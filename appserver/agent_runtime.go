@@ -12,6 +12,7 @@ import (
 	"codex_go/install"
 	"codex_go/model"
 	"codex_go/network"
+	"codex_go/retainedctx"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -129,6 +130,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.installationID = r.guardianInstallationID
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
+		modelReviewer.retainedContext = r.guardianRetainedContextForTurn
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		modelReviewer.metrics = r.services.TurnMetrics
 		modelReviewer.subagentThread = r.turnThreadIsSubagent
@@ -231,6 +233,20 @@ func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threa
 		return nil, err
 	}
 	return items, nil
+}
+
+// guardianRetainedContextForTurn resolves the thread's retained evidence for the
+// review prompt.
+//
+// A delegated subagent's history carries the parent's adopted instructions, and
+// Go does not yet mark them with Rust's `inherited_user_message` provenance, so
+// only a thread's own accepted instructions are offered as retained evidence;
+// a worker keeps the root-conversation section until that provenance lands.
+func (r *RuntimeRouter) guardianRetainedContextForTurn(threadID, turnID string) *retainedctx.RetainedContext {
+	if r == nil || r.turnThreadIsSubagent(threadID) {
+		return nil
+	}
+	return r.retainedContextForThread(threadID)
 }
 
 // guardianRootUserAuthorizationForTurn returns bounded root-conversation user

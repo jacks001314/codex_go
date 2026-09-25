@@ -17,6 +17,7 @@ import (
 	"codex_go/features"
 	"codex_go/mcp"
 	"codex_go/model"
+	"codex_go/retainedctx"
 	"codex_go/sandbox"
 	"codex_go/session"
 	"codex_go/state"
@@ -61,6 +62,10 @@ type modelGuardianReviewer struct {
 	latestResponseID      func(threadID, turnID string) string
 	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
 	rootUserAuthorization func(threadID, turnID string) []string
+	// retainedContext resolves the thread's retained evidence, which the review
+	// prompt renders as the retained user-instruction section (Rust's
+	// SectionHistory::retained_context and the RetainedUserInstructionsSection).
+	retainedContext func(threadID, turnID string) *retainedctx.RetainedContext
 	// Rust #42807 gives extension contributors a request-scoped `decide` hook
 	// (Allow / Reviewed / AskUser) plus structured reasons for a fresh review.
 	// The Go port has no ApprovalReviewContributor extension registry; the
@@ -441,9 +446,17 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			}
 		}
 	}
+	// Rust's review prompt renders the retained user-instruction section from the
+	// session's retained context, so the reviewer sees the thread's original
+	// instructions even after compaction.
+	var retainedContext *retainedctx.RetainedContext
+	if r.retainedContext != nil {
+		retainedContext = r.retainedContext(threadID, turnID)
+	}
 	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
 		NodeReplEvidence:  promptNodeReplEvidence,
 		PermissionContext: permissionContext,
+		RetainedContext:   retainedContext,
 	})
 	if err == nil && r.rootUserAuthorization != nil {
 		var root []string
@@ -453,6 +466,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 				NodeReplEvidence:      promptNodeReplEvidence,
 				RootUserAuthorization: root,
 				PermissionContext:     permissionContext,
+				RetainedContext:       retainedContext,
 			})
 		}
 	}

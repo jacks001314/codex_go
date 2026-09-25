@@ -42,6 +42,7 @@ import (
 	"codex_go/protocol"
 	"codex_go/realtime"
 	"codex_go/remotecontrol"
+	"codex_go/retainedctx"
 	"codex_go/review"
 	"codex_go/rollout"
 	"codex_go/runtimeutil"
@@ -459,14 +460,20 @@ type RuntimeRouter struct {
 	// thread reuses its handle across turns and an unloaded thread releases the
 	// tree's board state (Rust opens a handle with the thread runtime and drops
 	// it when the runtime unloads).
-	messageBoardHandles    map[string]agentboard.Board
-	messageBoardHandlesMu  sync.Mutex
-	agentActivityMu        sync.Mutex
-	agentActivity          map[string]chan string
-	agentMessagesMu        sync.Mutex
-	agentMessages          map[string][]any
-	nodeReplEvidenceMu     sync.Mutex
-	nodeReplEvidence       map[string]*codexctx.NodeReplReviewEvidence
+	messageBoardHandles   map[string]agentboard.Board
+	messageBoardHandlesMu sync.Mutex
+	agentActivityMu       sync.Mutex
+	agentActivity         map[string]chan string
+	agentMessagesMu       sync.Mutex
+	agentMessages         map[string][]any
+	nodeReplEvidenceMu    sync.Mutex
+	nodeReplEvidence      map[string]*codexctx.NodeReplReviewEvidence
+	// retainedContexts is the thread-owned retained evidence the Guardian review
+	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
+	// the thread's newest compaction checkpoint and then kept current from the
+	// thread's accepted user messages.
+	retainedContextsMu     sync.Mutex
+	retainedContexts       map[string]*retainedctx.RetainedContext
 	rolloutBudgetOnce      sync.Once
 	rolloutBudget          *runtimeutil.Budget
 	rolloutBudgetCharged   atomic.Bool
@@ -5498,6 +5505,9 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.forgetThreadMCPToolCallElicitations(threadID)
 	// Rust drops the thread's message-board handle with its runtime.
 	r.closeMessageBoardHandle(threadID)
+	// Rust drops the thread's retained context with its in-memory runtime; the
+	// durable checkpoint keeps the evidence a resumed thread needs.
+	r.forgetThreadRetainedContext(threadID)
 	r.forgetThreadSessionState(threadID)
 	r.closeThreadShellSnapshots(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {

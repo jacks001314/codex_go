@@ -2,6 +2,7 @@ package rollout
 
 import (
 	"bytes"
+	"codex_go/retainedctx"
 	"codex_go/session"
 	"encoding/json"
 	"os"
@@ -1673,6 +1674,102 @@ func writeRollout(t *testing.T, home string, threadID string, now time.Time, mes
 		t.Fatalf("Close() error = %v", err)
 	}
 	return recorder.Path()
+}
+
+// Mirrors Rust's CompactedItem::retained_context: a checkpoint persists the
+// host-owned retained snapshot, and a later load reads it back for the resumed
+// thread, while a checkpoint written without a snapshot carries none.
+func TestAppendCompactedPersistsRetainedContextLikeRust(t *testing.T) {
+	home := t.TempDir()
+	now := fixedTime()
+	recorder, err := NewRecorder(&CreateParams{
+		CodexHome:     home,
+		ThreadID:      "thread-retained-context",
+		SessionID:     "thread-retained-context",
+		Source:        "cli",
+		CWD:           home,
+		ModelProvider: "openai",
+		HistoryMode:   "paginated",
+		Now:           now,
+	})
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+	messageID := "message-1"
+	retained := &retainedctx.RetainedContext{}
+	retained.RecordUserMessage(retainedctx.RetainedUserMessage{
+		TurnID:    "turn-1",
+		MessageID: &messageID,
+		Text:      "Keep the repository private.",
+		Complete:  true,
+	}, retainedctx.LocalInputSource(nil))
+	if err := recorder.AppendCompactedWithContext("summary", nil, retained, now.Add(time.Second)); err != nil {
+		t.Fatalf("AppendCompactedWithContext() error = %v", err)
+	}
+	if err := recorder.AppendCompacted("second summary", nil, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("AppendCompacted() error = %v", err)
+	}
+	path := recorder.Path()
+	if err := recorder.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	lines, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	restored := CompactedRetainedContext(lines)
+	if restored == nil {
+		t.Fatal("CompactedRetainedContext() = nil, want the checkpoint's snapshot")
+	}
+	if got := stateOrderedTexts(restored.OrderedEntries()); !reflect.DeepEqual(got, []string{"Keep the repository private."}) {
+		t.Fatalf("restored retained instructions = %#v", got)
+	}
+
+	// A checkpoint without a snapshot leaves the earlier one authoritative only
+	// when it is newer; here the newest checkpoint has none, so the reader falls
+	// back to the older one that does.
+	if err := func() error {
+		second, err := NewRecorder(&CreateParams{
+			CodexHome: home, ThreadID: "thread-no-snapshot", SessionID: "thread-no-snapshot",
+			Source: "cli", CWD: home, ModelProvider: "openai", HistoryMode: "paginated", Now: now,
+		})
+		if err != nil {
+			return err
+		}
+		if err := second.AppendCompacted("summary", nil, now.Add(time.Second)); err != nil {
+			return err
+		}
+		noSnapshotPath := second.Path()
+		if err := second.Close(); err != nil {
+			return err
+		}
+		plainLines, _, err := Load(noSnapshotPath)
+		if err != nil {
+			return err
+		}
+		if got := CompactedRetainedContext(plainLines); got != nil {
+			t.Fatalf("CompactedRetainedContext() = %#v, want nil without a snapshot", got)
+		}
+		return nil
+	}(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func stateOrderedTexts(entries []retainedctx.OrderedEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		switch {
+		case entry.Entry.UserMessage != nil:
+			out = append(out, entry.Entry.UserMessage.Text)
+		case entry.Entry.AssistantMessage != nil:
+			out = append(out, entry.Entry.AssistantMessage.Text)
+		case entry.Entry.VerifiedAnswer != nil:
+			out = append(out, entry.Entry.VerifiedAnswer.Questions[0].Answer)
+		}
+	}
+	return out
 }
 
 func fixedTime() time.Time {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/retainedctx"
 	"codex_go/session"
 
 	"github.com/klauspost/compress/zstd"
@@ -232,6 +233,12 @@ type CompactedEvent struct {
 	FirstWindowID              string          `json:"first_window_id,omitempty"`
 	PreviousWindowID           string          `json:"previous_window_id,omitempty"`
 	WindowID                   string          `json:"window_id,omitempty"`
+	// RetainedContext is the bounded host-owned retained snapshot taken with this
+	// checkpoint (Rust CompactedItemWire retained_context). The facts live until
+	// their instruction boundary is rolled back; compaction does not expire them,
+	// so a resumed thread can still show its original instructions to the
+	// Guardian reviewer.
+	RetainedContext *retainedctx.RetainedContext `json:"retained_context,omitempty"`
 }
 
 type ThreadGoal struct {
@@ -866,6 +873,13 @@ func (r *Recorder) AppendTurnAborted(turnID string, reason string, completedAt t
 }
 
 func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.Time) error {
+	return r.AppendCompactedWithContext(message, replacement, nil, now)
+}
+
+// AppendCompactedWithContext also persists the checkpoint's retained-context
+// snapshot (Rust CompactedItem::retained_context): the host-owned evidence a
+// resumed thread must keep even though the model's history was compacted.
+func (r *Recorder) AppendCompactedWithContext(message string, replacement []Item, retained *retainedctx.RetainedContext, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -897,13 +911,15 @@ func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.
 		}
 	}
 	payloadValues := struct {
-		Message                    string            `json:"message"`
-		ReplacementHistory         []json.RawMessage `json:"replacement_history,omitempty"`
-		ReplacementHistoryMetadata []json.RawMessage `json:"replacement_history_metadata,omitempty"`
+		Message                    string                       `json:"message"`
+		ReplacementHistory         []json.RawMessage            `json:"replacement_history,omitempty"`
+		ReplacementHistoryMetadata []json.RawMessage            `json:"replacement_history_metadata,omitempty"`
+		RetainedContext            *retainedctx.RetainedContext `json:"retained_context,omitempty"`
 	}{
 		Message:                    strings.TrimSpace(message),
 		ReplacementHistory:         history,
 		ReplacementHistoryMetadata: historyMetadata,
+		RetainedContext:            retained,
 	}
 	payload, err := json.Marshal(payloadValues)
 	if err != nil {
@@ -1577,6 +1593,24 @@ func ItemsFromLines(lines []Line) []Item {
 		}
 	}
 	return items
+}
+
+// CompactedRetainedContext returns the retained-context snapshot of the latest
+// checkpoint in the rollout, or nil when the rollout has none. It mirrors Rust's
+// resume rule of reading `CompactedItem::retained_context` from the newest
+// checkpoint before replaying later evidence.
+func CompactedRetainedContext(lines []Line) *retainedctx.RetainedContext {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i].Type != "compacted" {
+			continue
+		}
+		event := compactedEventFromPayload(lines[i].Payload)
+		if event == nil || event.RetainedContext == nil {
+			continue
+		}
+		return event.RetainedContext
+	}
+	return nil
 }
 
 func compactedReplacementItems(payload json.RawMessage) ([]Item, bool) {

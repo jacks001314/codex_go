@@ -3903,8 +3903,12 @@ func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, message string, 
 		}
 		items = append(items, *item)
 	}
+	// Rust persists the retained snapshot with every compaction checkpoint, so a
+	// resumed thread can still show its original instructions even though the
+	// model's history was compacted.
+	retained := r.retainedContextForThread(threadID)
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendCompacted(message, items, now)
+		return recorder.AppendCompactedWithContext(message, items, retained, now)
 	})
 }
 
