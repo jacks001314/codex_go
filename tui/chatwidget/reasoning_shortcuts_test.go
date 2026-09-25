@@ -59,6 +59,73 @@ func TestReasoningChoicesAndCurrentAnchorMatchRust(t *testing.T) {
 	}
 }
 
+// Rust #48116: raising reaches Max, Ultra still opens the picker guidance, and
+// the footer guidance names the model path (an auto model is named directly).
+func TestDecideReasoningShortcutReachesMaxButNotUltraLikeRust(t *testing.T) {
+	preset := &ReasoningModelPreset{
+		Model:                  "gpt-test",
+		DefaultReasoningEffort: "high",
+		SupportedReasoningEfforts: []ReasoningEffortOption{
+			{Effort: "high"},
+			{Effort: "max"},
+			{Effort: "ultra"},
+		},
+	}
+	raised := DecideReasoningShortcut(ReasoningShortcutRaise, ReasoningShortcutContext{
+		SessionConfigured:         true,
+		CurrentModel:              "gpt-test",
+		ConfiguredReasoningEffort: "high",
+		Preset:                    preset,
+	})
+	if !raised.Handled || raised.Action != ReasoningShortcutApplyNormal || raised.Effort != "max" {
+		t.Fatalf("raise to max = %#v", raised)
+	}
+	plan := DecideReasoningShortcut(ReasoningShortcutRaise, ReasoningShortcutContext{
+		SessionConfigured:         true,
+		CollaborationModesEnabled: true,
+		PlanModeActive:            true,
+		CurrentModel:              "gpt-test",
+		ConfiguredReasoningEffort: "high",
+		Preset:                    preset,
+	})
+	if plan.Action != ReasoningShortcutApplyPlanOverride || plan.Effort != "max" {
+		t.Fatalf("plan raise to max = %#v", plan)
+	}
+	ultra := DecideReasoningShortcut(ReasoningShortcutRaise, ReasoningShortcutContext{
+		SessionConfigured:         true,
+		CurrentModel:              "gpt-test",
+		ConfiguredReasoningEffort: "max",
+		Preset:                    preset,
+	})
+	if ultra.Action != ReasoningShortcutInfo || ultra.Effort != "max" ||
+		ultra.Info != "Ultra is available under /model → All models → gpt-test → More reasoning…" {
+		t.Fatalf("raise to ultra = %#v", ultra)
+	}
+	auto := DecideReasoningShortcut(ReasoningShortcutRaise, ReasoningShortcutContext{
+		SessionConfigured:         true,
+		CurrentModel:              "codex-auto-compact",
+		ConfiguredReasoningEffort: "max",
+		Preset: &ReasoningModelPreset{
+			Model:                     "codex-auto-compact",
+			DefaultReasoningEffort:    "high",
+			SupportedReasoningEfforts: []ReasoningEffortOption{{Effort: "max"}, {Effort: "ultra"}},
+		},
+	})
+	if auto.Info != "Ultra is available under /model → codex-auto-compact → More reasoning…" {
+		t.Fatalf("auto model guidance = %#v", auto)
+	}
+	// Lowering never opens the guidance.
+	lowered := DecideReasoningShortcut(ReasoningShortcutLower, ReasoningShortcutContext{
+		SessionConfigured:         true,
+		CurrentModel:              "gpt-test",
+		ConfiguredReasoningEffort: "ultra",
+		Preset:                    preset,
+	})
+	if lowered.Action != ReasoningShortcutApplyNormal || lowered.Effort != "max" {
+		t.Fatalf("lower from ultra = %#v", lowered)
+	}
+}
+
 func TestDecideReasoningShortcutActionsMatchRust(t *testing.T) {
 	preset := &ReasoningModelPreset{
 		Model:                  "gpt-test",

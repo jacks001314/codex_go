@@ -170,6 +170,18 @@ func DecideReasoningShortcut(direction ReasoningShortcutDirection, context Reaso
 			Direction: direction,
 		}
 	}
+	// Rust #48116: raising steps into Max when the model advertises it, but Ultra
+	// still requires the explicit advanced-reasoning picker.
+	if direction == ReasoningShortcutRaise && isUltraReasoningEffort(next) {
+		return ReasoningShortcutDecision{
+			Handled:   true,
+			Action:    ReasoningShortcutInfo,
+			Info:      ReasoningUltraGuidanceMessage(context.Preset.Model),
+			Model:     context.Preset.Model,
+			Effort:    current,
+			Direction: direction,
+		}
+	}
 
 	action := ReasoningShortcutApplyNormal
 	if context.CollaborationModesEnabled && context.PlanModeActive {
@@ -182,6 +194,23 @@ func DecideReasoningShortcut(direction ReasoningShortcutDirection, context Reaso
 		Effort:    next,
 		Direction: direction,
 	}
+}
+
+// ReasoningUltraGuidanceMessage mirrors Rust's picker guidance for Ultra
+// (#48116): an auto-selected model is named directly, any other model through
+// the "All models" list.
+func ReasoningUltraGuidanceMessage(model string) string {
+	model = strings.TrimSpace(model)
+	modelPath := model
+	if !strings.HasPrefix(model, "codex-auto-") {
+		modelPath = "All models → " + model
+	}
+	return "Ultra is available under /model → " + modelPath + " → More reasoning…"
+}
+
+// isUltraReasoningEffort reports whether the effort is the picker-only level.
+func isUltraReasoningEffort(effort string) bool {
+	return strings.EqualFold(strings.TrimSpace(effort), "ultra")
 }
 
 func ReasoningShortcutBoundMessage(direction ReasoningShortcutDirection, effort string) string {
