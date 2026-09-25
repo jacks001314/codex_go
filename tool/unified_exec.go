@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	osexec "os/exec"
 	"runtime"
@@ -302,6 +303,7 @@ type unifiedExecProcess struct {
 	remote               *execserver.Client
 	remoteURL            string
 	remoteProvider       execserver.NoiseRendezvousConnectProvider
+	remoteHeaders        http.Header
 	remoteSessionID      string
 	remoteID             string
 	remoteWrite          uint64
@@ -597,7 +599,10 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	if req.UnifiedExecNoiseProvider != nil {
 		client, err = execserver.DialNoiseRendezvousClient(connectCtx, req.UnifiedExecNoiseProvider, execserver.DialClientOptions{ClientName: "codex-go-unified-exec"})
 	} else {
-		client, err = execserver.DialClient(connectCtx, req.UnifiedExecRemoteURL, "codex-go-unified-exec")
+		client, err = execserver.DialClientWithOptions(connectCtx, req.UnifiedExecRemoteURL, execserver.DialClientOptions{
+			ClientName:  "codex-go-unified-exec",
+			HTTPHeaders: req.UnifiedExecRemoteHTTPHeaders.Clone(),
+		})
 	}
 	if err != nil {
 		m.releaseProcessID(processID)
@@ -708,6 +713,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		remote:                 client,
 		remoteURL:              req.UnifiedExecRemoteURL,
 		remoteProvider:         req.UnifiedExecNoiseProvider,
+		remoteHeaders:          req.UnifiedExecRemoteHTTPHeaders.Clone(),
 		remoteSessionID:        client.SessionID(),
 		remoteID:               remoteID,
 		remoteEvents:           events,
@@ -1580,6 +1586,7 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	p.mu.Lock()
 	remoteURL := p.remoteURL
 	remoteProvider := p.remoteProvider
+	remoteHeaders := p.remoteHeaders.Clone()
 	sessionID := p.remoteSessionID
 	processID := p.remoteID
 	exited := p.exited
@@ -1591,7 +1598,11 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	lastErr := disconnectErr
 	for time.Now().Before(deadline) {
 		attemptCtx, cancel := context.WithDeadline(context.Background(), deadline)
-		options := execserver.DialClientOptions{ClientName: "codex-go-unified-exec", ResumeSessionID: sessionID}
+		options := execserver.DialClientOptions{
+			ClientName:      "codex-go-unified-exec",
+			ResumeSessionID: sessionID,
+			HTTPHeaders:     remoteHeaders.Clone(),
+		}
 		var client *execserver.Client
 		var err error
 		if remoteProvider != nil {

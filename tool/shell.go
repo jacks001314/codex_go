@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -119,13 +120,16 @@ type ShellRequest struct {
 	UnifiedExecTurnID               string
 	UnifiedExecRemoteURL            string
 	UnifiedExecNoiseProvider        execserver.NoiseRendezvousConnectProvider
-	UnifiedExecEnvironmentID        string
-	UnifiedExecUserHomeDir          string
-	EnforceManagedNetwork           bool
-	ManagedNetwork                  *network.ProxyManagedNetworkSandboxContext
-	RemoteNetworkProxy              *execserver.RemoteNetworkProxyLaunchConfig
-	NetworkPolicyDecider            network.ProxyPolicyDecider
-	NetworkPolicyDecisionTimeout    time.Duration
+	// UnifiedExecRemoteHTTPHeaders are sent on the remote executor's WebSocket
+	// upgrade and reconnects (Rust #47648 executor bearer tokens).
+	UnifiedExecRemoteHTTPHeaders http.Header
+	UnifiedExecEnvironmentID     string
+	UnifiedExecUserHomeDir       string
+	EnforceManagedNetwork        bool
+	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider         network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout time.Duration
 }
 
 type UnifiedExecEnvironment struct {
@@ -137,7 +141,10 @@ type UnifiedExecEnvironment struct {
 	// home-relative policy paths in filesystem sandbox contexts (Rust #41204).
 	UserHomeDir   string
 	ExecServerURL string
-	NoiseProvider execserver.NoiseRendezvousConnectProvider
+	// ExecServerHTTPHeaders are sent on this environment's executor WebSocket
+	// upgrade and reconnects (Rust #47648 executor bearer tokens).
+	ExecServerHTTPHeaders http.Header
+	NoiseProvider         execserver.NoiseRendezvousConnectProvider
 	// ShellEnvironmentPolicy is this environment's resolved shell environment
 	// policy table (empty when the thread-derived policy applies), mirroring
 	// Rust protocol::EnvironmentConfig shell_environment_policy (#38902).

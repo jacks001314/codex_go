@@ -79,7 +79,11 @@ func (f *environmentOpenAIFileSystem) dial(ctx context.Context) (*execserverclie
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(f.record.ConnectTimeoutMS))
 	defer cancel()
-	options := execserverclient.DialClientOptions{ClientName: "codex-go-openai-file", HTTPClient: f.record.HTTPClient}
+	options := execserverclient.DialClientOptions{
+		ClientName:  "codex-go-openai-file",
+		HTTPClient:  f.record.HTTPClient,
+		HTTPHeaders: f.record.ExecServerHeaders.Clone(),
+	}
 	if f.record.NoiseProvider != nil {
 		return execserverclient.DialNoiseRendezvousClient(connectCtx, f.record.NoiseProvider, options)
 	}

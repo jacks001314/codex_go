@@ -147,6 +147,10 @@ type EnvironmentAddParams struct {
 	EnvironmentID    string  `json:"environmentId"`
 	ExecServerURL    string  `json:"execServerUrl"`
 	ConnectTimeoutMS *uint64 `json:"connectTimeoutMs,omitempty"`
+	// AuthBearerToken is the optional raw bearer token for executor
+	// authentication, including reconnects (Rust #47648). It requires a secure
+	// transport or a loopback destination and is never echoed in diagnostics.
+	AuthBearerToken *string `json:"authBearerToken,omitempty"`
 }
 
 func (m *EnvironmentManager) SetHTTPClient(httpClient *http.Client) {
@@ -176,7 +180,46 @@ func (p *EnvironmentAddParams) Validate() error {
 	if parsed.Scheme != "ws" && parsed.Scheme != "wss" {
 		return fmt.Errorf("%w: execServerUrl must use ws or wss", ErrInvalidEnvironmentRequest)
 	}
+	// Rust #47648: a supplied bearer token requires wss:// or a loopback
+	// destination, so the credential is never sent over a plain remote ws://
+	// connection.
+	if token := environmentAuthBearerToken(p); token != "" && !execserverclient.HeadersAllowedForURL(strings.TrimSpace(p.ExecServerURL)) {
+		return fmt.Errorf("%w: authBearerToken requires a wss:// or loopback execServerUrl", ErrInvalidEnvironmentRequest)
+	}
 	return nil
+}
+
+// environmentAuthBearerToken returns the registration's bearer token, treating a
+// blank or absent value as unauthenticated (Rust preserves unauthenticated
+// behavior, including for explicit nulls).
+func environmentAuthBearerToken(params *EnvironmentAddParams) string {
+	if params == nil || params.AuthBearerToken == nil {
+		return ""
+	}
+	return strings.TrimSpace(*params.AuthBearerToken)
+}
+
+// executorHeadersForToken builds the executor's Authorization header.
+func executorHeadersForToken(token string) http.Header {
+	if strings.TrimSpace(token) == "" {
+		return nil
+	}
+	headers := http.Header{}
+	headers.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	return headers
+}
+
+// execServerDialOptions builds the WebSocket upgrade options for one executor
+// record, including its configured headers.
+func execServerDialOptions(record *EnvironmentRecord) *websocket.DialOptions {
+	if record == nil {
+		return nil
+	}
+	options := &websocket.DialOptions{HTTPClient: record.HTTPClient}
+	if len(record.ExecServerHeaders) > 0 {
+		options.HTTPHeader = record.ExecServerHeaders
+	}
+	return options
 }
 
 type EnvironmentAddResponse struct{}
@@ -248,10 +291,13 @@ type EnvironmentRecord struct {
 	ExecServerURL    string
 	NoiseProvider    execserverclient.NoiseRendezvousConnectProvider
 	ConnectTimeoutMS *uint64
-	Shell            EnvironmentShellInfo
-	CWD              *string
-	InfoOverride     bool
-	HTTPClient       *http.Client
+	// ExecServerHeaders are sent on the executor's WebSocket upgrade and on
+	// reconnects; the app-server fills them from the registration's bearer token.
+	ExecServerHeaders http.Header
+	Shell             EnvironmentShellInfo
+	CWD               *string
+	InfoOverride      bool
+	HTTPClient        *http.Client
 	// Provisioning is non-nil for provisioned (deferred) Noise environments and
 	// nil for ordinary environments, which connect eagerly.
 	Provisioning *ProvisioningState
@@ -285,12 +331,13 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record := EnvironmentRecord{
-		EnvironmentID:    strings.TrimSpace(params.EnvironmentID),
-		ExecServerURL:    strings.TrimSpace(params.ExecServerURL),
-		ConnectTimeoutMS: cloneUint64Ptr(params.ConnectTimeoutMS),
-		Shell:            m.defaultShell,
-		CWD:              cloneString(m.defaultCWD),
-		HTTPClient:       m.httpClient,
+		EnvironmentID:     strings.TrimSpace(params.EnvironmentID),
+		ExecServerURL:     strings.TrimSpace(params.ExecServerURL),
+		ConnectTimeoutMS:  cloneUint64Ptr(params.ConnectTimeoutMS),
+		ExecServerHeaders: executorHeadersForToken(environmentAuthBearerToken(params)),
+		Shell:             m.defaultShell,
+		CWD:               cloneString(m.defaultCWD),
+		HTTPClient:        m.httpClient,
 	}
 	m.records[record.EnvironmentID] = record
 	return &EnvironmentAddResponse{}, nil
@@ -849,6 +896,7 @@ func cloneUint64Ptr(value *uint64) *uint64 {
 func cloneEnvironmentRecord(record EnvironmentRecord) EnvironmentRecord {
 	record.ConnectTimeoutMS = cloneUint64Ptr(record.ConnectTimeoutMS)
 	record.CWD = cloneString(record.CWD)
+	record.ExecServerHeaders = record.ExecServerHeaders.Clone()
 	return record
 }
 
@@ -917,7 +965,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		}
 		return response, nil
 	}
-	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
+	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 	if err != nil {
 		return nil, err
 	}
@@ -980,7 +1028,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 		}
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusKind(status.Status)}, nil
 	}
-	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
+	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 	if err != nil {
 		return nil, err
 	}

@@ -14308,13 +14308,14 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			environmentShell = &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
 		}
 		environment := tool.UnifiedExecEnvironment{
-			ID:            environmentID,
-			CWD:           cwd,
-			Shell:         environmentShell,
-			PlatformOS:    platformOS,
-			UserHomeDir:   userHomeDir,
-			ExecServerURL: strings.TrimSpace(record.ExecServerURL),
-			NoiseProvider: record.NoiseProvider,
+			ID:                    environmentID,
+			CWD:                   cwd,
+			Shell:                 environmentShell,
+			PlatformOS:            platformOS,
+			UserHomeDir:           userHomeDir,
+			ExecServerURL:         strings.TrimSpace(record.ExecServerURL),
+			ExecServerHTTPHeaders: record.ExecServerHeaders.Clone(),
+			NoiseProvider:         record.NoiseProvider,
 		}
 		if state.Config != nil {
 			allowLoginShell := state.Config.AllowLoginShell

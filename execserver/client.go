@@ -133,6 +133,11 @@ type DialClientOptions struct {
 	ClientName      string
 	ResumeSessionID string
 	HTTPClient      *http.Client
+	// HTTPHeaders are sent on the direct WebSocket upgrade request and on every
+	// reconnect (Rust RemoteEnvironmentOptions::http_headers, #47648). They are
+	// validated: connection-controlled headers are rejected, and a non-empty set
+	// requires wss:// or a loopback destination.
+	HTTPHeaders http.Header
 }
 
 type ProcessEventKind string
@@ -262,6 +267,10 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 	if clientName == "" {
 		clientName = "codex-go-unified-exec"
 	}
+	headers, err := normalizeExecServerHeaders(url, options.HTTPHeaders)
+	if err != nil {
+		return nil, err
+	}
 	client := &Client{
 		url:          url,
 		clientName:   clientName,
@@ -275,7 +284,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		done:         make(chan struct{}),
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient)
+		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers)
 	}
 	conn, initialized, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
 	if err != nil {
@@ -294,8 +303,12 @@ func dialInitializedClientConnection(
 	resumeSessionID string,
 	handleNotification func(string, json.RawMessage) error,
 	httpClient *http.Client,
+	headers http.Header,
 ) (clientConnection, *InitializeResponse, error) {
 	dialOptions := &websocket.DialOptions{HTTPClient: httpClient}
+	if len(headers) > 0 {
+		dialOptions.HTTPHeader = headers
+	}
 	conn, _, err := websocket.Dial(ctx, serverURL, dialOptions)
 	if err != nil {
 		return nil, nil, err

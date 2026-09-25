@@ -189,7 +189,7 @@ func discoverRemoteEnvironmentSkillsWithSandbox(ctx context.Context, record *Env
 		defer client.Close()
 		caller = clientRemoteEnvironmentFSCaller{client: client}
 	} else {
-		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
+		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -309,7 +309,7 @@ func readRemoteEnvironmentSkillTextWithSandbox(ctx context.Context, record *Envi
 		defer client.Close()
 		caller = clientRemoteEnvironmentFSCaller{client: client}
 	} else {
-		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, &websocket.DialOptions{HTTPClient: record.HTTPClient})
+		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 		if err != nil {
 			return "", err
 		}
