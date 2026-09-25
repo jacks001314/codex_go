@@ -512,7 +512,7 @@
             "id": "session-startup-prewarm",
             "kind": "shared-fixtures",
             "rustPaths": [
-                "core/src/session_startup_prewarm.rs",
+                "core/src/session/startup_prewarm.rs",
                 "core/src/tasks/regular.rs",
                 "core/src/session/session.rs"
             ],

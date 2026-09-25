@@ -49,8 +49,11 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// Upstream grew the CLI suite with the daemon package replacement,
 			// background-server fixtures (#45558/#45580/#46117), and the remote
 			// workspace-root rejection snapshot (#46494), plus the doctor
-			// filesystem-path diagnostics snapshots (#46543).
-			Files: 31,
+			// filesystem-path diagnostics snapshots (#46543). This pass adds the
+			// exec-server PID-namespace and WebSocket-auth suites (#47989,
+			// #47601) and the doctor path-safety config/database snapshots
+			// (#47886/#47887).
+			Files: 38,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -58,6 +61,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 				"cli/tests/mcp_list.rs",
 				"cli/tests/plugin_cli.rs",
 				"cli/tests/doctor_enterprise_network.rs",
+				"cli/tests/exec_server_websocket_auth.rs",
+				"cli/tests/exec_server/pid_namespace_tests.rs",
+				"cli/tests/snapshots/doctor_path_safety__doctor_config_not_found.snap",
 			},
 		},
 		{
@@ -87,7 +93,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #45495/#45812/#46020 added the login-requirement, workspace
 			// routing and rollout-compression fixtures; #46562 added the
 			// system-proxy bootstrap suite.
-			Files: 149,
+			// This pass adds the plugin-metadata, mcp-resource,
+			// thread-settings, project, environment and executor
+			// bearer-token fixtures (#46917-#48004).
+			Files: 154,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -116,7 +125,11 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #46539 then added core/tests/suite/command_lifecycle_tests.rs.
 			// #46555/#46556/#46562 added the executor-registration, step-settings
 			// and network-approval core suites.
-			Files: 215,
+			// This pass adds the network-policy, gateway-auth, guardian
+			// authorization, agent-controller, message-board, prewarm,
+			// tool-observation-budget, retry-after, mxc and patrol suites
+			// (#47017-#47989).
+			Files: 256,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -137,7 +150,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// exec-flow compact-exploration helpers plus the replay tests, and
 			// #46711/#46731/#46732/#46734 added the history-projection,
 			// dynamic-activity, transcript-copy and transcript-composer suites.
-			Files: 112,
+			// This pass adds the prompt-suggestion, transcript-search,
+			// startup-warning, warnings-viewer and effect-toggle coverage.
+			Files: 123,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -151,7 +166,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #46574/#46565 added the question-notification and activity-group
 			// ordering snapshots; #46711/#46731/#46732/#46734 added the
 			// history-projection, dynamic-activity and transcript-copy ones.
-			Files: 63,
+			// This pass adds the prompt-suggestion, transcript-search,
+			// warnings-viewer and markdown/effect snapshot set.
+			Files: 70,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
@@ -159,8 +176,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			},
 		},
 		{
+			// This pass adds the advertised-identity and model-specific
+			// description coverage (#47118/#47642/#47670/#47981).
 			Path:  "tools/src",
-			Files: 39,
+			Files: 41,
 			Owner: "tool, turn",
 			Focus: "tool schemas, dynamic tools, MCP tools, tool search",
 			Required: []string{

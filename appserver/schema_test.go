@@ -136,11 +136,12 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream a633ebc1 (#46547/#46553): the
-		// backend-independent agent control contract and the LiveAgent listing
-		// records.
-		{"stable", stablePrecomputedExports, "0041bfe5b4a5dd41253f73f3432482bc6d4d914ea66a13892dffc8579f79f9dd"},
-		{"experimental", experimentalPrecomputedExports, "b7a9f836d476c795e00fafb887525037e34d89122f001450668d9b804d226d4a"},
+		// Re-vendored from upstream 8ae55c863d (#47074/#47967 and the lane
+		// between): the cloud config surface, the terminal Flex-capacity error
+		// classification and the gateway/message-board/executor protocol
+		// additions.
+		{"stable", stablePrecomputedExports, "29861c6ab189407dfdb4d7d7dce90461aa80d1d023e798f9f6160301abce4e57"},
+		{"experimental", experimentalPrecomputedExports, "d94964ca6d870bf143dd47445daf00a6539568548e05fc3a022fe63a767dc14e"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -162,6 +162,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"skills",
 		"core",
 		"core-api",
+		"core-plugin-common",
 		"core-plugins",
 		"diagnostics",
 		"guardian-context",
@@ -176,6 +177,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"exec-server/tests/support",
 		"execpolicy",
 		"ext/agent",
+		"ext/agent-message-board",
 		"ext/connectors",
 		"ext/extension-api",
 		"ext/goal",
@@ -225,6 +227,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"user-verification",
 		"tools",
 		"v8-poc",
+		"websocket-auth",
 		"websocket-client",
 		"windows-sandbox-service",
 		"worktree",
@@ -277,30 +280,35 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		// Re-pinned to upstream 7498521d (#45900/#45982/#46020): the tcp-tunnel
-		// and mermaid workspace members plus the new async-utils dependency.
-		{Path: "Cargo.toml", SHA256: "00aa06d5118440a17c654c1f60d565b1d9a5d7610de8c8a7ae7b46bedc4bde39"},
+		// Re-pinned to upstream 8ae55c863d (#47447/#47683/#47748): the
+		// websocket-auth, core-plugin-common and ext/agent-message-board
+		// workspace members plus the aligned Cargo/Bazel debug-information
+		// defaults.
+		{Path: "Cargo.toml", SHA256: "da6db45ca737a45798b76ab32d3dfaf8bdb08e34890e2b855ae69da1d4f85088"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
-		// Re-pinned to upstream 78245b47 (#46569): exec turns set an explicit
-		// `turn_trigger`.
-		{Path: "exec/src/lib.rs", SHA256: "e1b7c44c6d8445391dadfecff1346addda2b4fc82940b5c9a082b67847d552b9"},
+		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
+		// runs through embedded Codex startup.
+		{Path: "exec/src/lib.rs", SHA256: "d37a7839dcf7e5b74a9dff32ee9030dd09a3ac290b105b8ae39ad15d449611cd"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "2e9eb984f0de88bc3fbe7ea0d1017e39e93df108a7a3f9ffd9c66aa54e94a316"},
 		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
-		// Re-pinned to upstream a633ebc1 (#46540): retry decisions and delays
-		// moved into CodexErr.
-		{Path: "core/src/client.rs", SHA256: "3c2183670bb93703cda433a2a93f262c0c4b53d5a1df28a16ba614e8700435fc"},
-		// Re-pinned to upstream 7498521d (#46020): the new experimental
-		// `rollout/compress` client request.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "553532a9865cc1b881b7b6237436799417fa207a9db44b7e032af918562d29cf"},
-		// Re-pinned to upstream 78245b47 (#46562): the system-proxy bootstrap
-		// suite joined the module list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "eea7c7cec039ce569bfefecbaedcff6fc0b4e9286a245cca2b9cee90038473ed"},
-		// Re-pinned to upstream 36430b36 (#46490/#46509/#46508): the
-		// gateway-auth, guardian-persistence and models-cache-auth core suites
-		// joined the module list.
-		{Path: "core/tests/suite/mod.rs", SHA256: "64274ec4838f74b50db998cd6e77981230a9d1719ca4f4e68d153cd9f52d8f22"},
+		// Re-pinned to upstream 8ae55c863d (#47745/#47758/#47957): the startup
+		// prewarm, tool-observation and message-budget client changes.
+		{Path: "core/src/client.rs", SHA256: "82608d33acccfc4ece91b912c2573d7b1bd91c157aee30b990590868a23cf927"},
+		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
+		// gateway OAuth, MCP resource-target, realtime reasoning-status and
+		// executor bearer-token requests.
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "d1aef98633f16cff20e2ef9836292a7bf1a4656d960e9ab1f29625596eefe168"},
+		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
+		// provider-requirements, message-board, gateway-auth and network-policy
+		// suites joined the module list.
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "6311cdf058b50df02f9e7d22278775caed30b26cea351c5545133caf746291a1"},
+		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
+		// the network-policy, extension-hook, guardian-authorization,
+		// agent-controller and macOS patch-permission suites joined the module
+		// list.
+		{Path: "core/tests/suite/mod.rs", SHA256: "c045457c7477057874bee427856f01d2a0eb5b5b2247515baff94e4203e662b7"},
 	}
 }
 

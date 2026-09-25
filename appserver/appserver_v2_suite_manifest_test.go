@@ -18,6 +18,8 @@ type rustAppServerV2SuiteCase struct {
 func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 	return []rustAppServerV2SuiteCase{
 		{Module: "account", Owner: "auth", Focus: "account read/login/logout/rate-limit RPCs"},
+		{Module: "agent_message_board", Owner: "agent, appserver", Focus: "in-memory agent message board tools bound to an ephemeral session (#47946)"},
+		{Module: "application_network", Owner: "network, appserver", Focus: "application network policy enforced across app-server bootstrap and per-request transports (#47407)"},
 		{Module: "account_system_proxy", Owner: "auth, config, appserver", Focus: "system-proxy fallback for account and config bootstrap requests"},
 		{Module: "account_thread_usage", Owner: "auth, appserver", Focus: "account usage/read thread-level estimation"},
 		{Module: "analytics", Owner: "telemetry", Focus: "analytics enablement and payload capture"},
@@ -62,6 +64,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "fs", Owner: "appserver", Focus: "fs read/write/watch RPCs"},
 		{Module: "git_attribution", Owner: "appserver, session", Focus: "git attribution propagation"},
 		{Module: "guardian_v2", Owner: "appserver, guardian", Focus: "Guardian V2 approval routing, risk scores and managed-reviewer gating"},
+		{Module: "gateway_oauth", Owner: "auth, appserver", Focus: "explicit gateway OAuth sign-in, credential persistence and redaction (#47207/#47158)"},
 		{Module: "history_notes_extension", Owner: "token-budget, history, notes", Focus: "history and notes tools for token-budget sessions"},
 		{Module: "hooks_list", Owner: "appserver, tool", Focus: "hooks/list RPC incl. execution mode"},
 		{Module: "host_skills", Owner: "prompt, execserver", Focus: "host-provided skill discovery"},
@@ -83,6 +86,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "misalignment_policy", Owner: "appserver, protocol", Focus: "misalignment policy violations surfaced as typed errors (Rust #38682)"},
 		{Module: "model_auto_review", Owner: "appserver, config", Focus: "auto_review required-on-models enforcement and requirements exposure"},
 		{Module: "model_list", Owner: "model", Focus: "model/list RPC"},
+		{Module: "model_list_requirements_tests", Owner: "config, model, appserver", Focus: "current provider requirements enforced against the served model list (#46917)"},
 		{Module: "model_provider_capabilities_read", Owner: "model", Focus: "modelProvider/capabilities/read RPC"},
 		{Module: "model_provider_enforcement", Owner: "appserver, config", Focus: "managed model provider requirements enforced on existing threads"},
 		{Module: "multi_agent_v2_developer_instructions", Owner: "agent, prompt", Focus: "multi-agent developer instruction propagation"},

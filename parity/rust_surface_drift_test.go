@@ -30,11 +30,14 @@ func TestRustFeatureKeySurfaceAgainstGo(t *testing.T) {
 func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	fields := rustStructPublicFields(t, filepath.Join(root, "config", "src", "config_toml.rs"), "ConfigToml")
-	if len(fields) != 103 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 103", len(fields))
+	// Re-pinned to upstream 8ae55c863d (#47074): ConfigToml gains `cloud`
+	// (CloudToml), the cloud-owned feature-settings table.
+	if len(fields) != 104 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 104", len(fields))
 	}
 	for _, required := range []string{
 		"agents",
+		"cloud",
 		"features",
 		"model_auto_compact_token_limit",
 		"model_auto_compact_token_limit_scope",

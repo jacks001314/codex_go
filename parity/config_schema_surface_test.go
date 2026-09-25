@@ -57,11 +57,13 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	goKeys := config.KnownTopLevelConfigFields()
 	sort.Strings(goKeys)
 
-	if len(rustKeys) != 100 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 100 (pinned baseline)", len(rustKeys))
+	// Re-pinned to upstream 8ae55c863d (#47074): `cloud` joins the top-level
+	// surface as the cloud-owned feature-settings table.
+	if len(rustKeys) != 101 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 101 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 107 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 107 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 108 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 108 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

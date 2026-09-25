@@ -139,7 +139,10 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Focus:    "Windows restricted-token and elevated sandbox deny-read enforcement",
 			Platform: "Windows only",
 			Tests: []string{
-				"windows_elevated_unified_exec_enforces_managed_deny_reads",
+				// #47919 renamed the managed-deny-read case to cover the large
+				// recursive deny-list payload transported through the
+				// environment.
+				"windows_elevated_unified_exec_enforces_large_recursive_deny_reads",
 				"windows_elevated_does_not_create_missing_workspace_metadata",
 				"windows_elevated_enforces_deny_read_and_protects_setup_marker",
 				"windows_elevated_setup_rejects_default_root_deny",
