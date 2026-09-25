@@ -117,6 +117,15 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 	}
 	if msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1 {
 		switch msg.Runes[0] {
+		case 'f', 'F':
+			// Rust's locked-thread fork shortcut: f/F (plain or shifted) opens an
+			// editable copy of the thread without taking the source lease. Ctrl
+			// and Super combinations arrive as their own key types, so a rune
+			// without Alt is the unmodified (or shifted) press Rust accepts, and a
+			// blocking view keeps ownership of the key.
+			if !msg.Alt && m.modal == nil {
+				return m.applyForkCurrentSession("")
+			}
 		case 'r', 'R':
 			return m.retryReadOnlyThread()
 		case 'q', 'Q':
@@ -196,7 +205,7 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 // key, the command-center key when one is available (Left/Esc, or Esc once Left
 // was remapped), the exit keys, and the transcript shortcut.
 func (m *Model) readOnlyFooterLine() string {
-	items := []string{"r retry"}
+	items := []string{"r retry", "f fork"}
 	if m.commandCenterAvailable() {
 		key := "Esc"
 		if m.agentsNavigationKeyAvailable() {
