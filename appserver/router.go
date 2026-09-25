@@ -3261,15 +3261,22 @@ func (r *Router) buildPaginatedThreadItemsResponse(params *ThreadItemsListParams
 	if params.SortDirection == SortDesc {
 		direction = state.ThreadHistorySortDesc
 	}
+	position, err := ThreadItemsListPositionForParams(params)
+	if err != nil {
+		return nil, err
+	}
 	page, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
 		ThreadID:      params.ThreadID,
 		TurnID:        params.TurnID,
-		Cursor:        params.Cursor,
+		Position:      position,
 		PageSize:      limit,
 		SortDirection: direction,
 	})
 	if err != nil {
-		return nil, paginatedThreadHistoryError(err, true)
+		// Rust #48151: an item anchor that cannot be resolved is invalid params
+		// rather than a generic invalid request.
+		anchored := position != nil && position.Anchor != nil
+		return nil, paginatedThreadHistoryError(err, true, anchored)
 	}
 	data := make([]ThreadItemEntry, 0, len(page.Items))
 	for _, stored := range page.Items {
@@ -3342,8 +3349,12 @@ func (r *Router) loadPaginatedTurnFullItems(threadID, turnID string) ([]ThreadIt
 	var cursor *string
 	items := []ThreadItem{}
 	for {
+		var position *state.ThreadHistoryListItemsPosition
+		if cursor != nil {
+			position = &state.ThreadHistoryListItemsPosition{Cursor: cursor}
+		}
 		page, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
-			ThreadID: threadID, TurnID: &turnID, Cursor: cursor, PageSize: threadItemsMaxLimit, SortDirection: state.ThreadHistorySortAsc,
+			ThreadID: threadID, TurnID: &turnID, Position: position, PageSize: threadItemsMaxLimit, SortDirection: state.ThreadHistorySortAsc,
 		})
 		if err != nil {
 			return nil, paginatedThreadHistoryError(err, false)
@@ -3409,11 +3420,16 @@ func stateThreadTurnToAPI(stored state.ThreadHistoryTurn, itemsView TurnItemsVie
 	return turn, nil
 }
 
-func paginatedThreadHistoryError(err error, itemsMethod bool) error {
+func paginatedThreadHistoryError(err error, itemsMethod bool, anchored ...bool) error {
 	var historyErr *state.ThreadHistoryError
 	if errors.As(err, &historyErr) {
 		switch historyErr.Kind {
 		case state.ThreadHistoryInvalidRequest:
+			// Rust #48151: a store rejection of an item-anchor position is
+			// invalid params (-32602), not a generic invalid request.
+			if len(anchored) > 0 && anchored[0] {
+				return invalidParams(historyErr.Error())
+			}
 			return jsonRPCInvalidRequest(historyErr.Error())
 		case state.ThreadHistoryUnsupported:
 			if itemsMethod {

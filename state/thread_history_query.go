@@ -97,9 +97,25 @@ type ThreadHistoryTurnsPage struct {
 type ThreadHistoryListItemsParams struct {
 	ThreadID      string
 	TurnID        *string
-	Cursor        *string
+	Position      *ThreadHistoryListItemsPosition
 	PageSize      int
 	SortDirection ThreadHistorySortDirection
+}
+
+// ThreadHistoryListItemsPosition mirrors Rust's ListItemsPosition (#48151): the
+// starting position of an item page is either the opaque cursor a previous call
+// returned or an exclusive item anchor inside the requested turn's visible
+// history.
+type ThreadHistoryListItemsPosition struct {
+	// Cursor is an opaque continuation cursor from a previous page.
+	Cursor *string
+	// Anchor is an exclusive item position; it requires a non-empty TurnID.
+	Anchor *ThreadHistoryItemAnchor
+}
+
+// ThreadHistoryItemAnchor mirrors Rust's ThreadItemsListAnchor::Item.
+type ThreadHistoryItemAnchor struct {
+	ItemID string
 }
 
 type ThreadHistoryListTurnsParams struct {
@@ -164,7 +180,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 	if direction == "" {
 		direction = ThreadHistorySortAsc
 	}
-	cursor, err := parseHistoryCursor(params.Cursor, params.ThreadID, historyCursorItems)
+	cursor, err := itemsHistoryCursorForPosition(ctx, db, lineage, &params)
 	if err != nil {
 		return nil, err
 	}
@@ -484,6 +500,58 @@ func parseHistoryCursor(value *string, threadID, scope string) (*historyCursor, 
 		return nil, invalidThreadHistory("invalid cursor: " + *value)
 	}
 	return &cursor, nil
+}
+
+// itemsHistoryCursorForPosition mirrors Rust's ListItemsPosition handling in
+// segment paging (#48151): an opaque cursor is validated as before, while an
+// item anchor is resolved inside the requested turn's visible history - the
+// lineage's segments, so an inherited fork history is searched too - and excludes
+// the anchor itself.
+func itemsHistoryCursorForPosition(ctx context.Context, db *sql.DB, lineage []threadHistoryLineageSegment, params *ThreadHistoryListItemsParams) (*historyCursor, error) {
+	if params == nil || params.Position == nil {
+		return nil, nil
+	}
+	position := params.Position
+	if position.Anchor == nil {
+		return parseHistoryCursor(position.Cursor, params.ThreadID, historyCursorItems)
+	}
+	turnID := ""
+	if params.TurnID != nil {
+		turnID = strings.TrimSpace(*params.TurnID)
+	}
+	if turnID == "" {
+		return nil, invalidThreadHistory("turnId is required when cursor is an item anchor")
+	}
+	anchorItemID := strings.TrimSpace(position.Anchor.ItemID)
+	if anchorItemID != "" {
+		for _, segment := range lineage {
+			query := `SELECT rollout_ordinal FROM thread_items WHERE thread_id = ? AND item_id = ? AND turn_id = ? AND rollout_ordinal >= ?`
+			args := []any{segment.ThreadID, anchorItemID, turnID, sqliteInt(segment.Start)}
+			if segment.End != nil {
+				query += ` AND rollout_ordinal < ?`
+				args = append(args, sqliteInt(segment.End.EndOrdinalExclusive))
+			}
+			var ordinal int64
+			err := db.QueryRowContext(ctx, query, args...).Scan(&ordinal)
+			if err == sql.ErrNoRows {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("resolve thread history item anchor: %w", err)
+			}
+			if ordinal < 0 {
+				break
+			}
+			return &historyCursor{
+				RequestedThreadID: params.ThreadID,
+				RolloutOrdinal:    uint64(ordinal),
+				// The anchor itself is excluded from the page.
+				IncludeAnchor: false,
+				Scope:         historyCursorScope{Kind: historyCursorItems},
+			}, nil
+		}
+	}
+	return nil, invalidThreadHistory("cursor.itemId does not identify an item in the requested history scope")
 }
 
 func serializeHistoryCursor(threadID, scope string, ordinal int64, includeAnchor bool) (*string, error) {

@@ -67,9 +67,13 @@ func remoteTranscriptPreviewFromItems(ctx context.Context, client *remoteAppServ
 		limit := pageSize
 		sortDesc := appserver.SortDesc
 		var response appserver.ThreadItemsListResponse
+		var cursorParam *appserver.ThreadItemsListCursor
+		if cursor != nil {
+			cursorParam = &appserver.ThreadItemsListCursor{Opaque: *cursor}
+		}
 		params := appserver.ThreadItemsListParams{
 			ThreadID:      threadID,
-			Cursor:        cursor,
+			Cursor:        cursorParam,
 			Limit:         &limit,
 			SortDirection: sortDesc,
 		}

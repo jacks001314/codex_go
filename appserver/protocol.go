@@ -16,6 +16,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/sandbox"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/turn"
 )
 
@@ -2927,11 +2928,83 @@ type ThreadReadResponse struct {
 }
 
 type ThreadItemsListParams struct {
-	ThreadID      string        `json:"threadId"`
-	TurnID        *string       `json:"turnId,omitempty"`
-	Cursor        *string       `json:"cursor,omitempty"`
-	Limit         *int          `json:"limit,omitempty"`
-	SortDirection SortDirection `json:"sortDirection,omitempty"`
+	ThreadID      string                 `json:"threadId"`
+	TurnID        *string                `json:"turnId,omitempty"`
+	Cursor        *ThreadItemsListCursor `json:"cursor,omitempty"`
+	Limit         *int                   `json:"limit,omitempty"`
+	SortDirection SortDirection          `json:"sortDirection,omitempty"`
+}
+
+// ThreadItemsListCursor mirrors Rust's untagged ThreadItemsListCursor (#48151):
+// `cursor` is either the opaque continuation string a previous call returned or
+// an exclusive item anchor.
+type ThreadItemsListCursor struct {
+	Opaque string
+	Anchor *ThreadItemsListAnchor
+}
+
+// ThreadItemsListAnchor mirrors Rust's ThreadItemsListAnchor: an exclusive item
+// position inside the requested visible turn.
+type ThreadItemsListAnchor struct {
+	Type   string `json:"type"`
+	ItemID string `json:"itemId"`
+}
+
+func (c *ThreadItemsListCursor) UnmarshalJSON(data []byte) error {
+	if c == nil {
+		return fmt.Errorf("invalid cursor")
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*c = ThreadItemsListCursor{}
+		return nil
+	}
+	if strings.HasPrefix(trimmed, `"`) {
+		var opaque string
+		if err := json.Unmarshal(data, &opaque); err != nil {
+			return err
+		}
+		*c = ThreadItemsListCursor{Opaque: opaque}
+		return nil
+	}
+	var anchor ThreadItemsListAnchor
+	if err := json.Unmarshal(data, &anchor); err != nil {
+		return err
+	}
+	*c = ThreadItemsListCursor{Anchor: &anchor}
+	return nil
+}
+
+func (c ThreadItemsListCursor) MarshalJSON() ([]byte, error) {
+	if c.Anchor != nil {
+		return json.Marshal(c.Anchor)
+	}
+	return json.Marshal(c.Opaque)
+}
+
+// ThreadItemsListPositionForParams converts the protocol cursor into the store's
+// starting position, mirroring Rust's thread processor (#48151): an item anchor
+// without a non-empty turn id is invalid params.
+func ThreadItemsListPositionForParams(params *ThreadItemsListParams) (*state.ThreadHistoryListItemsPosition, error) {
+	if params == nil || params.Cursor == nil {
+		return nil, nil
+	}
+	cursor := params.Cursor
+	if cursor.Anchor == nil {
+		opaque := cursor.Opaque
+		return &state.ThreadHistoryListItemsPosition{Cursor: &opaque}, nil
+	}
+	if cursor.Anchor.Type != "" && cursor.Anchor.Type != "item" {
+		return nil, invalidParams(fmt.Sprintf("cursor: unknown variant `%s`, expected `item`", cursor.Anchor.Type))
+	}
+	turnID := ""
+	if params.TurnID != nil {
+		turnID = strings.TrimSpace(*params.TurnID)
+	}
+	if turnID == "" {
+		return nil, invalidParams("turnId is required when cursor is an item anchor")
+	}
+	return &state.ThreadHistoryListItemsPosition{Anchor: &state.ThreadHistoryItemAnchor{ItemID: cursor.Anchor.ItemID}}, nil
 }
 
 func (p *ThreadItemsListParams) Validate() error {
@@ -3525,7 +3598,7 @@ func BuildItemsResponse(record *session.Record, params *ThreadItemsListParams) (
 			items[left], items[right] = items[right], items[left]
 		}
 	}
-	start, err := parseCursor(params.Cursor)
+	start, err := itemsPageStart(items, params)
 	if err != nil {
 		return nil, err
 	}
@@ -5417,6 +5490,42 @@ func parseCursor(cursor *string) (int, error) {
 		return 0, jsonRPCInvalidRequest("invalid cursor")
 	}
 	return value, nil
+}
+
+// itemsPageStart resolves the exclusive start offset of an item page over the
+// already-ordered (and, for descending requests, already reversed) entry list.
+// An opaque continuation cursor is a numeric offset; an item anchor (#48151)
+// must identify an item inside the requested turn and excludes it, so ascending
+// pages continue after it and descending pages continue before it.
+func itemsPageStart(items []ThreadItemEntry, params *ThreadItemsListParams) (int, error) {
+	if params == nil || params.Cursor == nil {
+		return 0, nil
+	}
+	cursor := params.Cursor
+	if cursor.Anchor == nil {
+		opaque := cursor.Opaque
+		return parseCursor(&opaque)
+	}
+	if cursor.Anchor.Type != "" && cursor.Anchor.Type != "item" {
+		return 0, invalidParams(fmt.Sprintf("cursor: unknown variant `%s`, expected `item`", cursor.Anchor.Type))
+	}
+	turnID := ""
+	if params.TurnID != nil {
+		turnID = strings.TrimSpace(*params.TurnID)
+	}
+	if turnID == "" {
+		return 0, invalidParams("turnId is required when cursor is an item anchor")
+	}
+	anchorItemID := strings.TrimSpace(cursor.Anchor.ItemID)
+	if anchorItemID == "" {
+		return 0, invalidParams("cursor.itemId does not identify an item in the requested history scope")
+	}
+	for index, entry := range items {
+		if strings.TrimSpace(entry.Item.ID) == anchorItemID && strings.TrimSpace(entry.TurnID) == turnID {
+			return index + 1, nil
+		}
+	}
+	return 0, invalidParams("cursor.itemId does not identify an item in the requested history scope")
 }
 
 func paginateItems(items []ThreadItem, start int, limit int) ([]ThreadItem, string) {

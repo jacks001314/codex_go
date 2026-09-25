@@ -140,8 +140,10 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// gained `guardian_source_order_guidance`, the delivery proof for retained
 		// source-order labels, on the internal protocol surface only the stable
 		// export carries.
-		{"stable", stablePrecomputedExports, "71b6d71e6d5df28a79c61fca0ab7ea406cc434c9153e2a75eea44d12af852367"},
-		{"experimental", experimentalPrecomputedExports, "42590bd02dcb4ab9ae0f74b2cbd6298ae3eefa9a98c1ac50856059ca2b9814e1"},
+		// Re-vendored from upstream de9e78e3e7 (#48151): `thread/items/list`'s
+		// cursor accepts an exclusive item anchor.
+		{"stable", stablePrecomputedExports, "cb5b5990bf3b58ee3c3dc8642918219e386840590cf0fd2140729d5b26d74b90"},
+		{"experimental", experimentalPrecomputedExports, "3792a6caa3a106c9810a3ec6ada207268b95bb146d40d29cb5d3c12b5088de6e"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -2939,7 +2939,7 @@ func TestRouterThreadResumeReturnsStableHistoryHeadCursorsLikeRust(t *testing.T)
 	if turnsResponse.Error != nil || len(turnsResponse.Result.(*TurnsPage).Data) != 2 {
 		t.Fatalf("turns page = %+v", turnsResponse)
 	}
-	itemsResponse := router.Handle(requestWithParams(t, IntID(4), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-head-cursors", Cursor: first.ItemsBackwardsCursor, SortDirection: SortDesc}))
+	itemsResponse := router.Handle(requestWithParams(t, IntID(4), MethodThreadItemsList, ThreadItemsListParams{ThreadID: "thread-head-cursors", Cursor: &ThreadItemsListCursor{Opaque: stringPtrValue(first.ItemsBackwardsCursor)}, SortDirection: SortDesc}))
 	if itemsResponse.Error != nil || len(itemsResponse.Result.(*ThreadItemsListResponse).Data) != 2 {
 		t.Fatalf("items page = %+v", itemsResponse)
 	}
@@ -3832,7 +3832,7 @@ func TestRouterSearchLoadedTurnsAndInjectItems(t *testing.T) {
 	oneLimit := 1
 	nextItems := router.Handle(requestWithParams(t, IntID(31), MethodThreadItemsList, ThreadItemsListParams{
 		ThreadID: "thread-a",
-		Cursor:   itemsPage.NextCursor,
+		Cursor:   &ThreadItemsListCursor{Opaque: stringPtrValue(itemsPage.NextCursor)},
 		Limit:    &oneLimit,
 	}))
 	if nextItems.Error != nil {
@@ -3846,7 +3846,7 @@ func TestRouterSearchLoadedTurnsAndInjectItems(t *testing.T) {
 	badItemsCursor := "not-a-number"
 	badItemsCursorResponse := router.Handle(requestWithParams(t, IntID(32), MethodThreadItemsList, ThreadItemsListParams{
 		ThreadID: "thread-a",
-		Cursor:   &badItemsCursor,
+		Cursor:   &ThreadItemsListCursor{Opaque: badItemsCursor},
 	}))
 	if badItemsCursorResponse.Error == nil || badItemsCursorResponse.Error.Code != -32600 || badItemsCursorResponse.Error.Message != "invalid cursor" {
 		t.Fatalf("bad items cursor response = %+v", badItemsCursorResponse.Error)

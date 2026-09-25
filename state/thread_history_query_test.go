@@ -79,7 +79,7 @@ func TestThreadHistoryQueriesPageProjectedRowsLikeRust(t *testing.T) {
 	}
 	assertHistoryCursor(t, *items.NextCursor, "thread-page", historyCursorItems, false)
 	nextItems, err := runtime.ListThreadHistoryItems(ctx, ThreadHistoryListItemsParams{
-		ThreadID: "thread-page", Cursor: items.NextCursor, PageSize: 2, SortDirection: ThreadHistorySortAsc,
+		ThreadID: "thread-page", Position: &ThreadHistoryListItemsPosition{Cursor: items.NextCursor}, PageSize: 2, SortDirection: ThreadHistorySortAsc,
 	})
 	if err != nil || !equalStrings(historyItemIDs(nextItems.Items), []string{"agent-1", "user-2"}) {
 		t.Fatalf("next items = %#v, err %v", nextItems, err)
@@ -96,7 +96,7 @@ func TestThreadHistoryQueriesPageProjectedRowsLikeRust(t *testing.T) {
 	if _, err := runtime.ListThreadHistoryTurns(ctx, ThreadHistoryListTurnsParams{ThreadID: "thread-page", Cursor: &wrongThreadCursor, PageSize: 1}); !isInvalidHistoryError(err) {
 		t.Fatalf("wrong-thread cursor error = %v", err)
 	}
-	if _, err := runtime.ListThreadHistoryItems(ctx, ThreadHistoryListItemsParams{ThreadID: "thread-page", Cursor: turns.NextCursor, PageSize: 1}); !isInvalidHistoryError(err) {
+	if _, err := runtime.ListThreadHistoryItems(ctx, ThreadHistoryListItemsParams{ThreadID: "thread-page", Position: &ThreadHistoryListItemsPosition{Cursor: turns.NextCursor}, PageSize: 1}); !isInvalidHistoryError(err) {
 		t.Fatalf("wrong-scope cursor error = %v", err)
 	}
 }
