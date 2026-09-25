@@ -26,8 +26,9 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// warnings snapshot on top of #48135's remapped-left external-writer
 	// snapshot, #48121's command-center draft handoff, #48116's Max-reasoning
 	// footers and #48101's truncated multiline `/ps` preview.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1327 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1327", got)
+	// #48211 added the external-editor visible-handoff suite snapshot.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1328 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1328", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -497,12 +498,14 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			},
 		},
 		{
-			Path:     "tui/tests/suite/snapshots",
-			Files:    4,
+			Path: "tui/tests/suite/snapshots",
+			// #48211 added the external-editor visible-handoff snapshot.
+			Files:    5,
 			Owner:    "tui",
 			Focus:    "integration suite snapshots for automatic background server startup failures and shared-daemon feature/host-policy/override mismatches",
 			Priority: []string{"status"},
 			Required: []string{
+				"tui/tests/suite/snapshots/all__suite__focus_palette__external_editor__external_editor_visible_handoff.snap",
 				"tui/tests/suite/snapshots/all__suite__focus_palette__daemon_auto_start_failure.snap",
 				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_feature_mismatch.snap",
 				"tui/tests/suite/snapshots/all__suite__daemon_compatibility__daemon_host_policy_mismatch.snap",

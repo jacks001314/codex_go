@@ -52,8 +52,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// filesystem-path diagnostics snapshots (#46543). This pass adds the
 			// exec-server PID-namespace and WebSocket-auth suites (#47989,
 			// #47601) and the doctor path-safety config/database snapshots
-			// (#47886/#47887).
-			Files: 38,
+			// (#47886/#47887), plus the isolated executable fixture helper
+			// (#48213).
+			Files: 39,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
