@@ -22,10 +22,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream bf832f4678: #48116 added the Max-reasoning footer
-	// snapshots on top of #48101's truncated multiline `/ps` preview.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1324 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1324", got)
+	// Re-pinned to upstream 66c4e5a20d: #48121 added the command-center
+	// draft-handoff snapshot on top of #48116's Max-reasoning footers and
+	// #48101's truncated multiline `/ps` preview.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1325 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1325", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -106,13 +107,15 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46566 added the unavailable-thread local-command snapshot;
 			// #46691 added the two running-task exit pickers; #46751 moved the
 			// two startup-warning summaries into the warnings-viewer snapshots.
-			Files:    61,
+			// #48121 added the command-center draft-handoff snapshot.
+			Files:    62,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
 			Required: []string{
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__model_catalog__model_migration_prompt_shows_for_hidden_model.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_retained_worktree_error.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_new_draft_handoff.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__transcript_composer__transcript_close_restores_inline_draft.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__remote_disconnect_exit.snap",
 			},
