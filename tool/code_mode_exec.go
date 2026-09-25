@@ -134,8 +134,11 @@ type CodeModeRemoteAvailabilityProvider interface {
 }
 
 type CodeModeRemoteSession interface {
-	Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error)
-	Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error)
+	// The trailing signal is Rust #48123's optional preempt token: when it
+	// fires, the session ends the observation early while the cell keeps running.
+	// A nil signal never preempts.
+	Execute(context.Context, CodeModeRemoteExecuteRequest, *YieldSignal) (CodeModeRemoteResponse, error)
+	Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error)
 	Terminate(context.Context, string) (CodeModeRemoteResponse, error)
 	Close() error
 }
@@ -633,7 +636,10 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 	if yieldTimeMS < 0 {
 		return nil, RespondToModel("yield_time_ms must be non-negative")
 	}
-	if options.YieldTimeMS == nil && !strings.Contains(source, "yield_control") {
+	preempt := YieldSignalFromInvocation(invocation)
+	// A host request carrying a preempt signal must run as an observable cell so
+	// an `operation/yield` frame can end the observation early (#48123).
+	if options.YieldTimeMS == nil && !strings.Contains(source, "yield_control") && preempt == nil {
 		invocationCopy := *invocation
 		invocationCopy.Payload.Input = source
 		started := time.Now()
@@ -695,6 +701,8 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.cellOverheadEnabled()), runErr
 	case <-yield:
 	case <-timer.C:
+	case <-preempt.Done():
+		// #48123: the caller yielded the observation; the cell keeps running.
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()
@@ -737,7 +745,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 	yieldValue := uint64(yieldTimeMS)
 	yield := &yieldValue
 	startedAt := time.Now()
-	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens})
+	response, err := e.remote.Execute(ctx, CodeModeRemoteExecuteRequest{ToolCallID: invocation.CallID, Source: source, EnabledTools: definitions, YieldTimeMS: yield, MaxOutputTokens: options.MaxOutputTokens}, YieldSignalFromInvocation(invocation))
 	if err != nil {
 		return nil, err
 	}
@@ -1620,7 +1628,7 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 			if waitMS <= 0 {
 				waitMS = 10000
 			}
-			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS))
+			response, remoteErr = e.exec.remote.Wait(ctx, params.CellID, uint64(waitMS), YieldSignalFromInvocation(invocation))
 		}
 		if remoteErr == nil {
 			if response.State != "yielded" {
@@ -1656,6 +1664,13 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 	}
 	timer := time.NewTimer(time.Duration(waitMS) * time.Millisecond)
 	defer timer.Stop()
+	preempt := YieldSignalFromInvocation(invocation)
+	runningOutput := func() (*Output, error) {
+		status := "Script running with cell ID " + params.CellID
+		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
+		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
+		return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), nil
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -1671,10 +1686,10 @@ func (e *codeModeWaitExecutor) execute(ctx context.Context, invocation *Invocati
 		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
 		return applyCodeModeHeader(output, codeModeCellStatus(cell), time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), runErr
 	case <-timer.C:
-		status := "Script running with cell ID " + params.CellID
-		output := &Output{CallID: invocation.CallID, ToolName: PlainName("wait"), Success: true, Body: e.exec.cellDelta(cell), Data: map[string]any{"cell_id": params.CellID, "running": true}}
-		output = truncateCodeModeOutput(output, codeModeWaitTokenLimit(params.MaxTokens))
-		return applyCodeModeHeader(output, status, time.Since(cell.startedAt), nil, e.exec.cellOverheadEnabled()), nil
+		return runningOutput()
+	case <-preempt.Done():
+		// #48123: the caller yielded the observation; the cell keeps running.
+		return runningOutput()
 	}
 }
 

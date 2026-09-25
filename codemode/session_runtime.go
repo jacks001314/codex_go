@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/tool"
 )
 
 type StartedCell struct {
@@ -38,7 +40,10 @@ func (r *SessionRuntime) Cells() *CellStore {
 	return r.cells
 }
 
-func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (*StartedCell, error) {
+// Execute starts a cell. Rust #48123's preempt signal ends the foreground
+// observation early while the cell keeps running and stays available to later
+// waits; a nil signal never preempts.
+func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest, preempt *tool.YieldSignal) (*StartedCell, error) {
 	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
@@ -67,47 +72,58 @@ func (r *SessionRuntime) Execute(ctx context.Context, request *ExecuteRequest) (
 	if err != nil {
 		return nil, err
 	}
-	result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools})
-	_ = engine.Close()
-	items := []ContentItem{}
-	if result != nil {
-		items = result.ContentItems
-	}
-	output := ""
-	if result != nil {
-		for _, item := range items {
-			if item.Type == "input_text" {
-				output += item.Text
-			}
-		}
-	}
-	if output != "" {
-		if _, err := r.cells.AppendOutput(cellID.String(), output); err != nil {
-			return nil, err
-		}
-	}
+	// The script runs off the caller's goroutine so the yield timer and the
+	// preempt signal can end the observation while the cell keeps running
+	// (Rust's cell actor select).
+	done := make(chan engineOutcome, 1)
+	go func() {
+		result, execErr := engine.Execute(ctx, EngineRequest{ToolCallID: request.ToolCallID, Source: request.Source, EnabledTools: request.EnabledTools})
+		_ = engine.Close()
+		done <- engineOutcome{result: result, execErr: execErr}
+	}()
+
 	yieldMS := ProtocolDefaultExecYieldTimeMS
 	if request.YieldTimeMS != nil {
 		yieldMS = *request.YieldTimeMS
 	}
+	var timer <-chan time.Time
 	if yieldMS == 0 {
-		go r.completeLater(ctx, cellID, "", execErr, wakeup)
+		// Rust's YieldAfter(0) yields before the script produces anything.
+		go r.finishCellFromEngine(cellID, done, wakeup)
 		return &StartedCell{
 			CellID:          cellID,
-			InitialResponse: withHostDuration(Yielded(cellID, cloneContentItems(items)), startedAt),
+			InitialResponse: withHostDuration(Yielded(cellID, nil), startedAt),
 		}, nil
 	}
-	if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
-		return nil, err
+	deadline := time.NewTimer(time.Duration(yieldMS) * time.Millisecond)
+	defer deadline.Stop()
+	timer = deadline.C
+	select {
+	case outcome := <-done:
+		items, appendErr, execErr := r.applyEngineOutcome(cellID, outcome)
+		if appendErr != nil {
+			return nil, appendErr
+		}
+		if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
+			return nil, err
+		}
+		r.signal(cellID.String())
+		return &StartedCell{
+			CellID:          cellID,
+			InitialResponse: withHostDuration(Result(cellID, cloneContentItems(items), errorText(execErr)), startedAt),
+		}, nil
+	case <-timer:
+	case <-preempt.Done():
+	case <-ctx.Done():
 	}
-	r.signal(cellID.String())
+	go r.finishCellFromEngine(cellID, done, wakeup)
 	return &StartedCell{
 		CellID:          cellID,
-		InitialResponse: withHostDuration(Result(cellID, cloneContentItems(items), errorText(execErr)), startedAt),
+		InitialResponse: withHostDuration(Yielded(cellID, nil), startedAt),
 	}, nil
 }
 
-func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest) (*WaitOutcome, error) {
+func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest, preempt *tool.YieldSignal) (*WaitOutcome, error) {
 	startedAt := time.Now()
 	if r == nil {
 		return nil, fmt.Errorf("code mode session runtime is nil")
@@ -135,6 +151,8 @@ func (r *SessionRuntime) Wait(ctx context.Context, request *WaitRequest) (*WaitO
 		return nil, ctx.Err()
 	case <-wakeup:
 	case <-timer.C:
+	case <-preempt.Done():
+		// #48123: the caller yielded the observation; the cell keeps running.
 	}
 	cell, ok := r.cells.Get(cellID)
 	if !ok {
@@ -184,14 +202,45 @@ func (r *SessionRuntime) Shutdown() {
 	r.mu.Unlock()
 }
 
-func (r *SessionRuntime) completeLater(ctx context.Context, cellID CellID, output string, execErr error, wakeup <-chan struct{}) {
+type engineOutcome struct {
+	result  *EngineResult
+	execErr error
+}
+
+// applyEngineOutcome records the finished script's output on the cell.
+func (r *SessionRuntime) applyEngineOutcome(cellID CellID, outcome engineOutcome) ([]ContentItem, error, error) {
+	items := []ContentItem{}
+	if outcome.result != nil {
+		items = outcome.result.ContentItems
+	}
+	output := ""
+	for _, item := range items {
+		if item.Type == "input_text" {
+			output += item.Text
+		}
+	}
+	if output != "" {
+		if _, err := r.cells.AppendOutput(cellID.String(), output); err != nil {
+			return nil, err, outcome.execErr
+		}
+	}
+	return items, nil, outcome.execErr
+}
+
+// finishCellFromEngine completes a yielded cell once its script finishes, unless
+// the cell was terminated or completed first.
+func (r *SessionRuntime) finishCellFromEngine(cellID CellID, done <-chan engineOutcome, wakeup <-chan struct{}) {
 	select {
-	case <-ctx.Done():
-		_, _ = r.cells.Complete(cellID.String(), "", ctx.Err())
+	case outcome := <-done:
+		_, appendErr, execErr := r.applyEngineOutcome(cellID, outcome)
+		if appendErr != nil {
+			return
+		}
+		if _, err := r.cells.Complete(cellID.String(), "", execErr); err != nil {
+			return
+		}
 	case <-wakeup:
 		return
-	case <-time.After(10 * time.Millisecond):
-		_, _ = r.cells.Complete(cellID.String(), output, execErr)
 	}
 	r.signal(cellID.String())
 }

@@ -1729,7 +1729,7 @@ func (p *originCodeModeProvider) NewSession(delegate tool.CodeModeRemoteDelegate
 
 type originCodeModeSession struct{ provider *originCodeModeProvider }
 
-func (s *originCodeModeSession) Execute(ctx context.Context, _ tool.CodeModeRemoteExecuteRequest) (tool.CodeModeRemoteResponse, error) {
+func (s *originCodeModeSession) Execute(ctx context.Context, _ tool.CodeModeRemoteExecuteRequest, _ *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	if _, err := s.provider.delegate.Invoke(ctx, tool.CodeModeRemoteNestedCall{
 		CellID: "turn-origin-cell", RuntimeToolCallID: "exec-origin-call-nested",
 		ToolName: tool.PlainName("nested-echo"), Kind: tool.PayloadFunction, Input: json.RawMessage(`{}`),
@@ -1742,7 +1742,7 @@ func (s *originCodeModeSession) Execute(ctx context.Context, _ tool.CodeModeRemo
 	}, nil
 }
 
-func (s *originCodeModeSession) Wait(context.Context, string, uint64) (tool.CodeModeRemoteResponse, error) {
+func (s *originCodeModeSession) Wait(context.Context, string, uint64, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{CellID: "turn-origin-cell", State: "completed"}, nil
 }
 

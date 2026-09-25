@@ -27,6 +27,7 @@ const (
 	CodeModeHost_AcknowledgeNotification_FullMethodName = "/codex.code_mode.v1.CodeModeHost/AcknowledgeNotification"
 	CodeModeHost_Execute_FullMethodName                 = "/codex.code_mode.v1.CodeModeHost/Execute"
 	CodeModeHost_Wait_FullMethodName                    = "/codex.code_mode.v1.CodeModeHost/Wait"
+	CodeModeHost_YieldObservation_FullMethodName        = "/codex.code_mode.v1.CodeModeHost/YieldObservation"
 	CodeModeHost_CancelWait_FullMethodName              = "/codex.code_mode.v1.CodeModeHost/CancelWait"
 	CodeModeHost_Terminate_FullMethodName               = "/codex.code_mode.v1.CodeModeHost/Terminate"
 )
@@ -59,6 +60,9 @@ type CodeModeHostClient interface {
 	// the execution yields, completes, or is terminated.
 	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExecuteEvent], error)
 	Wait(ctx context.Context, in *WaitRequest, opts ...grpc.CallOption) (*WaitResponse, error)
+	// Ends the current observation early without stopping its cell. The
+	// corresponding Execute or Wait still returns its ordinary outcome.
+	YieldObservation(ctx context.Context, in *YieldObservationRequest, opts ...grpc.CallOption) (*YieldObservationResponse, error)
 	// Acknowledges that a canceled wait has retired before another wait starts.
 	CancelWait(ctx context.Context, in *CancelWaitRequest, opts ...grpc.CallOption) (*CancelWaitResponse, error)
 	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*WaitResponse, error)
@@ -182,6 +186,16 @@ func (c *codeModeHostClient) Wait(ctx context.Context, in *WaitRequest, opts ...
 	return out, nil
 }
 
+func (c *codeModeHostClient) YieldObservation(ctx context.Context, in *YieldObservationRequest, opts ...grpc.CallOption) (*YieldObservationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(YieldObservationResponse)
+	err := c.cc.Invoke(ctx, CodeModeHost_YieldObservation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codeModeHostClient) CancelWait(ctx context.Context, in *CancelWaitRequest, opts ...grpc.CallOption) (*CancelWaitResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CancelWaitResponse)
@@ -230,6 +244,9 @@ type CodeModeHostServer interface {
 	// the execution yields, completes, or is terminated.
 	Execute(*ExecuteRequest, grpc.ServerStreamingServer[ExecuteEvent]) error
 	Wait(context.Context, *WaitRequest) (*WaitResponse, error)
+	// Ends the current observation early without stopping its cell. The
+	// corresponding Execute or Wait still returns its ordinary outcome.
+	YieldObservation(context.Context, *YieldObservationRequest) (*YieldObservationResponse, error)
 	// Acknowledges that a canceled wait has retired before another wait starts.
 	CancelWait(context.Context, *CancelWaitRequest) (*CancelWaitResponse, error)
 	Terminate(context.Context, *TerminateRequest) (*WaitResponse, error)
@@ -266,6 +283,9 @@ func (UnimplementedCodeModeHostServer) Execute(*ExecuteRequest, grpc.ServerStrea
 }
 func (UnimplementedCodeModeHostServer) Wait(context.Context, *WaitRequest) (*WaitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Wait not implemented")
+}
+func (UnimplementedCodeModeHostServer) YieldObservation(context.Context, *YieldObservationRequest) (*YieldObservationResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method YieldObservation not implemented")
 }
 func (UnimplementedCodeModeHostServer) CancelWait(context.Context, *CancelWaitRequest) (*CancelWaitResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CancelWait not implemented")
@@ -406,6 +426,24 @@ func _CodeModeHost_Wait_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CodeModeHost_YieldObservation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(YieldObservationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeModeHostServer).YieldObservation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CodeModeHost_YieldObservation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeModeHostServer).YieldObservation(ctx, req.(*YieldObservationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CodeModeHost_CancelWait_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CancelWaitRequest)
 	if err := dec(in); err != nil {
@@ -464,6 +502,10 @@ var CodeModeHost_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Wait",
 			Handler:    _CodeModeHost_Wait_Handler,
+		},
+		{
+			MethodName: "YieldObservation",
+			Handler:    _CodeModeHost_YieldObservation_Handler,
 		},
 		{
 			MethodName: "CancelWait",

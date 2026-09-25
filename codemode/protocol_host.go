@@ -19,6 +19,11 @@ const DualWebSocketCapability = "dual-websocket-v1"
 // #37114).
 const SessionCellExecutionResourceLimitsCapability = "session-cell-execution-resource-limits"
 
+// YieldObservationCapability is the optional host capability advertising that an
+// in-flight execute or wait observation can be yielded without cancelling its
+// cell (Rust #48123).
+const YieldObservationCapability = "yield-observation"
+
 type RequestID int64
 
 type DelegateRequestID int64
@@ -242,6 +247,12 @@ func CancelRequest(id RequestID) ClientToHost {
 	return ClientToHost{Type: "operation/cancel", ID: id}
 }
 
+// YieldRequest ends the active observation for id without cancelling its cell
+// (Rust ClientToHost::YieldRequest, `operation/yield`).
+func YieldRequest(id RequestID) ClientToHost {
+	return ClientToHost{Type: "operation/yield", ID: id}
+}
+
 func DelegateResponseMessage(id DelegateRequestID, result WireResult[DelegateResponse]) ClientToHost {
 	return ClientToHost{Type: "delegate/response", DelegateID: id, DelegateResponse: &result}
 }
@@ -270,6 +281,11 @@ func (m ClientToHost) MarshalJSON() ([]byte, error) {
 			Request *HostRequest `json:"request"`
 		}{Type: m.Type, ID: m.ID, Request: m.Request})
 	case "operation/cancel":
+		return json.Marshal(struct {
+			Type string    `json:"type"`
+			ID   RequestID `json:"id"`
+		}{Type: m.Type, ID: m.ID})
+	case "operation/yield":
 		return json.Marshal(struct {
 			Type string    `json:"type"`
 			ID   RequestID `json:"id"`
@@ -312,7 +328,7 @@ func (m *ClientToHost) UnmarshalJSON(data []byte) error {
 			return err
 		}
 		m.ID, m.Request = value.ID, &value.Request
-	case "operation/cancel":
+	case "operation/cancel", "operation/yield":
 		if err := json.Unmarshal(data, &struct {
 			ID *RequestID `json:"id"`
 		}{ID: &m.ID}); err != nil {
@@ -511,11 +527,11 @@ func (m HostToClient) MarshalJSON() ([]byte, error) {
 }
 
 type HostRequest struct {
-	Method              string              `json:"method"`
-	SessionID           SessionID           `json:"sessionId,omitempty"`
-	Request             *ExecuteRequest     `json:"request,omitempty"`
-	Wait                *WaitRequest        `json:"-"`
-	CellID              CellID              `json:"cellId,omitempty"`
+	Method              string               `json:"method"`
+	SessionID           SessionID            `json:"sessionId,omitempty"`
+	Request             *ExecuteRequest      `json:"request,omitempty"`
+	Wait                *WaitRequest         `json:"-"`
+	CellID              CellID               `json:"cellId,omitempty"`
 	CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits,omitempty"`
 }
 
@@ -524,10 +540,10 @@ func (r *HostRequest) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("host request is nil")
 	}
 	var envelope struct {
-		Method              string              `json:"method"`
-		SessionID           SessionID           `json:"sessionId"`
-		Request             json.RawMessage     `json:"request"`
-		CellID              CellID              `json:"cellId"`
+		Method              string               `json:"method"`
+		SessionID           SessionID            `json:"sessionId"`
+		Request             json.RawMessage      `json:"request"`
+		CellID              CellID               `json:"cellId"`
 		CellExecutionLimits *CellExecutionLimits `json:"cellExecutionLimits"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {

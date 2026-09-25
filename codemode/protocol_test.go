@@ -166,7 +166,7 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 		ToolCallID:  "call-1",
 		Source:      "text('hello')",
 		YieldTimeMS: uint64Ptr(100),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -178,14 +178,14 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 		ToolCallID:  "call-2",
 		Source:      "// @exec: yield\nawait text('later')",
 		YieldTimeMS: uint64Ptr(0),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Execute(yielded) error = %v", err)
 	}
 	if yielded.InitialResponse.Variant != "Yielded" {
 		t.Fatalf("yielded = %#v", yielded.InitialResponse)
 	}
-	wait, err := runtime.Wait(ctx, &WaitRequest{CellID: yielded.CellID, YieldTimeMS: 1000})
+	wait, err := runtime.Wait(ctx, &WaitRequest{CellID: yielded.CellID, YieldTimeMS: 1000}, nil)
 	if err != nil {
 		t.Fatalf("Wait() error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestSessionRuntimeExecuteWaitTerminateAndHost(t *testing.T) {
 
 	sessionID, _ := NewSessionID("session-1")
 	host := NewSessionHost(runtime)
-	response, initial, err := host.Handle(ctx, &HostRequest{Method: "session/execute", SessionID: sessionID, Request: &ExecuteRequest{ToolCallID: "call-3", Source: "text('host')"}})
+	response, initial, err := host.Handle(ctx, &HostRequest{Method: "session/execute", SessionID: sessionID, Request: &ExecuteRequest{ToolCallID: "call-3", Source: "text('host')"}}, nil)
 	if err != nil {
 		t.Fatalf("Handle(execute) error = %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSessionHostClampsYieldTimeToSessionLimitsLikeRust(t *testing.T) {
 	sessionID, _ := NewSessionID("session-limited")
 	maxYield := uint64(10)
 	open := OpenSessionRequestWithLimits(sessionID, &CellExecutionLimits{MaxYieldTimeMS: &maxYield})
-	if _, _, err := host.Handle(ctx, &open); err != nil {
+	if _, _, err := host.Handle(ctx, &open, nil); err != nil {
 		t.Fatalf("Handle(open) error = %v", err)
 	}
 	request := ExecuteSessionRequest(sessionID, ExecuteRequest{
@@ -314,7 +314,7 @@ func TestSessionHostClampsYieldTimeToSessionLimitsLikeRust(t *testing.T) {
 	})
 	// The clamped request must still execute; the yield value itself is
 	// capped at max_yield_time_ms by the host before reaching the runtime.
-	response, initial, err := host.Handle(ctx, &request)
+	response, initial, err := host.Handle(ctx, &request, nil)
 	if err != nil {
 		t.Fatalf("Handle(execute with limits) error = %v", err)
 	}

@@ -1008,13 +1008,13 @@ type recordingCodeModeRemoteSession struct {
 	request      CodeModeRemoteExecuteRequest
 }
 
-func (s *recordingCodeModeRemoteSession) Execute(_ context.Context, request CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+func (s *recordingCodeModeRemoteSession) Execute(_ context.Context, request CodeModeRemoteExecuteRequest, _ *YieldSignal) (CodeModeRemoteResponse, error) {
 	s.executeCalls++
 	s.request = request
 	return s.response, s.err
 }
 
-func (s *recordingCodeModeRemoteSession) Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error) {
+func (s *recordingCodeModeRemoteSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return s.response, s.err
 }
 
@@ -1036,11 +1036,11 @@ type yieldedCodeModeSession struct {
 	settleResponse  CodeModeRemoteResponse
 }
 
-func (s *yieldedCodeModeSession) Execute(context.Context, CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+func (s *yieldedCodeModeSession) Execute(context.Context, CodeModeRemoteExecuteRequest, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return s.executeResponse, nil
 }
 
-func (s *yieldedCodeModeSession) Wait(context.Context, string, uint64) (CodeModeRemoteResponse, error) {
+func (s *yieldedCodeModeSession) Wait(context.Context, string, uint64, *YieldSignal) (CodeModeRemoteResponse, error) {
 	return s.settleResponse, nil
 }
 

@@ -3,6 +3,8 @@ package codemode
 import (
 	"context"
 	"fmt"
+
+	"codex_go/tool"
 )
 
 type SessionHost struct {
@@ -17,7 +19,10 @@ func NewSessionHost(runtime *SessionRuntime) *SessionHost {
 	return &SessionHost{runtime: runtime}
 }
 
-func (h *SessionHost) Handle(ctx context.Context, request *HostRequest) (*HostResponse, *RuntimeResponse, error) {
+// Handle serves one host request. The trailing signal is the request's
+// operation-yield token: cancelling it ends an execute or wait observation early
+// while the cell keeps running (Rust #48123). A nil signal never preempts.
+func (h *SessionHost) Handle(ctx context.Context, request *HostRequest, yield *tool.YieldSignal) (*HostResponse, *RuntimeResponse, error) {
 	if h == nil || h.runtime == nil {
 		return nil, nil, fmt.Errorf("code mode session host is nil")
 	}
@@ -40,7 +45,7 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest) (*HostRe
 			value := h.cellExecutionLimits.ClampYieldTimeMS(*request.Request.YieldTimeMS)
 			clamped.YieldTimeMS = &value
 		}
-		started, err := h.runtime.Execute(ctx, &clamped)
+		started, err := h.runtime.Execute(ctx, &clamped, yield)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -52,7 +57,7 @@ func (h *SessionHost) Handle(ctx context.Context, request *HostRequest) (*HostRe
 		}
 		clamped := *request.Wait
 		clamped.YieldTimeMS = h.cellExecutionLimits.ClampYieldTimeMS(request.Wait.YieldTimeMS)
-		outcome, err := h.runtime.Wait(ctx, &clamped)
+		outcome, err := h.runtime.Wait(ctx, &clamped, yield)
 		if err != nil {
 			return nil, nil, err
 		}

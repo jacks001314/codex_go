@@ -236,7 +236,7 @@ func TestWebSocketProviderExecutesAndHandlesDelegates(t *testing.T) {
 		EnabledTools: []tool.CodeModeRemoteToolDefinition{{
 			Name: "exec_command", ToolName: tool.PlainName("exec_command"), Kind: tool.PayloadFunction,
 		}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -338,7 +338,7 @@ func TestWebSocketProviderNegotiatesDualWebSocketLanes(t *testing.T) {
 		EnabledTools: []tool.CodeModeRemoteToolDefinition{{
 			Name: "exec_command", ToolName: tool.PlainName("exec_command"), Kind: tool.PayloadFunction,
 		}},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -436,7 +436,7 @@ func TestDualWebSocketRejectsBulkMessageOnControlLane(t *testing.T) {
 	session := provider.NewSession(&recordingRemoteDelegate{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("x")`})
+	_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("x")`}, nil)
 	if err == nil || !strings.Contains(err.Error(), "bulk message on the control websocket") {
 		t.Fatalf("Execute() error = %v, want lane enforcement failure", err)
 	}
@@ -489,7 +489,7 @@ func TestRemoteSessionConcurrentFirstExecuteOpensOnce(t *testing.T) {
 	for range 2 {
 		go func() {
 			<-start
-			_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("OK")`})
+			_, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("OK")`}, nil)
 			errs <- err
 		}()
 	}
@@ -542,7 +542,7 @@ func TestRemoteSessionReopensAfterConnectionLoss(t *testing.T) {
 	session := provider.NewSession(&recordingRemoteDelegate{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("ONE")`}); err != nil {
+	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("ONE")`}, nil); err != nil {
 		t.Fatalf("first Execute() error = %v", err)
 	}
 	concrete := session.(*remoteSession)
@@ -559,7 +559,7 @@ func TestRemoteSessionReopensAfterConnectionLoss(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("TWO")`}); err != nil {
+	if _, err := session.Execute(ctx, tool.CodeModeRemoteExecuteRequest{Source: `text("TWO")`}, nil); err != nil {
 		t.Fatalf("second Execute() error = %v", err)
 	}
 	if got := openCount.Load(); got != 2 {

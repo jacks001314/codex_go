@@ -16,7 +16,7 @@ type interruptRecordingSession struct {
 	cellID   string
 }
 
-func (s *interruptRecordingSession) Execute(ctx context.Context, request CodeModeRemoteExecuteRequest) (CodeModeRemoteResponse, error) {
+func (s *interruptRecordingSession) Execute(ctx context.Context, request CodeModeRemoteExecuteRequest, _ *YieldSignal) (CodeModeRemoteResponse, error) {
 	s.mu.Lock()
 	if s.cellID == "" {
 		s.cellID = "cell-1"
@@ -27,7 +27,7 @@ func (s *interruptRecordingSession) Execute(ctx context.Context, request CodeMod
 	return CodeModeRemoteResponse{CellID: cellID, State: "yielded"}, nil
 }
 
-func (s *interruptRecordingSession) Wait(ctx context.Context, cellID string, ms uint64) (CodeModeRemoteResponse, error) {
+func (s *interruptRecordingSession) Wait(ctx context.Context, cellID string, ms uint64, _ *YieldSignal) (CodeModeRemoteResponse, error) {
 	s.mu.Lock()
 	s.waited = append(s.waited, cellID)
 	s.mu.Unlock()

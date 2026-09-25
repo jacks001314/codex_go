@@ -22,10 +22,20 @@ type stdioHostServer struct {
 	mu           sync.Mutex
 	sessions     map[SessionID]*stdioHostSession
 	seen         map[SessionID]struct{}
-	requests     map[RequestID]context.CancelFunc
+	requests     map[RequestID]*stdioHostRequest
 	pending      map[DelegateRequestID]chan delegateHostResult
 	nextDelegate atomic.Int64
 	wg           sync.WaitGroup
+}
+
+// stdioHostRequest tracks one in-flight host request. The yield signal is the
+// per-request preempt token Rust hands to the runtime (#48123): an
+// `operation/yield` frame cancels it so the observation ends early while the
+// cell keeps running.
+type stdioHostRequest struct {
+	kind   string
+	cancel context.CancelFunc
+	yield  *tool.YieldSignal
 }
 
 type delegateHostResult struct {
@@ -40,7 +50,7 @@ func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error 
 	host := &stdioHostServer{
 		ctx: ctx, reader: NewFramedReader(stdin), writer: NewFramedWriter(stdout),
 		sessions: map[SessionID]*stdioHostSession{}, seen: map[SessionID]struct{}{},
-		requests: map[RequestID]context.CancelFunc{}, pending: map[DelegateRequestID]chan delegateHostResult{},
+		requests: map[RequestID]*stdioHostRequest{}, pending: map[DelegateRequestID]chan delegateHostResult{},
 	}
 	if err := host.negotiate(); err != nil {
 		return err
@@ -61,6 +71,8 @@ func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error 
 			host.startRequest(message.ID, message.Request)
 		case "operation/cancel":
 			host.cancelRequest(message.ID)
+		case "operation/yield":
+			host.yieldRequest(message.ID)
 		case "delegate/response":
 			host.completeDelegate(message.DelegateID, message.DelegateResponse)
 		case "connection/hello":
@@ -87,10 +99,26 @@ func (h *stdioHostServer) negotiate() error {
 	if !(&first.Hello.SupportedVersions).Contains(ProtocolV1) {
 		return h.write(HandshakeRejected(NoCompatibleVersion(versions)))
 	}
+	// Rust #48123: the host advertises the supported optional capabilities the
+	// client asked for, and rejects a required capability it cannot provide.
+	supported := CapabilitySet{}
+	for _, name := range []string{SessionCellExecutionResourceLimitsCapability, YieldObservationCapability} {
+		if capability, err := NewCapability(name); err == nil {
+			supported = append(supported, capability)
+		}
+	}
 	hostCapabilities := CapabilitySet{}
 	for _, capability := range first.Hello.RequiredCapabilities {
-		if !(&hostCapabilities).Contains(capability) {
+		if !(&supported).Contains(capability) {
 			return h.write(HandshakeRejected(MissingRequiredCapability(capability)))
+		}
+		if !(&hostCapabilities).Contains(capability) {
+			hostCapabilities = append(hostCapabilities, capability)
+		}
+	}
+	for _, capability := range first.Hello.OptionalCapabilities {
+		if (&supported).Contains(capability) && !(&hostCapabilities).Contains(capability) {
+			hostCapabilities = append(hostCapabilities, capability)
 		}
 	}
 	return h.write(HostHelloMessage(HostHello{SelectedVersion: ProtocolV1, Capabilities: hostCapabilities}))
@@ -98,6 +126,11 @@ func (h *stdioHostServer) negotiate() error {
 
 func (h *stdioHostServer) startRequest(id RequestID, request *HostRequest) {
 	requestCtx, cancel := context.WithCancel(h.ctx)
+	kind := ""
+	if request != nil {
+		kind = request.Method
+	}
+	entry := &stdioHostRequest{kind: kind, cancel: cancel, yield: tool.NewYieldSignal()}
 	h.mu.Lock()
 	if _, exists := h.requests[id]; exists {
 		h.mu.Unlock()
@@ -105,7 +138,7 @@ func (h *stdioHostServer) startRequest(id RequestID, request *HostRequest) {
 		_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](fmt.Sprintf("duplicate code-mode request ID %d", id))))
 		return
 	}
-	h.requests[id] = cancel
+	h.requests[id] = entry
 	h.mu.Unlock()
 	h.wg.Add(1)
 	go func() {
@@ -116,11 +149,11 @@ func (h *stdioHostServer) startRequest(id RequestID, request *HostRequest) {
 			h.mu.Unlock()
 			cancel()
 		}()
-		h.handleRequest(requestCtx, id, request)
+		h.handleRequest(requestCtx, id, request, entry.yield)
 	}()
 }
 
-func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, request *HostRequest) {
+func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, request *HostRequest, yield *tool.YieldSignal) {
 	if request == nil {
 		_ = h.write(HostOperationResponse(id, ResultErr[HostResponse]("host request is nil")))
 		return
@@ -158,7 +191,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 		if err := h.write(HostOperationResponse(id, ResultOK(ExecutionStarted(cellID)))); err != nil {
 			return
 		}
-		response := session.execute(ctx, cellID, request.Request)
+		response := session.execute(ctx, cellID, request.Request, yield)
 		_ = h.write(InitialResponse(id, ResultOK(response)))
 		if response.Variant != "Yielded" {
 			_ = h.write(CellClosed(request.SessionID, cellID))
@@ -169,7 +202,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](fmt.Sprintf("unknown code-mode session %s", request.SessionID))))
 			return
 		}
-		outcome := session.wait(ctx, request.Wait, false)
+		outcome := session.wait(ctx, request.Wait, false, yield)
 		_ = h.write(HostOperationResponse(id, ResultOK(WaitCompleted(outcome))))
 		if outcome.Response.Variant != "Yielded" {
 			_ = h.write(CellClosed(request.SessionID, outcome.Response.CellID))
@@ -180,7 +213,7 @@ func (h *stdioHostServer) handleRequest(ctx context.Context, id RequestID, reque
 			_ = h.write(HostOperationResponse(id, ResultErr[HostResponse](fmt.Sprintf("unknown code-mode session %s", request.SessionID))))
 			return
 		}
-		outcome := session.wait(ctx, &WaitRequest{CellID: request.CellID}, true)
+		outcome := session.wait(ctx, &WaitRequest{CellID: request.CellID}, true, yield)
 		_ = h.write(HostOperationResponse(id, ResultOK(WaitCompleted(outcome))))
 		_ = h.write(CellClosed(request.SessionID, request.CellID))
 	case "session/shutdown":
@@ -207,10 +240,26 @@ func (h *stdioHostServer) session(id SessionID) *stdioHostSession {
 
 func (h *stdioHostServer) cancelRequest(id RequestID) {
 	h.mu.Lock()
-	cancel := h.requests[id]
+	entry := h.requests[id]
 	h.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if entry != nil {
+		entry.cancel()
+	}
+}
+
+// yieldRequest mirrors Rust HostState::yield_request / RequestRegistry
+// ::yield_observation: only an execute or wait observation can be yielded, and
+// an unknown or already finished request id is ignored.
+func (h *stdioHostServer) yieldRequest(id RequestID) {
+	h.mu.Lock()
+	entry := h.requests[id]
+	h.mu.Unlock()
+	if entry == nil {
+		return
+	}
+	switch entry.kind {
+	case "session/execute", "session/wait":
+		entry.yield.Cancel()
 	}
 }
 
@@ -262,9 +311,9 @@ func (h *stdioHostServer) write(message any) error {
 
 func (h *stdioHostServer) shutdown() {
 	h.mu.Lock()
-	requests := make([]context.CancelFunc, 0, len(h.requests))
-	for _, cancel := range h.requests {
-		requests = append(requests, cancel)
+	requests := make([]*stdioHostRequest, 0, len(h.requests))
+	for _, entry := range h.requests {
+		requests = append(requests, entry)
 	}
 	sessions := make([]*stdioHostSession, 0, len(h.sessions))
 	for _, session := range h.sessions {
@@ -272,8 +321,8 @@ func (h *stdioHostServer) shutdown() {
 	}
 	h.sessions = map[SessionID]*stdioHostSession{}
 	h.mu.Unlock()
-	for _, cancel := range requests {
-		cancel()
+	for _, entry := range requests {
+		entry.cancel()
 	}
 	for _, session := range sessions {
 		session.shutdown(context.Background())
@@ -301,7 +350,7 @@ func (s *stdioHostSession) nextCellID() CellID {
 	return NewCellID(fmt.Sprintf("cell-%d", s.nextCell.Add(1)))
 }
 
-func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *ExecuteRequest) RuntimeResponse {
+func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *ExecuteRequest, yield *tool.YieldSignal) RuntimeResponse {
 	allowed, err := s.registerDefinitions(request.EnabledTools)
 	if err != nil {
 		message := err.Error()
@@ -314,6 +363,9 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 		Context: map[string]any{
 			tool.CodeModeCellIDContextKey:       cellID.String(),
 			tool.CodeModeEnabledToolsContextKey: allowed,
+			// #48123: the request's preempt signal lets an `operation/yield`
+			// frame end this observation while the cell keeps running.
+			tool.CodeModePreemptContextKey: yield,
 		},
 	}
 	invocation.Context["code_mode_notify"] = tool.CodeModeNotifyFunc(func(callID, text string) {
@@ -323,7 +375,7 @@ func (s *stdioHostSession) execute(ctx context.Context, cellID CellID, request *
 	return hostRuntimeResponse(cellID, output, execErr)
 }
 
-func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, terminate bool) WaitOutcome {
+func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, terminate bool, yield *tool.YieldSignal) WaitOutcome {
 	if request == nil || strings.TrimSpace(request.CellID.String()) == "" {
 		cellID := CellID("")
 		if request != nil {
@@ -335,7 +387,11 @@ func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, termi
 	arguments, _ := json.Marshal(map[string]any{
 		"cell_id": request.CellID.String(), "yield_time_ms": request.YieldTimeMS, "terminate": terminate,
 	})
-	output, err := s.waitExecutor.Execute(ctx, &tool.Invocation{CallID: "wait-" + request.CellID.String(), Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)}})
+	output, err := s.waitExecutor.Execute(ctx, &tool.Invocation{
+		CallID:  "wait-" + request.CellID.String(),
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: string(arguments)},
+		Context: map[string]any{tool.CodeModePreemptContextKey: yield},
+	})
 	if err != nil && strings.Contains(err.Error(), "not found") {
 		message := err.Error()
 		return MissingCell(Result(request.CellID, nil, &message))
@@ -347,7 +403,7 @@ func (s *stdioHostSession) wait(ctx context.Context, request *WaitRequest, termi
 func (s *stdioHostSession) shutdown(ctx context.Context) {
 	for value := uint64(1); value <= s.nextCell.Load(); value++ {
 		cellID := NewCellID(fmt.Sprintf("cell-%d", value))
-		_ = s.wait(ctx, &WaitRequest{CellID: cellID}, true)
+		_ = s.wait(ctx, &WaitRequest{CellID: cellID}, true, nil)
 	}
 }
 

@@ -135,10 +135,15 @@ type remoteConnectOptions struct {
 func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTransport, options *remoteConnectOptions) (*remoteConnection, error) {
 	versions, _ := NewSupportedProtocolVersions(ProtocolV1)
 	dual, _ := NewCapability(DualWebSocketCapability)
-	optional := CapabilitySet{}
+	// Rust's connection hello asks for the session cell-execution limits and the
+	// yield-observation capability (the latter #48123) as optional capabilities.
+	limits, _ := NewCapability(SessionCellExecutionResourceLimitsCapability)
+	yield, _ := NewCapability(YieldObservationCapability)
+	requested := []Capability{limits, yield}
 	if options != nil && strings.TrimSpace(options.websocketURL) != "" {
-		optional, _ = NewCapabilitySet(dual)
+		requested = append(requested, dual)
 	}
+	optional, _ := NewCapabilitySet(requested...)
 	hello, _ := NewClientHello(versions, CapabilitySet{}, optional)
 	if err := transport.Write(ctx, ClientHelloMessage(hello)); err != nil {
 		_ = transport.Close()
@@ -189,6 +194,7 @@ func connectRemoteTransportWithHandshake(ctx context.Context, transport remoteTr
 		return nil, fmt.Errorf("code-mode host returned an unexpected bulk pairing token")
 	}
 	connection := newRemoteConnection(transport, bulk)
+	connection.capabilities = response.Hello.Capabilities
 	go connection.readLoop()
 	if bulk != nil {
 		go connection.readBulkLoop()
@@ -227,7 +233,7 @@ type remoteSession struct {
 	closed   bool
 }
 
-func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemoteExecuteRequest) (tool.CodeModeRemoteResponse, error) {
+func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemoteExecuteRequest, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	connection, err := s.connection(ctx)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
@@ -257,11 +263,11 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
 		TraceContext: codeModeTraceContextFromContext(ctx),
-	})
+	}, preempt)
 	return publicRemoteResponseForGeneration(response, s.generation), err
 }
 
-func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64) (tool.CodeModeRemoteResponse, error) {
+func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	connection, err := s.connection(ctx)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
@@ -274,7 +280,7 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 		return tool.CodeModeRemoteResponse{}, err
 	}
 	outcome, err := connection.withTransportDeadline(runtimeTimeout, "wait", func(ctx context.Context) (HostResponse, error) {
-		return connection.Request(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}))
+		return connection.RequestWithYield(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}), preempt)
 	})
 	if err != nil {
 		if errors.Is(err, errCodeModeHostRequestTimeout) {
@@ -511,6 +517,10 @@ type remoteConnection struct {
 	pending   map[RequestID]*remotePending
 	delegates map[SessionID]tool.CodeModeRemoteDelegate
 	cancels   map[DelegateRequestID]context.CancelFunc
+	// capabilities are the host's negotiated capabilities (Rust
+	// Connection::capabilities), used to decide whether a yield frame may be
+	// sent to this host (#48123).
+	capabilities CapabilitySet
 }
 
 func newRemoteConnection(transport remoteTransport, bulk ...remoteTransport) *remoteConnection {
@@ -592,10 +602,22 @@ func (c *remoteConnection) RemoveDelegate(sessionID SessionID) {
 }
 
 func (c *remoteConnection) Request(ctx context.Context, request HostRequest) (HostResponse, error) {
+	return c.requestWithYield(ctx, request, nil)
+}
+
+// RequestWithYield is Request with Rust #48123's preempt signal: firing it sends
+// an `operation/yield` frame so the host ends the observation early.
+func (c *remoteConnection) RequestWithYield(ctx context.Context, request HostRequest, preempt *tool.YieldSignal) (HostResponse, error) {
+	return c.requestWithYield(ctx, request, preempt)
+}
+
+func (c *remoteConnection) requestWithYield(ctx context.Context, request HostRequest, preempt *tool.YieldSignal) (HostResponse, error) {
 	pending, id, err := c.sendRequest(ctx, request, false)
 	if err != nil {
 		return HostResponse{}, err
 	}
+	stopYield := c.watchYield(id, c.supportedYieldSignal(preempt))
+	defer stopYield()
 	select {
 	case result := <-pending.response:
 		return result.response, result.err
@@ -605,28 +627,70 @@ func (c *remoteConnection) Request(ctx context.Context, request HostRequest) (Ho
 	}
 }
 
-func (c *remoteConnection) Execute(ctx context.Context, sessionID SessionID, delegate tool.CodeModeRemoteDelegate, request ExecuteRequest) (RuntimeResponse, error) {
+// supportedYieldSignal drops a caller's preempt signal when the host did not
+// negotiate `yield-observation`, so an older host keeps its normal timeout
+// behavior (Rust Connection::supported_yield_signal, #48123).
+func (c *remoteConnection) supportedYieldSignal(signal *tool.YieldSignal) *tool.YieldSignal {
+	if c == nil || signal == nil {
+		return nil
+	}
+	c.mu.Lock()
+	supported := c.capabilities.Contains(Capability(YieldObservationCapability))
+	c.mu.Unlock()
+	if !supported {
+		return nil
+	}
+	return signal
+}
+
+// watchYield emits the `operation/yield` frame when the preempt signal fires and
+// returns a stop function the caller runs once the observation settles.
+func (c *remoteConnection) watchYield(id RequestID, signal *tool.YieldSignal) func() {
+	if signal == nil {
+		return func() {}
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-signal.Done():
+			_ = c.write(context.Background(), YieldRequest(id))
+		case <-stopped:
+		}
+	}()
+	return func() { close(stopped) }
+}
+
+func (c *remoteConnection) Execute(ctx context.Context, sessionID SessionID, delegate tool.CodeModeRemoteDelegate, request ExecuteRequest, preempt *tool.YieldSignal) (RuntimeResponse, error) {
 	c.SetDelegate(sessionID, delegate)
 	pending, id, err := c.sendRequest(ctx, ExecuteSessionRequest(sessionID, request), true)
 	if err != nil {
 		return RuntimeResponse{}, err
 	}
+	// Rust keeps the yield watcher alive until the observation's final response
+	// arrives, so the frame can still be sent while the initial response is in
+	// flight.
+	stopYield := c.watchYield(id, c.supportedYieldSignal(preempt))
 	select {
 	case result := <-pending.response:
 		if result.err != nil {
+			stopYield()
 			return RuntimeResponse{}, result.err
 		}
 		if result.response.Type != "execution/started" {
+			stopYield()
 			return RuntimeResponse{}, fmt.Errorf("code-mode host returned an invalid execute response")
 		}
 	case <-ctx.Done():
+		stopYield()
 		c.cancelRequest(id)
 		return RuntimeResponse{}, ctx.Err()
 	}
 	select {
 	case result := <-pending.initial:
+		stopYield()
 		return result.response, result.err
 	case <-ctx.Done():
+		stopYield()
 		c.cancelRequest(id)
 		return RuntimeResponse{}, ctx.Err()
 	}

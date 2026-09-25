@@ -122,11 +122,11 @@ func (p *DisabledProvider) Close() error { return nil }
 
 type unavailableRemoteSession struct{ err error }
 
-func (s unavailableRemoteSession) Execute(context.Context, tool.CodeModeRemoteExecuteRequest) (tool.CodeModeRemoteResponse, error) {
+func (s unavailableRemoteSession) Execute(context.Context, tool.CodeModeRemoteExecuteRequest, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, s.err
 }
 
-func (s unavailableRemoteSession) Wait(context.Context, string, uint64) (tool.CodeModeRemoteResponse, error) {
+func (s unavailableRemoteSession) Wait(context.Context, string, uint64, *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
 	return tool.CodeModeRemoteResponse{}, s.err
 }
 
