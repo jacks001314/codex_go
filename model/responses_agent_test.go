@@ -633,6 +633,57 @@ func TestResponsesAgentRunnerRunWebSocketReadsModelsETagFromMetadataEvent(t *tes
 	}
 }
 
+// Mirrors Rust's
+// `websocket_safety_buffering_event_controls_visibility_when_header_disables_it`:
+// a WebSocket event's own JSON headers supply the safety-buffering treatment, so
+// a payload that omits its wire `retry_model` still falls back to the header's
+// faster model, and the delivered payload asks the UI to show even when the
+// payload tries to disable it.
+func TestResponsesAgentRunnerRunWebSocketSafetyBufferingUsesEventHeadersLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		events := []string{
+			`{"type":"codex.response.metadata","headers":{"x-codex-safety-buffering-enabled":"false","x-codex-safety-buffering-faster-model":"gpt-fast-header"}}`,
+			`{"type":"response.output_text.delta","delta":"hi","safety_buffering":{"use_cases":["cyber"],"reasons":["user_risk"],"show_buffering_ui":false}}`,
+			`{"type":"response.completed","response":{"id":"resp-ws-buffering","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+		}
+		for _, event := range events {
+			_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+		}
+	}))
+	defer server.Close()
+
+	var events []ResponsesStreamEvent
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		SupportsWebsockets: true,
+		StreamHandler: func(event *ResponsesStreamEvent) {
+			if event != nil {
+				events = append(events, *event)
+			}
+		},
+	})
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "buffer me"}); err != nil {
+		t.Fatalf("RunWebSocket() error = %v", err)
+	}
+	buffering := firstEventByKind(events, ResponsesStreamEventSafetyBuffer)
+	if buffering == nil || buffering.SafetyBuffering == nil {
+		t.Fatalf("safety buffering event = %#v", buffering)
+	}
+	if !buffering.SafetyBuffering.ShowBufferingUI {
+		t.Fatal("a delivered payload must ask the UI to show")
+	}
+	faster := buffering.SafetyBuffering.FasterModel
+	if faster == nil || *faster != "gpt-fast-header" {
+		t.Fatalf("faster model = %v, want the event header's model", faster)
+	}
+}
 func TestResponsesAgentRunnerRunWebSocketRecoversDeclaredCustomToolCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		conn, err := websocket.Accept(w, request, nil)

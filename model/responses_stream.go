@@ -200,6 +200,10 @@ type responsesStreamAccumulator struct {
 	functionCallArgDeltas map[string]string
 	customToolInputDeltas map[string]string
 	declaredCustomTools   map[string]struct{}
+	// safetyBufferingTreatment carries the response-side safety-buffering
+	// headers: the HTTP response headers for a streamed response, or the JSON
+	// `headers` of each WebSocket event (Rust's `safety_buffering_for_event`).
+	safetyBufferingTreatment safetyBufferingTreatment
 }
 
 func newResponsesStreamAccumulator(request *AgentRequest) *responsesStreamAccumulator {
@@ -475,7 +479,10 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
-	response, err := parseResponsesStreamWithMetrics(streamCtx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics, r.Telemetry)
+	// Rust derives the safety-buffering treatment from the response headers once
+	// per stream and threads it into every event.
+	treatment, _ := safetyBufferingTreatmentFromHeaders(httpResponse.Header)
+	response, err := parseResponsesStreamWithTreatment(streamCtx, newIdleTimeoutReader(httpResponse.Body, r.streamIdleTimeout()), request, r.ProviderID, handler, r.Metrics, r.Telemetry, treatment)
 	if err != nil {
 		return nil, err
 	}
@@ -537,6 +544,13 @@ func parseResponsesStream(ctx context.Context, reader io.Reader, request *AgentR
 // the per-event codex.sse_event metrics and diagnostic records (Rust's
 // SessionTelemetry::log_sse_event with the watcher's per-event duration).
 func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler, metrics MetricsSink, telemetrySink SessionTelemetrySink) (*AgentResponse, error) {
+	return parseResponsesStreamWithTreatment(ctx, reader, request, providerID, handler, metrics, telemetrySink, safetyBufferingTreatment{})
+}
+
+// parseResponsesStreamWithTreatment is `parseResponsesStreamWithMetrics` with the
+// response's safety-buffering treatment (Rust threads the same value into
+// `process_sse_with_treatment`).
+func parseResponsesStreamWithTreatment(ctx context.Context, reader io.Reader, request *AgentRequest, providerID string, handler ResponsesStreamHandler, metrics MetricsSink, telemetrySink SessionTelemetrySink, treatment safetyBufferingTreatment) (*AgentResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -544,6 +558,7 @@ func parseResponsesStreamWithMetrics(ctx context.Context, reader io.Reader, requ
 		return nil, errors.New("responses stream body is nil")
 	}
 	accumulator := newResponsesStreamAccumulator(request)
+	accumulator.safetyBufferingTreatment = treatment
 	parser := newResponsesSSEParser(reader)
 	// Rust's turn loop wraps the streamed events in `receiving_stream`, with one
 	// `handle_responses` (the per-event span record_responses names) and one
@@ -1016,7 +1031,17 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 	}
 	if rawType == "response.metadata" {
-		emitResponsesMetadataEvents(sse.Data, handler)
+		a.emitMetadataEvents(sse.Data, handler)
+	}
+	// Rust calls `safety_buffering_for_event` for every event: a payload can carry
+	// its own top-level `safety_buffering` field on any event kind, not only on a
+	// metadata event.
+	if buffering := safetyBufferingFromStreamMetadata(sse.Data, a.safetyBufferingTreatment); buffering != nil {
+		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
+			Kind:            ResponsesStreamEventSafetyBuffer,
+			SafetyBuffering: buffering,
+			RawType:         string(ResponsesStreamEventSafetyBuffer),
+		})
 	}
 	switch rawType {
 	case "error":
@@ -1510,7 +1535,7 @@ func accumulatedToolInputDelta(values map[string]string, keys ...string) string 
 	return ""
 }
 
-func emitResponsesMetadataEvents(data []byte, handler ResponsesStreamHandler) {
+func (a *responsesStreamAccumulator) emitMetadataEvents(data []byte, handler ResponsesStreamHandler) {
 	if reroute := modelRerouteFromStreamMetadata(data); reroute != nil {
 		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
 			Kind:    ResponsesStreamEventModelReroute,
@@ -1530,13 +1555,6 @@ func emitResponsesMetadataEvents(data []byte, handler ResponsesStreamHandler) {
 			Kind:               ResponsesStreamEventModeration,
 			ModerationMetadata: metadata,
 			RawType:            string(ResponsesStreamEventModeration),
-		})
-	}
-	if buffering := safetyBufferingFromStreamMetadata(data); buffering != nil {
-		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
-			Kind:            ResponsesStreamEventSafetyBuffer,
-			SafetyBuffering: buffering,
-			RawType:         string(ResponsesStreamEventSafetyBuffer),
 		})
 	}
 }
@@ -1594,7 +1612,7 @@ func turnModerationMetadataFromStreamMetadata(data []byte) (any, bool) {
 	return value, true
 }
 
-func safetyBufferingFromStreamMetadata(data []byte) *ResponsesSafetyBuffering {
+func safetyBufferingFromStreamMetadata(data []byte, treatment safetyBufferingTreatment) *ResponsesSafetyBuffering {
 	var payload map[string]any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return nil
@@ -1606,7 +1624,7 @@ func safetyBufferingFromStreamMetadata(data []byte) *ResponsesSafetyBuffering {
 		if !ok {
 			return nil
 		}
-		return safetyBufferingFromPayload(parsed)
+		return safetyBufferingFromPayload(parsed, treatment)
 	}
 	// Fallback: typed `response.metadata` events whose metadata object declares
 	// `"type": "safety_buffering"` carry the payload directly on the metadata.
@@ -1617,21 +1635,83 @@ func safetyBufferingFromStreamMetadata(data []byte) *ResponsesSafetyBuffering {
 	if text, _ := metadata["type"].(string); text != "safety_buffering" {
 		return nil
 	}
-	return safetyBufferingFromPayload(metadata)
+	return safetyBufferingFromPayload(metadata, treatment)
 }
 
-func safetyBufferingFromPayload(payload map[string]any) *ResponsesSafetyBuffering {
-	buffering := &ResponsesSafetyBuffering{
-		Model:           stringFromAnyMap(payload, "model"),
-		UseCases:        stringSliceFromAny(firstAnyFromMap(payload, "use_cases", "useCases")),
-		Reasons:         stringSliceFromAny(firstAnyFromMap(payload, "reasons")),
-		ShowBufferingUI: boolFromAny(firstAnyFromMap(payload, "show_buffering_ui", "showBufferingUi", "showBufferingUI")),
-		FasterModel:     stringPtrFromAny(firstAnyFromMap(payload, "faster_model", "fasterModel")),
-	}
-	if buffering.Model == "" && len(buffering.UseCases) == 0 && len(buffering.Reasons) == 0 && !buffering.ShowBufferingUI && buffering.FasterModel == nil {
+// safetyBufferingFromPayload mirrors Rust's `SafetyBuffering` deserialization
+// plus `ResponsesStreamEvent::safety_buffering`: both wire arrays are required,
+// the payload's own wire `retry_model` wins, and the response's header treatment
+// supplies the model only when the payload omits it. Rust marks
+// `show_buffering_ui` as `#[serde(skip)]` and always sets it, so a delivered
+// payload always asks the UI to show.
+func safetyBufferingFromPayload(payload map[string]any, treatment safetyBufferingTreatment) *ResponsesSafetyBuffering {
+	useCases, useCasesOK := jsonStringArrayField(payload, "use_cases", "useCases")
+	reasons, reasonsOK := jsonStringArrayField(payload, "reasons")
+	if !useCasesOK || !reasonsOK {
 		return nil
 	}
+	fasterModel, fasterModelPresent, fasterModelOK := jsonOptionalStringField(payload, "retry_model", "faster_model", "fasterModel")
+	if !fasterModelOK {
+		return nil
+	}
+	if !fasterModelPresent {
+		fasterModel = cloneStringPointer(treatment.fasterModel)
+	}
+	buffering := &ResponsesSafetyBuffering{
+		Model:           stringFromAnyMap(payload, "model"),
+		UseCases:        useCases,
+		Reasons:         reasons,
+		ShowBufferingUI: true,
+		FasterModel:     fasterModel,
+	}
 	return buffering
+}
+
+// jsonStringArrayField mirrors a required `Vec<String>` field: the key must be
+// present and hold an array whose elements are all strings.
+func jsonStringArrayField(payload map[string]any, keys ...string) ([]string, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		values, ok := value.([]any)
+		if !ok {
+			return nil, false
+		}
+		out := make([]string, 0, len(values))
+		for _, item := range values {
+			text, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, text)
+		}
+		return out, true
+	}
+	return nil, false
+}
+
+// jsonOptionalStringField mirrors an `Option<String>` field: absent means the
+// field was omitted, present with null means an explicit null (which suppresses
+// the treatment fallback), and any other non-string value makes the whole
+// payload invalid.
+func jsonOptionalStringField(payload map[string]any, keys ...string) (*string, bool, bool) {
+	for _, key := range keys {
+		value, ok := payload[key]
+		if !ok {
+			continue
+		}
+		if value == nil {
+			return nil, true, true
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, true, false
+		}
+		return &text, true, true
+	}
+	return nil, false, true
 }
 
 func streamMetadataObject(payload map[string]any) map[string]any {

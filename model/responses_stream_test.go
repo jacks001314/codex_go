@@ -290,9 +290,209 @@ func TestSoleAccumulatedToolInputDeltaRejectsAmbiguousInputs(t *testing.T) {
 	}
 }
 
+func stringPtrSafetyBuffering(value string) *string { return &value }
+
+// Mirrors Rust's `treatment_from_headers` (codex-api/src/safety_buffering.rs):
+// only the two safety-buffering headers create a treatment, and the faster model
+// comes from its own header.
+func TestSafetyBufferingTreatmentFromHeadersMatchesRust(t *testing.T) {
+	cases := []struct {
+		name        string
+		headers     map[string]string
+		wantPresent bool
+		wantModel   *string
+	}{
+		{name: "no headers"},
+		{name: "unrelated header", headers: map[string]string{"x-other": "1"}},
+		{name: "enabled only", headers: map[string]string{xCodexSafetyBufferingEnabledHeader: "true"}, wantPresent: true},
+		{
+			name:        "faster model only",
+			headers:     map[string]string{xCodexSafetyBufferingFasterModelHeader: "gpt-fast-header"},
+			wantPresent: true,
+			wantModel:   stringPtrSafetyBuffering("gpt-fast-header"),
+		},
+		{
+			name: "both headers",
+			headers: map[string]string{
+				xCodexSafetyBufferingEnabledHeader:     "false",
+				xCodexSafetyBufferingFasterModelHeader: "gpt-fast-header",
+			},
+			wantPresent: true,
+			wantModel:   stringPtrSafetyBuffering("gpt-fast-header"),
+		},
+		{
+			name:        "blank model value",
+			headers:     map[string]string{xCodexSafetyBufferingFasterModelHeader: ""},
+			wantPresent: true,
+			wantModel:   stringPtrSafetyBuffering(""),
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			headers := http.Header{}
+			for name, value := range testCase.headers {
+				headers.Set(name, value)
+			}
+			treatment, present := safetyBufferingTreatmentFromHeaders(headers)
+			if present != testCase.wantPresent {
+				t.Fatalf("present = %v, want %v", present, testCase.wantPresent)
+			}
+			got := treatment.fasterModel
+			if (got == nil) != (testCase.wantModel == nil) || (got != nil && *got != *testCase.wantModel) {
+				t.Fatalf("faster model = %v, want %v", got, testCase.wantModel)
+			}
+		})
+	}
+	if _, present := safetyBufferingTreatmentFromHeaders(nil); present {
+		t.Fatal("nil headers must not produce a treatment")
+	}
+}
+
+// Mirrors Rust's `json_headers_to_http_headers`: string, number and boolean
+// values convert, while invalid names and unsupported or invalid values are
+// dropped.
+func TestJSONHeadersToHTTPHeadersMatchesRust(t *testing.T) {
+	if mapped := jsonHeadersToHTTPHeaders(nil); mapped != nil {
+		t.Fatalf("nil headers = %#v, want nil", mapped)
+	}
+	if mapped := jsonHeadersToHTTPHeaders(map[string]any{}); mapped != nil {
+		t.Fatalf("empty headers = %#v, want nil", mapped)
+	}
+	mapped := jsonHeadersToHTTPHeaders(map[string]any{
+		"x-model":        "gpt-fast",
+		"x-count":        float64(3),
+		"x-enabled":      true,
+		"x-disabled":     false,
+		"bad name":       "dropped",
+		"x-object":       map[string]any{"a": 1},
+		"x-array":        []any{"a"},
+		"x-null":         nil,
+		"x-bad-value":    "line\nbreak",
+		"x-padded-value": " padded ",
+	})
+	if got := mapped.Get("x-model"); got != "gpt-fast" {
+		t.Fatalf("x-model = %q", got)
+	}
+	if got := mapped.Get("x-count"); got != "3" {
+		t.Fatalf("x-count = %q", got)
+	}
+	if got := mapped.Get("x-enabled"); got != "true" {
+		t.Fatalf("x-enabled = %q", got)
+	}
+	if got := mapped.Get("x-disabled"); got != "false" {
+		t.Fatalf("x-disabled = %q", got)
+	}
+	for _, name := range []string{"bad name", "x-object", "x-array", "x-null", "x-bad-value", "x-padded-value"} {
+		if _, ok := mapped[http.CanonicalHeaderKey(name)]; ok {
+			t.Fatalf("%s survived conversion: %#v", name, mapped)
+		}
+	}
+	// The converted headers feed the treatment lookup, the WebSocket path's form.
+	jsonHeaders := map[string]any{"X-Codex-Safety-Buffering-Faster-Model": "gpt-fast-header"}
+	treatment, present := safetyBufferingTreatmentFromJSONHeaders(jsonHeaders)
+	if !present || treatment.fasterModel == nil || *treatment.fasterModel != "gpt-fast-header" {
+		t.Fatalf("treatment from JSON headers = %#v (present=%v)", treatment, present)
+	}
+}
+
+// Mirrors Rust's
+// `safety_buffering_prefers_wire_retry_model_and_only_falls_back_when_omitted`:
+// the payload's own wire `retry_model` wins, an explicit null suppresses the
+// fallback, and the header treatment supplies the model only when the payload
+// omits the key. A delivered payload always asks the UI to show.
+func TestSafetyBufferingPrefersWireRetryModelAndFallsBackLikeRust(t *testing.T) {
+	treatment := safetyBufferingTreatment{fasterModel: stringPtrSafetyBuffering("gpt-fast-header")}
+	cases := []struct {
+		name      string
+		payload   string
+		wantModel *string
+	}{
+		{
+			name:      "omitted falls back to the header",
+			payload:   `{"use_cases":["cyber"],"reasons":["user_risk"]}`,
+			wantModel: stringPtrSafetyBuffering("gpt-fast-header"),
+		},
+		{
+			name:      "wire model wins",
+			payload:   `{"use_cases":["cyber"],"reasons":["user_risk"],"retry_model":"gpt-fast-wire"}`,
+			wantModel: stringPtrSafetyBuffering("gpt-fast-wire"),
+		},
+		{
+			name:      "explicit null suppresses the fallback",
+			payload:   `{"use_cases":["cyber"],"reasons":["user_risk"],"retry_model":null}`,
+			wantModel: nil,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := []byte(`{"type":"response.output_text.delta","delta":"hi","safety_buffering":` + testCase.payload + `}`)
+			buffering := safetyBufferingFromStreamMetadata(event, treatment)
+			if buffering == nil {
+				t.Fatal("expected a safety buffering payload")
+			}
+			if !buffering.ShowBufferingUI {
+				t.Fatal("a delivered payload must ask the UI to show")
+			}
+			if len(buffering.UseCases) != 1 || buffering.UseCases[0] != "cyber" ||
+				len(buffering.Reasons) != 1 || buffering.Reasons[0] != "user_risk" {
+				t.Fatalf("payload = %#v", buffering)
+			}
+			got := buffering.FasterModel
+			if (got == nil) != (testCase.wantModel == nil) || (got != nil && *got != *testCase.wantModel) {
+				t.Fatalf("faster model = %v, want %v", got, testCase.wantModel)
+			}
+		})
+	}
+
+	// A non-string wire value makes serde reject the payload outright.
+	invalid := []byte(`{"type":"response.output_text.delta","safety_buffering":{"use_cases":["cyber"],"reasons":["user_risk"],"retry_model":5}}`)
+	if buffering := safetyBufferingFromStreamMetadata(invalid, treatment); buffering != nil {
+		t.Fatalf("invalid wire model = %#v, want none", buffering)
+	}
+}
+
+// Mirrors Rust's `SafetyBuffering` struct: both wire arrays are required, so a
+// payload missing either one (or carrying a non-string element) produces no
+// event, while an empty pair is still a valid payload.
+func TestSafetyBufferingRequiresWireArraysLikeRust(t *testing.T) {
+	for _, payload := range []string{
+		`{"reasons":["user_risk"]}`,
+		`{"use_cases":["cyber"]}`,
+		`{"use_cases":["cyber"],"reasons":"user_risk"}`,
+		`{"use_cases":[1],"reasons":["user_risk"]}`,
+		`{"use_cases":"cyber","reasons":["user_risk"]}`,
+	} {
+		event := []byte(`{"type":"response.output_text.delta","safety_buffering":` + payload + `}`)
+		if buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{}); buffering != nil {
+			t.Fatalf("payload %s produced %#v, want none", payload, buffering)
+		}
+	}
+	empty := []byte(`{"type":"response.output_text.delta","safety_buffering":{"use_cases":[],"reasons":[]}}`)
+	buffering := safetyBufferingFromStreamMetadata(empty, safetyBufferingTreatment{})
+	if buffering == nil || !buffering.ShowBufferingUI || len(buffering.UseCases) != 0 || len(buffering.Reasons) != 0 {
+		t.Fatalf("empty arrays payload = %#v", buffering)
+	}
+}
+
+// Rust marks `show_buffering_ui` as `#[serde(skip)]`, so the payload can neither
+// supply nor suppress it.
+func TestSafetyBufferingForcesVisibilityLikeRust(t *testing.T) {
+	event := []byte(`{"type":"response.output_text.delta","safety_buffering":{"use_cases":["cyber"],"reasons":["user_risk"],"show_buffering_ui":false}}`)
+	buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{})
+	if buffering == nil || !buffering.ShowBufferingUI {
+		t.Fatalf("payload-supplied visibility = %#v, want forced true", buffering)
+	}
+	// The typed-metadata form behaves the same way.
+	metadata := []byte(`{"type":"response.metadata","metadata":{"type":"safety_buffering","use_cases":["cyber"],"reasons":["user_risk"]}}`)
+	buffering = safetyBufferingFromStreamMetadata(metadata, safetyBufferingTreatment{})
+	if buffering == nil || !buffering.ShowBufferingUI {
+		t.Fatalf("metadata payload = %#v, want forced true", buffering)
+	}
+}
+
 func TestSafetyBufferingFallsBackToTypedResponseMetadata(t *testing.T) {
 	event := []byte(`{"type":"response.metadata","metadata":{"type":"safety_buffering","use_cases":["cyber"],"reasons":["user_risk"]}}`)
-	buffering := safetyBufferingFromStreamMetadata(event)
+	buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{})
 	if buffering == nil || len(buffering.UseCases) != 1 || buffering.UseCases[0] != "cyber" || len(buffering.Reasons) != 1 || buffering.Reasons[0] != "user_risk" {
 		t.Fatalf("safety buffering = %#v", buffering)
 	}
@@ -300,7 +500,7 @@ func TestSafetyBufferingFallsBackToTypedResponseMetadata(t *testing.T) {
 
 func TestSafetyBufferingTopLevelPresenceWinsOverMetadata(t *testing.T) {
 	event := []byte(`{"type":"response.metadata","safety_buffering":{"use_cases":["top_level"],"reasons":["top"]},"metadata":{"type":"safety_buffering","use_cases":["nested"],"reasons":["nested"]}}`)
-	buffering := safetyBufferingFromStreamMetadata(event)
+	buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{})
 	if buffering == nil || len(buffering.UseCases) != 1 || buffering.UseCases[0] != "top_level" {
 		t.Fatalf("top-level safety buffering should win: %#v", buffering)
 	}
@@ -311,7 +511,7 @@ func TestSafetyBufferingTopLevelMalformedIsAuthoritative(t *testing.T) {
 	// an object (Rust 9558d830f6).
 	for _, topLevel := range []string{"null", "false"} {
 		event := []byte(`{"type":"response.metadata","safety_buffering":` + topLevel + `,"metadata":{"type":"safety_buffering","use_cases":["nested"],"reasons":["nested"]}}`)
-		if buffering := safetyBufferingFromStreamMetadata(event); buffering != nil {
+		if buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{}); buffering != nil {
 			t.Fatalf("malformed top-level %s should win over metadata: %#v", topLevel, buffering)
 		}
 	}
@@ -319,7 +519,7 @@ func TestSafetyBufferingTopLevelMalformedIsAuthoritative(t *testing.T) {
 
 func TestSafetyBufferingIgnoresUnrelatedMetadata(t *testing.T) {
 	event := []byte(`{"type":"response.metadata","metadata":{"type":"other_metadata","use_cases":["cyber"]}}`)
-	if buffering := safetyBufferingFromStreamMetadata(event); buffering != nil {
+	if buffering := safetyBufferingFromStreamMetadata(event, safetyBufferingTreatment{}); buffering != nil {
 		t.Fatalf("unrelated metadata should not produce safety buffering: %#v", buffering)
 	}
 }

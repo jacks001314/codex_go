@@ -936,6 +936,14 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
 		}
+		// Rust's `safety_buffering_for_event` refreshes the treatment from the
+		// event's own JSON headers before every event, so a WebSocket stream can
+		// switch the fallback model mid-stream.
+		if headers, ok := event["headers"].(map[string]any); ok {
+			if updated, ok := safetyBufferingTreatmentFromJSONHeaders(headers); ok {
+				accumulator.safetyBufferingTreatment = updated
+			}
+		}
 		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, handler)
 		if err != nil {
 			return nil, err
