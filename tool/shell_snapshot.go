@@ -66,6 +66,7 @@ func MaybeWrapShellLCWithSnapshot(
 	snapshotPath string,
 	explicitEnvOverrides map[string]string,
 	env map[string]string,
+	runtimePathPrepends []string,
 ) []string {
 	if !snapshotWrapSupported {
 		return command
@@ -107,6 +108,13 @@ func MaybeWrapShellLCWithSnapshot(
 		}
 	}
 	overrideCaptures, overrideExports := buildSnapshotOverrideExports(overrideEnv, snapshotReplayedEnvKeys)
+	// A snapshot carries the user's PATH, so the runtime's own entries are
+	// re-exported after sourcing it (Rust's shell_exports_after_snapshot).
+	pathExports := (*RuntimePathPrepends)(nil)
+	if len(runtimePathPrepends) > 0 {
+		pathExports = &RuntimePathPrepends{entries: append([]string(nil), runtimePathPrepends...)}
+	}
+	runtimePathExports := pathExports.ShellExportsAfterSnapshot(explicitEnvOverrides)
 
 	quotedSnapshot := shellSingleQuote(snapshotPath)
 	var trailing strings.Builder
@@ -129,6 +137,10 @@ func MaybeWrapShellLCWithSnapshot(
 	rewritten.WriteString("\n\n")
 	if overrideExports != "" {
 		rewritten.WriteString(overrideExports)
+		rewritten.WriteString("\n\n")
+	}
+	if runtimePathExports != "" {
+		rewritten.WriteString(runtimePathExports)
 		rewritten.WriteString("\n\n")
 	}
 	rewritten.WriteString(runOriginal)

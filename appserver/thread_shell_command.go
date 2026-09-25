@@ -12,9 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/config"
+	"codex_go/envutil"
+	"codex_go/execpolicy"
+	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
 	usershell "codex_go/shell"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -26,6 +31,128 @@ type threadShellCommandRun struct {
 	Standalone bool
 	StartedAt  int64
 	TimeoutMs  *int64
+}
+
+// threadShellCommandLaunch prepares a user shell command the way Rust's
+// `tasks/user_shell.rs` does: the session's own shell runs it as a login
+// command, the session's shell snapshot is replayed so the user's aliases,
+// functions and options still apply, and Codex's own PATH entries stay on PATH
+// after the snapshot restores the user's.
+//
+// The command itself runs outside the sandbox - `/shell` is the explicit
+// full-access escape hatch - so the snapshot is captured without one too.
+func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threadShellCommandRun) ([]string, []string) {
+	if r == nil || run == nil {
+		return threadShellCommandArgv(""), nil
+	}
+	shellType, shellPath := r.threadShellCommandShell(run.ThreadID)
+	if shellPath == "" {
+		// The environment reported no shell; keep the previous behavior rather
+		// than failing a command the user typed.
+		return threadShellCommandArgv(run.Command), nil
+	}
+	sessionShell := &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
+	if shellType != tool.ShellUnknown {
+		sessionShell.Type = shellType
+	}
+	argv := sessionShell.DeriveExecArgs(run.Command, true)
+
+	cfg := r.effectiveWriteStdinConfig(run.ThreadID)
+	env, explicitOverrides := r.threadShellCommandEnv(run, cfg)
+	prepends := &tool.RuntimePathPrepends{}
+	if runtime.GOOS != "windows" {
+		tool.ApplyPackagePathPrepends(env, prepends)
+	}
+	if provider := r.shellSnapshotProviderForTurn(run.ThreadID, cfg); provider != nil {
+		snapshotPath := provider(ctx, tool.SnapshotProviderRequest{
+			ShellType:       sessionShell.Type,
+			ShellPath:       sessionShell.Path,
+			CWD:             run.CWD,
+			AllowLoginShell: true,
+		})
+		if snapshotPath != "" {
+			argv = tool.MaybeWrapShellLCWithSnapshot(argv, sessionShell, snapshotPath, explicitOverrides, env, prepends.Entries())
+		}
+	}
+	return argv, envSliceFromMap(env)
+}
+
+// threadShellCommandShell resolves the shell the thread's environment runs.
+func (r *RuntimeRouter) threadShellCommandShell(threadID string) (tool.ShellType, string) {
+	if r == nil || r.services.Environment == nil {
+		return tool.ShellUnknown, ""
+	}
+	// Rust uses the turn environment's shell; Go resolves the same selection the
+	// turn's launches use, and falls back to the implicit local environment.
+	for _, environment := range r.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}) {
+		if environment.Shell == nil || strings.TrimSpace(environment.Shell.Path) == "" {
+			continue
+		}
+		return environment.Shell.Type, strings.TrimSpace(environment.Shell.Path)
+	}
+	local := r.services.Environment.LocalShell()
+	if shellPath := strings.TrimSpace(local.Path); shellPath != "" {
+		shellType := tool.DetectShellType(shellPath)
+		if detected := tool.DetectShellType(local.Name); detected != tool.ShellUnknown {
+			shellType = detected
+		}
+		return shellType, shellPath
+	}
+	return tool.ShellUnknown, ""
+}
+
+// threadShellCommandEnv builds the user shell command's environment from the
+// thread's shell environment policy, with the session identity and apply-patch
+// mode injected, and reports the policy's explicit overrides so the snapshot
+// wrapper restores them after sourcing.
+func (r *RuntimeRouter) threadShellCommandEnv(run *threadShellCommandRun, cfg *config.Config) (map[string]string, map[string]string) {
+	env := map[string]string{}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		env[key] = value
+	}
+	explicitOverrides := map[string]string{}
+	if cfg != nil {
+		if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
+			if policy := execpolicy.EnvPolicyFromShellEnvironmentPolicy(table, run.CWD); policy != nil {
+				env = execpolicy.CreateEnv(policy, &run.ThreadID, env)
+				for key, value := range policy.Set {
+					explicitOverrides[key] = value
+				}
+			}
+		}
+		env = envutil.InjectApplyPatchEnv(env, features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings"))
+	}
+	// Rust 97729885d4: the shared root-session identity, falling back to the
+	// thread id when the thread record has none.
+	sessionID := strings.TrimSpace(run.ThreadID)
+	if r != nil {
+		if record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(run.ThreadID)), false, false); err == nil && record != nil && strings.TrimSpace(record.SessionID) != "" {
+			sessionID = strings.TrimSpace(record.SessionID)
+		}
+	}
+	if sessionID != "" {
+		env["CODEX_SESSION_ID"] = sessionID
+	}
+	if threadID := strings.TrimSpace(run.ThreadID); threadID != "" {
+		env["CODEX_THREAD_ID"] = threadID
+	}
+	return env, explicitOverrides
+}
+
+// envSliceFromMap renders an environment map for exec.Cmd.
+func envSliceFromMap(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for key, value := range values {
+		out = append(out, key+"="+value)
+	}
+	return out
 }
 
 func (r *RuntimeRouter) handleThreadShellCommand(request *Request, params *ShellCommandParams) (*ShellCommandResponse, error) {
@@ -251,11 +378,12 @@ func (r *RuntimeRouter) persistThreadShellCommandRecord(run *threadShellCommandR
 }
 
 func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *threadShellCommandRun, processID string, output *threadShellCommandOutput) (int64, CommandExecutionStatus) {
-	argv := threadShellCommandArgv(run.Command)
+	argv, commandEnv := r.threadShellCommandLaunch(ctx, run)
 	cmd := osexec.CommandContext(ctx, argv[0], argv[1:]...)
 	if strings.TrimSpace(run.CWD) != "" {
 		cmd.Dir = run.CWD
 	}
+	cmd.Env = commandEnv
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		output.WriteString("failed to capture stdout: " + err.Error())

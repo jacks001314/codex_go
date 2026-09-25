@@ -108,7 +108,13 @@ type ShellRequest struct {
 	// separately so a write_stdin review does not treat them as agent-requested
 	// grants (Rust's unified-exec `internal_permissions`, #48073). The
 	// agent-requested AdditionalPermissions stay as the model sent them.
-	InternalPermissions             *sandbox.AdditionalPermissionProfile
+	InternalPermissions *sandbox.AdditionalPermissionProfile
+	// RuntimePathPrepends are the Codex-owned PATH entries this launch keeps on
+	// PATH: the packaged codex-path directory and, for a zsh-fork launch, the
+	// forked shell's directory. They are prepended to the command environment and
+	// re-exported after a shell snapshot restores the user's PATH (Rust's
+	// RuntimePathPrepends).
+	RuntimePathPrepends             []string
 	SandboxProfile                  *ShellSandboxProfile
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile

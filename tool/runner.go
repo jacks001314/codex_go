@@ -256,6 +256,9 @@ func shellRequestEnv(req *ShellRequest) map[string]string {
 		}
 		base[key] = value
 	}
+	// Codex-owned PATH entries are applied last, on top of the policy and the
+	// launch's own overrides, exactly like Rust's apply_package_path_prepend.
+	applyRuntimePathPrepends(base, req.RuntimePathPrepends)
 	return base
 }
 

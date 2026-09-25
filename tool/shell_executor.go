@@ -735,6 +735,15 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(policyTable, req.CWD)
 		req.ThreadID = e.unifiedExecThreadID
 	}
+	// Rust puts Codex's own PATH entries on every Unix launch, whether or not a
+	// snapshot is replayed, so commands resolve Codex's bundled shims.
+	zshForkShellPath := ""
+	if validation.ShellMode == UnifiedExecShellModeZshFork && validation.ZshForkShell != nil {
+		zshForkShellPath = validation.ZshForkShell.Path
+	}
+	if runtimePathPrependsSupported && !remoteEnvironment {
+		req.RuntimePathPrepends = RuntimePathEntriesForLaunch(zshForkShellPath)
+	}
 	if e.snapshotProvider != nil {
 		// Rust replays the session's shell snapshot in front of the model's
 		// script so the user's aliases, functions and options still apply. The
@@ -750,7 +759,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			Remote:              remoteEnvironment,
 		})
 		if snapshotPath != "" {
-			req.Command = MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshotPath, snapshotExplicitOverrides(req), req.Env)
+			req.Command = MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshotPath, snapshotExplicitOverrides(req), req.Env, req.RuntimePathPrepends)
 		}
 	}
 	// Rust #45505 brackets every exec_command call with a

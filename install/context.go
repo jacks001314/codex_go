@@ -121,6 +121,28 @@ func FromExe(isMacOS bool, currentExe string, managedByPnpm bool, managedByNPM b
 	return &InstallContext{Method: method, PackageLayout: layout}
 }
 
+// PackagePathDir returns the packaged `codex-path` directory that holds the
+// bundled command shims (the ripgrep binary, and `apply_patch` for packaged
+// installs), or "" when this install has no package layout. Rust
+// `InstallContext::package_layout.path_dir`: the CLI puts it on PATH so commands
+// the model or the user runs resolve Codex's own tools.
+func (c *InstallContext) PackagePathDir() string {
+	if c == nil || c.PackageLayout == nil || c.PackageLayout.PathDir == nil {
+		return ""
+	}
+	return strings.TrimSpace(*c.PackageLayout.PathDir)
+}
+
+// PackagePathDirOfExe resolves the package path directory for an executable,
+// which the arg0 launcher needs before the install context exists.
+func PackagePathDirOfExe(currentExe string) string {
+	layout := PackageLayoutFromExe(currentExe)
+	if layout == nil || layout.PathDir == nil {
+		return ""
+	}
+	return strings.TrimSpace(*layout.PathDir)
+}
+
 func (c *InstallContext) RGCommand() string {
 	if c != nil && c.PackageLayout != nil && c.PackageLayout.PathDir != nil {
 		candidate := filepath.Join(*c.PackageLayout.PathDir, defaultRGCommand())

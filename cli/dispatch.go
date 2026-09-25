@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"codex_go/install"
 	"codex_go/utils"
 )
 
@@ -114,9 +115,22 @@ func PrepareArg0Aliases(codexHome string, currentExe string, existingPATH string
 	cleanupOnError = false
 	return &DispatchAliasGuard{
 		TempDir:     tempDir,
-		UpdatedPATH: PathEnvWithEntry(tempDir, existingPATH),
+		UpdatedPATH: arg0UpdatedPATH(tempDir, currentExe, existingPATH),
 		Paths:       paths,
 	}, nil
+}
+
+// arg0UpdatedPATH puts the alias directory in front of the PATH the process
+// keeps, on top of the package's own `codex-path` directory, mirroring Rust's
+// `prepare_path_env_var_with_aliases`: the package path first, then the aliases,
+// so a packaged install exposes its bundled command shims to every child while
+// the arg0 aliases still win.
+func arg0UpdatedPATH(aliasDir string, currentExe string, existingPATH string) string {
+	updated := existingPATH
+	if packagePathDir := install.PackagePathDirOfExe(currentExe); packagePathDir != "" {
+		updated = PathEnvWithEntry(packagePathDir, updated)
+	}
+	return PathEnvWithEntry(aliasDir, updated)
 }
 
 func DispatchPathsForProcess(currentExe string, aliases *DispatchAliasGuard) DispatchPaths {

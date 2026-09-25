@@ -343,6 +343,12 @@ func RunSandboxedSnapshotCommand(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// A launch without a permission profile (the user-shell command path, which
+	// is the explicit full-access escape hatch) captures without a sandbox,
+	// mirroring Rust's ShellSnapshotSandbox::run(None).
+	if profile == nil {
+		return runSnapshotCommandDirect(ctx, command, cwd, env)
+	}
 	plan, planErr := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{
 		ResolvedPermissionProfile:   profile,
 		ResolvedPermissionProfileID: profileID,
@@ -368,6 +374,24 @@ func RunSandboxedSnapshotCommand(
 		env = cloneEnvMap(env)
 		env["CODEX_PERMISSION_PROFILE"] = plan.PermissionProfileID
 	}
+	process.Env = envSlice(env)
+	var stdout, stderr strings.Builder
+	process.Stdout = &stdout
+	process.Stderr = &stderr
+	if err := process.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return nil, err
+		}
+		return nil, errors.New("snapshot command failed: " + strings.TrimSpace(stderr.String()))
+	}
+	return []byte(stdout.String()), nil
+}
+
+// runSnapshotCommandDirect runs a capture command with no sandbox.
+func runSnapshotCommandDirect(ctx context.Context, command []string, cwd string, env map[string]string) ([]byte, error) {
+	process := exec.CommandContext(ctx, command[0], command[1:]...)
+	process.Dir = cwd
 	process.Env = envSlice(env)
 	var stdout, stderr strings.Builder
 	process.Stdout = &stdout

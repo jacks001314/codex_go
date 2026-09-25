@@ -891,6 +891,18 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 	return status, nil
 }
 
+// LocalShell returns the shell of the implicit local environment, which local
+// launches run under when no provider default is configured (Rust's detected
+// default shell).
+func (m *EnvironmentManager) LocalShell() EnvironmentShellInfo {
+	if m == nil {
+		return EnvironmentShellInfo{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.defaultShell
+}
+
 // DefaultEnvironmentID returns the provider-selected default environment, when
 // one is configured and is not the implicit local environment.
 func (m *EnvironmentManager) DefaultEnvironmentID() (string, bool) {

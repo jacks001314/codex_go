@@ -37,7 +37,7 @@ func TestMaybeWrapShellLCWithSnapshotBootstrapsInSessionShellLikeRust(t *testing
 	snapshotPath := snapshotWrapFixture(t)
 	sessionShell := &Shell{Type: ShellZsh, Path: "/bin/zsh"}
 	command := []string{"/bin/bash", "-lc", "echo hello"}
-	rewritten := MaybeWrapShellLCWithSnapshot(command, sessionShell, snapshotPath, nil, nil)
+	rewritten := MaybeWrapShellLCWithSnapshot(command, sessionShell, snapshotPath, nil, nil, nil)
 	if len(rewritten) != 3 {
 		t.Fatalf("rewritten = %#v", rewritten)
 	}
@@ -65,7 +65,7 @@ __CODEX_SNAPSHOT_OVERRIDE_2="${CODEX_PLUGIN_METRICS_OUTPUT-}"`
 	// Arguments after the script are carried into the re-executed command.
 	withArguments := MaybeWrapShellLCWithSnapshot(
 		[]string{"/bin/bash", "-lc", "echo hello", "one", "two'three"},
-		sessionShell, snapshotPath, nil, nil,
+		sessionShell, snapshotPath, nil, nil, nil,
 	)
 	if !strings.Contains(withArguments[2], `exec '/bin/bash' -c 'echo hello' 'one' 'two'"'"'three'`) {
 		t.Fatalf("trailing arguments were not preserved:\n%s", withArguments[2])
@@ -78,7 +78,7 @@ func TestMaybeWrapShellLCWithSnapshotEscapesSingleQuotesLikeRust(t *testing.T) {
 	snapshotPath := snapshotWrapFixture(t)
 	rewritten := MaybeWrapShellLCWithSnapshot(
 		[]string{"/bin/bash", "-lc", "echo 'hello'"},
-		&Shell{Type: ShellZsh, Path: "/bin/zsh"}, snapshotPath, nil, nil,
+		&Shell{Type: ShellZsh, Path: "/bin/zsh"}, snapshotPath, nil, nil, nil,
 	)
 	if !strings.Contains(rewritten[2], `exec '/bin/bash' -c 'echo '"'"'hello'"'"''`) {
 		t.Fatalf("single quotes were not escaped:\n%s", rewritten[2])
@@ -145,7 +145,7 @@ func wrapSnapshotFixtureCommand(t *testing.T, snapshotPath string, overrides, en
 	t.Helper()
 	return MaybeWrapShellLCWithSnapshot(
 		[]string{"/bin/bash", "-lc", "echo hello"},
-		&Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, overrides, env,
+		&Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, overrides, env, nil,
 	)
 }
 
@@ -172,7 +172,7 @@ func TestMaybeWrapShellLCWithSnapshotLeavesOtherCommandsAlone(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := MaybeWrapShellLCWithSnapshot(testCase.command, testCase.shell, testCase.snapshot, nil, testCase.env)
+			got := MaybeWrapShellLCWithSnapshot(testCase.command, testCase.shell, testCase.snapshot, nil, testCase.env, nil)
 			if len(got) != len(testCase.command) {
 				t.Fatalf("rewritten = %#v, want the original command", got)
 			}
@@ -191,7 +191,7 @@ func TestMaybeWrapShellLCWithSnapshotFollowsTheHostLikeRust(t *testing.T) {
 	snapshotPath := snapshotWrapFixture(t)
 	snapshotWrapSupported = false
 	command := []string{"/bin/bash", "-lc", "echo hi"}
-	got := MaybeWrapShellLCWithSnapshot(command, &Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, nil, nil)
+	got := MaybeWrapShellLCWithSnapshot(command, &Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, nil, nil, nil)
 	if len(got) != 3 || got[2] != "echo hi" {
 		t.Fatalf("rewritten = %#v, want the original command", got)
 	}
