@@ -13,8 +13,22 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T20:00:00+08:00",
+    "generatedAt": "2026-09-25T22:00:00+08:00",
     "items": [
+        {
+            "id": "executor-bearer-token-connections",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream ad26b2520a (#47648 Support bearer tokens for app-server executor connections) except the environments.toml URL-entry half, which needs the unported executor provider: environment/add accepts the optional authBearerToken, requires wss:// or a loopback execServerUrl for it (rejecting insecure remote ws:// with a token-free error), and stores Authorization: Bearer <token> on the registration so environment info/status, remote skills, the OpenAI-file executor client and the unified-exec path (initial connection and reconnects) all authenticate. execserver.DialClientOptions gained HTTPHeaders with validation (connection-controlled and sec-websocket-* names rejected, invalid names/values rejected, non-empty sets require wss:// or loopback) plus RedactedExecServerHeaders for diagnostics.",
+            "test": "go test ./appserver -run 'EnvironmentAddAuthBearerToken|EnvironmentAddRPCAccepts' -count=1; go test ./execserver -run 'TestNormalizeExecServerHeaders|TestClientSendsExecutorHTTPHeaders|TestRedactedExecServerHeaders' -count=1"
+        },
+        {
+            "id": "exec-server-listener-websocket-auth",
+            "status": "done",
+            "area": "execserver",
+            "reason": "Aligned upstream 2210190435 (#47601 Add opt-in WebSocket authentication to exec-server) and c44deff7b1 (#47447 Extract WebSocket authentication into codex-websocket-auth): the shared policy moved to codex_go/websocketauth (appserver keeps aliases), codex exec-server accepts the shared --ws-* flag family through cli.WebSocketAuthOptions (capability-token via token file or SHA-256 digest, signed bearer JWT with issuer/audience/clock skew), Server.SetWebSocketAuthPolicy validates Authorization: Bearer before every WebSocket upgrade and answers 401 for missing or invalid credentials, and listener auth is rejected together with --remote, forward, or a stdio listener. Unauthenticated listeners are unchanged.",
+            "test": "go test ./execserver -run 'TestExecServerListener' -count=1; go test ./cli -run TestParseExecServerWebSocketAuthFlagsLikeRust -count=1; go test ./app -run TestRunExecServerListenerWebSocketAuthLikeRust -count=1"
+        },
         {
             "id": "doctor-config-load-error-redaction",
             "status": "done",
