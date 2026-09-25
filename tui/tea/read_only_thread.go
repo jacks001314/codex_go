@@ -32,15 +32,77 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	m.notice = ""
 }
 
+// commandCenterAvailable mirrors Rust's ExternalWriterNotice
+// `command_center_available`: a session connected to a shared app server can
+// return to the command center (the embedded TUI marks the dashboard
+// unavailable), together with Rust's input gate that refuses an embedded
+// app-server target.
+func (m *Model) commandCenterAvailable() bool {
+	if m == nil {
+		return false
+	}
+	return !m.agentsOverviewEmbedded && m.onAgentsOverviewRefresh != nil
+}
+
+// agentsNavigationKeyAvailable mirrors Rust BottomPane::agents_navigation_key_available
+// (#48132): `Left` must still move the composer's cursor for the active
+// editor/Vim keymap, no global/chat/voice action may claim it, and no chord may
+// start with it (Go's keymap has no configurable chord prefixes, so that last
+// exclusion has no counterpart here).
+func (m *Model) agentsNavigationKeyAvailable() bool {
+	if m == nil {
+		return false
+	}
+	// Rust resolves the composer's move_left binding for the active keymap.
+	// Go's keymap catalog only exposes Vim normal mode's movement actions; the
+	// plain composer's cursor movement is not remappable, so Left stays available
+	// there unless another action claims it.
+	if m.vimMode && !m.vimInsert {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "vim_normal", "move_left")
+		if !keymapBindingsContainKey(bindings, "left") {
+			return false
+		}
+	}
+	for _, action := range codextui.KeymapActions(codextui.KeymapActionFilter{}) {
+		switch action.Context {
+		case "global", "chat", "voice":
+		default:
+			continue
+		}
+		resolved, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, action.Context, action.Action)
+		if keymapBindingsContainKey(resolved, "left") {
+			return false
+		}
+	}
+	return true
+}
+
+func keymapBindingsContainKey(bindings []string, keySpec string) bool {
+	for _, binding := range bindings {
+		if strings.EqualFold(strings.TrimSpace(binding), keySpec) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleReadOnlyThreadKey routes the keys the read-only notice advertises:
-// R retries, Esc/Ctrl+C/Q exit, and the transcript/raw/copy surfaces stay
+// Left or Esc return to the command center when one is available (Rust #48132),
+// R retries, Ctrl+C/Q exit, and the transcript/raw/copy surfaces stay
 // available. Everything else is ignored.
 func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if m.commandCenterAvailable() {
+		if msg.Type == bubbletea.KeyEsc || (msg.Type == bubbletea.KeyLeft && m.agentsNavigationKeyAvailable()) {
+			return m.applyAgentsCommand()
+		}
+	} else if msg.Type == bubbletea.KeyEsc {
+		return bubbletea.Quit
+	}
 	switch msg.Type {
-	case bubbletea.KeyCtrlC, bubbletea.KeyCtrlD, bubbletea.KeyEsc:
+	case bubbletea.KeyCtrlC, bubbletea.KeyCtrlD:
 		return bubbletea.Quit
 	}
 	if m.keyMatches("global", "open_transcript", keySpec) {
@@ -126,8 +188,26 @@ func (m *Model) renderReadOnlyThreadNotice() string {
 		Width(width).
 		Padding(0, 2).
 		Render(strings.Join(lines, "\n"))
-	footer := m.readOnlyDimText(" r retry   Esc/Ctrl+C/q exit   Ctrl+T transcript")
+	footer := m.readOnlyDimText(m.readOnlyFooterLine())
 	return card + "\n" + footer
+}
+
+// readOnlyFooterLine mirrors Rust ExternalWriterNotice::footer_lines: the retry
+// key, the command-center key when one is available (Left/Esc, or Esc once Left
+// was remapped), the exit keys, and the transcript shortcut.
+func (m *Model) readOnlyFooterLine() string {
+	items := []string{"r retry"}
+	if m.commandCenterAvailable() {
+		key := "Esc"
+		if m.agentsNavigationKeyAvailable() {
+			key = "\u2190/Esc"
+		}
+		items = append(items, key+" command center", "ctrl+c/q exit")
+	} else {
+		items = append(items, "Esc/ctrl+c/q exit")
+	}
+	items = append(items, "Ctrl+T transcript")
+	return " " + strings.Join(items, "   ")
 }
 
 func (m *Model) readOnlyDimText(text string) string {
