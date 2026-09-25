@@ -399,6 +399,11 @@ func (b *InMemoryBoard) Post(ctx context.Context, caller string, request PostReq
 		}
 	}
 	state.subscribe(SubscriptionTarget{Kind: "thread", ThreadID: root}, caller)
+	if len(recipients) == 0 {
+		// Rust #48072: a post with no recipients skips the notification preview.
+		state.mu.Unlock()
+		return &metadata, nil
+	}
 	preview := state.posts[index].preview(previewChars)
 	state.mu.Unlock()
 
