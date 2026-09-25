@@ -51,9 +51,13 @@ func (m *Manager) ConnectWebsocketContext(ctx context.Context, options *RemoteCo
 	if dial == nil {
 		dial = websocket.Dial
 	}
-	conn, response, err := dial(connectCtx, request.URL.String(), &websocket.DialOptions{
-		HTTPHeader: request.Header,
-	})
+	dialOptions := &websocket.DialOptions{HTTPHeader: request.Header}
+	if backend.WebsocketHTTPClient != nil {
+		// The dial client carries the application network policy, so a managed
+		// restriction applies to the WebSocket connection too.
+		dialOptions.HTTPClient = backend.WebsocketHTTPClient
+	}
+	conn, response, err := dial(connectCtx, request.URL.String(), dialOptions)
 	if err != nil {
 		body := readRemoteControlWebsocketErrorBody(response)
 		if WebsocketResponseReportsMissingRemoteAppServer(response, body) {

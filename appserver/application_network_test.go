@@ -44,6 +44,14 @@ func TestRemoteControlBackendHonorsApplicationNetworkPolicyLikeRust(t *testing.T
 	if _, err := backend.ServerAPIOptions.HTTPClient.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/backend-api/enroll")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
 		t.Fatalf("denied remote-control request error = %v", err)
 	}
+	// The WebSocket dial carries the same policy: the built client rejects a
+	// denied host before connecting.
+	if backend.WebsocketHTTPClient == nil {
+		t.Fatal("the remote-control WebSocket client is not policy-bound")
+	}
+	if _, err := backend.WebsocketHTTPClient.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/backend-api/wham/remote/control/server")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("denied remote-control websocket error = %v", err)
+	}
 
 	// A host without managed requirements keeps the package default doer.
 	plainHome := t.TempDir()
@@ -61,6 +69,9 @@ func TestRemoteControlBackendHonorsApplicationNetworkPolicyLikeRust(t *testing.T
 	}
 	if plainBackend.ServerAPIOptions.HTTPClient != nil {
 		t.Fatal("an unrestricted policy replaced the remote-control default doer")
+	}
+	if plainBackend.WebsocketHTTPClient != nil {
+		t.Fatal("an unrestricted policy replaced the remote-control websocket default")
 	}
 }
 

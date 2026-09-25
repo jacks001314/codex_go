@@ -15,6 +15,46 @@ import (
 	"github.com/coder/websocket"
 )
 
+// Rust parity (#47410): the remote-control WebSocket dial carries the backend's
+// policy-bound HTTP client, and the websocket default stays in place when the
+// backend supplies none.
+func TestManagerWebsocketDialUsesBackendHTTPClient(t *testing.T) {
+	dialOptionsFor := func(t *testing.T, client *http.Client) *websocket.DialOptions {
+		t.Helper()
+		manager, _ := managerWithCurrentWebsocketEnrollment(t, "token")
+		manager.mu.Lock()
+		backend := cloneManagerBackendOptions(manager.backend)
+		manager.mu.Unlock()
+		if backend == nil {
+			t.Fatal("manager has no backend")
+		}
+		backend.WebsocketHTTPClient = client
+		manager.ConfigureBackend(backend)
+		captured := (*websocket.DialOptions)(nil)
+		_, _, err := manager.ConnectWebsocketContext(context.Background(), &RemoteControlWebsocketConnectOptions{
+			Dial: func(_ context.Context, _ string, options *websocket.DialOptions) (*websocket.Conn, *http.Response, error) {
+				captured = options
+				return nil, nil, errors.New("stop after capturing the dial options")
+			},
+		})
+		if err == nil {
+			t.Fatal("the injected dial failure was ignored")
+		}
+		if captured == nil {
+			t.Fatal("the dial was not reached")
+		}
+		return captured
+	}
+
+	client := &http.Client{}
+	if got := dialOptionsFor(t, client); got.HTTPClient != client {
+		t.Fatalf("dial HTTP client = %#v, want the backend's client", got.HTTPClient)
+	}
+	if got := dialOptionsFor(t, nil); got.HTTPClient != nil {
+		t.Fatalf("dial HTTP client = %#v, want the websocket default", got.HTTPClient)
+	}
+}
+
 func TestManagerConnectWebsocketContextDialsWithRefreshedEnrollment(t *testing.T) {
 	store := newTestEnrollmentStore(t)
 	ctx := context.Background()

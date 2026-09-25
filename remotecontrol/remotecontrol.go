@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -212,6 +213,10 @@ type ManagerBackendOptions struct {
 	AuthRecoveryReset   func()
 	AuthRecoveryChanged func() bool
 	ServerAPIOptions    *ServerAPIOptions
+	// WebsocketHTTPClient, when set, carries the application network policy for
+	// the remote-control WebSocket dial (Rust #47410 guards the WebSocket
+	// transport with the same policy). Nil keeps the websocket package default.
+	WebsocketHTTPClient *http.Client
 	AppServerClientName *string
 }
 

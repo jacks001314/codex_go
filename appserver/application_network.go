@@ -69,16 +69,36 @@ func (r *RuntimeRouter) invalidateApplicationNetworkPolicy() {
 	r.networkPolicy.Policy().Invalidate()
 }
 
-// remoteControlHTTPDoer returns the doer the remote-control server API uses for
-// enrollment and server requests. Rust #47410 routes those through the shared
-// application policy; a nil result keeps the remote-control package default.
-func (r *RuntimeRouter) remoteControlHTTPDoer() remotecontrol.HTTPDoer {
+// remoteControlRestrictedPolicy returns the router's published policy when it
+// restricts application destinations. Rust #47410 routes the remote-control
+// server API and WebSocket dial through that policy.
+func (r *RuntimeRouter) remoteControlRestrictedPolicy() (network.NetworkPolicy, bool) {
 	if r == nil {
-		return nil
+		return network.UnmanagedNetworkPolicy(), false
 	}
 	policy, composed := r.refreshApplicationNetworkPolicy()
 	if !policy.IsManaged() || !composed.IsRestricted() {
+		return policy, false
+	}
+	return policy, true
+}
+
+// remoteControlHTTPDoer returns the doer the remote-control server API uses for
+// enrollment and server requests; a nil result keeps the package default.
+func (r *RuntimeRouter) remoteControlHTTPDoer() remotecontrol.HTTPDoer {
+	policy, restricted := r.remoteControlRestrictedPolicy()
+	if !restricted {
 		return nil
 	}
 	return &network.PolicyHTTPDoer{Policy: policy, Next: http.DefaultClient}
+}
+
+// remoteControlWebsocketHTTPClient returns the client the remote-control
+// WebSocket dial uses; a nil result keeps the websocket package default.
+func (r *RuntimeRouter) remoteControlWebsocketHTTPClient() *http.Client {
+	policy, restricted := r.remoteControlRestrictedPolicy()
+	if !restricted {
+		return nil
+	}
+	return network.PolicyHTTPClient(policy, http.DefaultClient)
 }

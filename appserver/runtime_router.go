@@ -1824,6 +1824,7 @@ func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *R
 	if serverAPIOptions.HTTPClient == nil {
 		serverAPIOptions.HTTPClient = r.remoteControlHTTPDoer()
 	}
+	websocketHTTPClient := r.remoteControlWebsocketHTTPClient()
 	return &remotecontrol.ManagerBackendOptions{
 		RemoteControlURL:    remoteControlURL,
 		Store:               store,
@@ -1833,6 +1834,7 @@ func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *R
 		AuthRecoveryReset:   authRecoveryReset,
 		AuthRecoveryChanged: authRecoveryChanged,
 		ServerAPIOptions:    serverAPIOptions,
+		WebsocketHTTPClient: websocketHTTPClient,
 		AppServerClientName: options.RemoteControlAppServerClientName,
 	}
 }
