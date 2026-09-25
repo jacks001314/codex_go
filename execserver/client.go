@@ -43,6 +43,9 @@ type Client struct {
 	cacheMu        sync.Mutex
 	discoveryCache *CapabilityDiscoveryCache
 	accepted       bool
+	// reconnectDisabled mirrors Rust's stdio transport, which registers no
+	// reconnect strategy: a dropped stdio connection cannot resume its session.
+	reconnectDisabled bool
 }
 
 type inFlightMetadataRequest struct {
@@ -138,6 +141,10 @@ type DialClientOptions struct {
 	// validated: connection-controlled headers are rejected, and a non-empty set
 	// requires wss:// or a loopback destination.
 	HTTPHeaders http.Header
+	// StdioCommand selects the stdio transport: the program is spawned and
+	// spoken to over line-delimited JSON-RPC instead of dialing a URL (Rust
+	// ExecServerTransportParams::StdioCommand). Each reconnect respawns it.
+	StdioCommand *StdioExecServerCommand
 }
 
 type ProcessEventKind string
@@ -257,15 +264,21 @@ func DialClient(ctx context.Context, url string, clientName string) (*Client, er
 
 func DialClientWithOptions(ctx context.Context, url string, options DialClientOptions) (*Client, error) {
 	url = strings.TrimSpace(url)
-	if url == "" {
-		return nil, errors.New("exec-server URL is required")
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	clientName := strings.TrimSpace(options.ClientName)
 	if clientName == "" {
 		clientName = "codex-go-unified-exec"
+	}
+	if options.StdioCommand != nil {
+		if strings.TrimSpace(url) != "" {
+			return nil, errors.New("exec-server stdio command conflicts with an exec-server url")
+		}
+		return dialStdioCommandClient(ctx, clientName, options)
+	}
+	if url == "" {
+		return nil, errors.New("exec-server URL is required")
 	}
 	headers, err := normalizeExecServerHeaders(url, options.HTTPHeaders)
 	if err != nil {
@@ -1494,6 +1507,11 @@ func (c *Client) ensureConnected(ctx context.Context) error {
 func (c *Client) recoverConnection(ctx context.Context) error {
 	c.recoverMu.Lock()
 	defer c.recoverMu.Unlock()
+	if c.reconnectDisabled {
+		// Rust's ExecServerClient::recover fails the connection when no
+		// reconnect strategy is registered (stdio transports have none).
+		return errors.New("exec-server transport disconnected")
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

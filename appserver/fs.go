@@ -13,12 +13,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	execserver "codex_go/execserver"
 )
 
 var ErrInvalidFSRequest = errors.New("invalid fs request")
 
 const defaultFSWatchPollInterval = 100 * time.Millisecond
-const CodexExecServerURLEnvVar = "CODEX_EXEC_SERVER_URL"
+
+// CodexExecServerURLEnvVar mirrors Rust's CODEX_EXEC_SERVER_URL_ENV_VAR, which
+// lives in the exec-server crate.
+const CodexExecServerURLEnvVar = execserver.CodexExecServerURLEnvVarName
 
 var ErrLocalFilesystemNotConfigured = errors.New("local filesystem is not configured")
 var ErrLocalEnvironmentNotConfigured = errors.New("local environment is not configured")
