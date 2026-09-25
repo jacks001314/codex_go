@@ -59,9 +59,9 @@ func (r *RuntimeRouter) refreshApplicationNetworkPolicy() (network.NetworkPolicy
 	// application client, so the process-scoped client follows the published
 	// generation.
 	if composed.IsRestricted() {
-		model.SetAWSHTTPClient(network.PolicyHTTPClient(policy, http.DefaultClient))
+		model.SetAWSApplicationClient(network.PolicyHTTPClient(policy, http.DefaultClient), policy)
 	} else {
-		model.SetAWSHTTPClient(nil)
+		model.SetAWSApplicationClient(nil, network.UnmanagedNetworkPolicy())
 	}
 	return policy, composed
 }

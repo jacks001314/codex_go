@@ -28,9 +28,9 @@ func publishApplicationNetworkPolicy(cfg *config.Config) *network.NetworkPolicyC
 	// Rust #47408: the AWS SDK's credential and region requests use the
 	// application client, so the run installs the policy-bound one.
 	if cfg.RestrictsApplicationTraffic() {
-		model.SetAWSHTTPClient(network.PolicyHTTPClient(cfg.NetworkPolicy(), http.DefaultClient))
+		model.SetAWSApplicationClient(network.PolicyHTTPClient(cfg.NetworkPolicy(), http.DefaultClient), cfg.NetworkPolicy())
 	} else {
-		model.SetAWSHTTPClient(nil)
+		model.SetAWSApplicationClient(nil, network.UnmanagedNetworkPolicy())
 	}
 	return controller
 }

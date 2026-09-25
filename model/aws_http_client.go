@@ -14,19 +14,27 @@ import (
 	"sync"
 
 	"codex_go/auth"
+	"codex_go/network"
 )
 
 var awsApplicationHTTPClient struct {
 	mu     sync.RWMutex
 	client *http.Client
+	policy network.NetworkPolicy
 }
 
-// SetAWSHTTPClient installs the client the AWS SDK credential and region
-// requests use. A nil client keeps the AWS SDK default.
-func SetAWSHTTPClient(client *http.Client) {
+// SetAWSApplicationClient installs the client and policy the AWS SDK credential
+// and region requests use. A nil client keeps the AWS SDK default.
+func SetAWSApplicationClient(client *http.Client, policy network.NetworkPolicy) {
 	awsApplicationHTTPClient.mu.Lock()
 	defer awsApplicationHTTPClient.mu.Unlock()
 	awsApplicationHTTPClient.client = client
+	awsApplicationHTTPClient.policy = policy
+}
+
+// SetAWSHTTPClient installs only the client, leaving the policy unmanaged.
+func SetAWSHTTPClient(client *http.Client) {
+	SetAWSApplicationClient(client, network.UnmanagedNetworkPolicy())
 }
 
 // AWSHTTPClient returns the installed client, or nil when the host installed
@@ -37,11 +45,20 @@ func AWSHTTPClient() *http.Client {
 	return awsApplicationHTTPClient.client
 }
 
+// AWSNetworkPolicy returns the installed application policy, or an unmanaged
+// policy when the host installed none.
+func AWSNetworkPolicy() network.NetworkPolicy {
+	awsApplicationHTTPClient.mu.RLock()
+	defer awsApplicationHTTPClient.mu.RUnlock()
+	return awsApplicationHTTPClient.policy
+}
+
 // awsAuthLoadOptions carries the installed client into the AWS config chain.
 func awsAuthLoadOptions() *auth.AWSAuthLoadOptions {
 	client := AWSHTTPClient()
-	if client == nil {
+	policy := AWSNetworkPolicy()
+	if client == nil && !policy.IsScoped() {
 		return nil
 	}
-	return &auth.AWSAuthLoadOptions{HTTPClient: client}
+	return &auth.AWSAuthLoadOptions{HTTPClient: client, Policy: policy}
 }

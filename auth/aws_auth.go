@@ -17,13 +17,37 @@ import (
 	awsv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
+
+	"codex_go/network"
 )
 
 var (
 	ErrAWSAuthEmptyService       = errors.New("AWS service name must not be empty")
 	ErrAWSAuthMissingRegion      = errors.New("AWS region must not be empty")
 	ErrAWSAuthMissingCredentials = errors.New("AWS credentials are required")
+	// ErrAWSAuthPolicy reports an application network policy denial during AWS
+	// authentication (Rust AwsAuthError::Policy); it is never retryable.
+	ErrAWSAuthPolicy = errors.New("application network policy denied the AWS request")
 )
+
+// awsPolicyError classifies an application network policy denial and passes other
+// errors through unchanged.
+func awsPolicyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, denial := range []error{
+		network.ErrNetworkPolicyUnavailable,
+		network.ErrNetworkPolicyDestination,
+		network.ErrNetworkPolicyRevoked,
+		network.ErrNetworkPolicyUnsupportedTransport,
+	} {
+		if errors.Is(err, denial) {
+			return fmt.Errorf("%w: %w", ErrAWSAuthPolicy, err)
+		}
+	}
+	return err
+}
 
 type AWSAuthConfig struct {
 	Profile string `json:"profile,omitempty"`
@@ -56,12 +80,26 @@ type AWSCredentialsProvider interface {
 // SDK credential provider interface used for SigV4 signing.
 type awsCredentialsProviderAdapter struct {
 	provider AWSCredentialsProvider
+	policy   network.NetworkPolicy
 }
 
 func (a awsCredentialsProviderAdapter) Retrieve(ctx context.Context) (awssdk.Credentials, error) {
-	keys, err := a.provider.Credentials(ctx)
+	// Rust #47408: a caller-supplied exporter requires unrestricted application
+	// policy, and its work is cancelled when the permission is revoked.
+	permit, err := a.policy.AcquireForUnsupportedSDK()
 	if err != nil {
-		return awssdk.Credentials{}, err
+		return awssdk.Credentials{}, awsPolicyError(err)
+	}
+	var keys AWSAccessKeys
+	var providerErr error
+	if _, err := network.RunWithNetworkPermit(ctx, permit, func(runCtx context.Context) struct{} {
+		keys, providerErr = a.provider.Credentials(runCtx)
+		return struct{}{}
+	}); err != nil {
+		return awssdk.Credentials{}, awsPolicyError(err)
+	}
+	if providerErr != nil {
+		return awssdk.Credentials{}, awsPolicyError(providerErr)
 	}
 	return awssdk.Credentials{
 		AccessKeyID:     strings.TrimSpace(keys.AccessKeyID),
@@ -88,6 +126,9 @@ type AWSAuthContext struct {
 	credentials awssdk.CredentialsProvider
 	region      string
 	service     string
+	// policy checks the signing destination before credentials are loaded and
+	// cancels a credential fetch whose permission is revoked (Rust #47408).
+	policy network.NetworkPolicy
 }
 
 // AWSAuthLoadOptions carries the host dependencies of the AWS config chain.
@@ -100,6 +141,11 @@ type AWSAuthLoadOptions struct {
 	// HTTPClient, when set, carries the application network policy (and the
 	// configured proxy behaviour) for the SDK's credential and region requests.
 	HTTPClient *http.Client
+	// Policy is the application network policy the resolved context enforces:
+	// signing checks the request destination before loading credentials, and a
+	// caller-supplied credential exporter requires an unrestricted policy
+	// because its I/O runs outside the shared AWS transport (Rust #47408).
+	Policy network.NetworkPolicy
 }
 
 func (o *AWSAuthLoadOptions) awsConfigOptions() []func(*awsconfig.LoadOptions) error {
@@ -107,6 +153,14 @@ func (o *AWSAuthLoadOptions) awsConfigOptions() []func(*awsconfig.LoadOptions) e
 		return nil
 	}
 	return []func(*awsconfig.LoadOptions) error{awsconfig.WithHTTPClient(o.HTTPClient)}
+}
+
+// networkPolicy returns the application policy the resolved context enforces.
+func (o *AWSAuthLoadOptions) networkPolicy() network.NetworkPolicy {
+	if o == nil {
+		return network.UnmanagedNetworkPolicy()
+	}
+	return o.Policy
 }
 
 func LoadAWSAuthContext(config *AWSAuthConfig) (*AWSAuthContext, error) {
@@ -148,6 +202,7 @@ func LoadAWSAuthContextWithOptions(config *AWSAuthConfig, options *AWSAuthLoadOp
 		credentials: loaded.Credentials,
 		region:      region,
 		service:     normalized.Service,
+		policy:      options.networkPolicy(),
 	}, nil
 }
 
@@ -187,12 +242,13 @@ func LoadAWSAuthContextWithProviderAndOptions(config *AWSAuthConfig, provider AW
 	if region == "" {
 		return nil, ErrAWSAuthMissingRegion
 	}
-	adapter := awsCredentialsProviderAdapter{provider: provider}
+	adapter := awsCredentialsProviderAdapter{provider: provider, policy: options.networkPolicy()}
 	return &AWSAuthContext{
 		config:      loaded,
 		credentials: adapter,
 		region:      region,
 		service:     normalized.Service,
+		policy:      options.networkPolicy(),
 	}, nil
 }
 
@@ -326,11 +382,56 @@ func (c *AWSAuthContext) SignAt(request *AWSAuthRequestToSign, at time.Time) (*A
 	if c.credentials == nil {
 		return nil, ErrAWSAuthMissingCredentials
 	}
-	credentials, err := c.credentials.Retrieve(context.Background())
+	// Rust #47408: check the signing destination before loading credentials, then
+	// load them under the permit so a revocation cancels the fetch.
+	ctx := context.Background()
+	permit, err := c.signingPermit(request)
 	if err != nil {
+		return nil, err
+	}
+	var credentials awssdk.Credentials
+	var credentialErr error
+	_, err = network.RunWithNetworkPermit(ctx, permit, func(runCtx context.Context) struct{} {
+		credentials, credentialErr = c.credentials.Retrieve(runCtx)
+		return struct{}{}
+	})
+	if err != nil {
+		if policyErr := awsPolicyError(err); errors.Is(policyErr, ErrAWSAuthPolicy) {
+			return nil, policyErr
+		}
 		return nil, fmt.Errorf("%w: %v", ErrAWSAuthMissingCredentials, err)
 	}
+	if credentialErr != nil {
+		if policyErr := awsPolicyError(credentialErr); errors.Is(policyErr, ErrAWSAuthPolicy) {
+			return nil, policyErr
+		}
+		return nil, fmt.Errorf("%w: %v", ErrAWSAuthMissingCredentials, credentialErr)
+	}
 	return SignAWSRequestWithCredentials(&credentials, c.region, c.service, request, at)
+}
+
+// signingPermit authorizes the request destination, mirroring Rust's
+// `network_policy.acquire(&url)` ahead of `provide_credentials()`.
+func (c *AWSAuthContext) signingPermit(request *AWSAuthRequestToSign) (*network.NetworkPermit, error) {
+	if c == nil || !c.policy.IsScoped() {
+		return network.UnmanagedNetworkPolicy().Acquire(awsRequestURL(request))
+	}
+	permit, err := c.policy.Acquire(awsRequestURL(request))
+	if err != nil {
+		return nil, awsPolicyError(err)
+	}
+	return permit, nil
+}
+
+func awsRequestURL(request *AWSAuthRequestToSign) *url.URL {
+	if request == nil {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(request.URL))
+	if err != nil {
+		return nil
+	}
+	return parsed
 }
 
 func SignAWSRequest(credentials *AWSAuthCredentials, region string, service string, request *AWSAuthRequestToSign, at time.Time) (*AWSAuthSignedRequest, error) {

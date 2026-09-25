@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"codex_go/network"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +11,94 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/network"
 )
+
+// countingAWSCredentialsProvider records whether credentials were loaded.
+type countingAWSCredentialsProvider struct {
+	calls int
+	err   error
+}
+
+func (p *countingAWSCredentialsProvider) Credentials(context.Context) (AWSAccessKeys, error) {
+	p.calls++
+	if p.err != nil {
+		return AWSAccessKeys{}, p.err
+	}
+	return AWSAccessKeys{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "secret"}, nil
+}
+
+// Rust parity (#47408): signing checks the request destination before loading
+// credentials, and a denied destination never consults the provider.
+func TestAWSAuthSigningChecksDestinationBeforeCredentialsLikeRust(t *testing.T) {
+	controller := network.NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"bedrock-runtime.us-east-1.amazonaws.com"}))
+
+	provider := &countingAWSCredentialsProvider{}
+	context := &AWSAuthContext{
+		credentials: awsCredentialsProviderAdapter{provider: provider, policy: network.UnmanagedNetworkPolicy()},
+		region:      "us-east-1",
+		service:     "bedrock",
+		policy:      policy,
+	}
+	_, err := context.SignAt(&AWSAuthRequestToSign{Method: http.MethodPost, URL: "https://denied.example/v1/responses"}, time.Now().UTC())
+	if !errors.Is(err, ErrAWSAuthPolicy) || !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("denied destination error = %v, want an AWS policy denial", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("credentials were loaded %d times for a denied destination", provider.calls)
+	}
+
+	signed, err := context.SignAt(&AWSAuthRequestToSign{
+		Method:  http.MethodPost,
+		URL:     "https://bedrock-runtime.us-east-1.amazonaws.com/v1/responses",
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    []byte(`{}`),
+	}, time.Now().UTC())
+	if err != nil || signed == nil {
+		t.Fatalf("allowed destination SignAt() = %#v, %v", signed, err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("credentials loaded %d times, want one", provider.calls)
+	}
+}
+
+// Rust parity (#47408): a caller-supplied credential exporter requires an
+// unrestricted policy because its I/O runs outside the shared AWS transport, and
+// revocation cancels its work.
+func TestAWSAuthCredentialExporterRequiresUnrestrictedPolicyLikeRust(t *testing.T) {
+	provider := &countingAWSCredentialsProvider{}
+	controller := network.NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"bedrock-runtime.us-east-1.amazonaws.com"}))
+
+	restricted := awsCredentialsProviderAdapter{provider: provider, policy: policy}
+	if _, err := restricted.Retrieve(context.Background()); !errors.Is(err, ErrAWSAuthPolicy) {
+		t.Fatalf("restricted exporter error = %v, want an AWS policy denial", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("the restricted exporter still ran %d times", provider.calls)
+	}
+
+	unrestricted := network.NewNetworkPolicyController()
+	unrestrictedPolicy := unrestricted.Policy()
+	unrestricted.Publish(unrestrictedPolicy.Revision(), network.UnrestrictedDestinationPolicy())
+	allowed := awsCredentialsProviderAdapter{provider: provider, policy: unrestrictedPolicy}
+	if _, err := allowed.Retrieve(context.Background()); err != nil {
+		t.Fatalf("unrestricted exporter error = %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("the unrestricted exporter ran %d times, want one", provider.calls)
+	}
+
+	// Revoking the permission fails further exports instead of running them.
+	unrestricted.Policy().Invalidate()
+	if _, err := allowed.Retrieve(context.Background()); !errors.Is(err, ErrAWSAuthPolicy) {
+		t.Fatalf("revoked exporter error = %v, want an AWS policy denial", err)
+	}
+}
 
 // Rust parity (#47408): the AWS SDK's credential and region requests are routed
 // through the host's application client, so a managed restriction denies them
