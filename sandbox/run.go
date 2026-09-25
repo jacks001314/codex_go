@@ -584,6 +584,30 @@ func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, addi
 			}
 		}
 	}
+	// Rust's merge_permission_profiles keeps read and write roots apart, so a
+	// read-only grant (the credential-broker shell snapshot, #48073) has to
+	// reach the profile as a read entry.
+	if len(additional.ReadFileSystem) > 0 && wire.Type == "managed" {
+		if wire.FileSys == nil {
+			wire.FileSys = &rustPermissionFilesystem{Type: "restricted"}
+		}
+		if wire.FileSys.Type == "" {
+			wire.FileSys.Type = "restricted"
+		}
+		// An unrestricted filesystem already reads every path; keep it as is
+		// instead of narrowing it to a restricted profile.
+		if wire.FileSys.Type != "unrestricted" {
+			for _, path := range additional.ReadFileSystem {
+				cleaned := cleanRunPath(path)
+				if cleaned == "" || runtimeProfileHasPathAccess(wire.FileSys.Entries, cleaned, string(FileSystemAccessRead)) {
+					continue
+				}
+				wire.FileSys.Entries = append(wire.FileSys.Entries, rustPermissionFilesystemEntry{
+					Path: rustPermissionFilesystemPath{Type: "path", Path: cleaned}, Access: string(FileSystemAccessRead),
+				})
+			}
+		}
+	}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err

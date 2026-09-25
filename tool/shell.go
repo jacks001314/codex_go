@@ -98,10 +98,17 @@ type ShellRequest struct {
 	EnvPolicy *execpolicy.EnvPolicy
 	// ThreadID is exposed to model-reachable commands as CODEX_THREAD_ID when
 	// an EnvPolicy builds the command environment.
-	ThreadID                        string
-	TTY                             bool
-	SandboxPermissions              sandbox.SandboxPermissions
-	AdditionalPermissions           *sandbox.AdditionalPermissionProfile
+	ThreadID              string
+	TTY                   bool
+	SandboxPermissions    sandbox.SandboxPermissions
+	AdditionalPermissions *sandbox.AdditionalPermissionProfile
+	// InternalPermissions are the runtime's own grants for this launch (the
+	// plugin-metrics sidecar's output directory, and Rust's shell-snapshot read
+	// grant). They are added to the command's permission profile and recorded
+	// separately so a write_stdin review does not treat them as agent-requested
+	// grants (Rust's unified-exec `internal_permissions`, #48073). The
+	// agent-requested AdditionalPermissions stay as the model sent them.
+	InternalPermissions             *sandbox.AdditionalPermissionProfile
 	SandboxProfile                  *ShellSandboxProfile
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile

@@ -103,10 +103,13 @@ type WriteStdinApprovalRequest struct {
 	Chars         string
 	CWD           string
 	TTY           bool
-	// SandboxPermissions / AdditionalPermissions / PermissionProfile are the
-	// terminal's retained launch facts (Rust TerminalPermissions).
+	// SandboxPermissions / AdditionalPermissions / InternalPermissions /
+	// PermissionProfile are the terminal's retained launch facts (Rust
+	// TerminalPermissions). InternalPermissions are the runtime's own grants,
+	// which Rust's review rule does not treat as agent-requested (#48073).
 	SandboxPermissions    sandbox.SandboxPermissions
 	AdditionalPermissions *sandbox.AdditionalPermissionProfile
+	InternalPermissions   *sandbox.AdditionalPermissionProfile
 	PermissionProfile     *sandbox.PermissionProfile
 	// Escalated reports that the launch bypassed the sandbox.
 	Escalated bool
@@ -123,6 +126,7 @@ type WriteStdinApprovalFunc func(ctx context.Context, request *WriteStdinApprova
 type unifiedExecLaunchFacts struct {
 	launchSandboxPermissions sandbox.SandboxPermissions
 	additionalPermissions    *sandbox.AdditionalPermissionProfile
+	internalPermissions      *sandbox.AdditionalPermissionProfile
 	permissionProfile        *sandbox.PermissionProfile
 	environmentID            string
 	managedNetwork           bool
@@ -139,6 +143,7 @@ func unifiedExecLaunchFactsFromRequest(req *ShellRequest) unifiedExecLaunchFacts
 	return unifiedExecLaunchFacts{
 		launchSandboxPermissions: req.SandboxPermissions,
 		additionalPermissions:    req.AdditionalPermissions,
+		internalPermissions:      req.InternalPermissions,
 		permissionProfile:        req.PermissionProfile,
 		environmentID:            environmentID,
 		managedNetwork:           req.EnforceManagedNetwork,
@@ -1014,6 +1019,7 @@ func (m *UnifiedExecManager) WriteStdin(ctx context.Context, args *WriteStdinArg
 					TTY:                   process.tty,
 					SandboxPermissions:    process.launchSandboxPermissions,
 					AdditionalPermissions: process.additionalPermissions,
+					InternalPermissions:   process.internalPermissions,
 					PermissionProfile:     process.permissionProfile,
 					Escalated:             process.escalated,
 					ManagedNetwork:        process.managedNetwork,

@@ -1488,6 +1488,61 @@ func TestFileSystemSandboxContextCanonicalProfileWinsOverLegacyJSONLikeRust(t *t
 	}
 }
 
+// TestUnifiedExecWriteStdinCarriesRuntimeGrantsLikeRust pins the launch facts a
+// write_stdin review needs (#48073): the runtime's own grants travel separately
+// from the agent-requested ones, so the app-server can tell a sidecar-only
+// terminal (no review) from one that retains agent grants (review).
+func TestUnifiedExecWriteStdinCarriesRuntimeGrantsLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	internal := &sandbox.AdditionalPermissionProfile{FileSystem: []string{"/tmp/codex-metrics"}}
+	agentGrant := &sandbox.AdditionalPermissionProfile{ReadFileSystem: []string{"/tmp/agent-read"}}
+	request := &ShellRequest{
+		Command:               unifiedExecHelperCommand("echo"),
+		HookCommand:           "interactive helper",
+		CWD:                   t.TempDir(),
+		TTY:                   true,
+		YieldTimeMS:           unifiedExecMinYieldMS,
+		TimeoutMS:             15_000,
+		MaxOutputTokens:       intPtr(100),
+		SandboxPermissions:    sandbox.SandboxPermissionsWithAdditionalPermissions,
+		AdditionalPermissions: agentGrant,
+		InternalPermissions:   internal,
+	}
+	opened, err := manager.Exec(context.Background(), request, "exec-call")
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if opened.ProcessID == nil {
+		t.Fatalf("opened.ProcessID = %v, want non-nil", opened.ProcessID)
+	}
+	var reviewed int
+	manager.SetWriteStdinApproval(func(_ context.Context, approval *WriteStdinApprovalRequest) error {
+		reviewed++
+		if approval.InternalPermissions != internal {
+			t.Fatalf("InternalPermissions = %#v, want the launch's runtime grants", approval.InternalPermissions)
+		}
+		if approval.AdditionalPermissions != agentGrant {
+			t.Fatalf("AdditionalPermissions = %#v, want the agent's own grants", approval.AdditionalPermissions)
+		}
+		return nil
+	})
+	write := NewWriteStdinExecutor(manager, intPtr(50))
+	if _, err := write.Execute(context.Background(), &Invocation{
+		CallID:   "write-call-internal",
+		ToolName: PlainName(DefaultWriteStdinToolName),
+		Payload: Payload{Kind: PayloadFunction, Arguments: fmt.Sprintf(
+			`{"session_id":%d,"chars":"hello\n","yield_time_ms":250,"max_output_tokens":1000}`,
+			*opened.ProcessID,
+		)},
+	}); err != nil {
+		t.Fatalf("write hello error = %v", err)
+	}
+	if reviewed != 1 {
+		t.Fatalf("approval calls = %d, want 1", reviewed)
+	}
+}
+
 func unifiedExecHelperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=^TestUnifiedExecHelperProcess$", "--", "--unified-exec-helper", mode}
 }

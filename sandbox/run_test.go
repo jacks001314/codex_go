@@ -229,6 +229,43 @@ func TestPermissionProfileAdditionalGrantsPreserveCanonicalEntriesLikeRust(t *te
 	}
 }
 
+// TestPermissionProfileReadOnlyGrantReachesTheProfileLikeRust mirrors Rust's
+// read/write split in `merge_permission_profiles`: a read-only grant (the
+// credential-broker shell snapshot, #48073) must reach the command's profile as
+// a read entry instead of being dropped, and an unrestricted profile stays
+// unrestricted rather than being narrowed to a restricted one.
+func TestPermissionProfileReadOnlyGrantReachesTheProfileLikeRust(t *testing.T) {
+	readonly := ReadOnlyPermissionProfile()
+	snapshot := filepath.Join(t.TempDir(), "shell-snapshot.sh")
+	effective, err := PermissionProfileWithAdditionalPermissions(&readonly, &AdditionalPermissionProfile{
+		ReadFileSystem: []string{snapshot},
+	})
+	if err != nil {
+		t.Fatalf("PermissionProfileWithAdditionalPermissions() error = %v", err)
+	}
+	raw, err := RuntimePermissionProfileJSON(*effective)
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	if access := permissionProfilePathAccess(t, raw, cleanRunPath(snapshot)); access != string(FileSystemAccessRead) {
+		t.Fatalf("read-only grant access = %q in %s", access, raw)
+	}
+
+	// A danger-full-access profile already reads every path, so the grant must
+	// not turn it into a restricted profile.
+	fullAccess := FullAccessPermissionProfile()
+	effective, err = PermissionProfileWithAdditionalPermissions(&fullAccess, &AdditionalPermissionProfile{
+		ReadFileSystem: []string{snapshot},
+	})
+	if err != nil {
+		t.Fatalf("PermissionProfileWithAdditionalPermissions() error = %v", err)
+	}
+	if !effective.Disabled && !effective.LegacySandboxPolicy().HasFullDiskReadAccess() {
+		raw, _ := RuntimePermissionProfileJSON(*effective)
+		t.Fatalf("unrestricted profile was narrowed by a read-only grant: %s", raw)
+	}
+}
+
 func TestWindowsPermissionProfilesIgnoreSymbolicSlashTmpLikeRust(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-specific symbolic slash_tmp semantics")

@@ -14721,12 +14721,45 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 	if launch != nil && current != nil && !equalSandboxPermissionProfiles(launch, current) {
 		return sandbox.SandboxPermissionsRequireEscalated, nil
 	}
-	if request.AdditionalPermissions != nil && (request.AdditionalPermissions.Network != nil ||
-		len(request.AdditionalPermissions.FileSystem) > 0 ||
-		len(request.AdditionalPermissions.ReadFileSystem) > 0) {
+	if sandboxAdditionalPermissionsBeyondInternal(request.AdditionalPermissions, request.InternalPermissions) {
 		return sandbox.SandboxPermissionsWithAdditionalPermissions, nil
 	}
 	return sandbox.SandboxPermissionsUseDefault, nil
+}
+
+// sandboxAdditionalPermissionsBeyondInternal mirrors Rust's #48073 rule: the
+// launch's runtime-internal grants (the plugin-metrics sidecar's output
+// directory, a shell-snapshot read grant) are part of an ordinary launch, so
+// only permissions beyond them need a fresh write_stdin review.
+func sandboxAdditionalPermissionsBeyondInternal(additional *sandbox.AdditionalPermissionProfile, internal *sandbox.AdditionalPermissionProfile) bool {
+	if additional == nil || additional.IsEmpty() {
+		return false
+	}
+	if internal == nil || internal.IsEmpty() {
+		return true
+	}
+	internalWrite := make(map[string]struct{}, len(internal.FileSystem))
+	for _, path := range internal.FileSystem {
+		internalWrite[path] = struct{}{}
+	}
+	for _, path := range additional.FileSystem {
+		if _, ok := internalWrite[path]; !ok {
+			return true
+		}
+	}
+	internalRead := make(map[string]struct{}, len(internal.ReadFileSystem))
+	for _, path := range internal.ReadFileSystem {
+		internalRead[path] = struct{}{}
+	}
+	for _, path := range additional.ReadFileSystem {
+		if _, ok := internalRead[path]; !ok {
+			return true
+		}
+	}
+	if additional.Network != nil && (internal.Network == nil || *additional.Network != *internal.Network) {
+		return true
+	}
+	return false
 }
 
 // terminalWriteDriftError mirrors Rust TerminalPermissions::review_requirement's
@@ -14747,7 +14780,12 @@ func (r *RuntimeRouter) terminalWriteDriftError(request *tool.WriteStdinApproval
 }
 
 // currentWriteStdinPermissionProfile resolves the permission profile the
-// terminal's environment currently enforces.
+// terminal's environment currently enforces, including the launch's retained
+// grants. Rust captures the current terminal policy with
+// `merge_permission_profiles(additional_permissions, internal_permissions)`
+// (#48073), so a retained runtime or agent grant is a launch fact rather than
+// drift; without it a sidecar-granted terminal would report escalation instead
+// of the runtime-only case that needs no review.
 func (r *RuntimeRouter) currentWriteStdinPermissionProfile(request *tool.WriteStdinApprovalRequest, cfg *config.Config) (*sandbox.PermissionProfile, error) {
 	if cfg == nil {
 		return nil, nil
@@ -14768,7 +14806,23 @@ func (r *RuntimeRouter) currentWriteStdinPermissionProfile(request *tool.WriteSt
 	if err != nil || resolution == nil {
 		return nil, nil
 	}
-	return resolution.Profile, nil
+	profile := resolution.Profile
+	var additional, internal *sandbox.AdditionalPermissionProfile
+	if request != nil {
+		additional = request.AdditionalPermissions
+		internal = request.InternalPermissions
+	}
+	granted := sandbox.MergePermissionProfiles(additional, internal)
+	if granted.IsEmpty() || profile == nil || profile.Disabled {
+		return profile, nil
+	}
+	merged, mergeErr := sandbox.PermissionProfileWithAdditionalPermissions(profile, granted)
+	if mergeErr != nil {
+		// An unmergeable grant cannot prove drift either; the caller falls back
+		// to the grant comparison alone.
+		return profile, nil
+	}
+	return merged, nil
 }
 
 // terminalWriteApprovalAction builds Rust's ApprovalAction::WriteStdin for the
@@ -14810,8 +14864,14 @@ func terminalWriteApprovalReason(request *tool.WriteStdinApprovalRequest, permis
 			authority = "This terminal retains sandbox or network settings that differ from the current permissions."
 		}
 	}
-	reason := "Send input to an existing terminal. " + authority +
-		" The cwd is its launch directory; the terminal's current directory and state may have changed."
+	reason := "Send input to an existing terminal. " + authority
+	// Rust #48073: the runtime's own filesystem grants are reported without
+	// naming their paths, so a reviewer knows the launch is not an ordinary one
+	// even when it needs no fresh approval.
+	if request != nil && request.InternalPermissions != nil {
+		reason += " It also has an internal filesystem grant."
+	}
+	reason += " The cwd is its launch directory; the terminal's current directory and state may have changed."
 	if request != nil && request.AdditionalPermissions != nil {
 		if grants := additionalPermissionsJSON(request.AdditionalPermissions); len(grants) > 0 {
 			if encoded, err := json.Marshal(grants); err == nil {

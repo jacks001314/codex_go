@@ -675,6 +675,11 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	var metricsSidecar *plugin.PluginMetricsSidecar
 	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil)
+	// Runtime grants are the launch's own, not the agent's: Rust keeps them in
+	// `internal_permissions`, merges them into the command's permissions, and
+	// carries them separately so a later write_stdin review does not treat them
+	// as agent-requested (#48073).
+	var internalPermissions *sandbox.AdditionalPermissionProfile
 	if e.pluginMetricsResolver != nil && !remoteEnvironment {
 		if req.Env == nil {
 			req.Env = map[string]string{}
@@ -687,8 +692,14 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 				// The sidecar's own grant comes from its single accessor, so the
 				// launch and any later internal-permission record agree (Rust
 				// PluginMetricsSidecar::additional_permissions).
-				req.AdditionalPermissions = sandbox.MergePermissionProfiles(req.AdditionalPermissions, metricsSidecar.AdditionalPermissions())
+				internalPermissions = sandbox.MergePermissionProfiles(internalPermissions, metricsSidecar.AdditionalPermissions())
 			}
+		}
+	}
+	if !internalPermissions.IsEmpty() {
+		req.InternalPermissions = internalPermissions
+		if err := applyInternalPermissionsToLaunch(req, internalPermissions); err != nil {
+			return nil, RespondToModel(err.Error())
 		}
 	}
 	if environment != nil {
@@ -967,6 +978,31 @@ func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
 		prepared.Env["CODEX_PERMISSION_PROFILE"] = profileID
 	}
 	return &prepared, nil
+}
+
+// applyInternalPermissionsToLaunch grants the runtime's own permissions to the
+// command the launch is about to start, mirroring Rust's
+// `merge_permission_profiles(req.additional_permissions, internal_permissions)`
+// in the unified-exec launch (#48073): the plugin-metrics sidecar could not
+// write its output otherwise. The agent-requested grants stay untouched so the
+// later write_stdin review, its action payload and its reason text keep
+// reporting only what the agent asked for.
+func applyInternalPermissionsToLaunch(req *ShellRequest, internal *sandbox.AdditionalPermissionProfile) error {
+	if req == nil || internal.IsEmpty() || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
+		return nil
+	}
+	merged, err := sandbox.PermissionProfileWithAdditionalPermissions(req.PermissionProfile, internal)
+	if err != nil {
+		return err
+	}
+	profileJSON, err := sandbox.RuntimePermissionProfileJSON(*merged)
+	if err != nil {
+		return err
+	}
+	req.PermissionProfile = merged
+	req.PermissionProfileJSON = profileJSON
+	req.SandboxProfile = buildShellSandboxProfile(merged, sandbox.MergePermissionProfiles(req.AdditionalPermissions, internal), req.CWD)
+	return nil
 }
 
 func cloneSandboxType(value sandbox.SandboxType) *sandbox.SandboxType {

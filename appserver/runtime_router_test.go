@@ -27952,6 +27952,147 @@ func TestWriteStdinApprovalSkipsMatchingTerminalsLikeRust(t *testing.T) {
 	}
 }
 
+// TestWriteStdinReviewTreatsRuntimeGrantsAsLaunchFactsLikeRust mirrors Rust
+// #48073: a terminal whose only extra grants are the runtime's own (the
+// plugin-metrics sidecar's output directory) needs no review, while any grant
+// the agent asked for beyond them still does, and a sandbox bypass keeps
+// requiring review.
+func TestWriteStdinReviewTreatsRuntimeGrantsAsLaunchFactsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	// A configured workspace-write profile makes the thread's current profile
+	// resolvable, so the launch/current comparison runs as it does in a real
+	// terminal instead of being skipped.
+	if err := os.WriteFile(config.ConfigPath(home), []byte("sandbox_mode = \"workspace-write\"\n[features]\nwrite_stdin_approval = true\n"), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	t.Cleanup(func() { _ = router.Close() })
+	cwd := t.TempDir()
+	baseRequest := &tool.WriteStdinApprovalRequest{
+		ProcessID:          21,
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		Chars:              "hello\n",
+		TTY:                true,
+		CWD:                cwd,
+		SandboxPermissions: sandbox.SandboxPermissionsUseDefault,
+	}
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	if cfg == nil {
+		t.Fatal("effectiveWriteStdinConfig() = nil")
+	}
+	base, err := router.currentWriteStdinPermissionProfile(baseRequest, cfg)
+	if err != nil {
+		t.Fatalf("currentWriteStdinPermissionProfile() error = %v", err)
+	}
+	if base == nil {
+		t.Fatal("currentWriteStdinPermissionProfile() = nil, want the resolved profile")
+	}
+	networkEnabled := true
+	internal := &sandbox.AdditionalPermissionProfile{FileSystem: []string{filepath.Join(cwd, "private-metrics")}}
+	cases := []struct {
+		name       string
+		additional *sandbox.AdditionalPermissionProfile
+		escalated  bool
+		want       sandbox.SandboxPermissions
+	}{
+		{"runtime grant only", nil, false, sandbox.SandboxPermissionsUseDefault},
+		{
+			"agent filesystem grant",
+			&sandbox.AdditionalPermissionProfile{FileSystem: []string{filepath.Join(cwd, "agent-output")}},
+			false,
+			sandbox.SandboxPermissionsWithAdditionalPermissions,
+		},
+		{
+			"agent read grant",
+			&sandbox.AdditionalPermissionProfile{ReadFileSystem: []string{filepath.Join(cwd, "agent-read")}},
+			false,
+			sandbox.SandboxPermissionsWithAdditionalPermissions,
+		},
+		{
+			"agent network grant",
+			&sandbox.AdditionalPermissionProfile{Network: &networkEnabled},
+			false,
+			sandbox.SandboxPermissionsWithAdditionalPermissions,
+		},
+		{
+			"agent grant beside the runtime grant",
+			&sandbox.AdditionalPermissionProfile{FileSystem: []string{filepath.Join(cwd, "agent-output")}},
+			false,
+			sandbox.SandboxPermissionsWithAdditionalPermissions,
+		},
+		{"sandbox bypass", nil, true, sandbox.SandboxPermissionsRequireEscalated},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			// The launch folds the runtime's grants into its own profile, the way
+			// the unified-exec launch does (#48073).
+			launch, err := sandbox.PermissionProfileWithAdditionalPermissions(
+				base,
+				sandbox.MergePermissionProfiles(testCase.additional, internal),
+			)
+			if err != nil {
+				t.Fatalf("PermissionProfileWithAdditionalPermissions() error = %v", err)
+			}
+			request := *baseRequest
+			request.PermissionProfile = launch
+			request.AdditionalPermissions = testCase.additional
+			request.InternalPermissions = internal
+			if testCase.escalated {
+				request.SandboxPermissions = sandbox.SandboxPermissionsRequireEscalated
+			}
+			got, err := router.terminalWriteReviewRequirement(&request, cfg)
+			if err != nil {
+				t.Fatalf("terminalWriteReviewRequirement() error = %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("review requirement = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestWriteStdinApprovalReportsInternalGrantWithoutItsPathsLikeRust pins Rust
+// #48073's reason text: an internal grant is reported, but its paths never enter
+// the description (clients that strip the experimental additionalPermissions
+// field must not learn them either).
+func TestWriteStdinApprovalReportsInternalGrantWithoutItsPathsLikeRust(t *testing.T) {
+	router, threadID, _ := newWriteStdinApprovalRouter(t)
+	t.Cleanup(func() { _ = router.Close() })
+	internal := &sandbox.AdditionalPermissionProfile{FileSystem: []string{filepath.Join(t.TempDir(), "private-metrics")}}
+	request := &tool.WriteStdinApprovalRequest{
+		ProcessID:           22,
+		ThreadID:            threadID,
+		TurnID:              "turn-1",
+		Chars:               "hello\n",
+		TTY:                 true,
+		CWD:                 t.TempDir(),
+		SandboxPermissions:  sandbox.SandboxPermissionsUseDefault,
+		InternalPermissions: internal,
+	}
+	got := terminalWriteApprovalReason(request, sandbox.SandboxPermissionsUseDefault)
+	const want = "Send input to an existing terminal. This terminal uses the current permissions. " +
+		"It also has an internal filesystem grant. The cwd is its launch directory; " +
+		"the terminal's current directory and state may have changed."
+	if got != want {
+		t.Fatalf("approval reason = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "private-metrics") {
+		t.Fatalf("approval reason leaked the internal grant path: %q", got)
+	}
+	if strings.Contains(got, "Retained grants") {
+		t.Fatalf("an internal-only launch must not report retained agent grants: %q", got)
+	}
+}
+
 func TestWriteStdinApprovalDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
 	home := t.TempDir()
 	// Rust #47799 promoted write_stdin_approval to stable and enabled it by
