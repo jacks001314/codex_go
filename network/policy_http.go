@@ -8,6 +8,7 @@ package network
 // policy denial that callers must not retry.
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -87,34 +88,67 @@ func (d *PolicyHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 		}
 		next = &clone
 	}
+	request, release := beginPermitRequest(permit, request)
 	response, err := next.Do(request)
 	if err != nil {
+		release()
 		permit.Release()
+		// An abort caused by revocation is the policy denial, not a transport
+		// failure the caller might retry.
+		if policyErr := permit.Check(); policyErr != nil {
+			return nil, &PolicyError{Err: policyErr}
+		}
 		return nil, err
 	}
 	if response == nil {
+		release()
 		permit.Release()
 		return nil, nil
 	}
-	wrapResponseBodyWithPermit(permit, response)
+	wrapResponseBodyWithPermit(permit, response, release)
 	return response, nil
+}
+
+// beginPermitRequest derives the request's context from the permit's lifetime.
+//
+// Revocation must stop the work already in flight, not only the next operation:
+// the derived context aborts the dial, the request and the response as soon as
+// the permit is revoked (Rust #47408's cancellation token, which the shared
+// client threads through every request). The watcher lives until the caller
+// releases the operation, so a revocation while the response streams aborts that
+// too; the returned release must run when the body or stream is closed.
+func beginPermitRequest(permit *NetworkPermit, request *http.Request) (*http.Request, func()) {
+	ctx, cancelRequest := context.WithCancel(request.Context())
+	stopWatch := make(chan struct{})
+	go func() {
+		select {
+		case <-permit.Revoked():
+			cancelRequest()
+		case <-stopWatch:
+		}
+	}()
+	return request.WithContext(ctx), func() {
+		close(stopWatch)
+		cancelRequest()
+	}
 }
 
 // wrapResponseBodyWithPermit keeps a permit alive for the response body, or, for
 // a hijacked stream (an upgraded WebSocket connection), for as long as the
 // caller owns the connection.
-func wrapResponseBodyWithPermit(permit *NetworkPermit, response *http.Response) {
+func wrapResponseBodyWithPermit(permit *NetworkPermit, response *http.Response, release func()) {
 	if response == nil || response.Body == nil {
+		release()
 		permit.Release()
 		return
 	}
 	if stream, hijacked := response.Body.(io.ReadWriteCloser); hijacked {
 		// An upgraded connection outlives the response, so it keeps the permit
 		// itself (Rust's WebSocketConnection retains the NetworkPermit).
-		response.Body = newPermitStream(permit, stream)
+		response.Body = newPermitStream(permit, stream, release)
 		return
 	}
-	response.Body = newPermitBody(permit, response.Body)
+	response.Body = newPermitBody(permit, response.Body, release)
 }
 
 // permitStream guards an upgraded connection with the request's permit.
@@ -128,11 +162,13 @@ type permitStream struct {
 	permit *NetworkPermit
 	stream io.ReadWriteCloser
 	done   chan struct{}
-	once   sync.Once
+	// release ends the request watcher and cancels the derived context.
+	release func()
+	once    sync.Once
 }
 
-func newPermitStream(permit *NetworkPermit, stream io.ReadWriteCloser) *permitStream {
-	guarded := &permitStream{permit: permit, stream: stream, done: make(chan struct{})}
+func newPermitStream(permit *NetworkPermit, stream io.ReadWriteCloser, release func()) *permitStream {
+	guarded := &permitStream{permit: permit, stream: stream, done: make(chan struct{}), release: release}
 	go func() {
 		select {
 		case <-permit.Revoked():
@@ -173,9 +209,15 @@ func (s *permitStream) Write(buffer []byte) (int, error) {
 
 // Close ends the guarded operation and releases the permit.
 func (s *permitStream) Close() error {
-	s.once.Do(func() { close(s.done) })
-	s.permit.Release()
-	return s.stream.Close()
+	err := s.stream.Close()
+	s.once.Do(func() {
+		close(s.done)
+		if s.release != nil {
+			s.release()
+		}
+		s.permit.Release()
+	})
+	return err
 }
 
 // permitBody keeps a request's permit alive for the whole response body and
@@ -185,11 +227,13 @@ type permitBody struct {
 	permit *NetworkPermit
 	body   io.ReadCloser
 	done   chan struct{}
-	once   sync.Once
+	// release ends the request watcher and cancels the derived context.
+	release func()
+	once    sync.Once
 }
 
-func newPermitBody(permit *NetworkPermit, body io.ReadCloser) *permitBody {
-	wrapped := &permitBody{permit: permit, body: body, done: make(chan struct{})}
+func newPermitBody(permit *NetworkPermit, body io.ReadCloser, release func()) *permitBody {
+	wrapped := &permitBody{permit: permit, body: body, done: make(chan struct{}), release: release}
 	go func() {
 		select {
 		case <-permit.Revoked():
@@ -216,9 +260,17 @@ func (b *permitBody) Read(buffer []byte) (int, error) {
 }
 
 func (b *permitBody) Close() error {
-	b.once.Do(func() { close(b.done) })
-	b.permit.Release()
-	return b.body.Close()
+	// Close the body first: a complete read lets the transport keep the
+	// connection alive, and only then is the request's derived context released.
+	err := b.body.Close()
+	b.once.Do(func() {
+		close(b.done)
+		if b.release != nil {
+			b.release()
+		}
+		b.permit.Release()
+	})
+	return err
 }
 
 var _ HTTPDoer = (*PolicyHTTPDoer)(nil)

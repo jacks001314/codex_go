@@ -146,7 +146,7 @@ func TestPolicyHTTPDoerReleasesHijackedStreamPermitsLikeRust(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	response := &http.Response{StatusCode: http.StatusSwitchingProtocols, Body: client}
-	wrapResponseBodyWithPermit(permit, response)
+	wrapResponseBodyWithPermit(permit, response, func() {})
 	if permit.isReleased() {
 		t.Fatal("the guarded stream released the permit before the connection closed")
 	}
@@ -349,4 +349,121 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+// blockingDoer stands in for a request that is still in flight: it waits for its
+// context and reports how the wait ended.
+type blockingDoer struct {
+	contexts chan context.Context
+}
+
+func (d *blockingDoer) Do(request *http.Request) (*http.Response, error) {
+	select {
+	case d.contexts <- request.Context():
+	default:
+	}
+	<-request.Context().Done()
+	return nil, request.Context().Err()
+}
+
+// Rust #47408 ("cancel active work when permission is revoked"): a request that
+// is still in flight when the policy is revoked is aborted, and the caller sees
+// the policy denial rather than a transport error it might retry.
+func TestPolicyHTTPDoerCancelsInFlightRequestsOnRevocationLikeRust(t *testing.T) {
+	doer := &blockingDoer{contexts: make(chan context.Context, 1)}
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	guarded := &PolicyHTTPDoer{Policy: policy, Next: doer}
+	done := make(chan error, 1)
+	go func() {
+		_, err := guarded.Do(&http.Request{URL: mustURL(t, "https://example.com/credentials")})
+		done <- err
+	}()
+	var requestContext context.Context
+	select {
+	case requestContext = <-doer.contexts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never started")
+	}
+	policy.Invalidate()
+	select {
+	case err := <-done:
+		if !IsPolicyError(err) || !errors.Is(err, ErrNetworkPolicyRevoked) {
+			t.Fatalf("in-flight error = %v, want the revocation denial", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation did not abort the in-flight request")
+	}
+	select {
+	case <-requestContext.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the aborted request kept its context alive")
+	}
+}
+
+// The round-tripper variant guards the clients built with PolicyHTTPClient.
+func TestPolicyRoundTripperCancelsInFlightRequestsOnRevocationLikeRust(t *testing.T) {
+	doer := &blockingDoer{contexts: make(chan context.Context, 1)}
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	roundTripper := &PolicyRoundTripper{Policy: policy, Next: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return doer.Do(request)
+	})}
+	done := make(chan error, 1)
+	go func() {
+		_, err := roundTripper.RoundTrip(&http.Request{URL: mustURL(t, "https://example.com/credentials")})
+		done <- err
+	}()
+	select {
+	case <-doer.contexts:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never started")
+	}
+	policy.Invalidate()
+	select {
+	case err := <-done:
+		if !IsPolicyError(err) || !errors.Is(err, ErrNetworkPolicyRevoked) {
+			t.Fatalf("in-flight error = %v, want the revocation denial", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("revocation did not abort the in-flight request")
+	}
+}
+
+// RunWithNetworkPermit passes a context that revocation cancels, so the work
+// already running under the permit stops (Rust #47408's cancellation token).
+func TestRunWithNetworkPermitCancelsTheOperationOnRevocation(t *testing.T) {
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	permit, err := policy.Acquire(mustURL(t, "https://example.com/credentials"))
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	cancelled := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := RunWithNetworkPermit(context.Background(), permit, func(runCtx context.Context) struct{} {
+			<-runCtx.Done()
+			close(cancelled)
+			return struct{}{}
+		})
+		done <- runErr
+	}()
+	policy.Invalidate()
+	select {
+	case runErr := <-done:
+		if !errors.Is(runErr, ErrNetworkPolicyRevoked) {
+			t.Fatalf("RunWithNetworkPermit() error = %v, want the revocation denial", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunWithNetworkPermit did not return on revocation")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operation's context was not cancelled by revocation")
+	}
 }

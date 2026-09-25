@@ -398,16 +398,24 @@ func (p *NetworkPermit) isReleased() bool {
 
 // RunWithNetworkPermit runs an operation under a permit, returning the
 // revocation denial when the permit is revoked first (Rust NetworkPermit::run).
+// Revocation also cancels the operation's context, so the work already in flight
+// stops instead of continuing under a permission the account no longer has
+// (Rust #47408's "cancel active work when permission is revoked").
 func RunWithNetworkPermit[T any](ctx context.Context, permit *NetworkPermit, operation func(context.Context) T) (T, error) {
 	var zero T
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runCtx, cancel := context.WithCancel(ctx)
+	// Revocation returns from this function, and the deferred cancel ends the
+	// operation's context, so the work in flight stops rather than continuing
+	// under a permission the account no longer has.
+	defer cancel()
 	done := make(chan struct{})
 	var value T
 	go func() {
 		defer close(done)
-		value = operation(ctx)
+		value = operation(runCtx)
 	}()
 	select {
 	case <-permit.Revoked():

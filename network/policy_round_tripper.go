@@ -32,16 +32,24 @@ func (t *PolicyRoundTripper) RoundTrip(request *http.Request) (*http.Response, e
 	if err != nil {
 		return nil, &PolicyError{Err: err}
 	}
+	request, release := beginPermitRequest(permit, request)
 	response, err := next.RoundTrip(request)
 	if err != nil {
+		release()
 		permit.Release()
+		// An abort caused by revocation is the policy denial, not a transport
+		// failure the caller might retry.
+		if policyErr := permit.Check(); policyErr != nil {
+			return nil, &PolicyError{Err: policyErr}
+		}
 		return nil, err
 	}
 	if response == nil {
+		release()
 		permit.Release()
 		return nil, nil
 	}
-	wrapResponseBodyWithPermit(permit, response)
+	wrapResponseBodyWithPermit(permit, response, release)
 	return response, nil
 }
 
