@@ -13,8 +13,23 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T22:00:00+08:00",
+    "generatedAt": "2026-09-25T23:30:00+08:00",
     "items": [
+        {
+            "id": "portable-project-trust-lookup",
+            "status": "done",
+            "area": "config",
+            "reason": "Aligned upstream 13869ca39e (#47620 Add portable project trust lookup APIs): config.ProjectTrustLookup mirrors Rust's ProjectTrustLookup with ordered keys (cwd before repository root, canonical spelling before original), exact matching on the merged projects map followed by case-insensitive Windows matching with a lowest-key tie-break, and precedence for entries that omit trust_level. ProjectTrustLevelForTarget resolves through the lookup so trust entries written with either spelling are honored; ProjectConfigEnabled's ancestor walk remains the onboarding directory_trust_persisted check. The Rust project_trust_tests cases (POSIX order/case, Windows exact-then-sorted aliases, cwd-over-root precedence) are mirrored.",
+            "test": "go test ./config -run ProjectTrust -count=1; go test ./app ./appserver -count=1"
+        },
+        {
+            "id": "executor-environment-toml-provider",
+            "status": "missing",
+            "area": "execserver",
+            "reason": "Upstream's executor environment provider (exec-server/src/environment_provider.rs + environment_toml.rs) has no Go counterpart: Go's exec-server serves a single local environment and has no environments.toml parsing, EnvironmentProvider snapshot, default-environment selection or per-environment transport list. Landing it also completes the auth_bearer_token URL-entry half of #47648 (the RPC half is done in sync148).",
+            "userImpact": "Go's exec-server cannot yet serve the environments listed in environments.toml, so multi-environment executors configured through that file are unavailable.",
+            "test": "go test ./execserver -count=1"
+        },
         {
             "id": "executor-bearer-token-connections",
             "status": "done",
