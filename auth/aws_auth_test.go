@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"codex_go/network"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,34 @@ import (
 	"testing"
 	"time"
 )
+
+// Rust parity (#47408): the AWS SDK's credential and region requests are routed
+// through the host's application client, so a managed restriction denies them
+// before they leave the process.
+func TestAWSAuthLoadOptionsEnforceApplicationNetworkPolicyLikeRust(t *testing.T) {
+	for _, key := range []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"} {
+		t.Setenv(key, "")
+	}
+	home := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(home, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(home, "credentials"))
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "false")
+
+	controller := network.NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"allowed.example"}))
+	client := network.PolicyHTTPClient(policy, network.NewHTTPClient(false, 0))
+
+	// A region is required for the load to reach credential discovery, which is
+	// the request the policy must deny.
+	_, err := LoadAWSAuthContextWithOptions(&AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, &AWSAuthLoadOptions{HTTPClient: client})
+	if err == nil {
+		t.Fatal("a restricted application network policy still resolved AWS credentials")
+	}
+	if !strings.Contains(err.Error(), network.ErrNetworkPolicyDestination.Error()) {
+		t.Fatalf("AWS credential load error = %v, want the application network policy denial", err)
+	}
+}
 
 func TestSignAddsSigV4Headers(t *testing.T) {
 	context, err := NewAWSAuthContext(&AWSAuthConfig{Region: "us-east-1", Service: "bedrock"}, &AWSAuthCredentials{

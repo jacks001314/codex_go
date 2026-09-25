@@ -90,20 +90,46 @@ type AWSAuthContext struct {
 	service     string
 }
 
+// AWSAuthLoadOptions carries the host dependencies of the AWS config chain.
+//
+// Rust parity: codex-rs/aws-auth (see `transport.rs`, #47408) - the credential
+// and region requests the AWS SDK makes are routed through the application-owned
+// client, so a managed application network policy checks the destination before
+// the request leaves the process.
+type AWSAuthLoadOptions struct {
+	// HTTPClient, when set, carries the application network policy (and the
+	// configured proxy behaviour) for the SDK's credential and region requests.
+	HTTPClient *http.Client
+}
+
+func (o *AWSAuthLoadOptions) awsConfigOptions() []func(*awsconfig.LoadOptions) error {
+	if o == nil || o.HTTPClient == nil {
+		return nil
+	}
+	return []func(*awsconfig.LoadOptions) error{awsconfig.WithHTTPClient(o.HTTPClient)}
+}
+
 func LoadAWSAuthContext(config *AWSAuthConfig) (*AWSAuthContext, error) {
+	return LoadAWSAuthContextWithOptions(config, nil)
+}
+
+// LoadAWSAuthContextWithOptions mirrors `AwsAuthContext::load` with the host's
+// application client, so the SDK's credential discovery honors the application
+// network policy (Rust #47408).
+func LoadAWSAuthContextWithOptions(config *AWSAuthConfig, options *AWSAuthLoadOptions) (*AWSAuthContext, error) {
 	normalized, err := normalizeAWSAuthConfig(config)
 	if err != nil {
 		return nil, err
 	}
 	ctx := context.Background()
-	options := []func(*awsconfig.LoadOptions) error{}
+	loadOptions := options.awsConfigOptions()
 	if normalized.Profile != "" {
-		options = append(options, awsconfig.WithSharedConfigProfile(normalized.Profile))
+		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(normalized.Profile))
 	}
 	if normalized.Region != "" {
-		options = append(options, awsconfig.WithRegion(normalized.Region))
+		loadOptions = append(loadOptions, awsconfig.WithRegion(normalized.Region))
 	}
-	loaded, err := awsconfig.LoadDefaultConfig(ctx, options...)
+	loaded, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,22 +156,30 @@ func LoadAWSAuthContext(config *AWSAuthConfig) (*AWSAuthContext, error) {
 // from the standard AWS config chain, then replace the SDK credential provider
 // with a caller-supplied exporter so signing uses the exported credentials.
 func LoadAWSAuthContextWithProvider(config *AWSAuthConfig, provider AWSCredentialsProvider) (*AWSAuthContext, error) {
+	return LoadAWSAuthContextWithProviderAndOptions(config, provider, nil)
+}
+
+// LoadAWSAuthContextWithProviderAndOptions is
+// LoadAWSAuthContextWithProvider with the host's application client, so the
+// region lookup and the exported credential provider honor the application
+// network policy (Rust #47408).
+func LoadAWSAuthContextWithProviderAndOptions(config *AWSAuthConfig, provider AWSCredentialsProvider, options *AWSAuthLoadOptions) (*AWSAuthContext, error) {
 	normalized, err := normalizeAWSAuthConfig(config)
 	if err != nil {
 		return nil, err
 	}
 	if provider == nil {
-		return LoadAWSAuthContext(config)
+		return LoadAWSAuthContextWithOptions(config, options)
 	}
 	ctx := context.Background()
-	options := []func(*awsconfig.LoadOptions) error{}
+	loadOptions := options.awsConfigOptions()
 	if normalized.Profile != "" {
-		options = append(options, awsconfig.WithSharedConfigProfile(normalized.Profile))
+		loadOptions = append(loadOptions, awsconfig.WithSharedConfigProfile(normalized.Profile))
 	}
 	if normalized.Region != "" {
-		options = append(options, awsconfig.WithRegion(normalized.Region))
+		loadOptions = append(loadOptions, awsconfig.WithRegion(normalized.Region))
 	}
-	loaded, err := awsconfig.LoadDefaultConfig(ctx, options...)
+	loaded, err := awsconfig.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +225,13 @@ func NewAWSAuthContext(config *AWSAuthConfig, credentials *AWSAuthCredentials) (
 }
 
 func ResolveAWSRegion(config *AWSAuthConfig) (string, error) {
+	return ResolveAWSRegionWithOptions(config, nil)
+}
+
+// ResolveAWSRegionWithOptions is ResolveAWSRegion with the host's application
+// client, so the region lookup honors the application network policy
+// (Rust #47408).
+func ResolveAWSRegionWithOptions(config *AWSAuthConfig, loadOptions *AWSAuthLoadOptions) (string, error) {
 	normalized, err := normalizeAWSAuthConfig(&AWSAuthConfig{
 		Profile: stringFromAWSConfig(config, "profile"),
 		Region:  stringFromAWSConfig(config, "region"),
@@ -200,7 +241,7 @@ func ResolveAWSRegion(config *AWSAuthConfig) (string, error) {
 		return "", err
 	}
 	ctx := context.Background()
-	options := []func(*awsconfig.LoadOptions) error{}
+	options := loadOptions.awsConfigOptions()
 	if normalized.Profile != "" {
 		options = append(options, awsconfig.WithSharedConfigProfile(normalized.Profile))
 	}
