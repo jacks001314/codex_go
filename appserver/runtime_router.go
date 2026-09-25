@@ -14721,7 +14721,9 @@ func (r *RuntimeRouter) terminalWriteReviewRequirement(request *tool.WriteStdinA
 	if launch != nil && current != nil && !equalSandboxPermissionProfiles(launch, current) {
 		return sandbox.SandboxPermissionsRequireEscalated, nil
 	}
-	if request.AdditionalPermissions != nil && (request.AdditionalPermissions.Network != nil || len(request.AdditionalPermissions.FileSystem) > 0) {
+	if request.AdditionalPermissions != nil && (request.AdditionalPermissions.Network != nil ||
+		len(request.AdditionalPermissions.FileSystem) > 0 ||
+		len(request.AdditionalPermissions.ReadFileSystem) > 0) {
 		return sandbox.SandboxPermissionsWithAdditionalPermissions, nil
 	}
 	return sandbox.SandboxPermissionsUseDefault, nil
@@ -16376,6 +16378,14 @@ func additionalPermissionsJSON(profile *sandbox.AdditionalPermissionProfile) map
 	}
 	if len(profile.FileSystem) > 0 {
 		value["file_system"] = map[string]any{"write": append([]string(nil), profile.FileSystem...)}
+	}
+	if len(profile.ReadFileSystem) > 0 {
+		fileSystem, _ := value["file_system"].(map[string]any)
+		if fileSystem == nil {
+			fileSystem = map[string]any{}
+			value["file_system"] = fileSystem
+		}
+		fileSystem["read"] = append([]string(nil), profile.ReadFileSystem...)
 	}
 	if len(value) == 0 {
 		return nil

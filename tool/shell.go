@@ -608,7 +608,10 @@ func cloneAdditionalPermissions(in *sandbox.AdditionalPermissionProfile) *sandbo
 	if in == nil {
 		return nil
 	}
-	out := &sandbox.AdditionalPermissionProfile{FileSystem: append([]string(nil), in.FileSystem...)}
+	out := &sandbox.AdditionalPermissionProfile{
+		FileSystem:     append([]string(nil), in.FileSystem...),
+		ReadFileSystem: append([]string(nil), in.ReadFileSystem...),
+	}
 	if in.Network != nil {
 		value := *in.Network
 		out.Network = &value

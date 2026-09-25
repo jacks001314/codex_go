@@ -40,8 +40,14 @@ type PermissionProfile struct {
 }
 
 type AdditionalPermissionProfile struct {
-	Network    *bool
+	Network *bool
+	// FileSystem lists the additional write roots.
 	FileSystem []string
+	// ReadFileSystem lists the additional read-only roots (Rust's
+	// `fileSystem.read`). A read grant must stay a read grant: the runtime's
+	// internal shell-snapshot grant needs exactly one read root and must not
+	// silently become a write root.
+	ReadFileSystem []string
 }
 
 func (p *AdditionalPermissionProfile) UnmarshalJSON(data []byte) error {
@@ -67,13 +73,16 @@ func (p *AdditionalPermissionProfile) UnmarshalJSON(data []byte) error {
 		p.Network = &value
 	}
 	p.FileSystem = nil
+	p.ReadFileSystem = nil
+	appendRoots := func(read []string, write []string) {
+		p.ReadFileSystem = append(p.ReadFileSystem, read...)
+		p.FileSystem = append(p.FileSystem, write...)
+	}
 	if raw.FileSystem != nil {
-		p.FileSystem = append(p.FileSystem, raw.FileSystem.Read...)
-		p.FileSystem = append(p.FileSystem, raw.FileSystem.Write...)
+		appendRoots(raw.FileSystem.Read, raw.FileSystem.Write)
 	}
 	if raw.FileSystemSnake != nil {
-		p.FileSystem = append(p.FileSystem, raw.FileSystemSnake.Read...)
-		p.FileSystem = append(p.FileSystem, raw.FileSystemSnake.Write...)
+		appendRoots(raw.FileSystemSnake.Read, raw.FileSystemSnake.Write)
 	}
 	return nil
 }
@@ -84,8 +93,11 @@ func (p *AdditionalPermissionProfile) MarshalJSON() ([]byte, error) {
 		network = &AdditionalNetworkPermissions{Enabled: p.Network}
 	}
 	var fileSystem *AdditionalFileSystemPermissions
-	if p.FileSystem != nil {
-		fileSystem = &AdditionalFileSystemPermissions{Read: nil, Write: append([]string(nil), p.FileSystem...)}
+	if p.FileSystem != nil || p.ReadFileSystem != nil {
+		fileSystem = &AdditionalFileSystemPermissions{
+			Read:  append([]string(nil), p.ReadFileSystem...),
+			Write: append([]string(nil), p.FileSystem...),
+		}
 	}
 	return json.Marshal(struct {
 		Network    *AdditionalNetworkPermissions    `json:"network"`
@@ -308,25 +320,39 @@ func NormalizeAndValidateAdditionalPermissions(
 
 func NormalizeAdditionalPermissions(profile AdditionalPermissionProfile, cwd string) (AdditionalPermissionProfile, error) {
 	out := AdditionalPermissionProfile{Network: profile.Network}
-	seen := map[string]bool{}
-	for _, path := range profile.FileSystem {
-		if err := requireNonEmpty(path, "file_system permission path"); err != nil {
-			return AdditionalPermissionProfile{}, err
+	normalize := func(paths []string) ([]string, error) {
+		normalized := []string{}
+		seen := map[string]bool{}
+		for _, path := range paths {
+			if err := requireNonEmpty(path, "file_system permission path"); err != nil {
+				return nil, err
+			}
+			if !filepath.IsAbs(path) && cwd != "" {
+				path = filepath.Join(cwd, path)
+			}
+			path = cleanAbs(path)
+			if !seen[path] {
+				seen[path] = true
+				normalized = append(normalized, path)
+			}
 		}
-		if !filepath.IsAbs(path) && cwd != "" {
-			path = filepath.Join(cwd, path)
-		}
-		path = cleanAbs(path)
-		if !seen[path] {
-			seen[path] = true
-			out.FileSystem = append(out.FileSystem, path)
-		}
+		return normalized, nil
 	}
+	normalizedWrite, err := normalize(profile.FileSystem)
+	if err != nil {
+		return AdditionalPermissionProfile{}, err
+	}
+	normalizedRead, err := normalize(profile.ReadFileSystem)
+	if err != nil {
+		return AdditionalPermissionProfile{}, err
+	}
+	out.FileSystem = normalizedWrite
+	out.ReadFileSystem = normalizedRead
 	return out, nil
 }
 
 func (p *AdditionalPermissionProfile) IsEmpty() bool {
-	return p == nil || (p.Network == nil && len(p.FileSystem) == 0)
+	return p == nil || (p.Network == nil && len(p.FileSystem) == 0 && len(p.ReadFileSystem) == 0)
 }
 
 func MergePermissionProfiles(left, right *AdditionalPermissionProfile) *AdditionalPermissionProfile {
@@ -343,7 +369,9 @@ func MergePermissionProfiles(left, right *AdditionalPermissionProfile) *Addition
 		network = &value
 	}
 	var paths []string
+	var readPaths []string
 	seen := map[string]bool{}
+	seenRead := map[string]bool{}
 	appendPaths := func(profile *AdditionalPermissionProfile) {
 		if profile == nil {
 			return
@@ -355,8 +383,15 @@ func MergePermissionProfiles(left, right *AdditionalPermissionProfile) *Addition
 				paths = append(paths, cleaned)
 			}
 		}
+		for _, path := range profile.ReadFileSystem {
+			cleaned := cleanAbs(path)
+			if cleaned != "" && !seenRead[cleaned] {
+				seenRead[cleaned] = true
+				readPaths = append(readPaths, cleaned)
+			}
+		}
 	}
 	appendPaths(left)
 	appendPaths(right)
-	return &AdditionalPermissionProfile{Network: network, FileSystem: paths}
+	return &AdditionalPermissionProfile{Network: network, FileSystem: paths, ReadFileSystem: readPaths}
 }

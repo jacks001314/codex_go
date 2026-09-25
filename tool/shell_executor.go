@@ -684,9 +684,10 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			metricsSidecar = plugin.NewPluginMetricsSidecar(*resolved)
 			if metricsSidecar != nil {
 				metricsSidecar.InstallOutputEnv(req.Env)
-				req.AdditionalPermissions = sandbox.MergePermissionProfiles(req.AdditionalPermissions, &sandbox.AdditionalPermissionProfile{
-					FileSystem: []string{metricsSidecar.OutputDir()},
-				})
+				// The sidecar's own grant comes from its single accessor, so the
+				// launch and any later internal-permission record agree (Rust
+				// PluginMetricsSidecar::additional_permissions).
+				req.AdditionalPermissions = sandbox.MergePermissionProfiles(req.AdditionalPermissions, metricsSidecar.AdditionalPermissions())
 			}
 		}
 	}
