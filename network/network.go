@@ -139,10 +139,15 @@ func NewSpec(config Config, requirements *Requirements, permissionKind Permissio
 	}, nil
 }
 
-// EnvironmentNetworkPolicy is the attachment/owner-provided traffic policy for
-// one execution environment (#39980). Proxy enablement, listeners, network
-// mode, MITM, and credentials remain outside attachment-owned traffic policy.
+// EnvironmentNetworkPolicy is the attachment/owner-provided network policy for
+// one execution environment (#39980, #48198). The owner can require proxy
+// routing without granting direct network access; listeners, network mode, MITM
+// and credentials remain controller-owned.
 type EnvironmentNetworkPolicy struct {
+	// RequiresProxy requires managed proxy routing even when direct network
+	// access is restricted. False leaves activation to the controller and the
+	// command's permissions. Rust omits it from the wire when false.
+	RequiresProxy                  bool `json:"requiresProxy,omitempty"`
 	Domains                        map[string]DomainPermission
 	UnixSockets                    map[string]UnixSocketPermission
 	AllowUpstreamProxy             bool
@@ -151,10 +156,12 @@ type EnvironmentNetworkPolicy struct {
 	ManagedAllowedDomainsOnly      bool
 }
 
-// EnvironmentNetworkPolicyFromConfig captures portable traffic restrictions
-// without exposing controller runtime settings (#39980).
+// EnvironmentNetworkPolicyFromConfig captures proxy activation and traffic
+// restrictions without exposing other controller runtime settings (#39980,
+// #48198).
 func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnly bool) EnvironmentNetworkPolicy {
 	return EnvironmentNetworkPolicy{
+		RequiresProxy:                  config.Enabled,
 		Domains:                        copyDomainMapArray(config.Domains),
 		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
 		AllowUpstreamProxy:             config.AllowUpstreamProxy,

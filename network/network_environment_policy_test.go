@@ -1,6 +1,10 @@
 package network
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestEnvironmentNetworkPolicyApplyToPreservesInheritedDenials(t *testing.T) {
 	controller := &Config{
@@ -131,11 +135,39 @@ func TestEnvironmentNetworkPolicyFromConfigResolvesOmittedFlagLikeRust(t *testin
 	if policy.DangerouslyAllowAllUnixSockets {
 		t.Fatal("omitted controller flag must resolve to false for the portable policy")
 	}
+	// Rust #48198: the owner's enabled proxy configuration is captured as an
+	// explicit proxy requirement, so restricted commands are not left offline.
+	if !policy.RequiresProxy {
+		t.Fatal("an enabled owner proxy must be captured as a proxy requirement")
+	}
+	disabled := EnvironmentNetworkPolicyFromConfig(&Config{}, false)
+	if disabled.RequiresProxy {
+		t.Fatal("a disabled owner proxy must not require proxy routing")
+	}
 	explicit := EnvironmentNetworkPolicyFromConfig(&Config{
 		Enabled:                        true,
 		DangerouslyAllowAllUnixSockets: boolTestPtr(true),
 	}, false)
 	if !explicit.DangerouslyAllowAllUnixSockets {
 		t.Fatal("explicit controller allow-all must be captured")
+	}
+}
+
+// Mirrors Rust #48198's wire shape: an explicit proxy requirement is serialized
+// and a policy without one omits the field.
+func TestEnvironmentNetworkPolicyRequiresProxyWireLikeRust(t *testing.T) {
+	json := func(policy EnvironmentNetworkPolicy) string {
+		t.Helper()
+		encoded, err := json.Marshal(policy)
+		if err != nil {
+			t.Fatalf("marshal environment network policy: %v", err)
+		}
+		return string(encoded)
+	}
+	if got := json(EnvironmentNetworkPolicy{RequiresProxy: true}); !strings.Contains(got, `"requiresProxy":true`) {
+		t.Fatalf("required proxy policy = %s", got)
+	}
+	if got := json(EnvironmentNetworkPolicy{}); strings.Contains(got, "requiresProxy") {
+		t.Fatalf("policy without a proxy requirement = %s", got)
 	}
 }
