@@ -67,6 +67,12 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		return nil
 	}
 	threadCWD := r.shellSnapshotThreadCWD(threadID)
+	// Rust starts the session's snapshot capture as soon as the turn environments
+	// resolve, so the first command does not wait for it. Protected captures (an
+	// active credential broker) stay lazy and sandboxed.
+	if !shellSnapshotProtected(cfg) {
+		r.prewarmShellSnapshot(builder, threadID, threadCWD)
+	}
 	return func(ctx context.Context, request tool.SnapshotProviderRequest) string {
 		if !shellSnapshotLaunchEligible(request) {
 			return ""
@@ -77,17 +83,62 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 			return ""
 		}
 		started := time.Now()
+		// Every launch in the session's directory replays the one session
+		// snapshot, captured with a login shell and without a sandbox (Rust's
+		// start_shell_snapshot_task plus the non-broker branch of
+		// TurnEnvironment::shell_snapshot, which ignores the launch's sandbox).
 		snapshot, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
-			ShellType:           request.ShellType,
-			ShellPath:           request.ShellPath,
-			CWD:                 request.CWD,
-			AllowLoginShell:     request.AllowLoginShell,
-			PermissionProfile:   request.PermissionProfile,
-			PermissionProfileID: request.PermissionProfileID,
+			ShellType:       request.ShellType,
+			ShellPath:       request.ShellPath,
+			CWD:             request.CWD,
+			AllowLoginShell: true,
 		})
 		r.recordShellSnapshot(time.Since(started), reason)
 		return snapshot.Path()
 	}
+}
+
+// shellSnapshotPrewarmTimeout bounds a prewarm capture, matching the capture
+// timeout the builder applies.
+const shellSnapshotPrewarmTimeout = tool.DefaultSnapshotTimeout
+
+// shellSnapshotProtected reports whether this session's snapshots are protected
+// and therefore captured lazily: Rust skips the prewarm while the credential
+// broker is configured and enabled (`ShellSnapshot::should_rebuild_inherited`).
+func shellSnapshotProtected(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return config.CredentialBrokerProjectStateForValues(cfg.Values) == config.CredentialBrokerProjectEnabled
+}
+
+// prewarmShellSnapshot captures the session's snapshot in the background, the way
+// Rust spawns `start_shell_snapshot_task` when an environment resolves. It is
+// best effort: a shell that cannot be snapshotted, a remote environment or a
+// failed capture simply leaves the launch without a snapshot.
+func (r *RuntimeRouter) prewarmShellSnapshot(builder *tool.SnapshotBuilder, threadID string, cwd string) {
+	if r == nil || builder == nil {
+		return
+	}
+	shellType, shellPath, remote := r.sessionShellForThread(threadID)
+	if remote || shellPath == "" || !shellSnapshotShellSupported(shellType) {
+		return
+	}
+	if cwd == "" {
+		cwd = r.shellSnapshotThreadCWD(threadID)
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), shellSnapshotPrewarmTimeout)
+		defer cancel()
+		started := time.Now()
+		_, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
+			ShellType:       shellType,
+			ShellPath:       shellPath,
+			CWD:             cwd,
+			AllowLoginShell: true,
+		})
+		r.recordShellSnapshot(time.Since(started), reason)
+	}()
 }
 
 // recordShellSnapshot mirrors Rust's shell-snapshot telemetry
@@ -124,7 +175,14 @@ func shellSnapshotLaunchEligible(request tool.SnapshotProviderRequest) bool {
 	if request.Remote || !request.AllowLoginShell {
 		return false
 	}
-	switch request.ShellType {
+	return shellSnapshotShellSupported(request.ShellType)
+}
+
+// shellSnapshotShellSupported reports whether the capture supports this shell:
+// the POSIX shells Rust snapshots (an `sh` launch is folded into bash at the
+// tool layer, and the capture script adapts to a bash-backed sh).
+func shellSnapshotShellSupported(shellType tool.ShellType) bool {
+	switch shellType {
 	case tool.ShellBash, tool.ShellZsh:
 		return true
 	default:

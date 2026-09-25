@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"codex_go/config"
 	"codex_go/sandbox"
@@ -171,6 +173,146 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 			}
 		})
 	}
+}
+
+// recordedSnapshotCapture is one capture run the recording runner saw.
+type recordedSnapshotCapture struct {
+	argv    []string
+	profile *sandbox.PermissionProfile
+}
+
+// recordingSnapshotRunner records every capture so a test can see whether the
+// session prewarmed once, reused it, and captured without a sandbox.
+type recordingSnapshotRunner struct {
+	mu       sync.Mutex
+	captures []recordedSnapshotCapture
+}
+
+func (r *recordingSnapshotRunner) run(
+	_ context.Context,
+	command []string,
+	_ string,
+	_ map[string]string,
+	profile *sandbox.PermissionProfile,
+	_ string,
+) ([]byte, error) {
+	if len(command) >= 3 && strings.HasPrefix(command[2], "set -e; . ") {
+		return nil, nil
+	}
+	r.mu.Lock()
+	r.captures = append(r.captures, recordedSnapshotCapture{argv: append([]string(nil), command...), profile: profile})
+	r.mu.Unlock()
+	return snapshotTestCaptureStream(), nil
+}
+
+func (r *recordingSnapshotRunner) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.captures)
+}
+
+func (r *recordingSnapshotRunner) capture(index int) recordedSnapshotCapture {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if index < 0 || index >= len(r.captures) {
+		return recordedSnapshotCapture{}
+	}
+	return r.captures[index]
+}
+
+// Rust prewarms the session snapshot when the environment resolves
+// (`start_shell_snapshot_task`): the capture runs in the background with a login
+// shell and no sandbox, and every launch in the session's directory reuses it
+// instead of capturing again.
+func TestShellSnapshotPrewarmsAndReusesLikeRust(t *testing.T) {
+	runner := &recordingSnapshotRunner{}
+	previous := shellSnapshotCaptureRunner
+	shellSnapshotCaptureRunner = runner.run
+	t.Cleanup(func() { shellSnapshotCaptureRunner = previous })
+	router, threadID, cwd := newShellSnapshotRouter(t, "sandbox_mode = \"workspace-write\"\n")
+	t.Cleanup(func() { _ = router.Close() })
+	router.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	provider := router.shellSnapshotProviderForTurn(threadID, cfg)
+	if provider == nil {
+		t.Fatal("no snapshot provider")
+	}
+	if !waitForSnapshotCaptures(runner, 1, 2*time.Second) {
+		t.Fatalf("the session did not prewarm its snapshot (captures = %d)", runner.count())
+	}
+	prewarmed := runner.capture(0)
+	if len(prewarmed.argv) < 3 || prewarmed.argv[1] != "-lc" {
+		t.Fatalf("prewarm argv = %#v, want a login capture", prewarmed.argv)
+	}
+	if prewarmed.profile != nil {
+		t.Fatalf("prewarm profile = %#v, want an unsandboxed capture", prewarmed.profile)
+	}
+
+	path := provider(context.Background(), tool.SnapshotProviderRequest{
+		ShellType:       tool.ShellBash,
+		ShellPath:       "/bin/bash",
+		CWD:             cwd,
+		AllowLoginShell: true,
+	})
+	if path == "" {
+		t.Fatal("the launch found no snapshot")
+	}
+	if captures := runner.count(); captures != 1 {
+		t.Fatalf("captures = %d, want the prewarmed snapshot to be reused", captures)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("prewarmed snapshot missing: %v", err)
+	}
+}
+
+// A session with the credential broker configured keeps its snapshots lazy
+// (Rust's `should_rebuild_inherited`): protected captures need the command's
+// sandbox and credential preparation.
+func TestShellSnapshotSkipsPrewarmWithTheCredentialBrokerLikeRust(t *testing.T) {
+	runner := &recordingSnapshotRunner{}
+	previous := shellSnapshotCaptureRunner
+	shellSnapshotCaptureRunner = runner.run
+	t.Cleanup(func() { shellSnapshotCaptureRunner = previous })
+	brokerConfig := "sandbox_mode = \"workspace-write\"\n[features.network_proxy]\nenabled = true\ncredential_broker = true\n"
+	router, threadID, cwd := newShellSnapshotRouter(t, brokerConfig)
+	t.Cleanup(func() { _ = router.Close() })
+	router.services.Environment = NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, cwd)
+	cfg := router.effectiveWriteStdinConfig(threadID)
+	if !shellSnapshotProtected(cfg) {
+		t.Fatal("the broker configuration was not detected as protected")
+	}
+	provider := router.shellSnapshotProviderForTurn(threadID, cfg)
+	if provider == nil {
+		t.Fatal("no snapshot provider")
+	}
+	// Give a prewarm a chance to run: a protected session does not start one.
+	if waitForSnapshotCaptures(runner, 1, 200*time.Millisecond) {
+		t.Fatalf("a protected session prewarmed a snapshot (captures = %d)", runner.count())
+	}
+	if path := provider(context.Background(), tool.SnapshotProviderRequest{
+		ShellType:       tool.ShellBash,
+		ShellPath:       "/bin/bash",
+		CWD:             cwd,
+		AllowLoginShell: true,
+	}); path == "" {
+		t.Fatal("the launch found no snapshot")
+	}
+	if captures := runner.count(); captures != 1 {
+		t.Fatalf("captures = %d, want exactly the launch's capture", captures)
+	}
+}
+
+// waitForSnapshotCaptures reports whether the runner reaches want captures within
+// a short window, so a test can assert that no capture was started.
+func waitForSnapshotCaptures(runner *recordingSnapshotRunner, want int, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if runner.count() >= want {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return runner.count() >= want
 }
 
 // TestShellSnapshotPruneLookupReadsTheRolloutLikeRust covers the state-db half of

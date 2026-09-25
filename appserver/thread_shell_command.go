@@ -45,7 +45,7 @@ func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threa
 	if r == nil || run == nil {
 		return threadShellCommandArgv(""), nil
 	}
-	shellType, shellPath := r.threadShellCommandShell(run.ThreadID)
+	shellType, shellPath, _ := r.sessionShellForThread(run.ThreadID)
 	if shellPath == "" {
 		// The environment reported no shell; keep the previous behavior rather
 		// than failing a command the user typed.
@@ -77,10 +77,12 @@ func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threa
 	return argv, envSliceFromMap(env)
 }
 
-// threadShellCommandShell resolves the shell the thread's environment runs.
-func (r *RuntimeRouter) threadShellCommandShell(threadID string) (tool.ShellType, string) {
+// sessionShellForThread resolves the shell the thread's environment runs, and
+// whether that environment is remote (a remote shell cannot be captured or
+// snapshotted on this host).
+func (r *RuntimeRouter) sessionShellForThread(threadID string) (tool.ShellType, string, bool) {
 	if r == nil || r.services.Environment == nil {
-		return tool.ShellUnknown, ""
+		return tool.ShellUnknown, "", false
 	}
 	// Rust uses the turn environment's shell; Go resolves the same selection the
 	// turn's launches use, and falls back to the implicit local environment.
@@ -88,7 +90,10 @@ func (r *RuntimeRouter) threadShellCommandShell(threadID string) (tool.ShellType
 		if environment.Shell == nil || strings.TrimSpace(environment.Shell.Path) == "" {
 			continue
 		}
-		return environment.Shell.Type, strings.TrimSpace(environment.Shell.Path)
+		remote := strings.TrimSpace(environment.ExecServerURL) != "" ||
+			environment.NoiseProvider != nil ||
+			environment.ExecServerStdioCommand != nil
+		return environment.Shell.Type, strings.TrimSpace(environment.Shell.Path), remote
 	}
 	local := r.services.Environment.LocalShell()
 	if shellPath := strings.TrimSpace(local.Path); shellPath != "" {
@@ -96,9 +101,9 @@ func (r *RuntimeRouter) threadShellCommandShell(threadID string) (tool.ShellType
 		if detected := tool.DetectShellType(local.Name); detected != tool.ShellUnknown {
 			shellType = detected
 		}
-		return shellType, shellPath
+		return shellType, shellPath, false
 	}
-	return tool.ShellUnknown, ""
+	return tool.ShellUnknown, "", false
 }
 
 // threadShellCommandEnv builds the user shell command's environment from the
