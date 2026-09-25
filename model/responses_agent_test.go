@@ -2435,6 +2435,95 @@ func TestResponsesAgentRunnerRunWebSocketUsageLimitReportsRateLimitsLikeRust(t *
 		t.Fatalf("primary window = %#v", primary)
 	}
 }
+
+// Mirrors Rust's WebSocket turn-state propagation: `connect_websocket` records
+// the handshake response's `x-codex-turn-state`, and `ResponseEvent::turn_state`
+// records the one a `response.metadata` event carries in its JSON headers. Both
+// fill the session's turn state once, and the next dial in the turn sends it.
+func TestResponsesAgentRunnerRunWebSocketTurnStateMatchesRust(t *testing.T) {
+	t.Run("handshake header", func(t *testing.T) {
+		var handshakes []string
+		dials := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			dials++
+			handshakes = append(handshakes, request.Header.Get(responsesCodexTurnStateHeader))
+			if dials == 1 {
+				// The handshake teaches the client the turn state, then the stream
+				// ends before any event so the client redials.
+				w.Header().Set(responsesCodexTurnStateHeader, "ws-handshake-1")
+				conn, err := websocket.Accept(w, request, nil)
+				if err != nil {
+					t.Errorf("Accept() error = %v", err)
+					return
+				}
+				_ = conn.Close(websocket.StatusAbnormalClosure, "drop")
+				return
+			}
+			serveWebSocketTurnStateResponse(t, w, request, `{"x-codex-turn-state":"ws-event-ignored"}`)
+		}))
+		defer server.Close()
+
+		runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+		if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "turn state", TurnID: "turn-1"}); err != nil {
+			t.Fatalf("RunWebSocket() error = %v", err)
+		}
+		if len(handshakes) != 2 || handshakes[0] != "" || handshakes[1] != "ws-handshake-1" {
+			t.Fatalf("handshake turn states = %#v, want the handshake's state on the redial", handshakes)
+		}
+	})
+
+	t.Run("metadata event header", func(t *testing.T) {
+		var handshakes []string
+		dials := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			dials++
+			handshakes = append(handshakes, request.Header.Get(responsesCodexTurnStateHeader))
+			if dials == 1 {
+				serveWebSocketTurnStateResponse(t, w, request, `{"x-codex-turn-state":"ws-event-2"}`)
+				return
+			}
+			serveWebSocketTurnStateResponse(t, w, request, "")
+		}))
+		defer server.Close()
+
+		runner := NewResponsesAgentRunner(&ResponsesAgentOptions{Provider: &APIProvider{BaseURL: server.URL}, SupportsWebsockets: true})
+		request := &AgentRequest{Model: "gpt-test", Prompt: "turn state", TurnID: "turn-1"}
+		if _, err := runner.RunWebSocket(context.Background(), request); err != nil {
+			t.Fatalf("first RunWebSocket() error = %v", err)
+		}
+		if _, err := runner.RunWebSocket(context.Background(), request); err != nil {
+			t.Fatalf("second RunWebSocket() error = %v", err)
+		}
+		if len(handshakes) != 2 || handshakes[0] != "" || handshakes[1] != "ws-event-2" {
+			t.Fatalf("handshake turn states = %#v, want the metadata event's state on the redial", handshakes)
+		}
+	})
+}
+
+// serveWebSocketTurnStateResponse completes one WebSocket turn, optionally
+// carrying the turn-state header on a response.metadata event, and closes the
+// connection so the next request in the turn redials.
+func serveWebSocketTurnStateResponse(t *testing.T, w http.ResponseWriter, request *http.Request, metadataHeaders string) {
+	t.Helper()
+	conn, err := websocket.Accept(w, request, nil)
+	if err != nil {
+		t.Errorf("Accept() error = %v", err)
+		return
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+	_, _, _ = conn.Read(request.Context())
+	events := []string{}
+	if metadataHeaders != "" {
+		events = append(events, `{"type":"response.metadata","headers":`+metadataHeaders+`}`)
+	}
+	events = append(events,
+		`{"type":"response.output_text.delta","delta":"ok"}`,
+		`{"type":"response.completed","response":{"id":"resp-ws-turn-state","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}`,
+	)
+	for _, event := range events {
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+	}
+}
 func TestResponsesAgentRunnerRetriesTransientHTTPError(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

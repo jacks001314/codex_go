@@ -865,6 +865,12 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			return nil, err
 		}
 		session.conn = conn
+		// Rust's websocket connect records the handshake response's turn state once
+		// per request (`connect_websocket`'s `turn_state.set`), so the next request
+		// in the turn carries it.
+		if response != nil {
+			r.rememberTurnStateFromHeaders(request, response.Header)
+		}
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
 	requestStartedAt := time.Now()
@@ -946,6 +952,12 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		if headers, ok := event["headers"].(map[string]any); ok {
 			if updated, ok := safetyBufferingTreatmentFromJSONHeaders(headers); ok {
 				accumulator.safetyBufferingTreatment = updated
+			}
+			// Rust's `ResponseEvent::turn_state` reads the `x-codex-turn-state`
+			// entry from a `response.metadata` event's JSON headers, so a stream
+			// can refresh the turn state without a new handshake.
+			if rawType == "response.metadata" {
+				r.rememberTurnStateFromHeaders(request, jsonHeadersToHTTPHeaders(headers))
 			}
 		}
 		completed, err := accumulator.apply(&responsesSSEEvent{Event: rawType, Data: data}, handler)
