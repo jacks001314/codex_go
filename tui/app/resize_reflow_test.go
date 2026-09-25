@@ -163,13 +163,20 @@ func TestResizeReflowSizeChangeDecisionMatchesRust(t *testing.T) {
 }
 
 func TestClearAndRunResizeReflowDecisionsMatchRust(t *testing.T) {
-	alt := ClearTerminalForResizeReplayDecisionForState(true, 4)
+	alt := ClearTerminalForResizeReplayDecisionForState(false, true, false, 4)
 	if !alt.ClearVisibleScreenOnly || alt.ClearScrollbackAndVisibleScreen || !alt.ResetViewportY {
 		t.Fatalf("alt clear decision = %#v", alt)
 	}
-	normal := ClearTerminalForResizeReplayDecisionForState(false, 0)
+	normal := ClearTerminalForResizeReplayDecisionForState(false, false, false, 0)
 	if normal.ClearVisibleScreenOnly || !normal.ClearScrollbackAndVisibleScreen || normal.ResetViewportY {
 		t.Fatalf("normal clear decision = %#v", normal)
+	}
+	// #48121: an owned screen and a deferred thread-switch clear skip the clear.
+	if owned := ClearTerminalForResizeReplayDecisionForState(true, false, false, 4); !owned.Skip {
+		t.Fatalf("owned-screen clear decision = %#v", owned)
+	}
+	if deferred := ClearTerminalForResizeReplayDecisionForState(false, false, true, 4); !deferred.Skip {
+		t.Fatalf("deferred thread-switch clear decision = %#v", deferred)
 	}
 
 	wait := MaybeRunResizeReflowDecision(true, false, nil, false, 0)

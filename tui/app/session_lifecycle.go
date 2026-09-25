@@ -70,6 +70,69 @@ type SessionSummaryHint struct {
 	ResumeHint string
 }
 
+// ThreadAttachPresentation mirrors Rust ThreadAttachPresentation (#48121): a
+// thread started by thread/start without inherited history is Fresh, and a
+// fresh thread whose startup composer is already visible is FreshWithDraft.
+type ThreadAttachPresentation string
+
+const (
+	ThreadAttachPresentationFresh          ThreadAttachPresentation = "fresh"
+	ThreadAttachPresentationFreshWithDraft ThreadAttachPresentation = "fresh_with_draft"
+	ThreadAttachPresentationSessionLineage ThreadAttachPresentation = "session_lineage"
+)
+
+// ResetTranscriptForThreadSwitchEvent names Rust's plain reset variant; the
+// draft-preserving variant keeps the visible frame until the next synchronized
+// draw.
+const (
+	ResetTranscriptForThreadSwitchEvent                 = "ResetTranscriptForThreadSwitch"
+	ResetTranscriptForThreadSwitchPreservingScreenEvent = "ResetTranscriptForThreadSwitchPreservingScreen"
+)
+
+// ThreadAttachPresentationFor mirrors Rust agents_overview's presentation
+// choice: a startup draft makes a freshly started thread FreshWithDraft instead
+// of Fresh, and an attached saved session is SessionLineage.
+func ThreadAttachPresentationFor(startupDraftPresent bool, started bool) ThreadAttachPresentation {
+	switch {
+	case startupDraftPresent:
+		return ThreadAttachPresentationFreshWithDraft
+	case started:
+		return ThreadAttachPresentationFresh
+	default:
+		return ThreadAttachPresentationSessionLineage
+	}
+}
+
+// ThreadSwitchResetDecision is the transcript-reset contract Rust runs for a
+// thread attach: both variants reset the thread-scoped transcript state and
+// clear the previous thread's pending history lines, while only the
+// draft-preserving variant defers the terminal clear.
+type ThreadSwitchResetDecision struct {
+	ResetTranscriptState bool
+	ClearPendingHistory  bool
+	DeferTerminalClear   bool
+	Event                string
+}
+
+// ThreadSwitchResetFor maps a presentation onto Rust's reset decision.
+func ThreadSwitchResetFor(presentation ThreadAttachPresentation) ThreadSwitchResetDecision {
+	preserving := presentation == ThreadAttachPresentationFreshWithDraft
+	return ThreadSwitchResetDecision{
+		ResetTranscriptState: true,
+		ClearPendingHistory:  true,
+		DeferTerminalClear:   preserving,
+		Event:                ThreadSwitchResetEvent(preserving),
+	}
+}
+
+// ThreadSwitchResetEvent reports the app event Rust sends for the reset.
+func ThreadSwitchResetEvent(preservingScreen bool) string {
+	if preservingScreen {
+		return ResetTranscriptForThreadSwitchPreservingScreenEvent
+	}
+	return ResetTranscriptForThreadSwitchEvent
+}
+
 func IsTerminalThreadReadError(err error) bool {
 	return errorChainContainsAny(err, "thread not loaded:")
 }

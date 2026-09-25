@@ -281,3 +281,47 @@ func TestApplyLoadedSubagentBackfillMatchesRust(t *testing.T) {
 		t.Fatalf("tracked backfilled threads = %#v", got)
 	}
 }
+
+// Mirrors Rust #48121: a startup draft makes a started thread FreshWithDraft so
+// the attach resets the transcript without clearing the visible draft, while a
+// plain fresh thread and an attached saved session both clear immediately.
+func TestThreadAttachPresentationAndResetMatchRust(t *testing.T) {
+	cases := []struct {
+		startupDraft bool
+		started      bool
+		want         ThreadAttachPresentation
+	}{
+		{true, true, ThreadAttachPresentationFreshWithDraft},
+		{true, false, ThreadAttachPresentationFreshWithDraft},
+		{false, true, ThreadAttachPresentationFresh},
+		{false, false, ThreadAttachPresentationSessionLineage},
+	}
+	for _, tc := range cases {
+		got := ThreadAttachPresentationFor(tc.startupDraft, tc.started)
+		if got != tc.want {
+			t.Fatalf("ThreadAttachPresentationFor(%v, %v) = %q, want %q", tc.startupDraft, tc.started, got, tc.want)
+		}
+		decision := ThreadSwitchResetFor(got)
+		if !decision.ResetTranscriptState || !decision.ClearPendingHistory {
+			t.Fatalf("reset decision %#v must reset transcript state and pending history", decision)
+		}
+		wantDefer := tc.want == ThreadAttachPresentationFreshWithDraft
+		if decision.DeferTerminalClear != wantDefer {
+			t.Fatalf("presentation %q deferred clear = %v, want %v", got, decision.DeferTerminalClear, wantDefer)
+		}
+		wantEvent := ResetTranscriptForThreadSwitchEvent
+		if wantDefer {
+			wantEvent = ResetTranscriptForThreadSwitchPreservingScreenEvent
+		}
+		if decision.Event != wantEvent {
+			t.Fatalf("presentation %q event = %q, want %q", got, decision.Event, wantEvent)
+		}
+	}
+
+	if got := ThreadSwitchResetEvent(false); got != ResetTranscriptForThreadSwitchEvent {
+		t.Fatalf("plain reset event = %q", got)
+	}
+	if got := ThreadSwitchResetEvent(true); got != ResetTranscriptForThreadSwitchPreservingScreenEvent {
+		t.Fatalf("preserving reset event = %q", got)
+	}
+}

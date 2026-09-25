@@ -71,6 +71,7 @@ type ResizeReflowTracker struct {
 }
 
 type ClearTerminalForResizeReplayDecision struct {
+	Skip                            bool
 	ClearVisibleScreenOnly          bool
 	ClearScrollbackAndVisibleScreen bool
 	ResetViewportY                  bool
@@ -239,7 +240,15 @@ func (t *ResizeReflowTracker) HandleDrawSizeChange(size ResizeReflowTerminalSize
 	return decision
 }
 
-func ClearTerminalForResizeReplayDecisionForState(altScreenActive bool, viewportY int) ClearTerminalForResizeReplayDecision {
+// ClearTerminalForResizeReplayDecisionForState mirrors Rust
+// App::clear_terminal_for_resize_replay: an owned screen and a deferred
+// thread-switch clear both skip the resize-time clear entirely (#48121), and
+// otherwise an alt screen clears only its visible screen while the inline
+// viewport clears scrollback and visible screen and resets the viewport row.
+func ClearTerminalForResizeReplayDecisionForState(ownedScreen bool, altScreenActive bool, deferredThreadSwitchClear bool, viewportY int) ClearTerminalForResizeReplayDecision {
+	if ownedScreen || deferredThreadSwitchClear {
+		return ClearTerminalForResizeReplayDecision{Skip: true}
+	}
 	return ClearTerminalForResizeReplayDecision{
 		ClearVisibleScreenOnly:          altScreenActive,
 		ClearScrollbackAndVisibleScreen: !altScreenActive,
