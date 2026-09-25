@@ -365,7 +365,7 @@ func TestBuildPromptKeepsEvidenceBeforeTheActionLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rootIndex := strings.Index(first, "Root user authorization evidence (root conversation):")
+	rootIndex := strings.Index(first, ">>> ROOT CONVERSATION START")
 	transcriptIndex := strings.Index(first, "Recent transcript:")
 	actionIndex := strings.Index(first, "The Codex agent has requested the following action:")
 	if rootIndex < 0 || transcriptIndex < 0 || actionIndex < 0 {

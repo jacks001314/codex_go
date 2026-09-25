@@ -607,17 +607,18 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 	}
 	var builder strings.Builder
 	if len(options.RootUserAuthorization) > 0 {
-		var section strings.Builder
-		section.WriteString("Root user authorization evidence (root conversation):\n")
+		messages := make([]RootMessage, 0, len(options.RootUserAuthorization))
 		for _, line := range options.RootUserAuthorization {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			section.WriteString("- ")
-			section.WriteString(strings.TrimSpace(line))
-			section.WriteByte('\n')
+			// Rust's root conversation section renders every retained line as
+			// role-labeled evidence inside its START/END markers.
+			messages = append(messages, RootMessage{Kind: RootMessageUser, Text: strings.TrimSpace(line)})
 		}
-		writeGuardianPromptSection(&builder, section.String())
+		if items := RootConversationSectionItems(messages); len(items) > 0 {
+			writeGuardianPromptSection(&builder, strings.Join(items, ""))
+		}
 	}
 	if len(transcript) > 0 {
 		var section strings.Builder
