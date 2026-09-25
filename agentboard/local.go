@@ -1080,14 +1080,7 @@ func postDestinationJSON(destination PostDestination) (map[string]any, error) {
 // subscriptionTargetKey mirrors serde's externally tagged SubscriptionTarget,
 // which Rust stores as the `target` column key.
 func subscriptionTargetKey(target SubscriptionTarget) (string, error) {
-	switch target.Kind {
-	case "channel":
-		return marshalWireJSON(map[string]any{"Channel": target.ChannelName})
-	case "thread":
-		return marshalWireJSON(map[string]any{"Thread": target.ThreadID})
-	default:
-		return "", invalid("subscription target is required")
-	}
+	return marshalWireJSON(target)
 }
 
 func marshalWireJSON(value any) (string, error) {

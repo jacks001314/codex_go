@@ -7,6 +7,7 @@ package agentboard
 
 import (
 	"context"
+	"encoding/json"
 
 	"codex_go/agent"
 )
@@ -73,9 +74,11 @@ const (
 )
 
 // CreateChannelRequest creates a channel and optionally subscribes the caller.
+// The JSON tags mirror Rust's serde field names (#48077 added the derives so a
+// host can serialize these request types).
 type CreateChannelRequest struct {
-	ChannelName  string
-	Subscription SubscriptionChange
+	ChannelName  string             `json:"channel_name"`
+	Subscription SubscriptionChange `json:"subscription"`
 }
 
 // ChannelQuery lists or searches channels.
@@ -143,22 +146,54 @@ type ReadThreadRequest struct {
 // ReadPostRequest reads one post. Offsets and lengths count Unicode scalar
 // values, not bytes.
 type ReadPostRequest struct {
-	MessageID   string
-	OffsetChars int
-	LimitChars  int
+	MessageID   string `json:"message_id"`
+	OffsetChars int    `json:"offset_chars"`
+	LimitChars  int    `json:"limit_chars"`
 }
 
-// SubscriptionTarget is a channel (new roots) or a thread (replies).
+// SubscriptionTarget is a channel (new roots) or a thread (replies). Its JSON
+// form is Rust's externally tagged enum (`{"Channel":"name"}` or
+// `{"Thread":"<uuid>"}`), which is also the key the local backend stores.
 type SubscriptionTarget struct {
 	Kind        string // "channel" or "thread"
 	ChannelName string
 	ThreadID    string
 }
 
+func (t SubscriptionTarget) MarshalJSON() ([]byte, error) {
+	switch t.Kind {
+	case "channel":
+		return json.Marshal(map[string]string{"Channel": t.ChannelName})
+	case "thread":
+		return json.Marshal(map[string]string{"Thread": t.ThreadID})
+	default:
+		return nil, invalid("subscription target is required")
+	}
+}
+
+func (t *SubscriptionTarget) UnmarshalJSON(data []byte) error {
+	if t == nil {
+		return invalid("subscription target is required")
+	}
+	var raw map[string]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	switch {
+	case raw["Channel"] != "":
+		*t = SubscriptionTarget{Kind: "channel", ChannelName: raw["Channel"]}
+	case raw["Thread"] != "":
+		*t = SubscriptionTarget{Kind: "thread", ThreadID: raw["Thread"]}
+	default:
+		return invalid("subscription target is required")
+	}
+	return nil
+}
+
 // SubscriptionRequest changes a subscription.
 type SubscriptionRequest struct {
-	Target SubscriptionTarget
+	Target SubscriptionTarget `json:"target"`
 	// TargetAgent is nil to change the caller's own subscription.
-	TargetAgent *agent.AgentPath
-	Change      SubscriptionChange
+	TargetAgent *agent.AgentPath   `json:"target_agent"`
+	Change      SubscriptionChange `json:"change"`
 }
