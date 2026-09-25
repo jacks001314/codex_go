@@ -37,7 +37,7 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
 
-	if _, _, ok := router.runtimePreviousTurnSettings(threadID, nil); ok {
+	if _, _, _, ok := router.runtimePreviousTurnSettings(threadID, nil); ok {
 		t.Fatal("a thread with no recorded turn reported previous settings")
 	}
 	record, err := store.Read(session.ThreadID(threadID), true, false)
@@ -45,15 +45,16 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 		t.Fatalf("read started thread error: %v", err)
 	}
 	router.recordRuntimeTurnContext(threadID, "turn-1", &appTurnRunConfig{
-		Model:           "gpt-previous",
-		ApprovalPolicy:  "on-request",
-		ReasoningEffort: "high",
-		Personality:     "friendly",
+		Model:              "gpt-previous",
+		ApprovalPolicy:     "on-request",
+		ReasoningEffort:    "high",
+		Personality:        "friendly",
+		CyberAccessProgram: "daybreak_blue",
 	}, record)
 
-	previousModel, previousHash, ok := router.runtimePreviousTurnSettings(threadID, nil)
-	if !ok || previousModel != "gpt-previous" || previousHash != "hash-previous" {
-		t.Fatalf("previous turn settings = %q, %q, %v; want gpt-previous, hash-previous, true", previousModel, previousHash, ok)
+	previousModel, previousHash, previousProgram, ok := router.runtimePreviousTurnSettings(threadID, nil)
+	if !ok || previousModel != "gpt-previous" || previousHash != "hash-previous" || previousProgram != "daybreak_blue" {
+		t.Fatalf("previous turn settings = %q, %q, %q, %v; want gpt-previous, hash-previous, daybreak_blue, true", previousModel, previousHash, previousProgram, ok)
 	}
 
 	// The record is durable: a different router reading the same rollout
@@ -63,15 +64,15 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 	if err != nil {
 		t.Fatalf("RecordFromPath() error = %v", err)
 	}
-	coldModel, coldHash, coldOK := rollout.TurnContextSettings(cold.Metadata.TurnContext)
-	if !coldOK || coldModel != "gpt-previous" || coldHash != "hash-previous" {
-		t.Fatalf("cold previous settings = %q, %q, %v", coldModel, coldHash, coldOK)
+	coldModel, coldHash, coldProgram, coldOK := rollout.TurnContextSettings(cold.Metadata.TurnContext)
+	if !coldOK || coldModel != "gpt-previous" || coldHash != "hash-previous" || coldProgram != "daybreak_blue" {
+		t.Fatalf("cold previous settings = %q, %q, %q, %v", coldModel, coldHash, coldProgram, coldOK)
 	}
 	raw, err := os.ReadFile(rolloutPath)
 	if err != nil {
 		t.Fatalf("ReadFile(rollout) error = %v", err)
 	}
-	if !strings.Contains(string(raw), `"turn_context"`) || !strings.Contains(string(raw), `"hash-previous"`) {
+	if !strings.Contains(string(raw), `"turn_context"`) || !strings.Contains(string(raw), `"hash-previous"`) || !strings.Contains(string(raw), `"cyber_access_program":"daybreak_blue"`) {
 		t.Fatalf("rollout is missing the turn-context record:\n%s", raw)
 	}
 }

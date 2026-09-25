@@ -14030,7 +14030,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
-			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), params.TurnTrigger, cwd, maxThreads, version, params.Environments)
+			// Rust's spawn/send-input tools copy the initiating turn's
+			// cyber_access_program into the child's start options (#44893), so the
+			// delegated turn keeps the same model/program pair.
+			parentProgram := appCyberAccessProgramForTurn(params, firstNonEmpty(providerFromTurnStart(params), stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID))
+			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), params.TurnTrigger, parentProgram, cwd, maxThreads, version, params.Environments)
 			if runtimeController, ok := options.AgentController.(*runtimeAgentController); ok {
 				runtimeController.maxDepth = maxDepth
 			}

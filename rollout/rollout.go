@@ -746,6 +746,11 @@ type TurnContextRecord struct {
 	Personality    string `json:"personality,omitempty"`
 	Model          string `json:"model,omitempty"`
 	CompHash       string `json:"comp_hash,omitempty"`
+	// CyberAccessProgram is the turn's selected cyber access program (Rust
+	// TurnContextItem::cyber_access_program, core snake_case). It is persisted so
+	// resume/fork replay can rebuild the model/program pair the turn used
+	// (Rust #48224).
+	CyberAccessProgram string `json:"cyber_access_program,omitempty"`
 }
 
 // AppendTurnContext persists one turn-context record for the turn.
@@ -764,23 +769,25 @@ func (r *Recorder) AppendTurnContext(record TurnContextRecord, now time.Time) er
 	})
 }
 
-// TurnContextSettings returns the model and compaction compatibility hash from a
-// turn-context payload (Rust's `PreviousTurnSettings` fields). ok is false when
-// the payload carries no model, so callers never treat an unidentifiable record
-// as a previous turn.
-func TurnContextSettings(raw json.RawMessage) (model string, compHash string, ok bool) {
+// TurnContextSettings returns the model, compaction compatibility hash and cyber
+// access program from a turn-context payload (Rust's `PreviousTurnSettings`
+// fields). ok is false when the payload carries no model, so callers never treat
+// an unidentifiable record as a previous turn. An absent program is an empty
+// string, which Rust keeps distinct from "inherit the next turn's selection"
+// (Rust #48224).
+func TurnContextSettings(raw json.RawMessage) (model string, compHash string, cyberAccessProgram string, ok bool) {
 	if len(raw) == 0 {
-		return "", "", false
+		return "", "", "", false
 	}
 	var values map[string]any
 	if err := json.Unmarshal(raw, &values); err != nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	model = strings.TrimSpace(stringFromAny(values["model"]))
 	if model == "" {
-		return "", "", false
+		return "", "", "", false
 	}
-	return model, strings.TrimSpace(stringFromAny(values["comp_hash"])), true
+	return model, strings.TrimSpace(stringFromAny(values["comp_hash"])), strings.TrimSpace(stringFromAny(values["cyber_access_program"])), true
 }
 
 func (r *Recorder) AppendTurnComplete(turnID string, completedAt time.Time, durationMS int64) error {

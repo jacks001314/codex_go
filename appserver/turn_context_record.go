@@ -35,6 +35,9 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 		Personality:    strings.TrimSpace(runConfig.Personality),
 		Model:          strings.TrimSpace(runConfig.Model),
 		CompHash:       strings.TrimSpace(r.modelCompHash(runConfig.Model)),
+		// The selected program is persisted with the model so resume/fork replay
+		// rebuilds the model/program pair the turn used (Rust #48224).
+		CyberAccessProgram: strings.TrimSpace(runConfig.CyberAccessProgram),
 	}
 	if strings.TrimSpace(runConfig.SandboxPolicy) != "" {
 		turnContext.SandboxPolicy = runConfig.SandboxPolicy
@@ -80,18 +83,19 @@ func (r *RuntimeRouter) setRuntimeTurnContext(threadID string, payload json.RawM
 	r.turnContexts[threadID] = append(json.RawMessage(nil), payload...)
 }
 
-// runtimePreviousTurnSettings returns the model and compaction compatibility
-// hash recorded by the thread's previous turn (Rust `sess.previous_turn_settings()`).
+// runtimePreviousTurnSettings returns the model, compaction compatibility hash
+// and cyber access program recorded by the thread's previous turn (Rust
+// `sess.previous_turn_settings()`).
 //
 // A live thread answers from the payload recorded when its last turn started; a
 // thread that has not run yet in this process is seeded from the
 // rollout-reconstructed record, so a resumed thread compares against the model
 // its rollout was recorded with. ok is false when no turn context is known,
 // which matches Rust returning `None` for a brand-new thread.
-func (r *RuntimeRouter) runtimePreviousTurnSettings(threadID string, record *session.Record) (string, string, bool) {
+func (r *RuntimeRouter) runtimePreviousTurnSettings(threadID string, record *session.Record) (string, string, string, bool) {
 	threadID = strings.TrimSpace(threadID)
 	if r == nil || threadID == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	r.turnContextMu.Lock()
 	raw := r.turnContexts[threadID]

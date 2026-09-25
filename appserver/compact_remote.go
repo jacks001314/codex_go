@@ -173,6 +173,10 @@ type agentCompactRunner struct {
 	// effort is the pinned request effort for the compaction model when
 	// reasoning-effort overrides apply (Rust #43796).
 	effort string
+	// cyberAccessProgram is the model/program pair the attempt must keep
+	// (Rust `Prompt.cyber_access_program`, #48224): the previous turn's program
+	// for a previous-model compaction, otherwise the current turn's selection.
+	cyberAccessProgram string
 	// clientMetadata is the compaction turn's Responses client metadata
 	// (Rust `Session::compaction_responses_metadata`): the turn-metadata
 	// document reports the compaction request kind and the turn's identity.
@@ -223,6 +227,10 @@ func (r *agentCompactRunner) Compact(ctx context.Context, request *compact.Reque
 		ClientMetadata:  clientMetadata,
 		ServiceTier:     r.serviceTier,
 		ReasoningEffort: strings.TrimSpace(r.effort),
+		// Rust passes the compaction turn's access program into the local prompt
+		// (compact.rs) and therefore into the remote request too; an absent
+		// program must not inherit a different turn's selection (#48224).
+		CyberAccessProgram: strings.TrimSpace(r.cyberAccessProgram),
 	})
 	if err != nil {
 		return nil, err

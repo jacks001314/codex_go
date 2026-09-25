@@ -57,7 +57,11 @@ type AgentRequest struct {
 	ItemIDsEnabled               bool
 	ServiceTier                  string
 	PromptCacheKey               string
-	ClientMetadata               map[string]string
+	// CyberAccessProgram is the turn's selected cyber access program (core
+	// snake_case, empty when the turn selected none). It reaches the request body
+	// only for a ChatGPT-authenticated account (Rust #44893 / for_auth).
+	CyberAccessProgram string
+	ClientMetadata     map[string]string
 	// Trace is the W3C trace context of the request that started this turn
 	// (Rust's `request_trace`): the websocket payload carries it so the model
 	// call stays inside the caller's trace.

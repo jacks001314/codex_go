@@ -24,16 +24,20 @@ type runtimeAgentController struct {
 	rootTurnID   string
 	// turnTrigger attributes delegated usage to the turn that initiated it
 	// (Rust #44659).
-	turnTrigger  string
-	rootID       string
-	scopePath    string
-	cwd          string
-	maxThreads   int
-	depth        int
-	maxDepth     int
-	version      agent.MultiAgentVersion
-	environments []map[string]any
-	registry     *agent.Registry
+	turnTrigger string
+	// cyberAccessProgram is the initiating turn's resolved core program, which a
+	// spawned or continued child turn inherits (Rust SpawnAgentOptions /
+	// SendInputOptions, #44893).
+	cyberAccessProgram string
+	rootID             string
+	scopePath          string
+	cwd                string
+	maxThreads         int
+	depth              int
+	maxDepth           int
+	version            agent.MultiAgentVersion
+	environments       []map[string]any
+	registry           *agent.Registry
 }
 
 func newRuntimeAgentController(router *RuntimeRouter, parentID string, cwd string, maxThreads int) agent.ToolController {
@@ -45,10 +49,10 @@ func newRuntimeAgentControllerWithVersion(router *RuntimeRouter, parentID string
 }
 
 func newRuntimeAgentControllerWithEnvironmentSelections(router *RuntimeRouter, parentID string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
-	return newRuntimeAgentControllerForTurn(router, parentID, "", "", "", cwd, maxThreads, version, environments)
+	return newRuntimeAgentControllerForTurn(router, parentID, "", "", "", "", cwd, maxThreads, version, environments)
 }
 
-func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, parentTurnID string, rootTurnID string, turnTrigger string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
+func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, parentTurnID string, rootTurnID string, turnTrigger string, cyberAccessProgram string, cwd string, maxThreads int, version agent.MultiAgentVersion, environments []map[string]any) agent.ToolController {
 	registry := (*agent.Registry)(nil)
 	rootID := strings.TrimSpace(parentID)
 	scopePath := "/root"
@@ -61,20 +65,21 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 		}
 	}
 	return &runtimeAgentController{
-		router:       router,
-		parentID:     strings.TrimSpace(parentID),
-		parentTurnID: strings.TrimSpace(parentTurnID),
-		rootTurnID:   strings.TrimSpace(rootTurnID),
-		turnTrigger:  strings.TrimSpace(turnTrigger),
-		rootID:       rootID,
-		scopePath:    scopePath,
-		cwd:          strings.TrimSpace(cwd),
-		maxThreads:   maxThreads,
-		depth:        depth,
-		maxDepth:     config.DefaultAgentMaxDepth,
-		version:      version,
-		environments: cloneMapSlice(environments),
-		registry:     registry,
+		router:             router,
+		parentID:           strings.TrimSpace(parentID),
+		parentTurnID:       strings.TrimSpace(parentTurnID),
+		rootTurnID:         strings.TrimSpace(rootTurnID),
+		turnTrigger:        strings.TrimSpace(turnTrigger),
+		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
+		rootID:             rootID,
+		scopePath:          scopePath,
+		cwd:                strings.TrimSpace(cwd),
+		maxThreads:         maxThreads,
+		depth:              depth,
+		maxDepth:           config.DefaultAgentMaxDepth,
+		version:            version,
+		environments:       cloneMapSlice(environments),
+		registry:           registry,
 	}
 }
 
@@ -214,7 +219,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
-		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger}
+		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
 		if c.version == agent.VersionV2 {
 			params.AdditionalInputItems = append(params.AdditionalInputItems, runtimeAgentCommunicationInputItem(c.scopePath, agentPath, prompt, true, args.Plaintext))
 			params.AdditionalInputItems = append(params.AdditionalInputItems, args.Items...)
@@ -406,7 +411,7 @@ func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.Send
 	if prompt == "" && len(args.Items) == 0 {
 		return nil, fmt.Errorf("message or items is required")
 	}
-	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt, AdditionalInputItems: append([]any(nil), args.Items...), ParentTurnID: c.parentTurnID}))
+	response, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: target, Prompt: prompt, AdditionalInputItems: append([]any(nil), args.Items...), ParentTurnID: c.parentTurnID, CoreCyberAccessProgram: c.cyberAccessProgram}))
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +629,7 @@ func (c *runtimeAgentController) FollowupTask(ctx context.Context, args *agent.F
 		return c.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: active.ID, InputItems: []any{item}})
 	}
 	queued := c.router.drainRuntimeAgentMessages(threadID)
-	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, AdditionalInputItems: append(queued, item)}
+	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram, AdditionalInputItems: append(queued, item)}
 	_, err = c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
 	return err
 }

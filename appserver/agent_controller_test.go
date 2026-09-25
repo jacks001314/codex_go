@@ -74,7 +74,7 @@ func TestRuntimeAgentControllerResolvesSpawnModelOverridesLikeRust(t *testing.T)
 		t.Fatal(err)
 	}
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
 
 	target, ok := firstSpawnAgentCatalogPreset(controller)
 	if !ok {
@@ -143,7 +143,7 @@ func TestRuntimeAgentControllerSpawnUsesConfiguredSubagentDefaultsLikeRust(t *te
 		ThreadRouter: NewRouter(store),
 		Config:       config.NewConfigService(home),
 	})
-	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
 	target, ok := firstSpawnAgentCatalogPreset(controller)
 	if !ok || len(target.SupportedReasoningLevels) == 0 {
 		t.Skip("the catalog has no picker-visible V2 spawn model with reasoning levels")
@@ -226,7 +226,7 @@ func TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust(t *testing.
 	if err := router.threads.RegisterTurn("parent", "parent-turn", func() {}, now.UnixMilli(), captured); err != nil {
 		t.Fatal(err)
 	}
-	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", "", parent.Metadata.CWD, 4, agent.VersionV2, nil).(*runtimeAgentController)
 	message := "do the work"
 	child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", Message: &message})
 	if err != nil {
@@ -368,7 +368,7 @@ func TestRuntimeAgentControllerPropagatesTurnTriggerLikeRust(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
-	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", parent.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "delegated", "", parent.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
 	if controller.turnTrigger != "delegated" {
 		t.Fatalf("controller turn trigger = %q", controller.turnTrigger)
 	}
@@ -442,7 +442,7 @@ func TestRuntimeAgentControllerV1DepthLimitMatchesRust(t *testing.T) {
 		t.Fatalf("child agent depth = %d, want 1", childRecord.Metadata.AgentDepth)
 	}
 	// A depth-1 agent cannot spawn or resume (Rust default max_depth = 1).
-	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", "", "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
+	childController := newRuntimeAgentControllerForTurn(router, child.AgentID, "", "", "", "", childRecord.Metadata.CWD, 4, agent.VersionV1, nil).(*runtimeAgentController)
 	if _, err := childController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "nested"}); !errors.Is(err, agent.ErrAgentDepthLimitReached) {
 		t.Fatalf("nested spawn error = %v", err)
 	}
@@ -534,7 +534,7 @@ func TestRuntimeAgentControllerChildInheritsTurnEnvironmentSelectionsLikeRust(t 
 }
 
 func TestRuntimeAgentControllerAttributesChildTurnsToParentTurn(t *testing.T) {
-	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", "root-turn", "", t.TempDir(), 1, agent.VersionV1, nil)
+	controller := newRuntimeAgentControllerForTurn(nil, "parent-thread", "parent-turn", "root-turn", "", "", t.TempDir(), 1, agent.VersionV1, nil)
 	runtimeController, ok := controller.(*runtimeAgentController)
 	if !ok {
 		t.Fatalf("controller = %T", controller)

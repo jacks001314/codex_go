@@ -21,6 +21,10 @@ type previousModelCompaction struct {
 	Run           bool
 	Reason        compact.Reason
 	PreviousModel string
+	// PreviousProgram is the access program recorded for the previous turn. Rust
+	// restores it after `with_model`, so compaction keeps that turn's
+	// model/program pair instead of inheriting the current selection (#48224).
+	PreviousProgram string
 }
 
 // runtimeModelContextWindow mirrors Rust's `TurnContext::model_context_window`:
@@ -58,7 +62,7 @@ func (r *RuntimeRouter) previousModelCompactionForTurn(
 	if r == nil || record == nil || runConfig == nil {
 		return previousModelCompaction{}
 	}
-	previousModel, previousHash, ok := r.runtimePreviousTurnSettings(threadID, record)
+	previousModel, previousHash, previousProgram, ok := r.runtimePreviousTurnSettings(threadID, record)
 	if !ok {
 		return previousModelCompaction{}
 	}
@@ -67,7 +71,7 @@ func (r *RuntimeRouter) previousModelCompactionForTurn(
 		return previousModelCompaction{}
 	}
 	if compactionHashChanged(previousHash, r.modelCompHash(currentModel)) {
-		return previousModelCompaction{Run: true, Reason: compact.ReasonCompHashChanged, PreviousModel: previousModel}
+		return previousModelCompaction{Run: true, Reason: compact.ReasonCompHashChanged, PreviousModel: previousModel, PreviousProgram: previousProgram}
 	}
 	if previousModel == currentModel {
 		return previousModelCompaction{}
@@ -82,7 +86,7 @@ func (r *RuntimeRouter) previousModelCompactionForTurn(
 	if !r.compactTokenStatusForTurn(threadID, currentModel, params).ShouldCompact {
 		return previousModelCompaction{}
 	}
-	return previousModelCompaction{Run: true, Reason: compact.ReasonModelSwitch, PreviousModel: previousModel}
+	return previousModelCompaction{Run: true, Reason: compact.ReasonModelSwitch, PreviousModel: previousModel, PreviousProgram: previousProgram}
 }
 
 // compactionHashChanged mirrors Rust's `comp_hash_changed`: a missing hash on
@@ -116,13 +120,16 @@ func (r *RuntimeRouter) runPreviousModelInlineCompact(
 	// attempt.
 	remoteOnly := r.providerSupportsRemoteCompact(record.Metadata.ModelProvider)
 	_, err := r.compactThread(ctx, &runtimeCompactRequest{
-		ThreadID:                  threadID,
-		TurnID:                    turnID,
-		ConnectionID:              connectionID,
-		Trigger:                   compact.TriggerAuto,
-		Reason:                    decision.Reason,
-		Phase:                     compact.PhasePreTurn,
-		Model:                     decision.PreviousModel,
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ConnectionID: connectionID,
+		Trigger:      compact.TriggerAuto,
+		Reason:       decision.Reason,
+		Phase:        compact.PhasePreTurn,
+		Model:        decision.PreviousModel,
+		// The previous model pairs with the previous turn's program; an absent
+		// program must not inherit the current selection (Rust #48224).
+		CyberAccessProgram:        appStringPointer(decision.PreviousProgram),
 		RemoteOnly:                remoteOnly,
 		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 	})
@@ -134,13 +141,16 @@ func (r *RuntimeRouter) runPreviousModelInlineCompact(
 	}
 	fallbackStatus := r.compactTokenStatusForTurn(threadID, runConfig.Model, params)
 	_, fallbackErr := r.compactThread(ctx, &runtimeCompactRequest{
-		ThreadID:                  threadID,
-		TurnID:                    turnID,
-		ConnectionID:              connectionID,
-		Trigger:                   compact.TriggerAuto,
-		Reason:                    decision.Reason,
-		Phase:                     compact.PhasePreTurn,
-		Model:                     runConfig.Model,
+		ThreadID:     threadID,
+		TurnID:       turnID,
+		ConnectionID: connectionID,
+		Trigger:      compact.TriggerAuto,
+		Reason:       decision.Reason,
+		Phase:        compact.PhasePreTurn,
+		Model:        runConfig.Model,
+		// The retry compacts with the selected model, so it uses the current
+		// turn's program.
+		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
 		RemoteOnly:                remoteOnly,
 		ActiveContextTokensBefore: int64(fallbackStatus.ActiveContextTokens),
 	})

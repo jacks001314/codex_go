@@ -244,6 +244,7 @@ type responsesAgentRequest struct {
 	Include              []string                `json:"include,omitempty"`
 	ServiceTier          string                  `json:"service_tier,omitempty"`
 	PromptCacheKey       string                  `json:"prompt_cache_key,omitempty"`
+	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
 	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
 	Text                 *responsesTextParam     `json:"text,omitempty"`
 	UseResponsesLite     bool                    `json:"-"`
@@ -672,6 +673,9 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	if apiRequest.PromptCacheKey != "" {
 		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
 	}
+	if apiRequest.AccessPrograms != nil {
+		payload["access_programs"] = apiRequest.AccessPrograms
+	}
 	requestStartedAt := time.Now()
 	writeErr := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
@@ -806,6 +810,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		Model: modelID, Instructions: responsesInstructions(request), Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
+		AccessPrograms: AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
@@ -1039,6 +1044,9 @@ func websocketResponseCreatePayload(apiRequest *responsesAgentRequest, previousR
 	if apiRequest.PromptCacheKey != "" {
 		payload["prompt_cache_key"] = apiRequest.PromptCacheKey
 	}
+	if apiRequest.AccessPrograms != nil {
+		payload["access_programs"] = apiRequest.AccessPrograms
+	}
 	return payload
 }
 
@@ -1230,6 +1238,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		ParallelToolCalls:    parallelToolCalls,
 		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
+		AccessPrograms:       AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
 		ClientMetadata:       cloneStringMap(request.ClientMetadata),
 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 		UseResponsesLite:     modelInfo.UseResponsesLite,

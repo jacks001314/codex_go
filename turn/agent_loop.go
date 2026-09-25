@@ -128,8 +128,13 @@ type AgentLoopRequest struct {
 	// UsageTags carries the turn's scalar-only usage diagnostics document (Rust
 	// core::feedback_config::usage_tags, #46501); the sampling-request span
 	// records it as the `tags_json` field.
-	UsageTags               map[string]string
-	PromptCacheKey          string
+	UsageTags      map[string]string
+	PromptCacheKey string
+	// CyberAccessProgram is the turn's selected cyber access program (core
+	// snake_case, empty when none was selected or the provider is not OpenAI).
+	// Rust carries it on the turn context and copies it into every Prompt
+	// (#44893), so it reaches the request body only for a ChatGPT account.
+	CyberAccessProgram      string
 	ClientMetadata          map[string]string
 	ClientMetadataTransform ClientMetadataTransform
 	// Trace is the W3C trace context of the request that started this turn
@@ -370,6 +375,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ItemIDsEnabled:               request.ItemIDsEnabled,
 			ServiceTier:                  request.ServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
+			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,

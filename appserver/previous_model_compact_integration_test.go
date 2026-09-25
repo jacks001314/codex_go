@@ -55,19 +55,21 @@ func TestRuntimeTurnStartRunsPreviousModelCompactionLikeRust(t *testing.T) {
 	}
 	threadID := start.Result.(*ThreadStartResponse).Thread.ID
 
+	firstProgram := turn.CyberAccessProgramDaybreakBlue
 	first := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: threadID,
-		Prompt:   "first turn",
-		Model:    "gpt-previous",
+		ThreadID:           threadID,
+		Prompt:             "first turn",
+		Model:              "gpt-previous",
+		CyberAccessProgram: &firstProgram,
 	}))
 	if first.Error != nil {
 		t.Fatalf("first turn start error: %+v", first.Error)
 	}
 	waitForTurnCompletedStatus(t, sink, first.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
 
-	previousModel, previousHash, ok := router.runtimePreviousTurnSettings(threadID, nil)
-	if !ok || previousModel != "gpt-previous" || previousHash != "hash-previous" {
-		t.Fatalf("recorded previous settings = %q, %q, %v; want gpt-previous, hash-previous, true", previousModel, previousHash, ok)
+	previousModel, previousHash, previousProgram, ok := router.runtimePreviousTurnSettings(threadID, nil)
+	if !ok || previousModel != "gpt-previous" || previousHash != "hash-previous" || previousProgram != "daybreak_blue" {
+		t.Fatalf("recorded previous settings = %q, %q, %q, %v; want gpt-previous, hash-previous, daybreak_blue, true", previousModel, previousHash, previousProgram, ok)
 	}
 	record, err := store.Read(session.ThreadID(threadID), true, false)
 	if err != nil {

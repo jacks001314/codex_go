@@ -196,6 +196,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ItemIDsEnabled:               request.ItemIDsEnabled,
 			ServiceTier:                  request.ServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
+			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),
 			Trace:                        request.Trace,
 			AttestationProvider:          request.AttestationProvider,

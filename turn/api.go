@@ -29,6 +29,38 @@ type InputTooLargeError struct {
 	ActualChars int
 }
 
+// CyberAccessProgram is the app-server v2 `turn/start.cyberAccessProgram`
+// selection (Rust app-server-protocol `CyberAccessProgram`, camelCase on the
+// wire). It is a distinct type from the core value that reaches the request
+// body and the rollout record (Rust `turn_input::CyberAccessProgram`,
+// snake_case, modelled as `model.CyberAccessProgram`); CoreValue performs the
+// mapping.
+type CyberAccessProgram string
+
+const (
+	CyberAccessProgramStandard     CyberAccessProgram = "standard"
+	CyberAccessProgramDaybreakBlue CyberAccessProgram = "daybreakBlue"
+	CyberAccessProgramDaybreakRed  CyberAccessProgram = "daybreakRed"
+)
+
+// CoreValue maps the app-server selection onto the core snake_case value used by
+// the Responses request body and the persisted turn context
+// (Rust `impl From<CyberAccessProgram> for CoreCyberAccessProgram`). An unknown
+// selection has no core value, so it is dropped: Rust's v2 enum rejects it
+// during deserialization instead.
+func (p CyberAccessProgram) CoreValue() string {
+	switch p {
+	case CyberAccessProgramStandard:
+		return "standard"
+	case CyberAccessProgramDaybreakBlue:
+		return "daybreak_blue"
+	case CyberAccessProgramDaybreakRed:
+		return "daybreak_red"
+	default:
+		return ""
+	}
+}
+
 func (e *InputTooLargeError) Error() string {
 	maxChars := MaxUserInputTextChars
 	if e != nil && e.MaxChars > 0 {
@@ -222,18 +254,28 @@ type TurnStartParams struct {
 	OutputSchema       any            `json:"outputSchema,omitempty"`
 	CollaborationMode  map[string]any `json:"collaborationMode,omitempty"`
 	// Deprecated: accepted for old app-server clients, but ignored by runtime.
-	MultiAgentMode        *string                           `json:"multiAgentMode,omitempty"`
-	Personality           *string                           `json:"personality,omitempty"`
-	PersonalitySet        bool                              `json:"-"`
-	Config                map[string]any                    `json:"config,omitempty"`
-	BaseInstructions      *string                           `json:"baseInstructions,omitempty"`
-	DeveloperInstructions *string                           `json:"developerInstructions,omitempty"`
-	AdditionalContext     map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
-	DynamicTools          []DynamicToolSpec                 `json:"dynamicTools,omitempty"`
-	ExperimentalRawEvents bool                              `json:"-"`
-	ParentTurnID          string                            `json:"-"`
-	RootTurnID            string                            `json:"-"`
-	AdditionalInputItems  []any                             `json:"-"`
+	MultiAgentMode *string `json:"multiAgentMode,omitempty"`
+	// CyberAccessProgram requests a workspace-authorized cyber program for this
+	// turn (Rust `turn/start.cyberAccessProgram`, EXPERIMENTAL). Omission
+	// preserves the backend's automatic behavior; the value never grants access,
+	// and only the OpenAI provider records it (Rust TurnContext).
+	CyberAccessProgram *CyberAccessProgram `json:"cyberAccessProgram,omitempty"`
+	// CoreCyberAccessProgram is the core snake_case program an internally started
+	// turn inherits (Rust `TurnStartOptions.cyber_access_program`): a spawned or
+	// continued subagent turn copies the initiating turn's program. It is the
+	// resolved, provider-gated value, so it is not a client-settable field.
+	CoreCyberAccessProgram string                            `json:"-"`
+	Personality            *string                           `json:"personality,omitempty"`
+	PersonalitySet         bool                              `json:"-"`
+	Config                 map[string]any                    `json:"config,omitempty"`
+	BaseInstructions       *string                           `json:"baseInstructions,omitempty"`
+	DeveloperInstructions  *string                           `json:"developerInstructions,omitempty"`
+	AdditionalContext      map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
+	DynamicTools           []DynamicToolSpec                 `json:"dynamicTools,omitempty"`
+	ExperimentalRawEvents  bool                              `json:"-"`
+	ParentTurnID           string                            `json:"-"`
+	RootTurnID             string                            `json:"-"`
+	AdditionalInputItems   []any                             `json:"-"`
 	// Trace carries the W3C trace context of the request that started this turn
 	// (Rust TurnInputRequest::with_trace), so the model request continues the
 	// caller's trace.
@@ -251,22 +293,23 @@ func (p *TurnStartParams) CloneDynamicTools() []DynamicToolSpec {
 
 func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		ThreadID            string          `json:"threadId"`
-		ClientUserMessageID string          `json:"clientUserMessageId,omitempty"`
-		Input               []TurnUserInput `json:"input"`
-		ToolOutput          *TurnToolOutput `json:"toolOutput,omitempty"`
-		TurnTrigger         string          `json:"turnTrigger,omitempty"`
-		CWD                 string          `json:"cwd,omitempty"`
-		ApprovalPolicy      any             `json:"approvalPolicy,omitempty"`
-		ApprovalsReviewer   *string         `json:"approvalsReviewer,omitempty"`
-		SandboxPolicy       any             `json:"sandboxPolicy,omitempty"`
-		Model               string          `json:"model,omitempty"`
-		ServiceTier         *string         `json:"serviceTier,omitempty"`
-		Effort              *string         `json:"effort,omitempty"`
-		Summary             *string         `json:"summary,omitempty"`
-		Personality         *string         `json:"personality,omitempty"`
-		OutputSchema        any             `json:"outputSchema,omitempty"`
-		CollaborationMode   map[string]any  `json:"collaborationMode,omitempty"`
+		ThreadID            string              `json:"threadId"`
+		ClientUserMessageID string              `json:"clientUserMessageId,omitempty"`
+		Input               []TurnUserInput     `json:"input"`
+		ToolOutput          *TurnToolOutput     `json:"toolOutput,omitempty"`
+		TurnTrigger         string              `json:"turnTrigger,omitempty"`
+		CWD                 string              `json:"cwd,omitempty"`
+		ApprovalPolicy      any                 `json:"approvalPolicy,omitempty"`
+		ApprovalsReviewer   *string             `json:"approvalsReviewer,omitempty"`
+		SandboxPolicy       any                 `json:"sandboxPolicy,omitempty"`
+		Model               string              `json:"model,omitempty"`
+		ServiceTier         *string             `json:"serviceTier,omitempty"`
+		Effort              *string             `json:"effort,omitempty"`
+		Summary             *string             `json:"summary,omitempty"`
+		Personality         *string             `json:"personality,omitempty"`
+		OutputSchema        any                 `json:"outputSchema,omitempty"`
+		CollaborationMode   map[string]any      `json:"collaborationMode,omitempty"`
+		CyberAccessProgram  *CyberAccessProgram `json:"cyberAccessProgram,omitempty"`
 	}{
 		ThreadID:            p.ThreadID,
 		ClientUserMessageID: p.ClientUserMessageID,
@@ -284,6 +327,7 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		Personality:         p.Personality,
 		OutputSchema:        p.OutputSchema,
 		CollaborationMode:   p.CollaborationMode,
+		CyberAccessProgram:  p.CyberAccessProgram,
 	})
 }
 

@@ -134,6 +134,7 @@ func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, tu
 		Reason:                    compact.ReasonTokenLimit,
 		Phase:                     compact.PhasePostTurn,
 		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
 	})
 	return true, compactErr
 }
@@ -1566,6 +1567,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
 			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
 			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+			CyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
 		})
 		if compactErr != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
@@ -1679,6 +1681,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		ItemIDsEnabled:               runConfig.ItemIDsEnabled,
 		PromptCacheKey:               runConfig.PromptCacheKey,
 		ServiceTier:                  runConfig.ServiceTier,
+		CyberAccessProgram:           runConfig.CyberAccessProgram,
 		UsageTags:                    runConfig.UsageTags,
 		ClientMetadata:               cloneStringMap(runConfig.ClientMetadata),
 		Trace:                        params.Trace,
@@ -2097,6 +2100,7 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			Phase:                     compact.PhaseMidTurn,
 			ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 			History:                   history,
+			CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -5512,6 +5516,12 @@ type runtimeCompactRequest struct {
 	// previous-model compaction against the previous model's step context, so the
 	// attempt must not use the thread's newly selected model (#46324).
 	Model string
+	// CyberAccessProgram fixes the compaction attempt's program. Rust compacts
+	// with the model/program pair of the turn whose context drives the attempt
+	// (#48224): the previous-model attempt carries the previous turn's program
+	// (including an absent one), while a nil value resolves the thread's latest
+	// turn context.
+	CyberAccessProgram *string
 	// RemoteOnly surfaces a failed remote attempt instead of summarizing locally,
 	// which is what lets the previous-model compaction retry with the selected
 	// model (Rust's V2 auto-compaction path has no local fallback, #46324).
@@ -5598,7 +5608,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
-		Runner:               r.compactRunnerForRecord(record, request, params.Model),
+		Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record)),
 		MaxSummaryChars:      4000,
 		InitialContext:       initialContext,
 		InjectBeforeLastUser: true,
@@ -5872,7 +5882,34 @@ func compactUsageMetadataMap(usage *compact.Usage) map[string]any {
 	}
 }
 
-func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string) compact.RemoteRunner {
+// compactProgramForAttempt resolves the cyber access program a compaction
+// attempt uses. An attempt that fixed the program explicitly (the previous-model
+// pre-turn compaction, #48224) keeps it verbatim - including an absent program;
+// every other attempt follows the thread's latest turn context, which the live
+// turn or the resumed rollout recorded (Rust reads
+// `turn_context.cyber_access_program`).
+func (r *RuntimeRouter) compactProgramForAttempt(params *runtimeCompactRequest, record *session.Record) string {
+	if params != nil && params.CyberAccessProgram != nil {
+		return strings.TrimSpace(*params.CyberAccessProgram)
+	}
+	threadID := ""
+	if params != nil {
+		threadID = strings.TrimSpace(params.ThreadID)
+	}
+	if threadID == "" && record != nil {
+		threadID = strings.TrimSpace(string(record.ID))
+	}
+	if r == nil || threadID == "" {
+		return ""
+	}
+	_, _, program, ok := r.runtimePreviousTurnSettings(threadID, record)
+	if !ok {
+		return ""
+	}
+	return program
+}
+
+func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *compact.Request, modelOverride string, cyberAccessProgram string) compact.RemoteRunner {
 	if r == nil {
 		return nil
 	}
@@ -5927,13 +5964,14 @@ func (r *RuntimeRouter) compactRunnerForRecord(record *session.Record, request *
 		)
 	}
 	return &agentCompactRunner{
-		agent:          agent,
-		model:          compactModel,
-		providerID:     firstNonEmpty(providerID, model.OpenAIProviderID),
-		serviceTier:    r.remoteCompactServiceTierForRecord(record),
-		modelHash:      modelHash,
-		effort:         compactionEffort,
-		clientMetadata: r.compactResponsesClientMetadata(record, request, compactModel),
+		agent:              agent,
+		model:              compactModel,
+		providerID:         firstNonEmpty(providerID, model.OpenAIProviderID),
+		serviceTier:        r.remoteCompactServiceTierForRecord(record),
+		modelHash:          modelHash,
+		effort:             compactionEffort,
+		cyberAccessProgram: strings.TrimSpace(cyberAccessProgram),
+		clientMetadata:     r.compactResponsesClientMetadata(record, request, compactModel),
 		// Rust #46044: compaction prompts carry the recorded Code Mode tool
 		// inventory from the thread's recorder.
 		executedToolCalls:               r.executedToolCallRecorder(string(record.ID)),
@@ -6736,6 +6774,12 @@ type appTurnRunConfig struct {
 	ItemIDsEnabled               bool
 	PromptCacheKey               string
 	ServiceTier                  string
+	// CyberAccessProgram is the turn's selected cyber access program (core
+	// snake_case, empty when none was selected or the provider is not OpenAI).
+	// Rust records it on the turn context and copies it into the sampling Prompt
+	// (#44893); it is also persisted with the turn context so a resumed thread
+	// keeps the model/program pair (#48224).
+	CyberAccessProgram string
 	// UsageTags is the turn's usage-tag diagnostics document (Rust #46501),
 	// carried on the sampling-request span as `tags_json`.
 	UsageTags                       map[string]string
@@ -7048,6 +7092,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ItemIDsEnabled:                 cfg.FeatureSettings()["item_ids"],
 		PromptCacheKey:                 r.responsesPromptCacheKey(threadID, lineage, threadSnapshot.Ephemeral),
 		ServiceTier:                    serviceTier,
+		CyberAccessProgram:             appCyberAccessProgramForTurn(params, modelProviderConfig.ProviderID),
 		// Rust #46501: the span carries the usage-tag document alongside the
 		// turn's resolved settings.
 		UsageTags:                       UsageTagsForTurn(cfg, cfg.FeatureSettings(), modelInfo, serviceTier),
@@ -10436,6 +10481,43 @@ func appIncludeTimingMetrics(cfg *config.Config) bool {
 		boolConfigValue(cfg, "responsesapi_include_timing_metrics") ||
 		boolConfigValue(cfg, "responsesapiIncludeTimingMetrics")
 }
+
+// appCyberAccessProgramForTurn mirrors Rust's turn-context construction
+// (session/turn_context.rs, #44893): the per-turn selection is recorded only when
+// the turn's provider is the OpenAI provider, and an unknown app-server value has
+// no core program. Omission preserves the backend's automatic behavior.
+func appCyberAccessProgramForTurn(params *turn.TurnStartParams, providerID string) string {
+	if params == nil {
+		return ""
+	}
+	// A client-started turn selects with the app-server wire value; an internally
+	// started turn (a spawned or continued subagent) already carries the
+	// initiating turn's resolved core program (Rust #44893).
+	program := ""
+	if params.CyberAccessProgram != nil {
+		program = params.CyberAccessProgram.CoreValue()
+	}
+	if program == "" {
+		program = strings.TrimSpace(params.CoreCyberAccessProgram)
+	}
+	if program == "" || strings.TrimSpace(providerID) != model.OpenAIProviderID {
+		return ""
+	}
+	return program
+}
+
+// appCyberAccessProgramForTurnPointer fixes the current turn's program for a
+// compaction attempt. The pointer is always non-nil: an empty value means the
+// turn selected no program, which must not fall back to another turn's
+// selection (Rust #48224).
+func appCyberAccessProgramForTurnPointer(params *turn.TurnStartParams, providerID string) *string {
+	program := appCyberAccessProgramForTurn(params, providerID)
+	return &program
+}
+
+// appStringPointer returns a pointer to value, so an explicitly absent value is
+// distinguishable from "not fixed" (see runtimeCompactRequest.CyberAccessProgram).
+func appStringPointer(value string) *string { return &value }
 
 func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.TurnStartParams, modelID string) string {
 	if params != nil && params.ServiceTierForTurn != nil {
