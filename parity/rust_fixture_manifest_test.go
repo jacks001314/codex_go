@@ -129,7 +129,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// authorization, agent-controller, message-board, prewarm,
 			// tool-observation-budget, retry-after, mxc and patrol suites
 			// (#47017-#47989).
-			Files: 256,
+			// #48135 then added core/tests/suite/pending_input.rs.
+			Files: 257,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

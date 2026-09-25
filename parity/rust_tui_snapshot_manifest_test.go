@@ -22,11 +22,12 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream 66c4e5a20d: #48121 added the command-center
-	// draft-handoff snapshot on top of #48116's Max-reasoning footers and
-	// #48101's truncated multiline `/ps` preview.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1325 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1325", got)
+	// Re-pinned to upstream 1bf73324ca: #48135 added the remapped-left
+	// external-writer snapshot on top of #48121's command-center draft handoff,
+	// #48116's Max-reasoning footers and #48101's truncated multiline `/ps`
+	// preview.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1326 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1326", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -108,7 +109,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46691 added the two running-task exit pickers; #46751 moved the
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
-			Files:    62,
+			// #48135 added the remapped-left external-writer view snapshot.
+			Files:    63,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -116,6 +118,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__model_catalog__model_migration_prompt_shows_for_hidden_model.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_retained_worktree_error.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_task_defaults_tests__command_center_new_draft_handoff.snap",
+				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__external_writer_view_respects_remapped_left.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__transcript_composer__transcript_close_restores_inline_draft.snap",
 				"tui/src/app/tests/snapshots/codex_tui__app__tests__background_exit_tests__remote_disconnect_exit.snap",
 			},

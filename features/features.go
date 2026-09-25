@@ -130,6 +130,10 @@ var Registry = []Spec{
 	// reasoning and commentary boundaries when agent mail arrives; pending mail
 	// is delivered at the next normal input boundary instead.
 	{Key: "defer_mailbox_preemption", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #48135): yield foreground code-mode
+	// observations when new user input arrives, so a queued message is delivered
+	// while the cell keeps running.
+	{Key: "instant_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #47946): shared discussion tools for an
 	// agent tree (the in-memory agent message board).
 	{Key: "agent_message_board", Stage: StageUnderDevelopment, DefaultEnabled: false},
