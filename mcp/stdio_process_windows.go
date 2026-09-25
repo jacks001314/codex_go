@@ -51,12 +51,7 @@ func startMCPStdioProcess(cmd *exec.Cmd) (*mcpStdioProcess, error) {
 		windows.CloseHandle(job)
 		return startUncontainedMCPStdioProcess(cmd)
 	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &windows.SysProcAttr{}
-	}
-	// The child must not run before it can be assigned to the job, or a helper it
-	// spawns could escape containment.
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	suspendMCPStdioForJobAssignment(cmd)
 	if err := cmd.Start(); err != nil {
 		windows.CloseHandle(job)
 		return nil, err
@@ -94,6 +89,20 @@ func startUncontainedMCPStdioProcess(cmd *exec.Cmd) (*mcpStdioProcess, error) {
 		return nil, err
 	}
 	return &mcpStdioProcess{}, nil
+}
+
+// suspendMCPStdioForJobAssignment marks the child to start suspended with no
+// console window. The child must not run before it can be assigned to the job,
+// or a helper it spawns could escape containment; Rust's `prepare_suspended_spawn`
+// replaces the creation flags, so both flags are set together (Rust #48238).
+func suspendMCPStdioForJobAssignment(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &windows.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED | windows.CREATE_NO_WINDOW
 }
 
 func resumeSuspendedMCPProcess(handle windows.Handle) error {

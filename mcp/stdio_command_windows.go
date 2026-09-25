@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"codex_go/envutil"
+	"golang.org/x/sys/windows"
 )
 
 func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
@@ -19,13 +20,29 @@ func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
 		}
 		cmd := exec.Command(comspec)
 		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: windowsBatchCommandLine(command, args)}
+		suppressMCPStdioConsoleWindow(cmd)
 		envutil.ScrubCommandEnv(cmd)
 		return cmd
 	default:
 		cmd := exec.Command(command, args...)
+		suppressMCPStdioConsoleWindow(cmd)
 		envutil.ScrubCommandEnv(cmd)
 		return cmd
 	}
+}
+
+// suppressMCPStdioConsoleWindow mirrors Rust #48238: the launcher sets
+// CREATE_NO_WINDOW on the shared command wrapper, so both a direct program and a
+// batch shim launched through cmd.exe run without a console window. A server is
+// a stdio-only helper, so a window would only flash over the user's terminal.
+func suppressMCPStdioConsoleWindow(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 }
 
 func windowsBatchCommandLine(command string, args []string) string {

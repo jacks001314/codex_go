@@ -2210,35 +2210,62 @@ func stringFromHeaderMap(headers map[string]any, names ...string) string {
 	return ""
 }
 
+// responsesFailedErrorBody mirrors Rust's `sse::responses_error::Error` (#48229):
+// the `response.error` object of a `response.failed` event. Every field keeps
+// Rust's type - including the ones this classification does not read - because a
+// malformed value anywhere makes Rust's `serde_json::from_value::<Error>` fail
+// and the whole event degrade to the stream-error fallback.
+type responsesFailedErrorBody struct {
+	Type         *string         `json:"type"`
+	Code         *string         `json:"code"`
+	Message      *string         `json:"message"`
+	PlanType     *string         `json:"plan_type"`
+	ResetsAt     *int64          `json:"resets_at"`
+	Misalignment json.RawMessage `json:"misalignment"`
+}
+
 func responseFailedError(data []byte) error {
 	var payload struct {
-		Response struct {
-			Error *responsesAgentAPIErrorBody `json:"error"`
-		} `json:"response"`
-		Error *responsesAgentAPIErrorBody `json:"error"`
+		Response json.RawMessage `json:"response"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return errResponsesStreamFailed
 	}
-	errBody := payload.Error
-	if errBody == nil {
-		errBody = payload.Response.Error
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
 	}
-	code := responseErrorCode(errBody)
-	message := ""
-	if errBody != nil {
-		message = strings.TrimSpace(errBody.Message)
+	// A missing, null or non-object `response` carries no `error` field, which is
+	// Rust's `Value::get("error")` returning None.
+	if len(payload.Response) == 0 || json.Unmarshal(payload.Response, &envelope) != nil {
+		return errResponsesStreamFailed
 	}
-	responsesDiagnostic("response.failed", map[string]any{"code": code, "message": message})
-	if code == "flex_unavailable" {
-		// Rust #47967: Flex-capacity failures end the turn without retries and
-		// report the terminal classification through the app-server protocol.
+	rawError := bytes.TrimSpace(envelope.Error)
+	if len(rawError) == 0 || string(rawError) == "null" {
+		return errResponsesStreamFailed
+	}
+	// Rust checks the Flex shape with `Value::get("code")` before decoding the
+	// strict error body, so a Flex-capacity failure ends the turn even when
+	// another field is malformed (Rust #47967, #48229).
+	if _, message, ok := flexUnavailableErrorBody(rawError); ok {
 		return &codexapi.APIError{
 			Kind:    codexapi.ErrorFlexUnavailable,
 			Status:  http.StatusTooManyRequests,
 			Message: message,
 		}
 	}
+	var errBody responsesFailedErrorBody
+	if err := json.Unmarshal(rawError, &errBody); err != nil {
+		return errResponsesStreamFailed
+	}
+	code := ""
+	if errBody.Code != nil {
+		code = strings.TrimSpace(*errBody.Code)
+	}
+	message := ""
+	if errBody.Message != nil {
+		message = strings.TrimSpace(*errBody.Message)
+	}
+	responsesDiagnostic("response.failed", map[string]any{"code": code, "message": message})
 	switch code {
 	case "context_length_exceeded":
 		return &codexapi.APIError{
@@ -2253,7 +2280,7 @@ func responseFailedError(data []byte) error {
 	case "usage_not_included":
 		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
 	case "cyber_policy":
-		return &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy, Message: message}
+		return &codexapi.APIError{Kind: codexapi.ErrorCyberPolicy, Message: fallbackPolicyMessage(message, CyberPolicyFallbackMessage)}
 	case "bio_policy":
 		// Rust #46306: streaming bio-policy failures keep their own
 		// classification, with the server message preserved and a
@@ -2266,33 +2293,52 @@ func responseFailedError(data []byte) error {
 		if strings.TrimSpace(message) == "" {
 			message = "This request was blocked due to a misalignment policy violation."
 		}
-		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody)}
+		return &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: message, Misalignment: parseMisalignmentDetails(errBody.Misalignment)}
 	case "invalid_prompt":
+		if errBody.Message == nil {
+			message = "Invalid request."
+		}
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded":
 		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
 	}
-	if errBody != nil {
-		// Rust #45602: `slow_down` is a retryable rate limit, not a terminal
-		// server overload.
-		if code == "rate_limit_exceeded" || code == "slow_down" {
-			retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
-			if delay, ok := responseFailedRetryDelay(code, message); ok {
-				return retryable.WithRetryDelay(delay)
-			}
-			return retryable
-		}
-		retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
+	// Rust #45602: `slow_down` is a retryable rate limit, not a terminal server
+	// overload.
+	if code == "rate_limit_exceeded" || code == "slow_down" {
+		retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
 		if delay, ok := responseFailedRetryDelay(code, message); ok {
 			return retryable.WithRetryDelay(delay)
 		}
 		return retryable
 	}
-	return errResponsesStreamFailed
+	// Rust's fallback arm reports an unclassified failure as retryable; a
+	// malformed payload never reaches here (it degrades to the sentinel above).
+	retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
+	if delay, ok := responseFailedRetryDelay(code, message); ok {
+		return retryable.WithRetryDelay(delay)
+	}
+	return retryable
 }
 
-func parseMisalignmentDetails(errBody *responsesAgentAPIErrorBody) *codexapi.MisalignmentDetails {
-	if errBody == nil || len(errBody.Misalignment) == 0 || strings.TrimSpace(string(errBody.Misalignment)) == "" || string(errBody.Misalignment) == "null" {
+// flexUnavailableErrorBody recognizes Rust's `parse_flex_unavailable`
+// (`Value::get("code") == "flex_unavailable"`) without requiring the rest of the
+// error object to decode.
+func flexUnavailableErrorBody(rawError []byte) (string, string, bool) {
+	var body struct {
+		Code    *string `json:"code"`
+		Message *string `json:"message"`
+	}
+	if err := json.Unmarshal(rawError, &body); err != nil || body.Code == nil || *body.Code != "flex_unavailable" {
+		return "", "", false
+	}
+	if body.Message == nil {
+		return "", "", true
+	}
+	return *body.Code, strings.TrimSpace(*body.Message), true
+}
+
+func parseMisalignmentDetails(raw json.RawMessage) *codexapi.MisalignmentDetails {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "" || string(raw) == "null" {
 		return nil
 	}
 	var details struct {
@@ -2302,7 +2348,7 @@ func parseMisalignmentDetails(errBody *responsesAgentAPIErrorBody) *codexapi.Mis
 			Message string `json:"message"`
 		} `json:"steer"`
 	}
-	if err := json.Unmarshal(errBody.Misalignment, &details); err != nil {
+	if err := json.Unmarshal(raw, &details); err != nil {
 		return nil
 	}
 	out := &codexapi.MisalignmentDetails{ErrorType: details.ErrorType, DetailedExplanation: details.DetailedExplanation}

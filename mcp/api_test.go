@@ -1400,6 +1400,7 @@ func helperMCPServerCommand(t *testing.T) (string, []string) {
 }
 
 func runMCPHelperServer() {
+	reportMCPHelperConsoleState()
 	if os.Getenv("MCP_OPTIONAL_STARTUP_BARRIER") == "1" {
 		releaseFile := os.Getenv("MCP_CONCURRENT_RELEASE_FILE")
 		for {
