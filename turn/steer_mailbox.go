@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+
+	"codex_go/tool"
 )
 
 type SteerMailbox struct {
 	mu       sync.Mutex
 	items    map[string][]any
 	metadata map[string]map[string]string
+	// changed is closed and replaced on every enqueue that stores input, so
+	// watchers wake without polling (Rust InputQueue::activity_tx).
+	changed chan struct{}
 }
 
 type SteerEnqueueParams struct {
@@ -60,7 +65,78 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
 		}
 		m.metadata[key] = metadata
 	}
+	if m.changed != nil {
+		close(m.changed)
+	}
+	m.changed = make(chan struct{})
 	return nil
+}
+
+// WatchUserInput mirrors Rust InputQueue::watch_user_input (#48135): it
+// subscribes before the first check so an arrival between the check and the wait
+// cannot be missed, then cancels the signal once a queued user message is
+// waiting for the turn. Other turn inputs (agent mail, message-board
+// notifications) are not instant-interrupt triggers, matching Rust's
+// `TurnInputQueue::has_user_input`. The returned function releases the watcher.
+func (m *SteerMailbox) WatchUserInput(threadID string, turnID string, signal *tool.YieldSignal) func() {
+	if m == nil || signal == nil {
+		return func() {}
+	}
+	key := steerMailboxKey(threadID, turnID)
+	stopped := make(chan struct{})
+	released := make(chan struct{})
+
+	m.mu.Lock()
+	if m.changed == nil {
+		m.changed = make(chan struct{})
+	}
+	changed := m.changed
+	pending := steerItemsHaveUserInput(m.items[key])
+	m.mu.Unlock()
+	if pending {
+		signal.Cancel()
+		return func() {}
+	}
+
+	go func() {
+		defer close(released)
+		for {
+			select {
+			case <-changed:
+				m.mu.Lock()
+				pending := steerItemsHaveUserInput(m.items[key])
+				changed = m.changed
+				m.mu.Unlock()
+				if pending {
+					signal.Cancel()
+					return
+				}
+			case <-stopped:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(stopped)
+		<-released
+	}
+}
+
+// steerItemsHaveUserInput mirrors Rust TurnInputQueue::has_user_input: only a
+// queued user message counts, not the agent mail and notification inputs the
+// shared mailbox also carries.
+func steerItemsHaveUserInput(items []any) bool {
+	for _, item := range items {
+		raw, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["type"])), "message") &&
+			strings.EqualFold(strings.TrimSpace(fmt.Sprint(raw["role"])), "user") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *SteerMailbox) Drain(params *SteerDrainParams) []any {

@@ -37,6 +37,10 @@ type RuntimeOptions struct {
 	// returns an output that declares external context (Rust `handle_any_tool`
 	// marking the thread's memory mode polluted).
 	OnToolOutputExternalContext func(ctx context.Context, threadID string, invocation *tool.Invocation)
+	// InstantInterrupt mirrors the `features.instant_interrupt` gate (#48135):
+	// when set, each sampling request watches the turn's queued user input and
+	// yields its code-mode observations once a user message arrives.
+	InstantInterrupt bool
 }
 
 type Runtime struct {
@@ -51,6 +55,7 @@ type Runtime struct {
 	executedToolCalls            *ExecutedToolCallRecorder
 	truncationPolicyForModel     func(model string) *utils.TruncationPolicy
 	onToolOutputExternalContext  func(ctx context.Context, threadID string, invocation *tool.Invocation)
+	instantInterrupt             bool
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -77,6 +82,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		executedToolCalls:            executedToolCalls,
 		truncationPolicyForModel:     options.TruncationPolicyForModel,
 		onToolOutputExternalContext:  options.OnToolOutputExternalContext,
+		instantInterrupt:             options.InstantInterrupt,
 	}
 }
 
@@ -270,6 +276,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			TurnID:                      request.TurnID,
 			ExecutedToolCalls:           executedToolCalls,
 			ToolMode:                    loopRequest.ToolMode,
+			InstantInterrupt:            r.instantInterrupt,
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
 			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
 		}),

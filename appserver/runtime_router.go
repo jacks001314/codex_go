@@ -13448,6 +13448,9 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// Rust's handle_any_tool marks the thread's memory mode polluted when a
 		// tool output carries external context and memories are disabled on it.
 		OnToolOutputExternalContext: r.markThreadMemoryPollutedOnToolOutput,
+		// Rust #48135: the instant-interrupt feature is what opts a sampling
+		// request into watching queued user input for code-mode yielding.
+		InstantInterrupt: turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "instant_interrupt"),
 	}), nil
 }
 

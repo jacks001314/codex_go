@@ -1183,6 +1183,9 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		Now:                          r.now,
 		MaxTurns:                     r.MaxToolTurns,
 		TurnMetadataIncludesToolInfo: run.Config != nil && run.Config.ToolRegistryTurnMetadataIncludesToolInfo(),
+		// Rust #48135: the instant-interrupt feature opts a sampling request into
+		// watching queued user input for code-mode yielding.
+		InstantInterrupt: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "instant_interrupt"),
 	}).Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       run.Prompt,
 		Instructions:                 run.Instructions,

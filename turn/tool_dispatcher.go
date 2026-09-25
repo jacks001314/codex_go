@@ -27,6 +27,11 @@ type ToolDispatcherOptions struct {
 	TurnID                      string
 	ExecutedToolCalls           *ExecutedToolCallRecorder
 	ToolMode                    string
+	// InstantInterrupt enables Rust #48135's opt-in code-mode yielding: each
+	// sampling request watches the turn's queued user input and hands the
+	// code-mode calls a shared preemption signal, so a message queued during a
+	// long-running cell is delivered while the cell keeps running.
+	InstantInterrupt bool
 	// Truncation is the effective model's output-truncation policy for this
 	// turn (Rust `ToolCall::truncation_policy`). It bounds a direct call's
 	// response-content budget; Code Mode calls ignore it because they receive
@@ -105,6 +110,7 @@ type ToolDispatcher struct {
 	turnID                      string
 	executedToolCalls           *ExecutedToolCallRecorder
 	toolMode                    string
+	instantInterrupt            bool
 	truncation                  *utils.TruncationPolicy
 	onToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
 	clockMu                     sync.Mutex
@@ -329,9 +335,25 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		turnID:                      strings.TrimSpace(options.TurnID),
 		executedToolCalls:           options.ExecutedToolCalls,
 		toolMode:                    strings.TrimSpace(options.ToolMode),
+		instantInterrupt:            options.InstantInterrupt,
 		truncation:                  options.Truncation,
 		onToolOutputExternalContext: options.OnToolOutputExternalContext,
 	}
+}
+
+// BeginStepPreempt mirrors Rust #48135's `run_sampling_request`: when the
+// instant-interrupt feature is enabled, the sampling request creates a
+// preemption signal and watches the turn's queued user input, and the caller
+// attaches it to the step context so every code-mode call of that request
+// yields its observation once a user message arrives. It returns a stop
+// function that releases the watcher; both results are empty when the feature
+// is off or the dispatcher has no mailbox.
+func (d *ToolDispatcher) BeginStepPreempt(mailbox *SteerMailbox) (*tool.YieldSignal, func()) {
+	if d == nil || !d.instantInterrupt || mailbox == nil {
+		return nil, nil
+	}
+	signal := tool.NewYieldSignal()
+	return signal, mailbox.WatchUserInput(d.threadID, d.turnID, signal)
 }
 
 func (d *ToolDispatcher) ExecuteToolItems(ctx context.Context, items []model.AgentItem) ([]ToolExecutionResult, error) {
@@ -539,6 +561,17 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		invocation.Cancel = nil
 		cancel(nil)
 	}()
+	// #48135: a sampling request's preemption signal reaches the code-mode exec
+	// and wait executors through the invocation context, so queued user input
+	// yields their observation while the cell keeps running.
+	if tool.IsCodeModeToolName(invocation.ToolName) {
+		if signal := tool.CodeModePreemptFromContext(ctx); signal != nil {
+			if invocation.Context == nil {
+				invocation.Context = map[string]any{}
+			}
+			invocation.Context[tool.CodeModePreemptContextKey] = signal
+		}
+	}
 	var notifyMu sync.Mutex
 	notifyItems := []any{}
 	if invocation.ToolName.Namespace == "" && invocation.ToolName.Name == tool.CodeModeExecToolName {

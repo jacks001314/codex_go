@@ -10,6 +10,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/model"
 	"codex_go/protocol"
+	"codex_go/tool"
 )
 
 type AgentLoopOptions struct {
@@ -105,15 +106,15 @@ type AgentLoopRequest struct {
 	// after InputItems when there is no prompt) for the first sampling request,
 	// then folded into the turn's input for later iterations. Rust records
 	// trusted reasoning-effort configuration updates after accepted input.
-	PostPromptInputItems         []any
-	SteerMailbox                 *SteerMailbox
-	Tools                        []any
-	HostedTools                  []any
-	Store                        bool
-	PreviousResponseID           string
-	ParallelToolCalls            bool
-	ReasoningEffort              string
-	ReasoningSummary             string
+	PostPromptInputItems []any
+	SteerMailbox         *SteerMailbox
+	Tools                []any
+	HostedTools          []any
+	Store                bool
+	PreviousResponseID   string
+	ParallelToolCalls    bool
+	ReasoningEffort      string
+	ReasoningSummary     string
 	// DropReasoningEffortUpdates removes saved configuration_update items from
 	// the request copy when the effective model/provider does not support them
 	// (Rust #46530).
@@ -309,6 +310,15 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// Rust instruments the sampling request with `run_sampling_request`, so the
 		// client's spans and records land inside the turn's span tree.
 		stepCtx, samplingSpan := startSamplingRequestSpan(ctx, request, stepModel)
+		// Rust #48135: an instant-interrupt sampling request owns a preemption
+		// signal whose watcher cancels it as soon as the turn's queued input
+		// holds a user message. The signal reaches every code-mode call this
+		// request issues through the step context, including calls received later
+		// in the same response.
+		stepPreempt, stopStepPreempt := l.dispatcher.BeginStepPreempt(l.steerMailbox)
+		if stepPreempt != nil {
+			stepCtx = tool.WithCodeModePreempt(stepCtx, stepPreempt)
+		}
 		// Rust keeps `run_sampling_request` open until the step's in-flight tool
 		// futures have been drained, so the step's tool spans (mcp.tools.call and
 		// the tool records) nest under it. endSamplingRequestSpan closes the span
@@ -319,6 +329,10 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				return
 			}
 			samplingSpanEnded = true
+			if stopStepPreempt != nil {
+				stopStepPreempt()
+				stopStepPreempt = nil
+			}
 			if samplingSpan != nil {
 				samplingSpan.End()
 			}
