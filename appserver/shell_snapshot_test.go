@@ -173,6 +173,28 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 	}
 }
 
+// TestShellSnapshotPruneLookupReadsTheRolloutLikeRust covers the state-db half of
+// Rust's cleanup: a session with a stored rollout reports its age, and an unknown
+// session reports nothing so its snapshots are pruned.
+func TestShellSnapshotPruneLookupReadsTheRolloutLikeRust(t *testing.T) {
+	router, threadID, _ := newShellSnapshotRouter(t, "")
+	t.Cleanup(func() { _ = router.Close() })
+	lookup := router.shellSnapshotPruneLookup()
+	if lookup == nil {
+		t.Fatal("shellSnapshotPruneLookup() = nil")
+	}
+	modified, ok := lookup(threadID)
+	if !ok || modified.IsZero() {
+		t.Fatalf("lookup(%s) = %v/%v, want the stored rollout's age", threadID, modified, ok)
+	}
+	if _, ok := lookup("01a0d700-0000-7000-8000-000000000000"); ok {
+		t.Fatal("an unknown session reported a rollout")
+	}
+	if _, ok := lookup("  "); ok {
+		t.Fatal("an empty session id reported a rollout")
+	}
+}
+
 // stubShellSnapshotFeature turns the feature back on for the thread's config.
 func stubShellSnapshotFeature(t *testing.T, router *RuntimeRouter, threadID string) func(context.Context, tool.SnapshotProviderRequest) string {
 	t.Helper()

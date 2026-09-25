@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/envutil"
 	"codex_go/sandbox"
@@ -281,6 +282,48 @@ func TestSnapshotBuilderCapturesWithTheHostShellLikeRust(t *testing.T) {
 	// environment this test set.
 	if !strings.Contains(string(content), `declare -x SNAPSHOT_PROBE_MARKER="probe-value"`) {
 		t.Fatalf("snapshot misses the captured export:\n%s", content)
+	}
+}
+
+// TestSnapshotBuilderPrunesWithTheRolloutLookupLikeRust covers Rust's
+// cleanup_stale_snapshots wiring: the first capture prunes snapshots whose
+// session has no rollout, and keeps a live session's.
+func TestSnapshotBuilderPrunesWithTheRolloutLookupLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	dir := filepath.Join(codexHome, "shell_snapshots")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	deadPath := filepath.Join(dir, "gone.1.sh")
+	livePath := filepath.Join(dir, "live.1.sh")
+	for _, path := range []string{deadPath, livePath} {
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	runner := &snapshotBuilderRunner{capture: snapshotBashCaptureStream()}
+	builder := NewSnapshotBuilder(SnapshotBuilderOptions{
+		CodexHome: codexHome,
+		SessionID: "session-1",
+		Runner:    runner.run,
+		Prune: func(sessionID string) (time.Time, bool) {
+			if sessionID == "live" {
+				return time.Now().Add(-time.Hour), true
+			}
+			return time.Time{}, false
+		},
+	})
+	t.Cleanup(builder.Close)
+	if created, _ := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true,
+	}); created == nil {
+		t.Fatal("Snapshot() = nil")
+	}
+	if _, err := os.Stat(deadPath); !os.IsNotExist(err) {
+		t.Fatalf("a dead session's snapshot survived (err = %v)", err)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Fatalf("a live session's snapshot was pruned: %v", err)
 	}
 }
 

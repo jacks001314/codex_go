@@ -83,7 +83,16 @@ func BuildPOSIXSnapshot(env map[string]string, aliases map[string]string) string
 	return b.String()
 }
 
-func CleanupStaleSnapshots(codexHome string, sessionID string, now time.Time) ([]string, error) {
+// SnapshotPruneLookup reports the rollout file's modification time for a
+// session, and whether the session still has one (Rust's
+// `find_thread_path_by_id_str` plus the rollout's metadata).
+type SnapshotPruneLookup func(sessionID string) (time.Time, bool)
+
+// CleanupSnapshots mirrors Rust's `cleanup_stale_snapshots`: it removes snapshots
+// whose session no longer has a rollout, whose rollout has not been touched
+// within the retention window, and files whose name carries no session id. The
+// active session's snapshots are always kept.
+func CleanupSnapshots(codexHome string, activeSessionID string, now time.Time, lookup SnapshotPruneLookup) ([]string, error) {
 	dir := filepath.Join(codexHome, SnapshotDir)
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -92,17 +101,37 @@ func CleanupStaleSnapshots(codexHome string, sessionID string, now time.Time) ([
 	if err != nil {
 		return nil, err
 	}
+	activeSessionID = strings.TrimSpace(activeSessionID)
 	removed := []string{}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), sessionID+".") {
+		if entry.IsDir() {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		info, err := entry.Info()
-		if err != nil {
-			return removed, err
+		sessionID, ok := SnapshotSessionIDFromFileName(entry.Name())
+		if !ok {
+			// A file Codex does not recognize is not a snapshot it may keep.
+			if err := os.Remove(path); err != nil {
+				return removed, err
+			}
+			removed = append(removed, path)
+			continue
 		}
-		if now.Sub(info.ModTime()) <= SnapshotRetention {
+		if sessionID == activeSessionID {
+			continue
+		}
+		if lookup == nil {
+			continue
+		}
+		rolloutModified, ok := lookup(sessionID)
+		if !ok {
+			if err := os.Remove(path); err != nil {
+				return removed, err
+			}
+			removed = append(removed, path)
+			continue
+		}
+		if now.Sub(rolloutModified) < SnapshotRetention {
 			continue
 		}
 		if err := os.Remove(path); err != nil {
@@ -111,6 +140,31 @@ func CleanupStaleSnapshots(codexHome string, sessionID string, now time.Time) ([
 		removed = append(removed, path)
 	}
 	return removed, nil
+}
+
+// SnapshotSessionIDFromFileName decodes the session a snapshot file belongs to,
+// mirroring Rust's `snapshot_session_id_from_file_name`: `<session>.<nonce>.sh`,
+// `<session>.<nonce>.ps1` and `<session>.tmp-<nonce>` carry the session, and
+// anything else does not.
+func SnapshotSessionIDFromFileName(fileName string) (string, bool) {
+	// Rust splits at the last dot: rsplit_once('.').
+	index := strings.LastIndex(fileName, ".")
+	if index <= 0 || index == len(fileName)-1 {
+		return "", false
+	}
+	stem, extension := fileName[:index], fileName[index+1:]
+	if strings.HasPrefix(extension, "tmp-") {
+		return stem, true
+	}
+	if extension != "sh" && extension != "ps1" {
+		return "", false
+	}
+	// The generation segment after the session id is ignored.
+	sessionID, _, _ := strings.Cut(stem, ".")
+	if sessionID == "" {
+		return "", false
+	}
+	return sessionID, true
 }
 
 func shellQuoteName(name string) string {

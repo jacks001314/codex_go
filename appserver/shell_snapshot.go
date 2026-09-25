@@ -11,6 +11,7 @@ package appserver
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/session"
+	"codex_go/shell"
 	"codex_go/telemetry"
 	"codex_go/tool"
 )
@@ -25,6 +27,31 @@ import (
 // shellSnapshotCaptureRunner runs a session's snapshot captures. It is a
 // variable so a test can stand in for a real POSIX shell and its sandbox.
 var shellSnapshotCaptureRunner tool.SnapshotCaptureRunner
+
+// shellSnapshotPruneLookup reports the rollout age of a session, which the
+// snapshot prune needs to tell a live session's snapshots from a dead one's
+// (Rust's `find_thread_path_by_id_str` plus the rollout's metadata).
+func (r *RuntimeRouter) shellSnapshotPruneLookup() shell.SnapshotPruneLookup {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
+		return nil
+	}
+	store := r.services.ThreadRouter.store
+	return func(sessionID string) (time.Time, bool) {
+		sessionID = strings.TrimSpace(sessionID)
+		if sessionID == "" {
+			return time.Time{}, false
+		}
+		path, err := store.Path(session.ThreadID(sessionID))
+		if err != nil || strings.TrimSpace(path) == "" {
+			return time.Time{}, false
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return time.Time{}, false
+		}
+		return info.ModTime(), true
+	}
+}
 
 // shellSnapshotProviderForTurn returns the snapshot provider this turn's shell
 // executor asks, or nil when the session has no snapshot. The feature gate is
@@ -124,6 +151,7 @@ func (r *RuntimeRouter) shellSnapshotBuilderForThread(threadID string) *tool.Sna
 		CodexHome: strings.TrimSpace(r.codexHomeForRollout()),
 		SessionID: threadID,
 		Runner:    shellSnapshotCaptureRunner,
+		Prune:     r.shellSnapshotPruneLookup(),
 	})
 	if builder == nil {
 		return nil

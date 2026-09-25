@@ -46,6 +46,10 @@ type SnapshotBuilderOptions struct {
 	// Runner runs the capture and validation commands. It defaults to
 	// RunSandboxedSnapshotCommand.
 	Runner SnapshotCaptureRunner
+	// Prune reports the rollout age of a session, so snapshots left behind by
+	// sessions that are gone are removed (Rust's state-db lookup). Nil keeps
+	// only the unattributable files pruned.
+	Prune shell.SnapshotPruneLookup
 	// Timeout bounds each capture run; DefaultSnapshotTimeout when zero.
 	Timeout time.Duration
 }
@@ -189,15 +193,16 @@ func (b *SnapshotBuilder) Close() {
 	}
 }
 
-// cleanupStaleSnapshotsLocked removes this session's leaked snapshots once. Rust
-// additionally drops snapshots whose rollout is gone or stale; that pass needs
-// the rollout store, so Go keeps the age-based helper it already had.
+// cleanupStaleSnapshotsLocked prunes leaked snapshots once per builder, mirroring
+// Rust's `cleanup_stale_snapshots`: sessions with no rollout, rollouts past the
+// retention window, and files with no session id are removed; the active session
+// keeps its files.
 func (b *SnapshotBuilder) cleanupStaleSnapshotsLocked() {
 	if b.cleaned {
 		return
 	}
 	b.cleaned = true
-	_, _ = shell.CleanupStaleSnapshots(b.options.CodexHome, b.options.SessionID, time.Now())
+	_, _ = shell.CleanupSnapshots(b.options.CodexHome, b.options.SessionID, time.Now(), b.options.Prune)
 }
 
 func (b *SnapshotBuilder) captureLocked(ctx context.Context, request SnapshotCaptureRequest) (*ShellSnapshotFile, SnapshotFailureReason) {
