@@ -2247,9 +2247,10 @@ func ProjectConfigEnabled(userValues map[string]any, cwd string) bool {
 // (Rust project trust levels, #39082). ok=false when no explicit decision
 // exists for the path.
 func ProjectTrustLevelForTarget(userValues map[string]any, path string) (string, bool) {
-	trustLevels := projectTrustLevels(userValues)
-	level, ok := trustLevels[canonicalProjectPath(path)]
-	return level, ok
+	// Rust #47620: the lookup tries the canonical spelling before the original
+	// one, so an entry written with either spelling is honored.
+	cfg := &Config{Values: userValues}
+	return cfg.ProjectTrustLevelForLookup(ProjectTrustLookupFromNativePath(path))
 }
 
 func projectTrustLevels(values map[string]any) map[string]string {
