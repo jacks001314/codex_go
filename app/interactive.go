@@ -834,9 +834,13 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	if shouldRunInteractiveTUI(stdin, stdout) {
 		return runInteractiveTUI(ctx, root, stdin, stdout)
 	}
+	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+	if err != nil {
+		return err
+	}
 	session := &interactiveSession{
 		Root:   *root,
-		Runner: newCodexExecRunner(auth.DefaultCodexHome()),
+		Runner: runner,
 		Reader: bufio.NewScanner(stdin),
 		Stdout: stdout,
 		Stderr: stderr,
@@ -870,8 +874,14 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		return err
 	}
 	state.SetThreadID(threadID)
-	runner := newCodexExecRunner(auth.DefaultCodexHome())
-	sideRunner := newCodexExecRunner(auth.DefaultCodexHome())
+	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+	if err != nil {
+		return err
+	}
+	sideRunner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+	if err != nil {
+		return err
+	}
 	sideCoordinator := newInteractiveLocalSideCoordinator(store)
 	defer sideCoordinator.CloseAll()
 	pluginService := interactivePluginService()
@@ -3946,7 +3956,11 @@ func runInteractivePrompt(ctx context.Context, root *cli.RootOptions, stdin io.R
 		Shared: root.Shared,
 		Color:  "auto",
 	}
-	_, err := newCodexExecRunner(auth.DefaultCodexHome()).RunContext(ctx, &codexexec.Request{
+	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+	if err != nil {
+		return err
+	}
+	_, err = runner.RunContext(ctx, &codexexec.Request{
 		Root: *root,
 		Exec: execOpts,
 	}, stdin, stdout, stderr)
@@ -4125,7 +4139,11 @@ func (s *interactiveSession) Run(ctx context.Context) error {
 		return errors.New("interactive session is nil")
 	}
 	if s.Runner == nil {
-		s.Runner = newCodexExecRunner(auth.DefaultCodexHome())
+		runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
+		if err != nil {
+			return err
+		}
+		s.Runner = runner
 	}
 	if s.Reader == nil {
 		return errors.New("interactive reader is nil")

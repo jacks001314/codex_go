@@ -117,6 +117,13 @@ type Runner struct {
 	UseResponsesAPI  bool
 	HTTPClient       model.HTTPDoer
 	Now              func() time.Time
+	// UnifiedExecEnvironments carries the executors configured in
+	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback) for a host that
+	// runs turns in-process. Rust builds an EnvironmentManager from CODEX_HOME in
+	// `codex exec`, the TUI and the worktree paths, so the configured executors
+	// are selected there exactly as they are in the app-server. Empty keeps every
+	// tool on the implicit local environment.
+	UnifiedExecEnvironments []tool.UnifiedExecEnvironment
 
 	goalMu       *sync.Mutex
 	goalThreadID string
@@ -1219,6 +1226,19 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	})
 }
 
+// applyUnifiedExecEnvironments installs the host-resolved environments.toml
+// executors on a turn's shell options, mirroring the app-server's
+// EnvironmentManager wiring. The shell executor resolves a launch with no
+// explicit environment request to the first configured environment, so a
+// single provider default replaces the implicit local environment; an empty
+// list leaves the options untouched (tools stay local).
+func (r *Runner) applyUnifiedExecEnvironments(options *turn.ToolRegistryOptions) {
+	if r == nil || options == nil || options.Shell == nil || len(r.UnifiedExecEnvironments) == 0 {
+		return
+	}
+	options.Shell.UnifiedExecEnvironments = append([]tool.UnifiedExecEnvironment(nil), r.UnifiedExecEnvironments...)
+}
+
 func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.Router, error) {
 	if r == nil {
 		return nil, errors.New("exec runner is nil")
@@ -1264,6 +1284,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval
 		options.Shell.DecisionSink = r.sessionTelemetryForRun()
+		r.applyUnifiedExecEnvironments(options)
 		if run != nil {
 			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit
 			options.Shell.Validation.AdditionalPermissionsAllowed = run.ExecPermissionApprovals
