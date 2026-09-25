@@ -783,7 +783,17 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 		listenURL = execserver.DefaultListenURL
 	}
 	httpClient := codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)
-	return execserver.NewServerWithHTTPClient(httpClient).ServeTransport(ctx, listenURL, stdin, stdout)
+	server := execserver.NewServerWithHTTPClient(httpClient)
+	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
+	// combination was already validated against stdio/--remote/forward.
+	if opts.WebSocketAuthOptions.Configured() {
+		policy, err := appserver.NewWebSocketAuthPolicy(webSocketAuthSettingsFromOptions(opts.WebSocketAuthOptions))
+		if err != nil {
+			return err
+		}
+		server.SetWebSocketAuthPolicy(policy)
+	}
+	return server.ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
 func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool, stdin io.Reader) error {
@@ -1287,14 +1297,20 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 }
 
 func webSocketAuthSettingsFromCLI(opts cli.AppServerOptions) *appserver.WebSocketAuthSettings {
+	return webSocketAuthSettingsFromOptions(opts.WebSocketAuthOptions)
+}
+
+// webSocketAuthSettingsFromOptions maps the shared `--ws-*` family onto the
+// listener policy settings (Rust's shared WebsocketAuthArgs, #47447).
+func webSocketAuthSettingsFromOptions(options cli.WebSocketAuthOptions) *appserver.WebSocketAuthSettings {
 	return &appserver.WebSocketAuthSettings{
-		Mode:                appserver.WebSocketAuthMode(strings.TrimSpace(opts.WSAuth)),
-		TokenFile:           opts.WSTokenFile,
-		TokenSHA256:         opts.WSTokenSHA256,
-		SharedSecretFile:    opts.WSSharedSecretFile,
-		Issuer:              opts.WSIssuer,
-		Audience:            opts.WSAudience,
-		MaxClockSkewSeconds: uint64Value(opts.WSMaxClockSkewSeconds),
+		Mode:                appserver.WebSocketAuthMode(strings.TrimSpace(options.WSAuth)),
+		TokenFile:           options.WSTokenFile,
+		TokenSHA256:         options.WSTokenSHA256,
+		SharedSecretFile:    options.WSSharedSecretFile,
+		Issuer:              options.WSIssuer,
+		Audience:            options.WSAudience,
+		MaxClockSkewSeconds: uint64Value(options.WSMaxClockSkewSeconds),
 	}
 }
 

@@ -269,9 +269,133 @@ type ExecServerOptions struct {
 	Name                 string
 	UseAgentIdentityAuth bool
 	ExitOnStdinClose     bool
+	WebSocketAuthOptions
 }
 
 const execServerExitOnStdinCloseEnv = "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE"
+
+// WebSocketAuthOptions mirrors Rust's shared WebsocketAuthArgs (#47447): the
+// `--ws-*` flag family accepted by both `codex app-server` and
+// `codex exec-server`.
+type WebSocketAuthOptions struct {
+	WSAuth                string
+	WSAuthSet             bool
+	WSTokenFile           string
+	WSTokenFileSet        bool
+	WSTokenSHA256         string
+	WSTokenSHA256Set      bool
+	WSSharedSecretFile    string
+	WSSharedSecretFileSet bool
+	WSIssuer              string
+	WSIssuerSet           bool
+	WSAudience            string
+	WSAudienceSet         bool
+	WSMaxClockSkewSeconds *uint64
+}
+
+// applyWebSocketAuthFlag parses one `--ws-*` argument. handled reports whether
+// the flag belongs to the shared family; next is the index the caller continues
+// from.
+func applyWebSocketAuthFlag(args []string, index int, arg string, options *WebSocketAuthOptions) (bool, int, error) {
+	if options == nil {
+		return false, index, nil
+	}
+	switch {
+	case arg == "--ws-auth":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSAuth = value
+		options.WSAuthSet = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-auth="):
+		options.WSAuth = strings.TrimPrefix(arg, "--ws-auth=")
+		options.WSAuthSet = true
+		return true, index, nil
+	case arg == "--ws-token-file":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSTokenFile = value
+		options.WSTokenFileSet = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-token-file="):
+		options.WSTokenFile = strings.TrimPrefix(arg, "--ws-token-file=")
+		options.WSTokenFileSet = true
+		return true, index, nil
+	case arg == "--ws-token-sha256":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSTokenSHA256 = value
+		options.WSTokenSHA256Set = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-token-sha256="):
+		options.WSTokenSHA256 = strings.TrimPrefix(arg, "--ws-token-sha256=")
+		options.WSTokenSHA256Set = true
+		return true, index, nil
+	case arg == "--ws-shared-secret-file":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSSharedSecretFile = value
+		options.WSSharedSecretFileSet = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-shared-secret-file="):
+		options.WSSharedSecretFile = strings.TrimPrefix(arg, "--ws-shared-secret-file=")
+		options.WSSharedSecretFileSet = true
+		return true, index, nil
+	case arg == "--ws-issuer":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSIssuer = value
+		options.WSIssuerSet = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-issuer="):
+		options.WSIssuer = strings.TrimPrefix(arg, "--ws-issuer=")
+		options.WSIssuerSet = true
+		return true, index, nil
+	case arg == "--ws-audience":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSAudience = value
+		options.WSAudienceSet = true
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-audience="):
+		options.WSAudience = strings.TrimPrefix(arg, "--ws-audience=")
+		options.WSAudienceSet = true
+		return true, index, nil
+	case arg == "--ws-max-clock-skew-seconds":
+		value, next, err := requireValue(args, index, arg)
+		if err != nil {
+			return true, index, err
+		}
+		parsed, err := parseUint64Flag(arg, value)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSMaxClockSkewSeconds = &parsed
+		return true, next, nil
+	case strings.HasPrefix(arg, "--ws-max-clock-skew-seconds="):
+		value := strings.TrimPrefix(arg, "--ws-max-clock-skew-seconds=")
+		parsed, err := parseUint64Flag("--ws-max-clock-skew-seconds", value)
+		if err != nil {
+			return true, index, err
+		}
+		options.WSMaxClockSkewSeconds = &parsed
+		return true, index, nil
+	default:
+		return false, index, nil
+	}
+}
 
 type AppServerOptions struct {
 	Subcommand              []string
@@ -284,19 +408,7 @@ type AppServerOptions struct {
 	RemoteControl           bool
 	AnalyticsDefaultEnabled bool
 	CodeModeHostURL         string
-	WSAuth                  string
-	WSAuthSet               bool
-	WSTokenFile             string
-	WSTokenFileSet          bool
-	WSTokenSHA256           string
-	WSTokenSHA256Set        bool
-	WSSharedSecretFile      string
-	WSSharedSecretFileSet   bool
-	WSIssuer                string
-	WSIssuerSet             bool
-	WSAudience              string
-	WSAudienceSet           bool
-	WSMaxClockSkewSeconds   *uint64
+	WebSocketAuthOptions
 }
 
 type AppServerDaemonOptions struct {
@@ -2185,6 +2297,17 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case strings.HasPrefix(arg, "--ws-"):
+			// Rust #47601 shares WebsocketAuthArgs between the app-server and the
+			// exec-server listeners.
+			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &execServer.WebSocketAuthOptions)
+			if err != nil {
+				return err
+			}
+			if !handled {
+				return fmt.Errorf("unknown exec-server option %s", arg)
+			}
+			i = next
 		case arg == "forward":
 			// Rust #39249: forward mode registers an existing WebSocket
 			// exec-server as a remote environment.
@@ -2286,7 +2409,40 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	if execServer.ExitOnStdinClose && execServer.Remote == "" && forward == "" {
 		return errors.New("--exit-on-stdin-close requires --remote")
 	}
+	return execServer.ValidateWebsocketAuthFlags()
+}
+
+// ValidateWebsocketAuthFlags validates the shared `--ws-*` family for the
+// exec-server listener. Rust #47601 rejects listener authentication with stdio,
+// --remote, or forward, because those transports never authenticate upgrades.
+func (o *ExecServerOptions) ValidateWebsocketAuthFlags() error {
+	if o == nil {
+		return nil
+	}
+	if err := o.WebSocketAuthOptions.Validate(); err != nil {
+		return err
+	}
+	if !o.WebSocketAuthOptions.Configured() {
+		return nil
+	}
+	if o.Remote != "" || (o.Forward != "" && o.Forward != "forward") {
+		return errors.New("WebSocket listener auth cannot be used with --remote or forward")
+	}
+	listen := strings.TrimSpace(o.Listen)
+	if !o.ListenSet || listen == "" || listen == "stdio" {
+		return errors.New("WebSocket listener auth requires a WebSocket --listen transport")
+	}
 	return nil
+}
+
+// Configured reports whether any `--ws-*` flag was supplied.
+func (o *WebSocketAuthOptions) Configured() bool {
+	if o == nil {
+		return false
+	}
+	return strings.TrimSpace(o.WSAuth) != "" || o.WSAuthSet || o.WSTokenFileSet ||
+		o.WSTokenSHA256Set || o.WSSharedSecretFileSet || o.WSIssuerSet ||
+		o.WSAudienceSet || o.WSMaxClockSkewSeconds != nil
 }
 
 func parseAppServer(args []string, appServer *AppServerOptions) error {
@@ -2329,82 +2485,15 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 				return err
 			}
 			appServer.CodeModeHostURL = value
-		case arg == "--ws-auth":
-			value, next, err := requireValue(args, i, arg)
+		case strings.HasPrefix(arg, "--ws-"):
+			handled, next, err := applyWebSocketAuthFlag(args, i, arg, &appServer.WebSocketAuthOptions)
 			if err != nil {
 				return err
 			}
-			appServer.WSAuth = value
-			appServer.WSAuthSet = true
+			if !handled {
+				return fmt.Errorf("unknown app-server option %s", arg)
+			}
 			i = next
-		case strings.HasPrefix(arg, "--ws-auth="):
-			appServer.WSAuth = strings.TrimPrefix(arg, "--ws-auth=")
-			appServer.WSAuthSet = true
-		case arg == "--ws-token-file":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			appServer.WSTokenFile = value
-			appServer.WSTokenFileSet = true
-			i = next
-		case strings.HasPrefix(arg, "--ws-token-file="):
-			appServer.WSTokenFile = strings.TrimPrefix(arg, "--ws-token-file=")
-			appServer.WSTokenFileSet = true
-		case arg == "--ws-token-sha256":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			appServer.WSTokenSHA256 = value
-			appServer.WSTokenSHA256Set = true
-			i = next
-		case strings.HasPrefix(arg, "--ws-token-sha256="):
-			appServer.WSTokenSHA256 = strings.TrimPrefix(arg, "--ws-token-sha256=")
-			appServer.WSTokenSHA256Set = true
-		case arg == "--ws-shared-secret-file":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			appServer.WSSharedSecretFile = value
-			appServer.WSSharedSecretFileSet = true
-			i = next
-		case strings.HasPrefix(arg, "--ws-shared-secret-file="):
-			appServer.WSSharedSecretFile = strings.TrimPrefix(arg, "--ws-shared-secret-file=")
-			appServer.WSSharedSecretFileSet = true
-		case arg == "--ws-issuer":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			appServer.WSIssuer = value
-			appServer.WSIssuerSet = true
-			i = next
-		case strings.HasPrefix(arg, "--ws-issuer="):
-			appServer.WSIssuer = strings.TrimPrefix(arg, "--ws-issuer=")
-			appServer.WSIssuerSet = true
-		case arg == "--ws-audience":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			appServer.WSAudience = value
-			appServer.WSAudienceSet = true
-			i = next
-		case strings.HasPrefix(arg, "--ws-audience="):
-			appServer.WSAudience = strings.TrimPrefix(arg, "--ws-audience=")
-			appServer.WSAudienceSet = true
-		case arg == "--ws-max-clock-skew-seconds":
-			value, next, err := requireValue(args, i, arg)
-			if err != nil {
-				return err
-			}
-			parsed, err := parseUint64Flag(arg, value)
-			if err != nil {
-				return err
-			}
-			appServer.WSMaxClockSkewSeconds = &parsed
 			i = next
 		case strings.HasPrefix(arg, "--ws-max-clock-skew-seconds="):
 			value := strings.TrimPrefix(arg, "--ws-max-clock-skew-seconds=")
@@ -2495,6 +2584,15 @@ func (o *AppServerOptions) ValidateWebsocketAuthFlags() error {
 	if o == nil {
 		return nil
 	}
+	return o.WebSocketAuthOptions.Validate()
+}
+
+// Validate mirrors Rust's WebsocketAuthArgs::try_into_settings: the shared
+// `--ws-*` family must describe exactly one supported mode.
+func (o *WebSocketAuthOptions) Validate() error {
+	if o == nil {
+		return nil
+	}
 	mode := strings.TrimSpace(o.WSAuth)
 	usesCapability := o.WSTokenFileSet || o.WSTokenSHA256Set
 	usesSigned := o.WSSharedSecretFileSet || o.WSIssuerSet || o.WSAudienceSet || o.WSMaxClockSkewSeconds != nil
@@ -2517,12 +2615,12 @@ func (o *AppServerOptions) ValidateWebsocketAuthFlags() error {
 			return errors.New("`--ws-token-file` or `--ws-token-sha256` is required when `--ws-auth capability-token` is set")
 		}
 		if o.WSTokenFileSet {
-			if err := validateAppServerWebsocketAuthPath("--ws-token-file", o.WSTokenFile); err != nil {
+			if err := validateWebsocketAuthPath("--ws-token-file", o.WSTokenFile); err != nil {
 				return err
 			}
 		}
 		if o.WSTokenSHA256Set {
-			trimmed, err := validateAppServerWebsocketSHA256("--ws-token-sha256", o.WSTokenSHA256)
+			trimmed, err := validateWebsocketAuthSHA256("--ws-token-sha256", o.WSTokenSHA256)
 			if err != nil {
 				return err
 			}
@@ -2535,7 +2633,7 @@ func (o *AppServerOptions) ValidateWebsocketAuthFlags() error {
 		if !o.WSSharedSecretFileSet {
 			return errors.New("`--ws-shared-secret-file` is required when `--ws-auth signed-bearer-token` is set")
 		}
-		if err := validateAppServerWebsocketAuthPath("--ws-shared-secret-file", o.WSSharedSecretFile); err != nil {
+		if err := validateWebsocketAuthPath("--ws-shared-secret-file", o.WSSharedSecretFile); err != nil {
 			return err
 		}
 		o.WSIssuer = strings.TrimSpace(o.WSIssuer)
@@ -2546,14 +2644,14 @@ func (o *AppServerOptions) ValidateWebsocketAuthFlags() error {
 	return nil
 }
 
-func validateAppServerWebsocketAuthPath(flagName string, path string) error {
+func validateWebsocketAuthPath(flagName string, path string) error {
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("%s must be an absolute path", flagName)
 	}
 	return nil
 }
 
-func validateAppServerWebsocketSHA256(flagName string, value string) (string, error) {
+func validateWebsocketAuthSHA256(flagName string, value string) (string, error) {
 	trimmed := strings.TrimSpace(value)
 	if len(trimmed) != 64 {
 		return "", fmt.Errorf("%s must be a 64-character hex SHA-256 digest", flagName)

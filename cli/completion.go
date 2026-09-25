@@ -153,7 +153,14 @@ func codexCompletionSpec() *completionNode {
 			node("apply", []string{"--attempt"}),
 			node("diff", []string{"--attempt"}),
 		),
-		node("exec-server", []string{"--strict-config", "--listen", "--remote", "--environment-id", "--name", "--use-agent-identity-auth", "--exit-on-stdin-close"}),
+		node("exec-server", []string{
+			"--strict-config", "--listen", "--remote", "--environment-id", "--name",
+			"--use-agent-identity-auth", "--exit-on-stdin-close",
+			// Rust #47601 shares the WebSocket listener auth flags with the
+			// app-server listener.
+			"--ws-auth", "--ws-token-file", "--ws-token-sha256", "--ws-shared-secret-file",
+			"--ws-issuer", "--ws-audience", "--ws-max-clock-skew-seconds",
+		}),
 		node("features", nil,
 			node("list", nil),
 			node("enable", nil),

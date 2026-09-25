@@ -267,6 +267,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"turn",
 		"utils",
 		"voicehost",
+		"websocketauth",
 		"worktree",
 	}
 }

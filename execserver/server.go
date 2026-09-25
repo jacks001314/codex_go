@@ -25,6 +25,7 @@ import (
 	"codex_go/sandbox"
 	"codex_go/shell"
 	"codex_go/utils"
+	"codex_go/websocketauth"
 	"github.com/google/uuid"
 )
 
@@ -185,6 +186,9 @@ type Server struct {
 	handles    map[string]*os.File
 	httpClient *http.Client
 	requests   *serverRequestSender
+	// webSocketAuth gates incoming WebSocket upgrades when configured (Rust
+	// #47601). A nil or unconfigured policy keeps the listener unauthenticated.
+	webSocketAuth *websocketauth.Policy
 
 	registryMu         sync.Mutex
 	sessions           map[string]*serverSessionEntry

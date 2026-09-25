@@ -14,10 +14,35 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/websocketauth"
+
 	"github.com/coder/websocket"
 )
 
 const DefaultListenURL = "ws://127.0.0.1:0"
+
+// SetWebSocketAuthPolicy gates incoming WebSocket upgrades with the shared
+// WebSocket auth policy (Rust #47601: `codex exec-server --ws-auth ...`).
+// A nil or unconfigured policy keeps the listener unauthenticated for
+// compatibility.
+func (s *Server) SetWebSocketAuthPolicy(policy *websocketauth.Policy) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.webSocketAuth = policy
+	s.mu.Unlock()
+}
+
+// webSocketAuthPolicy returns the listener's configured policy.
+func (s *Server) webSocketAuthPolicy() *websocketauth.Policy {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.webSocketAuth
+}
 
 type ListenKind string
 
@@ -101,6 +126,15 @@ func (s *Server) ServeWebSocket(ctx context.Context, address string, stdout io.W
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
+		}
+		// Rust #47601: when listener authentication is configured, validate the
+		// Authorization header before every WebSocket upgrade and reject missing
+		// or invalid credentials with 401.
+		if policy := s.webSocketAuthPolicy(); policy.IsConfigured() {
+			if err := policy.Authorize(r.Header, time.Now()); err != nil {
+				http.Error(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
 		}
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 		if err != nil {
