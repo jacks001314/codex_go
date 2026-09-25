@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/text/cases"
 
 	"codex_go/agent"
@@ -216,8 +215,8 @@ func postRequestsEqual(left, right PostRequest) bool {
 }
 
 func (s *boardState) insertChannel(name string, author agent.AgentPath, now time.Time) error {
-	if name == "" || len(name) > maxChannelNameBytes || strings.TrimSpace(name) != name || containsControlChar(name) {
-		return invalid("channel names must contain 1–128 bytes without edge whitespace or control characters")
+	if err := validateChannelName(name); err != nil {
+		return err
 	}
 	if _, ok := s.channels[name]; ok {
 		return invalid("channel already exists")
@@ -345,7 +344,11 @@ func (b *InMemoryBoard) Post(ctx context.Context, caller string, request PostReq
 		state.mu.Unlock()
 		return existing, nil
 	}
-	id := uuid.NewString()
+	id, err := newBoardPostID()
+	if err != nil {
+		state.mu.Unlock()
+		return nil, err
+	}
 	channelName, root, target, err := state.resolveDestination(request.Destination, author, now, caller, id)
 	if err != nil {
 		state.mu.Unlock()
@@ -846,38 +849,33 @@ func reverse[T any](values []T) {
 // pageItems applies Rust's page(): a base64url 4-byte big-endian offset cursor,
 // a hard 50-item cap and a one-item lookahead for has_more.
 func pageItems[T any](request PageRequest, results []T) (*Page[T], error) {
-	offset := uint32(0)
-	if request.Cursor != nil {
-		decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(*request.Cursor))
-		if err != nil || len(decoded) != 4 {
-			return nil, invalid("invalid cursor")
-		}
-		offset = binary.BigEndian.Uint32(decoded)
-	}
-	limit := request.NormalizedLimit()
-	if limit > MaxPageLimit {
-		limit = MaxPageLimit
+	offset, limit, err := boardWindow(request)
+	if err != nil {
+		return nil, err
 	}
 	if int(offset) > len(results) {
 		offset = uint32(len(results))
 	}
-	window := results[offset:]
-	hasMore := len(window) > limit
-	if hasMore {
-		window = window[:limit]
+	return finishBoardPage(offset, limit, results[offset:])
+}
+
+// decodePageCursor decodes Rust's Window::new cursor: four base64url-encoded
+// big-endian offset bytes, or zero when the query has no cursor.
+func decodePageCursor(cursor *string) (uint32, error) {
+	if cursor == nil {
+		return 0, nil
 	}
-	var nextCursor *string
-	if hasMore {
-		next := uint64(offset) + uint64(len(window))
-		if next > 0xFFFFFFFF {
-			return nil, invalid("cursor offset exceeds the board limit")
-		}
-		encoded := make([]byte, 4)
-		binary.BigEndian.PutUint32(encoded, uint32(next))
-		cursor := base64.RawURLEncoding.EncodeToString(encoded)
-		nextCursor = &cursor
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(*cursor))
+	if err != nil || len(decoded) != 4 {
+		return 0, invalid("invalid cursor")
 	}
-	return &Page[T]{Results: window, NextCursor: nextCursor}, nil
+	return binary.BigEndian.Uint32(decoded), nil
+}
+
+func base64PageCursor(offset uint32) string {
+	encoded := make([]byte, 4)
+	binary.BigEndian.PutUint32(encoded, offset)
+	return base64.RawURLEncoding.EncodeToString(encoded)
 }
 
 var _ Board = (*InMemoryBoard)(nil)
