@@ -14,7 +14,6 @@ import (
 	"codex_go/codexapi"
 	"codex_go/config"
 	"codex_go/model"
-	"codex_go/network"
 	"codex_go/prompt"
 	"codex_go/realtime"
 	"codex_go/session"
@@ -330,10 +329,10 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	mergeHTTPHeaders(callHeaders, commonHeaders)
 	mergeHTTPHeaders(callHeaders, callAuth.Headers)
 
-	client, ok := r.httpClientForConfig(cfg).(*http.Client)
-	if !ok || client == nil {
-		client = network.NewHTTPClient(cfg.RespectSystemProxyEnabled(), 0)
-	}
+	// The realtime transport dials WebSockets with the client itself, so the
+	// application network policy is enforced by the client's transport (Rust
+	// guards WebSocket setup with the same permit).
+	client := r.policyHTTPClientForConfig(cfg)
 	backend := &realtime.TransportBackendConfig{
 		WebsocketBaseURL:  websocketProvider.BaseURL,
 		WebRTCCallBaseURL: callProvider.BaseURL,

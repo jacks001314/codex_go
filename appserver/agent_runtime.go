@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"time"
 
@@ -646,6 +647,31 @@ func (r *RuntimeRouter) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
 		return base
 	}
 	return &network.PolicyHTTPDoer{Policy: policy, Next: base}
+}
+
+// policyHTTPClientForConfig returns the app-server's concrete HTTP client with
+// the application network policy enforced by the client's own transport. Callers
+// that need an `*http.Client` (the realtime WebSocket dial, for example) use
+// this instead of asserting a type on httpClientForConfig, whose policy-bound
+// result is a `model.HTTPDoer`.
+func (r *RuntimeRouter) policyHTTPClientForConfig(cfg *config.Config) *http.Client {
+	var base *http.Client
+	if r != nil && r.services.HTTPClient != nil {
+		if client, ok := r.services.HTTPClient.(*http.Client); ok {
+			base = client
+		}
+	}
+	if base == nil {
+		base = network.NewHTTPClient(cfg != nil && cfg.RespectSystemProxyEnabled(), 0)
+	}
+	if r == nil {
+		return base
+	}
+	policy, composed := r.refreshApplicationNetworkPolicy()
+	if !policy.IsScoped() || !composed.IsRestricted() {
+		return base
+	}
+	return network.PolicyHTTPClient(policy, base)
 }
 
 func configValues(cfg *config.Config) map[string]any {

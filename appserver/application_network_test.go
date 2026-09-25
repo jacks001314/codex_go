@@ -130,6 +130,15 @@ func TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust(t *testing.T) {
 	if stub.attempts != 1 {
 		t.Fatalf("attempts = %d, want the denied request to be rejected before connecting", stub.attempts)
 	}
+	// The concrete client the WebSocket-dialing transports hold enforces the
+	// same policy through its transport.
+	concrete := router.policyHTTPClientForConfig(nil)
+	if _, ok := concrete.Transport.(*network.PolicyRoundTripper); !ok {
+		t.Fatalf("concrete client transport = %#v, want a policy round tripper", concrete.Transport)
+	}
+	if _, err := concrete.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/v1")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("concrete client denied request error = %v", err)
+	}
 
 	// Without the managed requirement the same destination is unrestricted.
 	if err := os.Remove(filepath.Join(home, "requirements.toml")); err != nil {
@@ -148,5 +157,10 @@ func TestRuntimeRouterEnforcesApplicationNetworkPolicyLikeRust(t *testing.T) {
 	_ = response.Body.Close()
 	if stub.attempts != 2 {
 		t.Fatalf("attempts = %d, want the unrestricted request to pass through", stub.attempts)
+	}
+	if unrestrictedClient := router.policyHTTPClientForConfig(nil); unrestrictedClient != nil {
+		if _, ok := unrestrictedClient.Transport.(*network.PolicyRoundTripper); ok {
+			t.Fatal("an unrestricted policy still wrapped the concrete client")
+		}
 	}
 }
