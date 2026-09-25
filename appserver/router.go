@@ -3015,6 +3015,19 @@ func (r *Router) repairStateThreadListing(fullReconcile bool) {
 	}
 }
 
+// stateThreadListRequiresPreview mirrors Rust's `push_thread_filters_with_preview`
+// (#48199): the plain active collection only lists threads with a discoverable
+// preview, while the archived collection, a relation listing
+// (`include_empty_preview = relation_filter.is_some()`) and a specific-section
+// listing keep threads whose preview is empty. An unsectioned listing is not
+// exempt.
+func stateThreadListRequiresPreview(options session.ListOptions) bool {
+	if options.Archived || options.Relation != nil {
+		return false
+	}
+	return !(options.SectionSet && options.SectionID != nil)
+}
+
 func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Page, error) {
 	rows, err := r.state.ListThreadRows(context.Background())
 	if err != nil {
@@ -3025,6 +3038,12 @@ func (r *Router) listRecordsFromState(options session.ListOptions) (*session.Pag
 		row := &rows[i]
 		path, exists := rollout.ExistingRolloutPath(row.RolloutPath)
 		if !exists {
+			continue
+		}
+		// Rust's SQLite listing hides threads without a discoverable preview from
+		// the plain active collection; the archived collection, a relation
+		// listing and a specific-section listing all keep them (#48199).
+		if stateThreadListRequiresPreview(options) && nullString(row.Preview) == "" {
 			continue
 		}
 		record := session.Record{

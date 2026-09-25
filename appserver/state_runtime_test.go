@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -1421,5 +1422,208 @@ func TestRuntimeRouterThreadGoalFeatureGateSeededFromOptions(t *testing.T) {
 	get := router.Handle(requestWithParams(t, IntID(2), MethodThreadGoalGet, GoalGetParams{ThreadID: "thread-goal-options"}))
 	if get.Error == nil || get.Error.Message != "goals feature is disabled" {
 		t.Fatalf("thread/goal/get with goals disabled via options = %+v", get)
+	}
+}
+
+// Mirrors Rust #48199 (`thread_list_keeps_archived_threads_without_previews` and
+// `list_archived_threads_without_db_keeps_threads_without_previews`): an
+// archived thread with an empty preview stays visible when listing the archive
+// collection, from the state rows and from the rollout scan alike, while paging
+// by cursor and reporting the empty preview.
+func TestRouterThreadListKeepsArchivedThreadsWithoutPreviews(t *testing.T) {
+	ctx := context.Background()
+	for _, useStateDBOnly := range []bool{true, false} {
+		t.Run(fmt.Sprintf("state_db_only=%v", useStateDBOnly), func(t *testing.T) {
+			home := t.TempDir()
+			stateConfig, err := state.NewSqliteConfig(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtime, err := state.InitStateRuntime(ctx, stateConfig, "openai")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			router := NewRouter(session.NewStore(home))
+			router.SetStateRuntime(runtime)
+
+			now := fixedTime()
+			ids := []string{"thread-empty-preview-a", "thread-empty-preview-b"}
+			for index, id := range ids {
+				recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+					CodexHome:     home,
+					ThreadID:      id,
+					SessionID:     id,
+					Source:        "cli",
+					CWD:           home,
+					ModelProvider: "openai",
+					Now:           now.Add(time.Duration(index) * time.Minute),
+				})
+				if err != nil {
+					t.Fatalf("NewRecorder(%s) error = %v", id, err)
+				}
+				if err := recorder.Close(); err != nil {
+					t.Fatalf("Close(%s) error = %v", id, err)
+				}
+				archive := router.Handle(requestWithParams(t, IntID(1), MethodThreadArchive, ThreadArchiveParams{ThreadID: id}))
+				if archive.Error != nil {
+					t.Fatalf("archive %s error = %+v", id, archive.Error)
+				}
+				archivedPath, err := rollout.FindThreadPath(home, id, true)
+				if err != nil {
+					t.Fatalf("FindThreadPath(%s) error = %v", id, err)
+				}
+				if err := runtime.ReconcileRollout(ctx, archivedPath, true); err != nil {
+					t.Fatalf("ReconcileRollout(%s) error = %v", id, err)
+				}
+			}
+
+			limit := 1
+			var cursor *string
+			found := []string{}
+			for page := 0; page <= len(ids); page++ {
+				response := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, ThreadListParams{
+					Archived:       boolPtr(true),
+					Limit:          &limit,
+					Cursor:         cursor,
+					UseStateDBOnly: useStateDBOnly,
+				}))
+				if response.Error != nil {
+					t.Fatalf("thread/list error = %+v", response.Error)
+				}
+				list := response.Result.(*ThreadListResponse)
+				for _, thread := range list.Data {
+					if thread.Preview != "" {
+						t.Fatalf("archived thread %s preview = %q, want empty", thread.ID, thread.Preview)
+					}
+					found = append(found, thread.ID)
+				}
+				cursor = list.NextCursor
+				if cursor == nil {
+					break
+				}
+			}
+			want := []string{ids[1], ids[0]}
+			if !reflect.DeepEqual(found, want) {
+				t.Fatalf("archived listing = %v, want %v", found, want)
+			}
+
+			// The active collection stays empty: the threads were archived.
+			active := router.Handle(requestWithParams(t, IntID(3), MethodThreadList, ThreadListParams{
+				Archived:       boolPtr(false),
+				UseStateDBOnly: useStateDBOnly,
+			}))
+			if active.Error != nil {
+				t.Fatalf("thread/list active error = %+v", active.Error)
+			}
+			if data := active.Result.(*ThreadListResponse).Data; len(data) != 0 {
+				t.Fatalf("active listing = %+v, want empty", data)
+			}
+		})
+	}
+}
+
+// Mirrors Rust's `push_thread_filters_with_preview` (#48199): the plain active
+// collection lists only threads with a discoverable preview, while the archived
+// collection, a relation listing (`include_empty_preview =
+// relation_filter.is_some()`) and a specific-section listing keep threads whose
+// preview is empty. An unsectioned listing is not exempt.
+func TestRouterThreadListRequiresPreviewLikeRust(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	stateConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := state.InitStateRuntime(ctx, stateConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	router := NewRouter(session.NewStore(home))
+	router.SetStateRuntime(runtime)
+
+	const (
+		named   = "0198f003-0000-7000-8000-000000000001"
+		orphan  = "0198f003-0000-7000-8000-000000000002"
+		silent  = "0198f003-0000-7000-8000-000000000003"
+		parent  = "0198f003-0000-7000-8000-000000000004"
+		section = "0198f003-0000-7000-8000-000000000010"
+	)
+	now := fixedTime()
+	writeRollout := func(threadID string, at time.Time) {
+		recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+			CodexHome: home, ThreadID: threadID, SessionID: threadID, Source: "cli",
+			CWD: home, ModelProvider: "openai", HistoryMode: "paginated", Now: at,
+		})
+		if err != nil {
+			t.Fatalf("NewRecorder(%s) error = %v", threadID, err)
+		}
+		if err := recorder.Close(); err != nil {
+			t.Fatalf("Close(%s) error = %v", threadID, err)
+		}
+		if err := runtime.ReconcileRollout(ctx, recorder.Path(), false); err != nil {
+			t.Fatalf("ReconcileRollout(%s) error = %v", threadID, err)
+		}
+	}
+	writeRollout(named, now)
+	writeRollout(orphan, now.Add(time.Minute))
+	writeRollout(silent, now.Add(2*time.Minute))
+	writeRollout(parent, now.Add(3*time.Minute))
+	setPreview := func(threadID, preview string) {
+		if _, err := runtime.StateDB().ExecContext(ctx, `UPDATE threads SET preview = ? WHERE id = ?`, preview, threadID); err != nil {
+			t.Fatalf("set preview for %s error = %v", threadID, err)
+		}
+	}
+	setPreview(named, "alpha request")
+	setPreview(orphan, "")
+	setPreview(silent, "")
+	setPreview(parent, "parent request")
+	if _, err := runtime.StateDB().ExecContext(ctx, `INSERT INTO thread_sections (id, name) VALUES (?, 'Work')`, section); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.StateDB().ExecContext(ctx, `UPDATE threads SET thread_section_id = ? WHERE id = ?`, section, silent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.StateDB().ExecContext(ctx, `INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status) VALUES (?, ?, 'running')`, parent, silent); err != nil {
+		t.Fatal(err)
+	}
+	limit := 20
+	list := func(id int64, params ThreadListParams) []string {
+		t.Helper()
+		params.Limit = &limit
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadList, params))
+		if response.Error != nil {
+			t.Fatalf("thread/list error = %+v", response.Error)
+		}
+		return threadListIDs(response.Result.(*ThreadListResponse).Data)
+	}
+
+	// The plain active collection hides the two empty-preview threads.
+	if got := list(1, ThreadListParams{}); !reflect.DeepEqual(got, []string{parent, named}) {
+		t.Fatalf("active listing = %v, want %v", got, []string{parent, named})
+	}
+	// An unsectioned listing is not exempt, so it hides them as well.
+	if got := list(2, ThreadListParams{SectionID: OptionalString{Set: true}}); !reflect.DeepEqual(got, []string{parent, named}) {
+		t.Fatalf("unsectioned listing = %v, want %v", got, []string{parent, named})
+	}
+	// A specific-section listing keeps the empty-preview thread.
+	if got := list(3, ThreadListParams{SectionID: OptionalString{Set: true, Value: stringPtr(section)}}); !reflect.DeepEqual(got, []string{silent}) {
+		t.Fatalf("section listing = %v, want [%s]", got, silent)
+	}
+	// A relation listing keeps the empty-preview thread.
+	if got := list(4, ThreadListParams{ParentThreadID: stringPtr(parent)}); !reflect.DeepEqual(got, []string{silent}) {
+		t.Fatalf("relation listing = %v, want [%s]", got, silent)
+	}
+	// The archived collection keeps the empty-preview thread.
+	archive := router.Handle(requestWithParams(t, IntID(5), MethodThreadArchive, ThreadArchiveParams{ThreadID: orphan}))
+	if archive.Error != nil {
+		t.Fatalf("archive error = %+v", archive.Error)
+	}
+	if got := list(6, ThreadListParams{Archived: boolPtr(true)}); !reflect.DeepEqual(got, []string{orphan}) {
+		t.Fatalf("archived listing = %v, want [%s]", got, orphan)
+	}
+	if got := list(7, ThreadListParams{}); !reflect.DeepEqual(got, []string{parent, named}) {
+		t.Fatalf("active listing after archive = %v, want %v", got, []string{parent, named})
 	}
 }
