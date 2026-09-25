@@ -1088,8 +1088,18 @@ func websocketUsageLimitError(event map[string]any) (*codexapi.APIError, bool) {
 	if !ok || status == 0 || status > 65535 {
 		return nil, false
 	}
-	message := firstAgentItemValue(responseToolString(value["message"]), "The usage limit has been reached")
-	return usageLimitReachedAPIError(int(status), message, value["limit_window_minutes"]), true
+	// Rust maps the whole event text through `map_api_error`, so the evidence -
+	// including the reset instant and plan type - comes from the event's `error`
+	// object exactly as it would from an HTTP body.
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return nil, false
+	}
+	errorBody, ok := decodeUsageLimitErrorBody(payload)
+	if !ok {
+		return nil, false
+	}
+	return usageLimitReachedAPIError(int(status), usageLimitEvidenceFromResponse(errorBody, websocketEventHTTPHeaders(event))), true
 }
 
 func websocketURLFromHTTP(value *url.URL) (string, error) {
@@ -2856,15 +2866,30 @@ func (r *ResponsesAgentRunner) authHeaders() http.Header {
 const usageLimitMaxWindowMinutes = 65535
 
 // usageLimitReachedAPIError mirrors Rust's `CodexErr::UsageLimitReached` for a
-// `usage_limit_reached` response, preserving the optional server-selected
-// window (Rust #48174).
-func usageLimitReachedAPIError(status int, message string, window any) *codexapi.APIError {
+// `usage_limit_reached` response: the failure keeps the evidence the response
+// supplied and reports Rust's recovery copy instead of the body's message
+// (Rust #48174).
+func usageLimitReachedAPIError(status int, evidence usageLimitEvidence) *codexapi.APIError {
 	return &codexapi.APIError{
-		Kind:                    codexapi.ErrorRateLimit,
-		Status:                  status,
-		Message:                 message,
-		UsageLimitWindowMinutes: usageLimitWindowMinutesFromValue(window),
+		Kind:                           codexapi.ErrorRateLimit,
+		Status:                         status,
+		Message:                        usageLimitReachedMessage(evidence),
+		UsageLimitWindowMinutes:        evidence.LimitWindowMinutes,
+		UsageLimitPlanType:             stringPointerIfNotEmpty(evidence.PlanType),
+		UsageLimitResetsAt:             evidence.ResetsAt,
+		UsageLimitLimitName:            stringPointerIfNotEmpty(evidence.LimitName),
+		UsageLimitPromoMessage:         stringPointerIfNotEmpty(evidence.PromoMessage),
+		UsageLimitRateLimitReachedType: stringPointerIfNotEmpty(evidence.RateLimitReachedType),
 	}
+}
+
+// stringPointerIfNotEmpty mirrors Rust's `Option` for the usage-limit evidence: an
+// absent value stays unset rather than becoming an empty string.
+func stringPointerIfNotEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // usageLimitWindowMinutesFromValue accepts unsigned integers that fit in u16,
@@ -2935,10 +2960,12 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	// `usage_limit_reached` is a usage-limit failure that preserves the
 	// server-selected window responsible for the limit.
 	if statusCode == http.StatusTooManyRequests && payload.Error != nil && strings.TrimSpace(payload.Error.Type) == "usage_limit_reached" {
-		if strings.TrimSpace(message) == "" {
-			message = http.StatusText(statusCode)
+		// Rust only classifies inside the strict body decode, so a body whose
+		// declared fields are malformed falls through to the generic retry
+		// classification below.
+		if errorBody, ok := decodeUsageLimitErrorBody(body); ok {
+			return usageLimitReachedAPIError(statusCode, usageLimitEvidenceFromResponse(errorBody, headers))
 		}
-		return usageLimitReachedAPIError(statusCode, message, payload.Error.LimitWindowMinutes)
 	}
 	if statusCode == http.StatusTooManyRequests && responsesIsQuotaError(payload.Error) {
 		if strings.TrimSpace(message) == "" {

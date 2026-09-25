@@ -36,6 +36,14 @@ type APIError struct {
 	// it on UsageLimitReachedError and reports it in turn/compaction analytics;
 	// other error kinds leave it unset.
 	UsageLimitWindowMinutes *uint16 `json:"usageLimitWindowMinutes,omitempty"`
+	// The remaining usage-limit evidence mirrors Rust's UsageLimitReachedError
+	// fields (#48174). They select the recovery copy Rust renders for the
+	// failure and are unset for every other error kind.
+	UsageLimitPlanType             *string    `json:"usageLimitPlanType,omitempty"`
+	UsageLimitResetsAt             *time.Time `json:"usageLimitResetsAt,omitempty"`
+	UsageLimitLimitName            *string    `json:"usageLimitLimitName,omitempty"`
+	UsageLimitPromoMessage         *string    `json:"usageLimitPromoMessage,omitempty"`
+	UsageLimitRateLimitReachedType *string    `json:"usageLimitRateLimitReachedType,omitempty"`
 	// Misalignment carries the optional public explanation and continuation
 	// instruction for a misalignment policy block (Rust #40952). It is exposed
 	// to live clients but never serialized into rollout storage.
@@ -50,10 +58,15 @@ type APIError struct {
 }
 
 type APIErrorDetails struct {
-	Kind                    APIErrorKind
-	Status                  int
-	Message                 string
-	UsageLimitWindowMinutes *uint16
+	Kind                           APIErrorKind
+	Status                         int
+	Message                        string
+	UsageLimitWindowMinutes        *uint16
+	UsageLimitPlanType             *string
+	UsageLimitResetsAt             *time.Time
+	UsageLimitLimitName            *string
+	UsageLimitPromoMessage         *string
+	UsageLimitRateLimitReachedType *string
 }
 
 // MisalignmentDetails mirrors the customer-facing misalignment block details
@@ -88,7 +101,10 @@ func (e *APIError) Error() string {
 	case ErrorRetryable:
 		return "retryable error: " + e.Message
 	case ErrorRateLimit:
-		return "rate limit: " + e.Message
+		// Rust's CodexErr::UsageLimitReached displays only the usage-limit copy
+		// (`#[error("{0}")]` over UsageLimitReachedError's Display), and the
+		// app-server reports that string as the turn error message.
+		return e.Message
 	case ErrorInvalidRequest:
 		return "invalid request: " + e.Message
 	case ErrorCyberPolicy:
@@ -111,11 +127,16 @@ func (e *APIError) Error() string {
 
 func NewAPIErrorWithDetails(details APIErrorDetails) *APIError {
 	return &APIError{
-		Kind:                    details.Kind,
-		Status:                  details.Status,
-		Message:                 details.Message,
-		UsageLimitWindowMinutes: details.UsageLimitWindowMinutes,
-		details:                 &details,
+		Kind:                           details.Kind,
+		Status:                         details.Status,
+		Message:                        details.Message,
+		UsageLimitWindowMinutes:        details.UsageLimitWindowMinutes,
+		UsageLimitPlanType:             details.UsageLimitPlanType,
+		UsageLimitResetsAt:             details.UsageLimitResetsAt,
+		UsageLimitLimitName:            details.UsageLimitLimitName,
+		UsageLimitPromoMessage:         details.UsageLimitPromoMessage,
+		UsageLimitRateLimitReachedType: details.UsageLimitRateLimitReachedType,
+		details:                        &details,
 	}
 }
 
@@ -127,10 +148,15 @@ func (e *APIError) Details() APIErrorDetails {
 		return *e.details
 	}
 	return APIErrorDetails{
-		Kind:                    e.Kind,
-		Status:                  e.Status,
-		Message:                 e.Message,
-		UsageLimitWindowMinutes: e.UsageLimitWindowMinutes,
+		Kind:                           e.Kind,
+		Status:                         e.Status,
+		Message:                        e.Message,
+		UsageLimitWindowMinutes:        e.UsageLimitWindowMinutes,
+		UsageLimitPlanType:             e.UsageLimitPlanType,
+		UsageLimitResetsAt:             e.UsageLimitResetsAt,
+		UsageLimitLimitName:            e.UsageLimitLimitName,
+		UsageLimitPromoMessage:         e.UsageLimitPromoMessage,
+		UsageLimitRateLimitReachedType: e.UsageLimitRateLimitReachedType,
 	}
 }
 
