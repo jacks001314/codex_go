@@ -2,6 +2,7 @@ package turn
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -225,7 +226,9 @@ func TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes(t *testing.
 
 	for index := 0; index < 6; index++ {
 		recorder.RecordToolCall(&tool.Invocation{
-			CallID:   "nested-large",
+			// Distinct invocation IDs, so the per-output argument budget is what
+			// bounds the inventory (a repeated ID replaces its attempt, Rust #48222).
+			CallID:   "nested-large-" + strconv.Itoa(index),
 			ToolName: tool.PlainName("large"),
 			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"value":"` + strings.Repeat("x", 7900) + `"}`},
 			Source:   "code_mode",
@@ -298,8 +301,10 @@ func TestExecutedToolCallRecorderAttachesCellCompletenessLikeRust(t *testing.T) 
 	first, token := recorder.AttachPendingToPrompt([]any{execInput, execOutput})
 	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(first)[1])
 	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
-	if metadata["cell_id"] != "cell-1" {
-		t.Fatalf("cell_id = %#v, want cell-1", metadata["cell_id"])
+	// The metadata cell id names the originating exec call, not the runtime
+	// handle (Rust seen_ids.rs and code_mode_terminated_empty_cell_has_complete_tool_inventory).
+	if metadata["cell_id"] != "exec-call" {
+		t.Fatalf("cell_id = %#v, want exec-call", metadata["cell_id"])
 	}
 	if metadata["tool_calls_complete"] != true {
 		t.Fatalf("tool_calls_complete = %#v, want true", metadata["tool_calls_complete"])
@@ -320,9 +325,8 @@ func codeModeWaitInputItem(callID string, cellID string) *model.AgentItem {
 func executedToolCallCompleteness(t *testing.T, recorder *ExecutedToolCallRecorder, items ...any) any {
 	t.Helper()
 	attached, token := recorder.AttachPendingToPrompt(items)
-	if token == nil {
-		t.Fatal("attachment token is nil")
-	}
+	// A retained binding re-emits an output's inventory without consuming the
+	// pending state, so it produces no commit token (Rust #48222).
 	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[len(items)-1])
 	recorder.CommitAttachment(token)
 	metadata, ok := object["internal_chat_message_metadata_passthrough"].(map[string]any)
@@ -347,8 +351,8 @@ func TestExecutedToolCallRecorderAttachesEmptyCompleteInventoryLikeRust(t *testi
 	}
 	object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
 	metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
-	if metadata["cell_id"] != "cell-empty" {
-		t.Fatalf("cell_id = %#v, want cell-empty", metadata["cell_id"])
+	if metadata["cell_id"] != "exec-call" {
+		t.Fatalf("cell_id = %#v, want exec-call", metadata["cell_id"])
 	}
 	if metadata["tool_calls_complete"] != true {
 		t.Fatalf("tool_calls_complete = %#v, want true", metadata["tool_calls_complete"])

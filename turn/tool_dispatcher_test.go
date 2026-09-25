@@ -983,7 +983,9 @@ func TestToolDispatcherClosesFinishedCodeModeCellsLikeRust(t *testing.T) {
 			}
 			object := marshalExecutedToolCallItem(t, model.BoundExecutedToolCallsForPrompt(attached)[1])
 			metadata := object["internal_chat_message_metadata_passthrough"].(map[string]any)
-			if metadata["cell_id"] != "cell-empty" || metadata["tool_calls_complete"] != tc.wantComplete {
+			// The metadata cell id names the originating exec call, not the
+			// runtime handle (Rust #46081).
+			if metadata["cell_id"] != "exec-call" || metadata["tool_calls_complete"] != tc.wantComplete {
 				t.Fatalf("metadata = %#v", metadata)
 			}
 			if calls := metadata["executed_tool_calls"].([]any); len(calls) != 0 {

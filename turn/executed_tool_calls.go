@@ -39,6 +39,14 @@ type ExecutedToolCallRecorder struct {
 	// seenIDs tracks observed call and runtime cell IDs so reused or historical
 	// IDs cannot be presented as fresh evidence (Rust #44472).
 	seenIDs *seenIDs
+	// seenNestedIDs tracks nested Code Mode invocation IDs separately from the
+	// shared ID filter, so the conservative duplicate filter cannot change
+	// existing completeness decisions (Rust #48222).
+	seenNestedIDs *seenIDs
+	// retained binds the calls attached to each output call ID so later requests
+	// re-emit them and a late result can still update the original output
+	// (Rust RetainedToolCalls, #46044 and #48222).
+	retained map[string]*retainedToolCallBinding
 	// historySeeded records that the first prompt's supplied history was
 	// indexed. Rust indexes the session's initial history at construction; Go
 	// records are created before the thread's first sampling request, so the
@@ -101,12 +109,72 @@ type recordedToolCallGroup struct {
 	// finished mirrors Rust's CellCompletion::Complete (#46081): the cell's
 	// dispatch gate closed, so its inventory is final even when it is empty.
 	finished bool
+	// originCallID is the exec/wait call ID that first registered the cell
+	// (Rust's RecordedCell::originating_call_id). It is the value written as the
+	// item's metadata cell id, which names the originating call rather than the
+	// runtime handle (Rust seen_ids.rs).
+	originCallID string
+	// runtimeCellID is the Code Mode runtime handle (Rust's CellId).
+	runtimeCellID string
+	// truncatedMetadataBindingValid records that this cell's observed identity
+	// can bind a truncated call to an output for late result backfill
+	// (Rust #48222).
+	truncatedMetadataBindingValid bool
+	// observedTruncatedCall records that the cell recorded at least one
+	// truncated call, so a closed cell may still need its binding retained.
+	observedTruncatedCall bool
+	// incomplete mirrors Rust's CellCompletion::Incomplete: the inventory can no
+	// longer be reported as complete (a truncated argument or an overflow), but
+	// the cell's identity is still trusted for late truncated backfill.
+	incomplete bool
+	// dispatchClosed records that the cell's dispatch gate closed; a later
+	// nested call for it cannot be trusted (Rust #48222).
+	dispatchClosed bool
 }
 
 type recordedToolCall struct {
 	call      model.ExecutedToolCall
 	callID    string
 	fullBytes int
+}
+
+// retainedToolCallBinding mirrors Rust's RetainedToolCalls: the calls attached to
+// one output (keyed by the output's call ID) plus the indices that let a late
+// accepted result update them and the next request re-emit them.
+type retainedToolCallBinding struct {
+	groupID string
+	// originCallID is the originating exec/wait call ID (Rust's
+	// RetainedToolCalls::cell_id), written as the item's metadata cell id.
+	originCallID string
+	// runtimeCellID is the Code Mode runtime handle (Rust's runtime_cell_id).
+	runtimeCellID string
+	calls         []recordedToolCall
+	complete      bool
+	// callIndexByID indexes calls whose arguments were recorded in full; a late
+	// result may still update one of them.
+	callIndexByID map[string]int
+	// truncatedCallIndexByID indexes truncated calls that have no result yet, so
+	// a late result can be bound to them (Rust #48222).
+	truncatedCallIndexByID map[string]int
+	// lateTruncatedIndices records which calls were updated by a late result, so
+	// ambiguous attribution can clear exactly that evidence again.
+	lateTruncatedIndices map[int]struct{}
+}
+
+// clearLateTruncatedMetadata removes the late-backfilled result evidence from a
+// binding whose attribution became ambiguous. Once cleared, the binding stops
+// accepting further late results (Rust RetainedToolCalls::clear_late_truncated_metadata).
+func (b *retainedToolCallBinding) clearLateTruncatedMetadata() {
+	if b == nil {
+		return
+	}
+	for index := range b.lateTruncatedIndices {
+		if index >= 0 && index < len(b.calls) {
+			b.calls[index].call.SetToolResultMetadata(model.ToolResultMetadata{})
+		}
+	}
+	b.lateTruncatedIndices = map[int]struct{}{}
+	b.truncatedCallIndexByID = map[string]int{}
 }
 
 type ExecutedToolCallAttachment struct {
@@ -176,13 +244,24 @@ func executedToolCallMetadataBytesForItem(item any) int {
 }
 
 type executedToolCallGroupAttachment struct {
-	groupID string
-	count   int
+	groupID       string
+	outputCallID  string
+	originCallID  string
+	runtimeCellID string
+	count         int
+	// calls is the attached inventory, kept so the commit can bind it to the
+	// output for later re-emission and late-result backfill (Rust #48222).
+	calls []recordedToolCall
+	// complete is the completeness proved at attachment time; it is only
+	// meaningful when the output carries a cell marker.
+	complete bool
+	hasCell  bool
 }
 
 func NewExecutedToolCallRecorder() *ExecutedToolCallRecorder {
 	return &ExecutedToolCallRecorder{
 		seenIDs:                newSeenIDs(),
+		seenNestedIDs:          newSeenIDs(),
 		canProveWaitCompletion: true,
 	}
 }
@@ -351,23 +430,52 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
-	freshCallID := r.seenIDs.observeCallID(callID)
+	trimmedCallID := strings.TrimSpace(callID)
+	// Nested invocation IDs use their own filter so tracking them cannot change
+	// the completeness of existing observations (Rust #48222).
+	freshCallID := r.seenNestedIDs.observeCallID(trimmedCallID)
+	if !freshCallID {
+		// A repeated nested ID makes the late-result binding ambiguous, so drop
+		// the backfilled evidence before losing the binding that identified it.
+		for _, binding := range r.retained {
+			if _, ok := binding.truncatedCallIndexByID[trimmedCallID]; ok {
+				binding.clearLateTruncatedMetadata()
+			}
+		}
+	}
+	// A closed dispatch gate cannot accept a new nested call, and neither can a
+	// cell whose identity was already revoked (Rust #48222).
+	if group := r.groups[groupID]; group != nil && group.dispatchClosed {
+		r.invalidateGroup(groupID)
+	}
 	pendingCount := r.pendingNestedCalls()
 	if pendingCount > maxPendingExecutedToolCalls || (len(r.groups) >= maxPendingExecutedToolCalls && r.groups[groupID] == nil) {
-		r.invalidateGroup(groupID)
+		if group := r.groups[groupID]; group != nil {
+			// Rust revokes completeness (CellCompletion::Incomplete) but keeps
+			// the cell's identity trusted.
+			group.incomplete = true
+		}
 		return
 	}
+	atPendingCallLimit := pendingCount == maxPendingExecutedToolCalls
 	group := r.groups[groupID]
 	if group == nil {
 		group = &recordedToolCallGroup{}
 		r.groups[groupID] = group
 	}
 	duplicate := false
+	duplicateIndex := -1
 	for index := range group.pending {
-		if group.pending[index].callID == strings.TrimSpace(callID) {
+		if group.pending[index].callID == trimmedCallID {
 			duplicate = true
+			duplicateIndex = index
 			break
 		}
+	}
+	if !freshCallID || duplicate {
+		// A duplicate or repeated ID cannot be proven to belong to this cell, so
+		// its truncated calls cannot be bound to an output for late backfill.
+		group.truncatedMetadataBindingValid = false
 	}
 	maxBytes := model.MaxExecutedToolCallArgumentBytes
 	remaining := maxExecutedToolCallFullArgumentBytesPerItem - group.fullBytes
@@ -377,21 +485,28 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 	if maxBytes < 0 {
 		maxBytes = 0
 	}
-	recorded := recordedToolCall{call: call, callID: strings.TrimSpace(callID)}
-	if pendingCount == maxPendingExecutedToolCalls {
+	recorded := recordedToolCall{call: call, callID: trimmedCallID}
+	if atPendingCallLimit {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, 0)
-		r.invalidateGroup(groupID)
+		group.incomplete = true
 	} else if originalBytes <= maxBytes {
 		recorded.fullBytes = originalBytes
 		group.fullBytes += originalBytes
 	} else {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, maxBytes)
-		r.invalidateGroup(groupID)
+		group.incomplete = true
 	}
 	// A duplicate call ID cannot be proven to belong to this cell, so revoke
 	// completeness while retaining the recorded attempt (Rust #44472).
 	if duplicate || !freshCallID {
 		r.invalidateGroup(groupID)
+	}
+	group.observedTruncatedCall = group.observedTruncatedCall || recorded.call.Truncated()
+	// A repeated ID replaces its earlier attempt instead of counting against the
+	// pending budget twice (Rust #48222).
+	if duplicate {
+		group.pending[duplicateIndex] = recorded
+		return
 	}
 	group.pending = append(group.pending, recorded)
 }
@@ -449,21 +564,70 @@ func (r *ExecutedToolCallRecorder) RecordToolResultMetadata(invocation *tool.Inv
 	if groupID == "" {
 		return false
 	}
-	group := r.groups[groupID]
-	if group == nil {
-		return false
+	runtimeCellID := strings.TrimPrefix(groupID, "cell:")
+	if runtimeCellID == groupID {
+		runtimeCellID = ""
 	}
-	for index := range group.pending {
-		if group.pending[index].callID == callID {
-			group.pending[index].call.SetToolResultMetadata(bounded)
-			return hasMetadata
+	if group := r.groups[groupID]; group != nil {
+		for index := range group.pending {
+			if group.pending[index].callID == callID {
+				group.pending[index].call.SetToolResultMetadata(bounded)
+				return hasMetadata
+			}
 		}
 	}
-	return false
+	// The call may already be bound to an output the current request attached
+	// (Rust #48222). A late result updates that binding so the original output
+	// keeps the evidence instead of dropping it with the pending inventory.
+	if runtimeCellID == "" {
+		return false
+	}
+	for _, binding := range r.retained {
+		if binding.runtimeCellID != runtimeCellID {
+			continue
+		}
+		index, ok := binding.callIndexByID[callID]
+		if !ok {
+			continue
+		}
+		binding.calls[index].call.SetToolResultMetadata(bounded)
+		return hasMetadata
+	}
+	var candidate *retainedToolCallBinding
+	candidateIndex := -1
+	candidates := 0
+	for _, binding := range r.retained {
+		if binding.runtimeCellID != runtimeCellID {
+			continue
+		}
+		index, ok := binding.truncatedCallIndexByID[callID]
+		if !ok {
+			continue
+		}
+		candidates++
+		candidate = binding
+		candidateIndex = index
+	}
+	// Only an unambiguous truncated binding may be backfilled; a conflicting
+	// output leaves the result unattributed (Rust #48222).
+	if candidates != 1 || candidate == nil {
+		return false
+	}
+	candidate.lateTruncatedIndices[candidateIndex] = struct{}{}
+	candidate.calls[candidateIndex].call.SetToolResultMetadata(bounded)
+	return hasMetadata
 }
 
 func (r *ExecutedToolCallRecorder) RegisterCell(cellID string, outputCallID string) {
-	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID)
+	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID, false)
+}
+
+// StartCell mirrors Rust `start_cell` (#48222): a new Code Mode execution takes
+// the runtime handle, so a reused runtime ID releases the previous execution's
+// pending calls, output mappings and late-result bindings instead of inheriting
+// them. The wait path registers into an already started cell with RegisterCell.
+func (r *ExecutedToolCallRecorder) StartCell(cellID string, outputCallID string) {
+	r.registerGroup("cell:"+strings.TrimSpace(cellID), outputCallID, true)
 }
 
 // FinishCell mirrors Rust `finish_cell_recording` (#46081): once the cell's
@@ -481,16 +645,34 @@ func (r *ExecutedToolCallRecorder) FinishCell(cellID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureState()
-	if group := r.groups["cell:"+cellID]; group != nil {
-		group.finished = true
+	groupID := "cell:" + cellID
+	group := r.groups[groupID]
+	if group == nil {
+		return
+	}
+	// An incomplete inventory never becomes complete, even when the dispatch gate
+	// closes (Rust CellCompletion::Incomplete); it still attaches its partial
+	// records without the marker.
+	group.finished = !group.incomplete
+	group.dispatchClosed = true
+	// A closed cell keeps its original binding while late truncated results
+	// remain eligible for backfill; an unverified empty cell is dropped
+	// (Rust #48222).
+	if len(group.pending) == 0 && !r.hasRetainedTruncatedForCell(cellID) && (group.incomplete || r.groupInvalid(groupID)) {
+		delete(r.groups, groupID)
+		for outputCallID, mapped := range r.outputs {
+			if mapped == groupID {
+				delete(r.outputs, outputCallID)
+			}
+		}
 	}
 }
 
 func (r *ExecutedToolCallRecorder) RegisterOutputCall(outputCallID string) {
-	r.registerGroup("call:"+strings.TrimSpace(outputCallID), outputCallID)
+	r.registerGroup("call:"+strings.TrimSpace(outputCallID), outputCallID, false)
 }
 
-func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID string) {
+func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID string, forcedStart bool) {
 	if r == nil || strings.TrimSpace(groupID) == "" || strings.TrimSpace(outputCallID) == "" {
 		return
 	}
@@ -518,17 +700,29 @@ func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID st
 		r.invalidateGroup(groupID)
 		return
 	}
-	freshOrigin := r.observeOrigin(outputCallID)
 	freshCell := true
-	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
-		if _, started := r.startedCells[cellID]; !started {
+	runtimeCellID := strings.TrimPrefix(groupID, "cell:")
+	if runtimeCellID == groupID {
+		runtimeCellID = ""
+	}
+	started := false
+	if runtimeCellID != "" {
+		if _, alreadyStarted := r.startedCells[runtimeCellID]; forcedStart || !alreadyStarted {
+			started = true
 			if len(r.startedCells) < maxPendingExecutedToolCalls {
-				r.startedCells[cellID] = struct{}{}
+				r.startedCells[runtimeCellID] = struct{}{}
 			}
-			if !r.seenIDs.observeRuntimeCellID(cellID) {
+			if !r.seenIDs.observeRuntimeCellID(runtimeCellID) {
 				freshCell = false
 			}
 		}
+	}
+	freshOrigin := r.observeOrigin(outputCallID)
+	if !freshCell {
+		// A reused runtime ID cannot distinguish the old pending calls or output
+		// mappings from this new execution, so release them instead of attaching
+		// them to it (Rust #48222).
+		r.dropReusedCell(runtimeCellID)
 	}
 	if !freshOrigin || !freshCell {
 		r.invalidateGroup(groupID)
@@ -536,6 +730,17 @@ func (r *ExecutedToolCallRecorder) registerGroup(groupID string, outputCallID st
 	if r.groups[groupID] == nil {
 		r.groups[groupID] = &recordedToolCallGroup{}
 	}
+	group := r.groups[groupID]
+	if started {
+		// Rust's start_cell owns these flags; a later registration (register_cell)
+		// must not reset a closed dispatch gate.
+		group.dispatchClosed = false
+		group.truncatedMetadataBindingValid = freshOrigin && freshCell && r.historyIndexed()
+	}
+	if strings.TrimSpace(group.originCallID) == "" && runtimeCellID != "" {
+		group.originCallID = strings.TrimSpace(outputCallID)
+	}
+	group.runtimeCellID = runtimeCellID
 	r.outputs[outputCallID] = groupID
 }
 
@@ -576,7 +781,7 @@ func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string) b
 		}
 		// Rust evicts cells that are Complete or Incomplete: a finished
 		// inventory, or one whose completeness was already revoked.
-		if !group.finished && !r.groupInvalid(groupID) {
+		if !group.finished && !group.incomplete && !r.groupInvalid(groupID) {
 			continue
 		}
 		if _, reachable := mapped[groupID]; reachable {
@@ -605,7 +810,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	defer r.mu.Unlock()
 	r.ensureState()
 	r.seedHistoryOnce(out)
-	if len(r.outputs) == 0 {
+	if len(r.outputs) == 0 && len(r.retained) == 0 {
 		return out, nil
 	}
 	attachment := &ExecutedToolCallAttachment{}
@@ -631,6 +836,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		position := index
 		inputIndices[inputCallID] = &position
 	}
+	r.invalidateUntrustedTruncatedBindings(out, outputCounts, inputIndices)
 	for index := len(out) - 1; index >= 0; index-- {
 		// Direct records are attached to their own output before history, so
 		// items that already carry one are not re-attached (Rust #45185).
@@ -641,7 +847,15 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		if !ok || callID == "" {
 			continue
 		}
+		// A retained binding re-emits the output's inventory on every request, so
+		// evidence attached before the cell finished (or before a late result
+		// arrived) is not dropped from later requests (Rust #46044/#48222).
+		if binding := r.retained[callID]; binding != nil {
+			attachRetainedBinding(r, out, index, callID, binding, outputCounts, inputIndices)
+			continue
+		}
 		calls := make([]model.ExecutedToolCall, 0, 4)
+		recorded := make([]recordedToolCall, 0, 4)
 		cellID := ""
 		groupFinished := false
 		// Completeness requires evidence that the supplied history was indexed
@@ -651,6 +865,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		if r.callInvalid(callID) {
 			complete = false
 		}
+		var group *recordedToolCallGroup
 		if groupID != "" {
 			if strings.HasPrefix(groupID, "cell:") {
 				cellID = strings.TrimPrefix(groupID, "cell:")
@@ -672,22 +887,32 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 					complete = false
 				}
 			}
-			if group := r.groups[groupID]; group != nil {
+			if group = r.groups[groupID]; group != nil {
 				groupFinished = group.finished
 			}
 			// Rust #46081: only a finished cell is complete; a still-running
 			// cell attaches its partial inventory without the marker.
 			complete = complete && groupFinished
-			if _, seen := seenGroups[groupID]; !seen {
-				if group := r.groups[groupID]; group != nil && (len(group.pending) > 0 || groupFinished) {
+			if _, seen := seenGroups[groupID]; !seen && group != nil {
+				if len(group.pending) > 0 || groupFinished {
 					for _, pending := range group.pending {
 						if pending.call.Truncated() {
 							complete = false
 						}
 						calls = append(calls, pending.call)
+						recorded = append(recorded, pending)
 					}
 					seenGroups[groupID] = struct{}{}
-					attachment.groups = append(attachment.groups, executedToolCallGroupAttachment{groupID: groupID, count: len(group.pending)})
+					attachment.groups = append(attachment.groups, executedToolCallGroupAttachment{
+						groupID:       groupID,
+						outputCallID:  callID,
+						originCallID:  group.originCallID,
+						runtimeCellID: group.runtimeCellID,
+						count:         len(group.pending),
+						calls:         recorded,
+						complete:      complete,
+						hasCell:       strings.TrimSpace(cellID) != "",
+					})
 				}
 			}
 		}
@@ -695,16 +920,58 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 		// an explicit `[]` reaches the model instead of omitting the marker.
 		if len(calls) > 0 || groupFinished {
 			var completePtr *bool
-			if strings.TrimSpace(cellID) != "" {
+			metadataCellID := ""
+			if group != nil {
+				metadataCellID = group.originCallID
+			}
+			if strings.TrimSpace(metadataCellID) != "" {
 				completePtr = &complete
 			}
-			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, cellID, completePtr)
+			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, metadataCellID, completePtr)
 		}
 	}
 	if len(attachment.groups) == 0 {
 		return out, nil
 	}
 	return out, attachment
+}
+
+// attachRetainedBinding re-emits the calls already bound to an output and
+// re-validates the completeness proof they carry. A binding whose output or
+// input became ambiguous loses its completeness on the spot (Rust #48222).
+func attachRetainedBinding(r *ExecutedToolCallRecorder, out []any, index int, callID string, binding *retainedToolCallBinding, outputCounts map[string]int, inputIndices map[string]*int) {
+	metadataCellID := strings.TrimSpace(binding.originCallID)
+	complete := binding.complete
+	if outputCounts[callID] > 1 {
+		complete = false
+		binding.complete = false
+	}
+	if binding.runtimeCellID != "" {
+		if !r.canProveWaitCompletion && !executedToolCallOutputIsCustom(out[index]) {
+			complete = false
+		}
+		if inputIndex, present := inputIndices[callID]; present {
+			// A verified output may outlive its input after compaction, but any
+			// input still present must keep identifying the same execution.
+			if inputIndex == nil || *inputIndex >= index ||
+				!codeModeInputMatchesOutput(out[*inputIndex], out[index], callID, binding.runtimeCellID) {
+				complete = false
+				binding.complete = false
+			}
+		}
+	}
+	if metadataCellID == "" && len(binding.calls) == 0 {
+		return
+	}
+	calls := make([]model.ExecutedToolCall, 0, len(binding.calls))
+	for _, call := range binding.calls {
+		calls = append(calls, call.call)
+	}
+	var completePtr *bool
+	if metadataCellID != "" {
+		completePtr = &complete
+	}
+	out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, metadataCellID, completePtr)
 }
 
 func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCallAttachment) {
@@ -722,23 +989,158 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 		if count > len(group.pending) {
 			count = len(group.pending)
 		}
+		// Bind the attached inventory to its output before dropping it from the
+		// pending state, so later requests re-emit it and a late result can still
+		// update the original output (Rust #48222).
+		if attached.outputCallID != "" {
+			r.retainBinding(attached, group)
+		}
 		group.pending = append([]recordedToolCall(nil), group.pending[count:]...)
 		group.fullBytes = 0
 		for _, pending := range group.pending {
 			group.fullBytes += pending.fullBytes
 		}
-		if len(group.pending) == 0 {
+		if len(group.pending) == 0 && !r.keepTruncatedBinding(group) {
 			delete(r.groups, attached.groupID)
 			delete(r.invalidGroups, attached.groupID)
 			if cellID := strings.TrimPrefix(attached.groupID, "cell:"); cellID != attached.groupID {
 				delete(r.invalidCells, cellID)
 			}
 		}
-		for outputCallID, groupID := range r.outputs {
-			if groupID == attached.groupID {
-				delete(r.outputs, outputCallID)
+		delete(r.outputs, attached.outputCallID)
+	}
+}
+
+// retainBinding records the inventory attached to one output so the next request
+// can re-emit it without the pending state. Only a validated cell binding admits
+// truncated calls to late-result backfill (Rust #48222).
+func (r *ExecutedToolCallRecorder) retainBinding(attached executedToolCallGroupAttachment, group *recordedToolCallGroup) {
+	if _, exists := r.retained[attached.outputCallID]; !exists && len(r.retained) >= maxPendingExecutedToolCalls {
+		r.evictRetainedBinding()
+	}
+	binding := &retainedToolCallBinding{
+		groupID:                attached.groupID,
+		originCallID:           attached.originCallID,
+		runtimeCellID:          attached.runtimeCellID,
+		calls:                  append([]recordedToolCall(nil), attached.calls...),
+		complete:               attached.complete,
+		callIndexByID:          map[string]int{},
+		truncatedCallIndexByID: map[string]int{},
+		lateTruncatedIndices:   map[int]struct{}{},
+	}
+	for index, call := range binding.calls {
+		if call.callID == "" {
+			continue
+		}
+		if !call.call.Truncated() {
+			binding.callIndexByID[call.callID] = index
+			continue
+		}
+		if group != nil && group.truncatedMetadataBindingValid && !call.call.HasToolResultMetadata() {
+			binding.truncatedCallIndexByID[call.callID] = index
+		}
+	}
+	r.retained[attached.outputCallID] = binding
+}
+
+// keepTruncatedBinding reports whether a drained cell must stay registered so its
+// truncated calls remain bound to their outputs: a live cell can still dispatch,
+// and a closed one still has results eligible for late backfill (Rust #48222).
+func (r *ExecutedToolCallRecorder) keepTruncatedBinding(group *recordedToolCallGroup) bool {
+	if group == nil || !group.truncatedMetadataBindingValid || !group.observedTruncatedCall {
+		return false
+	}
+	if !group.dispatchClosed {
+		return true
+	}
+	return r.hasRetainedTruncatedForCell(group.runtimeCellID)
+}
+
+// invalidateUntrustedTruncatedBindings checks every output that names a cell
+// before any retained calls are cloned into the request. A duplicated output, or
+// an input that no longer identifies the same execution, makes the whole cell's
+// attribution ambiguous, so its late-backfilled evidence is cleared and no
+// further backfill is admitted (Rust #48222).
+func (r *ExecutedToolCallRecorder) invalidateUntrustedTruncatedBindings(out []any, outputCounts map[string]int, inputIndices map[string]*int) {
+	if !r.hasTruncatedBindings() {
+		return
+	}
+	untrusted := map[string]struct{}{}
+	for index, item := range out {
+		if hasDirectCallMetadata(item) {
+			continue
+		}
+		_, callID, ok := executedToolCallOutputIdentity(item)
+		if !ok || callID == "" {
+			continue
+		}
+		runtimeCellID := ""
+		previouslyRetained := false
+		if binding := r.retained[callID]; binding != nil {
+			runtimeCellID = binding.runtimeCellID
+			previouslyRetained = true
+		} else if group := r.groups[r.outputs[callID]]; group != nil {
+			runtimeCellID = group.runtimeCellID
+		}
+		if runtimeCellID == "" {
+			continue
+		}
+		matchesInput := previouslyRetained
+		if inputIndex, present := inputIndices[callID]; present {
+			matchesInput = inputIndex != nil && *inputIndex < index &&
+				codeModeInputMatchesOutput(out[*inputIndex], item, callID, runtimeCellID)
+		}
+		if outputCounts[callID] != 1 || !matchesInput {
+			untrusted[runtimeCellID] = struct{}{}
+		}
+	}
+	for cellID := range untrusted {
+		if group := r.groups["cell:"+cellID]; group != nil {
+			group.truncatedMetadataBindingValid = false
+		}
+		for _, binding := range r.retained {
+			if binding.runtimeCellID != cellID {
+				continue
+			}
+			binding.complete = false
+			binding.clearLateTruncatedMetadata()
+		}
+	}
+}
+
+// hasTruncatedBindings reports whether late truncated backfill is in play: a
+// retained truncated call, or a validated cell holding a truncated call that has
+// no result yet (Rust #48222).
+func (r *ExecutedToolCallRecorder) hasTruncatedBindings() bool {
+	for _, binding := range r.retained {
+		if len(binding.truncatedCallIndexByID) > 0 {
+			return true
+		}
+	}
+	for _, group := range r.groups {
+		if !group.truncatedMetadataBindingValid {
+			continue
+		}
+		for _, pending := range group.pending {
+			if pending.call.Truncated() && !pending.call.HasToolResultMetadata() {
+				return true
 			}
 		}
+	}
+	return false
+}
+
+// evictRetainedBinding drops the lowest-key retained binding when the retained
+// budget is exhausted. The choice does not depend on Go's map iteration order.
+func (r *ExecutedToolCallRecorder) evictRetainedBinding() {
+	candidate := ""
+	for outputCallID := range r.retained {
+		if candidate == "" || outputCallID < candidate {
+			candidate = outputCallID
+		}
+	}
+	if candidate != "" {
+		delete(r.retained, candidate)
 	}
 }
 
@@ -754,6 +1156,12 @@ func (r *ExecutedToolCallRecorder) ensureState() {
 	}
 	if r.seenIDs == nil {
 		r.seenIDs = newSeenIDs()
+	}
+	if r.seenNestedIDs == nil {
+		r.seenNestedIDs = newSeenIDs()
+	}
+	if r.retained == nil {
+		r.retained = map[string]*retainedToolCallBinding{}
 	}
 	if r.pendingWrapperOrigins == nil {
 		r.pendingWrapperOrigins = map[string]struct{}{}
@@ -820,6 +1228,19 @@ func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
 	if groupID == "" {
 		return
 	}
+	if group := r.groups[groupID]; group != nil {
+		group.truncatedMetadataBindingValid = false
+	}
+	// Retained bindings created from this grouping lose their completeness and
+	// any late-backfilled evidence; ambiguous attribution cannot be repaired by
+	// a later result (Rust #48222).
+	for _, binding := range r.retained {
+		if binding.groupID != groupID {
+			continue
+		}
+		binding.complete = false
+		binding.clearLateTruncatedMetadata()
+	}
 	if cellID := strings.TrimPrefix(groupID, "cell:"); cellID != groupID {
 		if len(r.invalidCells) < maxPendingExecutedToolCalls {
 			r.invalidCells[cellID] = struct{}{}
@@ -829,6 +1250,48 @@ func (r *ExecutedToolCallRecorder) invalidateGroup(groupID string) {
 	if len(r.invalidGroups) < maxPendingExecutedToolCalls {
 		r.invalidGroups[groupID] = struct{}{}
 	}
+}
+
+// dropReusedCell releases a reused runtime cell's stale pending calls and output
+// mappings, and revokes the retained bindings that named it, so the new
+// execution cannot inherit them (Rust #48222).
+func (r *ExecutedToolCallRecorder) dropReusedCell(cellID string) {
+	if cellID == "" {
+		return
+	}
+	groupID := "cell:" + cellID
+	delete(r.groups, groupID)
+	// The revocation applied to the previous execution does not carry over to a
+	// fresh execution of the same runtime handle (Rust start_cell recreates it).
+	delete(r.invalidCells, cellID)
+	delete(r.invalidGroups, groupID)
+	for outputCallID, mapped := range r.outputs {
+		if mapped == groupID {
+			delete(r.outputs, outputCallID)
+		}
+	}
+	for _, binding := range r.retained {
+		if binding.runtimeCellID != cellID {
+			continue
+		}
+		binding.complete = false
+		binding.clearLateTruncatedMetadata()
+	}
+}
+
+// hasRetainedTruncatedForCell reports whether any output still holds a truncated
+// call bound to this runtime cell, so its binding must be kept for late
+// backfill (Rust #48222).
+func (r *ExecutedToolCallRecorder) hasRetainedTruncatedForCell(cellID string) bool {
+	if cellID == "" {
+		return false
+	}
+	for _, binding := range r.retained {
+		if binding.runtimeCellID == cellID && len(binding.truncatedCallIndexByID) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ExecutedToolCallRecorder) groupInvalid(groupID string) bool {

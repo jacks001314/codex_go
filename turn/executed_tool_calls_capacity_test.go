@@ -25,8 +25,10 @@ func assertCompleteCodeModeCellAttachment(t *testing.T, recorder *ExecutedToolCa
 	if !ok {
 		t.Fatalf("cell %s attached no metadata: %#v", cellID, object)
 	}
-	if metadata["cell_id"] != cellID {
-		t.Fatalf("cell %s cell_id = %#v, want %q", cellID, metadata["cell_id"], cellID)
+	// The metadata cell id names the originating exec call, not the runtime
+	// handle (Rust #46081/#48222).
+	if metadata["cell_id"] != outputCallID {
+		t.Fatalf("cell %s cell_id = %#v, want %q", cellID, metadata["cell_id"], outputCallID)
 	}
 	if metadata["tool_calls_complete"] != true {
 		t.Fatalf("cell %s tool_calls_complete = %#v, want true", cellID, metadata["tool_calls_complete"])

@@ -687,7 +687,14 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 				cellID, _ = output.Data["cell_id"].(string)
 			}
 			if strings.TrimSpace(cellID) != "" {
-				d.executedToolCalls.RegisterCell(cellID, invocation.CallID)
+				// Rust's exec handler starts the cell, while a wait registers into
+				// the already started cell (#48222 distinguishes the two, so a
+				// reused runtime ID can release the previous execution).
+				if invocation.ToolName.Name == tool.CodeModeExecToolName {
+					d.executedToolCalls.StartCell(cellID, invocation.CallID)
+				} else {
+					d.executedToolCalls.RegisterCell(cellID, invocation.CallID)
+				}
 				// Rust #46081: a non-yielded exec/wait output closes the cell's
 				// dispatch gate, so its recorded inventory is final (possibly
 				// empty). A yielded output keeps the cell running.
