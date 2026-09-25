@@ -13,7 +13,10 @@ var (
 	ErrAgentPathExists = errors.New("agent path already exists")
 )
 
-const rootAgentPath = "/root"
+// rootAgentPath is the registry's spelling of the protocol root path; it is an
+// alias of AgentPathRoot so the runtime registry and the protocol validators
+// cannot drift (`codex-rs/protocol/src/agent_path.rs` AgentPath::ROOT).
+const rootAgentPath = AgentPathRoot
 
 type AgentPath string
 
