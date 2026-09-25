@@ -29,6 +29,10 @@ type MultiAgentV2Config struct {
 	WaitAgentEnabled               bool
 	NonCodeModeOnly                bool
 	SubagentDeveloperInstructions  *string
+	// MessageBoardInMemory mirrors `features.multi_agent_v2.message_board_in_memory`:
+	// keep the message board in memory for a training session, including
+	// ephemeral sessions.
+	MessageBoardInMemory bool
 }
 
 func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) {
@@ -113,6 +117,7 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
 		"wait_agent_enabled":                 &out.WaitAgentEnabled,
 		"non_code_mode_only":                 &out.NonCodeModeOnly,
+		"message_board_in_memory":            &out.MessageBoardInMemory,
 	} {
 		if value, ok := raw[key].(bool); ok {
 			*target = value

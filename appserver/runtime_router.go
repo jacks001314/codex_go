@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/agentboard"
 	"codex_go/apps"
 	"codex_go/auth"
 	"codex_go/chatgptapi"
@@ -436,6 +437,10 @@ type RuntimeRouter struct {
 	agentRegistry          *agent.Registry
 	agentRegistryMu        sync.Mutex
 	agentRegistries        map[string]*agent.Registry
+	// messageBoards shares in-memory discussion-board state across every handle
+	// of one agent tree (Rust `InMemoryMessageBoards`); SQLite boards share their
+	// pool through agentboard's own per-path registry.
+	messageBoards agentboard.InMemoryMessageBoards
 	agentActivityMu        sync.Mutex
 	agentActivity          map[string]chan string
 	agentMessagesMu        sync.Mutex
@@ -13942,6 +13947,32 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			}
 			options.AgentRoles = agentsConfig.Roles
 			options.AgentDefaults = defaults
+		}
+	}
+	// Rust install_agent_message_board: the shared discussion board is
+	// independent of the delegation tool surface, so it is gated on the
+	// agent_message_board and multi_agent_v2 features rather than on
+	// agents.enabled. An ephemeral runtime must not open durable storage unless
+	// the board is kept in memory.
+	if messageBoardFeatureEnabled(cfg) {
+		ephemeral := false
+		if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
+			ephemeral = runtimeRecordEphemeral(record)
+		}
+		agentsMax := 0
+		if agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents()); agentsErr == nil && agentsConfig != nil {
+			agentsMax = agentsConfig.MaxConcurrentThreadsPerSession
+		}
+		v2Config, v2Err := cfg.MultiAgentV2Config(agentsMax)
+		if v2Err != nil {
+			return nil, v2Err
+		}
+		if messageBoardEnabledForTurn(cfg, ephemeral, v2Config) {
+			boardOptions, boardErr := r.messageBoardOptionsForTurn(ctx, cfg, threadID, v2Config, turnModelInfo)
+			if boardErr != nil {
+				return nil, boardErr
+			}
+			options.MessageBoard = boardOptions
 		}
 	}
 	if params != nil && len(params.DynamicTools) > 0 {

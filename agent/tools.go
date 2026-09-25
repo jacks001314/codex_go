@@ -20,6 +20,12 @@ const (
 	// model as one namespace tool carrying this description.
 	MultiAgentV1NamespaceDescription = "Tools for spawning and managing sub-agents."
 	MultiAgentV2Namespace            = "collaboration"
+	// MultiAgentV2NamespaceDescription matches Rust's
+	// MULTI_AGENT_V2_NAMESPACE_DESCRIPTION
+	// (codex-rs/core/src/tools/multi_agent_tool.rs). The host supplies it to
+	// every tool published inside the V2 namespace, including the message-board
+	// collaboration tools.
+	MultiAgentV2NamespaceDescription = "Tools for spawning and managing sub-agents."
 
 	// MultiAgentV1 wait timeouts mirror Rust's WaitAgentTimeoutOptions: the V1
 	// surface reuses the V2 default/min/max values

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/agent"
+	"codex_go/agentboard"
 	"codex_go/apps"
 	"codex_go/compact"
 	featureflags "codex_go/features"
@@ -147,13 +148,18 @@ type ToolRegistryOptions struct {
 	// value (#41461). A non-nil pointer to an empty string keeps it empty.
 	SendUserMessageAsyncDescription *string
 	DisableWaitAgent                bool
-	DynamicTools                    []DynamicToolSpec
-	ThreadID                        string
-	TurnID                          string
-	SessionID                       string
-	PluginMetricsResolver           func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
-	PluginMeasurementTracker        func(context.Context, plugin.PluginMeasurementBatch)
-	ExtraTools                      []tool.Executor
+	// MessageBoard, when set, registers the shared discussion board's nine
+	// collaboration tools for this turn's caller (Rust
+	// `install_agent_message_board`). The host owns board selection, the tool
+	// namespace and its description.
+	MessageBoard             *MessageBoardOptions
+	DynamicTools             []DynamicToolSpec
+	ThreadID                 string
+	TurnID                   string
+	SessionID                string
+	PluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
+	ExtraTools               []tool.Executor
 	// ExperimentalSupportedTools mirrors Rust model_info.experimental_supported_tools:
 	// tools the selected model declares as supported are registered
 	// conditionally (e.g. test_sync_tool for testing models).
@@ -181,6 +187,48 @@ func MultiAgentToolOverridesFromCatalog(messages *model.ModelMessages) map[strin
 		return nil
 	}
 	return out
+}
+
+// MessageBoardOptions supplies the caller-bound board and the host-owned
+// namespace for the shared-discussion tools of one turn.
+type MessageBoardOptions struct {
+	// Board is the caller-bound board handle the host selected (in-memory or
+	// SQLite).
+	Board agentboard.Board
+	// Caller is the calling thread; CallerPath is its authoritative tree path.
+	Caller     string
+	CallerPath agent.AgentPath
+	// Namespace is the host-configured Multi-Agent V2 namespace; an empty
+	// namespace publishes plain function tools. NamespaceDescription decorates
+	// the merged namespace.
+	Namespace            string
+	NamespaceDescription string
+	// ToolOverrides carries the active model catalog's per-tool overrides keyed
+	// by tool name (Rust `MultiAgentToolMessages::by_name`, which the board
+	// tools look up by their own names).
+	ToolOverrides map[string]agentboard.MessageBoardToolOverride
+}
+
+// registerMessageBoardTools mirrors Rust's
+// message_board_tools_with_descriptions registration: the board already exists,
+// so the nine tools are contributed for this caller.
+func registerMessageBoardTools(registry *tool.Registry, options *MessageBoardOptions) error {
+	if options == nil || options.Board == nil {
+		return nil
+	}
+	for _, executor := range agentboard.NewMessageBoardToolsWithOverrides(
+		options.Board,
+		options.Caller,
+		options.CallerPath,
+		options.Namespace,
+		options.NamespaceDescription,
+		options.ToolOverrides,
+	) {
+		if err := registry.Register(executor); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
@@ -263,6 +311,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 					return nil, err
 				}
 			}
+		}
+	}
+	if options.MessageBoard != nil {
+		if err := registerMessageBoardTools(registry, options.MessageBoard); err != nil {
+			return nil, err
 		}
 	}
 	if options.EnableShell {

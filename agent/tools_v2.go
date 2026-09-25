@@ -156,7 +156,7 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 	spec := tool.Spec{
 		Name:                 tool.NamespacedName(namespace, string(e.kind)),
 		Exposure:             e.exposure,
-		NamespaceDescription: "Tools for spawning and managing sub-agents.",
+		NamespaceDescription: MultiAgentV2NamespaceDescription,
 	}
 	if spec.Exposure == "" {
 		spec.Exposure = tool.ExposureModelVisible

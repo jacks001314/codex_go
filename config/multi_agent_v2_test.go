@@ -36,6 +36,28 @@ func TestMultiAgentV2ConfigDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+// Rust parity: features.multi_agent_v2.message_board_in_memory defaults to
+// false and keeps the board in memory (including ephemeral sessions) when set.
+func TestMultiAgentV2ConfigMessageBoardInMemoryLikeRust(t *testing.T) {
+	defaults, err := (&Config{}).MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.MessageBoardInMemory {
+		t.Fatalf("default message_board_in_memory = true, want false")
+	}
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{
+		"message_board_in_memory": true,
+	}}}}
+	got, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.MessageBoardInMemory {
+		t.Fatalf("message_board_in_memory = false, want true")
+	}
+}
+
 func TestMultiAgentV2ConfigAddsRootToLegacyAgentLimit(t *testing.T) {
 	for _, key := range []string{"max_concurrent_threads_per_session", "max_threads"} {
 		cfg := &Config{Values: map[string]any{"agents": map[string]any{key: int64(4)}}}
