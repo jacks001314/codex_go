@@ -100,23 +100,82 @@ func (d *PolicyHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	return response, nil
 }
 
-// wrapResponseBodyWithPermit keeps a permit alive for the response body.
-//
-// A hijacked stream (an upgraded WebSocket connection) is handed to the caller
-// as an `io.ReadWriteCloser` and must not be replaced: its own type is what lets
-// the WebSocket client take over the connection. The destination check that
-// authorized the request still applies; Rust additionally guards the stream's
-// reads and writes with the permit.
+// wrapResponseBodyWithPermit keeps a permit alive for the response body, or, for
+// a hijacked stream (an upgraded WebSocket connection), for as long as the
+// caller owns the connection.
 func wrapResponseBodyWithPermit(permit *NetworkPermit, response *http.Response) {
 	if response == nil || response.Body == nil {
 		permit.Release()
 		return
 	}
-	if _, hijacked := response.Body.(io.ReadWriteCloser); hijacked {
-		permit.Release()
+	if stream, hijacked := response.Body.(io.ReadWriteCloser); hijacked {
+		// An upgraded connection outlives the response, so it keeps the permit
+		// itself (Rust's WebSocketConnection retains the NetworkPermit).
+		response.Body = newPermitStream(permit, stream)
 		return
 	}
 	response.Body = newPermitBody(permit, response.Body)
+}
+
+// permitStream guards an upgraded connection with the request's permit.
+//
+// Rust's WebSocketConnection::poll_policy checks the permit before every read
+// and write, with a revocation future per direction, and fails the operation
+// with the policy denial. A Go read or write cannot poll while it blocks, so
+// revocation also closes the connection to wake it; the resulting failure is
+// reported as the same policy denial.
+type permitStream struct {
+	permit *NetworkPermit
+	stream io.ReadWriteCloser
+	done   chan struct{}
+	once   sync.Once
+}
+
+func newPermitStream(permit *NetworkPermit, stream io.ReadWriteCloser) *permitStream {
+	guarded := &permitStream{permit: permit, stream: stream, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-permit.Revoked():
+			_ = stream.Close()
+		case <-guarded.done:
+		}
+	}()
+	return guarded
+}
+
+func (s *permitStream) Read(buffer []byte) (int, error) {
+	if err := s.permit.Check(); err != nil {
+		return 0, &PolicyError{Err: err}
+	}
+	count, err := s.stream.Read(buffer)
+	if err != nil {
+		// A revoked connection must not look like a clean end of stream, so the
+		// revocation is reported even when the read ended.
+		if checkErr := s.permit.Check(); checkErr != nil {
+			return count, &PolicyError{Err: checkErr}
+		}
+	}
+	return count, err
+}
+
+func (s *permitStream) Write(buffer []byte) (int, error) {
+	if err := s.permit.Check(); err != nil {
+		return 0, &PolicyError{Err: err}
+	}
+	count, err := s.stream.Write(buffer)
+	if err != nil {
+		if checkErr := s.permit.Check(); checkErr != nil {
+			return count, &PolicyError{Err: checkErr}
+		}
+	}
+	return count, err
+}
+
+// Close ends the guarded operation and releases the permit.
+func (s *permitStream) Close() error {
+	s.once.Do(func() { close(s.done) })
+	s.permit.Release()
+	return s.stream.Close()
 }
 
 // permitBody keeps a request's permit alive for the whole response body and

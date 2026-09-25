@@ -1,13 +1,19 @@
 package network
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
 )
 
 // recordingDoer stands in for a transport so a test can prove whether a
@@ -56,29 +62,171 @@ func (h *hijackedBody) Read([]byte) (int, error)    { return 0, io.EOF }
 func (h *hijackedBody) Write(p []byte) (int, error) { return len(p), nil }
 func (h *hijackedBody) Close() error                { return nil }
 
-type hijackDoer struct{ body *hijackedBody }
+type hijackDoer struct{ body io.ReadWriteCloser }
 
 func (d hijackDoer) Do(*http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: http.StatusSwitchingProtocols, Body: d.body}, nil
 }
 
-// Rust parity: an upgraded connection is handed to the caller unchanged, so the
-// permit never replaces a hijacked stream's body.
-func TestPolicyHTTPDoerKeepsHijackedResponseBodiesLikeRust(t *testing.T) {
+// Rust parity: an upgraded connection keeps the request's authorization for as
+// long as the caller owns it, so its reads and writes are guarded by the permit
+// (codex-websocket-client's WebSocketConnection::poll_policy, #47389).
+func TestPolicyHTTPDoerGuardsHijackedStreamsLikeRust(t *testing.T) {
 	controller := NewNetworkPolicyController()
 	policy := controller.Policy()
 	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	server, client := net.Pipe()
+	defer server.Close()
+	doer := &PolicyHTTPDoer{Policy: policy, Next: hijackDoer{body: client}}
+	response, err := doer.Do(&http.Request{URL: mustURL(t, "https://example.com/socket")})
+	if err != nil {
+		t.Fatalf("upgrade request error = %v", err)
+	}
+	stream, ok := response.Body.(io.ReadWriteCloser)
+	if !ok {
+		t.Fatalf("the upgraded connection lost its writable stream: %#v", response.Body)
+	}
+
+	// While the permit is live the stream carries data in both directions.
+	go func() { _, _ = server.Write([]byte("hello")) }()
+	buffer := make([]byte, 5)
+	if _, err := io.ReadFull(stream, buffer); err != nil || string(buffer) != "hello" {
+		t.Fatalf("read = %q/%v", buffer, err)
+	}
+	go func() {
+		read := make([]byte, 5)
+		_, _ = io.ReadFull(server, read)
+	}()
+	if _, err := stream.Write([]byte("world")); err != nil {
+		t.Fatalf("write error = %v", err)
+	}
+
+	// Revocation fails the next operation with the policy denial and wakes a
+	// blocked read by closing the connection.
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := stream.Read(make([]byte, 1))
+		blocked <- err
+	}()
+	policy.Invalidate()
+	select {
+	case err := <-blocked:
+		if !IsPolicyError(err) || !errors.Is(err, ErrNetworkPolicyRevoked) {
+			t.Fatalf("blocked read error = %v, want the revocation denial", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a blocked read was not woken by revocation")
+	}
+	if _, err := stream.Write([]byte("more")); !IsPolicyError(err) || !errors.Is(err, ErrNetworkPolicyRevoked) {
+		t.Fatalf("write after revocation error = %v, want the revocation denial", err)
+	}
+
+	// Closing the connection closes the transport. The permit the stream owned is
+	// released, which TestPolicyHTTPDoerReleasesHijackedStreamPermitsLikeRust
+	// pins directly.
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close error = %v", err)
+	}
+	_ = server.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := server.Read(make([]byte, 1)); err == nil {
+		t.Fatal("closing the guarded stream left the transport open")
+	}
+}
+
+// A guarded stream owns the request's permit and drops it when the caller closes
+// the connection, mirroring Rust dropping the NetworkPermit with the connection.
+func TestPolicyHTTPDoerReleasesHijackedStreamPermitsLikeRust(t *testing.T) {
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	permit, err := policy.Acquire(mustURL(t, "https://example.com/socket"))
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	server, client := net.Pipe()
+	defer server.Close()
+	response := &http.Response{StatusCode: http.StatusSwitchingProtocols, Body: client}
+	wrapResponseBodyWithPermit(permit, response)
+	if permit.isReleased() {
+		t.Fatal("the guarded stream released the permit before the connection closed")
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close error = %v", err)
+	}
+	if !permit.isReleased() {
+		t.Fatal("closing the guarded stream did not release the permit")
+	}
+}
+
+// An unmanaged policy never touches the response, so an upgrade that needs no
+// authorization keeps the transport's own body.
+func TestPolicyHTTPDoerLeavesHijackedStreamsAloneWithoutAPolicy(t *testing.T) {
 	body := &hijackedBody{}
-	doer := &PolicyHTTPDoer{Policy: policy, Next: hijackDoer{body: body}}
+	doer := &PolicyHTTPDoer{Policy: UnmanagedNetworkPolicy(), Next: hijackDoer{body: body}}
 	response, err := doer.Do(&http.Request{URL: mustURL(t, "https://example.com/socket")})
 	if err != nil {
 		t.Fatalf("upgrade request error = %v", err)
 	}
 	if response.Body != io.ReadCloser(body) {
-		t.Fatalf("hijacked body was replaced: %#v", response.Body)
+		t.Fatalf("an unmanaged policy replaced the hijacked body: %#v", response.Body)
 	}
-	if _, ok := response.Body.(io.ReadWriteCloser); !ok {
-		t.Fatal("the hijacked body no longer exposes the writable stream")
+}
+
+// TestPolicyHTTPClientGuardsWebSocketDialLikeRust proves the guard reaches a real
+// upgraded connection: an echo exchange works while the policy allows the
+// destination, and revoking the policy denies the connection instead of letting
+// it keep reading and writing (Rust #47389's realtime read/write guarding).
+func TestPolicyHTTPClientGuardsWebSocketDialLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{InsecureSkipVerify: true})
+		if err != nil {
+			return
+		}
+		defer connection.Close(websocket.StatusNormalClosure, "")
+		for {
+			messageType, data, readErr := connection.Read(request.Context())
+			if readErr != nil {
+				return
+			}
+			if writeErr := connection.Write(request.Context(), messageType, data); writeErr != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	client := PolicyHTTPClient(policy, server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/socket"
+	connection, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	defer connection.Close(websocket.StatusNormalClosure, "")
+	if err := connection.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatalf("write error = %v", err)
+	}
+	messageType, data, err := connection.Read(ctx)
+	if err != nil || messageType != websocket.MessageText || string(data) != "ping" {
+		t.Fatalf("echo = %q/%q/%v", messageType, data, err)
+	}
+
+	// Revocation ends the connection: the permit's watcher closes the transport,
+	// so the next read and write fail instead of continuing under a policy the
+	// account no longer has.
+	policy.Invalidate()
+	revokedCtx, revokeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer revokeCancel()
+	if err := connection.Write(revokedCtx, websocket.MessageText, []byte("again")); err == nil {
+		if _, _, readErr := connection.Read(revokedCtx); readErr == nil {
+			t.Fatal("a revoked policy left the WebSocket usable")
+		}
+	}
+	if _, _, err := connection.Read(revokedCtx); err == nil {
+		t.Fatal("a revoked policy left the WebSocket readable")
 	}
 }
 
