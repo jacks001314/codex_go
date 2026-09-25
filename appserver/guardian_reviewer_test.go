@@ -521,7 +521,7 @@ func TestGuardianReviewRequestCarriesThePolicyInstructionsLikeRust(t *testing.T)
 			}); err != nil {
 				t.Fatalf("Guardian review error = %v", err)
 			}
-			want := state.RenderGuardianPolicyInstructions(testCase.wantPolicy, testCase.wantTemplate, state.GuardianOutputContractPrompt())
+			want := state.RenderGuardianPolicyInstructions(testCase.wantPolicy, "", testCase.wantTemplate, state.GuardianOutputContractPrompt())
 			if captured == nil || captured.Instructions != want {
 				t.Fatalf("Guardian instructions = %q, want %q", instructionsOrEmpty(captured), want)
 			}
@@ -544,7 +544,7 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	contract := state.GuardianOutputContractPrompt()
 	// No catalog and no config keeps the bundled documents.
 	bundled := guardianReviewInstructions(nil, nil)
-	wantBundled := state.RenderGuardianPolicyInstructions(state.GuardianPolicy(), state.GuardianPolicyTemplate(), contract)
+	wantBundled := state.RenderGuardianPolicyInstructions(state.GuardianPolicy(), "", state.GuardianPolicyTemplate(), contract)
 	if bundled != wantBundled {
 		t.Fatalf("bundled instructions drifted:\n%q\nwant\n%q", bundled, wantBundled)
 	}
@@ -556,7 +556,7 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 	policy := "Catalog policy."
 	template := "Catalog template:\n{{ tenant_policy_config }}"
 	catalog := guardianReviewInstructions(nil, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
-	if want := state.RenderGuardianPolicyInstructions(policy, template, contract); catalog != want {
+	if want := state.RenderGuardianPolicyInstructions(policy, "", template, contract); catalog != want {
 		t.Fatalf("catalog instructions = %q, want %q", catalog, want)
 	}
 
@@ -569,8 +569,27 @@ func TestGuardianReviewInstructionsPrecedenceLikeRust(t *testing.T) {
 		Requirements: &config.ConfigRequirements{GuardianPolicyConfig: &managed},
 	}
 	overridden := guardianReviewInstructions(cfg, &model.AutoReviewMessages{Policy: &policy, PolicyTemplate: &template})
-	if want := state.RenderGuardianPolicyInstructions(managed, configuredTemplate, contract); overridden != want {
+	if want := state.RenderGuardianPolicyInstructions(managed, "", configuredTemplate, contract); overridden != want {
 		t.Fatalf("configured instructions = %q, want %q", overridden, want)
+	}
+
+	// Rust #47125: the managed extra policy reaches the template's
+	// `{{ extra_policy }}` slot alongside the tenant policy.
+	extraTemplate := "Tenant:\n{{ tenant_policy_config }}\n\nExtra:\n{{ extra_policy }}"
+	managedExtra := "Managed extra policy."
+	withExtra := &config.Config{
+		Values: map[string]any{"auto_review": map[string]any{"experimental_policy_template": extraTemplate}},
+		Requirements: &config.ConfigRequirements{
+			GuardianPolicyConfig: &managed,
+			GuardianExtraPolicy:  &managedExtra,
+		},
+	}
+	got := guardianReviewInstructions(withExtra, nil)
+	if want := state.RenderGuardianPolicyInstructions(managed, managedExtra, extraTemplate, contract); got != want {
+		t.Fatalf("extra-policy instructions = %q, want %q", got, want)
+	}
+	if !strings.Contains(got, "Extra:\nManaged extra policy.") {
+		t.Fatalf("extra policy did not reach the reviewer instructions: %q", got)
 	}
 }
 

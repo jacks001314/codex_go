@@ -26,14 +26,65 @@ func TestRenderGuardianPolicyInstructionsMatchesRust(t *testing.T) {
 			want:     "Policy: \n\nReview contract.\n",
 		},
 		{
+			// Rust #47125: the extra-policy slot is empty when no extra policy
+			// is configured.
+			template: "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+			policy:   "Tenant policy.",
+			want:     "Tenant: Tenant policy.\nAdditional: \n\nReview contract.\n",
+		},
+		{
 			template: "",
 			policy:   "Tenant policy.",
 			want:     "\n\nReview contract.\n",
 		},
 	} {
-		if got := RenderGuardianPolicyInstructions(testCase.policy, testCase.template, "Review contract."); got != testCase.want {
+		if got := RenderGuardianPolicyInstructions(testCase.policy, "", testCase.template, "Review contract."); got != testCase.want {
 			t.Fatalf("RenderGuardianPolicyInstructions() = %q, want %q", got, testCase.want)
 		}
+	}
+}
+
+// TestRenderGuardianExtraPolicyMatchesRust mirrors Rust #47125's
+// reviewer_extra_policy_substitution_preserves_tenant_policy: every extra
+// placeholder receives the trimmed extra policy, and a template without the
+// slot ignores it.
+func TestRenderGuardianExtraPolicyMatchesRust(t *testing.T) {
+	for _, testCase := range []struct {
+		template    string
+		extraPolicy string
+		want        string
+	}{
+		{
+			template:    "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}\nAgain: {{ extra_policy }}",
+			extraPolicy: " \nAdditional policy.\n ",
+			want:        "Tenant: Tenant policy.\nAdditional: Additional policy.\nAgain: Additional policy.\n\nReview contract.\n",
+		},
+		{
+			template:    "Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+			extraPolicy: " \n\t",
+			want:        "Tenant: Tenant policy.\nAdditional: \n\nReview contract.\n",
+		},
+		{
+			template:    "Tenant: {{ tenant_policy_config }}",
+			extraPolicy: "Additional policy.",
+			want:        "Tenant: Tenant policy.\n\nReview contract.\n",
+		},
+	} {
+		if got := RenderGuardianPolicyInstructions("Tenant policy.", testCase.extraPolicy, testCase.template, "Review contract."); got != testCase.want {
+			t.Fatalf("RenderGuardianPolicyInstructions() = %q, want %q", got, testCase.want)
+		}
+	}
+
+	// Placeholder-like text inside either supplied policy stays literal.
+	got := RenderGuardianPolicyInstructions(
+		"Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.",
+		"Additional says {{ tenant_policy_config }} and {{ extra_policy }}.",
+		"Tenant: {{ tenant_policy_config }}\nAdditional: {{ extra_policy }}",
+		"Review contract.",
+	)
+	want := "Tenant: Tenant says {{ tenant_policy_config }} and {{ extra_policy }}.\nAdditional: Additional says {{ tenant_policy_config }} and {{ extra_policy }}.\n\nReview contract.\n"
+	if got != want {
+		t.Fatalf("literal placeholder preservation = %q, want %q", got, want)
 	}
 }
 

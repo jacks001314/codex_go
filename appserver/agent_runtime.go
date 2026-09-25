@@ -400,7 +400,13 @@ func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReview
 			policyTemplate = value
 		}
 	}
-	return state.RenderGuardianPolicyInstructions(policy, policyTemplate, state.GuardianOutputContractPrompt())
+	extraPolicy := ""
+	if cfg != nil {
+		if value, ok := cfg.GuardianExtraPolicy(); ok {
+			extraPolicy = value
+		}
+	}
+	return state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
 }
 
 // guardianReviewModelForTurn keeps the model-only view used by the review

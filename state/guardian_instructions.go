@@ -22,6 +22,9 @@ var bundledGuardianNodeReplPolicy string
 // guardianPolicyPlaceholder is Rust's TENANT_POLICY_CONFIG_PLACEHOLDER.
 const guardianPolicyPlaceholder = "{{ tenant_policy_config }}"
 
+// guardianExtraPolicyPlaceholder is Rust's EXTRA_POLICY_PLACEHOLDER (#47125).
+const guardianExtraPolicyPlaceholder = "{{ extra_policy }}"
+
 // GuardianPolicy returns the bundled Guardian policy document.
 func GuardianPolicy() string {
 	return bundledGuardianPolicy
@@ -112,9 +115,20 @@ func GuardianOutputContractPrompt() string {
 
 // RenderGuardianPolicyInstructions mirrors Rust
 // GuardianPolicyInstructions::body: the template keeps its layout, every
-// `{{ tenant_policy_config }}` occurrence receives the trimmed policy, and the
-// output contract terminates the instructions.
-func RenderGuardianPolicyInstructions(policy, policyTemplate, outputContract string) string {
-	prompt := strings.ReplaceAll(strings.TrimRight(policyTemplate, " \t\n\r"), guardianPolicyPlaceholder, strings.TrimSpace(policy))
+// `{{ extra_policy }}` occurrence receives the trimmed extra policy, the
+// `{{ tenant_policy_config }}` split points receive the trimmed tenant policy,
+// and the output contract terminates the instructions.
+//
+// Rust #47125 substitutes in two passes so placeholder-like text inside either
+// supplied policy stays literal: the template is split on the tenant
+// placeholder and only the template parts have their extra placeholder
+// replaced before being joined with the tenant policy.
+func RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, outputContract string) string {
+	trimmed := strings.TrimRight(policyTemplate, " \t\n\r")
+	parts := strings.Split(trimmed, guardianPolicyPlaceholder)
+	for i, part := range parts {
+		parts[i] = strings.ReplaceAll(part, guardianExtraPolicyPlaceholder, strings.TrimSpace(extraPolicy))
+	}
+	prompt := strings.Join(parts, strings.TrimSpace(policy))
 	return prompt + "\n\n" + outputContract + "\n"
 }

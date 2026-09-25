@@ -53,3 +53,47 @@ func TestRequirementsFileParsesGuardianPolicyConfig(t *testing.T) {
 		t.Fatalf("requirements = %#v, want the managed policy", requirements)
 	}
 }
+
+// TestGuardianExtraPolicyConfigLikeRust mirrors Rust #47125's
+// Config::guardian_extra_policy precedence: the managed `guardian_extra_policy`
+// requirement wins over `[auto_review] extra_policy`, and a blank value in
+// either layer is ignored.
+func TestGuardianExtraPolicyConfigLikeRust(t *testing.T) {
+	managed := "  Managed extra policy.  "
+	cfg := &Config{
+		Values:       map[string]any{"auto_review": map[string]any{"extra_policy": "Config extra policy."}},
+		Requirements: &ConfigRequirements{GuardianExtraPolicy: &managed},
+	}
+	if got, ok := cfg.GuardianExtraPolicy(); !ok || got != "Managed extra policy." {
+		t.Fatalf("GuardianExtraPolicy() = %q, %v, want the managed policy", got, ok)
+	}
+
+	empty := " \n\t "
+	cfg.Requirements.GuardianExtraPolicy = &empty
+	if got, ok := cfg.GuardianExtraPolicy(); !ok || got != "Config extra policy." {
+		t.Fatalf("GuardianExtraPolicy() with an empty requirement = %q, %v", got, ok)
+	}
+
+	cfg.Values = map[string]any{"auto_review": map[string]any{"extra_policy": "   "}}
+	if got, ok := cfg.GuardianExtraPolicy(); ok || got != "" {
+		t.Fatalf("GuardianExtraPolicy() with a blank config value = %q, %v, want unset", got, ok)
+	}
+	if got, ok := (&Config{}).GuardianExtraPolicy(); ok || got != "" {
+		t.Fatalf("GuardianExtraPolicy() = %q, %v, want unset", got, ok)
+	}
+}
+
+// TestRequirementsFileParsesGuardianExtraPolicy mirrors Rust
+// requirements_toml.guardian_extra_policy.
+func TestRequirementsFileParsesGuardianExtraPolicy(t *testing.T) {
+	requirements, err := ParseRequirementsTOML([]byte("guardian_extra_policy = \"  Managed extra policy.  \"\n"))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML() error = %v", err)
+	}
+	if requirements == nil || requirements.GuardianExtraPolicy == nil || *requirements.GuardianExtraPolicy != "Managed extra policy." {
+		t.Fatalf("requirements = %#v, want the managed extra policy", requirements)
+	}
+	if configRequirementsEmpty(requirements) {
+		t.Fatal("configRequirementsEmpty() = true for a guardian_extra_policy-only requirement")
+	}
+}
