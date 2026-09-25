@@ -444,7 +444,13 @@ type RuntimeRouter struct {
 	// messageBoards shares in-memory discussion-board state across every handle
 	// of one agent tree (Rust `InMemoryMessageBoards`); SQLite boards share their
 	// pool through agentboard's own per-path registry.
-	messageBoards          agentboard.InMemoryMessageBoards
+	messageBoards agentboard.InMemoryMessageBoards
+	// messageBoardHandles keeps one live caller-bound handle per thread, so a
+	// thread reuses its handle across turns and an unloaded thread releases the
+	// tree's board state (Rust opens a handle with the thread runtime and drops
+	// it when the runtime unloads).
+	messageBoardHandles    map[string]agentboard.Board
+	messageBoardHandlesMu  sync.Mutex
 	agentActivityMu        sync.Mutex
 	agentActivity          map[string]chan string
 	agentMessagesMu        sync.Mutex
@@ -658,6 +664,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentActivity:           map[string]chan string{},
 		agentMessages:           map[string][]any{},
 		networkPolicy:           network.NewNetworkPolicyController(),
+		messageBoardHandles:     map[string]agentboard.Board{},
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
@@ -5477,6 +5484,8 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	r.flushThreadPendingToolEvents(threadID)
 	r.forgetThreadToolEvidence(threadID)
 	r.forgetThreadMCPToolCallElicitations(threadID)
+	// Rust drops the thread's message-board handle with its runtime.
+	r.closeMessageBoardHandle(threadID)
 	r.forgetThreadSessionState(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)

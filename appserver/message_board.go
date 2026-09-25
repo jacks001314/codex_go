@@ -90,29 +90,74 @@ func (r *RuntimeRouter) messageBoardOptionsForTurn(ctx context.Context, cfg *con
 	if strings.TrimSpace(tree) == "" {
 		return nil, fmt.Errorf("message board has no tree identity for thread %s", threadID)
 	}
-	host := &messageBoardHost{router: r, tree: tree, caller: strings.TrimSpace(threadID)}
+	caller := strings.TrimSpace(threadID)
+	board, err := r.messageBoardHandleForThread(ctx, cfg, tree, caller, v2Config)
+	if err != nil {
+		return nil, err
+	}
+	return &turn.MessageBoardOptions{
+		Board:                board,
+		Caller:               caller,
+		CallerPath:           agent.AgentPath(callerPath),
+		Namespace:            v2Config.ToolNamespace,
+		NamespaceDescription: agent.MultiAgentV2NamespaceDescription,
+		ToolOverrides:        messageBoardToolOverridesFromCatalog(turnModelInfo),
+	}, nil
+}
+
+// messageBoardHandleForThread returns the thread's existing board handle, opening
+// one bound to this caller when the thread has none. Rust opens a handle with the
+// thread's runtime and drops it when the runtime unloads, so a turn never leaks a
+// handle and the tree's shared state survives as long as one thread is loaded.
+func (r *RuntimeRouter) messageBoardHandleForThread(ctx context.Context, cfg *config.Config, tree string, caller string, v2Config *config.MultiAgentV2Config) (agentboard.Board, error) {
+	r.messageBoardHandlesMu.Lock()
+	if handle, ok := r.messageBoardHandles[caller]; ok {
+		r.messageBoardHandlesMu.Unlock()
+		return handle, nil
+	}
+	host := &messageBoardHost{router: r, tree: tree, caller: caller}
 	var board agentboard.Board
 	if v2Config.MessageBoardInMemory {
 		board = r.messageBoards.Open(tree, host)
 	} else {
 		sqliteConfig, err := r.messageBoardSqliteConfig(cfg)
 		if err != nil {
+			r.messageBoardHandlesMu.Unlock()
 			return nil, err
 		}
 		opened, err := agentboard.OpenLocalBoard(ctx, sqliteConfig, tree, host)
 		if err != nil {
+			r.messageBoardHandlesMu.Unlock()
 			return nil, err
 		}
 		board = opened
 	}
-	return &turn.MessageBoardOptions{
-		Board:                board,
-		Caller:               strings.TrimSpace(threadID),
-		CallerPath:           agent.AgentPath(callerPath),
-		Namespace:            v2Config.ToolNamespace,
-		NamespaceDescription: agent.MultiAgentV2NamespaceDescription,
-		ToolOverrides:        messageBoardToolOverridesFromCatalog(turnModelInfo),
-	}, nil
+	r.messageBoardHandles[caller] = board
+	r.messageBoardHandlesMu.Unlock()
+	return board, nil
+}
+
+// closeMessageBoardHandle releases the thread's board handle. An unloaded thread
+// must not keep its handle, and the last handle of a tree releases the shared
+// in-memory state (Rust drops the handle with the runtime).
+func (r *RuntimeRouter) closeMessageBoardHandle(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.messageBoardHandlesMu.Lock()
+	handle, ok := r.messageBoardHandles[threadID]
+	delete(r.messageBoardHandles, threadID)
+	r.messageBoardHandlesMu.Unlock()
+	if !ok || handle == nil {
+		return
+	}
+	if closer, ok := handle.(interface{ Close() }); ok {
+		closer.Close()
+	}
 }
 
 // messageBoardSqliteConfig mirrors Rust's `config.sqlite_config()`: the

@@ -13,6 +13,7 @@ import (
 	"codex_go/config"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/turn"
 )
 
 // Rust parity: the local thread store's `thread_data_cleanup` callback deletes
@@ -114,6 +115,46 @@ func TestThreadDeleteRemovesOwnedMessageBoardsLikeRust(t *testing.T) {
 	if _, err := reopened.CreateChannel(ctx, rootID, agentboard.CreateChannelRequest{ChannelName: "gone"}); err == nil ||
 		!strings.Contains(err.Error(), "permanently deleted") {
 		t.Fatalf("create after reopen error = %v", err)
+	}
+}
+
+// Rust parity: a thread reuses one board handle across turns, and unloading the
+// thread releases it (Rust opens a handle with the thread runtime and drops it
+// when the runtime unloads).
+func TestThreadUnloadReleasesTheMessageBoardHandleLikeRust(t *testing.T) {
+	home := t.TempDir()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(home)),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+	})
+	defer router.Close()
+	cfg := &config.Config{Values: map[string]any{}}
+	v2 := &config.MultiAgentV2Config{ToolNamespace: "collaboration", MessageBoardInMemory: true}
+
+	first, err := router.messageBoardOptionsForTurn(context.Background(), cfg, "thread-1", v2, nil)
+	if err != nil || first == nil {
+		t.Fatalf("messageBoardOptionsForTurn() = %#v, %v", first, err)
+	}
+	if router.messageBoards.Len() != 1 {
+		t.Fatalf("live boards = %d, want one for the loaded thread", router.messageBoards.Len())
+	}
+	again, err := router.messageBoardOptionsForTurn(context.Background(), cfg, "thread-1", v2, nil)
+	if err != nil || again == nil || again.Board != first.Board {
+		t.Fatalf("the thread opened a second handle: %#v", again)
+	}
+	if router.messageBoards.Len() != 1 {
+		t.Fatalf("live boards = %d, want the handle reused", router.messageBoards.Len())
+	}
+
+	router.markThreadUnloaded("thread-1")
+	if router.messageBoards.Len() != 0 {
+		t.Fatalf("live boards = %d, want the handle released on unload", router.messageBoards.Len())
+	}
+	// A thread loaded again after the unload opens a fresh handle.
+	reopened, err := router.messageBoardOptionsForTurn(context.Background(), cfg, "thread-1", v2, nil)
+	if err != nil || reopened == nil || reopened.Board == first.Board {
+		t.Fatalf("handle after unload = %#v, %v", reopened, err)
 	}
 }
 
