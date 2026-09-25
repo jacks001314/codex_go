@@ -251,6 +251,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"reasoningoverride",
 		"recordreplay",
 		"remotecontrol",
+		"retainedctx",
 		"review",
 		"rollout",
 		"runtimeutil",
