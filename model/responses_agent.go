@@ -925,6 +925,10 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		case "error":
 			closeResponsesWebsocketSession(session, "response failed")
 			if usageLimit, ok := websocketUsageLimitError(event); ok {
+				// Rust's wrapped-WebSocket mapping builds `Transport(Http{headers})`
+				// and `map_api_error` then reads the rate-limit headers off it, so a
+				// WebSocket usage limit refreshes the session's snapshot too.
+				emitUsageLimitErrorHeaderEvents(handler, websocketEventHTTPHeaders(event), usageLimit)
 				return nil, usageLimit
 			}
 			if websocketEventErrorCode(event) == "previous_response_not_found" && strings.TrimSpace(request.PreviousResponseID) != "" && !transportRetried {
@@ -1038,6 +1042,17 @@ func websocketEventErrorCode(event map[string]any) string {
 		return strings.TrimSpace(responseToolString(value["code"]))
 	}
 	return strings.TrimSpace(responseToolString(event["code"]))
+}
+
+// websocketEventHTTPHeaders converts a WebSocket event's JSON `headers` object
+// into HTTP headers, mirroring Rust's `json_headers_to_http_headers` use on the
+// wrapped transport error.
+func websocketEventHTTPHeaders(event map[string]any) http.Header {
+	headers, ok := event["headers"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return jsonHeadersToHTTPHeaders(headers)
 }
 
 // websocketUsageLimitError mirrors Rust's wrapped-WebSocket usage-limit

@@ -2386,6 +2386,55 @@ func TestResponsesAgentRunnerUsageLimitErrorReportsRateLimitsLikeRust(t *testing
 		})
 	}
 }
+
+// Mirrors Rust's wrapped-WebSocket usage-limit mapping: an `error` event carrying
+// a numeric status, a `usage_limit_reached` type and `x-codex-*` headers is a
+// usage-limit failure whose rate-limit headers refresh the session's snapshot,
+// exactly like the HTTP path.
+func TestResponsesAgentRunnerRunWebSocketUsageLimitReportsRateLimitsLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, _, _ = conn.Read(request.Context())
+		event := `{"type":"error","status":429,"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"pro","limit_window_minutes":300},` +
+			`"headers":{"x-codex-primary-used-percent":"100.0","x-codex-primary-window-minutes":"300","x-codex-primary-reset-at":"1735689720"}}`
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(event))
+	}))
+	defer server.Close()
+
+	var events []ResponsesStreamEvent
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{BaseURL: server.URL},
+		SupportsWebsockets: true,
+		StreamHandler: func(event *ResponsesStreamEvent) {
+			if event != nil {
+				events = append(events, *event)
+			}
+		},
+	})
+	_, err := runner.RunWebSocket(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: "usage limit"})
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorRateLimit {
+		t.Fatalf("websocket usage limit error = %v", err)
+	}
+	if apiErr.UsageLimitWindowMinutes == nil || *apiErr.UsageLimitWindowMinutes != 300 {
+		t.Fatalf("usage limit window = %v, want 300", apiErr.UsageLimitWindowMinutes)
+	}
+	rateLimits := eventsByKind(events, ResponsesStreamEventRateLimits)
+	if len(rateLimits) != 1 || rateLimits[0].RateLimit == nil || rateLimits[0].RateLimit.Primary == nil {
+		t.Fatalf("rate limit events = %#v", rateLimits)
+	}
+	primary := rateLimits[0].RateLimit.Primary
+	if primary.UsedPercent != 100 ||
+		primary.WindowDurationMins == nil || *primary.WindowDurationMins != 300 ||
+		primary.ResetsAt == nil || *primary.ResetsAt != 1735689720 {
+		t.Fatalf("primary window = %#v", primary)
+	}
+}
 func TestResponsesAgentRunnerRetriesTransientHTTPError(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
