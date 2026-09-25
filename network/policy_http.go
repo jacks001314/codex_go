@@ -96,12 +96,27 @@ func (d *PolicyHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 		permit.Release()
 		return nil, nil
 	}
-	if response.Body != nil {
-		response.Body = newPermitBody(permit, response.Body)
-	} else {
-		permit.Release()
-	}
+	wrapResponseBodyWithPermit(permit, response)
 	return response, nil
+}
+
+// wrapResponseBodyWithPermit keeps a permit alive for the response body.
+//
+// A hijacked stream (an upgraded WebSocket connection) is handed to the caller
+// as an `io.ReadWriteCloser` and must not be replaced: its own type is what lets
+// the WebSocket client take over the connection. The destination check that
+// authorized the request still applies; Rust additionally guards the stream's
+// reads and writes with the permit.
+func wrapResponseBodyWithPermit(permit *NetworkPermit, response *http.Response) {
+	if response == nil || response.Body == nil {
+		permit.Release()
+		return
+	}
+	if _, hijacked := response.Body.(io.ReadWriteCloser); hijacked {
+		permit.Release()
+		return
+	}
+	response.Body = newPermitBody(permit, response.Body)
 }
 
 // permitBody keeps a request's permit alive for the whole response body and

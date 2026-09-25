@@ -41,11 +41,7 @@ func (t *PolicyRoundTripper) RoundTrip(request *http.Request) (*http.Response, e
 		permit.Release()
 		return nil, nil
 	}
-	if response.Body != nil {
-		response.Body = newPermitBody(permit, response.Body)
-	} else {
-		permit.Release()
-	}
+	wrapResponseBodyWithPermit(permit, response)
 	return response, nil
 }
 

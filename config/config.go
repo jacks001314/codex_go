@@ -30,6 +30,10 @@ type Config struct {
 	// factories built from this config bind it, so every application transport
 	// shares one policy generation. It is never serialized.
 	ApplicationNetworkPolicy *network.NetworkPolicy `json:"-"`
+	// ApplicationDestinationPolicy is the composed destination policy that
+	// generation publishes, so a transport can tell whether binding it would
+	// restrict anything. It is never serialized.
+	ApplicationDestinationPolicy *network.DestinationPolicy `json:"-"`
 	// isProjectless records that configuration discovery found no project-root
 	// marker, no Git checkout root and no project-local config directory
 	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was

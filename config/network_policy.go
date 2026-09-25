@@ -52,6 +52,26 @@ func (c *Config) SetNetworkPolicy(policy network.NetworkPolicy) {
 	c.ApplicationNetworkPolicy = &policy
 }
 
+// RestrictsApplicationTraffic reports whether the bound policy restricts
+// application destinations (Rust `DestinationPolicy::Restricted`). It is false
+// before a policy is bound and for an unrestricted one, so a transport can keep
+// its client untouched when nothing would be enforced.
+func (c *Config) RestrictsApplicationTraffic() bool {
+	if c == nil || c.ApplicationDestinationPolicy == nil {
+		return false
+	}
+	return c.ApplicationDestinationPolicy.IsRestricted()
+}
+
+// SetApplicationDestinationPolicy records the composed destination policy
+// alongside the carried read handle.
+func (c *Config) SetApplicationDestinationPolicy(policy network.DestinationPolicy) {
+	if c == nil {
+		return
+	}
+	c.ApplicationDestinationPolicy = &policy
+}
+
 // BindApplicationNetworkPolicy publishes the policy composed from this config's
 // managed requirements and binds it to the config, returning the controller the
 // caller keeps for account-change invalidation (Rust
@@ -67,7 +87,9 @@ func (c *Config) BindApplicationNetworkPolicy() *network.NetworkPolicyController
 		application = c.Requirements.Application
 	}
 	policy := controller.Policy()
-	controller.Publish(policy.Revision(), DestinationPolicyForApplicationRequirements(application))
+	composed := DestinationPolicyForApplicationRequirements(application)
+	controller.Publish(policy.Revision(), composed)
 	c.SetNetworkPolicy(policy)
+	c.SetApplicationDestinationPolicy(composed)
 	return controller
 }

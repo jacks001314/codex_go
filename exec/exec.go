@@ -1690,7 +1690,7 @@ func (r *Runner) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
 	// request is issued, so a managed restriction applies to every transport the
 	// run builds.
 	policy := cfg.NetworkPolicy()
-	if !policy.IsScoped() {
+	if !policy.IsScoped() || !cfg.RestrictsApplicationTraffic() {
 		return base
 	}
 	return &network.PolicyHTTPDoer{Policy: policy, Next: base}

@@ -48,6 +48,40 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	return parsed
 }
 
+// hijackedBody stands in for an upgraded connection, whose concrete type is what
+// lets a WebSocket client take over the stream.
+type hijackedBody struct{}
+
+func (h *hijackedBody) Read([]byte) (int, error)    { return 0, io.EOF }
+func (h *hijackedBody) Write(p []byte) (int, error) { return len(p), nil }
+func (h *hijackedBody) Close() error                { return nil }
+
+type hijackDoer struct{ body *hijackedBody }
+
+func (d hijackDoer) Do(*http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusSwitchingProtocols, Body: d.body}, nil
+}
+
+// Rust parity: an upgraded connection is handed to the caller unchanged, so the
+// permit never replaces a hijacked stream's body.
+func TestPolicyHTTPDoerKeepsHijackedResponseBodiesLikeRust(t *testing.T) {
+	controller := NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), UnrestrictedDestinationPolicy())
+	body := &hijackedBody{}
+	doer := &PolicyHTTPDoer{Policy: policy, Next: hijackDoer{body: body}}
+	response, err := doer.Do(&http.Request{URL: mustURL(t, "https://example.com/socket")})
+	if err != nil {
+		t.Fatalf("upgrade request error = %v", err)
+	}
+	if response.Body != io.ReadCloser(body) {
+		t.Fatalf("hijacked body was replaced: %#v", response.Body)
+	}
+	if _, ok := response.Body.(io.ReadWriteCloser); !ok {
+		t.Fatal("the hijacked body no longer exposes the writable stream")
+	}
+}
+
 // An endpoint scope is enforced even without a policy owner, so a bootstrap
 // client can only reach the URLs it was scoped to.
 func TestPolicyHTTPDoerEnforcesEndpointScopeLikeRust(t *testing.T) {

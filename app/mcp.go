@@ -870,7 +870,10 @@ func (s *mcpCLIStore) Load(overrides []string) (*mcpCLIConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.httpClient = codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0)
+	// The host publishes its application network policy for the config and every
+	// client it builds from that config binds it.
+	publishApplicationNetworkPolicy(loaded)
+	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
 }
 
@@ -879,7 +882,8 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 	if err != nil {
 		return nil, err
 	}
-	s.httpClient = codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0)
+	publishApplicationNetworkPolicy(bootstrap)
+	s.httpClient = policyHTTPClient(bootstrap, codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0))
 	snapshot, err := auth.NewStoreWithOptions(s.codexHome, authStoreOptionsFromLoadedConfig(bootstrap)).Load()
 	if err != nil {
 		return nil, err
@@ -894,6 +898,7 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 	loader := config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
 		loadCtx, cancel := context.WithTimeout(contextOrBackground(ctx), 15*time.Second)
 		defer cancel()
+		policy := publishApplicationNetworkPolicy(bootstrap)
 		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
 			CodexHome:          s.codexHome,
 			BaseURL:            bootstrap.ChatGPTBaseURL(),
@@ -901,6 +906,7 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 			AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
 			HTTPClient:         s.httpClient,
 			FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
+			NetworkPolicy:      &policy,
 			Authorize: func(requestCtx context.Context, request *http.Request) error {
 				return authHeaders.Apply(requestCtx, request, nil)
 			},
@@ -915,7 +921,8 @@ func (s *mcpCLIStore) LoadManaged(ctx context.Context, overrides []string) (*mcp
 	if err != nil {
 		return nil, err
 	}
-	s.httpClient = codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0)
+	publishApplicationNetworkPolicy(loaded)
+	s.httpClient = policyHTTPClient(loaded, codexnetwork.NewHTTPClient(loaded.RespectSystemProxyEnabled(), 0))
 	return mcpCLIConfigFromValues(loaded.Values), nil
 }
 

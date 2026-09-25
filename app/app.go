@@ -604,6 +604,10 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 	return config.NewCloudConfigLoader(func() (*config.CloudConfigBundle, error) {
 		loadCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
+		// Rust's config manager limits cloud bootstrap with the host's
+		// application network policy (the endpoint itself is scoped inside the
+		// loader).
+		policy := publishApplicationNetworkPolicy(bootstrap)
 		return config.LoadCloudConfigBundle(loadCtx, config.CloudConfigFetchOptions{
 			CodexHome:          codexHome,
 			BaseURL:            bootstrap.ChatGPTBaseURL(),
@@ -611,6 +615,7 @@ func sandboxCloudConfigBundleForRun(ctx context.Context, codexHome string, opts 
 			AccountID:          auth.AccountIDFromAuthForRestrictions(snapshot),
 			HTTPClient:         codexnetwork.NewHTTPClient(bootstrap.RespectSystemProxyEnabled(), 0),
 			FallbackHTTPClient: bootstrapFallbackHTTPClient(bootstrap, 0),
+			NetworkPolicy:      &policy,
 			Authorize: func(requestCtx context.Context, request *http.Request) error {
 				return authHeaders.Apply(requestCtx, request, nil)
 			},
@@ -768,7 +773,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 			ConnectURL:    forward,
 			EnvironmentID: environmentID,
 			Name:          strings.TrimSpace(opts.Name),
-			HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
+			HTTPClient:    policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 		})
 	}
 	loadedConfig, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), &config.EffectiveOptions{
@@ -782,7 +787,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	if !opts.ListenSet {
 		listenURL = execserver.DefaultListenURL
 	}
-	httpClient := codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)
+	httpClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	server := execserver.NewServerWithHTTPClient(httpClient)
 	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
 	// combination was already validated against stdio/--remote/forward.
@@ -825,7 +830,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 			EnvironmentID: environmentID,
 			Name:          strings.TrimSpace(opts.Name),
 			AuthHeaders:   headers,
-			HTTPClient:    codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
+			HTTPClient:    policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -869,7 +874,7 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		Name:               strings.TrimSpace(opts.Name),
 		AuthHeaders:        headers,
 		ResolveAuthHeaders: resolveHeaders,
-		HTTPClient:         codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0),
+		HTTPClient:         policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
 	})
 }
 
@@ -1295,7 +1300,7 @@ func appServerRuntimeOptionsFromCLI(opts cli.AppServerOptions, loadedConfig *con
 			return nil, errors.New("remote code-mode host requires the code_mode_host feature to be enabled")
 		}
 		options.CodeModeHostURL = hostURL
-		options.CodeModeHostHTTPClient = codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)
+		options.CodeModeHostHTTPClient = policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 		// Rust's explicitly selected WebSocket provider never falls back to the local host.
 		options.DisableCodeModeInProcessFallback = true
 	} else if loadedConfig != nil {
