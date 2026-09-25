@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"codex_go/network"
 )
 
 const (
@@ -31,6 +33,34 @@ type CloudConfigHTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+// scopeCloudConfigFetchOptions restricts the bootstrap clients to the exact
+// config bundle endpoint, mirroring Rust's
+// `restrict_to_endpoints(config_bundle_url)`. The endpoint scope is enforced
+// even without a policy owner, so a bootstrap client that was handed an
+// unrestricted policy still cannot reach another URL.
+func scopeCloudConfigFetchOptions(opts CloudConfigFetchOptions) CloudConfigFetchOptions {
+	endpoint, err := cloudConfigBundleEndpoint(opts.BaseURL)
+	if err != nil {
+		return opts
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return opts
+	}
+	policy := network.UnmanagedNetworkPolicy()
+	if opts.NetworkPolicy != nil {
+		policy = *opts.NetworkPolicy
+	}
+	policy = policy.RestrictToEndpoints([]*url.URL{parsed})
+	if opts.HTTPClient != nil {
+		opts.HTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.HTTPClient}
+	}
+	if opts.FallbackHTTPClient != nil {
+		opts.FallbackHTTPClient = &network.PolicyHTTPDoer{Policy: policy, Next: opts.FallbackHTTPClient}
+	}
+	return opts
+}
+
 type CloudConfigFetchOptions struct {
 	CodexHome     string
 	BaseURL       string
@@ -40,8 +70,13 @@ type CloudConfigFetchOptions struct {
 	// FallbackHTTPClient, when set, retries the GET through the system proxy
 	// after the primary client fails to connect or times out (Rust #46562).
 	FallbackHTTPClient CloudConfigHTTPDoer
-	Headers            http.Header
-	Authorize          func(context.Context, *http.Request) error
+	// NetworkPolicy, when set, is the application network policy the bootstrap
+	// GET is bound to. Either way the fetch is scoped to the exact config bundle
+	// endpoint, so the local policy limits cloud bootstrap
+	// (Rust ConfigManager::replace_cloud_config_bundle_loader).
+	NetworkPolicy *network.NetworkPolicy
+	Headers       http.Header
+	Authorize     func(context.Context, *http.Request) error
 }
 
 // cloudConfigFallbackAttemptTimeout bounds the primary bootstrap GET, including
@@ -70,6 +105,7 @@ func LoadCloudConfigBundle(ctx context.Context, opts CloudConfigFetchOptions) (*
 	if cached := loadCloudConfigBundleCache(opts); cached != nil {
 		return cached, nil
 	}
+	opts = scopeCloudConfigFetchOptions(opts)
 	if opts.FallbackHTTPClient != nil {
 		// Bound the primary attempt, then retry through the system proxy when it
 		// failed to connect or timed out. A caller-cancelled context stops here.

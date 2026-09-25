@@ -9,11 +9,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"codex_go/network"
 )
 
 const cloudManagedPermissionProfileRequirements = `
@@ -203,5 +206,61 @@ func TestLoadEffectiveCloudManagedPermissionProfileIsExplicitlyGated(t *testing.
 	}
 	if fallback == nil || fallback.ID != "managed-cloud" {
 		t.Fatalf("disallowed profile did not fall back to the required default: %#v", fallback)
+	}
+}
+
+// scopedCloudConfigDoer records whether a bootstrap request was attempted.
+type scopedCloudConfigDoer struct {
+	attempts int
+}
+
+func (d *scopedCloudConfigDoer) Do(*http.Request) (*http.Response, error) {
+	d.attempts++
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+}
+
+// Rust parity: the local policy limits cloud bootstrap, so the fetch client is
+// scoped to the exact config bundle endpoint and cannot reach another URL even
+// with an unrestricted destination policy.
+func TestCloudConfigFetchIsScopedToBundleEndpointLikeRust(t *testing.T) {
+	next := &scopedCloudConfigDoer{}
+	scoped := scopeCloudConfigFetchOptions(CloudConfigFetchOptions{
+		BaseURL:    "https://cloud.example/backend-api",
+		HTTPClient: next,
+	})
+	allowed, err := url.Parse("https://cloud.example/backend-api/wham/config/bundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scoped.HTTPClient.Do(&http.Request{URL: allowed}); err != nil {
+		t.Fatalf("allowed endpoint error = %v", err)
+	}
+	other, err := url.Parse("https://cloud.example/backend-api/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scoped.HTTPClient.Do(&http.Request{URL: other}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("other endpoint error = %v, want a destination denial", err)
+	}
+	if next.attempts != 1 {
+		t.Fatalf("attempts = %d, want only the bundle endpoint", next.attempts)
+	}
+
+	// A caller policy cannot widen the scope, and a destination the policy
+	// denies stays denied even at the scoped endpoint.
+	controller := network.NewNetworkPolicyController()
+	policy := controller.Policy()
+	controller.Publish(policy.Revision(), network.RestrictedDestinationPolicy([]string{"granted.example"}))
+	denied := scopeCloudConfigFetchOptions(CloudConfigFetchOptions{
+		BaseURL:       "https://denied.example",
+		HTTPClient:    &scopedCloudConfigDoer{},
+		NetworkPolicy: &policy,
+	})
+	endpoint, err := url.Parse("https://denied.example/wham/config/bundle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := denied.HTTPClient.Do(&http.Request{URL: endpoint}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("scoped managed policy error = %v", err)
 	}
 }

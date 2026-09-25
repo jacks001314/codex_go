@@ -48,6 +48,29 @@ func mustURL(t *testing.T, raw string) *url.URL {
 	return parsed
 }
 
+// An endpoint scope is enforced even without a policy owner, so a bootstrap
+// client can only reach the URLs it was scoped to.
+func TestPolicyHTTPDoerEnforcesEndpointScopeLikeRust(t *testing.T) {
+	allowed := mustURL(t, "https://cloud.example/backend-api/wham/config/bundle")
+	next := &recordingDoer{body: "ok"}
+	doer := &PolicyHTTPDoer{Policy: UnmanagedNetworkPolicy().RestrictToEndpoints([]*url.URL{allowed}), Next: next}
+
+	if _, err := doer.Do(&http.Request{URL: mustURL(t, "https://cloud.example/backend-api/other")}); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("unscoped URL error = %v, want a destination denial", err)
+	}
+	if next.attempted() != 0 {
+		t.Fatalf("attempted %d requests outside the endpoint scope", next.attempted())
+	}
+	response, err := doer.Do(&http.Request{URL: allowed})
+	if err != nil {
+		t.Fatalf("scoped request error = %v", err)
+	}
+	_ = response.Body.Close()
+	if next.attempted() != 1 {
+		t.Fatalf("attempted %d requests, want the scoped one to pass", next.attempted())
+	}
+}
+
 // Rust parity: the managed http-client rejects a denied destination before the
 // request is attempted, and an unmanaged policy changes nothing.
 func TestPolicyHTTPDoerChecksDestinationBeforeConnectingLikeRust(t *testing.T) {

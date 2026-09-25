@@ -121,6 +121,35 @@ func UnmanagedNetworkPolicy() NetworkPolicy { return NetworkPolicy{} }
 // policy lifecycle.
 func (p NetworkPolicy) IsManaged() bool { return p.state != nil }
 
+// IsScoped reports whether the policy constrains destinations at all: either
+// through a managed policy owner or through an endpoint scope installed by
+// RestrictToEndpoints.
+func (p NetworkPolicy) IsScoped() bool { return p.state != nil || p.endpoints != nil }
+
+// RestrictToEndpoints narrows a bootstrap client to exact endpoint URLs. It can
+// never grant access to a destination the underlying policy denies, and the
+// restriction is enforced even without a policy owner, matching Rust
+// `NetworkPolicy::restrict_to_endpoints`. Restricting again intersects with the
+// existing scope, and an empty set denies every destination.
+func (p NetworkPolicy) RestrictToEndpoints(endpoints []*url.URL) NetworkPolicy {
+	scoped := make([]*url.URL, 0, len(endpoints))
+	if p.endpoints == nil {
+		for _, endpoint := range endpoints {
+			if endpoint != nil {
+				scoped = append(scoped, endpoint)
+			}
+		}
+	} else {
+		for _, existing := range p.endpoints {
+			if existing != nil && containsEndpoint(endpoints, existing) {
+				scoped = append(scoped, existing)
+			}
+		}
+	}
+	p.endpoints = scoped
+	return p
+}
+
 // ForCurrentAccount binds a content client to the current account so retained
 // credentials cannot be used after another workspace's policy was installed.
 func (p NetworkPolicy) ForCurrentAccount() NetworkPolicy {

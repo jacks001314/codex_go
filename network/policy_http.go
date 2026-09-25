@@ -61,7 +61,7 @@ func (d *PolicyHTTPDoer) Do(request *http.Request) (*http.Response, error) {
 	if d == nil || d.Next == nil {
 		return nil, errors.New("network policy transport is unavailable")
 	}
-	if request == nil || !d.Policy.IsManaged() {
+	if request == nil || !d.Policy.IsScoped() {
 		return d.Next.Do(request)
 	}
 	permit, err := d.Policy.Acquire(request.URL)

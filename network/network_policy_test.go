@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 )
@@ -148,5 +149,50 @@ func TestNetworkPolicyUnsupportedSDKWorkIsDeniedAndCancelled(t *testing.T) {
 		return "should not run"
 	}); err != ErrNetworkPolicyRevoked {
 		t.Fatalf("run error = %v, want revoked", err)
+	}
+}
+
+// Rust parity: restricting a policy to exact endpoint URLs enforces the scope
+// even without a policy owner, intersects with an existing scope, and cannot
+// grant access a destination policy denies.
+func TestNetworkPolicyRestrictToEndpointsLikeRust(t *testing.T) {
+	allowed := mustParseURL(t, "https://cloud.example/backend-api/wham/config/bundle")
+	other := mustParseURL(t, "https://cloud.example/backend-api/other")
+
+	policy := UnmanagedNetworkPolicy().RestrictToEndpoints([]*url.URL{allowed})
+	if !policy.IsScoped() {
+		t.Fatal("an endpoint-scoped policy reports no scope")
+	}
+	if _, err := policy.Acquire(allowed); err != nil {
+		t.Fatalf("Acquire(allowed) error = %v", err)
+	}
+	if _, err := policy.Acquire(other); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("Acquire(other) error = %v, want a destination denial", err)
+	}
+	if _, err := policy.AcquireForUnsupportedSDK(); !errors.Is(err, ErrNetworkPolicyUnsupportedTransport) {
+		t.Fatalf("AcquireForUnsupportedSDK() error = %v", err)
+	}
+
+	// Restricting again intersects with the current scope.
+	intersected := policy.RestrictToEndpoints([]*url.URL{other})
+	if _, err := intersected.Acquire(allowed); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("intersection kept a dropped endpoint: %v", err)
+	}
+	// An empty set denies every destination.
+	if _, err := UnmanagedNetworkPolicy().RestrictToEndpoints(nil).Acquire(allowed); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("empty scope error = %v", err)
+	}
+
+	// A managed policy's own destination rules still bind under a scope.
+	controller := NewNetworkPolicyController()
+	managed := controller.Policy()
+	controller.Publish(managed.Revision(), RestrictedDestinationPolicy([]string{"granted.example"}))
+	scoped := managed.RestrictToEndpoints([]*url.URL{other})
+	if _, err := scoped.Acquire(other); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("scoped managed policy granted a denied host: %v", err)
+	}
+	granted := mustParseURL(t, "https://granted.example/path")
+	if _, err := scoped.Acquire(granted); !errors.Is(err, ErrNetworkPolicyDestination) {
+		t.Fatalf("scoped managed policy escaped its endpoint scope: %v", err)
 	}
 }
