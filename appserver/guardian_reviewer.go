@@ -1069,7 +1069,10 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 	if err != nil || cfg == nil {
 		return
 	}
-	threadContext := features.Enabled(cfg.FeatureSettings(), "guardianv2.thread_context")
+	// Rust #47686/#47688/#47689/#47690: thread-owned Guardian context capture is
+	// unconditional; the guardianv2.thread_context flag was promoted, then
+	// retired as a removed compatibility no-op, so the Go gate is fixed on.
+	threadContext := true
 	reuseParentCompaction := features.Enabled(cfg.FeatureSettings(), "guardian_reuse_parent_compaction")
 	if !threadContext && !reuseParentCompaction {
 		return

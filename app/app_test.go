@@ -57,6 +57,26 @@ func useLocalExecRunner(t *testing.T) {
 	})
 }
 
+// useEmbeddedLaunch pins the shared background server off for tests that
+// exercise interactive behavior unrelated to the daemon. Rust #47179 enabled
+// automatic daemon startup by default, and an eligible interactive launch now
+// requires the managed standalone install before it can reuse or start the
+// background server.
+func useEmbeddedLaunch(t *testing.T) {
+	t.Helper()
+	previousFeature := daemonAutoStartFeature
+	previousStart := daemonAutoStartStart
+	daemonAutoStartFeature = func() bool { return false }
+	daemonAutoStartStart = func() (string, error) {
+		t.Fatal("the shared background server must not be started by this test")
+		return "", nil
+	}
+	t.Cleanup(func() {
+		daemonAutoStartFeature = previousFeature
+		daemonAutoStartStart = previousStart
+	})
+}
+
 // TestInteractiveWindowsSandboxStartupPromptSkipsTrustedGitProjectLikeRust
 // reproduces the ConPTY differential fixture exactly: the cwd is a git root
 // and the effective config already trusts it, so the enable prompt must not
@@ -805,6 +825,7 @@ func TestExecJSONEndToEnd(t *testing.T) {
 }
 
 func TestInteractivePromptUsesExecRunner(t *testing.T) {
+	useEmbeddedLaunch(t)
 	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -826,6 +847,7 @@ func TestInteractivePromptNormalizesCRLF(t *testing.T) {
 }
 
 func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
+	useEmbeddedLaunch(t)
 	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -845,6 +867,7 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
 }
 
 func TestInteractiveSlashCommandsUpdateTUIState(t *testing.T) {
+	useEmbeddedLaunch(t)
 	useLocalExecRunner(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
@@ -988,6 +1011,7 @@ func TestInteractiveUIStateUsesConcreteDefaultModel(t *testing.T) {
 }
 
 func TestInteractiveKeymapCommandPersistsConfig(t *testing.T) {
+	useEmbeddedLaunch(t)
 	t.Setenv("TERM", "xterm-256color")
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
@@ -1095,6 +1119,7 @@ func TestAppServerRequirementsFromFileParsesFullRequirements(t *testing.T) {
 }
 
 func TestInteractiveSlashCommandRejectsInvalidApproval(t *testing.T) {
+	useEmbeddedLaunch(t)
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	var stdout bytes.Buffer
@@ -3609,6 +3634,7 @@ func TestInteractiveDumbTerminalWithoutTTYFailsLikeRust(t *testing.T) {
 }
 
 func TestInteractiveDumbTerminalTTYConfirmationLikeRust(t *testing.T) {
+	useEmbeddedLaunch(t)
 	t.Setenv("TERM", "dumb")
 	var stdout terminalBuffer
 	var stderr terminalBuffer
@@ -5738,6 +5764,7 @@ func TestReadRemoteAuthTokenFromEnvVar(t *testing.T) {
 }
 
 func TestExecPromptFromStdinEndToEnd(t *testing.T) {
+	useEmbeddedLaunch(t)
 	useLocalExecRunner(t)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	t.Setenv("OPENAI_API_KEY", "sk-test")

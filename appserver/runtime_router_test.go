@@ -20836,6 +20836,24 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			wantKind:  "bio_policy",
 			wantHTTP:  http.StatusBadRequest,
 		},
+		{
+			// Rust #47967: the Flex-capacity failure carries the 429 the
+			// request arrived with and keeps its dedicated classification.
+			name:      "flex unavailable",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: http.StatusTooManyRequests, Message: "Flex capacity unavailable."},
+			wantError: `"flexUnavailable"`,
+			wantKind:  "flex_unavailable",
+			wantHTTP:  http.StatusTooManyRequests,
+		},
+		{
+			// Rust's CodexErrorDetails::http_status_code_value reports 429 for
+			// FlexUnavailable even when the sampled error carries no status.
+			name:      "flex unavailable defaults to 429",
+			err:       &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Message: "Flex capacity unavailable."},
+			wantError: `"flexUnavailable"`,
+			wantKind:  "flex_unavailable",
+			wantHTTP:  http.StatusTooManyRequests,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -27936,6 +27954,11 @@ func TestWriteStdinApprovalSkipsMatchingTerminalsLikeRust(t *testing.T) {
 
 func TestWriteStdinApprovalDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
 	home := t.TempDir()
+	// Rust #47799 promoted write_stdin_approval to stable and enabled it by
+	// default, so the feature must now be disabled explicitly.
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nwrite_stdin_approval = false\n"), 0o600); err != nil {
+		t.Fatalf("write config error = %v", err)
+	}
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{
 		ThreadRouter: NewRouter(store),
@@ -27954,7 +27977,35 @@ func TestWriteStdinApprovalDisabledFeatureDoesNotGateLikeRust(t *testing.T) {
 		Chars:              "hello\n",
 		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
 	}); err != nil {
-		t.Fatalf("writeStdinApproval() with feature off error = %v, want no gate", err)
+		t.Fatalf("writeStdinApproval() with the feature disabled error = %v, want no gate", err)
+	}
+}
+
+// TestWriteStdinApprovalDefaultEnabledGatesLikeRust mirrors Rust #47799: with no
+// explicit setting the feature is on, so an escalated write requires review and
+// fails closed when the process cannot deliver an approval request.
+func TestWriteStdinApprovalDefaultEnabledGatesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
+	if threadStart.Error != nil {
+		t.Fatalf("thread start error: %+v", threadStart.Error)
+	}
+	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+	t.Cleanup(func() { _ = router.Close() })
+	err := router.writeStdinApproval(context.Background(), &tool.WriteStdinApprovalRequest{
+		ProcessID:          42,
+		ThreadID:           threadID,
+		TurnID:             "turn-1",
+		Chars:              "hello\n",
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	})
+	if err == nil || !strings.Contains(err.Error(), "server request sink is not configured") {
+		t.Fatalf("writeStdinApproval() with the default-enabled feature error = %v, want the approval gate", err)
 	}
 }
 

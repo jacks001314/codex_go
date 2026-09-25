@@ -44,15 +44,10 @@ var Registry = []Spec{
 		ExperimentalName:            "Analytics plan history",
 		ExperimentalMenuDescription: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
 	},
-	// Rust (codex-rs/features/src/lib.rs #46117): automatically start the
-	// shared local daemon for eligible interactive launches.
-	{
-		Key:                         "daemon_auto_start",
-		Stage:                       StageExperimental,
-		ExperimentalName:            "Automatically start the background server",
-		ExperimentalMenuDescription: "Use the shared local server for new, resumed, and forked sessions. Takes effect next launch.",
-		ExperimentalAnnouncement:    "Automatic background server startup can now be enabled from /experimental.",
-	},
+	// Rust (codex-rs/features/src/lib.rs #47179): automatic background-server
+	// startup was promoted to stable and is enabled by default; the
+	// experimental menu entry and announcement are gone.
+	{Key: "daemon_auto_start", Stage: StageStable, DefaultEnabled: true},
 	{Key: "undo", Stage: StageRemoved},
 	{Key: "shell_tool", Stage: StageStable, DefaultEnabled: true},
 	{Key: "secret_auth_storage", Stage: StageStable, DefaultEnabled: runtime.GOOS == "windows"},
@@ -131,6 +126,13 @@ var Registry = []Spec{
 	{Key: "multi_agent", Stage: StageStable, DefaultEnabled: true},
 	{Key: "multi_agent_v2", Stage: StageStable},
 	{Key: "multi_agent_mode", Stage: StageRemoved},
+	// Rust (codex-rs/features/src/lib.rs #47913): keep sampling through
+	// reasoning and commentary boundaries when agent mail arrives; pending mail
+	// is delivered at the next normal input boundary instead.
+	{Key: "defer_mailbox_preemption", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #47946): shared discussion tools for an
+	// agent tree (the in-memory agent message board).
+	{Key: "agent_message_board", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "enable_fanout", Stage: StageRemoved},
 	{Key: "apps", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_mcp_apps", Stage: StageUnderDevelopment},
@@ -202,7 +204,11 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs e4ce83419b #43104): retain thread
 	// context for Guardian reviews; renamed from guardian_thread_context into
 	// the guardianv2 configuration namespace.
-	{Key: "guardianv2.thread_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #47686/#47688/#47689/#47690): the
+	// flag was promoted to stable/default-on and then retired - thread-owned
+	// Guardian context capture is unconditional, and the key is kept as a
+	// removed compatibility no-op.
+	{Key: "guardianv2.thread_context", Stage: StageRemoved, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #45679): the extension-owned
 	// synchronous Guardian reviewer prototype was retired; the flag is kept as
 	// a removed compatibility no-op.
@@ -259,7 +265,9 @@ var Registry = []Spec{
 	{Key: "psp", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs f5420174da): feature-key surface frozen
 	// during the sync26 static re-target.
-	{Key: "transcript_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #46849): the fullscreen transcript
+	// control moved into the TUI configuration; the flag is deprecated.
+	{Key: "transcript_v2", Stage: StageDeprecated, DefaultEnabled: false},
 	{Key: "content_item_kinds", Stage: StageStable, DefaultEnabled: true},
 	{Key: "code_mode_prewarm", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "skip_host_skill_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -268,8 +276,13 @@ var Registry = []Spec{
 	{Key: "step_model_switching", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 307ce6cda9): write_stdin_approval
 	// added; compaction_image_budget promoted to stable/default-on (sync28).
-	{Key: "write_stdin_approval", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #47799 ("Enable terminal input approval by default") then promoted
+	// write_stdin_approval to stable and enabled it by default.
+	{Key: "write_stdin_approval", Stage: StageStable, DefaultEnabled: true},
 	{Key: "compaction_image_budget", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs #47375): opt into the local MXC
+	// sandbox as the preferred Windows sandbox backend.
+	{Key: "prefer_mxc", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #42385): experimental context
 	// management activation.
 	{Key: "context_management", Stage: StageUnderDevelopment},
