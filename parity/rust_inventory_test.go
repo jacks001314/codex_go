@@ -206,6 +206,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 func goTopLevelDirectoriesSnapshot() []string {
 	return []string{
 		"agent",
+		"agentboard",
 		"app",
 		"applypatch",
 		"apps",
