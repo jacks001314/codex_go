@@ -86,6 +86,7 @@ const (
 	ResponseAPIInvalidRequest   ResponseAPIErrorKind = "invalidRequest"
 	ResponseAPICyberPolicy      ResponseAPIErrorKind = "cyberPolicy"
 	ResponseAPIServerOverloaded ResponseAPIErrorKind = "serverOverloaded"
+	ResponseAPIFlexUnavailable  ResponseAPIErrorKind = "flexUnavailable"
 )
 
 type ResponseAPIError struct {
@@ -129,6 +130,9 @@ func TelemetryResponseAPIErrorMessage(err *ResponseAPIError) string {
 		return "cyber policy"
 	case ResponseAPIServerOverloaded:
 		return "server overloaded"
+	case ResponseAPIFlexUnavailable:
+		// Rust response-debug-context telemetry_api_error_message.
+		return "flex capacity unavailable"
 	default:
 		return err.Message
 	}

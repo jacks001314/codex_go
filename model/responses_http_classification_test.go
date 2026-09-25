@@ -47,3 +47,31 @@ func TestResponsesHTTPErrorDistinguishesCapacityFromSlowDownLikeRust(t *testing.
 		t.Fatalf("unknown_error error = %#v, want *ResponsesAPIError with status 503", unknown)
 	}
 }
+
+// TestResponsesHTTPErrorRecognizesFlexUnavailableLikeRust mirrors Rust #47967:
+// an HTTP 429 whose body carries `flex_unavailable` is a terminal Flex-capacity
+// failure, not a retryable rate limit or a usage-limit failure.
+func TestResponsesHTTPErrorRecognizesFlexUnavailableLikeRust(t *testing.T) {
+	flex := responsesHTTPError("OpenAI", http.StatusTooManyRequests, http.Header{},
+		[]byte(`{"error":{"code":"flex_unavailable","message":"Flex capacity unavailable."}}`))
+	var apiErr *codexapi.APIError
+	if !errors.As(flex, &apiErr) || apiErr.Kind != codexapi.ErrorFlexUnavailable {
+		t.Fatalf("flex error = %#v, want flexUnavailable", flex)
+	}
+	if apiErr.Status != http.StatusTooManyRequests {
+		t.Fatalf("flex status = %d, want 429", apiErr.Status)
+	}
+	if apiErr.Error() != "Flex capacity unavailable." {
+		t.Fatalf("flex display = %q", apiErr.Error())
+	}
+	if isRetryableResponsesStreamError(flex) {
+		t.Fatal("flex_unavailable must not be retryable")
+	}
+
+	// A 429 without the Flex code keeps the existing quota classification.
+	quota := responsesHTTPError("OpenAI", http.StatusTooManyRequests, http.Header{},
+		[]byte(`{"error":{"code":"credit_balance_exhausted","message":"limit reached"}}`))
+	if !errors.As(quota, &apiErr) || apiErr.Kind != codexapi.ErrorQuotaExceeded {
+		t.Fatalf("quota 429 = %#v, want quotaExceeded", quota)
+	}
+}

@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -378,6 +379,45 @@ func TestResponseFailedErrorDistinguishesCapacityFromSlowDownLikeRust(t *testing
 		}
 		if apiErr.Message != "Selected model is at capacity." {
 			t.Fatalf("message = %q", apiErr.Message)
+		}
+	})
+
+	// Rust #47967: Flex-capacity failures terminate the turn without retries
+	// and keep their dedicated classification.
+	t.Run("flex unavailable terminates", func(t *testing.T) {
+		raw := `{"type":"response.failed","response":{"error":{"code":"flex_unavailable","message":"Flex capacity unavailable."}}}`
+		err := responseFailedError([]byte(raw))
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorFlexUnavailable {
+			t.Fatalf("error = %#v, want flexUnavailable", err)
+		}
+		if apiErr.Status != http.StatusTooManyRequests {
+			t.Fatalf("status = %d, want 429", apiErr.Status)
+		}
+		if isRetryableResponsesStreamError(err) {
+			t.Fatal("flex_unavailable must not be retryable")
+		}
+	})
+
+	// The same classification applies to a standalone streamed `error` event
+	// (Rust process_responses_event's "error" arm).
+	t.Run("streamed error event terminates", func(t *testing.T) {
+		acc := &responsesStreamAccumulator{}
+		_, err := acc.apply(&responsesSSEEvent{
+			Event: "error",
+			Data:  []byte(`{"type":"error","error":{"code":"flex_unavailable","message":"Flex capacity unavailable."}}`),
+		}, nil)
+		var apiErr *codexapi.APIError
+		if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorFlexUnavailable {
+			t.Fatalf("error = %#v, want flexUnavailable", err)
+		}
+		// Other error events keep the existing buffered-stream behavior.
+		_, err = acc.apply(&responsesSSEEvent{
+			Event: "error",
+			Data:  []byte(`{"type":"error","error":{"code":"rate_limit_exceeded","message":"slow down"}}`),
+		}, nil)
+		if err != nil {
+			t.Fatalf("non-Flex error event = %v, want nil", err)
 		}
 	})
 

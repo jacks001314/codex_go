@@ -90,6 +90,31 @@ type ResponsesStreamEvent struct {
 	RawType            string
 }
 
+// flexUnavailableStreamError recognizes Rust's `parse_flex_unavailable`
+// (codex-api/src/error.rs, #47967): an error object whose `code` is
+// `flex_unavailable`, either as the SSE event's top-level `error` field or as
+// the `response.error` payload of a `response.failed` event.
+func flexUnavailableStreamError(data []byte) (string, bool) {
+	var payload struct {
+		Error    *responsesAgentAPIErrorBody `json:"error"`
+		Response struct {
+			Error *responsesAgentAPIErrorBody `json:"error"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return "", false
+	}
+	for _, body := range []*responsesAgentAPIErrorBody{payload.Error, payload.Response.Error} {
+		if body == nil {
+			continue
+		}
+		if responseErrorCode(body) == "flex_unavailable" {
+			return strings.TrimSpace(body.Message), true
+		}
+	}
+	return "", false
+}
+
 // ResponseUsageMetadata mirrors Rust protocol::ResponseUsageMetadata (#41087):
 // per-response usage metadata reported by the upstream service. Amount stays a
 // string so high-precision values survive without numeric conversion.
@@ -392,7 +417,8 @@ func isRetryableResponsesStreamError(err error) bool {
 			return true
 		case codexapi.ErrorContextWindowExceeded, codexapi.ErrorQuotaExceeded,
 			codexapi.ErrorUsageNotIncluded, codexapi.ErrorInvalidRequest,
-			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy:
+			codexapi.ErrorCyberPolicy, codexapi.ErrorBioPolicy,
+			codexapi.ErrorFlexUnavailable:
 			return false
 		default:
 			return details.Status >= http.StatusInternalServerError
@@ -912,6 +938,18 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		emitResponsesMetadataEvents(sse.Data, handler)
 	}
 	switch rawType {
+	case "error":
+		// Rust #47967: a streamed `error` event whose code is
+		// `flex_unavailable` is a terminal Flex-capacity failure; it ends the
+		// turn without retries instead of being buffered as a generic stream
+		// error.
+		if message, ok := flexUnavailableStreamError(sse.Data); ok {
+			return false, &codexapi.APIError{
+				Kind:    codexapi.ErrorFlexUnavailable,
+				Status:  http.StatusTooManyRequests,
+				Message: message,
+			}
+		}
 	case string(ResponsesStreamEventTimingMetrics):
 		metrics := responsesTimingMetricsFromEventData(sse.Data)
 		if len(metrics) > 0 {
@@ -2007,6 +2045,15 @@ func responseFailedError(data []byte) error {
 		message = strings.TrimSpace(errBody.Message)
 	}
 	responsesDiagnostic("response.failed", map[string]any{"code": code, "message": message})
+	if code == "flex_unavailable" {
+		// Rust #47967: Flex-capacity failures end the turn without retries and
+		// report the terminal classification through the app-server protocol.
+		return &codexapi.APIError{
+			Kind:    codexapi.ErrorFlexUnavailable,
+			Status:  http.StatusTooManyRequests,
+			Message: message,
+		}
+	}
 	switch code {
 	case "context_length_exceeded":
 		return &codexapi.APIError{

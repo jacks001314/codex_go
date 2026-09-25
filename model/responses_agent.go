@@ -2768,6 +2768,15 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: statusCode, Message: message}
 	}
+	// Rust #47967 (api_bridge.rs): an HTTP 429 whose body carries a
+	// `flex_unavailable` error is a terminal Flex-capacity failure, not a
+	// retryable rate limit.
+	if statusCode == http.StatusTooManyRequests && payload.Error != nil && responseErrorCode(payload.Error) == "flex_unavailable" {
+		if strings.TrimSpace(message) == "" {
+			message = "Flex capacity unavailable."
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: statusCode, Message: message}
+	}
 	if message == "" {
 		message = http.StatusText(statusCode)
 	}

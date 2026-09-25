@@ -22,6 +22,9 @@ const (
 	ErrorMisalignmentPolicyViolation APIErrorKind = "misalignmentPolicyViolation"
 	ErrorServerOverloaded            APIErrorKind = "serverOverloaded"
 	ErrorRateLimitExceeded           APIErrorKind = "rateLimitExceeded"
+	// ErrorFlexUnavailable is the terminal Flex-capacity failure Rust surfaces
+	// for a `flex_unavailable` error code (Rust #47967).
+	ErrorFlexUnavailable APIErrorKind = "flexUnavailable"
 )
 
 type APIError struct {
@@ -92,6 +95,9 @@ func (e *APIError) Error() string {
 		return "rate limit exceeded: " + e.Message
 	case ErrorServerOverloaded:
 		return "server overloaded"
+	case ErrorFlexUnavailable:
+		// Rust's CodexErr display for CodexErrorDetails::FlexUnavailable.
+		return "Flex capacity unavailable."
 	default:
 		return e.Message
 	}
