@@ -136,12 +136,15 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream 8ae55c863d (#47074/#47967 and the lane
-		// between): the cloud config surface, the terminal Flex-capacity error
-		// classification and the gateway/message-board/executor protocol
-		// additions.
-		{"stable", stablePrecomputedExports, "29861c6ab189407dfdb4d7d7dce90461aa80d1d023e798f9f6160301abce4e57"},
-		{"experimental", experimentalPrecomputedExports, "d94964ca6d870bf143dd47445daf00a6539568548e05fc3a022fe63a767dc14e"},
+		// Re-vendored from upstream 4b1c0c30da (#48035 re-pin; the previous
+		// re-vendor pinned 8ae55c863d with the cloud config surface, the
+		// terminal Flex-capacity error classification and the
+		// gateway/message-board/executor protocol additions). #48035 removed
+		// the plugin extension declarations (`PluginExtensions` and its
+		// entrypoint/quick-action/icon/search-provider types) from
+		// `PluginSummary` and the v2 plugin responses.
+		{"stable", stablePrecomputedExports, "ed9e34b369bc4b0c2c7985494de00e54939e3ff8ed08e028f3e0e7052186732e"},
+		{"experimental", experimentalPrecomputedExports, "42590bd02dcb4ab9ae0f74b2cbd6298ae3eefa9a98c1ac50856059ca2b9814e1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
