@@ -917,6 +917,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
+		RightClickPaste:             interactiveRightClickPasteValue(settings.RightClickPaste),
 		ShowRawReasoning:            interactiveShowRawAgentReasoning(root),
 		LocalWorktreeOperations:     true,
 		WorktreesEnabled:            worktreeEnabled,
@@ -1677,6 +1678,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		StatusLineUseColors:     interactiveStatusLineUseColors(values),
 		QuestionEscBack:         interactiveQuestionEscBack(values),
 		AutoRecap:               interactiveAutoRecap(values),
+		RightClickPaste:         interactiveRightClickPaste(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1742,6 +1744,30 @@ func interactiveAutoRecap(values map[string]any) *bool {
 		}
 	}
 	return &enabled
+}
+
+// interactiveRightClickPaste resolves the configured `tui.right_click_paste`
+// value (#48118). The config default is `auto`, matching Rust's
+// `#[serde(default)] RightClickPaste::Auto`; a present-but-non-string value
+// falls back to the default because Go's `[tui]` sub-table is not
+// value-validated.
+func interactiveRightClickPaste(values map[string]any) *string {
+	mode := string(tuiapp.RightClickPasteAuto)
+	if raw, ok := interactiveTUIConfig(values)["right_click_paste"]; ok {
+		if configured, ok := raw.(string); ok {
+			mode = string(tuiapp.ParseRightClickPasteMode(configured))
+		}
+	}
+	return &mode
+}
+
+// interactiveRightClickPasteValue flattens the resolved setting for the TUI
+// options; an unset value is Rust's `auto` default.
+func interactiveRightClickPasteValue(mode *string) string {
+	if mode == nil {
+		return string(tuiapp.RightClickPasteAuto)
+	}
+	return *mode
 }
 
 // interactiveEmbeddedReasoningOverrides mirrors Rust new_thread_reasoning_overrides

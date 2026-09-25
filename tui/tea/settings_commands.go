@@ -406,6 +406,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	if msg.Result.AutoRecap != nil {
 		m.disableAutoRecap = !*msg.Result.AutoRecap
 	}
+	if msg.Result.RightClickPaste != nil {
+		m.setRightClickPasteMode(*msg.Result.RightClickPaste)
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

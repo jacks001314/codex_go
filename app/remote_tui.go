@@ -408,6 +408,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		AnimationsEnabled:  settings.AnimationsEnabled,
 		QuestionEscBack:    settings.QuestionEscBack,
 		AutoRecap:          settings.AutoRecap,
+		RightClickPaste:    interactiveRightClickPasteValue(settings.RightClickPaste),
 		ShowRawReasoning:   showRawReasoning,
 		// Remote sessions only see the worktrees feature flag; managed worktree
 		// operations stay local (Rust #43120/#43286).

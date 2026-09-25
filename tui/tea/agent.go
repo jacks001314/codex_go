@@ -261,6 +261,9 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	}
 	m.invalidateAppsScope()
 	if m.State != nil {
+		// Rust #48118: replacing the chat widget drops a pending fullscreen
+		// right-click paste bound to the previous composer.
+		m.resetRightClickPaste()
 		// Rust #43994: the switched-to thread must not inherit transcript state
 		// (tool-call display, retry, review) from the thread that was active.
 		m.resetThreadScopedState()

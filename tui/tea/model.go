@@ -278,11 +278,14 @@ type SettingsWriteResult struct {
 	QuestionEscBack *bool
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil preserves the current value; the config default is enabled.
-	AutoRecap               *bool
-	Personality             chatwidget.Personality
-	Notifications           *chatwidget.NotificationsSetting
-	NotificationMethod      codextui.NotificationMethod
-	NotificationCondition   codextui.NotificationCondition
+	AutoRecap             *bool
+	Personality           chatwidget.Personality
+	Notifications         *chatwidget.NotificationsSetting
+	NotificationMethod    codextui.NotificationMethod
+	NotificationCondition codextui.NotificationCondition
+	// RightClickPaste is the configured `tui.right_click_paste` value (#48118).
+	// Nil preserves the current value; the config default is `auto`.
+	RightClickPaste         *string
 	PermissionRequirements  *chatwidget.PermissionRequirements
 	HideRateLimitModelNudge *bool
 	TUITheme                string
@@ -893,6 +896,13 @@ type Options struct {
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
+	// RightClickPaste is the configured `tui.right_click_paste` value (#48118):
+	// `auto` (the Windows/Linux default), `on` (also macOS) or `off`. An empty
+	// value or an unknown spelling resolves to `auto`.
+	RightClickPaste string
+	// OnClipboardRead, when set, supplies clipboard text for the fullscreen
+	// right-click paste fallback (#48118). Nil reads the system clipboard.
+	OnClipboardRead func() (string, error)
 	// ShowRawReasoning is the configured `show_raw_agent_reasoning` value
 	// (Rust config default false). It selects the raw chain-of-thought variant
 	// of a reasoning block, mirroring RawReasoningVisibility::Visible.
@@ -1496,9 +1506,19 @@ type Model struct {
 	// backgroundThreadEvents buffers app-server notifications for non-active
 	// (subagent) threads so switching to them can replay in-progress activity
 	// instead of showing an empty transcript (Rust parity: ThreadEventStore).
-	backgroundThreadEvents  map[string][]protocol.ThreadEvent
-	clipboardWrite          func(text string) error
-	clipboardWriteRich      func(html string, text string) error
+	backgroundThreadEvents map[string][]protocol.ThreadEvent
+	clipboardWrite         func(text string) error
+	clipboardWriteRich     func(html string, text string) error
+	// rightClickPaste implements the fullscreen right-click fallback (#48118): a
+	// right-button press reads the clipboard off the update loop and the text is
+	// delivered at the next render while the same thread/draft/cursor stays
+	// eligible. clipboardReadPending is Rust's worker `is_busy` guard.
+	rightClickPasteMode     tuiapp.RightClickPasteMode
+	rightClickPasteEnv      tuiapp.PasteEnvironment
+	rightClickPasteTarget   *tuiapp.RightClickPasteTarget
+	rightClickPasteResult   *rightClickPasteResult
+	clipboardRead           func() (string, error)
+	clipboardReadPending    bool
 	onExportTranscript      TranscriptExportFunc
 	onGenerateRecap         RecapGenerateFunc
 	recapInFlight           bool
@@ -1780,6 +1800,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if clipboardWriteRich == nil && options.OnClipboardWrite == nil {
 		clipboardWriteRich = defaultRichClipboardWriter(clipboardWrite)
 	}
+	clipboardRead := options.OnClipboardRead
+	if clipboardRead == nil {
+		clipboardRead = sysclipboard.ReadAll
+	}
 
 	model := &Model{
 		State:                           state,
@@ -1867,6 +1891,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
 		clipboardWrite:                  clipboardWrite,
 		clipboardWriteRich:              clipboardWriteRich,
+		clipboardRead:                   clipboardRead,
+		rightClickPasteMode:             tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
+		rightClickPasteEnv:              detectRightClickPasteEnvironment(),
 		onExportTranscript:              options.OnExportTranscript,
 		onGenerateRecap:                 options.OnGenerateRecap,
 		onDaybreakNotice:                options.OnDaybreakNotice,
@@ -2159,6 +2186,12 @@ func (m *Model) Init() bubbletea.Cmd {
 func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
+	}
+	// #48118: real input, focus changes and resizes invalidate a pending
+	// fullscreen right-click paste before the message is handled, so a late
+	// clipboard result can never overwrite newer input.
+	if event, ok := rightClickPasteEventFor(message); ok {
+		m.invalidateRightClickPaste(event)
 	}
 	// Route through overlay when dialog is active
 	if m.overlays != nil && m.overlays.Active() {
@@ -2500,6 +2533,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			m.notice = "Background server started. Open `codex agents` in another terminal."
 		}
 		return m, nil
+	case rightClickPasteReadMsg:
+		m.applyRightClickPasteRead(msg)
+		return m, nil
 	case AgentSwitchResultMsg:
 		m.applyAgentSwitchResult(msg)
 		return m, m.refreshStatusControlsCmd()
@@ -2783,6 +2819,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayMouse(msg)
 		}
+		// #48118: an unmodified right-button press is the fullscreen fallback
+		// trigger when no overlay, modal or selection owns the input.
+		if cmd := m.startRightClickPaste(msg); cmd != nil {
+			return m, cmd
+		}
 		// Rust parity: do not enable or consume terminal mouse tracking. Leaving
 		// mouse input to the terminal preserves scrollback, text selection/copy,
 		// and native paste behavior.
@@ -2808,6 +2849,9 @@ func (m *Model) View() string {
 	if m == nil {
 		return ""
 	}
+	// #48118: a completed right-click clipboard read is delivered only here, on
+	// the synchronized render, matching Rust's "only a draw may deliver a read".
+	m.deliverRightClickPasteAtRender()
 	m.ensureSize()
 	m.syncTranscriptHeight()
 	m.storePetDrawRequest()
