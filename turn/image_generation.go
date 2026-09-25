@@ -46,7 +46,11 @@ type ImageGenerationHandler struct {
 }
 
 type imageGenerationArgs struct {
-	Prompt                 string   `json:"prompt"`
+	Prompt string `json:"prompt"`
+	// TransparentBackground mirrors Rust's `transparent_background`
+	// (ext/image-generation/src/tool.rs, #47484): true maps the Images API
+	// background to `transparent`, false or omission to `opaque`.
+	TransparentBackground  bool     `json:"transparent_background"`
 	ReferencedImagePaths   []string `json:"referenced_image_paths,omitempty"`
 	NumLastImagesToInclude *int     `json:"num_last_images_to_include,omitempty"`
 }
@@ -183,8 +187,13 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	if len(paths) > imageGenerationMaxEditImages {
 		return nil, fmt.Errorf("`referenced_image_paths` must contain at most %d paths", imageGenerationMaxEditImages)
 	}
+	// Rust #47484: the boolean argument replaces the previous `auto` background,
+	// so generation and editing always send an explicit background.
+	background := codexapi.ImageBackgroundOpaque
+	if args.TransparentBackground {
+		background = codexapi.ImageBackgroundTransparent
+	}
 	if len(paths) == 0 && args.NumLastImagesToInclude == nil {
-		background := codexapi.ImageBackgroundAuto
 		quality := codexapi.ImageQualityAuto
 		size := "auto"
 		return &imageGenerationRequest{
@@ -226,7 +235,6 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 		images = recent
 	}
 	_ = ctx
-	background := codexapi.ImageBackgroundAuto
 	quality := codexapi.ImageQualityAuto
 	size := "auto"
 	return &imageGenerationRequest{
@@ -636,6 +644,11 @@ func imageGenerationSchema() map[string]any {
 				"type":        "string",
 				"description": "The prompt for the image to generate or edit.",
 			},
+			"transparent_background": map[string]any{
+				"type":        "boolean",
+				"description": "Whether the output should have a transparent background. Defaults to false.",
+				"default":     false,
+			},
 			"referenced_image_paths": map[string]any{
 				"type":        "array",
 				"description": "Absolute local image paths to edit. Omit when generating a brand new image.",
@@ -660,6 +673,7 @@ const imageGenerationDescription = `The ` + "`image_gen.imagegen`" + ` tool enab
 Guidelines:
 - imagegen needs a few minutes to finish. In code-mode, use the first-line @exec directive to give the initial call 120 seconds and the same yield for any waits that follow. Once it finishes, return the image with generatedImage(result).
 - Avoid printing the full result or its base64 image data with ` + "`text()`" + ` or ` + "`notify()`" + `; print only small metadata when needed.
+- Set ` + "`transparent_background`" + ` to true when the request calls for a transparent background, including background removal or a cutout; set it to false otherwise. For edits, preserve existing transparency unless the user asks to change it.
 - Omit both ` + "`referenced_image_paths`" + ` and ` + "`num_last_images_to_include`" + ` when generating a brand new image.
 - For edits, use ` + "`referenced_image_paths`" + ` when every target image has a local file path.
 - If you have not seen a local image yet, use ` + "`view_image`" + ` to inspect it before editing.

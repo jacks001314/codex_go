@@ -564,11 +564,54 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
 		}
+		if err := validateCloudConfigValues(cfg.Values); err != nil {
+			return nil, err
+		}
 		if err := validateBrowserComputerUseConfigValues(cfg.Values); err != nil {
 			return nil, err
 		}
 	}
 	return cfg, nil
+}
+
+// validateCloudConfigValues mirrors Rust's CloudToml
+// (config/src/config_toml.rs #47074): `[cloud]` owns cloud feature settings,
+// `[cloud.skills]` is a FeatureToggleToml, and both tables deny unknown fields.
+func validateCloudConfigValues(values map[string]any) error {
+	if values == nil {
+		return nil
+	}
+	raw, ok := values["cloud"]
+	if !ok {
+		return nil
+	}
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return fmt.Errorf("cloud must be a table")
+	}
+	for key := range table {
+		if key != "skills" {
+			return fmt.Errorf("cloud: unknown field `%s`", key)
+		}
+	}
+	skills, ok := table["skills"].(map[string]any)
+	if !ok {
+		if _, present := table["skills"]; present {
+			return fmt.Errorf("cloud.skills must be a table")
+		}
+		return nil
+	}
+	for key := range skills {
+		if key != "enabled" {
+			return fmt.Errorf("cloud.skills: unknown field `%s`", key)
+		}
+	}
+	if enabled, present := skills["enabled"]; present {
+		if _, ok := enabled.(bool); !ok {
+			return fmt.Errorf("cloud.skills.enabled must be a boolean")
+		}
+	}
+	return nil
 }
 
 func validateBrowserComputerUseConfigValues(values map[string]any) error {
@@ -611,6 +654,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"chatgpt_base_url":                  {},
 	"check_for_update_on_startup":       {},
 	"cli_auth_credentials_store":        {},
+	"cloud":                             {},
 	"compact_prompt":                    {},
 	"computer_use":                      {},
 	"default_permissions":               {},
@@ -1247,6 +1291,22 @@ func (c *Config) GuardianPolicyConfig() (string, bool) {
 	return autoReviewConfigValue(c.Values, "policy")
 }
 
+// GuardianExtraPolicy mirrors Rust Config::guardian_extra_policy (#47125): the
+// managed `guardian_extra_policy` requirement wins over the `[auto_review]
+// extra_policy` config value, and a blank value in either layer is ignored so
+// the lower-priority layer can still apply.
+func (c *Config) GuardianExtraPolicy() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	if c.Requirements != nil && c.Requirements.GuardianExtraPolicy != nil {
+		if value := strings.TrimSpace(*c.Requirements.GuardianExtraPolicy); value != "" {
+			return value, true
+		}
+	}
+	return autoReviewConfigValue(c.Values, "extra_policy")
+}
+
 // GuardianPolicyTemplate mirrors Rust Config::guardian_policy_template
 // (`[auto_review] experimental_policy_template`): the full reviewer prompt
 // template whose `{{ tenant_policy_config }}` placeholder receives the resolved
@@ -1365,15 +1425,22 @@ func (c *Config) SkillSelectionEnabled() bool {
 	return ok && enabled
 }
 
-func (c *Config) OrchestratorSkillsEnabled() bool {
+// CloudSkillsEnabled reports whether host-supplied cloud skills are discovered
+// and exposed to the model, mirroring Rust's
+// `cfg.cloud.skills.enabled.unwrap_or(true)` (core/config/mod.rs, #47074).
+//
+// `orchestrator.skills` is accepted as a legacy no-op: Rust retired the
+// built-in orchestrator skill provider in favor of the host-supplied cloud
+// provider and only `cloud.skills` gates the catalog now.
+func (c *Config) CloudSkillsEnabled() bool {
 	if c == nil || c.Values == nil {
 		return true
 	}
-	orchestrator, ok := c.Values["orchestrator"].(map[string]any)
+	cloud, ok := c.Values["cloud"].(map[string]any)
 	if !ok {
 		return true
 	}
-	skills, ok := orchestrator["skills"].(map[string]any)
+	skills, ok := cloud["skills"].(map[string]any)
 	if !ok {
 		return true
 	}
@@ -1382,6 +1449,13 @@ func (c *Config) OrchestratorSkillsEnabled() bool {
 		return true
 	}
 	return enabled
+}
+
+// OrchestratorSkillsEnabled is retained for the legacy `orchestrator.skills`
+// setting. Rust keeps the key as a compatibility no-op, so the effective gate
+// is always the cloud-skills setting.
+func (c *Config) OrchestratorSkillsEnabled() bool {
+	return c.CloudSkillsEnabled()
 }
 
 func (c *Config) UpdatePlanEnabled() bool {

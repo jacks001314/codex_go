@@ -580,6 +580,12 @@ type ConfigRequirements struct {
 	// `# Policy Configuration` section of the Guardian reviewer prompt. Like
 	// Permissions it is internal and not part of the app-server wire schema.
 	GuardianPolicyConfig *string `json:"-"`
+	// GuardianExtraPolicy is the managed `guardian_extra_policy` requirement
+	// (Rust ConfigRequirementsToml.guardian_extra_policy, #47125): it fills the
+	// Guardian template's `{{ extra_policy }}` slot and replaces the
+	// `[auto_review] extra_policy` config value. Internal, like
+	// GuardianPolicyConfig.
+	GuardianExtraPolicy *string `json:"-"`
 	// ModelProvider is the exact provider selection required by managed
 	// policy (Rust #44650).
 	ModelProvider *string `json:"modelProvider,omitempty"`
@@ -3715,6 +3721,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.DefaultPermissions = cloneStringPtr(requirements.DefaultPermissions)
 	clone.AdditionalDeveloperInstructions = cloneStringPtr(requirements.AdditionalDeveloperInstructions)
 	clone.GuardianPolicyConfig = cloneStringPtr(requirements.GuardianPolicyConfig)
+	clone.GuardianExtraPolicy = cloneStringPtr(requirements.GuardianExtraPolicy)
 	clone.AllowManagedHooksOnly = cloneBoolPtr(requirements.AllowManagedHooksOnly)
 	clone.AllowBrowserAndComputerUse = cloneBoolPtr(requirements.AllowBrowserAndComputerUse)
 	clone.AllowAppshots = cloneBoolPtr(requirements.AllowAppshots)

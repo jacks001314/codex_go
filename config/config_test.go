@@ -1190,13 +1190,36 @@ func TestSkillSelectionEnabledDefaultsOffAndRequiresBoolean(t *testing.T) {
 	}
 }
 
-func TestOrchestratorSkillsEnabledUsesRustDefaultAndNestedConfig(t *testing.T) {
-	if !(&Config{Values: map[string]any{}}).OrchestratorSkillsEnabled() {
-		t.Fatal("OrchestratorSkillsEnabled() default = false, want true")
+// TestCloudSkillsEnabledUsesRustDefaultAndNestedConfig pins the #47074 config
+// move: cloud skills default to enabled and are gated by
+// `cloud.skills.enabled`, while the legacy `orchestrator.skills` table is
+// accepted as a no-op.
+func TestCloudSkillsEnabledUsesRustDefaultAndNestedConfig(t *testing.T) {
+	if !(&Config{Values: map[string]any{}}).CloudSkillsEnabled() {
+		t.Fatal("CloudSkillsEnabled() default = false, want true")
 	}
-	disabled := &Config{Values: map[string]any{"orchestrator": map[string]any{"skills": map[string]any{"enabled": false}}}}
-	if disabled.OrchestratorSkillsEnabled() {
-		t.Fatal("OrchestratorSkillsEnabled() = true, want false")
+	empty := &Config{Values: map[string]any{"cloud": map[string]any{}}}
+	if !empty.CloudSkillsEnabled() {
+		t.Fatal("CloudSkillsEnabled() with an empty [cloud] table = false, want true")
+	}
+	disabled := &Config{Values: map[string]any{"cloud": map[string]any{"skills": map[string]any{"enabled": false}}}}
+	if disabled.CloudSkillsEnabled() {
+		t.Fatal("CloudSkillsEnabled() = true, want false")
+	}
+	// The retired orchestrator setting no longer gates the catalog, but it is
+	// still accepted (and ignored) so legacy configs keep loading.
+	legacy := &Config{Values: map[string]any{"orchestrator": map[string]any{"skills": map[string]any{"enabled": false}}}}
+	if !legacy.CloudSkillsEnabled() || !legacy.OrchestratorSkillsEnabled() {
+		t.Fatal("legacy orchestrator.skills.enabled = false still disabled cloud skills, want a no-op")
+	}
+	if err := validateCloudConfigValues(map[string]any{"cloud": map[string]any{"skills": map[string]any{"enabled": true}}}); err != nil {
+		t.Fatalf("validateCloudConfigValues(valid) error = %v", err)
+	}
+	if err := validateCloudConfigValues(map[string]any{"cloud": map[string]any{"unknown": true}}); err == nil {
+		t.Fatal("validateCloudConfigValues accepted an unknown [cloud] field")
+	}
+	if err := validateCloudConfigValues(map[string]any{"cloud": "yes"}); err == nil {
+		t.Fatal("validateCloudConfigValues accepted a non-table [cloud] value")
 	}
 }
 

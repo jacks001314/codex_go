@@ -287,6 +287,9 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 	if value, ok := stringAnyKey(values, "guardian_policy_config", "guardianPolicyConfig"); ok {
 		out.GuardianPolicyConfig = &value
 	}
+	if value, ok := stringAnyKey(values, "guardian_extra_policy", "guardianExtraPolicy"); ok {
+		out.GuardianExtraPolicy = &value
+	}
 	if nested, ok := mapAnyKey(values, "permissions"); ok {
 		out.Permissions = cloneMap(nested)
 	}
@@ -1032,6 +1035,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.DefaultPermissions == nil &&
 			value.AdditionalDeveloperInstructions == nil &&
 			value.GuardianPolicyConfig == nil &&
+			value.GuardianExtraPolicy == nil &&
 			value.Permissions == nil &&
 			value.AllowedWebSearchModes == nil &&
 			value.AllowManagedHooksOnly == nil &&

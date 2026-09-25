@@ -141,7 +141,7 @@ func TestImageGenerationHandlerPostsGenerationAndReturnsRustOutputShape(t *testi
 		t.Fatalf("output = %#v", output)
 	}
 	if requestBody["model"] != imageGenerationModel || requestBody["prompt"] != "paint a red square" ||
-		requestBody["background"] != "auto" || requestBody["quality"] != "auto" || requestBody["size"] != "auto" {
+		requestBody["background"] != "opaque" || requestBody["quality"] != "auto" || requestBody["size"] != "auto" {
 		t.Fatalf("request body = %#v", requestBody)
 	}
 	items, ok := output.Data["content_items"].([]FunctionCallOutputContentItem)
@@ -160,7 +160,7 @@ func TestImageGenerationHandlerPostsGenerationAndReturnsRustOutputShape(t *testi
 		t.Fatalf("saved path = %q", savedPath)
 	}
 	if _, ok := output.Data["transparentBackground"]; ok {
-		t.Fatalf("transparentBackground = %#v, want absent when background is auto", output.Data["transparentBackground"])
+		t.Fatalf("transparentBackground = %#v, want absent when the response omits background", output.Data["transparentBackground"])
 	}
 	data, err := os.ReadFile(savedPath)
 	if err != nil {
@@ -280,6 +280,65 @@ func ptrTo[T any](value T) *T {
 	return &value
 }
 
+// TestImageGenerationBackgroundArgumentMatchesRust pins Rust #47484: the
+// boolean `transparent_background` argument replaces the previous `auto`
+// background, so generation and editing always send an explicit background.
+func TestImageGenerationBackgroundArgumentMatchesRust(t *testing.T) {
+	handler := NewImageGenerationHandler(&ImageGenerationOptions{
+		InputItems: []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_image", "image_url": "data:image/png;base64,AAA"}}}},
+	})
+	oneImage := 1
+	for _, tc := range []struct {
+		name      string
+		args      imageGenerationArgs
+		want      codexapi.ImageBackground
+		wantEdit  bool
+		expectErr bool
+	}{
+		{name: "generate omitted", args: imageGenerationArgs{Prompt: "draw"}, want: codexapi.ImageBackgroundOpaque},
+		{name: "generate transparent", args: imageGenerationArgs{Prompt: "draw", TransparentBackground: true}, want: codexapi.ImageBackgroundTransparent},
+		{name: "edit omitted", args: imageGenerationArgs{Prompt: "draw", NumLastImagesToInclude: &oneImage}, want: codexapi.ImageBackgroundOpaque, wantEdit: true},
+		{name: "edit transparent", args: imageGenerationArgs{Prompt: "draw", NumLastImagesToInclude: &oneImage, TransparentBackground: true}, want: codexapi.ImageBackgroundTransparent, wantEdit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request, err := handler.requestForArgs(context.Background(), &tc.args)
+			if tc.expectErr {
+				if err == nil {
+					t.Fatal("requestForArgs() error = nil, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("requestForArgs() error = %v", err)
+			}
+			var background *codexapi.ImageBackground
+			switch request.kind {
+			case imageGenerationRequestGenerate:
+				background = request.generate.Background
+			case imageGenerationRequestEdit:
+				background = request.edit.Background
+			}
+			if request.kind == imageGenerationRequestEdit != tc.wantEdit {
+				t.Fatalf("request kind = %q, want edit=%v", request.kind, tc.wantEdit)
+			}
+			if background == nil || *background != tc.want {
+				t.Fatalf("background = %v, want %q", background, tc.want)
+			}
+		})
+	}
+
+	// The advertised schema carries the new boolean property.
+	schema := imageGenerationSchema()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %#v", schema["properties"])
+	}
+	transparent, ok := properties["transparent_background"].(map[string]any)
+	if !ok || transparent["type"] != "boolean" {
+		t.Fatalf("schema transparent_background = %#v, want a boolean property", properties["transparent_background"])
+	}
+}
+
 // TestRecentImageURLsRejectsFileBackedWindowsLikeRust mirrors Rust #45794's
 // `recent_images`: the window still counts file-backed images (so numbering
 // matches), a short window reports how many were available, and a window that
@@ -359,6 +418,7 @@ func TestImageGenerationDescriptionMatchesRustBlob(t *testing.T) {
 		"Guidelines:\n" +
 		"- imagegen needs a few minutes to finish. In code-mode, use the first-line @exec directive to give the initial call 120 seconds and the same yield for any waits that follow. Once it finishes, return the image with generatedImage(result).\n" +
 		"- Avoid printing the full result or its base64 image data with `text()` or `notify()`; print only small metadata when needed.\n" +
+		"- Set `transparent_background` to true when the request calls for a transparent background, including background removal or a cutout; set it to false otherwise. For edits, preserve existing transparency unless the user asks to change it.\n" +
 		"- Omit both `referenced_image_paths` and `num_last_images_to_include` when generating a brand new image.\n" +
 		"- For edits, use `referenced_image_paths` when every target image has a local file path.\n" +
 		"- If you have not seen a local image yet, use `view_image` to inspect it before editing.\n" +
