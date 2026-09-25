@@ -136,14 +136,13 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream 4b1c0c30da (#48035 re-pin; the previous
-		// re-vendor pinned 8ae55c863d with the cloud config surface, the
-		// terminal Flex-capacity error classification and the
-		// gateway/message-board/executor protocol additions). #48035 removed
-		// the plugin extension declarations (`PluginExtensions` and its
-		// entrypoint/quick-action/icon/search-provider types) from
-		// `PluginSummary` and the v2 plugin responses.
-		{"stable", stablePrecomputedExports, "ed9e34b369bc4b0c2c7985494de00e54939e3ff8ed08e028f3e0e7052186732e"},
+		// Re-vendored from upstream 86be5320b0 (#48060 re-pin; the previous
+		// re-vendor pinned 4b1c0c30da, which had removed the plugin extension
+		// declarations from `PluginSummary` and the v2 plugin responses).
+		// #48060 deduplicates Guardian retained instructions across reviews and
+		// adds the restored-evidence fragment kind to the internal protocol
+		// surface, which only the stable export carries.
+		{"stable", stablePrecomputedExports, "0be68c20a72e9fdde88a7fa46fcf0ac3b91d0b1a0c655a2824170b0e6166e845"},
 		{"experimental", experimentalPrecomputedExports, "42590bd02dcb4ab9ae0f74b2cbd6298ae3eefa9a98c1ac50856059ca2b9814e1"},
 	}
 	for _, test := range tests {
