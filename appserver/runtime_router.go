@@ -1813,6 +1813,17 @@ func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *R
 	if remoteControlURL == "" {
 		remoteControlURL = config.DefaultChatGPTBaseURL
 	}
+	// Rust #47410: remote-control enrollment and server requests honor the
+	// application network policy, so a managed restriction also covers the
+	// remote-control backend. A caller-supplied doer is kept as-is.
+	serverAPIOptions := &remotecontrol.ServerAPIOptions{}
+	if options.RemoteControlServerAPIOptions != nil {
+		cloned := *options.RemoteControlServerAPIOptions
+		serverAPIOptions = &cloned
+	}
+	if serverAPIOptions.HTTPClient == nil {
+		serverAPIOptions.HTTPClient = r.remoteControlHTTPDoer()
+	}
 	return &remotecontrol.ManagerBackendOptions{
 		RemoteControlURL:    remoteControlURL,
 		Store:               store,
@@ -1821,7 +1832,7 @@ func (r *RuntimeRouter) remoteControlManagerBackend(codexHome string, options *R
 		AuthRecovery:        authRecovery,
 		AuthRecoveryReset:   authRecoveryReset,
 		AuthRecoveryChanged: authRecoveryChanged,
-		ServerAPIOptions:    options.RemoteControlServerAPIOptions,
+		ServerAPIOptions:    serverAPIOptions,
 		AppServerClientName: options.RemoteControlAppServerClientName,
 	}
 }

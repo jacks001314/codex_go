@@ -16,6 +16,54 @@ import (
 	"codex_go/turn"
 )
 
+// Rust parity (#47410): remote-control enrollment and server requests honor the
+// application network policy.
+func TestRemoteControlBackendHonorsApplicationNetworkPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeManagedProviderRequirements(t, home, `
+[application.network]
+[application.network.domains]
+"allowed.example" = "allow"
+"denied.example" = "deny"
+`)
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(home)),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+	})
+	defer router.Close()
+
+	// An empty codex home keeps the backend free of an enrollment store, so the
+	// test only exercises the server API client.
+	backend := router.remoteControlManagerBackend("", &RuntimeRouterOptions{
+		RemoteControlURL: "https://allowed.example/backend-api",
+	})
+	if backend == nil || backend.ServerAPIOptions == nil || backend.ServerAPIOptions.HTTPClient == nil {
+		t.Fatalf("remote-control backend = %#v, want a policy-bound server API client", backend)
+	}
+	if _, err := backend.ServerAPIOptions.HTTPClient.Do(&http.Request{URL: appServerTestURL(t, "https://denied.example/backend-api/enroll")}); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("denied remote-control request error = %v", err)
+	}
+
+	// A host without managed requirements keeps the package default doer.
+	plainHome := t.TempDir()
+	plainRouter := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(plainHome)),
+		Config:       config.NewConfigService(plainHome),
+		Turns:        turn.NewTurnService(),
+	})
+	defer plainRouter.Close()
+	plainBackend := plainRouter.remoteControlManagerBackend("", &RuntimeRouterOptions{
+		RemoteControlURL: "https://plain.example/backend-api",
+	})
+	if plainBackend == nil || plainBackend.ServerAPIOptions == nil {
+		t.Fatalf("plain remote-control backend = %#v", plainBackend)
+	}
+	if plainBackend.ServerAPIOptions.HTTPClient != nil {
+		t.Fatal("an unrestricted policy replaced the remote-control default doer")
+	}
+}
+
 // accountDoerStub records whether an account/ChatGPT backend request was
 // attempted.
 type accountDoerStub struct {

@@ -8,8 +8,11 @@ package appserver
 // (#47407/#47389).
 
 import (
+	"net/http"
+
 	"codex_go/config"
 	"codex_go/network"
+	"codex_go/remotecontrol"
 )
 
 // destinationPolicyFromApplicationRequirements mirrors Rust's
@@ -64,4 +67,18 @@ func (r *RuntimeRouter) invalidateApplicationNetworkPolicy() {
 	r.networkPolicyMu.Lock()
 	defer r.networkPolicyMu.Unlock()
 	r.networkPolicy.Policy().Invalidate()
+}
+
+// remoteControlHTTPDoer returns the doer the remote-control server API uses for
+// enrollment and server requests. Rust #47410 routes those through the shared
+// application policy; a nil result keeps the remote-control package default.
+func (r *RuntimeRouter) remoteControlHTTPDoer() remotecontrol.HTTPDoer {
+	if r == nil {
+		return nil
+	}
+	policy, composed := r.refreshApplicationNetworkPolicy()
+	if !policy.IsManaged() || !composed.IsRestricted() {
+		return nil
+	}
+	return &network.PolicyHTTPDoer{Policy: policy, Next: http.DefaultClient}
 }
