@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T23:30:00+08:00",
+    "generatedAt": "2026-09-26T01:00:00+08:00",
     "items": [
         {
             "id": "portable-project-trust-lookup",
@@ -21,14 +21,6 @@
             "area": "config",
             "reason": "Aligned upstream 13869ca39e (#47620 Add portable project trust lookup APIs): config.ProjectTrustLookup mirrors Rust's ProjectTrustLookup with ordered keys (cwd before repository root, canonical spelling before original), exact matching on the merged projects map followed by case-insensitive Windows matching with a lowest-key tie-break, and precedence for entries that omit trust_level. ProjectTrustLevelForTarget resolves through the lookup so trust entries written with either spelling are honored; ProjectConfigEnabled's ancestor walk remains the onboarding directory_trust_persisted check. The Rust project_trust_tests cases (POSIX order/case, Windows exact-then-sorted aliases, cwd-over-root precedence) are mirrored.",
             "test": "go test ./config -run ProjectTrust -count=1; go test ./app ./appserver -count=1"
-        },
-        {
-            "id": "executor-environment-toml-provider",
-            "status": "missing",
-            "area": "execserver",
-            "reason": "Upstream's executor environment provider (exec-server/src/environment_provider.rs + environment_toml.rs) has no Go counterpart: Go's exec-server serves a single local environment and has no environments.toml parsing, EnvironmentProvider snapshot, default-environment selection or per-environment transport list. Landing it also completes the auth_bearer_token URL-entry half of #47648 (the RPC half is done in sync148).",
-            "userImpact": "Go's exec-server cannot yet serve the environments listed in environments.toml, so multi-environment executors configured through that file are unavailable.",
-            "test": "go test ./execserver -count=1"
         },
         {
             "id": "executor-bearer-token-connections",
@@ -1191,6 +1183,14 @@
             "id": "agents-overview-draft-preservation-and-styling",
             "reason": "Agents dashboard polish (documented follow-ups): (1) per-thread draft preservation on session switch - the tea Model captures the current thread composer draft on dashboard attach (agentsOverviewDrafts + agentsOverviewPendingDraft mirroring Rust input_states), restores the target thread saved draft (consumed, Rust remove) and clears the composer when none exists (Rust fresh chat widget), discarding pending drafts on failed switches; /agents stays composer-exclusive like Rust (pre-open drafts are consumed by the slash submit) and pending server requests remain covered by the existing per-thread backgroundThreadEvents buffer. (2) ANSI styling - tui/agents_overview now renders segment-based spans (style.go) with Render (plain) and RenderStyled (Rust ratatui-equivalent: bold headers/group names, dim summary/status/placeholder, red/green/cyan/dim status dots, cyan bold selection marker and prompt label, bold footer shortcuts); tea Model and the standalone codex agents dashboard both render styled. Verified by 4 core style tests + 3 tea draft tests; full tree go test ./... 0 FAIL.",
             "area": "tui"
+        },
+        {
+            "id": "executor-environment-toml-provider",
+            "status": "partial",
+            "area": "execserver",
+            "reason": "Aligned upstream's executor environment configuration layer (exec-server/src/environment_toml.rs + environment_provider.rs): execserver parses and validates environments.toml (default/include_local, per-environment id plus exactly one of url or program, auth_bearer_token, args/env/cwd, connect/initialize timeouts), rejecting unknown fields without echoing values, with Rust's validation messages verbatim; the provider snapshot covers id validation, duplicates, config-dir-relative stdio cwd, default selection (including `none` and the disabled-local rejection) and the CODEX_EXEC_SERVER_URL fallback. The stdio client transport is implemented (spawn program, line-delimited JSON-RPC, no reconnect strategy, mirroring Rust). Remaining: the host-side wiring that pre-registers the provider snapshot in appserver's environment manager (remote entries with headers, stdio entries with commands threaded through the unified-exec and remote-skills dial paths).",
+            "userImpact": "environments.toml can be parsed and validated, and stdio executors can be dialed, but the app-server does not yet serve the configured environments, so multi-environment executors stay unavailable through that file.",
+            "test": "go test ./execserver -run 'Environment|TestStdioClient|TestLoadEnvironmentsTOML' -count=1"
         }
     ]
 }
