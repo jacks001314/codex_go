@@ -84,7 +84,10 @@ func TestSnapshotBuilderCapturesOnceAndReusesLikeRust(t *testing.T) {
 		CWD:             "/repo",
 		AllowLoginShell: true,
 	}
-	first := builder.Snapshot(context.Background(), request)
+	first, reason := builder.Snapshot(context.Background(), request)
+	if reason != "" {
+		t.Fatalf("Snapshot() reason = %q", reason)
+	}
 	if first == nil {
 		t.Fatal("Snapshot() = nil")
 	}
@@ -122,13 +125,13 @@ func TestSnapshotBuilderCapturesOnceAndReusesLikeRust(t *testing.T) {
 	}
 
 	// The same launch reuses the snapshot; another directory captures its own.
-	second := builder.Snapshot(context.Background(), request)
+	second, _ := builder.Snapshot(context.Background(), request)
 	if second == nil || second.Path() != first.Path() || runner.captureCalls() != 1 {
 		t.Fatalf("second Snapshot() = %v after %d captures", second, runner.captureCalls())
 	}
 	other := request
 	other.CWD = "/elsewhere"
-	if builder.Snapshot(context.Background(), other) == nil || runner.captureCalls() != 2 {
+	if created, _ := builder.Snapshot(context.Background(), other); created == nil || runner.captureCalls() != 2 {
 		t.Fatalf("captures = %d, want one per directory", runner.captureCalls())
 	}
 
@@ -158,12 +161,13 @@ func TestSnapshotBuilderFailsOpenLikeRust(t *testing.T) {
 	}
 	request := SnapshotCaptureRequest{ShellType: ShellBash, ShellPath: "/bin/bash", CWD: "/repo", AllowLoginShell: true}
 	cases := []struct {
-		name   string
-		runner *snapshotBuilderRunner
+		name       string
+		runner     *snapshotBuilderRunner
+		wantReason SnapshotFailureReason
 	}{
-		{"capture failed", &snapshotBuilderRunner{captureErr: errSnapshotTestFailure}},
-		{"invalid capture", &snapshotBuilderRunner{capture: []byte("no banner\x00aliases")}},
-		{"validation failed", &snapshotBuilderRunner{capture: snapshotBashCaptureStream(), validateErr: errSnapshotTestFailure}},
+		{"capture failed", &snapshotBuilderRunner{captureErr: errSnapshotTestFailure}, SnapshotReasonWriteFailed},
+		{"invalid capture", &snapshotBuilderRunner{capture: []byte("no banner\x00aliases")}, SnapshotReasonWriteFailed},
+		{"validation failed", &snapshotBuilderRunner{capture: snapshotBashCaptureStream(), validateErr: errSnapshotTestFailure}, SnapshotReasonValidationFailed},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -174,8 +178,12 @@ func TestSnapshotBuilderFailsOpenLikeRust(t *testing.T) {
 				Runner:    testCase.runner.run,
 			})
 			t.Cleanup(builder.Close)
-			if snapshot := builder.Snapshot(context.Background(), request); snapshot != nil {
+			snapshot, reason := builder.Snapshot(context.Background(), request)
+			if snapshot != nil {
 				t.Fatalf("Snapshot() = %v, want no snapshot", snapshot.Path())
+			}
+			if reason != testCase.wantReason {
+				t.Fatalf("Snapshot() reason = %q, want %q", reason, testCase.wantReason)
 			}
 			if left := snapshotDirEntries(t, codexHome); len(left) != 0 {
 				t.Fatalf("failed capture left %#v behind", left)
@@ -197,12 +205,12 @@ func TestSnapshotBuilderCaptureShapeLikeRust(t *testing.T) {
 			Runner:    runner.run,
 		})
 		t.Cleanup(builder.Close)
-		if builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+		if created, _ := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
 			ShellType:       ShellBash,
 			ShellPath:       "/bin/bash",
 			CWD:             "/repo",
 			AllowLoginShell: allowLogin,
-		}) == nil {
+		}); created == nil {
 			t.Fatal("Snapshot() = nil")
 		}
 		wantFlag := "-c"
@@ -248,7 +256,7 @@ func TestSnapshotBuilderCapturesWithTheHostShellLikeRust(t *testing.T) {
 	}
 	t.Cleanup(builder.Close)
 	cwd := t.TempDir()
-	snapshot := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
+	snapshot, reason := builder.Snapshot(context.Background(), SnapshotCaptureRequest{
 		ShellType:           ShellBash,
 		ShellPath:           bash,
 		CWD:                 cwd,
@@ -256,6 +264,9 @@ func TestSnapshotBuilderCapturesWithTheHostShellLikeRust(t *testing.T) {
 		PermissionProfile:   &profile,
 		PermissionProfileID: "resolved",
 	})
+	if reason != "" {
+		t.Fatalf("Snapshot() reason = %q", reason)
+	}
 	if snapshot == nil {
 		t.Fatal("the host shell produced no snapshot")
 	}

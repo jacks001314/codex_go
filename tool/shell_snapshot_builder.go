@@ -50,6 +50,19 @@ type SnapshotBuilderOptions struct {
 	Timeout time.Duration
 }
 
+// SnapshotFailureReason reports why a session has no snapshot, mirroring the
+// static reasons Rust's try_create returns so telemetry can group them.
+type SnapshotFailureReason string
+
+const (
+	// SnapshotReasonWriteFailed means the capture could not run, decode or be
+	// written (Rust maps every write_shell_snapshot error to this reason).
+	SnapshotReasonWriteFailed SnapshotFailureReason = "write_failed"
+	// SnapshotReasonValidationFailed means the written snapshot could not be
+	// sourced, so it was discarded.
+	SnapshotReasonValidationFailed SnapshotFailureReason = "validation_failed"
+)
+
 // SnapshotCaptureRequest describes the launch whose shell state is needed.
 type SnapshotCaptureRequest struct {
 	ShellType           ShellType
@@ -136,12 +149,13 @@ func NewSnapshotBuilder(options SnapshotBuilderOptions) *SnapshotBuilder {
 }
 
 // Snapshot returns the session's snapshot for the request, capturing it on first
-// use. It returns nil when the shell has no snapshot support or the capture
-// failed; callers then run the command without a snapshot, exactly like Rust's
-// fail-open capture.
-func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureRequest) *ShellSnapshotFile {
+// use. A nil snapshot with an empty reason means the shell has no snapshot
+// support; otherwise the reason reports why the capture was discarded. Callers
+// run the command without a snapshot either way, exactly like Rust's fail-open
+// capture.
+func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureRequest) (*ShellSnapshotFile, SnapshotFailureReason) {
 	if b == nil {
-		return nil
+		return nil, ""
 	}
 	key := snapshotCaptureKey(request)
 	b.mu.Lock()
@@ -149,16 +163,16 @@ func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureR
 	b.cleanupStaleSnapshotsLocked()
 	if existing := b.snapshots[key]; existing != nil {
 		if _, err := os.Stat(existing.path); err == nil {
-			return existing
+			return existing, ""
 		}
 		delete(b.snapshots, key)
 	}
-	created := b.captureLocked(ctx, request)
+	created, reason := b.captureLocked(ctx, request)
 	if created == nil {
-		return nil
+		return nil, reason
 	}
 	b.snapshots[key] = created
-	return created
+	return created, ""
 }
 
 // Close removes every snapshot this session captured.
@@ -186,7 +200,7 @@ func (b *SnapshotBuilder) cleanupStaleSnapshotsLocked() {
 	_, _ = shell.CleanupStaleSnapshots(b.options.CodexHome, b.options.SessionID, time.Now())
 }
 
-func (b *SnapshotBuilder) captureLocked(ctx context.Context, request SnapshotCaptureRequest) *ShellSnapshotFile {
+func (b *SnapshotBuilder) captureLocked(ctx context.Context, request SnapshotCaptureRequest) (*ShellSnapshotFile, SnapshotFailureReason) {
 	startup := shell.SnapshotStartupInteractive
 	if !request.AllowLoginShell {
 		startup = shell.SnapshotStartupNonInteractive
@@ -197,18 +211,18 @@ func (b *SnapshotBuilder) captureLocked(ctx context.Context, request SnapshotCap
 		Declarations: true,
 	})
 	if !ok {
-		return nil
+		return nil, ""
 	}
 	runCtx, cancel := context.WithTimeout(ctx, b.options.Timeout)
 	defer cancel()
 	env := snapshotCaptureEnv()
 	captured, err := b.options.Runner(runCtx, snapshotExecArgs(request, script), request.CWD, env, request.PermissionProfile, request.PermissionProfileID)
 	if err != nil {
-		return nil
+		return nil, SnapshotReasonWriteFailed
 	}
 	decoded := shell.ParseCapturedSnapshot(captureType, captured)
 	if decoded == nil {
-		return nil
+		return nil, SnapshotReasonWriteFailed
 	}
 	return b.writeSnapshot(runCtx, request, env, decoded)
 }
@@ -221,7 +235,7 @@ func (b *SnapshotBuilder) writeSnapshot(
 	request SnapshotCaptureRequest,
 	env map[string]string,
 	decoded *shell.CapturedSnapshot,
-) *ShellSnapshotFile {
+) (*ShellSnapshotFile, SnapshotFailureReason) {
 	path, tempPath := shell.SnapshotPath(
 		b.options.CodexHome,
 		b.options.SessionID,
@@ -229,21 +243,21 @@ func (b *SnapshotBuilder) writeSnapshot(
 		time.Now().UnixNano(),
 	)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil
+		return nil, SnapshotReasonWriteFailed
 	}
 	if err := os.WriteFile(tempPath, []byte(decoded.RenderScript()), 0o600); err != nil {
-		return nil
+		return nil, SnapshotReasonWriteFailed
 	}
 	validation := "set -e; . \"" + tempPath + "\""
 	if _, err := b.options.Runner(ctx, snapshotExecArgs(request, validation), request.CWD, env, request.PermissionProfile, request.PermissionProfileID); err != nil {
 		_ = os.Remove(tempPath)
-		return nil
+		return nil, SnapshotReasonValidationFailed
 	}
 	if err := os.Rename(tempPath, path); err != nil {
 		_ = os.Remove(tempPath)
-		return nil
+		return nil, SnapshotReasonWriteFailed
 	}
-	return &ShellSnapshotFile{path: path}
+	return &ShellSnapshotFile{path: path}, ""
 }
 
 // snapshotShellType resolves the capture dialect for a launch. Go's tool-level

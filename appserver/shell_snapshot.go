@@ -13,10 +13,12 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/session"
+	"codex_go/telemetry"
 	"codex_go/tool"
 )
 
@@ -47,7 +49,8 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		if threadCWD != "" && !sameDirectory(request.CWD, threadCWD) {
 			return ""
 		}
-		snapshot := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
+		started := time.Now()
+		snapshot, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
 			ShellType:           request.ShellType,
 			ShellPath:           request.ShellPath,
 			CWD:                 request.CWD,
@@ -55,8 +58,35 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 			PermissionProfile:   request.PermissionProfile,
 			PermissionProfileID: request.PermissionProfileID,
 		})
+		r.recordShellSnapshot(time.Since(started), reason)
 		return snapshot.Path()
 	}
+}
+
+// recordShellSnapshot mirrors Rust's shell-snapshot telemetry
+// (core/src/shell_snapshot.rs): one duration sample and one count per capture
+// attempt, both tagged with the capture version and whether it succeeded, and
+// the count additionally tagged with the failure reason.
+func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.SnapshotFailureReason) {
+	if r == nil || r.services.TurnMetrics == nil {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	success := "true"
+	if reason != "" {
+		success = "false"
+	}
+	r.services.TurnMetrics.RecordDuration(telemetry.ShellSnapshotDurationMetric, duration, map[string]string{
+		"version": "v1",
+		"success": success,
+	})
+	tags := map[string]string{"version": "v1", "success": success}
+	if reason != "" {
+		tags["failure_reason"] = string(reason)
+	}
+	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
 }
 
 // shellSnapshotLaunchEligible mirrors the launch shape Rust's turn environment

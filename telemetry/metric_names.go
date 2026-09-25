@@ -62,6 +62,12 @@ const (
 	StartupPrewarmDurationMetric = "codex.startup_prewarm.duration_ms"
 	// StartupPrewarmAgeAtFirstTurnMetric measures the age of the startup prewarm
 	// attempt when the first real turn resolves it, tagged by outcome.
+	// ShellSnapshotDurationMetric measures one shell-snapshot capture attempt
+	// (Rust core/src/shell_snapshot.rs), tagged by version and success.
+	ShellSnapshotDurationMetric = "codex.shell_snapshot.duration_ms"
+	// ShellSnapshotCountMetric counts shell-snapshot capture attempts, tagged by
+	// version, success and the failure reason when one failed.
+	ShellSnapshotCountMetric                    = "codex.shell_snapshot"
 	StartupPrewarmAgeAtFirstTurnMetric          = "codex.startup_prewarm.age_at_first_turn_ms"
 	ThreadStartedMetric                         = "codex.thread.started"
 	ThreadSkillsEnabledTotalMetric              = "codex.thread.skills.enabled_total"
