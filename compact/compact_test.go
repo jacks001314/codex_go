@@ -175,10 +175,12 @@ func TestCompactLocallyInjectsInitialContext(t *testing.T) {
 	if !result.Succeeded() {
 		t.Fatalf("result = %+v", result)
 	}
-	if len(result.NewHistory) != 3 {
+	// Rust keeps every user message that fits the shared budget (#48115), so both
+	// prompts are retained and the initial context lands above the last one.
+	if len(result.NewHistory) != 4 {
 		t.Fatalf("new history = %+v", result.NewHistory)
 	}
-	if result.NewHistory[0].ID != "ctx" || result.NewHistory[1].ID != "u2" {
+	if result.NewHistory[0].ID != "u1" || result.NewHistory[1].ID != "ctx" || result.NewHistory[2].ID != "u2" {
 		t.Fatalf("initial context not inserted before last user: %+v", result.NewHistory)
 	}
 }

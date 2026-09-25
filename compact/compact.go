@@ -61,6 +61,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 
 	RemoteRetainedMessageTokenBudget = 64_000
 	MaxRetainedAgentMessageTokens    = 10_000
+	// CompactionUserMessageBudget mirrors Rust's COMPACT_USER_MESSAGE_MAX_TOKENS:
+	// the shared budget for the user messages a local compaction keeps.
+	CompactionUserMessageBudget = 20_000
 )
 
 var ErrInvalidCompaction = errors.New("invalid compaction")
@@ -324,7 +327,7 @@ func CompactLocally(request *Request, maxSummaryChars int, initialContext []Item
 	}
 	history := requestHistoryForCompaction(request)
 	summary := SummarizeLocally(history, maxSummaryChars)
-	compacted := BuildCompactedHistory(nil, lastUserMessages(history, 1), summary)
+	compacted := BuildCompactedHistory(nil, retainedUserMessagesForLocalCompaction(history, CompactionUserMessageBudget), summary)
 	if injectBeforeLastUser {
 		compacted = InsertInitialContextBeforeLastUserOrSummary(compacted, initialContext)
 	}
@@ -1112,6 +1115,85 @@ func lastUserMessages(history []Item, count int) []Item {
 		selected[i], selected[j] = selected[j], selected[i]
 	}
 	return selected
+}
+
+// retainedUserMessagesForLocalCompaction mirrors Rust's
+// `build_compacted_history_with_limit` (#48115): user messages are selected
+// newest first under one shared token budget.
+//
+// A text-only message that fits keeps its exact content parts and annotations, so
+// a multipart prompt survives compaction unchanged. A message that does not fit,
+// or that carries media, is materialized as its flattened text - media is never
+// carried into the replacement history - and ends the selection, so older
+// messages are dropped rather than truncated.
+func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item {
+	if maxTokens <= 0 {
+		return nil
+	}
+	candidates := make([]Item, 0, len(items))
+	for _, item := range items {
+		if item.Role != "user" || item.Kind == "compaction_summary" {
+			continue
+		}
+		if !ShouldKeepCompactedHistoryItem(item) {
+			continue
+		}
+		candidates = append(candidates, item)
+	}
+
+	remaining := maxTokens
+	selected := make([]Item, 0, len(candidates))
+	for index := len(candidates) - 1; index >= 0; index-- {
+		item := candidates[index]
+		tokens := max(1, EstimateTextTokens(ItemText(&item)))
+		if tokens <= remaining && contentPartsAreText(item.Content) {
+			selected = append(selected, item)
+			remaining -= tokens
+			continue
+		}
+		// Rebuild only the text fallback; never retain discarded media.
+		fallback := item
+		fallback.Text = truncateTextToTokens(ItemText(&item), remaining)
+		fallback.Content = nil
+		fallback.Raw = nil
+		if _, annotated := item.Data["content_item_kinds"]; annotated {
+			fallback.Data = cloneItemData(item.Data)
+			fallback.Data["content_item_kinds"] = []string{"user.text"}
+		}
+		selected = append(selected, fallback)
+		break
+	}
+	for left, right := 0, len(selected)-1; left < right; left, right = left+1, right-1 {
+		selected[left], selected[right] = selected[right], selected[left]
+	}
+	return selected
+}
+
+// contentPartsAreText reports whether every content part is text, which is what
+// lets a retained message keep its original parts.
+func contentPartsAreText(parts []ContentPart) bool {
+	for _, part := range parts {
+		switch strings.ToLower(strings.TrimSpace(part.Type)) {
+		case "", "text", "input_text", "output_text":
+		default:
+			return false
+		}
+		if part.ImageURL != "" || part.AudioURL != "" || part.FileID != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneItemData(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func cloneItems(items []Item) []Item {
