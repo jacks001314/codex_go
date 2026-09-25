@@ -24,6 +24,85 @@ type recordedRemoteRequest struct {
 	body   []byte
 }
 
+// rawNotificationBoardHandler streams an exact SSE body.
+func rawNotificationBoardHandler(body string) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(body))
+		writer.(http.Flusher).Flush()
+	}
+}
+
+// Rust #48190: the frame bound is per frame, not per connection, and LF, CR and
+// CRLF line endings all end a frame, so a long heartbeat sequence still delivers.
+func TestRemoteBoardNotificationFrameBoundIsPerFrameLikeRust(t *testing.T) {
+	heartbeats := strings.Repeat(": heartbeat\r\n\r\n: heartbeat\r\r: heartbeat\n\n", 16*1024)
+	notice := `{"recipient":"thread-1","turn_id":"turn-1","post":{"message_id":"m1","channel_name":"work","author":"/root","thread_id":"m1","created_at":"2026-01-02T03:04:05Z","text_preview":"hi","n_chars":2,"truncated":false}}`
+	httpServer := httptest.NewServer(rawNotificationBoardHandler(
+		heartbeats + "event: ready\ndata: {}\n\n" + "event: notification\ndata: " + notice + "\n\n"))
+	defer httpServer.Close()
+
+	receiver, err := newTestRemoteBoard(t, httpServer.URL, nil).Notifications(context.Background(), "thread-1", "turn-1")
+	if err != nil {
+		t.Fatalf("Notifications() error = %v", err)
+	}
+	defer receiver.Close()
+	got, err := receiver.Next(context.Background())
+	if err != nil || got == nil || got.Post.MessageID != "m1" {
+		t.Fatalf("Next() = %#v/%v, want the notification after the heartbeats", got, err)
+	}
+}
+
+// Rust #48190: an oversized readiness field, an unterminated trailing field and
+// an oversized multiline data frame are all refused before parsing, so the
+// parser never buffers the payload.
+func TestRemoteBoardNotificationFrameOversizeLikeRust(t *testing.T) {
+	oversized := strings.Repeat("x", remoteBoardMaxBody)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"oversized readiness field", "event: ready\nid: " + oversized + "\ndata: {}\n\n"},
+		{"unterminated field", "event: ready\ndata: {}\n\nid: " + oversized},
+		{"multiline data frame", "event: ready\ndata: {}\n\n" + strings.Repeat("data: x\n", 64*1024+1)},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(rawNotificationBoardHandler(testCase.body))
+			defer httpServer.Close()
+			receiver, err := newTestRemoteBoard(t, httpServer.URL, nil).Notifications(context.Background(), "thread-1", "turn-1")
+			if err == nil {
+				_, err = receiver.Next(context.Background())
+				receiver.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "board SSE frame exceeds the service limit") {
+				t.Fatalf("oversized frame error = %v, want the service-limit failure", err)
+			}
+		})
+	}
+}
+
+// Rust #48190: malformed UTF-8 is rejected incrementally instead of being
+// retained by the decoder awaiting more input.
+func TestRemoteBoardNotificationRejectsMalformedUTF8LikeRust(t *testing.T) {
+	for _, body := range []string{
+		"event: ready\ndata: \xff\xfe\n\n",
+		"event: ready\ndata: {}\n\n" + "event: notification\ndata: \xc3\x28\n\n",
+	} {
+		httpServer := httptest.NewServer(rawNotificationBoardHandler(body))
+		receiver, err := newTestRemoteBoard(t, httpServer.URL, nil).Notifications(context.Background(), "thread-1", "turn-1")
+		if err == nil {
+			_, err = receiver.Next(context.Background())
+			receiver.Close()
+		}
+		httpServer.Close()
+		if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") {
+			t.Fatalf("malformed UTF-8 error = %v, want an encoding failure", err)
+		}
+	}
+}
+
 // remoteBoardRecorder records the requests a mock service saw.
 type remoteBoardRecorder struct {
 	mu       sync.Mutex

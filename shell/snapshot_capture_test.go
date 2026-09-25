@@ -28,7 +28,7 @@ func TestSnapshotCaptureScriptsMatchRust(t *testing.T) {
 			for _, marker := range []string{
 				"SNAPSHOT_OPTIONS_BEGIN", "SNAPSHOT_ALIASES_END", "SNAPSHOT_EXPORTS",
 				"SNAPSHOT_DECLARATION_ENVIRONMENT", "SNAPSHOT_STARTUP_ENVIRONMENT",
-				"SNAPSHOT_COMMAND_HELPER", "SNAPSHOT_ENVIRONMENT",
+				"SNAPSHOT_COMMAND_HELPER", "SNAPSHOT_ENVIRONMENT", "SNAPSHOT_ZSH_ALIASES",
 			} {
 				if strings.Contains(script, marker) {
 					t.Fatalf("%s capture script kept %s:\n%s", shellType, marker, script)
@@ -89,6 +89,22 @@ func TestSnapshotCaptureScriptsMatchRust(t *testing.T) {
 				strings.Contains(source, `printf "case '' in '') ;; esac\n}\n"`)
 			if grouped != (shellType != ShellSh) {
 				t.Fatalf("%s incremental capture grouped=%v:\n%s", shellType, grouped, source)
+			}
+			// Rust #48187: the sourced group serializes zsh aliases with
+			// NO_RC_QUOTES, because the group is parsed before its restored
+			// options take effect. Evaluating captures keep the plain alias dump.
+			if shellType == ShellZsh {
+				if !strings.Contains(script, "\\alias -L") {
+					t.Fatalf("zsh capture script misses the alias dump:\n%s", script)
+				}
+				if strings.Contains(script, "NO_RC_QUOTES") {
+					t.Fatalf("evaluating zsh capture must not change quoting options:\n%s", script)
+				}
+				if !strings.Contains(source, "(\\setopt NO_RC_QUOTES; \\alias -L)") {
+					t.Fatalf("sourced zsh capture must normalize alias quoting:\n%s", source)
+				}
+			} else if strings.Contains(source, "NO_RC_QUOTES") {
+				t.Fatalf("%s sourced capture must not set zsh options:\n%s", shellType, source)
 			}
 		}
 	}

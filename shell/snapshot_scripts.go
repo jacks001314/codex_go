@@ -39,7 +39,7 @@ print ''
 printf '\0'
 alias_count=$(\alias -L | __codex_snapshot_command wc -l | __codex_snapshot_command tr -d ' ')
 print "# aliases $alias_count"
-\alias -L
+SNAPSHOT_ZSH_ALIASES
 print ''
 SNAPSHOT_ALIASES_END
 printf '\0'

@@ -81,12 +81,18 @@ func snapshotCaptureScript(shellType ShellType, options SnapshotCaptureOptions, 
 	}
 	optionsBegin := ""
 	aliasesEnd := ""
+	zshAliases := "\\alias -L"
 	if sourceReplay {
 		optionsBegin = "printf '{\\n'"
 		aliasesEnd = "printf \"case '' in '') ;; esac\\n}\\n\""
+		// The source group is parsed before its options take effect, so aliases
+		// must be serialized with the replay shell's initial quoting rules
+		// rather than RC_QUOTES (Rust #48187). `setopt` needs no optional module.
+		zshAliases = "(\\setopt NO_RC_QUOTES; \\alias -L)"
 	}
 	script = strings.ReplaceAll(script, "SNAPSHOT_OPTIONS_BEGIN", optionsBegin)
 	script = strings.ReplaceAll(script, "SNAPSHOT_ALIASES_END", aliasesEnd)
+	script = strings.ReplaceAll(script, "SNAPSHOT_ZSH_ALIASES", zshAliases)
 	script = strings.ReplaceAll(script, "SNAPSHOT_EXPORTS", declarations)
 	if options.Declarations {
 		script = strings.ReplaceAll(script, "SNAPSHOT_DECLARATION_ENVIRONMENT", snapshotEnvironment)

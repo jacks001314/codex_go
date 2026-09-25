@@ -533,7 +533,9 @@ func (n *RemoteBoardNotifications) Next(ctx context.Context) (*BoardNotification
 			}
 			return nil, fmt.Errorf("board notification stream: %w", err)
 		}
-		if event != "notification" || len(data) > remoteBoardMaxBody {
+		// The frame byte bound is enforced before parsing, so an oversized data
+		// payload can no longer arrive here.
+		if event != "notification" {
 			n.close()
 			return nil, errors.New("invalid board notification")
 		}
@@ -572,12 +574,91 @@ func (n *RemoteBoardNotifications) close() {
 	}
 }
 
+var (
+	// errRemoteBoardFrameLimit is Rust's "board SSE frame exceeds the service
+	// limit": the bound applies per frame, not per connection (#48190).
+	errRemoteBoardFrameLimit = errors.New("board SSE frame exceeds the service limit")
+	// errRemoteBoardFrameEncoding rejects malformed UTF-8 incrementally so the
+	// decoder cannot retain it indefinitely.
+	errRemoteBoardFrameEncoding = errors.New("board SSE frame is not valid UTF-8")
+)
+
+// remoteBoardFrameScanner enforces the service's per-frame byte bound and
+// incremental UTF-8 validity on the wire bytes before the event parser sees
+// them (Rust #48190).
+type remoteBoardFrameScanner struct {
+	frameBytes int
+	lineEmpty  bool
+	previousCR bool
+	utf8       [utf8.UTFMax]byte
+	utf8Len    int
+}
+
+func newRemoteBoardFrameScanner() *remoteBoardFrameScanner {
+	// A frame starts as an empty line so its first blank line resets the count.
+	return &remoteBoardFrameScanner{lineEmpty: true}
+}
+
+// push validates one wire byte and reports whether it completed a frame. Blank
+// lines end a frame and reset the byte count, supporting LF, CR and CRLF across
+// reads.
+func (s *remoteBoardFrameScanner) push(value byte) (bool, error) {
+	if value >= utf8.RuneSelf || s.utf8Len > 0 {
+		if s.utf8Len >= len(s.utf8) {
+			return false, errRemoteBoardFrameEncoding
+		}
+		s.utf8[s.utf8Len] = value
+		s.utf8Len++
+		prefix := s.utf8[:s.utf8Len]
+		switch {
+		case utf8.Valid(prefix):
+			s.utf8Len = 0
+		case !utf8.FullRune(prefix):
+			// Only an incomplete code point (at most three bytes) may carry
+			// across a read boundary.
+		default:
+			return false, errRemoteBoardFrameEncoding
+		}
+	}
+	if s.previousCR && value != '\n' {
+		if s.lineEmpty {
+			s.frameBytes = 0
+		}
+		s.lineEmpty = true
+	}
+	s.frameBytes++
+	if s.frameBytes > remoteBoardMaxBody {
+		return false, errRemoteBoardFrameLimit
+	}
+	switch value {
+	case '\n':
+		frameEnded := s.lineEmpty
+		if s.lineEmpty {
+			s.frameBytes = 0
+		}
+		s.lineEmpty = true
+		s.previousCR = false
+		return frameEnded, nil
+	case '\r':
+		s.previousCR = true
+		return false, nil
+	default:
+		s.lineEmpty = false
+		s.previousCR = false
+		return false, nil
+	}
+}
+
 // readRemoteBoardEvent reads one server-sent event: its name and its data lines
-// joined by newlines. io.EOF means the stream ended between events.
+// joined by newlines. io.EOF means the stream ended between events. Every wire
+// byte is bounded and UTF-8 validated before the line is interpreted, and the
+// caller closes the stream after an error, so neither oversized fields nor
+// malformed encodings can accumulate in the parser.
 func readRemoteBoardEvent(reader *bufio.Reader) (string, []byte, error) {
 	if reader == nil {
 		return "", nil, io.EOF
 	}
+	scanner := newRemoteBoardFrameScanner()
 	event := ""
 	var data []string
 	for {
@@ -587,6 +668,11 @@ func readRemoteBoardEvent(reader *bufio.Reader) (string, []byte, error) {
 				return "", nil, err
 			}
 			return event, []byte(strings.Join(data, "\n")), nil
+		}
+		for index := 0; index < len(line); index++ {
+			if _, scanErr := scanner.push(line[index]); scanErr != nil {
+				return "", nil, scanErr
+			}
 		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		switch {
