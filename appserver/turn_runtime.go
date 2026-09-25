@@ -4187,7 +4187,12 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return turnAnalyticsErrorFields{}
 	}
 	details := err.Details()
-	status := uint16PtrFromHTTPStatus(details.Status)
+	// Rust's `CodexErrorDetails::http_status_code_value` reports the HTTP status
+	// only for the retry-limit, unexpected-status, connection-failure,
+	// stream-failure and Flex-capacity details; every other kind - usage limits,
+	// quota, usage-not-included, context window, policy refusals - reports null,
+	// so the analytics event must not carry one either.
+	status := analyticsErrorHTTPStatus(details.Kind, uint16PtrFromHTTPStatus(details.Status))
 	fields := func(info CodexErrorInfo, kind string) turnAnalyticsErrorFields {
 		return turnAnalyticsErrorFields{TurnError: info, CodexErrorKind: stringPtrIfNotEmpty(kind), HTTPStatusCode: status}
 	}
@@ -4211,10 +4216,6 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 	case codexapi.ErrorFlexUnavailable:
 		// Rust #47967: FlexUnavailable reports the 429 the Flex capacity
 		// failure arrived with (CodexErrorDetails::http_status_code_value).
-		if status == nil {
-			tooManyRequests := uint16(http.StatusTooManyRequests)
-			status = &tooManyRequests
-		}
 		return fields("flexUnavailable", "flex_unavailable")
 	case codexapi.ErrorCyberPolicy:
 		return fields("cyberPolicy", "cyber_policy")
@@ -4235,6 +4236,23 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 		return turnAnalyticsErrorFieldsFromAPIStatus(details.Status)
 	default:
 		return turnAnalyticsErrorFields{}
+	}
+}
+
+// analyticsErrorHTTPStatus mirrors Rust's `CodexErrorDetails::http_status_code_value`:
+// only these error kinds report the HTTP status they arrived with.
+func analyticsErrorHTTPStatus(kind codexapi.APIErrorKind, status *uint16) *uint16 {
+	switch kind {
+	case codexapi.ErrorRetryable, codexapi.ErrorAPI, codexapi.ErrorTransport, codexapi.ErrorStream:
+		return status
+	case codexapi.ErrorFlexUnavailable:
+		if status != nil {
+			return status
+		}
+		tooManyRequests := uint16(http.StatusTooManyRequests)
+		return &tooManyRequests
+	default:
+		return nil
 	}
 }
 

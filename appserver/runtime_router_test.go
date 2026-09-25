@@ -20784,7 +20784,9 @@ func TestRuntimeRouterTurnStartFailedAnalyticsClassifiesCodexAPIErrorLikeRust(t 
 	}
 	if params.TurnError != "badRequest" ||
 		params.CodexErrorKind == nil || *params.CodexErrorKind != "invalid_request" ||
-		params.CodexErrorHTTPStatusCode == nil || *params.CodexErrorHTTPStatusCode != http.StatusBadRequest {
+		// Rust's CodexErrorDetails::http_status_code_value reports no status for
+		// InvalidRequest, so the analytics event must not carry one either.
+		params.CodexErrorHTTPStatusCode != nil {
 		t.Fatalf("api failure analytics error fields = error:%#v kind:%#v http:%#v", params.TurnError, params.CodexErrorKind, params.CodexErrorHTTPStatusCode)
 	}
 	if params.DurationMS == nil || params.CompletedAt == nil || params.StartedAt == nil {
@@ -20798,35 +20800,34 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 		err       *codexapi.APIError
 		wantError string
 		wantKind  string
-		wantHTTP  uint16
+		wantHTTP  *uint16
 	}{
 		{
 			name:      "retry limit",
 			err:       &codexapi.APIError{Kind: codexapi.ErrorRetryable, Status: http.StatusTooManyRequests, Message: "retry exhausted"},
 			wantError: `{"responseTooManyFailedAttempts":{"httpStatusCode":429}}`,
 			wantKind:  "retry_limit",
-			wantHTTP:  http.StatusTooManyRequests,
+			wantHTTP:  uint16Ptr(http.StatusTooManyRequests),
 		},
 		{
 			name:      "transport",
 			err:       &codexapi.APIError{Kind: codexapi.ErrorTransport, Status: http.StatusUnauthorized, Message: "dial failed"},
 			wantError: `{"httpConnectionFailed":{"httpStatusCode":401}}`,
 			wantKind:  "connection_failed",
-			wantHTTP:  http.StatusUnauthorized,
+			wantHTTP:  uint16Ptr(http.StatusUnauthorized),
 		},
 		{
 			name:      "stream",
 			err:       &codexapi.APIError{Kind: codexapi.ErrorStream, Status: http.StatusServiceUnavailable, Message: "stream failed"},
 			wantError: `{"responseStreamConnectionFailed":{"httpStatusCode":503}}`,
 			wantKind:  "response_stream_failed",
-			wantHTTP:  http.StatusServiceUnavailable,
+			wantHTTP:  uint16Ptr(http.StatusServiceUnavailable),
 		},
 		{
 			name:      "misalignment policy violation",
 			err:       &codexapi.APIError{Kind: codexapi.ErrorMisalignmentPolicyViolation, Status: http.StatusBadRequest, Message: "blocked"},
 			wantError: `"misalignmentPolicyViolation"`,
 			wantKind:  "misalignment_policy_violation",
-			wantHTTP:  http.StatusBadRequest,
 		},
 		{
 			// Rust #46306 maps BioPolicy to the app-server's `other` variant.
@@ -20834,7 +20835,6 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			err:       &codexapi.APIError{Kind: codexapi.ErrorBioPolicy, Status: http.StatusBadRequest, Message: "blocked"},
 			wantError: `"other"`,
 			wantKind:  "bio_policy",
-			wantHTTP:  http.StatusBadRequest,
 		},
 		{
 			// Rust #47967: the Flex-capacity failure carries the 429 the
@@ -20843,7 +20843,7 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			err:       &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: http.StatusTooManyRequests, Message: "Flex capacity unavailable."},
 			wantError: `"flexUnavailable"`,
 			wantKind:  "flex_unavailable",
-			wantHTTP:  http.StatusTooManyRequests,
+			wantHTTP:  uint16Ptr(http.StatusTooManyRequests),
 		},
 		{
 			// Rust's CodexErrorDetails::http_status_code_value reports 429 for
@@ -20852,7 +20852,7 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			err:       &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Message: "Flex capacity unavailable."},
 			wantError: `"flexUnavailable"`,
 			wantKind:  "flex_unavailable",
-			wantHTTP:  http.StatusTooManyRequests,
+			wantHTTP:  uint16Ptr(http.StatusTooManyRequests),
 		},
 	}
 	for _, tc := range cases {
@@ -20868,8 +20868,8 @@ func TestTurnAnalyticsErrorFieldsFromAPIErrorSerializesDataVariantsLikeRust(t *t
 			if fields.CodexErrorKind == nil || *fields.CodexErrorKind != tc.wantKind {
 				t.Fatalf("codex error kind = %#v, want %q", fields.CodexErrorKind, tc.wantKind)
 			}
-			if fields.HTTPStatusCode == nil || *fields.HTTPStatusCode != tc.wantHTTP {
-				t.Fatalf("http status = %#v, want %d", fields.HTTPStatusCode, tc.wantHTTP)
+			if (fields.HTTPStatusCode == nil) != (tc.wantHTTP == nil) || (fields.HTTPStatusCode != nil && *fields.HTTPStatusCode != *tc.wantHTTP) {
+				t.Fatalf("http status = %#v, want %#v", fields.HTTPStatusCode, tc.wantHTTP)
 			}
 		})
 	}

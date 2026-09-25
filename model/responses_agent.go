@@ -1230,7 +1230,9 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		return nil, err
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		return nil, responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		emitUsageLimitErrorHeaderEvents(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), httpResponse.Header, apiErr)
+		return nil, apiErr
 	}
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
 	var apiResponse responsesAgentAPIResponse
@@ -2907,6 +2909,15 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			message = http.StatusText(statusCode)
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: statusCode, Message: message}
+	}
+	// Rust's api_bridge classifies a 429 whose error type is `usage_not_included`
+	// as UsageNotIncluded, the same kind the streamed `response.failed` path
+	// already reports for that code.
+	if statusCode == http.StatusTooManyRequests && payload.Error != nil && strings.TrimSpace(payload.Error.Type) == "usage_not_included" {
+		if strings.TrimSpace(message) == "" {
+			message = http.StatusText(statusCode)
+		}
+		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
 	}
 	// Rust #47967 (api_bridge.rs): an HTTP 429 whose body carries a
 	// `flex_unavailable` error is a terminal Flex-capacity failure, not a

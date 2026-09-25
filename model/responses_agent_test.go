@@ -2323,6 +2323,69 @@ func TestResponsesAgentRunnerKeepsToolCallItems(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's `CodexErrorDetails::UsageLimitReached` handling in
+// core/src/session/turn.rs: a 429 usage-limit error carries the response's
+// rate-limit headers, so the session refreshes its snapshot even though the
+// request failed. A different 429 kind reports no rate limits.
+func TestResponsesAgentRunnerUsageLimitErrorReportsRateLimitsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		body      string
+		wantEvent bool
+	}{
+		{
+			name:      "usage limit",
+			body:      `{"error":{"type":"usage_limit_reached","message":"usage limit reached","plan_type":"pro","limit_window_minutes":300}}`,
+			wantEvent: true,
+		},
+		{
+			name:      "other 429",
+			body:      `{"error":{"type":"insufficient_quota","message":"limit reached"}}`,
+			wantEvent: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("x-codex-primary-used-percent", "100.0")
+				w.Header().Set("x-codex-primary-window-minutes", "300")
+				w.Header().Set("x-codex-primary-reset-at", "1735689720")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(testCase.body))
+			}))
+			defer server.Close()
+
+			var events []ResponsesStreamEvent
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider: &APIProvider{BaseURL: server.URL},
+				StreamHandler: func(event *ResponsesStreamEvent) {
+					if event != nil {
+						events = append(events, *event)
+					}
+				},
+			})
+			if _, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"}); err == nil {
+				t.Fatal("Run() accepted a 429 response")
+			}
+			rateLimits := eventsByKind(events, ResponsesStreamEventRateLimits)
+			if !testCase.wantEvent {
+				if len(rateLimits) != 0 {
+					t.Fatalf("unrelated 429 reported rate limits: %#v", rateLimits)
+				}
+				return
+			}
+			if len(rateLimits) != 1 || rateLimits[0].RateLimit == nil || rateLimits[0].RateLimit.Primary == nil {
+				t.Fatalf("rate limit events = %#v", rateLimits)
+			}
+			primary := rateLimits[0].RateLimit.Primary
+			if primary.UsedPercent != 100 ||
+				primary.WindowDurationMins == nil || *primary.WindowDurationMins != 300 ||
+				primary.ResetsAt == nil || *primary.ResetsAt != 1735689720 {
+				t.Fatalf("primary window = %#v", primary)
+			}
+		})
+	}
+}
 func TestResponsesAgentRunnerRetriesTransientHTTPError(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

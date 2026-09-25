@@ -123,6 +123,18 @@ func TestResponsesHTTPErrorPreservesUsageLimitWindowLikeRust(t *testing.T) {
 	if apiErr.UsageLimitWindowMinutes != nil {
 		t.Fatalf("quota window = %v, want unknown", apiErr.UsageLimitWindowMinutes)
 	}
+
+	// Rust's api_bridge classifies a 429 whose type is `usage_not_included` as
+	// UsageNotIncluded, with no HTTP status on the detail (Rust's
+	// `http_status_code_value` reports none for that kind).
+	notIncluded := responsesHTTPError("OpenAI", http.StatusTooManyRequests, http.Header{},
+		[]byte(`{"error":{"type":"usage_not_included","message":"not included in the plan"}}`))
+	if !errors.As(notIncluded, &apiErr) || apiErr.Kind != codexapi.ErrorUsageNotIncluded {
+		t.Fatalf("usage_not_included error = %#v, want usageNotIncluded", notIncluded)
+	}
+	if apiErr.Message != "not included in the plan" || apiErr.Status != 0 {
+		t.Fatalf("usage_not_included detail = %#v", apiErr)
+	}
 }
 
 func uint16PtrModel(value uint16) *uint16 { return &value }

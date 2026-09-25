@@ -469,15 +469,19 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 		"trace_id":     responseHeaderValue(httpResponse.Header, "x-trace-id"),
 		"server_model": responseHeaderValue(httpResponse.Header, responsesOpenAIModelHeader, responsesXOpenAIModelHeader),
 	})
+	// The handler is built before the status check because a usage-limit error
+	// still refreshes the client's rate-limit snapshot from its headers.
+	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		responseBody, readErr := io.ReadAll(io.LimitReader(httpResponse.Body, 16<<20))
 		if readErr != nil {
 			return nil, readErr
 		}
-		return nil, responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		emitUsageLimitErrorHeaderEvents(handler, httpResponse.Header, apiErr)
+		return nil, apiErr
 	}
 	r.rememberTurnStateFromHeaders(request, httpResponse.Header)
-	handler := combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler)
 	emitResponsesHeaderEvents(handler, httpResponse.Header)
 	// Rust derives the safety-buffering treatment from the response headers once
 	// per stream and threads it into every event.
@@ -689,6 +693,26 @@ const (
 	responsesModelsETagHeader     = "x-models-etag"
 	responsesReasoningHeader      = "x-reasoning-included"
 )
+
+// emitUsageLimitErrorHeaderEvents mirrors Rust's `map_api_error`: a 429
+// usage-limit error keeps the response's rate-limit headers on
+// `UsageLimitReachedError.rate_limits`, and the turn loop then refreshes the
+// session's snapshot from them (`sess.update_rate_limits`). Go has no error-side
+// carrier, so it emits the same header-derived events its success path emits.
+func emitUsageLimitErrorHeaderEvents(handler ResponsesStreamHandler, headers http.Header, err error) {
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorRateLimit {
+		return
+	}
+	for _, snapshot := range parseResponsesRateLimits(headers) {
+		rateLimit := snapshot
+		emitResponsesStreamEvent(handler, &ResponsesStreamEvent{
+			Kind:      ResponsesStreamEventRateLimits,
+			RateLimit: &rateLimit,
+			RawType:   string(ResponsesStreamEventRateLimits),
+		})
+	}
+}
 
 func emitResponsesHeaderEvents(handler ResponsesStreamHandler, headers http.Header) {
 	emitResponsesStreamEvent(handler, responsesHeadersEvent(headers))
