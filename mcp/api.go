@@ -723,6 +723,10 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 			// Rust applies the runtime's read-only policy to every enabled
 			// server (McpConnectionSet::with_read_only_mcp_tools).
 			config.RequiresReadOnlyTools = runtime.RequiresReadOnlyMCPTools
+			// Rust #48143: the registration's credential authority survives into
+			// the effective server, so an executor-discovered declaration cannot
+			// resolve host environment credentials after a reconnect.
+			config.CredentialPolicy = EffectiveCredentialPolicy(registration.CredentialPolicy)
 			if strings.TrimSpace(config.OAuthServerName) == "" {
 				config.OAuthServerName = name
 			}
@@ -1671,6 +1675,12 @@ func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, 
 		return "", false
 	}
 	key := mcpConnectionCacheKey(config, openAIForm)
+	// Rust #48143: an executor-only identity must never read host environment
+	// values for its cache identity - its credential resolution belongs to the
+	// executor - so the policy in the connection key identifies it instead.
+	if EffectiveCredentialPolicy(config.CredentialPolicy) == CredentialPolicyExecutorOnly {
+		return strings.TrimSpace(name) + "\x00" + key, true
+	}
 	envNames := make([]string, 0, 1+len(config.EnvHTTPHeaders))
 	if envVar := strings.TrimSpace(config.BearerTokenEnvVar); envVar != "" {
 		envNames = append(envNames, envVar)
@@ -2204,6 +2214,12 @@ func (s *MCPService) ServerConfigForServer(name string) (ServerConfig, bool) {
 }
 
 func (s *MCPService) listInventoryForConfig(name string, config *ServerConfig, threadID string) (*stdioInventory, error) {
+	// Rust #48143: an executor-discovered declaration may only reach a remote
+	// HTTP transport that needs no host environment headers, helpers or bearer
+	// tokens, and the rejection happens before any host value is read.
+	if err := ValidateExecutorDiscoveryCredentialPolicy(name, config); err != nil {
+		return nil, err
+	}
 	roots := s.rootsForThread(threadID)
 	if config != nil && strings.TrimSpace(config.URL) != "" {
 		if err := ValidateServerAuth(name, config); err != nil {
@@ -2288,11 +2304,15 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	cloned.ToolTimeout = 0
 	applyHTTPRequest := cloned.ApplyHTTPRequest != nil
 	cloned.ApplyHTTPRequest = nil
+	// Rust #48143: the credential policy is part of the connection identity, so a
+	// reconnect cannot reuse a host-credential connection for an executor-only
+	// declaration (it is `json:"-"` and therefore not in the marshalled config).
+	credentialPolicy := EffectiveCredentialPolicy(config.CredentialPolicy)
 	data, err := json.Marshal(cloned)
 	if err != nil {
-		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools)
+		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	}
-	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools)
+	return fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 }
 
 func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *stdioClient {

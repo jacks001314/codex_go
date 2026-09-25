@@ -62,6 +62,10 @@ type CatalogAction struct {
 	Config            ServerConfig
 	RegistrationOrder int  // tie-breaker within same tier
 	Remove            bool // true = removal action
+	// CredentialPolicy is the credential authority of this registration: host
+	// configuration and host plugins allow host fallback, executor-discovered
+	// declarations are confined to the executor (Rust #48143).
+	CredentialPolicy CredentialPolicy
 }
 
 // ResolvedServer pairs an MCP server config with its winning source and optional plugin attribution.
@@ -69,6 +73,7 @@ type ResolvedServer struct {
 	Source            CatalogSource
 	PluginAttribution *PluginAttribution
 	Config            ServerConfig
+	CredentialPolicy  CredentialPolicy
 }
 
 // CatalogConflict represents a same-tier name collision and the final outcome.
@@ -170,6 +175,7 @@ func ResolveCatalogWithDisabled(initialDisabled map[string]bool, actions []Catal
 			Source:            action.Source,
 			PluginAttribution: action.PluginAttribution,
 			Config:            config,
+			CredentialPolicy:  EffectiveCredentialPolicy(action.CredentialPolicy),
 		}
 	}
 

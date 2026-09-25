@@ -111,6 +111,14 @@ type ServerConfig struct {
 	// `openai/readOnly` and never share an unrestricted connection or catalog
 	// (Rust #46042).
 	RequiresReadOnlyTools bool `json:"-"`
+	// CredentialPolicy mirrors Rust #48143's effective-server credential policy:
+	// whether this server may resolve environment-variable credentials from the
+	// host. Host configuration leaves it unset (host fallback allowed);
+	// executor-discovered declarations set ExecutorOnly so a reconnect cannot
+	// promote them to host credentials. It is excluded from serialization and
+	// from the connection identity's JSON, and added explicitly to every cache
+	// key instead.
+	CredentialPolicy CredentialPolicy `json:"-"`
 }
 
 func (c *ServerConfig) EffectiveEnvironmentID() string {
@@ -247,6 +255,10 @@ type ServerRegistration struct {
 	PluginDisplayName string
 	PluginHostRoot    string
 	SelectionOrder    int
+	// CredentialPolicy is the registration's credential authority (Rust #48143):
+	// host configuration leaves it unset, executor-discovered declarations set
+	// CredentialPolicyExecutorOnly.
+	CredentialPolicy CredentialPolicy
 }
 
 type RuntimeConfig struct {

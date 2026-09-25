@@ -1280,6 +1280,12 @@ func (c *httpClient) bearerToken() string {
 func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) {
 	name := strings.TrimSpace(c.config.BearerTokenEnvVar)
 	if name != "" {
+		// Rust #48143: an executor-only identity must never read host environment
+		// values. Its configuration is rejected before a request is made, so this
+		// guard only keeps the value out of reach.
+		if EffectiveCredentialPolicy(c.config.CredentialPolicy) == CredentialPolicyExecutorOnly {
+			return "", false
+		}
 		return strings.TrimSpace(os.Getenv(name)), false
 	}
 	if c.config.ApplyHTTPRequest != nil || configuredAuthorizationHeader(c.config) {

@@ -256,6 +256,9 @@ func TestResolvedCatalogMatchesExpectedShape(t *testing.T) {
 	if !reflect.DeepEqual(catalog.Servers["docs"], ResolvedServer{
 		Source: CatalogSourceConfig,
 		Config: ServerConfig{Command: "docs", Enabled: true},
+		// #48143: a registration without an explicit policy is host-owned
+		// configuration, so the resolved server records host fallback.
+		CredentialPolicy: CredentialPolicyHostFallbackAllowed,
 	}) {
 		t.Fatalf("resolved server = %#v", catalog.Servers["docs"])
 	}
