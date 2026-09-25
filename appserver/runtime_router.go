@@ -430,17 +430,21 @@ type RuntimeRouter struct {
 	realtimeEventLocks      map[string]*sync.Mutex
 	// voiceDurationRecorded deduplicates the voice session duration metric,
 	// which is recorded once per completed session.
-	voiceDurationRecorded  map[string]bool
-	internalMemoryThreads  sync.Map
-	sessionEndMu           sync.Mutex
-	sessionEnded           map[string]struct{}
-	agentRegistry          *agent.Registry
-	agentRegistryMu        sync.Mutex
-	agentRegistries        map[string]*agent.Registry
+	voiceDurationRecorded map[string]bool
+	internalMemoryThreads sync.Map
+	sessionEndMu          sync.Mutex
+	sessionEnded          map[string]struct{}
+	agentRegistry         *agent.Registry
+	agentRegistryMu       sync.Mutex
+	agentRegistries       map[string]*agent.Registry
+	// networkPolicy publishes the application network policy the app-server's
+	// own transports enforce (Rust ConfigManager's NetworkPolicyController).
+	networkPolicy   *network.NetworkPolicyController
+	networkPolicyMu sync.Mutex
 	// messageBoards shares in-memory discussion-board state across every handle
 	// of one agent tree (Rust `InMemoryMessageBoards`); SQLite boards share their
 	// pool through agentboard's own per-path registry.
-	messageBoards agentboard.InMemoryMessageBoards
+	messageBoards          agentboard.InMemoryMessageBoards
 	agentActivityMu        sync.Mutex
 	agentActivity          map[string]chan string
 	agentMessagesMu        sync.Mutex
@@ -653,6 +657,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		agentRegistries:         map[string]*agent.Registry{},
 		agentActivity:           map[string]chan string{},
 		agentMessages:           map[string][]any{},
+		networkPolicy:           network.NewNetworkPolicyController(),
 	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()

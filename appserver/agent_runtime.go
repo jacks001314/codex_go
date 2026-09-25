@@ -628,10 +628,24 @@ func (r *RuntimeRouter) appTurnModelProviderConfig(cfg *config.Config, params *t
 }
 
 func (r *RuntimeRouter) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
+	var base model.HTTPDoer
 	if r != nil && r.services.HTTPClient != nil {
-		return r.services.HTTPClient
+		base = r.services.HTTPClient
+	} else {
+		base = network.NewHTTPClient(cfg != nil && cfg.RespectSystemProxyEnabled(), 0)
 	}
-	return network.NewHTTPClient(cfg != nil && cfg.RespectSystemProxyEnabled(), 0)
+	if r == nil {
+		return base
+	}
+	// Rust routes every managed app-server client through the shared policy:
+	// the destination is checked before route resolution and the permit stays
+	// valid for the response body. An unrestricted policy permits every
+	// destination, so the shared client is returned unwrapped.
+	policy, composed := r.refreshApplicationNetworkPolicy()
+	if !policy.IsManaged() || !composed.IsRestricted() {
+		return base
+	}
+	return &network.PolicyHTTPDoer{Policy: policy, Next: base}
 }
 
 func configValues(cfg *config.Config) map[string]any {
