@@ -12,8 +12,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"math/rand"
 
 	"codex_go/utils"
 
@@ -21,9 +24,14 @@ import (
 )
 
 const (
-	DefaultOpenAIFileUploadLimitBytes   int64 = 512 * 1024 * 1024
-	defaultOpenAIFileBaseURL                  = "https://chatgpt.com/backend-api"
-	defaultOpenAIFileRequestTimeout           = 60 * time.Second
+	DefaultOpenAIFileUploadLimitBytes int64 = 512 * 1024 * 1024
+	defaultOpenAIFileBaseURL                = "https://chatgpt.com/backend-api"
+	defaultOpenAIFileRequestTimeout         = 60 * time.Second
+	// Rust #47122/#47393: the blob PUT gets its own 5-minute allowance, retried
+	// within a single deadline across attempts.
+	defaultOpenAIFileBlobUploadTimeout        = 5 * time.Minute
+	maxOpenAIFileBlobUploadAttempts           = 5
+	openAIFileBlobRetryBaseDelay              = 125 * time.Millisecond
 	defaultOpenAIFileFinalizeTimeout          = 30 * time.Second
 	defaultOpenAIFileFinalizeRetryDelay       = 250 * time.Millisecond
 	maxOpenAIFileResponseBytes          int64 = 1024 * 1024
@@ -134,12 +142,15 @@ func openAIFileHostPath(pathURI string) (string, error) {
 }
 
 type LocalOpenAIFileUploader struct {
-	BaseURL          string
-	Auth             *OpenAIFileAuth
-	HTTPClient       OpenAIFileHTTPDoer
-	RequestTimeout   time.Duration
-	FinalizeTimeout  time.Duration
-	FinalizeInterval time.Duration
+	BaseURL        string
+	Auth           *OpenAIFileAuth
+	HTTPClient     OpenAIFileHTTPDoer
+	RequestTimeout time.Duration
+	// BlobUploadTimeout bounds the whole blob upload, retries and backoff
+	// included (Rust OPENAI_FILE_BLOB_UPLOAD_TIMEOUT).
+	BlobUploadTimeout time.Duration
+	FinalizeTimeout   time.Duration
+	FinalizeInterval  time.Duration
 }
 
 func (u *LocalOpenAIFileUploader) UploadOpenAIFile(ctx context.Context, request OpenAIFileUploadRequest) (*OpenAIUploadedFile, error) {
@@ -288,25 +299,80 @@ func (u *LocalOpenAIFileUploader) authorizedJSON(ctx context.Context, method str
 }
 
 func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL string, request OpenAIFileUploadRequest) error {
-	requestID := uuid.NewString()
 	host := openAIFileUploadHost(uploadURL)
 	started := time.Now()
-	requestCtx, cancel := context.WithTimeout(ctx, u.requestTimeout())
+	// Rust #47393/#47926: opening the stream, every attempt, and the backoff
+	// share one deadline, and each attempt uses a fresh client request ID. The
+	// transient gateway statuses (502/503/504) and transport failures recover
+	// on retry; other failures are terminal.
+	deadline := started.Add(u.blobUploadTimeout())
+	var lastErr error
+	for attempt := uint64(1); attempt <= maxOpenAIFileBlobUploadAttempts; attempt++ {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			if lastErr != nil {
+				return lastErr
+			}
+			return fmt.Errorf("OpenAI file blob upload failed after %dms (timeout, host=%s)", time.Since(started).Milliseconds(), host)
+		}
+		requestID := uuid.NewString()
+		attemptErr, retryable, serverDelay, hasServerDelay := u.uploadBlobAttempt(ctx, uploadURL, request, requestID, host, started, deadline)
+		if attemptErr == nil {
+			return nil
+		}
+		lastErr = attemptErr
+		delay := serverDelay
+		if !hasServerDelay {
+			delay = openAIFileBlobBackoff(openAIFileBlobRetryBaseDelay, attempt)
+		}
+		if !retryable || attempt >= maxOpenAIFileBlobUploadAttempts || delay >= time.Until(deadline) {
+			return attemptErr
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+	return lastErr
+}
+
+// uploadBlobAttempt performs one blob PUT and reports whether it is retryable
+// together with any server-advised retry delay.
+func (u *LocalOpenAIFileUploader) uploadBlobAttempt(
+	ctx context.Context,
+	uploadURL string,
+	request OpenAIFileUploadRequest,
+	requestID string,
+	host string,
+	started time.Time,
+	deadline time.Time,
+) (error, bool, time.Duration, bool) {
+	attemptCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	var contents io.ReadCloser
 	var err error
 	if request.Open != nil {
-		contents, err = request.Open(requestCtx)
+		contents, err = request.Open(attemptCtx)
 	} else {
 		contents, err = os.Open(request.Path)
 	}
 	if err != nil {
-		return err
+		// A read failure cannot recover by retrying the same request (Rust's
+		// `_ => (false, "read")` arm).
+		return fmt.Errorf("OpenAI file blob upload failed after %dms (read, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), host, requestID), false, 0, false
 	}
 	defer contents.Close()
-	uploadRequest, err := http.NewRequestWithContext(requestCtx, http.MethodPut, uploadURL, contents)
+	uploadRequest, err := http.NewRequestWithContext(attemptCtx, http.MethodPut, uploadURL, contents)
 	if err != nil {
-		return fmt.Errorf("OpenAI file blob upload failed after %dms (request, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), host, requestID)
+		return fmt.Errorf("OpenAI file blob upload failed after %dms (request, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), host, requestID), false, 0, false
 	}
 	uploadRequest.ContentLength = request.FileSizeBytes
 	uploadRequest.Header.Set("Content-Length", fmt.Sprintf("%d", request.FileSizeBytes))
@@ -314,11 +380,13 @@ func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL stri
 	uploadRequest.Header.Set("x-ms-client-request-id", requestID)
 	response, err := u.httpClient().Do(uploadRequest)
 	if err != nil {
-		return fmt.Errorf("OpenAI file blob upload failed after %dms (%s, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), openAIFileUploadErrorKind(err), host, requestID)
+		kind := openAIFileUploadErrorKind(err)
+		retryable := kind != "other" && ctx.Err() == nil
+		return fmt.Errorf("OpenAI file blob upload failed after %dms (%s, host=%s, azure_client_request_id=%s)", time.Since(started).Milliseconds(), kind, host, requestID), retryable, 0, false
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return fmt.Errorf(
+		statusErr := fmt.Errorf(
 			"OpenAI file blob upload to %s failed with status %d (azure_client_request_id=%s, azure_request_id=%s, azure_error_code=%s)",
 			host,
 			response.StatusCode,
@@ -326,8 +394,45 @@ func (u *LocalOpenAIFileUploader) uploadBlob(ctx context.Context, uploadURL stri
 			openAIFileResponseHeader(response, "x-ms-request-id"),
 			openAIFileResponseHeader(response, "x-ms-error-code"),
 		)
+		switch response.StatusCode {
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			delay, ok := openAIFileBlobRetryAfter(response.Header)
+			return statusErr, true, delay, ok
+		default:
+			// 403/409/500 and every other status stay terminal (Rust #47926).
+			return statusErr, false, 0, false
+		}
 	}
-	return nil
+	return nil, false, 0, false
+}
+
+// openAIFileBlobRetryAfter mirrors Rust's blob_retry_after: the Azure
+// millisecond hint wins, then the standard Retry-After seconds value.
+func openAIFileBlobRetryAfter(headers http.Header) (time.Duration, bool) {
+	if headers == nil {
+		return 0, false
+	}
+	if raw := strings.TrimSpace(headers.Get("x-ms-retry-after-ms")); raw != "" {
+		if milliseconds, err := strconv.ParseInt(raw, 10, 64); err == nil && milliseconds >= 0 {
+			return time.Duration(milliseconds) * time.Millisecond, true
+		}
+	}
+	if raw := strings.TrimSpace(headers.Get("Retry-After")); raw != "" {
+		if seconds, err := strconv.ParseInt(raw, 10, 64); err == nil && seconds >= 0 {
+			return time.Duration(seconds) * time.Second, true
+		}
+	}
+	return 0, false
+}
+
+// openAIFileBlobBackoff mirrors Rust's codex_client::backoff: base * 2^(attempt-1)
+// with a 0.9..1.1 jitter.
+func openAIFileBlobBackoff(base time.Duration, attempt uint64) time.Duration {
+	if attempt == 0 {
+		return base
+	}
+	raw := float64(base.Milliseconds()) * float64(uint64(1)<<(attempt-1))
+	return time.Duration(raw * (0.9 + rand.Float64()*0.2) * float64(time.Millisecond))
 }
 
 func (u *LocalOpenAIFileUploader) httpClient() OpenAIFileHTTPDoer {
@@ -342,6 +447,15 @@ func (u *LocalOpenAIFileUploader) requestTimeout() time.Duration {
 		return u.RequestTimeout
 	}
 	return defaultOpenAIFileRequestTimeout
+}
+
+// blobUploadTimeout is the whole blob-upload deadline shared by every attempt
+// (Rust OPENAI_FILE_BLOB_UPLOAD_TIMEOUT, #47122).
+func (u *LocalOpenAIFileUploader) blobUploadTimeout() time.Duration {
+	if u != nil && u.BlobUploadTimeout > 0 {
+		return u.BlobUploadTimeout
+	}
+	return defaultOpenAIFileBlobUploadTimeout
 }
 
 func (u *LocalOpenAIFileUploader) finalizeTimeout() time.Duration {
