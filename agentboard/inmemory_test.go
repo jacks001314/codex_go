@@ -484,12 +484,17 @@ func TestInMemoryQueriesPageDiscussionsAndSearchUnicodeLikeRust(t *testing.T) {
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatalf("Unmarshal(thread) error = %v", err)
 	}
-	replies, ok := decoded["replies"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread replies JSON = %#v", decoded["replies"])
+	// Rust flattens the reply page into the thread page (serde `flatten`), so the
+	// results and their metadata sit beside `root_post`.
+	if _, nested := decoded["replies"]; nested {
+		t.Fatalf("thread page kept a nested replies field: %#v", decoded)
 	}
-	if replies["n_returned"] != float64(1) || replies["has_more"] != false {
-		t.Fatalf("replies metadata = %#v", replies)
+	if decoded["n_returned"] != float64(1) || decoded["has_more"] != false {
+		t.Fatalf("thread page metadata = %#v", decoded)
+	}
+	results, ok := decoded["results"].([]any)
+	if !ok || len(results) != 1 {
+		t.Fatalf("thread replies JSON = %#v", decoded["results"])
 	}
 
 	if _, err := board.ReadThread(context.Background(), root, ReadThreadRequest{

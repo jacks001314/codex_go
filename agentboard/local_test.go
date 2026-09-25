@@ -428,9 +428,12 @@ func TestMessageBoardToolsRunOverTheLocalBoardLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_thread error = %v", err)
 	}
-	replies, _ := threadPage["replies"].(map[string]any)
-	if replies["n_returned"] != float64(1) {
-		t.Fatalf("replies = %#v", replies)
+	// Rust flattens the reply page into the thread page.
+	if _, nested := threadPage["replies"]; nested {
+		t.Fatalf("thread page kept a nested replies field: %#v", threadPage)
+	}
+	if threadPage["n_returned"] != float64(1) {
+		t.Fatalf("thread page = %#v", threadPage)
 	}
 	page, err := boardToolBody(t, execs["get_channels"], boardInvocation(t, "get_channels", map[string]any{}))
 	if err != nil {

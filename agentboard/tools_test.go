@@ -250,9 +250,12 @@ func TestMessageBoardToolsRunBoardScenariosLikeRust(t *testing.T) {
 	if rootPost["message_id"] != rootID || rootPost["text_preview"] != "first" {
 		t.Fatalf("root post = %#v", rootPost)
 	}
-	replies, _ := threadPage["replies"].(map[string]any)
-	if replies["n_returned"] != float64(1) {
-		t.Fatalf("replies = %#v", replies)
+	// Rust flattens the reply page into the thread page.
+	if _, nested := threadPage["replies"]; nested {
+		t.Fatalf("thread page kept a nested replies field: %#v", threadPage)
+	}
+	if threadPage["n_returned"] != float64(1) {
+		t.Fatalf("thread page = %#v", threadPage)
 	}
 
 	content, err := boardToolBody(t, execs["read_post"], boardInvocation(t, "read_post", map[string]any{"message_id": rootID, "offset_chars": 1, "limit_chars": 2}))

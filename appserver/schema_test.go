@@ -136,13 +136,10 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		data []byte
 		want string
 	}{
-		// Re-vendored from upstream 86be5320b0 (#48060 re-pin; the previous
-		// re-vendor pinned 4b1c0c30da, which had removed the plugin extension
-		// declarations from `PluginSummary` and the v2 plugin responses).
-		// #48060 deduplicates Guardian retained instructions across reviews and
-		// adds the restored-evidence fragment kind to the internal protocol
-		// surface, which only the stable export carries.
-		{"stable", stablePrecomputedExports, "0be68c20a72e9fdde88a7fa46fcf0ac3b91d0b1a0c655a2824170b0e6166e845"},
+		// Re-vendored from upstream e75b36efde (#48098): the retained-context
+		// `Ordered_for_RetainedUserMessage` gained the optional assistant `phase`
+		// on the internal protocol surface, which only the stable export carries.
+		{"stable", stablePrecomputedExports, "6ce7f85c12b0b5fc5697bfb4aa845149a6d4aa234698f34b93ae64409ad1dbd1"},
 		{"experimental", experimentalPrecomputedExports, "42590bd02dcb4ab9ae0f74b2cbd6298ae3eefa9a98c1ac50856059ca2b9814e1"},
 	}
 	for _, test := range tests {

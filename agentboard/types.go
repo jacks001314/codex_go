@@ -8,6 +8,7 @@ package agentboard
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 
 	"codex_go/agent"
@@ -89,8 +90,68 @@ func (p Page[T]) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
+// UnmarshalJSON reads Rust's Page form: the results and an optional cursor. The
+// derived counts are ignored, exactly like deserializing into `results` plus
+// `next_cursor`.
+func (p *Page[T]) UnmarshalJSON(data []byte) error {
+	if p == nil {
+		return errors.New("page target is nil")
+	}
+	var payload struct {
+		Results    []T     `json:"results"`
+		NextCursor *string `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	p.Results = payload.Results
+	p.NextCursor = payload.NextCursor
+	return nil
+}
+
 // ThreadPage is one page of a thread: the root post plus a page of replies.
+//
+// Its JSON form is Rust's flattened `ThreadPage` (`root_post` beside the reply
+// page's own fields), which is what a host receives from the board service and
+// what the board tools return.
 type ThreadPage struct {
-	RootPost PostPreview       `json:"root_post"`
-	Replies  Page[PostPreview] `json:"replies"`
+	RootPost PostPreview
+	Replies  Page[PostPreview]
+}
+
+func (p ThreadPage) MarshalJSON() ([]byte, error) {
+	payload := struct {
+		RootPost   PostPreview   `json:"root_post"`
+		Results    []PostPreview `json:"results"`
+		NReturned  int           `json:"n_returned"`
+		HasMore    bool          `json:"has_more"`
+		NextCursor *string       `json:"next_cursor"`
+	}{
+		RootPost:   p.RootPost,
+		Results:    p.Replies.Results,
+		NReturned:  len(p.Replies.Results),
+		HasMore:    p.Replies.NextCursor != nil,
+		NextCursor: p.Replies.NextCursor,
+	}
+	if payload.Results == nil {
+		payload.Results = []PostPreview{}
+	}
+	return json.Marshal(payload)
+}
+
+func (p *ThreadPage) UnmarshalJSON(data []byte) error {
+	if p == nil {
+		return errors.New("thread page target is nil")
+	}
+	var payload struct {
+		RootPost   PostPreview   `json:"root_post"`
+		Results    []PostPreview `json:"results"`
+		NextCursor *string       `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	p.RootPost = payload.RootPost
+	p.Replies = Page[PostPreview]{Results: payload.Results, NextCursor: payload.NextCursor}
+	return nil
 }
