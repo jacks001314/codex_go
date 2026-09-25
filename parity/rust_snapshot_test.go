@@ -121,6 +121,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"aws-auth",
 		"analytics",
 		"agent-graph-store",
+		"agent-message-board-client",
 		"agent-identity",
 		"agent-roles",
 		"backend-client",
@@ -280,11 +281,9 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
-		// Re-pinned to upstream 8ae55c863d (#47447/#47683/#47748): the
-		// websocket-auth, core-plugin-common and ext/agent-message-board
-		// workspace members plus the aligned Cargo/Bazel debug-information
-		// defaults.
-		{Path: "Cargo.toml", SHA256: "da6db45ca737a45798b76ab32d3dfaf8bdb08e34890e2b855ae69da1d4f85088"},
+		// Re-pinned to upstream e75b36efde (#48100): the
+		// agent-message-board-client workspace member.
+		{Path: "Cargo.toml", SHA256: "bafbeba3f6752808c1cac2902813ec767f4615d2913d092021d29d86a540f8f0"},
 		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.

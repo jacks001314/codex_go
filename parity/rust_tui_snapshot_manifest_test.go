@@ -22,14 +22,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
-	// Re-pinned to upstream d0a64e91ae (the transcript-and-settings lane:
-	// #46832/#46849/#46861/#46863/#46864/#46938/#47178/#47322/#47908/#47911/
-	// #47929/#47954/#48015): the analytics dashboard snapshots were dropped (#46861)
-	// while the transcript view, markdown rendering, prompt suggestions, effect
-	// toggles, warnings, settings and declined-tool-suggestion surfaces grew,
-	// netting +36 on top of the #46752 pinned total of 1285.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1321 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1321", got)
+	// Re-pinned to upstream e75b36efde: #48101 added the truncated multiline
+	// `/ps` command preview on top of the d0a64e91ae total of 1321.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1322 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1322", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -340,12 +336,14 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46708-#46710 added the dynamic history-cell previews, compact
 			// computer activity, image-label merge, compact patch, and
 			// request-user-input completed/interrupted results.
-			Files:    90,
+			// #48101 added the truncated multiline `/ps` command preview.
+			Files:    91,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
 			Required: []string{
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__single_line_command_compact_when_fits.snap",
+				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__ps_output_multiline_long_command_snapshot.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__plan_update_with_note_and_wrapping_snapshot.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__web_search_history_cell_snapshot.snap",
 				"tui/src/history_cell/snapshots/codex_tui__history_cell__tests__local_daemon_alpha_mismatch.snap",

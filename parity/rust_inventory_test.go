@@ -86,6 +86,7 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		".config",
 		"agent-graph-store",
 		"agent-identity",
+		"agent-message-board-client",
 		"agent-roles",
 		"analytics",
 		"ansi-escape",
