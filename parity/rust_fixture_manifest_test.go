@@ -132,12 +132,15 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// (#47017-#47989).
 			// #48135 then added core/tests/suite/pending_input.rs.
 			// #48141 added the astra_input_interrupts_response scenario snapshot.
-			Files: 258,
+			// #48224 added core/tests/suite/compact_program_tests.rs (the
+			// model/access-program compaction pairs).
+			Files: 259,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
 				"core/tests/suite/request_compression.rs",
 				"core/tests/suite/review.rs",
+				"core/tests/suite/compact_program_tests.rs",
 				"core/tests/suite/turn_state.rs",
 				"core/tests/suite/unified_exec.rs",
 			},

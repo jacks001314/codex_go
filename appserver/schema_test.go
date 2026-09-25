@@ -142,7 +142,13 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// export carries.
 		// Re-vendored from upstream de9e78e3e7 (#48151): `thread/items/list`'s
 		// cursor accepts an exclusive item anchor.
-		{"stable", stablePrecomputedExports, "cb5b5990bf3b58ee3c3dc8642918219e386840590cf0fd2140729d5b26d74b90"},
+		// Re-vendored from upstream 5f3180c793 (#48224): the internal
+		// `RolloutLine` schema now carries the previous turn's
+		// `cyber_access_program` alongside `model` and `comp_hash`, the
+		// model/program pair compaction must preserve. That field belongs to the
+		// unported turn-level access-program lane recorded in
+		// update/plan_2026_09_26.md.
+		{"stable", stablePrecomputedExports, "8691e8ec516b44dcd86e495290a88e10c4447321e25baab4001304410aa05bc4"},
 		{"experimental", experimentalPrecomputedExports, "3792a6caa3a106c9810a3ec6ada207268b95bb146d40d29cb5d3c12b5088de6e"},
 	}
 	for _, test := range tests {
