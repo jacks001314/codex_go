@@ -252,8 +252,12 @@ type RuntimeRouter struct {
 	// session.tool_approvals).
 	mcpToolApprovalsMu sync.Mutex
 	mcpToolApprovals   map[string]map[mcp.MCPToolApprovalKey]bool
-	authRevisionMu     sync.Mutex
-	authRevision       uint64
+	// gatewayLoginMu guards gatewayLogin, the one in-flight caller-initiated
+	// gateway sign-in and the connection that owns it (Rust #47207).
+	gatewayLoginMu sync.Mutex
+	gatewayLogin   *activeGatewayLogin
+	authRevisionMu sync.Mutex
+	authRevision   uint64
 	// authOwnerRevision is the ownership half of Rust's AuthChangeState
 	// (#43428): it advances only when the credential owner (auth mode or the
 	// ChatGPT user/workspace pair) changes, unlike authRevision which advances
@@ -2979,6 +2983,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.handleGetWorkspaceMessages(request)
 	case MethodSendAddCreditsNudgeEmail:
 		return r.handleSendAddCreditsNudgeEmail(request)
+	case MethodGatewayOAuthRead:
+		return r.handleGatewayOAuthRead()
+	case MethodGatewayOAuthLogin:
+		return r.handleGatewayOAuthLogin(request)
+	case MethodGatewayOAuthCancel:
+		return r.handleGatewayOAuthCancel(request)
 	case MethodProcessSpawn:
 		return r.handleProcessSpawn(request)
 	case MethodProcessWriteStdin:

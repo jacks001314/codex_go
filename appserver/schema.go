@@ -219,6 +219,11 @@ func baseClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodPluginUninstall)},
 		{Method: string(MethodReviewStart)},
 		{Method: string(MethodSendAddCreditsNudgeEmail)},
+		// Rust #47170/#47207: the explicit gateway sign-in RPCs take no params
+		// and are advertised without a params reference.
+		{Method: string(MethodGatewayOAuthRead)},
+		{Method: string(MethodGatewayOAuthLogin)},
+		{Method: string(MethodGatewayOAuthCancel)},
 		{Method: string(MethodSkillsConfigWrite)},
 		{Method: string(MethodSkillsExtraRootsSet)},
 		{Method: string(MethodSkillsList)},
@@ -355,6 +360,7 @@ func notificationMethods(includeExperimental bool) []ProtocolMethod {
 		{Method: string(NotificationAccountLoginCompleted)},
 		{Method: string(NotificationAccountRateLimitsUpdated)},
 		{Method: string(NotificationAccountUpdated)},
+		{Method: string(NotificationGatewayOAuthChanged)},
 		{Method: string(NotificationAgentMessageDelta)},
 		{Method: string(NotificationAppListUpdated)},
 		{Method: string(NotificationAuthRecoveryStarted)},
@@ -665,6 +671,7 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(NotificationAccountLoginCompleted):               {Params: "AccountLoginCompletedNotification"},
 		string(NotificationAccountRateLimitsUpdated):            {Params: "AccountRateLimitsUpdatedNotification"},
 		string(NotificationAccountUpdated):                      {Params: "AccountUpdatedNotification"},
+		string(NotificationGatewayOAuthChanged):                 {Params: "GatewayOAuthChangedNotification"},
 		string(NotificationAgentMessageDelta):                   {Params: "AgentMessageDeltaNotification"},
 		string(NotificationAppListUpdated):                      {Params: "AppListUpdatedNotification"},
 		string(NotificationAuthRecoveryStarted):                 {Params: "AuthRecoveryNotification"},

@@ -16,6 +16,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"codex_go/keyring"
@@ -60,6 +61,11 @@ type GatewayAuthManager struct {
 	openBrowser func(string) error
 	mu          sync.Mutex
 	cache       gatewayAuthCache
+	// control shares sign-in status and subscriptions with every manager for
+	// the same codex home (Rust GatewayLoginControl).
+	control *gatewayLoginControl
+	// loginAttempt serializes caller-initiated browser sign-ins.
+	loginAttempt atomic.Bool
 }
 
 // NewGatewayAuthManager builds a manager with a redirect-free HTTP client: token
@@ -70,12 +76,14 @@ func NewGatewayAuthManager(config GatewayAuthConfig, codexHome string, client *h
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
 	}
-	return &GatewayAuthManager{
+	manager := &GatewayAuthManager{
 		config:    config,
 		codexHome: codexHome,
 		storage:   newGatewayAuthStorage(codexHome, store),
 		client:    client,
 	}
+	manager.control = gatewayLoginControlFor(codexHome, manager)
+	return manager
 }
 
 // ResolveAccessToken returns a cached access token or refreshes/authorizes when
@@ -116,6 +124,9 @@ func (m *GatewayAuthManager) resolve(ctx context.Context, policy gatewayRefreshP
 	if !authorize {
 		return token, nil
 	}
+	// Rust #47170: a request that needs the browser flow reports NotReady before
+	// the interactive authorization starts, so clients can prompt explicitly.
+	m.publishStatus(GatewayAuthStatus{Kind: GatewayAuthStatusNotReady}, gatewayTokenFingerprint(m.cache.token))
 	return m.authorize(ctx)
 }
 
@@ -281,6 +292,13 @@ func (m *GatewayAuthManager) oauth() *oauthClient {
 // authorize runs the authorization-code grant with PKCE and the loopback
 // callback listener.
 func (m *GatewayAuthManager) authorize(ctx context.Context) (string, error) {
+	return m.authorizeWithURL(ctx, nil)
+}
+
+// authorizeWithURL is authorize with a caller-owned URL handoff: onURL receives
+// the authorization URL instead of the configured browser opener, which is what
+// the app-server's explicit gateway sign-in uses (Rust #47207).
+func (m *GatewayAuthManager) authorizeWithURL(ctx context.Context, onURL func(string)) (string, error) {
 	pkce, err := generatePKCE()
 	if err != nil {
 		return "", err
@@ -315,7 +333,11 @@ func (m *GatewayAuthManager) authorize(ctx context.Context) (string, error) {
 	if openBrowser == nil {
 		openBrowser = defaultGatewayBrowserOpener
 	}
-	if err := openBrowser(authorizationURL); err != nil {
+	if onURL != nil {
+		// The caller owns the handoff: the app-server forwards the URL to the
+		// initiating connection instead of opening a local browser.
+		onURL(authorizationURL)
+	} else if err := openBrowser(authorizationURL); err != nil {
 		fmt.Fprintln(os.Stderr, "Browser launch failed; open the URL above manually.")
 	}
 	code, err := listener.wait(ctx)
