@@ -75,6 +75,10 @@ type ShellExecutorOptions struct {
 	// PluginMetricsResolver resolves a trusted plugin analytics operation for
 	// one shell command (Rust #38252).
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	// SnapshotProvider supplies the session's shell-snapshot path for a launch,
+	// or "" when the session has none (Rust's turn-environment
+	// `shell_snapshot`, which the launch replays before the model's script).
+	SnapshotProvider func(ctx context.Context, request SnapshotProviderRequest) string
 	// PluginMeasurementTracker publishes a validated plugin measurement batch.
 	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	// ModelContext reports the resolved model and reasoning effort that invoked a
@@ -114,6 +118,7 @@ type ShellExecutor struct {
 	managedNetworkResolver   ManagedNetworkResolver
 	preserveLineEndings      bool
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
+	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) string
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	modelContext             func() (modelSlug string, reasoningEffort string)
 	oneShot                  bool
@@ -185,6 +190,7 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.preserveLineEndings = options.PreserveLineEndings
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
+	executor.snapshotProvider = options.SnapshotProvider
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
 	executor.modelContext = options.ModelContext
 	executor.oneShot = options.OneShot
@@ -728,6 +734,24 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if len(policyTable) > 0 {
 		req.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(policyTable, req.CWD)
 		req.ThreadID = e.unifiedExecThreadID
+	}
+	if e.snapshotProvider != nil {
+		// Rust replays the session's shell snapshot in front of the model's
+		// script so the user's aliases, functions and options still apply. The
+		// wrapper re-checks the launch shape and leaves brokered launches alone.
+		snapshotPath := e.snapshotProvider(ctx, SnapshotProviderRequest{
+			ShellType:           sessionShell.Type,
+			ShellPath:           sessionShell.Path,
+			CWD:                 req.CWD,
+			AllowLoginShell:     validation.AllowLoginShell,
+			PermissionProfile:   validation.PermissionProfile,
+			PermissionProfileID: validation.PermissionProfileID,
+			EnvironmentID:       req.UnifiedExecEnvironmentID,
+			Remote:              remoteEnvironment,
+		})
+		if snapshotPath != "" {
+			req.Command = MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshotPath, snapshotExplicitOverrides(req), req.Env)
+		}
 	}
 	// Rust #45505 brackets every exec_command call with a
 	// `unified_exec.exec_command` span and records how the call ended. Rust

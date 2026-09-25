@@ -1,12 +1,14 @@
 package tool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"codex_go/network"
+	"codex_go/sandbox"
 )
 
 // snapshotWrapFixture writes a snapshot file and enables the rewrite on the
@@ -192,5 +194,84 @@ func TestMaybeWrapShellLCWithSnapshotFollowsTheHostLikeRust(t *testing.T) {
 	got := MaybeWrapShellLCWithSnapshot(command, &Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, nil, nil)
 	if len(got) != 3 || got[2] != "echo hi" {
 		t.Fatalf("rewritten = %#v, want the original command", got)
+	}
+}
+
+// TestShellExecutorReplaysTheSessionSnapshotLikeRust wires the provider through
+// a launch: the model's `-lc` command sources the session snapshot, the
+// provider sees the launch facts Rust passes, and a provider that returns
+// nothing leaves the command alone.
+func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
+	snapshotPath := snapshotWrapFixture(t)
+	workspaceWrite := sandbox.WorkspaceWritePermissionProfile()
+	var launched *ShellRequest
+	var requested *SnapshotProviderRequest
+	executor := NewShellExecutor(&ShellExecutorOptions{
+		Runner: pluginMetricsShellRunner{onRun: func(req *ShellRequest) { launched = req }},
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/bash"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:      sandbox.ApprovalOnRequest,
+			AllowLoginShell:     true,
+			CWD:                 t.TempDir(),
+			DefaultTimeoutMS:    5000,
+			PermissionProfile:   &workspaceWrite,
+			PermissionProfileID: "resolved",
+		},
+		SnapshotProvider: func(_ context.Context, request SnapshotProviderRequest) string {
+			captured := request
+			requested = &captured
+			return snapshotPath
+		},
+	})
+	if _, err := executor.Execute(context.Background(), &Invocation{
+		CallID:   "call-snapshot",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if launched == nil {
+		t.Fatal("the shell runner did not see the launch request")
+	}
+	if requested == nil {
+		t.Fatal("the snapshot provider was not asked for a snapshot")
+	}
+	if requested.ShellType != ShellBash || requested.ShellPath != "/bin/bash" ||
+		requested.CWD != launched.CWD || !requested.AllowLoginShell || requested.Remote ||
+		requested.PermissionProfileID != "resolved" {
+		t.Fatalf("provider request = %#v", requested)
+	}
+	if len(launched.Command) != 3 || launched.Command[0] != "/bin/bash" || launched.Command[1] != "-c" {
+		t.Fatalf("launch command = %#v, want the snapshot wrapper", launched.Command)
+	}
+	if !strings.Contains(launched.Command[2], "if . '"+snapshotPath+"' >/dev/null 2>&1; then :; fi") ||
+		!strings.Contains(launched.Command[2], "exec '/bin/bash' -c 'echo hi'") {
+		t.Fatalf("launch command does not replay the snapshot:\n%s", launched.Command[2])
+	}
+
+	// A provider without a snapshot (feature disabled, a shell that overrides the
+	// session's, or a remote environment) leaves the launch untouched.
+	var untouched *ShellRequest
+	plain := NewShellExecutor(&ShellExecutorOptions{
+		Runner: pluginMetricsShellRunner{onRun: func(req *ShellRequest) { untouched = req }},
+		Shell:  &Shell{Type: ShellBash, Path: "/bin/bash"},
+		Validation: ShellValidationOptions{
+			ApprovalPolicy:    sandbox.ApprovalOnRequest,
+			AllowLoginShell:   true,
+			CWD:               t.TempDir(),
+			DefaultTimeoutMS:  5000,
+			PermissionProfile: &workspaceWrite,
+		},
+		SnapshotProvider: func(context.Context, SnapshotProviderRequest) string { return "" },
+	})
+	if _, err := plain.Execute(context.Background(), &Invocation{
+		CallID:   "call-no-snapshot",
+		ToolName: PlainName(DefaultExecCommandToolName),
+		Payload:  Payload{Kind: PayloadFunction, Arguments: `{"cmd":"echo hi"}`},
+	}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if untouched == nil || len(untouched.Command) != 3 || untouched.Command[2] != "echo hi" {
+		t.Fatalf("launch command = %#v, want the original command", untouched)
 	}
 }

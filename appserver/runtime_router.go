@@ -306,8 +306,12 @@ type RuntimeRouter struct {
 	// threadSessionSpans holds the thread-lifetime `session_loop` span of every
 	// live session, keyed by thread id. Rust opens it around the session's
 	// submission loop (session/mod.rs), so every turn's spans nest under it.
-	threadSessionSpansMu  sync.Mutex
-	threadSessionSpans    map[string]*telemetry.Span
+	threadSessionSpansMu sync.Mutex
+	threadSessionSpans   map[string]*telemetry.Span
+	// shellSnapshots holds each live session's shell-snapshot builder (Rust
+	// keeps one ShellSnapshot per session and drops it with the session).
+	shellSnapshotsMu      sync.Mutex
+	shellSnapshots        map[string]*tool.SnapshotBuilder
 	mcpEventStreams       *mcpEventStreamManager
 	skillShadowMu         sync.Mutex
 	skillShadowState      map[string]*skillShadowThreadState
@@ -1997,6 +2001,7 @@ func (r *RuntimeRouter) Close() error {
 }
 
 func (r *RuntimeRouter) close() error {
+	r.closeShellSnapshots()
 	if r.codexHomeScanCancel != nil {
 		r.codexHomeScanCancel()
 	}
@@ -5487,6 +5492,7 @@ func (r *RuntimeRouter) markThreadUnloaded(threadID string) {
 	// Rust drops the thread's message-board handle with its runtime.
 	r.closeMessageBoardHandle(threadID)
 	r.forgetThreadSessionState(threadID)
+	r.closeThreadShellSnapshots(threadID)
 	if err := r.deleteCodeModeRuntime(threadID); err != nil {
 		slog.Warn("failed to close thread code-mode runtime", "thread_id", threadID, "error", err)
 	}
@@ -13675,6 +13681,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.AnalyticsEnabled = r.analyticsEnabledOptionForThread(threadID)
 	if table, ok := cfg.Values["shell_environment_policy"].(map[string]any); ok {
 		options.Shell.ShellEnvironmentPolicy = cloneShellEnvironmentPolicy(table)
+	}
+	// Rust keeps one shell snapshot per session and replays it in front of every
+	// login-shell launch (Feature::ShellSnapshot).
+	if options.Shell != nil {
+		options.Shell.SnapshotProvider = r.shellSnapshotProviderForTurn(threadID, cfg)
 	}
 	// Rust UnifiedExecProcessManager::new(config.background_terminal_max_timeout):
 	// the configured background-terminal timeout caps unified-exec yields.
