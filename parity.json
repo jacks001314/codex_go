@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-26T01:00:00+08:00",
+    "generatedAt": "2026-09-26T03:00:00+08:00",
     "items": [
         {
             "id": "portable-project-trust-lookup",
@@ -1188,9 +1188,9 @@
             "id": "executor-environment-toml-provider",
             "status": "partial",
             "area": "execserver",
-            "reason": "Aligned upstream's executor environment configuration layer (exec-server/src/environment_toml.rs + environment_provider.rs): execserver parses and validates environments.toml (default/include_local, per-environment id plus exactly one of url or program, auth_bearer_token, args/env/cwd, connect/initialize timeouts), rejecting unknown fields without echoing values, with Rust's validation messages verbatim; the provider snapshot covers id validation, duplicates, config-dir-relative stdio cwd, default selection (including `none` and the disabled-local rejection) and the CODEX_EXEC_SERVER_URL fallback. The stdio client transport is implemented (spawn program, line-delimited JSON-RPC, no reconnect strategy, mirroring Rust). Remaining: the host-side wiring that pre-registers the provider snapshot in appserver's environment manager (remote entries with headers, stdio entries with commands threaded through the unified-exec and remote-skills dial paths).",
-            "userImpact": "environments.toml can be parsed and validated, and stdio executors can be dialed, but the app-server does not yet serve the configured environments, so multi-environment executors stay unavailable through that file.",
-            "test": "go test ./execserver -run 'Environment|TestStdioClient|TestLoadEnvironmentsTOML' -count=1"
+            "reason": "Aligned upstream's executor environment configuration layer and its host wiring: execserver parses and validates environments.toml (default/include_local, per-environment id plus exactly one of url or program, auth_bearer_token, args/env/cwd, connect/initialize timeouts), rejecting unknown fields without echoing values, with Rust's validation messages verbatim; the provider snapshot covers id validation, duplicates, config-dir-relative stdio cwd, default selection (including `none` and the disabled-local rejection) and the CODEX_EXEC_SERVER_URL fallback; the stdio client transport spawns the program and speaks line-delimited JSON-RPC with no reconnect strategy, mirroring Rust. The app-server now loads the provider at startup (a malformed file fails startup), pre-registers remote entries with their bearer headers and stdio entries with their commands, reaches stdio records from every executor path (environment info/status, remote skills, the OpenAI-file client, unified exec) and applies the provider default to turns that select no environment. Remaining: Rust builds the same manager from CODEX_HOME in codex exec, the TUI and the worktree paths, while Go's non-app-server hosts still run locally.",
+            "userImpact": "environments.toml is fully honored by the app server: configured remote (optionally bearer-authenticated) and stdio executors are addressable, selectable by turns and used as the default environment. The codex exec and TUI hosts still run locally.",
+            "test": "go test ./execserver -run 'Environment|TestStdioClient|TestLoadEnvironmentsTOML' -count=1; go test ./appserver -run 'Environment|TestUnifiedExecEnvironments' -count=1; go test ./app -run EnvironmentsTOML -count=1"
         }
     ]
 }
