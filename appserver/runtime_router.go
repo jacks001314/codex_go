@@ -675,6 +675,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	}
 	if router.services.ThreadRouter != nil {
 		router.services.ThreadRouter.SetStateRuntime(router.services.StateRuntime)
+		router.services.ThreadRouter.SetMessageBoardCleanup(router.messageBoardCleanup)
 	}
 	if router.services.ThreadRouter != nil && router.services.Config != nil {
 		router.services.ThreadRouter.retainClientDeveloperMessages = func() bool {

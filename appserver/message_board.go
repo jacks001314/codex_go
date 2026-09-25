@@ -23,6 +23,38 @@ import (
 	"codex_go/turn"
 )
 
+// messageBoardCleanup removes the discussion boards owned by permanently
+// deleted thread roots (Rust's local thread store `thread_data_cleanup`
+// callback). A child's ID does not match its parent's board, so deleting a
+// subagent thread leaves the tree's board in place. The callback is safe to
+// retry and independent of whether the message-board feature is currently
+// enabled.
+func (r *RuntimeRouter) messageBoardCleanup(threadIDs []session.ThreadID) error {
+	if r == nil || len(threadIDs) == 0 {
+		return nil
+	}
+	roots := make([]string, 0, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if id := strings.TrimSpace(string(threadID)); id != "" {
+			roots = append(roots, id)
+		}
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	sqliteConfig, err := r.messageBoardSqliteConfig(r.effectiveConfigForSessionTelemetry())
+	if err != nil {
+		// No resolvable board storage means there is no durable board to drop;
+		// failing the whole delete here would strand the caller on a missing
+		// sqlite home rather than a cleanup problem.
+		return nil
+	}
+	if err := agentboard.DeleteLocalBoards(context.Background(), sqliteConfig, roots); err != nil {
+		return fmt.Errorf("failed to delete agent message boards: %w", err)
+	}
+	return nil
+}
+
 // messageBoardFeatureEnabled reports whether the two features that own the
 // board are on (Rust `install_agent_message_board`'s feature gate).
 func messageBoardFeatureEnabled(cfg *config.Config) bool {

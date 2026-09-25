@@ -46,6 +46,11 @@ type Router struct {
 	// stamps it as `rpc.transport` on the request span; the in-process path uses
 	// "in-process" (app_server_tracing.rs).
 	requestTransport string
+	// messageBoardCleanup, when installed by the runtime, removes the shared
+	// discussion boards owned by permanently deleted thread roots. It mirrors
+	// Rust's local thread store `thread_data_cleanup` callback, which runs
+	// regardless of whether the message-board feature is currently enabled.
+	messageBoardCleanup func(threadIDs []session.ThreadID) error
 }
 
 // SetTracer installs the OTEL tracer used for request spans (Rust instruments
@@ -56,6 +61,16 @@ func (r *Router) SetTracer(tracer *telemetry.Tracer) {
 		return
 	}
 	r.tracer = tracer
+}
+
+// SetMessageBoardCleanup installs the hook that removes the shared discussion
+// boards owned by permanently deleted thread roots (Rust's local thread store
+// `thread_data_cleanup` callback).
+func (r *Router) SetMessageBoardCleanup(cleanup func(threadIDs []session.ThreadID) error) {
+	if r == nil {
+		return
+	}
+	r.messageBoardCleanup = cleanup
 }
 
 // SetRequestTransport stamps the transport name the request span reports. The
@@ -2398,6 +2413,14 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 		}
 	}
 	r.releaseLiveThreads(threadIDs)
+	// Rust's local thread store runs its `thread_data_cleanup` callback as part
+	// of the same delete: the permanently removed thread roots also drop their
+	// shared discussion boards.
+	if r.messageBoardCleanup != nil {
+		if err := r.messageBoardCleanup(threadIDs); err != nil {
+			return nil, err
+		}
+	}
 	return &ThreadDeleteResponse{}, nil
 }
 

@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,7 +12,110 @@ import (
 	"codex_go/agentboard"
 	"codex_go/config"
 	"codex_go/session"
+	"codex_go/state"
 )
+
+// Rust parity: the local thread store's `thread_data_cleanup` callback deletes
+// the boards owned by the permanently removed thread roots, and a subagent's ID
+// does not match its parent's board.
+type stubMessageBoardHost struct {
+	members map[string]agent.AgentPath
+}
+
+func (h stubMessageBoardHost) AgentPath(_ context.Context, caller string) (agent.AgentPath, error) {
+	path, ok := h.members[caller]
+	if !ok {
+		return "", fmt.Errorf("unknown agent")
+	}
+	return path, nil
+}
+
+func (h stubMessageBoardHost) ResolveAgent(_ context.Context, path agent.AgentPath) (string, error) {
+	for id, member := range h.members {
+		if member == path {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("unknown agent")
+}
+
+func (h stubMessageBoardHost) CurrentTime(context.Context, string) (time.Time, error) {
+	return time.Now().UTC(), nil
+}
+
+func (h stubMessageBoardHost) Notify(context.Context, string, agentboard.PostPreview) (agentboard.NotificationDelivery, error) {
+	return agentboard.NotificationAccepted, nil
+}
+
+func TestThreadDeleteRemovesOwnedMessageBoardsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	rootID := "root-thread"
+	childID := "child-thread"
+	for _, record := range []*session.Record{
+		{ID: session.ThreadID(rootID), SessionID: rootID, CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(1, 0).UTC(),
+			Metadata: session.Metadata{CWD: home, AgentPath: "/root"}},
+		{ID: session.ThreadID(childID), SessionID: rootID, ParentThreadID: session.ThreadID(rootID),
+			CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(),
+			Metadata: session.Metadata{CWD: home, AgentPath: "/root/worker", AgentDepth: 1}},
+	} {
+		if err := store.Save(record); err != nil {
+			t.Fatalf("save record %s: %v", record.ID, err)
+		}
+	}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+	})
+	defer router.Close()
+	sqliteConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The board only needs membership and a clock; the production host's clock
+	// path goes through the app-server current-time request, which a unit test
+	// has no client for.
+	host := stubMessageBoardHost{members: map[string]agent.AgentPath{
+		rootID: agent.AgentPathRoot, childID: agent.AgentPath("/root/worker"),
+	}}
+	board, err := agentboard.OpenLocalBoard(ctx, sqliteConfig, rootID, host)
+	if err != nil {
+		t.Fatalf("OpenLocalBoard() error = %v", err)
+	}
+	defer board.Close()
+	if _, err := board.CreateChannel(ctx, rootID, agentboard.CreateChannelRequest{ChannelName: "work", Subscription: agentboard.Subscribe}); err != nil {
+		t.Fatalf("CreateChannel() error = %v", err)
+	}
+
+	// Deleting the subagent leaves the tree's board alone.
+	if response := router.Handle(requestWithParams(t, IntID(2), MethodThreadDelete, ThreadDeleteParams{ThreadID: childID})); response.Error != nil {
+		t.Fatalf("delete child error = %+v", response.Error)
+	}
+	if _, err := board.CreateChannel(ctx, rootID, agentboard.CreateChannelRequest{ChannelName: "still-here"}); err != nil {
+		t.Fatalf("deleting a subagent dropped the tree's board: %v", err)
+	}
+
+	// Deleting the root tombstones the board, and the tombstone survives a
+	// reopen.
+	if response := router.Handle(requestWithParams(t, IntID(3), MethodThreadDelete, ThreadDeleteParams{ThreadID: rootID})); response.Error != nil {
+		t.Fatalf("delete root error = %+v", response.Error)
+	}
+	if _, err := board.CreateChannel(ctx, rootID, agentboard.CreateChannelRequest{ChannelName: "gone"}); err == nil ||
+		!strings.Contains(err.Error(), "permanently deleted") {
+		t.Fatalf("create after delete error = %v", err)
+	}
+	board.Close()
+	reopened, err := agentboard.OpenLocalBoard(ctx, sqliteConfig, rootID, host)
+	if err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.CreateChannel(ctx, rootID, agentboard.CreateChannelRequest{ChannelName: "gone"}); err == nil ||
+		!strings.Contains(err.Error(), "permanently deleted") {
+		t.Fatalf("create after reopen error = %v", err)
+	}
+}
 
 func TestMessageBoardGateRequiresBothFeaturesLikeRust(t *testing.T) {
 	v2 := &config.MultiAgentV2Config{ToolNamespace: "collaboration"}
