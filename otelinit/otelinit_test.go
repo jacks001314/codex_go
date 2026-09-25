@@ -7,6 +7,45 @@ import (
 	"codex_go/telemetry"
 )
 
+// Rust parity (#47408): a managed policy that restricts application destinations
+// disables the OTLP log, trace and metric exports.
+func TestBuildProviderDisablesOtlpUnderRestrictedApplicationNetworkPolicy(t *testing.T) {
+	cfg := otlpHTTPConfig()
+	cfg.Requirements = &config.ConfigRequirements{Application: &config.ApplicationRequirements{
+		Network: &config.ApplicationNetworkRequirements{
+			Enabled: true,
+			Domains: map[string]config.NetworkPermission{"allowed.example": config.NetworkAllow},
+		},
+	}}
+	cfg.BindApplicationNetworkPolicy()
+	if !cfg.RestrictsApplicationTraffic() {
+		t.Fatal("the bound policy does not restrict traffic")
+	}
+	provider, err := BuildProvider(Options{Config: cfg, ServiceName: "codex-app-server"})
+	if err != nil {
+		t.Fatalf("BuildProvider() error = %v", err)
+	}
+	if provider == nil {
+		return
+	}
+	defer func() { _ = provider.Shutdown(t.Context()) }()
+	if metrics := provider.Metrics(); metrics != nil && metrics.Enabled() {
+		t.Fatal("a restricted application network policy still exported OTLP metrics")
+	}
+
+	// The same config without the restriction keeps its OTLP pipeline.
+	unrestricted := otlpHTTPConfig()
+	unrestricted.BindApplicationNetworkPolicy()
+	allowed, err := BuildProvider(Options{Config: unrestricted, ServiceName: "codex-app-server"})
+	if err != nil {
+		t.Fatalf("BuildProvider(unrestricted) error = %v", err)
+	}
+	if allowed == nil || allowed.Metrics() == nil {
+		t.Fatalf("unrestricted provider = %#v", allowed)
+	}
+	defer func() { _ = allowed.Shutdown(t.Context()) }()
+}
+
 func otlpHTTPConfig() *config.Config {
 	return &config.Config{Values: map[string]any{
 		"analytics": map[string]any{"enabled": true},

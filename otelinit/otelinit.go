@@ -41,6 +41,15 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	if !analyticsEnabled {
 		metricsExporter = config.OtelExporterKind{Kind: config.OtelExporterKindNone}
 	}
+	// Rust #47408: OTLP log, trace and metric exports are disabled while a
+	// managed application network policy restricts destinations, because an
+	// export endpoint is not necessarily one the policy allows.
+	if options.Config != nil && options.Config.RestrictsApplicationTraffic() {
+		none := config.OtelExporterKind{Kind: config.OtelExporterKindNone}
+		resolved.Exporter = none
+		resolved.TraceExporter = none
+		metricsExporter = none
+	}
 	runtimeMetrics := false
 	if options.Config != nil {
 		runtimeMetrics = options.Config.FeatureSettings()["runtime_metrics"]
