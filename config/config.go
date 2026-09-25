@@ -2164,7 +2164,9 @@ func loadConfigFileIfExists(path string) (map[string]any, bool, error) {
 	}
 	var values map[string]any
 	if err := toml.Unmarshal(stripUTF8BOM(data), &values); err != nil {
-		return nil, false, err
+		// Rust #46962: keep the failure typed so diagnostics can report the
+		// location instead of echoing values that may be credentials.
+		return nil, false, newConfigLoadError(path, err)
 	}
 	if values == nil {
 		values = map[string]any{}

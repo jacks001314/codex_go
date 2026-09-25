@@ -987,10 +987,16 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 	})
 	details := []string{"config.toml: " + config.ConfigPath(codexHome)}
 	if err != nil {
-		return NewCheck("config.load", "config", CheckStatusFail, "config could not be loaded").
+		// Rust #46962: configuration load errors can echo configuration values
+		// (including credentials) into diagnostic reports, so only typed
+		// metadata is reported.
+		check := NewCheck("config.load", "config", CheckStatusFail, "config could not be loaded").
 			DetailsList(details).
-			Detail("error: " + err.Error()).
 			Remediate("Fix the reported config error, then rerun codex doctor.")
+		for _, detail := range configLoadErrorDetails(err) {
+			check = check.Detail(detail)
+		}
+		return check
 	}
 	modelName := stringConfigValueForDoctor(cfg, "model")
 	if modelName == "" {
@@ -1008,6 +1014,41 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 	featureFlagDetails(cfg, &details)
 	configTomlDetailsForDoctor(codexHome, &details)
 	return NewCheck("config.load", "config", CheckStatusOK, "config loaded").DetailsList(details)
+}
+
+// configLoadErrorDetails mirrors Rust #46962: report the typed location of a
+// configuration load failure, an I/O error kind, or a generic message, and
+// never the raw error text.
+func configLoadErrorDetails(err error) []string {
+	if path, line, column, ok := config.ConfigLoadErrorLocation(err); ok {
+		return []string{
+			"error: invalid configuration",
+			"file: " + path,
+			fmt.Sprintf("line: %d", line),
+			fmt.Sprintf("column: %d", column),
+		}
+	}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return []string{"error: entity not found"}
+	case errors.Is(err, os.ErrPermission):
+		return []string{"error: permission denied"}
+	case isTOMLDecodeError(err):
+		return []string{"error: invalid data"}
+	default:
+		return []string{"error: configuration load failed"}
+	}
+}
+
+// isTOMLDecodeError reports whether the failure is a TOML parse/decode error
+// whose text would contain the offending configuration values.
+func isTOMLDecodeError(err error) bool {
+	var decodeErr *toml.DecodeError
+	if errors.As(err, &decodeErr) {
+		return true
+	}
+	var missingErr *toml.StrictMissingError
+	return errors.As(err, &missingErr)
 }
 
 func logDirForDoctor(codexHome string, cfg *config.Config) string {
