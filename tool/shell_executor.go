@@ -543,7 +543,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if environment != nil {
 		environmentCWD := environment.CWD
-		remoteEnvironment := environment.ExecServerURL != "" || environment.NoiseProvider != nil
+		remoteEnvironment := environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil
 		if remoteEnvironment {
 			environmentCWD, err = resolveRemoteUnifiedExecCWD(environment.CWD, firstNonEmptyString(args.CWD, args.Workdir))
 			if err != nil {
@@ -581,7 +581,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		remoteEnvironment := false
 		if environment != nil && strings.TrimSpace(environment.ID) != "" {
 			environmentID = environment.ID
-			remoteEnvironment = environment.ExecServerURL != "" || environment.NoiseProvider != nil
+			remoteEnvironment = environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil
 		}
 		resolvedNetwork, resolveErr := e.managedNetworkResolver(environmentID, remoteEnvironment)
 		if resolveErr != nil {
@@ -674,7 +674,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		e.decisionSink.AutoApproved(toolName, callID)
 	}
 	var metricsSidecar *plugin.PluginMetricsSidecar
-	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil)
+	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil)
 	if e.pluginMetricsResolver != nil && !remoteEnvironment {
 		if req.Env == nil {
 			req.Env = map[string]string{}
@@ -695,6 +695,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
 		req.UnifiedExecNoiseProvider = environment.NoiseProvider
 		req.UnifiedExecRemoteHTTPHeaders = environment.ExecServerHTTPHeaders
+		req.UnifiedExecRemoteStdioCommand = environment.ExecServerStdioCommand
 		req.UnifiedExecUserHomeDir = strings.TrimSpace(environment.UserHomeDir)
 	}
 	if req.RemoteNetworkProxy != nil {
@@ -937,7 +938,7 @@ func (e *ShellExecutor) shouldUseUnifiedExec(req *ShellRequest) bool {
 }
 
 func prepareUnifiedExecShellRequest(req *ShellRequest) (*ShellRequest, error) {
-	if req == nil || strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
+	if req == nil || strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.UnifiedExecRemoteStdioCommand != nil || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
 		return req, nil
 	}
 	plan, err := sandbox.BuildCommandRunPlan(&sandbox.CommandRunRequest{

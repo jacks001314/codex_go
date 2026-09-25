@@ -123,13 +123,15 @@ type ShellRequest struct {
 	// UnifiedExecRemoteHTTPHeaders are sent on the remote executor's WebSocket
 	// upgrade and reconnects (Rust #47648 executor bearer tokens).
 	UnifiedExecRemoteHTTPHeaders http.Header
-	UnifiedExecEnvironmentID     string
-	UnifiedExecUserHomeDir       string
-	EnforceManagedNetwork        bool
-	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
-	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
-	NetworkPolicyDecider         network.ProxyPolicyDecider
-	NetworkPolicyDecisionTimeout time.Duration
+	// UnifiedExecRemoteStdioCommand selects a stdio executor instead of a URL.
+	UnifiedExecRemoteStdioCommand *execserver.StdioExecServerCommand
+	UnifiedExecEnvironmentID      string
+	UnifiedExecUserHomeDir        string
+	EnforceManagedNetwork         bool
+	ManagedNetwork                *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy            *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider          network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout  time.Duration
 }
 
 type UnifiedExecEnvironment struct {
@@ -144,7 +146,10 @@ type UnifiedExecEnvironment struct {
 	// ExecServerHTTPHeaders are sent on this environment's executor WebSocket
 	// upgrade and reconnects (Rust #47648 executor bearer tokens).
 	ExecServerHTTPHeaders http.Header
-	NoiseProvider         execserver.NoiseRendezvousConnectProvider
+	// ExecServerStdioCommand selects the stdio transport for an environment
+	// configured with a program instead of a URL (environments.toml entries).
+	ExecServerStdioCommand *execserver.StdioExecServerCommand
+	NoiseProvider          execserver.NoiseRendezvousConnectProvider
 	// ShellEnvironmentPolicy is this environment's resolved shell environment
 	// policy table (empty when the thread-derived policy applies), mirroring
 	// Rust protocol::EnvironmentConfig shell_environment_policy (#38902).

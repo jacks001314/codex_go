@@ -304,6 +304,7 @@ type unifiedExecProcess struct {
 	remoteURL            string
 	remoteProvider       execserver.NoiseRendezvousConnectProvider
 	remoteHeaders        http.Header
+	remoteStdioCommand   *execserver.StdioExecServerCommand
 	remoteSessionID      string
 	remoteID             string
 	remoteWrite          uint64
@@ -422,7 +423,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil {
+	if strings.TrimSpace(req.UnifiedExecRemoteURL) != "" || req.UnifiedExecNoiseProvider != nil || req.UnifiedExecRemoteStdioCommand != nil {
 		return m.execRemote(ctx, req, callID, processID)
 	}
 	if runtime.GOOS == "windows" && req.PermissionProfile != nil && !req.PermissionProfile.Disabled {
@@ -600,8 +601,9 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		client, err = execserver.DialNoiseRendezvousClient(connectCtx, req.UnifiedExecNoiseProvider, execserver.DialClientOptions{ClientName: "codex-go-unified-exec"})
 	} else {
 		client, err = execserver.DialClientWithOptions(connectCtx, req.UnifiedExecRemoteURL, execserver.DialClientOptions{
-			ClientName:  "codex-go-unified-exec",
-			HTTPHeaders: req.UnifiedExecRemoteHTTPHeaders.Clone(),
+			ClientName:   "codex-go-unified-exec",
+			HTTPHeaders:  req.UnifiedExecRemoteHTTPHeaders.Clone(),
+			StdioCommand: req.UnifiedExecRemoteStdioCommand,
 		})
 	}
 	if err != nil {
@@ -714,6 +716,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		remoteURL:              req.UnifiedExecRemoteURL,
 		remoteProvider:         req.UnifiedExecNoiseProvider,
 		remoteHeaders:          req.UnifiedExecRemoteHTTPHeaders.Clone(),
+		remoteStdioCommand:     req.UnifiedExecRemoteStdioCommand,
 		remoteSessionID:        client.SessionID(),
 		remoteID:               remoteID,
 		remoteEvents:           events,
@@ -1587,6 +1590,7 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	remoteURL := p.remoteURL
 	remoteProvider := p.remoteProvider
 	remoteHeaders := p.remoteHeaders.Clone()
+	remoteStdioCommand := p.remoteStdioCommand
 	sessionID := p.remoteSessionID
 	processID := p.remoteID
 	exited := p.exited
@@ -1602,6 +1606,7 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 			ClientName:      "codex-go-unified-exec",
 			ResumeSessionID: sessionID,
 			HTTPHeaders:     remoteHeaders.Clone(),
+			StdioCommand:    remoteStdioCommand,
 		}
 		var client *execserver.Client
 		var err error

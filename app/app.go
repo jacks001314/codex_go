@@ -1132,6 +1132,14 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	if err != nil {
 		return err
 	}
+	// Rust #47620/#47648 host wiring: environments.toml (or the
+	// CODEX_EXEC_SERVER_URL fallback) pre-registers the configured executors and
+	// a malformed file fails app-server startup.
+	environmentProvider, err := execserver.EnvironmentProviderFromCodexHome(codexHome)
+	if err != nil {
+		return err
+	}
+	runtimeOptions.EnvironmentProviderSnapshot = &environmentProvider
 	runtimeOptions.FeatureEnablement = featureEnablementFromRoot(root)
 	runtimeOptions.Requirements = requirements
 	runtimeOptions.EnableLogDB = true

@@ -215,6 +215,10 @@ type RuntimeRouterOptions struct {
 	CodeModeHostProgram                 string
 	DisableCodeModeInProcessFallback    bool
 	FeatureEnablement                   map[string]bool
+	// EnvironmentProviderSnapshot pre-registers the executors configured in
+	// environments.toml (or the CODEX_EXEC_SERVER_URL fallback), mirroring Rust
+	// EnvironmentManager::from_codex_home.
+	EnvironmentProviderSnapshot         *execserver.EnvironmentProviderSnapshot
 	StateRuntime                        *state.StateRuntime
 	EnableLogDB                         bool
 	logDBInstallation                   *state.LogDBInstallation
@@ -1319,6 +1323,13 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	// The hook runner reports completed-hook-run metrics through the session
 	// metrics sink (Rust's emit_hook_completed_metrics).
 	services.HookRunner.SetMetrics(runtimeMetrics)
+	// Rust EnvironmentManager::from_codex_home: the configured executors are
+	// registered before the router serves, so environments.toml entries are
+	// addressable by id. The snapshot is validated when it is loaded, so a
+	// failure here only means an entry carried no transport.
+	if options != nil && options.EnvironmentProviderSnapshot != nil {
+		_ = services.Environment.ApplyProviderSnapshot(*options.EnvironmentProviderSnapshot)
+	}
 	router := NewRuntimeRouter(services)
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
@@ -14269,7 +14280,21 @@ func (r *RuntimeRouter) configBaseDirForAgents() string {
 }
 
 func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartParams) []tool.UnifiedExecEnvironment {
-	if r == nil || params == nil || len(params.Environments) == 0 || r.services.Environment == nil {
+	if r == nil || params == nil || r.services.Environment == nil {
+		return nil
+	}
+	selections := params.Environments
+	if len(selections) == 0 {
+		// Rust EnvironmentManager::default_environment: a turn that selects no
+		// environment uses the provider's default (environments.toml `default`),
+		// which for a remote or stdio executor replaces the implicit local one.
+		defaultID, ok := r.services.Environment.DefaultEnvironmentID()
+		if !ok {
+			return nil
+		}
+		selections = []map[string]any{{"environmentId": defaultID}}
+	}
+	if len(selections) == 0 {
 		return nil
 	}
 	// Resolve FromThread attachments against the thread's environment config
@@ -14277,8 +14302,8 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 	// Ready configurations keep their canonical value; Pending and Failed
 	// attachments stay out of turn environments (#38684).
 	threadConfig := r.threadEnvironmentConfigForTurn(params)
-	out := make([]tool.UnifiedExecEnvironment, 0, len(params.Environments))
-	for _, selected := range params.Environments {
+	out := make([]tool.UnifiedExecEnvironment, 0, len(selections))
+	for _, selected := range selections {
 		environmentID := selectionEnvironmentID(selected)
 		state, _ := resolveEnvironmentConfig(selected, threadConfig)
 		if state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed {
@@ -14308,14 +14333,15 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			environmentShell = &tool.Shell{Type: tool.DetectShellType(shellPath), Path: shellPath}
 		}
 		environment := tool.UnifiedExecEnvironment{
-			ID:                    environmentID,
-			CWD:                   cwd,
-			Shell:                 environmentShell,
-			PlatformOS:            platformOS,
-			UserHomeDir:           userHomeDir,
-			ExecServerURL:         strings.TrimSpace(record.ExecServerURL),
-			ExecServerHTTPHeaders: record.ExecServerHeaders.Clone(),
-			NoiseProvider:         record.NoiseProvider,
+			ID:                     environmentID,
+			CWD:                    cwd,
+			Shell:                  environmentShell,
+			PlatformOS:             platformOS,
+			UserHomeDir:            userHomeDir,
+			ExecServerURL:          strings.TrimSpace(record.ExecServerURL),
+			ExecServerHTTPHeaders:  record.ExecServerHeaders.Clone(),
+			ExecServerStdioCommand: record.StdioCommand,
+			NoiseProvider:          record.NoiseProvider,
 		}
 		if state.Config != nil {
 			allowLoginShell := state.Config.AllowLoginShell

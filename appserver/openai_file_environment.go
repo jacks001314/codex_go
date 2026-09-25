@@ -79,13 +79,12 @@ func (f *environmentOpenAIFileSystem) dial(ctx context.Context) (*execserverclie
 	}
 	connectCtx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(f.record.ConnectTimeoutMS))
 	defer cancel()
-	options := execserverclient.DialClientOptions{
-		ClientName:  "codex-go-openai-file",
-		HTTPClient:  f.record.HTTPClient,
-		HTTPHeaders: f.record.ExecServerHeaders.Clone(),
-	}
+	options := execServerClientOptions(&f.record, "codex-go-openai-file")
 	if f.record.NoiseProvider != nil {
 		return execserverclient.DialNoiseRendezvousClient(connectCtx, f.record.NoiseProvider, options)
+	}
+	if recordUsesStdioTransport(&f.record) {
+		return execserverclient.DialClientWithOptions(connectCtx, "", options)
 	}
 	if strings.TrimSpace(f.record.ExecServerURL) == "" {
 		return nil, errors.New("primary turn environment has no exec-server connection")

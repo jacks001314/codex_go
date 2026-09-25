@@ -166,6 +166,48 @@ func (m *EnvironmentManager) SetHTTPClient(httpClient *http.Client) {
 	}
 }
 
+// ApplyProviderSnapshot pre-registers the environments an environment provider
+// offers (Rust EnvironmentManager::from_codex_home + insert_environment). The
+// local environment stays implicit, so only configured remote and stdio
+// environments become records.
+func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.EnvironmentProviderSnapshot) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.providerDefault = snapshot.Default
+	m.hasProvider = true
+	for _, environment := range snapshot.Environments {
+		id := strings.TrimSpace(environment.ID)
+		if id == "" || id == execserverclient.LocalEnvironmentID {
+			continue
+		}
+		record := EnvironmentRecord{
+			EnvironmentID: id,
+			Shell:         m.defaultShell,
+			CWD:           cloneString(m.defaultCWD),
+			HTTPClient:    m.httpClient,
+		}
+		switch environment.Transport.Kind {
+		case execserverclient.EnvironmentTransportStdio:
+			if environment.Transport.Command == nil {
+				return fmt.Errorf("%w: environment `%s` is missing its stdio command", ErrInvalidEnvironmentRequest, id)
+			}
+			record.StdioCommand = environment.Transport.Command
+		default:
+			record.ExecServerURL = strings.TrimSpace(environment.Transport.WebSocketURL)
+			record.ExecServerHeaders = environment.Transport.HTTPHeaders.Clone()
+			if environment.Transport.ConnectTimeout > 0 {
+				milliseconds := uint64(environment.Transport.ConnectTimeout / time.Millisecond)
+				record.ConnectTimeoutMS = &milliseconds
+			}
+		}
+		m.records[id] = record
+	}
+	return nil
+}
+
 func (p *EnvironmentAddParams) Validate() error {
 	if p == nil {
 		return fmt.Errorf("%w: params are nil", ErrInvalidEnvironmentRequest)
@@ -220,6 +262,29 @@ func execServerDialOptions(record *EnvironmentRecord) *websocket.DialOptions {
 		options.HTTPHeader = record.ExecServerHeaders
 	}
 	return options
+}
+
+// execServerClientOptions builds executor client options for a record: the
+// configured stdio command when the record carries one, otherwise the URL plus
+// its headers (Rust's ExecServerTransportParams selection).
+func execServerClientOptions(record *EnvironmentRecord, clientName string) execserverclient.DialClientOptions {
+	options := execserverclient.DialClientOptions{ClientName: clientName}
+	if record == nil {
+		return options
+	}
+	options.HTTPClient = record.HTTPClient
+	if record.StdioCommand != nil {
+		options.StdioCommand = record.StdioCommand
+		return options
+	}
+	options.HTTPHeaders = record.ExecServerHeaders.Clone()
+	return options
+}
+
+// recordUsesStdioTransport reports whether the record is reached over stdio
+// rather than a WebSocket URL.
+func recordUsesStdioTransport(record *EnvironmentRecord) bool {
+	return record != nil && record.StdioCommand != nil
 }
 
 type EnvironmentAddResponse struct{}
@@ -294,10 +359,13 @@ type EnvironmentRecord struct {
 	// ExecServerHeaders are sent on the executor's WebSocket upgrade and on
 	// reconnects; the app-server fills them from the registration's bearer token.
 	ExecServerHeaders http.Header
-	Shell             EnvironmentShellInfo
-	CWD               *string
-	InfoOverride      bool
-	HTTPClient        *http.Client
+	// StdioCommand selects the stdio transport for an environment configured
+	// with a program instead of a URL (environments.toml `program` entries).
+	StdioCommand *execserverclient.StdioExecServerCommand
+	Shell        EnvironmentShellInfo
+	CWD          *string
+	InfoOverride bool
+	HTTPClient   *http.Client
 	// Provisioning is non-nil for provisioned (deferred) Noise environments and
 	// nil for ordinary environments, which connect eagerly.
 	Provisioning *ProvisioningState
@@ -309,6 +377,11 @@ type EnvironmentManager struct {
 	defaultCWD   *string
 	records      map[string]EnvironmentRecord
 	httpClient   *http.Client
+	// providerDefault is the default environment selected by the configured
+	// provider (environments.toml `default`), applied to turns that select no
+	// environment (Rust EnvironmentManager::default_environment).
+	providerDefault execserverclient.EnvironmentDefault
+	hasProvider     bool
 }
 
 func NewEnvironmentManager(defaultShell EnvironmentShellInfo, defaultCWD string) *EnvironmentManager {
@@ -802,7 +875,7 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 	if record.InfoOverride {
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusReady}, nil
 	}
-	if strings.TrimSpace(record.ExecServerURL) == "" && record.NoiseProvider == nil {
+	if strings.TrimSpace(record.ExecServerURL) == "" && record.NoiseProvider == nil && !recordUsesStdioTransport(&record) {
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
 	}
 	status, err := fetchRemoteEnvironmentStatus(ctx, &record)
@@ -816,6 +889,24 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusReady}, nil
 	}
 	return status, nil
+}
+
+// DefaultEnvironmentID returns the provider-selected default environment, when
+// one is configured and is not the implicit local environment.
+func (m *EnvironmentManager) DefaultEnvironmentID() (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasProvider || m.providerDefault.Kind != execserverclient.EnvironmentDefaultID {
+		return "", false
+	}
+	id := strings.TrimSpace(m.providerDefault.ID)
+	if id == "" || id == execserverclient.LocalEnvironmentID {
+		return "", false
+	}
+	return id, true
 }
 
 func (m *EnvironmentManager) Remove(environmentID string) bool {
@@ -965,6 +1056,30 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		}
 		return response, nil
 	}
+	if recordUsesStdioTransport(record) {
+		// A record configured with a program (environments.toml `program`
+		// entries) is reached through the shared stdio client transport.
+		client, err := execserverclient.DialClientWithOptions(ctx, strings.TrimSpace(record.ExecServerURL), execServerClientOptions(record, "codex-go"))
+		if err != nil {
+			return nil, err
+		}
+		defer client.Close()
+		info, err := client.EnvironmentInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+		response := &EnvironmentInfoResponse{
+			Shell:        EnvironmentShellInfo{Name: info.Shell.Name, Path: info.Shell.Path},
+			CWD:          cloneString(info.CWD),
+			PlatformOS:   info.PlatformOS,
+			UserHomeDir:  strings.TrimSpace(info.UserHomeDir),
+			Capabilities: info.Capabilities,
+		}
+		if err := response.Shell.Validate(); err != nil {
+			return nil, err
+		}
+		return response, nil
+	}
 	conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 	if err != nil {
 		return nil, err
@@ -1024,6 +1139,24 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 		defer client.Close()
 		status, err := client.EnvironmentStatus(ctx)
 		if err != nil {
+			return nil, err
+		}
+		return &EnvironmentStatusResponse{Status: EnvironmentStatusKind(status.Status)}, nil
+	}
+	if recordUsesStdioTransport(record) {
+		client, err := execserverclient.DialClientWithOptions(ctx, "", execServerClientOptions(record, "codex-go"))
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+			}
+			return nil, err
+		}
+		defer client.Close()
+		status, err := client.EnvironmentStatus(ctx)
+		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
+			}
 			return nil, err
 		}
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusKind(status.Status)}, nil

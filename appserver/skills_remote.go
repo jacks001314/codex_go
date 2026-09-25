@@ -188,6 +188,13 @@ func discoverRemoteEnvironmentSkillsWithSandbox(ctx context.Context, record *Env
 		}
 		defer client.Close()
 		caller = clientRemoteEnvironmentFSCaller{client: client}
+	} else if recordUsesStdioTransport(record) {
+		client, err := execserverclient.DialClientWithOptions(ctx, "", execServerClientOptions(record, "codex-go"))
+		if err != nil {
+			return nil, nil, err
+		}
+		defer client.Close()
+		caller = clientRemoteEnvironmentFSCaller{client: client}
 	} else {
 		conn, _, err := websocket.Dial(ctx, record.ExecServerURL, execServerDialOptions(record))
 		if err != nil {
@@ -303,6 +310,13 @@ func readRemoteEnvironmentSkillTextWithSandbox(ctx context.Context, record *Envi
 	var caller remoteEnvironmentFSCaller
 	if record.NoiseProvider != nil {
 		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		if err != nil {
+			return "", err
+		}
+		defer client.Close()
+		caller = clientRemoteEnvironmentFSCaller{client: client}
+	} else if recordUsesStdioTransport(record) {
+		client, err := execserverclient.DialClientWithOptions(ctx, "", execServerClientOptions(record, "codex-go"))
 		if err != nil {
 			return "", err
 		}
