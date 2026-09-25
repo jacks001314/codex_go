@@ -13,8 +13,23 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-25T18:00:00+08:00",
+    "generatedAt": "2026-09-25T20:00:00+08:00",
     "items": [
+        {
+            "id": "doctor-config-load-error-redaction",
+            "status": "done",
+            "area": "doctor",
+            "reason": "Aligned upstream 0ad18769ad (#46962 Avoid exposing config values in codex doctor errors): the config loader wraps TOML failures in a typed ConfigLoadError (path + 1-based line/column) and the doctor config.load check reports typed metadata only - 'error: invalid configuration' with file/line/column for a located parse failure, an I/O kind (entity not found / permission denied / invalid data) otherwise, or 'error: configuration load failed' - so credentials echoed by configuration load errors never reach diagnostic reports.",
+            "test": "go test ./doctor -run 'ConfigCheckReports|ConfigLoadErrorLocation' -count=1; go test ./config -count=1"
+        },
+        {
+            "id": "os-discovery-caching-audit",
+            "status": "intentional_difference",
+            "area": "telemetry",
+            "reason": "Audited upstream 87bc50f9d4 (#47038 Cache OS discovery for user agents and telemetry): Rust caches os_info::get() per process because OS discovery can launch subprocesses on Linux. Go's equivalents (appserver client user agent, telemetry runtime metadata, MCP client user agent) read the compile-time runtime.GOOS/runtime.GOARCH constants and never execute OS discovery, so there is nothing to cache and no behavior to align.",
+            "userImpact": "None: Go never spends time on per-request OS discovery, so the Rust latency and subprocess concern does not apply.",
+            "test": "go test ./doctor ./telemetry ./mcp -count=1"
+        },
         {
             "id": "mcp-oauth-authorization-endpoint-scheme",
             "status": "done",
