@@ -61,7 +61,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	}
 	command.Env = append(command.Env, DaemonShutdownFileEnv+"="+daemonShutdownFilePath(backend.PIDFile))
 	command.Env = append(command.Env, UpdaterPIDFileEnv+"="+backend.PIDFile)
-	if err := command.Start(); err != nil {
+	if err := startDetachedCommand(command); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}
 	pid := uint32(command.Process.Pid)
@@ -73,6 +73,26 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	}
 	_ = command.Process.Release()
 	return pid, processStartTime, nil
+}
+
+// startDetachedCommand starts a prepared detached process. Rust #48272 clears
+// the launcher's own standard-handle inheritance flags before spawning
+// (`SetHandleInformation(.., HANDLE_FLAG_INHERIT, 0)`) because a detached child
+// would otherwise keep the launcher's output pipes open and leave the caller
+// waiting for EOF.
+//
+// Go reaches the same end state without touching the launcher's handles:
+// `syscall.StartProcess` always passes an explicit
+// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` containing exactly the child's configured
+// stdio (plus `SysProcAttr.AdditionalInheritedHandles`), so unrelated inheritable
+// handles - including the launcher's own stdout/stderr pipes - are never
+// propagated to the child. The Windows regression test asserts that property
+// against this entry point.
+func startDetachedCommand(command *exec.Cmd) error {
+	if command == nil {
+		return fmt.Errorf("detached command is nil")
+	}
+	return command.Start()
 }
 
 func processMatchesPIDRecord(record *PIDRecord) (bool, error) {
