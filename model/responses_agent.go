@@ -340,6 +340,10 @@ type responsesAgentAPIErrorBody struct {
 	Message string `json:"message"`
 	Type    string `json:"type,omitempty"`
 	Code    any    `json:"code,omitempty"`
+	// LimitWindowMinutes is the server-selected window responsible for a usage
+	// limit. It stays untyped because Rust accepts any JSON value and keeps only
+	// unsigned integers that fit in u16 (Rust #48174).
+	LimitWindowMinutes any `json:"limit_window_minutes,omitempty"`
 	// Misalignment carries the optional public explanation and continuation
 	// instruction returned with a misalignment block (Rust #40952).
 	Misalignment json.RawMessage `json:"misalignment,omitempty"`
@@ -920,6 +924,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 			}
 		case "error":
 			closeResponsesWebsocketSession(session, "response failed")
+			if usageLimit, ok := websocketUsageLimitError(event); ok {
+				return nil, usageLimit
+			}
 			if websocketEventErrorCode(event) == "previous_response_not_found" && strings.TrimSpace(request.PreviousResponseID) != "" && !transportRetried {
 				clone := *request
 				clone.PreviousResponseID = ""
@@ -1023,6 +1030,23 @@ func websocketEventErrorCode(event map[string]any) string {
 		return strings.TrimSpace(responseToolString(value["code"]))
 	}
 	return strings.TrimSpace(responseToolString(event["code"]))
+}
+
+// websocketUsageLimitError mirrors Rust's wrapped-WebSocket usage-limit
+// mapping: the event must carry a numeric status and a `usage_limit_reached`
+// error type, which then reaches analytics with its preserved window
+// (Rust #48174).
+func websocketUsageLimitError(event map[string]any) (*codexapi.APIError, bool) {
+	value, ok := event["error"].(map[string]any)
+	if !ok || strings.TrimSpace(responseToolString(value["type"])) != "usage_limit_reached" {
+		return nil, false
+	}
+	status, ok := uint64FromAny(event["status"])
+	if !ok || status == 0 || status > 65535 {
+		return nil, false
+	}
+	message := firstAgentItemValue(responseToolString(value["message"]), "The usage limit has been reached")
+	return usageLimitReachedAPIError(int(status), message, value["limit_window_minutes"]), true
 }
 
 func websocketURLFromHTTP(value *url.URL) (string, error) {
@@ -2783,6 +2807,32 @@ func (r *ResponsesAgentRunner) authHeaders() http.Header {
 	return r.Auth.Headers
 }
 
+const usageLimitMaxWindowMinutes = 65535
+
+// usageLimitReachedAPIError mirrors Rust's `CodexErr::UsageLimitReached` for a
+// `usage_limit_reached` response, preserving the optional server-selected
+// window (Rust #48174).
+func usageLimitReachedAPIError(status int, message string, window any) *codexapi.APIError {
+	return &codexapi.APIError{
+		Kind:                    codexapi.ErrorRateLimit,
+		Status:                  status,
+		Message:                 message,
+		UsageLimitWindowMinutes: usageLimitWindowMinutesFromValue(window),
+	}
+}
+
+// usageLimitWindowMinutesFromValue accepts unsigned integers that fit in u16,
+// matching Rust's `Value::as_u64` plus `u16::try_from`. Missing, null,
+// malformed and out-of-range values are unknown.
+func usageLimitWindowMinutesFromValue(value any) *uint16 {
+	minutes, ok := uint64FromAny(value)
+	if !ok || minutes > usageLimitMaxWindowMinutes {
+		return nil
+	}
+	converted := uint16(minutes)
+	return &converted
+}
+
 func responsesHTTPError(providerName string, statusCode int, headers http.Header, body []byte) error {
 	var payload struct {
 		Error *responsesAgentAPIErrorBody `json:"error"`
@@ -2834,6 +2884,15 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		case "slow_down":
 			return &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
 		}
+	}
+	// Rust #48174 (api_bridge.rs): an HTTP 429 whose error type is
+	// `usage_limit_reached` is a usage-limit failure that preserves the
+	// server-selected window responsible for the limit.
+	if statusCode == http.StatusTooManyRequests && payload.Error != nil && strings.TrimSpace(payload.Error.Type) == "usage_limit_reached" {
+		if strings.TrimSpace(message) == "" {
+			message = http.StatusText(statusCode)
+		}
+		return usageLimitReachedAPIError(statusCode, message, payload.Error.LimitWindowMinutes)
 	}
 	if statusCode == http.StatusTooManyRequests && responsesIsQuotaError(payload.Error) {
 		if strings.TrimSpace(message) == "" {

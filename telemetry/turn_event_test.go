@@ -101,6 +101,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"explicit_client_interrupt_requested_at_ms": null,
 			"codex_error_kind": null,
 			"codex_error_http_status_code": null,
+			"usage_limit_window_minutes": null,
 			"steer_count": 0,
 			"running_background_process_count": 3,
 			"total_tool_call_count": null,
@@ -207,6 +208,38 @@ func TestCodexTurnEventPluginInventoryNullabilityMatchesRust(t *testing.T) {
 			}
 			if !strings.Contains(string(encoded), testCase.want) {
 				t.Fatalf("event JSON = %s, want containing %s", encoded, testCase.want)
+			}
+		})
+	}
+}
+
+// TestCodexTurnEventUsageLimitWindowMatchesRust mirrors Rust #48174: the
+// server-selected window responsible for a usage limit reaches turn analytics,
+// and stays null for an unknown window or any other error kind.
+func TestCodexTurnEventUsageLimitWindowMatchesRust(t *testing.T) {
+	threeHundred := uint16(300)
+	for _, testCase := range []struct {
+		name   string
+		window *uint16
+		want   any
+	}{
+		{name: "five hour", window: &threeHundred, want: float64(300)},
+		{name: "unknown", window: nil, want: nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			event := NewCodexTurnEvent(CodexTurnEventInput{
+				ThreadID:                "thread-1",
+				SessionID:               "session-1",
+				TurnID:                  "turn-1",
+				UsageLimitWindowMinutes: testCase.window,
+			})
+			var payload map[string]any
+			if err := marshalUnmarshalTelemetry(event, &payload); err != nil {
+				t.Fatalf("marshal event error = %v", err)
+			}
+			params := payload["event_params"].(map[string]any)
+			if params["usage_limit_window_minutes"] != testCase.want {
+				t.Fatalf("usage_limit_window_minutes = %#v, want %#v", params["usage_limit_window_minutes"], testCase.want)
 			}
 		})
 	}

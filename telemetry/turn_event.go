@@ -95,6 +95,7 @@ type CodexTurnEventParams struct {
 	TurnError                            any                          `json:"turn_error"`
 	CodexErrorKind                       *string                      `json:"codex_error_kind"`
 	CodexErrorHTTPStatusCode             *uint16                      `json:"codex_error_http_status_code"`
+	UsageLimitWindowMinutes              *uint16                      `json:"usage_limit_window_minutes"`
 	SteerCount                           *int                         `json:"steer_count"`
 	RunningBackgroundProcessCount        *int                         `json:"running_background_process_count"`
 	TotalToolCallCount                   *int                         `json:"total_tool_call_count"`
@@ -159,6 +160,7 @@ type CodexTurnEventInput struct {
 	TurnError                            any
 	CodexErrorKind                       *string
 	CodexErrorHTTPStatusCode             *uint16
+	UsageLimitWindowMinutes              *uint16
 	SteerCount                           *int
 	RunningBackgroundProcessCount        *int
 	ToolCounts                           *CodexTurnToolCounts
@@ -249,6 +251,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			TurnError:                            input.TurnError,
 			CodexErrorKind:                       input.CodexErrorKind,
 			CodexErrorHTTPStatusCode:             input.CodexErrorHTTPStatusCode,
+			UsageLimitWindowMinutes:              input.UsageLimitWindowMinutes,
 			SteerCount:                           input.SteerCount,
 			RunningBackgroundProcessCount:        input.RunningBackgroundProcessCount,
 			TotalToolCallCount:                   toolCountPtr(input.ToolCounts, func(c CodexTurnToolCounts) int { return c.Total }),

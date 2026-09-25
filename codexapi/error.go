@@ -31,6 +31,11 @@ type APIError struct {
 	Kind    APIErrorKind `json:"kind"`
 	Status  int          `json:"status,omitempty"`
 	Message string       `json:"message,omitempty"`
+	// UsageLimitWindowMinutes is the server-selected window responsible for a
+	// usage-limit failure, when the response carried one. Rust #48174 preserves
+	// it on UsageLimitReachedError and reports it in turn/compaction analytics;
+	// other error kinds leave it unset.
+	UsageLimitWindowMinutes *uint16 `json:"usageLimitWindowMinutes,omitempty"`
 	// Misalignment carries the optional public explanation and continuation
 	// instruction for a misalignment policy block (Rust #40952). It is exposed
 	// to live clients but never serialized into rollout storage.
@@ -45,9 +50,10 @@ type APIError struct {
 }
 
 type APIErrorDetails struct {
-	Kind    APIErrorKind
-	Status  int
-	Message string
+	Kind                    APIErrorKind
+	Status                  int
+	Message                 string
+	UsageLimitWindowMinutes *uint16
 }
 
 // MisalignmentDetails mirrors the customer-facing misalignment block details
@@ -105,10 +111,11 @@ func (e *APIError) Error() string {
 
 func NewAPIErrorWithDetails(details APIErrorDetails) *APIError {
 	return &APIError{
-		Kind:    details.Kind,
-		Status:  details.Status,
-		Message: details.Message,
-		details: &details,
+		Kind:                    details.Kind,
+		Status:                  details.Status,
+		Message:                 details.Message,
+		UsageLimitWindowMinutes: details.UsageLimitWindowMinutes,
+		details:                 &details,
 	}
 }
 
@@ -119,7 +126,12 @@ func (e *APIError) Details() APIErrorDetails {
 	if e.details != nil {
 		return *e.details
 	}
-	return APIErrorDetails{Kind: e.Kind, Status: e.Status, Message: e.Message}
+	return APIErrorDetails{
+		Kind:                    e.Kind,
+		Status:                  e.Status,
+		Message:                 e.Message,
+		UsageLimitWindowMinutes: e.UsageLimitWindowMinutes,
+	}
 }
 
 func (e *APIError) WithRetryDelay(delay time.Duration) *APIError {

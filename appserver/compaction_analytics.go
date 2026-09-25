@@ -41,6 +41,7 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 	}
 	var codexErrorKind *string
 	var codexErrorHTTPStatusCode *uint16
+	var usageLimitWindowMinutes *uint16
 	if compactErr != nil {
 		if errors.Is(compactErr, ErrCompactHookStopped) && (result == nil || !result.Succeeded()) {
 			codexErrorKind = stringPtrIfNotEmpty("turn_aborted")
@@ -48,6 +49,7 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 			fields := turnAnalyticsErrorFieldsFromError(compactErr)
 			codexErrorKind = fields.CodexErrorKind
 			codexErrorHTTPStatusCode = fields.HTTPStatusCode
+			usageLimitWindowMinutes = fields.UsageLimitWindowMinutes
 		}
 	}
 	lineage := r.responsesMetadataLineage(request.ThreadID)
@@ -70,6 +72,7 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 		Status:                          compactionAnalyticsStatus(result, compactErr),
 		CodexErrorKind:                  codexErrorKind,
 		CodexErrorHTTPStatusCode:        codexErrorHTTPStatusCode,
+		UsageLimitWindowMinutes:         usageLimitWindowMinutes,
 		ActiveContextTokensBefore:       activeContextTokensBefore,
 		ActiveContextTokensAfter:        activeContextTokensAfter,
 		RetainedImageCount:              compactionAnalyticsRetainedImageCount(result),

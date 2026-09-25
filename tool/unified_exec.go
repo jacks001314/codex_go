@@ -25,6 +25,8 @@ import (
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/utils"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -630,7 +632,10 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			return nil, errors.New("selected exec-server does not support executor-local network proxy launches")
 		}
 	}
-	remoteID := strconv.Itoa(processID)
+	// Threads sharing an executor and sandbox retries can reuse a public handle
+	// while the executor still retains its previous process, so every request
+	// carries a fresh UUID suffix (Rust #48168).
+	remoteID := fmt.Sprintf("%d-%s", processID, uuid.NewString())
 	events, err := client.SubscribeProcessEvents(remoteID)
 	if err != nil {
 		_ = client.Close()

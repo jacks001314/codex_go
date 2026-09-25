@@ -71,6 +71,7 @@ type CodexCompactionEventParams struct {
 	Status                          string                       `json:"status"`
 	CodexErrorKind                  *string                      `json:"codex_error_kind"`
 	CodexErrorHTTPStatusCode        *uint16                      `json:"codex_error_http_status_code"`
+	UsageLimitWindowMinutes         *uint16                      `json:"usage_limit_window_minutes"`
 	ActiveContextTokensBefore       int64                        `json:"active_context_tokens_before"`
 	ActiveContextTokensAfter        int64                        `json:"active_context_tokens_after"`
 	RetainedImageCount              *int                         `json:"retained_image_count"`
@@ -103,6 +104,7 @@ type CodexCompactionEventInput struct {
 	Status                          string
 	CodexErrorKind                  *string
 	CodexErrorHTTPStatusCode        *uint16
+	UsageLimitWindowMinutes         *uint16
 	ActiveContextTokensBefore       int64
 	ActiveContextTokensAfter        int64
 	RetainedImageCount              *int
@@ -141,6 +143,7 @@ func NewCodexCompactionEvent(input CodexCompactionEventInput) CodexCompactionEve
 			Status:                          firstNonEmptyTelemetry(input.Status, CompactionStatusCompleted),
 			CodexErrorKind:                  input.CodexErrorKind,
 			CodexErrorHTTPStatusCode:        input.CodexErrorHTTPStatusCode,
+			UsageLimitWindowMinutes:         input.UsageLimitWindowMinutes,
 			ActiveContextTokensBefore:       input.ActiveContextTokensBefore,
 			ActiveContextTokensAfter:        input.ActiveContextTokensAfter,
 			RetainedImageCount:              input.RetainedImageCount,

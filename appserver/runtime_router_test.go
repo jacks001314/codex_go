@@ -28513,3 +28513,50 @@ func TestCompactItemsPreserveFileImageReferencesLikeRust(t *testing.T) {
 		t.Fatalf("round-trip file id = %q, want file-1", got)
 	}
 }
+
+// TestTurnAnalyticsUsageLimitWindowMatchesRust mirrors Rust #48174: only the
+// usage-limit error reports the server-selected window it arrived with, and
+// every other error kind reports null.
+func TestTurnAnalyticsUsageLimitWindowMatchesRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    *codexapi.APIError
+		window *uint16
+	}{
+		{
+			name:   "five hour",
+			err:    &codexapi.APIError{Kind: codexapi.ErrorRateLimit, Status: http.StatusTooManyRequests, Message: "usage limit reached", UsageLimitWindowMinutes: uint16Ptr(300)},
+			window: uint16Ptr(300),
+		},
+		{
+			name:   "weekly",
+			err:    &codexapi.APIError{Kind: codexapi.ErrorRateLimit, Status: http.StatusTooManyRequests, Message: "usage limit reached", UsageLimitWindowMinutes: uint16Ptr(10080)},
+			window: uint16Ptr(10080),
+		},
+		{
+			name: "missing window",
+			err:  &codexapi.APIError{Kind: codexapi.ErrorRateLimit, Status: http.StatusTooManyRequests, Message: "usage limit reached"},
+		},
+		{
+			name: "other error carries no window",
+			err:  &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: http.StatusTooManyRequests, Message: "limit reached", UsageLimitWindowMinutes: uint16Ptr(300)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fields := turnAnalyticsErrorFieldsFromAPIError(tc.err)
+			if fields.TurnError != "usageLimitExceeded" {
+				t.Fatalf("turn error = %#v, want usageLimitExceeded", fields.TurnError)
+			}
+			got := fields.UsageLimitWindowMinutes
+			if (got == nil) != (tc.window == nil) || (got != nil && *got != *tc.window) {
+				t.Fatalf("window = %v, want %v", got, tc.window)
+			}
+			// The same fields reach the turn analytics path for any error value.
+			fromError := turnAnalyticsErrorFieldsFromError(tc.err)
+			if (fromError.UsageLimitWindowMinutes == nil) != (tc.window == nil) {
+				t.Fatalf("error fields window = %v, want %v", fromError.UsageLimitWindowMinutes, tc.window)
+			}
+		})
+	}
+}

@@ -9,6 +9,8 @@ import (
 
 	"codex_go/execserver"
 	"codex_go/sandbox"
+
+	"github.com/google/uuid"
 )
 
 // Rust #45505 brackets a session start and its output collection with their own
@@ -270,13 +272,19 @@ func TestUnifiedExecRemoteProcessStartEventMatchesRust(t *testing.T) {
 	if event == nil {
 		t.Fatalf("no process-start event was recorded: %#v", openSession.events)
 	}
-	// The public id and the executor's id agree for a remote start, because the
-	// executor is addressed with the stringified public id.
+	// The executor's id is the public id with a fresh UUID suffix, so a reused
+	// public handle never collides with a process the executor still holds
+	// (Rust #48168).
 	publicID, parseErr := strconv.Atoi(event[UnifiedExecSpanProcessID])
 	if parseErr != nil || publicID <= 0 {
 		t.Fatalf("process-start event id = %#v", event)
 	}
-	if event[UnifiedExecSpanExecutorProcessKey] != event[UnifiedExecSpanProcessID] {
+	executorProcessID := event[UnifiedExecSpanExecutorProcessKey]
+	suffixed, ok := strings.CutPrefix(executorProcessID, event[UnifiedExecSpanProcessID]+"-")
+	if !ok {
+		t.Fatalf("executor process id %q is not the public id plus a suffix", executorProcessID)
+	}
+	if _, err := uuid.Parse(suffixed); err != nil {
 		t.Fatalf("process-start event = %#v", event)
 	}
 }

@@ -1902,7 +1902,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -2259,7 +2259,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
-	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil)
+	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
 
@@ -3947,6 +3947,7 @@ type turnCompletionAnalyticsContext struct {
 	TurnError                            CodexErrorInfo
 	CodexErrorKind                       *string
 	CodexErrorHTTPStatusCode             *uint16
+	UsageLimitWindowMinutes              *uint16
 	ExplicitClientInterruptRequestedAtMS *uint64
 }
 
@@ -3982,6 +3983,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 		analytics.TurnError = errorFields.TurnError
 		analytics.CodexErrorKind = errorFields.CodexErrorKind
 		analytics.CodexErrorHTTPStatusCode = errorFields.HTTPStatusCode
+		analytics.UsageLimitWindowMinutes = errorFields.UsageLimitWindowMinutes
 	}
 	_ = r.appendRuntimeTurnError(threadID, err.Error(), now)
 	tokenDelta := int64(0)
@@ -4116,13 +4118,16 @@ func (r *RuntimeRouter) emitTurnCompletionAnalytics(ctx context.Context, analyti
 	}
 	startedAt := time.UnixMilli(startedAtMS).UTC()
 	record := &turn.TurnRecord{ID: turnID}
-	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.ExplicitClientInterruptRequestedAtMS)
+	r.emitCodexTurnAnalyticsEvent(ctx, analytics.ConnectionID, analytics.Params, record, analytics.RunConfig, analytics.Result, status, startedAt, completedAt, durationMS, analytics.SteerCount, analytics.TurnError, analytics.CodexErrorKind, analytics.CodexErrorHTTPStatusCode, analytics.UsageLimitWindowMinutes, analytics.ExplicitClientInterruptRequestedAtMS)
 }
 
 type turnAnalyticsErrorFields struct {
 	TurnError      CodexErrorInfo
 	CodexErrorKind *string
 	HTTPStatusCode *uint16
+	// UsageLimitWindowMinutes is the server-selected window responsible for a
+	// usage limit, when known (Rust #48174).
+	UsageLimitWindowMinutes *uint16
 }
 
 func turnAnalyticsErrorFieldsFromError(err error) turnAnalyticsErrorFields {
@@ -4194,7 +4199,11 @@ func turnAnalyticsErrorFieldsFromAPIError(err *codexapi.APIError) turnAnalyticsE
 	case codexapi.ErrorUsageNotIncluded:
 		return fields("usageLimitExceeded", "usage_not_included")
 	case codexapi.ErrorRateLimit:
-		return fields("usageLimitExceeded", "usage_limit_reached")
+		// Rust #48174: only the usage-limit error carries the window; other
+		// error kinds report null.
+		out := fields("usageLimitExceeded", "usage_limit_reached")
+		out.UsageLimitWindowMinutes = details.UsageLimitWindowMinutes
+		return out
 	case codexapi.ErrorRateLimitExceeded:
 		return fields("rateLimitExceeded", "rate_limit_exceeded")
 	case codexapi.ErrorServerOverloaded:
@@ -7444,7 +7453,7 @@ func countTurnUserInputImages(inputs []turn.TurnUserInput) int {
 	return count
 }
 
-func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, explicitClientInterruptRequestedAtMS *uint64) {
+func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connectionID string, params *turn.TurnStartParams, record *turn.TurnRecord, runConfig *appTurnRunConfig, result *turn.AgentLoopResult, status TurnStatus, startedAt time.Time, completedAt time.Time, durationMS int64, steerCount int, turnError CodexErrorInfo, codexErrorKind *string, codexErrorHTTPStatusCode *uint16, usageLimitWindowMinutes *uint16, explicitClientInterruptRequestedAtMS *uint64) {
 	if r == nil || r.services.Analytics == nil || params == nil || record == nil || runConfig == nil || r.threadAnalyticsDisabled(params.ThreadID) {
 		return
 	}
@@ -7487,6 +7496,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		TurnError:                            turnError,
 		CodexErrorKind:                       codexErrorKind,
 		CodexErrorHTTPStatusCode:             codexErrorHTTPStatusCode,
+		UsageLimitWindowMinutes:              usageLimitWindowMinutes,
 		SteerCount:                           intPtrAppserver(steerCount),
 		RunningBackgroundProcessCount:        intPtrAppserver(r.requireThreadExtras().CountBackgroundTerminals(params.ThreadID)),
 		ToolCounts:                           analyticsTurnToolCounts(result),
