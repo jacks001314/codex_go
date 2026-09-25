@@ -32,6 +32,10 @@ type ToolDispatcherOptions struct {
 	// response-content budget; Code Mode calls ignore it because they receive
 	// typed results.
 	Truncation *utils.TruncationPolicy
+	// OnToolOutputExternalContext runs after a tool returns an output that
+	// declares external context (Rust `handle_any_tool` marking the thread's
+	// memory mode polluted when `memories.disable_on_external_context`).
+	OnToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
 }
 
 // observeNonDispatchedItem records a call ID that bypassed local dispatch so a
@@ -102,6 +106,7 @@ type ToolDispatcher struct {
 	executedToolCalls           *ExecutedToolCallRecorder
 	toolMode                    string
 	truncation                  *utils.TruncationPolicy
+	onToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
 	clockMu                     sync.Mutex
 	// preparedDirectCalls/permittedDirectCalls carry the direct-call records
 	// reserved before dispatch so executeToolInvocation can attach each one to
@@ -325,6 +330,7 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		executedToolCalls:           options.ExecutedToolCalls,
 		toolMode:                    strings.TrimSpace(options.ToolMode),
 		truncation:                  options.Truncation,
+		onToolOutputExternalContext: options.OnToolOutputExternalContext,
 	}
 }
 
@@ -634,6 +640,11 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	}
 	if output == nil {
 		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, CompletedAt: d.nowUTC()}
+	}
+	// Rust checks the tool output's external-context marker right after a
+	// successful handler return, before any post-tool bookkeeping.
+	if dispatchErr == nil && output.ContainsExternalContext && d.onToolOutputExternalContext != nil {
+		d.onToolOutputExternalContext(toolCtx, invocation, output)
 	}
 	if d.executedToolCalls != nil && invocation.ToolName.Namespace == "" {
 		switch invocation.ToolName.Name {

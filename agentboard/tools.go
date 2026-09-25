@@ -531,6 +531,11 @@ func messageBoardJSONOutput(invocation *tool.Invocation, body []byte) *tool.Outp
 		Data: map[string]any{
 			"content_items": []any{map[string]any{"type": "input_text", "text": text}},
 		},
+		// Rust returns the board result as
+		// `JsonToolOutput::new(result).with_external_context()`: other agents
+		// authored it, so a host that disables memories on external context
+		// must mark the thread polluted.
+		ContainsExternalContext: true,
 	}
 }
 

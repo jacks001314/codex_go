@@ -9326,11 +9326,7 @@ func (r *RuntimeRouter) markThreadMemoryPollutedOnExternalContext(threadID strin
 	if !standalone {
 		return
 	}
-	cfg := r.effectiveMCPConfigForThread(strings.TrimSpace(threadID))
-	if cfg == nil || !cfg.Memories().DisableOnExternalContext {
-		return
-	}
-	_, _ = r.services.StateRuntime.MarkThreadMemoryModePolluted(context.Background(), strings.TrimSpace(threadID))
+	r.markThreadMemoryPollutedIfExternalContextDisabled(context.Background(), threadID)
 }
 
 func (r *RuntimeRouter) appendEphemeralThreadItems(threadID session.ThreadID, items []session.Item) (*session.Record, bool) {
@@ -13373,7 +13369,41 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 				Limit: int(info.TruncationPolicy.Limit),
 			}
 		},
+		// Rust's handle_any_tool marks the thread's memory mode polluted when a
+		// tool output carries external context and memories are disabled on it.
+		OnToolOutputExternalContext: r.markThreadMemoryPollutedOnToolOutput,
 	}), nil
+}
+
+// markThreadMemoryPollutedOnToolOutput mirrors Rust's `handle_any_tool`
+// external-context check: a successful tool output that declares external
+// context marks the thread polluted when `memories.disable_on_external_context`
+// is enabled.
+func (r *RuntimeRouter) markThreadMemoryPollutedOnToolOutput(ctx context.Context, threadID string, invocation *tool.Invocation) {
+	_ = invocation
+	r.markThreadMemoryPollutedIfExternalContextDisabled(ctx, threadID)
+}
+
+// markThreadMemoryPollutedIfExternalContextDisabled applies the
+// memories.disable_on_external_context gate and marks the thread's memory mode
+// polluted. Both the tool-output marker and the standalone-item rule (#39791)
+// funnel through it.
+func (r *RuntimeRouter) markThreadMemoryPollutedIfExternalContextDisabled(ctx context.Context, threadID string) {
+	if r == nil || r.services.StateRuntime == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	cfg := r.effectiveMCPConfigForThread(threadID)
+	if cfg == nil || !cfg.Memories().DisableOnExternalContext {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	_, _ = r.services.StateRuntime.MarkThreadMemoryModePolluted(ctx, threadID)
 }
 
 func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.ExecutedToolCallRecorder {

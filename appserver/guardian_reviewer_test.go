@@ -965,6 +965,59 @@ func TestMarkThreadMemoryPollutedOnStandaloneExternalContextLikeRust(t *testing.
 	}
 }
 
+// Rust parity: core/src/tools/registry.rs handle_any_tool marks the thread's
+// memory mode polluted when a successful tool output declares external context
+// and memories.disable_on_external_context is enabled.
+func TestMarkThreadMemoryPollutedOnToolOutputLikeRust(t *testing.T) {
+	home := t.TempDir()
+	sqliteConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateRuntime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateRuntime.Close()
+	threadID := "123e4567-e89b-42d3-a456-426614174102"
+	rolloutPath := writeMemoryStartupTestRollout(t, home, threadID, time.Now().UTC().Add(-time.Hour).Truncate(time.Second))
+	if err := stateRuntime.ReconcileRollout(context.Background(), rolloutPath, false); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		StateRuntime: stateRuntime,
+		Config:       config.NewConfigService(home),
+		Models:       model.NewModelService(nil),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+	})
+	defer router.Close()
+
+	// Without the gate the marker is inert.
+	router.markThreadMemoryPollutedOnToolOutput(context.Background(), threadID, &tool.Invocation{CallID: "call-1"})
+	var mode string
+	if err := stateRuntime.StateDB().QueryRow(`SELECT memory_mode FROM threads WHERE id = ?`, threadID).Scan(&mode); err != nil {
+		t.Fatalf("query memory_mode: %v", err)
+	}
+	if mode == "polluted" {
+		t.Fatalf("marker polluted a thread while the gate was disabled")
+	}
+
+	if err := os.WriteFile(config.ConfigPath(home), []byte("[memories]\ndisable_on_external_context = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router.markThreadMemoryPollutedOnToolOutput(context.Background(), threadID, &tool.Invocation{CallID: "call-1"})
+	if err := stateRuntime.StateDB().QueryRow(`SELECT memory_mode FROM threads WHERE id = ?`, threadID).Scan(&mode); err != nil {
+		t.Fatalf("query memory_mode: %v", err)
+	}
+	if mode != "polluted" {
+		t.Fatalf("memory_mode = %q, want polluted", mode)
+	}
+}
+
 func TestModelGuardianReviewerInterruptsAfterDenialThreshold(t *testing.T) {
 	interrupts := 0
 	reviewer := &modelGuardianReviewer{

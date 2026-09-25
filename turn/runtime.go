@@ -33,6 +33,10 @@ type RuntimeOptions struct {
 	// carries the policy so tools can bound their response budget; when nil, the
 	// tool's own limit governs.
 	TruncationPolicyForModel func(model string) *utils.TruncationPolicy
+	// OnToolOutputExternalContext is invoked with a turn's thread ID after a tool
+	// returns an output that declares external context (Rust `handle_any_tool`
+	// marking the thread's memory mode polluted).
+	OnToolOutputExternalContext func(ctx context.Context, threadID string, invocation *tool.Invocation)
 }
 
 type Runtime struct {
@@ -46,6 +50,7 @@ type Runtime struct {
 	maxTurns                     int
 	executedToolCalls            *ExecutedToolCallRecorder
 	truncationPolicyForModel     func(model string) *utils.TruncationPolicy
+	onToolOutputExternalContext  func(ctx context.Context, threadID string, invocation *tool.Invocation)
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -71,6 +76,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		maxTurns:                     options.MaxTurns,
 		executedToolCalls:            executedToolCalls,
 		truncationPolicyForModel:     options.TruncationPolicyForModel,
+		onToolOutputExternalContext:  options.OnToolOutputExternalContext,
 	}
 }
 
@@ -265,6 +271,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ExecutedToolCalls:           executedToolCalls,
 			ToolMode:                    loopRequest.ToolMode,
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
+			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
 		}),
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
@@ -278,6 +285,18 @@ func (r *Runtime) truncationPolicy(modelID string) *utils.TruncationPolicy {
 		return nil
 	}
 	return r.truncationPolicyForModel(strings.TrimSpace(modelID))
+}
+
+// toolOutputExternalContextHandler binds the turn's thread ID to the host's
+// external-context handler (Rust `handle_any_tool`).
+func (r *Runtime) toolOutputExternalContextHandler(threadID string) func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) {
+	if r == nil || r.onToolOutputExternalContext == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	return func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) {
+		r.onToolOutputExternalContext(ctx, threadID, invocation)
+	}
 }
 
 func directModeVisibleSpecs(visibleSpecs []tool.Spec, codeModeSpecs []tool.Spec) []tool.Spec {

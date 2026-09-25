@@ -102,6 +102,11 @@ func (h *WebSearchHandler) Execute(ctx context.Context, invocation *tool.Invocat
 		LogPreview:  "[standalone web search output]",
 		Data:        data,
 		CompletedAt: time.Now().UTC(),
+		// Rust's SearchOutput declares contains_external_context() == true, so
+		// the dispatcher marks the thread's memory mode polluted when memories
+		// are disabled on external context. The Data key above stays as the
+		// harness-visible marker.
+		ContainsExternalContext: true,
 	}, nil
 }
 

@@ -193,6 +193,12 @@ type Output struct {
 	// destination-filtered `_meta` on its own, and harness metadata is stripped
 	// per destination (#44336).
 	ToolResultMetadata any `json:"-"`
+	// ContainsExternalContext mirrors Rust's
+	// `ToolOutput::contains_external_context`: the output carries context the
+	// model did not author, so a host that disables memories on external
+	// context must mark the thread's memory mode polluted. It is never
+	// serialized.
+	ContainsExternalContext bool `json:"-"`
 }
 
 type Executor interface {

@@ -489,6 +489,35 @@ func TestMessageBoardRequestIDsLikeRust(t *testing.T) {
 	}
 }
 
+// Rust returns every board result as
+// `JsonToolOutput::new(result).with_external_context()`, which the host consumes
+// to mark the thread's memory mode polluted.
+func TestMessageBoardOutputsDeclareExternalContextLikeRust(t *testing.T) {
+	host, root, _, _ := testTree(t)
+	boards := &InMemoryMessageBoards{}
+	board := boards.Open(root, host)
+	defer board.Close()
+	executors := NewMessageBoardTools(board, root, agent.AgentPathRoot, "", "")
+	output, err := boardToolExecutor(t, executors, "get_channels").Execute(context.Background(), boardInvocation(t, "get_channels", map[string]any{}))
+	if err != nil {
+		t.Fatalf("get_channels error = %v", err)
+	}
+	if output == nil || !output.ContainsExternalContext {
+		t.Fatalf("get_channels output = %#v, want the external-context marker", output)
+	}
+}
+
+func boardToolExecutor(t *testing.T, executors []tool.Executor, name string) tool.Executor {
+	t.Helper()
+	for _, executor := range executors {
+		if executor.Spec().Name.Name == name {
+			return executor
+		}
+	}
+	t.Fatalf("missing tool %s", name)
+	return nil
+}
+
 func boardToolSet(t *testing.T, board Board, caller string, callerPath agent.AgentPath) map[string]tool.Executor {
 	t.Helper()
 	executors := NewMessageBoardTools(board, caller, callerPath, "", "")
