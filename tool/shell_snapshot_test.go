@@ -275,3 +275,55 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 		t.Fatalf("launch command = %#v, want the original command", untouched)
 	}
 }
+
+// Mirrors Rust's `build_brokered_credential_exports` (#48073): the snapshot's
+// brokered credential copies are restored onto their real keys with xtrace
+// suppressed, and the unset markers re-remove keys the broker stripped.
+func TestBuildBrokeredCredentialExportsLikeRust(t *testing.T) {
+	if got := buildBrokeredCredentialExports(nil, false); got != "" {
+		t.Fatalf("empty env exports = %q, want empty", got)
+	}
+	valueKey := snapshotBrokeredValueEnvPrefix + "OPENAI_API_KEY"
+	unsetKey := snapshotBrokeredUnsetEnvPrefix + "STRIPPED_TOKEN"
+	env := map[string]string{valueKey: "dummy", unsetKey: "1", snapshotBrokeredValueEnvPrefix + "1BAD": "ignored"}
+
+	outer := buildBrokeredCredentialExports(env, false)
+	for _, want := range []string{
+		"case $- in\n  *x*) __CODEX_SNAPSHOT_BROKER_XTRACE=1; set +x ;;",
+		"if [ -z \"${" + valueKey + "+x}\" ]; then exit 1; fi",
+		"export OPENAI_API_KEY=\"${" + valueKey + "}\" || exit 1",
+		"unset STRIPPED_TOKEN || exit 1",
+		"unset __CODEX_SNAPSHOT_BROKER_XTRACE",
+	} {
+		if !strings.Contains(outer, want) {
+			t.Fatalf("outer exports missing %q:\n%s", want, outer)
+		}
+	}
+	if strings.Contains(outer, "1BAD") {
+		t.Fatalf("invalid variable name was not filtered:\n%s", outer)
+	}
+	if strings.Contains(outer, "unset "+valueKey) {
+		t.Fatalf("outer block removed the snapshot copy:\n%s", outer)
+	}
+
+	inner := buildBrokeredCredentialExports(env, true)
+	for _, want := range []string{
+		"unset " + valueKey + " || exit 1",
+		"unset " + unsetKey + " || exit 1",
+	} {
+		if !strings.Contains(inner, want) {
+			t.Fatalf("inner exports missing %q:\n%s", want, inner)
+		}
+	}
+}
+
+// Mirrors Rust's `join_shell_blocks`: empty fragments are dropped and the rest
+// joined with a single newline.
+func TestJoinShellBlocksLikeRust(t *testing.T) {
+	if got := joinShellBlocks("", "a", "", "b"); got != "a\nb" {
+		t.Fatalf("joinShellBlocks = %q, want %q", got, "a\nb")
+	}
+	if got := joinShellBlocks("", ""); got != "" {
+		t.Fatalf("joinShellBlocks(empty) = %q, want empty", got)
+	}
+}

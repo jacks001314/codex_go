@@ -33,6 +33,15 @@ const (
 	codexPermissionProfileVar = "CODEX_PERMISSION_PROFILE"
 )
 
+// Brokered replay prefixes mirror Rust's SNAPSHOT_BROKERED_*_ENV_PREFIX: a
+// brokered snapshot stores child-visible dummy values (and unset markers) under
+// these names, and the wrapper restores them onto the real keys around the
+// command (#48073).
+const (
+	snapshotBrokeredValueEnvPrefix = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_VALUE_"
+	snapshotBrokeredUnsetEnvPrefix = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_UNSET_"
+)
+
 // snapshotReplayedEnvKeys are the runtime-only variables restored even when the
 // live command environment does not carry them, so an inactive value cannot
 // resurface from the snapshot.
@@ -221,4 +230,86 @@ func isValidShellVariableName(name string) bool {
 		}
 	}
 	return true
+}
+
+// joinShellBlocks joins non-empty shell fragments with a single newline,
+// mirroring Rust's `join_shell_blocks`.
+func joinShellBlocks(blocks ...string) string {
+	kept := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if block != "" {
+			kept = append(kept, block)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// buildBrokeredCredentialExports mirrors Rust's
+// `build_brokered_credential_exports`: the snapshot's brokered credential copies
+// are restored onto their real keys while the command runs, and its unset markers
+// re-remove keys the broker had stripped. xtrace is suppressed around the block
+// so a replayed value can never reach the terminal. `removeCopies` drops the
+// snapshot-side copies for the inner (command) block.
+func buildBrokeredCredentialExports(env map[string]string, removeCopies bool) string {
+	type copyKey struct {
+		key     string
+		copyKey string
+	}
+	valueCopies := make([]copyKey, 0)
+	for copyKeyName := range env {
+		key, ok := strings.CutPrefix(copyKeyName, snapshotBrokeredValueEnvPrefix)
+		if !ok || !isValidShellVariableName(key) {
+			continue
+		}
+		valueCopies = append(valueCopies, copyKey{key: key, copyKey: copyKeyName})
+	}
+	sort.Slice(valueCopies, func(i int, j int) bool {
+		if valueCopies[i].key != valueCopies[j].key {
+			return valueCopies[i].key < valueCopies[j].key
+		}
+		return valueCopies[i].copyKey < valueCopies[j].copyKey
+	})
+	valueRestores := make([]string, 0, len(valueCopies))
+	for _, entry := range valueCopies {
+		restore := "if [ -z \"${" + entry.copyKey + "+x}\" ]; then exit 1; fi\n" +
+			"if [ -n \"${" + entry.key + "+x}\" ] && [ -n \"${" + entry.key + "}\" ] && [ \"${" + entry.key + "}\" != \"${" + entry.copyKey + "}\" ]; then export " + entry.key + "=\"${" + entry.copyKey + "}\" || exit 1; fi\n" +
+			"if [ -n \"${" + entry.key + "+x}\" ] && [ -n \"${" + entry.key + "}\" ] && [ \"${" + entry.key + "}\" != \"${" + entry.copyKey + "}\" ]; then exit 1; fi"
+		if removeCopies {
+			restore += "\nunset " + entry.copyKey + " || exit 1"
+		}
+		valueRestores = append(valueRestores, restore)
+	}
+
+	unsetMarkers := make([]copyKey, 0)
+	for markerKey := range env {
+		key, ok := strings.CutPrefix(markerKey, snapshotBrokeredUnsetEnvPrefix)
+		if !ok || !isValidShellVariableName(key) {
+			continue
+		}
+		unsetMarkers = append(unsetMarkers, copyKey{key: key, copyKey: markerKey})
+	}
+	sort.Slice(unsetMarkers, func(i int, j int) bool {
+		if unsetMarkers[i].key != unsetMarkers[j].key {
+			return unsetMarkers[i].key < unsetMarkers[j].key
+		}
+		return unsetMarkers[i].copyKey < unsetMarkers[j].copyKey
+	})
+	unsetRestores := make([]string, 0, len(unsetMarkers))
+	for _, entry := range unsetMarkers {
+		restore := "if [ -z \"${" + entry.copyKey + "+x}\" ]; then exit 1; fi\n" +
+			"if [ -n \"${" + entry.key + "+x}\" ] && [ -n \"${" + entry.key + "}\" ]; then unset " + entry.key + " || exit 1; fi\n" +
+			"if [ -n \"${" + entry.key + "+x}\" ] && [ -n \"${" + entry.key + "}\" ]; then exit 1; fi"
+		if removeCopies {
+			restore += "\nunset " + entry.copyKey + " || exit 1"
+		}
+		unsetRestores = append(unsetRestores, restore)
+	}
+
+	exports := joinShellBlocks(strings.Join(valueRestores, "\n"), strings.Join(unsetRestores, "\n"))
+	if exports == "" {
+		return ""
+	}
+	return "case $- in\n  *x*) __CODEX_SNAPSHOT_BROKER_XTRACE=1; set +x ;;\n  *) __CODEX_SNAPSHOT_BROKER_XTRACE= ;;\nesac\n" +
+		exports +
+		"\nif [ -n \"$__CODEX_SNAPSHOT_BROKER_XTRACE\" ]; then\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\n  set -x\nelse\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\nfi"
 }
