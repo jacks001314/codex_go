@@ -305,6 +305,16 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
 		message.Complete = retainedInstructionComplete(responseItem, hasResponseItem) &&
 			len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+		// Rust's `UserInputOrigin::from_message`: only a user message whose
+		// classifications are exactly the heartbeat kind coalesces as one.
+		role := strings.TrimSpace(item.Role)
+		if hasResponseItem && responseItem.Role != "" {
+			role = responseItem.Role
+		}
+		message.Origin = retainedctx.UserInputOriginFromMessage(role, responseItem.ContentKinds)
+	}
+	if hasResponseItem {
+		message.Phase = responseItem.Phase
 	}
 	if metadata != nil && metadata.RetainedSource != nil && !metadata.RetainedSource.Complete {
 		// Rust narrows a record's completeness with the captured source.
@@ -495,8 +505,11 @@ func retainedHarnessCandidates(items []session.Item) bool {
 // a session item persisted: the harness-owned content classifications Rust reads
 // from `internal_chat_message_metadata_passthrough`.
 type sessionItemResponseItemFields struct {
+	Role         string
 	ContentTypes []string
 	ContentKinds []string
+	// Phase is the assistant message phase Rust persists with the record.
+	Phase *string
 }
 
 // sessionItemResponseItemFields parses the item's persisted response item. ok is
@@ -506,6 +519,8 @@ func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemRespo
 		return sessionItemResponseItemFields{}, false
 	}
 	var payload struct {
+		Role    string  `json:"role"`
+		Phase   *string `json:"phase"`
 		Content []struct {
 			Type string `json:"type"`
 		} `json:"content"`
@@ -517,8 +532,14 @@ func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemRespo
 		return sessionItemResponseItemFields{}, false
 	}
 	fields := sessionItemResponseItemFields{
+		Role:         strings.TrimSpace(payload.Role),
 		ContentTypes: make([]string, 0, len(payload.Content)),
 		ContentKinds: payload.Metadata.Kinds,
+		Phase:        payload.Phase,
+	}
+	if fields.Phase != nil {
+		phase := strings.TrimSpace(*fields.Phase)
+		fields.Phase = &phase
 	}
 	for _, content := range payload.Content {
 		fields.ContentTypes = append(fields.ContentTypes, strings.TrimSpace(content.Type))
