@@ -296,7 +296,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// prewarm, tool-observation and message-budget client changes.
 		// Re-pinned to upstream c7e80f873f (#48141): preempting model responses
 		// when new user input arrives.
-		{Path: "core/src/client.rs", SHA256: "215135a2e8452e083bdde19a756989001333d66278e97e62e5e7e0e6b6857fbb"},
+		// Re-pinned to upstream e72da2b538 (#48344): the runtime-only
+		// `include_internal_metadata` provider grant for tool metadata.
+		{Path: "core/src/client.rs", SHA256: "80af5097265a431ce1c2a44bc0ca1f54807271c311b56571b8342c4dc6dad322"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

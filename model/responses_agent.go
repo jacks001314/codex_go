@@ -728,15 +728,26 @@ func toolResultMetadataDestinationAllowed(baseURL string) bool {
 	return strings.HasSuffix(host, ".chatgpt.com") || strings.HasSuffix(host, ".chatgpt-staging.com")
 }
 
+// includeInternalMetadata reports whether the resolved provider may receive
+// internal tool metadata: the provider definition's runtime-only grant, or the
+// first-party HTTPS destination check (Rust #48344's
+// `ModelProvider::include_internal_metadata`).
+func (r *ResponsesAgentRunner) includeInternalMetadata() bool {
+	baseURL := ""
+	if r != nil && r.Provider != nil {
+		if r.Provider.IncludeInternalMetadata {
+			return true
+		}
+		baseURL = r.Provider.BaseURL
+	}
+	return toolResultMetadataDestinationAllowed(baseURL)
+}
+
 // filterToolResultMetadataForDestination clears raw tool-result metadata when the
 // resolved request destination is not an allowed OpenAI/ChatGPT HTTPS host. HTTP
 // and WebSocket requests share this filter (Rust #44336).
 func (r *ResponsesAgentRunner) filterToolResultMetadataForDestination(items []any) []any {
-	baseURL := ""
-	if r != nil && r.Provider != nil {
-		baseURL = r.Provider.BaseURL
-	}
-	if toolResultMetadataDestinationAllowed(baseURL) {
+	if r.includeInternalMetadata() {
 		return items
 	}
 	out := make([]any, 0, len(items))
@@ -3518,6 +3529,9 @@ func cloneAPIProvider(provider *APIProvider) *APIProvider {
 		RequestMaxRetries: provider.RequestMaxRetries,
 		StreamMaxRetries:  provider.StreamMaxRetries,
 		StreamIdleTimeout: provider.StreamIdleTimeout,
+		// The runtime-only metadata grant travels with the resolved provider, so
+		// the runner clone must not drop it (Rust #48344).
+		IncludeInternalMetadata: provider.IncludeInternalMetadata,
 	})
 }
 

@@ -353,6 +353,13 @@ type ProviderInfo struct {
 	RequiresOpenAIAuth          bool                 `json:"requires_openai_auth,omitempty"`
 	SupportsWebsockets          bool                 `json:"supports_websockets,omitempty"`
 	SupportsStandaloneWebSearch bool                 `json:"supports_standalone_web_search,omitempty"`
+	// IncludeInternalMetadata is Rust's runtime-only
+	// `ModelProviderInfo::include_internal_metadata` grant: a provider carrying it
+	// may receive internal tool metadata even when its endpoint would fail the
+	// destination check. It can never be loaded from or written to serialized
+	// provider configuration (Rust `#[serde(skip)]`/`#[schemars(skip)]`), and a
+	// provider received through remote configuration keeps it false.
+	IncludeInternalMetadata bool `json:"-"`
 }
 
 type APIProvider struct {
@@ -364,6 +371,9 @@ type APIProvider struct {
 	RequestMaxRetries uint64
 	StreamMaxRetries  uint64
 	StreamIdleTimeout time.Duration
+	// IncludeInternalMetadata mirrors the provider definition's runtime-only grant
+	// (Rust `ModelProvider::include_internal_metadata`).
+	IncludeInternalMetadata bool
 }
 
 func (p *ProviderInfo) Validate() error {
@@ -432,14 +442,15 @@ func (p *ProviderInfo) ToAPIProvider(authMode string) (APIProvider, error) {
 	}
 	headers := p.BuildHeaderMap()
 	return APIProvider{
-		Name:              p.Name,
-		BaseURL:           baseURL,
-		QueryParams:       cloneMap(p.QueryParams),
-		Headers:           headers,
-		Auth:              cloneProviderAuthInfo(p.Auth),
-		RequestMaxRetries: p.EffectiveRequestMaxRetries(),
-		StreamMaxRetries:  p.EffectiveStreamMaxRetries(),
-		StreamIdleTimeout: p.EffectiveStreamIdleTimeout(),
+		Name:                    p.Name,
+		BaseURL:                 baseURL,
+		QueryParams:             cloneMap(p.QueryParams),
+		Headers:                 headers,
+		Auth:                    cloneProviderAuthInfo(p.Auth),
+		RequestMaxRetries:       p.EffectiveRequestMaxRetries(),
+		StreamMaxRetries:        p.EffectiveStreamMaxRetries(),
+		StreamIdleTimeout:       p.EffectiveStreamIdleTimeout(),
+		IncludeInternalMetadata: p.IncludeInternalMetadata,
 	}, nil
 }
 
@@ -681,6 +692,9 @@ func CreateOpenAIProvider(baseURL string) ProviderInfo {
 		RequiresOpenAIAuth:          true,
 		SupportsWebsockets:          true,
 		SupportsStandaloneWebSearch: true,
+		// Rust create_openai_provider: the built-in OpenAI provider may receive
+		// internal tool metadata at any endpoint, including an overridden one.
+		IncludeInternalMetadata: true,
 	}
 }
 

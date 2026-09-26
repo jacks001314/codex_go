@@ -134,7 +134,8 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #48141 added the astra_input_interrupts_response scenario snapshot.
 			// #48224 added core/tests/suite/compact_program_tests.rs (the
 			// model/access-program compaction pairs).
-			Files: 259,
+			// #48353 added the cloud-skills-across-executor-readiness snapshot.
+			Files: 260,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

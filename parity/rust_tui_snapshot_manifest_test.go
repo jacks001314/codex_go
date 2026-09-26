@@ -27,8 +27,9 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// snapshot, #48121's command-center draft handoff, #48116's Max-reasoning
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1328 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1328", got)
+	// #48352 added the turn-tip placement snapshot.
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1329 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1329", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -86,7 +87,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// prompt-navigation, slash-picker, composer-gap and warnings-page
 			// snapshots plus the fresh-thread animation and retained revert
 			// history. #48206 added the partial-dismissal warnings snapshot.
-			Files:    74,
+			// #48352 added the turn-tip placement snapshot.
+			Files:    75,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -105,6 +107,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				// the header rather than the draft layout.
 				"tui/src/app/snapshots/codex_tui__app__owned_transcript__empty_state_animation_tests__fresh_thread_header.snap",
 				"tui/src/app/snapshots/codex_tui__app__prompt_suggestions__tests__prompt_suggestion_request_history.snap",
+				// #48352 renders working and completed turn tips in the
+				// transcript, so their placements have their own snapshot.
+				"tui/src/app/snapshots/codex_tui__app__turn_tips__tests__turn_tip_placements.snap",
 			},
 		},
 		{
