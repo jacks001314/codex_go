@@ -26,6 +26,11 @@ const (
 type sourceCodeBlock struct {
 	Code     string
 	Language string
+	// Mermaid marks a `mermaid` fence whose diagram the TUI renders natively
+	// (Rust `markdown_render::end_codeblock`), and Closed records that the fence
+	// has a real closing marker: an incomplete fence keeps plain highlighting.
+	Mermaid bool
+	Closed  bool
 }
 
 func Render(text string, width int) (string, error) {
@@ -102,7 +107,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if err != nil {
 		return "", err
 	}
-	out = restoreSourceCodeBlocks(out, codeBlocks, themeID)
+	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width)
 	out = annotateRenderedLineURLs(out)
 	out = annotateWebLinkLabels(out, webLinks)
@@ -427,10 +432,18 @@ func collectSourceCodeBlocks(source string) []sourceCodeBlock {
 		}
 		switch block := node.(type) {
 		case *ast.FencedCodeBlock:
-			blocks = append(blocks, sourceCodeBlock{
+			language := codeLanguageToken(string(block.Language(data)))
+			collected := sourceCodeBlock{
 				Code:     string(block.Lines().Value(data)),
-				Language: codeLanguageToken(string(block.Language(data))),
-			})
+				Language: language,
+			}
+			if language == "mermaid" && block.Lines().Len() > 0 {
+				start := block.Lines().At(0).Start
+				end := block.Lines().At(block.Lines().Len() - 1).Stop
+				collected.Mermaid = true
+				collected.Closed = mermaidHasClosingFence(source, start, end)
+			}
+			blocks = append(blocks, collected)
 		case *ast.CodeBlock:
 			blocks = append(blocks, sourceCodeBlock{Code: string(block.Lines().Value(data))})
 		}
@@ -450,7 +463,7 @@ func codeLanguageToken(language string) string {
 	return strings.TrimSpace(language)
 }
 
-func restoreSourceCodeBlocks(rendered string, blocks []sourceCodeBlock, themeID string) string {
+func restoreSourceCodeBlocks(rendered string, blocks []sourceCodeBlock, themeID string, width int) string {
 	if len(blocks) == 0 || !renderedContainsCodeBlockMarkers(rendered, len(blocks)) {
 		return rendered
 	}
@@ -462,11 +475,24 @@ func restoreSourceCodeBlocks(rendered string, blocks []sourceCodeBlock, themeID 
 		plain := utils.StripANSI(line)
 		if markerIndex := strings.Index(plain, codeBlockStartMarker); markerIndex >= 0 && blockIndex < len(blocks) {
 			indent := plain[:markerIndex]
-			highlighted := codextui.HighlightCodeANSI(blocks[blockIndex].Code, blocks[blockIndex].Language, themeID)
-			if highlighted == "" {
+			block := blocks[blockIndex]
+			var blockLines []string
+			switch {
+			case block.Mermaid && block.Closed && MermaidRenderingEnabled:
+				// Rust subtracts the block's indentation from the wrap width so a
+				// diagram only widens the transcript as far as the fence allows.
+				innerWidth := width - codextui.DisplayWidth(indent)
+				blockLines = renderMermaidFence(block.Code, innerWidth, themeID)
+			default:
+				highlighted := codextui.HighlightCodeANSI(block.Code, block.Language, themeID)
+				if highlighted != "" {
+					blockLines = strings.Split(strings.ReplaceAll(highlighted, "\r\n", "\n"), "\n")
+				}
+			}
+			if len(blockLines) == 0 {
 				out = append(out, indent)
 			} else {
-				for _, codeLine := range strings.Split(strings.ReplaceAll(highlighted, "\r\n", "\n"), "\n") {
+				for _, codeLine := range blockLines {
 					out = append(out, indent+codeLine)
 				}
 			}
