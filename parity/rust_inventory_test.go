@@ -238,6 +238,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"keyring",
 		"mcp",
 		"memories",
+		"mermaid",
 		"metrics",
 		"model",
 		"network",
