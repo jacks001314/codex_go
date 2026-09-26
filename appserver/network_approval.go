@@ -315,11 +315,12 @@ func (s *networkApprovalService) requestGuardianApproval(ctx context.Context, ac
 		reviewer = s.router.ensureGuardianReviewer(s.router.services.Agent)
 	}
 	action := state.Action{
-		Type:     "network_access",
-		Host:     request.Host,
-		Protocol: string(protocol),
-		Port:     request.Port,
-		Target:   target,
+		Type:          "network_access",
+		EnvironmentID: strings.TrimSpace(request.EnvironmentID),
+		Host:          request.Host,
+		Protocol:      string(protocol),
+		Port:          request.Port,
+		Target:        target,
 	}
 	if ownerCall != nil && ownerCall.trigger != nil {
 		action.Extra = map[string]any{"trigger": *ownerCall.trigger}

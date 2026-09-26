@@ -279,7 +279,7 @@ func TestRemoteGuardianNetworkDecisionsAreScopedPerRequestAndEnvironmentLikeRust
 			t.Fatalf("review %d context = %#v", index, review)
 		}
 		action := review.action
-		if action.Type != "network_access" || action.Host != host || action.Protocol != "http" || action.Port != 80 || action.Target != "http://"+host+":80" {
+		if action.Type != "network_access" || action.EnvironmentID != expected.environmentID || action.Host != host || action.Protocol != "http" || action.Port != 80 || action.Target != "http://"+host+":80" {
 			t.Fatalf("review %d action = %#v", index, action)
 		}
 		trigger, ok := action.Extra["trigger"].(guardianNetworkAccessTrigger)
