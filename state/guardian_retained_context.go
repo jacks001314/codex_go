@@ -184,8 +184,17 @@ func RetainedUserInstructionsSectionItems(context *retainedctx.RetainedContext) 
 	if len(fragments) == 0 {
 		return nil
 	}
+	return retainedInstructionsSectionItems(fragments, HasLegacyRetainedOrder(context))
+}
+
+// retainedInstructionsSectionItems assembles the marked retained-instruction
+// section over the given fragments. Unlike the section contributor, it keeps
+// the banners even when no fragment survives, because Rust's
+// `remove_delivered_instructions` only empties the section's user content and
+// leaves the section in place.
+func retainedInstructionsSectionItems(fragments []RetainedInstructionFragment, legacy bool) []string {
 	start := retainedUserInstructionsStart
-	if HasLegacyRetainedOrder(context) {
+	if legacy {
 		start = retainedUserInstructionsLegacyStart
 	}
 	items := make([]string, 0, len(fragments)+2)
@@ -194,6 +203,98 @@ func RetainedUserInstructionsSectionItems(context *retainedctx.RetainedContext) 
 		items = append(items, fragment.Content+"\n")
 	}
 	return append(items, retainedUserInstructionsEnd+"\n")
+}
+
+// RemoveDeliveredRetainedInstructions mirrors
+// `ComposedContext::remove_delivered_instructions` for the
+// retained-user-instruction section: a fragment whose complete source revision
+// an admitted reviewer-history item or the transcript already delivered is
+// dropped, while fragments without a source (legacy positional labels and the
+// omission notices) are always kept. Host metadata whose revision changed, is
+// incomplete, or is missing cannot prove delivery.
+func RemoveDeliveredRetainedInstructions(fragments []RetainedInstructionFragment, transcriptSources []retainedctx.RetainedSource, reviewerHistory []*retainedctx.HarnessMetadata) []RetainedInstructionFragment {
+	kept := make([]RetainedInstructionFragment, 0, len(fragments))
+	for _, fragment := range fragments {
+		if fragment.Source != nil && retainedSourceDelivered(*fragment.Source, transcriptSources, reviewerHistory) {
+			continue
+		}
+		kept = append(kept, fragment)
+	}
+	return kept
+}
+
+// RetainedGuidanceDelivered mirrors the `guardian_source_order_guidance` test in
+// `ComposedContext::retain_new_instructions`: once an admitted reviewer-history
+// item delivered the meaning of the source-order labels, an emptied section is
+// dropped instead of resending the guidance sentence.
+func RetainedGuidanceDelivered(reviewerHistory []*retainedctx.HarnessMetadata) bool {
+	for _, metadata := range reviewerHistory {
+		if metadata != nil && metadata.GuardianSourceOrderGuidance {
+			return true
+		}
+	}
+	return false
+}
+
+// RetainNewRetainedInstructions mirrors
+// `ComposedContext::retain_new_instructions` for the retained-user-instruction
+// section: it removes fragments the admitted reviewer history or the transcript
+// already delivered and drops the section entirely when the ordering guidance
+// was already delivered and nothing but the banners remains. A nil result means
+// the section contributes nothing; a non-nil result may still be banner-only.
+func RetainNewRetainedInstructions(context *retainedctx.RetainedContext, transcriptSources []retainedctx.RetainedSource, reviewerHistory []*retainedctx.HarnessMetadata) []string {
+	if context == nil {
+		return nil
+	}
+	fragments := RenderRetainedInstructions(context)
+	if len(fragments) == 0 {
+		return nil
+	}
+	remaining := RemoveDeliveredRetainedInstructions(fragments, transcriptSources, reviewerHistory)
+	if RetainedGuidanceDelivered(reviewerHistory) && len(remaining) == 0 {
+		return nil
+	}
+	return retainedInstructionsSectionItems(remaining, HasLegacyRetainedOrder(context))
+}
+
+// DeduplicateRetainedInstructions mirrors
+// `ComposedContext::deduplicate_transcript_instructions` (each async sample
+// carries its own originals and ordering guidance): it only removes fragments
+// the transcript already carries, so the section survives with its banners even
+// when every fragment was delivered.
+func DeduplicateRetainedInstructions(context *retainedctx.RetainedContext, transcriptSources []retainedctx.RetainedSource) []string {
+	if context == nil {
+		return nil
+	}
+	fragments := RenderRetainedInstructions(context)
+	if len(fragments) == 0 {
+		return nil
+	}
+	remaining := RemoveDeliveredRetainedInstructions(fragments, transcriptSources, nil)
+	return retainedInstructionsSectionItems(remaining, HasLegacyRetainedOrder(context))
+}
+
+// retainedSourceDelivered reports whether an admitted source already delivered
+// this exact complete revision. Rust requires both a complete delivered source
+// and equality across id, revision and completeness, so a changed revision, an
+// incomplete copy or identical prompt text alone are never proof.
+func retainedSourceDelivered(source retainedctx.RetainedSource, transcriptSources []retainedctx.RetainedSource, reviewerHistory []*retainedctx.HarnessMetadata) bool {
+	for _, delivered := range transcriptSources {
+		if delivered.Complete && delivered == source {
+			return true
+		}
+	}
+	for _, metadata := range reviewerHistory {
+		if metadata == nil {
+			continue
+		}
+		for _, delivered := range metadata.GuardianSources {
+			if delivered.Complete && delivered == source {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SenderUserMessagesSectionItems mirrors Rust's `SenderUserMessagesSection`:

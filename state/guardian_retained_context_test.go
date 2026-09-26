@@ -388,3 +388,107 @@ func TestGuardianPromptIncludesRetainedInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("nil retained context rendered a section:\n%s", withoutRetained)
 	}
 }
+
+// Mirrors Rust's `delivery_uses_source_revision_and_complete_host_metadata`: a
+// retained instruction is dropped only when the reviewer history proves a
+// complete delivery of that exact source revision; identical text without
+// metadata, a shortened copy, or a correction (same id, new revision) all
+// require redelivery.
+func TestRetainNewRetainedInstructionsUsesSourceRevisionAndCompleteHostMetadata(t *testing.T) {
+	context := &retainedctx.RetainedContext{}
+	context.RecordUserMessage(retainedctx.RetainedUserMessage{
+		TurnID:    "turn",
+		MessageID: retainedStringPtr("source"),
+		Text:      "Draft only.",
+		Complete:  true,
+	}, retainedctx.LocalInputSource(retainedUint64Ptr(4)))
+
+	fragments := RenderRetainedInstructions(context)
+	if len(fragments) != 1 || fragments[0].Source == nil {
+		t.Fatalf("rendered fragments = %#v, want one sourced fragment", fragments)
+	}
+	source := *fragments[0].Source
+	original := RetainedUserInstructionsSectionItems(context)
+	if len(original) != 3 {
+		t.Fatalf("original section = %#v, want banner, fragment and footer", original)
+	}
+
+	delivered := []*retainedctx.HarnessMetadata{{
+		GuardianSourceOrderGuidance: true,
+		GuardianSources:             []retainedctx.RetainedSource{source},
+	}}
+	if got := RetainNewRetainedInstructions(context, nil, delivered); got != nil {
+		t.Fatalf("delivered section = %#v, want it dropped", got)
+	}
+
+	// Identical prompt text alone, or a shortened copy with the same source id,
+	// is not proof.
+	if got := RetainNewRetainedInstructions(context, nil, []*retainedctx.HarnessMetadata{nil}); !reflect.DeepEqual(got, original) {
+		t.Fatalf("missing metadata is not delivery proof: %#v", got)
+	}
+	incomplete := &retainedctx.HarnessMetadata{
+		GuardianSourceOrderGuidance: true,
+		GuardianSources:             []retainedctx.RetainedSource{source},
+	}
+	incomplete.MarkRetainedSourcesIncomplete()
+	if got := RetainNewRetainedInstructions(context, nil, []*retainedctx.HarnessMetadata{incomplete}); !reflect.DeepEqual(got, original) {
+		t.Fatalf("a shortened copy is not delivery proof: %#v", got)
+	}
+
+	// A correction keeps its source id and acceptance order but gets a new
+	// revision, so it is redelivered.
+	context.RecordUserMessage(retainedctx.RetainedUserMessage{
+		TurnID:    "turn",
+		MessageID: retainedStringPtr("source"),
+		Text:      "Do not draft or send.",
+		Complete:  true,
+	}, retainedctx.LocalInputSource(retainedUint64Ptr(4)))
+	corrected := RetainedUserInstructionsSectionItems(context)
+	if got := RetainNewRetainedInstructions(context, nil, delivered); !reflect.DeepEqual(got, corrected) {
+		t.Fatalf("corrected section = %#v, want redelivery of %#v", got, corrected)
+	}
+	correctedFragments := RenderRetainedInstructions(context)
+	if correctedFragments[0].Source == nil || *correctedFragments[0].Source == source {
+		t.Fatalf("corrected source = %#v, want a new revision", correctedFragments[0].Source)
+	}
+}
+
+// Mirrors Rust's
+// `transcript_original_requires_complete_source_proof_and_survives_budgeting`:
+// an admitted transcript copy of a complete retained source counts as delivery
+// for both reviewer targets, while an incomplete copy does not, and a
+// guidance-delivered history drops the emptied section.
+func TestDeduplicateRetainedInstructionsUsesTranscriptSourceProof(t *testing.T) {
+	context := &retainedctx.RetainedContext{}
+	context.RecordUserMessage(retainedctx.RetainedUserMessage{
+		TurnID:    "",
+		MessageID: retainedStringPtr("original"),
+		Text:      "Draft only. Do not send.",
+		Complete:  true,
+	}, retainedctx.LocalInputSource(retainedUint64Ptr(6)))
+
+	fragments := RenderRetainedInstructions(context)
+	if len(fragments) != 1 || fragments[0].Source == nil {
+		t.Fatalf("rendered fragments = %#v, want one sourced fragment", fragments)
+	}
+	source := *fragments[0].Source
+	guidance := []string{retainedUserInstructionsStart + "\n", retainedUserInstructionsEnd + "\n"}
+
+	if got := DeduplicateRetainedInstructions(context, []retainedctx.RetainedSource{source}); !reflect.DeepEqual(got, guidance) {
+		t.Fatalf("deduplicated section = %#v, want banner-only %#v", got, guidance)
+	}
+	incomplete := source
+	incomplete.Complete = false
+	if got := DeduplicateRetainedInstructions(context, []retainedctx.RetainedSource{incomplete}); !reflect.DeepEqual(got, RetainedUserInstructionsSectionItems(context)) {
+		t.Fatalf("an incomplete transcript copy is not delivery proof: %#v", got)
+	}
+
+	delivered := []*retainedctx.HarnessMetadata{{GuardianSourceOrderGuidance: true}}
+	if got := RetainNewRetainedInstructions(context, []retainedctx.RetainedSource{source}, delivered); got != nil {
+		t.Fatalf("guidance-delivered section = %#v, want it dropped", got)
+	}
+	// Without the delivered guidance the emptied section survives with its banners.
+	if got := RetainNewRetainedInstructions(context, []retainedctx.RetainedSource{source}, nil); !reflect.DeepEqual(got, guidance) {
+		t.Fatalf("section without delivered guidance = %#v, want banner-only", got)
+	}
+}
