@@ -133,3 +133,42 @@ func TestWarningsViewerIncludesThreadWarningsLikeRust(t *testing.T) {
 		t.Fatalf("viewer did not include the thread warning detail:\n%s", view)
 	}
 }
+
+// Mirrors Rust's passive warning notice: the composer footer right-aligns the
+// retained-warning count with the open-warnings shortcut, and dismissing the
+// warning clears it.
+func TestWarningsFooterNoticeLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
+	model.Update(StatusMsg{Status: "warning: A runtime warning"})
+
+	view := utils.StripANSI(model.View())
+	// The static footer hint is wide, so the notice degrades to its compact form
+	// (Rust's `warning_notice` budget rule); the header/history warning lines also
+	// start with the same glyph, so match the count form.
+	if !hasWarningNotice(view) {
+		t.Fatalf("footer warning notice missing:\n%s", view)
+	}
+
+	// Dismissing the warning through the viewer clears the notice.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	// The page must be drawn for the dismissal to apply (Rust discards only
+	// warnings actually shown).
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "A runtime warning") {
+		t.Fatalf("viewer did not draw the warning:\n%s", view)
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	if model.warningsView != nil {
+		t.Fatal("Esc did not close the viewer")
+	}
+	if got := model.warningDisplay.WarningCount(); got != 0 {
+		t.Fatalf("warning count after dismissal = %d, want 0", got)
+	}
+	if view := utils.StripANSI(model.View()); hasWarningNotice(view) {
+		t.Fatalf("dismissed warning still counted in the footer:\n%s", view)
+	}
+}
+
+func hasWarningNotice(view string) bool {
+	return strings.Contains(view, "\u26a0 1 warning") || strings.Contains(view, "\u26a0 1 \u00b7")
+}

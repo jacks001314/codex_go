@@ -2,6 +2,7 @@ package bottompane
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"codex_go/tui/history_cell"
@@ -354,4 +355,70 @@ func warningsWrapText(text string, width int) []string {
 		out = append(out, current)
 	}
 	return out
+}
+
+// WarningNotice mirrors `ChatComposer::warning_notice`: the retained-warning
+// count with the configured shortcut, degrading from the full sentence to the
+// compact form and finally to the bare count.
+func WarningNotice(count int, width int, shortcut string) string {
+	if count <= 0 || width < 1 {
+		return ""
+	}
+	plural := "s"
+	if count == 1 {
+		plural = ""
+	}
+	group := strings.TrimSpace(shortcut)
+	if group == "" {
+		group = "/warnings"
+	}
+	full := "\u26a0 " + strconv.Itoa(count) + " warning" + plural + " \u00b7 " + group + " to view"
+	if runewidth.StringWidth(full) <= width {
+		return full
+	}
+	compact := "\u26a0 " + strconv.Itoa(count) + " \u00b7 " + group
+	if runewidth.StringWidth(compact) <= width {
+		return compact
+	}
+	return truncateWarningLine("\u26a0 "+strconv.Itoa(count), width)
+}
+
+// WarningNoticeLine mirrors `warning_notice_layout`: the passive hint row keeps
+// its hints and right-aligns the notice when the budget allows, dropping the
+// notice entirely before it crowds the hints. left is returned unchanged when no
+// notice fits.
+func WarningNoticeLine(width int, left string, count int, shortcut string) string {
+	if count <= 0 || width <= 0 {
+		return left
+	}
+	available := width - 1
+	if available < 1 {
+		return left
+	}
+	budget := available / 2
+	if budget < 14 {
+		budget = 14
+	}
+	if budget > available {
+		budget = available
+	}
+	hint := runewidth.StringWidth(left)
+	if hint > available {
+		hint = available
+	}
+	if shrink := available - hint - 2; budget > shrink {
+		budget = shrink
+	}
+	if budget < runewidth.StringWidth("\u26a0 "+strconv.Itoa(count)) {
+		return left
+	}
+	notice := WarningNotice(count, budget, shortcut)
+	if notice == "" {
+		return left
+	}
+	gap := available - runewidth.StringWidth(left) - runewidth.StringWidth(notice)
+	if gap < 0 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap+1) + notice
 }

@@ -3042,9 +3042,42 @@ func (m *Model) View() string {
 		// Rust show_esc_backtrack_hint replaces the composer footer with the
 		// second-Esc prompt once backtrack mode is primed.
 		footerLine = bottompane.EscHintLine(true)
+	} else {
+		// Rust #48205/#48206: the passive hint row right-aligns the retained
+		// warning count (with its open-warnings shortcut) when it fits.
+		m.warningDisplay.SyncWarnings(m.retainedWarningCells())
+		if m.passiveWarningNoticeApplies() {
+			footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
+		}
 	}
 	sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerLine, m.width)))
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+// passiveWarningNoticeApplies mirrors `show_warning_notice`'s reachable gates:
+// the notice shares the passive footer row, which exists on an empty composer or
+// a draft while no task runs.
+func (m *Model) passiveWarningNoticeApplies() bool {
+	if m == nil {
+		return false
+	}
+	if strings.TrimSpace(m.composer.Value()) == "" {
+		return true
+	}
+	return !m.isTaskRunning()
+}
+
+// warningsShortcutLabel resolves the open-warnings binding label for the notice
+// (Rust's `show_warnings_key`, falling back to `/warnings`).
+func (m *Model) warningsShortcutLabel() string {
+	if m == nil {
+		return "/warnings"
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "open_warnings")
+	if len(bindings) == 0 {
+		return "/warnings"
+	}
+	return codextui.KeybindingDisplayLabel(strings.TrimSpace(bindings[0]))
 }
 
 // voiceStripState builds the composer strip for the current session. It reports

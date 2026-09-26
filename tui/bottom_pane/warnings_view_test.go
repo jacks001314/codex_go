@@ -202,3 +202,44 @@ func TestWarningsViewRenderScrollsLongDiagnosticsLikeRust(t *testing.T) {
 		t.Fatalf("second warning missing:\n%s", got)
 	}
 }
+
+// Mirrors `ChatComposer::warning_notice`: the full sentence, the compact form,
+// then the bare count.
+func TestWarningNoticeLikeRust(t *testing.T) {
+	if got := WarningNotice(1, 80, "f2"); got != "\u26a0 1 warning \u00b7 f2 to view" {
+		t.Fatalf("singular notice = %q", got)
+	}
+	if got := WarningNotice(3, 80, "f2"); got != "\u26a0 3 warnings \u00b7 f2 to view" {
+		t.Fatalf("plural notice = %q", got)
+	}
+	// The full sentence does not fit: the compact form keeps the count and key.
+	compact := WarningNotice(3, 12, "f2")
+	if strings.Contains(compact, "warning") || !strings.Contains(compact, "3") || !strings.Contains(compact, "f2") {
+		t.Fatalf("compact notice = %q", compact)
+	}
+	// Neither fits: only the count remains.
+	counted := WarningNotice(3, 4, "f2")
+	if strings.Contains(counted, "f2") || !strings.HasPrefix(counted, "\u26a0") {
+		t.Fatalf("count-only notice = %q", counted)
+	}
+	if got := WarningNotice(0, 80, "f2"); got != "" {
+		t.Fatalf("zero-count notice = %q, want empty", got)
+	}
+}
+
+// Mirrors `warning_notice_layout`: the notice is right-aligned beside the hints
+// and dropped before it crowds them.
+func TestWarningNoticeLineLikeRust(t *testing.T) {
+	left := "? for shortcuts"
+	line := WarningNoticeLine(80, left, 1, "f2")
+	if !strings.HasPrefix(line, left) || !strings.Contains(line, "\u26a0 1 warning \u00b7 f2 to view") {
+		t.Fatalf("notice line = %q", line)
+	}
+	if got := WarningNoticeLine(80, left, 0, "f2"); got != left {
+		t.Fatalf("no-warning line = %q, want the hints unchanged", got)
+	}
+	wideHint := strings.Repeat("x", 36)
+	if got := WarningNoticeLine(40, wideHint, 1, "f2"); got != wideHint {
+		t.Fatalf("crowded line = %q, want the hints unchanged", got)
+	}
+}
