@@ -6,11 +6,25 @@ package retainedctx
 // harness metadata; a Go re-derivation reuses the recorded order so repeated
 // passes neither advance the thread's counter nor reorder the evidence.
 func (c *RetainedContext) AssistantMessageOrder(messageID *string) (uint64, bool) {
+	return c.messageOrder(&c.assistantMessages, messageID)
+}
+
+// UserMessageOrder returns the primary acceptance order already recorded for a
+// user message id, so an item's persisted harness metadata can name the same
+// order the retained context holds.
+func (c *RetainedContext) UserMessageOrder(messageID *string) (uint64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	return c.messageOrder(&c.userMessages, messageID)
+}
+
+func (c *RetainedContext) messageOrder(entries *[]orderedUserMessage, messageID *string) (uint64, bool) {
 	if c == nil || messageID == nil {
 		return 0, false
 	}
-	for i := range c.assistantMessages {
-		entry := &c.assistantMessages[i]
+	for i := range *entries {
+		entry := &(*entries)[i]
 		if entry.Value.MessageID == nil || *entry.Value.MessageID != *messageID || entry.Inherited {
 			continue
 		}

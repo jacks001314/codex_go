@@ -133,9 +133,13 @@ func (s RetainedInputSource) AcceptanceOrder() (uint64, bool) {
 // Go persists harness metadata as an untyped map, so this type carries only the
 // members the retained-context model consumes.
 type HarnessMetadata struct {
-	UserInputOrder       *uint64
-	InheritedUserMessage bool
-	SenderUserMessages   *SenderUserMessages
+	UserInputOrder       *uint64             `json:"user_input_order,omitempty"`
+	InheritedUserMessage bool                `json:"inherited_user_message,omitempty"`
+	SenderUserMessages   *SenderUserMessages `json:"sender_user_messages,omitempty"`
+	// RetainedSource is the host-observed version captured when the item was
+	// recorded (Rust `CodexHarnessMetadata::retained_source`): it carries the
+	// delivery proof a replay restores instead of minting a new revision.
+	RetainedSource *RetainedSource `json:"retained_source,omitempty"`
 }
 
 // RetainedInputSourceFromMetadata mirrors

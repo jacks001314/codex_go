@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -16,6 +17,10 @@ import (
 // `guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS`: the budget the host applies to
 // original instruction and assistant evidence before retaining it.
 const guardianMaxRootMessageTokens = 900
+
+// harnessMetadataKey is where a session item carries its persisted harness
+// metadata (Rust's CodexHarnessMetadata sidecar of a response item).
+const harnessMetadataKey = "harness_metadata"
 
 // Rust parity: codex-history's retained context as the host owns it
 // (history/src/lib.rs and retained_context.rs), consumed by the Guardian review
@@ -43,7 +48,19 @@ func (r *RuntimeRouter) retainedContextForThread(threadID string) *retainedctx.R
 	}
 	r.retainedContextsMu.Lock()
 	defer r.retainedContextsMu.Unlock()
+	context := r.retainedLiveContextLocked(threadID)
+	if len(context.OrderedEntries()) == 0 {
+		return nil
+	}
+	return context.Clone()
+}
+
+// retainedLiveContextLocked returns the thread's live retained evidence, seeded
+// from its newest checkpoint and the sparse facts recorded after it. The caller
+// must hold retainedContextsMu.
+func (r *RuntimeRouter) retainedLiveContextLocked(threadID string) *retainedctx.RetainedContext {
 	context := r.retainedContexts[threadID]
+	created := false
 	if context == nil {
 		context = r.checkpointRetainedContext(threadID)
 		if context == nil {
@@ -53,19 +70,20 @@ func (r *RuntimeRouter) retainedContextForThread(threadID string) *retainedctx.R
 			r.retainedContexts = map[string]*retainedctx.RetainedContext{}
 		}
 		r.retainedContexts[threadID] = context
+		created = true
 	}
+	// The thread's recorded messages are derived first, so their orders stay
+	// ahead of a fact accepted later; re-recording an identical message is
+	// idempotent (Rust's id-based dedup).
 	r.recordRetainedUserMessages(context, threadID)
-	// Rust replays the sparse facts recorded after the newest checkpoint on top
-	// of its snapshot, in acceptance order; re-recording a fact the snapshot
-	// already holds is idempotent. The thread's user messages are derived first so
-	// their orders stay ahead of a fact accepted later.
-	for _, event := range r.retainedContextEvents(threadID) {
-		context.Record(event)
+	if created {
+		// Rust replays the sparse facts recorded after the newest checkpoint on
+		// top of its snapshot, in acceptance order.
+		for _, event := range r.retainedContextEvents(threadID) {
+			context.Record(event)
+		}
 	}
-	if len(context.OrderedEntries()) == 0 {
-		return nil
-	}
-	return context.Clone()
+	return context
 }
 
 // forgetThreadRetainedContext drops a thread's in-memory retained evidence when
@@ -213,52 +231,110 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 	}
 	for index := range record.Items {
 		item := &record.Items[index]
-		// Rust's ContextManager::record_retained_message skips compaction output:
-		// a summary is a digest of the conversation, not host-observed evidence.
-		if sessionItemIsCompactionOutput(item) {
+		metadata := harnessMetadataFromSessionItem(item)
+		record, ok := retainedRecordForSessionItem(item, index, metadata)
+		if !ok {
 			continue
 		}
-		switch {
-		case sessionItemIsUserMessage(item):
-			text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
-			if text == "" {
-				continue
-			}
-			message := retainedctx.RetainedUserMessage{
-				TurnID:   runtimeSessionItemTurnID(item, index),
-				Text:     text,
-				Complete: true,
-			}
-			if id := strings.TrimSpace(item.ID); id != "" {
-				message.MessageID = &id
-			}
-			context.RecordUserMessage(message, retainedctx.LocalInputSource(nil))
-		case sessionItemIsAssistantMessage(item):
-			// Rust's ContextManager::record_retained_message retains assistant
-			// output as untrusted context: the whole original within the bounded
-			// budget, marked incomplete when the bound had to shorten it.
-			text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
-			if text == "" {
-				continue
-			}
-			message := retainedctx.RetainedUserMessage{
-				TurnID:   runtimeSessionItemTurnID(item, index),
-				Text:     utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens)),
-				Complete: len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens),
-			}
-			if id := strings.TrimSpace(item.ID); id != "" {
-				message.MessageID = &id
-			}
-			// Rust reserves the assistant message's acceptance order once and
-			// persists it with the item; a re-derivation must reuse the recorded
-			// order instead of advancing the thread's counter again.
-			order, recorded := context.AssistantMessageOrder(message.MessageID)
-			if !recorded {
-				order = context.ReserveOrder()
-			}
-			context.RecordAssistantMessage(message, retainedctx.LocalInputSource(&order))
+		recordRetainedSessionItem(context, record, metadata)
+	}
+}
+
+// retainedSessionItemRecord is the retained record one history item produces.
+type retainedSessionItemRecord struct {
+	assistant bool
+	message   retainedctx.RetainedUserMessage
+}
+
+// retainedRecordForSessionItem mirrors Rust's
+// `ContextManager::record_retained_message`: the message family, the text bounded
+// by the guardian budget, and the completeness the item's own evidence
+// establishes. Compaction output is skipped, because a summary is a digest of the
+// conversation rather than host-observed evidence.
+func retainedRecordForSessionItem(item *session.Item, index int, metadata *retainedctx.HarnessMetadata) (retainedSessionItemRecord, bool) {
+	if item == nil || sessionItemIsCompactionOutput(item) {
+		return retainedSessionItemRecord{}, false
+	}
+	userMessage := sessionItemIsUserMessage(item)
+	assistantMessage := sessionItemIsAssistantMessage(item)
+	if !userMessage && !assistantMessage {
+		return retainedSessionItemRecord{}, false
+	}
+	text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+	if text == "" {
+		return retainedSessionItemRecord{}, false
+	}
+	message := retainedctx.RetainedUserMessage{}
+	if metadata != nil && metadata.RetainedSource != nil {
+		// A recorded item keeps the identity and turn its source captured, so a
+		// replay cannot mint a different version of the same evidence.
+		message.TurnID = strings.TrimSpace(metadata.RetainedSource.ID.TurnID)
+		if messageID := strings.TrimSpace(metadata.RetainedSource.ID.MessageID); messageID != "" {
+			message.MessageID = &messageID
+		}
+	} else {
+		message.TurnID = runtimeSessionItemTurnID(item, index)
+		if id := strings.TrimSpace(item.ID); id != "" {
+			message.MessageID = &id
 		}
 	}
+	if assistantMessage {
+		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
+		message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
+	} else {
+		message.Text = text
+		message.Complete = true
+	}
+	if metadata != nil && metadata.RetainedSource != nil && !metadata.RetainedSource.Complete {
+		// Rust narrows a record's completeness with the captured source.
+		message.Complete = false
+	}
+	return retainedSessionItemRecord{assistant: assistantMessage, message: message}, true
+}
+
+// recordRetainedSessionItem records one item's retained evidence, using the
+// source its harness metadata carries, restoring a recorded revision so the
+// delivery proof survives a replay (Rust's `replay_annotated_item`). The
+// returned order is the accepted position the entry now holds, when it has one.
+func recordRetainedSessionItem(context *retainedctx.RetainedContext, record retainedSessionItemRecord, metadata *retainedctx.HarnessMetadata) (*retainedctx.RetainedSource, uint64, bool) {
+	if context == nil {
+		return nil, 0, false
+	}
+	source := retainedctx.RetainedInputSourceFromMetadata(metadata)
+	if record.assistant && !source.Inherited && source.Order == nil {
+		// Rust reserves an assistant message's order once and persists it with
+		// the item; a re-derivation reuses the recorded order instead of
+		// advancing the thread's counter again.
+		order, recorded := context.AssistantMessageOrder(record.message.MessageID)
+		if !recorded {
+			order = context.ReserveOrder()
+		}
+		source = retainedctx.LocalInputSource(&order)
+	}
+	var captured *retainedctx.RetainedSource
+	if record.assistant {
+		captured = context.RecordAssistantMessage(record.message, source)
+	} else {
+		captured = context.RecordUserMessage(record.message, source)
+	}
+	if captured != nil && metadata != nil && metadata.RetainedSource != nil &&
+		captured.ID == metadata.RetainedSource.ID && captured.Complete == metadata.RetainedSource.Complete {
+		context.RestoreSourceRevision(metadata.RetainedSource)
+	}
+	if captured == nil {
+		return nil, 0, false
+	}
+	if source.Inherited {
+		return captured, 0, false
+	}
+	var order uint64
+	var ok bool
+	if record.assistant {
+		order, ok = context.AssistantMessageOrder(record.message.MessageID)
+	} else {
+		order, ok = context.UserMessageOrder(record.message.MessageID)
+	}
+	return captured, order, ok
 }
 
 // sessionItemIsCompactionOutput reports whether the history item is a compaction
@@ -273,6 +349,122 @@ func sessionItemIsCompactionOutput(item *session.Item) bool {
 	}
 	if flag, ok := item.Metadata["compaction_output"].(bool); ok && flag {
 		return true
+	}
+	return false
+}
+
+// harnessMetadataRawFromItem returns the item's persisted harness metadata JSON,
+// whichever form the session carried it in.
+func harnessMetadataRawFromItem(item *session.Item) json.RawMessage {
+	if item == nil || item.Data == nil {
+		return nil
+	}
+	switch value := item.Data[harnessMetadataKey].(type) {
+	case json.RawMessage:
+		return value
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil
+		}
+		return json.RawMessage(value)
+	case map[string]any:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		return encoded
+	default:
+		return nil
+	}
+}
+
+// harnessMetadataFromSessionItem parses the item's persisted harness metadata
+// into the retained model's view of Rust's CodexHarnessMetadata.
+func harnessMetadataFromSessionItem(item *session.Item) *retainedctx.HarnessMetadata {
+	raw := harnessMetadataRawFromItem(item)
+	if len(raw) == 0 {
+		return nil
+	}
+	var metadata retainedctx.HarnessMetadata
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil
+	}
+	return &metadata
+}
+
+// annotateSessionItemHarnessMetadata merges the captured source and acceptance
+// order into the item's harness metadata, preserving whatever else the item
+// already carried (Rust writes both when the item is recorded).
+func annotateSessionItemHarnessMetadata(item *session.Item, source *retainedctx.RetainedSource, order uint64, hasOrder bool) {
+	if item == nil || source == nil {
+		return
+	}
+	merged := map[string]any{}
+	if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
+		_ = json.Unmarshal(raw, &merged)
+	}
+	encodedSource, err := json.Marshal(source)
+	if err != nil {
+		return
+	}
+	merged["retained_source"] = json.RawMessage(encodedSource)
+	if hasOrder {
+		merged["user_input_order"] = order
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data[harnessMetadataKey] = json.RawMessage(encoded)
+}
+
+// annotateRetainedHarnessMetadata records the retained evidence of the items
+// about to be appended and writes the host-observed source and acceptance order
+// into their harness metadata, mirroring Rust's
+// `ContextManager::record_annotated_items`. A resumed thread then restores the
+// same delivery proof and order instead of minting a new revision.
+func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadID, items []session.Item) {
+	if r == nil || len(items) == 0 {
+		return
+	}
+	threadKey := strings.TrimSpace(string(threadID))
+	if threadKey == "" || !retainedHarnessCandidates(items) {
+		return
+	}
+	r.retainedContextsMu.Lock()
+	defer r.retainedContextsMu.Unlock()
+	context := r.retainedLiveContextLocked(threadKey)
+	for index := range items {
+		item := &items[index]
+		metadata := harnessMetadataFromSessionItem(item)
+		if metadata != nil && metadata.RetainedSource != nil {
+			// The item already carries its recorded version.
+			continue
+		}
+		record, ok := retainedRecordForSessionItem(item, index, metadata)
+		if !ok {
+			continue
+		}
+		captured, order, hasOrder := recordRetainedSessionItem(context, record, metadata)
+		annotateSessionItemHarnessMetadata(item, captured, order, hasOrder)
+	}
+}
+
+// retainedHarnessCandidates reports whether the batch holds a message the
+// retained model can record, so appending unrelated items never resolves a
+// thread's retained evidence.
+func retainedHarnessCandidates(items []session.Item) bool {
+	for index := range items {
+		item := &items[index]
+		if sessionItemIsCompactionOutput(item) {
+			continue
+		}
+		if sessionItemIsUserMessage(item) || sessionItemIsAssistantMessage(item) {
+			return true
+		}
 	}
 	return false
 }

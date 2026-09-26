@@ -9361,6 +9361,10 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
 	}
+	// Rust records the host-observed retained source and acceptance order with the
+	// item (ContextManager::record_annotated_items), so a resumed thread restores
+	// the same delivery proof instead of minting a new revision.
+	r.annotateRetainedHarnessMetadata(threadID, items)
 	if liveThread := r.threads.LiveThread(threadID); liveThread != nil {
 		return liveThread.AppendItems(items)
 	}

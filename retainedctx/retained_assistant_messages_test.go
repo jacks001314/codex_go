@@ -37,3 +37,24 @@ func TestAssistantMessageOrderReportsRecordedOrderLikeRust(t *testing.T) {
 		t.Fatal("an unsequenced assistant message reported an order")
 	}
 }
+
+// UserMessageOrder mirrors AssistantMessageOrder for the instruction family, so a
+// recorded item's harness metadata can name the order the context holds.
+func TestUserMessageOrderReportsRecordedOrderLikeRust(t *testing.T) {
+	context := &RetainedContext{}
+	messageID := "user-1"
+	if _, ok := context.UserMessageOrder(&messageID); ok {
+		t.Fatal("an unrecorded message id reported an order")
+	}
+	order := context.ReserveOrder()
+	context.RecordUserMessage(RetainedUserMessage{
+		TurnID:    "turn-1",
+		MessageID: &messageID,
+		Text:      "Keep the repository private.",
+		Complete:  true,
+	}, LocalInputSource(&order))
+	got, ok := context.UserMessageOrder(&messageID)
+	if !ok || got != order {
+		t.Fatalf("UserMessageOrder() = %d/%v, want %d/true", got, ok, order)
+	}
+}
