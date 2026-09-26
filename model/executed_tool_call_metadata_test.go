@@ -124,6 +124,56 @@ func TestBoundExecutedToolCallsShedsMetadataBeforeSourcesAndCalls(t *testing.T) 
 	}
 }
 
+// Mirrors Rust's `shed_generic_result_metadata`: the largest snapshot is shed
+// first (so one large result cannot discard unrelated small results), and a
+// snapshot carrying the resource-access field keeps only that field instead of
+// becoming the omission marker.
+func TestBoundExecutedToolCallsShedsLargestSnapshotFirstLikeRust(t *testing.T) {
+	newItem := func(name string, callID string, metadata any) *AgentItem {
+		item := &AgentItem{Type: "function_call", Name: name, CallID: callID, Arguments: `{}`}
+		RecordExecutedToolCall(item)
+		calls := item.ExecutedToolCalls()
+		calls[0].SetToolResultMetadata(NewToolResultMetadata(metadata))
+		item.ReplaceExecutedToolCalls(calls)
+		return item
+	}
+	resourceAccess := map[string]any{"openai/resource_access": map[string]any{"id": "res-1"}, "big": strings.Repeat("b", MaxExecutedToolCallMetadataBytes)}
+	large := newItem("large", "call-large", resourceAccess)
+	small := newItem("small", "call-small", map[string]any{"provider": "small"})
+
+	bounded := BoundExecutedToolCallsForPrompt([]any{large, small})
+	if executedToolCallMetadataBytes(bounded[0].(*AgentItem))+executedToolCallMetadataBytes(bounded[1].(*AgentItem)) > MaxExecutedToolCallMetadataBytes {
+		t.Fatal("bounded metadata exceeds the prompt budget")
+	}
+	largeCalls := bounded[0].(*AgentItem).ExecutedToolCalls()
+	if len(largeCalls) != 1 || !largeCalls[0].HasToolResultMetadata() {
+		t.Fatalf("large call metadata = %#v", largeCalls)
+	}
+	retained, _ := largeCalls[0].toolResultMetadata.value.(map[string]any)
+	if len(retained) != 1 || retained["openai/resource_access"] == nil {
+		t.Fatalf("resource access was not retained alone: %#v", largeCalls[0].toolResultMetadata.value)
+	}
+	smallCalls := bounded[1].(*AgentItem).ExecutedToolCalls()
+	smallRetained, _ := smallCalls[0].toolResultMetadata.value.(map[string]any)
+	if len(smallRetained) != 1 || smallRetained["provider"] != "small" {
+		t.Fatalf("small snapshot was shed: %#v", smallCalls[0].toolResultMetadata.value)
+	}
+
+	// Without the resource-access field the large snapshot becomes the marker,
+	// and the smaller unrelated snapshot still survives.
+	plain := newItem("large-plain", "call-plain", map[string]any{"provider": strings.Repeat("p", MaxExecutedToolCallMetadataBytes)})
+	smallAgain := newItem("small-again", "call-small-again", map[string]any{"provider": "small"})
+	bounded = BoundExecutedToolCallsForPrompt([]any{plain, smallAgain})
+	plainCalls := bounded[0].(*AgentItem).ExecutedToolCalls()
+	if !plainCalls[0].toolResultMetadata.isOmittedDueToSizeLimit() {
+		t.Fatalf("plain snapshot was not omitted: %#v", plainCalls[0].toolResultMetadata.value)
+	}
+	kept, _ := bounded[1].(*AgentItem).ExecutedToolCalls()[0].toolResultMetadata.value.(map[string]any)
+	if kept["provider"] != "small" {
+		t.Fatalf("unrelated small snapshot was shed: %#v", kept)
+	}
+}
+
 func TestToolResultMetadataDestinationFiltering(t *testing.T) {
 	for _, allowed := range []string{
 		"https://api.openai.com/v1",

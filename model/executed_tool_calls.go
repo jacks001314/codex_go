@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -21,6 +22,9 @@ const (
 	toolResultSourcesField                      = "tool_result_sources"
 	toolResultMetadataField                     = "tool_result_metadata"
 	toolResultMetadataOmittedMarker             = "omitted_due_to_size_limit"
+	// resourceAccessMetadataKey is Rust's RESOURCE_ACCESS_METADATA_KEY: the one
+	// field kept when a snapshot must shrink but its evidence is still useful.
+	resourceAccessMetadataKey = "openai/resource_access"
 )
 
 type ExecutedToolCall struct {
@@ -175,6 +179,26 @@ func (m *ToolResultMetadata) omitIfSmaller(originalBytes int, overageBytes int) 
 		return omittedBytes
 	}
 	return originalBytes
+}
+
+// retainResourceAccess mirrors Rust's `retain_resource_access`: an object that
+// carries the resource-access field keeps only that field, so the caller can
+// reuse the smaller snapshot instead of omitting it. It reports whether the
+// snapshot changed.
+func (m *ToolResultMetadata) retainResourceAccess() bool {
+	if m == nil {
+		return false
+	}
+	object, ok := m.value.(map[string]any)
+	if !ok {
+		return false
+	}
+	value, present := object[resourceAccessMetadataKey]
+	if !present {
+		return false
+	}
+	*m = ToolResultMetadata{value: map[string]any{resourceAccessMetadataKey: value}}
+	return true
 }
 
 // IsNone reports whether no snapshot (or omission marker) is recorded.
@@ -414,6 +438,61 @@ func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, ExecutedTool
 	}
 }
 
+// shedGenericResultMetadata mirrors Rust's `shed_generic_result_metadata` for
+// the prompt budget: snapshots are shed largest-first (ties by output order,
+// then the call's own order within the output), a snapshot that carries the
+// resource-access field keeps only that field, and every other snapshot is
+// replaced by the omission marker only when the marker is smaller. It reports
+// the remaining metadata bytes.
+func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, totalBytes int) int {
+	type metadataHandle struct {
+		itemIndex int
+		callIndex int
+		bytes     int
+	}
+	var handles []metadataHandle
+	for itemIndex := range items {
+		calls := items[itemIndex].ExecutedToolCalls()
+		for callIndex := range calls {
+			if !calls[callIndex].HasToolResultMetadata() {
+				continue
+			}
+			handles = append(handles, metadataHandle{
+				itemIndex: itemIndex,
+				callIndex: callIndex,
+				bytes:     jsonSize(calls[callIndex].toolResultMetadata),
+			})
+		}
+	}
+	sort.SliceStable(handles, func(i int, j int) bool {
+		if handles[i].bytes != handles[j].bytes {
+			return handles[i].bytes > handles[j].bytes
+		}
+		if handles[i].itemIndex != handles[j].itemIndex {
+			return handles[i].itemIndex < handles[j].itemIndex
+		}
+		return handles[i].callIndex < handles[j].callIndex
+	})
+	total := totalBytes
+	for _, handle := range handles {
+		if total <= maxBytes {
+			break
+		}
+		calls := items[handle.itemIndex].ExecutedToolCalls()
+		metadata := &calls[handle.callIndex].toolResultMetadata
+		original := jsonSize(*metadata)
+		retained := original
+		if metadata.retainResourceAccess() {
+			retained = jsonSize(*metadata)
+		} else {
+			retained = metadata.omitIfSmaller(original, total-maxBytes)
+		}
+		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
+		total -= original - retained
+	}
+	return total
+}
+
 func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	remainingItems := len(items)
 	originalCalls := 0
@@ -438,29 +517,11 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 		return
 	}
 	// Raw result metadata must not displace existing source evidence, calls, or
-	// completion proof. Oversized snapshots degrade to the omission marker first,
-	// then are dropped entirely (Rust #44336).
-	overageBytes := originalBytes - MaxExecutedToolCallMetadataBytes
-	originalBytes = 0
-	for _, item := range items {
-		calls := item.ExecutedToolCalls()
-		changed := false
-		for index := range calls {
-			if !calls[index].HasToolResultMetadata() {
-				continue
-			}
-			// Rust's `omit_if_smaller`: the marker carries the shed overage and
-			// replaces the snapshot only when it is actually smaller.
-			currentBytes := jsonSize(calls[index].toolResultMetadata)
-			if retained := calls[index].toolResultMetadata.omitIfSmaller(currentBytes, overageBytes); retained != currentBytes {
-				changed = true
-			}
-		}
-		if changed {
-			item.ReplaceExecutedToolCalls(calls)
-		}
-		originalBytes += executedToolCallMetadataBytes(item)
-	}
+	// completion proof. Rust's `shed_generic_result_metadata` sheds the largest
+	// snapshots first, so one large result cannot discard unrelated small
+	// results; a resource-access field is kept on its own before a snapshot is
+	// replaced by the smaller omission marker (`omit_if_smaller`).
+	originalBytes = shedGenericResultMetadata(items, MaxExecutedToolCallMetadataBytes, originalBytes)
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {
 		return
 	}
