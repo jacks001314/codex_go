@@ -97,6 +97,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
 	localLinks = append(citationLinks, localLinks...)
 	urlPlaceholders, text := protectLongBareURLs(text, width)
+	mathPlaceholders, text := protectMathSpans(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	colorLevel := codextui.DetectStdoutColorLevel()
@@ -115,6 +116,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	}
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width)
+	out = restoreMathPlaceholders(out, mathPlaceholders)
 	out = annotateRenderedLineURLs(out)
 	out = annotateWebLinkLabels(out, webLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)

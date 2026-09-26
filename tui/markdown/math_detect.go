@@ -51,18 +51,31 @@ func mathOpenDelimiter(rest string) (open string, close string, display bool, ok
 // (except the literal `0`, #48551) or is an all-uppercase initialism is prose,
 // not math.
 func inlineMathAdmitted(formula string, next rune, hasNext bool) bool {
-	if formula != "" {
-		if last, _ := utf8.DecodeLastRuneInString(formula); unicode.IsSpace(last) {
-			return false
-		}
+	if mathFormulaTrailingWhitespace(formula) {
+		return false
 	}
-	if hasNext && (unicode.IsLetter(next) || unicode.IsNumber(next)) {
+	if hasNext && isAlnumRune(next) {
 		return false
 	}
 	if formula != "0" && startsWithASCIIDigit(formula) && !strings.ContainsAny(formula, `\^_=+-*/<>`) {
 		return false
 	}
 	return !(len(formula) > 1 && allASCIIUppercase(formula))
+}
+
+// mathFormulaTrailingWhitespace reports whether a formula ends in whitespace
+// (Rust's `formula.ends_with(char::is_whitespace)`).
+func mathFormulaTrailingWhitespace(formula string) bool {
+	if formula == "" {
+		return false
+	}
+	last, _ := utf8.DecodeLastRuneInString(formula)
+	return unicode.IsSpace(last)
+}
+
+// isAlnumRune mirrors Rust's `char::is_alphanumeric`.
+func isAlnumRune(character rune) bool {
+	return unicode.IsLetter(character) || unicode.IsNumber(character)
 }
 
 func startsWithASCIIDigit(formula string) bool {
