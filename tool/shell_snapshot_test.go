@@ -9,6 +9,7 @@ import (
 
 	"codex_go/network"
 	"codex_go/sandbox"
+	"codex_go/shell"
 )
 
 // snapshotWrapFixture writes a snapshot file and enables the rewrite on the
@@ -325,5 +326,65 @@ func TestJoinShellBlocksLikeRust(t *testing.T) {
 	}
 	if got := joinShellBlocks("", ""); got != "" {
 		t.Fatalf("joinShellBlocks(empty) = %q, want empty", got)
+	}
+}
+
+// Mirrors Rust's `build_proxy_env_exports`: the managed proxy variables are
+// captured around the snapshot and restored afterwards, and BASH_ENV joins them
+// only for a brokered launch.
+func TestBuildProxyEnvExportsLikeRust(t *testing.T) {
+	captures, restores := buildProxyEnvExports(map[string]string{})
+	for _, want := range []string{
+		"__CODEX_SNAPSHOT_PROXY_OVERRIDE_SET_0=",
+		"CODEX_NETWORK_PROXY_ACTIVE",
+		"HTTP_PROXY",
+		"http_proxy",
+		"ALL_PROXY",
+		"__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${" + network.ProxyActiveEnvKey + "+x}\"",
+	} {
+		if !strings.Contains(captures, want) {
+			t.Fatalf("captures missing %q:\n%s", want, captures)
+		}
+	}
+	if !strings.HasPrefix(restores, "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${"+network.ProxyActiveEnvKey+"+x}\" ]; then") {
+		t.Fatalf("restores guard = %q", restores)
+	}
+	if strings.Contains(captures, "BASH_ENV") {
+		t.Fatalf("non-brokered captures included BASH_ENV:\n%s", captures)
+	}
+	if !strings.Contains(captures, network.ProxyCustomCAEnvKeys[0]) {
+		t.Fatalf("captures missing the custom CA key %q:\n%s", network.ProxyCustomCAEnvKeys[0], captures)
+	}
+
+	brokered, _ := buildProxyEnvExports(map[string]string{network.CredentialBrokerActiveEnvKey: "1"})
+	if !strings.Contains(brokered, "BASH_ENV") {
+		t.Fatalf("brokered captures missing BASH_ENV:\n%s", brokered)
+	}
+}
+
+func TestProxyEnvKeysLikeRust(t *testing.T) {
+	found := map[string]bool{}
+	for _, key := range network.ProxyEnvKeys {
+		found[key] = true
+	}
+	for _, want := range []string{
+		network.ProxyActiveEnvKey,
+		network.CredentialBrokerActiveEnvKey,
+		network.BrokeredCredentialsEnvKey,
+		network.ProxyAllowLocalBindingEnvKey,
+		network.ProxyAttributionTokenEnvKey,
+		"HTTP_PROXY", "ALL_PROXY", "NO_PROXY",
+	} {
+		if !found[want] {
+			t.Fatalf("ProxyEnvKeys missing %q", want)
+		}
+	}
+}
+
+// Mirrors Rust's `posix_env_path_expansion_function` export for the brokered
+// wrapper.
+func TestPosixEnvPathExpansionFunctionExportedLikeRust(t *testing.T) {
+	if script := shell.PosixEnvPathExpansionFunction(); !strings.Contains(script, "__codex_snapshot_expand_env") {
+		t.Fatalf("expansion function = %q", script)
 	}
 }

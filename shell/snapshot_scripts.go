@@ -289,3 +289,10 @@ export -p | __codex_snapshot_command awk '
 done
 fi
 `
+
+// PosixEnvPathExpansionFunction returns Rust's
+// `posix_env_path_expansion_function`: the shell helper that expands `${VAR}`
+// indirections in a POSIX environment-file path. It is exported for the
+// brokered shell-snapshot wrapper, which embeds it in the replay script
+// (#48073).
+func PosixEnvPathExpansionFunction() string { return posixEnvPathExpansionFunction }

@@ -42,6 +42,16 @@ const (
 	snapshotBrokeredUnsetEnvPrefix = "CODEX_NETWORK_PROXY_SNAPSHOT_BROKERED_UNSET_"
 )
 
+// snapshotProxyOverrideVariablePrefix mirrors the capture prefix Rust uses for
+// the managed proxy variables.
+const snapshotProxyOverrideVariablePrefix = "__CODEX_SNAPSHOT_PROXY_OVERRIDE"
+
+// The macOS-only git SSH command marker Rust preserves across the snapshot.
+const (
+	proxyGitSSHCommandEnvKey = "GIT_SSH_COMMAND"
+	proxyGitSSHCommandMarker = "CODEX_PROXY_GIT_SSH_COMMAND=1 "
+)
+
 // snapshotReplayedEnvKeys are the runtime-only variables restored even when the
 // live command environment does not carry them, so an inactive value cannot
 // resurface from the snapshot.
@@ -312,4 +322,72 @@ func buildBrokeredCredentialExports(env map[string]string, removeCopies bool) st
 	return "case $- in\n  *x*) __CODEX_SNAPSHOT_BROKER_XTRACE=1; set +x ;;\n  *) __CODEX_SNAPSHOT_BROKER_XTRACE= ;;\nesac\n" +
 		exports +
 		"\nif [ -n \"$__CODEX_SNAPSHOT_BROKER_XTRACE\" ]; then\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\n  set -x\nelse\n  unset __CODEX_SNAPSHOT_BROKER_XTRACE\nfi"
+}
+
+// buildProxyEnvExports mirrors Rust's `build_proxy_env_exports`: it captures the
+// managed proxy variables (plus the brokered credential keys, the custom CA keys
+// and `BASH_ENV` for a brokered launch) so sourcing the snapshot cannot replace
+// the live values, and restores them once the snapshot is in effect, together
+// with the macOS git-ssh marker handling.
+func buildProxyEnvExports(env map[string]string) (string, string) {
+	keys := append([]string(nil), network.ProxyEnvKeys...)
+	keys = append(keys, network.ProxyBrokeredCredentialEnvKeys(env)...)
+	keys = append(keys, network.ProxyCustomCAEnvKeys...)
+	if env[network.CredentialBrokerActiveEnvKey] == "1" {
+		keys = append(keys, "BASH_ENV")
+	}
+	keys = normalizedShellVariableKeys(keys)
+	captures, restores := buildSnapshotOverrideExportsForKeys(snapshotProxyOverrideVariablePrefix, keys)
+	activeKey := network.ProxyActiveEnvKey
+	proxyCaptures := captures + "\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${" + activeKey + "+x}\""
+	proxyRestores := "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${" + activeKey + "+x}\" ]; then\n" +
+		restores + "\nfi"
+	gitCaptures, gitRestores := buildCodexProxyGitSSHCommandExports()
+	return joinShellBlocks(proxyCaptures, gitCaptures), joinShellBlocks(proxyRestores, gitRestores)
+}
+
+// normalizedShellVariableKeys filters invalid names, then sorts and dedupes,
+// mirroring Rust's key preparation before `build_override_exports_for_keys`.
+func normalizedShellVariableKeys(keys []string) []string {
+	filtered := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if isValidShellVariableName(key) {
+			filtered = append(filtered, key)
+		}
+	}
+	sort.Strings(filtered)
+	out := filtered[:0]
+	for index, key := range filtered {
+		if index > 0 && filtered[index-1] == key {
+			continue
+		}
+		out = append(out, key)
+	}
+	return out
+}
+
+// buildCodexProxyGitSSHCommandExports mirrors Rust's
+// `build_codex_proxy_git_ssh_command_exports`, which exists only on macOS: the
+// proxy's marked GIT_SSH_COMMAND must survive the snapshot while an ordinary user
+// value must not be mistaken for it.
+func buildCodexProxyGitSSHCommandExports() (string, string) {
+	if runtime.GOOS != "darwin" {
+		return "", ""
+	}
+	key := proxyGitSSHCommandEnvKey
+	markerPattern := strings.TrimRight(proxyGitSSHCommandMarker, " ") + "\\ *"
+	captures := "__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_SET=\"${" + key + "+x}\"\n" +
+		"__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND=\"${" + key + "-}\"\n" +
+		"case \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\" in\n  " + markerPattern +
+		") __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_LIVE_MARKED=1 ;;\n  *) __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_LIVE_MARKED= ;;\nesac"
+	restores := "case \"${" + key + "-}\" in\n  " + markerPattern +
+		") __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_AFTER_MARKED=1 ;;\n  *) __CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_AFTER_MARKED= ;;\nesac\n" +
+		"if [ -n \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_LIVE_MARKED\" ]; then\n" +
+		"  if [ -z \"${" + key + "+x}\" ] || [ -n \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_AFTER_MARKED\" ]; then\n" +
+		"    export " + key + "=\"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\"\n  fi\n" +
+		"elif [ -n \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_AFTER_MARKED\" ]; then\n" +
+		"  if [ -n \"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND_SET\" ]; then\n" +
+		"    export " + key + "=\"$__CODEX_SNAPSHOT_PROXY_GIT_SSH_COMMAND\"\n" +
+		"  else\n    unset " + key + "\n  fi\nfi"
+	return captures, restores
 }

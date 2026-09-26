@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +23,45 @@ const (
 	ProxyAllowLocalBindingEnvKey = "CODEX_NETWORK_ALLOW_LOCAL_BINDING"
 	ProxyDefaultNoProxyValue     = "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 )
+
+// ProxyAttributionTokenEnvKey mirrors Rust's PROXY_ATTRIBUTION_TOKEN_ENV_KEY.
+const ProxyAttributionTokenEnvKey = "CODEX_NETWORK_PROXY_ATTRIBUTION"
+
+// windowsSandboxProxyPortsEnvKey mirrors Rust's WINDOWS_SANDBOX_PROXY_PORTS_ENV_KEY.
+const windowsSandboxProxyPortsEnvKey = "CODEX_WINDOWS_SANDBOX_PROXY_PORTS"
+
+// ProxyEnvKeys mirrors Rust's `PROXY_ENV_KEYS`: every variable the managed proxy
+// owns, including the Windows-only sandbox port marker.
+var ProxyEnvKeys = proxyEnvKeys()
+
+func proxyEnvKeys() []string {
+	keys := []string{
+		ProxyActiveEnvKey,
+		CredentialBrokerActiveEnvKey,
+		BrokeredCredentialsEnvKey,
+		ProxyAllowLocalBindingEnvKey,
+	}
+	if runtime.GOOS == "windows" {
+		keys = append(keys, windowsSandboxProxyPortsEnvKey)
+	}
+	keys = append(keys,
+		ProxyAttributionTokenEnvKey,
+		"ELECTRON_GET_USE_PROXY",
+		"NODE_USE_ENV_PROXY",
+		"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+		"YARN_HTTP_PROXY", "YARN_HTTPS_PROXY",
+		"npm_config_http_proxy", "npm_config_https_proxy", "npm_config_proxy",
+		"NPM_CONFIG_HTTP_PROXY", "NPM_CONFIG_HTTPS_PROXY", "NPM_CONFIG_PROXY",
+		"BUNDLE_HTTP_PROXY", "BUNDLE_HTTPS_PROXY",
+		"PIP_PROXY", "DOCKER_HTTP_PROXY", "DOCKER_HTTPS_PROXY",
+		"WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy",
+		"NO_PROXY", "no_proxy", "npm_config_noproxy", "NPM_CONFIG_NOPROXY",
+		"YARN_NO_PROXY", "BUNDLE_NO_PROXY",
+		"ALL_PROXY", "all_proxy",
+		"FTP_PROXY", "ftp_proxy",
+	)
+	return keys
+}
 
 // Rust #44931 removed YARN_NO_PROXY: Yarn's no-proxy variable is not honored by
 // the managed proxy environment.
