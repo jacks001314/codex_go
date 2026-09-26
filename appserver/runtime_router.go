@@ -9369,10 +9369,22 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	// item (ContextManager::record_annotated_items), so a resumed thread restores
 	// the same delivery proof instead of minting a new revision.
 	r.annotateRetainedHarnessMetadata(threadID, items)
+	// Rust checkpoints the thread's cumulative MCP attribution into the recorded
+	// items before they are persisted (session/mod.rs), then acknowledges the
+	// revision once the append succeeds.
+	mcpRevision, hasMcpCheckpoint := r.annotateMcpAttributionMetadata(string(threadID), items)
 	if liveThread := r.threads.LiveThread(threadID); liveThread != nil {
-		return liveThread.AppendItems(items)
+		record, err := liveThread.AppendItems(items)
+		if err == nil && hasMcpCheckpoint {
+			r.markMcpAttributionPersisted(string(threadID), mcpRevision)
+		}
+		return record, err
 	}
-	return r.services.ThreadRouter.store.AppendItems(threadID, items)
+	record, err := r.services.ThreadRouter.store.AppendItems(threadID, items)
+	if err == nil && hasMcpCheckpoint {
+		r.markMcpAttributionPersisted(string(threadID), mcpRevision)
+	}
+	return record, err
 }
 
 // markThreadMemoryPollutedOnExternalContext mirrors Rust
