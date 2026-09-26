@@ -181,6 +181,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		if forkOptions.Mode == session.ForkAll {
 			record.Items = filterInheritedCurrentTimeReminders(record.Items)
 		}
+		// Rust spawn.rs's forked-item provenance: persist the scope of every copied
+		// conversational message, so a resume cannot recapture the parent's
+		// authorization as the child's own.
+		markInheritedUserMessages(record.Items)
 	} else {
 		record = &session.Record{ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID), CreatedAt: now, UpdatedAt: now, RecencyAt: now}
 		if err := c.router.services.ThreadRouter.store.Create(record); err != nil {

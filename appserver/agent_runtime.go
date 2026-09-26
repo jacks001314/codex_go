@@ -238,12 +238,13 @@ func (r *RuntimeRouter) guardianEnvironmentInputItems(ctx context.Context, threa
 // guardianRetainedContextForTurn resolves the thread's retained evidence for the
 // review prompt.
 //
-// A delegated subagent's history carries the parent's adopted instructions, and
-// Go does not yet mark them with Rust's `inherited_user_message` provenance, so
-// only a thread's own accepted instructions are offered as retained evidence;
-// a worker keeps the root-conversation section until that provenance lands.
+// A delegated subagent's history carries the parent's adopted instructions, which
+// the spawn path marks with Rust's `inherited_user_message` provenance; the
+// derivation therefore keeps only the thread's own accepted instructions as
+// retained evidence, and a worker's reviewer sees the root-conversation section
+// for the parent's authorization instead of it being presented as the worker's.
 func (r *RuntimeRouter) guardianRetainedContextForTurn(threadID, turnID string) *retainedctx.RetainedContext {
-	if r == nil || r.turnThreadIsSubagent(threadID) {
+	if r == nil {
 		return nil
 	}
 	return r.retainedContextForThread(threadID)

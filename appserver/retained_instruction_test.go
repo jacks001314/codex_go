@@ -85,7 +85,7 @@ func TestRetainedInstructionCompletenessLikeRust(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			item := sessionItemForRetainedTest("user-1", testCase.text, testCase.kinds, testCase.contentTypes)
-			record, ok := retainedRecordForSessionItem(&item, 0, nil)
+			record, ok := retainedRecordForSessionItem(&item, 0, nil, true)
 			if ok != testCase.wantRecorded {
 				t.Fatalf("retainedRecordForSessionItem() recorded = %v, want %v", ok, testCase.wantRecorded)
 			}
@@ -108,7 +108,7 @@ func TestRetainedInstructionCompletenessLikeRust(t *testing.T) {
 	// excerpt.
 	oversized := strings.Repeat("y", utils.ApproxBytesForTokens(900)+200)
 	item := sessionItemForRetainedTest("user-1", oversized, []string{"user.text"}, []string{"input_text"})
-	record, ok := retainedRecordForSessionItem(&item, 0, nil)
+	record, ok := retainedRecordForSessionItem(&item, 0, nil, true)
 	if !ok {
 		t.Fatal("the oversized instruction was not retained")
 	}
@@ -124,7 +124,7 @@ func TestRetainedInstructionCompletenessLikeRust(t *testing.T) {
 // reaches the reviewer as an omission notice rather than an instruction.
 func TestRetainedOmittedObjectiveIsIncompleteLikeRust(t *testing.T) {
 	item := sessionItemForRetainedTest("user-1", "Objective withheld.", []string{"user.goal.omitted"}, []string{"input_text"})
-	record, ok := retainedRecordForSessionItem(&item, 0, nil)
+	record, ok := retainedRecordForSessionItem(&item, 0, nil, true)
 	if !ok {
 		t.Fatal("the omitted-objective message was not retained")
 	}

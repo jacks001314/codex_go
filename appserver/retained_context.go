@@ -234,10 +234,11 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 	if err != nil || record == nil {
 		return
 	}
+	retainInherited := !runtimeRecordIsSubagent(record)
 	for index := range record.Items {
 		item := &record.Items[index]
 		metadata := harnessMetadataFromSessionItem(item)
-		record, ok := retainedRecordForSessionItem(item, index, metadata)
+		record, ok := retainedRecordForSessionItem(item, index, metadata, retainInherited)
 		if !ok {
 			continue
 		}
@@ -256,8 +257,14 @@ type retainedSessionItemRecord struct {
 // by the guardian budget, and the completeness the item's own evidence
 // establishes. Compaction output is skipped, because a summary is a digest of the
 // conversation rather than host-observed evidence.
-func retainedRecordForSessionItem(item *session.Item, index int, metadata *retainedctx.HarnessMetadata) (retainedSessionItemRecord, bool) {
+func retainedRecordForSessionItem(item *session.Item, index int, metadata *retainedctx.HarnessMetadata, retainInherited bool) (retainedSessionItemRecord, bool) {
 	if item == nil || sessionItemIsCompactionOutput(item) {
+		return retainedSessionItemRecord{}, false
+	}
+	if metadata != nil && metadata.InheritedUserMessage && !retainInherited {
+		// Rust's ContextManager::retain_inherited_user_messages: a worker keeps the
+		// root-authorization section instead of presenting the parent's adopted
+		// instructions as its own evidence.
 		return retainedSessionItemRecord{}, false
 	}
 	userMessage := sessionItemIsUserMessage(item)
@@ -451,6 +458,7 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 	r.retainedContextsMu.Lock()
 	defer r.retainedContextsMu.Unlock()
 	context := r.retainedLiveContextLocked(threadKey)
+	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for index := range items {
 		item := &items[index]
 		metadata := harnessMetadataFromSessionItem(item)
@@ -458,7 +466,7 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 			// The item already carries its recorded version.
 			continue
 		}
-		record, ok := retainedRecordForSessionItem(item, index, metadata)
+		record, ok := retainedRecordForSessionItem(item, index, metadata, retainInherited)
 		if !ok {
 			continue
 		}
@@ -565,4 +573,39 @@ func retainedInstructionComplete(fields sessionItemResponseItemFields, ok bool) 
 		}
 	}
 	return true
+}
+
+// markInheritedUserMessages mirrors Rust spawn.rs's forked-item provenance for a
+// MultiAgent V2 spawn: every copied conversational message is marked as inherited
+// so a resume cannot recapture the parent's authorization as the child's own, a
+// copied item drops the parent's sender evidence, and an item whose position
+// belongs to the parent's counter loses the parent's acceptance order.
+func markInheritedUserMessages(items []session.Item) {
+	for index := range items {
+		item := &items[index]
+		userMessage := sessionItemIsUserMessage(item)
+		if !userMessage && !sessionItemIsAssistantMessage(item) {
+			continue
+		}
+		metadata := harnessMetadataFromSessionItem(item)
+		merged := map[string]any{}
+		if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
+			_ = json.Unmarshal(raw, &merged)
+		}
+		merged["inherited_user_message"] = true
+		// Assistant and tool positions belong to the parent's counter, not the child's.
+		dropParentOrder := metadata == nil || metadata.SenderUserMessages != nil || !userMessage
+		if dropParentOrder {
+			delete(merged, "user_input_order")
+		}
+		delete(merged, "sender_user_messages")
+		encoded, err := json.Marshal(merged)
+		if err != nil {
+			continue
+		}
+		if item.Data == nil {
+			item.Data = map[string]any{}
+		}
+		item.Data[harnessMetadataKey] = json.RawMessage(encoded)
+	}
 }
