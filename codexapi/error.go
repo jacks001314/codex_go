@@ -87,7 +87,9 @@ func (e *APIError) Error() string {
 	}
 	switch e.Kind {
 	case ErrorTransport:
-		return e.Message
+		// Rust's CodexErr::ConnectionFailed displays `Connection failed: {source}`,
+		// where the source is the transport error.
+		return "Connection failed: " + e.Message
 	case ErrorAPI:
 		return fmt.Sprintf("api error %d: %s", e.Status, e.Message)
 	case ErrorStream:

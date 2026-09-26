@@ -42,6 +42,11 @@ func TestAPIErrorDisplayMatchesRustLikeRust(t *testing.T) {
 			want: "stream disconnected before completion: connection reset",
 		},
 		{
+			name: "connection failed",
+			err:  &APIError{Kind: ErrorTransport, Message: "error sending request for url (http://example.com/)"},
+			want: "Connection failed: error sending request for url (http://example.com/)",
+		},
+		{
 			name: "retryable",
 			err:  &APIError{Kind: ErrorRetryable, Message: "temporarily unavailable"},
 			want: "stream disconnected before completion: temporarily unavailable",
