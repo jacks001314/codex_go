@@ -200,3 +200,80 @@ func TestAuthFlowPolicySkipsDisabledChoices(t *testing.T) {
 		t.Fatalf("highlighted=%s, want API key", model.highlighted)
 	}
 }
+
+// Mirrors Rust's `login_can_complete_while_browser_is_opening` (#48502): the
+// pending login state is recorded before the browser starts, so a completion
+// that arrives while the browser is opening still matches the active login.
+func TestAuthFlowBrowserLoginCanCompleteWhileOpening(t *testing.T) {
+	done := make(chan error, 1)
+	done <- nil
+	services := defaultAuthFlowServices()
+	services.startBrowser = func(_ context.Context, options *auth.OAuthOptions) (*auth.BrowserLoginServer, error) {
+		if !options.OpenBrowser {
+			t.Fatal("the local login flow must request browser opening")
+		}
+		return &auth.BrowserLoginServer{
+			AuthURL: "https://auth.example.test/login",
+			Done:    done,
+		}, nil
+	}
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+		services:       services,
+	})
+
+	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	if start == nil {
+		t.Fatal("browser start command missing")
+	}
+	// The state must already be recorded before the browser-start command runs.
+	if model.state != SignInChatGPTContinueInBrowser {
+		t.Fatalf("state before browser start = %s, want %s", model.state, SignInChatGPTContinueInBrowser)
+	}
+	_, wait := model.Update(start())
+	if wait == nil {
+		t.Fatal("browser wait command missing")
+	}
+	// The completion was already queued, so the wait resolves immediately.
+	model.Update(wait())
+	if model.state != SignInChatGPTSuccessMessage {
+		t.Fatalf("state after immediate completion = %s, want %s", model.state, SignInChatGPTSuccessMessage)
+	}
+}
+
+// Mirrors Rust's `opens_login_browser_for_local_app_servers` (#48502): the
+// browser is opened for the interactive ChatGPT choice and not for the device
+// code choice, whose one-time code is entered on another device.
+func TestAuthFlowBrowserOpeningFollowsTheChoice(t *testing.T) {
+	services := defaultAuthFlowServices()
+	services.startBrowser = func(_ context.Context, options *auth.OAuthOptions) (*auth.BrowserLoginServer, error) {
+		if !options.OpenBrowser {
+			t.Fatal("the ChatGPT choice must open the browser")
+		}
+		return &auth.BrowserLoginServer{AuthURL: "https://auth.example.test/login", Done: make(chan error, 1)}, nil
+	}
+	services.requestDeviceCode = func(_ context.Context, options *auth.OAuthOptions) (*auth.DeviceCode, error) {
+		if options.OpenBrowser {
+			t.Fatal("the device code choice must not open the browser")
+		}
+		return &auth.DeviceCode{VerificationURL: "https://auth.example.test/device", UserCode: "CODE-1", DeviceAuthID: "d1"}, nil
+	}
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+		services:       services,
+	})
+	if _, cmd := model.startChoice(AuthChoiceChatGPT); cmd == nil {
+		t.Fatal("ChatGPT start command missing")
+	} else {
+		cmd()
+	}
+	if _, cmd := model.startChoice(AuthChoiceDeviceCode); cmd == nil {
+		t.Fatal("device code start command missing")
+	} else {
+		cmd()
+	}
+}
