@@ -9,7 +9,13 @@ import (
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/tool"
+	"codex_go/utils"
 )
+
+// guardianMaxRootMessageTokens mirrors
+// `guardian::GUARDIAN_MAX_ROOT_MESSAGE_TOKENS`: the budget the host applies to
+// original instruction and assistant evidence before retaining it.
+const guardianMaxRootMessageTokens = 900
 
 // Rust parity: codex-history's retained context as the host owns it
 // (history/src/lib.rs and retained_context.rs), consumed by the Guardian review
@@ -207,21 +213,66 @@ func (r *RuntimeRouter) recordRetainedUserMessages(context *retainedctx.Retained
 	}
 	for index := range record.Items {
 		item := &record.Items[index]
-		if !sessionItemIsUserMessage(item) {
+		// Rust's ContextManager::record_retained_message skips compaction output:
+		// a summary is a digest of the conversation, not host-observed evidence.
+		if sessionItemIsCompactionOutput(item) {
 			continue
 		}
-		text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
-		if text == "" {
-			continue
+		switch {
+		case sessionItemIsUserMessage(item):
+			text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+			if text == "" {
+				continue
+			}
+			message := retainedctx.RetainedUserMessage{
+				TurnID:   runtimeSessionItemTurnID(item, index),
+				Text:     text,
+				Complete: true,
+			}
+			if id := strings.TrimSpace(item.ID); id != "" {
+				message.MessageID = &id
+			}
+			context.RecordUserMessage(message, retainedctx.LocalInputSource(nil))
+		case sessionItemIsAssistantMessage(item):
+			// Rust's ContextManager::record_retained_message retains assistant
+			// output as untrusted context: the whole original within the bounded
+			// budget, marked incomplete when the bound had to shorten it.
+			text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
+			if text == "" {
+				continue
+			}
+			message := retainedctx.RetainedUserMessage{
+				TurnID:   runtimeSessionItemTurnID(item, index),
+				Text:     utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens)),
+				Complete: len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens),
+			}
+			if id := strings.TrimSpace(item.ID); id != "" {
+				message.MessageID = &id
+			}
+			// Rust reserves the assistant message's acceptance order once and
+			// persists it with the item; a re-derivation must reuse the recorded
+			// order instead of advancing the thread's counter again.
+			order, recorded := context.AssistantMessageOrder(message.MessageID)
+			if !recorded {
+				order = context.ReserveOrder()
+			}
+			context.RecordAssistantMessage(message, retainedctx.LocalInputSource(&order))
 		}
-		message := retainedctx.RetainedUserMessage{
-			TurnID:   runtimeSessionItemTurnID(item, index),
-			Text:     text,
-			Complete: true,
-		}
-		if id := strings.TrimSpace(item.ID); id != "" {
-			message.MessageID = &id
-		}
-		context.RecordUserMessage(message, retainedctx.LocalInputSource(nil))
 	}
+}
+
+// sessionItemIsCompactionOutput reports whether the history item is a compaction
+// summary. Rust marks it with `CodexHarnessMetadata::compaction_output`; the
+// session item carries the same fact as its compacted-history kind.
+func sessionItemIsCompactionOutput(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(stringValueFromMap(item.Metadata, "kind")), "compaction_summary") {
+		return true
+	}
+	if flag, ok := item.Metadata["compaction_output"].(bool); ok && flag {
+		return true
+	}
+	return false
 }

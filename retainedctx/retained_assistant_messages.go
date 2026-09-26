@@ -1,5 +1,24 @@
 package retainedctx
 
+// AssistantMessageOrder returns the primary acceptance order already recorded for
+// an assistant message id. Rust reserves that order once
+// (`Session::reserve_assistant_message_order`) and persists it with the item's
+// harness metadata; a Go re-derivation reuses the recorded order so repeated
+// passes neither advance the thread's counter nor reorder the evidence.
+func (c *RetainedContext) AssistantMessageOrder(messageID *string) (uint64, bool) {
+	if c == nil || messageID == nil {
+		return 0, false
+	}
+	for i := range c.assistantMessages {
+		entry := &c.assistantMessages[i]
+		if entry.Value.MessageID == nil || *entry.Value.MessageID != *messageID || entry.Inherited {
+			continue
+		}
+		return entry.Order, true
+	}
+	return 0, false
+}
+
 // RecordAssistantMessage records original assistant text without interpreting it
 // as a question or grant. Older unsequenced sources cannot establish order
 // relative to queued user replies. It returns the captured source for the

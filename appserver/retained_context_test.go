@@ -13,6 +13,7 @@ import (
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/state"
+	"codex_go/utils"
 )
 
 func retainedOrderedTexts(entries []retainedctx.OrderedEntry) []string {
@@ -50,7 +51,9 @@ func TestRuntimeRouterRetainedContextRecordsThreadInstructionsLikeRust(t *testin
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	want := []string{"Keep the repository private.", "Never publish it."}
+	// The assistant message is retained as assistant context between the two
+	// instructions, in the acceptance order history records.
+	want := []string{"Keep the repository private.", "Understood.", "Never publish it."}
 	context := router.retainedContextForThread(string(threadID))
 	if context == nil {
 		t.Fatal("retainedContextForThread() = nil, want the thread's instructions")
@@ -58,11 +61,22 @@ func TestRuntimeRouterRetainedContextRecordsThreadInstructionsLikeRust(t *testin
 	if got := retainedOrderedTexts(context.OrderedEntries()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("retained instructions = %#v, want %#v", got, want)
 	}
-	// The assistant message is not user authorization evidence.
+	// The assistant message is assistant context, never user authorization evidence.
+	sawAssistant := false
 	for _, entry := range context.OrderedEntries() {
 		if entry.Entry.AssistantMessage != nil {
+			sawAssistant = true
+			if entry.Entry.AssistantMessage.Text != "Understood." {
+				t.Fatalf("assistant context = %#v", entry.Entry.AssistantMessage)
+			}
+			continue
+		}
+		if entry.Entry.UserMessage != nil && entry.Entry.UserMessage.Text == "Understood." {
 			t.Fatalf("assistant text became retained user evidence: %#v", entry)
 		}
+	}
+	if !sawAssistant {
+		t.Fatal("the assistant message was not retained as assistant context")
 	}
 	// Resolving again dedupes by message id instead of duplicating.
 	if got := retainedOrderedTexts(router.retainedContextForThread(string(threadID)).OrderedEntries()); !reflect.DeepEqual(got, want) {
@@ -110,7 +124,15 @@ func TestRuntimeRouterRetainedContextSurvivesCompactionLikeRust(t *testing.T) {
 	if err != nil || record == nil {
 		t.Fatalf("Read() = %#v/%v", record, err)
 	}
-	record.Items = []session.Item{{ID: "compacted-1", Type: "message", Role: "assistant", Text: "summary"}}
+	// The compacted history marks its summary the way sessionItemsFromCompactItems
+	// does, so the derivation recognises it as compaction output.
+	record.Items = []session.Item{{
+		ID:       "compacted-1",
+		Type:     "message",
+		Role:     "assistant",
+		Text:     "summary",
+		Metadata: map[string]any{"compact": true, "kind": "compaction_summary"},
+	}}
 	if err := store.Save(record); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -187,5 +209,101 @@ func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T)
 	}
 	if strings.Contains(captured.Prompt, "RETAINED USER INSTRUCTIONS") {
 		t.Fatalf("a thread without retained evidence rendered a section:\n%s", captured.Prompt)
+	}
+}
+
+// Mirrors Rust's ContextManager::record_retained_message assistant arm: assistant
+// output is retained as bounded context in history order, is marked incomplete
+// when the evidence bound had to shorten it, is not duplicated by a repeated
+// resolution, and never includes a compaction summary.
+func TestRuntimeRouterRetainsAssistantContextLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := session.ThreadID("thread-assistant-context")
+	oversized := strings.Repeat("x", utils.ApproxBytesForTokens(900)+200)
+	if err := store.Create(&session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Items: []session.Item{
+			{ID: "user-1", Type: "message", Role: "user", Text: "Keep the repository private."},
+			{ID: "assistant-1", Type: "message", Role: "assistant", Text: "Understood."},
+			{ID: "assistant-oversized", Type: "message", Role: "assistant", Text: oversized},
+			{
+				ID: "compacted-1", Type: "message", Role: "assistant", Text: "conversation digest",
+				Metadata: map[string]any{"compact": true, "kind": "compaction_summary"},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	context := router.retainedContextForThread(string(threadID))
+	if context == nil {
+		t.Fatal("retainedContextForThread() = nil")
+	}
+	entries := context.OrderedEntries()
+	if len(entries) != 3 {
+		t.Fatalf("retained entries = %#v, want the instruction and two assistant messages", entries)
+	}
+	orders := make([]retainedctx.RetainedContextOrder, 0, len(entries))
+	for _, entry := range entries {
+		orders = append(orders, entry.Order)
+		if entry.Entry.UserMessage != nil || entry.Entry.VerifiedAnswer != nil {
+			if entry.Entry.UserMessage != nil && entry.Entry.UserMessage.Text != "Keep the repository private." {
+				t.Fatalf("unexpected retained user evidence = %#v", entry.Entry.UserMessage)
+			}
+		}
+	}
+	assistant := map[string]*retainedctx.RetainedUserMessage{}
+	for _, entry := range entries {
+		if entry.Entry.AssistantMessage != nil {
+			assistant[entry.Entry.AssistantMessage.Text] = entry.Entry.AssistantMessage
+		}
+	}
+	if assistant["Understood."] == nil || !assistant["Understood."].Complete {
+		t.Fatalf("bounded assistant context = %#v", assistant["Understood."])
+	}
+	oversizedEntry := context.OrderedEntries()[2].Entry.AssistantMessage
+	if oversizedEntry == nil {
+		t.Fatalf("the oversized assistant message was not retained: %#v", entries)
+	}
+	if oversizedEntry.Complete {
+		t.Fatal("a truncated assistant message was retained as complete evidence")
+	}
+	// Rust's truncation is token-estimated, so the retained text is bounded but
+	// need not fit the byte estimate exactly; the incomplete flag is the contract.
+	if len(oversizedEntry.Text) >= len(oversized) {
+		t.Fatalf("assistant text = %d bytes, want a bounded excerpt", len(oversizedEntry.Text))
+	}
+	if strings.Contains(oversizedEntry.Text, "conversation digest") {
+		t.Fatalf("the compaction summary was retained as assistant evidence")
+	}
+
+	// Resolving again neither duplicates the evidence nor advances its order.
+	again := router.retainedContextForThread(string(threadID))
+	if again == nil || len(again.OrderedEntries()) != len(entries) {
+		t.Fatalf("second resolution = %#v", again)
+	}
+	for index, entry := range again.OrderedEntries() {
+		if entry.Order != orders[index] {
+			t.Fatalf("entry %d order = %#v, want %#v", index, entry.Order, orders[index])
+		}
+	}
+
+	// The reviewer prompt renders the bounded assistant context and the omission
+	// notice for the message the bound had to shorten.
+	prompt, err := state.BuildPromptWithOptions(state.Action{Type: "command", Command: "ls", CWD: "/repo"}, nil,
+		state.BuildPromptOptions{RetainedContext: again})
+	if err != nil {
+		t.Fatalf("BuildPromptWithOptions() error = %v", err)
+	}
+	if !strings.Contains(prompt, "assistant: Understood.") {
+		t.Fatalf("prompt is missing the assistant context:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, state.RootMessage{Kind: state.RootMessageIncompleteAssistantContext}.Render()) {
+		t.Fatalf("prompt is missing the omitted-assistant-context notice:\n%s", prompt)
+	}
+	if strings.Contains(prompt, strings.Repeat("x", 40)) {
+		t.Fatalf("prompt rendered the truncated assistant text:\n%s", prompt)
 	}
 }
