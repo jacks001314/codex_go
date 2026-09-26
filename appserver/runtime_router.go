@@ -14075,6 +14075,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.ContextStatus = r.contextStatusForThread(threadID)
 	options.NewContextWindow = r.newContextWindowRequesterForTurn(threadID, cfg)
 	options.UserInputResponder = r.userInputResponderForTurn(threadID, strings.TrimSpace(turnID))
+	// Rust request_user_input.rs: with guardian approval enabled, the answers the
+	// host accepts become retained evidence the reviewer can render.
+	options.VerifiedAnswerRecorder = r.verifiedAnswerRecorderForTurn(threadID, strings.TrimSpace(turnID), cfg.FeatureSettings())
 	// Rust build_mcp_tool_call_request_meta: MCP tool calls report the turn's
 	// metadata document in `_meta`.
 	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))

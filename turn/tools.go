@@ -24,11 +24,14 @@ type ToolRegistryOptions struct {
 	ContextStatus                  func() compact.TokenStatus
 	UserInputResponder             tool.UserInputResponder
 	RequestUserInputAvailableModes []string
-	DynamicToolCaller              DynamicToolCaller
-	ClockProvider                  tool.ClockProvider
-	EnvironmentWaiter              tool.EnvironmentWaiter
-	SelectedEnvironmentIDs         []string
-	WaitForEnvironmentToolConfig   *tool.WaitForEnvironmentToolConfig
+	// VerifiedAnswerRecorder receives the accepted request_user_input answers
+	// (Rust request_user_input.rs's retained verified-answer capture).
+	VerifiedAnswerRecorder       tool.VerifiedAnswerRecorder
+	DynamicToolCaller            DynamicToolCaller
+	ClockProvider                tool.ClockProvider
+	EnvironmentWaiter            tool.EnvironmentWaiter
+	SelectedEnvironmentIDs       []string
+	WaitForEnvironmentToolConfig *tool.WaitForEnvironmentToolConfig
 
 	Shell        *tool.ShellExecutorOptions
 	ApplyPatch   *tool.ApplyPatchExecutorOptions
@@ -279,6 +282,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			ContextStatus:                  options.ContextStatus,
 			UserInputResponder:             options.UserInputResponder,
 			RequestUserInputAvailableModes: options.RequestUserInputAvailableModes,
+			VerifiedAnswerRecorder:         options.VerifiedAnswerRecorder,
 			ClockProvider:                  options.ClockProvider,
 			ThreadID:                       options.ThreadID,
 			EnableCurrentTime:              options.EnableCurrentTimeTool,

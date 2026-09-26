@@ -214,7 +214,11 @@ type Line struct {
 	TurnContext       json.RawMessage `json:"turn_context,omitempty"`
 	WorldState        json.RawMessage `json:"world_state,omitempty"`
 	SecurityRiskScore json.RawMessage `json:"security_risk_score,omitempty"`
-	Data              map[string]any  `json:"data,omitempty"`
+	// RetainedContext carries the sparse, model-invisible retained-context event
+	// of a `retained_context` line (Rust RolloutItem::RetainedContext). The wire
+	// form is Rust's `payload` key, so this field is only populated by the reader.
+	RetainedContext json.RawMessage `json:"-"`
+	Data            map[string]any  `json:"data,omitempty"`
 }
 
 type RollbackEvent struct {
@@ -763,10 +767,59 @@ func (r *Recorder) AppendTurnContext(record TurnContextRecord, now time.Time) er
 		now = time.Now().UTC()
 	}
 	return r.AppendLine(Line{
-		Type:        "turn_context",
-		Timestamp:   now.UTC().Format(time.RFC3339Nano),
-		TurnContext: payload,
+		Type:      "turn_context",
+		Timestamp: now.UTC().Format(time.RFC3339Nano),
+		// Rust's RolloutItemWire serializes every variant's body under `payload`
+		// (tag = "type"), so a Go-written rollout stays readable by the Rust
+		// implementation; the reader maps `payload` back onto TurnContext for
+		// this type.
+		Payload: payload,
 	})
+}
+
+// AppendRetainedContext persists one sparse retained-context event (Rust
+// RolloutItem::RetainedContext): a model-invisible host fact recorded between
+// compaction checkpoints, which a resumed thread replays in order.
+func (r *Recorder) AppendRetainedContext(event retainedctx.RetainedContextEvent, now time.Time) error {
+	event.Bound()
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return r.AppendLine(Line{
+		Type:      "retained_context",
+		Timestamp: now.UTC().Format(time.RFC3339Nano),
+		Payload:   payload,
+	})
+}
+
+// RetainedContextEvents returns the sparse retained-context events a rollout
+// carries, oldest first. A resumed thread restores its newest checkpoint's
+// snapshot and then replays these; re-recording an event the checkpoint already
+// holds is idempotent (Rust's `RetainedContext::record`).
+func RetainedContextEvents(lines []Line) []retainedctx.RetainedContextEvent {
+	events := []retainedctx.RetainedContextEvent{}
+	for i := range lines {
+		if lines[i].Type != "retained_context" {
+			continue
+		}
+		payload := lines[i].RetainedContext
+		if len(payload) == 0 {
+			payload = lines[i].Payload
+		}
+		if len(payload) == 0 {
+			continue
+		}
+		var event retainedctx.RetainedContextEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			continue
+		}
+		events = append(events, event)
+	}
+	return events
 }
 
 // TurnContextSettings returns the model, compaction compatibility hash and cyber
@@ -1473,6 +1526,8 @@ func unmarshalLine(data []byte, line *Line) error {
 				line.WorldState = append(json.RawMessage(nil), payload...)
 			case "security_risk_score":
 				line.SecurityRiskScore = append(json.RawMessage(nil), payload...)
+			case "retained_context":
+				line.RetainedContext = append(json.RawMessage(nil), payload...)
 			}
 		}
 		if line.ThreadRolledBack == nil {
@@ -1493,6 +1548,11 @@ func unmarshalLine(data []byte, line *Line) error {
 		if len(line.SecurityRiskScore) == 0 {
 			if payload, ok := raw["security_risk_score"]; ok {
 				line.SecurityRiskScore = append(json.RawMessage(nil), payload...)
+			}
+		}
+		if len(line.RetainedContext) == 0 {
+			if payload, ok := raw["retained_context"]; ok {
+				line.RetainedContext = append(json.RawMessage(nil), payload...)
 			}
 		}
 	}

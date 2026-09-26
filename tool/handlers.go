@@ -10,6 +10,7 @@ import (
 
 	"codex_go/compact"
 	contextfrag "codex_go/context"
+	"codex_go/retainedctx"
 )
 
 type PlanStatus string
@@ -219,9 +220,16 @@ type UserInputResponse struct {
 
 type UserInputResponder func(context.Context, *RequestUserInputArgs) (*UserInputResponse, error)
 
+// VerifiedAnswerRecorder receives the host-verified answers of an accepted
+// `request_user_input` call (Rust request_user_input.rs records a
+// `RetainedContextEvent::VerifiedAnswer` for the Guardian review evidence). It
+// is only installed when the guardian-approval feature is enabled.
+type VerifiedAnswerRecorder func(callID string, questions []retainedctx.VerifiedQuestionAnswer)
+
 type RequestUserInputHandler struct {
 	responder      UserInputResponder
 	availableModes []string
+	verifiedAnswer VerifiedAnswerRecorder
 }
 
 func NewRequestUserInputHandler(responder UserInputResponder) *RequestUserInputHandler {
@@ -290,11 +298,85 @@ func (h *RequestUserInputHandler) Execute(ctx context.Context, invocation *Invoc
 			return nil, err
 		}
 	}
+	if h.verifiedAnswer != nil && response != nil && !response.TimedOut {
+		if answers := verifiedQuestionAnswers(&args, response); len(answers) > 0 {
+			h.verifiedAnswer(strings.TrimSpace(invocation.CallID), answers)
+		}
+	}
 	body, err := json.Marshal(response)
 	if err != nil {
 		return nil, err
 	}
 	return &Output{Success: true, Body: string(body)}, nil
+}
+
+// verifiedQuestionAnswers mirrors Rust's request_user_input capture: for each
+// requested question, the answers the host submitted (blank answers dropped) and
+// the question text extended with one line per *selected* option. A question with
+// no submission, or only blank answers, contributes nothing.
+func verifiedQuestionAnswers(args *RequestUserInputArgs, response *UserInputResponse) []retainedctx.VerifiedQuestionAnswer {
+	if args == nil || response == nil {
+		return nil
+	}
+	out := []retainedctx.VerifiedQuestionAnswer{}
+	for index := range args.Questions {
+		question := &args.Questions[index]
+		submitted, ok := submittedAnswersForQuestion(response, question.ID)
+		if !ok {
+			continue
+		}
+		answers := make([]string, 0, len(submitted))
+		for _, answer := range submitted {
+			if strings.TrimSpace(answer) == "" {
+				continue
+			}
+			answers = append(answers, answer)
+		}
+		if len(answers) == 0 {
+			continue
+		}
+		questionText := question.Question
+		for optionIndex := range question.Options {
+			option := &question.Options[optionIndex]
+			if !containsSubmittedAnswer(submitted, option.Label) {
+				continue
+			}
+			questionText += "\n" + option.Label + ": " + option.Description
+		}
+		out = append(out, retainedctx.VerifiedQuestionAnswer{
+			Question: questionText,
+			Answer:   strings.Join(answers, "\n"),
+		})
+	}
+	return out
+}
+
+// submittedAnswersForQuestion returns the host's answers for one question. Rust
+// models them as a list; Go's responders also expose the first non-empty answer
+// as a single string, so an absent list falls back to it.
+func submittedAnswersForQuestion(response *UserInputResponse, questionID string) ([]string, bool) {
+	if response == nil {
+		return nil, false
+	}
+	if answers, ok := response.StructuredAnswers[questionID]; ok {
+		return answers, true
+	}
+	answer, ok := response.Answers[questionID]
+	if !ok {
+		return nil, false
+	}
+	return []string{answer}, true
+}
+
+// containsSubmittedAnswer reports whether the host submitted exactly this value,
+// mirroring Rust's `response.answers.contains(&option.label)`.
+func containsSubmittedAnswer(answers []string, value string) bool {
+	for _, answer := range answers {
+		if answer == value {
+			return true
+		}
+	}
+	return false
 }
 
 type GetContextRemainingHandler struct {
@@ -549,12 +631,16 @@ type CoreHandlerOptions struct {
 	ContextStatus                  func() compact.TokenStatus
 	UserInputResponder             UserInputResponder
 	RequestUserInputAvailableModes []string
-	ClockProvider                  ClockProvider
-	ThreadID                       string
-	EnableCurrentTime              bool
-	EnableClockSleep               bool
-	EnableLegacySleep              bool
-	DisableUpdatePlan              bool
+	// VerifiedAnswerRecorder receives the accepted answers of a
+	// `request_user_input` call. Rust installs it whenever the guardian-approval
+	// feature is enabled (request_user_input.rs).
+	VerifiedAnswerRecorder VerifiedAnswerRecorder
+	ClockProvider          ClockProvider
+	ThreadID               string
+	EnableCurrentTime      bool
+	EnableClockSleep       bool
+	EnableLegacySleep      bool
+	DisableUpdatePlan      bool
 	// DisableGetContextRemaining mirrors Rust's token-budget gate: the handler
 	// is registered only when the `token_budget` feature is enabled
 	// (codex-rs/core/src/tools/spec_plan.rs), which is off by default.
@@ -581,6 +667,9 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	}
 	handlers := []Executor{
 		NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes),
+	}
+	if handler, ok := handlers[0].(*RequestUserInputHandler); ok {
+		handler.verifiedAnswer = options.VerifiedAnswerRecorder
 	}
 	if !options.DisableGetContextRemaining {
 		handlers = append(handlers, NewGetContextRemainingHandler(options.ContextStatus))

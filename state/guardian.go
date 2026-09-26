@@ -609,11 +609,11 @@ type BuildPromptOptions struct {
 // composed context uses: the stable evidence first and the planned action last,
 // so the evidence stays a reusable history prefix across approval requests
 // (#46279). Rust's registry order places the root conversation, then the
-// retained user instructions, then the transcript, the node-repl evidence and
-// the parent-turn permission context, and finally the planned action with its
-// tool descriptions; the sections Go does not model (trusted answers, previous
-// reviews, trusted tool/skills) come from the review's inherited context
-// instead.
+// retained user instructions, then the trusted user answers, then the
+// transcript, the node-repl evidence and the parent-turn permission context, and
+// finally the planned action with its tool descriptions; the sections Go does not
+// model (previous reviews, trusted tool/skills) come from the review's inherited
+// context instead.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
@@ -637,6 +637,12 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 		writeGuardianPromptSection(&builder, strings.Join(items, ""))
 	}
 	if items := RetainedUserInstructionsSectionItems(options.RetainedContext); len(items) > 0 {
+		writeGuardianPromptSection(&builder, strings.Join(items, ""))
+	}
+	// Rust feeds the review's selected-answer evidence into the composer as
+	// `trusted_user_answers` (guardian/prompt.rs's `user_input_snapshot`), which
+	// the TrustedUserAnswers section renders.
+	if items := TrustedUserAnswersSectionItems(RenderVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
 		writeGuardianPromptSection(&builder, strings.Join(items, ""))
 	}
 	if len(transcript) > 0 {
