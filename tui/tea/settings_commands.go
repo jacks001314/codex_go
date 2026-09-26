@@ -9,6 +9,7 @@ import (
 	codextui "codex_go/tui"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
+	"codex_go/tui/markdown"
 )
 
 const (
@@ -411,6 +412,16 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if msg.Result.RightClickPaste != nil {
 		m.setRightClickPasteMode(*msg.Result.RightClickPaste)
+	}
+	if msg.Result.Rendering != nil {
+		// Rust refreshes the Markdown rendering preferences when the resolved
+		// session settings become active (markdown_render::preferences::init).
+		markdown.InitRendering(markdown.Rendering{
+			Mermaid: msg.Result.Rendering.Mermaid,
+			Math:    msg.Result.Rendering.Math,
+			Tables:  msg.Result.Rendering.Tables,
+			Lists:   msg.Result.Rendering.Lists,
+		})
 	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)

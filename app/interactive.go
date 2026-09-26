@@ -1696,6 +1696,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		QuestionEscBack:         interactiveQuestionEscBack(values),
 		AutoRecap:               interactiveAutoRecap(values),
 		RightClickPaste:         interactiveRightClickPaste(values),
+		Rendering:               interactiveRenderingSettings(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1798,6 +1799,19 @@ func interactiveRightClickPasteValue(mode *string) string {
 		return string(tuiapp.RightClickPasteAuto)
 	}
 	return *mode
+}
+
+// interactiveRenderingSettings resolves the `tui.rendering` preferences for the
+// TUI runtime so a settings change refreshes the Markdown renderers (Rust
+// `LocalSettings::tui.rendering`).
+func interactiveRenderingSettings(values map[string]any) *codextea.RenderingSettings {
+	rendering := config.TuiRenderingFromValues(values)
+	return &codextea.RenderingSettings{
+		Mermaid: rendering.Mermaid,
+		Math:    rendering.Math,
+		Tables:  rendering.Tables,
+		Lists:   rendering.Lists,
+	}
 }
 
 // interactiveEmbeddedReasoningOverrides mirrors Rust new_thread_reasoning_overrides

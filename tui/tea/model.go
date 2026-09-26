@@ -298,7 +298,21 @@ type SettingsWriteResult struct {
 	SessionPickerView       string
 	PluginUserMarketplaces  map[string]bool
 	PluginGitMarketplaces   map[string]bool
-	FilePath                string
+	// Rendering carries the resolved `tui.rendering` preferences so a settings
+	// change refreshes the Markdown renderers (Rust
+	// `markdown_render::preferences::init(local_settings.tui.rendering)`). Nil
+	// preserves the current preferences.
+	Rendering *RenderingSettings
+	FilePath  string
+}
+
+// RenderingSettings is the resolved rich-rendering preference set (Rust
+// `TuiRendering`); every renderer defaults to on.
+type RenderingSettings struct {
+	Mermaid bool
+	Math    bool
+	Tables  bool
+	Lists   bool
 }
 
 type SettingsWriteFunc func(edits []SettingsEdit) (SettingsWriteResult, error)
