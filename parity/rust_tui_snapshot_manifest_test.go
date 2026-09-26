@@ -22,14 +22,17 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
+	// Re-pinned to upstream 75a714843b: #48547 added the blossom replay fade
+	// snapshot, #48548/#48549 added the table-copy continuation and the
+	// empty-selected-row copy spacing snapshots.
 	// Re-pinned to upstream f5ffa46959: #48206 added the partial-dismissal
 	// warnings snapshot on top of #48135's remapped-left external-writer
 	// snapshot, #48121's command-center draft handoff, #48116's Max-reasoning
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
 	// #48352 added the turn-tip placement snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1329 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1329", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1332 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1332", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -427,7 +430,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// tui/src/pager_overlay/snapshots, and #46733/#46750 added the
 			// owned startup draft layout and the wheel/selection autoscroll
 			// guard.
-			Files:    189,
+			Files:    191,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -460,7 +463,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    33,
+			Files:    34,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	sysclipboard "github.com/atotto/clipboard"
 	bubbletea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -57,6 +58,9 @@ type authFlowServices struct {
 	requestDeviceCode  func(context.Context, *auth.OAuthOptions) (*auth.DeviceCode, error)
 	completeDeviceCode func(context.Context, *auth.OAuthOptions, *auth.DeviceCode) error
 	saveAPIKey         func(*auth.Store, string) error
+	// copyText writes the browser sign-in URL to the clipboard (Rust's
+	// `clipboard.copy` for the onboarding copy shortcut).
+	copyText func(string) error
 }
 
 func defaultAuthFlowServices() *authFlowServices {
@@ -67,21 +71,25 @@ func defaultAuthFlowServices() *authFlowServices {
 		saveAPIKey: func(store *auth.Store, apiKey string) error {
 			return store.Save(auth.FromAPIKey(apiKey))
 		},
+		copyText: sysclipboard.WriteAll,
 	}
 }
 
 type authFlowModel struct {
-	ctx                 context.Context
-	options             AuthFlowOptions
-	services            *authFlowServices
-	state               SignInState
-	highlighted         AuthChoice
-	errorMessage        string
-	width               int
-	apiKey              string
-	apiKeyPrepopulated  bool
-	savingAPIKey        bool
-	browserURL          string
+	ctx                context.Context
+	options            AuthFlowOptions
+	services           *authFlowServices
+	state              SignInState
+	highlighted        AuthChoice
+	errorMessage       string
+	width              int
+	apiKey             string
+	apiKeyPrepopulated bool
+	savingAPIKey       bool
+	browserURL         string
+	// browserNotice is the dim status line under the browser sign-in URL
+	// (Rust's auth widget error slot used for the copy result).
+	browserNotice       string
 	browserServer       *auth.BrowserLoginServer
 	deviceCode          *auth.DeviceCode
 	nextAttemptID       uint64
@@ -240,6 +248,7 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 			m.state = SignInPickMode
 			m.errorMessage = ""
 			m.browserURL = ""
+			m.browserNotice = ""
 			m.deviceCode = nil
 			return m, m.cancelActiveAttempt()
 		}
@@ -249,6 +258,10 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		m.state = SignInChatGPTSuccess
 		m.completed = true
 		return m, bubbletea.Quit
+	}
+	if m.state == SignInChatGPTContinueInBrowser && m.browserURL != "" && isCopyLinkKey(message) {
+		m.copyBrowserLoginURL()
+		return m, nil
 	}
 	if m.state != SignInPickMode {
 		return m, nil
@@ -283,6 +296,32 @@ func (m *authFlowModel) handleKey(message bubbletea.KeyMsg) (bubbletea.Model, bu
 		}
 	}
 	return m, nil
+}
+
+// isCopyLinkKey mirrors Rust's `keys::COPY_LINK` press: a plain `c` in the
+// browser sign-in step copies the login URL without touching the login attempt.
+func isCopyLinkKey(message bubbletea.KeyMsg) bool {
+	return message.Type == bubbletea.KeyRunes && len(message.Runes) == 1 &&
+		!message.Alt && message.Runes[0] == 'c'
+}
+
+// copyBrowserLoginURL mirrors Rust's onboarding copy shortcut: the sign-in URL
+// goes to the clipboard and the result is shown under it. Go's clipboard write
+// is synchronous, so Rust's pending/busy/unconfirmed async statuses collapse to
+// success or failure.
+func (m *authFlowModel) copyBrowserLoginURL() {
+	if m == nil || strings.TrimSpace(m.browserURL) == "" {
+		return
+	}
+	if m.services == nil || m.services.copyText == nil {
+		m.browserNotice = "Could not copy link: clipboard unavailable"
+		return
+	}
+	if err := m.services.copyText(m.browserURL); err != nil {
+		m.browserNotice = "Could not copy link: " + err.Error()
+		return
+	}
+	m.browserNotice = "Copied link to clipboard"
 }
 
 func (m *authFlowModel) handleAPIKeyEntryKey(message bubbletea.KeyMsg) (bubbletea.Model, bubbletea.Cmd) {
@@ -354,6 +393,7 @@ func (m *authFlowModel) startChoice(choice AuthChoice) (bubbletea.Model, bubblet
 		attemptID, attemptCtx := m.beginAttempt()
 		m.state = SignInChatGPTContinueInBrowser
 		m.browserURL = ""
+		m.browserNotice = ""
 		m.errorMessage = ""
 		oauthOptions := m.oauthOptions(true)
 		return m, func() bubbletea.Msg {
@@ -411,6 +451,7 @@ func (m *authFlowModel) handleBrowserStarted(message browserStartedMsg) (bubblet
 	}
 	m.browserServer = message.server
 	m.browserURL = strings.TrimSpace(message.server.AuthURL)
+	m.browserNotice = ""
 	return m, func() bubbletea.Msg {
 		return loginCompletedMsg{attemptID: message.attemptID, err: <-message.server.Done}
 	}
@@ -480,6 +521,7 @@ func (m *authFlowModel) failAttempt(err error) {
 	m.finishAttempt()
 	m.state = SignInPickMode
 	m.browserURL = ""
+	m.browserNotice = ""
 	m.deviceCode = nil
 	if err != nil && !errors.Is(err, context.Canceled) {
 		m.errorMessage = err.Error()
@@ -607,8 +649,11 @@ func (m *authFlowModel) renderBrowserLogin() string {
 	if m.browserURL == "" {
 		lines = append(lines, authDimStyle.Render("  Starting browser login..."), "")
 	} else {
+		lines = append(lines, "  If the link doesn't open automatically, press c to copy it:")
+		if m.browserNotice != "" {
+			lines = append(lines, authDimStyle.Render("  "+m.browserNotice))
+		}
 		lines = append(lines,
-			"  If the link doesn't open automatically, open the following link to authenticate:",
 			"",
 			"  "+authCyanStyle.Underline(true).Render(m.browserURL),
 			"",

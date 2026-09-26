@@ -13,6 +13,7 @@ var (
 	SelectThird     = []KeyBindingHint{{Key: "3", Label: "select third"}}
 	Confirm         = []KeyBindingHint{{Key: "Enter", Label: "confirm"}}
 	Cancel          = []KeyBindingHint{{Key: "Esc", Label: "cancel"}}
+	CopyLink        = []KeyBindingHint{{Key: "c", Label: "copy link"}}
 	Quit            = []KeyBindingHint{{Key: "q", Label: "quit"}, {Key: "Ctrl-C", Label: "quit"}, {Key: "Ctrl-D", Label: "quit"}}
 	ToggleAnimation = []KeyBindingHint{{Key: "Ctrl-.", Label: "change animation"}, {Key: "Ctrl-Shift-.", Label: "change animation"}}
 )

@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -275,5 +276,65 @@ func TestAuthFlowBrowserOpeningFollowsTheChoice(t *testing.T) {
 		t.Fatal("device code start command missing")
 	} else {
 		cmd()
+	}
+}
+
+// Mirrors Rust #48544: the browser sign-in step advertises the `c` copy
+// shortcut, copies the sign-in URL with a status line for the result, and clears
+// the notice when the attempt is cancelled.
+func TestAuthFlowCopiesBrowserLoginURLLikeRust(t *testing.T) {
+	done := make(chan error, 1)
+	services := defaultAuthFlowServices()
+	services.startBrowser = func(context.Context, *auth.OAuthOptions) (*auth.BrowserLoginServer, error) {
+		return &auth.BrowserLoginServer{
+			AuthURL: "https://auth.example.test/login",
+			Done:    done,
+		}, nil
+	}
+	var copied []string
+	copyErr := error(nil)
+	services.copyText = func(text string) error {
+		copied = append(copied, text)
+		return copyErr
+	}
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+		services:       services,
+	})
+
+	_, start := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEnter})
+	// The URL is not known yet, so the shortcut is inert.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
+	if len(copied) != 0 {
+		t.Fatalf("copied before the URL arrived: %#v", copied)
+	}
+	model.Update(start())
+	if view := model.View(); !strings.Contains(view, "press c to copy it:") {
+		t.Fatalf("browser view missing the copy hint:\n%s", view)
+	}
+
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
+	if len(copied) != 1 || copied[0] != "https://auth.example.test/login" {
+		t.Fatalf("copied = %#v, want the sign-in URL", copied)
+	}
+	if view := model.View(); !strings.Contains(view, "Copied link to clipboard") {
+		t.Fatalf("browser view missing the copy result:\n%s", view)
+	}
+
+	copyErr = errors.New("clipboard offline")
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'c'}})
+	if view := model.View(); !strings.Contains(view, "Could not copy link: clipboard offline") {
+		t.Fatalf("browser view missing the copy failure:\n%s", view)
+	}
+
+	// Esc cancels the attempt and clears the notice.
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	if model.state != SignInPickMode {
+		t.Fatalf("state after esc = %s, want the picker", model.state)
+	}
+	if view := model.View(); strings.Contains(view, "Copied link") || strings.Contains(view, "Could not copy link") {
+		t.Fatalf("copy notice survived the cancel:\n%s", view)
 	}
 }
