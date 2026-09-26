@@ -4395,6 +4395,16 @@ func (m *Model) renderWorkingIndicator() string {
 	return strings.Join(lines, "\n")
 }
 
+// progressEffectsEnabled mirrors Rust's progress-animation gate
+// (`animations && effects.progress`, e.g. chatwidget/tool_lifecycle.rs and
+// command_lifecycle.rs) for the activity and exec-cell spinners.
+func (m *Model) progressEffectsEnabled() bool {
+	if m == nil {
+		return false
+	}
+	return m.animationsEnabled && m.effects.Progress
+}
+
 func (m *Model) renderWorkingHeader(header string) string {
 	if m == nil || strings.TrimSpace(header) == "" {
 		return ""
@@ -5237,7 +5247,7 @@ func (m *Model) renderCommandExecutionItem(item *protocol.ThreadItem) {
 		return
 	}
 
-	cell := execcell.NewExecCell(call, m.animationsEnabled)
+	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
 	if m.activeExecCell != nil && m.activeExecCellMessageIndex >= 0 && cell.IsExploringCell() {
 		if !m.activeExecCell.IsActive() && m.activeExecCell.IsExploringCell() {
 			// A completion with no matching start (a replayed command) folds
@@ -5789,7 +5799,7 @@ func (m *Model) renderToolCallState(state *toolCallDisplayState, outputItem *pro
 		started := state.StartedAt
 		call.StartTime = &started
 	}
-	cell := execcell.NewExecCell(call, m.animationsEnabled)
+	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	if output != nil {
 		state.Completed = true
@@ -5876,7 +5886,7 @@ func (m *Model) renderToolCallFailure(state *toolCallDisplayState, message strin
 		Source:   execcell.ExecSourceAgent,
 		Duration: duration,
 	}
-	cell := execcell.NewExecCell(call, m.animationsEnabled)
+	cell := execcell.NewExecCell(call, m.progressEffectsEnabled())
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLinesWithTheme(width, m.activeTUITheme()), cell.RawLines())
 	state.Completed = true
 }
