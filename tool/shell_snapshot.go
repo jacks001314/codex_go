@@ -112,11 +112,20 @@ func MaybeWrapShellLCWithSnapshot(
 	if len(command) < 3 {
 		return command
 	}
-	if env[network.CredentialBrokerActiveEnvKey] == "1" {
+	brokered := env[network.CredentialBrokerActiveEnvKey] == "1"
+	flag := command[1]
+	if flag != "-lc" && !(brokered && flag == "-c") {
 		return command
 	}
-	if command[1] != "-lc" {
-		return command
+	if brokered {
+		// A brokered launch is rewrapped only once its snapshot was captured with
+		// the broker's protected environment (the SNAPSHOT_* capture keys). Until
+		// the creation side lands, sourcing a plain snapshot could reintroduce
+		// credentials the sandbox must not see.
+		if !brokeredSnapshotPrepared(env) {
+			return command
+		}
+		return brokeredSnapshotWrap(command, sessionShell, snapshotPath, explicitEnvOverrides, env, runtimePathPrepends)
 	}
 
 	overrideEnv := map[string]string{}
@@ -437,6 +446,125 @@ func buildBrokeredEnvScript(shellType ShellType, env map[string]string) (string,
 func hasEnvKey(env map[string]string, key string) bool {
 	_, ok := env[key]
 	return ok
+}
+
+// brokeredSnapshotPrepared reports whether the live launch carries the
+// broker-prepared capture keys the brokered wrapper restores from. It stands in
+// for the creation side (which writes the same keys into a brokered snapshot's
+// launch environment) so a plain snapshot is never replayed under the broker.
+func brokeredSnapshotPrepared(env map[string]string) bool {
+	for key := range env {
+		if strings.HasPrefix(key, snapshotBrokeredValueEnvPrefix) ||
+			strings.HasPrefix(key, snapshotBrokeredUnsetEnvPrefix) ||
+			key == snapshotOriginalBashEnvKey ||
+			key == snapshotOriginalPosixEnvKey ||
+			key == snapshotOriginalZdotdirEnvKey {
+			return true
+		}
+	}
+	return false
+}
+
+// brokeredSnapshotWrap mirrors the brokered branch of Rust's
+// `maybe_wrap_shell_lc_with_snapshot`: the session shell sources the snapshot and
+// then runs the command inline (reusing the shell) once the broker's protected
+// environment has been replayed around it, or re-executes the original shell
+// with the brokered zsh startup flags.
+func brokeredSnapshotWrap(
+	command []string,
+	sessionShell *Shell,
+	snapshotPath string,
+	explicitEnvOverrides map[string]string,
+	env map[string]string,
+	runtimePathPrepends []string,
+) []string {
+	flag := command[1]
+	shellPath := sessionShell.Path
+	commandUsesSessionZsh := sessionShell.Type == ShellZsh && command[0] == shellPath
+	reuseSessionShell := command[0] == shellPath && (sessionShell.Type == ShellBash || sessionShell.Type == ShellZsh)
+	originalShellIsZsh := commandUsesSessionZsh || DetectShellType(command[0]) == ShellZsh
+	brokeredZshFlag := "-fc"
+	if flag == "-lc" {
+		brokeredZshFlag = "-lfc"
+	}
+	originalShellFlag := "-c"
+	if originalShellIsZsh {
+		originalShellFlag = brokeredZshFlag
+	}
+	var trailing strings.Builder
+	for _, argument := range command[3:] {
+		trailing.WriteString(" '")
+		trailing.WriteString(shellSingleQuote(argument))
+		trailing.WriteString("'")
+	}
+
+	overrideEnv := map[string]string{}
+	for key, value := range explicitEnvOverrides {
+		overrideEnv[key] = value
+	}
+	for _, key := range []string{
+		codexSessionIDEnvVar,
+		execpolicy.ThreadIDEnvVar,
+		codexVersionEnvVar,
+		codexPermissionProfileVar,
+		applypatch.PreserveLineEndingsEnvVar,
+		plugin.PluginMetricsOutputEnvVar,
+	} {
+		if value, ok := env[key]; ok {
+			overrideEnv[key] = value
+		}
+	}
+	overrideCaptures, overrideExports := buildSnapshotOverrideExports(overrideEnv, snapshotReplayedEnvKeys)
+	proxyCaptures, proxyExports := buildProxyEnvExports(env)
+	envCaptures, replayedStartupCapture, envExports := buildBrokeredEnvScript(sessionShell.Type, env)
+	zshStartupExports := ""
+	if sessionShell.Type == ShellZsh {
+		key := snapshotOriginalZdotdirEnvKey
+		zshStartupExports = "if [ -n \"${" + key + "+x}\" ]; then\n  export ZDOTDIR=\"${" + key + "}\"\nelif [ \"${ZDOTDIR-}\" = /dev/null ]; then\n  unset ZDOTDIR\nfi\nunset " + key
+	}
+	// Zsh always reads the global zshenv, even with `-f`, so private copies of the
+	// child-visible dummy values survive until the command shell finished startup.
+	outerCredentialExports := buildBrokeredCredentialExports(env, false)
+	innerCredentialExports := buildBrokeredCredentialExports(env, true)
+	originalScript := command[2]
+	if innerCredentialExports != "" {
+		originalScript = innerCredentialExports + "\n" + command[2]
+	}
+	pathExports := (*RuntimePathPrepends)(nil)
+	if len(runtimePathPrepends) > 0 {
+		pathExports = &RuntimePathPrepends{entries: append([]string(nil), runtimePathPrepends...)}
+	}
+	runtimePathPrependExports := pathExports.ShellExportsAfterSnapshot(explicitEnvOverrides)
+
+	overrideCaptures = joinShellBlocks(outerCredentialExports, overrideCaptures, proxyCaptures, envCaptures)
+	overrideExports = joinShellBlocks(
+		outerCredentialExports,
+		replayedStartupCapture,
+		overrideExports,
+		proxyExports,
+		runtimePathPrependExports,
+		envExports,
+		zshStartupExports,
+		outerCredentialExports,
+	)
+	runOriginal := originalScript
+	if !reuseSessionShell {
+		runOriginal = "exec '" + shellSingleQuote(command[0]) + "' " + originalShellFlag + " '" +
+			shellSingleQuote(originalScript) + "'" + trailing.String()
+	}
+	quotedSnapshot := shellSingleQuote(snapshotPath)
+	rewrittenScript := "if . '" + quotedSnapshot + "' >/dev/null 2>&1; then :; fi\n\n" + runOriginal
+	if overrideExports != "" {
+		rewrittenScript = overrideCaptures + "\n\nif . '" + quotedSnapshot + "' >/dev/null 2>&1; then :; fi\n\n" +
+			overrideExports + "\n\n" + runOriginal
+	}
+	wrapperFlag := "-c"
+	if sessionShell.Type == ShellZsh {
+		wrapperFlag = brokeredZshFlag
+	}
+	rewritten := []string{shellPath, wrapperFlag, rewrittenScript}
+	rewritten = append(rewritten, command[3:]...)
+	return rewritten
 }
 
 const brokeredEnvCapturesTemplate = `__CODEX_SNAPSHOT_ORIGINAL_ENV_SET="${ENV+x}"

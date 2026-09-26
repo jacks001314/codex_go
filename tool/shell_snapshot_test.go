@@ -424,3 +424,67 @@ func TestBuildBrokeredEnvScriptLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors the brokered branch of Rust's `maybe_wrap_shell_lc_with_snapshot`: the
+// session shell sources the snapshot and runs the command inline once the
+// broker-prepared capture keys are present, with the brokered zsh startup flags
+// and the credential/proxy/env blocks around it.
+func TestBrokeredSnapshotWrapLikeRust(t *testing.T) {
+	snapshotPath := snapshotWrapFixture(t)
+	prepared := map[string]string{
+		network.CredentialBrokerActiveEnvKey:              "1",
+		snapshotBrokeredValueEnvPrefix + "OPENAI_API_KEY": "dummy",
+		snapshotOriginalZdotdirEnvKey:                     "/home/user/.config/zsh",
+	}
+
+	// A zsh session shell is reused: the command runs inline and the trailing
+	// arguments become the wrapper's positional parameters.
+	zsh := MaybeWrapShellLCWithSnapshot(
+		[]string{"/bin/zsh", "-lc", "echo hello", "one", "two"},
+		&Shell{Type: ShellZsh, Path: "/bin/zsh"}, snapshotPath, nil, prepared, nil,
+	)
+	if len(zsh) != 5 || zsh[0] != "/bin/zsh" || zsh[1] != "-lfc" || zsh[3] != "one" || zsh[4] != "two" {
+		t.Fatalf("brokered zsh argv = %#v", zsh)
+	}
+	script := zsh[2]
+	for _, want := range []string{
+		"if . '" + snapshotPath + "' >/dev/null 2>&1; then :; fi",
+		"unset " + snapshotBrokeredValueEnvPrefix + "OPENAI_API_KEY || exit 1",
+		"unset " + snapshotOriginalZdotdirEnvKey,
+		"__codex_snapshot_env_is_protected() (",
+		"echo hello",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("brokered zsh script missing %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "exec '") {
+		t.Fatalf("reused session shell should not re-exec:\n%s", script)
+	}
+
+	// A different original shell is re-executed with the escaped script.
+	bash := MaybeWrapShellLCWithSnapshot(
+		[]string{"/bin/sh", "-c", "echo hi"},
+		&Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, nil, prepared, nil,
+	)
+	if len(bash) != 3 || bash[0] != "/bin/bash" || bash[1] != "-c" {
+		t.Fatalf("brokered bash argv = %#v", bash)
+	}
+	if !strings.Contains(bash[2], "exec '/bin/sh' -c '") || !strings.Contains(bash[2], "echo hi") {
+		t.Fatalf("brokered bash script did not re-exec the original shell:\n%s", bash[2])
+	}
+}
+
+// A brokered launch whose environment lacks the broker-prepared capture keys is
+// left alone: sourcing a plain snapshot under the broker could reintroduce
+// credentials the sandbox must not see.
+func TestMaybeWrapShellLCWithSnapshotBrokeredStaysInertUntilPrepared(t *testing.T) {
+	snapshotPath := snapshotWrapFixture(t)
+	command := []string{"/bin/sh", "-c", "echo hi"}
+	rewritten := MaybeWrapShellLCWithSnapshot(command, &Shell{Type: ShellBash, Path: "/bin/bash"}, snapshotPath, nil, map[string]string{
+		network.CredentialBrokerActiveEnvKey: "1",
+	}, nil)
+	if strings.Join(rewritten, "\x00") != strings.Join(command, "\x00") {
+		t.Fatalf("unprepared brokered command = %#v, want unchanged", rewritten)
+	}
+}
