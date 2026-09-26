@@ -2,6 +2,7 @@ package eventmap
 
 import (
 	"encoding/base64"
+	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,13 +92,25 @@ type TurnItem struct {
 	SavedPath     string
 }
 
+// contextualDeveloperPrefixes mirrors Rust's CONTEXTUAL_DEVELOPER_PREFIXES
+// (core/src/event_mapping.rs): a developer message starting with one of these is
+// rollback-trimmable contextual evidence.
 var contextualDeveloperPrefixes = []string{
 	"<permissions instructions>",
+	"Approved command prefix saved:",
 	"<model_switch>",
+	"<managed_developer_instructions>",
+	"<persistent_mode>",
+	"<apps_instructions>",
 	"<collaboration_mode>",
+	"<multi_agent_role>",
 	"<multi_agent_mode>",
+	"<environments_instructions>",
+	"<git_attribution>",
+	"<plugins_instructions>",
 	"<realtime_conversation>",
 	"<skills_instructions>",
+	"<tools>",
 	"<personality_spec>",
 	"<token_budget>",
 	"<context_window>",
@@ -243,11 +256,38 @@ func isValidInternalModelSource(source string) bool {
 	return true
 }
 
-// isHookPromptFragmentText recognizes a hook prompt fragment. Go's turn-item
-// parser matches the same `<hook_prompt` prefix; Rust additionally requires a
-// parseable body with a non-empty hook run id.
+// isHookPromptFragmentText recognizes a hook prompt fragment.
 func isHookPromptFragmentText(text string) bool {
-	return strings.HasPrefix(strings.TrimSpace(text), "<hook_prompt")
+	_, ok := parseHookPromptFragment(text)
+	return ok
+}
+
+// hookPromptFragment is Rust's `HookPromptFragment`.
+type hookPromptFragment struct {
+	Text      string
+	HookRunID string
+}
+
+// parseHookPromptFragment mirrors Rust's `parse_hook_prompt_fragment`: the
+// trimmed text is a `<hook_prompt hook_run_id="...">text</hook_prompt>` element
+// whose run id is non-empty.
+func parseHookPromptFragment(text string) (hookPromptFragment, bool) {
+	trimmed := strings.TrimSpace(text)
+	if !strings.HasPrefix(trimmed, "<hook_prompt") {
+		return hookPromptFragment{}, false
+	}
+	var parsed struct {
+		XMLName   xml.Name `xml:"hook_prompt"`
+		HookRunID string   `xml:"hook_run_id,attr"`
+		Text      string   `xml:",chardata"`
+	}
+	if err := xml.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return hookPromptFragment{}, false
+	}
+	if strings.TrimSpace(parsed.HookRunID) == "" {
+		return hookPromptFragment{}, false
+	}
+	return hookPromptFragment{Text: parsed.Text, HookRunID: parsed.HookRunID}, true
 }
 
 func IsContextualDevMessageContent(message []ContentItem) bool {
@@ -396,18 +436,20 @@ func parseVisibleHookPrompt(item *ResponseItem) (*TurnItem, bool) {
 	if len(item.Content) != 1 || item.Content[0].Kind != ContentInputText {
 		return nil, false
 	}
-	text := strings.TrimSpace(item.Content[0].Text)
-	if !strings.HasPrefix(text, "<hook_prompt") {
+	// Rust's `parse_visible_hook_prompt_message` only admits a parseable hook
+	// prompt with a non-empty run id; an attribute-less tag is an ordinary
+	// message.
+	if _, ok := parseHookPromptFragment(item.Content[0].Text); !ok {
 		return nil, false
 	}
-	return &TurnItem{Kind: TurnHookPrompt, ID: item.ID, AgentText: text}, true
+	return &TurnItem{Kind: TurnHookPrompt, ID: item.ID, AgentText: strings.TrimSpace(item.Content[0].Text)}, true
 }
 
 func isContextualDevFragment(item *ContentItem) bool {
 	if item == nil || item.Kind != ContentInputText {
 		return false
 	}
-	trimmed := strings.TrimLeft(item.Text, " \t\r\n")
+	trimmed := strings.TrimLeftFunc(item.Text, unicode.IsSpace)
 	lower := strings.ToLower(trimmed)
 	for _, prefix := range contextualDeveloperPrefixes {
 		if strings.HasPrefix(lower, strings.ToLower(prefix)) {

@@ -110,9 +110,22 @@ func TestContextualUserAndHookPrompt(t *testing.T) {
 			t.Fatalf("IsContextualUserMessageContent(%q) = true, want false", text)
 		}
 	}
-	hook, ok := ParseTurnItem(&ResponseItem{Kind: ResponseMessage, Role: "user", ID: "h1", Content: []ContentItem{{Kind: ContentInputText, Text: "<hook_prompt>hi</hook_prompt>"}}})
+	// Rust's `parse_hook_prompt_fragment` requires a parseable element with a
+	// non-empty run id, so the tagged form is a hook prompt...
+	hook, ok := ParseTurnItem(&ResponseItem{Kind: ResponseMessage, Role: "user", ID: "h1", Content: []ContentItem{{Kind: ContentInputText, Text: `<hook_prompt hook_run_id="run-1">hi</hook_prompt>`}}})
 	if !ok || hook.Kind != TurnHookPrompt {
 		t.Fatalf("hook = %#v/%v", hook, ok)
+	}
+	// ...while an attribute-less tag is an ordinary user message.
+	plain, ok := ParseTurnItem(&ResponseItem{Kind: ResponseMessage, Role: "user", ID: "h2", Content: []ContentItem{{Kind: ContentInputText, Text: "<hook_prompt>hi</hook_prompt>"}}})
+	if !ok || plain.Kind != TurnUserMessage {
+		t.Fatalf("attribute-less hook tag = %#v/%v, want a user message", plain, ok)
+	}
+	if IsContextualUserMessageContent([]ContentItem{{Kind: ContentInputText, Text: `<hook_prompt hook_run_id="run-1">hi</hook_prompt>`}}) != true {
+		t.Fatal("a hook prompt is contextual context")
+	}
+	if IsContextualUserMessageContent([]ContentItem{{Kind: ContentInputText, Text: "<hook_prompt>hi</hook_prompt>"}}) {
+		t.Fatal("an attribute-less hook tag is not contextual context")
 	}
 }
 
@@ -188,5 +201,49 @@ func TestStripHiddenAssistantMarkupHidesUnterminatedCitations(t *testing.T) {
 	text := "visible\uE200cite\uE202turn0forecast0"
 	if got := StripHiddenAssistantMarkup(text, false); got != "visible" {
 		t.Fatalf("StripHiddenAssistantMarkup() = %q", got)
+	}
+}
+
+// Mirrors Rust's CONTEXTUAL_DEVELOPER_PREFIXES: every rollback-trimmable
+// developer fragment is recognized case-insensitively after leading whitespace.
+func TestContextualDeveloperPrefixesLikeRust(t *testing.T) {
+	prefixes := []string{
+		"<permissions instructions>",
+		"Approved command prefix saved:",
+		"<model_switch>",
+		"<managed_developer_instructions>",
+		"<persistent_mode>",
+		"<apps_instructions>",
+		"<collaboration_mode>",
+		"<multi_agent_role>",
+		"<multi_agent_mode>",
+		"<environments_instructions>",
+		"<git_attribution>",
+		"<plugins_instructions>",
+		"<realtime_conversation>",
+		"<skills_instructions>",
+		"<tools>",
+		"<personality_spec>",
+		"<token_budget>",
+		"<context_window>",
+		"<context_window_guidance>",
+		"<rollout_budget>",
+	}
+	for _, prefix := range prefixes {
+		content := []ContentItem{{Kind: ContentInputText, Text: prefix + "\nbody"}}
+		if !IsContextualDevMessageContent(content) {
+			t.Fatalf("IsContextualDevMessageContent(%q) = false", prefix)
+		}
+		if HasNonContextualDevMessageContent(content) {
+			t.Fatalf("HasNonContextualDevMessageContent(%q) = true", prefix)
+		}
+	}
+	if !IsContextualDevMessageContent([]ContentItem{{Kind: ContentInputText, Text: "  <TOOLS>body"}}) {
+		t.Fatal("leading whitespace and case must be ignored")
+	}
+	for _, text := range []string{"real instructions", "<unknown_tag>body", ""} {
+		if IsContextualDevMessageContent([]ContentItem{{Kind: ContentInputText, Text: text}}) {
+			t.Fatalf("IsContextualDevMessageContent(%q) = true, want false", text)
+		}
 	}
 }
