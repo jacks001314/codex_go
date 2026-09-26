@@ -45,8 +45,11 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 			captured = request
 			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
 		}),
-		store:                 state.NewReviewStore(),
-		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string) { return &profile, cwd },
+		store: state.NewReviewStore(),
+		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
+			environmentID := "env-1"
+			return &profile, cwd, &environmentID
+		},
 	}
 	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "command", Command: "ls", CWD: cwd}); err != nil {
 		t.Fatalf("Review() error = %v", err)
@@ -60,6 +63,11 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 	if !strings.Contains(captured.Prompt, "do not approve escalation whose purpose is to read them") {
 		t.Fatalf("prompt missing the restriction guidance:\n%s", captured.Prompt)
 	}
+	// The resolved environment's selection id names the scope of the evidence
+	// (Rust's GuardianPermissionContext::environment_id).
+	if !strings.Contains(captured.Prompt, `The active permission profile for environment "env-1"`) {
+		t.Fatalf("prompt missing the environment scope:\n%s", captured.Prompt)
+	}
 
 	// A profile without deny entries contributes no section.
 	open := &modelGuardianReviewer{
@@ -68,9 +76,9 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
 		}),
 		store: state.NewReviewStore(),
-		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string) {
+		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
 			readOnly := sandbox.ReadOnlyPermissionProfile()
-			return &readOnly, cwd
+			return &readOnly, cwd, nil
 		},
 	}
 	if _, _, err := open.Review(context.Background(), "thread-1", "turn-1", "call-2", state.Action{Type: "command", Command: "ls", CWD: cwd}); err != nil {

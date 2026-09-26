@@ -518,7 +518,7 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 }
 
 func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID string) *sandbox.PermissionProfile {
-	profile, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID)
+	profile, _, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID)
 	if profile == nil {
 		return nil
 	}
@@ -531,24 +531,50 @@ func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID 
 }
 
 // guardianTurnPermissionProfileForTurn resolves the reviewed turn's active
-// permission profile and working directory. Rust's Guardian permission evidence
-// is resolved from the reviewed environment's profile
-// (core/src/guardian/permissions.rs::for_environment), not from the read-only
-// profile the reviewer's own session uses.
-func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID string) (*sandbox.PermissionProfile, string) {
+// permission profile, working directory and environment selection id. Rust's
+// Guardian permission evidence is resolved from the reviewed environment's own
+// profile (`core/src/guardian/permissions.rs::for_environment`), falling back to
+// the turn's profile, and names the environment it resolved.
+func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {
-		return nil, ""
+		return nil, "", nil
 	}
 	cfg, err := r.effectiveConfigForTurn(active.Params)
 	if err != nil || cfg == nil {
-		return nil, ""
+		return nil, "", nil
+	}
+	environmentID, environmentCWD, environmentProfile := r.guardianTurnEnvironmentForTurn(active.Params)
+	if environmentProfile != nil {
+		cwd := firstNonEmpty(environmentCWD, active.Params.CWD)
+		return environmentProfile, cwd, environmentID
 	}
 	resolution, err := turnSandboxPermissionProfile(cfg, active.Params.CWD, active.Params)
 	if err != nil || resolution == nil || resolution.Profile == nil {
-		return nil, ""
+		return nil, "", environmentID
 	}
-	return resolution.Profile, active.Params.CWD
+	return resolution.Profile, active.Params.CWD, environmentID
+}
+
+// guardianTurnEnvironmentForTurn resolves the reviewed turn's primary
+// environment: its selection id, its working directory and its own permission
+// profile when the environment config supplies one (Rust's
+// `TurnEnvironment::permission_profile_with_workspace_roots`). A turn that
+// selects no environment keeps the parent turn's profile and reports no id.
+func (r *RuntimeRouter) guardianTurnEnvironmentForTurn(params *turn.TurnStartParams) (*string, string, *sandbox.PermissionProfile) {
+	if r == nil || params == nil {
+		return nil, "", nil
+	}
+	environments := r.unifiedExecEnvironmentsForTurn(params)
+	if len(environments) == 0 {
+		return nil, "", nil
+	}
+	primary := environments[0]
+	var environmentID *string
+	if id := strings.TrimSpace(primary.ID); id != "" {
+		environmentID = &id
+	}
+	return environmentID, strings.TrimSpace(primary.CWD), primary.PermissionProfile
 }
 
 // guardianInstallationID resolves the Codex installation id attached to
