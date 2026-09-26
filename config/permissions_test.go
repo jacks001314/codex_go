@@ -52,6 +52,44 @@ func TestResolveSandboxPermissionProfileCompilesCustomRuntimeJSON(t *testing.T) 
 	assertRuntimeEntry(t, wire, "glob_pattern", "", filepath.Join(extra, "**", "*.env"), string(sandbox.FileSystemAccessDeny))
 }
 
+// Rust protects the project-root metadata names (`.git`/`.agents`/`.codex`/`.aws`)
+// for every writable root, not only the built-in workspace profile. Go derives
+// the same protection from the resolved policy's writable roots, so a custom
+// profile that writes `:workspace_roots` without extending `:workspace` still
+// keeps those metadata names read-only.
+func TestCustomPermissionProfileProtectsProjectMetadataRootsLikeRust(t *testing.T) {
+	cwd := filepath.Join(t.TempDir(), "repo")
+	cfg := &Config{Values: map[string]any{
+		"default_permissions": "dev",
+		"permissions": map[string]any{
+			"dev": map[string]any{
+				"filesystem": map[string]any{
+					":workspace_roots": map[string]any{".": "write"},
+				},
+			},
+		},
+	}}
+	resolved, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil {
+		t.Fatalf("ResolveSandboxPermissionProfile() error = %v", err)
+	}
+	if resolved == nil || resolved.Profile == nil || resolved.Profile.SandboxPolicy == nil {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	roots := resolved.Profile.SandboxPolicy.GetWritableRootsWithCWD(cwd)
+	if len(roots) == 0 {
+		t.Fatal("custom profile produced no writable roots")
+	}
+	for _, root := range roots {
+		for _, name := range []string{".git", ".agents", ".gcode", ".aws"} {
+			protected := filepath.Join(root.Root, name)
+			if root.IsPathWritable(filepath.Join(protected, "probe.txt")) {
+				t.Fatalf("metadata path %s is writable under root %s", protected, root.Root)
+			}
+		}
+	}
+}
+
 // Mirrors Rust's PermissionProfile::materialize_project_roots_with_path_uris
 // (#46568): supplied workspace roots anchor the profile's project roots instead
 // of the thread cwd.
