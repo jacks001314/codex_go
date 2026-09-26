@@ -300,6 +300,15 @@ func (i *AgentItem) SetExecutedToolCallsComplete(complete bool) {
 	}
 }
 
+// ClearExecutedToolCallsComplete discards a completion claim when the host
+// cannot retain the cell's full evidence (Rust's
+// `ResponseItem::clear_tool_calls_complete`).
+func (i *AgentItem) ClearExecutedToolCallsComplete() {
+	if i != nil {
+		i.toolCallsComplete = nil
+	}
+}
+
 type responsesReasoningSummary struct {
 	Type string `json:"type"`
 	Text string `json:"text"`

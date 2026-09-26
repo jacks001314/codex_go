@@ -174,6 +174,66 @@ func TestBoundExecutedToolCallsShedsLargestSnapshotFirstLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's damaged-cell bookkeeping (`bound_executed_tool_calls_for_prompt`
+// -> `clear_damaged_cell_completeness`): a cell whose calls or arguments were
+// lost cannot keep a completion claim, so every item of that cell loses it.
+func TestBoundExecutedToolCallsClearsDamagedCellCompletenessLikeRust(t *testing.T) {
+	cell := func(callID string, arguments string) *AgentItem {
+		item := &AgentItem{Type: "function_call", Name: "tool", CallID: callID, Arguments: arguments}
+		RecordExecutedToolCall(item)
+		item.SetExecutedToolCallCell("cell-1")
+		item.SetExecutedToolCallsComplete(true)
+		return item
+	}
+	// The first call's arguments exceed the per-call limit, so the bound truncates
+	// them and the cell is damaged; the second call is intact but shares the cell.
+	truncated := cell("call-large", `{"value":"`+strings.Repeat("x", MaxExecutedToolCallArgumentBytes)+`"}`)
+	intact := cell("call-small", `{"value":1}`)
+
+	bounded := BoundExecutedToolCallsForPrompt([]any{truncated, intact})
+	for index, value := range bounded {
+		item := value.(*AgentItem)
+		if item.toolCallsComplete != nil {
+			t.Fatalf("item %d kept a completion claim for a damaged cell: %#v", index, *item.toolCallsComplete)
+		}
+	}
+	encoded, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "tool_calls_complete") {
+		t.Fatalf("damaged cell serialized a completion claim: %s", encoded)
+	}
+}
+
+// Mirrors Rust's `shed_remaining_result_metadata`: with the updated sizes the
+// largest snapshot is shed first, so an unrelated existing marker survives.
+func TestShedRemainingResultMetadataShedsLargestFirstLikeRust(t *testing.T) {
+	newCarrier := func(callID string, metadata ToolResultMetadata) *AgentItem {
+		item := &AgentItem{Type: "function_call", Name: "tool", CallID: callID, Arguments: `{}`}
+		RecordExecutedToolCall(item)
+		calls := item.ExecutedToolCalls()
+		calls[0].toolResultMetadata = metadata
+		item.ReplaceExecutedToolCalls(calls)
+		return item
+	}
+	large := newCarrier("call-large", ToolResultMetadata{value: strings.Repeat("x", 5_000)})
+	marker := newCarrier("call-marker", OmittedToolResultMetadata())
+	total := executedToolCallMetadataBytes(large) + executedToolCallMetadataBytes(marker)
+
+	items := []ExecutedToolCallCarrier{large, marker}
+	retained := shedRemainingResultMetadata(items, total-1_000, total)
+	if retained >= total {
+		t.Fatalf("retained bytes = %d, want the largest snapshot shed", retained)
+	}
+	if !large.ExecutedToolCalls()[0].toolResultMetadata.isOmittedDueToSizeLimit() {
+		t.Fatalf("large snapshot was not shed: %#v", large.ExecutedToolCalls()[0].toolResultMetadata.value)
+	}
+	if value, _ := marker.ExecutedToolCalls()[0].toolResultMetadata.value.(string); value != "omitted_due_to_size_limit" {
+		t.Fatalf("existing marker changed: %#v", marker.ExecutedToolCalls()[0].toolResultMetadata.value)
+	}
+}
+
 func TestToolResultMetadataDestinationFiltering(t *testing.T) {
 	for _, allowed := range []string{
 		"https://api.openai.com/v1",

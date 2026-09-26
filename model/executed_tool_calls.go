@@ -497,25 +497,115 @@ func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, to
 	return total
 }
 
+// shedRemainingResultMetadata mirrors Rust's `shed_remaining_result_metadata`
+// for the prompt budget: re-sort by the updated sizes (a plain snapshot before
+// an existing marker of the same size, largest first) and omit what is still
+// over budget. It reports the remaining metadata bytes.
+func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, totalBytes int) int {
+	type metadataHandle struct {
+		itemIndex int
+		callIndex int
+		bytes     int
+		omitted   bool
+	}
+	var handles []metadataHandle
+	for itemIndex := range items {
+		calls := items[itemIndex].ExecutedToolCalls()
+		for callIndex := range calls {
+			metadata := calls[callIndex].toolResultMetadata
+			if !metadata.IsSome() {
+				continue
+			}
+			handles = append(handles, metadataHandle{
+				itemIndex: itemIndex,
+				callIndex: callIndex,
+				bytes:     jsonSize(metadata),
+				omitted:   metadata.isOmittedDueToSizeLimit(),
+			})
+		}
+	}
+	sort.SliceStable(handles, func(i int, j int) bool {
+		if handles[i].bytes != handles[j].bytes {
+			return handles[i].bytes > handles[j].bytes
+		}
+		if handles[i].omitted != handles[j].omitted {
+			return !handles[i].omitted
+		}
+		if handles[i].itemIndex != handles[j].itemIndex {
+			return handles[i].itemIndex < handles[j].itemIndex
+		}
+		return handles[i].callIndex < handles[j].callIndex
+	})
+	total := totalBytes
+	for _, handle := range handles {
+		if total <= maxBytes {
+			break
+		}
+		calls := items[handle.itemIndex].ExecutedToolCalls()
+		metadata := &calls[handle.callIndex].toolResultMetadata
+		original := jsonSize(*metadata)
+		retained := metadata.omitIfSmaller(original, total-maxBytes)
+		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
+		total -= original - retained
+	}
+	return total
+}
+
+// executedToolCallCellID reads a carrier's Code Mode cell id when it exposes one.
+func executedToolCallCellID(item ExecutedToolCallCarrier) string {
+	carrier, ok := item.(interface{ ExecutedToolCallCellID() string })
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(carrier.ExecutedToolCallCellID())
+}
+
+// clearExecutedToolCallsComplete discards a carrier's completion claim when the
+// host cannot retain the cell's full evidence (Rust's
+// `ResponseItem::clear_tool_calls_complete`).
+func clearExecutedToolCallsComplete(item ExecutedToolCallCarrier) {
+	if clearer, ok := item.(interface{ ClearExecutedToolCallsComplete() }); ok {
+		clearer.ClearExecutedToolCallsComplete()
+	}
+}
+
 func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	remainingItems := len(items)
 	originalCalls := 0
 	originalBytes := 0
+	damagedCells := map[string]bool{}
 	for _, item := range items {
 		calls := item.ExecutedToolCalls()
+		truncated := false
 		for index := range calls {
 			call := &calls[index]
 			argumentBytes := executedToolCallArgumentBytes(*call)
 			if call.truncation == nil && argumentBytes > MaxExecutedToolCallArgumentBytes {
 				setExecutedToolCallTruncation(call, argumentBytes, MaxExecutedToolCallArgumentBytes, nil, nil)
 			}
+			truncated = truncated || call.truncation != nil
 			originalCalls++
 			if call.truncation != nil && call.truncation.OmittedCalls != nil {
 				originalCalls += *call.truncation.OmittedCalls
 			}
 		}
 		item.ReplaceExecutedToolCalls(calls)
+		if truncated {
+			// An inventory whose calls or arguments were lost cannot claim
+			// completeness (Rust #41058 `mark_tool_calls_complete`).
+			clearExecutedToolCallsComplete(item)
+			if cell := executedToolCallCellID(item); cell != "" {
+				damagedCells[cell] = true
+			}
+		}
 		originalBytes += executedToolCallMetadataBytes(item)
+	}
+	// Every item in a damaged cell loses its completion claim too, so a later
+	// output cannot present the cell's surviving calls as complete.
+	for _, item := range items {
+		if damagedCells[executedToolCallCellID(item)] {
+			clearExecutedToolCallsComplete(item)
+		}
 	}
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {
 		return
@@ -526,6 +616,13 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	// results; a resource-access field is kept on its own before a snapshot is
 	// replaced by the smaller omission marker (`omit_if_smaller`).
 	originalBytes = shedGenericResultMetadata(items, MaxExecutedToolCallMetadataBytes, originalBytes)
+	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+		return
+	}
+	// Rust's `shed_remaining_result_metadata`: with the updated sizes, a plain
+	// snapshot is omitted before an existing marker of the same size, and the
+	// largest remaining snapshots are shed first.
+	originalBytes = shedRemainingResultMetadata(items, MaxExecutedToolCallMetadataBytes, originalBytes)
 	if originalBytes <= MaxExecutedToolCallMetadataBytes {
 		return
 	}
