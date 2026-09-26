@@ -933,6 +933,12 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	if len(attachment.groups) == 0 {
 		return out, nil
 	}
+	// Rust's attach stage ("retained") bounds the request items once they carry
+	// more than the per-output gate, preserving the newest calls so an older
+	// call cannot displace them (the retained-inventory bound).
+	if model.ExecutedToolCallMetadataTotalBytes(out) > maxExecutedToolCallFullArgumentBytesPerItem {
+		out = model.BoundExecutedToolCallsForPromptPrioritizingRecent(out)
+	}
 	return out, attachment
 }
 

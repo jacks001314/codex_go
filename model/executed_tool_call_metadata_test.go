@@ -222,7 +222,7 @@ func TestShedRemainingResultMetadataShedsLargestFirstLikeRust(t *testing.T) {
 	total := executedToolCallMetadataBytes(large) + executedToolCallMetadataBytes(marker)
 
 	items := []ExecutedToolCallCarrier{large, marker}
-	retained := shedRemainingResultMetadata(items, total-1_000, false, total)
+	retained := shedRemainingResultMetadata(items, total-1_000, false, false, total)
 	if retained >= total {
 		t.Fatalf("retained bytes = %d, want the largest snapshot shed", retained)
 	}
@@ -322,6 +322,45 @@ func TestBoundedInputForResponseMessageLikeRust(t *testing.T) {
 	}}
 	if got := boundedInputForResponseMessage(plain, &AgentRequest{}); got[0] != plain.Input[0] {
 		t.Fatal("a message without tool metadata must not be re-bounded")
+	}
+}
+
+// Mirrors Rust's `bound_executed_tool_calls_for_prompt_prioritizing_recent`: the
+// retained-history entry point gives each output the whole remaining budget in
+// newest-first order, so the newest inventory survives while older ones are
+// truncated, where the plain entry point splits the budget evenly.
+func TestBoundExecutedToolCallsPrioritizingRecentKeepsNewestLikeRust(t *testing.T) {
+	nameBytes := (MaxExecutedToolCallMetadataBytes / 2) + 64
+	build := func() []any {
+		items := make([]any, 0, 3)
+		for index, callID := range []string{"call-oldest", "call-middle", "call-newest"} {
+			item := &AgentItem{
+				Type: "function_call", CallID: callID, Arguments: `{}`,
+				Name: strings.Repeat("n", nameBytes) + strings.Repeat("t", index),
+			}
+			RecordExecutedToolCall(item)
+			items = append(items, item)
+		}
+		return items
+	}
+	truncated := func(item any) bool {
+		calls := item.(*AgentItem).ExecutedToolCalls()
+		return len(calls) == 0 || calls[0].truncation != nil
+	}
+
+	recent := build()
+	bounded := BoundExecutedToolCallsForPromptPrioritizingRecent(recent)
+	if truncated(bounded[2]) {
+		t.Fatal("newest inventory was shed under the recent-prioritized bound")
+	}
+	if !truncated(bounded[0]) {
+		t.Fatal("oldest inventory survived the recent-prioritized bound")
+	}
+
+	plain := build()
+	bounded = BoundExecutedToolCallsForPrompt(plain)
+	if !truncated(bounded[2]) {
+		t.Fatal("plain bound kept the newest inventory whole")
 	}
 }
 

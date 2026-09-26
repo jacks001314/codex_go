@@ -100,9 +100,9 @@ func TestToolResultSourcesBoundsAndSerializesLikeRust(t *testing.T) {
 }
 
 func TestBoundExecutedToolCallsEnforcesPerCallAndPromptLimitsIdempotently(t *testing.T) {
-	// The prompt budget is Rust's 2 MiB, so the inventory must exceed it (Rust's
-	// `bound_executed_tool_calls_for_prompt_prioritizing_recent` shares the same
-	// limit) before the prompt-wide omission counts appear.
+	// The prompt budget is Rust's 2 MiB, so the inventory must exceed it before
+	// the distributed truncation runs (Rust's `distribute_remaining_budget` keeps
+	// one truncated call per output and records the calls it represents).
 	items := make([]any, 0, 1000)
 	for index := 0; index < 1000; index++ {
 		item := &AgentItem{Type: "function_call", Name: "tool-" + strings.Repeat("n", 16*1024), CallID: "call", Arguments: `{"value":"` + strings.Repeat("x", 12*1024) + `"}`}
@@ -111,24 +111,26 @@ func TestBoundExecutedToolCallsEnforcesPerCallAndPromptLimitsIdempotently(t *tes
 	}
 	bounded := BoundExecutedToolCallsForPrompt(items)
 	metadataBytes := 0
-	omissionFound := false
+	retained := 0
 	for _, value := range bounded {
 		item := value.(*AgentItem)
 		metadataBytes += executedToolCallMetadataBytes(item)
-		for _, call := range item.ExecutedToolCalls() {
+		calls := item.ExecutedToolCalls()
+		if len(calls) == 0 {
+			continue
+		}
+		retained++
+		for _, call := range calls {
 			if call.truncation == nil {
 				t.Fatalf("oversized call was not truncated: %#v", call)
-			}
-			if call.truncation.OmittedCalls != nil && *call.truncation.OmittedCalls > 0 {
-				omissionFound = true
 			}
 		}
 	}
 	if metadataBytes > MaxExecutedToolCallMetadataBytes {
 		t.Fatalf("metadata bytes = %d", metadataBytes)
 	}
-	if !omissionFound {
-		t.Fatal("prompt-wide omission count was not retained")
+	if retained == 0 {
+		t.Fatal("every output lost its inventory under a budget it could partly fit")
 	}
 	firstJSON, err := json.Marshal(bounded)
 	if err != nil {
