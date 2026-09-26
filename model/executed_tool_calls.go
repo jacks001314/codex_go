@@ -11,7 +11,11 @@ import (
 
 const (
 	MaxExecutedToolCallArgumentBytes = 8 * 1024
-	MaxExecutedToolCallMetadataBytes = 32 * 1024
+	// MaxExecutedToolCallMetadataBytes is Rust's protocol
+	// `MAX_EXECUTED_TOOL_CALL_METADATA_BYTES`: the budget for one serialized
+	// prompt. The 32 KiB per-output gate is the *retention* threshold and lives in
+	// the turn recorder (`maxExecutedToolCallFullArgumentBytesPerItem`), not here.
+	MaxExecutedToolCallMetadataBytes = 2 * 1024 * 1024
 	MaxToolResultSources             = 32
 	MaxToolResultSourceFieldBytes    = 128
 

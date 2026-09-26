@@ -100,9 +100,12 @@ func TestToolResultSourcesBoundsAndSerializesLikeRust(t *testing.T) {
 }
 
 func TestBoundExecutedToolCallsEnforcesPerCallAndPromptLimitsIdempotently(t *testing.T) {
-	items := make([]any, 0, 300)
-	for index := 0; index < 300; index++ {
-		item := &AgentItem{Type: "function_call", Name: "tool-" + strings.Repeat("n", 128), CallID: "call", Arguments: `{"value":"` + strings.Repeat("x", 12*1024) + `"}`}
+	// The prompt budget is Rust's 2 MiB, so the inventory must exceed it (Rust's
+	// `bound_executed_tool_calls_for_prompt_prioritizing_recent` shares the same
+	// limit) before the prompt-wide omission counts appear.
+	items := make([]any, 0, 1000)
+	for index := 0; index < 1000; index++ {
+		item := &AgentItem{Type: "function_call", Name: "tool-" + strings.Repeat("n", 16*1024), CallID: "call", Arguments: `{"value":"` + strings.Repeat("x", 12*1024) + `"}`}
 		RecordExecutedToolCall(item)
 		items = append(items, item)
 	}
