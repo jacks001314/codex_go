@@ -18,12 +18,70 @@ import (
 const MCPStartupFailureReauthenticationRequired = "reauthenticationRequired"
 
 type StartupWarningsCell struct {
-	Messages       []string
-	OtherSources   map[string]bool
-	MCPServers     map[string]bool
+	Messages     []string
+	OtherSources map[string]bool
+	MCPServers   map[string]bool
+	// MCPDetails maps each failed MCP server to the diagnostics reported for it
+	// (Rust's `mcp_details`), so the warnings viewer can show per-server detail.
+	MCPDetails     map[string][]string
 	SignInServers  map[string]bool
 	PendingHeader  bool
 	TranscriptHint string
+}
+
+func cloneWarningDetails(values map[string][]string) map[string][]string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(values))
+	for key, messages := range values {
+		out[key] = append([]string(nil), messages...)
+	}
+	return out
+}
+
+// WarningKeys mirrors `HistoryCell::warning_keys`: one key per other source and
+// one per MCP server, in the sorted order Rust's `BTreeSet` iteration produces.
+func (c StartupWarningsCell) WarningKeys() []WarningKey {
+	keys := make([]WarningKey, 0, len(c.OtherSources)+len(c.MCPServers))
+	for _, message := range sortedWarningSetKeys(c.OtherSources) {
+		keys = append(keys, WarningKey{Kind: WarningIdMessage, Value: message})
+	}
+	for _, server := range sortedWarningSetKeys(c.MCPServers) {
+		keys = append(keys, WarningKey{Kind: WarningIdMCPServer, Value: server})
+	}
+	return keys
+}
+
+// WarningEntries mirrors `HistoryCell::warning_entries` for the startup cell:
+// other sources keep their own diagnostic text, and an MCP server's details are
+// its reported diagnostics (or Rust's fallback when none were recorded) plus the
+// sign-in note when reauthentication is required.
+func (c StartupWarningsCell) WarningEntries() []WarningEntry {
+	entries := make([]WarningEntry, 0, len(c.OtherSources)+len(c.MCPServers))
+	for _, message := range sortedWarningSetKeys(c.OtherSources) {
+		entries = append(entries, WarningEntry{
+			ID:      WarningId{Kind: WarningIdMessage, Value: message},
+			Source:  "Startup",
+			Details: message,
+		})
+	}
+	for _, server := range sortedWarningSetKeys(c.MCPServers) {
+		details, recorded := c.MCPDetails[server]
+		rendered := "MCP startup incomplete: " + server
+		if recorded {
+			rendered = strings.Join(details, "\n\n")
+		}
+		if c.SignInServers[server] {
+			rendered += "\n\nSign-in required."
+		}
+		entries = append(entries, WarningEntry{
+			ID:      WarningId{Kind: WarningIdMCPServer, Value: server},
+			Source:  "MCP \u00b7 " + server,
+			Details: rendered,
+		})
+	}
+	return entries
 }
 
 // NewStartupWarnings mirrors StartupWarningsCell::new.
@@ -45,9 +103,11 @@ func NewMCPStartupWarnings(messages []string, servers []string, failureReason st
 	cell := StartupWarningsCell{
 		Messages:   append([]string(nil), messages...),
 		MCPServers: map[string]bool{},
+		MCPDetails: map[string][]string{},
 	}
 	for _, server := range servers {
 		cell.MCPServers[server] = true
+		cell.MCPDetails[server] = append([]string(nil), messages...)
 	}
 	if strings.TrimSpace(failureReason) == MCPStartupFailureReauthenticationRequired {
 		cell.SignInServers = map[string]bool{}
@@ -66,6 +126,7 @@ func (c StartupWarningsCell) Merge(incoming StartupWarningsCell) StartupWarnings
 		Messages:       append([]string(nil), c.Messages...),
 		OtherSources:   cloneWarningSet(c.OtherSources),
 		MCPServers:     cloneWarningSet(c.MCPServers),
+		MCPDetails:     cloneWarningDetails(c.MCPDetails),
 		SignInServers:  cloneWarningSet(c.SignInServers),
 		PendingHeader:  c.PendingHeader,
 		TranscriptHint: c.TranscriptHint,
@@ -86,6 +147,18 @@ func (c StartupWarningsCell) Merge(incoming StartupWarningsCell) StartupWarnings
 			merged.MCPServers = map[string]bool{}
 		}
 		merged.MCPServers[server] = true
+	}
+	for server, messages := range incoming.MCPDetails {
+		if merged.MCPDetails == nil {
+			merged.MCPDetails = map[string][]string{}
+		}
+		details := merged.MCPDetails[server]
+		for _, message := range messages {
+			if !containsWarningMessage(details, message) {
+				details = append(details, message)
+			}
+		}
+		merged.MCPDetails[server] = details
 	}
 	for server := range incoming.SignInServers {
 		if merged.SignInServers == nil {
