@@ -140,6 +140,11 @@ type HarnessMetadata struct {
 	// recorded (Rust `CodexHarnessMetadata::retained_source`): it carries the
 	// delivery proof a replay restores instead of minting a new revision.
 	RetainedSource *RetainedSource `json:"retained_source,omitempty"`
+	// DeliveredAssistantMessage is the bounded assistant text a successful
+	// messaging tool result confirmed, captured after input hooks (Rust
+	// `CodexHarnessMetadata::delivered_assistant_message`). The host retains it as
+	// an assistant message at the originating call's position.
+	DeliveredAssistantMessage *string `json:"delivered_assistant_message,omitempty"`
 }
 
 // RetainedInputSourceFromMetadata mirrors

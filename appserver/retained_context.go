@@ -464,12 +464,23 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 		return
 	}
 	threadKey := strings.TrimSpace(string(threadID))
-	if threadKey == "" || (!retainedHarnessCandidates(items) && !retainedSenderCandidates(items)) {
+	delivered := r.deliveredAssistantRecords(threadID, items)
+	if threadKey == "" || (!retainedHarnessCandidates(items) && !retainedSenderCandidates(items) && len(delivered) == 0) {
 		return
 	}
+	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	r.retainedContextsMu.Lock()
 	defer r.retainedContextsMu.Unlock()
 	context := r.retainedLiveContextLocked(threadKey)
+	// Rust's delivered-assistant evidence is recorded at the originating call's
+	// position, so its call lookup reads the thread's stored history before the
+	// retained lock is held (the call and its output are usually appended apart).
+	for _, record := range delivered {
+		if record.source.Inherited && !retainInherited {
+			continue
+		}
+		context.RecordAssistantMessage(record.message, record.source)
+	}
 	// Rust records a delivery's sender snapshot before its retained message
 	// (ContextManager::record_annotated_items -> record_sender_user_messages).
 	for index := range items {
@@ -481,7 +492,6 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 	if !retainedHarnessCandidates(items) {
 		return
 	}
-	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for index := range items {
 		item := &items[index]
 		metadata := harnessMetadataFromSessionItem(item)
@@ -501,6 +511,89 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 // retainedHarnessCandidates reports whether the batch holds a message the
 // retained model can record, so appending unrelated items never resolves a
 // thread's retained evidence.
+// deliveredAssistantEvidence is one messaging tool result's confirmed assistant
+// text, paired with the source of the call it belongs to.
+type deliveredAssistantEvidence struct {
+	message retainedctx.RetainedUserMessage
+	source  retainedctx.RetainedInputSource
+}
+
+// deliveredAssistantRecords mirrors the delivered-assistant arm of Rust's
+// `ContextManager::record_retained_message`: the host captured the bounded text
+// before post-tool hooks, so it is retained at the *call's* position rather than
+// the later completion position. Rust looks the call up in the live history, and
+// Go does the same through the thread record because a call and its output are
+// usually appended separately.
+func (r *RuntimeRouter) deliveredAssistantRecords(threadID session.ThreadID, items []session.Item) []deliveredAssistantEvidence {
+	if r == nil || len(items) == 0 {
+		return nil
+	}
+	var history []session.Item
+	loaded := false
+	var records []deliveredAssistantEvidence
+	for index := range items {
+		item := &items[index]
+		metadata := harnessMetadataFromSessionItem(item)
+		if metadata == nil || metadata.DeliveredAssistantMessage == nil {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
+			continue
+		}
+		callID := strings.TrimSpace(item.CallID)
+		if callID == "" {
+			continue
+		}
+		if !loaded {
+			history = r.retainedCallLookupHistory(threadID)
+			loaded = true
+		}
+		call, ok := findFunctionCallSessionItem(append(append([]session.Item(nil), history...), items[:index]...), callID)
+		if !ok {
+			// Rust's `?`: an output whose call is gone retains nothing.
+			continue
+		}
+		message := retainedctx.RetainedUserMessage{
+			Origin:   retainedctx.UserInputOriginUser,
+			Text:     *metadata.DeliveredAssistantMessage,
+			Complete: true,
+			TurnID:   runtimeSessionItemTurnID(call, 0),
+		}
+		if id := strings.TrimSpace(call.ID); id != "" {
+			message.MessageID = &id
+		}
+		records = append(records, deliveredAssistantEvidence{
+			message: message,
+			source:  retainedctx.RetainedInputSourceFromMetadata(harnessMetadataFromSessionItem(call)),
+		})
+	}
+	return records
+}
+
+// retainedCallLookupHistory returns the thread's stored items so a retained
+// output can find its recorded call.
+func (r *RuntimeRouter) retainedCallLookupHistory(threadID session.ThreadID) []session.Item {
+	if r == nil {
+		return nil
+	}
+	record, err := r.threadRecord(threadID, true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	return record.Items
+}
+
+// findFunctionCallSessionItem returns the recorded call an output belongs to.
+func findFunctionCallSessionItem(items []session.Item, callID string) (*session.Item, bool) {
+	for index := len(items) - 1; index >= 0; index-- {
+		item := &items[index]
+		if strings.EqualFold(strings.TrimSpace(item.Type), "function_call") && strings.TrimSpace(item.CallID) == callID {
+			return item, true
+		}
+	}
+	return nil, false
+}
+
 func retainedHarnessCandidates(items []session.Item) bool {
 	for index := range items {
 		item := &items[index]
