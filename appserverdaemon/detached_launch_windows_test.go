@@ -3,6 +3,7 @@
 package appserverdaemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,12 +21,35 @@ func TestEnsureDetachedLaunchProbesAndReapsSuspendedChild(t *testing.T) {
 		t.Fatalf("ensureDetachedLaunch(real executable) error = %v", err)
 	}
 
-	// A path that cannot be launched reports Rust's "existing daemon was not
-	// stopped" contract.
+	// A path that cannot be launched reports Rust's plain failure contract, and
+	// must never be classified as a job restriction: an inaccessible or corrupt
+	// installation stays visible.
 	missing := filepath.Join(t.TempDir(), "missing-codex.exe")
 	err = ensureDetachedLaunch(missing)
-	if err == nil || !strings.Contains(err.Error(), "cannot launch detached daemon; existing daemon was not stopped") {
+	if err == nil || !strings.Contains(err.Error(), "cannot launch detached daemon") {
 		t.Fatalf("ensureDetachedLaunch(missing) error = %v", err)
+	}
+	if IsDetachedLaunchRestricted(err) {
+		t.Fatalf("missing executable classified as a launcher restriction: %v", err)
+	}
+}
+
+// Mirrors Rust's `DetachedLaunchRestricted` Display and classification contract:
+// the error is recognizable by type and carries the build-and-run guidance.
+func TestDetachedLaunchRestrictedErrorContract(t *testing.T) {
+	var nilErr *DetachedLaunchRestrictedError
+	if nilErr.Error() != "this Windows launcher prevents background processes from outliving it (for example, cargo run); build and run codex.exe directly to use the background server" {
+		t.Fatalf("restriction message = %q", nilErr.Error())
+	}
+	restricted := &DetachedLaunchRestrictedError{err: os.ErrPermission}
+	if !IsDetachedLaunchRestricted(restricted) {
+		t.Fatal("IsDetachedLaunchRestricted(restricted) = false")
+	}
+	if !errors.Is(restricted, os.ErrPermission) {
+		t.Fatal("restriction must unwrap to the underlying launch error")
+	}
+	if IsDetachedLaunchRestricted(nil) {
+		t.Fatal("IsDetachedLaunchRestricted(nil) = true")
 	}
 }
 

@@ -261,7 +261,11 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 // and an opted-out launch says nothing.
 func TestDaemonAutoStartExclusionWarningLikeRust(t *testing.T) {
 	originalFeature := daemonAutoStartFeature
-	t.Cleanup(func() { daemonAutoStartFeature = originalFeature })
+	originalReason := daemonAutoStartExclusionReason
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonAutoStartExclusionReason = originalReason
+	})
 	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
 
 	daemonAutoStartFeature = func() bool { return false }
@@ -285,5 +289,46 @@ func TestDaemonAutoStartExclusionWarningLikeRust(t *testing.T) {
 	want = "Running without the shared background server: --profile requires embedded mode."
 	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{Profile: "work"}}); got != want {
 		t.Fatalf("--profile warning = %q, want %q", got, want)
+	}
+}
+
+// TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust mirrors
+// Rust #48491: when the Windows launcher forbids detaching the shared background
+// server, automatic startup uses the embedded server and reports the exclusion,
+// while every other launch failure stays fatal.
+func TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	originalStart := daemonAutoStartStart
+	originalReason := daemonAutoStartExclusionReason
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonAutoStartStart = originalStart
+		daemonAutoStartExclusionReason = originalReason
+	})
+
+	daemonAutoStartFeature = func() bool { return true }
+	daemonAutoStartStart = func() (string, error) {
+		return "", &appserverdaemon.DetachedLaunchRestrictedError{}
+	}
+	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil || endpoint != nil {
+		t.Fatalf("restricted auto-start = %#v, err = %v; want embedded", endpoint, err)
+	}
+	want := "Running without the shared background server: this Windows launcher requires embedded mode."
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != want {
+		t.Fatalf("restriction warning = %q, want %q", got, want)
+	}
+
+	// A different launch failure keeps the fatal --no-daemon guidance and never
+	// reports the launcher exclusion.
+	daemonAutoStartExclusionReason = ""
+	daemonAutoStartStart = func() (string, error) {
+		return "", errors.New("managed standalone Codex install not found")
+	}
+	if _, err := interactiveDaemonEndpoint(&cli.RootOptions{}); err == nil || !strings.Contains(err.Error(), daemonFailureHint) {
+		t.Fatalf("unrelated failure error = %v, want the --no-daemon guidance", err)
+	}
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != "" {
+		t.Fatalf("unrelated failure warning = %q, want none", got)
 	}
 }

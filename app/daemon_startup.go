@@ -286,6 +286,14 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	}
 	socketPath, err := daemonAutoStartStart()
 	if err != nil {
+		// Rust #48491: a Windows launcher that forbids detaching a background
+		// process does not block the CLI. Automatic startup uses the embedded
+		// server and reports the exclusion; every other launch failure stays
+		// fatal with the --no-daemon guidance.
+		if appserverdaemon.IsDetachedLaunchRestricted(err) {
+			daemonAutoStartExclusionReason = detachedLaunchRestrictionExclusion
+			return nil, nil
+		}
 		return nil, fmt.Errorf("%w\n%s", err, daemonFailureHint)
 	}
 	if socketPath == "" {
@@ -293,6 +301,16 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	}
 	return appserverdaemon.NewUnixSocketEndpoint(socketPath), nil
 }
+
+// detachedLaunchRestrictionExclusion is the exclusion reason Rust reports when
+// the Windows launcher forbids detaching the shared background server.
+const detachedLaunchRestrictionExclusion = "this Windows launcher"
+
+// daemonAutoStartExclusionReason records an exclusion automatic startup
+// discovered at runtime (Rust startup_orchestration's `daemon_exclusion`), such
+// as a restrictive Windows launcher. It is set by interactiveDaemonEndpoint and
+// reported by daemonAutoStartExclusionWarning.
+var daemonAutoStartExclusionReason string
 
 // daemonAutoStartExclusionWarning mirrors Rust startup_orchestration.rs: when
 // the opt-in auto-start would apply but the launch is excluded, the TUI reports
@@ -306,7 +324,10 @@ func daemonAutoStartExclusionWarning(root *cli.RootOptions) string {
 	if !daemonAutoStartFeature() {
 		return ""
 	}
-	reason := daemonStartupExclusion(root, false)
+	reason := daemonAutoStartExclusionReason
+	if reason == "" {
+		reason = daemonStartupExclusion(root, false)
+	}
 	if reason == "" || reason == "--no-daemon" {
 		return ""
 	}

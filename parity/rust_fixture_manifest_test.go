@@ -54,7 +54,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #47601) and the doctor path-safety config/database snapshots
 			// (#47886/#47887), plus the isolated executable fixture helper
 			// (#48213).
-			Files: 39,
+			// Re-pinned to upstream a6bd19261c (#48491): the restrictive Windows
+			// launcher adds the embedded-fallback warning snapshot.
+			Files: 40,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -65,6 +67,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 				"cli/tests/exec_server_websocket_auth.rs",
 				"cli/tests/exec_server/pid_namespace_tests.rs",
 				"cli/tests/snapshots/doctor_path_safety__doctor_config_not_found.snap",
+				"cli/tests/snapshots/daemon_startup__restrictive_launcher_warning.snap",
 			},
 		},
 		{
