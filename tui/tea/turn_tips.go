@@ -6,8 +6,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
+	"codex_go/tui/markdown"
+	"codex_go/utils"
 )
 
 // This file ports Rust's `tui/src/app/turn_tips.rs`: a random tip shown beneath
@@ -138,7 +141,7 @@ func (t *turnTips) observeTurnCompleted(threadID string, turnID string, succeede
 // workingTip mirrors the working arm of Rust's `App::turn_tip`: the tip is
 // selected and rendered once the current turn has run for the working delay.
 // The caller renders it and then acknowledges the surface.
-func (t *turnTips) workingTip(width int, now time.Time, keymap *codextui.KeymapConfig) (string, bool) {
+func (t *turnTips) workingTip(width int, now time.Time, keymap *codextui.KeymapConfig, themeID string, cwd string) (string, bool) {
 	if t == nil {
 		return "", false
 	}
@@ -149,10 +152,17 @@ func (t *turnTips) workingTip(width int, now time.Time, keymap *codextui.KeymapC
 	if current.startedAt.IsZero() || now.Sub(current.startedAt) < turnTipWorkingDelay {
 		return "", false
 	}
-	if current.template == "" {
-		current.template = t.pickWorkingTemplate(width, keymap)
+	// Rust reserves four columns for the "  └ " prefix (`content_width = width - 4`
+	// over the transcript width); the caller passes that width already reduced by
+	// the working indicator's two-column bullet, so the tip keeps two more.
+	contentWidth := width - 2
+	if contentWidth < 1 {
+		return "", false
 	}
-	tip, ok := renderTurnTipLine(current.template, width, keymap)
+	if current.template == "" {
+		current.template = t.pickWorkingTemplate(contentWidth, keymap, themeID, cwd)
+	}
+	tip, ok := renderTurnTipLine(current.template, contentWidth, keymap, themeID, cwd)
 	if !ok {
 		return "", false
 	}
@@ -181,7 +191,7 @@ func (t *turnTips) acknowledge(surface turnTipSurface) {
 // pickWorkingTemplate mirrors Rust's template selection: the catalog is
 // shuffled, the previously shown template is skipped, and the first template
 // that renders on one line inside the width wins.
-func (t *turnTips) pickWorkingTemplate(width int, keymap *codextui.KeymapConfig) string {
+func (t *turnTips) pickWorkingTemplate(width int, keymap *codextui.KeymapConfig, themeID string, cwd string) string {
 	templates := codextui.TooltipTemplates()
 	rng := t.ensureRNG()
 	shuffled := append([]string(nil), templates...)
@@ -190,36 +200,50 @@ func (t *turnTips) pickWorkingTemplate(width int, keymap *codextui.KeymapConfig)
 		if template == t.previous {
 			continue
 		}
-		if _, ok := renderTurnTipLine(template, width, keymap); ok {
+		if _, ok := renderTurnTipLine(template, width, keymap, themeID, cwd); ok {
 			return template
 		}
 	}
 	for _, template := range shuffled {
-		if _, ok := renderTurnTipLine(template, width, keymap); ok {
+		if _, ok := renderTurnTipLine(template, width, keymap, themeID, cwd); ok {
 			return template
 		}
 	}
 	return ""
 }
 
-// renderTurnTipLine renders one template and keeps it only when it is a single
-// line that fits the width (Rust's `render_tooltip_lines` single-line rule).
-func renderTurnTipLine(template string, width int, keymap *codextui.KeymapConfig) (string, bool) {
-	if strings.TrimSpace(template) == "" {
+// renderTurnTipLine renders one template the way Rust's `render_tooltip_lines`
+// does: the resolved tip is prefixed with Markdown bold `Tip:` and rendered
+// through the streaming Markdown renderer, and only a single line that fits the
+// width is kept (otherwise Rust skips the template and tries the next one).
+func renderTurnTipLine(template string, width int, keymap *codextui.KeymapConfig, themeID string, cwd string) (string, bool) {
+	if strings.TrimSpace(template) == "" || width < 1 {
 		return "", false
 	}
-	rendered, ok := codextui.RenderTooltip(template, keymap)
+	tip, ok := codextui.RenderTooltip(template, keymap)
 	if !ok {
 		return "", false
 	}
-	rendered = strings.TrimSpace(rendered)
-	if rendered == "" || strings.ContainsAny(rendered, "\r\n") {
+	rendered, err := markdown.RenderWithThemeCwd("**Tip:** "+tip, width, themeID, cwd)
+	if err != nil {
 		return "", false
 	}
-	if width > 0 && len([]rune(rendered)) > width {
+	rendered = strings.ReplaceAll(rendered, "\r\n", "\n")
+	lines := make([]string, 0, 2)
+	for _, candidate := range strings.Split(rendered, "\n") {
+		if strings.TrimSpace(utils.StripANSI(candidate)) == "" {
+			continue
+		}
+		lines = append(lines, strings.TrimRight(candidate, " "))
+	}
+	if len(lines) != 1 {
 		return "", false
 	}
-	return rendered, true
+	line := lines[0]
+	if runewidth.StringWidth(utils.StripANSI(line)) > width {
+		return "", false
+	}
+	return line, true
 }
 
 // turnTipsAllowed mirrors the gates Rust's `App::turn_tip` applies before a tip

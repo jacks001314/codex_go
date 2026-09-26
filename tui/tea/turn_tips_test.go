@@ -40,6 +40,33 @@ func TestTurnTipsWorkingTipAppearsAfterDelayLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust's `render_tooltip_lines`: the resolved tip is prefixed with
+// Markdown bold `Tip:` and rendered through the Markdown renderer, and a
+// template whose rendering is not a single fitting line is skipped.
+func TestRenderTurnTipLineUsesMarkdownTipLinesLikeRust(t *testing.T) {
+	line, ok := renderTurnTipLine(
+		"Start a fresh idea with **/new**; the previous session stays in history.",
+		100, nil, "", "")
+	if !ok {
+		t.Fatal("key-free tip did not render")
+	}
+	if !strings.Contains(utils.StripANSI(line), "Tip: Start a fresh idea") {
+		t.Fatalf("tip line = %q, want the Markdown Tip: prefix", utils.StripANSI(line))
+	}
+	if !strings.Contains(line, "\x1b[1m") {
+		t.Fatalf("tip line = %q, want the bold Tip: styling", line)
+	}
+	// Rust rejects a template that wraps at the available width (its `[line]`
+	// single-line match), so the picker tries the next one.
+	if _, ok := renderTurnTipLine("Start a fresh idea with **/new**.", 8, nil, "", ""); ok {
+		t.Fatal("a wrapping tip still produced a single line")
+	}
+	// A placeholder with no keymap is skipped before rendering.
+	if _, ok := renderTurnTipLine("Press {key:composer.queue} to queue a message.", 100, nil, "", ""); ok {
+		t.Fatal("an unbound placeholder produced a tip line")
+	}
+}
+
 // Mirrors Rust's gates: the preference, an empty composer, no modal and a
 // running turn are all required before a tip may be shown.
 func TestTurnTipsHonorShowTooltipsAndGatesLikeRust(t *testing.T) {

@@ -4378,7 +4378,7 @@ func (m *Model) renderWorkingIndicator() string {
 	// Rust #48352: a random tip appears beneath the working status once the turn
 	// has run for the working delay; exposure is counted only once it rendered.
 	if m.turnTipsAllowed() {
-		if tip, ok := m.turnTips.workingTip(width, now, m.keymapConfig); ok {
+		if tip, ok := m.turnTips.workingTip(width, now, m.keymapConfig, m.activeTUITheme(), m.sessionCWD); ok {
 			lines = append(lines, "  \u2514 "+tip)
 			m.turnTips.acknowledge(turnTipSurfaceWorking)
 		}
