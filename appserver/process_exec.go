@@ -102,6 +102,9 @@ func (s *ProcessService) SpawnWithOptions(ctx context.Context, params *ProcessSp
 	if params.TTY {
 		return s.spawnPTYWithConnection(execCtx, cancel, connectionID, cmd, params, stdout, stderr, notify)
 	}
+	// Rust's `process/exec` piped spawn goes through the pty child command, which
+	// sets CREATE_NO_WINDOW on Windows (Rust #48483).
+	suppressChildConsoleWindow(cmd)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if params.StreamStdoutStderr {
