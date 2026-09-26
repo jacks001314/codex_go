@@ -132,6 +132,13 @@ func keybindingDisplayLabel(spec string) string {
 	return strings.Join(labels, " ")
 }
 
+// KeybindingDisplayLabel renders a resolved binding spec for TUI surfaces that
+// show keymap hints (the warnings viewer footer), mirroring Rust's
+// `ShortcutHint::display_label`.
+func KeybindingDisplayLabel(spec string) string {
+	return keybindingDisplayLabel(spec)
+}
+
 func keybindingKeyLabel(part string) string {
 	modifiers := map[string]bool{}
 	key := ""

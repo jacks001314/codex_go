@@ -1344,6 +1344,10 @@ type Model struct {
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
 	// cadence and exposure state (see turn_tips.go).
 	turnTips turnTips
+	// warningsView hosts the retained-warnings viewer while it is open
+	// (#48205/#48206); warningsFlash shows a copy result in its footer.
+	warningsView  *bottompane.WarningsView
+	warningsFlash string
 	// turnFinalAnswerSeen records that the running turn produced a final-answer
 	// item, which is what makes it eligible for a completion tip. The TUI's item
 	// events do not carry a turn id, so the flag pairs the item with the turn
@@ -2669,6 +2673,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		// The warnings viewer (#48205/#48206) owns the keyboard while it is open;
+		// no key is forwarded to the draft.
+		if m.warningsView != nil {
+			return m, m.updateWarningsViewKey(msg)
+		}
 		if msg.Type == bubbletea.KeyRunes && msg.Paste {
 			// Handle bracketed paste before overlays, popups and keymaps. Windows
 			// Terminal commonly delivers Ctrl+V/right-click paste through this
@@ -2813,6 +2822,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		if m.keyMatches("global", "open_agents", keySpec) {
 			return m, m.applyAgentsCommand()
+		}
+		if m.keyMatches("global", "open_warnings", keySpec) {
+			m.openWarningsView()
+			return m, nil
 		}
 		if m.keyMatches("global", "copy", keySpec) {
 			m.copyLastAgentResponse()
@@ -2974,6 +2987,12 @@ func (m *Model) View() string {
 		sections = append(sections, m.bottomStyle.Render("Save and close external editor to continue."))
 	} else if m.windowsSandboxSetupActive {
 		sections = append(sections, m.bottomStyle.Render(m.renderWindowsSandboxSetupStatus()))
+	} else if m.warningsView != nil {
+		// Rust's warnings viewer occupies the bottom pane without replacing the
+		// retained draft (#48205/#48206).
+		if viewer := m.renderWarningsView(m.width); viewer != "" {
+			sections = append(sections, m.bottomStyle.Render(viewer))
+		}
 	} else if m.readOnlyThread {
 		// Rust #43253: the read-only notice replaces the composer.
 		sections = append(sections, m.bottomStyle.Render(m.renderReadOnlyThreadNotice()))

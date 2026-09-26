@@ -24,6 +24,7 @@ const keymapFeatureFastMode = "fast_mode"
 var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "open_transcript", "Open the transcript overlay.", []string{"ctrl-t"}),
 	keymapAction("global", "Global", "open_agents", "Open the shared agents overview.", []string{"alt-a"}),
+	keymapAction("global", "Global", "open_warnings", "Open the retained warnings viewer.", []string{"f2"}),
 	keymapAction("global", "Global", "open_external_editor", "Open the current draft in an external editor.", []string{"ctrl-g"}),
 	keymapAction("global", "Global", "copy", "Copy the last agent response to the clipboard.", []string{"ctrl-o"}),
 	keymapAction("global", "Global", "clear_terminal", "Clear the terminal UI.", []string{"ctrl-l"}),

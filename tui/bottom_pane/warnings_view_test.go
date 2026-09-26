@@ -2,6 +2,7 @@ package bottompane
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/tui/history_cell"
@@ -135,5 +136,69 @@ func TestWarningsViewKeepAndNextLikeRust(t *testing.T) {
 	singleDismissed, singleKept := single.Close()
 	if !reflect.DeepEqual(singleKept, []historycell.WarningEntry{entries[0]}) || len(singleDismissed) != 0 {
 		t.Fatalf("single keep = (%#v, %#v)", singleDismissed, singleKept)
+	}
+}
+
+// Mirrors `warnings_view_render.rs`: the title names the current diagnostic, the
+// body shows its wrapped details, and the footer carries the hint items.
+func TestWarningsViewRenderLikeRust(t *testing.T) {
+	view := NewWarningsView(warningsEntriesForTest())
+	hints := WarningsHints{Keep: "k", Cancel: "ctrl+c", Copy: "ctrl+o", Navigation: "\u2190/\u2192", Scroll: "\u2193"}
+	rows := view.RenderLines(120, 12, hints)
+	if len(rows) != 12 {
+		t.Fatalf("rendered %d rows, want 12", len(rows))
+	}
+	if !strings.Contains(rows[0], "Warnings \u00b7 1 of 3 \u00b7 MCP \u00b7 example") {
+		t.Fatalf("title = %q", rows[0])
+	}
+	if rows[1] != "" {
+		t.Fatalf("separator = %q, want blank", rows[1])
+	}
+	body := strings.Join(rows, "\n")
+	if !strings.Contains(body, "MCP example could not connect") {
+		t.Fatalf("body lost the diagnostic detail:\n%s", body)
+	}
+	footer := rows[len(rows)-1]
+	for _, want := range []string{"k keep & next", "ctrl+c dismiss & close", "ctrl+o copy", "warning", "scroll"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer %q missing %q", footer, want)
+		}
+	}
+
+	// A footer that cannot hold every item drops whole trailing items.
+	medium := view.RenderLines(80, 12, hints)
+	if got := medium[len(medium)-1]; !strings.Contains(got, "k keep & next") || strings.Contains(got, "scroll") {
+		t.Fatalf("medium footer = %q, want the leading items without scroll", got)
+	}
+
+	// A narrow footer drops whole trailing items rather than truncating them.
+	narrow := view.RenderLines(20, 6, hints)
+	if got := narrow[len(narrow)-1]; strings.Contains(got, "scroll") || strings.Contains(got, "copy") {
+		t.Fatalf("narrow footer kept trailing items: %q", got)
+	}
+}
+
+// Mirrors `warning_pages_wrap_and_scroll_long_diagnostics`.
+func TestWarningsViewRenderScrollsLongDiagnosticsLikeRust(t *testing.T) {
+	entries := warningsEntriesForTest()
+	entries[0].Details = "Long diagnostic \u65e5\u672c\u8a9e\n" +
+		strings.Repeat("Details retained in full, including remediation instructions.\n", 20) +
+		"END OF DIAGNOSTIC"
+	view := NewWarningsView(entries)
+	hints := WarningsHints{Keep: "k", Cancel: "ctrl+c"}
+	if got := strings.Join(view.RenderLines(40, 9, hints), "\n"); !strings.Contains(got, "Long diagnostic") {
+		t.Fatalf("first page missing the diagnostic:\n%s", got)
+	}
+	view.PageDown()
+	if got := strings.Join(view.RenderLines(40, 9, hints), "\n"); strings.Contains(got, "Long diagnostic") {
+		t.Fatalf("second page still shows the first line:\n%s", got)
+	}
+	view.JumpBottom()
+	if got := strings.Join(view.RenderLines(40, 9, hints), "\n"); !strings.Contains(got, "END OF DIAGNOSTIC") {
+		t.Fatalf("bottom page missing the final line:\n%s", got)
+	}
+	view.MoveRight()
+	if got := strings.Join(view.RenderLines(40, 9, hints), "\n"); !strings.Contains(got, "Unknown setting") {
+		t.Fatalf("second warning missing:\n%s", got)
 	}
 }

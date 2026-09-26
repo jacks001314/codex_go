@@ -223,6 +223,11 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "chat" && action == "toggle_voice" && config.mainSurfaceBindingExists("f8") {
 			return nil, "default", false
 		}
+		// The F2 warnings-viewer default yields to any main-surface binding of F2,
+		// so a new default never shadows a shortcut the user already relies on.
+		if context == "global" && action == "open_warnings" && config.mainSurfaceBindingExists("f2") {
+			return nil, "default", false
+		}
 		// Rust #44424/#44433/#45255: the agents-dashboard defaults yield to an
 		// explicit binding for the same key on the agents, list, or global
 		// surface, so a new default never shadows an existing shortcut. The

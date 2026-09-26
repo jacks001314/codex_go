@@ -1,6 +1,12 @@
 package bottompane
 
-import "codex_go/tui/history_cell"
+import (
+	"fmt"
+	"strings"
+
+	"codex_go/tui/history_cell"
+	"github.com/mattn/go-runewidth"
+)
 
 // Rust parity: codex-rs/tui/src/bottom_pane/warnings_view.rs. A frozen set of
 // warnings shown one at a time without changing the retained draft; on
@@ -223,4 +229,129 @@ func (v *WarningsView) pageSizeOrOne() int {
 		return 1
 	}
 	return v.pageSize
+}
+
+// WarningsHints carries the footer labels the caller resolves from the keymap
+// (Rust's render reads the runtime keymap for the same hints). An empty label
+// drops that item.
+type WarningsHints struct {
+	// Keep is the plain `k` label ("k").
+	Keep string
+	// Cancel is the list cancel hint (dismiss and close).
+	Cancel string
+	// Copy is the global copy hint, when bound.
+	Copy string
+	// Navigation is the joined move-left/move-right labels, when bound.
+	Navigation string
+	// Scroll is the list move-down hint, when bound.
+	Scroll string
+}
+
+// RenderLines mirrors `warnings_view_render.rs`: a title line naming the current
+// diagnostic, a blank separator, the wrapped and scrolled details, and the
+// footer hint items. The result has exactly height lines (blank-padded); nil
+// means the area is too small to draw.
+func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) []string {
+	if v == nil || width < 5 || height < 3 {
+		return nil
+	}
+	inner := width - 4
+	title := "Warnings"
+	details := "No warnings"
+	if entry, ok := v.CurrentEntry(); ok {
+		title = fmt.Sprintf("Warnings \u00b7 %d of %d \u00b7 %s", v.current+1, len(v.entries), entry.Source)
+		details = entry.Details
+	}
+	bodyHeight := height - 3
+	body := warningsWrapText(details, inner)
+	if len(body) > 0 {
+		v.MarkVisited()
+	}
+	v.SetPageMetrics(bodyHeight, len(body))
+	offset := v.offset
+	rows := make([]string, 0, height)
+	rows = append(rows, truncateWarningLine(title, inner), "")
+	for index := 0; index < bodyHeight; index++ {
+		if offset+index < len(body) {
+			rows = append(rows, truncateWarningLine(body[offset+index], inner))
+			continue
+		}
+		rows = append(rows, "")
+	}
+	rows = append(rows, warningsFooterLine(hints, inner))
+	for len(rows) < height {
+		rows = append(rows, "")
+	}
+	return rows[:height]
+}
+
+// warningsFooterLine mirrors Rust's `footer_hint_items_line` item list, dropping
+// trailing items that no longer fit the width.
+func warningsFooterLine(hints WarningsHints, width int) string {
+	items := make([]string, 0, 5)
+	if label := strings.TrimSpace(hints.Keep); label != "" {
+		items = append(items, label+" keep & next")
+	}
+	if label := strings.TrimSpace(hints.Cancel); label != "" {
+		items = append(items, label+" dismiss & close")
+	}
+	if label := strings.TrimSpace(hints.Copy); label != "" {
+		items = append(items, label+" copy")
+	}
+	if label := strings.TrimSpace(hints.Navigation); label != "" {
+		items = append(items, label+" warning")
+	}
+	if label := strings.TrimSpace(hints.Scroll); label != "" {
+		items = append(items, label+" scroll")
+	}
+	for len(items) > 0 {
+		line := strings.Join(items, " \u00b7 ")
+		if runewidth.StringWidth(line) <= width {
+			return line
+		}
+		items = items[:len(items)-1]
+	}
+	return ""
+}
+
+func truncateWarningLine(text string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if runewidth.StringWidth(text) <= width {
+		return text
+	}
+	runes := []rune(text)
+	for len(runes) > 0 && runewidth.StringWidth(string(runes)) > width {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
+}
+
+// warningsWrapText wraps whitespace-separated words to width, mirroring
+// `textwrap::wrap` for the viewer's plain diagnostics; a word longer than the
+// width occupies its own line.
+func warningsWrapText(text string, width int) []string {
+	if width < 1 {
+		return nil
+	}
+	var out []string
+	for _, sourceLine := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		words := strings.Fields(sourceLine)
+		if len(words) == 0 {
+			out = append(out, "")
+			continue
+		}
+		current := words[0]
+		for _, word := range words[1:] {
+			if runewidth.StringWidth(current)+1+runewidth.StringWidth(word) <= width {
+				current += " " + word
+				continue
+			}
+			out = append(out, current)
+			current = word
+		}
+		out = append(out, current)
+	}
+	return out
 }
