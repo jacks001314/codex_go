@@ -3829,7 +3829,9 @@ func TestResponsesAgentRunnerStreamsResponseFailed(t *testing.T) {
 		Stream:   true,
 	})
 	_, err := runner.Run(context.Background(), &AgentRequest{Prompt: "hello", Model: "gpt-test"})
-	if err == nil || !strings.Contains(err.Error(), "context window exceeded") {
+	// Rust's CodexErrorDetails::ContextWindowExceeded copy is the user-facing
+	// message for this failure.
+	if err == nil || !strings.Contains(err.Error(), "Codex ran out of room in the model's context window.") {
 		t.Fatalf("Run error = %v", err)
 	}
 	var apiErr *codexapi.APIError

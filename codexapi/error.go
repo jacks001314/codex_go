@@ -91,32 +91,38 @@ func (e *APIError) Error() string {
 	case ErrorAPI:
 		return fmt.Sprintf("api error %d: %s", e.Status, e.Message)
 	case ErrorStream:
-		return "stream error: " + e.Message
+		// Rust's CodexErrorDetails::Stream.
+		return "stream disconnected before completion: " + e.Message
 	case ErrorContextWindowExceeded:
-		return "context window exceeded"
+		// Rust's CodexErrorDetails::ContextWindowExceeded. The iOS input-limit
+		// classifier matches this message's ASCII prefix.
+		return "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
 	case ErrorQuotaExceeded:
-		return "quota exceeded"
+		return "Quota exceeded. Check your plan and billing details."
 	case ErrorUsageNotIncluded:
-		return "usage not included"
+		return "To use Codex with your ChatGPT plan, upgrade to Plus: https://chatgpt.com/explore/plus."
 	case ErrorRetryable:
-		return "retryable error: " + e.Message
+		// Rust maps ApiError::Retryable onto CodexErr::Stream, whose display is
+		// the stream copy.
+		return "stream disconnected before completion: " + e.Message
 	case ErrorRateLimit:
 		// Rust's CodexErr::UsageLimitReached displays only the usage-limit copy
 		// (`#[error("{0}")]` over UsageLimitReachedError's Display), and the
 		// app-server reports that string as the turn error message.
 		return e.Message
 	case ErrorInvalidRequest:
-		return "invalid request: " + e.Message
+		// Rust's CodexErrorDetails::InvalidRequest(String) displays the message.
+		return e.Message
 	case ErrorCyberPolicy:
-		return "cyber policy: " + e.Message
+		return e.Message
 	case ErrorBioPolicy:
-		return "bio policy: " + e.Message
+		return e.Message
 	case ErrorMisalignmentPolicyViolation:
-		return "misalignment policy violation: " + e.Message
+		return e.Message
 	case ErrorRateLimitExceeded:
 		return "rate limit exceeded: " + e.Message
 	case ErrorServerOverloaded:
-		return "server overloaded"
+		return "Selected model is at capacity. Please try a different model."
 	case ErrorFlexUnavailable:
 		// Rust's CodexErr display for CodexErrorDetails::FlexUnavailable.
 		return "Flex capacity unavailable."
