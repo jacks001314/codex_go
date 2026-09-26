@@ -5,10 +5,12 @@ import (
 	"strings"
 	"time"
 
+	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/retainedctx"
 	"codex_go/rollout"
 	"codex_go/session"
+	"codex_go/state"
 	"codex_go/tool"
 	"codex_go/utils"
 )
@@ -462,12 +464,23 @@ func (r *RuntimeRouter) annotateRetainedHarnessMetadata(threadID session.ThreadI
 		return
 	}
 	threadKey := strings.TrimSpace(string(threadID))
-	if threadKey == "" || !retainedHarnessCandidates(items) {
+	if threadKey == "" || (!retainedHarnessCandidates(items) && !retainedSenderCandidates(items)) {
 		return
 	}
 	r.retainedContextsMu.Lock()
 	defer r.retainedContextsMu.Unlock()
 	context := r.retainedLiveContextLocked(threadKey)
+	// Rust records a delivery's sender snapshot before its retained message
+	// (ContextManager::record_annotated_items -> record_sender_user_messages).
+	for index := range items {
+		metadata := harnessMetadataFromSessionItem(&items[index])
+		if metadata != nil && metadata.SenderUserMessages != nil {
+			context.RecordSenderUserMessages(metadata)
+		}
+	}
+	if !retainedHarnessCandidates(items) {
+		return
+	}
 	retainInherited := !r.turnThreadIsSubagent(threadKey)
 	for index := range items {
 		item := &items[index]
@@ -499,6 +512,139 @@ func retainedHarnessCandidates(items []session.Item) bool {
 		}
 	}
 	return false
+}
+
+// retainedSenderCandidates reports whether the batch carries a recorded sender
+// delivery, so appending one records it even though it is not a message.
+func retainedSenderCandidates(items []session.Item) bool {
+	for index := range items {
+		metadata := harnessMetadataFromSessionItem(&items[index])
+		if metadata != nil && metadata.SenderUserMessages != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// senderContextMessageLimit is Rust's `.take(3)`: at most three recent user
+// messages travel with one delivery.
+const senderContextMessageLimit = 3
+
+// senderContextNamespaces are the trusted namespaces Rust's
+// `capture_sender_user_messages` accepts for a delegation delivery.
+var senderContextNamespaces = map[string]bool{"codex_app": true, "codex_tui": true}
+
+// captureSenderDeliveries attaches the host-observed sender snapshot to each
+// standalone delegation output in the batch, mirroring Rust's
+// `LocalAgentRuntime::capture_sender_user_messages` at turn-input admission.
+func (r *RuntimeRouter) captureSenderDeliveries(threadID string, items []session.Item) {
+	if r == nil || len(items) == 0 {
+		return
+	}
+	receiverThreadID := strings.TrimSpace(threadID)
+	if receiverThreadID == "" {
+		return
+	}
+	receiverTurnID := ""
+	if active := r.threads.ActiveTurn(receiverThreadID); active != nil {
+		receiverTurnID = strings.TrimSpace(active.TurnID)
+	}
+	for index := range items {
+		snapshot, ok := r.captureSenderUserMessages(&items[index], receiverThreadID, receiverTurnID)
+		if !ok {
+			continue
+		}
+		mergeSessionItemHarnessMetadata(&items[index], map[string]any{"sender_user_messages": snapshot})
+	}
+}
+
+// captureSenderUserMessages mirrors Rust's
+// `LocalAgentRuntime::capture_sender_user_messages`: a recognized delivery
+// always gets its own snapshot, even when the output carries no usable
+// provenance. Only genuine delegations from a trusted namespace qualify.
+func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverThreadID string, receiverTurnID string) (*retainedctx.SenderUserMessages, bool) {
+	if r == nil || item == nil {
+		return nil, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
+		return nil, false
+	}
+	// Rust destructures `call_id: None`, so a paired tool result never captures.
+	if strings.TrimSpace(item.CallID) != "" {
+		return nil, false
+	}
+	deliveryID := strings.TrimSpace(item.ID)
+	if deliveryID == "" {
+		return nil, false
+	}
+	if strings.TrimSpace(item.Name) != "send_message_to_thread" || !senderContextNamespaces[strings.TrimSpace(item.Namespace)] {
+		return nil, false
+	}
+	output := firstNonEmpty(item.Text, stringValueFromMap(item.Data, "output"))
+	sourceThreadID := ""
+	if source, _, ok := codexctx.ParseDelegatedPrompt(output); ok {
+		if source = strings.TrimSpace(source); source != "" && source != receiverThreadID {
+			sourceThreadID = source
+		}
+	}
+	fragment := state.GuardianSenderMessages{Source: sourceThreadID, Delivery: deliveryID}
+	if sourceThreadID != "" {
+		fragment.Messages = senderContextMessages(r.retainedContextForThread(sourceThreadID))
+	}
+	snapshot := &retainedctx.SenderUserMessages{
+		ReceiverTurnID:    receiverTurnID,
+		ReceiverMessageID: deliveryID,
+		Text:              fragment.Render(),
+	}
+	snapshot.Bound()
+	return snapshot, true
+}
+
+// senderContextMessages mirrors Rust's sender lookup: up to three recent
+// complete local user messages in acceptance order.
+func senderContextMessages(context *retainedctx.RetainedContext) []*string {
+	if context == nil {
+		return nil
+	}
+	var messages []*string
+	for _, entry := range context.OrderedEntries() {
+		if entry.Order.Inherited || entry.Entry.UserMessage == nil || !entry.Entry.UserMessage.Complete {
+			continue
+		}
+		text := entry.Entry.UserMessage.Text
+		messages = append(messages, &text)
+	}
+	if len(messages) > senderContextMessageLimit {
+		messages = messages[len(messages)-senderContextMessageLimit:]
+	}
+	return messages
+}
+
+// mergeSessionItemHarnessMetadata merges fields into the item's harness
+// metadata, preserving whatever else the item already carried.
+func mergeSessionItemHarnessMetadata(item *session.Item, fields map[string]any) {
+	if item == nil || len(fields) == 0 {
+		return
+	}
+	merged := map[string]any{}
+	if raw := harnessMetadataRawFromItem(item); len(raw) > 0 {
+		_ = json.Unmarshal(raw, &merged)
+	}
+	for key, value := range fields {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		merged[key] = json.RawMessage(encoded)
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return
+	}
+	if item.Data == nil {
+		item.Data = map[string]any{}
+	}
+	item.Data[harnessMetadataKey] = json.RawMessage(encoded)
 }
 
 // sessionItemResponseItemFields is the retained model's view of the response item

@@ -9361,6 +9361,10 @@ func (r *RuntimeRouter) runtimeAppendItems(threadID session.ThreadID, items []se
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, fmt.Errorf("%w: %s", session.ErrThreadNotFound, threadID)
 	}
+	// Rust captures a delegation's sender snapshot at turn-input admission
+	// (LocalAgentRuntime::capture_sender_user_messages), before the item is
+	// recorded; the snapshot then travels with the item's harness metadata.
+	r.captureSenderDeliveries(string(threadID), items)
 	// Rust records the host-observed retained source and acceptance order with the
 	// item (ContextManager::record_annotated_items), so a resumed thread restores
 	// the same delivery proof instead of minting a new revision.
