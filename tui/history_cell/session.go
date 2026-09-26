@@ -18,6 +18,10 @@ type SessionHeaderHistoryCell struct {
 	ShowFastStatus  bool
 	Directory       string
 	YoloMode        bool
+	// Greeting is the session's selected startup greeting (Rust's shared
+	// `OnceLock<Greeting>`). When set, the header renders as the compact welcome
+	// banner instead of the card.
+	Greeting string
 }
 
 func NewSessionHeader(model string, reasoningEffort string, showFastStatus bool, directory string, version string) SessionHeaderHistoryCell {
@@ -35,7 +39,24 @@ func (c SessionHeaderHistoryCell) WithYoloMode(yoloMode bool) SessionHeaderHisto
 	return c
 }
 
+// WithGreeting binds the session's chosen greeting to the header
+// (Rust `history_cell::set_session_greeting`).
+func (c SessionHeaderHistoryCell) WithGreeting(greeting string) SessionHeaderHistoryCell {
+	c.Greeting = strings.TrimSpace(greeting)
+	return c
+}
+
 func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
+	if c.Greeting != "" {
+		if width <= 0 {
+			return nil
+		}
+		lines := c.compactBannerLines(width)
+		for i := range lines {
+			lines[i] = tui.TruncateWithEllipsis(lines[i], width)
+		}
+		return lines
+	}
 	if width < 4 {
 		return nil
 	}
@@ -58,7 +79,30 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 	return historyBorder(lines, innerWidth)
 }
 
+// compactBannerLines mirrors Rust's `compact_hyperlink_lines` when a greeting is
+// present: a compact, borderless welcome banner with the greeting last. Rust
+// colours the prompt marker and greeting with the theme accent; Go's session
+// header renders plain lines like the card it replaces.
+func (c SessionHeaderHistoryCell) compactBannerLines(width int) []string {
+	lines := []string{
+		"",
+		"  >_ gcode " + c.versionLabel(),
+		"     " + c.formatDirectory(max(width-5, 1)),
+	}
+	if c.YoloMode {
+		lines = append(lines, "  permissions: YOLO mode")
+	}
+	return append(lines, "", "  "+c.Greeting)
+}
+
 func (c SessionHeaderHistoryCell) RawLines() []string {
+	if c.Greeting != "" {
+		lines := c.compactBannerLines(1 << 30)
+		for i := range lines {
+			lines[i] = strings.TrimRight(lines[i], " ")
+		}
+		return lines
+	}
 	lines := []string{
 		"gcode " + c.versionLabel(),
 		"model: " + strings.TrimSpace(c.Model+reasoningSuffix(c.ReasoningEffort)),

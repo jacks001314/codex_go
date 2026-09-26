@@ -192,10 +192,25 @@ func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 	})
 	model := NewModel(state, Options{Width: 90, Height: 18, ShowSessionHeader: true, SessionHeaderVersion: "0.142.5"})
 	view := model.View()
-	for _, want := range []string{"gcode", "model:", "gpt-5.5 xhigh", "directory:", `D:\repo`} {
+	// Rust #48513: a bound greeting renders the compact welcome banner instead of
+	// the model/directory card.
+	for _, want := range []string{"gcode", "(v0.142.5)", `D:\repo`} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "model:") || strings.Contains(view, "╭") {
+		t.Fatalf("the welcome banner must replace the card header:\n%s", view)
+	}
+	greeting := false
+	for _, phrase := range historycell.Greetings {
+		if strings.Contains(view, phrase) {
+			greeting = true
+			break
+		}
+	}
+	if !greeting {
+		t.Fatalf("welcome banner missing a selected greeting:\n%s", view)
 	}
 	if strings.Contains(view, "No messages yet.") {
 		t.Fatalf("session header view should replace empty transcript:\n%s", view)
@@ -8714,15 +8729,14 @@ func TestModelDisplayNameSurfacesLikeRust(t *testing.T) {
 	}
 
 	model.addStartupSessionHeader("0.1.0")
-	raw := ""
-	for _, message := range model.State.Messages {
-		raw += message.RawText
+	// Rust #48513: the compact welcome banner carries no model line, so the
+	// display name surfaces through the status line instead.
+	view := model.View()
+	if !strings.Contains(view, "GPT-5.6-Terra") {
+		t.Fatalf("status line missing the display name: %q", view)
 	}
-	if !strings.Contains(raw, "GPT-5.6-Terra") {
-		t.Fatalf("startup session header missing the display name: %q", raw)
-	}
-	if strings.Contains(raw, "gpt-5.6-terra") {
-		t.Fatalf("startup session header leaked the raw model id: %q", raw)
+	if strings.Contains(view, "gpt-5.6-terra") {
+		t.Fatalf("view leaked the raw model id: %q", view)
 	}
 }
 

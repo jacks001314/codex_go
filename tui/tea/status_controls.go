@@ -467,7 +467,8 @@ func (m *Model) renderStatusHeader() string {
 		return result.StatusLineText
 	}
 	if m.State != nil {
-		return m.State.RenderStatusLine()
+		// Rust's status line shows the model's catalog display name.
+		return m.State.RenderStatusLineWithModelName(m.modelDisplayName(m.State.Model))
 	}
 	return ""
 }

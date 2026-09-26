@@ -599,10 +599,25 @@ func (s *State) RenderStatusLine() string {
 	if s == nil {
 		return "Thread: new | Status: idle | Model: default | Approval: default | Sandbox: default"
 	}
+	return s.RenderStatusLineWithModelName("")
+}
+
+// RenderStatusLineWithModelName renders the legacy status line with the given
+// model label. Rust's `StatusLineItem::ModelName` shows the model's catalog
+// display name (chatwidget/status_surfaces.rs), so a caller with the model
+// catalog passes the resolved name here; an empty label keeps the state's model.
+func (s *State) RenderStatusLineWithModelName(modelName string) string {
+	if s == nil {
+		return "Thread: new | Status: idle | Model: default | Approval: default | Sandbox: default"
+	}
+	model := strings.TrimSpace(modelName)
+	if model == "" {
+		model = s.Model
+	}
 	parts := []string{
 		"Thread: " + displayValue(s.ThreadID, "new"),
 		"Status: " + displayValue(s.Status, "idle"),
-		"Model: " + displayValue(s.Model, "default"),
+		"Model: " + displayValue(model, "default"),
 		"Approval: " + displayValue(s.ApprovalPolicy, "default"),
 		"Sandbox: " + displayValue(s.Sandbox, "default"),
 	}

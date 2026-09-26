@@ -1283,6 +1283,10 @@ type Model struct {
 	startupWarningsIndex    int
 	startupWarningsComplete bool
 	sessionHeaderShown      bool
+	// sessionGreeting is the session's selected startup greeting, chosen once so
+	// the header keeps it for the whole session (Rust's shared
+	// `empty_state_animation.greeting`).
+	sessionGreeting string
 	// showTooltips mirrors Rust's `local_settings.tui.show_tooltips`.
 	showTooltips bool
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
@@ -6414,13 +6418,16 @@ func (m *Model) addStartupSessionHeader(version string) {
 	if cwd == "" {
 		cwd = strings.TrimSpace(m.statusControlsRuntime().CWD)
 	}
+	if m.sessionGreeting == "" {
+		m.sessionGreeting = historycell.ChooseGreeting()
+	}
 	header := historycell.NewSessionHeader(
 		m.modelDisplayName(m.State.Model),
 		m.State.EffectiveReasoningEffort(),
 		m.sessionShowFastStatus(),
 		cwd,
 		firstNonEmpty(strings.TrimSpace(version), "dev"),
-	)
+	).WithGreeting(m.sessionGreeting)
 	cell := historycell.NewSessionInfo(header, false, m.startupSessionTooltip())
 	width := m.width
 	if width < 20 {
