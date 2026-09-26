@@ -28,10 +28,14 @@ func TestRuntimeRouterAnnotatesRetainedProvenanceLikeRust(t *testing.T) {
 		{
 			ID: "user-1", Type: "message", Role: "user", Text: "Keep the repository private.",
 			Metadata: map[string]any{"turnId": "turn-1"},
+			// A real instruction carries the harness classifications that prove it
+			// is genuine user content.
+			Raw: json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Keep the repository private."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}`),
 		},
 		{
 			ID: "assistant-1", Type: "message", Role: "assistant", Text: "Understood.",
 			Metadata: map[string]any{"turnId": "turn-1"},
+			Raw:      json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Understood."}]}`),
 		},
 	}
 	if _, err := router.runtimeAppendItems(threadID, items); err != nil {
@@ -137,6 +141,9 @@ func TestRuntimeRouterKeepsRecordedIncompleteProvenanceLikeRust(t *testing.T) {
 			ID: "user-1", Type: "message", Role: "user", Text: "Keep the repository private.",
 			Metadata: map[string]any{"turnId": "turn-1"},
 			Data:     map[string]any{harnessMetadataKey: json.RawMessage(raw)},
+			// The classifications prove genuine user content, so the recorded
+			// source's incompleteness is the only reason this stays incomplete.
+			Raw: json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"Keep the repository private."}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["user.text"]}}`),
 		}},
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)

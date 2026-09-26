@@ -18,6 +18,11 @@ import (
 // original instruction and assistant evidence before retaining it.
 const guardianMaxRootMessageTokens = 900
 
+// retainedOmittedObjectiveKind mirrors `UserGoalUpdate::OMITTED_OBJECTIVE_KIND`:
+// a harness-authored goal placeholder cannot prove that the original objective
+// text was captured.
+const retainedOmittedObjectiveKind = "user.goal.omitted"
+
 // harnessMetadataKey is where a session item carries its persisted harness
 // metadata (Rust's CodexHarnessMetadata sidecar of a response item).
 const harnessMetadataKey = "harness_metadata"
@@ -260,6 +265,12 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 	if !userMessage && !assistantMessage {
 		return retainedSessionItemRecord{}, false
 	}
+	responseItem, hasResponseItem := sessionItemResponseItemFieldsFromItem(item)
+	if userMessage && !assistantMessage && !sessionItemIsUserAuthorizationMessage(responseItem, hasResponseItem) {
+		// Rust only retains a user message whose content classifications do not
+		// show it to be a contextual fragment rather than genuine user input.
+		return retainedSessionItemRecord{}, false
+	}
 	text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
 	if text == "" {
 		return retainedSessionItemRecord{}, false
@@ -282,8 +293,11 @@ func retainedRecordForSessionItem(item *session.Item, index int, metadata *retai
 		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
 		message.Complete = len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
 	} else {
-		message.Text = text
-		message.Complete = true
+		// Rust bounds every retained original, and an instruction is only complete
+		// when the harness classified each content entry as genuine user content.
+		message.Text = utils.TruncateText(text, utils.TokensPolicy(guardianMaxRootMessageTokens))
+		message.Complete = retainedInstructionComplete(responseItem, hasResponseItem) &&
+			len(text) <= utils.ApproxBytesForTokens(guardianMaxRootMessageTokens)
 	}
 	if metadata != nil && metadata.RetainedSource != nil && !metadata.RetainedSource.Complete {
 		// Rust narrows a record's completeness with the captured source.
@@ -467,4 +481,88 @@ func retainedHarnessCandidates(items []session.Item) bool {
 		}
 	}
 	return false
+}
+
+// sessionItemResponseItemFields is the retained model's view of the response item
+// a session item persisted: the harness-owned content classifications Rust reads
+// from `internal_chat_message_metadata_passthrough`.
+type sessionItemResponseItemFields struct {
+	ContentTypes []string
+	ContentKinds []string
+}
+
+// sessionItemResponseItemFields parses the item's persisted response item. ok is
+// false for a legacy item without one, which Rust treats conservatively.
+func sessionItemResponseItemFieldsFromItem(item *session.Item) (sessionItemResponseItemFields, bool) {
+	if item == nil || len(item.Raw) == 0 {
+		return sessionItemResponseItemFields{}, false
+	}
+	var payload struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+		Metadata struct {
+			Kinds []string `json:"content_item_kinds"`
+		} `json:"internal_chat_message_metadata_passthrough"`
+	}
+	if err := json.Unmarshal(item.Raw, &payload); err != nil {
+		return sessionItemResponseItemFields{}, false
+	}
+	fields := sessionItemResponseItemFields{
+		ContentTypes: make([]string, 0, len(payload.Content)),
+		ContentKinds: payload.Metadata.Kinds,
+	}
+	for _, content := range payload.Content {
+		fields.ContentTypes = append(fields.ContentTypes, strings.TrimSpace(content.Type))
+	}
+	return fields, true
+}
+
+// sessionItemIsUserAuthorizationMessage mirrors Rust's
+// `is_user_authorization_message`: unknown, incomplete and legacy classifications
+// stay conservative, and a message whose classifications show contextual or media
+// content is not authorization evidence.
+func sessionItemIsUserAuthorizationMessage(fields sessionItemResponseItemFields, ok bool) bool {
+	if !ok {
+		// A legacy item carries no classification to doubt.
+		return true
+	}
+	kinds := fields.ContentKinds
+	if len(kinds) == 0 || len(kinds) != len(fields.ContentTypes) {
+		return true
+	}
+	for _, kind := range kinds {
+		switch kind {
+		case "", "unknown", "images.preparation_error", "images.unsupported", "audio.unsupported":
+			return true
+		}
+		if strings.HasPrefix(kind, "user.") {
+			return true
+		}
+	}
+	return false
+}
+
+// retainedInstructionComplete mirrors Rust's completeness proof for an original
+// instruction: every content entry must carry a classification and all of them
+// must be genuine user content, and every entry must be text.
+func retainedInstructionComplete(fields sessionItemResponseItemFields, ok bool) bool {
+	if !ok {
+		return false
+	}
+	kinds := fields.ContentKinds
+	if len(kinds) == 0 || len(kinds) != len(fields.ContentTypes) {
+		return false
+	}
+	for _, kind := range kinds {
+		if !strings.HasPrefix(kind, "user.") || kind == retainedOmittedObjectiveKind {
+			return false
+		}
+	}
+	for _, contentType := range fields.ContentTypes {
+		if contentType != "input_text" && contentType != "output_text" {
+			return false
+		}
+	}
+	return true
 }
