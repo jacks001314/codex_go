@@ -2,6 +2,7 @@ package historycell
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,30 @@ func TestStartupWarningsMergeDetailsLikeRust(t *testing.T) {
 	}
 	if got := merged.WarningEntries(); len(got) != 1 || got[0].Details != "first\n\nsecond\n\nSign-in required." {
 		t.Fatalf("merged WarningEntries = %#v", got)
+	}
+}
+
+// Mirrors Rust's `WarningHistoryCell` (via `new_warning_event`): one message
+// diagnostic with the `Warning` source label, rendered as a prefixed line.
+func TestWarningEventCellIdentityLikeRust(t *testing.T) {
+	cell := NewWarningEvent("Careful with this command")
+	wantKeys := []WarningKey{{Kind: WarningIdMessage, Value: "Careful with this command"}}
+	if got := cell.WarningKeys(); !reflect.DeepEqual(got, wantKeys) {
+		t.Fatalf("WarningKeys() = %#v, want %#v", got, wantKeys)
+	}
+	wantEntries := []WarningEntry{{
+		ID:      WarningId{Kind: WarningIdMessage, Value: "Careful with this command"},
+		Source:  "Warning",
+		Details: "Careful with this command",
+	}}
+	if got := cell.WarningEntries(); !reflect.DeepEqual(got, wantEntries) {
+		t.Fatalf("WarningEntries() = %#v, want %#v", got, wantEntries)
+	}
+	lines := cell.TranscriptLines(80)
+	if len(lines) != 1 || !strings.Contains(lines[0], "Careful with this command") {
+		t.Fatalf("TranscriptLines() = %#v", lines)
+	}
+	if len(cell.RawLines()) == 0 {
+		t.Fatal("RawLines() is empty")
 	}
 }

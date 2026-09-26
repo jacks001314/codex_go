@@ -1348,6 +1348,9 @@ type Model struct {
 	// (#48205/#48206); warningsFlash shows a copy result in its footer.
 	warningsView  *bottompane.WarningsView
 	warningsFlash string
+	// warningCells are the warning-bearing history cells retained for the viewer
+	// and footer count (Rust's `warning_entries(transcript_cells)`).
+	warningCells []historycell.WarningCell
 	// turnFinalAnswerSeen records that the running turn produced a final-answer
 	// item, which is what makes it eligible for a completion tip. The TUI's item
 	// events do not carry a turn id, so the flag pairs the item with the turn
@@ -4531,6 +4534,9 @@ func (m *Model) addHistoryCell(cell historycell.HistoryCell) {
 	if m == nil || m.State == nil {
 		return
 	}
+	if warning, ok := cell.(historycell.WarningCell); ok {
+		m.warningCells = append(m.warningCells, warning)
+	}
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -6597,6 +6603,7 @@ func (m *Model) applyWarningMessage(message string) {
 		width = 20
 	}
 	cell := historycell.NewWarningEvent(message)
+	m.warningCells = append(m.warningCells, cell)
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 	m.notice = message
 	m.refreshTranscript()

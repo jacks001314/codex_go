@@ -20,7 +20,7 @@ func (m *Model) openWarningsView() {
 	if m == nil {
 		return
 	}
-	entries := m.warningDisplay.VisibleEntries([]historycell.WarningCell{m.startupWarnings})
+	entries := m.warningDisplay.VisibleEntries(m.retainedWarningCells())
 	m.warningsView = bottompane.NewWarningsView(entries)
 	m.warningsFlash = ""
 }
@@ -33,10 +33,23 @@ func (m *Model) closeWarningsView() bubbletea.Cmd {
 	}
 	dismissed, kept := m.warningsView.Close()
 	m.warningDisplay.ApplyDecisions(dismissed, kept)
-	m.warningDisplay.SyncWarnings([]historycell.WarningCell{m.startupWarnings})
+	m.warningDisplay.SyncWarnings(m.retainedWarningCells())
 	m.warningsView = nil
 	m.warningsFlash = ""
 	return nil
+}
+
+// retainedWarningCells returns every retained diagnostic source for the viewer
+// and footer: the warning-bearing history cells plus the merged startup summary
+// (Rust's `warning_entries(transcript_cells)`).
+func (m *Model) retainedWarningCells() []historycell.WarningCell {
+	if m == nil {
+		return nil
+	}
+	cells := make([]historycell.WarningCell, 0, len(m.warningCells)+1)
+	cells = append(cells, m.warningCells...)
+	cells = append(cells, m.startupWarnings)
+	return cells
 }
 
 // updateWarningsViewKey routes a key to the warnings viewer, mirroring

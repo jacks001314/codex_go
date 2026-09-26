@@ -227,7 +227,7 @@ func (c StartupWarningsCell) SummaryLine() string {
 func (c StartupWarningsCell) TranscriptLines(width int) []string {
 	var out []string
 	for _, message := range c.Messages {
-		out = append(out, NewWarningEvent(message).DisplayLines(width)...)
+		out = append(out, NewWarningEvent(message).TranscriptLines(width)...)
 	}
 	return out
 }

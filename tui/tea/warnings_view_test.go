@@ -116,3 +116,20 @@ func TestWarningsSlashCommandOpensViewerLikeRust(t *testing.T) {
 		t.Fatalf("/warnings submitted %d requests, want none", got)
 	}
 }
+
+// Mirrors Rust's `warning_entries(transcript_cells)`: an ordinary thread warning
+// is retained for the viewer, not only the startup summary.
+func TestWarningsViewerIncludesThreadWarningsLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
+	model.Update(StatusMsg{Status: "warning: A runtime warning"})
+
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyF2})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "Warnings \u00b7 1 of 1 \u00b7 Warning") {
+		t.Fatalf("viewer did not include the thread warning title:\n%s", view)
+	}
+	if !strings.Contains(view, "A runtime warning") {
+		t.Fatalf("viewer did not include the thread warning detail:\n%s", view)
+	}
+}

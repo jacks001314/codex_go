@@ -67,10 +67,6 @@ func (c UpdateAvailableHistoryCell) RawLines() []string {
 	}
 }
 
-func NewWarningEvent(message string) PrefixedWrappedHistoryCell {
-	return NewPrefixedWrappedHistoryCell(message, "\u26a0 ", "  ")
-}
-
 type SafetyAccessBlockCell struct {
 	Title   string
 	Body    string

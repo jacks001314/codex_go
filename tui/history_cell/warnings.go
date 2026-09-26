@@ -100,3 +100,55 @@ func sortedWarningSetKeys(values map[string]bool) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// WarningEventCell mirrors Rust's `WarningHistoryCell`: one retained diagnostic
+// with a stable identity. Rust distinguishes `visible_in_transcript` (ordinary
+// warnings render only in raw mode and the warnings panel; usage warnings render
+// in both), but Go's state stores a history entry only when it has display lines,
+// so the flag is recorded here without gating the rendering yet.
+type WarningEventCell struct {
+	// ServerVersionNotice marks a daemon version notice.
+	ServerVersionNotice bool
+	// VisibleInTranscript mirrors Rust's flag; ordinary warnings are false.
+	VisibleInTranscript bool
+	// Key is the diagnostic's stable identity.
+	Key string
+	// Diagnostic is the retained message text.
+	Diagnostic string
+}
+
+// NewWarningEvent mirrors Rust's `new_warning_event`.
+func NewWarningEvent(message string) WarningEventCell {
+	return WarningEventCell{Key: message, Diagnostic: message}
+}
+
+// DisplayLines renders the prefixed warning line.
+func (c WarningEventCell) DisplayLines(width int) []string {
+	return NewPrefixedWrappedHistoryCell(c.Diagnostic, "\u26a0 ", "  ").DisplayLines(width)
+}
+
+// TranscriptLines mirrors Rust's `transcript_lines`, which renders the diagnostic
+// regardless of the live-transcript visibility flag.
+func (c WarningEventCell) TranscriptLines(width int) []string {
+	return c.DisplayLines(width)
+}
+
+// RawLines mirrors Rust's `raw_lines`.
+func (c WarningEventCell) RawLines() []string {
+	return rawLinesFromSource(c.Diagnostic)
+}
+
+// WarningKeys mirrors `HistoryCell::warning_keys`: the message identity.
+func (c WarningEventCell) WarningKeys() []WarningKey {
+	return []WarningKey{{Kind: WarningIdMessage, Value: c.Key}}
+}
+
+// WarningEntries mirrors `HistoryCell::warning_entries`: the message diagnostic
+// under the `Warning` source label.
+func (c WarningEventCell) WarningEntries() []WarningEntry {
+	return []WarningEntry{{
+		ID:      WarningId{Kind: WarningIdMessage, Value: c.Key},
+		Source:  "Warning",
+		Details: c.Diagnostic,
+	}}
+}
