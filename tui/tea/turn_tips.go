@@ -276,8 +276,9 @@ func renderTurnTipLine(template string, width int, keymap *codextui.KeymapConfig
 // turnTipsSurfacesAllowed mirrors the gates Rust's `App::turn_tip` applies to
 // both tip surfaces before the phase is considered: the preference on, an
 // externally owned thread not shown, no modal or popup, an empty composer with
-// no queued follow-up, no primed or previewing backtrack selection, and a
-// transcript that is following the tail.
+// no queued follow-up, and no primed or previewing backtrack selection. The
+// viewport-following gate moved to `turnTipsViewportAllows` (#48560), so a
+// painted working tip survives transcript interaction and scrolling away.
 func (m *Model) turnTipsSurfacesAllowed() bool {
 	if m == nil || !m.showTooltips || m.readOnlyThread {
 		return false
@@ -294,18 +295,35 @@ func (m *Model) turnTipsSurfacesAllowed() bool {
 	if m.backtrack.Primed || m.backtrack.OverlayPreviewActive {
 		return false
 	}
-	return m.activityFollow || m.transcript.AtBottom()
+	return true
+}
+
+// turnTipsViewportAllows mirrors Rust #48560's viewport gate: initial exposure
+// and completion tips still require an idle, following viewport, but once a
+// working tip has been painted it stays visible while the user interacts with or
+// scrolls the transcript. Go has no transcript mouse selection/search model, so
+// only Rust's `is_following()` half applies (the recorded active-interaction
+// half).
+func (m *Model) turnTipsViewportAllows() bool {
+	if m == nil {
+		return false
+	}
+	if m.activityFollow || m.transcript.AtBottom() {
+		return true
+	}
+	current := m.turnTips.current
+	return current != nil && current.shown && current.phase == turnTipPhaseWorking
 }
 
 // turnTipsAllowed is the working surface: the shared gates plus a running turn.
 func (m *Model) turnTipsAllowed() bool {
-	return m.turnTipsSurfacesAllowed() && m.isTaskRunning()
+	return m.turnTipsSurfacesAllowed() && m.turnTipsViewportAllows() && m.isTaskRunning()
 }
 
 // completionTipAllowed is the completion surface: the shared gates plus a
 // finished turn (no user turn pending or running).
 func (m *Model) completionTipAllowed() bool {
-	return m.turnTipsSurfacesAllowed() && !m.isUserTurnPendingOrRunning()
+	return m.turnTipsSurfacesAllowed() && m.turnTipsViewportAllows() && !m.isUserTurnPendingOrRunning()
 }
 
 // turnTipTickMsg re-renders the frame at the working tip's deadline.

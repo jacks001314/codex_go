@@ -22,6 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
+	// Re-pinned to upstream 6a39914e37: #48560 added the working-tip
+	// mouse-selection snapshot.
 	// Re-pinned to upstream 7b7d934408: #48551 added the math zero/big-wedge
 	// display snapshot.
 	// Re-pinned to upstream 75a714843b: #48547 added the blossom replay fade
@@ -33,8 +35,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
 	// #48352 added the turn-tip placement snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1333 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1333", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1334 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1334", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -92,8 +94,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// prompt-navigation, slash-picker, composer-gap and warnings-page
 			// snapshots plus the fresh-thread animation and retained revert
 			// history. #48206 added the partial-dismissal warnings snapshot.
-			// #48352 added the turn-tip placement snapshot.
-			Files:    75,
+			// #48352 added the turn-tip placement snapshot, and #48560 the
+			// working-tip mouse-selection snapshot.
+			Files:    76,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -115,6 +118,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				// #48352 renders working and completed turn tips in the
 				// transcript, so their placements have their own snapshot.
 				"tui/src/app/snapshots/codex_tui__app__turn_tips__tests__turn_tip_placements.snap",
+				// #48560 keeps a painted working tip stable through mouse
+				// selection, so the mouse-down frame has its own snapshot.
+				"tui/src/app/snapshots/codex_tui__app__turn_tips__tests__working_tip_mouse_down.snap",
 			},
 		},
 		{

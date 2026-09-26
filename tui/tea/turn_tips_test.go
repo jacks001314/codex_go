@@ -237,3 +237,72 @@ func TestTurnTipsGateBacktrackReadOnlyAndQueueLikeRust(t *testing.T) {
 		t.Fatalf("a queued follow-up rendered a tip:\n%s", view)
 	}
 }
+
+// Mirrors Rust #48560: a working tip that was already painted stays put while
+// the transcript is scrolled away from the tail, while an unseen working tip and
+// any completion tip still require an idle, following viewport.
+func TestTurnTipsShownWorkingTipSurvivesLeavingTailLikeRust(t *testing.T) {
+	enabled := true
+	base := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+
+	// A painted working tip survives leaving the tail.
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &enabled})
+	model.now = func() time.Time { return base }
+	model.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	model.now = func() time.Time { return base.Add(turnTipWorkingDelay + time.Second) }
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u2514 ") {
+		t.Fatalf("baseline working tip missing:\n%s", view)
+	}
+	if model.turnTips.current == nil || !model.turnTips.current.shown {
+		t.Fatal("working tip was not acknowledged as shown")
+	}
+	leaveTranscriptTail(model)
+	if model.turnTipsAllowed() != true {
+		t.Fatal("shown working tip was suppressed after leaving the tail")
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip: ") {
+		t.Fatalf("shown working tip disappeared after leaving the tail:\n%s", view)
+	}
+
+	// A working tip that has never been painted still waits for the tail.
+	unseen := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &enabled})
+	unseen.now = func() time.Time { return base }
+	unseen.Update(ThreadEventMsg{Event: protocol.TurnStarted()})
+	unseen.now = func() time.Time { return base.Add(turnTipWorkingDelay + time.Second) }
+	leaveTranscriptTail(unseen)
+	if unseen.turnTipsAllowed() {
+		t.Fatal("an unseen working tip was allowed off the tail")
+	}
+	if view := utils.StripANSI(unseen.View()); strings.Contains(view, "\u2514 ") {
+		t.Fatalf("an unseen working tip rendered off the tail:\n%s", view)
+	}
+
+	// The completion surface does not get the exemption.
+	finished := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &enabled})
+	finished.now = func() time.Time { return base }
+	for index := 0; index < turnTipCompletionInterval; index++ {
+		turnID := turnIDForTest(index)
+		finished.Update(ThreadEventMsg{Event: protocol.TurnStartedWithID(turnID)})
+		finished.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+			Type: "item.completed",
+			Item: &protocol.ThreadItem{ID: "final-" + turnID, Type: "agent_message", Text: "done", Phase: "final_answer"},
+		}})
+		finished.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
+	}
+	if finished.turnTips.current == nil || !finished.turnTips.current.completionEligible {
+		t.Fatal("finished turn did not become eligible for a completion tip")
+	}
+	leaveTranscriptTail(finished)
+	if finished.completionTipAllowed() {
+		t.Fatal("a completion tip was allowed off the tail")
+	}
+}
+
+// leaveTranscriptTail moves the model off the transcript tail the way scrolling
+// does: following stops and the viewport no longer sits at the bottom.
+func leaveTranscriptTail(model *Model) {
+	model.activityFollow = false
+	model.transcript.Height = 10
+	model.transcript.SetContent(strings.Repeat("transcript row\n", 200))
+	model.transcript.YOffset = 0
+}
