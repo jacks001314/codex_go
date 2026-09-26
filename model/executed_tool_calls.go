@@ -2,6 +2,8 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -114,22 +116,65 @@ type ToolResultMetadata struct {
 	value any
 }
 
-// NewToolResultMetadata bounds a raw MCP `_meta` snapshot before cloning it. No
-// keys are filtered; an oversized snapshot becomes the omission marker.
+// NewToolResultMetadata captures the complete MCP `_meta` snapshot. No keys are
+// filtered: retention and outgoing-request budgets apply later (Rust
+// `ToolResultMetadata::new`). The prompt bound sheds an oversized snapshot.
 func NewToolResultMetadata(metadata any) ToolResultMetadata {
 	if metadata == nil {
 		return ToolResultMetadata{}
-	}
-	if jsonSize(metadata) > MaxExecutedToolCallMetadataBytes {
-		return OmittedToolResultMetadata()
 	}
 	return ToolResultMetadata{value: metadata}
 }
 
 // OmittedToolResultMetadata is the harness status marker used when raw metadata
-// exceeds the byte limit.
+// exceeds the byte limit. It is the parse-compatible bare form; the shedding
+// path writes the overage form (Rust `omitted_due_to_size_limit`).
 func OmittedToolResultMetadata() ToolResultMetadata {
 	return ToolResultMetadata{value: toolResultMetadataOmittedMarker}
+}
+
+// omittedToolResultMetadataForOverage is Rust's `omitted_due_to_size_limit
+// (overage_bytes=N)` marker.
+func omittedToolResultMetadataForOverage(overageBytes int) ToolResultMetadata {
+	return ToolResultMetadata{value: fmt.Sprintf("%s (overage_bytes=%d)", toolResultMetadataOmittedMarker, overageBytes)}
+}
+
+// isOmittedDueToSizeLimit mirrors Rust's `is_omitted_due_to_size_limit`: both
+// the bare marker and the overage form count.
+func (m ToolResultMetadata) isOmittedDueToSizeLimit() bool {
+	value, ok := m.value.(string)
+	if !ok {
+		return false
+	}
+	if value == toolResultMetadataOmittedMarker {
+		return true
+	}
+	overage, ok := strings.CutPrefix(value, toolResultMetadataOmittedMarker+" (overage_bytes=")
+	if !ok {
+		return false
+	}
+	overage, ok = strings.CutSuffix(overage, ")")
+	if !ok {
+		return false
+	}
+	_, err := strconv.Atoi(overage)
+	return err == nil
+}
+
+// omitIfSmaller mirrors Rust's `omit_if_smaller`: replace the snapshot with the
+// overage marker only when the marker is smaller, and report the retained size.
+// An absent or already-omitted snapshot keeps its original size.
+func (m *ToolResultMetadata) omitIfSmaller(originalBytes int, overageBytes int) int {
+	if m == nil || m.IsNone() || m.isOmittedDueToSizeLimit() {
+		return originalBytes
+	}
+	omitted := omittedToolResultMetadataForOverage(overageBytes)
+	omittedBytes := jsonSize(omitted)
+	if omittedBytes < originalBytes {
+		*m = omitted
+		return omittedBytes
+	}
+	return originalBytes
 }
 
 // IsNone reports whether no snapshot (or omission marker) is recorded.
@@ -395,13 +440,19 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	// Raw result metadata must not displace existing source evidence, calls, or
 	// completion proof. Oversized snapshots degrade to the omission marker first,
 	// then are dropped entirely (Rust #44336).
+	overageBytes := originalBytes - MaxExecutedToolCallMetadataBytes
 	originalBytes = 0
 	for _, item := range items {
 		calls := item.ExecutedToolCalls()
 		changed := false
 		for index := range calls {
-			if calls[index].HasToolResultMetadata() {
-				calls[index].toolResultMetadata = OmittedToolResultMetadata()
+			if !calls[index].HasToolResultMetadata() {
+				continue
+			}
+			// Rust's `omit_if_smaller`: the marker carries the shed overage and
+			// replaces the snapshot only when it is actually smaller.
+			currentBytes := jsonSize(calls[index].toolResultMetadata)
+			if retained := calls[index].toolResultMetadata.omitIfSmaller(currentBytes, overageBytes); retained != currentBytes {
 				changed = true
 			}
 		}

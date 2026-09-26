@@ -34,14 +34,51 @@ func TestToolResultMetadataBoundsAndRedacts(t *testing.T) {
 		t.Fatalf("Marshal() = %s", encoded)
 	}
 
+	// Rust's `ToolResultMetadata::new` captures the complete snapshot; the
+	// outgoing-request budget sheds it later, so capture must not omit it.
 	oversized := NewToolResultMetadata(strings.Repeat("x", MaxExecutedToolCallMetadataBytes+1))
+	if !oversized.IsSome() || oversized.isOmittedDueToSizeLimit() {
+		t.Fatal("capture must retain the raw oversized snapshot")
+	}
 	call.SetToolResultMetadata(oversized)
 	encoded, err = json.Marshal(call)
 	if err != nil {
 		t.Fatalf("Marshal(oversized) error = %v", err)
 	}
-	if !strings.Contains(string(encoded), `"tool_result_metadata":"omitted_due_to_size_limit"`) {
-		t.Fatalf("Marshal(oversized) = %s", encoded)
+	if strings.Contains(string(encoded), "omitted_due_to_size_limit") {
+		t.Fatal("capture shed the oversized snapshot before the request budget")
+	}
+}
+
+// Mirrors Rust's `omit_if_smaller` / `is_omitted_due_to_size_limit`: the marker
+// carries the shed overage, replaces the snapshot only when it is smaller, and
+// both the bare and overage forms parse as an omission.
+func TestToolResultMetadataOmissionMarkerLikeRust(t *testing.T) {
+	oversized := ToolResultMetadata{value: strings.Repeat("m", 2_000)}
+	if retained := oversized.omitIfSmaller(2_000, 117); retained >= 2_000 {
+		t.Fatalf("retained bytes = %d, want the smaller marker", retained)
+	}
+	if !oversized.isOmittedDueToSizeLimit() {
+		t.Fatalf("marker not recognized: %#v", oversized.value)
+	}
+	if value, _ := oversized.value.(string); value != "omitted_due_to_size_limit (overage_bytes=117)" {
+		t.Fatalf("marker = %q", value)
+	}
+	// An already-small snapshot is never replaced by a larger marker.
+	small := ToolResultMetadata{value: map[string]any{}}
+	if retained := small.omitIfSmaller(jsonSize(small), 10); retained != jsonSize(small) {
+		t.Fatalf("small snapshot retained %d bytes, want %d", retained, jsonSize(small))
+	}
+	if small.isOmittedDueToSizeLimit() {
+		t.Fatal("a small snapshot must not become a marker")
+	}
+	for _, value := range []string{"omitted_due_to_size_limit", "omitted_due_to_size_limit (overage_bytes=5)"} {
+		if !(ToolResultMetadata{value: value}).isOmittedDueToSizeLimit() {
+			t.Fatalf("marker %q not recognized", value)
+		}
+	}
+	if (ToolResultMetadata{value: "omitted_due_to_size_limit (overage_bytes=x)"}).isOmittedDueToSizeLimit() {
+		t.Fatal("a malformed overage must not parse as an omission")
 	}
 }
 
@@ -81,7 +118,8 @@ func TestBoundExecutedToolCallsShedsMetadataBeforeSourcesAndCalls(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
-	if !strings.Contains(string(encoded), `"tool_result_metadata":"omitted_due_to_size_limit"`) {
+	// Rust's shedding marker carries the overage it removed.
+	if !strings.Contains(string(encoded), `"tool_result_metadata":"omitted_due_to_size_limit (overage_bytes=`) {
 		t.Fatalf("raw metadata was not replaced by the omission marker: %s", encoded)
 	}
 }
