@@ -1285,6 +1285,9 @@ type Model struct {
 	sessionHeaderShown      bool
 	// showTooltips mirrors Rust's `local_settings.tui.show_tooltips`.
 	showTooltips bool
+	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
+	// cadence and exposure state (see turn_tips.go).
+	turnTips turnTips
 	// skillLoadWarnings tracks the active invalid-SKILL.md diagnostics (Rust
 	// App::skill_load_warnings) and skillLoadWarningsComplete closes the startup
 	// window for them once the initial skills list has been handled.
@@ -2359,6 +2362,10 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		m.sampleVoicePeaks()
 		return m, voiceMeterTickCmd()
+	case turnTipTickMsg:
+		// A turn-tip deadline only needs a frame: the working tip is computed
+		// while rendering, so the message itself has no state to apply.
+		return m, nil
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
@@ -4308,6 +4315,14 @@ func (m *Model) renderWorkingIndicator() string {
 	if len(lines) == 0 {
 		return ""
 	}
+	// Rust #48352: a random tip appears beneath the working status once the turn
+	// has run for the working delay; exposure is counted only once it rendered.
+	if m.turnTipsAllowed() {
+		if tip, ok := m.turnTips.workingTip(width, now, m.keymapConfig); ok {
+			lines = append(lines, "  \u2514 "+tip)
+			m.turnTips.acknowledge(turnTipSurfaceWorking)
+		}
+	}
 	header := strings.TrimSpace(indicator.Header)
 	lines[0] = "\u2022 " + lines[0]
 	lines[0] = fitTerminalLine(lines[0], m.width)
@@ -4562,6 +4577,13 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		if m.State != nil {
 			m.clearAgentsOverviewBlankSession(m.State.ThreadID)
 		}
+		// Rust #48352: the working tip's clock starts with the turn, and the
+		// frame that paints it must be requested up front (Rust's
+		// `frame_requester.schedule_frame_in(remaining)`).
+		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", m.currentTime())
+		if m.showTooltips {
+			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
+		}
 		m.setStatus("running")
 		// Rust warning_display_state.startup_complete: after the first turn the
 		// startup window is over, so later diagnostics use the warning path.
@@ -4599,6 +4621,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 		m.applyItemStarted(event.Item, startedAtMS)
 	case "item.completed":
+		if event.Item != nil && strings.EqualFold(strings.TrimSpace(event.Item.Phase), "final_answer") &&
+			strings.TrimSpace(firstNonEmpty(event.Item.Text, event.Item.Message)) != "" {
+			m.turnTips.observeRetainedItem(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", true)
+		}
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
 		m.applyDelta(event.Delta)
@@ -4611,6 +4637,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
 		m.markThreadCompleted(m.State.ThreadID)
+		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", true, false)
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()
 		m.clearCompactionActivity()
