@@ -86,7 +86,13 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if width <= 0 {
 		width = defaultWidth
 	}
-	text = UnwrapMarkdownFences(text)
+	// A ```markdown fence that wraps a table is only unwrapped when rich table
+	// rendering is enabled (Rust `code_fence.rs`/`markdown.rs` gate on
+	// `preferences::current().tables`); otherwise the fence stays a code block
+	// and the source is preserved.
+	if CurrentRendering().Tables {
+		text = UnwrapMarkdownFences(text)
+	}
 	text, citationLinks := rewriteFileCitations(text, cwd)
 	text, localLinks, webLinks := rewriteLinksWithInfo(text, cwd)
 	localLinks = append(citationLinks, localLinks...)
@@ -478,7 +484,7 @@ func restoreSourceCodeBlocks(rendered string, blocks []sourceCodeBlock, themeID 
 			block := blocks[blockIndex]
 			var blockLines []string
 			switch {
-			case block.Mermaid && block.Closed && MermaidRenderingEnabled:
+			case block.Mermaid && block.Closed && CurrentRendering().Mermaid:
 				// Rust subtracts the block's indentation from the wrap width so a
 				// diagram only widens the transcript as far as the fence allows.
 				innerWidth := width - codextui.DisplayWidth(indent)

@@ -40,7 +40,9 @@ func plainMarkdownText(t *testing.T, source string, width int) string {
 // completed mermaid fence renders through the diagram renderer rather than as a
 // highlighted source block.
 func TestMermaidFencesUseNativeRendererForEveryFamily(t *testing.T) {
-	if !MermaidRenderingEnabled {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+	if !DefaultRendering().Mermaid {
 		t.Fatal("mermaid rendering must be enabled by default")
 	}
 	for _, source := range []string{
@@ -167,4 +169,38 @@ func firstOrEmpty(lines []string) string {
 		return ""
 	}
 	return lines[0]
+}
+
+// Mirrors Rust's `streaming/rendering_preferences_tests.rs`: a disabled renderer
+// preserves the original source instead of rendering it.
+func TestMarkdownRenderingPreferences(t *testing.T) {
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	mermaidSource := "```mermaid\nflowchart LR\nA --> B\n```\n"
+	InitRendering(Rendering{Mermaid: false, Math: true, Tables: true, Lists: true})
+	got := plainMarkdownText(t, mermaidSource, 100)
+	want := plainMarkdownText(t, strings.Replace(mermaidSource, "mermaid", "unknown", 1), 100)
+	if got != want {
+		t.Fatalf("disabled mermaid rendered %q, want the preserved source", got)
+	}
+	if strings.Contains(got, "\u250c") {
+		t.Fatalf("disabled mermaid still produced a diagram:\n%s", got)
+	}
+
+	// The table-fence unwrapping is gated the same way (Rust code_fence.rs), so a
+	// disabled table renderer keeps the pipe source inside its code fence.
+	tableSource := "```markdown\n| A | B |\n|---|---|\n| 1 | 2 |\n```\n"
+	InitRendering(Rendering{Mermaid: true, Math: true, Tables: true, Lists: true})
+	enabled := plainMarkdownText(t, tableSource, 60)
+	InitRendering(Rendering{Mermaid: true, Math: true, Tables: false, Lists: true})
+	disabled := plainMarkdownText(t, tableSource, 60)
+	if enabled == disabled {
+		t.Fatalf("tables preference had no effect:\n%s", enabled)
+	}
+	if strings.Contains(enabled, "|---|---|") {
+		t.Fatalf("enabled tables rendering kept the pipe source:\n%s", enabled)
+	}
+	if !strings.Contains(disabled, "|---|---|") {
+		t.Fatalf("disabled tables rendering lost the source:\n%s", disabled)
+	}
 }

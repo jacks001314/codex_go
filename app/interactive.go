@@ -45,6 +45,7 @@ import (
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 	idecontext "codex_go/tui/ide_context"
+	"codex_go/tui/markdown"
 	codextea "codex_go/tui/tea"
 	"codex_go/turn"
 	"codex_go/worktree"
@@ -1679,6 +1680,10 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		featureSettings = loaded.FeatureSettings()
 	}
 	userMarketplaces, gitMarketplaces := interactivePluginMarketplacesFromConfig(values)
+	// Rust seeds the Markdown rendering preferences from the effective config
+	// before the first preview and refreshes them when resolved session settings
+	// activate (markdown_render::preferences::init).
+	markdown.InitRenderingFromConfig(config.TuiRenderingFromValues(values))
 	return codextea.SettingsWriteResult{
 		FeatureSettings:         featureSettings,
 		UseMemories:             interactiveMemoryBoolFromConfig(values, "use_memories"),

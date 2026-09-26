@@ -12,11 +12,6 @@ import (
 // owned by the transcript, and unsupported syntax, resource limits and terminal
 // overflow keep the original code block behind a reason notice.
 
-// MermaidRenderingEnabled mirrors `preferences::current().mermaid`
-// (`TuiRendering::default().mermaid` is true). The TUI seeds it before startup
-// previews and refreshes it when resolved session settings become active.
-var MermaidRenderingEnabled = true
-
 // mermaidFallbackWidth mirrors Rust's `width.unwrap_or(120)`.
 const mermaidFallbackWidth = 120
 
