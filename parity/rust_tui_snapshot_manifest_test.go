@@ -22,6 +22,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
+	// Re-pinned to upstream 7b7d934408: #48551 added the math zero/big-wedge
+	// display snapshot.
 	// Re-pinned to upstream 75a714843b: #48547 added the blossom replay fade
 	// snapshot, #48548/#48549 added the table-copy continuation and the
 	// empty-selected-row copy spacing snapshots.
@@ -31,8 +33,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
 	// #48352 added the turn-tip placement snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1332 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1332", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1333 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1333", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -375,7 +377,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/markdown_render/snapshots",
-			Files:    25,
+			Files:    26,
 			Owner:    "tui/markdown_render, tui/mermaid",
 			Focus:    "markdown render web-link labels, Unicode math (inline/display/accents), and Mermaid text rendering",
 			Priority: []string{"markdown"},
