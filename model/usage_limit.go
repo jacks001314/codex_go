@@ -69,6 +69,19 @@ func decodeUsageLimitErrorBody(body []byte) (usageLimitErrorBody, bool) {
 	return *payload.Error, true
 }
 
+// usageLimitErrorBodyIsQuotaError mirrors Rust's quota arm inside the single
+// strict `UsageErrorResponse` decode (#44492): the `insufficient_quota` error
+// type or one of the quota error codes.
+func usageLimitErrorBodyIsQuotaError(body usageLimitErrorBody) bool {
+	if body.Type != nil && strings.TrimSpace(*body.Type) == "insufficient_quota" {
+		return true
+	}
+	if body.Code == nil {
+		return false
+	}
+	return responsesQuotaErrorCodes[strings.TrimSpace(*body.Code)]
+}
+
 // usageLimitEvidenceFromResponse assembles the evidence a usage-limit response
 // carries: the body's plan type, reset instant and window, plus the headers'
 // promo message, reached type and active limit name.

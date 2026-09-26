@@ -2953,10 +2953,6 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			}
 		}
 	}
-	// Rust #44492: HTTP 429 quota errors are usage-limit failures, not
-	// retry-limit failures. Recognize the quota error code set and the
-	// `insufficient_quota` type before falling back to the generic
-	// rate-limit handling.
 	// Rust #45602: a 503 body distinguishes model capacity from a retryable
 	// rate limit instead of treating both as one blanket overload.
 	if statusCode == http.StatusServiceUnavailable && payload.Error != nil {
@@ -2967,40 +2963,38 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			return &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
 		}
 	}
-	// Rust #48174 (api_bridge.rs): an HTTP 429 whose error type is
-	// `usage_limit_reached` is a usage-limit failure that preserves the
-	// server-selected window responsible for the limit.
-	if statusCode == http.StatusTooManyRequests && payload.Error != nil && strings.TrimSpace(payload.Error.Type) == "usage_limit_reached" {
-		// Rust only classifies inside the strict body decode, so a body whose
-		// declared fields are malformed falls through to the generic retry
-		// classification below.
+	if statusCode == http.StatusTooManyRequests {
+		// Rust #47967 (api_bridge.rs): the `flex_unavailable` code is checked on
+		// the lenient error object before the strict usage-error decode, so it
+		// stays a terminal Flex-capacity failure even when the body's other
+		// fields are malformed.
+		if payload.Error != nil && responseErrorCode(payload.Error) == "flex_unavailable" {
+			if strings.TrimSpace(message) == "" {
+				message = "Flex capacity unavailable."
+			}
+			return &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: statusCode, Message: message}
+		}
+		// Rust parses the 429 body once as `UsageErrorResponse`; a body it
+		// cannot decode skips every classification below and falls through to
+		// the generic (retryable) API error. The strict decode therefore gates
+		// the usage-limit (#48174), usage-not-included and quota (#44492)
+		// branches alike, rather than only the usage-limit branch.
 		if errorBody, ok := decodeUsageLimitErrorBody(body); ok {
-			return usageLimitReachedAPIError(statusCode, usageLimitEvidenceFromResponse(errorBody, headers))
+			switch {
+			case errorBody.Type != nil && strings.TrimSpace(*errorBody.Type) == "usage_limit_reached":
+				return usageLimitReachedAPIError(statusCode, usageLimitEvidenceFromResponse(errorBody, headers))
+			case errorBody.Type != nil && strings.TrimSpace(*errorBody.Type) == "usage_not_included":
+				if strings.TrimSpace(message) == "" {
+					message = http.StatusText(statusCode)
+				}
+				return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
+			case usageLimitErrorBodyIsQuotaError(errorBody):
+				if strings.TrimSpace(message) == "" {
+					message = http.StatusText(statusCode)
+				}
+				return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: statusCode, Message: message}
+			}
 		}
-	}
-	if statusCode == http.StatusTooManyRequests && responsesIsQuotaError(payload.Error) {
-		if strings.TrimSpace(message) == "" {
-			message = http.StatusText(statusCode)
-		}
-		return &codexapi.APIError{Kind: codexapi.ErrorQuotaExceeded, Status: statusCode, Message: message}
-	}
-	// Rust's api_bridge classifies a 429 whose error type is `usage_not_included`
-	// as UsageNotIncluded, the same kind the streamed `response.failed` path
-	// already reports for that code.
-	if statusCode == http.StatusTooManyRequests && payload.Error != nil && strings.TrimSpace(payload.Error.Type) == "usage_not_included" {
-		if strings.TrimSpace(message) == "" {
-			message = http.StatusText(statusCode)
-		}
-		return &codexapi.APIError{Kind: codexapi.ErrorUsageNotIncluded, Message: message}
-	}
-	// Rust #47967 (api_bridge.rs): an HTTP 429 whose body carries a
-	// `flex_unavailable` error is a terminal Flex-capacity failure, not a
-	// retryable rate limit.
-	if statusCode == http.StatusTooManyRequests && payload.Error != nil && responseErrorCode(payload.Error) == "flex_unavailable" {
-		if strings.TrimSpace(message) == "" {
-			message = "Flex capacity unavailable."
-		}
-		return &codexapi.APIError{Kind: codexapi.ErrorFlexUnavailable, Status: statusCode, Message: message}
 	}
 	if message == "" {
 		message = http.StatusText(statusCode)
@@ -3044,16 +3038,6 @@ var responsesQuotaErrorCodes = map[string]bool{
 	"organization_spend_limit_exceeded": true,
 	"project_spend_limit_exceeded":      true,
 	"organization_usage_limit_exceeded": true,
-}
-
-func responsesIsQuotaError(body *responsesAgentAPIErrorBody) bool {
-	if body == nil {
-		return false
-	}
-	if strings.TrimSpace(body.Type) == "insufficient_quota" {
-		return true
-	}
-	return responsesQuotaErrorCodes[strings.TrimSpace(responseErrorCode(body))]
 }
 
 func mapProviderAPIErrorMessage(providerName string, statusCode int, bodyText string, message string) string {
