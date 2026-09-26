@@ -172,3 +172,19 @@ func TestWarningsFooterNoticeLikeRust(t *testing.T) {
 func hasWarningNotice(view string) bool {
 	return strings.Contains(view, "\u26a0 1 warning") || strings.Contains(view, "\u26a0 1 \u00b7")
 }
+
+// Mirrors the popup gates of `show_warning_notice`: an open command popup keeps
+// the passive row for itself, so the warning notice yields.
+func TestWarningsFooterNoticeYieldsToPopupsLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30, ShowTooltips: &enabled})
+	model.Update(StatusMsg{Status: "warning: A runtime warning"})
+	if view := utils.StripANSI(model.View()); !hasWarningNotice(view) {
+		t.Fatalf("baseline notice missing:\n%s", view)
+	}
+	// Open the slash popup by typing `/`.
+	typeText(t, model, "/")
+	if view := utils.StripANSI(model.View()); hasWarningNotice(view) {
+		t.Fatalf("notice rendered while the slash popup is open:\n%s", view)
+	}
+}

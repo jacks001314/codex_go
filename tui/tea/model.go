@@ -3056,9 +3056,16 @@ func (m *Model) View() string {
 
 // passiveWarningNoticeApplies mirrors `show_warning_notice`'s reachable gates:
 // the notice shares the passive footer row, which exists on an empty composer or
-// a draft while no task runs.
+// a draft while no task runs, and never competes with a modal, an open popup or
+// the Vim search prompt (the esc-backtrack hint already replaces the row).
 func (m *Model) passiveWarningNoticeApplies() bool {
 	if m == nil {
+		return false
+	}
+	if m.modal != nil || m.slashPopup.Active || m.skillPopup.Active || m.mentionPopup != nil {
+		return false
+	}
+	if m.vimSearchMode {
 		return false
 	}
 	if strings.TrimSpace(m.composer.Value()) == "" {
