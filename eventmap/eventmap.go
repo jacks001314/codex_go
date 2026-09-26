@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 type ContentKind string
@@ -33,20 +34,20 @@ const (
 )
 
 type ResponseItem struct {
-	Kind            ResponseItemKind
-	ID              string
-	Role            string
-	Phase           string
-	Content         []ContentItem
+	Kind    ResponseItemKind
+	ID      string
+	Role    string
+	Phase   string
+	Content []ContentItem
 	// ContentItemKinds carries the harness-owned content classification aligned
 	// with Content, so omitted unsupported media can be tagged (Rust #40277).
 	ContentItemKinds []string
-	Summary         []string
-	RawContent      []string
-	WebSearchAction string
-	ImageStatus     string
-	RevisedPrompt   string
-	ImageResult     string
+	Summary          []string
+	RawContent       []string
+	WebSearchAction  string
+	ImageStatus      string
+	RevisedPrompt    string
+	ImageResult      string
 }
 
 type TurnItemKind string
@@ -106,15 +107,147 @@ var contextualDeveloperPrefixes = []string{
 
 func IsContextualUserMessageContent(message []ContentItem) bool {
 	for _, item := range message {
-		if item.Kind != ContentInputText {
-			continue
-		}
-		text := strings.TrimSpace(item.Text)
-		if strings.HasPrefix(text, "<contextual_user") || strings.HasPrefix(text, "<current_time") || strings.HasPrefix(text, "<plugin_instructions") {
+		if isContextualUserFragment(item) {
 			return true
 		}
 	}
 	return false
+}
+
+// contextualUserMarkedFragments lists Rust's `CONTEXTUAL_USER_FRAGMENT_MATCHERS`
+// marker pairs (core/src/context/contextual_user_message.rs): a user-role
+// message wrapped in any of these is hidden runtime context, not user
+// authorization.
+var contextualUserMarkedFragments = [][2]string{
+	{"<user_instructions>", "</user_instructions>"},
+	{"<environment_context>", "</environment_context>"},
+	{"<agent_message_board_notification>", "</agent_message_board_notification>"},
+	{"<skills_instructions>", "</skills_instructions>"},
+	{"<user_shell_command>", "</user_shell_command>"},
+	{"<turn_aborted>", "</turn_aborted>"},
+	{"<subagent_notification>", "</subagent_notification>"},
+	{"<recommended_plugins>", "</recommended_plugins>"},
+}
+
+// contextualUserWarningPrefixes are the legacy warning bodies Rust still
+// recognizes as injected context.
+var contextualUserWarningPrefixes = []string{
+	"Warning: The maximum number of unified exec processes you can keep open is",
+	"Warning: Your account was flagged for potentially high-risk cyber activity",
+}
+
+const (
+	applyPatchExecCommandWarningPrefix = "Warning: apply_patch was requested via "
+	applyPatchExecCommandWarningSuffix = "Use the apply_patch tool instead of exec_command."
+)
+
+// isContextualUserFragment mirrors Rust's `context::is_contextual_user_fragment`:
+// a hook prompt, or any standard contextual user fragment.
+func isContextualUserFragment(item ContentItem) bool {
+	if item.Kind != ContentInputText {
+		return false
+	}
+	return isHookPromptFragmentText(item.Text) || isStandardContextualUserText(item.Text)
+}
+
+// isStandardContextualUserText mirrors `is_standard_contextual_user_text`.
+func isStandardContextualUserText(text string) bool {
+	for _, markers := range contextualUserMarkedFragments {
+		if matchesMarkedText(markers[0], markers[1], text) {
+			return true
+		}
+	}
+	if isAdditionalContextFragmentText(text) {
+		return true
+	}
+	if isInternalModelContextFragmentText(text) {
+		return true
+	}
+	trimmed := strings.TrimSpace(text)
+	for _, prefix := range contextualUserWarningPrefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return strings.HasPrefix(trimmed, applyPatchExecCommandWarningPrefix) &&
+		strings.HasSuffix(trimmed, applyPatchExecCommandWarningSuffix)
+}
+
+// matchesMarkedText mirrors `matches_marked_text`: non-empty markers, the text
+// trimmed at the start and case-insensitively prefixed by the opening marker and
+// trimmed at the end and case-insensitively suffixed by the closing marker.
+func matchesMarkedText(start, end, text string) bool {
+	if start == "" || end == "" {
+		return false
+	}
+	trimmedStart := strings.TrimLeftFunc(text, unicode.IsSpace)
+	if len(trimmedStart) < len(start) || !strings.EqualFold(trimmedStart[:len(start)], start) {
+		return false
+	}
+	trimmedEnd := strings.TrimRightFunc(trimmedStart, unicode.IsSpace)
+	return len(trimmedEnd) >= len(end) && strings.EqualFold(trimmedEnd[len(trimmedEnd)-len(end):], end)
+}
+
+// isAdditionalContextFragmentText mirrors `AdditionalContextUserFragment`: the
+// text is `<external_<key>>...<value>...</external_<key>>`.
+func isAdditionalContextFragmentText(text string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(text), "<external_")
+	if !ok {
+		return false
+	}
+	key, valueAndClose, ok := strings.Cut(rest, ">")
+	if !ok {
+		return false
+	}
+	return strings.HasSuffix(valueAndClose, "</external_"+key+">")
+}
+
+// isInternalModelContextFragmentText mirrors `InternalModelContextFragment`: the
+// legacy goal context, or `<codex_internal_context source="<valid>">...</codex_internal_context>`.
+func isInternalModelContextFragmentText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "<goal_context>") && strings.HasSuffix(trimmed, "</goal_context>") {
+		return true
+	}
+	rest, ok := strings.CutPrefix(trimmed, "<codex_internal_context")
+	if !ok {
+		return false
+	}
+	rest, ok = strings.CutPrefix(rest, " source=\"")
+	if !ok {
+		return false
+	}
+	source, bodyAndClose, ok := strings.Cut(rest, "\">")
+	if !ok {
+		return false
+	}
+	return isValidInternalModelSource(source) && strings.HasSuffix(bodyAndClose, "</codex_internal_context>")
+}
+
+// isValidInternalModelSource mirrors `is_valid_source`: a lowercase ASCII word.
+func isValidInternalModelSource(source string) bool {
+	if source == "" {
+		return false
+	}
+	for index, ch := range source {
+		if index == 0 {
+			if ch < 'a' || ch > 'z' {
+				return false
+			}
+			continue
+		}
+		if (ch < 'a' || ch > 'z') && (ch < '0' || ch > '9') && ch != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// isHookPromptFragmentText recognizes a hook prompt fragment. Go's turn-item
+// parser matches the same `<hook_prompt` prefix; Rust additionally requires a
+// parseable body with a non-empty hook run id.
+func isHookPromptFragmentText(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), "<hook_prompt")
 }
 
 func IsContextualDevMessageContent(message []ContentItem) bool {

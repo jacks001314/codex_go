@@ -73,8 +73,42 @@ func TestParseAssistantReasoningWebSearchAndImage(t *testing.T) {
 }
 
 func TestContextualUserAndHookPrompt(t *testing.T) {
-	if !IsContextualUserMessageContent([]ContentItem{{Kind: ContentInputText, Text: "<current_time>now</current_time>"}}) {
-		t.Fatalf("IsContextualUserMessageContent() = false")
+	// Mirrors Rust's CONTEXTUAL_USER_FRAGMENT_MATCHERS: every injected user
+	// fragment is hidden runtime context.
+	contextual := []string{
+		"<user_instructions>follow</user_instructions>",
+		"  <environment_context>\n<cwd>/repo</cwd>\n</environment_context>  ",
+		"<agent_message_board_notification>board</agent_message_board_notification>",
+		"<skills_instructions>skills</skills_instructions>",
+		"<user_shell_command><command>ls</command></user_shell_command>",
+		"<turn_aborted>interrupted</turn_aborted>",
+		"<subagent_notification>agent done</subagent_notification>",
+		"<recommended_plugins>plugins</recommended_plugins>",
+		"<external_calendar>{\"a\":1}</external_calendar>",
+		"<codex_internal_context source=\"goal\">\nbody\n</codex_internal_context>",
+		"<goal_context>legacy goal</goal_context>",
+		"Warning: The maximum number of unified exec processes you can keep open is 5",
+		"Warning: Your account was flagged for potentially high-risk cyber activity",
+		"Warning: apply_patch was requested via exec_command. Use the apply_patch tool instead of exec_command.",
+	}
+	for _, text := range contextual {
+		if !IsContextualUserMessageContent([]ContentItem{{Kind: ContentInputText, Text: text}}) {
+			t.Fatalf("IsContextualUserMessageContent(%q) = false, want true", text)
+		}
+	}
+	// A developer-role fragment, plain text and a partially marked message are
+	// not contextual user content.
+	for _, text := range []string{
+		"<current_time>now</current_time>",
+		"<current_time_reminder>It is now.</current_time_reminder>",
+		"hello",
+		"<user_instructions>unclosed",
+		"<codex_internal_context source=\"Bad\">body</codex_internal_context>",
+		"Warning: apply_patch was requested via exec_command.",
+	} {
+		if IsContextualUserMessageContent([]ContentItem{{Kind: ContentInputText, Text: text}}) {
+			t.Fatalf("IsContextualUserMessageContent(%q) = true, want false", text)
+		}
 	}
 	hook, ok := ParseTurnItem(&ResponseItem{Kind: ResponseMessage, Role: "user", ID: "h1", Content: []ContentItem{{Kind: ContentInputText, Text: "<hook_prompt>hi</hook_prompt>"}}})
 	if !ok || hook.Kind != TurnHookPrompt {

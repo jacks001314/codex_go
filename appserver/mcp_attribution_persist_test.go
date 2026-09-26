@@ -42,14 +42,17 @@ func TestIsMcpAttributionTurnBoundaryMatchesRust(t *testing.T) {
 		{name: "agent message", item: session.Item{Type: "agent_message"}, want: true},
 		{name: "plain user message", item: session.Item{Type: "message", Role: "user", Text: "hello"}, want: true},
 		{
-			// The contextual classifier is Go's canonical
-			// `eventmap.IsContextualUserMessageContent`, which recognizes the
-			// `<current_time>`/`<contextual_user>`/`<plugin_instructions>`
-			// markers. (Its prefix set is narrower than Rust's
-			// `context::is_contextual_user_fragment` matcher list; recorded.)
-			name: "contextual current_time",
-			item: session.Item{Type: "message", Role: "user", Content: []session.ContentPart{{Type: "input_text", Text: "<current_time>now</current_time>"}}},
+			// `eventmap.IsContextualUserMessageContent` mirrors Rust's
+			// `context::is_contextual_user_fragment`, so an injected user fragment
+			// is not a turn boundary.
+			name: "contextual user fragment",
+			item: session.Item{Type: "message", Role: "user", Content: []session.ContentPart{{Type: "input_text", Text: "<environment_context>\n<cwd>/repo</cwd>\n</environment_context>"}}},
 			want: false,
+		},
+		{
+			name: "developer current_time reminder",
+			item: session.Item{Type: "message", Role: "user", Content: []session.ContentPart{{Type: "input_text", Text: "<current_time>now</current_time>"}}},
+			want: true,
 		},
 		{name: "assistant message", item: session.Item{Type: "message", Role: "assistant", Text: "done"}, want: false},
 		{
