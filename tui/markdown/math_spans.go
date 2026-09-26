@@ -31,30 +31,55 @@ const (
 	mathPlaceholderSuffix = "END"
 )
 
+// mathSpanScan is the full result of Rust's `MathMarkdown::new`: the masked
+// rendering copy, the placeholder restorations, and the streaming bookkeeping
+// (`pending_start`/`display_ranges`) that Rust's tests pin even though the
+// renderer consumes only the first two.
+type mathSpanScan struct {
+	placeholders map[string]string
+	masked       string
+	// pendingStart is the line start of an unterminated standalone display that
+	// the streaming layer keeps mutable (Rust's `pending_start`).
+	pendingStart *int
+	// displayRanges are the source ranges of every matched or unterminated
+	// standalone display (Rust's `display_ranges`).
+	displayRanges [][2]int
+}
+
 // protectMathSpans masks admitted math spans in the source, returning the
 // placeholder map and the masked text. It is a no-op when math rendering is
 // disabled or the source cannot contain math.
 func protectMathSpans(text string, width int) (map[string]string, string) {
+	result := analyzeMathSpans(text, width)
+	return result.placeholders, result.masked
+}
+
+// analyzeMathSpans runs the source scan and returns every field Rust's
+// `MathMarkdown::new` records.
+func analyzeMathSpans(text string, width int) mathSpanScan {
+	result := mathSpanScan{masked: text}
 	if !CurrentRendering().Math {
-		return nil, text
+		return result
 	}
 	if !strings.Contains(text, "$") && !strings.Contains(text, `\(`) && !strings.Contains(text, `\[`) {
-		return nil, text
+		return result
 	}
 	document := goldmark.DefaultParser().Parse(gmtext.NewReader([]byte(text)))
-	protected := mathProtectedRanges(document, text)
-	containers := mathContainerRanges(document)
 	math := &mathScanner{
 		text:       text,
 		width:      width,
-		protected:  protected,
-		containers: containers,
+		protected:  mathProtectedRanges(document, text),
+		containers: mathContainerRanges(document),
 	}
 	math.scan()
 	if len(math.placeholders) == 0 {
-		return nil, text
+		return result
 	}
-	return math.placeholders, math.masked.String()
+	result.placeholders = math.placeholders
+	result.masked = math.masked.String()
+	result.pendingStart = math.pendingStart
+	result.displayRanges = math.displayRanges
+	return result
 }
 
 type mathScanner struct {
@@ -65,6 +90,8 @@ type mathScanner struct {
 	masked          strings.Builder
 	placeholders    map[string]string
 	nextPlaceholder int
+	pendingStart    *int
+	displayRanges   [][2]int
 }
 
 func (s *mathScanner) placeholderFor(rendered string) string {
@@ -180,6 +207,16 @@ func (s *mathScanner) scan() {
 			end = position
 			break
 		}
+		// Every matched or still-open standalone display records its source span,
+		// so a streamed preview can keep the region mutable (Rust pushes before
+		// the rejected-display handling).
+		if display && (!rejectedDisplay || end >= 0 || len(body) < maxMathBytes) {
+			endOffset := len(text)
+			if end >= 0 {
+				endOffset = end + len(close)
+			}
+			s.displayRanges = append(s.displayRanges, [2]int{start, endOffset})
+		}
 		// Retain rejected pairing only within the lookahead window, so shell PID
 		// dollars cannot keep the whole streamed response mutable.
 		if rejectedDisplay || rejectedClose {
@@ -200,6 +237,10 @@ func (s *mathScanner) scan() {
 				// Streamed display content with no closer yet stays inert: the
 				// tail is masked so the Markdown parser sees text, but restored
 				// verbatim afterwards (Rust records the tail as a replacement).
+				if len(body) < maxMathBytes && s.pendingStart == nil {
+					line := lineStart
+					s.pendingStart = &line
+				}
 				emitTo(start)
 				s.masked.WriteString(s.placeholderFor(text[start:]))
 				cursor = len(text)

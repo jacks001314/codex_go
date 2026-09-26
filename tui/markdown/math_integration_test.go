@@ -151,3 +151,42 @@ func TestMathPreferenceGateLikeRust(t *testing.T) {
 		t.Fatalf("disabled math rendered = %#v", got)
 	}
 }
+
+// Mirrors Rust's `unicode_math_pending_display_tracks_original_offset`: an
+// unterminated standalone display records the start of its own line as
+// `pending_start` (so a streamed preview keeps the region mutable), while a
+// fenced code block, a prose-prefixed `$$` and an over-budget tail do not.
+func TestMathPendingDisplayTracksOriginalOffsetLikeRust(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	cases := []struct {
+		name   string
+		source string
+		want   int
+		set    bool
+	}{
+		{name: "standalone display", source: "Prose\n\n$$\nx^2\n\n", want: 7, set: true},
+		{name: "fenced code block", source: "```\n$$\n"},
+		{name: "shell pid", source: "echo $$\n"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			scan := analyzeMathSpans(testCase.source, 80)
+			if testCase.set {
+				if scan.pendingStart == nil || *scan.pendingStart != testCase.want {
+					t.Fatalf("pendingStart = %v, want %d", scan.pendingStart, testCase.want)
+				}
+			} else if scan.pendingStart != nil {
+				t.Fatalf("pendingStart = %d, want none", *scan.pendingStart)
+			}
+		})
+	}
+
+	// An over-budget tail is left to the ordinary renderer, so no pending region
+	// is tracked.
+	oversized := "$$\n" + strings.Repeat("x", maxMathBytes+1)
+	if scan := analyzeMathSpans(oversized, 80); scan.pendingStart != nil {
+		t.Fatalf("oversized pending display = %d, want none", *scan.pendingStart)
+	}
+}
