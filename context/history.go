@@ -32,10 +32,34 @@ type HistoryManager struct {
 	items          []HistoryItem
 	historyVersion uint64
 	tokenInfo      *TokenUsageInfo
+	// referenceContextItem mirrors Rust's `ContextManager::reference_context_item`
+	// baseline: the persisted per-turn `TurnContextItem` (a JSON object) that the
+	// next real turn diffs against. Go has no typed `TurnContextItem` at this
+	// layer, so the raw persisted payload stands in for it. Rollback clears the
+	// baseline when it trims a mixed `build_initial_context` bundle, so the next
+	// turn fully reinjects context instead of diffing against stale state
+	// (Rust context_manager/history.rs `trim_pre_turn_context_updates`).
+	referenceContextItem json.RawMessage
 }
 
 func NewHistoryManager() *HistoryManager {
 	return &HistoryManager{tokenInfo: &TokenUsageInfo{}}
+}
+
+// SetReferenceContextItem records the reference-context baseline (Rust
+// `ContextManager::set_reference_context_item`). Passing nil clears it.
+func (m *HistoryManager) SetReferenceContextItem(item json.RawMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.referenceContextItem = append(json.RawMessage(nil), item...)
+}
+
+// ReferenceContextItem returns the recorded reference-context baseline, or nil
+// when none is stored (Rust `ContextManager::reference_context_item`).
+func (m *HistoryManager) ReferenceContextItem() json.RawMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append(json.RawMessage(nil), m.referenceContextItem...)
 }
 
 func (m *HistoryManager) RecordItems(items ...HistoryItem) {
@@ -90,13 +114,51 @@ func (m *HistoryManager) DropLastUserTurns(count uint32) {
 	if len(positions) == 0 {
 		return
 	}
+	firstInstructionTurn := positions[0]
 	n := int(count)
-	cut := positions[0]
+	cut := firstInstructionTurn
 	if n < len(positions) {
 		cut = positions[len(positions)-n]
 	}
+	cut = m.trimPreTurnContextUpdates(firstInstructionTurn, cut)
 	m.items = cloneItems(m.items[:cut])
 	m.historyVersion++
+}
+
+// trimPreTurnContextUpdates mirrors Rust's `trim_pre_turn_context_updates`: it
+// walks backward from the rollback cut and removes contiguous contextual
+// developer/user context-update items sitting immediately above the boundary,
+// never crossing firstInstructionTurn so session-prefix items survive rollback.
+//
+// A trimmed developer message that mixes contextual fragments with persistent
+// developer text (a `build_initial_context` bundle) is not reconstructible from
+// steady-state diffs, so the reference-context baseline is cleared and the next
+// real turn fully reinjects context.
+func (m *HistoryManager) trimPreTurnContextUpdates(firstInstructionTurn, cut int) int {
+	for cut > firstInstructionTurn {
+		item := &m.items[cut-1]
+		if item.Kind != eventmap.ResponseMessage {
+			break
+		}
+		switch item.Role {
+		case "developer":
+			if !eventmap.IsContextualDevMessageContent(item.Content) {
+				return cut
+			}
+			if eventmap.HasNonContextualDevMessageContent(item.Content) {
+				m.referenceContextItem = nil
+			}
+			cut--
+		case "user":
+			if !eventmap.IsContextualUserMessageContent(item.Content) {
+				return cut
+			}
+			cut--
+		default:
+			return cut
+		}
+	}
+	return cut
 }
 
 func (m *HistoryManager) ReplaceLastTurnImages(placeholder string) bool {

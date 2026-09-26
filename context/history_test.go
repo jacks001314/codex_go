@@ -43,6 +43,101 @@ func TestDropLastUserTurns(t *testing.T) {
 	}
 }
 
+func textMessage(role string, id string, text string) HistoryItem {
+	return HistoryItem{
+		Kind:    eventmap.ResponseMessage,
+		Role:    role,
+		ID:      id,
+		Content: []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: text}},
+	}
+}
+
+func outputMessage(role string, id string, text string) HistoryItem {
+	return HistoryItem{
+		Kind:    eventmap.ResponseMessage,
+		Role:    role,
+		ID:      id,
+		Content: []eventmap.ContentItem{{Kind: eventmap.ContentOutputText, Text: text}},
+	}
+}
+
+// TestDropLastUserTurnsTrimsContextUpdatesAboveRolledBackTurn mirrors Rust
+// history_tests::drop_last_n_user_turns_trims_context_updates_above_rolled_back_turn:
+// the contiguous contextual developer/user items above the rolled-back turn are
+// trimmed, while a purely contextual bundle leaves the reference baseline intact.
+func TestDropLastUserTurnsTrimsContextUpdatesAboveRolledBackTurn(t *testing.T) {
+	manager := NewHistoryManager()
+	manager.RecordItems(
+		outputMessage("assistant", "prefix", "session prefix item"),
+		textMessage("user", "u1", "turn 1 user"),
+		outputMessage("assistant", "a1", "turn 1 assistant"),
+		textMessage("developer", "d1", "<managed_developer_instructions>\nROLLED_BACK_MANAGED_INSTRUCTIONS\n</managed_developer_instructions>"),
+		textMessage("developer", "d2", "<apps_instructions>\nROLLED_BACK_APPS_INSTRUCTIONS"),
+		textMessage("developer", "d3", "<plugins_instructions>\nROLLED_BACK_PLUGIN_INSTRUCTIONS"),
+		textMessage("developer", "d4", "<environments_instructions>\nROLLED_BACK_ENVIRONMENT_INSTRUCTIONS"),
+		textMessage("developer", "d5", "<collaboration_mode>ROLLED_BACK_DEV_INSTRUCTIONS</collaboration_mode>"),
+		textMessage("developer", "d6", "<multi_agent_role>ROLLED_BACK_MULTI_AGENT_ROLE</multi_agent_role>"),
+		textMessage("developer", "d7", "<multi_agent_mode>ROLLED_BACK_MULTI_AGENT_MODE</multi_agent_mode>"),
+		textMessage("user", "ctx", "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>"),
+		textMessage("user", "u2", "turn 2 user"),
+		outputMessage("assistant", "a2", "turn 2 assistant"),
+	)
+	baseline := []byte(`{"turn_id":"reference-turn","model":"gpt-test"}`)
+	manager.SetReferenceContextItem(baseline)
+
+	manager.DropLastUserTurns(1)
+
+	items := manager.RawItems()
+	wantIDs := []string{"prefix", "u1", "a1"}
+	if len(items) != len(wantIDs) {
+		t.Fatalf("items = %#v, want %d items", items, len(wantIDs))
+	}
+	for i, id := range wantIDs {
+		if items[i].ID != id {
+			t.Fatalf("items[%d].ID = %q, want %q (items=%#v)", i, items[i].ID, id, items)
+		}
+	}
+	if got := manager.ReferenceContextItem(); string(got) != string(baseline) {
+		t.Fatalf("reference context item = %s, want %s", got, baseline)
+	}
+}
+
+// TestDropLastUserTurnsClearsReferenceContextForMixedDeveloperContextBundles
+// mirrors Rust
+// history_tests::drop_last_n_user_turns_clears_reference_context_for_mixed_developer_context_bundles:
+// a trimmed developer message mixing contextual fragments with persistent
+// developer text is not reconstructible, so the baseline is cleared.
+func TestDropLastUserTurnsClearsReferenceContextForMixedDeveloperContextBundles(t *testing.T) {
+	manager := NewHistoryManager()
+	manager.RecordItems(
+		textMessage("user", "u1", "turn 1 user"),
+		outputMessage("assistant", "a1", "turn 1 assistant"),
+		HistoryItem{
+			Kind: eventmap.ResponseMessage,
+			Role: "developer",
+			ID:   "d1",
+			Content: []eventmap.ContentItem{
+				{Kind: eventmap.ContentInputText, Text: "<permissions instructions>contextual permissions</permissions instructions>"},
+				{Kind: eventmap.ContentInputText, Text: "persistent plugin instructions"},
+			},
+		},
+		textMessage("user", "ctx", "<environment_context><cwd>PRETURN_CONTEXT_DIFF_CWD</cwd></environment_context>"),
+		textMessage("user", "u2", "turn 2 user"),
+		outputMessage("assistant", "a2", "turn 2 assistant"),
+	)
+	manager.SetReferenceContextItem([]byte(`{"turn_id":"reference-turn"}`))
+
+	manager.DropLastUserTurns(1)
+
+	items := manager.RawItems()
+	if len(items) != 2 || items[0].ID != "u1" || items[1].ID != "a1" {
+		t.Fatalf("items = %#v, want [u1 a1]", items)
+	}
+	if got := manager.ReferenceContextItem(); len(got) != 0 {
+		t.Fatalf("reference context item = %s, want cleared", got)
+	}
+}
+
 func TestStripImagesAndBuildTextMessage(t *testing.T) {
 	items := []HistoryItem{{
 		Kind: eventmap.ResponseMessage,
@@ -100,7 +195,7 @@ func TestForPromptTagsOmittedImageUnsupported(t *testing.T) {
 	manager := NewHistoryManager()
 	manager.RecordItems(
 		HistoryItem{Kind: eventmap.ResponseMessage, Role: "user", ID: "u1",
-			Content: []eventmap.ContentItem{{Kind: eventmap.ContentInputImage, ImageURL: "data:image/png;base64,AAA"}},
+			Content:          []eventmap.ContentItem{{Kind: eventmap.ContentInputImage, ImageURL: "data:image/png;base64,AAA"}},
 			ContentItemKinds: []string{"user.image"}},
 	)
 	prompt := manager.ForPrompt(false)
