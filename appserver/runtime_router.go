@@ -13520,16 +13520,51 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 		return nil
 	}
 	r.executedToolCallsMu.Lock()
-	defer r.executedToolCallsMu.Unlock()
 	if r.executedToolCalls == nil {
 		r.executedToolCalls = map[string]*turn.ExecutedToolCallRecorder{}
 	}
 	recorder := r.executedToolCalls[threadID]
-	if recorder == nil {
-		recorder = turn.NewExecutedToolCallRecorder()
+	r.executedToolCallsMu.Unlock()
+	if recorder != nil {
+		return recorder
+	}
+	// Seed from the thread's persisted history outside the map lock so a resume
+	// or fork restores the cumulative MCP attribution before any new source is
+	// recorded (Rust `ExecutedToolCalls::new(features, history)`).
+	fresh, checkpoints := r.mcpAttributionHistory(threadID)
+	recorder = turn.NewExecutedToolCallRecorder()
+	recorder.SeedMcpAttribution(fresh, checkpoints)
+	r.executedToolCallsMu.Lock()
+	if existing := r.executedToolCalls[threadID]; existing != nil {
+		recorder = existing
+	} else {
 		r.executedToolCalls[threadID] = recorder
 	}
+	r.executedToolCallsMu.Unlock()
 	return recorder
+}
+
+// mcpAttributionHistory returns the thread's persisted attribution checkpoints
+// in rollout order, and whether the history is fresh (an empty thread, where a
+// missing checkpoint is expected rather than evidence of pre-attribution
+// history). Go's record already carries compaction replacement items with their
+// harness-metadata sidecar, so a single ordered pass is enough.
+func (r *RuntimeRouter) mcpAttributionHistory(threadID string) (bool, []retainedctx.McpAttribution) {
+	if r == nil {
+		return true, nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, true)
+	if err != nil || record == nil || len(record.Items) == 0 {
+		return true, nil
+	}
+	checkpoints := make([]retainedctx.McpAttribution, 0, 1)
+	for i := range record.Items {
+		metadata := harnessMetadataFromSessionItem(&record.Items[i])
+		if metadata != nil && metadata.McpAttribution != nil {
+			checkpoints = append(checkpoints, *metadata.McpAttribution)
+		}
+	}
+	return false, checkpoints
 }
 
 func (r *RuntimeRouter) deleteExecutedToolCallRecorder(threadID string) {

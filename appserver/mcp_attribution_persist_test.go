@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -142,5 +143,58 @@ func TestMcpAttributionCheckpointSkipsUnpersistedBatches(t *testing.T) {
 	}
 	if items[0].Data != nil {
 		t.Fatalf("unpersisted batch annotated: %#v", items[0].Data)
+	}
+}
+
+// Mirrors Rust's `ExecutedToolCalls::new(features, history)` restore: a resumed
+// or forked thread seeds the recorder from its persisted checkpoints, pre-
+// attribution history reports the missing-checkpoint error, and an empty thread
+// starts clean.
+func TestExecutedToolCallRecorderSeedsFromThreadHistory(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-mcp-attribution-seed")
+	item := func(attribution string) session.Item {
+		item := session.Item{ID: "item-" + attribution, Type: "message", Role: "user", Text: "hello"}
+		if attribution != "" {
+			item.Data = map[string]any{"harness_metadata": json.RawMessage(`{"mcp_attribution":` + attribution + `}`)}
+		}
+		return item
+	}
+	initial := `{"status":"complete","sources":[{"server_name":"example","tool_name":"search","first_turn_id":"turn_1"}]}`
+	cumulative := `{"status":"complete","sources":[{"server_name":"example","tool_name":"search","first_turn_id":"turn_1"},{"server_name":"example","tool_name":"fetch","first_turn_id":"turn_2"}]}`
+	if err := store.Save(&session.Record{ID: threadID, Items: []session.Item{item(initial), item(cumulative)}}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	restored := router.executedToolCallRecorder(string(threadID)).McpAttributionSnapshot()
+	want := retainedctx.McpAttribution{
+		Status: retainedctx.McpAttributionStatusComplete,
+		Sources: []retainedctx.McpAttributionSource{
+			{ServerName: "example", ToolName: "search", FirstTurnID: "turn_1"},
+			{ServerName: "example", ToolName: "fetch", FirstTurnID: "turn_2"},
+		},
+	}
+	if !reflect.DeepEqual(restored, want) {
+		t.Fatalf("restored attribution = %#v, want %#v", restored, want)
+	}
+	if again := router.executedToolCallRecorder(string(threadID)); again != router.executedToolCallRecorder(string(threadID)) {
+		t.Fatal("seeding replaced the cached recorder")
+	}
+
+	// An empty thread is a fresh history: no checkpoint and no error.
+	if got := router.executedToolCallRecorder("thread-empty").McpAttributionSnapshot(); got.Status != retainedctx.McpAttributionStatusNone {
+		t.Fatalf("empty thread attribution = %#v, want none", got)
+	}
+
+	// A legacy thread with items but no checkpoint cannot prove earlier context
+	// was MCP-free.
+	legacy := session.ThreadID("thread-mcp-attribution-legacy")
+	if err := store.Save(&session.Record{ID: legacy, Items: []session.Item{item("")}}); err != nil {
+		t.Fatalf("Save(legacy) error = %v", err)
+	}
+	got := router.executedToolCallRecorder(string(legacy)).McpAttributionSnapshot()
+	if got.Status != retainedctx.McpAttributionStatusAttributionError ||
+		got.ErrorReason == nil || *got.ErrorReason != retainedctx.McpAttributionErrorHistoryMissingCheckpoint {
+		t.Fatalf("legacy thread attribution = %#v, want the missing-checkpoint error", got)
 	}
 }
