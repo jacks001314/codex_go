@@ -9,27 +9,23 @@ import (
 
 // Rust parity: codex-rs/tui/src/history_cell/session.rs.
 
-const SessionHeaderMaxInnerWidth = 56
-
 type SessionHeaderHistoryCell struct {
 	Version         string
 	Model           string
 	ReasoningEffort string
-	ShowFastStatus  bool
 	Directory       string
 	YoloMode        bool
 	// Greeting is the session's selected startup greeting (Rust's shared
-	// `OnceLock<Greeting>`). When set, the header renders as the compact welcome
-	// banner instead of the card.
+	// `OnceLock<Greeting>`). When set, the header appends the greeting beneath
+	// the directory line.
 	Greeting string
 }
 
-func NewSessionHeader(model string, reasoningEffort string, showFastStatus bool, directory string, version string) SessionHeaderHistoryCell {
+func NewSessionHeader(model string, reasoningEffort string, directory string, version string) SessionHeaderHistoryCell {
 	return SessionHeaderHistoryCell{
 		Version:         strings.TrimSpace(version),
 		Model:           strings.TrimSpace(model),
 		ReasoningEffort: strings.TrimSpace(reasoningEffort),
-		ShowFastStatus:  showFastStatus,
 		Directory:       strings.TrimSpace(directory),
 	}
 }
@@ -47,61 +43,33 @@ func (c SessionHeaderHistoryCell) WithGreeting(greeting string) SessionHeaderHis
 }
 
 func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
-	if c.Greeting != "" {
-		if width <= 0 {
-			return nil
-		}
-		lines := c.compactBannerLines(width)
-		for i := range lines {
-			lines[i] = tui.TruncateWithEllipsis(lines[i], width)
-		}
-		return lines
-	}
-	if width < 4 {
+	if width <= 0 {
 		return nil
 	}
-	innerWidth := min(width-4, SessionHeaderMaxInnerWidth)
-	if innerWidth < 1 {
-		return nil
-	}
-	lines := []string{
-		">_ gcode " + c.versionLabel(),
-		"",
-		c.modelLine(),
-		c.directoryLine(innerWidth),
-	}
-	if c.YoloMode {
-		lines = append(lines, "permissions: YOLO mode")
-	}
-	for i := range lines {
-		lines[i] = tui.TruncateWithEllipsis(lines[i], innerWidth)
-	}
-	return historyBorder(lines, innerWidth)
-}
-
-// compactBannerLines mirrors Rust's `compact_hyperlink_lines` when a greeting is
-// present: a compact, borderless welcome banner with the greeting last. Rust
-// colours the prompt marker and greeting with the theme accent; Go's session
-// header renders plain lines like the card it replaces.
-func (c SessionHeaderHistoryCell) compactBannerLines(width int) []string {
+	// Rust #48562: every session header (new, resume, fork, clear-screen) uses
+	// the compact borderless title/directory layout; the boxed model row is gone.
 	lines := []string{
 		"",
 		"  >_ gcode " + c.versionLabel(),
-		"     " + c.formatDirectory(max(width-5, 1)),
+		"     " + c.formatDirectoryLimit(width-5),
 	}
 	if c.YoloMode {
 		lines = append(lines, "  permissions: YOLO mode")
 	}
-	return append(lines, "", "  "+c.Greeting)
+	if c.Greeting != "" {
+		// The tip/help that follows has its own normal composite separator.
+		lines = append(lines, "", "  "+c.Greeting)
+	}
+	for i := range lines {
+		lines[i] = tui.TruncateWithEllipsis(lines[i], width)
+	}
+	return lines
 }
 
 func (c SessionHeaderHistoryCell) RawLines() []string {
 	if c.Greeting != "" {
-		lines := c.compactBannerLines(1 << 30)
-		for i := range lines {
-			lines[i] = strings.TrimRight(lines[i], " ")
-		}
-		return lines
+		// Rust's greeting raw output is the display lines at maximum width.
+		return c.DisplayLines(1 << 30)
 	}
 	lines := []string{
 		"gcode " + c.versionLabel(),
@@ -122,25 +90,13 @@ func (c SessionHeaderHistoryCell) versionLabel() string {
 	return "(v" + version + ")"
 }
 
-func (c SessionHeaderHistoryCell) modelLine() string {
-	line := "model: " + firstNonEmptyHistory(c.Model, "default")
-	if c.ReasoningEffort != "" {
-		line += " " + c.ReasoningEffort
+// formatDirectoryLimit mirrors Rust's `format_directory(Some(max_width))`: a zero
+// or negative budget yields an empty path instead of Go's "no limit" sentinel.
+func (c SessionHeaderHistoryCell) formatDirectoryLimit(maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
 	}
-	if c.ShowFastStatus {
-		line += "   fast"
-	}
-	line += "   /model to change"
-	return line
-}
-
-func (c SessionHeaderHistoryCell) directoryLine(innerWidth int) string {
-	prefix := "directory: "
-	maxPathWidth := innerWidth - tui.DisplayWidth(prefix)
-	if maxPathWidth < 1 {
-		maxPathWidth = 1
-	}
-	return prefix + c.formatDirectory(maxPathWidth)
+	return c.formatDirectory(maxWidth)
 }
 
 func (c SessionHeaderHistoryCell) formatDirectory(maxWidth int) string {
@@ -195,11 +151,3 @@ func (c SessionInfoCell) RawLines() []string {
 	return joinCellLines(c.Parts, 0, true)
 }
 
-func historyBorder(lines []string, innerWidth int) []string {
-	out := []string{"\u256d" + strings.Repeat("\u2500", innerWidth+2) + "\u256e"}
-	for _, line := range lines {
-		out = append(out, "\u2502 "+padRightRunes(line, innerWidth)+" \u2502")
-	}
-	out = append(out, "\u2570"+strings.Repeat("\u2500", innerWidth+2)+"\u256f")
-	return out
-}

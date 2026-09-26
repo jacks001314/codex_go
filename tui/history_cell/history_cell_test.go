@@ -610,17 +610,20 @@ func TestPatchSearchAndSessionHistoryCells(t *testing.T) {
 		t.Fatalf("active search raw = %q", got)
 	}
 
-	header := NewSessionHeader("gpt-5", "high", true, `D:\repo\project`, "1.2.3").WithYoloMode(true)
+	header := NewSessionHeader("gpt-5", "high", `D:\repo\project`, "1.2.3").WithYoloMode(true)
 	headerDisplay := strings.Join(header.DisplayLines(80), "\n")
-	for _, want := range []string{"gcode (v1.2.3)", "model: gpt-5 high", "fast", "permissions: YOLO mode"} {
+	for _, want := range []string{">_ gcode (v1.2.3)", "project", "permissions: YOLO mode"} {
 		if !strings.Contains(headerDisplay, want) {
 			t.Fatalf("session header missing %q:\n%s", want, headerDisplay)
 		}
 	}
-	halfwidthHeader := NewSessionHeader("gpt-5", "", false, "\uff76\uff9e\uff8a\uff9f", "1")
+	if strings.Contains(headerDisplay, "model:") {
+		t.Fatalf("borderless session header must not carry the boxed model row:\n%s", headerDisplay)
+	}
+	halfwidthHeader := NewSessionHeader("gpt-5", "", "\uff76\uff9e\uff8a\uff9f", "1")
 	for _, line := range halfwidthHeader.DisplayLines(16) {
-		if tui.DisplayWidth(line) != 16 {
-			t.Fatalf("halfwidth session border width=%d line=%q", tui.DisplayWidth(line), line)
+		if tui.DisplayWidth(line) > 16 {
+			t.Fatalf("halfwidth session header exceeds width=%d line=%q", tui.DisplayWidth(line), line)
 		}
 	}
 	info := NewSessionInfo(header, true, "")

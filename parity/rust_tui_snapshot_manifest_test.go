@@ -22,6 +22,9 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	manifest := rustTUISnapshotManifest()
 
+	// Re-pinned to upstream e8fdbf1f7c: #48562 removed the boxed session-header
+	// snapshots (the halfwidth sound-marks, clear-UI fast-status and
+	// thread-read-model ones) as every session header became borderless.
 	// Re-pinned to upstream 6a39914e37: #48560 added the working-tip
 	// mouse-selection snapshot.
 	// Re-pinned to upstream 7b7d934408: #48551 added the math zero/big-wedge
@@ -35,8 +38,8 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
 	// #48352 added the turn-tip placement snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1334 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1334", got)
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1331 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1331", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -365,7 +368,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// computer activity, image-label merge, compact patch, and
 			// request-user-input completed/interrupted results.
 			// #48101 added the truncated multiline `/ps` command preview.
-			Files:    91,
+			// #48562 removed the halfwidth sound-marks header snapshot with the
+			// boxed card.
+			Files:    90,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -438,7 +443,9 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// tui/src/pager_overlay/snapshots, and #46733/#46750 added the
 			// owned startup draft layout and the wheel/selection autoscroll
 			// guard.
-			Files:    191,
+			// #48562 removed the clear-UI fast-status and thread-read-model
+			// header snapshots with the boxed card.
+			Files:    189,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},

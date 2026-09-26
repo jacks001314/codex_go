@@ -6566,7 +6566,6 @@ func (m *Model) addStartupSessionHeader(version string) {
 	header := historycell.NewSessionHeader(
 		m.modelDisplayName(m.State.Model),
 		m.State.EffectiveReasoningEffort(),
-		m.sessionShowFastStatus(),
 		cwd,
 		firstNonEmpty(strings.TrimSpace(version), "dev"),
 	).WithGreeting(m.sessionGreeting)

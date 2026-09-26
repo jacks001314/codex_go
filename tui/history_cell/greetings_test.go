@@ -43,10 +43,11 @@ func TestGreetingsCatalogLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's `history_cell/session.rs` greeting banner: a bound greeting
-// renders the compact, borderless welcome banner instead of the card.
+// Mirrors Rust's `history_cell/session.rs` session header: the borderless
+// title/directory layout is shared by every flow, and a bound greeting appends
+// its phrase beneath the directory line.
 func TestSessionHeaderGreetingBannerLikeRust(t *testing.T) {
-	header := NewSessionHeader("gpt-5", "high", true, `D:\repo`, "1.2.3").WithGreeting("Pull up a prompt.")
+	header := NewSessionHeader("gpt-5", "high", `D:\repo`, "1.2.3").WithGreeting("Pull up a prompt.")
 	lines := header.DisplayLines(80)
 	joined := strings.Join(lines, "\n")
 	for _, want := range []string{">_ gcode (v1.2.3)", `D:\repo`, "Pull up a prompt."} {
@@ -71,9 +72,9 @@ func TestSessionHeaderGreetingBannerLikeRust(t *testing.T) {
 		t.Fatalf("raw banner = %q", raw)
 	}
 
-	// Without a greeting the card header is unchanged.
-	card := strings.Join(NewSessionHeader("gpt-5", "high", true, `D:\repo`, "1.2.3").DisplayLines(80), "\n")
-	if !strings.Contains(card, "model:") || !strings.Contains(card, "\u256d") {
-		t.Fatalf("card header = %q", card)
+	// Without a greeting the same borderless header renders, minus the greeting.
+	plain := strings.Join(NewSessionHeader("gpt-5", "high", `D:\repo`, "1.2.3").DisplayLines(80), "\n")
+	if !strings.Contains(plain, ">_ gcode (v1.2.3)") || strings.Contains(plain, "\u256d") || strings.Contains(plain, "model:") {
+		t.Fatalf("borderless header = %q", plain)
 	}
 }
