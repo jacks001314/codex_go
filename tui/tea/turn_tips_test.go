@@ -126,3 +126,80 @@ func TestTurnTipsCompletionCadenceLikeRust(t *testing.T) {
 func turnIDForTest(index int) string {
 	return "turn-" + string(rune('a'+index))
 }
+
+// Mirrors Rust's completion surface: a finished turn with a final answer whose
+// cadence allows it renders one Markdown tip line, counted once and stable for
+// the rest of the finished turn.
+func TestTurnTipsCompletionTipRendersLikeRust(t *testing.T) {
+	var tips turnTips
+	base := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < turnTipCompletionInterval; index++ {
+		tips.observeTurnStarted("thread-1", turnIDForTest(index), base)
+	}
+	tips.observeTurnCompleted("thread-1", turnIDForTest(2), true, true)
+	if tips.current == nil || !tips.current.completionEligible {
+		t.Fatal("finished turn did not become eligible for a completion tip")
+	}
+	line, ok := tips.completionTip(80, nil, "", "")
+	if !ok || !strings.Contains(utils.StripANSI(line), "Tip: ") {
+		t.Fatalf("completion tip = %q ok=%v", line, ok)
+	}
+	tips.acknowledge(turnTipSurfaceCompletion)
+	again, ok := tips.completionTip(80, nil, "", "")
+	if !ok || again != line {
+		t.Fatalf("completion tip did not persist: %q ok=%v", again, ok)
+	}
+	if tips.completionsShown != 1 || tips.nextCompletion != tips.starts+turnTipCompletionInterval {
+		t.Fatalf("completion accounting = %d/%d", tips.completionsShown, tips.nextCompletion)
+	}
+	// A new turn inside the spacing window is not eligible again.
+	tips.observeTurnStarted("thread-1", turnIDForTest(3), base)
+	tips.observeTurnCompleted("thread-1", turnIDForTest(3), true, true)
+	if tips.current == nil || tips.current.completionEligible {
+		t.Fatal("spacing window still allowed a completion tip")
+	}
+	// Once the window elapses the next finished turn is eligible again.
+	tips.observeTurnStarted("thread-1", turnIDForTest(4), base)
+	tips.observeTurnStarted("thread-1", turnIDForTest(5), base)
+	tips.observeTurnCompleted("thread-1", turnIDForTest(5), true, true)
+	if tips.current == nil || !tips.current.completionEligible {
+		t.Fatal("third turn in the window did not restore eligibility")
+	}
+}
+
+// A completed turn with a final answer renders the completion tip in the
+// transcript (Rust's `Phase::Complete` surface), gated on the tooltip
+// preference and the finished-turn state.
+func TestTurnTipsCompletionTipRendersInTranscriptLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &enabled})
+	for index := 0; index < turnTipCompletionInterval; index++ {
+		turnID := turnIDForTest(index)
+		model.Update(ThreadEventMsg{Event: protocol.TurnStartedWithID(turnID)})
+		model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+			Type: "item.completed",
+			Item: &protocol.ThreadItem{ID: "final-" + turnID, Type: "agent_message", Text: "done", Phase: "final_answer"},
+		}})
+		model.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
+	}
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "\u2514 ") || !strings.Contains(view, "Tip: ") {
+		t.Fatalf("completion tip missing from the transcript:\n%s", view)
+	}
+
+	// The preference gate suppresses the completion tip.
+	disabled := false
+	off := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &disabled})
+	for index := 0; index < turnTipCompletionInterval; index++ {
+		turnID := turnIDForTest(index)
+		off.Update(ThreadEventMsg{Event: protocol.TurnStartedWithID(turnID)})
+		off.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+			Type: "item.completed",
+			Item: &protocol.ThreadItem{ID: "final-" + turnID, Type: "agent_message", Text: "done", Phase: "final_answer"},
+		}})
+		off.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
+	}
+	if view := utils.StripANSI(off.View()); strings.Contains(view, "\u2514 ") {
+		t.Fatalf("disabled tooltips rendered a completion tip:\n%s", view)
+	}
+}

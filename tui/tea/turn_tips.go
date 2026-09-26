@@ -53,6 +53,11 @@ type turnTipState struct {
 	hasFinalAnswer bool
 	template       string
 	shown          bool
+	// completionEligible mirrors Rust's `Phase::Complete` surface: a finished
+	// turn with a final answer whose cadence allows a completion tip. Go renders
+	// it in the transcript, so the turn is marked here rather than entering
+	// Rust's waiting-for-history phase.
+	completionEligible bool
 }
 
 // turnTips mirrors Rust's `TurnTips`.
@@ -134,8 +139,8 @@ func (t *turnTips) observeTurnCompleted(threadID string, turnID string, succeede
 	}
 	// Rust enters a waiting-for-history phase and anchors the completion tip
 	// after the queued history update; Go renders it with the transcript, so the
-	// turn is only marked eligible here.
-	current.phase = turnTipPhaseFinished
+	// turn only becomes eligible here.
+	current.completionEligible = true
 }
 
 // workingTip mirrors the working arm of Rust's `App::turn_tip`: the tip is
@@ -186,6 +191,28 @@ func (t *turnTips) acknowledge(surface turnTipSurface) {
 		t.completionsShown++
 		t.nextCompletion = t.starts + turnTipCompletionInterval
 	}
+}
+
+// completionTip mirrors the completion arm of Rust's `App::turn_tip`: a finished
+// turn with a final answer whose cadence allows a tip renders one tip line in the
+// transcript until the next turn replaces it. The surface shares the template
+// selection with the working tip, so the previously shown tip is skipped.
+func (t *turnTips) completionTip(width int, keymap *codextui.KeymapConfig, themeID string, cwd string) (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	current := t.current
+	if current == nil || !current.completionEligible || width < 1 {
+		return "", false
+	}
+	if current.template == "" {
+		current.template = t.pickWorkingTemplate(width, keymap, themeID, cwd)
+	}
+	tip, ok := renderTurnTipLine(current.template, width, keymap, themeID, cwd)
+	if !ok {
+		return "", false
+	}
+	return tip, true
 }
 
 // pickWorkingTemplate mirrors Rust's template selection: the catalog is
@@ -251,6 +278,22 @@ func renderTurnTipLine(template string, width int, keymap *codextui.KeymapConfig
 // composer must be empty, and the turn must still be running.
 func (m *Model) turnTipsAllowed() bool {
 	if m == nil || !m.showTooltips || !m.isTaskRunning() {
+		return false
+	}
+	if m.modal != nil || m.overlay != nil {
+		return false
+	}
+	if strings.TrimSpace(m.composer.Value()) != "" || len(m.composerElements) > 0 {
+		return false
+	}
+	return true
+}
+
+// completionTipAllowed mirrors the gates Rust applies to the completion surface:
+// the preference on, no modal or popup, an empty composer, and no user turn
+// pending or running (the working-tip gate requires a running turn instead).
+func (m *Model) completionTipAllowed() bool {
+	if m == nil || !m.showTooltips || m.isUserTurnPendingOrRunning() {
 		return false
 	}
 	if m.modal != nil || m.overlay != nil {

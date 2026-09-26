@@ -1344,6 +1344,11 @@ type Model struct {
 	// turnTips mirrors Rust's `App::turn_tips`: the foreground turn's tip
 	// cadence and exposure state (see turn_tips.go).
 	turnTips turnTips
+	// turnFinalAnswerSeen records that the running turn produced a final-answer
+	// item, which is what makes it eligible for a completion tip. The TUI's item
+	// events do not carry a turn id, so the flag pairs the item with the turn
+	// boundary the id-keyed cadence checks.
+	turnFinalAnswerSeen bool
 	// skillLoadWarnings tracks the active invalid-SKILL.md diagnostics (Rust
 	// App::skill_load_warnings) and skillLoadWarningsComplete closes the startup
 	// window for them once the initial skills list has been handled.
@@ -4653,7 +4658,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// Rust #48352: the working tip's clock starts with the turn, and the
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
-		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", m.currentTime())
+		m.turnFinalAnswerSeen = false
+		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), m.currentTime())
 		if m.showTooltips {
 			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
 		}
@@ -4696,7 +4702,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 	case "item.completed":
 		if event.Item != nil && strings.EqualFold(strings.TrimSpace(event.Item.Phase), "final_answer") &&
 			strings.TrimSpace(firstNonEmpty(event.Item.Text, event.Item.Message)) != "" {
-			m.turnTips.observeRetainedItem(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", true)
+			// The item event carries no turn id; the boundary observation below
+			// pairs the flag with the turn that completes.
+			m.turnFinalAnswerSeen = true
 		}
 		cmd = m.applyItemCompleted(event.Item)
 	case "item.delta":
@@ -4710,7 +4718,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
 		m.markThreadCompleted(m.State.ThreadID)
-		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), "", true, false)
+		m.turnTips.observeTurnCompleted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), true, m.turnFinalAnswerSeen)
 		m.Transcript.lastTurnError = ""
 		m.clearRetryActivity()
 		m.clearCompactionActivity()
@@ -7558,6 +7566,15 @@ func (m *Model) refreshTranscript() {
 	}
 	m.transcript.Height = m.transcriptHeightForLayout()
 	content := m.transcriptRenderCached(m.State, m.transcript.Width)
+	// Rust #48352: once a turn finished with a final answer and the cadence
+	// allows it, a completion tip renders in the transcript (four columns are
+	// reserved for its "  └ " prefix) until the next turn replaces it.
+	if m.completionTipAllowed() && strings.TrimSpace(content) != "" {
+		if tip, ok := m.turnTips.completionTip(m.transcript.Width-4, m.keymapConfig, m.activeTUITheme(), m.sessionCWD); ok {
+			content = strings.TrimRight(content, "\n") + "\n  \u2514 " + tip
+			m.turnTips.acknowledge(turnTipSurfaceCompletion)
+		}
+	}
 	if content == m.lastTranscriptContent {
 		if m.activityFollow && m.transcript.Height != m.lastTranscriptHeight {
 			m.transcript.GotoBottom()

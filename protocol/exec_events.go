@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type ThreadEvent struct {
 	Type string `json:"type"`
 
-	ThreadID   string             `json:"thread_id,omitempty"`
+	ThreadID string `json:"thread_id,omitempty"`
+	// TurnID is the server-assigned turn identity. The exec JSON stream omits it;
+	// the TUI carries it so a real new turn is distinguishable from a repeated
+	// turn/started notification (Rust's turn-id keyed turn-tip cadence).
+	TurnID     string             `json:"turnId,omitempty"`
 	Usage      *Usage             `json:"usage,omitempty"`
 	Error      *ThreadError       `json:"error,omitempty"`
 	Item       *ThreadItem        `json:"item,omitempty"`
@@ -191,6 +196,11 @@ func CommandExecutionItemWithAttribution(id string, command string, aggregatedOu
 
 func TurnStarted() ThreadEvent {
 	return ThreadEvent{Type: "turn.started"}
+}
+
+// TurnStartedWithID carries the server's turn id (see ThreadEvent.TurnID).
+func TurnStartedWithID(turnID string) ThreadEvent {
+	return ThreadEvent{Type: "turn.started", TurnID: strings.TrimSpace(turnID)}
 }
 
 func AgentMessageItem(id, text string) ThreadItem {
@@ -586,6 +596,15 @@ func TurnCompleted(usage Usage) ThreadEvent {
 	return ThreadEvent{
 		Type:  "turn.completed",
 		Usage: &usage,
+	}
+}
+
+// TurnCompletedWithID carries the server's turn id (see ThreadEvent.TurnID).
+func TurnCompletedWithID(usage Usage, turnID string) ThreadEvent {
+	return ThreadEvent{
+		Type:   "turn.completed",
+		Usage:  &usage,
+		TurnID: strings.TrimSpace(turnID),
 	}
 }
 

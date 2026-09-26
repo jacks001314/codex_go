@@ -3830,12 +3830,12 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		}
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeClear, "")
 		if !c.notificationThreadIsActive(payload.ThreadID) {
-			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnStarted()})
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnStartedWithID(payload.Turn.ID)})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
 		c.resetReasoningStatus(payload.ThreadID)
-		c.send(codextea.ThreadEventMsg{Event: protocol.TurnStarted()})
+		c.send(codextea.ThreadEventMsg{Event: protocol.TurnStartedWithID(payload.Turn.ID)})
 	case appserver.NotificationTurnCompleted:
 		var payload appserver.TurnCompletedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {
@@ -3845,7 +3845,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeSet, status)
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
-			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnCompleted(protocol.Usage{})})
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnCompletedWithID(protocol.Usage{}, payload.Turn.ID)})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)
@@ -3862,7 +3862,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			c.send(codextea.TurnInterruptedMsg{})
 			return nil
 		}
-		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompleted(protocol.Usage{})})
+		c.send(codextea.ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, payload.Turn.ID)})
 	// Rust chatwidget ServerNotification::ConfigWarning: startup config
 	// warnings coalesce into the startup warnings entry until the first turn.
 	case appserver.NotificationConfigWarning:
