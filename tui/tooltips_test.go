@@ -27,24 +27,57 @@ func (r *scriptedTooltipRNG) Intn(n int) int {
 	return value % n
 }
 
-func TestDefaultTooltipsMatchRustFiltering(t *testing.T) {
-	linux := tooltipsForOS(TooltipTargetOSLinux)
-	for _, tip := range linux {
-		if strings.Contains(tip, "codex app") {
-			t.Fatalf("linux tooltip should filter codex app tip: %q", tip)
+// Rust chains the platform Desktop-app tip onto the shared asset tips: macOS
+// always, Linux only for a desktop session, Windows never.
+func TestDefaultTooltipsMatchRustPlatformChain(t *testing.T) {
+	macos := tooltipsForOS(TooltipTargetOSMacOS)
+	if len(macos) == 0 || macos[len(macos)-1] != MacosAppTooltip {
+		t.Fatalf("macOS pool tail = %q, want the Desktop-app tip", macos)
+	}
+	for _, tip := range tooltipsForOS(TooltipTargetOSWindows) {
+		if tip == MacosAppTooltip || tip == LinuxAppTooltip {
+			t.Fatalf("windows pool should carry no platform app tip: %q", tip)
 		}
 	}
+	for _, tip := range tooltipsForOS(TooltipTargetOSLinux) {
+		if tip == MacosAppTooltip {
+			t.Fatalf("linux pool should carry no macOS app tip: %q", tip)
+		}
+	}
+}
 
-	windows := tooltipsForOS(TooltipTargetOSWindows)
-	var found bool
-	for _, tip := range windows {
-		if strings.Contains(tip, "codex app") {
-			found = true
-			break
+// Mirrors the Rust snapshot `configured_shortcut_tips_render_at_narrow_width`
+// (tui/src/tooltips/snapshots): the default bindings resolve to `tab`,
+// `ctrl+o`, `ctrl+t`, `ctrl+g`, `ctrl+r`, and the two alt chords. Go does not
+// register `global.find_transcript`, so Rust's contract drops that tip rather
+// than showing a raw placeholder.
+func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
+	resolved := ResolvedTooltips(NewKeymapConfig())
+	alt := AltKeyLabel()
+	want := []string{
+		"Press `` tab `` to queue a message when a task is running; otherwise it sends immediately (except `!`).",
+		"Use **/copy** or press `` ctrl+o `` to copy the latest agent response as Markdown.",
+		"Press `` ctrl+t `` to open the full transcript.",
+		"Press `` ctrl+g `` to edit your current draft in an external editor.",
+		"Press `` ctrl+r `` to search previously entered prompts.",
+		"For models with adjustable reasoning, press `` " + alt + "+. `` to increase reasoning effort or `` " + alt + "+, `` to decrease it.",
+	}
+	for _, expected := range want {
+		found := false
+		for _, tip := range resolved {
+			if tip == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("resolved pool missing %q:\n%#v", expected, resolved)
 		}
 	}
-	if !found {
-		t.Fatal("windows tooltip pool should keep codex app tip")
+	for _, tip := range resolved {
+		if strings.Contains(tip, "{key:") {
+			t.Fatalf("unresolved placeholder in %q", tip)
+		}
 	}
 }
 
@@ -221,4 +254,82 @@ func dateForTooltipTest(value string) time.Time {
 		panic(err)
 	}
 	return parsed
+}
+
+// Mirrors Rust's tooltips/keybinding_tests.rs: placeholders follow the current
+// bindings, and a tip is skipped when any referenced shortcut is invalid or
+// unbound.
+func TestRenderTooltipSubstitutesConfiguredBindingsLikeRust(t *testing.T) {
+	defaults := NewKeymapConfig()
+	got, ok := RenderTooltip("Press {key:global.open_transcript} to open the full transcript.", defaults)
+	if !ok || got != "Press `` ctrl+t `` to open the full transcript." {
+		t.Fatalf("default tip = %q, %v", got, ok)
+	}
+
+	remapped := NewKeymapConfig()
+	if err := remapped.Set("global", "open_transcript", []string{"f12"}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = RenderTooltip("Press {key:global.open_transcript} to open the full transcript.", remapped)
+	if !ok || got != "Press `` f12 `` to open the full transcript." {
+		t.Fatalf("remapped tip = %q, %v", got, ok)
+	}
+
+	// A key-free template renders without a keymap.
+	if got, ok := RenderTooltip("Use /copy to copy a response.", nil); !ok || got != "Use /copy to copy a response." {
+		t.Fatalf("key-free tip = %q, %v", got, ok)
+	}
+}
+
+func TestRenderTooltipSkipsUnboundOrInvalidPlaceholdersLikeRust(t *testing.T) {
+	unbound := NewKeymapConfig()
+	if err := unbound.Set("global", "copy", []string{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, template := range []string{
+		"Press {key:global.copy} to copy.",
+		"Press {key:global.open_transcript} or {key:global.copy}.",
+		"Press {key:global.missing}.",
+		"Press {key:missing.copy}.",
+		"Press {key:copy}.",
+		"Press {key:global.copy",
+	} {
+		if got, ok := RenderTooltip(template, unbound); ok {
+			t.Fatalf("template %q resolved to %q, want skipped", template, got)
+		}
+	}
+	if got, ok := RenderTooltip("Press {key:global.copy}.", nil); ok {
+		t.Fatalf("nil keymap resolved to %q, want skipped", got)
+	}
+}
+
+// The reasoning tip needs both of its shortcuts bound; unbinding either one
+// drops the whole tip.
+func TestResolvedTooltipsDropTipsWithAnUnboundPlaceholderLikeRust(t *testing.T) {
+	all := NewKeymapConfig()
+	resolved := ResolvedTooltips(all)
+	var found bool
+	for _, tip := range resolved {
+		if strings.Contains(tip, "to improve reasoning") || strings.Contains(tip, "reasoning effort") {
+			found = true
+		}
+		if strings.Contains(tip, "{key:") {
+			t.Fatalf("resolved tip still carries a placeholder: %q", tip)
+		}
+	}
+	if !found {
+		t.Fatalf("reasoning tip missing from the resolved pool: %#v", resolved)
+	}
+
+	for _, action := range []string{"increase_reasoning_effort", "decrease_reasoning_effort"} {
+		unbound := NewKeymapConfig()
+		if err := unbound.Set("chat", action, []string{}); err != nil {
+			t.Fatal(err)
+		}
+		for _, tip := range ResolvedTooltips(unbound) {
+			if strings.Contains(tip, "For models with adjustable reasoning") {
+				t.Fatalf("unbound %s kept the reasoning tip: %q", action, tip)
+			}
+		}
+	}
 }

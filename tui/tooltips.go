@@ -3,6 +3,7 @@ package tui
 import (
 	_ "embed"
 	"math/rand"
+	"os"
 	"regexp"
 	"runtime"
 	"strings"
@@ -17,11 +18,15 @@ import (
 const (
 	AnnouncementTipURL = "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml"
 
-	AppTooltip         = "Try the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
+	// The copy mirrors Rust's `tooltips.rs` constants verbatim (including the
+	// en dash and right single quote in FreeGoTooltip).
+	AppTooltip         = "Try the **Desktop app**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
+	MacosAppTooltip    = "Run `codex app` to open the Desktop app (it installs on macOS if needed)."
+	LinuxAppTooltip    = "Try the **Desktop app** on Linux: install it from https://learn.chatgpt.com/docs/linux/linux-app and run 'chatgpt'."
 	FastTooltip        = "*New* Use **/fast** to enable our fastest inference with increased plan usage."
-	OtherTooltip       = "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
+	OtherTooltip       = "*New* Build faster with the **Desktop app**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true"
 	OtherTooltipNonMac = "*New* Build faster with Codex."
-	FreeGoTooltip      = "*New* For a limited time, Codex is included in your plan for free - let's build together."
+	FreeGoTooltip      = "*New* For a limited time, Codex is included in your plan for free \u2013 let\u2019s build together."
 )
 
 //go:embed tooltips.txt
@@ -139,7 +144,10 @@ func PickTooltip(rng TooltipRNG) (string, bool) {
 	if rng == nil {
 		rng = globalTooltipRNG{}
 	}
-	tips := DefaultTooltips()
+	// Rust's `pick_tooltip` draws from `resolved_tooltips(keymap)`; without a
+	// keymap only the key-free tips remain, so a `{key:...}` template can never
+	// be shown as a raw placeholder.
+	tips := ResolvedTooltips(nil)
 	if len(tips) == 0 {
 		return "", false
 	}
@@ -175,10 +183,17 @@ func tooltipsForOS(targetOS TooltipTargetOS) []string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if targetOS != TooltipTargetOSMacOS && targetOS != TooltipTargetOSWindows && strings.Contains(line, "codex app") {
-			continue
-		}
 		tips = append(tips, line)
+	}
+	// Rust chains the platform app tip onto the asset tips: macOS always shows
+	// the Desktop-app tip, Linux only when a desktop session is present.
+	switch targetOS {
+	case TooltipTargetOSMacOS:
+		tips = append(tips, MacosAppTooltip)
+	case TooltipTargetOSLinux:
+		if tip, ok := linuxAppTooltip(); ok {
+			tips = append(tips, tip)
+		}
 	}
 	return tips
 }
@@ -188,8 +203,45 @@ func paidAppTooltip() (string, bool) {
 	case TooltipTargetOSMacOS, TooltipTargetOSWindows:
 		return AppTooltip, true
 	default:
-		return "", false
+		return linuxAppTooltip()
 	}
+}
+
+// linuxDesktopSession mirrors Rust's `LinuxDesktopSession::current`: a desktop
+// session needs a display server and must not be WSL.
+type linuxDesktopSession struct {
+	hasDisplay bool
+	isWSL      bool
+}
+
+func currentLinuxDesktopSession() linuxDesktopSession {
+	if runtime.GOOS != "linux" {
+		return linuxDesktopSession{}
+	}
+	hasDisplay := strings.TrimSpace(os.Getenv("DISPLAY")) != "" ||
+		strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) != ""
+	return linuxDesktopSession{hasDisplay: hasDisplay, isWSL: isProbablyWSL()}
+}
+
+func linuxAppTooltip() (string, bool) {
+	session := currentLinuxDesktopSession()
+	if session.hasDisplay && !session.isWSL {
+		return LinuxAppTooltip, true
+	}
+	return "", false
+}
+
+// isProbablyWSL mirrors Rust's `is_probably_wsl`: the kernel version is the
+// primary signal, with the WSL environment variables as a fallback.
+func isProbablyWSL() bool {
+	if version, err := os.ReadFile("/proc/version"); err == nil {
+		lower := strings.ToLower(string(version))
+		if strings.Contains(lower, "microsoft") || strings.Contains(lower, "wsl") {
+			return true
+		}
+	}
+	return strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" ||
+		strings.TrimSpace(os.Getenv("WSL_INTEROP")) != ""
 }
 
 func paidTooltipPlan(plan auth.PlanType) bool {
