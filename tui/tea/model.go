@@ -6936,6 +6936,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		m.applyKeymapCommand(invocation.Args)
 	case codextui.CommandStatus:
 		return m.applyStatusCommand()
+	case codextui.CommandWarnings:
+		m.openWarningsView()
+		return nil
 	case codextui.CommandUsage:
 		return m.applyUsageCommand(invocation.Args)
 	case codextui.CommandGoal:

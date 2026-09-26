@@ -90,3 +90,29 @@ func TestWarningsViewerKeepAndCopyLikeRust(t *testing.T) {
 		t.Fatalf("visible warnings after keep = %#v, want both", visible)
 	}
 }
+
+// Mirrors Rust's `/warnings` slash command: it opens the same viewer without
+// submitting anything.
+func TestWarningsSlashCommandOpensViewerLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:                 100,
+		Height:                30,
+		ShowTooltips:          &enabled,
+		StartupConfigWarnings: []string{"Config warning"},
+	})
+	invocation, ok := codextui.ParseCommand("/warnings")
+	if !ok || invocation.Command != codextui.CommandWarnings {
+		t.Fatalf("ParseCommand(/warnings) = %#v ok=%v", invocation, ok)
+	}
+	runTeaCmd(t, model, model.applyCommand(invocation))
+	if model.warningsView == nil {
+		t.Fatal("/warnings did not open the warnings viewer")
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Warnings \u00b7 1 of 1") || !strings.Contains(view, "Config warning") {
+		t.Fatalf("/warnings viewer missing the retained diagnostic:\n%s", view)
+	}
+	if got := len(model.SubmittedRequests()); got != 0 {
+		t.Fatalf("/warnings submitted %d requests, want none", got)
+	}
+}

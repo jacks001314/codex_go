@@ -107,7 +107,7 @@ func TestCommandPopupFlagsMatchRustVisibility(t *testing.T) {
 	popup = NewCommandPopup(CommandPopupFlags{SideConversationActive: true, TokenActivityCommandEnabled: true}, nil)
 	popup.OnComposerTextChange("/")
 	got := commandPopupItemNames(popup.FilteredItems())
-	want := []string{"ide", "copy", "raw", "diff", "mention", "status", "usage"}
+	want := []string{"ide", "copy", "raw", "diff", "mention", "status", "warnings", "usage"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("side commands = %#v, want %#v", got, want)
 	}

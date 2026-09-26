@@ -774,6 +774,7 @@ const (
 	CommandHelp             Command = "help"
 	CommandKeymap           Command = "keymap"
 	CommandStatus           Command = "status"
+	CommandWarnings         Command = "warnings"
 	CommandUsage            Command = "usage"
 	CommandGoal             Command = "goal"
 	CommandStatusline       Command = "statusline"
@@ -874,6 +875,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandKeymap, Args: args, Name: name}, true
 	case "/status":
 		return &CommandInvocation{Command: CommandStatus, Args: args, Name: name}, true
+	case "/warnings":
+		return &CommandInvocation{Command: CommandWarnings, Args: args, Name: name}, true
 	case "/usage":
 		return &CommandInvocation{Command: CommandUsage, Args: args, Name: name}, true
 	case "/goal":

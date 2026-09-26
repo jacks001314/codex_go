@@ -21,6 +21,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "help", Command: CommandHelp, Aliases: []string{"?"}, Description: "show this command list"},
 		{Name: "keymap", Command: CommandKeymap, Aliases: []string{"keys"}, Description: "remap TUI shortcuts"},
 		{Name: "status", Command: CommandStatus, Description: "show current session configuration and token usage"},
+		{Name: "warnings", Command: CommandWarnings, Description: "view retained warnings and diagnostic details"},
 		{Name: "usage", Command: CommandUsage, Description: "view account usage or use a usage limit reset"},
 		{Name: "goal", Command: CommandGoal, Description: "set or view the goal for a long-running task"},
 		{Name: "statusline", Command: CommandStatusline, Description: "configure status line items"},

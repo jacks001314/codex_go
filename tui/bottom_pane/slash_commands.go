@@ -372,6 +372,7 @@ func sideConversationCommandAllowed(command codextui.Command) bool {
 		codextui.CommandDiff,
 		codextui.CommandMention,
 		codextui.CommandStatus,
+		codextui.CommandWarnings,
 		codextui.CommandUsage:
 		return true
 	default:
@@ -412,6 +413,7 @@ var rustSlashCommandOrder = []string{
 	"diff",
 	"mention",
 	"status",
+	"warnings",
 	"usage",
 	"debug-config",
 	"title",
@@ -468,6 +470,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"diff":                  "show git diff (including untracked files)",
 	"mention":               "mention a file",
 	"status":                "show current session configuration and token usage",
+	"warnings":              "view retained warnings and diagnostic details",
 	"usage":                 "view account usage or use a usage limit reset",
 	"debug-config":          "show config layers and requirement sources for debugging",
 	"title":                 "configure which items appear in the terminal title",
