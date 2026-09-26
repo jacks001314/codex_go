@@ -179,12 +179,12 @@ func TestFlowchartRejectsUnsupportedInput(t *testing.T) {
 			t.Fatalf("Render(%q) error = %v, want ErrUnsupported", source, err)
 		}
 	}
-	// Recorded divergence: Rust's `unicode-width` 0.2 collapses the Arabic
-	// lam-alef ligature, so `A[\u0644\u0627]` fails its ligature check and is
-	// rejected there; Go's width libraries do not model that ligature and accept
-	// the label.
-	if _, err := Render("flowchart TD; A[\u0644\u0627]", 100); err != nil {
-		t.Fatalf("Render(arabic label) error = %v, want it accepted (documented divergence)", err)
+	// Rust's `unicode-width` 0.2 collapses the Arabic lam-alef ligature, so
+	// `A[\u0644\u0627]` fails `check_label_text`'s ligature check and is rejected
+	// there; `textWidth` reproduces that collapse (width_arabic.go), so Go rejects
+	// it too.
+	if _, err := Render("flowchart TD; A[\u0644\u0627]", 100); err != ErrUnsupported {
+		t.Fatalf("Render(arabic label) error = %v, want ErrUnsupported", err)
 	}
 }
 

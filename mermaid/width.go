@@ -22,7 +22,9 @@ func charWidth(r rune) int {
 //
 // Rust's `unicode-width` computes a string width that differs from the sum of
 // its scalars for emoji presentation sequences; `uniseg` reproduces that for the
-// emoji, CJK and ASCII cases the renderer draws. Its one known divergence is
-// Arabic: `unicode-width` 0.2 collapses a lam-alef ligature, so Rust rejects
-// such labels through `check_label_text`'s ligature check while Go accepts them.
-func textWidth(text string) int { return uniseg.StringWidth(text) }
+// emoji, CJK and ASCII cases the renderer draws. `unicode-width` 0.2 also
+// collapses the Arabic lam-alef ligature, which `uniseg` does not, so each
+// collapsed pair is subtracted here (see width_arabic.go).
+func textWidth(text string) int {
+	return uniseg.StringWidth(text) - lamAlefCollapses(text)
+}
