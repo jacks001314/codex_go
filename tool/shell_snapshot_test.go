@@ -388,3 +388,39 @@ func TestPosixEnvPathExpansionFunctionExportedLikeRust(t *testing.T) {
 		t.Fatalf("expansion function = %q", script)
 	}
 }
+
+// Mirrors the brokered `env_captures`/`env_exports` of Rust's
+// `maybe_wrap_shell_lc_with_snapshot`: the protected POSIX ENV is captured with
+// ZDOTDIR-aware expansion and restored only while the command's ENV still points
+// at one of those startup files.
+func TestBuildBrokeredEnvScriptLikeRust(t *testing.T) {
+	captures, replayed, exports := buildBrokeredEnvScript(ShellBash, nil)
+	for _, want := range []string{
+		"__CODEX_SNAPSHOT_ORIGINAL_ENV_SET=\"${ENV+x}\"",
+		"__codex_snapshot_expand_env_with_zdotdir() (",
+		"if [ -n \"${" + snapshotOriginalZdotdirEnvKey + "+x}\" ]; then",
+		"__CODEX_SNAPSHOT_PROTECTED_ENV=$(",
+		"__codex_snapshot_expand_env_with_zdotdir \"${" + snapshotOriginalBashEnvKey + "-}\"",
+		"__codex_snapshot_expand_env_with_zdotdir \"${" + snapshotOriginalPosixEnvKey + "-}\"",
+	} {
+		if !strings.Contains(captures, want) {
+			t.Fatalf("captures missing %q:\n%s", want, captures)
+		}
+	}
+	if !strings.Contains(captures, "__codex_snapshot_expand_env() (") {
+		t.Fatalf("captures missing the expansion helper:\n%s", captures)
+	}
+	if replayed != "__CODEX_SNAPSHOT_REPLAYED_BASH_ENV=\"${BASH_ENV-}\"" {
+		t.Fatalf("replayed capture = %q", replayed)
+	}
+	for _, want := range []string{
+		"__codex_snapshot_env_is_protected() (",
+		"if __codex_snapshot_env_is_protected \"$__CODEX_SNAPSHOT_CURRENT_ENV\"; then",
+		"builtin unset ENV 2>/dev/null || command unset ENV || exit 1",
+		"  " + snapshotOriginalBashEnvKey + " " + snapshotOriginalPosixEnvKey,
+	} {
+		if !strings.Contains(exports, want) {
+			t.Fatalf("exports missing %q:\n%s", want, exports)
+		}
+	}
+}

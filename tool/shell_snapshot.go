@@ -22,6 +22,7 @@ import (
 	"codex_go/execpolicy"
 	"codex_go/network"
 	"codex_go/plugin"
+	"codex_go/shell"
 )
 
 // Environment variables the launch's own values must win over: the snapshot
@@ -50,6 +51,14 @@ const snapshotProxyOverrideVariablePrefix = "__CODEX_SNAPSHOT_PROXY_OVERRIDE"
 const (
 	proxyGitSSHCommandEnvKey = "GIT_SSH_COMMAND"
 	proxyGitSSHCommandMarker = "CODEX_PROXY_GIT_SSH_COMMAND=1 "
+)
+
+// Startup-environment keys a brokered snapshot preserves around the command,
+// mirroring Rust's SNAPSHOT_ORIGINAL_*_ENV_KEY constants.
+const (
+	snapshotOriginalBashEnvKey    = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_BASH_ENV"
+	snapshotOriginalPosixEnvKey   = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_POSIX_ENV"
+	snapshotOriginalZdotdirEnvKey = "CODEX_NETWORK_PROXY_SNAPSHOT_ORIGINAL_ZDOTDIR"
 )
 
 // snapshotReplayedEnvKeys are the runtime-only variables restored even when the
@@ -391,3 +400,100 @@ func buildCodexProxyGitSSHCommandExports() (string, string) {
 		"  else\n    unset " + key + "\n  fi\nfi"
 	return captures, restores
 }
+
+// buildBrokeredEnvScript mirrors the brokered branch of Rust's
+// `maybe_wrap_shell_lc_with_snapshot`: before the snapshot runs it captures the
+// launch's protected POSIX `ENV` (following ZDOTDIR-aware `${VAR}` indirections
+// through the expansion helper), and afterwards it restores `ENV` only while the
+// command's own `ENV` still points at one of those protected startup files.
+//
+// Go's shell model collapses `sh` into bash, so the POSIX startup key is only
+// selected once a dedicated `sh` type exists (Rust's `ShellType::Sh` branch).
+func buildBrokeredEnvScript(shellType ShellType, env map[string]string) (string, string, string) {
+	bashEnvKey := snapshotOriginalBashEnvKey
+	posixEnvKey := snapshotOriginalPosixEnvKey
+	startupEnvKey := bashEnvKey
+	if shellType == ShellType("sh") && hasEnvKey(env, posixEnvKey) {
+		startupEnvKey = posixEnvKey
+	}
+	alternateStartupEnvKey := posixEnvKey
+	if startupEnvKey == posixEnvKey {
+		alternateStartupEnvKey = bashEnvKey
+	}
+	captures := strings.NewReplacer(
+		"%%EXPAND%%", shell.PosixEnvPathExpansionFunction(),
+		"%%ZDOTDIR%%", snapshotOriginalZdotdirEnvKey,
+		"%%STARTUP%%", startupEnvKey,
+		"%%ALTERNATE%%", alternateStartupEnvKey,
+	).Replace(brokeredEnvCapturesTemplate)
+	replayed := "__CODEX_SNAPSHOT_REPLAYED_BASH_ENV=\"${BASH_ENV-}\""
+	exports := strings.NewReplacer(
+		"%%BASH%%", bashEnvKey,
+		"%%POSIX%%", posixEnvKey,
+	).Replace(brokeredEnvExportsTemplate)
+	return captures, replayed, exports
+}
+
+func hasEnvKey(env map[string]string, key string) bool {
+	_, ok := env[key]
+	return ok
+}
+
+const brokeredEnvCapturesTemplate = `__CODEX_SNAPSHOT_ORIGINAL_ENV_SET="${ENV+x}"
+__CODEX_SNAPSHOT_ORIGINAL_ENV="${ENV-}"
+%%EXPAND%%
+__codex_snapshot_expand_env_with_zdotdir() (
+  if [ -n "${%%ZDOTDIR%%+x}" ]; then
+    export ZDOTDIR="${%%ZDOTDIR%%}"
+  elif [ -n "${ZSH_VERSION-}" ] && [ "${ZDOTDIR-}" = /dev/null ]; then
+    unset ZDOTDIR
+  fi
+  __codex_snapshot_expand_env "$1"
+)
+__CODEX_SNAPSHOT_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${%%STARTUP%%-}"
+)
+__CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${%%ALTERNATE%%-}"
+)`
+
+const brokeredEnvExportsTemplate = `__CODEX_SNAPSHOT_CURRENT_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "${ENV-}"
+)
+__CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "$__CODEX_SNAPSHOT_ORIGINAL_ENV"
+)
+__CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV=$(
+  __codex_snapshot_expand_env_with_zdotdir "$__CODEX_SNAPSHOT_REPLAYED_BASH_ENV"
+)
+unset -f __codex_snapshot_expand_env __codex_snapshot_expand_env_with_zdotdir
+__codex_snapshot_env_is_protected() (
+  for __codex_protected_env in \
+    "$__CODEX_SNAPSHOT_PROTECTED_ENV" \
+    "$__CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV" \
+    "$__CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV"; do
+    if [ -n "$__codex_protected_env" ] &&
+      { [ "$1" = "$__codex_protected_env" ] ||
+        [ "$1" -ef "$__codex_protected_env" ] 2>/dev/null; }; then
+      return 0
+    fi
+  done
+  return 1
+)
+if __codex_snapshot_env_is_protected "$__CODEX_SNAPSHOT_CURRENT_ENV"; then
+  if [ -n "$__CODEX_SNAPSHOT_ORIGINAL_ENV_SET" ] &&
+    ! __codex_snapshot_env_is_protected "$__CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV"; then
+    builtin export ENV="$__CODEX_SNAPSHOT_ORIGINAL_ENV" 2>/dev/null ||
+      command export ENV="$__CODEX_SNAPSHOT_ORIGINAL_ENV" || exit 1
+    [ "${ENV-}" = "$__CODEX_SNAPSHOT_ORIGINAL_ENV" ] || exit 1
+  else
+    builtin unset ENV 2>/dev/null || command unset ENV || exit 1
+    [ -z "${ENV+x}" ] || exit 1
+  fi
+fi
+unset -f __codex_snapshot_env_is_protected
+unset __CODEX_SNAPSHOT_ORIGINAL_ENV_SET __CODEX_SNAPSHOT_ORIGINAL_ENV \
+  __CODEX_SNAPSHOT_PROTECTED_ENV __CODEX_SNAPSHOT_ALTERNATE_PROTECTED_ENV \
+  __CODEX_SNAPSHOT_REPLAYED_BASH_ENV __CODEX_SNAPSHOT_REPLAYED_PROTECTED_ENV \
+  __CODEX_SNAPSHOT_CURRENT_ENV __CODEX_SNAPSHOT_ORIGINAL_EXPANDED_ENV \
+  %%BASH%% %%POSIX%%`
