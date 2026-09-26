@@ -44,24 +44,33 @@ func renderMermaidFence(source string, width int, themeID string) []string {
 		lines := wrapDimmedNotice(mermaidFallbackNotice(err), width)
 		return append(lines, highlightedMermaidSource(source, themeID)...)
 	}
-	return styleMermaidSpans(spans)
+	return styleMermaidSpans(spans, themeID)
 }
 
-// styleMermaidSpans maps each semantic role onto the TUI's terminal theme:
-// nodes are cyan, edges dim and text unstyled, matching Rust's fallbacks when a
-// theme has no scope for the role.
-func styleMermaidSpans(diagram [][]mermaid.Span) []string {
+// styleMermaidSpans maps each semantic role onto the theme, mirroring
+// `mermaid::render`: node colour from `entity.name.type`/`support.type`/
+// `variable`, edge colour from `comment`, falling back to Rust's cyan and dim
+// when the theme styles neither scope. Text is unstyled.
+func styleMermaidSpans(diagram [][]mermaid.Span, themeID string) []string {
+	nodeSGR := codextui.ThemeScopeForegroundSGR(themeID, "entity.name.type", "support.type", "variable")
+	if nodeSGR == "" {
+		nodeSGR = "\x1b[36m"
+	}
+	edgeSGR := codextui.ThemeScopeForegroundSGR(themeID, "comment")
+	if edgeSGR == "" {
+		edgeSGR = "\x1b[2m"
+	}
 	lines := make([]string, 0, len(diagram))
 	for _, spans := range diagram {
 		var builder strings.Builder
 		for _, span := range spans {
 			switch span.Role {
 			case mermaid.RoleNode:
-				builder.WriteString("\x1b[36m")
+				builder.WriteString(nodeSGR)
 				builder.WriteString(span.Text)
 				builder.WriteString("\x1b[0m")
 			case mermaid.RoleEdge:
-				builder.WriteString("\x1b[2m")
+				builder.WriteString(edgeSGR)
 				builder.WriteString(span.Text)
 				builder.WriteString("\x1b[0m")
 			default:

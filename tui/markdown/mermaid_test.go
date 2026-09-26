@@ -204,3 +204,27 @@ func TestMarkdownRenderingPreferences(t *testing.T) {
 		t.Fatalf("disabled tables rendering lost the source:\n%s", disabled)
 	}
 }
+
+// Mirrors Rust `mermaid::render`: the node/edge roles take the theme's scope
+// colours (`entity.name.type`/`support.type`/`variable` and `comment`) when the
+// theme styles them, and Rust's cyan/dim fallbacks otherwise.
+func TestMermaidDiagramUsesThemeScopeColours(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	// The bundled `dali` theme styles `support.type, ..., entity.name.type` with
+	// #5FD7FF and `comment, ...` with #808080.
+	themed := strings.Join(renderMermaidFence("graph TD; A --> B", 60, "dali"), "\n")
+	if !strings.Contains(themed, "\x1b[38;2;95;215;255m") {
+		t.Fatalf("themed diagram lost the node scope colour:\n%q", themed)
+	}
+	if !strings.Contains(themed, "\x1b[38;2;128;128;128m") {
+		t.Fatalf("themed diagram lost the edge scope colour:\n%q", themed)
+	}
+
+	// Without theme scope colours the diagram keeps the cyan/dim fallbacks.
+	fallback := strings.Join(renderMermaidFence("graph TD; A --> B", 60, ""), "\n")
+	if !strings.Contains(fallback, "\x1b[36m") || !strings.Contains(fallback, "\x1b[2m") {
+		t.Fatalf("fallback diagram lost the cyan/dim colours:\n%q", fallback)
+	}
+}
