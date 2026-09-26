@@ -91,7 +91,7 @@ func TestAppExitInfoFormatsDisconnectGuidance(t *testing.T) {
 	}
 	lines := info.FormatExitMessages()
 	joined := strings.Join(lines, "|")
-	if !strings.Contains(joined, "The active turn was interrupted") || !strings.Contains(joined, "Reconnect: codex --remote wss://host:443") || !strings.Contains(joined, "Stop the running turn: press esc") {
+	if !strings.Contains(joined, "The active turn was interrupted") || !strings.Contains(joined, "To reconnect, run:") || !strings.Contains(joined, "|  codex --remote wss://host:443|") || !strings.Contains(joined, "Stop the running turn: press esc") {
 		t.Fatalf("exit summary = %q", joined)
 	}
 }

@@ -90,7 +90,10 @@ func (i *AppExitInfo) FormatExitMessages() []string {
 	}
 	if i.Disconnect != nil {
 		if len(i.Disconnect.Command) > 0 {
-			lines = append(lines, "Reconnect: "+strings.Join(i.Disconnect.Command, " "))
+			// Rust #48350: the resume command is printed on its own indented line
+			// under a "To reconnect, run:" label instead of a single prefixed line.
+			lines = append(lines, "To reconnect, run:")
+			lines = append(lines, "  "+strings.Join(i.Disconnect.Command, " "))
 		}
 		if i.Disconnect.StopHint != "" {
 			lines = append(lines, "Stop the running turn: "+i.Disconnect.StopHint)
