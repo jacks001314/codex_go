@@ -4275,3 +4275,40 @@ func TestResponsesInputItemsDropUnsupportedConfigurationUpdatesLikeRust(t *testi
 		t.Fatalf("unfiltered input item count = %d, want 4", len(unfiltered))
 	}
 }
+
+// Mirrors Rust #48508: an interrupted incomplete response completes the stream
+// with `end_turn: false`, preserving token usage so the turn can continue, while
+// every other incomplete reason stays an error.
+func TestInterruptedIncompleteCompletesWithEndTurnFalseLikeRust(t *testing.T) {
+	var events []ResponsesStreamEvent
+	response, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.created","response":{"id":"resp-1"}}`,
+		`{"type":"response.output_item.done","item":{"id":"rs-1","type":"reasoning","summary":["partial thought"]}}`,
+		`{"type":"response.incomplete","response":{"id":"resp-1","incomplete_details":{"reason":"interrupted"},"end_turn":true,"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, func(event *ResponsesStreamEvent) {
+		events = append(events, *event)
+	})
+	if err != nil {
+		t.Fatalf("parseResponsesStream() error = %v", err)
+	}
+	if response.ResponseID != "resp-1" || response.Usage.TotalTokens != 16 {
+		t.Fatalf("response = %#v", response)
+	}
+	completed := events[len(events)-1]
+	if completed.Kind != ResponsesStreamEventCompleted || completed.RawType != "response.incomplete" {
+		t.Fatalf("completed event = %#v", completed)
+	}
+	if completed.EndTurn == nil || *completed.EndTurn {
+		t.Fatalf("EndTurn = %v, want false", completed.EndTurn)
+	}
+	if completed.Usage == nil || completed.Usage.TotalTokens != 16 {
+		t.Fatalf("completed usage = %#v, want the interrupted response's usage", completed.Usage)
+	}
+
+	// A different incomplete reason still fails.
+	if _, err := parseResponsesStream(context.Background(), strings.NewReader(responsesSSE(
+		`{"type":"response.incomplete","response":{"id":"resp-2","incomplete_details":{"reason":"max_output_tokens"}}}`,
+	)), &AgentRequest{Model: "gpt-test"}, OpenAIProviderName, nil); err == nil || err.Error() != "Incomplete response returned, reason: max_output_tokens" {
+		t.Fatalf("non-interrupted incomplete error = %v", err)
+	}
+}

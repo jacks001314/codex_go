@@ -1205,7 +1205,14 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			ReasoningPart: part,
 			RawType:       rawType,
 		})
-	case "response.completed":
+	case "response.completed", "response.incomplete":
+		// Rust #48508: an interrupted incomplete response is completion with
+		// `end_turn: false`, preserving items and token usage so the turn can
+		// continue; every other incomplete reason stays an error.
+		interrupted := rawType == "response.incomplete"
+		if interrupted && responseIncompleteReason(sse.Data) != "interrupted" {
+			return false, responseIncompleteError(sse.Data)
+		}
 		items, err := completedAgentItemsFromStreamEventData(sse.Data, len(a.items))
 		if err != nil {
 			return false, err
@@ -1222,6 +1229,9 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 			a.hasUsage = true
 		}
 		endTurn := endTurnFromStreamEventData(sse.Data)
+		if interrupted {
+			endTurn = responsesBoolPointer(false)
+		}
 		event := &ResponsesStreamEvent{
 			Kind:       ResponsesStreamEventCompleted,
 			ResponseID: a.responseID,
@@ -1237,8 +1247,6 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 		}
 		emitResponsesStreamEvent(handler, event)
 		return true, nil
-	case "response.incomplete":
-		return false, responseIncompleteError(sse.Data)
 	case "response.failed":
 		return false, responseFailedError(sse.Data)
 	}
@@ -1246,6 +1254,12 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 }
 
 func responseIncompleteError(data []byte) error {
+	return fmt.Errorf("Incomplete response returned, reason: %s", responseIncompleteReason(data))
+}
+
+// responseIncompleteReason reports the response's incomplete reason, defaulting
+// to `unknown` exactly like Rust's `process_responses_event`.
+func responseIncompleteReason(data []byte) string {
 	reason := "unknown"
 	var payload struct {
 		Response struct {
@@ -1259,8 +1273,10 @@ func responseIncompleteError(data []byte) error {
 			reason = value
 		}
 	}
-	return fmt.Errorf("Incomplete response returned, reason: %s", reason)
+	return reason
 }
+
+func responsesBoolPointer(value bool) *bool { return &value }
 
 func (a *responsesStreamAccumulator) recordAgentItem(item *AgentItem) {
 	if a == nil || item == nil {

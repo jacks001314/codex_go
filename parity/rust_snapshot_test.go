@@ -298,7 +298,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// when new user input arrives.
 		// Re-pinned to upstream e72da2b538 (#48344): the runtime-only
 		// `include_internal_metadata` provider grant for tool metadata.
-		{Path: "core/src/client.rs", SHA256: "80af5097265a431ce1c2a44bc0ca1f54807271c311b56571b8342c4dc6dad322"},
+		// Re-pinned to upstream 12de0e395d (#48508): the interrupt seam that
+		// preserves WebSocket continuations when steering a turn.
+		{Path: "core/src/client.rs", SHA256: "c2f3e2031a621e0e593b493634ee56099f7a9e89d71747d0a869a30e2aaebfd4"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.

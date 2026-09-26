@@ -836,8 +836,13 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 			responseID := responseIDFromWebsocketEvent(event)
 			return &AgentResponse{ResponseID: responseID, ProviderID: r.ProviderID}, nil
 		case "response.incomplete":
-			closeResponsesWebsocketSession(session, "prewarm incomplete")
-			return nil, responseIncompleteError(data)
+			// Rust #48508: an interrupted incomplete response is completion, so the
+			// prewarm keeps the connection; every other reason stays an error.
+			if responseIncompleteReason(data) != "interrupted" {
+				closeResponsesWebsocketSession(session, "prewarm incomplete")
+				return nil, responseIncompleteError(data)
+			}
+			return &AgentResponse{ResponseID: responseIDFromWebsocketEvent(event), ProviderID: r.ProviderID}, nil
 		case "response.failed", "error":
 			closeResponsesWebsocketSession(session, "prewarm failed")
 			return nil, fmt.Errorf("responses websocket prewarm failed: %s", strings.TrimSpace(responseToolString(event["error"])))
