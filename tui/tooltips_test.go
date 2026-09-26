@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/features"
 )
 
 type scriptedTooltipRNG struct {
@@ -77,6 +78,40 @@ func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 	for _, tip := range resolved {
 		if strings.Contains(tip, "{key:") {
 			t.Fatalf("unresolved placeholder in %q", tip)
+		}
+	}
+}
+
+// Rust's `tooltip_templates` returns `ALL_TOOLTIPS`: the catalog tips followed
+// by the experimental feature announcements whose stage carries copy.
+func TestTooltipTemplatesAppendExperimentalAnnouncementsLikeRust(t *testing.T) {
+	catalog := DefaultTooltips()
+	templates := TooltipTemplates()
+	if len(templates) < len(catalog) {
+		t.Fatalf("templates shorter than the catalog: %#v", templates)
+	}
+	for index, tip := range catalog {
+		if templates[index] != tip {
+			t.Fatalf("templates[%d] = %q, want catalog %q", index, templates[index], tip)
+		}
+	}
+
+	var want []string
+	for _, spec := range features.Registry {
+		if spec.Stage != features.StageExperimental {
+			continue
+		}
+		if announcement := strings.TrimSpace(spec.ExperimentalAnnouncement); announcement != "" {
+			want = append(want, announcement)
+		}
+	}
+	tail := templates[len(catalog):]
+	if len(tail) != len(want) {
+		t.Fatalf("experimental tail = %#v, want %#v", tail, want)
+	}
+	for index, tip := range want {
+		if tail[index] != tip {
+			t.Fatalf("experimental tail[%d] = %q, want %q", index, tail[index], tip)
 		}
 	}
 }

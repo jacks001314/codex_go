@@ -1,6 +1,11 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"codex_go/features"
+	"codex_go/voicehost"
+)
 
 // This file ports Rust's tooltip rendering (`codex-rs/tui/src/tooltips.rs`):
 // the `{key:context.action}` placeholder substitution and the resolved tip pool
@@ -8,11 +13,35 @@ import "strings"
 // is malformed or whose action has no current binding, and without a runtime
 // keymap only the key-free tips remain.
 
-// TooltipTemplates returns the catalog templates in file order (Rust's
-// `tooltip_templates`). The templates still carry their `{key:...}`
-// placeholders; use RenderTooltip to resolve them.
+// realtimeConversationFeatureKey is Rust's `Feature::RealtimeConversation`; its
+// experimental announcement is shown only when voice is supported on the host.
+const realtimeConversationFeatureKey = "realtime_conversation"
+
+// TooltipTemplates returns the catalog templates in file order followed by the
+// experimental feature announcements (Rust's `tooltip_templates` over
+// `ALL_TOOLTIPS`). The templates still carry their `{key:...}` placeholders; use
+// RenderTooltip to resolve them.
 func TooltipTemplates() []string {
-	return DefaultTooltips()
+	return append(DefaultTooltips(), experimentalTooltips()...)
+}
+
+// experimentalTooltips mirrors Rust's `experimental_tooltips`: the experimental
+// stage's announcement copy for each feature, omitting Realtime Conversation
+// when voice is unsupported on this host.
+func experimentalTooltips() []string {
+	tips := []string{}
+	for _, spec := range features.Registry {
+		if spec.Key == realtimeConversationFeatureKey && !voicehost.IsSupported() {
+			continue
+		}
+		if spec.Stage != features.StageExperimental {
+			continue
+		}
+		if announcement := strings.TrimSpace(spec.ExperimentalAnnouncement); announcement != "" {
+			tips = append(tips, announcement)
+		}
+	}
+	return tips
 }
 
 // ResolvedTooltips returns the local tip pool in catalog order with the current
