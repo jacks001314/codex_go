@@ -14149,6 +14149,22 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.MCPConnectorAuthFailureObserver = func(callID string) {
 		r.rememberMCPToolCallElicitation(threadID, strings.TrimSpace(turnID), callID, telemetry.ElicitationTypeAuthOrLink)
 	}
+	// Rust's cumulative MCP attribution: every completed tools/call is recorded on
+	// the thread's executed-tool-call recorder, which checkpoints it into harness
+	// metadata so a resume or fork restores the same attribution.
+	options.MCPSourceObserver = func(source mcp.McpCallSource) {
+		recorder := r.executedToolCallRecorder(threadID)
+		if recorder == nil {
+			return
+		}
+		recorder.RecordMcpSource(retainedctx.McpAttributionSource{
+			ConnectorID: source.ConnectorID,
+			PluginID:    source.PluginID,
+			ServerName:  source.ServerName,
+			ToolName:    source.ToolName,
+			FirstTurnID: source.FirstTurnID,
+		})
+	}
 	return turn.BuildToolRouter(options)
 }
 

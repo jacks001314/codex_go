@@ -73,10 +73,14 @@ type ToolRegistryOptions struct {
 	// result is a trusted connector authentication failure, so the caller can
 	// classify the call for analytics (Rust #45716). Nil leaves the report off.
 	MCPConnectorAuthFailureObserver func(callID string)
-	OrchestratorSkillsEnabled       *bool
-	SkillProviders                  *skillprovider.Registry
-	OpenAIFileRewriter              *mcp.OpenAIFileRewriter
-	Model                           string
+	// MCPSourceObserver receives every completed MCP tools/call so the thread can
+	// accumulate its cumulative MCP attribution (Rust `record_mcp_source`). Nil
+	// leaves the report off.
+	MCPSourceObserver         func(source mcp.McpCallSource)
+	OrchestratorSkillsEnabled *bool
+	SkillProviders            *skillprovider.Registry
+	OpenAIFileRewriter        *mcp.OpenAIFileRewriter
+	Model                     string
 	// ModelConfirmationPolicies carries the issuing model's Browser Use /
 	// Computer Use confirmation-policy Markdown (#41072), forwarded to actor MCP
 	// calls. Nil results in an empty openai/confirmation_policies object for
@@ -758,6 +762,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			SessionID:                         options.SessionID,
 			WindowID:                          options.WindowID,
 			ConnectorAuthFailureObserver:      options.MCPConnectorAuthFailureObserver,
+			MCPSourceObserver:                 options.MCPSourceObserver,
 		})
 		spec := executor.Spec()
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)

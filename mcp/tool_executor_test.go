@@ -782,3 +782,66 @@ func TestToolExecutorSkipsAuthElicitationOutsideCodexApps(t *testing.T) {
 		t.Fatal("non-Codex-Apps server must not request an elicitation")
 	}
 }
+
+// Mirrors Rust's `McpAttributionSource` construction in
+// `core/src/mcp_tool_call.rs`: the connector id is reported only for a
+// host-owned apps server, the plugin id when a plugin contributed the server,
+// and the first turn is the originating turn id.
+func TestMcpCallSourceMatchesRust(t *testing.T) {
+	hosted := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  CodexAppsServerName,
+		ConnectorID: "connector_calendar",
+		PluginID:    "acme/calendar",
+		TurnID:      "turn_1",
+		ToolInfo:    &MCPToolInfo{Name: "calendar_create"},
+	})
+	source := hosted.mcpCallSource()
+	if source.ServerName != CodexAppsServerName || source.ToolName != "calendar_create" || source.FirstTurnID != "turn_1" {
+		t.Fatalf("source = %#v", source)
+	}
+	if source.ConnectorID == nil || *source.ConnectorID != "connector_calendar" {
+		t.Fatalf("connector id = %v, want connector_calendar", source.ConnectorID)
+	}
+	if source.PluginID == nil || *source.PluginID != "acme/calendar" {
+		t.Fatalf("plugin id = %v, want acme/calendar", source.PluginID)
+	}
+
+	// A custom server keeps the connector id out of the attribution even when a
+	// connector identity was configured, because it is not host-owned apps.
+	custom := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:  "custom",
+		ConnectorID: "connector_calendar",
+		TurnID:      "turn_1",
+		ToolInfo:    &MCPToolInfo{Name: "read"},
+	})
+	if got := custom.mcpCallSource(); got.ConnectorID != nil {
+		t.Fatalf("custom server connector id = %q, want nil", *got.ConnectorID)
+	}
+}
+
+// TestToolExecutorReportsCompletedCallToMCPSourceObserver pins the producer
+// boundary: a completed tools/call is reported once to the observer with the
+// built source.
+func TestToolExecutorReportsCompletedCallToMCPSourceObserver(t *testing.T) {
+	var received []McpCallSource
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:        CodexAppsServerName,
+		ConnectorID:       "connector_drive",
+		TurnID:            "turn_9",
+		ToolInfo:          &MCPToolInfo{Name: "drive_search"},
+		MCPSourceObserver: func(source McpCallSource) { received = append(received, source) },
+	})
+	executor.recordMcpAttribution()
+	if len(received) != 1 {
+		t.Fatalf("observed sources = %#v, want one", received)
+	}
+	if received[0].ServerName != CodexAppsServerName || received[0].ToolName != "drive_search" || received[0].FirstTurnID != "turn_9" {
+		t.Fatalf("observed source = %#v", received[0])
+	}
+	if received[0].ConnectorID == nil || *received[0].ConnectorID != "connector_drive" {
+		t.Fatalf("observed connector id = %v", received[0].ConnectorID)
+	}
+
+	// Without an observer the recorder stays untouched.
+	NewToolExecutor(&ToolExecutorOptions{ServerName: "custom", ToolInfo: &MCPToolInfo{Name: "read"}}).recordMcpAttribution()
+}

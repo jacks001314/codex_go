@@ -44,6 +44,19 @@ func IsNodeReplBackedServer(server string) bool {
 	return server == "node_repl" || server == "cua_repl"
 }
 
+// McpCallSource is the identity of one completed MCP tools/call, reported to the
+// thread's cumulative attribution recorder (Rust
+// `codex_protocol::mcp::McpAttributionSource` as built by
+// `core/src/mcp_tool_call.rs`). ConnectorID is set only for a host-owned apps
+// server; the first turn is the originating turn id.
+type McpCallSource struct {
+	ConnectorID *string
+	PluginID    *string
+	ServerName  string
+	ToolName    string
+	FirstTurnID string
+}
+
 func mustMarshalJSON(value any) []byte {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -116,6 +129,10 @@ type ToolExecutorOptions struct {
 	// model-facing rewrite can change it (Rust #45716's classification). Nil
 	// leaves the report off.
 	ConnectorAuthFailureObserver func(callID string)
+	// MCPSourceObserver receives every completed tools/call so the thread can
+	// accumulate its cumulative MCP attribution (Rust `record_mcp_source`). Nil
+	// leaves the report off.
+	MCPSourceObserver func(source McpCallSource)
 }
 
 // AuthElicitationOptions carries the turn-scoped hooks the Codex Apps auth
@@ -162,6 +179,7 @@ type ToolExecutor struct {
 	toolApproval                  *ToolApprovalOptions
 	captureResultMetadata         bool
 	connectorAuthFailureObserver  func(callID string)
+	mcpSourceObserver             func(source McpCallSource)
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -205,6 +223,7 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.toolApproval = options.ToolApproval
 	executor.captureResultMetadata = options.CaptureResultMetadata
 	executor.connectorAuthFailureObserver = options.ConnectorAuthFailureObserver
+	executor.mcpSourceObserver = options.MCPSourceObserver
 	return executor
 }
 
@@ -340,6 +359,10 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	} else {
 		response, err = e.mcpService().CallTool(callParams)
 	}
+	// Rust `mcp_tool_call.rs`: direct and Code Mode calls share this boundary, and
+	// an approved call that reached the server is attributed even when it
+	// returned an error, because the error may contain peer data.
+	e.recordMcpAttribution()
 	if err != nil {
 		if output, ok := mcpAuthenticationChallengeToolOutput(err); ok {
 			return output, nil
@@ -731,6 +754,36 @@ func (e *ToolExecutor) resolvedRemoteToolName() string {
 		return strings.TrimSpace(e.toolInfo.Name)
 	}
 	return e.resolvedToolName().Name
+}
+
+// recordMcpAttribution reports a completed tools/call to the thread's cumulative
+// MCP attribution recorder (Rust `ExecutedToolCalls::record_mcp_source`).
+func (e *ToolExecutor) recordMcpAttribution() {
+	if e == nil || e.mcpSourceObserver == nil {
+		return
+	}
+	e.mcpSourceObserver(e.mcpCallSource())
+}
+
+// mcpCallSource mirrors Rust's `McpAttributionSource` construction in
+// `core/src/mcp_tool_call.rs`: the connector id is reported only for a
+// host-owned apps server, the plugin id when a plugin contributed the server,
+// and the first turn is the originating turn id.
+func (e *ToolExecutor) mcpCallSource() McpCallSource {
+	source := McpCallSource{
+		ServerName:  e.resolvedServerName(),
+		ToolName:    e.resolvedRemoteToolName(),
+		FirstTurnID: e.turnID,
+	}
+	if e.connectorID != "" && IsCodexAppsMCPServerName(source.ServerName) {
+		connectorID := e.connectorID
+		source.ConnectorID = &connectorID
+	}
+	if e.pluginID != "" {
+		pluginID := e.pluginID
+		source.PluginID = &pluginID
+	}
+	return source
 }
 
 func (e *ToolExecutor) mcpService() *MCPService {
