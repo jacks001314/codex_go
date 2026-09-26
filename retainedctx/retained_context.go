@@ -133,18 +133,67 @@ func (s RetainedInputSource) AcceptanceOrder() (uint64, bool) {
 // Go persists harness metadata as an untyped map, so this type carries only the
 // members the retained-context model consumes.
 type HarnessMetadata struct {
-	UserInputOrder       *uint64             `json:"user_input_order,omitempty"`
-	InheritedUserMessage bool                `json:"inherited_user_message,omitempty"`
-	SenderUserMessages   *SenderUserMessages `json:"sender_user_messages,omitempty"`
+	// GuardianSources are the complete retained records this Guardian message
+	// actually delivered (Rust `CodexHarnessMetadata::guardian_sources`). A
+	// consumer deduplicates a retained source it has already received from these
+	// host-observed revisions.
+	GuardianSources []RetainedSource `json:"guardian_sources,omitempty"`
+	// GuardianSourceOrderGuidance records that this complete message delivered
+	// the meaning of the retained source-order labels, so a later review reuses
+	// them instead of resending the guidance.
+	GuardianSourceOrderGuidance bool `json:"guardian_source_order_guidance,omitempty"`
 	// RetainedSource is the host-observed version captured when the item was
 	// recorded (Rust `CodexHarnessMetadata::retained_source`): it carries the
 	// delivery proof a replay restores instead of minting a new revision.
 	RetainedSource *RetainedSource `json:"retained_source,omitempty"`
+	// ClientAuthored records a developer message supplied by an app-server
+	// client. Rust always serializes this member, so it carries no `omitempty`.
+	ClientAuthored bool `json:"client_authored"`
+	// HistoryTruncationTokenLimit is the originating history budget in tokens,
+	// reused when replaying persisted history. Rust renames it on the wire.
+	HistoryTruncationTokenLimit *uint64 `json:"fallback_token_limit_override,omitempty"`
 	// DeliveredAssistantMessage is the bounded assistant text a successful
 	// messaging tool result confirmed, captured after input hooks (Rust
 	// `CodexHarnessMetadata::delivered_assistant_message`). The host retains it as
 	// an assistant message at the originating call's position.
 	DeliveredAssistantMessage *string `json:"delivered_assistant_message,omitempty"`
+	// HarnessAuthoredConfiguration marks a response-configuration update created
+	// by the Codex harness itself rather than a client.
+	HarnessAuthoredConfiguration bool `json:"harness_authored_configuration,omitempty"`
+	// CompactionModelHash is the producer compatibility hash of an opaque
+	// compaction item, never the currently selected model.
+	CompactionModelHash *string `json:"compaction_model_hash,omitempty"`
+	UserInputOrder      *uint64 `json:"user_input_order,omitempty"`
+	// CompactionOutput marks output generated for compaction, which is not an
+	// original user-visible assistant message.
+	CompactionOutput bool `json:"compaction_output,omitempty"`
+	// InheritedUserMessage marks copied parent user/assistant context, which must
+	// not become child-local authorization.
+	InheritedUserMessage bool `json:"inherited_user_message,omitempty"`
+	// McpAttribution is the cumulative MCP tools/call attribution checkpoint,
+	// never model-visible (Rust `CodexHarnessMetadata::mcp_attribution`). An
+	// unreadable checkpoint decodes as an attribution error rather than being
+	// dropped, so the loss stays visible to the host.
+	McpAttribution     *McpAttribution     `json:"mcp_attribution,omitempty"`
+	SenderUserMessages *SenderUserMessages `json:"sender_user_messages,omitempty"`
+}
+
+// MarkRetainedSourcesIncomplete mirrors
+// `CodexHarnessMetadata::mark_retained_sources_incomplete`: a shortened message
+// no longer proves delivery of a complete original, so every retained source it
+// carried loses its delivery proof and the ordering guidance stops counting as
+// delivered.
+func (m *HarnessMetadata) MarkRetainedSourcesIncomplete() {
+	if m == nil {
+		return
+	}
+	m.GuardianSourceOrderGuidance = false
+	if m.RetainedSource != nil {
+		m.RetainedSource.Complete = false
+	}
+	for i := range m.GuardianSources {
+		m.GuardianSources[i].Complete = false
+	}
 }
 
 // RetainedInputSourceFromMetadata mirrors
