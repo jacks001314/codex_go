@@ -17,8 +17,9 @@ type RequestPermissionsDecision struct {
 }
 
 // RequestPermissionsReviewer reviews a request_permissions call through the
-// shared Guardian approval path.
-type RequestPermissionsReviewer func(ctx context.Context, threadID, turnID, callID string, reason string, permissions map[string]any) (RequestPermissionsDecision, error)
+// shared Guardian approval path. environmentID is the call's own environment
+// when it named one (Rust `RequestPermissionsEnvironmentArgs::environment_id`).
+type RequestPermissionsReviewer func(ctx context.Context, threadID, turnID, callID, environmentID, reason string, permissions map[string]any) (RequestPermissionsDecision, error)
 
 // RequestPermissionsExecutor implements the request_permissions tool: the
 // requested permission profile is routed through the shared Guardian approval
@@ -30,11 +31,15 @@ type RequestPermissionsExecutor struct {
 func (e *RequestPermissionsExecutor) Spec() Spec {
 	return Spec{
 		Name:        PlainName(RequestPermissionsToolName),
-		Description: "Requests additional permissions for the current turn. The requested permission profile is reviewed automatically; the call only succeeds when the review approves it.",
+		Description: "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Use environment_id to target a specific attached environment; omit it to use the primary environment. Relative filesystem paths resolve against the selected environment cwd. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"reason": map[string]any{"type": "string", "description": "Why the additional permissions are needed."},
+				"environment_id": map[string]any{
+					"type":        "string",
+					"description": "Environment id from <environment_context>. Omit to use the primary environment.",
+				},
 				"permissions": map[string]any{
 					"type":        "object",
 					"description": "Requested permission profile (fileSystem/network).",
@@ -53,8 +58,10 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 		return nil, RespondToModel("request_permissions review is not configured")
 	}
 	var args struct {
-		Reason      string         `json:"reason"`
-		Permissions map[string]any `json:"permissions"`
+		Reason             string         `json:"reason"`
+		EnvironmentID      *string        `json:"environment_id"`
+		EnvironmentIDCamel *string        `json:"environmentId"`
+		Permissions        map[string]any `json:"permissions"`
 	}
 	if err := invocation.DecodeArguments(&args); err != nil {
 		return nil, RespondToModel("request_permissions arguments are invalid: " + err.Error())
@@ -64,7 +71,13 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 	}
 	threadID := strings.TrimSpace(invocationContextString(invocation, "thread_id"))
 	turnID := strings.TrimSpace(invocationContextString(invocation, "turn_id"))
-	decision, err := e.Reviewer(ctx, threadID, turnID, invocation.CallID, strings.TrimSpace(args.Reason), cloneRequestPermissions(args.Permissions))
+	environmentID := ""
+	if args.EnvironmentID != nil {
+		environmentID = strings.TrimSpace(*args.EnvironmentID)
+	} else if args.EnvironmentIDCamel != nil {
+		environmentID = strings.TrimSpace(*args.EnvironmentIDCamel)
+	}
+	decision, err := e.Reviewer(ctx, threadID, turnID, invocation.CallID, environmentID, strings.TrimSpace(args.Reason), cloneRequestPermissions(args.Permissions))
 	if err != nil {
 		return nil, err
 	}

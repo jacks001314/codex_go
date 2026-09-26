@@ -14256,7 +14256,7 @@ func (r *RuntimeRouter) historyNotesBackendForTurn(cfg *config.Config, params *t
 // the shared Guardian approval path (Rust #38701). Turn cancellation while an
 // automatic permission review is pending propagates through ctx.
 func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool.RequestPermissionsReviewer {
-	return func(ctx context.Context, reviewThreadID string, turnID string, callID string, reason string, permissions map[string]any) (tool.RequestPermissionsDecision, error) {
+	return func(ctx context.Context, reviewThreadID string, turnID string, callID string, environmentID string, reason string, permissions map[string]any) (tool.RequestPermissionsDecision, error) {
 		if r == nil {
 			return tool.RequestPermissionsDecision{}, errors.New("request_permissions review is unavailable")
 		}
@@ -14279,10 +14279,11 @@ func (r *RuntimeRouter) requestPermissionsGuardianReviewer(threadID string) tool
 		}
 		reviewer := r.ensureGuardianReviewer(r.services.Agent)
 		action := state.Action{
-			Type:        "request_permissions",
-			TurnID:      strings.TrimSpace(turnID),
-			Reason:      strings.TrimSpace(reason),
-			Permissions: permissions,
+			Type:          "request_permissions",
+			EnvironmentID: strings.TrimSpace(environmentID),
+			TurnID:        strings.TrimSpace(turnID),
+			Reason:        strings.TrimSpace(reason),
+			Permissions:   permissions,
 		}
 		decision, reviewReason, err := reviewer.Review(ctx, threadID, turnID, callID, action)
 		if err != nil {

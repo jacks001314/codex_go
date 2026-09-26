@@ -506,7 +506,7 @@ func TestRequestPermissionsRunsPermissionRequestHooksLikeRust(t *testing.T) {
 			t.Fatalf("RegisterTurn() error = %v", err)
 		}
 		decision, err := router.requestPermissionsGuardianReviewer("thread-1")(
-			context.Background(), "", "turn-1", "call-1", "need repository write access",
+			context.Background(), "", "turn-1", "call-1", "", "need repository write access",
 			map[string]any{"write": true},
 		)
 		if err != nil {
