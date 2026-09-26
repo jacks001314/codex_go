@@ -406,6 +406,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		LocalDaemonSession: interactiveRemoteEndpointIsLocal(endpoint),
 		LocalSession:       interactiveRemoteEndpointIsLocal(endpoint),
 		AnimationsEnabled:  settings.AnimationsEnabled,
+		Effects:            settings.Effects,
 		QuestionEscBack:    settings.QuestionEscBack,
 		AutoRecap:          settings.AutoRecap,
 		RightClickPaste:    interactiveRightClickPasteValue(settings.RightClickPaste),

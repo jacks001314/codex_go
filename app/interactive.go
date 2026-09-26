@@ -926,6 +926,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
 		LocalSession:                true,
 		AnimationsEnabled:           settings.AnimationsEnabled,
+		Effects:                     settings.Effects,
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
 		RightClickPaste:             interactiveRightClickPasteValue(settings.RightClickPaste),
@@ -1697,6 +1698,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		AutoRecap:               interactiveAutoRecap(values),
 		RightClickPaste:         interactiveRightClickPaste(values),
 		Rendering:               interactiveRenderingSettings(values),
+		Effects:                 interactiveEffectsSettings(values),
 		Personality:             interactivePersonalityFromConfig(values),
 		Notifications:           interactiveNotificationSettingsFromConfig(values),
 		NotificationMethod:      interactiveNotificationMethodFromConfig(values),
@@ -1811,6 +1813,20 @@ func interactiveRenderingSettings(values map[string]any) *codextea.RenderingSett
 		Math:    rendering.Math,
 		Tables:  rendering.Tables,
 		Lists:   rendering.Lists,
+	}
+}
+
+// interactiveEffectsSettings resolves the `tui.effects` preferences (Rust
+// `LocalSettings::tui.effects`) so the TUI applies the per-effect gates.
+func interactiveEffectsSettings(values map[string]any) *codextea.EffectsSettings {
+	effects := config.TuiEffectsFromValues(values)
+	return &codextea.EffectsSettings{
+		Starfield: effects.Starfield,
+		Shimmer:   effects.Shimmer,
+		Welcome:   effects.Welcome,
+		Effort:    effects.Effort,
+		Progress:  effects.Progress,
+		Title:     effects.Title,
 	}
 }
 

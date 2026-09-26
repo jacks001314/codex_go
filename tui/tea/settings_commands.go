@@ -423,6 +423,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			Lists:   msg.Result.Rendering.Lists,
 		})
 	}
+	if msg.Result.Effects != nil {
+		m.effects = *msg.Result.Effects
+	}
 	if msg.Result.Notifications != nil {
 		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
 	}

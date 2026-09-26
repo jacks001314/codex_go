@@ -303,7 +303,10 @@ type SettingsWriteResult struct {
 	// `markdown_render::preferences::init(local_settings.tui.rendering)`). Nil
 	// preserves the current preferences.
 	Rendering *RenderingSettings
-	FilePath  string
+	// Effects carries the per-effect preferences (Rust `TuiEffects`). Nil
+	// preserves the current value.
+	Effects  *EffectsSettings
+	FilePath string
 }
 
 // RenderingSettings is the resolved rich-rendering preference set (Rust
@@ -313,6 +316,38 @@ type RenderingSettings struct {
 	Math    bool
 	Tables  bool
 	Lists   bool
+}
+
+// EffectsSettings is the resolved per-effect preference set (Rust `TuiEffects`),
+// each subordinate to `tui.animations`; every effect defaults to on.
+type EffectsSettings struct {
+	Starfield bool
+	Shimmer   bool
+	Welcome   bool
+	Effort    bool
+	Progress  bool
+	Title     bool
+}
+
+// DefaultEffectsSettings mirrors `TuiEffects::default` (every effect on).
+func DefaultEffectsSettings() EffectsSettings {
+	return EffectsSettings{
+		Starfield: true,
+		Shimmer:   true,
+		Welcome:   true,
+		Effort:    true,
+		Progress:  true,
+		Title:     true,
+	}
+}
+
+// effectsSettingsOrDefault resolves the per-effect preferences, defaulting to
+// every effect enabled when the host supplies none.
+func effectsSettingsOrDefault(effects *EffectsSettings) EffectsSettings {
+	if effects == nil {
+		return DefaultEffectsSettings()
+	}
+	return *effects
 }
 
 type SettingsWriteFunc func(edits []SettingsEdit) (SettingsWriteResult, error)
@@ -997,6 +1032,9 @@ type Options struct {
 	// preference combined with the host motion preference (Rust #44666). Nil
 	// defaults to enabled.
 	AnimationsEnabled *bool
+	// Effects carries the per-effect preferences (Rust `TuiEffects`), each
+	// subordinate to AnimationsEnabled. Nil defaults to every effect enabled.
+	Effects *EffectsSettings
 	// StatusLineUseColors is the configured `tui.status_line_use_colors` value
 	// (Rust #44857). Nil defaults to enabled.
 	StatusLineUseColors *bool
@@ -1463,8 +1501,11 @@ type Model struct {
 	localDaemonSession    bool
 	localSession          bool
 	animationsEnabled     bool
-	statusLineUseColors   bool
-	questionEscBack       bool
+	// effects holds the per-effect preferences (Rust `TuiEffects`); each is
+	// subordinate to animationsEnabled.
+	effects             EffectsSettings
+	statusLineUseColors bool
+	questionEscBack     bool
 	// asyncQuestions retains pending async questions with their drafts
 	// (Rust #42891 bottom_pane.questions).
 	asyncQuestions bottompane.AsyncQuestions
@@ -1880,6 +1921,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		localDaemonSession:              options.LocalDaemonSession,
 		localSession:                    options.LocalSession,
 		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
+		effects:                         effectsSettingsOrDefault(options.Effects),
 		statusLineUseColors:             options.StatusLineUseColors == nil || *options.StatusLineUseColors,
 		questionEscBack:                 options.QuestionEscBack == nil || *options.QuestionEscBack,
 		asyncQuestions:                  *bottompane.NewAsyncQuestions(),
@@ -4357,7 +4399,10 @@ func (m *Model) renderWorkingHeader(header string) string {
 	if m == nil || strings.TrimSpace(header) == "" {
 		return ""
 	}
-	motion := codextui.MotionModeFromAnimationsEnabled(m.animationsEnabled)
+	// Rust's status shimmer is `animations && effects.shimmer`
+	// (owned_transcript.rs); progress and shimmer obey the master switch
+	// independently.
+	motion := codextui.MotionModeFromAnimationsEnabled(m.animationsEnabled && m.effects.Shimmer)
 	var elapsed time.Duration
 	if !m.workingHeaderStartedAt.IsZero() {
 		elapsed = m.currentTime().Sub(m.workingHeaderStartedAt)
