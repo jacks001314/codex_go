@@ -22,6 +22,7 @@ import (
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/eventmap"
 	"codex_go/filesearch"
@@ -278,7 +279,11 @@ type SettingsWriteResult struct {
 	QuestionEscBack *bool
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil preserves the current value; the config default is enabled.
-	AutoRecap             *bool
+	AutoRecap *bool
+	// ShowTooltips is the configured `tui.show_tooltips` value (Rust
+	// local_settings). Nil preserves the current value; the config default is
+	// enabled.
+	ShowTooltips          *bool
 	Personality           chatwidget.Personality
 	Notifications         *chatwidget.NotificationsSetting
 	NotificationMethod    codextui.NotificationMethod
@@ -836,17 +841,22 @@ type streamEnvelopeMsg struct {
 }
 
 type Options struct {
-	Width                     int
-	Height                    int
-	NoAltScreen               bool
-	Placeholder               string
-	ModelPickerOptions        []codextui.ModelPickerOption
-	ServiceTierCommands       []bottompane.ServiceTierCommand
-	SessionPickerItems        []codextui.SessionSummary
-	SessionPickerCWD          string
-	SessionPickerView         string
-	ShowSessionHeader         bool
-	SessionHeaderVersion      string
+	Width                int
+	Height               int
+	NoAltScreen          bool
+	Placeholder          string
+	ModelPickerOptions   []codextui.ModelPickerOption
+	ServiceTierCommands  []bottompane.ServiceTierCommand
+	SessionPickerItems   []codextui.SessionSummary
+	SessionPickerCWD     string
+	SessionPickerView    string
+	ShowSessionHeader    bool
+	SessionHeaderVersion string
+	// ShowTooltips mirrors Rust's `tui.show_tooltips` preference: when enabled
+	// the session header shows a startup tooltip resolved against the current
+	// keybindings. A nil value keeps tooltips off, so callers that do not opt in
+	// (including tests) render a deterministic header.
+	ShowTooltips              *bool
 	OnSubmit                  SubmitFunc
 	OnSubmitRequest           SubmitRequestFunc
 	OnSteerRequest            SteerRequestFunc
@@ -1273,6 +1283,8 @@ type Model struct {
 	startupWarningsIndex    int
 	startupWarningsComplete bool
 	sessionHeaderShown      bool
+	// showTooltips mirrors Rust's `local_settings.tui.show_tooltips`.
+	showTooltips bool
 	// skillLoadWarnings tracks the active invalid-SKILL.md diagnostics (Rust
 	// App::skill_load_warnings) and skillLoadWarningsComplete closes the startup
 	// window for them once the initial skills list has been handled.
@@ -2021,6 +2033,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		model.statusControls.TerminalTitleIDs = append([]string(nil), options.TerminalTitleItems...)
 	}
 	model.resize(firstPositive(options.Width, defaultWidth), firstPositive(options.Height, defaultHeight))
+	model.showTooltips = options.ShowTooltips != nil && *options.ShowTooltips
 	if options.ShowSessionHeader {
 		model.addStartupSessionHeader(options.SessionHeaderVersion)
 	}
@@ -6377,11 +6390,11 @@ func (m *Model) addStartupSessionHeader(version string) {
 	header := historycell.NewSessionHeader(
 		m.modelDisplayName(m.State.Model),
 		m.State.EffectiveReasoningEffort(),
-		false,
+		m.sessionShowFastStatus(),
 		cwd,
 		firstNonEmpty(strings.TrimSpace(version), "dev"),
 	)
-	cell := historycell.NewSessionInfo(header, false, "")
+	cell := historycell.NewSessionInfo(header, false, m.startupSessionTooltip())
 	width := m.width
 	if width < 20 {
 		width = 20
@@ -6389,6 +6402,44 @@ func (m *Model) addStartupSessionHeader(version string) {
 	m.State.AddHistoryLines(cell.DisplayLines(width), cell.RawLines())
 	// The startup warnings entry waits for the splash (Rust pending_header).
 	m.renderStartupWarnings()
+}
+
+// sessionShowFastStatus mirrors Rust's
+// `ChatWidget::should_show_fast_status`: only a ChatGPT account on the
+// model-supported fast service tier shows the fast marker.
+func (m *Model) sessionShowFastStatus() bool {
+	if m == nil || !m.hasChatGPTAccount || m.State == nil {
+		return false
+	}
+	if strings.TrimSpace(m.State.ServiceTier) != chatwidget.ServiceTierFastRequestValue {
+		return false
+	}
+	for _, tier := range m.serviceTierCommands {
+		if tier.ID == chatwidget.ServiceTierFastRequestValue {
+			return true
+		}
+	}
+	return false
+}
+
+// startupSessionTooltip resolves the non-first-event session header tip (Rust's
+// `tooltips::get_tooltip(auth_plan, show_fast_status, keymap)` gated on
+// `local_settings.tui.show_tooltips`). An empty string leaves the header without
+// a tip, matching a disabled preference or an unavailable tip.
+func (m *Model) startupSessionTooltip() string {
+	if m == nil || !m.showTooltips {
+		return ""
+	}
+	var plan *auth.PlanType
+	if raw := strings.TrimSpace(m.chatGPTPlanType); raw != "" {
+		parsed := auth.PlanTypeFromString(raw)
+		plan = &parsed
+	}
+	tip, ok := codextui.GetTooltipWithKeymap(plan, m.sessionShowFastStatus(), m.keymapConfig)
+	if !ok {
+		return ""
+	}
+	return tip
 }
 
 func (m *Model) applyHistoryCell(cell historycell.HistoryCell) {

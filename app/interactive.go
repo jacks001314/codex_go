@@ -938,6 +938,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
 		ShowSessionHeader:           true,
+		ShowTooltips:                settings.ShowTooltips,
 		SessionHeaderVersion:        doctor.Version(),
 		WindowsSandboxStartupPrompt: interactiveWindowsSandboxStartupPrompt(root, settings.PermissionRequirements),
 		OnSessionAction:             interactiveSessionActionHandler(root),
@@ -1685,6 +1686,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
 		DisablePasteBurst:       loaded.DisablePasteBurst(),
 		AnimationsEnabled:       interactiveAnimationsEnabled(values),
+		ShowTooltips:            interactiveShowTooltips(values),
 		StatusLineUseColors:     interactiveStatusLineUseColors(values),
 		QuestionEscBack:         interactiveQuestionEscBack(values),
 		AutoRecap:               interactiveAutoRecap(values),
@@ -1715,6 +1717,19 @@ func interactiveAnimationsEnabled(values map[string]any) *bool {
 	}
 	effective := codextui.EffectiveAnimations(configured)
 	return &effective
+}
+
+// interactiveShowTooltips resolves the configured `tui.show_tooltips` value.
+// The TUI config default is enabled, matching Rust's `Tui::default`
+// (`show_tooltips: true`).
+func interactiveShowTooltips(values map[string]any) *bool {
+	enabled := true
+	if raw, ok := interactiveTUIConfig(values)["show_tooltips"]; ok {
+		if configured, ok := raw.(bool); ok {
+			enabled = configured
+		}
+	}
+	return &enabled
 }
 
 // interactiveStatusLineUseColors resolves the configured

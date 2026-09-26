@@ -420,6 +420,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
 		ShowSessionHeader:           true,
+		ShowTooltips:                settings.ShowTooltips,
 		SessionHeaderVersion:        doctor.Version(),
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),

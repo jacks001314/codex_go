@@ -1549,6 +1549,13 @@ func firstNonEmptyAccount(values ...string) string {
 	return ""
 }
 
+// PlanTypeFromString mirrors Rust's `PlanType::from_raw_value`: a known plan
+// name maps to its variant and anything else is `PlanUnknown`. The tooltip
+// policy needs the same plan classification Rust's `get_tooltip` receives.
+func PlanTypeFromString(value string) PlanType {
+	return planFromString(value)
+}
+
 func planFromString(value string) PlanType {
 	switch strings.TrimSpace(value) {
 	case string(PlanFree):

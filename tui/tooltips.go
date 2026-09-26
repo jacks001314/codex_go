@@ -100,10 +100,21 @@ func CurrentTooltipTargetOS() TooltipTargetOS {
 }
 
 func GetTooltip(plan *auth.PlanType, fastModeEnabled bool) (string, bool) {
-	return SelectStartupTooltip(plan, fastModeEnabled, nil, globalTooltipRNG{})
+	return GetTooltipWithKeymap(plan, fastModeEnabled, nil)
+}
+
+// GetTooltipWithKeymap mirrors Rust's `get_tooltip(plan, fast_mode_enabled,
+// keymap)`: the announcement/promo policy first, then a random tip from the
+// keymap-resolved pool.
+func GetTooltipWithKeymap(plan *auth.PlanType, fastModeEnabled bool, keymap *KeymapConfig) (string, bool) {
+	return selectStartupTooltip(plan, fastModeEnabled, nil, globalTooltipRNG{}, keymap)
 }
 
 func SelectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcement *string, rng TooltipRNG) (string, bool) {
+	return selectStartupTooltip(plan, fastModeEnabled, announcement, rng, nil)
+}
+
+func selectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcement *string, rng TooltipRNG, keymap *KeymapConfig) (string, bool) {
 	if announcement != nil {
 		if content := strings.TrimSpace(*announcement); content != "" {
 			return content, true
@@ -127,7 +138,7 @@ func SelectStartupTooltip(plan *auth.PlanType, fastModeEnabled bool, announcemen
 		}
 	}
 
-	return PickTooltip(rng)
+	return PickTooltipWithKeymap(rng, keymap)
 }
 
 func PickPaidTooltip(rng TooltipRNG, fastModeEnabled bool) (string, bool) {
@@ -141,13 +152,19 @@ func PickPaidTooltip(rng TooltipRNG, fastModeEnabled bool) (string, bool) {
 }
 
 func PickTooltip(rng TooltipRNG) (string, bool) {
+	return PickTooltipWithKeymap(rng, nil)
+}
+
+// PickTooltipWithKeymap draws a random tip from the keymap-resolved pool (Rust's
+// `pick_tooltip`, which resolves `{key:...}` against the current bindings).
+func PickTooltipWithKeymap(rng TooltipRNG, keymap *KeymapConfig) (string, bool) {
 	if rng == nil {
 		rng = globalTooltipRNG{}
 	}
 	// Rust's `pick_tooltip` draws from `resolved_tooltips(keymap)`; without a
 	// keymap only the key-free tips remain, so a `{key:...}` template can never
 	// be shown as a raw placeholder.
-	tips := ResolvedTooltips(nil)
+	tips := ResolvedTooltips(keymap)
 	if len(tips) == 0 {
 		return "", false
 	}
