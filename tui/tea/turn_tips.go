@@ -273,11 +273,13 @@ func renderTurnTipLine(template string, width int, keymap *codextui.KeymapConfig
 	return line, true
 }
 
-// turnTipsAllowed mirrors the gates Rust's `App::turn_tip` applies before a tip
-// may be shown: the preference must be on, no modal or popup may be active, the
-// composer must be empty, and the turn must still be running.
-func (m *Model) turnTipsAllowed() bool {
-	if m == nil || !m.showTooltips || !m.isTaskRunning() {
+// turnTipsSurfacesAllowed mirrors the gates Rust's `App::turn_tip` applies to
+// both tip surfaces before the phase is considered: the preference on, an
+// externally owned thread not shown, no modal or popup, an empty composer with
+// no queued follow-up, no primed or previewing backtrack selection, and a
+// transcript that is following the tail.
+func (m *Model) turnTipsSurfacesAllowed() bool {
+	if m == nil || !m.showTooltips || m.readOnlyThread {
 		return false
 	}
 	if m.modal != nil || m.overlay != nil {
@@ -286,23 +288,24 @@ func (m *Model) turnTipsAllowed() bool {
 	if strings.TrimSpace(m.composer.Value()) != "" || len(m.composerElements) > 0 {
 		return false
 	}
-	return true
+	if len(m.queued) > 0 {
+		return false
+	}
+	if m.backtrack.Primed || m.backtrack.OverlayPreviewActive {
+		return false
+	}
+	return m.activityFollow || m.transcript.AtBottom()
 }
 
-// completionTipAllowed mirrors the gates Rust applies to the completion surface:
-// the preference on, no modal or popup, an empty composer, and no user turn
-// pending or running (the working-tip gate requires a running turn instead).
+// turnTipsAllowed is the working surface: the shared gates plus a running turn.
+func (m *Model) turnTipsAllowed() bool {
+	return m.turnTipsSurfacesAllowed() && m.isTaskRunning()
+}
+
+// completionTipAllowed is the completion surface: the shared gates plus a
+// finished turn (no user turn pending or running).
 func (m *Model) completionTipAllowed() bool {
-	if m == nil || !m.showTooltips || m.isUserTurnPendingOrRunning() {
-		return false
-	}
-	if m.modal != nil || m.overlay != nil {
-		return false
-	}
-	if strings.TrimSpace(m.composer.Value()) != "" || len(m.composerElements) > 0 {
-		return false
-	}
-	return true
+	return m.turnTipsSurfacesAllowed() && !m.isUserTurnPendingOrRunning()
 }
 
 // turnTipTickMsg re-renders the frame at the working tip's deadline.

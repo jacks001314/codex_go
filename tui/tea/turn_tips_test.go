@@ -203,3 +203,37 @@ func TestTurnTipsCompletionTipRendersInTranscriptLikeRust(t *testing.T) {
 		t.Fatalf("disabled tooltips rendered a completion tip:\n%s", view)
 	}
 }
+
+// Mirrors the remaining `App::turn_tip` gates Go models: a primed backtrack
+// selection, a read-only externally owned thread and a queued follow-up all
+// suppress the tip surfaces.
+func TestTurnTipsGateBacktrackReadOnlyAndQueueLikeRust(t *testing.T) {
+	enabled := true
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 30, ShowTooltips: &enabled})
+	for index := 0; index < turnTipCompletionInterval; index++ {
+		turnID := turnIDForTest(index)
+		model.Update(ThreadEventMsg{Event: protocol.TurnStartedWithID(turnID)})
+		model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{
+			Type: "item.completed",
+			Item: &protocol.ThreadItem{ID: "final-" + turnID, Type: "agent_message", Text: "done", Phase: "final_answer"},
+		}})
+		model.Update(ThreadEventMsg{Event: protocol.TurnCompletedWithID(protocol.Usage{}, turnID)})
+	}
+	if view := utils.StripANSI(model.View()); !strings.Contains(view, "Tip: ") {
+		t.Fatalf("baseline completion tip missing:\n%s", view)
+	}
+	model.backtrack.Primed = true
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+		t.Fatalf("a primed backtrack selection rendered a tip:\n%s", view)
+	}
+	model.backtrack.Primed = false
+	model.readOnlyThread = true
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+		t.Fatalf("a read-only thread rendered a tip:\n%s", view)
+	}
+	model.readOnlyThread = false
+	model.queued = append(model.queued, queuedSubmission{})
+	if view := utils.StripANSI(model.View()); strings.Contains(view, "Tip: ") {
+		t.Fatalf("a queued follow-up rendered a tip:\n%s", view)
+	}
+}
