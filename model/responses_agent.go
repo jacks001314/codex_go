@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"codex_go/auth"
 	"codex_go/codexapi"
@@ -387,9 +388,15 @@ type responsesAgentAPIErrorBody struct {
 }
 
 type ResponsesAPIError struct {
-	StatusCode             int
-	Message                string
-	Body                   string
+	StatusCode int
+	Message    string
+	Body       string
+	// UserMessage overrides the rendered message when the host has
+	// provider-specific guidance (Rust's `UnexpectedResponseError::user_message`):
+	// the Cloudflare-blocked copy and Amazon Bedrock's expired-signature copy.
+	UserMessage string
+	// URL is the request URL Rust renders after the message (Rust's `url`).
+	URL                    string
 	RequestID              string
 	CFRay                  string
 	AuthorizationError     string
@@ -398,24 +405,116 @@ type ResponsesAPIError struct {
 	hasRetryDelay          bool
 }
 
+// unexpectedResponseBodyMaxBytes is Rust's `UNEXPECTED_RESPONSE_BODY_MAX_BYTES`.
+const unexpectedResponseBodyMaxBytes = 1000
+
+// cloudflareBlockedMessage is Rust codex-api's `CLOUDFLARE_BLOCKED_MESSAGE`.
+const cloudflareBlockedMessage = "Access blocked by Cloudflare. This usually happens when connecting from a restricted region"
+
+// Error renders Rust's `UnexpectedResponseError::Display` (#48174's error lane):
+// a provider-specific user message when present, otherwise the status and the
+// body, followed by whatever response context the request carried. The
+// app-server reports this string as the turn error message, so it must match
+// Rust rather than carry a Go-only prefix.
 func (e *ResponsesAPIError) Error() string {
 	if e == nil {
 		return "responses API request failed"
 	}
-	parts := []string{fmt.Sprintf("responses API request failed with status %d: %s", e.StatusCode, e.Message)}
-	if e.RequestID != "" {
-		parts = append(parts, "request_id: "+e.RequestID)
+	message := e.UserMessage
+	if message == "" {
+		message = fmt.Sprintf("unexpected status %s: %s", httpStatusDisplay(e.StatusCode), e.displayBody())
+	}
+	if e.URL != "" {
+		message += ", url: " + e.URL
 	}
 	if e.CFRay != "" {
-		parts = append(parts, "cf_ray: "+e.CFRay)
+		message += ", cf-ray: " + e.CFRay
+	}
+	if e.RequestID != "" {
+		message += ", request id: " + e.RequestID
 	}
 	if e.AuthorizationError != "" {
-		parts = append(parts, "auth_error: "+e.AuthorizationError)
+		message += ", auth error: " + e.AuthorizationError
 	}
 	if e.AuthorizationErrorCode != "" {
-		parts = append(parts, "auth_error_code: "+e.AuthorizationErrorCode)
+		message += ", auth error code: " + e.AuthorizationErrorCode
 	}
-	return strings.Join(parts, ", ")
+	return message
+}
+
+// displayBody mirrors Rust's `UnexpectedResponseError::display_body`: a JSON
+// body's `error.message` wins, an empty body reports `Unknown error`, and any
+// other body is truncated with an ellipsis at the byte limit.
+func (e *ResponsesAPIError) displayBody() string {
+	if message := extractUnexpectedResponseErrorMessage(e.Body); message != "" {
+		return message
+	}
+	trimmed := strings.TrimSpace(e.Body)
+	if trimmed == "" {
+		return "Unknown error"
+	}
+	return truncateWithEllipsis(trimmed, unexpectedResponseBodyMaxBytes)
+}
+
+// extractUnexpectedResponseErrorMessage mirrors Rust's `extract_error_message`:
+// the body's `error.message` string, trimmed, or nothing when it is absent or
+// blank.
+func extractUnexpectedResponseErrorMessage(body string) string {
+	var payload struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || payload.Error == nil {
+		return ""
+	}
+	return strings.TrimSpace(payload.Error.Message)
+}
+
+// truncateWithEllipsis mirrors Rust's `truncate_with_ellipsis`: cut at the byte
+// limit on a UTF-8 boundary and mark the truncation.
+func truncateWithEllipsis(text string, maxBytes int) string {
+	if len(text) <= maxBytes {
+		return text
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "..."
+}
+
+// httpStatusDisplay mirrors `http::StatusCode`'s Display: the code and its
+// reason phrase, or just the code for a status this build does not name.
+func httpStatusDisplay(statusCode int) string {
+	if text := http.StatusText(statusCode); text != "" {
+		return strconv.Itoa(statusCode) + " " + text
+	}
+	return strconv.Itoa(statusCode)
+}
+
+// responsesProviderUserMessage mirrors Rust's provider-specific `user_message`
+// overrides: codex-api's Cloudflare-blocked 403 copy and model-provider's
+// Amazon Bedrock expired-signature 401 copy.
+func responsesProviderUserMessage(providerName string, statusCode int, bodyText string) string {
+	if providerName == AmazonBedrockProviderName && statusCode == http.StatusUnauthorized && strings.Contains(bodyText, "Signature expired:") {
+		return bedrockExpiredSignatureMessage
+	}
+	if statusCode == http.StatusForbidden && strings.Contains(bodyText, "Cloudflare") && strings.Contains(bodyText, "blocked") {
+		return cloudflareBlockedMessage + " (status " + httpStatusDisplay(statusCode) + ")"
+	}
+	return ""
+}
+
+// setResponsesAPIErrorURL records the request URL Rust renders after an
+// unexpected-status message (`UnexpectedResponseError::url`). The transport
+// error carries it in Rust; Go's HTTP client exposes it on the response.
+func setResponsesAPIErrorURL(err error, response *http.Response) {
+	responsesErr, ok := err.(*ResponsesAPIError)
+	if !ok || responsesErr == nil || response == nil || response.Request == nil || response.Request.URL == nil {
+		return
+	}
+	responsesErr.URL = response.Request.URL.String()
 }
 
 func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunner {
@@ -1327,6 +1426,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
 		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		setResponsesAPIErrorURL(apiErr, httpResponse)
 		emitUsageLimitErrorHeaderEvents(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), httpResponse.Header, apiErr)
 		return nil, apiErr
 	}
@@ -3043,6 +3143,7 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		StatusCode:             statusCode,
 		Message:                message,
 		Body:                   bodyText,
+		UserMessage:            responsesProviderUserMessage(providerName, statusCode, bodyText),
 		RequestID:              responseHeaderValue(headers, responsesRequestIDHeader, responsesOAIRequestIDHeader),
 		CFRay:                  responseHeaderValue(headers, "cf-ray"),
 		AuthorizationError:     responseHeaderValue(headers, "x-openai-authorization-error"),

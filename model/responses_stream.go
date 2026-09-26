@@ -478,6 +478,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 			return nil, readErr
 		}
 		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		setResponsesAPIErrorURL(apiErr, httpResponse)
 		emitUsageLimitErrorHeaderEvents(handler, httpResponse.Header, apiErr)
 		return nil, apiErr
 	}

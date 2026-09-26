@@ -3868,7 +3868,7 @@ func TestResponsesAgentRunnerReturnsAPIErrorMessage(t *testing.T) {
 	if apiErr.RequestID != "req-error" || apiErr.CFRay != "ray-error" || apiErr.AuthorizationError != "identity denied" || apiErr.AuthorizationErrorCode != "identity_denied" {
 		t.Fatalf("debug context = %#v", apiErr)
 	}
-	if !strings.Contains(err.Error(), "request_id: req-error") || !strings.Contains(err.Error(), "cf_ray: ray-error") {
+	if !strings.Contains(err.Error(), "request id: req-error") || !strings.Contains(err.Error(), "cf-ray: ray-error") {
 		t.Fatalf("error string = %v", err)
 	}
 }
@@ -3895,7 +3895,7 @@ func TestResponsesAgentRunnerMapsBedrockExpiredSignature(t *testing.T) {
 	if apiErr.Message != bedrockExpiredSignatureMessage {
 		t.Fatalf("message = %q", apiErr.Message)
 	}
-	if !strings.Contains(err.Error(), "Refresh your AWS credentials and retry") || !strings.Contains(err.Error(), "request_id: req-bedrock") {
+	if !strings.Contains(err.Error(), "Refresh your AWS credentials and retry") || !strings.Contains(err.Error(), "request id: req-bedrock") {
 		t.Fatalf("error string = %v", err)
 	}
 }
