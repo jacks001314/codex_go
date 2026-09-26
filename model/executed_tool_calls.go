@@ -404,6 +404,41 @@ func BoundExecutedToolCallsForPrompt(items []any) []any {
 	return out
 }
 
+// executedToolCallCarriers collects the carriers of items that already hold a
+// trusted executed-tool-call inventory, without cloning them.
+func executedToolCallCarriers(items []any) []ExecutedToolCallCarrier {
+	var carriers []ExecutedToolCallCarrier
+	for _, item := range items {
+		carrier, ok := item.(ExecutedToolCallCarrier)
+		if !ok || carrier == nil || len(carrier.ExecutedToolCalls()) == 0 {
+			continue
+		}
+		carriers = append(carriers, carrier)
+	}
+	return carriers
+}
+
+// ExecutedToolCallMetadataTotalBytes mirrors Rust's
+// `metadata_metrics::metadata_bytes`: the serialized bytes the
+// executed-tool-call metadata occupies across items.
+func ExecutedToolCallMetadataTotalBytes(items []any) int {
+	return executedToolCallMetadataBytesOf(executedToolCallCarriers(items))
+}
+
+// BoundExecutedToolCallsForMessage mirrors Rust's
+// `bound_executed_tool_calls_for_message`: bound optional observations to the
+// space left in the actual outgoing message. Only the wire copy changes, and the
+// whole-message scope sheds sources and recorded arguments before resource
+// evidence. The items are bounded in place and returned.
+func BoundExecutedToolCallsForMessage(items []any, maxMetadataBytes int) []any {
+	carriers := executedToolCallCarriers(items)
+	if len(carriers) == 0 {
+		return items
+	}
+	boundExecutedToolCallItemsWithBudget(carriers, maxMetadataBytes, true)
+	return items
+}
+
 func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, ExecutedToolCallCarrier) {
 	switch item := value.(type) {
 	case *AgentItem:
@@ -448,7 +483,7 @@ func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, ExecutedTool
 // resource-access field keeps only that field, and every other snapshot is
 // replaced by the omission marker only when the marker is smaller. It reports
 // the remaining metadata bytes.
-func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, totalBytes int) int {
+func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, wholeMessage bool, totalBytes int) int {
 	type metadataHandle struct {
 		itemIndex int
 		callIndex int
@@ -494,6 +529,28 @@ func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, to
 		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
 		total -= original - retained
 	}
+	// Tiny generic values and markers can be cheaper than replacing them with a
+	// new marker. Remove their complete fields before sacrificing resource
+	// evidence (Rust's whole-message scope).
+	if wholeMessage {
+		for _, handle := range handles {
+			if total <= maxBytes {
+				break
+			}
+			calls := items[handle.itemIndex].ExecutedToolCalls()
+			metadata := &calls[handle.callIndex].toolResultMetadata
+			if metadata.retainResourceAccess() {
+				continue
+			}
+			before := jsonSize(*metadata)
+			*metadata = ToolResultMetadata{}
+			items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
+			total -= before + len(`,"tool_result_metadata":`)
+			if total < 0 {
+				total = 0
+			}
+		}
+	}
 	return total
 }
 
@@ -501,7 +558,7 @@ func shedGenericResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, to
 // for the prompt budget: re-sort by the updated sizes (a plain snapshot before
 // an existing marker of the same size, largest first) and omit what is still
 // over budget. It reports the remaining metadata bytes.
-func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, totalBytes int) int {
+func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, wholeMessage bool, totalBytes int) int {
 	type metadataHandle struct {
 		itemIndex int
 		callIndex int
@@ -525,6 +582,9 @@ func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, 
 		}
 	}
 	sort.SliceStable(handles, func(i int, j int) bool {
+		if wholeMessage && handles[i].omitted != handles[j].omitted {
+			return !handles[i].omitted
+		}
 		if handles[i].bytes != handles[j].bytes {
 			return handles[i].bytes > handles[j].bytes
 		}
@@ -548,6 +608,48 @@ func shedRemainingResultMetadata(items []ExecutedToolCallCarrier, maxBytes int, 
 		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
 		total -= original - retained
 	}
+	// Use the updated sizes: markers should be removed before smaller provider
+	// metadata, and the largest remaining snapshots go first.
+	for index := range handles {
+		calls := items[handles[index].itemIndex].ExecutedToolCalls()
+		metadata := calls[handles[index].callIndex].toolResultMetadata
+		handles[index].bytes = jsonSize(metadata)
+		handles[index].omitted = metadata.isOmittedDueToSizeLimit()
+	}
+	sort.SliceStable(handles, func(i int, j int) bool {
+		left := wholeMessage && !handles[i].omitted
+		right := wholeMessage && !handles[j].omitted
+		if left != right {
+			return left
+		}
+		if handles[i].bytes != handles[j].bytes {
+			return handles[i].bytes > handles[j].bytes
+		}
+		if handles[i].omitted != handles[j].omitted {
+			return !handles[i].omitted
+		}
+		if handles[i].itemIndex != handles[j].itemIndex {
+			return handles[i].itemIndex < handles[j].itemIndex
+		}
+		return handles[i].callIndex < handles[j].callIndex
+	})
+	for _, handle := range handles {
+		if total <= maxBytes {
+			break
+		}
+		calls := items[handle.itemIndex].ExecutedToolCalls()
+		metadata := &calls[handle.callIndex].toolResultMetadata
+		if metadata.IsNone() {
+			continue
+		}
+		before := jsonSize(*metadata)
+		*metadata = ToolResultMetadata{}
+		items[handle.itemIndex].ReplaceExecutedToolCalls(calls)
+		total -= before + len(`,"tool_result_metadata":`)
+		if total < 0 {
+			total = 0
+		}
+	}
 	return total
 }
 
@@ -560,6 +662,110 @@ func executedToolCallCellID(item ExecutedToolCallCarrier) string {
 	return strings.TrimSpace(carrier.ExecutedToolCallCellID())
 }
 
+// executedToolCallMetadataBytesOf sums the metadata bytes of trusted carriers.
+func executedToolCallMetadataBytesOf(items []ExecutedToolCallCarrier) int {
+	total := 0
+	for _, item := range items {
+		total += executedToolCallMetadataBytes(item)
+	}
+	return total
+}
+
+// clearDamagedCellCompleteness discards the completion claim on every carrier
+// whose Code Mode cell is damaged (Rust's `clear_damaged_cell_completeness`).
+func clearDamagedCellCompleteness(items []ExecutedToolCallCarrier, damagedCells map[string]bool) {
+	if len(damagedCells) == 0 {
+		return
+	}
+	for _, item := range items {
+		if damagedCells[executedToolCallCellID(item)] {
+			clearExecutedToolCallsComplete(item)
+		}
+	}
+}
+
+// shedResultSources mirrors Rust's `shed_result_sources`: source evidence is
+// optional and must not discard calls or their completion proof. The
+// whole-message scope stops once the budget is met; the prompt scope drops it
+// all. It reports the remaining overage.
+func shedResultSources(items []ExecutedToolCallCarrier, maxMetadataBytes int, wholeMessage bool) int {
+	overage := executedToolCallMetadataBytesOf(items) - maxMetadataBytes
+	if overage < 0 {
+		overage = 0
+	}
+	for _, item := range items {
+		calls := item.ExecutedToolCalls()
+		changed := false
+		for index := range calls {
+			if wholeMessage && overage == 0 {
+				break
+			}
+			if !calls[index].HasToolResultSources() {
+				continue
+			}
+			bytes := jsonSize(calls[index].toolResultSources)
+			calls[index].SetToolResultSources(ToolResultSources{})
+			changed = true
+			overage -= bytes + len(`,"tool_result_sources":`)
+			if overage < 0 {
+				overage = 0
+			}
+		}
+		if changed {
+			item.ReplaceExecutedToolCalls(calls)
+		}
+	}
+	return overage
+}
+
+// truncateCallArgumentsToFit mirrors Rust's `truncate_call_arguments_to_fit`: a
+// large outgoing message should not lose the other tool names in a cell when
+// replacing one call's arguments is enough to make it fit.
+func truncateCallArgumentsToFit(items []ExecutedToolCallCarrier, maxMetadataBytes int, overageBytes int, damagedCells map[string]bool) {
+	for itemIndex := range items {
+		for overageBytes > 0 {
+			calls := items[itemIndex].ExecutedToolCalls()
+			changed := false
+			for index := range calls {
+				if calls[index].truncation != nil {
+					continue
+				}
+				original := executedToolCallArgumentBytes(calls[index])
+				if original <= 0 {
+					continue
+				}
+				retained := original - overageBytes
+				if retained < 0 {
+					retained = 0
+				}
+				candidate := calls[index]
+				setExecutedToolCallTruncation(&candidate, original, minInt(retained, MaxExecutedToolCallArgumentBytes), nil, nil)
+				truncatedBytes := jsonSize(map[string]any{executedToolCallTruncatedField: *candidate.truncation})
+				if truncatedBytes >= original {
+					continue
+				}
+				calls[index] = candidate
+				changed = true
+				clearExecutedToolCallsComplete(items[itemIndex])
+				if cell := executedToolCallCellID(items[itemIndex]); cell != "" {
+					damagedCells[cell] = true
+				}
+				break
+			}
+			if !changed {
+				break
+			}
+			items[itemIndex].ReplaceExecutedToolCalls(calls)
+			// Losing one call's arguments invalidates every output in that cell.
+			clearDamagedCellCompleteness(items, damagedCells)
+			overageBytes = executedToolCallMetadataBytesOf(items) - maxMetadataBytes
+			if overageBytes < 0 {
+				overageBytes = 0
+			}
+		}
+	}
+}
+
 // clearExecutedToolCallsComplete discards a carrier's completion claim when the
 // host cannot retain the cell's full evidence (Rust's
 // `ResponseItem::clear_tool_calls_complete`).
@@ -570,6 +776,14 @@ func clearExecutedToolCallsComplete(item ExecutedToolCallCarrier) {
 }
 
 func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
+	boundExecutedToolCallItemsWithBudget(items, MaxExecutedToolCallMetadataBytes, false)
+}
+
+// boundExecutedToolCallItemsWithBudget mirrors Rust's
+// `bound_executed_tool_calls_with_metadata_budget` for one budget and scope.
+// The whole-message scope sheds optional sources and recorded arguments before
+// resource-access evidence; the prompt budget keeps its existing order.
+func boundExecutedToolCallItemsWithBudget(items []ExecutedToolCallCarrier, maxMetadataBytes int, wholeMessage bool) {
 	remainingItems := len(items)
 	originalCalls := 0
 	originalBytes := 0
@@ -607,7 +821,7 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 			clearExecutedToolCallsComplete(item)
 		}
 	}
-	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+	if originalBytes <= maxMetadataBytes {
 		return
 	}
 	// Raw result metadata must not displace existing source evidence, calls, or
@@ -615,15 +829,24 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	// snapshots first, so one large result cannot discard unrelated small
 	// results; a resource-access field is kept on its own before a snapshot is
 	// replaced by the smaller omission marker (`omit_if_smaller`).
-	originalBytes = shedGenericResultMetadata(items, MaxExecutedToolCallMetadataBytes, originalBytes)
-	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+	originalBytes = shedGenericResultMetadata(items, maxMetadataBytes, wholeMessage, originalBytes)
+	if originalBytes <= maxMetadataBytes {
 		return
+	}
+	if wholeMessage {
+		// At the message limit, shed optional sources and recorded arguments
+		// before resource-access evidence (Rust's whole-message ordering).
+		overage := shedResultSources(items, maxMetadataBytes, true)
+		if overage > 0 {
+			truncateCallArgumentsToFit(items, maxMetadataBytes, overage, damagedCells)
+		}
+		originalBytes = executedToolCallMetadataBytesOf(items)
 	}
 	// Rust's `shed_remaining_result_metadata`: with the updated sizes, a plain
 	// snapshot is omitted before an existing marker of the same size, and the
 	// largest remaining snapshots are shed first.
-	originalBytes = shedRemainingResultMetadata(items, MaxExecutedToolCallMetadataBytes, originalBytes)
-	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+	originalBytes = shedRemainingResultMetadata(items, maxMetadataBytes, wholeMessage, originalBytes)
+	if originalBytes <= maxMetadataBytes {
 		return
 	}
 	// Omission markers are optional too; keep the original call budget if they
@@ -643,29 +866,17 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 		}
 		originalBytes += executedToolCallMetadataBytes(item)
 	}
-	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+	if originalBytes <= maxMetadataBytes {
 		return
 	}
 	// Source evidence is optional: dropping it must not discard calls or their
-	// completion proof (Rust #42164).
-	for _, item := range items {
-		calls := item.ExecutedToolCalls()
-		changed := false
-		for index := range calls {
-			if calls[index].HasToolResultSources() {
-				calls[index].SetToolResultSources(ToolResultSources{})
-				changed = true
-			}
-		}
-		if changed {
-			item.ReplaceExecutedToolCalls(calls)
-		}
+	// completion proof (Rust #42164). The whole-message path already handled
+	// sources and arguments before resource evidence.
+	if !wholeMessage {
+		shedResultSources(items, maxMetadataBytes, false)
 	}
-	originalBytes = 0
-	for _, item := range items {
-		originalBytes += executedToolCallMetadataBytes(item)
-	}
-	if originalBytes <= MaxExecutedToolCallMetadataBytes {
+	originalBytes = executedToolCallMetadataBytesOf(items)
+	if originalBytes <= maxMetadataBytes {
 		return
 	}
 
@@ -682,7 +893,7 @@ func boundExecutedToolCallItems(items []ExecutedToolCallCarrier) {
 	reservation := jsonSize(map[string]any{executedToolCallTruncatedField: ExecutedToolCallTruncation{
 		OriginalBytes: maxInt(), MaxBytes: maxInt(), OmittedCalls: intPointer(maxInt()), OriginalNameBytes: intPointer(maxInt()),
 	}})
-	remainingBytes := MaxExecutedToolCallMetadataBytes - minInt(MaxExecutedToolCallMetadataBytes, reservation)
+	remainingBytes := maxMetadataBytes - minInt(maxMetadataBytes, reservation)
 	for _, item := range items {
 		if len(item.ExecutedToolCalls()) == 0 {
 			continue

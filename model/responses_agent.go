@@ -230,6 +230,42 @@ type ExternalAuthRefreshFunc func(ctx context.Context, request *ExternalAuthRefr
 // the previously authenticated account.
 type WorkloadIdentityRefreshFunc func(ctx context.Context, previousAccountID string) (*auth.AuthDotJSON, error)
 
+// MaxResponseMessageBytes mirrors Rust's client_tool_metadata
+// `MAX_RESPONSE_MESSAGE_BYTES`: the soft cap on one serialized outgoing message.
+const MaxResponseMessageBytes = 15 * 1024 * 1024
+
+// boundedInputForResponseMessage mirrors Rust's
+// `client_tool_metadata::bounded_input`: a message whose serialized form exceeds
+// the soft cap is bounded by the overage, and only its optional
+// executed-tool-call metadata changes. Model-visible input, ordinary content and
+// the WebSocket continuation history stay intact.
+func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *AgentRequest) []any {
+	if apiRequest == nil {
+		return nil
+	}
+	input := apiRequest.Input
+	if len(input) == 0 || request == nil {
+		return input
+	}
+	before := ExecutedToolCallMetadataTotalBytes(input)
+	if before == 0 {
+		return input
+	}
+	encoded, err := json.Marshal(apiRequest)
+	if err != nil || len(encoded) <= MaxResponseMessageBytes {
+		return input
+	}
+	budget := before - (len(encoded) - MaxResponseMessageBytes)
+	if budget < 0 {
+		budget = 0
+	}
+	bounded := BoundExecutedToolCallsForMessage(input, budget)
+	if ExecutedToolCallMetadataTotalBytes(bounded) == before {
+		return input
+	}
+	return bounded
+}
+
 type responsesAgentRequest struct {
 	Model                string                  `json:"model"`
 	Instructions         string                  `json:"instructions,omitempty"`
@@ -599,6 +635,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -829,6 +866,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	if apiRequest.Reasoning != nil {
 		apiRequest.Include = []string{"reasoning.encrypted_content"}
 	}
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -1271,6 +1309,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if apiRequest.Reasoning != nil {
 		apiRequest.Include = []string{"reasoning.encrypted_content"}
 	}
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
 	if apiRequest.Stream {
 		return r.runStreaming(ctx, request, apiRequest)
 	}

@@ -222,7 +222,7 @@ func TestShedRemainingResultMetadataShedsLargestFirstLikeRust(t *testing.T) {
 	total := executedToolCallMetadataBytes(large) + executedToolCallMetadataBytes(marker)
 
 	items := []ExecutedToolCallCarrier{large, marker}
-	retained := shedRemainingResultMetadata(items, total-1_000, total)
+	retained := shedRemainingResultMetadata(items, total-1_000, false, total)
 	if retained >= total {
 		t.Fatalf("retained bytes = %d, want the largest snapshot shed", retained)
 	}
@@ -231,6 +231,97 @@ func TestShedRemainingResultMetadataShedsLargestFirstLikeRust(t *testing.T) {
 	}
 	if value, _ := marker.ExecutedToolCalls()[0].toolResultMetadata.value.(string); value != "omitted_due_to_size_limit" {
 		t.Fatalf("existing marker changed: %#v", marker.ExecutedToolCalls()[0].toolResultMetadata.value)
+	}
+}
+
+// Mirrors Rust's `bound_executed_tool_calls_for_message`: the whole-message
+// scope sheds optional sources (and then recorded arguments) before
+// resource-access evidence, so ordinary content and the call inventory survive.
+func TestBoundExecutedToolCallsForMessageShedsSourcesFirstLikeRust(t *testing.T) {
+	newCarrier := func(callID string, metadata any) *AgentItem {
+		item := &AgentItem{Type: "function_call", Name: "tool", CallID: callID, Arguments: `{}`}
+		RecordExecutedToolCall(item)
+		calls := item.ExecutedToolCalls()
+		calls[0].SetToolResultSources(NewToolResultSources([]ToolResultSource{{Type: "document", ID: "R0"}}))
+		calls[0].SetToolResultMetadata(NewToolResultMetadata(metadata))
+		item.ReplaceExecutedToolCalls(calls)
+		return item
+	}
+	// The snapshot holds only the resource-access field, so the generic pass
+	// cannot shrink it and the sources step runs first.
+	item := newCarrier("call-1", map[string]any{"openai/resource_access": map[string]any{"id": "res-1"}})
+	items := []any{item}
+	budget := ExecutedToolCallMetadataTotalBytes(items) - 1
+
+	bound := BoundExecutedToolCallsForMessage(items, budget)
+	if len(bound) != 1 {
+		t.Fatalf("bound items = %#v", bound)
+	}
+	calls := item.ExecutedToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+	if calls[0].HasToolResultSources() {
+		t.Fatalf("whole-message bound kept sources: %#v", calls[0].toolResultSources)
+	}
+	retained, _ := calls[0].toolResultMetadata.value.(map[string]any)
+	if retained["openai/resource_access"] == nil {
+		t.Fatalf("resource evidence was sacrificed before sources: %#v", calls[0].toolResultMetadata.value)
+	}
+	if ExecutedToolCallMetadataTotalBytes(items) > budget {
+		t.Fatalf("metadata bytes = %d, want at most %d", ExecutedToolCallMetadataTotalBytes(items), budget)
+	}
+}
+
+// Mirrors Rust's `client_tool_metadata::bounded_input`: only a message whose
+// serialized form exceeds the soft cap is bounded, and only its optional
+// executed-tool-call metadata changes.
+func TestBoundedInputForResponseMessageLikeRust(t *testing.T) {
+	carrier := func(metadata any) *AgentItem {
+		item := &AgentItem{Type: "function_call", Name: "tool", CallID: "call-1", Arguments: `{}`}
+		RecordExecutedToolCall(item)
+		calls := item.ExecutedToolCalls()
+		calls[0].SetToolResultMetadata(NewToolResultMetadata(metadata))
+		item.ReplaceExecutedToolCalls(calls)
+		return item
+	}
+	small := &responsesAgentRequest{Model: "m", Input: []any{carrier(map[string]any{"provider": "small"})}}
+	if got := boundedInputForResponseMessage(small, &AgentRequest{}); len(got) != 1 || got[0] != small.Input[0] {
+		t.Fatalf("a message under the soft cap was bounded: %#v", got)
+	}
+
+	// A message over the cap keeps ordinary content and loses the optional
+	// metadata.
+	large := carrier(map[string]any{"provider": strings.Repeat("p", 5_000)})
+	big := &responsesAgentRequest{Model: "m", Input: []any{
+		large,
+		&AgentItem{Type: "function_call_output", Name: "tool", CallID: "call-2", Text: strings.Repeat("x", MaxResponseMessageBytes)},
+	}}
+	encoded, err := json.Marshal(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) <= MaxResponseMessageBytes {
+		t.Fatalf("message bytes = %d, want over the soft cap", len(encoded))
+	}
+	before := ExecutedToolCallMetadataTotalBytes(big.Input)
+	got := boundedInputForResponseMessage(big, &AgentRequest{})
+	if len(got) != len(big.Input) {
+		t.Fatalf("bounded input length = %d, want %d", len(got), len(big.Input))
+	}
+	if after := ExecutedToolCallMetadataTotalBytes(got); after >= before {
+		t.Fatalf("metadata bytes = %d, want the optional snapshot shed from %d", after, before)
+	}
+	if output, ok := got[1].(*AgentItem); !ok || len(output.Text) != MaxResponseMessageBytes {
+		t.Fatal("ordinary content must survive the soft-cap bound")
+	}
+
+	// A message over the cap without optional metadata is untouched.
+	plain := &responsesAgentRequest{Model: "m", Input: []any{
+		&AgentItem{Type: "function_call_output", Name: "tool", CallID: "call-3", Text: strings.Repeat("x", MaxResponseMessageBytes)},
+	}}
+	if got := boundedInputForResponseMessage(plain, &AgentRequest{}); got[0] != plain.Input[0] {
+		t.Fatal("a message without tool metadata must not be re-bounded")
 	}
 }
 
