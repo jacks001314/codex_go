@@ -46,9 +46,9 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
 		}),
 		store: state.NewReviewStore(),
-		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
-			environmentID := "env-1"
-			return &profile, cwd, &environmentID
+		turnPermissionProfile: func(threadID, turnID, environmentID string) (*sandbox.PermissionProfile, string, *string) {
+			resolvedEnvironmentID := "env-1"
+			return &profile, cwd, &resolvedEnvironmentID
 		},
 	}
 	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "command", Command: "ls", CWD: cwd}); err != nil {
@@ -76,7 +76,7 @@ func TestModelGuardianReviewerIncludesTurnPermissionEvidenceLikeRust(t *testing.
 			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
 		}),
 		store: state.NewReviewStore(),
-		turnPermissionProfile: func(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
+		turnPermissionProfile: func(threadID, turnID, environmentID string) (*sandbox.PermissionProfile, string, *string) {
 			readOnly := sandbox.ReadOnlyPermissionProfile()
 			return &readOnly, cwd, nil
 		},

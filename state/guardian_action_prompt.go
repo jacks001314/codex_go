@@ -58,11 +58,12 @@ func guardianActionJSONValue(action Action) map[string]any {
 	switch strings.TrimSpace(action.Type) {
 	case "network_access":
 		value := map[string]any{
-			"tool":     "network_access",
-			"target":   action.Target,
-			"host":     action.Host,
-			"protocol": action.Protocol,
-			"port":     action.Port,
+			"tool":           "network_access",
+			"environment_id": action.EnvironmentID,
+			"target":         action.Target,
+			"host":           action.Host,
+			"protocol":       action.Protocol,
+			"port":           action.Port,
 		}
 		if trigger, ok := action.Extra["trigger"]; ok && trigger != nil {
 			value["trigger"] = trigger
@@ -92,16 +93,18 @@ func guardianActionJSONValue(action Action) map[string]any {
 		return value
 	case "apply_patch":
 		return map[string]any{
-			"tool":  "apply_patch",
-			"cwd":   action.CWD,
-			"files": append([]string{}, action.Files...),
-			"patch": action.Patch,
+			"tool":           "apply_patch",
+			"environment_id": action.EnvironmentID,
+			"cwd":            action.CWD,
+			"files":          append([]string{}, action.Files...),
+			"patch":          action.Patch,
 		}
 	case "request_permissions":
 		value := map[string]any{
-			"tool":        "request_permissions",
-			"turn_id":     action.TurnID,
-			"permissions": normalizeRequestPermissions(action.Permissions),
+			"tool":           "request_permissions",
+			"environment_id": action.EnvironmentID,
+			"turn_id":        action.TurnID,
+			"permissions":    normalizeRequestPermissions(action.Permissions),
 		}
 		if reason := strings.TrimSpace(action.Reason); reason != "" {
 			value["reason"] = reason
@@ -109,10 +112,11 @@ func guardianActionJSONValue(action Action) map[string]any {
 		return value
 	case "execve":
 		value := map[string]any{
-			"tool":    execveToolName(action.Source),
-			"program": action.Program,
-			"argv":    append([]string{}, action.Argv...),
-			"cwd":     action.CWD,
+			"tool":           execveToolName(action.Source),
+			"environment_id": action.EnvironmentID,
+			"program":        action.Program,
+			"argv":           append([]string{}, action.Argv...),
+			"cwd":            action.CWD,
 		}
 		if permissions := action.AdditionalPermissions; len(permissions) > 0 {
 			value["additional_permissions"] = permissions
@@ -133,7 +137,7 @@ func guardianActionJSONValue(action Action) map[string]any {
 		}
 		return value
 	default:
-		value := map[string]any{"tool": "exec_command", "cwd": action.CWD}
+		value := map[string]any{"tool": "exec_command", "environment_id": action.EnvironmentID, "cwd": action.CWD}
 		switch {
 		case len(action.CommandArgv) > 0:
 			value["command"] = append([]string{}, action.CommandArgv...)

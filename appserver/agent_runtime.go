@@ -518,7 +518,7 @@ func (r *RuntimeRouter) guardianReviewNodeReplAutoReviewRequiredForTurn(threadID
 }
 
 func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID string) *sandbox.PermissionProfile {
-	profile, _, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID)
+	profile, _, _ := r.guardianTurnPermissionProfileForTurn(threadID, turnID, "")
 	if profile == nil {
 		return nil
 	}
@@ -534,8 +534,11 @@ func (r *RuntimeRouter) guardianReviewPermissionProfileForTurn(threadID, turnID 
 // permission profile, working directory and environment selection id. Rust's
 // Guardian permission evidence is resolved from the reviewed environment's own
 // profile (`core/src/guardian/permissions.rs::for_environment`), falling back to
-// the turn's profile, and names the environment it resolved.
-func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID string) (*sandbox.PermissionProfile, string, *string) {
+// the turn's profile, and names the environment it resolved. A non-empty
+// requestedEnvironmentID is the tool payload's own environment (Rust's
+// `for_tool`); an unavailable one drops the evidence entirely, as Rust's caller
+// turns the resolution error into `None`.
+func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID string, requestedEnvironmentID string) (*sandbox.PermissionProfile, string, *string) {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {
 		return nil, "", nil
@@ -544,7 +547,10 @@ func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID st
 	if err != nil || cfg == nil {
 		return nil, "", nil
 	}
-	environmentID, environmentCWD, environmentProfile := r.guardianTurnEnvironmentForTurn(active.Params)
+	environmentID, environmentCWD, environmentProfile, environmentFound := r.guardianTurnEnvironmentForTurn(active.Params, requestedEnvironmentID)
+	if strings.TrimSpace(requestedEnvironmentID) != "" && !environmentFound {
+		return nil, "", nil
+	}
 	if environmentProfile != nil {
 		cwd := firstNonEmpty(environmentCWD, active.Params.CWD)
 		return environmentProfile, cwd, environmentID
@@ -556,25 +562,41 @@ func (r *RuntimeRouter) guardianTurnPermissionProfileForTurn(threadID, turnID st
 	return resolution.Profile, active.Params.CWD, environmentID
 }
 
-// guardianTurnEnvironmentForTurn resolves the reviewed turn's primary
-// environment: its selection id, its working directory and its own permission
-// profile when the environment config supplies one (Rust's
-// `TurnEnvironment::permission_profile_with_workspace_roots`). A turn that
-// selects no environment keeps the parent turn's profile and reports no id.
-func (r *RuntimeRouter) guardianTurnEnvironmentForTurn(params *turn.TurnStartParams) (*string, string, *sandbox.PermissionProfile) {
+// guardianTurnEnvironmentForTurn resolves the reviewed turn's environment: the
+// requested one when the tool payload names it, otherwise the turn's primary
+// environment. It returns the selection id, the working directory, the
+// environment's own permission profile when the environment config supplies one
+// (Rust's `TurnEnvironment::permission_profile_with_workspace_roots`), and
+// whether the requested environment was found. A turn that selects no
+// environment keeps the parent turn's profile and reports no id.
+func (r *RuntimeRouter) guardianTurnEnvironmentForTurn(params *turn.TurnStartParams, requestedEnvironmentID string) (*string, string, *sandbox.PermissionProfile, bool) {
 	if r == nil || params == nil {
-		return nil, "", nil
+		return nil, "", nil, false
 	}
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	if len(environments) == 0 {
-		return nil, "", nil
+		return nil, "", nil, false
 	}
-	primary := environments[0]
+	selected := environments[0]
+	requested := strings.TrimSpace(requestedEnvironmentID)
+	if requested != "" {
+		found := false
+		for index := range environments {
+			if strings.TrimSpace(environments[index].ID) == requested {
+				selected = environments[index]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, "", nil, false
+		}
+	}
 	var environmentID *string
-	if id := strings.TrimSpace(primary.ID); id != "" {
+	if id := strings.TrimSpace(selected.ID); id != "" {
 		environmentID = &id
 	}
-	return environmentID, strings.TrimSpace(primary.CWD), primary.PermissionProfile
+	return environmentID, strings.TrimSpace(selected.CWD), selected.PermissionProfile, true
 }
 
 // guardianInstallationID resolves the Codex installation id attached to

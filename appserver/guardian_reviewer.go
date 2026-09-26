@@ -56,8 +56,9 @@ type modelGuardianReviewer struct {
 	// turnPermissionProfile resolves the reviewed turn's own profile and cwd for
 	// the permission evidence, which is distinct from the read-only profile the
 	// reviewer's session uses, plus the reviewed environment's selection id when
-	// the turn selected one (Rust's guardian permission resolution).
-	turnPermissionProfile func(threadID, turnID string) (*sandbox.PermissionProfile, string, *string)
+	// one was resolved. The last argument is the tool payload's own environment
+	// id when it names one (Rust's `for_tool`).
+	turnPermissionProfile func(threadID, turnID, environmentID string) (*sandbox.PermissionProfile, string, *string)
 	// latestResponseID resolves the reviewed turn's newest response id for the
 	// review request's `parent_response_id` client metadata (Rust #45441).
 	latestResponseID      func(threadID, turnID string) string
@@ -439,7 +440,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// approve an escalation to read (core/src/guardian/permissions.rs).
 	var permissionContext *state.PermissionContext
 	if r.turnPermissionProfile != nil {
-		if profile, cwd, environmentID := r.turnPermissionProfile(threadID, turnID); profile != nil {
+		if profile, cwd, environmentID := r.turnPermissionProfile(threadID, turnID, strings.TrimSpace(action.EnvironmentID)); profile != nil {
 			deniedPaths := sandbox.UnreadableRootsWithCWD(profile, cwd)
 			deniedGlobs := sandbox.UnreadableGlobsWithCWD(profile, cwd)
 			if environmentID != nil || len(deniedPaths) > 0 || len(deniedGlobs) > 0 {

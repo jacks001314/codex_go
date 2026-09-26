@@ -217,11 +217,12 @@ func TestParseAssessmentAndPrompt(t *testing.T) {
 
 func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	prompt, err := BuildPrompt(Action{
-		Type:     "network_access",
-		Host:     "example.test",
-		Protocol: "http",
-		Port:     80,
-		Target:   "http://example.test:80",
+		Type:          "network_access",
+		EnvironmentID: "local",
+		Host:          "example.test",
+		Protocol:      "http",
+		Port:          80,
+		Target:        "http://example.test:80",
 		Extra: map[string]any{"trigger": map[string]any{
 			"callId":             "call-1",
 			"command":            []string{"/bin/sh", "-c", "curl example.test"},
@@ -252,7 +253,7 @@ func TestBuildPromptSerializesNetworkActionLikeRust(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(prompt, prefix), suffix)), &action); err != nil {
 		t.Fatalf("decode action: %v", err)
 	}
-	if len(action) != 6 || action["tool"] != "network_access" || action["host"] != "example.test" || action["protocol"] != "http" || action["target"] != "http://example.test:80" || action["port"] != float64(80) {
+	if len(action) != 7 || action["tool"] != "network_access" || action["environment_id"] != "local" || action["host"] != "example.test" || action["protocol"] != "http" || action["target"] != "http://example.test:80" || action["port"] != float64(80) {
 		t.Fatalf("action = %#v", action)
 	}
 	trigger, ok := action["trigger"].(map[string]any)
@@ -407,17 +408,18 @@ func TestGuardianActionJSONMatchesRust(t *testing.T) {
 				Source:             CommandSourceUnifiedExec,
 				CommandArgv:        []string{"ls", "-la"},
 				CWD:                "/repo",
+				EnvironmentID:      "local",
 				SandboxPermissions: "require_escalated",
 				Justification:      "list the workspace",
 				TTY:                &tty,
 				Reason:             "retry after scope change",
 			},
-			want: "{\n  \"command\": [\n    \"ls\",\n    \"-la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"justification\": \"list the workspace\",\n  \"sandbox_permissions\": \"require_escalated\",\n  \"tool\": \"exec_command\",\n  \"tty\": true\n}",
+			want: "{\n  \"command\": [\n    \"ls\",\n    \"-la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"justification\": \"list the workspace\",\n  \"sandbox_permissions\": \"require_escalated\",\n  \"tool\": \"exec_command\",\n  \"tty\": true\n}",
 		},
 		{
 			name:   "exec_command without argv",
-			action: Action{Type: "command", Command: "ls -la", CWD: "/repo"},
-			want:   "{\n  \"command\": [\n    \"ls -la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"tool\": \"exec_command\"\n}",
+			action: Action{Type: "command", Command: "ls -la", CWD: "/repo", EnvironmentID: "local"},
+			want:   "{\n  \"command\": [\n    \"ls -la\"\n  ],\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"tool\": \"exec_command\"\n}",
 		},
 		{
 			name: "mcp_tool_call",
@@ -435,24 +437,24 @@ func TestGuardianActionJSONMatchesRust(t *testing.T) {
 		},
 		{
 			name:   "apply_patch",
-			action: Action{Type: "apply_patch", CWD: "/repo", Files: []string{"a.txt"}, Patch: "*** Begin Patch"},
-			want:   "{\n  \"cwd\": \"/repo\",\n  \"files\": [\n    \"a.txt\"\n  ],\n  \"patch\": \"*** Begin Patch\",\n  \"tool\": \"apply_patch\"\n}",
+			action: Action{Type: "apply_patch", CWD: "/repo", EnvironmentID: "local", Files: []string{"a.txt"}, Patch: "*** Begin Patch"},
+			want:   "{\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"files\": [\n    \"a.txt\"\n  ],\n  \"patch\": \"*** Begin Patch\",\n  \"tool\": \"apply_patch\"\n}",
 		},
 		{
 			name: "request_permissions",
 			action: Action{
-				Type: "request_permissions", TurnID: "turn-1", Reason: "needs network",
+				Type: "request_permissions", EnvironmentID: "local", TurnID: "turn-1", Reason: "needs network",
 				Permissions: map[string]any{
 					"network":    map[string]any{"enabled": true},
 					"fileSystem": map[string]any{"write": []string{"/repo/out"}},
 				},
 			},
-			want: "{\n  \"permissions\": {\n    \"file_system\": {\n      \"write\": [\n        \"/repo/out\"\n      ]\n    },\n    \"network\": {\n      \"enabled\": true\n    }\n  },\n  \"reason\": \"needs network\",\n  \"tool\": \"request_permissions\",\n  \"turn_id\": \"turn-1\"\n}",
+			want: "{\n  \"environment_id\": \"local\",\n  \"permissions\": {\n    \"file_system\": {\n      \"write\": [\n        \"/repo/out\"\n      ]\n    },\n    \"network\": {\n      \"enabled\": true\n    }\n  },\n  \"reason\": \"needs network\",\n  \"tool\": \"request_permissions\",\n  \"turn_id\": \"turn-1\"\n}",
 		},
 		{
 			name:   "execve",
-			action: Action{Type: "execve", Source: CommandSourceShell, Program: "/bin/rm", Argv: []string{"-rf", "build"}, CWD: "/repo"},
-			want:   "{\n  \"argv\": [\n    \"-rf\",\n    \"build\"\n  ],\n  \"cwd\": \"/repo\",\n  \"program\": \"/bin/rm\",\n  \"tool\": \"shell\"\n}",
+			action: Action{Type: "execve", Source: CommandSourceShell, EnvironmentID: "local", Program: "/bin/rm", Argv: []string{"-rf", "build"}, CWD: "/repo"},
+			want:   "{\n  \"argv\": [\n    \"-rf\",\n    \"build\"\n  ],\n  \"cwd\": \"/repo\",\n  \"environment_id\": \"local\",\n  \"program\": \"/bin/rm\",\n  \"tool\": \"shell\"\n}",
 		},
 		{
 			name: "write_stdin",

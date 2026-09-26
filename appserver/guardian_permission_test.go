@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/applypatch"
 	"codex_go/sandbox"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -38,7 +40,10 @@ func TestGuardianTurnEnvironmentForTurnResolvesSelectionLikeRust(t *testing.T) {
 		t.Fatalf("turn environments = %#v", environments)
 	}
 
-	environmentID, cwd, profile := router.guardianTurnEnvironmentForTurn(params)
+	environmentID, cwd, profile, found := router.guardianTurnEnvironmentForTurn(params, "")
+	if !found {
+		t.Fatal("primary environment not found")
+	}
 	if environmentID == nil || *environmentID != "ready-env" {
 		t.Fatalf("environment id = %v, want ready-env", environmentID)
 	}
@@ -60,9 +65,35 @@ func TestGuardianTurnEnvironmentForTurnResolvesSelectionLikeRust(t *testing.T) {
 		t.Fatalf("profile = %s, want the environment's own %s", profileWire, environmentWire)
 	}
 
+	// A tool payload's own environment resolves that environment instead of the
+	// primary one (Rust's `for_tool`), and an unavailable id drops the evidence.
+	if id, _, _, found := router.guardianTurnEnvironmentForTurn(params, "ready-env"); !found || id == nil || *id != "ready-env" {
+		t.Fatalf("requested environment = %v/%v, want ready-env", id, found)
+	}
+	if _, _, _, found := router.guardianTurnEnvironmentForTurn(params, "missing-env"); found {
+		t.Fatal("an unavailable tool environment must not resolve")
+	}
+
 	// A turn that selects no environment keeps the parent turn's profile and
 	// reports no selection id.
-	if id, cwd, profile := router.guardianTurnEnvironmentForTurn(&turn.TurnStartParams{}); id != nil || cwd != "" || profile != nil {
-		t.Fatalf("unselected environment = %v/%q/%#v, want none", id, cwd, profile)
+	if id, cwd, profile, found := router.guardianTurnEnvironmentForTurn(&turn.TurnStartParams{}, ""); id != nil || cwd != "" || profile != nil || found {
+		t.Fatalf("unselected environment = %v/%q/%#v/%v, want none", id, cwd, profile, found)
+	}
+}
+
+// The approval actions carry the tool payload's own environment, which the
+// guardian action JSON renders and the permission evidence resolves (Rust's
+// `apply_patch::parse_patch(...).environment_id` and ExecCommand.environment_id).
+func TestGuardianApprovalActionsCarryToolEnvironmentLikeRust(t *testing.T) {
+	patch := applyPatchApprovalAction(&tool.ApplyPatchApprovalRequest{
+		Action: &applypatch.Action{EnvironmentID: "remote"},
+		CWD:    "/repo",
+	})
+	if patch.EnvironmentID != "remote" {
+		t.Fatalf("apply_patch environment = %q, want remote", patch.EnvironmentID)
+	}
+	command := commandApprovalAction(&tool.ShellRequest{UnifiedExecEnvironmentID: "remote", CWD: "/repo"})
+	if command.EnvironmentID != "remote" {
+		t.Fatalf("exec_command environment = %q, want remote", command.EnvironmentID)
 	}
 }

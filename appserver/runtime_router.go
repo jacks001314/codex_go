@@ -16457,6 +16457,9 @@ func requestPermissionsHookToolInput(reason string, permissions map[string]any) 
 func commandApprovalAction(request *tool.ShellRequest) state.Action {
 	action := state.Action{Type: "command", Source: state.CommandSourceShell}
 	if request != nil {
+		// Rust's ExecCommand approval carries the resolved environment id, which
+		// scopes the reviewer's permission evidence (guardian::permissions::for_tool).
+		action.EnvironmentID = strings.TrimSpace(request.UnifiedExecEnvironmentID)
 		action.Command = strings.TrimSpace(request.HookCommand)
 		action.CommandArgv = append([]string(nil), request.Command...)
 		action.CWD = strings.TrimSpace(request.CWD)
@@ -16517,6 +16520,12 @@ func applyPatchApprovalAction(request *tool.ApplyPatchApprovalRequest) state.Act
 	action := state.Action{Type: "apply_patch"}
 	if request == nil {
 		return action
+	}
+	// Rust's guardian permission resolution reads the patch's own environment
+	// (apply_patch::parse_patch(input).environment_id) and the action JSON names
+	// it, so the reviewer's evidence is scoped to the patched environment.
+	if request.Action != nil {
+		action.EnvironmentID = strings.TrimSpace(request.Action.EnvironmentID)
 	}
 	action.CWD = strings.TrimSpace(request.CWD)
 	action.Patch = request.Patch
