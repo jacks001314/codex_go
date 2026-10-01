@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
@@ -401,5 +402,31 @@ func TestLegacyAppPathStringInfersUNCRootsLikeRust(t *testing.T) {
 	}
 	if uri.String() != "file://server/share/project" {
 		t.Fatalf("uri = %s", uri)
+	}
+}
+
+// TestOpaquePathConventionInferenceLikeRust pins Rust #49388: an opaque UTF-16LE
+// path keeps its Windows convention when it starts with a forward slash, and a
+// bare leading slash still designates a POSIX root.
+func TestOpaquePathConventionInferenceLikeRust(t *testing.T) {
+	for _, native := range []string{`//server/share/project`, `/\server\share`, `C:\workspace\file`} {
+		uri, err := windowsOpaquePathURI(native)
+		if err != nil {
+			t.Fatalf("windowsOpaquePathURI(%q) error = %v", native, err)
+		}
+		if !uri.IsOpaque() {
+			t.Fatalf("windowsOpaquePathURI(%q) is not opaque", native)
+		}
+		if convention, ok := uri.InferConvention(); !ok || convention != ConventionWindows {
+			t.Fatalf("InferConvention(%q) = %q %v, want %s", native, convention, ok, ConventionWindows)
+		}
+	}
+	raw := badPathURIPrefix + base64.RawURLEncoding.EncodeToString([]byte("/tmp/file"))
+	posix, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convention, ok := posix.InferConvention(); !ok || convention != ConventionPosix {
+		t.Fatalf("opaque POSIX convention = %q %v", convention, ok)
 	}
 }
