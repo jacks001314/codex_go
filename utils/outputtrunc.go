@@ -236,17 +236,62 @@ func truncateWithByteEstimate(s string, maxBytes int, useTokens bool) string {
 	if s == "" {
 		return ""
 	}
-	totalChars := utf8.RuneCountInString(s)
 	if maxBytes <= 0 {
+		// Token markers count bytes only, so the character count is deferred to the
+		// paths that need it (Rust #49712).
+		totalChars := 0
+		if !useTokens {
+			totalChars = utf8.RuneCountInString(s)
+		}
 		return formatTruncationMarker(useTokens, removedUnits(useTokens, len(s), totalChars))
 	}
 	if len(s) <= maxBytes {
 		return s
 	}
 	leftBudget, rightBudget := splitBudget(maxBytes)
-	removedChars, left, right := SplitString(s, leftBudget, rightBudget)
+	var removedChars int
+	var left, right string
+	if useTokens {
+		// Token markers depend only on byte counts, so select the retained prefix and
+		// suffix from UTF-8 boundaries instead of scanning the discarded middle.
+		removedChars = 0
+		left = s[:floorCharBoundary(s, leftBudget)]
+		right = s[ceilCharBoundary(s, len(s)-rightBudget):]
+	} else {
+		removedChars, left, right = SplitString(s, leftBudget, rightBudget)
+	}
 	marker := formatTruncationMarker(useTokens, removedUnits(useTokens, len(s)-maxBytes, removedChars))
 	return left + marker + right
+}
+
+// floorCharBoundary returns the largest index at or below index that starts a
+// UTF-8 sequence, clamped to the string bounds (Rust str::floor_char_boundary).
+func floorCharBoundary(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index > 0 && !utf8.RuneStart(s[index]) {
+		index--
+	}
+	return index
+}
+
+// ceilCharBoundary returns the smallest index at or above index that starts a
+// UTF-8 sequence, clamped to the string bounds (Rust str::ceil_char_boundary).
+func ceilCharBoundary(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index < len(s) && !utf8.RuneStart(s[index]) {
+		index++
+	}
+	return index
 }
 
 func SplitString(s string, beginningBytes int, endBytes int) (int, string, string) {
