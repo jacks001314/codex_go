@@ -413,6 +413,9 @@ func RunSandboxedSnapshotCommand(
 		env["CODEX_PERMISSION_PROFILE"] = plan.PermissionProfileID
 	}
 	process.Env = envSlice(env)
+	// Rust #48483: the snapshot capture is piped, so it must not allocate a
+	// console window when the runner itself has no console.
+	envutil.SuppressConsoleWindow(process)
 	var stdout, stderr strings.Builder
 	process.Stdout = &stdout
 	process.Stderr = &stderr
@@ -431,6 +434,9 @@ func runSnapshotCommandDirect(ctx context.Context, command []string, cwd string,
 	process := exec.CommandContext(ctx, command[0], command[1:]...)
 	process.Dir = cwd
 	process.Env = envSlice(env)
+	// Rust #48483: the snapshot capture is piped, so it must not allocate a
+	// console window when the runner itself has no console.
+	envutil.SuppressConsoleWindow(process)
 	var stdout, stderr strings.Builder
 	process.Stdout = &stdout
 	process.Stderr = &stderr

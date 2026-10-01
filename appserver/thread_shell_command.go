@@ -390,6 +390,9 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 		cmd.Dir = run.CWD
 	}
 	cmd.Env = commandEnv
+	// Rust #48483: the shell tool is piped, so a shared app-server daemon (which
+	// owns no console) must not make Windows allocate one per command.
+	envutil.SuppressConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		output.WriteString("failed to capture stdout: " + err.Error())

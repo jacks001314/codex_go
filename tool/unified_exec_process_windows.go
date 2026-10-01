@@ -10,6 +10,7 @@ import (
 	osexec "os/exec"
 	"strings"
 
+	"codex_go/envutil"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 	windowsunified "codex_go/sandbox/windowssandbox/unified_exec"
@@ -76,6 +77,9 @@ func windowsUnifiedExecSandboxLevel(profile *sandbox.PermissionProfile, configur
 }
 
 func startUnifiedExecCommand(cmd *osexec.Cmd, tty bool) (*startedUnifiedExecCommand, error) {
+	// Rust #48483: a piped unified-exec child must not allocate a console window
+	// when the runner itself has no console (shared app-server daemon).
+	envutil.SuppressConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

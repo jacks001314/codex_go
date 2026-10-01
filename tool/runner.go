@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/execpolicy"
 	"codex_go/execserver"
 	"codex_go/sandbox"
@@ -183,6 +184,9 @@ func (r *LocalShellRunner) runDirect(ctx context.Context, command []string, cwd 
 	if len(env) > 0 {
 		cmd.Env = envSlice(env)
 	}
+	// Rust #48483: a piped model-reachable child must not allocate a console
+	// window when the runner itself has no console (shared app-server daemon).
+	envutil.SuppressConsoleWindow(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
