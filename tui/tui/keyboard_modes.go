@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/envutil"
 	codextui "codex_go/tui"
 )
 
@@ -136,6 +137,9 @@ func ProbeWindowsTermProgram() (string, bool, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), WindowsTermProgramProbeTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", "set TERM_PROGRAM")
+	// Rust #48483: the probe is piped, so it must not allocate a console window
+	// when the TUI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	output, err := command.Output()
 	if err != nil {
 		if ctx.Err() != nil {

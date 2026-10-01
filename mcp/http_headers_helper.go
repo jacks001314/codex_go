@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/envutil"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -114,6 +115,9 @@ func runMCPHTTPHeadersHelper(command string, cwd string) (http.Header, error) {
 		cmd = exec.CommandContext(ctx, "sh", "-c", command)
 	}
 	cmd.Dir = cwd
+	// Rust #48238: the headers helper is a stdio-only child, so it must not
+	// allocate a console window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

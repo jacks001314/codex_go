@@ -22,6 +22,7 @@ import (
 
 	"codex_go/auth"
 	"codex_go/codexapi"
+	"codex_go/envutil"
 	"codex_go/eventmap"
 	"codex_go/network"
 	"codex_go/protocol"
@@ -3483,6 +3484,9 @@ func (r *ResponsesAgentRunner) runBedrockAWSRefreshCommand(ctx context.Context, 
 	defer cancel()
 	args := append([]string(nil), refresh.Args...)
 	cmd := exec.CommandContext(execCtx, refresh.Command, args...)
+	// Rust #48483: the refresh helper is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))

@@ -514,6 +514,9 @@ func gitRemoteCandidates(cwd string, remote string, upstream string) []string {
 func gitOutput(cwd string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = cwd
+	// Rust #48483: git probes are piped, so they must not allocate a console
+	// window when the app server itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	envutil.ScrubCommandEnv(cmd)
 	stdout, stderr, err := runCommandCaptured(cmd)
 	if err != nil {

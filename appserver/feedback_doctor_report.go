@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"codex_go/envutil"
 )
 
 const (
@@ -50,7 +52,11 @@ func FeedbackDoctorReportFromExecutable(ctx context.Context, options *FeedbackDo
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	output, err := runCommandCombinedOutput(exec.CommandContext(ctx, executable, "doctor", "--json", "--feedback"))
+	command := exec.CommandContext(ctx, executable, "doctor", "--json", "--feedback")
+	// Rust #48483: the report capture is piped, so it must not allocate a console
+	// window when the app server itself has no console.
+	envutil.SuppressConsoleWindow(command)
+	output, err := runCommandCombinedOutput(command)
 	if err != nil && len(output) == 0 {
 		return nil, err
 	}

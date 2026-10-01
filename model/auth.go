@@ -15,6 +15,7 @@ import (
 	"codex_go/agent"
 	"codex_go/auth"
 	"codex_go/codexapi"
+	"codex_go/envutil"
 )
 
 const BedrockAPIKeyUnsupportedMessage = "Bedrock API key auth is only supported by the Amazon Bedrock model provider"
@@ -184,6 +185,9 @@ func ResolveProviderCommandAuth(ctx context.Context, info *ProviderAuthInfo) (Au
 	if cwd := strings.TrimSpace(info.CWD); cwd != "" {
 		cmd.Dir = cwd
 	}
+	// Rust #48483: the provider auth helper is piped, so it must not allocate a
+	// console window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

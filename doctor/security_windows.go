@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"codex_go/envutil"
 )
 
 // Rust c7a95f84b3 (#38827): query the supported Windows endpoint protection
@@ -59,7 +61,11 @@ func endpointProtectionInspection() endpointInspection {
 func endpointServiceQuery(service string) (string, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), endpointProductQueryTimeout)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, endpointWindowsScPath, "query", service).Output()
+	command := exec.CommandContext(ctx, endpointWindowsScPath, "query", service)
+	// Rust #48483: the service probe is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
+	output, err := command.Output()
 	if err != nil {
 		var exitCode int
 		if exitErr, ok := err.(*exec.ExitError); ok {

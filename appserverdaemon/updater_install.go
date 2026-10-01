@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/install"
 )
 
@@ -163,6 +164,9 @@ func supportsDaemonUpdateLoop(codexBin string) bool {
 // managed_install::supports_daemon_command).
 func supportsDaemonCommand(codexBin string, args []string) bool {
 	command := exec.Command(codexBin, append([]string{"app-server", "daemon"}, args...)...)
+	// Rust #48483: the managed-binary probe is piped, so it must not allocate a
+	// console window when the daemon itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	command.Stdin = nil
 	command.Stdout = nil
 	command.Stderr = nil
@@ -266,7 +270,11 @@ func managedCodexVersion(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("managed Codex binary path is empty")
 	}
-	output, err := exec.Command(path, "--version").Output()
+	versionCmd := exec.Command(path, "--version")
+	// Rust #48483: the version probe is piped, so it must not allocate a console
+	// window when the daemon itself has no console.
+	envutil.SuppressConsoleWindow(versionCmd)
+	output, err := versionCmd.Output()
 	if err != nil {
 		return "", err
 	}

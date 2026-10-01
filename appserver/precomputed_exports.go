@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"codex_go/envutil"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -90,6 +91,9 @@ func generatePrecomputedTypeScript(outDir string, prettier string, options Gener
 	if options.RunPrettier && strings.TrimSpace(prettier) != "" && len(paths) > 0 {
 		args := append([]string{"--write", "--log-level", "warn"}, paths...)
 		command := exec.Command(prettier, args...)
+		// Rust #48483: the formatter is a piped child, so it must not allocate a
+		// console window when the app server itself has no console.
+		envutil.SuppressConsoleWindow(command)
 		command.Stdout = os.Stdout
 		command.Stderr = os.Stderr
 		if err := command.Run(); err != nil {

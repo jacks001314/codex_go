@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/install"
 )
 
@@ -734,7 +735,11 @@ func ManagedCodexVersionBestEffort(path string) *string {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	output, err := exec.Command(path, "--version").Output()
+	versionCmd := exec.Command(path, "--version")
+	// Rust #48483: the version probe is piped, so it must not allocate a console
+	// window when the daemon itself has no console.
+	envutil.SuppressConsoleWindow(versionCmd)
+	output, err := versionCmd.Output()
 	if err != nil {
 		return nil
 	}

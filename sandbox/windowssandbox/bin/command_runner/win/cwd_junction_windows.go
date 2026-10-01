@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"codex_go/envutil"
 	"codex_go/sandbox/windowssandbox"
 	"golang.org/x/sys/windows"
 )
@@ -46,6 +47,9 @@ func createCWDJunction(cwd string, logDir string) (string, error) {
 
 	logJunction(logDir, fmt.Sprintf("junction: creating via cmd /c mklink /J %q %q", junctionPath, cwd))
 	cmd := exec.Command("cmd", "/c", "mklink", "/J", junctionPath, cwd)
+	// Rust #48483: the junction helper is piped, so it must not allocate a
+	// console window when the command runner itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
 		if _, statErr := os.Lstat(junctionPath); statErr == nil {

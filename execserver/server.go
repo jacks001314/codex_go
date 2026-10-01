@@ -1617,6 +1617,10 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 		s.releaseStartingProcess(params.ProcessID, state)
 	}
+	// Rust #48483: the piped spawn must not allocate a console window when the
+	// exec server itself has no console. The supported-TTY branch above returned
+	// already and owns a pseudoconsole, so it is untouched.
+	envutil.SuppressConsoleWindow(cmd)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

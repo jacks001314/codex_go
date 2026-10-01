@@ -17,6 +17,7 @@ import (
 	"codex_go/chatgptapi"
 	"codex_go/cli"
 	"codex_go/config"
+	"codex_go/envutil"
 	"codex_go/model"
 )
 
@@ -428,6 +429,9 @@ func runGitApply(ctx context.Context, diff string, check bool) error {
 	}
 	command := exec.CommandContext(ctx, "git", args...)
 	command.Stdin = strings.NewReader(diff)
+	// Rust #48483: the apply helper is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
@@ -445,6 +449,7 @@ func resolveCloudBranch(ctx context.Context, branch string) string {
 		return branch
 	}
 	command := exec.CommandContext(ctx, "git", "branch", "--show-current")
+	envutil.SuppressConsoleWindow(command)
 	output, err := command.Output()
 	if err == nil {
 		if current := strings.TrimSpace(string(output)); current != "" {

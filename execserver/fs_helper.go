@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
 )
@@ -212,6 +213,9 @@ func runSandboxedFSOperation(ctx *FileSystemSandboxContext, operation string, pa
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = cwd
 	cmd.Env = envPairs(env)
+	// Rust #48483: the helper is piped, so it must not allocate a console window
+	// when the exec server itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return true, requestError(-32603, fmt.Sprintf("fs sandbox helper stdin pipe failed: %v", err))

@@ -25,6 +25,7 @@ import (
 	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/envutil"
 	codexexec "codex_go/exec"
 	"codex_go/execpolicy"
 	"codex_go/execserver"
@@ -322,6 +323,9 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 		command.Dir = filepath.Clean(plan.CWD)
 	}
 	command.Env = envSlice(env)
+	// Rust #48483: the sandboxed command is piped, so it must not allocate a
+	// console window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	return processExitError(command.Run())
 }
 

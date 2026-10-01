@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/envutil"
 )
 
 // powershellVersionCache caches the major.minor version for a resolved
@@ -35,6 +37,9 @@ func queryPowerShellVersion(ctx context.Context, path string) string {
 		"-Command",
 		"$PSVersionTable.PSVersion.ToString()",
 	)
+	// Rust #48483: the version probe is piped, so it must not allocate a console
+	// window when the app server itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	output, err := cmd.Output()
 	version := ""
 	if err == nil {

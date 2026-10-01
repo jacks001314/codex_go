@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	coresandbox "codex_go/sandbox"
+	"codex_go/envutil"
 	json "github.com/goccy/go-json"
 )
 
@@ -378,6 +379,9 @@ func runWrapperCommandDirect(req *WindowsSandboxWrapperRequest, stdin io.Reader,
 	cmd := exec.Command(req.Command[0], req.Command[1:]...)
 	cmd.Dir = req.CommandCWD
 	cmd.Env = envSlice(req.Env)
+	// Rust #48483: the wrapper child is piped, so it must not allocate a console
+	// window when the wrapper itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

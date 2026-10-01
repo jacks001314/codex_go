@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"codex_go/config"
+	"codex_go/envutil"
 )
 
 const (
@@ -442,6 +443,9 @@ func runBaselineGit(ctx context.Context, root string, args ...string) ([]byte, e
 	command := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=.codex-disabled-hooks"}, args...)...)
 	command.Dir = root
 	command.Env = append(os.Environ(), "LC_ALL=C", "LANG=C", "GIT_TERMINAL_PROMPT=0")
+	// Rust #48483: the baseline probe is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {

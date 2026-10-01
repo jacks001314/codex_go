@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"codex_go/envutil"
 	"github.com/google/uuid"
 )
 
@@ -362,6 +363,9 @@ func gitOutput(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = isolatedGitEnv()
+	// Rust #48483: worktree probes are piped, so they must not allocate a console
+	// window when the app server itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git %s failed: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))

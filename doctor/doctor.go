@@ -27,6 +27,7 @@ import (
 	"codex_go/cli"
 	"codex_go/codexapi"
 	"codex_go/config"
+	"codex_go/envutil"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/mcp"
@@ -784,7 +785,11 @@ func searchCheck() *DoctorCheck {
 			Detail("search command readiness: " + err.Error()).
 			Remediate("Install ripgrep or repair the bundled Codex package.")
 	}
-	output, err := exec.Command(command, "--version").Output()
+	versionCmd := exec.Command(command, "--version")
+	// Rust #48483: the probe is piped, so it must not allocate a console window
+	// when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(versionCmd)
+	output, err := versionCmd.Output()
 	if err != nil {
 		return NewCheck("runtime.search", "search", CheckStatusWarning, "search command could not be verified").
 			DetailsList(details).

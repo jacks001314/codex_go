@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"codex_go/envutil"
 )
 
 const (
@@ -108,6 +110,9 @@ func packNpmPackage(destination string, packageName string, version string, regi
 	cmd := exec.Command(npmCmd, args...)
 	cmd.Dir = destination
 	cmd.Env = append(os.Environ(), "COREPACK_ENABLE_STRICT=0")
+	// Rust #48483: the package fetch is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {

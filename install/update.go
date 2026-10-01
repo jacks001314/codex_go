@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/envutil"
 	"codex_go/shell"
 )
 
@@ -268,6 +269,9 @@ func (r *ExecCommandRunner) Run(ctx context.Context, command string, args []stri
 	}
 	actualCommand, actualArgs := updateCommandAndArgs(command, args)
 	cmd := exec.CommandContext(ctx, actualCommand, actualArgs...)
+	// Rust #48483: the updater is piped, so it must not allocate a console window
+	// when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()
@@ -302,6 +306,9 @@ func (r *ExecCommandRunner) runWindowsUpdate(ctx context.Context, command string
 	defer os.RemoveAll(updateDir)
 	cmd := exec.CommandContext(ctx, execCommand, execArgs...)
 	cmd.Dir = updateDir
+	// Rust #48483: the updater is piped, so it must not allocate a console window
+	// when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	cmd.Stdout = r.Stdout
 	cmd.Stderr = r.Stderr
 	return cmd.Run()

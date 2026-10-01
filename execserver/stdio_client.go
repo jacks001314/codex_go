@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/envutil"
 )
 
 const (
@@ -55,6 +57,9 @@ func spawnStdioClientConnection(command *StdioExecServerCommand) (*stdioClientCo
 		return nil, errors.New("exec-server stdio command program is required")
 	}
 	child := exec.Command(program, command.Args...)
+	// Rust #48483: the stdio child is piped, so it must not allocate a console
+	// window when the exec server itself has no console.
+	envutil.SuppressConsoleWindow(child)
 	if len(command.Env) > 0 {
 		env := os.Environ()
 		names := make([]string, 0, len(command.Env))

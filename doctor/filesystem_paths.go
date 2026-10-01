@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	"codex_go/envutil"
 	"codex_go/sandbox"
 )
 
@@ -205,6 +206,9 @@ func runFilesystemProbe(path string, budget time.Duration) filesystemProbeOutcom
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "doctor", "--probe-filesystem-path", path)
+	// Rust #48483: the probe re-exec is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	if err := command.Run(); err != nil {
 		if ctx.Err() != nil {
 			return filesystemOutcomeTimedOut

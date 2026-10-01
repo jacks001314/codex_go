@@ -27,6 +27,7 @@ import (
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/doctor"
+	"codex_go/envutil"
 	"codex_go/eventmap"
 	codexexec "codex_go/exec"
 	"codex_go/features"
@@ -2578,6 +2579,9 @@ func interactiveOpenDesktopThread(threadID string) error {
 	}
 	url := tuiapp.DesktopThreadURL(threadID)
 	command := exec.Command("powershell.exe", "-NoProfile", "-Command", tuiapp.WindowsDesktopAppLaunchScript(url))
+	// Rust #48483: the Desktop handoff only needs the URL activation, so the
+	// PowerShell shim must not flash a console window over the TUI.
+	envutil.SuppressConsoleWindow(command)
 	_, err := command.Output()
 	if err == nil {
 		return nil

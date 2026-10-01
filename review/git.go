@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"codex_go/envutil"
 )
 
 type GitDiffProvider struct {
@@ -192,6 +194,9 @@ func (p *GitDiffProvider) git(args ...string) (string, error) {
 	if p.Dir != "" {
 		cmd.Dir = p.Dir
 	}
+	// Rust #48483: diff collection is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

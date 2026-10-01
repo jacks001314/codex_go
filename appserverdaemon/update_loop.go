@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/codexuds"
+	"codex_go/envutil"
 	"codex_go/install"
 )
 
@@ -391,7 +392,11 @@ func ReexecManagedUpdater(managedCodexBin string) error {
 	}
 	pidFile := os.Getenv(UpdaterPIDFileEnv)
 	if pidFile == "" {
-		return exec.Command(managedCodexBin, "app-server", "daemon", "pid-update-loop").Run()
+		command := exec.Command(managedCodexBin, "app-server", "daemon", "pid-update-loop")
+		// Rust #48483: the updater probe is piped, so it must not allocate a
+		// console window when the CLI itself has no console.
+		envutil.SuppressConsoleWindow(command)
+		return command.Run()
 	}
 	// Rust #42392: start the successor updater detached and wait until it
 	// claims the update PID record (readiness handshake). If it never becomes

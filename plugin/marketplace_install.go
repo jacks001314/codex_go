@@ -281,6 +281,9 @@ func runMarketplaceGitOutput(cwd *string, automatic bool, args ...string) (strin
 	if cwd != nil {
 		command.Dir = *cwd
 	}
+	// Rust #48483: marketplace git is piped, so it must not allocate a console
+	// window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(command)
 	output, err := command.CombinedOutput()
 	if err == nil {
 		return string(output), nil

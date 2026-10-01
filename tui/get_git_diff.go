@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"codex_go/envutil"
 )
 
 // Rust parity: codex-rs/tui/src/get_git_diff.rs.
@@ -69,6 +71,9 @@ func (LocalWorkspaceCommandRunner) RunWorkspaceCommand(ctx context.Context, comm
 		cmd.Dir = strings.TrimSpace(command.CWD)
 	}
 	cmd.Env = workspaceCommandEnv(os.Environ(), command.Env)
+	// Rust #48483: workspace commands are piped, so they must not allocate a
+	// console window when the TUI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout

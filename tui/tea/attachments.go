@@ -11,6 +11,7 @@ import (
 
 	appsapi "codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/envutil"
 	pluginapi "codex_go/plugin"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
@@ -29,6 +30,9 @@ func pasteImageFromClipboard() (string, error) {
 	path := filepath.Join(dir, "clipboard.png")
 	script := "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; $img=[Windows.Forms.Clipboard]::GetImage(); if ($null -eq $img) { exit 2 }; $img.Save('" + strings.ReplaceAll(path, "'", "''") + "', [Drawing.Imaging.ImageFormat]::Png)"
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Sta", "-Command", script)
+	// Rust #48483: the clipboard helper is piped, so it must not allocate a
+	// console window when the TUI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	if output, runErr := cmd.CombinedOutput(); runErr != nil {
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("%v: %s", runErr, strings.TrimSpace(string(output)))

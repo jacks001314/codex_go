@@ -39,7 +39,9 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
 			return nil, err
 		}
 		defer attrs.Close()
-		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT)
+		// Rust #48483: the sandbox child is a piped helper, so it must never
+		// allocate a console window of its own.
+		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_NO_WINDOW)
 		err = windows.CreateProcessAsUser(
 			windows.Token(req.Token),
 			nil,
@@ -67,7 +69,9 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
 		_ = desktop.Close()
 		return nil, err
 	}
-	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT)
+	// Rust #48483: the sandbox child is a piped helper, so it must never allocate
+	// a console window of its own.
+	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW)
 	err = windows.CreateProcessAsUser(
 		windows.Token(req.Token),
 		nil,

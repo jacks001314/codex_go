@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/envutil"
 )
 
 var (
@@ -27,7 +29,9 @@ func resolveLocalTimezoneName() string {
 		return value
 	}
 	if runtime.GOOS == "windows" {
-		if output, err := exec.Command("tzutil", "/g").Output(); err == nil {
+		cmd := exec.Command("tzutil", "/g")
+		envutil.SuppressConsoleWindow(cmd)
+		if output, err := cmd.Output(); err == nil {
 			windowsID := strings.TrimSpace(string(output))
 			if iana := windowsTimezoneIANA[windowsID]; iana != "" {
 				return iana

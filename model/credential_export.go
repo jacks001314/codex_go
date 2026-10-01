@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/auth"
+	"codex_go/envutil"
 )
 
 // Bedrock credential export (Rust #44028): a configured command emits SigV4
@@ -103,6 +104,9 @@ func (p *AWSCredentialExportProvider) export(ctx context.Context, now time.Time)
 
 	args := append([]string(nil), p.args...)
 	cmd := exec.CommandContext(execCtx, p.command, args...)
+	// Rust #48483: the credential export helper is piped, so it must not allocate
+	// a console window when the CLI itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run AWS credential export command `%s`: %v", p.command, err)
