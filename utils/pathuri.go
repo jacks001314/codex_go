@@ -342,18 +342,29 @@ func (u *PathURI) InferConvention() (PathConvention, bool) {
 		return "", false
 	}
 	if data := opaqueFallbackBytes(u.url); data != nil {
-		if len(data) >= 4 && len(data)%2 == 0 {
-			values := make([]uint16, len(data)/2)
-			for i := range values {
-				values[i] = uint16(data[i*2]) | uint16(data[i*2+1])<<8
-			}
-			text := string(utf16.Decode(values))
-			if isWindowsAbsolutePath(text) || strings.HasPrefix(text, `\\`) {
-				return ConventionWindows, true
-			}
-		}
-		if len(data) > 0 && data[0] == '/' {
+		// Rust #49388: a UTF-16LE Windows separator starts with `"\\0"`, so only a
+		// bare leading slash designates a POSIX root.
+		if len(data) > 0 && data[0] == '/' && !(len(data) >= 2 && data[1] == 0) {
 			return ConventionPosix, true
+		}
+		if len(data)%2 != 0 {
+			return "", false
+		}
+		values := make([]uint16, len(data)/2)
+		for i := range values {
+			values[i] = uint16(data[i*2]) | uint16(data[i*2+1])<<8
+		}
+		if len(values) < 2 {
+			return "", false
+		}
+		// Rust #49388: either Windows separator is accepted in both positions of an
+		// opaque UNC prefix, and the drive letter must fit in one ASCII byte.
+		first, second := values[0], values[1]
+		hasDrive := first < 0x80 && pathURIASCIIAlpha(byte(first)) && second == ':'
+		isSeparator := func(value uint16) bool { return value == '\\' || value == '/' }
+		hasUNCPrefix := isSeparator(first) && isSeparator(second)
+		if hasDrive || hasUNCPrefix {
+			return ConventionWindows, true
 		}
 		return "", false
 	}
@@ -767,6 +778,12 @@ func isDriveRelative(nativePath string) bool {
 
 func pathURIASCIIAlpha(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+
+// isWindowsSeparatorByte reports whether ch is one of the two separators that
+// Windows path syntax accepts in place of the other.
+func isWindowsSeparatorByte(ch byte) bool {
+	return ch == '\\' || ch == '/'
 }
 
 func PathSegments(convention PathConvention, pathText string) []string {

@@ -97,3 +97,27 @@ func TestApproxTokenConversions(t *testing.T) {
 		t.Fatalf("unexpected int64 token conversion")
 	}
 }
+
+// TestTruncateMiddleTokensKeepsPartialCharactersOutOfBothEnds mirrors Rust #49712:
+// multibyte characters straddling a retained boundary are dropped whole, the
+// retained prefix/suffix come from UTF-8 boundary lookups, and the original token
+// estimate is still reported. The marker itself is Go's ASCII "..."; Rust renders
+// U+2026 (recorded as a Go-only difference in update/plan_2026_10_01.md).
+func TestTruncateMiddleTokensKeepsPartialCharactersOutOfBothEnds(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		expected string
+	}{
+		{input: "a😀b😀c", expected: "a...2 tokens truncated...c"},
+		{input: "é中😀é", expected: "é...2 tokens truncated...é"},
+		{input: "😀😀😀", expected: "...2 tokens truncated..."},
+	} {
+		truncated, tokens := TruncateMiddleWithTokenBudget(tc.input, 1)
+		if truncated != tc.expected {
+			t.Fatalf("TruncateMiddleWithTokenBudget(%q, 1) = %q, want %q", tc.input, truncated, tc.expected)
+		}
+		if tokens == nil || *tokens != 3 {
+			t.Fatalf("original token count for %q = %v, want 3", tc.input, tokens)
+		}
+	}
+}

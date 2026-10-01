@@ -137,18 +137,23 @@ func (p *LegacyAppPathString) ToPathURI(convention PathConvention) (*PathURI, er
 	return FromAbsoluteNativePath(p.Value, convention)
 }
 
+// InferAbsolutePathConvention infers the path convention of an absolute API path
+// from its spelling. Two leading separators select Windows UNC or namespace
+// syntax, including forward and mixed slashes, independently of the host; that
+// favors UNC paths over ambiguous double-slash POSIX paths, which callers keep
+// by converting with an explicit ConventionPosix. Relative paths report false
+// and inferred prefixes still require validation.
 func (p *LegacyAppPathString) InferAbsolutePathConvention() (PathConvention, bool) {
 	if p == nil {
 		return "", false
 	}
 	bytes := []byte(p.Value)
-	if len(bytes) >= 3 && pathURIASCIIAlpha(bytes[0]) && bytes[1] == ':' && (bytes[2] == '\\' || bytes[2] == '/') {
+	hasWindowsDriveRoot := len(bytes) >= 3 && pathURIASCIIAlpha(bytes[0]) && bytes[1] == ':' && isWindowsSeparatorByte(bytes[2])
+	hasWindowsUNCRoot := len(bytes) >= 2 && isWindowsSeparatorByte(bytes[0]) && isWindowsSeparatorByte(bytes[1])
+	if hasWindowsDriveRoot || hasWindowsUNCRoot {
 		return ConventionWindows, true
 	}
-	if strings.HasPrefix(p.Value, `\\`) {
-		return ConventionWindows, true
-	}
-	if strings.HasPrefix(p.Value, "/") {
+	if len(bytes) > 0 && bytes[0] == '/' {
 		return ConventionPosix, true
 	}
 	return "", false

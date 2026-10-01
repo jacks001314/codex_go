@@ -44,6 +44,13 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	logger.Debug("drop websocket", "target", "codex_api::responses_websocket_timing")
 	logger.Info("drop log-only audit", "target", "codex_otel.log_only")
 	logger.Info("retain audit", "target", "codex_otel.network_proxy")
+	// Rust #49414: guard/trigger TRACE events are dropped while their DEBUG events
+	// survive, and the shutdown target keeps its TRACE events.
+	logger.Log(context.Background(), slog.Level(-8), "drop guard trace", "target", "tokio_graceful::guard")
+	logger.Debug("retain guard debug", "target", "tokio_graceful::guard")
+	logger.Log(context.Background(), slog.Level(-8), "drop trigger trace", "target", "tokio_graceful::trigger")
+	logger.Debug("retain trigger debug", "target", "tokio_graceful::trigger")
+	logger.Log(context.Background(), slog.Level(-8), "retain shutdown trace", "target", "tokio_graceful::shutdown")
 	if err := handler.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +58,15 @@ func TestLogDBHandlerDropsFilteredRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
+	if len(rows) != 5 {
 		t.Fatalf("filtered rows = %#v", rows)
 	}
 	for _, row := range rows {
 		if row.Target == "codex_otel.log_only" || row.Target == "codex_api::responses_websocket_timing" || (row.Target == "opentelemetry_sdk" && row.Level == "DEBUG") {
 			t.Fatalf("filtered row persisted: %#v", row)
+		}
+		if (row.Target == "tokio_graceful::guard" || row.Target == "tokio_graceful::trigger") && row.Level != "DEBUG" {
+			t.Fatalf("guard/trigger trace persisted: %#v", row)
 		}
 	}
 }

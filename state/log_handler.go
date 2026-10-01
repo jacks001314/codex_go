@@ -183,6 +183,12 @@ func persistSlogRecord(target string, level slog.Level) bool {
 		return level >= slog.LevelInfo
 	case "opentelemetry_sdk":
 		return level >= slog.LevelInfo
+	// Rust #49414: the graceful-shutdown guard and trigger emit per-step TRACE
+	// events that flood the bounded SQLite log queue, so their default filter is
+	// DEBUG. Go has no TRACE level, so "below DEBUG" is the record-level analogue
+	// that this floor drops.
+	case "tokio_graceful::guard", "tokio_graceful::trigger":
+		return level >= slog.LevelDebug
 	default:
 		return true
 	}

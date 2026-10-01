@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
@@ -367,5 +368,65 @@ func TestPathURILexicalDepthAndJoinDescendantLikeRust(t *testing.T) {
 	}
 	if _, err := base.JoinDescendant("../../escape"); err == nil {
 		t.Fatal("JoinDescendant(../../escape) = nil error, want escaping path rejected")
+	}
+}
+
+// TestLegacyAppPathStringInfersUNCRootsLikeRust pins Rust #49424: two leading
+// separators select Windows UNC or namespace syntax, including forward and mixed
+// slashes, while a single leading slash stays POSIX.
+func TestLegacyAppPathStringInfersUNCRootsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  PathConvention
+	}{
+		{value: `//server/share/project`, want: ConventionWindows},
+		{value: `/\server\share`, want: ConventionWindows},
+		{value: `\\server\share`, want: ConventionWindows},
+		{value: `C:\workspace\file.rs`, want: ConventionWindows},
+		{value: "/workspace/file.rs", want: ConventionPosix},
+	} {
+		path := NewLegacyAppPathString(tc.value)
+		got, ok := path.InferAbsolutePathConvention()
+		if !ok || got != tc.want {
+			t.Fatalf("InferAbsolutePathConvention(%q) = %q %v, want %q", tc.value, got, ok, tc.want)
+		}
+	}
+	relative := NewLegacyAppPathString("relative/path")
+	if _, ok := relative.InferAbsolutePathConvention(); ok {
+		t.Fatalf("relative path inferred a convention")
+	}
+	unc := NewLegacyAppPathString(`//server/share/project`)
+	uri, err := unc.ToPathURI(ConventionWindows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uri.String() != "file://server/share/project" {
+		t.Fatalf("uri = %s", uri)
+	}
+}
+
+// TestOpaquePathConventionInferenceLikeRust pins Rust #49388: an opaque UTF-16LE
+// path keeps its Windows convention when it starts with a forward slash, and a
+// bare leading slash still designates a POSIX root.
+func TestOpaquePathConventionInferenceLikeRust(t *testing.T) {
+	for _, native := range []string{`//server/share/project`, `/\server\share`, `C:\workspace\file`} {
+		uri, err := windowsOpaquePathURI(native)
+		if err != nil {
+			t.Fatalf("windowsOpaquePathURI(%q) error = %v", native, err)
+		}
+		if !uri.IsOpaque() {
+			t.Fatalf("windowsOpaquePathURI(%q) is not opaque", native)
+		}
+		if convention, ok := uri.InferConvention(); !ok || convention != ConventionWindows {
+			t.Fatalf("InferConvention(%q) = %q %v, want %s", native, convention, ok, ConventionWindows)
+		}
+	}
+	raw := badPathURIPrefix + base64.RawURLEncoding.EncodeToString([]byte("/tmp/file"))
+	posix, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if convention, ok := posix.InferConvention(); !ok || convention != ConventionPosix {
+		t.Fatalf("opaque POSIX convention = %q %v", convention, ok)
 	}
 }
