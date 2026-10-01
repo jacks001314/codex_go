@@ -4,9 +4,8 @@ package appserver
 
 import (
 	osexec "os/exec"
-	"syscall"
 
-	"golang.org/x/sys/windows"
+	"codex_go/envutil"
 )
 
 // suppressChildConsoleWindow mirrors Rust #48483: the pty child-command wrapper
@@ -15,11 +14,5 @@ import (
 // that already selected CREATE_SUSPENDED (Job Object containment) keeps it:
 // Go sets creation flags directly, where Rust's `creation_flags` replaces them.
 func suppressChildConsoleWindow(cmd *osexec.Cmd) {
-	if cmd == nil {
-		return
-	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+	envutil.SuppressConsoleWindow(cmd)
 }

@@ -8,7 +8,6 @@ import (
 	"syscall"
 
 	"codex_go/envutil"
-	"golang.org/x/sys/windows"
 )
 
 func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
@@ -36,13 +35,7 @@ func newMCPStdioCommand(command string, args ...string) *exec.Cmd {
 // batch shim launched through cmd.exe run without a console window. A server is
 // a stdio-only helper, so a window would only flash over the user's terminal.
 func suppressMCPStdioConsoleWindow(cmd *exec.Cmd) {
-	if cmd == nil {
-		return
-	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+	envutil.SuppressConsoleWindow(cmd)
 }
 
 func windowsBatchCommandLine(command string, args []string) string {
