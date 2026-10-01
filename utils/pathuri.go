@@ -769,6 +769,12 @@ func pathURIASCIIAlpha(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
 }
 
+// isWindowsSeparatorByte reports whether ch is one of the two separators that
+// Windows path syntax accepts in place of the other.
+func isWindowsSeparatorByte(ch byte) bool {
+	return ch == '\\' || ch == '/'
+}
+
 func PathSegments(convention PathConvention, pathText string) []string {
 	if convention == ConventionWindows {
 		return strings.FieldsFunc(pathText, func(ch rune) bool { return ch == '/' || ch == '\\' })

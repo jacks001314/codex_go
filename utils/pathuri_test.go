@@ -369,3 +369,37 @@ func TestPathURILexicalDepthAndJoinDescendantLikeRust(t *testing.T) {
 		t.Fatal("JoinDescendant(../../escape) = nil error, want escaping path rejected")
 	}
 }
+
+// TestLegacyAppPathStringInfersUNCRootsLikeRust pins Rust #49424: two leading
+// separators select Windows UNC or namespace syntax, including forward and mixed
+// slashes, while a single leading slash stays POSIX.
+func TestLegacyAppPathStringInfersUNCRootsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  PathConvention
+	}{
+		{value: `//server/share/project`, want: ConventionWindows},
+		{value: `/\server\share`, want: ConventionWindows},
+		{value: `\\server\share`, want: ConventionWindows},
+		{value: `C:\workspace\file.rs`, want: ConventionWindows},
+		{value: "/workspace/file.rs", want: ConventionPosix},
+	} {
+		path := NewLegacyAppPathString(tc.value)
+		got, ok := path.InferAbsolutePathConvention()
+		if !ok || got != tc.want {
+			t.Fatalf("InferAbsolutePathConvention(%q) = %q %v, want %q", tc.value, got, ok, tc.want)
+		}
+	}
+	relative := NewLegacyAppPathString("relative/path")
+	if _, ok := relative.InferAbsolutePathConvention(); ok {
+		t.Fatalf("relative path inferred a convention")
+	}
+	unc := NewLegacyAppPathString(`//server/share/project`)
+	uri, err := unc.ToPathURI(ConventionWindows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uri.String() != "file://server/share/project" {
+		t.Fatalf("uri = %s", uri)
+	}
+}
