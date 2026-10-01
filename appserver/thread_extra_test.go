@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"codex_go/model"
+	"codex_go/sandbox"
 )
 
 func TestGoalStoreSetGetClear(t *testing.T) {
@@ -247,6 +248,101 @@ func TestSettingsMarshalRustShape(t *testing.T) {
 	collaborationMode, ok := payload["collaborationMode"].(map[string]any)
 	if !ok || collaborationMode["mode"] != string(ModeKindDefault) {
 		t.Fatalf("collaborationMode = %#v", payload["collaborationMode"])
+	}
+}
+
+// TestSettingsRoundTripsRustWireShape covers the app-server notification path:
+// the settings are marshalled through a pointer, so sandboxPolicy and
+// activePermissionProfile serialize as tagged objects that must decode back
+// into the internal flat strings.
+func TestSettingsRoundTripsRustWireShape(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings Settings
+		want     string
+	}{
+		{name: "read-only", settings: Settings{SandboxPolicy: "read-only"}, want: "read-only"},
+		{name: "workspace-write", settings: Settings{SandboxPolicy: "workspace-write"}, want: "workspace-write"},
+		{name: "danger-full-access", settings: Settings{SandboxPolicy: "danger-full-access"}, want: "danger-full-access"},
+		{name: "external-sandbox", settings: Settings{SandboxPolicy: "external-sandbox"}, want: "external-sandbox"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile := "trusted"
+			notification := &SettingsUpdatedNotification{
+				ThreadID: "thread-1",
+				ThreadSettings: Settings{
+					SandboxPolicy:           tt.settings.SandboxPolicy,
+					ActivePermissionProfile: &profile,
+					Model:                   "gpt-test",
+				},
+			}
+			data, err := json.Marshal(notification)
+			if err != nil {
+				t.Fatalf("Marshal notification returned error: %v", err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatalf("Unmarshal payload returned error: %v", err)
+			}
+			threadSettings, _ := payload["threadSettings"].(map[string]any)
+			if _, ok := threadSettings["sandboxPolicy"].(map[string]any); !ok {
+				t.Fatalf("sandboxPolicy should serialize as an object: %#v", threadSettings["sandboxPolicy"])
+			}
+			var decoded SettingsUpdatedNotification
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("Unmarshal notification returned error: %v", err)
+			}
+			if decoded.ThreadSettings.SandboxPolicy != tt.want {
+				t.Fatalf("sandboxPolicy = %q, want %q", decoded.ThreadSettings.SandboxPolicy, tt.want)
+			}
+			if decoded.ThreadSettings.ActivePermissionProfile == nil || *decoded.ThreadSettings.ActivePermissionProfile != profile {
+				t.Fatalf("activePermissionProfile = %#v, want %q", decoded.ThreadSettings.ActivePermissionProfile, profile)
+			}
+			if decoded.ThreadSettings.Model != "gpt-test" {
+				t.Fatalf("model = %q, want gpt-test", decoded.ThreadSettings.Model)
+			}
+		})
+	}
+}
+
+// TestSettingsUnmarshalAcceptsRustGranularApprovalPolicy keeps a Rust-produced
+// approvalPolicy object from failing the whole notification decode.
+func TestSettingsUnmarshalAcceptsRustGranularApprovalPolicy(t *testing.T) {
+	data := []byte(`{"approvalPolicy":{"granular":{"sandbox_approval":true,"rules":true,"skill_approval":true,"request_permissions":true,"mcp_elicitations":true}},"sandboxPolicy":{"type":"externalSandbox","networkAccess":"enabled"}}`)
+	var settings Settings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatalf("Unmarshal Settings returned error: %v", err)
+	}
+	if settings.ApprovalPolicy != string(sandbox.ApprovalGranular) {
+		t.Fatalf("approvalPolicy = %q, want %q", settings.ApprovalPolicy, sandbox.ApprovalGranular)
+	}
+	if settings.SandboxPolicy != "external-sandbox" {
+		t.Fatalf("sandboxPolicy = %q, want external-sandbox", settings.SandboxPolicy)
+	}
+}
+
+// TestSettingsUpdateParamsUnmarshalRustSandboxPolicy keeps object-form
+// sandboxPolicy accepted on thread/settings/update, matching Rust's payload.
+func TestSettingsUpdateParamsUnmarshalRustSandboxPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "object", body: `{"threadId":"thread-1","sandboxPolicy":{"type":"readOnly","networkAccess":false}}`, want: "read-only"},
+		{name: "string", body: `{"threadId":"thread-1","sandboxPolicy":"workspace-write"}`, want: "workspace-write"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var params SettingsUpdateParams
+			if err := json.Unmarshal([]byte(tt.body), &params); err != nil {
+				t.Fatalf("Unmarshal SettingsUpdateParams returned error: %v", err)
+			}
+			if params.SandboxPolicy == nil || *params.SandboxPolicy != tt.want {
+				t.Fatalf("sandboxPolicy = %#v, want %q", params.SandboxPolicy, tt.want)
+			}
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"codex_go/model"
+	"codex_go/sandbox"
 	"codex_go/session"
 	"github.com/google/uuid"
 )
@@ -293,7 +295,10 @@ type SettingsUpdateParams struct {
 
 func (p *SettingsUpdateParams) UnmarshalJSON(data []byte) error {
 	type settingsUpdateParamsAlias SettingsUpdateParams
-	var decoded settingsUpdateParamsAlias
+	var decoded struct {
+		settingsUpdateParamsAlias
+		SandboxPolicy json.RawMessage `json:"sandboxPolicy"`
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
@@ -301,14 +306,26 @@ func (p *SettingsUpdateParams) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
+	params := SettingsUpdateParams(decoded.settingsUpdateParamsAlias)
 	if serviceTierRaw, ok := raw["serviceTier"]; ok {
 		serviceTier := &ThreadExtraOptionalString{}
 		if err := serviceTier.UnmarshalJSON(serviceTierRaw); err != nil {
 			return err
 		}
-		decoded.ServiceTier = serviceTier
+		params.ServiceTier = serviceTier
 	}
-	*p = SettingsUpdateParams(decoded)
+	// Rust's thread/settings/update carries sandboxPolicy as a tagged object;
+	// normalize either wire form to the internal sandbox mode.
+	if sandboxRaw, ok := raw["sandboxPolicy"]; ok {
+		mode, err := settingsSandboxPolicyMode(sandboxRaw)
+		if err != nil {
+			return err
+		}
+		if mode != "" {
+			params.SandboxPolicy = &mode
+		}
+	}
+	*p = params
 	return nil
 }
 
@@ -414,6 +431,135 @@ func (s *Settings) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// UnmarshalJSON accepts the Rust wire shape, where approvalPolicy can be an
+// externally tagged object and sandboxPolicy/activePermissionProfile are
+// tagged objects rather than the flat strings held internally. Without it,
+// settings notifications written by MarshalJSON fail to round-trip.
+func (s *Settings) UnmarshalJSON(data []byte) error {
+	if string(bytes.TrimSpace(data)) == "null" {
+		return nil
+	}
+	type settingsAlias Settings
+	var decoded struct {
+		settingsAlias
+		ApprovalPolicy          json.RawMessage `json:"approvalPolicy"`
+		SandboxPolicy           json.RawMessage `json:"sandboxPolicy"`
+		ActivePermissionProfile json.RawMessage `json:"activePermissionProfile"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	settings := Settings(decoded.settingsAlias)
+	approvalPolicy, err := settingsApprovalPolicyMode(decoded.ApprovalPolicy)
+	if err != nil {
+		return err
+	}
+	settings.ApprovalPolicy = approvalPolicy
+	sandboxPolicy, err := settingsSandboxPolicyMode(decoded.SandboxPolicy)
+	if err != nil {
+		return err
+	}
+	settings.SandboxPolicy = sandboxPolicy
+	activeProfile, err := settingsActivePermissionProfileID(decoded.ActivePermissionProfile)
+	if err != nil {
+		return err
+	}
+	settings.ActivePermissionProfile = activeProfile
+	*s = settings
+	return nil
+}
+
+// settingsApprovalPolicyMode normalizes the wire form of approvalPolicy into
+// the internal mode string. Rust's granular variant serializes as an
+// externally tagged object; only the mode name is retained here.
+func settingsApprovalPolicyMode(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return "", nil
+	}
+	if trimmed[0] == '"' {
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(value), nil
+	}
+	var values map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &values); err != nil {
+		return "", err
+	}
+	if _, ok := values["granular"]; ok {
+		return string(sandbox.ApprovalGranular), nil
+	}
+	if kindRaw, ok := values["type"]; ok {
+		var kind string
+		if err := json.Unmarshal(kindRaw, &kind); err == nil && strings.EqualFold(strings.TrimSpace(kind), string(sandbox.ApprovalGranular)) {
+			return string(sandbox.ApprovalGranular), nil
+		}
+	}
+	return "", nil
+}
+
+// settingsSandboxPolicyMode normalizes the wire form of sandboxPolicy, either
+// a mode string or Rust's tagged policy object, into the internal sandbox mode.
+func settingsSandboxPolicyMode(raw json.RawMessage) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return "", nil
+	}
+	if trimmed[0] == '"' {
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(value), nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal(trimmed, &values); err != nil {
+		return "", err
+	}
+	if _, ok := values["type"]; !ok {
+		if mode := turnSandboxPolicyMode(values); mode != "" {
+			return mode, nil
+		}
+	}
+	var policy sandbox.SandboxPolicy
+	if err := json.Unmarshal(trimmed, &policy); err != nil {
+		return "", err
+	}
+	return string(policy.Kind), nil
+}
+
+// settingsActivePermissionProfileID normalizes the wire form of
+// activePermissionProfile, Rust's {id, extends} object or a bare id string,
+// into the internal profile id.
+func settingsActivePermissionProfileID(raw json.RawMessage) (*string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil, nil
+	}
+	if trimmed[0] == '"' {
+		var value string
+		if err := json.Unmarshal(trimmed, &value); err != nil {
+			return nil, err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, nil
+		}
+		return &value, nil
+	}
+	var profile sandbox.ActivePermissionProfile
+	if err := json.Unmarshal(trimmed, &profile); err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(profile.ID)
+	if id == "" {
+		return nil, nil
+	}
+	return &id, nil
+}
+
 func threadSettingsApprovalPolicy(value string) any {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -436,7 +582,7 @@ func threadSettingsSandboxPolicy(value string) any {
 		return map[string]any{"type": "dangerFullAccess"}
 	case "readOnly", "read-only", ":read-only":
 		return map[string]any{"type": "readOnly", "networkAccess": false}
-	case "externalSandbox":
+	case "externalSandbox", string(sandbox.SandboxModeExternalSandbox):
 		return map[string]any{"type": "externalSandbox", "networkAccess": "disabled"}
 	default:
 		return map[string]any{
