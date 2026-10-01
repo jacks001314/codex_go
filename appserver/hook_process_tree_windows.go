@@ -7,6 +7,7 @@ import (
 	osexec "os/exec"
 	"unsafe"
 
+	"codex_go/envutil"
 	"golang.org/x/sys/windows"
 )
 
@@ -36,7 +37,14 @@ func startHookProcessTree(cmd *osexec.Cmd) (*hookProcessTree, error) {
 		windows.CloseHandle(job)
 		return nil, fmt.Errorf("set hook job object limit: %w", err)
 	}
-	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	// The caller may already have suppressed the console window, and Go assigns
+	// creation flags directly where Rust's `creation_flags` replaces them, so the
+	// containment flag is merged into the existing set rather than replacing it.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &windows.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	envutil.SuppressConsoleWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		windows.CloseHandle(job)
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"unsafe"
 
+	"codex_go/envutil"
 	"golang.org/x/sys/windows"
 )
 
@@ -33,7 +34,15 @@ func startGitTree(cmd *exec.Cmd, respawn func() *exec.Cmd) (*gitProcessTree, err
 		windows.CloseHandle(job)
 		return nil, fmt.Errorf("set job object limit: %w", err)
 	}
-	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
+	// Keep any flags the caller already selected (Go assigns creation flags
+	// directly, where Rust's `creation_flags` replaces them) and suppress the
+	// console window: a detached app-server owns no console, so `git` would
+	// otherwise pop a terminal window per invocation (Rust #48483).
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &windows.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
+	envutil.SuppressConsoleWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		windows.CloseHandle(job)
 		return nil, err

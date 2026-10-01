@@ -189,6 +189,9 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	cmd := r.commandForHook(execCtx, metadata)
 	cmd.Dir = cwd
 	cmd.Env = hookCommandEnv(r.hookEnvironment(), metadata.Env)
+	// Rust #48483: a hook is a piped helper, so it must not allocate a console
+	// window when the app server itself has no console.
+	envutil.SuppressConsoleWindow(cmd)
 	// Rust c4513cb982: hook child processes must not inherit Codex launch
 	// context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubCommandEnv(cmd)
