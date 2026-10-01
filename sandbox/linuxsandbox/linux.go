@@ -792,9 +792,9 @@ func buildInnerLinuxSandboxCommand(cmd *linuxSandboxCommand) ([]string, error) {
 }
 
 func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
-	bwrap, err := exec.LookPath("bwrap")
-	if err != nil {
-		return errors.New("bubblewrap is unavailable: no system bwrap was found on PATH")
+	launcher := resolveBwrapLauncher()
+	if !launcher.available() {
+		return bwrapUnavailableError()
 	}
 	var dataFDs []int
 	defer func() {
@@ -845,7 +845,19 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	}
 	args = append(args, "--chdir", cmd.CommandCWD, "--")
 	args = append(args, inner...)
-	return unix.Exec(bwrap, args, os.Environ())
+	// Bubblewrap semantics: unsharing the pid namespace makes the sandboxed
+	// process PID 1, and the inner stage must report the canonical sandbox name
+	// (or run through this CLI's argv[0] when the launcher predates --argv0).
+	args = injectAsPid1(args)
+	args, err := applyInnerCommandArgv0(args, launcher.SupportsArgv0, os.Args[0])
+	if err != nil {
+		return err
+	}
+	makeFilesInheritable(dataFDs)
+	if launcher.Bundled {
+		return execBundledBwrap(launcher.Program, args, os.Environ())
+	}
+	return unix.Exec(launcher.Program, args, os.Environ())
 }
 
 func appendUnreadableRootBwrapArgs(args *[]string, path string) (int, error) {

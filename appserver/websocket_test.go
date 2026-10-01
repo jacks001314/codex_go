@@ -139,6 +139,30 @@ func TestWebSocketServerRejectsBrowserOrigin(t *testing.T) {
 	}
 }
 
+// TestWebSocketServerAcceptsTheClientPathLikeRust pins Rust's fallback route:
+// its clients handshake at `ws://localhost/rpc`, so any path must upgrade.
+func TestWebSocketServerAcceptsTheClientPathLikeRust(t *testing.T) {
+	server := httptest.NewServer(NewWebSocketServer(nil, func() *RuntimeRouter {
+		return NewDefaultRuntimeRouter(session.NewStore(t.TempDir()), t.TempDir())
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http")+"/rpc", nil)
+	if err != nil {
+		t.Fatalf("websocket dial /rpc error = %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"ws-test","version":"1.0.0"}}}`)); err != nil {
+		t.Fatalf("write initialize error = %v", err)
+	}
+	response := readWebSocketResponseForTest(t, ctx, conn)
+	if response.Error != nil || response.ID.String() != "1" {
+		t.Fatalf("initialize response over /rpc = %#v", response)
+	}
+}
+
 func readWebSocketResponseForTest(t *testing.T, ctx context.Context, conn *websocket.Conn) *Response {
 	t.Helper()
 	messageType, data, err := conn.Read(ctx)

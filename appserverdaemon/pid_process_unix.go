@@ -41,6 +41,9 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 		command.Env = os.Environ()
 	}
 	command.Env = append(command.Env, UpdaterPIDFileEnv+"="+backend.PIDFile)
+	// Handoff suppression belongs to the foreground CLI, not its long-lived
+	// children (Rust pid_start's `env_remove(HANDOFF_ENV)`).
+	command.Env = withoutEnvVar(command.Env, TelemetryHandoffEnv)
 	if err := command.Start(); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}

@@ -95,3 +95,46 @@ func TestPIDLogTailAppendToContext(t *testing.T) {
 		t.Fatalf("context = %q, want %q", context, want)
 	}
 }
+
+// TestPIDBackendCommandArgsReplaysFeatureOverridesLikeRust pins Rust
+// PidBackend::command_args: the app-server launch replays the stored overrides
+// as `-c features.<name>=<bool>` in a deterministic order, and the updater
+// launch ignores them.
+func TestPIDBackendCommandArgsReplaysFeatureOverridesLikeRust(t *testing.T) {
+	backend := NewPIDBackend(BackendPaths{
+		PIDFile: filepath.Join(t.TempDir(), PIDFileName),
+		FeatureOverrides: map[string]bool{
+			"code_mode_host":   true,
+			"auth_elicitation": false,
+		},
+	})
+	want := []string{
+		"app-server", "--listen", "unix://",
+		"-c", "features.auth_elicitation=false",
+		"-c", "features.code_mode_host=true",
+	}
+	if got := backend.CommandArgs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("CommandArgs() = %#v, want %#v", got, want)
+	}
+
+	remote := NewPIDBackend(BackendPaths{
+		PIDFile:              filepath.Join(t.TempDir(), PIDFileName),
+		RemoteControlEnabled: true,
+		FeatureOverrides:     map[string]bool{"code_mode_host": true},
+	})
+	wantRemote := []string{
+		"app-server", "--remote-control", "--listen", "unix://",
+		"-c", "features.code_mode_host=true",
+	}
+	if got := remote.CommandArgs(); !reflect.DeepEqual(got, wantRemote) {
+		t.Fatalf("remote CommandArgs() = %#v, want %#v", got, wantRemote)
+	}
+
+	updater := NewPIDUpdateLoopBackend(BackendPaths{
+		UpdatePIDFile:    filepath.Join(t.TempDir(), UpdatePIDFileName),
+		FeatureOverrides: map[string]bool{"code_mode_host": true},
+	})
+	if got := updater.CommandArgs(); !reflect.DeepEqual(got, []string{"app-server", "daemon", "pid-update-loop"}) {
+		t.Fatalf("updater CommandArgs() = %#v", got)
+	}
+}

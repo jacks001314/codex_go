@@ -6395,6 +6395,10 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 	return response, nil
 }
 
+// systemBwrapWarning is injectable so the startup wiring can be pinned without
+// depending on the host's bubblewrap installation.
+var systemBwrapWarning = sandbox.SystemBwrapWarning
+
 func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNotification {
 	if r == nil || r.services.Config == nil {
 		return nil
@@ -6404,6 +6408,13 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 	// (packaged defaults, user, and managed configuration).
 	if ignored := r.services.Config.IgnoredSettingsWarning(""); strings.TrimSpace(ignored) != "" {
 		warnings = append(warnings, config.ConfigWarningNotification{Summary: ignored})
+	}
+	// Rust app-server startup: the bubblewrap warning joins the config warnings,
+	// so a session whose sandbox cannot use bubblewrap learns why.
+	if profile := r.services.Config.EffectivePermissionProfileForCWD(r.services.DefaultCWD); profile != nil {
+		if warning := systemBwrapWarning(profile); warning != "" {
+			warnings = append(warnings, config.ConfigWarningNotification{Summary: warning})
+		}
 	}
 	r.rememberEmittedConfigWarnings(warnings)
 	return warnings

@@ -3,16 +3,16 @@
 package appserver
 
 import (
-	"bufio"
 	"context"
-	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
-func TestServeUnixSocketHandlesJSONRPCLine(t *testing.T) {
+func TestServeUnixSocketServesJSONRPCOverWebSocket(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	socketPath := filepath.Join(t.TempDir(), "codex.sock")
@@ -24,18 +24,21 @@ func TestServeUnixSocketHandlesJSONRPCLine(t *testing.T) {
 		})
 	}()
 
-	conn := dialUnixSocketForTest(t, socketPath)
-	defer conn.Close()
-	_, err := conn.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test","version":"1"}}}` + "\n"))
+	conn := dialControlSocketWebSocket(t, socketPath)
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 15*time.Second)
+	err := conn.Write(writeCtx, websocket.MessageText, []byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test","version":"1"}}}`))
+	cancelWrite()
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
-	line, err := bufio.NewReader(conn).ReadString('\n')
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 15*time.Second)
+	_, data, err := conn.Read(readCtx)
+	cancelRead()
 	if err != nil {
-		t.Fatalf("ReadString() error = %v", err)
+		t.Fatalf("Read() error = %v", err)
 	}
-	if !strings.Contains(line, `"id":1`) || !strings.Contains(line, `"result"`) {
-		t.Fatalf("response line = %q", line)
+	if !strings.Contains(string(data), `"id":1`) || !strings.Contains(string(data), `"result"`) {
+		t.Fatalf("response = %q", string(data))
 	}
 	cancel()
 	select {
@@ -45,20 +48,5 @@ func TestServeUnixSocketHandlesJSONRPCLine(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for ServeUnixSocket")
-	}
-}
-
-func dialUnixSocketForTest(t *testing.T, socketPath string) net.Conn {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for {
-		conn, err := net.Dial("unix", socketPath)
-		if err == nil {
-			return conn
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Dial unix %s error = %v", socketPath, err)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -27,12 +27,15 @@ const (
 type UpdateActionKind string
 
 const (
-	UpdateActionNPMGlobalLatest  UpdateActionKind = "npm-global-latest"
-	UpdateActionBunGlobalLatest  UpdateActionKind = "bun-global-latest"
-	UpdateActionPnpmGlobalLatest UpdateActionKind = "pnpm-global-latest"
-	UpdateActionBrewUpgrade      UpdateActionKind = "brew-upgrade"
-	UpdateActionStandaloneUnix   UpdateActionKind = "standalone-unix"
-	UpdateActionStandaloneWin    UpdateActionKind = "standalone-windows"
+	UpdateActionNPMGlobalLatest UpdateActionKind = "npm-global-latest"
+	UpdateActionBunGlobalLatest UpdateActionKind = "bun-global-latest"
+	// UpdateActionVitePlusGlobalLatest is `vp install -g <package>@latest`
+	// (Rust UpdateAction::VitePlusGlobalLatest).
+	UpdateActionVitePlusGlobalLatest UpdateActionKind = "vite-plus-global-latest"
+	UpdateActionPnpmGlobalLatest     UpdateActionKind = "pnpm-global-latest"
+	UpdateActionBrewUpgrade          UpdateActionKind = "brew-upgrade"
+	UpdateActionStandaloneUnix       UpdateActionKind = "standalone-unix"
+	UpdateActionStandaloneWin        UpdateActionKind = "standalone-windows"
 )
 
 type UpdateStatus string
@@ -92,6 +95,18 @@ type ExecCommandRunner struct {
 	}
 }
 
+// fetchHomebrewCaskVersion reads the version Homebrew currently serves for the
+// Codex cask (Rust fetch_homebrew_cask_version).
+func fetchHomebrewCaskVersion(ctx context.Context, client *http.Client, url string) (string, error) {
+	var info struct {
+		Version string `json:"version"`
+	}
+	if err := getJSON(ctx, client, url, &info); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(info.Version), nil
+}
+
 func ActionFromContext(context *InstallContext) *UpdateAction {
 	if context == nil {
 		return nil
@@ -101,6 +116,8 @@ func ActionFromContext(context *InstallContext) *UpdateAction {
 		return &UpdateAction{Kind: UpdateActionNPMGlobalLatest}
 	case InstallBun:
 		return &UpdateAction{Kind: UpdateActionBunGlobalLatest}
+	case InstallVitePlus:
+		return &UpdateAction{Kind: UpdateActionVitePlusGlobalLatest}
 	case InstallPnpm:
 		return &UpdateAction{Kind: UpdateActionPnpmGlobalLatest}
 	default:
@@ -117,6 +134,8 @@ func (a *UpdateAction) CommandArgs() (string, []string) {
 		return "npm", []string{"install", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBunGlobalLatest:
 		return "bun", []string{"install", "-g", NPMPackageName + "@latest"}
+	case UpdateActionVitePlusGlobalLatest:
+		return "vp", []string{"install", "-g", NPMPackageName + "@latest"}
 	case UpdateActionPnpmGlobalLatest:
 		return "pnpm", []string{"add", "-g", NPMPackageName + "@latest"}
 	case UpdateActionBrewUpgrade:
@@ -404,7 +423,13 @@ func FetchLatestVersion(ctx context.Context, opts *UpdateCheckOptions) (string, 
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	switch {
-	case installContext != nil && (installContext.Method.Kind == InstallNPM || installContext.Method.Kind == InstallBun || installContext.Method.Kind == InstallPnpm):
+	case installContext != nil && installContext.Method.Kind == InstallBrew:
+		// Homebrew's cask can lag the GitHub release, so the cask API is the
+		// authoritative version for a brew install (Rust
+		// doctor/updates.rs::fetch_homebrew_cask_version and tui/src/updates.rs).
+		return fetchHomebrewCaskVersion(ctx, client, firstNonEmpty(opts.HomebrewURL, DefaultHomebrewCaskURL))
+	case installContext != nil && (installContext.Method.Kind == InstallNPM || installContext.Method.Kind == InstallBun ||
+		installContext.Method.Kind == InstallVitePlus || installContext.Method.Kind == InstallPnpm):
 		latest, err := fetchLatestGitHubReleaseVersion(ctx, client, firstNonEmpty(opts.GitHubURL, DefaultGitHubLatestReleaseURL))
 		if err != nil {
 			return "", err

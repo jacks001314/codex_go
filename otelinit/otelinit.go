@@ -29,6 +29,10 @@ type Options struct {
 	// export clients enforce it, so a managed policy makes the exports
 	// cancellable and a restricting one disables them (Rust #47408).
 	NetworkPolicy network.NetworkPolicy
+	// SkipGlobalMetricsInstall keeps a short-lived provider from replacing the
+	// process-global metrics client. Rust's TUI daemon telemetry uses the
+	// app-server-client builder for the same reason.
+	SkipGlobalMetricsInstall bool
 }
 
 // BuildProvider mirrors otel_init::build_provider: resolve the effective
@@ -77,7 +81,7 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	// Rust OtelProvider::try_new installs the built metrics client as the
 	// process-global client, which library code such as the model catalog
 	// manager uses for its global timers.
-	if provider != nil && provider.Metrics() != nil {
+	if !options.SkipGlobalMetricsInstall && provider != nil && provider.Metrics() != nil {
 		telemetry.InstallGlobalMetrics(provider.Metrics())
 	}
 	return provider, nil

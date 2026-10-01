@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -249,21 +248,13 @@ func TestRemotePromptEditCarriesTaskToolsNamespaceLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	clientConn, serverConn := net.Pipe()
 	var mu sync.Mutex
 	startParams := map[string]any{}
 	forkParams := map[string]any{}
-	go func() {
-		defer serverConn.Close()
-		decoder := json.NewDecoder(serverConn)
-		encoder := json.NewEncoder(serverConn)
+	socketPath := startUnixWebSocketTestServer(t, func(_ context.Context, conn *websocket.Conn) {
 		for {
-			var request struct {
-				ID     json.RawMessage `json:"id"`
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			if err := decoder.Decode(&request); err != nil {
+			request, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
 				return
 			}
 			result := map[string]any{}
@@ -283,18 +274,17 @@ func TestRemotePromptEditCarriesTaskToolsNamespaceLikeRust(t *testing.T) {
 				mu.Unlock()
 				result = map[string]any{"thread": map[string]any{"id": "thread-forked"}}
 			}
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+			remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 		}
-	}()
+	})
 
 	state := codextui.NewState(nil)
 	host := &taskToolsMCPHost{}
 	defer host.close()
 	client := &remoteAppServerTUIClient{
-		endpoint:  appserverdaemon.NewUnixSocketEndpoint("/tmp/codex-prompt-edit.sock"),
+		endpoint:  appserverdaemon.NewUnixSocketEndpoint(socketPath),
 		root:      &cli.RootOptions{},
 		state:     state,
-		unixDial:  func(context.Context, string) (net.Conn, error) { return clientConn, nil },
 		taskTools: host,
 	}
 	if err := client.connect(ctx); err != nil {

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "description": "Pinned bubblewrap source staged into every Linux package's codex-resources directory, so a packaged CLI can sandbox tools even where no system bwrap is installed (Rust codex-resources/bwrap). The digest is the published release asset's SHA-256 and identifies the input, not security or license approval.",
+  "license": "LGPL-2.0-or-later",
+  "purpose": "Sandbox launcher the packaged CLI runs when no system bwrap is on PATH (Rust linux-sandbox::bundled_bwrap)",
+  "sources": [
+    {
+      "name": "bubblewrap",
+      "version": "0.13.0",
+      "url": "https://github.com/containers/bubblewrap/releases/download/v0.13.0/bubblewrap-0.13.0.tar.xz",
+      "sha256": "4734237473c0e5d695e4e9034a34e43b2dbf5164655bd13fa59ae376b2b7a765",
+      "bytes": 129260
+    }
+  ],
+  "targets": [
+    { "goos": "linux", "goarch": "amd64" },
+    { "goos": "linux", "goarch": "arm64" }
+  ],
+  "buildTools": [
+    {
+      "name": "meson",
+      "purpose": "Build program required to compile bubblewrap",
+      "url": "https://mesonbuild.com/Getting-meson.html"
+    },
+    {
+      "name": "ninja",
+      "purpose": "Backend meson drives; also used for the packaged voice codec",
+      "url": "https://github.com/ninja-build/ninja/releases"
+    }
+  ]
+}

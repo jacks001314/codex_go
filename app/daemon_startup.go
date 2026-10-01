@@ -116,10 +116,10 @@ func daemonConfigExclusion(root *cli.RootOptions) string {
 	return ""
 }
 
-// daemonLaunchOverrides renders the launch's configuration overrides the way
+// daemonRawLaunchOverrides renders the launch's configuration overrides the way
 // Rust's CliConfigOverrides does: `-c` plus the `--enable`/`--disable` feature
 // flags and `--search`'s web-search mode.
-func daemonLaunchOverrides(root *cli.RootOptions) []config.Override {
+func daemonRawLaunchOverrides(root *cli.RootOptions) []string {
 	if root == nil {
 		return nil
 	}
@@ -133,7 +133,12 @@ func daemonLaunchOverrides(root *cli.RootOptions) []config.Override {
 	if root.Shared.Search {
 		raw = append(raw, `web_search="live"`)
 	}
-	overrides, err := config.ParseOverrides(raw)
+	return raw
+}
+
+// daemonLaunchOverrides parses the launch's configuration overrides.
+func daemonLaunchOverrides(root *cli.RootOptions) []config.Override {
+	overrides, err := config.ParseOverrides(daemonRawLaunchOverrides(root))
 	if err != nil {
 		// An unparseable override cannot be replayed by the server.
 		return []config.Override{{Path: "", Value: nil}}
@@ -243,20 +248,80 @@ func defaultLocalDaemonSocketPath() string {
 
 // daemonAutoStartFeature reports whether the effective configuration opts into
 // automatic background-server startup (Rust Feature::DaemonAutoStart, #46117;
-// disabled by default).
-var daemonAutoStartFeature = func() bool {
-	cfg, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), nil)
+// stable and enabled by default since #47179). The launch's own overrides take
+// part, so `-c features.daemon_auto_start=false` and `--disable
+// daemon_auto_start` turn it off exactly as they do in Rust, whose startup
+// orchestration reads the loaded config rather than the raw config files.
+var daemonAutoStartFeature = func(root *cli.RootOptions) bool {
+	opts := &config.EffectiveOptions{}
+	if root != nil {
+		opts.RawOverrides = daemonRawLaunchOverrides(root)
+		opts.EnableFeatures = root.EnableFeatures
+		opts.DisableFeatures = root.DisableFeatures
+	}
+	cfg, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), opts)
 	if err != nil || cfg == nil {
 		return false
 	}
 	return features.Enabled(cfg.FeatureSettings(), "daemon_auto_start")
 }
 
+// daemonStartupServerFeatures extracts the shared-server feature settings a
+// launch explicitly enables, which is what a daemon auto-start hands to the
+// managed app-server (Rust `daemon_startup::server_features` plus
+// `retain(|_, enabled| *enabled)`). Disabling a shared service still requires
+// confirmation, so only enabled keys travel.
+func daemonStartupServerFeatures(root *cli.RootOptions) map[string]bool {
+	features := map[string]bool{}
+	for _, override := range daemonLaunchOverrides(root) {
+		switch override.Path {
+		case "features":
+			table, ok := override.Value.(map[string]any)
+			if !ok {
+				continue
+			}
+			for name, value := range table {
+				collectStartupServerFeature(features, name, value)
+			}
+		default:
+			name, ok := strings.CutPrefix(override.Path, "features.")
+			if !ok {
+				continue
+			}
+			collectStartupServerFeature(features, name, override.Value)
+		}
+	}
+	if len(features) == 0 {
+		return nil
+	}
+	return features
+}
+
+func collectStartupServerFeature(features map[string]bool, name string, value any) {
+	name = strings.TrimSpace(name)
+	if !daemonServerFeatureKeys[name] {
+		return
+	}
+	enabled, ok := value.(bool)
+	if !ok || !enabled {
+		// Disabling a shared service requires confirmation, even on a fresh
+		// auto-start, so a disabled key is not replayed automatically.
+		return
+	}
+	features[name] = true
+}
+
 // daemonAutoStartStart starts (or attaches to) the shared background server and
 // returns its control socket path.
-var daemonAutoStartStart = func() (string, error) {
+var daemonAutoStartStart = func(root *cli.RootOptions) (string, error) {
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
-	output, err := runner.Run(appserverdaemon.LifecycleStart)
+	// The launch's own server features travel with the start so a shared server
+	// keeps the services this launch asked for (Rust
+	// `start_with_features(&daemon_features)`).
+	output, err := runner.StartWithFeatures(daemonStartupServerFeatures(root))
+	// The TUI owns the foreground observation and records what the auto-start
+	// reached (Rust startup_orchestration::daemon_telemetry::record_start).
+	recordDaemonStartTelemetry(root, output, err)
 	if err != nil {
 		return "", err
 	}
@@ -281,10 +346,10 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	if daemonStartupExclusion(root, false) != "" {
 		return nil, nil
 	}
-	if !daemonAutoStartFeature() {
+	if !daemonAutoStartFeature(root) {
 		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
 	}
-	socketPath, err := daemonAutoStartStart()
+	socketPath, err := daemonAutoStartStart(root)
 	if err != nil {
 		// Rust #48491: a Windows launcher that forbids detaching a background
 		// process does not block the CLI. Automatic startup uses the embedded
@@ -321,7 +386,7 @@ func daemonAutoStartExclusionWarning(root *cli.RootOptions) string {
 	if root == nil || strings.TrimSpace(root.Remote) != "" {
 		return ""
 	}
-	if !daemonAutoStartFeature() {
+	if !daemonAutoStartFeature(root) {
 		return ""
 	}
 	reason := daemonAutoStartExclusionReason

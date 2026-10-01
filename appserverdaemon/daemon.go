@@ -8,28 +8,40 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	"codex_go/codexuds"
 	"codex_go/install"
 	"codex_go/remotecontrol"
 )
 
 const (
-	PIDFileName           = "app-server.pid"
-	UpdatePIDFileName     = "app-server-updater.pid"
+	// PIDFileName and UpdatePIDFileName name the pid records of a daemon that
+	// owns its package (Rust DAEMON_PID_FILE_NAME / DAEMON_UPDATE_PID_FILE_NAME).
+	// A launch that reuses the pre-dedicated package uses the legacy names
+	// instead; see PathsForCodexHome.
+	PIDFileName           = "daemon.pid"
+	UpdatePIDFileName     = "daemon-updater.pid"
 	OperationLockFileName = "daemon.lock"
 	SettingsFileName      = "settings.json"
 	StateDirName          = "app-server-daemon"
 	ControlDirName        = "app-server-control"
 	ControlSocketFileName = "app-server-control.sock"
 	// DaemonShutdownFileEnv names the env var carrying the shutdown-request
-	// file a detached pid-managed app server must watch (Rust #42364).
+	// file a detached pid-managed *updater* must watch: it has no control
+	// socket, so its owner requests termination through a file in the private
+	// state directory (Rust app-server-transport::daemon_shutdown).
 	DaemonShutdownFileEnv = "CODEX_DAEMON_SHUTDOWN_FILE"
+	// DaemonShutdownSocketEnv names the env var that tells a pid-managed
+	// app-server it may accept the control socket's `/daemon/shutdown` request
+	// (Rust app-server-transport::DAEMON_SHUTDOWN_SOCKET_ENV).
+	DaemonShutdownSocketEnv = "CODEX_DAEMON_SHUTDOWN_SOCKET"
 	// UpdaterPIDFileEnv carries the update-loop PID file to a reexecuted
 	// successor updater so it can claim PID ownership (Rust #42392).
 	UpdaterPIDFileEnv = "CODEX_UPDATER_PID_FILE"
 )
 
-var ErrUnsupportedPlatform = errors.New("codex app-server daemon lifecycle is only supported on Unix platforms")
+var ErrUnsupportedPlatform = errors.New("codex app-server daemon lifecycle is only supported on Unix and Windows platforms")
 var ErrDaemonPathsRequired = errors.New("app-server daemon paths are required")
 
 type BackendKind string
@@ -172,7 +184,11 @@ type RestartMode string
 
 const (
 	RestartIfVersionChanged RestartMode = "ifVersionChanged"
-	RestartAlways           RestartMode = "always"
+	// RestartIfBinaryOrVersionChanged restarts when the managed executable is a
+	// different binary than the running one, or when its version changed
+	// (Rust RestartMode::IfBinaryOrVersionChanged).
+	RestartIfBinaryOrVersionChanged RestartMode = "ifBinaryOrVersionChanged"
+	RestartAlways                   RestartMode = "always"
 )
 
 type UpdaterRefreshMode string
@@ -196,13 +212,120 @@ const (
 	DefaultShutdownGraceSeconds = 60
 	// MaxShutdownGraceSeconds bounds the configurable grace period.
 	MaxShutdownGraceSeconds = 5 * 60
+	// DefaultUpdateIntervalMinutes is how often the managed updater checks for a
+	// newer package unless settings say otherwise (Rust
+	// settings::DEFAULT_UPDATE_INTERVAL_MINUTES).
+	DefaultUpdateIntervalMinutes = 60
 )
+
+// DaemonUpdaterSettings is the stored `updater` block. Both fields default when
+// absent, so a missing block means "update hourly".
+type DaemonUpdaterSettings struct {
+	AutoUpdateEnabled     *bool `json:"autoUpdateEnabled,omitempty"`
+	UpdateIntervalMinutes *int  `json:"updateIntervalMinutes,omitempty"`
+}
+
+// AutoUpdateEnabledValue resolves whether the managed updater may replace the
+// daemon package on its own.
+func (u *DaemonUpdaterSettings) AutoUpdateEnabledValue() bool {
+	if u == nil || u.AutoUpdateEnabled == nil {
+		return true
+	}
+	return *u.AutoUpdateEnabled
+}
+
+// UpdateIntervalMinutesValue resolves the updater's cadence in minutes.
+func (u *DaemonUpdaterSettings) UpdateIntervalMinutesValue() int {
+	if u == nil || u.UpdateIntervalMinutes == nil {
+		return DefaultUpdateIntervalMinutes
+	}
+	return *u.UpdateIntervalMinutes
+}
+
+func (u *DaemonUpdaterSettings) validate() error {
+	if u == nil || u.UpdateIntervalMinutes == nil {
+		return nil
+	}
+	if *u.UpdateIntervalMinutes <= 0 {
+		return errors.New("update interval must be positive")
+	}
+	return nil
+}
 
 type DaemonSettings struct {
 	RemoteControlEnabled bool `json:"remoteControlEnabled"`
+	// FeatureOverrides are the `features.<name>=<bool>` switches the managed
+	// app-server is launched with, so a shared server keeps the services the
+	// launch that started it asked for (Rust DaemonSettings::feature_overrides).
+	FeatureOverrides map[string]bool `json:"featureOverrides,omitempty"`
 	// ShutdownGraceSeconds bounds the managed app-server shutdown grace period.
 	// Nil means the default; valid values are 0 through MaxShutdownGraceSeconds.
 	ShutdownGraceSeconds *int `json:"shutdownGraceSeconds,omitempty"`
+	// Updater mirrors the stored updater block. Nil means the defaults.
+	Updater *DaemonUpdaterSettings `json:"updater,omitempty"`
+}
+
+// AutoUpdateEnabled reports whether the managed updater may replace the daemon
+// package on its own.
+func (s *DaemonSettings) AutoUpdateEnabled() bool {
+	if s == nil {
+		return true
+	}
+	return s.Updater.AutoUpdateEnabledValue()
+}
+
+// UpdateInterval resolves the managed updater's cadence.
+func (s *DaemonSettings) UpdateInterval() time.Duration {
+	if s == nil {
+		return time.Duration(DefaultUpdateIntervalMinutes) * time.Minute
+	}
+	return time.Duration(s.Updater.UpdateIntervalMinutesValue()) * time.Minute
+}
+
+// CloneFeatureOverrides returns a copy so callers cannot mutate a stored map.
+func CloneFeatureOverrides(overrides map[string]bool) map[string]bool {
+	if len(overrides) == 0 {
+		return nil
+	}
+	clone := make(map[string]bool, len(overrides))
+	for name, enabled := range overrides {
+		clone[name] = enabled
+	}
+	return clone
+}
+
+// FeatureOverridesEqual reports whether two override sets agree, treating an
+// empty set and a missing one as equal (Rust's BTreeMap equality).
+func FeatureOverridesEqual(a map[string]bool, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, enabled := range a {
+		if other, ok := b[name]; !ok || other != enabled {
+			return false
+		}
+	}
+	return true
+}
+
+// daemonSettingsEqual compares the launch settings a restart may replace
+// (Rust DaemonSettings: PartialEq).
+func daemonSettingsEqual(a *DaemonSettings, b *DaemonSettings) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.RemoteControlEnabled != b.RemoteControlEnabled ||
+		!FeatureOverridesEqual(a.FeatureOverrides, b.FeatureOverrides) {
+		return false
+	}
+	if (a.ShutdownGraceSeconds == nil) != (b.ShutdownGraceSeconds == nil) {
+		return false
+	}
+	if a.ShutdownGraceSeconds != nil && *a.ShutdownGraceSeconds != *b.ShutdownGraceSeconds {
+		return false
+	}
+	return a.AutoUpdateEnabled() == b.AutoUpdateEnabled() &&
+		a.UpdateInterval() == b.UpdateInterval()
 }
 
 // ShutdownGraceSecondsValue resolves the configured grace period, falling back
@@ -231,25 +354,40 @@ type Paths struct {
 type Daemon struct {
 	Paths      *Paths
 	CLIVersion string
+	// LogDiagnostics routes startup diagnostics to the caller's logging instead
+	// of stderr, which a live TUI owns (Rust Daemon::log_diagnostics).
+	LogDiagnostics bool
 }
 
+// EnsureSupportedPlatform mirrors Rust ensure_supported_platform: the managed
+// lifecycle runs on Unix and Windows.
 func EnsureSupportedPlatform() error {
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows", "aix", "android", "darwin", "dragonfly", "freebsd", "hurd", "illumos", "ios",
+		"linux", "netbsd", "openbsd", "solaris":
+		return nil
+	default:
 		return ErrUnsupportedPlatform
 	}
-	return nil
 }
 
 func PathsForCodexHome(codexHome string) *Paths {
 	stateDir := filepath.Join(codexHome, StateDirName)
+	pidFileName, updatePIDFileName := PIDFileName, UpdatePIDFileName
+	if legacyPackageSelection(codexHome) {
+		// A CLI that reuses the pre-dedicated standalone package keeps writing
+		// the legacy pid records so both clients agree on one backend
+		// (Rust Daemon::from_environment).
+		pidFileName, updatePIDFileName = LegacyPIDFileName, LegacyUpdatePIDFileName
+	}
 	return &Paths{
 		CodexHome:         codexHome,
 		SocketPath:        AppServerControlSocketPath(codexHome),
-		PIDFile:           filepath.Join(stateDir, PIDFileName),
-		UpdatePIDFile:     filepath.Join(stateDir, UpdatePIDFileName),
+		PIDFile:           filepath.Join(stateDir, pidFileName),
+		UpdatePIDFile:     filepath.Join(stateDir, updatePIDFileName),
 		OperationLockFile: filepath.Join(stateDir, OperationLockFileName),
 		SettingsFile:      filepath.Join(stateDir, SettingsFileName),
-		ManagedCodexBin:   install.ManagedCodexBin(codexHome),
+		ManagedCodexBin:   ManagedCodexBin(codexHome),
 	}
 }
 
@@ -268,6 +406,9 @@ func LoadSettings(path string) (*DaemonSettings, error) {
 	var settings DaemonSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, fmt.Errorf("failed to parse daemon settings %s: %w", path, err)
+	}
+	if err := settings.Updater.validate(); err != nil {
+		return nil, err
 	}
 	if settings.ShutdownGraceSeconds != nil && (*settings.ShutdownGraceSeconds < 0 || *settings.ShutdownGraceSeconds > MaxShutdownGraceSeconds) {
 		return nil, fmt.Errorf("shutdown grace must be between 0 and %d seconds", MaxShutdownGraceSeconds)
@@ -292,7 +433,7 @@ func SaveSettings(path string, settings *DaemonSettings) error {
 	if settings == nil {
 		settings = &DaemonSettings{}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(path)); err != nil {
 		return fmt.Errorf("failed to create daemon settings directory %s: %w", filepath.Dir(path), err)
 	}
 	// Read-modify-write so settings written by other versions (for example an
@@ -308,13 +449,26 @@ func SaveSettings(path string, settings *DaemonSettings) error {
 	if settings.ShutdownGraceSeconds != nil {
 		values["shutdownGraceSeconds"] = *settings.ShutdownGraceSeconds
 	}
+	if len(settings.FeatureOverrides) == 0 {
+		// Rust removes the key instead of storing an empty map.
+		delete(values, "featureOverrides")
+	} else {
+		values["featureOverrides"] = settings.FeatureOverrides
+	}
 	data, err := json.MarshalIndent(values, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize settings: %w", err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("failed to write daemon settings %s: %w", path, err)
+	// Publish atomically so a crash cannot leave settings half-written
+	// (Rust DaemonSettings::save writes a temporary file and renames it).
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return fmt.Errorf("failed to write daemon settings %s: %w", temporary, err)
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("failed to replace daemon settings %s: %w", path, err)
 	}
 	return nil
 }
@@ -334,6 +488,9 @@ func UpdateModesForIdentities(running *install.ExecutableIdentity, managed *inst
 	return RestartAlways, UpdaterRefreshReexecIfManagedBinaryChanged
 }
 
+// RestartDecisionFor mirrors Rust `restart_decision`: IfBinaryOrVersionChanged
+// is resolved by the running backend's executable identity before this call, so
+// only the version comparison reaches it.
 func RestartDecisionFor(mode RestartMode, appServerVersion *string, managedVersion *string) RestartDecision {
 	if mode == RestartAlways {
 		return DecisionRestart
@@ -442,6 +599,15 @@ func NewDaemon(paths *Paths, cliVersion string) *Daemon {
 	return &Daemon{Paths: paths, CLIVersion: cliVersion}
 }
 
+// Diagnostic reports a startup diagnostic to stderr, or suppresses it while a
+// live front end owns the terminal (Rust Daemon::diagnostic).
+func (d *Daemon) Diagnostic(format string, args ...any) {
+	if d != nil && d.LogDiagnostics {
+		return
+	}
+	fmt.Fprintf(os.Stderr, format+"\n", args...)
+}
+
 func NewDaemonForCodexHome(codexHome string, cliVersion string) *Daemon {
 	return NewDaemon(PathsForCodexHome(codexHome), cliVersion)
 }
@@ -451,14 +617,17 @@ func (d *Daemon) BackendPaths(settings *DaemonSettings) BackendPaths {
 		return BackendPaths{}
 	}
 	remoteControlEnabled := false
+	var featureOverrides map[string]bool
 	if settings != nil {
 		remoteControlEnabled = settings.RemoteControlEnabled
+		featureOverrides = settings.FeatureOverrides
 	}
 	return BackendPaths{
 		CodexBin:             d.Paths.ManagedCodexBin,
 		PIDFile:              d.Paths.PIDFile,
 		UpdatePIDFile:        d.Paths.UpdatePIDFile,
 		RemoteControlEnabled: remoteControlEnabled,
+		FeatureOverrides:     featureOverrides,
 	}
 }
 

@@ -414,6 +414,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	for _, warning := range config.NewConfigService(r.CodexHome).ConfigWarningsForCWD(requestCWD(req)) {
 		streamCollector.Warning(warning)
 	}
+	emitStartupBwrapWarning(cfg, req, streamCollector)
 	mcpService, mcpTools, mcpConnectors := r.configuredMCPRuntimeForConfig(cfg, resolvedAuth)
 	var webSearchOptions *turn.WebSearchOptions
 	var imageGenerationOptions *turn.ImageGenerationOptions
@@ -1566,6 +1567,34 @@ func authSnapshotUsesCodexBackendExec(snapshot *auth.AuthDotJSON) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// systemBwrapWarning is injectable so the exec startup wiring can be pinned
+// without depending on the host's bubblewrap installation.
+var systemBwrapWarning = sandbox.SystemBwrapWarning
+
+// warnSink is the part of the exec event stream the startup warning uses.
+type warnSink interface {
+	Warning(message string)
+}
+
+// emitStartupBwrapWarning mirrors Rust exec: outside JSON mode, an exec run
+// whose permission profile needs the platform sandbox reports why bubblewrap is
+// missing or unusable.
+func emitStartupBwrapWarning(cfg *config.Config, req *Request, sink warnSink) {
+	if req != nil && req.Exec.JSON {
+		return
+	}
+	if sink == nil {
+		return
+	}
+	resolution, err := resolveExecSandboxPermissionProfile(cfg, req)
+	if err != nil || resolution == nil {
+		return
+	}
+	if warning := systemBwrapWarning(resolution.Profile); warning != "" {
+		sink.Warning(warning)
 	}
 }
 

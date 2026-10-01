@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,8 +45,11 @@ const (
 	InstallNPM        InstallMethodKind = "npm"
 	InstallBun        InstallMethodKind = "bun"
 	InstallPnpm       InstallMethodKind = "pnpm"
-	InstallBrew       InstallMethodKind = "brew"
-	InstallOther      InstallMethodKind = "other"
+	// InstallVitePlus is a Codex binary launched through the Vite+-managed
+	// `codex.js` shim (Rust InstallMethod::VitePlus).
+	InstallVitePlus InstallMethodKind = "vite-plus"
+	InstallBrew     InstallMethodKind = "brew"
+	InstallOther    InstallMethodKind = "other"
 )
 
 type CodexPackageLayout struct {
@@ -96,6 +100,7 @@ func Current() *InstallContext {
 		current = FromExe(
 			runtime.GOOS == "darwin",
 			exe,
+			os.Getenv("CODEX_MANAGED_BY_VITE_PLUS") != "",
 			os.Getenv("CODEX_MANAGED_BY_PNPM") != "",
 			os.Getenv("CODEX_MANAGED_BY_NPM") != "",
 			os.Getenv("CODEX_MANAGED_BY_BUN") != "",
@@ -105,10 +110,14 @@ func Current() *InstallContext {
 	return cloneContext(current)
 }
 
-func FromExe(isMacOS bool, currentExe string, managedByPnpm bool, managedByNPM bool, managedByBun bool, codexHome string) *InstallContext {
+// FromExe resolves the install context for an executable. The managed-by
+// overrides are checked in Rust's precedence order: Vite+, then pnpm, npm, bun.
+func FromExe(isMacOS bool, currentExe string, managedByVitePlus bool, managedByPnpm bool, managedByNPM bool, managedByBun bool, codexHome string) *InstallContext {
 	layout := PackageLayoutFromExe(currentExe)
 	method := InstallMethod{Kind: InstallOther}
 	switch {
+	case managedByVitePlus:
+		method = InstallMethod{Kind: InstallVitePlus}
 	case managedByPnpm:
 		method = InstallMethod{Kind: InstallPnpm}
 	case managedByNPM:
@@ -288,6 +297,10 @@ func validPackageManifestVersion(version string) bool {
 	return true
 }
 
+// ManagedCodexBin returns the pre-dedicated standalone package's executable
+// path. A daemon that owns its package resolves the executable it launches with
+// appserverdaemon.ManagedCodexBin instead, which prefers the dedicated
+// packages/app-server-daemon root (Rust managed_install::managed_codex_bin).
 func ManagedCodexBin(codexHome string) string {
 	return filepath.Join(codexHome, "packages", standalonePackagesDirname, "current", managedCodexFileName())
 }
@@ -305,6 +318,51 @@ func ExecutableIdentityFromBytes(data []byte) ExecutableIdentity {
 	return ExecutableIdentity{Digest: hex.EncodeToString(sum[:])}
 }
 
+// packageLayoutFromRootMetadata resolves an executable that sits at the package
+// root, which is the layout a locally built or WinGet-installed CLI uses. Only
+// metadata that names this exact executable proves the layout.
+func packageLayoutFromRootMetadata(canonicalExe string, exeDir string) *CodexPackageLayout {
+	data, err := os.ReadFile(filepath.Join(exeDir, packageMetadataFilename))
+	if err != nil {
+		return nil
+	}
+	var metadata struct {
+		LayoutVersion *int   `json:"layoutVersion"`
+		Entrypoint    string `json:"entrypoint"`
+	}
+	if json.Unmarshal(data, &metadata) != nil {
+		return nil
+	}
+	if metadata.LayoutVersion == nil || *metadata.LayoutVersion != 1 {
+		return nil
+	}
+	if metadata.Entrypoint != filepath.Base(canonicalExe) {
+		return nil
+	}
+	return &CodexPackageLayout{
+		PackageDir:   exeDir,
+		BinDir:       exeDir,
+		ResourcesDir: existingDir(filepath.Join(exeDir, resourcesDirname)),
+		PathDir:      existingDir(filepath.Join(exeDir, pathDirname)),
+	}
+}
+
+// ExecutableIdentityFromFile returns the identity of the executable at path
+// without holding it in memory, so debug builds of a few hundred megabytes can
+// be hashed without a matching allocation.
+func ExecutableIdentityFromFile(path string) (ExecutableIdentity, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return ExecutableIdentity{}, err
+	}
+	defer file.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, file); err != nil {
+		return ExecutableIdentity{}, err
+	}
+	return ExecutableIdentity{Digest: hex.EncodeToString(sum.Sum(nil))}, nil
+}
+
 func PackageLayoutFromExe(exePath string) *CodexPackageLayout {
 	if exePath == "" {
 		return nil
@@ -317,6 +375,13 @@ func PackageLayoutFromExe(exePath string) *CodexPackageLayout {
 		canonicalExe = resolved
 	}
 	exeDir := filepath.Dir(canonicalExe)
+	// WinGet preserves a target-qualified executable at the package root. Only
+	// recognize that layout when metadata names this exact executable.
+	if runtime.GOOS == "windows" {
+		if layout := packageLayoutFromRootMetadata(canonicalExe, exeDir); layout != nil {
+			return layout
+		}
+	}
 	binDir := exeDir
 	switch filepath.Base(exeDir) {
 	case binDirname:

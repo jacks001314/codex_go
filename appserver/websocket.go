@@ -188,20 +188,21 @@ func WebSocketURLFromAddr(addr net.Addr) string {
 }
 
 func (s *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// A browser-attached Origin header never belongs on this listener; refusing
+	// it outright keeps a page from driving a local server (Rust
+	// transport::reject_requests_with_origin_header).
+	if strings.TrimSpace(r.Header.Get("Origin")) != "" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
 	switch r.URL.Path {
 	case "/readyz", "/healthz":
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 		return
-	case "", "/":
-	default:
-		http.NotFound(w, r)
-		return
 	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Rust routes every other path (including the client's `/rpc`) to the
+	// WebSocket upgrade handler (axum `fallback(any(...))`).
 	if s == nil || s.routerFactory == nil {
 		http.Error(w, "app-server websocket router is not configured", http.StatusInternalServerError)
 		return

@@ -4,8 +4,37 @@ import (
 	"testing"
 
 	"codex_go/config"
+	"codex_go/metrics"
 	"codex_go/telemetry"
 )
+
+// TestBuildProviderSkipGlobalMetricsInstall pins that a short-lived provider can
+// be built without replacing the process-global metrics client, which the TUI
+// daemon telemetry relies on.
+func TestBuildProviderSkipGlobalMetricsInstall(t *testing.T) {
+	sentinel := telemetry.NewMetricsClient(telemetry.MetricsClientOptions{
+		Environment: "test",
+		ServiceName: "sentinel",
+		Endpoint:    "https://metrics.test/v1/metrics",
+	})
+	if sentinel == nil || !sentinel.Enabled() {
+		t.Fatal("sentinel metrics client is not enabled")
+	}
+	telemetry.InstallGlobalMetrics(sentinel)
+	t.Cleanup(func() { telemetry.InstallGlobalMetrics(nil) })
+
+	provider, err := BuildProvider(Options{Config: otlpHTTPConfig(), SkipGlobalMetricsInstall: true})
+	if err != nil {
+		t.Fatalf("BuildProvider() error = %v", err)
+	}
+	if provider == nil || provider.Metrics() == nil {
+		t.Fatalf("provider = %#v", provider)
+	}
+	defer func() { _ = provider.Shutdown(t.Context()) }()
+	if got := metrics.Global(); got != metrics.Recorder(sentinel) {
+		t.Fatalf("global metrics client = %#v, want the sentinel left in place", got)
+	}
+}
 
 // Rust parity (#47408): a managed policy that restricts application destinations
 // disables the OTLP log, trace and metric exports.

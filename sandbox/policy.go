@@ -63,6 +63,10 @@ const (
 	SandboxReadOnly         SandboxMode = "read-only"
 	SandboxWorkspaceWrite   SandboxMode = "workspace-write"
 	SandboxDangerFullAccess SandboxMode = "danger-full-access"
+	// SandboxModeExternalSandbox is an executor-managed sandbox: the platform
+	// provides the isolation, so the CLI never needs bubblewrap for it
+	// (Rust FileSystemSandboxKind::ExternalSandbox).
+	SandboxModeExternalSandbox SandboxMode = "external-sandbox"
 )
 
 func ParseSandboxMode(value string) (SandboxMode, error) {
@@ -212,7 +216,7 @@ func NewDangerFullAccessPolicy() *SandboxPolicy {
 }
 
 func NewExternalSandboxPolicy(network NetworkAccess) *SandboxPolicy {
-	return &SandboxPolicy{Kind: "external-sandbox", ExternalNetwork: network}
+	return &SandboxPolicy{Kind: SandboxModeExternalSandbox, ExternalNetwork: network}
 }
 
 func SandboxPolicyFromMode(mode SandboxMode) (*SandboxPolicy, error) {

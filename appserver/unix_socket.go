@@ -5,10 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/coder/websocket"
 
 	"codex_go/session"
 )
@@ -20,6 +25,11 @@ type UnixSocketOptions struct {
 	StoreRoot      string
 	Listen         string
 	RuntimeOptions *RuntimeRouterOptions
+	// ShutdownAccess accepts the managed daemon's `/daemon/shutdown` request
+	// (Rust DaemonShutdownAccess). A server nobody manages refuses it.
+	ShutdownAccess DaemonShutdownAccess
+	// OnDaemonShutdown is invoked after a successful shutdown handshake.
+	OnDaemonShutdown func()
 }
 
 func UnixSocketPath(listen string, codexHome string) (string, error) {
@@ -104,7 +114,7 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 			return router
 		}
 		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
-	})
+	}, options.ShutdownAccess, options.OnDaemonShutdown)
 }
 
 func ensureUnixSocketParent(socketPath string) error {
@@ -115,10 +125,120 @@ func ensureUnixSocketParent(socketPath string) error {
 	return os.MkdirAll(dir, 0o700)
 }
 
-func serveUnixSocketConnection(conn net.Conn, router *RuntimeRouter) error {
-	defer conn.Close()
-	if router != nil {
-		defer router.Close()
+// DaemonShutdownPath is the WebSocket path a managed daemon's owner uses to ask
+// the server to stop (Rust app-server-transport::run_daemon_shutdown).
+const DaemonShutdownPath = "/daemon/shutdown"
+
+// maxUnfragmentedMessageBytesHeader advertises the single-frame message limit so
+// a client can reject an oversized request before the socket closes (Rust
+// MAX_UNFRAGMENTED_MESSAGE_BYTES_HEADER).
+const maxUnfragmentedMessageBytesHeader = "x-codex-websocket-max-unfragmented-message-bytes"
+
+// controlSocketResponseTimeout bounds the shutdown handshake (Rust
+// client::CONTROL_SOCKET_RESPONSE_TIMEOUT).
+const controlSocketResponseTimeout = 2 * time.Second
+
+// DaemonShutdownAccess mirrors Rust transport::DaemonShutdownAccess: only a
+// server that a managed daemon owns accepts the shutdown request.
+type DaemonShutdownAccess int
+
+const (
+	// DaemonShutdownDisabled refuses the shutdown path.
+	DaemonShutdownDisabled DaemonShutdownAccess = iota
+	// DaemonShutdownManaged accepts the shutdown path.
+	DaemonShutdownManaged
+)
+
+// serveUnixSocketHTTP serves the control socket as the WebSocket transport Rust
+// uses (app-server-transport::start_control_socket_acceptor): every accepted
+// connection upgrades, the managed shutdown path is gated by access, and any
+// other path is the JSON-RPC control channel.
+func serveUnixSocketHTTP(ctx context.Context, listener net.Listener, routerFactory func() *RuntimeRouter, access DaemonShutdownAccess, shutdown func()) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return serveJSONLineConnection(router, conn, conn)
+	handler := &unixSocketHandler{routerFactory: routerFactory, access: access, shutdown: shutdown}
+	server := &http.Server{Handler: handler}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), controlSocketResponseTimeout)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+		_ = listener.Close()
+	}()
+	err := server.Serve(listener)
+	if errors.Is(err, http.ErrServerClosed) || (ctx.Err() != nil && errors.Is(err, net.ErrClosed)) {
+		return nil
+	}
+	return err
+}
+
+type unixSocketHandler struct {
+	routerFactory func() *RuntimeRouter
+	access        DaemonShutdownAccess
+	shutdown      func()
+}
+
+func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == DaemonShutdownPath {
+		if h == nil || h.access != DaemonShutdownManaged {
+			http.Error(w, "unmanaged server", http.StatusForbidden)
+			return
+		}
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		if err != nil {
+			return
+		}
+		runDaemonShutdownHandshake(r.Context(), conn, h.shutdown)
+		return
+	}
+	if h == nil || h.routerFactory == nil {
+		http.Error(w, "app-server control socket router is not configured", http.StatusInternalServerError)
+		return
+	}
+	// Rust routes every other path to the WebSocket upgrade handler.
+	if max := DefaultWebSocketMaxMessageSize; max > 0 {
+		w.Header().Set(maxUnfragmentedMessageBytesHeader, strconv.FormatInt(max, 10))
+	}
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+	if err != nil {
+		return
+	}
+	if DefaultWebSocketMaxMessageSize > 0 {
+		conn.SetReadLimit(DefaultWebSocketMaxMessageSize)
+	}
+	_ = serveWebSocketConnection(r.Context(), conn, h.routerFactory())
+}
+
+// runDaemonShutdownHandshake reads the owner's PID, echoes it, and asks the
+// manager to stop (Rust run_daemon_shutdown).
+func runDaemonShutdownHandshake(ctx context.Context, conn *websocket.Conn, shutdown func()) {
+	if conn == nil {
+		return
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pid := strconv.Itoa(os.Getpid())
+	readCtx, cancelRead := context.WithTimeout(ctx, controlSocketResponseTimeout)
+	messageType, data, err := conn.Read(readCtx)
+	cancelRead()
+	if err != nil || messageType != websocket.MessageText || string(data) != pid {
+		return
+	}
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), controlSocketResponseTimeout)
+	err = conn.Write(writeCtx, websocket.MessageText, []byte(pid))
+	cancelWrite()
+	if err != nil {
+		return
+	}
+	// Let the manager receive the acknowledgment before the main loop closes
+	// connections.
+	ackCtx, cancelAck := context.WithTimeout(context.Background(), controlSocketResponseTimeout)
+	_, _, _ = conn.Read(ackCtx)
+	cancelAck()
+	if shutdown != nil {
+		shutdown()
+	}
 }

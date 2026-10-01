@@ -721,6 +721,7 @@ func installCheck(codexHome string, showDetails bool, currentExe func() (string,
 	details = append(details,
 		fmt.Sprintf("managed by npm: %t", doctorManagedByNPM(exe)),
 		fmt.Sprintf("managed by bun: %t", managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN")),
+		fmt.Sprintf("managed by Vite+: %t", managedEnvSetForDoctor("CODEX_MANAGED_BY_VITE_PLUS")),
 		fmt.Sprintf("managed by pnpm: %t", managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM")),
 	)
 	pushEnvPathDetailForDoctor(&details, "managed package root", "CODEX_MANAGED_PACKAGE_ROOT")
@@ -857,6 +858,7 @@ func doctorInstallContextForDoctor(currentExe string, codexHome string) *install
 	return install.FromExe(
 		runtime.GOOS == "darwin",
 		currentExe,
+		managedEnvSetForDoctor("CODEX_MANAGED_BY_VITE_PLUS"),
 		managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM"),
 		doctorManagedByNPM(currentExe),
 		managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN"),
@@ -875,6 +877,8 @@ func installMethodNameForDoctor(ctx *install.InstallContext) string {
 		return "npm"
 	case install.InstallBun:
 		return "bun"
+	case install.InstallVitePlus:
+		return "vite+"
 	case install.InstallPnpm:
 		return "pnpm"
 	case install.InstallBrew:
@@ -914,6 +918,8 @@ func describeInstallContextForDoctor(ctx *install.InstallContext) string {
 		return describeMethodWithPackageLayoutForDoctor("npm", ctx.PackageLayout)
 	case install.InstallBun:
 		return describeMethodWithPackageLayoutForDoctor("bun", ctx.PackageLayout)
+	case install.InstallVitePlus:
+		return describeMethodWithPackageLayoutForDoctor("vite+", ctx.PackageLayout)
 	case install.InstallPnpm:
 		return describeMethodWithPackageLayoutForDoctor("pnpm", ctx.PackageLayout)
 	case install.InstallBrew:
@@ -2115,7 +2121,8 @@ func doctorManagedByNPM(currentExe string) bool {
 }
 
 func inheritedManagedEnvForCargoBinary(currentExe string) bool {
-	if !managedEnvSetForDoctor("CODEX_MANAGED_BY_NPM") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM") {
+	if !managedEnvSetForDoctor("CODEX_MANAGED_BY_NPM") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_BUN") &&
+		!managedEnvSetForDoctor("CODEX_MANAGED_BY_VITE_PLUS") && !managedEnvSetForDoctor("CODEX_MANAGED_BY_PNPM") {
 		return false
 	}
 	if strings.TrimSpace(currentExe) == "" {

@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"codex_go/install"
 )
 
 type LifecycleRunner struct {
@@ -34,17 +36,31 @@ var (
 	enableRemoteControlOnSocket   = EnableRemoteControlOnSocket
 	disableRemoteControlOnSocket  = DisableRemoteControlOnSocket
 	ensureManagedCodexBin         = EnsureManagedCodexBin
+	prepareManagedDaemon          = prepareDaemonInstall
 	pidBackendIsStartingOrRunning = func(backend *PIDBackend) (bool, error) { return backend.IsStartingOrRunning() }
 	startPIDBackend               = func(backend *PIDBackend) (*uint32, error) { return backend.Start() }
 	stopPIDBackend                = func(backend *PIDBackend, graceSeconds int) error { return backend.StopWithGrace(graceSeconds) }
 	lifecycleReadyTimeout         = RemoteControlReadyTimeout
 	lifecycleReadyRetry           = 50 * time.Millisecond
 	readStderrLogTail             = ReadStderrLogTail
+	// managedCodexVersionBestEffort is injectable so the package checks can pin
+	// the version of a staged executable without running it.
+	managedCodexVersionBestEffort = ManagedCodexVersionBestEffort
+	// ensureDetachedLaunchProbe is injectable so the updater's restart preflight
+	// can be pinned without a runnable managed binary.
+	ensureDetachedLaunchProbe = ensureDetachedLaunch
 )
 
 func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error) {
 	if r == nil {
 		r = &LifecycleRunner{}
+	}
+	// Only start/restart perform the Windows elevation handoff the daemon
+	// forbids; stop and version must keep working (Rust lib.rs run(command)).
+	if command == LifecycleStart || command == LifecycleRestart {
+		if err := EnsureNonElevated(); err != nil {
+			return nil, err
+		}
 	}
 	daemon := r.daemon()
 	backend := BackendPID
@@ -55,6 +71,10 @@ func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error
 			return nil, err
 		}
 		defer lock.Close()
+		// Every lifecycle command re-resolves the installation it owns: an
+		// update may have migrated the package while this command waited for the
+		// lock (Rust Daemon::run -> current_installation).
+		daemon.refreshInstallation()
 		settings, err := daemon.LoadSettings()
 		if err != nil {
 			return nil, err
@@ -66,6 +86,7 @@ func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error
 			return nil, err
 		}
 		defer lock.Close()
+		daemon.refreshInstallation()
 		settings, err := daemon.LoadSettings()
 		if err != nil {
 			return nil, err
@@ -77,8 +98,18 @@ func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error
 			return nil, err
 		}
 		defer lock.Close()
+		daemon.refreshInstallation()
 		// Stop must work even when settings are unreadable or partially edited.
-		return r.stop(daemon.LoadSettingsForStop())
+		output, err := r.stop(daemon.LoadSettingsForStop())
+		if err != nil {
+			return nil, err
+		}
+		// A stop retires the running app-server's saved threads (Rust
+		// run(LifecycleCommand::Stop)).
+		if recoveryErr := discardPendingRecovery(daemon); recoveryErr != nil {
+			daemon.Diagnostic("warning: failed to clear saved threads after daemon stop: %v", recoveryErr)
+		}
+		return output, nil
 	case LifecycleVersion:
 		settings, err := daemon.LoadSettings()
 		if err != nil {
@@ -92,6 +123,9 @@ func (r *LifecycleRunner) Run(command LifecycleCommand) (*LifecycleOutput, error
 }
 
 func (r *LifecycleRunner) Bootstrap(options *BootstrapOptions) (*BootstrapOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
 	lock, err := r.acquireOperationLock()
 	if err != nil {
 		return nil, err
@@ -100,11 +134,79 @@ func (r *LifecycleRunner) Bootstrap(options *BootstrapOptions) (*BootstrapOutput
 	return r.bootstrapLocked(options)
 }
 
-func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*BootstrapOutput, error) {
-	daemon := r.daemon()
-	if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
+// StartWithFeatures starts the managed app-server, merging the stored feature
+// overrides with the launch's own (Rust app-server-daemon::start_with_features).
+// Startup diagnostics stay out of the caller's terminal because a live TUI owns
+// stderr.
+func (r *LifecycleRunner) StartWithFeatures(features map[string]bool) (*LifecycleOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
 		return nil, err
 	}
+	daemon := r.daemon()
+	daemon.LogDiagnostics = true
+	lock, err := r.acquireOperationLock()
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	daemon.refreshInstallation()
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
+	merged := CloneFeatureOverrides(settings.FeatureOverrides)
+	if merged == nil {
+		merged = map[string]bool{}
+	}
+	for name, enabled := range features {
+		merged[name] = enabled
+	}
+	return r.startWithFeatureOverrides(settings, merged)
+}
+
+// RestartWithFeatures applies confirmed feature settings to an existing managed
+// daemon, restarting it only when the settings actually change
+// (Rust app-server-daemon::restart_with_features).
+func (r *LifecycleRunner) RestartWithFeatures(features map[string]bool) (*LifecycleOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
+	daemon := r.daemon()
+	lock, err := r.acquireOperationLock()
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	daemon.refreshInstallation()
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
+	backend, err := r.runningAppServerBackend(settings)
+	if err != nil {
+		return nil, err
+	}
+	if backend == nil {
+		return nil, errors.New("no running managed daemon; rerun the command to check the current server")
+	}
+	previous := CloneFeatureOverrides(settings.FeatureOverrides)
+	merged := CloneFeatureOverrides(settings.FeatureOverrides)
+	if merged == nil {
+		merged = map[string]bool{}
+	}
+	for name, enabled := range features {
+		merged[name] = enabled
+	}
+	if FeatureOverridesEqual(previous, merged) {
+		return r.startWithFeatureOverrides(settings, previous)
+	}
+	settings.FeatureOverrides = CloneFeatureOverrides(merged)
+	backendKind := BackendPID
+	return r.restart(settings, &backendKind)
+}
+
+func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*BootstrapOutput, error) {
+	daemon := r.daemon()
 	settings := &DaemonSettings{}
 	if options != nil {
 		settings.RemoteControlEnabled = options.RemoteControlEnabled
@@ -121,12 +223,24 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 			}
 		}
 	}
+	// A fresh launch installs the daemon's own package before it checks the
+	// managed executable (Rust bootstrap_locked).
+	if err := prepareManagedDaemon(daemon, settings); err != nil {
+		return nil, err
+	}
+	daemon.refreshInstallation()
+	if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
+		return nil, err
+	}
 	if err := daemon.SaveSettings(settings); err != nil {
 		return nil, err
 	}
 	if running, err := pidBackendIsStartingOrRunning(r.appServerBackend(settings)); err != nil {
 		return nil, err
 	} else if running {
+		if err := discardPendingRecovery(daemon); err != nil {
+			daemon.Diagnostic("warning: failed to clear stale daemon recovery before bootstrap: %v", err)
+		}
 		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
 		}
@@ -144,15 +258,24 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 	if _, err := startPIDBackend(r.updateLoopBackend(settings)); err != nil {
 		return nil, err
 	}
+	autoUpdateEnabled, err := ensureManagedUpdater(daemon, settings)
+	if err != nil {
+		return nil, err
+	}
 	appServerVersion, err := r.waitUntilReady()
 	if err != nil {
 		return nil, err
 	}
 	managedVersion := r.managedVersion()
-	return daemon.BootstrapOutput(settings, appServerVersion, managedVersion), nil
+	output := daemon.BootstrapOutput(settings, appServerVersion, managedVersion)
+	output.AutoUpdateEnabled = autoUpdateEnabled
+	return output, nil
 }
 
 func (r *LifecycleRunner) EnsureRemoteControlStarted() (*RemoteControlStartOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
 	daemon := r.daemon()
 	lock, err := r.acquireOperationLock()
 	if err != nil {
@@ -206,6 +329,9 @@ func (r *LifecycleRunner) IsBootstrapped() (bool, error) {
 }
 
 func (r *LifecycleRunner) SetRemoteControl(mode RemoteControlMode) (*RemoteControlOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
 	lock, err := r.acquireOperationLock()
 	if err != nil {
 		return nil, err
@@ -262,6 +388,9 @@ func (r *LifecycleRunner) setRemoteControlLocked(mode RemoteControlMode) (*Remot
 	if backend != nil {
 		if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
 			return nil, err
+		}
+		if err := discardPendingRecovery(daemon); err != nil {
+			daemon.Diagnostic("warning: failed to clear stale recovery before remote-control restart: %v", err)
 		}
 		if err := stopPIDBackend(r.appServerBackend(&DaemonSettings{RemoteControlEnabled: previous}), settings.ShutdownGraceSecondsValue()); err != nil {
 			return nil, err
@@ -324,6 +453,28 @@ func (r *LifecycleRunner) TryRestartIfRunning(mode RestartMode, updaterRefreshMo
 		}
 		return RestartNotRunning, nil
 	}
+	// The installer can retarget `current` while this update waits for the lock
+	// or probes the running server. Never restart from a release that is no
+	// longer the selected latest-channel binary (Rust try_restart_if_running).
+	if !isStableStandaloneRelease(daemonCodexHome(daemon), ManagedCodexBin(daemonCodexHome(daemon))) ||
+		canonicalPath(ManagedCodexBin(daemonCodexHome(daemon))) != canonicalPath(managedCodexBin) {
+		return RestartAlreadyCurrent, nil
+	}
+	if mode == RestartIfBinaryOrVersionChanged {
+		managedIdentity, err := install.ExecutableIdentityFromFile(managedCodexBin)
+		if err != nil {
+			return "", err
+		}
+		runningIdentity, err := NewPIDBackend(daemon.BackendPaths(settings)).RunningExecutableIdentity()
+		if err != nil {
+			return "", err
+		}
+		if runningIdentity != nil && *runningIdentity == managedIdentity {
+			mode = RestartIfVersionChanged
+		} else {
+			mode = RestartAlways
+		}
+	}
 	appServerVersion, _ := probeAppServerVersionOnSocket(socketPath, ControlSocketProbeTimeout)
 	managedVersion := r.managedVersion()
 	if strings.TrimSpace(managedCodexBin) != "" {
@@ -342,6 +493,15 @@ func (r *LifecycleRunner) TryRestartIfRunning(mode RestartMode, updaterRefreshMo
 	case DecisionAlreadyCurrent:
 		return RestartAlreadyCurrent, nil
 	case DecisionRestart:
+		// Preflight the replacement before the running server is stopped, so an
+		// incompatible launcher cannot leave the daemon down (Rust
+		// try_restart_if_running's ensure_detached_launch).
+		if err := ensureDetachedLaunchProbe(managedCodexBin); err != nil {
+			return "", err
+		}
+		if err := discardPendingRecovery(daemon); err != nil {
+			daemon.Diagnostic("warning: failed to clear stale daemon recovery before update: %v", err)
+		}
 		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
 			return "", err
 		}
@@ -359,6 +519,13 @@ func (r *LifecycleRunner) TryRestartIfRunning(mode RestartMode, updaterRefreshMo
 }
 
 func (r *LifecycleRunner) start(settings *DaemonSettings) (*LifecycleOutput, error) {
+	return r.startWithFeatureOverrides(settings, nil)
+}
+
+// startWithFeatureOverrides starts or reuses the managed app-server, replacing
+// the stored feature overrides with the launch's set. Rust Daemon::start: only a
+// fresh launch may replace them, and an empty set clears them.
+func (r *LifecycleRunner) startWithFeatureOverrides(settings *DaemonSettings, overrides map[string]bool) (*LifecycleOutput, error) {
 	daemon := r.daemon()
 	socketPath := daemonSocketPath(daemon)
 	if socketPath != "" {
@@ -381,8 +548,23 @@ func (r *LifecycleRunner) start(settings *DaemonSettings) (*LifecycleOutput, err
 		}
 		return daemon.LifecycleOutput(StatusAlreadyRunning, backend, nil, &version, r.managedVersion()), nil
 	}
+	// A fresh start must ignore snapshots left by older stop clients (Rust
+	// Daemon::start).
+	if err := discardPendingRecovery(daemon); err != nil {
+		daemon.Diagnostic("warning: failed to clear stale daemon recovery before start: %v", err)
+	}
+	if err := prepareManagedDaemon(daemon, settings); err != nil {
+		return nil, err
+	}
+	daemon.refreshInstallation()
 	if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
 		return nil, err
+	}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, overrides) {
+		settings.FeatureOverrides = CloneFeatureOverrides(overrides)
+		if err := daemon.SaveSettings(settings); err != nil {
+			return nil, err
+		}
 	}
 	pid, err := startPIDBackend(r.appServerBackend(settings))
 	if err != nil {
@@ -391,6 +573,9 @@ func (r *LifecycleRunner) start(settings *DaemonSettings) (*LifecycleOutput, err
 	version, err := r.waitUntilReady()
 	if err != nil {
 		return nil, err
+	}
+	if _, err := ensureManagedUpdater(daemon, settings); err != nil {
+		daemon.Diagnostic("warning: failed to ensure managed updater after app-server start: %v", err)
 	}
 	backendKind := BackendPID
 	return daemon.LifecycleOutput(StatusStarted, &backendKind, pid, &version, r.managedVersion()), nil
@@ -410,6 +595,10 @@ func (r *LifecycleRunner) restart(settings *DaemonSettings, backend *BackendKind
 			}
 		}
 	}
+	if err := prepareManagedDaemon(daemon, settings); err != nil {
+		return nil, err
+	}
+	daemon.refreshInstallation()
 	if err := ensureManagedCodexBin(daemon.Paths.ManagedCodexBin); err != nil {
 		return nil, err
 	}
@@ -418,7 +607,20 @@ func (r *LifecycleRunner) restart(settings *DaemonSettings, backend *BackendKind
 		return nil, err
 	}
 	if running != nil {
+		if err := discardPendingRecovery(daemon); err != nil {
+			daemon.Diagnostic("warning: failed to clear stale daemon recovery before restart: %v", err)
+		}
 		if err := stopPIDBackend(r.appServerBackend(settings), settings.ShutdownGraceSecondsValue()); err != nil {
+			return nil, err
+		}
+	}
+	// Persist changed launch settings only after the old process has stopped, so
+	// an interrupted restart cannot make an unapplied change look current
+	// (Rust Daemon::restart_with_settings).
+	if stored, err := daemon.LoadSettings(); err != nil {
+		return nil, err
+	} else if !daemonSettingsEqual(stored, settings) {
+		if err := daemon.SaveSettings(settings); err != nil {
 			return nil, err
 		}
 	}
@@ -429,6 +631,9 @@ func (r *LifecycleRunner) restart(settings *DaemonSettings, backend *BackendKind
 	version, err := r.waitUntilReady()
 	if err != nil {
 		return nil, err
+	}
+	if _, err := ensureManagedUpdater(daemon, settings); err != nil {
+		daemon.Diagnostic("warning: failed to ensure managed updater after app-server restart: %v", err)
 	}
 	return daemon.LifecycleOutput(StatusRestarted, backend, pid, &version, r.managedVersion()), nil
 }
@@ -522,7 +727,7 @@ func EnsureManagedCodexBin(path string) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("managed standalone Codex install not found at %s\n\nThis command requires the standalone install managed by the Codex installer, because the daemon starts and updates app-server from that fixed path.\n\nInstall it with:\n  curl -fsSL https://chatgpt.com/codex/install.sh | sh\n\nThen rerun the command you just tried.", path)
+	return fmt.Errorf("daemon executable not found at %s; repair the existing installation, or run `codex app-server daemon start` to install a missing daemon", path)
 }
 
 func ManagedCodexVersionBestEffort(path string) *string {
@@ -563,7 +768,7 @@ func (r *LifecycleRunner) now() time.Time {
 }
 
 func (r *LifecycleRunner) managedVersion() *string {
-	return ManagedCodexVersionBestEffort(r.daemon().Paths.ManagedCodexBin)
+	return managedCodexVersionBestEffort(r.daemon().Paths.ManagedCodexBin)
 }
 
 func cliVersionString(daemon *Daemon) string {

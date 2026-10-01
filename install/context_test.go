@@ -27,7 +27,7 @@ func TestDetectsStandaloneReleaseLayout(t *testing.T) {
 	if err := os.WriteFile(rgPath, []byte(""), 0o600); err != nil {
 		t.Fatalf("WriteFile(rg) error = %v", err)
 	}
-	context := FromExe(false, exePath, false, false, false, home)
+	context := FromExe(false, exePath, false, false, false, false, home)
 	if context.Method.Kind != InstallStandalone {
 		t.Fatalf("method = %+v, want standalone", context.Method)
 	}
@@ -165,6 +165,66 @@ func TestPackageLayoutFromExeResolvesBinJunctionLikeRust(t *testing.T) {
 	}
 }
 
+// TestPackageLayoutFromExeRootMetadataLikeRust covers the layout a locally
+// built or WinGet-installed CLI uses: the executable sits at the package root
+// and only metadata naming that exact executable proves the layout.
+func TestPackageLayoutFromExeRootMetadataLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the package-root layout is resolved on Windows")
+	}
+	packageDir := t.TempDir()
+	resourcesDir := filepath.Join(packageDir, resourcesDirname)
+	if err := os.MkdirAll(resourcesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(resources) error = %v", err)
+	}
+	exePath := filepath.Join(packageDir, "codex.exe")
+	if err := os.WriteFile(exePath, []byte(""), 0o600); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	manifest := `{"layoutVersion":1,"entrypoint":"codex.exe","resourcesDir":"codex-resources"}`
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte(manifest), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	layout := PackageLayoutFromExe(exePath)
+	if layout == nil {
+		t.Fatal("PackageLayoutFromExe() = nil, want the package-root layout")
+	}
+	if layout.PackageDir != packageDir || layout.BinDir != packageDir {
+		t.Fatalf("layout = %+v, want package dir %q", layout, packageDir)
+	}
+	if layout.ResourcesDir == nil || *layout.ResourcesDir != resourcesDir {
+		t.Fatalf("resources dir = %v, want %q", layout.ResourcesDir, resourcesDir)
+	}
+	// Metadata that names another executable does not describe this layout.
+	other := `{"layoutVersion":1,"entrypoint":"codex-code-mode-host.exe"}`
+	if err := os.WriteFile(filepath.Join(packageDir, packageMetadataFilename), []byte(other), 0o600); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	if layout := PackageLayoutFromExe(exePath); layout != nil {
+		t.Fatalf("PackageLayoutFromExe() = %+v, want nil for mismatched metadata", layout)
+	}
+}
+
+// TestExecutableIdentityFromFileMatchesBytes pins that the streaming digest
+// agrees with the in-memory one.
+func TestExecutableIdentityFromFileMatchesBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "codex.exe")
+	content := []byte("codex identity")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("WriteFile(error) = %v", err)
+	}
+	fromFile, err := ExecutableIdentityFromFile(path)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile() error = %v", err)
+	}
+	if fromFile != ExecutableIdentityFromBytes(content) {
+		t.Fatalf("ExecutableIdentityFromFile() = %+v, want %+v", fromFile, ExecutableIdentityFromBytes(content))
+	}
+	if _, err := ExecutableIdentityFromFile(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("ExecutableIdentityFromFile( missing ) error = nil")
+	}
+}
+
 func TestPackageManifestParsesVersion(t *testing.T) {
 	packageDir := t.TempDir()
 	binDir := filepath.Join(packageDir, binDirname)
@@ -269,13 +329,18 @@ func TestCodeModeHostProgramAcceptsSymlinkToFile(t *testing.T) {
 }
 
 func TestManagedByPackageManagersWins(t *testing.T) {
-	if got := FromExe(false, "codex", true, true, true, "").Method.Kind; got != InstallPnpm {
+	// Vite+ outranks pnpm, npm and bun (Rust install_method_from_exe's override
+	// precedence).
+	if got := FromExe(false, "codex", true, true, true, true, "").Method.Kind; got != InstallVitePlus {
+		t.Fatalf("vite+ precedence method = %q", got)
+	}
+	if got := FromExe(false, "codex", false, true, true, true, "").Method.Kind; got != InstallPnpm {
 		t.Fatalf("pnpm precedence method = %q", got)
 	}
-	if got := FromExe(false, "codex", false, true, false, "").Method.Kind; got != InstallNPM {
+	if got := FromExe(false, "codex", false, false, true, false, "").Method.Kind; got != InstallNPM {
 		t.Fatalf("npm method = %q", got)
 	}
-	if got := FromExe(false, "codex", false, false, true, "").Method.Kind; got != InstallBun {
+	if got := FromExe(false, "codex", false, false, false, true, "").Method.Kind; got != InstallBun {
 		t.Fatalf("bun method = %q", got)
 	}
 }

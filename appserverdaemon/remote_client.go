@@ -9,8 +9,12 @@ import (
 )
 
 const (
-	DefaultRemoteAppServerChannelCapacity      = 1
-	UDSWebSocketHandshakeURL                   = "ws://localhost/rpc"
+	DefaultRemoteAppServerChannelCapacity = 1
+	UDSWebSocketHandshakeURL              = "ws://localhost/rpc"
+	// UDSDaemonShutdownHandshakeURL is the managed daemon's shutdown route on
+	// the same control socket (Rust client::request_shutdown's
+	// `connect_at(socket_path, "ws://localhost/daemon/shutdown")`).
+	UDSDaemonShutdownHandshakeURL              = "ws://localhost/daemon/shutdown"
 	RemoteAppServerMaxWebSocketMessageSize int = 128 << 20
 )
 

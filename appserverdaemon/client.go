@@ -1,14 +1,17 @@
 package appserverdaemon
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"codex_go/remotecontrol"
 )
@@ -21,6 +24,9 @@ const (
 
 	RemoteControlReadyTimeout = 10 * time.Second
 	ControlSocketProbeTimeout = 200 * time.Millisecond
+	// ControlSocketResponseTimeout bounds one control-socket exchange (Rust
+	// client::CONTROL_SOCKET_RESPONSE_TIMEOUT).
+	ControlSocketResponseTimeout = 2 * time.Second
 )
 
 var errRemoteControlInvalidParams = errors.New("remote-control request returned invalid params")
@@ -277,7 +283,7 @@ func EnableRemoteControlOnSocket(socketPath string, connectTimeout time.Duration
 	if err != nil {
 		return RemoteControlReadyStatus{}, err
 	}
-	defer conn.Close()
+	defer conn.Close(websocket.StatusNormalClosure, "")
 	client := newLocalSocketRemoteControlClient(conn)
 	return client.enableRemoteControl()
 }
@@ -287,7 +293,7 @@ func DisableRemoteControlOnSocket(socketPath string, connectTimeout time.Duratio
 	if err != nil {
 		return RemoteControlReadyStatus{}, err
 	}
-	defer conn.Close()
+	defer conn.Close(websocket.StatusNormalClosure, "")
 	client := newLocalSocketRemoteControlClient(conn)
 	return client.disableRemoteControl()
 }
@@ -297,11 +303,9 @@ func ProbeAppServerVersionOnSocket(socketPath string, timeout time.Duration) (st
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
+	defer conn.Close(websocket.StatusNormalClosure, "")
 	client := newLocalSocketRemoteControlClient(conn)
-	if err := conn.SetDeadline(time.Now().Add(defaultDuration(timeout, ControlSocketProbeTimeout))); err != nil {
-		return "", err
-	}
+	client.setDeadline(time.Now().Add(defaultDuration(timeout, ControlSocketProbeTimeout)))
 	response, err := client.initialize()
 	if err != nil {
 		return "", err
@@ -309,23 +313,82 @@ func ProbeAppServerVersionOnSocket(socketPath string, timeout time.Duration) (st
 	return ParseVersionFromUserAgent(response.UserAgent)
 }
 
+// localSocketRemoteControlClient speaks the control socket's WebSocket
+// transport (Rust app-server-client::connect_unix_socket_endpoint): every
+// request is one text frame and every answer is another.
 type localSocketRemoteControlClient struct {
-	conn    net.Conn
-	scanner *bufio.Scanner
-	encoder *json.Encoder
+	conn *websocket.Conn
+	// deadline bounds each read; the zero value uses the default response
+	// timeout.
+	deadline time.Time
 }
 
-func newLocalSocketRemoteControlClient(conn net.Conn) *localSocketRemoteControlClient {
-	scanner := bufio.NewScanner(conn)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	return &localSocketRemoteControlClient{
-		conn:    conn,
-		scanner: scanner,
-		encoder: json.NewEncoder(conn),
+func newLocalSocketRemoteControlClient(conn *websocket.Conn) *localSocketRemoteControlClient {
+	return &localSocketRemoteControlClient{conn: conn}
+}
+
+// setDeadline replaces the client's read deadline.
+func (c *localSocketRemoteControlClient) setDeadline(deadline time.Time) {
+	if c == nil {
+		return
 	}
+	c.deadline = deadline
 }
 
-func connectUnixSocketWithRetry(socketPath string, connectTimeout time.Duration, connectRetryDelay time.Duration) (net.Conn, error) {
+// errControlSocketTimeout reports that a control-socket read exhausted its
+// deadline, which callers treat like a network timeout.
+var errControlSocketTimeout = errors.New("timed out waiting for the app-server control socket")
+
+// errSocketPeerRejected marks a fatal peer-policy refusal, which the connect
+// retry loop must not retry.
+type errSocketPeerRejected struct{ err error }
+
+func (e *errSocketPeerRejected) Error() string { return e.err.Error() }
+func (e *errSocketPeerRejected) Unwrap() error { return e.err }
+
+func (c *localSocketRemoteControlClient) sendMessage(payload any) error {
+	if c == nil || c.conn == nil {
+		return fmt.Errorf("%w: remote-control socket client is nil", ErrDaemonPathsRequired)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ControlSocketResponseTimeout)
+	defer cancel()
+	return c.conn.Write(ctx, websocket.MessageText, encoded)
+}
+
+func (c *localSocketRemoteControlClient) readMessage() (json.RawMessage, error) {
+	if c == nil || c.conn == nil {
+		return nil, fmt.Errorf("%w: remote-control socket client is nil", ErrDaemonPathsRequired)
+	}
+	timeout := ControlSocketResponseTimeout
+	if !c.deadline.IsZero() {
+		remaining := time.Until(c.deadline)
+		if remaining <= 0 {
+			return nil, errControlSocketTimeout
+		}
+		timeout = remaining
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	messageType, data, err := c.conn.Read(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errControlSocketTimeout
+		}
+		return nil, err
+	}
+	if messageType != websocket.MessageText {
+		return nil, errors.New("app-server control socket sent a non-text frame")
+	}
+	return json.RawMessage(append([]byte(nil), data...)), nil
+}
+
+// connectUnixSocketWithRetry dials the control socket, verifies the peer, and
+// upgrades the connection to the WebSocket transport Rust's client uses.
+func connectUnixSocketWithRetry(socketPath string, connectTimeout time.Duration, connectRetryDelay time.Duration) (*websocket.Conn, error) {
 	socketPath = strings.TrimSpace(socketPath)
 	if socketPath == "" {
 		return nil, fmt.Errorf("%w: socket path is empty", ErrDaemonPathsRequired)
@@ -335,6 +398,13 @@ func connectUnixSocketWithRetry(socketPath string, connectTimeout time.Duration,
 	}
 	if connectRetryDelay <= 0 {
 		connectRetryDelay = 50 * time.Millisecond
+	}
+	dialPath, release, err := prepareSocketDialPath(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if release != nil {
+		defer release()
 	}
 	deadline := time.Now().Add(connectTimeout)
 	var lastErr error
@@ -346,22 +416,110 @@ func connectUnixSocketWithRetry(socketPath string, connectTimeout time.Duration,
 			}
 			return nil, fmt.Errorf("app server did not become ready on %s", socketPath)
 		}
-		conn, err := net.DialTimeout("unix", socketPath, minDuration(connectRetryDelay, remaining))
+		conn, err := dialUnixSocketWebSocket(dialPath, minDuration(connectRetryDelay, remaining))
 		if err == nil {
 			return conn, nil
+		}
+		// A peer that is another user or an elevated token must never receive
+		// application data, so that failure is fatal rather than retried.
+		var peerErr *errSocketPeerRejected
+		if errors.As(err, &peerErr) {
+			return nil, fmt.Errorf("refusing the app-server connection on %s: %w", socketPath, peerErr)
 		}
 		lastErr = err
 		time.Sleep(minDuration(connectRetryDelay, time.Until(deadline)))
 	}
 }
 
+// dialUnixSocketWebSocket upgrades a peer-checked unix connection to the
+// control socket's WebSocket protocol (Rust UDS_WEBSOCKET_HANDSHAKE_URL).
+func dialUnixSocketWebSocket(dialPath string, timeout time.Duration) (*websocket.Conn, error) {
+	return dialUnixSocketWebSocketURL(dialPath, UDSWebSocketHandshakeURL, timeout)
+}
+
+// dialUnixSocketWebSocketURL upgrades a peer-checked unix connection to the
+// WebSocket route at handshakeURL.
+func dialUnixSocketWebSocketURL(dialPath string, handshakeURL string, timeout time.Duration) (*websocket.Conn, error) {
+	if timeout <= 0 {
+		timeout = ControlSocketResponseTimeout
+	}
+	var peerErr error
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", dialPath)
+			if err != nil {
+				return nil, err
+			}
+			if err := ensureSocketPeerAllowed(conn); err != nil {
+				_ = conn.Close()
+				peerErr = err
+				return nil, err
+			}
+			return conn, nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, handshakeURL, &websocket.DialOptions{
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		if peerErr != nil {
+			return nil, &errSocketPeerRejected{err: peerErr}
+		}
+		return nil, err
+	}
+	if max := RemoteAppServerMaxWebSocketMessageSize; max > 0 {
+		conn.SetReadLimit(int64(max))
+	}
+	return conn, nil
+}
+
+// RequestDaemonShutdown asks a managed app-server to stop through its control
+// socket (Rust app-server-daemon client::request_shutdown): connect to the
+// `/daemon/shutdown` route, send this process's PID, and require the same PID
+// echoed back as acknowledgment.
+func RequestDaemonShutdown(socketPath string, pid uint32, timeout time.Duration) error {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return fmt.Errorf("%w: socket path is empty", ErrDaemonPathsRequired)
+	}
+	if timeout <= 0 {
+		timeout = ControlSocketResponseTimeout
+	}
+	dialPath, release, err := prepareSocketDialPath(socketPath)
+	if err != nil {
+		return err
+	}
+	if release != nil {
+		defer release()
+	}
+	conn, err := dialUnixSocketWebSocketURL(dialPath, UDSDaemonShutdownHandshakeURL, timeout)
+	if err != nil {
+		return fmt.Errorf("failed to connect to %s: %w", socketPath, err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	want := strconv.FormatUint(uint64(pid), 10)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(want)); err != nil {
+		return fmt.Errorf("failed to request managed app-server shutdown: %w", err)
+	}
+	messageType, data, err := conn.Read(ctx)
+	if err != nil {
+		return fmt.Errorf("shutdown socket closed without acknowledgment: %w", err)
+	}
+	if messageType != websocket.MessageText || string(data) != want {
+		return fmt.Errorf("shutdown acknowledgment did not match the managed process %d", pid)
+	}
+	return nil
+}
+
 func (c *localSocketRemoteControlClient) enableRemoteControl() (RemoteControlReadyStatus, error) {
 	if c == nil || c.conn == nil {
 		return RemoteControlReadyStatus{}, fmt.Errorf("%w: remote-control socket client is nil", ErrDaemonPathsRequired)
 	}
-	if err := c.conn.SetDeadline(time.Now().Add(RemoteControlReadyTimeout)); err != nil {
-		return RemoteControlReadyStatus{}, err
-	}
+	c.setDeadline(time.Now().Add(RemoteControlReadyTimeout))
 	if _, err := c.initialize(); err != nil {
 		return RemoteControlReadyStatus{}, err
 	}
@@ -375,7 +533,7 @@ func (c *localSocketRemoteControlClient) enableRemoteControl() (RemoteControlRea
 			return RemoteControlReadyStatus{}, err
 		}
 	}
-	_ = c.conn.SetDeadline(time.Time{})
+	c.setDeadline(time.Time{})
 	return status, nil
 }
 
@@ -383,9 +541,7 @@ func (c *localSocketRemoteControlClient) disableRemoteControl() (RemoteControlRe
 	if c == nil || c.conn == nil {
 		return RemoteControlReadyStatus{}, fmt.Errorf("%w: remote-control socket client is nil", ErrDaemonPathsRequired)
 	}
-	if err := c.conn.SetDeadline(time.Now().Add(RemoteControlReadyTimeout)); err != nil {
-		return RemoteControlReadyStatus{}, err
-	}
+	c.setDeadline(time.Now().Add(RemoteControlReadyTimeout))
 	if _, err := c.initialize(); err != nil {
 		return RemoteControlReadyStatus{}, err
 	}
@@ -393,27 +549,30 @@ func (c *localSocketRemoteControlClient) disableRemoteControl() (RemoteControlRe
 	if err != nil {
 		return RemoteControlReadyStatus{}, err
 	}
-	_ = c.conn.SetDeadline(time.Time{})
+	c.setDeadline(time.Time{})
 	return status, nil
 }
 
 func (c *localSocketRemoteControlClient) initialize() (*InitializeResponse, error) {
-	if err := c.encoder.Encode(BuildInitializeRequest("0.0.0", true)); err != nil {
+	if err := c.sendMessage(BuildInitializeRequest("0.0.0", true)); err != nil {
 		return nil, fmt.Errorf("failed to send initialize request: %w", err)
 	}
 	response, err := c.readInitializeResponse()
 	if err != nil {
 		return nil, err
 	}
-	if err := c.encoder.Encode(InitializedNotification()); err != nil {
+	if err := c.sendMessage(InitializedNotification()); err != nil {
 		return nil, fmt.Errorf("failed to send initialized notification: %w", err)
 	}
 	return response, nil
 }
 
 func (c *localSocketRemoteControlClient) readInitializeResponse() (*InitializeResponse, error) {
-	for c.scanner.Scan() {
-		raw := append(json.RawMessage(nil), c.scanner.Bytes()...)
+	for {
+		raw, err := c.readMessage()
+		if err != nil {
+			return nil, err
+		}
 		var response struct {
 			ID     *int64          `json:"id"`
 			Result json.RawMessage `json:"result"`
@@ -438,10 +597,6 @@ func (c *localSocketRemoteControlClient) readInitializeResponse() (*InitializeRe
 		}
 		return &initialize, nil
 	}
-	if err := c.scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, io.EOF
 }
 
 func (c *localSocketRemoteControlClient) requestEnableWithFallback() (RemoteControlReadyStatus, error) {
@@ -453,7 +608,7 @@ func (c *localSocketRemoteControlClient) requestEnableWithFallback() (RemoteCont
 }
 
 func (c *localSocketRemoteControlClient) requestEnable(params any) (RemoteControlReadyStatus, error) {
-	if err := c.encoder.Encode(BuildRemoteControlRequest("remoteControl/enable", params)); err != nil {
+	if err := c.sendMessage(BuildRemoteControlRequest("remoteControl/enable", params)); err != nil {
 		return RemoteControlReadyStatus{}, fmt.Errorf("failed to send remoteControl/enable request: %w", err)
 	}
 	result, err := c.readRemoteControlResponse("remoteControl/enable")
@@ -476,7 +631,7 @@ func (c *localSocketRemoteControlClient) requestDisableWithFallback() (RemoteCon
 }
 
 func (c *localSocketRemoteControlClient) requestDisable(params any) (RemoteControlReadyStatus, error) {
-	if err := c.encoder.Encode(BuildRemoteControlRequest("remoteControl/disable", params)); err != nil {
+	if err := c.sendMessage(BuildRemoteControlRequest("remoteControl/disable", params)); err != nil {
 		return RemoteControlReadyStatus{}, fmt.Errorf("failed to send remoteControl/disable request: %w", err)
 	}
 	result, err := c.readRemoteControlResponse("remoteControl/disable")
@@ -491,8 +646,11 @@ func (c *localSocketRemoteControlClient) requestDisable(params any) (RemoteContr
 }
 
 func (c *localSocketRemoteControlClient) readRemoteControlResponse(method string) (json.RawMessage, error) {
-	for c.scanner.Scan() {
-		raw := append(json.RawMessage(nil), c.scanner.Bytes()...)
+	for {
+		raw, err := c.readMessage()
+		if err != nil {
+			return nil, err
+		}
 		message, err := DecodeRemoteControlRPCMessage(RemoteControlRequestID, raw)
 		if err != nil {
 			return nil, err
@@ -509,10 +667,6 @@ func (c *localSocketRemoteControlClient) readRemoteControlResponse(method string
 			continue
 		}
 	}
-	if err := c.scanner.Err(); err != nil {
-		return nil, err
-	}
-	return nil, io.EOF
 }
 
 func (c *localSocketRemoteControlClient) waitForRemoteControlStatus(latest RemoteControlReadyStatus, readyTimeout time.Duration) (RemoteControlReadyStatus, error) {
@@ -526,20 +680,16 @@ func (c *localSocketRemoteControlClient) waitForRemoteControlStatus(latest Remot
 			latest.TimedOut = true
 			return latest, nil
 		}
-		if err := c.conn.SetReadDeadline(time.Now().Add(remaining)); err != nil {
+		c.setDeadline(time.Now().Add(remaining))
+		raw, err := c.readMessage()
+		if err != nil {
+			if errors.Is(err, errControlSocketTimeout) {
+				latest.TimedOut = true
+				return latest, nil
+			}
 			return RemoteControlReadyStatus{}, err
 		}
-		if !c.scanner.Scan() {
-			if err := c.scanner.Err(); err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					latest.TimedOut = true
-					return latest, nil
-				}
-				return RemoteControlReadyStatus{}, err
-			}
-			return latest, nil
-		}
-		message, err := DecodeRemoteControlRPCMessage(RemoteControlRequestID, append(json.RawMessage(nil), c.scanner.Bytes()...))
+		message, err := DecodeRemoteControlRPCMessage(RemoteControlRequestID, raw)
 		if err != nil {
 			return RemoteControlReadyStatus{}, err
 		}

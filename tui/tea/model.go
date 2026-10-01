@@ -1024,6 +1024,21 @@ type Options struct {
 	OnReadGitDiff             GitDiffReaderFunc
 	OnStopBackgroundTerminals StopBackgroundTerminalsFunc
 	LocalDaemonSession        bool
+	// DaemonCLIExecutable is the launching Codex CLI's executable path, which
+	// the /daemon menu uses to manage the local background server
+	// (Rust TuiCli::daemon_cli_executable).
+	DaemonCLIExecutable string
+	// DaemonCLIVersion is that CLI's own version, shown in the "Use this CLI
+	// build" confirmation (Rust's package manifest version fallback).
+	DaemonCLIVersion string
+	// DaemonCLIPackage reports whether that CLI has a complete local package, so
+	// its build can be copied into the daemon's releases directory.
+	DaemonCLIPackage bool
+	// DaemonVersion is the running local daemon's app-server version, when known.
+	DaemonVersion string
+	// RemoteAppServer reports an explicit remote app server, whose daemon cannot
+	// be managed from this host.
+	RemoteAppServer bool
 	// LocalSession reports that the session's workspace and executors are
 	// local, so agents-overview project grouping may expand across linked
 	// worktrees (Rust #43279).
@@ -1511,8 +1526,17 @@ type Model struct {
 	onInterrupt           InterruptFunc
 	onInterruptMCPStartup InterruptFunc
 	localDaemonSession    bool
-	localSession          bool
-	animationsEnabled     bool
+	daemonCLIExecutable   string
+	daemonCLIVersion      string
+	daemonCLIPackage      bool
+	daemonVersion         string
+	remoteAppServer       bool
+	// pendingUpdateAction records the update the TUI wants the CLI to run after
+	// it exits (Rust App::pending_update_action).
+	pendingUpdateAction codextui.UpdateAction
+	daemonConfirmSource codextui.DaemonUpdateSource
+	localSession        bool
+	animationsEnabled   bool
 	// effects holds the per-effect preferences (Rust `TuiEffects`); each is
 	// subordinate to animationsEnabled.
 	effects             EffectsSettings
@@ -1931,6 +1955,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onInterrupt:                     options.OnInterrupt,
 		onInterruptMCPStartup:           options.OnInterruptMCPStartup,
 		localDaemonSession:              options.LocalDaemonSession,
+		daemonCLIExecutable:             strings.TrimSpace(options.DaemonCLIExecutable),
+		daemonCLIVersion:                strings.TrimSpace(options.DaemonCLIVersion),
+		daemonCLIPackage:                options.DaemonCLIPackage,
+		daemonVersion:                   strings.TrimSpace(options.DaemonVersion),
+		remoteAppServer:                 options.RemoteAppServer,
 		localSession:                    options.LocalSession,
 		animationsEnabled:               options.AnimationsEnabled == nil || *options.AnimationsEnabled,
 		effects:                         effectsSettingsOrDefault(options.Effects),
@@ -6984,6 +7013,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyStatusCommand()
 	case codextui.CommandWarnings:
 		m.openWarningsView()
+		return nil
+	case codextui.CommandDaemon:
+		m.openDaemonMenu()
 		return nil
 	case codextui.CommandUsage:
 		return m.applyUsageCommand(invocation.Args)

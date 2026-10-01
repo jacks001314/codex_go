@@ -1632,6 +1632,56 @@ func TestRejectRemoteAuthEnvForAppServerSubcommandsNamesRustSurface(t *testing.T
 	}
 }
 
+// TestParseAppServerDaemonUpdate mirrors Rust's
+// `app-server daemon update --from-cli [-y]` surface: --yes requires --from-cli
+// and no other option is accepted.
+func TestParseAppServerDaemonUpdate(t *testing.T) {
+	parsed, err := Parse([]string{"app-server", "daemon", "update", "--from-cli", "-y"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	daemon := parsed.AppServer.Daemon
+	if daemon.Action != "update" || !daemon.FromCLI || !daemon.Yes {
+		t.Fatalf("parsed daemon options = %#v", daemon)
+	}
+	if _, err := Parse([]string{"app-server", "daemon", "update", "--yes"}); err == nil ||
+		err.Error() != "`--yes` requires `--from-cli`" {
+		t.Fatalf("update --yes error = %v", err)
+	}
+	if _, err := Parse([]string{"app-server", "daemon", "update", "--unknown"}); err == nil {
+		t.Fatal("an unknown update option must fail")
+	}
+	if _, err := Parse([]string{"app-server", "daemon", "update", "extra"}); err == nil {
+		t.Fatal("an update positional argument must fail")
+	}
+}
+
+// TestParseAppServerDaemonPidUpdateLoop mirrors Rust's internal updater launch:
+// the one-shot worker may carry a single-use production-restore authority, and
+// the ownership probe flag suppresses the loop.
+func TestParseAppServerDaemonPidUpdateLoop(t *testing.T) {
+	parsed, err := Parse([]string{"app-server", "daemon", "pid-update-loop", "--restore-release", "local-abc-x86_64-pc-windows-msvc"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if got := parsed.AppServer.Daemon.RestoreRelease; got != "local-abc-x86_64-pc-windows-msvc" {
+		t.Fatalf("RestoreRelease = %q", got)
+	}
+	parsed, err = Parse([]string{"app-server", "daemon", "pid-update-loop", "--check-package-ownership"})
+	if err != nil {
+		t.Fatalf("Parse returned error: %v", err)
+	}
+	if !parsed.AppServer.Daemon.CheckPackageOwnership {
+		t.Fatal("CheckPackageOwnership = false")
+	}
+	if _, err := Parse([]string{"app-server", "daemon", "pid-update-loop", "--restore-release"}); err == nil {
+		t.Fatal("a missing --restore-release value must fail")
+	}
+	if _, err := Parse([]string{"app-server", "daemon", "pid-update-loop", "--unknown"}); err == nil {
+		t.Fatal("an unknown pid-update-loop option must fail")
+	}
+}
+
 func TestParseDesktopApp(t *testing.T) {
 	parsed, err := Parse([]string{"app", "--download-url", "https://example.test/codex", "."})
 	if err != nil {

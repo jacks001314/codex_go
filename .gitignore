@@ -16,5 +16,15 @@ dist/
 third_party/voice/cache/
 third_party/voice/work/
 third_party/voice/build/
+# Prepared ripgrep release binaries. The pinned manifest and prepare script are
+# committed; downloaded archives and staged executables are not.
+third_party/ripgrep/cache/
+third_party/ripgrep/work/
+third_party/ripgrep/build/
+# Prepared bubblewrap build. The pinned manifest and prepare script are
+# committed; downloaded sources and built launchers are not.
+third_party/bwrap/cache/
+third_party/bwrap/work/
+third_party/bwrap/build/
 func.md
 npm_token.md

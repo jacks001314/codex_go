@@ -74,7 +74,18 @@ switch ($CGO) {
     }
 }
 
-$ldflags = "-s -w -X codex_go/doctor.buildVersion=$ResolvedVersion -X codex_go/appserver.buildVersion=$ResolvedVersion -X codex_go/mcp.buildVersion=$ResolvedVersion"
+# Linux packages pin the digest of the bundled bubblewrap they carry, so the
+# sandbox refuses to run a replaced launcher (Rust build.rs stamps
+# CODEX_BWRAP_SHA256 the same way).
+$BwrapDigestFlag = ""
+if ($GOOS -eq "linux") {
+    $BwrapDigestFile = Join-Path $Root "third_party/bwrap/build/$GOOS-$GOARCH/bundled-bwrap.sha256"
+    if (Test-Path -LiteralPath $BwrapDigestFile) {
+        $BwrapSha = ([System.IO.File]::ReadAllText($BwrapDigestFile)).Trim()
+        if ($BwrapSha) { $BwrapDigestFlag = "-X codex_go/sandbox/linuxsandbox.bundledBwrapSHA256=$BwrapSha" }
+    }
+}
+$ldflags = "-s -w -X codex_go/doctor.buildVersion=$ResolvedVersion -X codex_go/appserver.buildVersion=$ResolvedVersion -X codex_go/mcp.buildVersion=$ResolvedVersion $BwrapDigestFlag"
 $arguments = @("build", "-trimpath", "-buildvcs=false", "-ldflags", $ldflags, "-o", $Output)
 if ($Race) { $arguments += "-race" }
 if ($Rebuild) { $arguments += "-a" }
@@ -146,4 +157,50 @@ if (Test-Path -LiteralPath $PreparedCodec) {
 }
 if ($GOOS -eq $HostGOOS -and $GOARCH -eq $HostGOARCH) {
     & $Output --version
+}
+
+# A managed daemon seeds itself from a complete CLI package, so the build marks
+# the tree it just produced with the manifest that names the entrypoint and the
+# packaged resources (Rust codex-package.json). The executable sits at the
+# package root, which is the layout install.PackageLayoutFromExe resolves for a
+# locally built CLI.
+$OutputDir = Split-Path -Parent $Output
+if ((Split-Path -Leaf $OutputDir) -eq "bin") {
+    $Triples = @{
+        "windows/amd64" = "x86_64-pc-windows-msvc"
+        "windows/arm64" = "aarch64-pc-windows-msvc"
+        "darwin/amd64"  = "x86_64-apple-darwin"
+        "darwin/arm64"  = "aarch64-apple-darwin"
+        "linux/amd64"   = "x86_64-unknown-linux-musl"
+        "linux/arm64"   = "aarch64-unknown-linux-musl"
+    }
+    $Triple = $Triples["$GOOS/$GOARCH"]
+    if (-not $Triple) { $Triple = "$GOOS/$GOARCH" }
+    $ManifestPath = Join-Path $OutputDir "codex-package.json"
+    $Manifest = [ordered]@{
+        layoutVersion = 1
+        version       = $ResolvedVersion
+        target        = $Triple
+        variant       = "codex"
+        entrypoint    = "codex$Extension"
+        resourcesDir  = "codex-resources"
+        pathDir       = "codex-path"
+    }
+    [System.IO.File]::WriteAllText($ManifestPath, ($Manifest | ConvertTo-Json), [System.Text.UTF8Encoding]::new($false))
+    Write-Host "==> Wrote $ManifestPath"
+
+    # The packaged CLI resolves its own search backend from the package's
+    # codex-path directory (Rust `package_layout.path_dir`), so every package
+    # carries the pinned ripgrep binary; a package without it cannot be
+    # installed as a managed daemon.
+    $RipgrepName = "rg$Extension"
+    $PreparedRipgrep = Join-Path $Root "third_party/ripgrep/build/$GOOS-$GOARCH/bin/$RipgrepName"
+    if (Test-Path -LiteralPath $PreparedRipgrep) {
+        $PathDir = Join-Path $OutputDir "codex-path"
+        New-Item -ItemType Directory -Force -Path $PathDir | Out-Null
+        Copy-Item -LiteralPath $PreparedRipgrep -Destination (Join-Path $PathDir $RipgrepName) -Force
+        Write-Host "==> Staged $RipgrepName"
+    } else {
+        Write-Warning "ripgrep for $GOOS/$GOARCH is not prepared; run third_party/ripgrep/prepare_ripgrep.py --platform $GOOS-$GOARCH"
+    }
 }

@@ -273,6 +273,10 @@ tar -xzf dist/v$VERSION/codex-go-v$VERSION-linux-amd64.tar.gz -C /tmp/cg
 /tmp/cg/codex --version   # 打印 0.1.0
 
 # 3) 本地构建 npm 包并 dry-run 校验（不真正推 npm）
+# Before packaging, stage the bundled local tools (a missing tool only warns,
+# but the package is then incomplete):
+#   - third_party/ripgrep/prepare_ripgrep.py --platform <goos>-<goarch>  -> codex-path/rg
+#   - third_party/bwrap/prepare_bwrap.py   --platform linux-<arch>       -> codex-resources/bwrap
 node npm/scripts/build-packages.mjs --version "$VERSION" --output-dir "dist/v$VERSION/npm"
 node npm/scripts/publish-packages.mjs --directory "dist/v$VERSION/npm" --tag latest   # 仅用于校验文件数
 # 发布前请改为：npm publish --dry-run 逐一验证，再放 true publish。

@@ -68,6 +68,9 @@ func TestUpdateActionCommandStringsMatchRust(t *testing.T) {
 	if got := UpdateActionPnpmGlobalLatest.CommandString(); got != "pnpm add -g @jacks001314/codex-go@latest" {
 		t.Fatalf("pnpm CommandString = %q", got)
 	}
+	if got := UpdateActionVitePlusGlobalLatest.CommandString(); got != "vp install -g @jacks001314/codex-go@latest" {
+		t.Fatalf("vite-plus CommandString = %q", got)
+	}
 }
 
 func TestUpdatesCacheDismissVersionMatchesRust(t *testing.T) {

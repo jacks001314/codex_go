@@ -3,12 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"sync"
 	"testing"
 	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/coder/websocket"
 
 	"codex_go/appserver"
 	"codex_go/appserverdaemon"
@@ -24,20 +24,12 @@ import (
 func TestRemoteStartThreadRetriesWithoutDynamicToolsLikeRust(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	clientConn, serverConn := net.Pipe()
 	var mu sync.Mutex
 	var dynamicToolAttempts []bool
-	go func() {
-		defer serverConn.Close()
-		decoder := json.NewDecoder(serverConn)
-		encoder := json.NewEncoder(serverConn)
+	socketPath := startUnixWebSocketTestServer(t, func(_ context.Context, conn *websocket.Conn) {
 		for {
-			var request struct {
-				ID     json.RawMessage `json:"id"`
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			if err := decoder.Decode(&request); err != nil {
+			request, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
 				return
 			}
 			switch request.Method {
@@ -50,31 +42,30 @@ func TestRemoteStartThreadRetriesWithoutDynamicToolsLikeRust(t *testing.T) {
 				attempt := len(dynamicToolAttempts)
 				mu.Unlock()
 				if attempt == 1 {
-					_ = encoder.Encode(map[string]any{
+					remoteTUITestWrite(ctx, conn, map[string]any{
 						"jsonrpc": "2.0",
 						"id":      request.ID,
 						"error":   map[string]any{"code": -32600, "message": "Invalid request: unknown field `dynamicTools`"},
 					})
 					continue
 				}
-				_ = encoder.Encode(map[string]any{
+				remoteTUITestWrite(ctx, conn, map[string]any{
 					"jsonrpc": "2.0",
 					"id":      request.ID,
 					"result":  map[string]any{"thread": map[string]any{"id": "thread-retry"}},
 				})
 			default:
-				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{}})
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{}})
 			}
 		}
-	}()
+	})
 
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 32)
 	client := &remoteAppServerTUIClient{
-		endpoint: appserverdaemon.NewUnixSocketEndpoint("/tmp/codex-dynamic-tools.sock"),
+		endpoint: appserverdaemon.NewUnixSocketEndpoint(socketPath),
 		state:    state,
 		messages: messages,
-		unixDial: func(context.Context, string) (net.Conn, error) { return clientConn, nil },
 	}
 	if err := client.connect(ctx); err != nil {
 		t.Fatalf("connect: %v", err)

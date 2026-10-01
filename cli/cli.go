@@ -414,6 +414,20 @@ type AppServerOptions struct {
 type AppServerDaemonOptions struct {
 	Action        string
 	RemoteControl bool
+	// FromCLI marks `app-server daemon update --from-cli`, which copies and pins
+	// this CLI's package (Rust AppServerDaemonSubcommand::Update).
+	FromCLI bool
+	// Yes confirms the copy without an interactive prompt; it requires FromCLI.
+	Yes bool
+	// RestoreRelease authorizes one production restore for the internal
+	// pid-update-loop launch (Rust PidUpdateLoop::restore_release).
+	RestoreRelease string
+	// CheckPackageOwnership asks the internal pid-update-loop launch to report
+	// whether daemon-owned packages are supported instead of running the loop.
+	CheckPackageOwnership bool
+	// Help prints the daemon subcommand help (clap's -h/--help). The managed
+	// updater probe relies on `pid-update-loop --help` succeeding.
+	Help bool
 }
 
 type AppServerProxyOptions struct {
@@ -2668,10 +2682,34 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 		return errors.New("app-server daemon requires a subcommand")
 	}
 	daemon.Action = args[0]
+	for _, arg := range args[1:] {
+		if arg == "-h" || arg == "--help" {
+			daemon.Help = true
+			return nil
+		}
+	}
 	switch daemon.Action {
-	case "start", "restart", "enable-remote-control", "disable-remote-control", "stop", "version", "pid-update-loop":
+	case "start", "restart", "enable-remote-control", "disable-remote-control", "stop", "version":
 		if len(args) != 1 {
 			return fmt.Errorf("app-server daemon %s does not accept arguments", daemon.Action)
+		}
+	case "pid-update-loop":
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--restore-release":
+				if i+1 >= len(args) {
+					return errors.New("app-server daemon pid-update-loop --restore-release requires a value")
+				}
+				i++
+				daemon.RestoreRelease = strings.TrimSpace(args[i])
+			case "--check-package-ownership":
+				daemon.CheckPackageOwnership = true
+			default:
+				if strings.HasPrefix(args[i], "-") {
+					return fmt.Errorf("unknown app-server daemon pid-update-loop option %s", args[i])
+				}
+				return fmt.Errorf("app-server daemon pid-update-loop does not accept argument %s", args[i])
+			}
 		}
 	case "bootstrap":
 		for _, arg := range args[1:] {
@@ -2684,6 +2722,23 @@ func parseAppServerDaemon(args []string, daemon *AppServerDaemonOptions) error {
 				}
 				return fmt.Errorf("app-server daemon bootstrap does not accept argument %s", arg)
 			}
+		}
+	case "update":
+		for _, arg := range args[1:] {
+			switch arg {
+			case "--from-cli":
+				daemon.FromCLI = true
+			case "-y", "--yes":
+				daemon.Yes = true
+			default:
+				if strings.HasPrefix(arg, "-") {
+					return fmt.Errorf("unknown app-server daemon update option %s", arg)
+				}
+				return fmt.Errorf("app-server daemon update does not accept argument %s", arg)
+			}
+		}
+		if daemon.Yes && !daemon.FromCLI {
+			return errors.New("`--yes` requires `--from-cli`")
 		}
 	default:
 		return fmt.Errorf("unknown app-server daemon subcommand %s", daemon.Action)

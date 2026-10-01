@@ -16,7 +16,9 @@ import (
 func TestInteractiveStartAgentsDaemonPlatformGate(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	err := interactiveStartAgentsDaemon()
-	if err == nil || !strings.Contains(err.Error(), "managed standalone Codex install not found") {
+	// A fresh daemon launch installs its own package first, so a binary that is
+	// not a packaged CLI reports Rust's missing-package error.
+	if err == nil || !strings.Contains(err.Error(), "this CLI has no complete local package") {
 		t.Fatalf("non-Windows start-daemon error = %v", err)
 	}
 }

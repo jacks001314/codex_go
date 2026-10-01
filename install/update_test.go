@@ -35,6 +35,7 @@ func TestActionFromContext(t *testing.T) {
 	}{
 		{name: "npm", context: &InstallContext{Method: InstallMethod{Kind: InstallNPM}}, want: UpdateActionNPMGlobalLatest, has: true},
 		{name: "bun", context: &InstallContext{Method: InstallMethod{Kind: InstallBun}}, want: UpdateActionBunGlobalLatest, has: true},
+		{name: "vite-plus", context: &InstallContext{Method: InstallMethod{Kind: InstallVitePlus}}, want: UpdateActionVitePlusGlobalLatest, has: true},
 		{name: "pnpm", context: &InstallContext{Method: InstallMethod{Kind: InstallPnpm}}, want: UpdateActionPnpmGlobalLatest, has: true},
 		{name: "brew", context: &InstallContext{Method: InstallMethod{Kind: InstallBrew}}, has: false},
 		{name: "standalone", context: &InstallContext{Method: InstallMethod{Kind: InstallStandalone}}, has: false},
@@ -61,6 +62,12 @@ func TestUpdateActionCommandArgs(t *testing.T) {
 	command, args := action.CommandArgs()
 	if command != "pnpm" || len(args) != 3 || args[0] != "add" || args[2] != NPMPackageName+"@latest" {
 		t.Fatalf("CommandArgs() = %q %#v", command, args)
+	}
+	// Vite+ uses `install -g` like npm/bun (Rust UpdateAction::VitePlusGlobalLatest).
+	vite := &UpdateAction{Kind: UpdateActionVitePlusGlobalLatest}
+	command, args = vite.CommandArgs()
+	if command != "vp" || len(args) != 3 || args[0] != "install" || args[1] != "-g" || args[2] != NPMPackageName+"@latest" {
+		t.Fatalf("vite-plus CommandArgs() = %q %#v", command, args)
 	}
 }
 
@@ -136,7 +143,7 @@ func TestFetchLatestVersionUsesGoReleaseForUnsupportedInstallMethod(t *testing.T
 	defer server.Close()
 
 	latest, err := FetchLatestVersion(context.Background(), &UpdateCheckOptions{
-		Context:   &InstallContext{Method: InstallMethod{Kind: InstallBrew}},
+		Context:   &InstallContext{Method: InstallMethod{Kind: InstallOther}},
 		GitHubURL: server.URL,
 	})
 	if err != nil {
@@ -144,6 +151,27 @@ func TestFetchLatestVersionUsesGoReleaseForUnsupportedInstallMethod(t *testing.T
 	}
 	if latest != "2.3.4" {
 		t.Fatalf("latest = %q", latest)
+	}
+}
+
+// TestFetchLatestVersionUsesHomebrewCaskForBrew pins Rust's brew version source:
+// the cask API, not the GitHub release (which it can lag).
+func TestFetchLatestVersionUsesHomebrewCaskForBrew(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"0.157.0"}`))
+	}))
+	defer server.Close()
+
+	latest, err := FetchLatestVersion(context.Background(), &UpdateCheckOptions{
+		Context:     &InstallContext{Method: InstallMethod{Kind: InstallBrew}},
+		HomebrewURL: server.URL,
+	})
+	if err != nil {
+		t.Fatalf("FetchLatestVersion(brew) error = %v", err)
+	}
+	if latest != "0.157.0" {
+		t.Fatalf("latest = %q, want the cask version", latest)
 	}
 }
 

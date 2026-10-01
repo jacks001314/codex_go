@@ -231,6 +231,36 @@ func TestInstallCheckIgnoresInheritedManagedEnvForCargoBinaryLikeRust(t *testing
 	}
 }
 
+// TestInstallCheckReportsVitePlusLikeRust pins the Vite+ managed-by detail and
+// the "vite+" install method / update action labels Rust uses.
+func TestInstallCheckReportsVitePlusLikeRust(t *testing.T) {
+	home := t.TempDir()
+	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_NPM")
+	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_BUN")
+	unsetEnvForDoctor(t, "CODEX_MANAGED_BY_PNPM")
+	t.Setenv("CODEX_MANAGED_BY_VITE_PLUS", "1")
+	t.Setenv("CODEX_MANAGED_PACKAGE_ROOT", home)
+	withCodexPathCandidatesForDoctor(t, func() []string { return nil })
+
+	exe := filepath.Join(home, "bin", "codex")
+	check := installCheck(home, false, func() (string, error) { return exe, nil })
+	for _, want := range []string{
+		"install context: vite+",
+		"managed by Vite+: true",
+	} {
+		if !containsDetail(check, want) {
+			t.Fatalf("missing detail %q in %#v", want, check.Details)
+		}
+	}
+	context := doctorInstallContextForDoctor(exe, home)
+	if got := installMethodNameForDoctor(context); got != "vite+" {
+		t.Fatalf("installMethodNameForDoctor() = %q, want vite+", got)
+	}
+	if got := updateActionLabel(context); !strings.HasPrefix(got, "vp install -g ") {
+		t.Fatalf("updateActionLabel() = %q, want a vp install command", got)
+	}
+}
+
 func TestSearchProviderForDoctorDetectsBundledPath(t *testing.T) {
 	root := t.TempDir()
 	pathDir := filepath.Join(root, "codex-path")

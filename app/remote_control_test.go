@@ -3,40 +3,45 @@ package app
 import (
 	"bytes"
 	"context"
-	"errors"
 	"runtime"
 	"strings"
 	"testing"
-
-	"codex_go/appserverdaemon"
+	"time"
 )
 
 func TestRemoteControlStartPlatformBoundary(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	var stdout bytes.Buffer
 	err := Run(context.Background(), []string{"remote-control", "--json", "start"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if runtime.GOOS == "windows" {
-		if !errors.Is(err, appserverdaemon.ErrUnsupportedPlatform) {
-			t.Fatalf("remote-control start error = %v", err)
-		}
-		if stdout.Len() != 0 {
-			t.Fatalf("stdout = %q, want empty", stdout.String())
-		}
-		return
-	}
-	if err == nil || !strings.Contains(err.Error(), "managed standalone Codex install not found") {
+	// The lifecycle runs on Unix and Windows alike (Rust ensure_supported_platform),
+	// and the daemon installs its own package before it starts, so a binary that
+	// is not a packaged CLI reports Rust's missing-package error.
+	if err == nil || !strings.Contains(err.Error(), "this CLI has no complete local package") {
 		t.Fatalf("remote-control start error = %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 }
 
-func TestRemoteControlForegroundUnsupportedOnWindows(t *testing.T) {
+// TestRemoteControlForegroundBindsControlSocketOnWindows pins the Windows
+// transport: the foreground command serves its own control socket through the
+// codexuds package instead of failing with an unsupported-transport error
+// (Rust serves the same socket through the codex-uds crate).
+func TestRemoteControlForegroundBindsControlSocketOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("foreground remote-control uses a Unix socket")
 	}
 	t.Setenv("CODEX_HOME", t.TempDir())
-	err := Run(context.Background(), []string{"remote-control", "--json"}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{})
-	if !errors.Is(err, appserverdaemon.ErrUnsupportedPlatform) {
-		t.Fatalf("remote-control foreground error = %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var stdout bytes.Buffer
+	err := Run(ctx, []string{"remote-control"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err != nil && strings.Contains(err.Error(), "unix socket transport is not supported") {
+		t.Fatalf("foreground remote control could not serve the control socket: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Starting app-server with remote control enabled...") {
+		t.Fatalf("stdout = %q, want the foreground progress line", stdout.String())
 	}
 }
 

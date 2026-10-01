@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/appserverdaemon"
 	codexauth "codex_go/auth"
 	"codex_go/cli"
 	"codex_go/config"
@@ -17,12 +18,86 @@ import (
 
 const testRemoteControlWebSocketURL = "wss://chatgpt.com/backend-api/wham/remote/control/server"
 
+// TestAppServerDaemonUpdateWithoutSelectionIsUnsupportedLikeRust pins the
+// manual update path: without a managed package selection the CLI reports the
+// updater's unsupported status instead of failing.
+func TestAppServerDaemonUpdateWithoutSelectionIsUnsupportedLikeRust(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	var stdout bytes.Buffer
+	err := Run(context.Background(), []string{"app-server", "daemon", "update"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("daemon update error = %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{`"status":"unsupported"`, "This command requires a daemon package selected from its managed releases directory."} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, missing %q", output, want)
+		}
+	}
+}
+
+// TestAppServerDaemonUpdateFromCLINeedsASelectedPackage mirrors the Replace
+// guard: copying this CLI's package replaces an existing selection, so a
+// CODEX_HOME without one reports Rust's refusal before anything is staged.
+func TestAppServerDaemonUpdateFromCLINeedsASelectedPackage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	var stderr bytes.Buffer
+	err := Run(context.Background(), []string{"app-server", "daemon", "update", "--from-cli", "--yes"}, strings.NewReader(""), &bytes.Buffer{}, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "no daemon package is selected; run `codex app-server daemon start` first") {
+		t.Fatalf("daemon update --from-cli error = %v", err)
+	}
+}
+
+// TestConfirmDaemonInstallLikeRust pins the confirmation text and the --yes and
+// interactive answers (Rust cli::daemon_install).
+func TestConfirmDaemonInstallLikeRust(t *testing.T) {
+	request := &appserverdaemon.DaemonInstallRequest{
+		Source:          "/cli/package",
+		Version:         "1.2.3",
+		Destination:     "/home/packages/app-server-daemon",
+		RestartRequired: true,
+	}
+	version := "1.0.0"
+	request.InstalledVersion = &version
+	var stderr bytes.Buffer
+	confirmed, err := confirmDaemonInstall(request, true, strings.NewReader(""), &stderr)
+	if err != nil || !confirmed {
+		t.Fatalf("confirmDaemonInstall(--yes) = %v, %v", confirmed, err)
+	}
+	description := stderr.String()
+	for _, want := range []string{
+		"Replace installed daemon version 1.0.0 with CLI version 1.2.3 from /cli/package.",
+		"The daemon package will be installed in /home/packages/app-server-daemon.",
+		"The selected package will be pinned.",
+		"The running daemon will restart; active or queued work may be interrupted.",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("description %q missing %q", description, want)
+		}
+	}
+
+	// Without --yes a non-terminal caller must be told to rerun with --yes.
+	if _, err := confirmDaemonInstall(request, false, strings.NewReader(""), &bytes.Buffer{}); err == nil ||
+		!strings.Contains(err.Error(), "rerun with --yes") {
+		t.Fatalf("confirmDaemonInstall(non-terminal) error = %v", err)
+	}
+	if confirmed, err := readConfirmation(strings.NewReader("yes\n")); err != nil || !confirmed {
+		t.Fatalf("readConfirmation(yes) = %v, %v", confirmed, err)
+	}
+	if confirmed, err := readConfirmation(strings.NewReader("n\n")); err != nil || confirmed {
+		t.Fatalf("readConfirmation(n) = %v, %v", confirmed, err)
+	}
+}
+
 func TestAppServerDaemonPlatformBoundary(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 
 	var stdout bytes.Buffer
 	err := Run(context.Background(), []string{"app-server", "daemon", "bootstrap", "--remote-control"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "managed standalone Codex install not found") {
+	// The bootstrap installs the daemon's own package first, which a
+	// non-packaged CLI cannot provide (Rust prepare_install::prepare).
+	if err == nil || !strings.Contains(err.Error(), "this CLI has no complete local package") {
 		t.Fatalf("bootstrap error = %v", err)
 	}
 }

@@ -1070,7 +1070,7 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	if len(opts.Subcommand) > 0 {
 		switch opts.Subcommand[0] {
 		case "daemon":
-			return runAppServerDaemon(ctx, opts.Daemon, stdout)
+			return runAppServerDaemon(ctx, opts.Daemon, opts.AnalyticsDefaultEnabled, root, stdout, stderr, stdin)
 		case "proxy":
 			socketPath := opts.Proxy.SocketPath
 			if socketPath == "" {
@@ -1111,10 +1111,6 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 	}
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
-	// Detached Windows pid-managed app servers receive graceful shutdown
-	// through CODEX_DAEMON_SHUTDOWN_FILE (Rust #42364); the watcher is a no-op
-	// unless that env var is set.
-	go appserverdaemon.WatchDaemonShutdownRequest(serverCtx, cancelServer)
 	codexHome := auth.DefaultCodexHome()
 	loadedConfig, err := loadAppServerConfig(codexHome, opts, root)
 	if err != nil {
@@ -1158,10 +1154,19 @@ func runAppServer(ctx context.Context, opts cli.AppServerOptions, root *cli.Root
 		return server.ServeWithShutdown(stdin, stdout)
 	}
 	if strings.HasPrefix(listen, "unix://") {
+		// A pid-managed app-server accepts the control socket's shutdown
+		// request only when its owner set CODEX_DAEMON_SHUTDOWN_SOCKET
+		// (Rust app-server-transport::start_control_socket_acceptor).
+		shutdownAccess := appserver.DaemonShutdownDisabled
+		if strings.TrimSpace(os.Getenv(appserverdaemon.DaemonShutdownSocketEnv)) != "" {
+			shutdownAccess = appserver.DaemonShutdownManaged
+		}
 		return appserver.ServeUnixSocket(serverCtx, &appserver.UnixSocketOptions{
-			CodexHome:      codexHome,
-			Listen:         listen,
-			RuntimeOptions: runtimeOptions,
+			CodexHome:        codexHome,
+			Listen:           listen,
+			RuntimeOptions:   runtimeOptions,
+			ShutdownAccess:   shutdownAccess,
+			OnDaemonShutdown: cancelServer,
 		})
 	}
 	if strings.HasPrefix(listen, "ws://") {
@@ -1326,7 +1331,86 @@ func uint64Value(value *uint64) uint64 {
 	return *value
 }
 
-func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, stdout io.Writer) error {
+// appServerDaemonHelpText mirrors the clap help of `codex app-server daemon`
+// (Rust AppServerDaemonSubcommand doc comments).
+func appServerDaemonHelpText() string {
+	return strings.Join([]string{
+		"Usage: codex app-server daemon <COMMAND>",
+		"",
+		"Commands:",
+		"  bootstrap               Install durable local app-server management for SSH-driven use",
+		"  start                   Start the local app server daemon if it is not already running",
+		"  restart                 Restart the local app server daemon",
+		"  update                  Update the daemon package (may interrupt running work)",
+		"  enable-remote-control   Enable remote control for future starts and a currently running managed daemon",
+		"  disable-remote-control  Disable remote control for future starts and a currently running managed daemon",
+		"  stop                    Stop the local app server daemon",
+		"  version                 Print local CLI and running app-server versions as JSON",
+		"  pid-update-loop         [internal] Run the detached pid-backed standalone updater loop",
+		"  help                    Print this message or the help of the given subcommand(s)",
+		"",
+		"Options:",
+		"  -h, --help  Print help",
+	}, "\n") + "\n"
+}
+
+// confirmDaemonInstall describes the package a daemon installation would replace
+// and asks for consent (Rust cli::daemon_install).
+func confirmDaemonInstall(request *appserverdaemon.DaemonInstallRequest, yes bool, stdin io.Reader, stderr io.Writer) (bool, error) {
+	if request == nil {
+		return false, errors.New("daemon installation request is missing")
+	}
+	fmt.Fprintln(stderr, describeDaemonInstall(request))
+	if yes {
+		return true, nil
+	}
+	if !isRealTerminal(stdin) || !isRealTerminal(stderr) {
+		return false, errors.New("daemon installation requires confirmation; rerun with --yes to copy this CLI package")
+	}
+	fmt.Fprint(stderr, "Copy this package? [y/N]: ")
+	confirmed, err := readConfirmation(stdin)
+	if err != nil {
+		return false, err
+	}
+	if !confirmed {
+		fmt.Fprintln(stderr, "Daemon installation cancelled.")
+	}
+	return confirmed, nil
+}
+
+// describeDaemonInstall mirrors Rust daemon_install::describe_install.
+func describeDaemonInstall(request *appserverdaemon.DaemonInstallRequest) string {
+	installed := "unknown"
+	if request.InstalledVersion != nil && strings.TrimSpace(*request.InstalledVersion) != "" {
+		installed = strings.TrimSpace(*request.InstalledVersion)
+	}
+	message := fmt.Sprintf(
+		"Replace installed daemon version %s with CLI version %s from %s.\nThe daemon package will be installed in %s.\nThe selected package will be pinned. Run `codex app-server daemon update` to return to production updates.",
+		installed, request.Version, request.Source, request.Destination)
+	if request.RestartRequired {
+		message += "\nThe running daemon will restart; active or queued work may be interrupted."
+	}
+	return message
+}
+
+// readConfirmation accepts "y" or "yes" case-insensitively (Rust cli::confirm).
+func readConfirmation(stdin io.Reader) (bool, error) {
+	scanner := bufio.NewScanner(stdin)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	answer := strings.TrimSpace(scanner.Text())
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes"), nil
+}
+
+func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, analyticsDefaultEnabled bool, root *cli.RootOptions, stdout io.Writer, stderr io.Writer, stdin io.Reader) error {
+	if opts.Help {
+		_, err := fmt.Fprint(stdout, appServerDaemonHelpText())
+		return err
+	}
 	runner := appserverdaemon.NewLifecycleRunnerForCodexHome(auth.DefaultCodexHome(), "")
 	var output any
 	var err error
@@ -1345,11 +1429,41 @@ func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, st
 		output, err = runner.Run(appserverdaemon.LifecycleStop)
 	case "version":
 		output, err = runner.Run(appserverdaemon.LifecycleVersion)
+	case "update":
+		var updated *appserverdaemon.UpdateOutput
+		target := daemonUpdateTargetPublicStable
+		if opts.FromCLI {
+			target = daemonUpdateTargetThisCLI
+			updated, err = appserverdaemon.UpdateFromCLI(auth.DefaultCodexHome(), func(request *appserverdaemon.DaemonInstallRequest) (bool, error) {
+				return confirmDaemonInstall(request, opts.Yes, stdin, stderr)
+			})
+		} else {
+			// Without --from-cli this forwards the request to the managed updater,
+			// which installs the latest published release (Rust manual_update).
+			updated, err = appserverdaemon.RequestManualUpdate(ctx, auth.DefaultCodexHome(), nil)
+		}
+		// The foreground CLI reports the daemon update outcome with the bounded
+		// settings tags (Rust daemon_telemetry::record_command).
+		recordDaemonUpdateTelemetry(root, analyticsDefaultEnabled, target, updated, err)
+		if err != nil {
+			return err
+		}
+		if updated == nil {
+			// A cancelled installation reports nothing, like Rust's `Ok(None)`.
+			return nil
+		}
+		output = updated
 	case "pid-update-loop":
+		if opts.CheckPackageOwnership {
+			// Rust: report daemon-owned package support without starting the loop.
+			return nil
+		}
 		if err := appserverdaemon.ClaimManagedUpdaterPID(); err != nil {
 			return err
 		}
-		return appserverdaemon.RunPIDUpdateLoop(ctx, runner, nil)
+		loopOptions := appserverdaemon.DefaultUpdateLoopOptions()
+		loopOptions.RestoreRelease = opts.RestoreRelease
+		return appserverdaemon.RunPIDUpdateLoop(ctx, runner, loopOptions)
 	default:
 		return fmt.Errorf("unknown app-server daemon subcommand %s", opts.Action)
 	}

@@ -394,21 +394,33 @@ type lifecycleManagedDaemonStub struct {
 	appRunning     bool
 	updaterRunning bool
 	socketReady    bool
-	nextPID        uint32
-	appVersion     string
+	// appStops counts app-server backend stops so a test can tell a restart
+	// (stop + start) from a reused daemon.
+	appStops   int
+	nextPID    uint32
+	appVersion string
 }
 
 func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 	t.Helper()
 	stub := &lifecycleManagedDaemonStub{nextPID: 4100, appVersion: "9.9.9"}
 	oldEnsure := ensureManagedCodexBin
+	oldPrepare := prepareManagedDaemon
 	oldIsRunning := pidBackendIsStartingOrRunning
 	oldStart := startPIDBackend
 	oldStop := stopPIDBackend
 	oldProbe := probeAppServerVersionOnSocket
 	oldEnable := enableRemoteControlOnSocket
 	oldDisable := disableRemoteControlOnSocket
+	oldDetachedProbe := ensureDetachedLaunchProbe
 	ensureManagedCodexBin = func(string) error { return nil }
+	// The detached-launch preflight spawns the managed binary, which the tests
+	// replace with a placeholder file, so it is stubbed like the other edges.
+	ensureDetachedLaunchProbe = func(string) error { return nil }
+	// These tests exercise the lifecycle around an already-installed daemon, so
+	// the package preparation step is stubbed exactly like the managed-binary
+	// check (Rust's lifecycle tests patch prepare_install::prepare).
+	prepareManagedDaemon = func(*Daemon, *DaemonSettings) error { return nil }
 	pidBackendIsStartingOrRunning = func(backend *PIDBackend) (bool, error) {
 		if backend != nil && backend.CommandKind == PIDCommandUpdateLoop {
 			return stub.updaterRunning, nil
@@ -431,6 +443,9 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 			stub.updaterRunning = false
 			return nil
 		}
+		if stub.appRunning {
+			stub.appStops++
+		}
 		stub.appRunning = false
 		stub.socketReady = false
 		return nil
@@ -449,12 +464,14 @@ func stubLifecycleManagedDaemon(t *testing.T) *lifecycleManagedDaemonStub {
 	}
 	t.Cleanup(func() {
 		ensureManagedCodexBin = oldEnsure
+		prepareManagedDaemon = oldPrepare
 		pidBackendIsStartingOrRunning = oldIsRunning
 		startPIDBackend = oldStart
 		stopPIDBackend = oldStop
 		probeAppServerVersionOnSocket = oldProbe
 		enableRemoteControlOnSocket = oldEnable
 		disableRemoteControlOnSocket = oldDisable
+		ensureDetachedLaunchProbe = oldDetachedProbe
 	})
 	return stub
 }
@@ -477,4 +494,92 @@ func stubRemoteControlSocketCalls(
 		enableRemoteControlOnSocket = oldEnable
 		disableRemoteControlOnSocket = oldDisable
 	})
+}
+
+// TestLifecycleRunnerStartWithFeaturesLikeRust mirrors Rust
+// app-server-daemon::start_with_features: the launch's features are merged with
+// the stored overrides and persisted, and a plain start clears them.
+func TestLifecycleRunnerStartWithFeaturesLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	runner := NewLifecycleRunner(daemon)
+
+	if _, err := runner.StartWithFeatures(map[string]bool{"code_mode_host": true}); err != nil {
+		t.Fatalf("StartWithFeatures error = %v", err)
+	}
+	if !stub.appRunning {
+		t.Fatal("StartWithFeatures did not start the backend")
+	}
+	settings, err := LoadSettings(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("LoadSettings error = %v", err)
+	}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, map[string]bool{"code_mode_host": true}) {
+		t.Fatalf("stored overrides = %#v", settings.FeatureOverrides)
+	}
+
+	// Only a fresh launch may replace the stored overrides; a launch that reuses
+	// the running server leaves them alone (Rust Daemon::start).
+	if _, err := runner.StartWithFeatures(map[string]bool{"auth_elicitation": true}); err != nil {
+		t.Fatalf("second StartWithFeatures error = %v", err)
+	}
+	settings, err = LoadSettings(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("LoadSettings error = %v", err)
+	}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, map[string]bool{"code_mode_host": true}) {
+		t.Fatalf("stored overrides after reuse = %#v", settings.FeatureOverrides)
+	}
+}
+
+// TestLifecycleRunnerRestartWithFeaturesLikeRust mirrors Rust
+// restart_with_features: changed features restart the daemon and persist, while
+// an unchanged set only re-checks the running server.
+func TestLifecycleRunnerRestartWithFeaturesLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	runner := NewLifecycleRunner(daemon)
+	runner.Now = func() time.Time { return fixedDaemonTime() }
+	if _, err := runner.StartWithFeatures(map[string]bool{"code_mode_host": true}); err != nil {
+		t.Fatalf("StartWithFeatures error = %v", err)
+	}
+
+	// Without a running daemon the restart is refused like Rust's
+	// "no running managed daemon" guard.
+	stub.appRunning = false
+	stub.socketReady = false
+	if _, err := runner.RestartWithFeatures(map[string]bool{"code_mode_host": true}); err == nil ||
+		!strings.Contains(err.Error(), "no running managed daemon") {
+		t.Fatalf("RestartWithFeatures without a daemon error = %v", err)
+	}
+
+	// A changed set restarts the backend and persists the merged overrides.
+	stub.appRunning = true
+	stub.socketReady = true
+	stopsBefore := stub.appStops
+	if _, err := runner.RestartWithFeatures(map[string]bool{"auth_elicitation": true}); err != nil {
+		t.Fatalf("RestartWithFeatures error = %v", err)
+	}
+	if stub.appStops <= stopsBefore {
+		t.Fatalf("restarts = %d, want more than %d", stub.appStops, stopsBefore)
+	}
+	settings, err := LoadSettings(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("LoadSettings error = %v", err)
+	}
+	want := map[string]bool{"code_mode_host": true, "auth_elicitation": true}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, want) {
+		t.Fatalf("stored overrides = %#v, want %#v", settings.FeatureOverrides, want)
+	}
+
+	// An unchanged set does not restart the backend.
+	stopsBefore = stub.appStops
+	if _, err := runner.RestartWithFeatures(map[string]bool{"auth_elicitation": true}); err != nil {
+		t.Fatalf("unchanged RestartWithFeatures error = %v", err)
+	}
+	if stub.appStops != stopsBefore {
+		t.Fatalf("restarts = %d, want %d (unchanged features must not restart)", stub.appStops, stopsBefore)
+	}
 }

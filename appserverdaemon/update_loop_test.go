@@ -4,11 +4,69 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"codex_go/install"
 )
+
+// TestUpdateOnceRestoreUsesReleaseNameLikeRust pins that the restore production
+// trigger compares the release *name* (Rust InstallerMode::Update/RestoreProduction
+// take `previous_release`), not the release path, and that the installer
+// receives the name as its previous release.
+func TestUpdateOnceRestoreUsesReleaseNameLikeRust(t *testing.T) {
+	stubLifecycleManagedDaemon(t)
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	root, _ := publishStableSelection(t, home, "1.0.0")
+	pinnedName := "local-deadbeef-" + platformTarget()
+	pinned := filepath.Join(root, releasesDirName, pinnedName)
+	if err := os.MkdirAll(filepath.Join(pinned, "bin"), 0o700); err != nil {
+		t.Fatalf("MkdirAll pinned error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pinned, "bin", managedCodexFileName()), []byte("pinned"), 0o700); err != nil {
+		t.Fatalf("WriteFile pinned entrypoint error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(root, autoUpdateVersionFileName)); err != nil {
+		t.Fatalf("Remove marker error = %v", err)
+	}
+	if err := selectDaemonRelease(root, pinned); err != nil {
+		t.Fatalf("selectDaemonRelease(pinned) error = %v", err)
+	}
+	daemon.refreshInstallation()
+	runner := NewLifecycleRunner(daemon)
+	runningIdentity := install.ExecutableIdentityFromBytes([]byte("old"))
+	var installed installerMode
+	options := &UpdateLoopOptions{
+		Install: func(_ context.Context, mode installerMode, _ string) error {
+			installed = mode
+			return nil
+		},
+		ReadFile:      os.ReadFile,
+		ReexecUpdater: func(string) error { return nil },
+	}
+
+	// A restore authorized for a different release name is refused before the
+	// installer runs.
+	if _, _, _, err := updateOnce(context.Background(), runner, &runningIdentity, options, UpdateTrigger{Kind: UpdateTriggerRestoreProduction, Release: "1.0.0-" + platformTarget()}); err == nil ||
+		!strings.Contains(err.Error(), "daemon selection changed") {
+		t.Fatalf("mismatched restore error = %v", err)
+	}
+	if installed.Kind != installerUpdate {
+		t.Fatalf("installer ran for a mismatched restore: %#v", installed)
+	}
+
+	// The matching release name reaches the installer in restore mode; the
+	// selection is still pinned afterwards, so the post-install check reports it.
+	if _, _, _, err := updateOnce(context.Background(), runner, &runningIdentity, options, UpdateTrigger{Kind: UpdateTriggerRestoreProduction, Release: pinnedName}); err == nil ||
+		!strings.Contains(err.Error(), "did not select a stable latest release") {
+		t.Fatalf("matching restore error = %v", err)
+	}
+	if installed.Kind != installerRestoreProduction || installed.Release != pinnedName {
+		t.Fatalf("installer mode = %#v, want restore of %q", installed, pinnedName)
+	}
+}
 
 func TestUpdateModesForIdentities(t *testing.T) {
 	same := ExecutableIdentityFromBytes([]byte("same"))
@@ -66,11 +124,24 @@ func TestUpdateOnceRestartsWhenUpdaterIdentityChanged(t *testing.T) {
 	home := t.TempDir()
 	daemon := NewDaemonForCodexHome(home, "codex-go-test")
 	managedBin := daemon.Paths.ManagedCodexBin
-	if err := os.MkdirAll(filepath.Dir(managedBin), 0o700); err != nil {
-		t.Fatalf("MkdirAll managed bin error = %v", err)
+	// The updater only restarts a daemon whose selected release is still the
+	// latest-channel one, so publish an installer-shaped selection first.
+	root := filepath.Join(home, "packages", daemonPackagesDirname)
+	release := filepath.Join(root, releasesDirName, "1.2.3-"+platformTarget())
+	if err := os.MkdirAll(filepath.Join(release, "bin"), 0o700); err != nil {
+		t.Fatalf("MkdirAll release error = %v", err)
 	}
-	if err := os.WriteFile(managedBin, []byte("new"), 0o700); err != nil {
-		t.Fatalf("WriteFile managed bin error = %v", err)
+	if err := os.WriteFile(filepath.Join(release, "bin", managedCodexFileName()), []byte("new"), 0o700); err != nil {
+		t.Fatalf("WriteFile release entrypoint error = %v", err)
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("MkdirAll package root error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, autoUpdateVersionFileName), []byte("1.2.3-"+platformTarget()), 0o600); err != nil {
+		t.Fatalf("WriteFile marker error = %v", err)
+	}
+	if err := selectDaemonRelease(root, release); err != nil {
+		t.Fatalf("selectDaemonRelease error = %v", err)
 	}
 	runner := NewLifecycleRunner(daemon)
 	runner.Now = func() time.Time { return fixedDaemonTime() }
@@ -78,8 +149,8 @@ func TestUpdateOnceRestartsWhenUpdaterIdentityChanged(t *testing.T) {
 		t.Fatalf("Run(start) error = %v", err)
 	}
 	options := &UpdateLoopOptions{
-		InstallLatest: func(context.Context) error { return nil },
-		ReadFile:      os.ReadFile,
+		Install:  func(context.Context, installerMode, string) error { return nil },
+		ReadFile: os.ReadFile,
 		ReexecUpdater: func(path string) error {
 			if path != managedBin {
 				t.Fatalf("reexec path = %q, want %q", path, managedBin)

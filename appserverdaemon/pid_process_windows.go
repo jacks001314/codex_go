@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"codex_go/codexuds"
 	"golang.org/x/sys/windows"
 )
 
@@ -22,10 +23,10 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	if backend == nil {
 		return 0, "", fmt.Errorf("pid backend is nil")
 	}
-	if windows.GetCurrentProcessToken().IsElevated() {
-		return 0, "", fmt.Errorf("pid-managed app-server startup requires a non-elevated Windows process")
+	if err := EnsureNonElevated(); err != nil {
+		return 0, "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(backend.PIDFile), 0o700); err != nil {
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(backend.PIDFile)); err != nil {
 		return 0, "", fmt.Errorf("failed to create pid directory %s: %w", filepath.Dir(backend.PIDFile), err)
 	}
 	command := exec.Command(resolvePIDLaunchBinary(backend.CodexBin), backend.CommandArgs()...)
@@ -59,8 +60,22 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	if command.Env == nil {
 		command.Env = os.Environ()
 	}
-	command.Env = append(command.Env, DaemonShutdownFileEnv+"="+daemonShutdownFilePath(backend.PIDFile))
 	command.Env = append(command.Env, UpdaterPIDFileEnv+"="+backend.PIDFile)
+	// A managed app-server accepts the control socket's shutdown request; the
+	// detached updater, which has no control socket, is signalled through a
+	// file instead (Rust backend::pid_start's Windows shutdown wiring).
+	if backend.CommandKind == PIDCommandUpdateLoop {
+		shutdownFile := daemonShutdownFilePath(backend.PIDFile)
+		_ = os.Remove(shutdownFile)
+		// The updater re-acknowledges readiness once it serves requests.
+		clearUpdaterReadyMarker(backend.PIDFile)
+		command.Env = append(command.Env, DaemonShutdownFileEnv+"="+shutdownFile)
+	} else {
+		command.Env = append(command.Env, DaemonShutdownSocketEnv+"=1")
+	}
+	// Handoff suppression belongs to the foreground CLI, not its long-lived
+	// children (Rust pid_start's `env_remove(HANDOFF_ENV)`).
+	command.Env = withoutEnvVar(command.Env, TelemetryHandoffEnv)
 	if err := startDetachedCommand(command); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}
@@ -142,16 +157,27 @@ func windowsTerminatePIDProcess(pid uint32, force bool) error {
 	return nil
 }
 
+// waitTimeoutEvent is the WAIT_TIMEOUT event value WaitForSingleObject returns
+// while the process has not signaled exit.
+const waitTimeoutEvent = 0x00000102
+
 func pidProcessExists(pid uint32) bool {
 	if pid == 0 {
 		return false
 	}
-	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.SYNCHRONIZE, false, pid)
 	if err != nil {
 		return !errors.Is(err, windows.ERROR_INVALID_PARAMETER)
 	}
 	defer windows.CloseHandle(handle)
-	return true
+	// A terminated process that has not been reaped yet still opens, so only a
+	// process that has not signaled exit counts as running (Rust
+	// backend::windows::Process::is_running).
+	event, err := windows.WaitForSingleObject(handle, 0)
+	if err != nil {
+		return false
+	}
+	return event == waitTimeoutEvent
 }
 
 // readPIDProcessStartTime returns a stable per-process creation timestamp that

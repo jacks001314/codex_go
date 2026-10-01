@@ -7,133 +7,65 @@ import (
 	"testing"
 )
 
-func TestSystemBwrapWarningDetectsWSL1(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("WSL detection is Linux-only")
-	}
-
-	// Note: This test can only verify the function runs without crashing.
-	// Actual WSL1 detection depends on the real /proc/version file.
-	warning := SystemBwrapWarning()
-	// warning may be empty or contain a message depending on the environment
-	_ = warning
-}
-
-func TestSystemBwrapWarningDetectsMissingBwrap(t *testing.T) {
+func TestSystemBwrapWarningRunsLikeRust(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bwrap detection is Linux-only")
 	}
-
-	// Temporarily modify PATH to exclude bwrap
-	origPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", origPath)
-
-	// Set PATH to a directory without bwrap
-	tempDir := t.TempDir()
-	os.Setenv("PATH", tempDir)
-
-	warning := SystemBwrapWarning()
+	// The result depends on the host (PATH and /proc/version), so this only
+	// pins that the warning is one of the documented texts.
+	readOnly := ReadOnlyPermissionProfile()
+	warning := SystemBwrapWarning(&readOnly)
 	if warning == "" {
-		t.Error("expected warning about missing bwrap, got empty string")
+		return
 	}
-	if warning != "" && warning != "bubblewrap is unavailable: no system bwrap was found on PATH" {
-		// May also get WSL1 warning if running on WSL1
-		t.Logf("got warning: %s", warning)
+	for _, known := range []string{missingBwrapWarning, userNamespaceWarning, wsl1BwrapWarning} {
+		if warning == known {
+			return
+		}
+	}
+	t.Fatalf("SystemBwrapWarning() = %q, want one of the documented texts", warning)
+}
+
+func TestSystemBwrapWarningDetectsMissingBwrapLikeRust(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bwrap detection is Linux-only")
+	}
+	originalPath := os.Getenv("PATH")
+	t.Cleanup(func() { _ = os.Setenv("PATH", originalPath) })
+	if err := os.Setenv("PATH", t.TempDir()); err != nil {
+		t.Fatalf("Setenv error = %v", err)
+	}
+	readOnly := ReadOnlyPermissionProfile()
+	warning := SystemBwrapWarning(&readOnly)
+	if warning != missingBwrapWarning && warning != wsl1BwrapWarning {
+		t.Fatalf("warning = %q, want the missing-bubblewrap text (or the WSL1 text)", warning)
 	}
 }
 
-func TestIsUserNamespaceFailure(t *testing.T) {
-	tests := []struct {
-		name   string
-		stderr string
-		want   bool
-	}{
-		{
-			name:   "creating new namespace error",
-			stderr: "bwrap: creating new namespace failed: Operation not permitted",
-			want:   true,
-		},
-		{
-			name:   "user namespaces not enabled",
-			stderr: "bwrap: user namespaces are not enabled in the kernel",
-			want:   true,
-		},
-		{
-			name:   "permission denied",
-			stderr: "bwrap: Permission denied",
-			want:   true,
-		},
-		{
-			name:   "operation not permitted",
-			stderr: "bwrap: Operation not permitted",
-			want:   true,
-		},
-		{
-			name:   "unrelated error",
-			stderr: "bwrap: Unknown option --argv0",
-			want:   false,
-		},
-		{
-			name:   "empty error",
-			stderr: "",
-			want:   false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := isUserNamespaceFailure(tt.stderr)
-			if got != tt.want {
-				t.Errorf("isUserNamespaceFailure(%q) = %v, want %v", tt.stderr, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestSystemBwrapHasUserNamespaceAccess(t *testing.T) {
+func TestProbeSystemBwrapUserNamespacesLikeRust(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("bwrap is Linux-only")
 	}
-
-	// Create a fake bwrap script that simulates success
-	tempDir := t.TempDir()
-	fakeBwrap := filepath.Join(tempDir, "bwrap")
-	script := `#!/bin/sh
-exit 0
-`
-	if err := os.WriteFile(fakeBwrap, []byte(script), 0755); err != nil {
-		t.Fatal(err)
+	directory := t.TempDir()
+	writeFakeBwrap(t, filepath.Join(directory, "ok"), "exit 0\n")
+	if !probeSystemBwrapUserNamespaces(filepath.Join(directory, "ok"), systemBwrapProbeTimeout) {
+		t.Error("a successful launcher must report user namespace access")
 	}
-
-	if !systemBwrapHasUserNamespaceAccess(fakeBwrap) {
-		t.Error("expected successful fake bwrap to return true")
+	writeFakeBwrap(t, filepath.Join(directory, "denied"),
+		"echo 'bwrap: No permissions to create a new namespace' >&2\nexit 1\n")
+	if probeSystemBwrapUserNamespaces(filepath.Join(directory, "denied"), systemBwrapProbeTimeout) {
+		t.Error("a user-namespace failure must report no access")
 	}
-
-	// Create a fake bwrap that fails with user namespace error
-	fakeBwrapFail := filepath.Join(tempDir, "bwrap-fail")
-	failScript := `#!/bin/sh
-echo "bwrap: creating new namespace failed: Operation not permitted" >&2
-exit 1
-`
-	if err := os.WriteFile(fakeBwrapFail, []byte(failScript), 0755); err != nil {
-		t.Fatal(err)
+	writeFakeBwrap(t, filepath.Join(directory, "other"),
+		"echo 'bwrap: Unknown option --argv0' >&2\nexit 1\n")
+	if !probeSystemBwrapUserNamespaces(filepath.Join(directory, "other"), systemBwrapProbeTimeout) {
+		t.Error("an unrelated failure must not be reported as a namespace problem")
 	}
+}
 
-	if systemBwrapHasUserNamespaceAccess(fakeBwrapFail) {
-		t.Error("expected failing fake bwrap to return false")
-	}
-
-	// Create a fake bwrap that fails with unrelated error
-	fakeBwrapOther := filepath.Join(tempDir, "bwrap-other")
-	otherScript := `#!/bin/sh
-echo "bwrap: Unknown option --argv0" >&2
-exit 1
-`
-	if err := os.WriteFile(fakeBwrapOther, []byte(otherScript), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	if !systemBwrapHasUserNamespaceAccess(fakeBwrapOther) {
-		t.Error("expected bwrap with non-namespace error to return true")
+func writeFakeBwrap(t *testing.T, path string, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o755); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/coder/websocket"
 
 	"codex_go/apps"
 	"codex_go/appserver"
@@ -143,20 +143,12 @@ func TestRemoteStartThreadUsesTaskToolsMCPTransportLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	clientConn, serverConn := net.Pipe()
 	var mu sync.Mutex
 	var startParams map[string]any
-	go func() {
-		defer serverConn.Close()
-		decoder := json.NewDecoder(serverConn)
-		encoder := json.NewEncoder(serverConn)
+	socketPath := startUnixWebSocketTestServer(t, func(_ context.Context, conn *websocket.Conn) {
 		for {
-			var request struct {
-				ID     json.RawMessage `json:"id"`
-				Method string          `json:"method"`
-				Params json.RawMessage `json:"params"`
-			}
-			if err := decoder.Decode(&request); err != nil {
+			request, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
 				return
 			}
 			if request.Method == string(appserver.MethodThreadStart) {
@@ -166,23 +158,22 @@ func TestRemoteStartThreadUsesTaskToolsMCPTransportLikeRust(t *testing.T) {
 				startParams = params
 				mu.Unlock()
 			}
-			_ = encoder.Encode(map[string]any{
+			remoteTUITestWrite(ctx, conn, map[string]any{
 				"jsonrpc": "2.0",
 				"id":      request.ID,
 				"result":  map[string]any{"thread": map[string]any{"id": "thread-mcp"}},
 			})
 		}
-	}()
+	})
 
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 32)
 	host := &taskToolsMCPHost{}
 	defer host.close()
 	client := &remoteAppServerTUIClient{
-		endpoint:  appserverdaemon.NewUnixSocketEndpoint("/tmp/codex-task-tools.sock"),
+		endpoint:  appserverdaemon.NewUnixSocketEndpoint(socketPath),
 		state:     state,
 		messages:  messages,
-		unixDial:  func(context.Context, string) (net.Conn, error) { return clientConn, nil },
 		taskTools: host,
 	}
 	if err := client.connect(ctx); err != nil {
@@ -302,17 +293,10 @@ func TestTaskToolsMCPToolCallRoutesThroughTheAppServerLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	clientConn, serverConn := net.Pipe()
-	go func() {
-		defer serverConn.Close()
-		decoder := json.NewDecoder(serverConn)
-		encoder := json.NewEncoder(serverConn)
+	socketPath := startUnixWebSocketTestServer(t, func(_ context.Context, conn *websocket.Conn) {
 		for {
-			var request struct {
-				ID     json.RawMessage `json:"id"`
-				Method string          `json:"method"`
-			}
-			if err := decoder.Decode(&request); err != nil {
+			request, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
 				return
 			}
 			result := map[string]any{}
@@ -322,19 +306,18 @@ func TestTaskToolsMCPToolCallRoutesThroughTheAppServerLikeRust(t *testing.T) {
 			case string(appserver.MethodThreadList):
 				result = map[string]any{"data": []any{map[string]any{"id": "thread-listed", "cwd": "/repo"}}}
 			}
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+			remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
 		}
-	}()
+	})
 
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 32)
 	host := &taskToolsMCPHost{}
 	defer host.close()
 	client := &remoteAppServerTUIClient{
-		endpoint:  appserverdaemon.NewUnixSocketEndpoint("/tmp/codex-task-tools-call.sock"),
+		endpoint:  appserverdaemon.NewUnixSocketEndpoint(socketPath),
 		state:     state,
 		messages:  messages,
-		unixDial:  func(context.Context, string) (net.Conn, error) { return clientConn, nil },
 		taskTools: host,
 	}
 	if err := client.connect(ctx); err != nil {

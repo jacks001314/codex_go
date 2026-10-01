@@ -6,9 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"codex_go/codexuds"
 	"codex_go/install"
 )
 
@@ -28,6 +30,12 @@ type BackendPaths struct {
 	PIDFile              string
 	UpdatePIDFile        string
 	RemoteControlEnabled bool
+	// FeatureOverrides are replayed as `-c features.<name>=<bool>` on the managed
+	// app-server launch (Rust BackendPaths::feature_overrides).
+	FeatureOverrides map[string]bool
+	// RestoreRelease authorizes one updater run to return a pinned package to
+	// production updates for that release (Rust PidBackend::new_update_loop).
+	RestoreRelease string
 }
 
 type PIDCommandKind string
@@ -43,6 +51,8 @@ type PIDBackend struct {
 	LockFile             string
 	CommandKind          PIDCommandKind
 	RemoteControlEnabled bool
+	FeatureOverrides     map[string]bool
+	RestoreRelease       string
 }
 
 type PIDRecord struct {
@@ -79,15 +89,17 @@ func NewPIDBackend(paths BackendPaths) *PIDBackend {
 		LockFile:             pidPathWithExtension(paths.PIDFile, "pid.lock"),
 		CommandKind:          PIDCommandAppServer,
 		RemoteControlEnabled: paths.RemoteControlEnabled,
+		FeatureOverrides:     CloneFeatureOverrides(paths.FeatureOverrides),
 	}
 }
 
 func NewPIDUpdateLoopBackend(paths BackendPaths) *PIDBackend {
 	return &PIDBackend{
-		CodexBin:    paths.CodexBin,
-		PIDFile:     paths.UpdatePIDFile,
-		LockFile:    pidPathWithExtension(paths.UpdatePIDFile, "pid.lock"),
-		CommandKind: PIDCommandUpdateLoop,
+		CodexBin:       paths.CodexBin,
+		PIDFile:        paths.UpdatePIDFile,
+		LockFile:       pidPathWithExtension(paths.UpdatePIDFile, "pid.lock"),
+		CommandKind:    PIDCommandUpdateLoop,
+		RestoreRelease: paths.RestoreRelease,
 	}
 }
 
@@ -97,12 +109,25 @@ func (b *PIDBackend) CommandArgs() []string {
 	}
 	switch b.CommandKind {
 	case PIDCommandUpdateLoop:
-		return []string{"app-server", "daemon", "pid-update-loop"}
-	default:
-		if b.RemoteControlEnabled {
-			return []string{"app-server", "--remote-control", "--listen", "unix://"}
+		args := []string{"app-server", "daemon", "pid-update-loop"}
+		if strings.TrimSpace(b.RestoreRelease) != "" {
+			args = append(args, "--restore-release", b.RestoreRelease)
 		}
-		return []string{"app-server", "--listen", "unix://"}
+		return args
+	default:
+		var args []string
+		if b.RemoteControlEnabled {
+			args = []string{"app-server", "--remote-control", "--listen", "unix://"}
+		} else {
+			args = []string{"app-server", "--listen", "unix://"}
+		}
+		// Replay the stored feature overrides so a shared server keeps the
+		// services the launch that started it asked for (Rust
+		// PidBackend::command_args).
+		for _, name := range sortedFeatureOverrideNames(b.FeatureOverrides) {
+			args = append(args, "-c", fmt.Sprintf("features.%s=%t", name, b.FeatureOverrides[name]))
+		}
+		return args
 	}
 }
 
@@ -111,6 +136,20 @@ func (b *PIDBackend) CommandEnv() map[string]string {
 		return nil
 	}
 	return map[string]string{RemoteControlDisabledEnvVar: "1"}
+}
+
+// sortedFeatureOverrideNames keeps the replayed overrides deterministic, which
+// Rust gets from iterating a BTreeMap.
+func sortedFeatureOverrideNames(overrides map[string]bool) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (b *PIDBackend) IsStartingOrRunning() (bool, error) {
@@ -171,7 +210,10 @@ func (b *PIDBackend) Start() (*uint32, error) {
 	if b.PIDFile == "" {
 		return nil, fmt.Errorf("%w: pid file is empty", ErrDaemonPathsRequired)
 	}
-	if err := os.MkdirAll(filepath.Dir(b.PIDFile), 0o700); err != nil {
+	// The pid directory is the daemon state directory, which the updater also
+	// serves its request socket from, so it carries the platform's private
+	// contract (Rust pid_start::start_inner).
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(b.PIDFile)); err != nil {
 		return nil, fmt.Errorf("failed to create pid directory %s: %w", filepath.Dir(b.PIDFile), err)
 	}
 	reservationLock, err := acquireExclusiveFileLock(b.LockFile, PIDStartTimeout, PIDStartPollInterval, "pid lock")
@@ -224,6 +266,12 @@ func (b *PIDBackend) Start() (*uint32, error) {
 	if err := WritePIDRecord(b.PIDFile, record); err != nil {
 		_ = terminatePIDProcess(pid)
 		_ = os.Remove(b.PIDFile)
+		return nil, err
+	}
+	// A detached updater acknowledges readiness once it serves requests; a
+	// launcher that gave up on it must not leave a half-started backend behind
+	// (Rust PidBackend::finish_updater_start).
+	if err := finishUpdaterStart(b, record); err != nil {
 		return nil, err
 	}
 	return &record.PID, nil
@@ -462,7 +510,7 @@ func WritePIDRecord(path string, record *PIDRecord) error {
 	if record == nil {
 		return fmt.Errorf("pid record is nil")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(path)); err != nil {
 		return err
 	}
 	data, err := json.Marshal(record)

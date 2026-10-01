@@ -1,66 +1,60 @@
 package sandbox
 
 import (
-	"os/exec"
-	"strings"
+	"os"
+	"runtime"
 
 	"codex_go/utils"
 )
 
-// SystemBwrapWarning checks if bubblewrap can be used on the current system
-// and returns a warning message if there are known issues, matching Rust's
-// system_bwrap_warning behavior.
-func SystemBwrapWarning() string {
-	if utils.IsWSL1() {
-		return "Claude Code's sandboxing is not available on WSL1, which lacks support for user namespaces. " +
-			"Please upgrade to WSL2 or use a native Linux environment to enable sandboxed tool execution."
+// SystemBwrapWarning reports why the profile's sandboxed commands would fall
+// back to a limited (or unavailable) sandbox, or "" when the profile does not
+// need bubblewrap or the system launcher is usable (Rust
+// sandboxing::bwrap::system_bwrap_warning). Only the *system* launcher is
+// inspected: the message itself points at the bundled bubblewrap the sandbox
+// falls back to.
+func SystemBwrapWarning(profile *PermissionProfile) string {
+	if runtime.GOOS != "linux" {
+		// The non-Linux Rust build has no bubblewrap warning at all.
+		return ""
 	}
+	if !ShouldRequirePlatformSandbox(profile) {
+		return ""
+	}
+	return systemBwrapWarning(
+		findSystemBwrapInPath(os.Getenv("PATH"), currentWorkingDirectory()),
+		utils.IsWSL1(),
+		func(path string) bool { return probeSystemBwrapUserNamespaces(path, systemBwrapProbeTimeout) },
+	)
+}
 
-	bwrapPath, err := exec.LookPath("bwrap")
+func currentWorkingDirectory() string {
+	cwd, err := os.Getwd()
 	if err != nil {
-		return "bubblewrap is unavailable: no system bwrap was found on PATH"
+		return ""
 	}
-
-	if !systemBwrapHasUserNamespaceAccess(bwrapPath) {
-		return "bubblewrap cannot create user namespaces. This is often due to a system security " +
-			"policy. You may need to enable unprivileged user namespaces or run in a different environment."
-	}
-
-	return ""
+	return cwd
 }
 
-// systemBwrapHasUserNamespaceAccess probes whether bwrap can create user namespaces
-// by attempting a minimal sandboxed command.
-func systemBwrapHasUserNamespaceAccess(bwrapPath string) bool {
-	cmd := exec.Command(bwrapPath,
-		"--unshare-user",
-		"--unshare-net",
-		"--ro-bind", "/", "/",
-		"/bin/true")
-
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		return true
+// ShouldRequirePlatformSandbox mirrors Rust
+// sandboxing::policy_transforms::should_require_platform_sandbox: the platform
+// sandbox is required when the profile restricts the filesystem or the network,
+// and an unrestricted or executor-managed profile never needs one.
+func ShouldRequirePlatformSandbox(profile *PermissionProfile) bool {
+	// The startup warning has no managed network requirements (Rust passes
+	// false at that call site).
+	policy := profile.LegacySandboxPolicy()
+	externalSandbox := policy != nil && policy.Kind == SandboxModeExternalSandbox
+	if !profile.AllowsNetwork() {
+		// Restricted filesystem without network: every kind except an external
+		// sandbox has to be enforced by the platform.
+		return !externalSandbox
 	}
-
-	// Check if the error is a user namespace failure
-	return !isUserNamespaceFailure(string(output))
-}
-
-// isUserNamespaceFailure checks if the error output indicates a user namespace issue.
-func isUserNamespaceFailure(stderr string) bool {
-	lowerStderr := strings.ToLower(stderr)
-	userNamespaceFailures := []string{
-		"creating new namespace",
-		"user namespaces are not enabled",
-		"permission denied",
-		"operation not permitted",
+	if policy == nil || externalSandbox || policy.Kind == SandboxDangerFullAccess {
+		// Unrestricted and external sandboxes need no platform sandbox.
+		return false
 	}
-
-	for _, pattern := range userNamespaceFailures {
-		if strings.Contains(lowerStderr, pattern) {
-			return true
-		}
-	}
-	return false
+	// Restricted: a profile that already grants full disk write access does not
+	// need bubblewrap either.
+	return !policy.HasFullDiskWriteAccess()
 }

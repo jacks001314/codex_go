@@ -24,6 +24,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/auth"
 	"codex_go/cli"
+	"codex_go/codexuds"
 	"codex_go/config"
 	"codex_go/doctor"
 	"codex_go/features"
@@ -42,7 +43,7 @@ import (
 )
 
 type remoteAppServerDialFunc func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
-type remoteAppServerUnixDialFunc func(context.Context, string) (net.Conn, error)
+type remoteAppServerUnixDialFunc func(context.Context, string, bool) (*websocket.Conn, error)
 
 const remoteTUIAccountRequestTimeout = 20 * time.Second
 
@@ -313,7 +314,7 @@ func (t *remoteJSONLineTransport) close() {
 	}
 }
 
-func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, stdin io.Reader, stdout io.Writer) error {
+func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
@@ -326,6 +327,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	accountDisplay, hasChatGPTAccount := interactiveRemoteStatusAccount(ctx, endpoint)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	showRawReasoning := interactiveShowRawAgentReasoning(root)
 	// Rust #39082: query remote project config layers before starting a thread
 	// and persist accepted trust through config/batchWrite on the remote server.
@@ -402,15 +404,20 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 	})
 	options := codextea.Options{
-		NoAltScreen:        root != nil && root.Shared.NoAltScreen,
-		LocalDaemonSession: interactiveRemoteEndpointIsLocal(endpoint),
-		LocalSession:       interactiveRemoteEndpointIsLocal(endpoint),
-		AnimationsEnabled:  settings.AnimationsEnabled,
-		Effects:            settings.Effects,
-		QuestionEscBack:    settings.QuestionEscBack,
-		AutoRecap:          settings.AutoRecap,
-		RightClickPaste:    interactiveRightClickPasteValue(settings.RightClickPaste),
-		ShowRawReasoning:   showRawReasoning,
+		NoAltScreen:         root != nil && root.Shared.NoAltScreen,
+		LocalDaemonSession:  interactiveRemoteEndpointIsLocal(endpoint),
+		LocalSession:        interactiveRemoteEndpointIsLocal(endpoint),
+		DaemonCLIExecutable: daemonCLIExecutable,
+		DaemonCLIVersion:    daemonCLIVersion,
+		DaemonCLIPackage:    daemonCLIPackage,
+		DaemonVersion:       interactiveDaemonVersionForEndpoint(endpoint),
+		RemoteAppServer:     interactiveRemoteEndpointIsExplicitRemote(root),
+		AnimationsEnabled:   settings.AnimationsEnabled,
+		Effects:             settings.Effects,
+		QuestionEscBack:     settings.QuestionEscBack,
+		AutoRecap:           settings.AutoRecap,
+		RightClickPaste:     interactiveRightClickPasteValue(settings.RightClickPaste),
+		ShowRawReasoning:    showRawReasoning,
 		// Remote sessions only see the worktrees feature flag; managed worktree
 		// operations stay local (Rust #43120/#43286).
 		WorktreesEnabled: interactiveRemoteWorktreesEnabled(root),
@@ -664,8 +671,11 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}
-	_, err := codextea.Run(ctx, state, options, stdin, stdout)
-	return err
+	model, err := codextea.Run(ctx, state, options, stdin, stdout)
+	if err != nil {
+		return err
+	}
+	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
 }
 
 func interactiveRemoteStatusAccount(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool) {
@@ -2688,13 +2698,16 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 		}
 		dial := c.unixDial
 		if dial == nil {
-			dial = remoteDialUnixSocket
+			dial = remoteDialUnixSocketWebSocket
 		}
-		conn, err := dial(ctx, socketPath)
+		// A local unix control socket names a non-elevated same-user peer before
+		// the upgrade is sent (Rust SocketPeerPolicy::NonElevatedCurrentUser for
+		// the shared local daemon).
+		conn, err := dial(ctx, socketPath, true)
 		if err != nil {
 			return fmt.Errorf("connect remote app-server unix socket %s: %w", socketPath, err)
 		}
-		c.transport = newRemoteJSONLineTransport(conn)
+		c.transport = &remoteWebSocketTransport{conn: conn}
 		return nil
 	default:
 		return fmt.Errorf("unknown remote app-server endpoint kind %q", c.endpoint.Kind)
@@ -2710,6 +2723,44 @@ func (c *remoteAppServerTUIClient) close() {
 func remoteDialUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
 	var dialer net.Dialer
 	return dialer.DialContext(ctx, "unix", socketPath)
+}
+
+// remoteDialUnixSocketWebSocket dials the control socket and upgrades it to the
+// WebSocket transport (Rust app-server-client::connect_unix_socket_endpoint,
+// UDS_WEBSOCKET_HANDSHAKE_URL). When peerCheck is set the raw connection must
+// name a non-elevated same-user peer before the upgrade is sent.
+func remoteDialUnixSocketWebSocket(ctx context.Context, socketPath string, peerCheck bool) (*websocket.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var peerErr error
+	transport := &http.Transport{
+		DialContext: func(dialCtx context.Context, network string, addr string) (net.Conn, error) {
+			conn, err := remoteDialUnixSocket(dialCtx, socketPath)
+			if err != nil {
+				return nil, err
+			}
+			if peerCheck {
+				if err := codexuds.EnsureNonElevatedPeer(conn); err != nil {
+					_ = conn.Close()
+					peerErr = err
+					return nil, err
+				}
+			}
+			return conn, nil
+		},
+	}
+	conn, _, err := websocket.Dial(ctx, appserverdaemon.UDSWebSocketHandshakeURL, &websocket.DialOptions{
+		HTTPClient: &http.Client{Transport: transport},
+	})
+	if err != nil {
+		if peerErr != nil {
+			return nil, fmt.Errorf("refusing the app-server connection on %s: %w", socketPath, peerErr)
+		}
+		return nil, err
+	}
+	conn.SetReadLimit(int64(appserverdaemon.RemoteAppServerMaxWebSocketMessageSize))
+	return conn, nil
 }
 
 func (c *remoteAppServerTUIClient) initialize(ctx context.Context) error {

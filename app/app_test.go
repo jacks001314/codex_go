@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,8 +65,8 @@ func useEmbeddedLaunch(t *testing.T) {
 	t.Helper()
 	previousFeature := daemonAutoStartFeature
 	previousStart := daemonAutoStartStart
-	daemonAutoStartFeature = func() bool { return false }
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return false }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		t.Fatal("the shared background server must not be started by this test")
 		return "", nil
 	}
@@ -4532,7 +4531,7 @@ func TestRemoteServerRequestChatGPTAuthRefreshUsesLocalAuth(t *testing.T) {
 	}
 }
 
-func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
+func TestRemoteAppServerTUIClientUsesUnixSocketWebSocketTransport(t *testing.T) {
 	t.Setenv("CODEX_GO_VERSION", "9.8.7-test")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -4540,18 +4539,13 @@ func TestRemoteAppServerTUIClientUsesUnixSocketJSONLineTransport(t *testing.T) {
 	serverErrs := make(chan error, 1)
 	state := codextui.NewState(nil)
 	messages := make(chan bubbletea.Msg, 16)
+	socketPath := startUnixWebSocketTestServer(t, func(_ context.Context, conn *websocket.Conn) {
+		remoteTUITestServeAppServer(ctx, conn, requests, serverErrs)
+	})
 	client := &remoteAppServerTUIClient{
-		endpoint: appserverdaemon.NewUnixSocketEndpoint(`/tmp/codex.sock`),
+		endpoint: appserverdaemon.NewUnixSocketEndpoint(socketPath),
 		state:    state,
 		messages: messages,
-		unixDial: func(ctx context.Context, socketPath string) (net.Conn, error) {
-			if socketPath != `/tmp/codex.sock` {
-				return nil, fmt.Errorf("socket path = %q", socketPath)
-			}
-			clientConn, serverConn := net.Pipe()
-			go remoteTUITestServeJSONLineAppServer(ctx, serverConn, requests, serverErrs)
-			return clientConn, nil
-		},
 	}
 	if err := client.connect(ctx); err != nil {
 		t.Fatalf("connect unix transport: %v", err)
@@ -5555,13 +5549,25 @@ func remoteTUITestReadResponse(ctx context.Context, conn *websocket.Conn) (remot
 	return response, nil
 }
 
-func remoteTUITestServeJSONLineAppServer(ctx context.Context, conn net.Conn, requests chan<- remoteTUITestRequest, errs chan<- error) {
-	defer conn.Close()
-	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
+func remoteTUITestServeAppServer(ctx context.Context, conn *websocket.Conn, requests chan<- remoteTUITestRequest, errs chan<- error) {
+	write := func(value any) bool {
+		data, err := json.Marshal(value)
+		if err != nil {
+			remoteTUITestSendErr(errs, err)
+			return false
+		}
+		if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return false
+			}
+			remoteTUITestSendErr(errs, err)
+			return false
+		}
+		return true
+	}
 	for {
-		var req remoteTUITestRequest
-		if err := decoder.Decode(&req); err != nil {
+		req, err := remoteTUITestReadRequest(ctx, conn)
+		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(ctx.Err(), context.Canceled) {
 				return
 			}
@@ -5571,61 +5577,54 @@ func remoteTUITestServeJSONLineAppServer(ctx context.Context, conn net.Conn, req
 		requests <- req
 		switch req.Method {
 		case string(appserver.MethodInitialize):
-			if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			if !write(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}}) {
 				return
 			}
 		case string(appserver.MethodThreadStart):
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result":  map[string]any{"thread": map[string]any{"id": "thread-unix"}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
 		case string(appserver.MethodConfigRead):
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result":  map[string]any{"config": map[string]any{}, "origins": map[string]any{}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
 		case string(appserver.MethodConfigRequirementsRead):
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result":  map[string]any{"requirements": map[string]any{}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
 		case string(appserver.MethodModelList):
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result":  map[string]any{"data": []any{}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
 		case string(appserver.MethodTurnStart):
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      req.ID,
 				"result":  map[string]any{"turn": map[string]any{"id": "turn-unix", "items": []any{}, "status": "inProgress"}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
-			if err := encoder.Encode(map[string]any{
+			if !write(map[string]any{
 				"jsonrpc": "2.0",
 				"method":  string(appserver.NotificationTurnCompleted),
 				"params":  map[string]any{"threadId": "thread-unix", "turn": map[string]any{"id": "turn-unix", "items": []any{}, "status": "completed"}},
-			}); err != nil {
-				remoteTUITestSendErr(errs, err)
+			}) {
 				return
 			}
 		default:

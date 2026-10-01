@@ -5,13 +5,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"codex_go/codexuds"
 )
 
 func openLockFile(path string) (*os.File, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("%w: lock file is empty", ErrDaemonPathsRequired)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// The lock file lives in the daemon state directory, which is also where the
+	// updater serves its request socket. Create it with the platform's private
+	// contract so both uses agree (Rust pid_start::start_inner).
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("failed to create lock directory %s: %w", filepath.Dir(path), err)
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)

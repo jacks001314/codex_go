@@ -272,6 +272,51 @@ func (c *Config) ResolveSandboxPermissionProfile(profileID string, cwd string) (
 	return c.ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID, cwd, nil)
 }
 
+// EffectivePermissionProfileForCWD resolves the permission profile the startup
+// sandbox warning inspects: the default profile of the layers visible from cwd
+// (Rust `config.permissions.permission_profile()`). A config that selects no
+// permission profile resolves to the built-in read-only default, matching the
+// runtime's own default, and an unresolvable config reports nil so a caller
+// skips the warning instead of failing.
+func (s *ConfigService) EffectivePermissionProfileForCWD(cwd string) *sandbox.PermissionProfile {
+	if s == nil {
+		return nil
+	}
+	layers, err := s.readLayersForCWD(cwd, s.currentProfile())
+	if err != nil {
+		return nil
+	}
+	values, _ := mergeConfigLayers(layers)
+	cfg := &Config{Values: values, Requirements: s.LocalRequirements()}
+	if !permissionProfileSelectionConfigured(values) {
+		// Rust's PermissionProfile::default() is managed read-only, and the Go
+		// runtime already derives that default (loadSandboxRunConfigForRunContext),
+		// so the startup warning must inspect the same profile.
+		if cfg.Values == nil {
+			cfg.Values = map[string]any{}
+		}
+		cfg.Values["sandbox_mode"] = string(sandbox.SandboxReadOnly)
+	}
+	resolution, err := cfg.ResolveSandboxPermissionProfile("", cwd)
+	if err != nil || resolution == nil {
+		return nil
+	}
+	return resolution.Profile
+}
+
+// permissionProfileSelectionConfigured reports whether the merged config picks a
+// permission profile, either through the canonical `default_permissions` key or
+// the legacy `sandbox_mode`.
+func permissionProfileSelectionConfigured(values map[string]any) bool {
+	if values == nil {
+		return false
+	}
+	if strings.TrimSpace(stringFromConfigValue(values["default_permissions"])) != "" {
+		return true
+	}
+	return strings.TrimSpace(stringFromConfigValue(values["sandbox_mode"])) != ""
+}
+
 // ResolveSandboxPermissionProfileWithWorkspaceRoots mirrors Rust's
 // `PermissionProfile::materialize_project_roots_with_path_uris` (#46568): the
 // profile's project roots are anchored at the supplied workspace roots (a

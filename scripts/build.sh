@@ -83,7 +83,17 @@ case "$CGO_MODE" in
 esac
 export GOOS=$TARGET_GOOS GOARCH=$TARGET_GOARCH CGO_ENABLED
 
-set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION" -o "$OUTPUT"
+# Linux packages pin the digest of the bundled bubblewrap they carry, so the
+# sandbox refuses to run a replaced launcher (Rust build.rs stamps
+# CODEX_BWRAP_SHA256 the same way).
+BWRAP_DIGEST_FLAG=""
+if [ "$TARGET_GOOS" = linux ]; then
+  BWRAP_SHA_FILE="$ROOT/third_party/bwrap/build/$TARGET_GOOS-$TARGET_GOARCH/bundled-bwrap.sha256"
+  BWRAP_SHA=$(tr -d ' \t\r\n' < "$BWRAP_SHA_FILE" 2>/dev/null || true)
+  [ -n "$BWRAP_SHA" ] && BWRAP_DIGEST_FLAG="-X codex_go/sandbox/linuxsandbox.bundledBwrapSHA256=$BWRAP_SHA"
+fi
+
+set -- build -trimpath -buildvcs=false -ldflags "-s -w -X codex_go/doctor.buildVersion=$VERSION -X codex_go/appserver.buildVersion=$VERSION -X codex_go/mcp.buildVersion=$VERSION $BWRAP_DIGEST_FLAG" -o "$OUTPUT"
 [ "$RACE" -eq 1 ] && set -- "$@" -race
 [ "$REBUILD" -eq 1 ] && set -- "$@" -a
 set -- "$@" ./cmd/codex
@@ -142,4 +152,63 @@ else
 fi
 if [ "$TARGET_GOOS/$TARGET_GOARCH" = "$HOST_GOOS/$HOST_GOARCH" ]; then
   "$OUTPUT" --version
+fi
+
+# A managed daemon seeds itself from a complete CLI package, so the build marks
+# the tree it just produced with the manifest that names the entrypoint and the
+# packaged resources (Rust codex-package.json). The executable sits at the
+# package root, which is the layout install.PackageLayoutFromExe resolves for a
+# locally built CLI.
+OUTPUT_DIR=$(dirname -- "$OUTPUT")
+if [ "$(basename -- "$OUTPUT_DIR")" = bin ]; then
+  case "$TARGET_GOOS/$TARGET_GOARCH" in
+    windows/amd64) TRIPLE=x86_64-pc-windows-msvc ;;
+    windows/arm64) TRIPLE=aarch64-pc-windows-msvc ;;
+    darwin/amd64) TRIPLE=x86_64-apple-darwin ;;
+    darwin/arm64) TRIPLE=aarch64-apple-darwin ;;
+    linux/amd64) TRIPLE=x86_64-unknown-linux-musl ;;
+    linux/arm64) TRIPLE=aarch64-unknown-linux-musl ;;
+    *) TRIPLE="$TARGET_GOOS/$TARGET_GOARCH" ;;
+  esac
+  MANIFEST_PATH=$OUTPUT_DIR/codex-package.json
+  cat > "$MANIFEST_PATH" <<EOF
+{
+  "layoutVersion": 1,
+  "version": "$VERSION",
+  "target": "$TRIPLE",
+  "variant": "codex",
+  "entrypoint": "codex$EXT",
+  "resourcesDir": "codex-resources",
+  "pathDir": "codex-path"
+}
+EOF
+  echo "==> Wrote $MANIFEST_PATH"
+
+  # The packaged CLI resolves its own search backend from the package's
+  # codex-path directory (Rust `package_layout.path_dir`), so every package
+  # carries the pinned ripgrep binary; a package without it cannot be installed
+  # as a managed daemon.
+  RIPGREP_NAME=rg$EXT
+  PREPARED_RIPGREP="$ROOT/third_party/ripgrep/build/$TARGET_GOOS-$TARGET_GOARCH/bin/$RIPGREP_NAME"
+  if [ -f "$PREPARED_RIPGREP" ]; then
+    mkdir -p "$OUTPUT_DIR/codex-path"
+    cp -f "$PREPARED_RIPGREP" "$OUTPUT_DIR/codex-path/$RIPGREP_NAME"
+    echo "==> Staged $RIPGREP_NAME"
+  else
+    echo "==> WARNING: ripgrep for $TARGET_GOOS/$TARGET_GOARCH is not prepared; run third_party/ripgrep/prepare_ripgrep.py --platform $TARGET_GOOS-$TARGET_GOARCH"
+  fi
+
+  # Linux packages carry the sandbox launcher the CLI runs when no system bwrap
+  # is on PATH (Rust codex-resources/bwrap). A package without it cannot be
+  # installed as a managed daemon.
+  if [ "$TARGET_GOOS" = linux ]; then
+    PREPARED_BWRAP="$ROOT/third_party/bwrap/build/$TARGET_GOOS-$TARGET_GOARCH/bin/bwrap"
+    if [ -f "$PREPARED_BWRAP" ]; then
+      mkdir -p "$OUTPUT_DIR/codex-resources"
+      cp -f "$PREPARED_BWRAP" "$OUTPUT_DIR/codex-resources/bwrap"
+      echo "==> Staged bwrap"
+    else
+      echo "==> WARNING: bubblewrap for $TARGET_GOOS/$TARGET_GOARCH is not prepared; run third_party/bwrap/prepare_bwrap.py --platform $TARGET_GOOS-$TARGET_GOARCH"
+    fi
+  fi
 fi

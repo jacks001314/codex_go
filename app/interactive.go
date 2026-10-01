@@ -825,7 +825,7 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 			return runInteractiveRemotePrompt(ctx, root, remoteEndpoint, stdout, stderr)
 		}
 		if shouldRunInteractiveTUI(stdin, stdout) {
-			return runInteractiveRemoteTUI(ctx, root, remoteEndpoint, stdin, stdout)
+			return runInteractiveRemoteTUI(ctx, root, remoteEndpoint, stdin, stdout, stderr)
 		}
 		return errors.New("interactive remote app-server TUI requires a real terminal")
 	}
@@ -833,7 +833,7 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 		return runInteractivePrompt(ctx, root, stdin, stdout, stderr)
 	}
 	if shouldRunInteractiveTUI(stdin, stdout) {
-		return runInteractiveTUI(ctx, root, stdin, stdout)
+		return runInteractiveTUI(ctx, root, stdin, stdout, stderr)
 	}
 	runner, err := newLocalRunnerWithEnvironments(auth.DefaultCodexHome(), false)
 	if err != nil {
@@ -863,12 +863,13 @@ func isRealTerminal(value any) bool {
 	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
-func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer) error {
+func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
 	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
+	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	store := newSessionStore()
 	threadID, err := interactiveStartLocalTUIThread(root, state, store)
 	if err != nil {
@@ -923,8 +924,14 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		stopSession:      voiceStop,
 	})
 	options := codextea.Options{
-		NoAltScreen:                 root != nil && root.Shared.NoAltScreen,
-		LocalSession:                true,
+		NoAltScreen:  root != nil && root.Shared.NoAltScreen,
+		LocalSession: true,
+		// The embedded session is neither the local daemon nor an explicit
+		// remote, but /daemon still manages the local background server with
+		// this CLI (Rust App::open_daemon_menu with AppServerTarget::Embedded).
+		DaemonCLIExecutable:         daemonCLIExecutable,
+		DaemonCLIVersion:            daemonCLIVersion,
+		DaemonCLIPackage:            daemonCLIPackage,
 		AnimationsEnabled:           settings.AnimationsEnabled,
 		Effects:                     settings.Effects,
 		QuestionEscBack:             settings.QuestionEscBack,
@@ -1112,8 +1119,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	if warning := daemonAutoStartExclusionWarning(root); warning != "" {
 		options.InitialHistoryCells = append(options.InitialHistoryCells, historycell.NewStartupWarnings([]string{warning}))
 	}
-	_, err = codextea.Run(ctx, state, options, stdin, stdout)
-	return err
+	model, err := codextea.Run(ctx, state, options, stdin, stdout)
+	if err != nil {
+		return err
+	}
+	return runPendingDaemonUpdate(ctx, model, stdout, stderr)
 }
 
 // interactiveAutoThreadTitle derives a provisional thread title from the first

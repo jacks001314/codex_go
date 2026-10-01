@@ -3,6 +3,7 @@
 package appserverdaemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -21,6 +22,14 @@ var procUpdateNtResumeProcess = windows.NewLazySystemDLL("ntdll.dll").NewProc("N
 // updater exits (Rust #42392). The child starts suspended so it is assigned to
 // the job before it can spawn grandchildren outside the job.
 func runWindowsUpdateInstaller(ctx context.Context, command string, args []string) error {
+	return runWindowsUpdateInstallerWithInput(ctx, command, args, nil, updateInstallerEnvVars())
+}
+
+// runWindowsUpdateInstallerWithInput runs a prepared installer invocation
+// inside the kill-on-close job, optionally feeding the fetched script on stdin
+// (Rust run_installer_script: the guards travel as environment variables and the
+// script itself arrives on stdin).
+func runWindowsUpdateInstallerWithInput(ctx context.Context, command string, args []string, script []byte, env map[string]string) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -42,7 +51,10 @@ func runWindowsUpdateInstaller(ctx context.Context, command string, args []strin
 		return fmt.Errorf("set updater job object limit: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, resolved, args...)
-	cmd.Env = appendExecutableEnvironment(updateInstallerEnvVars())
+	cmd.Env = appendExecutableEnvironment(env)
+	if script != nil {
+		cmd.Stdin = bytes.NewReader(script)
+	}
 	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("invoke standalone Codex updater: %w", err)

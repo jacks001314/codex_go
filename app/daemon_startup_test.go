@@ -64,6 +64,43 @@ func TestDaemonConfigExclusionFeatureFlagsLikeRust(t *testing.T) {
 	}
 }
 
+// TestDaemonStartupServerFeaturesLikeRust mirrors Rust
+// daemon_startup::server_features plus the auto-start's retention rule: only the
+// shared-server features a launch explicitly enables travel to the daemon, since
+// disabling a shared service requires confirmation.
+func TestDaemonStartupServerFeaturesLikeRust(t *testing.T) {
+	root := &cli.RootOptions{ConfigOverrides: []string{
+		"features.code_mode_host=true",
+		"features.auth_elicitation=false",
+		"features.unrelated=true",
+	}}
+	got := daemonStartupServerFeatures(root)
+	if !FeatureOverridesEqualForTest(got, map[string]bool{"code_mode_host": true}) {
+		t.Fatalf("daemonStartupServerFeatures() = %#v, want only code_mode_host", got)
+	}
+	if got := daemonStartupServerFeatures(&cli.RootOptions{}); got != nil {
+		t.Fatalf("daemonStartupServerFeatures(plain) = %#v, want nil", got)
+	}
+	enabled := &cli.RootOptions{EnableFeatures: []string{"mcp_oauth_refresh_coordination"}}
+	if got := daemonStartupServerFeatures(enabled); !FeatureOverridesEqualForTest(got, map[string]bool{"mcp_oauth_refresh_coordination": true}) {
+		t.Fatalf("daemonStartupServerFeatures(--enable) = %#v", got)
+	}
+}
+
+// FeatureOverridesEqualForTest compares override sets without importing the
+// daemon package just for one assertion.
+func FeatureOverridesEqualForTest(a map[string]bool, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, enabled := range a {
+		if other, ok := b[name]; !ok || other != enabled {
+			return false
+		}
+	}
+	return true
+}
+
 // TestDaemonStartupExclusionLikeRust mirrors Rust daemon_startup::exclusion.
 func TestDaemonStartupExclusionLikeRust(t *testing.T) {
 	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
@@ -206,8 +243,8 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 	})
 
 	started := 0
-	daemonAutoStartFeature = func() bool { return true }
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		started++
 		return "/tmp/auto-started.sock", nil
 	}
@@ -232,7 +269,7 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 	}
 
 	// A failed start is fatal with the guidance, without an embedded fallback.
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		started++
 		return "", errors.New("managed standalone Codex install not found")
 	}
@@ -245,8 +282,8 @@ func TestInteractiveDaemonAutoStartLikeRust(t *testing.T) {
 	}
 
 	// Without the opt-in the launch only reuses an already-running daemon.
-	daemonAutoStartFeature = func() bool { return false }
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return false }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		t.Fatal("an unopted launch must not start the daemon")
 		return "", nil
 	}
@@ -268,11 +305,11 @@ func TestDaemonAutoStartExclusionWarningLikeRust(t *testing.T) {
 	})
 	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
 
-	daemonAutoStartFeature = func() bool { return false }
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return false }
 	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{Shared: cli.SharedOptions{OSS: true}}); got != "" {
 		t.Fatalf("unopted warning = %q, want none", got)
 	}
-	daemonAutoStartFeature = func() bool { return true }
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
 	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != "" {
 		t.Fatalf("eligible launch warning = %q, want none", got)
 	}
@@ -306,8 +343,8 @@ func TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust(t *
 		daemonAutoStartExclusionReason = originalReason
 	})
 
-	daemonAutoStartFeature = func() bool { return true }
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		return "", &appserverdaemon.DetachedLaunchRestrictedError{}
 	}
 	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
@@ -322,7 +359,7 @@ func TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust(t *
 	// A different launch failure keeps the fatal --no-daemon guidance and never
 	// reports the launcher exclusion.
 	daemonAutoStartExclusionReason = ""
-	daemonAutoStartStart = func() (string, error) {
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
 		return "", errors.New("managed standalone Codex install not found")
 	}
 	if _, err := interactiveDaemonEndpoint(&cli.RootOptions{}); err == nil || !strings.Contains(err.Error(), daemonFailureHint) {

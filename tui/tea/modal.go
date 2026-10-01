@@ -884,6 +884,20 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 		}
 		return m.applySafetyBufferingModalOption(response.OptionID)
 	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonMenuViewID {
+		m.modal = nil
+		if cancelled {
+			return nil
+		}
+		return m.confirmDaemonUpdate(codextui.DaemonUpdateSource(response.OptionID))
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.DaemonConfirmViewID {
+		m.modal = nil
+		if cancelled || response.OptionID != chatwidget.DaemonMenuItemUpdateAndExit {
+			return nil
+		}
+		return m.runDaemonUpdate(m.daemonConfirmSource)
+	}
 	// Rust #43074: the apps failure popup's Retry action re-runs the directory
 	// request; catalog rows keep their existing modal-response handling.
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.AppsSelectionViewID &&

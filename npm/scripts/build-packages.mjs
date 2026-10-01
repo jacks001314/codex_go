@@ -54,11 +54,27 @@ for (const target of targets) {
   const executableName = target.goos === "windows" ? "codex.exe" : "codex";
   const executable = path.join(binDir, executableName);
   const env = { ...process.env, GOOS: target.goos, GOARCH: target.goarch, CGO_ENABLED: "0" };
-  const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}`;
+  // Linux packages pin the digest of the bundled bubblewrap they carry, so the
+  // sandbox refuses to run a replaced launcher (Rust build.rs stamps
+  // CODEX_BWRAP_SHA256 the same way).
+  let bwrapDigestFlag = "";
+  if (target.goos === "linux") {
+    const digestPath = path.join(root, "third_party", "bwrap", "build", `${target.goos}-${target.goarch}`, "bundled-bwrap.sha256");
+    if (existsSync(digestPath)) {
+      const digest = readFileSync(digestPath, "utf8").trim();
+      if (digest) bwrapDigestFlag = ` -X codex_go/sandbox/linuxsandbox.bundledBwrapSHA256=${digest}`;
+    }
+  }
+  const ldflags = `-s -w -X codex_go/doctor.buildVersion=${version} -X codex_go/appserver.buildVersion=${version} -X codex_go/mcp.buildVersion=${version}${bwrapDigestFlag}`;
   run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", executable, "./cmd/codex"], { env });
   // Best-effort exec bit: required for Unix targets when built on a host that
   // does not preserve mode bits. No-op on Windows.
   try { chmodSync(executable, 0o755); } catch {}
+  // The managed app-server launches the code-mode host from its own package, so
+  // every packaged target ships it beside the entrypoint.
+  const codeModeHostName = target.goos === "windows" ? "codex-code-mode-host.exe" : "codex-code-mode-host";
+  run("go", ["build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(binDir, codeModeHostName), "./cmd/codex-code-mode-host"], { env });
+  try { chmodSync(path.join(binDir, codeModeHostName), 0o755); } catch {}
   if (target.goos === "windows") {
     const resourcesDir = path.join(targetDir, "codex-resources");
     mkdirSync(resourcesDir, { recursive: true });
@@ -73,6 +89,7 @@ for (const target of targets) {
     variant: "codex",
     entrypoint: `bin/${executableName}`,
     resourcesDir: "codex-resources",
+    pathDir: "codex-path",
   }, null, 2)}\n`);
   writeFileSync(path.join(packageDir, "package.json"), `${JSON.stringify({
     name: `@jacks001314/codex-go-${suffix}`,
@@ -86,6 +103,31 @@ for (const target of targets) {
   }, null, 2)}\n`);
   for (const file of ["README.md", "LICENSE", "NOTICE"]) {
     try { cpSync(path.join(root, file), path.join(packageDir, file)); } catch {}
+  }
+  // Every package carries the pinned search backend its own tools resolve from
+  // `codex-path` (Rust package_layout.path_dir); a package without it is
+  // rejected when a daemon installs from it.
+  const ripgrepName = target.goos === "windows" ? "rg.exe" : "rg";
+  const preparedRipgrep = path.join(root, "third_party", "ripgrep", "build", `${target.goos}-${target.goarch}`, "bin", ripgrepName);
+  if (existsSync(preparedRipgrep)) {
+    mkdirSync(path.join(targetDir, "codex-path"), { recursive: true });
+    cpSync(preparedRipgrep, path.join(targetDir, "codex-path", ripgrepName));
+    try { chmodSync(path.join(targetDir, "codex-path", ripgrepName), 0o755); } catch {}
+  } else {
+    console.warn(`ripgrep for ${target.goos}/${target.goarch} is not prepared; run third_party/ripgrep/prepare_ripgrep.py --platform ${target.goos}-${target.goarch}`);
+  }
+  // Linux packages carry the sandbox launcher the CLI runs when no system bwrap
+  // is on PATH (Rust codex-resources/bwrap); the package is rejected as a daemon
+  // package without it.
+  if (target.goos === "linux") {
+    const preparedBwrap = path.join(root, "third_party", "bwrap", "build", `${target.goos}-${target.goarch}`, "bin", "bwrap");
+    if (existsSync(preparedBwrap)) {
+      mkdirSync(path.join(targetDir, "codex-resources"), { recursive: true });
+      cpSync(preparedBwrap, path.join(targetDir, "codex-resources", "bwrap"));
+      try { chmodSync(path.join(targetDir, "codex-resources", "bwrap"), 0o755); } catch {}
+    } else {
+      console.warn(`bubblewrap for ${target.goos}/${target.goarch} is not prepared; run third_party/bwrap/prepare_bwrap.py --platform ${target.goos}-${target.goarch}`);
+    }
   }
   run("npm", ["pack", packageDir, "--pack-destination", outputDir]);
 }
