@@ -89,6 +89,12 @@ type SubmitRequest struct {
 	// `TurnStartParams::turn_trigger`). The interactive TUI defaults to "user";
 	// goal continuations request "goal" (#46569).
 	TurnTrigger string
+	// AdditionalContext carries Rust's turn/start `additionalContext` entries
+	// ("<name>": {"kind": ..., "value": ...}). A remote or daemon-backed host
+	// cannot receive InternalInputItems, so the goal runtime's continuation
+	// prompt reaches the model through this map instead, without being rendered
+	// as a user message.
+	AdditionalContext map[string]any
 	// LiteralInput marks queued input whose leading `!` was revealed only by
 	// paste expansion. It must be submitted as literal model input with shell
 	// escapes disabled (Rust #39604 QueuedInputAction::Literal).
@@ -239,6 +245,12 @@ type GoalReaderFunc func(threadID string) (*appserver.Goal, error)
 type GoalSetterFunc func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error)
 
 type GoalClearerFunc func(threadID string) (bool, error)
+
+// EnsureThreadFunc starts the session's thread when a local command needs a
+// thread id before the session's first turn. A daemon- or remote-backed TUI
+// creates its thread lazily with the first submitted turn, so /goal has to be
+// able to start one itself (Rust starts the thread during startup).
+type EnsureThreadFunc func() bubbletea.Cmd
 
 // GoalEditTextFunc resolves the text shown in the /goal edit prompt from the
 // stored objective, loading materialized goal objective files when the stored
@@ -1082,11 +1094,15 @@ type Options struct {
 	OnUpdateThreadPermissions func(threadID string, profileID string) error
 	// TerminalSize overrides the terminal-size probe used by the tmux resize
 	// monitor (Rust #43603); nil uses the process terminal.
-	TerminalSize                func() (int, int, error)
-	OnReadDebugConfig           DebugConfigReaderFunc
-	OnReadGoal                  GoalReaderFunc
-	OnSetGoal                   GoalSetterFunc
-	OnClearGoal                 GoalClearerFunc
+	TerminalSize      func() (int, int, error)
+	OnReadDebugConfig DebugConfigReaderFunc
+	OnReadGoal        GoalReaderFunc
+	OnSetGoal         GoalSetterFunc
+	OnClearGoal       GoalClearerFunc
+	// OnEnsureThread starts the session thread for a command that needs a
+	// thread id before the first turn (see EnsureThreadFunc). Nil leaves the
+	// command waiting for the thread that its own submission starts.
+	OnEnsureThread              EnsureThreadFunc
 	OnGoalEditText              GoalEditTextFunc
 	OnGoalDraftMaterialize      GoalDraftMaterializeFunc
 	OnGoalContinuation          GoalContinuationFunc
@@ -1684,6 +1700,7 @@ type Model struct {
 	onReadGoal                        GoalReaderFunc
 	onSetGoal                         GoalSetterFunc
 	onClearGoal                       GoalClearerFunc
+	onEnsureThread                    EnsureThreadFunc
 	onGoalEditText                    GoalEditTextFunc
 	onGoalDraftMaterialize            GoalDraftMaterializeFunc
 	onGoalContinuation                GoalContinuationFunc
@@ -2037,6 +2054,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadGoal:                      options.OnReadGoal,
 		onSetGoal:                       options.OnSetGoal,
 		onClearGoal:                     options.OnClearGoal,
+		onEnsureThread:                  options.OnEnsureThread,
 		onGoalEditText:                  options.OnGoalEditText,
 		onGoalDraftMaterialize:          options.OnGoalDraftMaterialize,
 		onGoalContinuation:              options.OnGoalContinuation,

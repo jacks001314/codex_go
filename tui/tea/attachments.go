@@ -193,6 +193,8 @@ func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 		IDEContext:             cloneIDEContext(request.IDEContext),
 		CollaborationMode:      cloneCollaborationMode(request.CollaborationMode),
 		InternalInputItems:     cloneAnySlice(request.InternalInputItems),
+		TurnTrigger:            request.TurnTrigger,
+		AdditionalContext:      cloneAnyMap(request.AdditionalContext),
 		LiteralInput:           request.LiteralInput,
 	}
 }

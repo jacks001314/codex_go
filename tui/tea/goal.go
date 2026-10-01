@@ -90,9 +90,17 @@ func (m *Model) prepareGoalSet(objective string) bubbletea.Cmd {
 	}
 	threadID := m.goalThreadID()
 	if threadID == "" {
+		// The session has no thread yet (a daemon- or remote-backed TUI creates
+		// one with the first turn). Hold the objective so the thread's start
+		// applies it, and start that thread now instead of dropping the command
+		// (Rust queues the /goal message and runs it once the session is
+		// configured).
 		m.pendingGoalObjective = objective
 		m.notice = ""
 		m.refreshTranscript()
+		if m.onEnsureThread != nil {
+			return m.onEnsureThread()
+		}
 		return nil
 	}
 	return m.readGoalForAction(goalActionPrepareSet, threadID, objective)

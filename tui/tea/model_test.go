@@ -7135,6 +7135,76 @@ func TestModelGoalWithoutThreadMatchesRustUsageAndQueuesObjective(t *testing.T) 
 	}
 }
 
+// TestModelGoalWithoutThreadStartsSession mirrors Rust's /goal bootstrap: a
+// session that has not started yet (a daemon- or remote-backed TUI creates its
+// thread with the first turn) starts the thread instead of dropping the
+// objective, and the goal is set once that thread exists.
+func TestModelGoalWithoutThreadStartsSession(t *testing.T) {
+	state := codextui.NewState(nil)
+	ensureCalls := 0
+	readCalls := 0
+	setObjectives := []string{}
+	model := NewModel(state, Options{
+		Width:  100,
+		Height: 24,
+		OnEnsureThread: func() bubbletea.Cmd {
+			ensureCalls++
+			return func() bubbletea.Msg {
+				return ThreadEventMsg{Event: protocol.ThreadStarted("thread-started")}
+			}
+		},
+		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
+			readCalls++
+			if threadID != "thread-started" {
+				t.Fatalf("goal read thread = %q", threadID)
+			}
+			return nil, nil
+		},
+		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
+			value := ""
+			if objective != nil {
+				value = *objective
+			}
+			setObjectives = append(setObjectives, value)
+			return appserver.Goal{ThreadID: threadID, Objective: value, Status: appserver.GoalActive}, nil
+		},
+	})
+
+	typeText(t, model, "/goal improve coverage")
+	_, cmd := model.Update(key(bubbletea.KeyEnter))
+	if ensureCalls != 1 {
+		t.Fatalf("ensure-thread calls = %d, want 1", ensureCalls)
+	}
+	if model.pendingGoalObjective != "improve coverage" {
+		t.Fatalf("pending goal objective = %q", model.pendingGoalObjective)
+	}
+	if cmd == nil {
+		t.Fatal("goal without a thread did not start the session")
+	}
+
+	// The started session applies the held objective and sets the goal.
+	_, cmd = model.Update(cmd())
+	for step := 0; step < 8 && cmd != nil; step++ {
+		msg := cmd()
+		if msg == nil {
+			break
+		}
+		_, cmd = model.Update(msg)
+	}
+	if readCalls != 1 {
+		t.Fatalf("goal read calls = %d, want 1", readCalls)
+	}
+	if len(setObjectives) != 1 || setObjectives[0] != "improve coverage" {
+		t.Fatalf("set objectives = %#v", setObjectives)
+	}
+	if model.pendingGoalObjective != "" {
+		t.Fatalf("pending goal objective after start = %q", model.pendingGoalObjective)
+	}
+	if model.currentGoal == nil || model.currentGoal.Objective != "improve coverage" {
+		t.Fatalf("current goal = %#v", model.currentGoal)
+	}
+}
+
 func TestModelUsageCommandOpensMenuAndShowsTokenActivity(t *testing.T) {
 	two := int64(2)
 	state := codextui.NewState(nil)

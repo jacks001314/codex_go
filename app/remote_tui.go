@@ -29,6 +29,7 @@ import (
 	"codex_go/doctor"
 	"codex_go/features"
 	"codex_go/plugin"
+	"codex_go/prompt"
 	"codex_go/protocol"
 	"codex_go/realtime"
 	"codex_go/review"
@@ -529,6 +530,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnReadGoal: func(threadID string) (*appserver.Goal, error) {
 			return interactiveRemoteReadGoal(ctx, endpoint, threadID)
 		},
+		OnEnsureThread: func() bubbletea.Cmd {
+			return interactiveRemoteEnsureThreadCommand(ctx, root, endpoint, state, brokers, taskToolsHost)
+		},
+		OnGoalContinuation: interactiveRemoteGoalContinuationCommand(ctx, root, endpoint, state, brokers, taskToolsHost, interrupts),
 		OnSetGoal: func(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) (appserver.Goal, error) {
 			return interactiveRemoteSetGoal(ctx, endpoint, threadID, objective, tokenBudget, status)
 		},
@@ -2491,6 +2496,99 @@ func interactiveRemoteTurnCommandWithTaskTools(ctx context.Context, root *cli.Ro
 		}
 		go runInteractiveRemoteTurn(ctx, root, endpoint, state, request, messages, brokers, interrupt, taskTools)
 		return codextea.StreamStartedMsg{Messages: messages}
+	}
+}
+
+// interactiveRemoteEnsureThreadCommand starts the session's thread without a
+// turn so a command that needs a thread id before the first user message
+// (/goal) can still run. A daemon- or remote-backed TUI creates its thread
+// lazily with the first submitted turn, while Rust starts one during startup
+// (app::startup::spawn_startup_thread_start); this mirrors that startup thread
+// for the commands that need it. The thread's events stream into the TUI the
+// same way a turn's startup events do.
+func interactiveRemoteEnsureThreadCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, brokers remoteTUIBrokers, taskTools *taskToolsMCPHost) bubbletea.Cmd {
+	return func() bubbletea.Msg {
+		messages := make(chan bubbletea.Msg, 64)
+		go func() {
+			defer close(messages)
+			client := &remoteAppServerTUIClient{
+				endpoint: endpoint,
+				root:     root,
+				state:    state,
+				messages: messages,
+				brokers:  brokers,
+				dial:     websocket.Dial,
+			}
+			if taskTools != nil {
+				client.taskTools = taskTools
+			}
+			if err := client.connect(ctx); err != nil {
+				sendRemoteThreadStartError(messages, err)
+				return
+			}
+			defer client.close()
+			if err := client.initialize(ctx); err != nil {
+				sendRemoteThreadStartError(messages, err)
+				return
+			}
+			// The session's task-tools MCP server hosts the dynamic-tools
+			// namespace for every thread of this connection, exactly as the
+			// per-turn client does (Rust DynamicToolMcpServer::attach).
+			if client.taskTools != nil {
+				if template, err := remoteThreadStartParams(root, state); err == nil {
+					client.taskTools.attach(client, template, client.registerDynamicToolThread)
+					defer client.taskTools.suspend()
+				}
+			}
+			if _, err := client.startThread(ctx, root, state); err != nil {
+				sendRemoteThreadStartError(messages, err)
+			}
+		}()
+		return codextea.StreamStartedMsg{Messages: messages}
+	}
+}
+
+// sendRemoteThreadStartError reports a failed session-thread start without
+// claiming a turn completed: no turn was requested.
+func sendRemoteThreadStartError(messages chan<- bubbletea.Msg, err error) {
+	if err == nil {
+		return
+	}
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		text = "remote app-server error"
+	}
+	messages <- codextea.ThreadEventMsg{Event: protocol.ErrorEvent(text)}
+}
+
+// interactiveRemoteGoalContinuationCommand starts an automatic continuation
+// turn for an active goal on a daemon- or remote-backed session (Rust's
+// ext/goal runtime). The embedded TUI drives its own continuation through the
+// exec runner, and the in-process router continues an idle goal by itself; a
+// remote host only does that for a thread it still has loaded, and the TUI's
+// per-request connections are gone by then, so the continuation prompt travels
+// as the turn's goal additional context.
+func interactiveRemoteGoalContinuationCommand(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, state *codextui.State, brokers remoteTUIBrokers, taskTools *taskToolsMCPHost, interrupts *remoteTUIInterruptController) codextea.GoalContinuationFunc {
+	return func(goal appserver.Goal) bubbletea.Cmd {
+		continuation := prompt.Continuation(&prompt.Goal{
+			Objective:       strings.TrimSpace(goal.Objective),
+			TokenBudget:     cloneInt64PtrRemote(goal.TokenBudget),
+			TokensUsed:      goal.TokensUsed,
+			TimeUsedSeconds: goal.TimeUsedSeconds,
+		})
+		if strings.TrimSpace(continuation) == "" {
+			return nil
+		}
+		request := codextea.SubmitRequest{
+			TurnTrigger: "goal",
+			AdditionalContext: map[string]any{
+				"goal": map[string]any{
+					"kind":  string(turn.AdditionalContextApplication),
+					"value": continuation,
+				},
+			},
+		}
+		return interactiveRemoteTurnCommandWithTaskTools(ctx, root, endpoint, state, request, brokers, taskTools, interrupts)
 	}
 }
 
@@ -4490,7 +4588,11 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		idecontext.ApplyIDEContextToUserInput(request.IDEContext, &inputs)
 	}
 	inputs = applySubmitTaskReferences(inputs, request.MentionBindings, threadID)
-	if len(inputs) == 0 {
+	additionalContext := remoteAdditionalContext(request.AdditionalContext)
+	// A goal continuation carries no user input: the continuation prompt
+	// travels as additional context, exactly like the host-side continuation
+	// (Rust ext/goal runtime.rs builds the same turn/start params).
+	if len(inputs) == 0 && len(additionalContext) == 0 {
 		return turn.TurnStartParams{}, errors.New("remote turn/start requires user input")
 	}
 	if request.CollaborationMode == nil {
@@ -4514,8 +4616,10 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		SandboxPolicy:         remoteStringAny(shared.Sandbox),
 		Config:                configValues,
 		ExperimentalRawEvents: true,
-		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569).
-		TurnTrigger: "user",
+		// Rust's TUI marks user-submitted turns with the "user" trigger (#46569)
+		// and attributes an automatic goal continuation with "goal".
+		TurnTrigger:       interactiveTurnTrigger(request),
+		AdditionalContext: additionalContext,
 	}
 	params.CollaborationMode = interactiveCollaborationModePayload(request.CollaborationMode)
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
@@ -4532,6 +4636,37 @@ func remoteTurnStartParams(root *cli.RootOptions, state *codextui.State, threadI
 		}
 	}
 	return params, nil
+}
+
+// remoteAdditionalContext converts a submission's additional-context entries
+// into the app server's typed form (Rust TurnStartParams::additional_context).
+func remoteAdditionalContext(values map[string]any) map[string]turn.AdditionalContextEntry {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]turn.AdditionalContextEntry, len(values))
+	for name, raw := range values {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		value, _ := entry["value"].(string)
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		kind, _ := entry["kind"].(string)
+		if strings.TrimSpace(kind) == "" {
+			kind = string(turn.AdditionalContextApplication)
+		}
+		out[strings.TrimSpace(name)] = turn.AdditionalContextEntry{
+			Value: value,
+			Kind:  turn.AdditionalContextKind(kind),
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func remoteTurnSteerParams(threadID string, turnID string, clientID string, request codextea.SubmitRequest) (turn.TurnSteerParams, error) {
