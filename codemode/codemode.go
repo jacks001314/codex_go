@@ -33,6 +33,88 @@ SOURCE: /[\s\S]+/
 const deferredNestedToolsGuidance = `Some deferred nested tools may be omitted from this description. They are still available on the global tools object and listed in ALL_TOOLS.
 To find one, filter ALL_TOOLS by name and description.`
 
+// mcpTypescriptPreamble mirrors Rust's `MCP_TYPESCRIPT_PREAMBLE`: the shared MCP
+// TypeScript definitions emitted whenever `code_mode_only` is enabled (Rust
+// #47118/#50536). Tool declarations reference these types, so the section is
+// included regardless of whether any available tool currently has an MCP output
+// schema.
+const mcpTypescriptPreamble = `type Role = "user" | "assistant";
+type MetaObject = Record<string, unknown>;
+type Annotations = {
+  audience?: Role[];
+  priority?: number;
+  lastModified?: string;
+};
+type Icon = {
+  src: string;
+  mimeType?: string;
+  sizes?: string[];
+  theme?: "light" | "dark";
+};
+type TextResourceContents = {
+  uri: string;
+  mimeType?: string;
+  _meta?: MetaObject;
+  text: string;
+};
+type BlobResourceContents = {
+  uri: string;
+  mimeType?: string;
+  _meta?: MetaObject;
+  blob: string;
+};
+type TextContent = {
+  type: "text";
+  text: string;
+  annotations?: Annotations;
+  _meta?: MetaObject;
+};
+type ImageContent = {
+  type: "image";
+  data: string;
+  mimeType: string;
+  annotations?: Annotations;
+  _meta?: MetaObject;
+};
+type AudioContent = {
+  type: "audio";
+  data: string;
+  mimeType: string;
+  annotations?: Annotations;
+  _meta?: MetaObject;
+};
+type ResourceLink = {
+  icons?: Icon[];
+  name: string;
+  title?: string;
+  uri: string;
+  description?: string;
+  mimeType?: string;
+  annotations?: Annotations;
+  size?: number;
+  _meta?: MetaObject;
+  type: "resource_link";
+};
+type EmbeddedResource = {
+  type: "resource";
+  resource: TextResourceContents | BlobResourceContents;
+  annotations?: Annotations;
+  _meta?: MetaObject;
+};
+type ContentBlock =
+  | TextContent
+  | ImageContent
+  | AudioContent
+  | ResourceLink
+  | EmbeddedResource;
+type CallToolResult<TStructured = { [key: string]: unknown }> = {
+  _meta?: MetaObject;
+  content: ContentBlock[];
+  isError?: boolean;
+  structuredContent?: TStructured;
+  [key: string]: unknown;
+};`
+
 const execDescriptionTemplate = `Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
 - All nested tools are available on the global tools object. Tool names are exposed as normalized JavaScript identifiers.
@@ -200,6 +282,13 @@ func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferred
 	}
 	if !codeModeOnly {
 		return strings.Join(sections, "\n\n")
+	}
+
+	// Rust #50536: include the shared MCP TypeScript preamble whenever
+	// code_mode_only is enabled, regardless of the available tools' output
+	// schemas, so the generated declarations always resolve.
+	if mcpTypescriptPreamble != "" {
+		sections = append(sections, "Shared MCP Types:\n```ts\n"+mcpTypescriptPreamble+"\n```")
 	}
 
 	definitions = SortDefinitions(definitions)

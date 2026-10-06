@@ -196,3 +196,33 @@ func TestCellStoreLifecycle(t *testing.T) {
 		t.Fatalf("List() = %#v", store.List())
 	}
 }
+
+// Mirrors Rust #50536: the shared MCP TypeScript preamble is included whenever
+// code_mode_only is enabled and stays present as tool output schemas change.
+func TestSharedMCPTypesPreambleStableInCodeModeOnly(t *testing.T) {
+	plain := []ToolDefinition{{Name: "plain", Description: "Plain tool"}}
+	mcpDeferred := []ToolDefinition{{
+		Name:     "mcp__sample__sync",
+		ToolName: tool.ToolName{Namespace: "mcp__sample", Name: "sync"},
+		OutputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content": map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
+				"isError": map[string]any{"type": "boolean"},
+				"_meta":   map[string]any{"type": "object"},
+			},
+		},
+	}}
+
+	base := BuildExecToolDescriptionWithDeferred(plain, nil, nil, true, false)
+	if !strings.Contains(base, "Shared MCP Types:") || !strings.Contains(base, "type CallToolResult") {
+		t.Fatalf("code-mode-only description missing the MCP preamble: %q", base)
+	}
+	withTools := BuildExecToolDescriptionWithDeferred(plain, mcpDeferred, nil, true, false)
+	if !strings.Contains(withTools, "Shared MCP Types:") {
+		t.Fatalf("preamble missing once a deferred MCP tool exists: %q", withTools)
+	}
+	if direct := BuildExecToolDescriptionWithDeferred(plain, nil, nil, false, false); strings.Contains(direct, "Shared MCP Types:") {
+		t.Fatalf("direct mode must not include the MCP preamble: %q", direct)
+	}
+}
