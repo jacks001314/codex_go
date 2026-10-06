@@ -33,6 +33,9 @@ type Args struct {
 	// ConnectHeadersStdin reads a JSON list of extension-header name/value
 	// pairs before the first bearer. Requires AuthTokenStdin.
 	ConnectHeadersStdin bool
+	// DiagnosticsJSON emits credential-safe JSON diagnostics on stderr instead
+	// of human-readable errors (Rust #50131).
+	DiagnosticsJSON bool
 }
 
 // ParseArgs parses the `codex tcp-tunnel` argument list with clap's shape: long
@@ -99,6 +102,11 @@ func ParseArgs(argv []string) (*Args, error) {
 				return nil, fmt.Errorf("unexpected value for '--connect-headers-stdin'")
 			}
 			args.ConnectHeadersStdin = true
+		case "--diagnostics-json":
+			if hasValue {
+				return nil, fmt.Errorf("unexpected value for '--diagnostics-json'")
+			}
+			args.DiagnosticsJSON = true
 		default:
 			if strings.HasPrefix(name, "-") {
 				return nil, fmt.Errorf("unexpected argument '%s' found", arg)

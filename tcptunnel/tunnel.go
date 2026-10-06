@@ -45,95 +45,109 @@ func Run(ctx context.Context, args *Args, stdin io.Reader, stdout, stderr io.Wri
 type sessionFactory func(target *ProxyTarget) *session
 
 func run(ctx context.Context, args *Args, stdin io.Reader, stdout, stderr io.Writer, newSessionFn sessionFactory) error {
-	if !args.AuthTokenStdin {
-		return errors.New("--auth-token-stdin is required")
+	diagnostics := DiagnosticsHuman
+	if args != nil && args.DiagnosticsJSON {
+		diagnostics = DiagnosticsJSON
 	}
-	listenAddr, err := net.ResolveTCPAddr("tcp", args.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("invalid listen address: %w", err)
-	}
-	if !listenAddr.IP.IsLoopback() {
-		return errors.New("listener must be loopback")
-	}
-	originsSource, err := os.ReadFile(args.ProxyOriginsFile)
-	if err != nil {
-		return fmt.Errorf("reading trusted proxy origins: %w", err)
-	}
-	trustedOrigins, err := ParseTrustedOrigins(string(originsSource))
-	if err != nil {
-		return err
-	}
-	proxyURL, err := url.Parse(args.ProxyURL)
-	if err != nil {
-		return fmt.Errorf("invalid proxy URL: %w", err)
-	}
-	target, err := ParseProxyTarget(proxyURL, trustedOrigins, args.Target)
-	if err != nil {
-		return err
-	}
+	phase := PhaseStartup
+	result := func() error {
+		if !args.AuthTokenStdin {
+			return errors.New("--auth-token-stdin is required")
+		}
+		listenAddr, err := net.ResolveTCPAddr("tcp", args.ListenAddr)
+		if err != nil {
+			return fmt.Errorf("invalid listen address: %w", err)
+		}
+		if !listenAddr.IP.IsLoopback() {
+			return errors.New("listener must be loopback")
+		}
+		originsSource, err := os.ReadFile(args.ProxyOriginsFile)
+		if err != nil {
+			return fmt.Errorf("reading trusted proxy origins: %w", err)
+		}
+		trustedOrigins, err := ParseTrustedOrigins(string(originsSource))
+		if err != nil {
+			return err
+		}
+		proxyURL, err := url.Parse(args.ProxyURL)
+		if err != nil {
+			return fmt.Errorf("invalid proxy URL: %w", err)
+		}
+		target, err := ParseProxyTarget(proxyURL, trustedOrigins, args.Target)
+		if err != nil {
+			return err
+		}
 
-	control := newControlInput(bufio.NewReader(stdin), args.ConnectHeadersStdin)
-	metadata := <-control.metadata
-	if metadata.err != nil {
-		return metadata.err
-	}
-	initial, ok := <-control.tokens
-	if !ok {
-		return errors.New("MASQUE credential input closed")
-	}
-	if initial.err != nil {
-		return initial.err
-	}
+		phase = PhaseControl
+		control := newControlInput(bufio.NewReader(stdin), args.ConnectHeadersStdin)
+		metadata := <-control.metadata
+		if metadata.err != nil {
+			return metadata.err
+		}
+		initial, ok := <-control.tokens
+		if !ok {
+			return errors.New("MASQUE credential input closed")
+		}
+		if initial.err != nil {
+			return initial.err
+		}
+		phase = PhaseStartup
 
-	auth := &authState{}
-	auth.store(initial.auth)
-	headers := metadata.headers
+		auth := &authState{}
+		auth.store(initial.auth)
+		headers := metadata.headers
 
-	listener, err := net.ListenTCP("tcp", listenAddr)
-	if err != nil {
-		return fmt.Errorf("binding loopback listener: %w", err)
-	}
-	defer listener.Close()
+		listener, err := net.ListenTCP("tcp", listenAddr)
+		if err != nil {
+			return fmt.Errorf("binding loopback listener: %w", err)
+		}
+		defer listener.Close()
 
-	session := newSessionFn(target)
-	defer session.close()
-	connectCtx, cancelConnect := context.WithTimeout(ctx, proxyConnectTimeout)
-	err = session.connect(connectCtx)
-	cancelConnect()
-	if err != nil {
-		return err
-	}
+		session := newSessionFn(target)
+		defer session.close()
+		connectCtx, cancelConnect := context.WithTimeout(ctx, proxyConnectTimeout)
+		err = session.connect(connectCtx)
+		connectTimedOut := connectCtx.Err() == context.DeadlineExceeded
+		cancelConnect()
+		if err != nil {
+			if connectTimedOut {
+				return classify(err, CodeTimeout)
+			}
+			return err
+		}
 
-	// The line is the caller readiness contract, including the assigned port.
-	if _, err := fmt.Fprintf(stdout, "LISTENING %s\n", listener.Addr().String()); err != nil {
-		return err
-	}
-	if flusher, ok := stdout.(interface{ Flush() error }); ok {
-		_ = flusher.Flush()
-	}
+		// The line is the caller readiness contract, including the assigned port.
+		if _, err := fmt.Fprintf(stdout, "LISTENING %s\n", listener.Addr().String()); err != nil {
+			return err
+		}
+		if flusher, ok := stdout.(interface{ Flush() error }); ok {
+			_ = flusher.Flush()
+		}
 
-	ready := make(chan struct{})
-	close(ready)
-	if !args.AuthTokenUpdatesStdin {
-		return serve(ctx, listener, target, session, headers, auth, stderr)
-	}
+		ready := make(chan struct{})
+		close(ready)
+		if !args.AuthTokenUpdatesStdin {
+			return diagnostics.withPhase(serve(ctx, listener, target, session, headers, auth, stderr, diagnostics), PhaseTransport)
+		}
 
-	tunnelErr := make(chan error, 1)
-	go func() {
-		tunnelErr <- serve(ctx, listener, target, session, headers, auth, stderr)
-	}()
-	updatesErr := make(chan error, 1)
-	go func() {
-		updatesErr <- updateAuthTokens(control.tokens, auth, ready, stdout)
-	}()
-	select {
-	case err := <-tunnelErr:
-		return err
-	case err := <-updatesErr:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
+		tunnelErr := make(chan error, 1)
+		go func() {
+			tunnelErr <- diagnostics.withPhase(serve(ctx, listener, target, session, headers, auth, stderr, diagnostics), PhaseTransport)
+		}()
+		updatesErr := make(chan error, 1)
+		go func() {
+			updatesErr <- updateAuthTokens(control.tokens, auth, ready, stdout)
+		}()
+		select {
+		case err := <-tunnelErr:
+			return err
+		case err := <-updatesErr:
+			return diagnostics.withPhase(err, PhaseControl)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	return diagnostics.finish(result(), phase, stderr)
 }
 
 // updateAuthTokens mirrors Rust's `update_auth_tokens`: each replacement bearer
@@ -265,6 +279,7 @@ func dialProxy(ctx context.Context, target *ProxyTarget, tlsConfig *tls.Config, 
 		return nil, fmt.Errorf("connecting to MASQUE proxy: %w", err)
 	}
 	lastErr := errors.New("MASQUE proxy resolved to no addresses")
+	lastTimeout := false
 	for _, peer := range peers {
 		config := tlsConfig.Clone()
 		if config.ServerName == "" {
@@ -273,12 +288,17 @@ func dialProxy(ctx context.Context, target *ProxyTarget, tlsConfig *tls.Config, 
 		addr := net.JoinHostPort(peer, fmt.Sprintf("%d", target.Port))
 		attemptCtx, cancel := context.WithTimeout(ctx, quicHandshakeTimeout)
 		conn, err := quic.DialAddr(attemptCtx, addr, config, quicConf)
+		timedOut := attemptCtx.Err() == context.DeadlineExceeded
 		cancel()
 		if err != nil {
 			lastErr = err
+			lastTimeout = timedOut
 			continue
 		}
 		return conn, nil
+	}
+	if lastTimeout {
+		return nil, classify(lastErr, CodeHandshakeTimeout)
 	}
 	return nil, fmt.Errorf("QUIC handshake failed: %w", lastErr)
 }
@@ -291,7 +311,7 @@ type acceptResult struct {
 // serve accepts loopback connections until the context ends, reconnecting the
 // proxy transport when it is lost. While offline, newly accepted connections
 // are closed rather than queued.
-func serve(ctx context.Context, listener *net.TCPListener, target *ProxyTarget, session *session, headers http.Header, auth *authState, stderr io.Writer) error {
+func serve(ctx context.Context, listener *net.TCPListener, target *ProxyTarget, session *session, headers http.Header, auth *authState, stderr io.Writer, diagnostics Diagnostics) error {
 	accepts := make(chan acceptResult)
 	go func() {
 		for {
@@ -315,20 +335,22 @@ func serve(ctx context.Context, listener *net.TCPListener, target *ProxyTarget, 
 		conn := session.conn
 		session.mu.Unlock()
 		if conn == nil {
-			if err := reconnect(ctx, session, accepts, stderr); err != nil {
+			if err := reconnect(ctx, session, accepts, stderr, diagnostics); err != nil {
 				return err
 			}
 			continue
 		}
-		served, err := serveConnection(ctx, conn, accepts, target, session, headers, auth, stderr)
+		served, err := serveConnection(ctx, conn, accepts, target, session, headers, auth, stderr, diagnostics)
 		if served {
 			return nil
 		}
 		if err == nil {
 			return nil
 		}
-		fmt.Fprintf(stderr, "MASQUE proxy connection lost; reconnecting: %v\n", err)
-		if err := reconnect(ctx, session, accepts, stderr); err != nil {
+		// The Go http3 transport has no observable "draining" event, so a lost
+		// transport is always classified as closed (Rust distinguishes draining).
+		diagnostics.report(PhaseTransport, classify(err, CodeClosed), fmt.Sprintf("MASQUE proxy connection lost; reconnecting: %v", err), stderr)
+		if err := reconnect(ctx, session, accepts, stderr, diagnostics); err != nil {
 			return err
 		}
 	}
@@ -337,7 +359,7 @@ func serve(ctx context.Context, listener *net.TCPListener, target *ProxyTarget, 
 // serveConnection accepts local connections while the transport is alive. It
 // reports `served` when the context ended, and returns the transport error
 // otherwise.
-func serveConnection(ctx context.Context, conn *quic.Conn, accepts <-chan acceptResult, target *ProxyTarget, session *session, headers http.Header, auth *authState, stderr io.Writer) (bool, error) {
+func serveConnection(ctx context.Context, conn *quic.Conn, accepts <-chan acceptResult, target *ProxyTarget, session *session, headers http.Header, auth *authState, stderr io.Writer, diagnostics Diagnostics) (bool, error) {
 	transportDone := conn.Context().Done()
 	for {
 		select {
@@ -355,7 +377,7 @@ func serveConnection(ctx context.Context, conn *quic.Conn, accepts <-chan accept
 			}
 			go func() {
 				if err := bridge(ctx, session, socket, target, headers, auth); err != nil {
-					fmt.Fprintf(stderr, "MASQUE TCP connection failed: %v\n", err)
+					diagnostics.report(PhaseConnect, err, fmt.Sprintf("MASQUE TCP connection failed: %v", err), stderr)
 				}
 			}()
 		}
@@ -364,7 +386,7 @@ func serveConnection(ctx context.Context, conn *quic.Conn, accepts <-chan accept
 
 // reconnect retries the proxy transport with Rust's backoff while draining (and
 // closing) local connections so nothing is queued or replayed.
-func reconnect(ctx context.Context, session *session, accepts <-chan acceptResult, stderr io.Writer) error {
+func reconnect(ctx context.Context, session *session, accepts <-chan acceptResult, stderr io.Writer, diagnostics Diagnostics) error {
 	delay := initialRetryDelay
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, proxyConnectTimeout)
@@ -373,7 +395,7 @@ func reconnect(ctx context.Context, session *session, accepts <-chan acceptResul
 		if err == nil {
 			return nil
 		}
-		fmt.Fprintf(stderr, "MASQUE proxy reconnect failed: %v\n", err)
+		diagnostics.report(PhaseTransport, err, fmt.Sprintf("MASQUE proxy reconnect failed: %v", err), stderr)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -419,7 +441,7 @@ func bridge(ctx context.Context, session *session, socket net.Conn, target *Prox
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode > 299 {
 		_ = pipeWriter.CloseWithError(fmt.Errorf("CONNECT rejected"))
-		return fmt.Errorf("MASQUE CONNECT rejected with status %d", response.StatusCode)
+		return rejectedError(response.StatusCode, nil)
 	}
 
 	uploadErr := make(chan error, 1)

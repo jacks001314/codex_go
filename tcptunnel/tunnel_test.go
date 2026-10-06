@@ -2,6 +2,7 @@ package tcptunnel
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -25,6 +26,25 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 )
+
+// lockedBuffer is a concurrency-safe stderr sink: bridge goroutines report
+// diagnostics while the test reads them.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 // localHTTP3Proxy is a minimal HTTP/3 CONNECT proxy used to exercise the
 // tunnel transport end to end. It records the authorization and extension
@@ -69,6 +89,11 @@ func newLocalHTTP3Proxy(t *testing.T) *localHTTP3Proxy {
 		requests <- recordedConnect{
 			authorization: r.Header.Get("Authorization"),
 			route:         r.Header.Get("X-Test-Route"),
+		}
+		// A dedicated bearer is rejected so the diagnostics path is exercised.
+		if r.Header.Get("Authorization") == "Bearer rejected-test" {
+			w.WriteHeader(http.StatusForbidden)
+			return
 		}
 		flusher, _ := w.(http.Flusher)
 		w.WriteHeader(http.StatusOK)
@@ -200,8 +225,9 @@ func TestTransportCarriesAuthenticatedConnectAndReconnectsWithoutReplay(t *testi
 		t.Fatalf("session.connect() error = %v", err)
 	}
 
+	diagnostics := &lockedBuffer{}
 	served := make(chan error, 1)
-	go func() { served <- serve(ctx, listener, target, session, headers, auth, io.Discard) }()
+	go func() { served <- serve(ctx, listener, target, session, headers, auth, diagnostics, DiagnosticsJSON) }()
 
 	dial := func() net.Conn {
 		t.Helper()
@@ -250,6 +276,22 @@ func TestTransportCarriesAuthenticatedConnectAndReconnectsWithoutReplay(t *testi
 	}
 
 	// A renewal applies to connections opened after it, never to the live one.
+	auth.store("Bearer rejected-test")
+	rejected := dial()
+	_ = rejected.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if count, err := rejected.Read(make([]byte, 1)); err == nil && count != 0 {
+		t.Fatalf("rejected CONNECT kept the stream open: n=%d err=%v", count, err)
+	}
+	expectConnect("Bearer rejected-test")
+	recordDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(recordDeadline) && !strings.Contains(diagnostics.String(), `"code":"rejected"`) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	record := diagnostics.String()
+	if !strings.Contains(record, `"phase":"connect"`) || !strings.Contains(record, `"http_status":403`) || !strings.Contains(record, `"terminal":false`) {
+		t.Fatalf("rejected CONNECT diagnostics = %q", record)
+	}
+
 	auth.store("Bearer replacement-test")
 	second := dial()
 	readReady(second)
@@ -430,4 +472,30 @@ func selfSignedCertificate(t *testing.T) (tls.Certificate, *x509.CertPool) {
 	}
 	roots.AddCert(parsed)
 	return certificate, roots
+}
+
+// Mirrors Rust #50131: a startup failure in JSON mode emits one terminal record
+// on stderr and returns the generic error the CLI is allowed to print.
+func TestRunJSONDiagnosticsFatalStartupEmitsTerminalRecord(t *testing.T) {
+	var stderr bytes.Buffer
+	args := &Args{
+		ProxyURL:         "https://proxy.example.org",
+		ProxyOriginsFile: filepath.Join(t.TempDir(), "missing-origins.txt"),
+		Target:           "127.0.0.1:22",
+		ListenAddr:       "127.0.0.1:0",
+		AuthTokenStdin:   true,
+		DiagnosticsJSON:  true,
+	}
+	err := run(context.Background(), args, strings.NewReader("token\n"), io.Discard, &stderr, newSession)
+	if err == nil || err.Error() != "TCP tunnel failed" {
+		t.Fatalf("run() error = %v, want generic failure", err)
+	}
+	record := strings.TrimSpace(stderr.String())
+	if !strings.Contains(record, `"v":1`) || !strings.Contains(record, `"phase":"startup"`) ||
+		!strings.Contains(record, `"code":"failed"`) || !strings.Contains(record, `"terminal":true`) {
+		t.Fatalf("stderr = %q", record)
+	}
+	if strings.Count(stderr.String(), "\n") != 1 {
+		t.Fatalf("stderr lines = %d, want 1: %q", strings.Count(stderr.String(), "\n"), stderr.String())
+	}
 }
