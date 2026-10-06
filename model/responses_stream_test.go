@@ -395,6 +395,22 @@ func TestJSONHeadersToHTTPHeadersMatchesRust(t *testing.T) {
 	}
 }
 
+// TestJSONHeadersResolveCaseVariantDuplicatesLikeRust pins Rust #51440's
+// duplicate-name case: the JSON map is ordered, so the entry that sorts last
+// wins (`retry-after` after `Retry-After`). Go's map iteration is randomized,
+// so the conversion must sort keys to stay deterministic.
+func TestJSONHeadersResolveCaseVariantDuplicatesLikeRust(t *testing.T) {
+	for attempt := 0; attempt < 50; attempt++ {
+		mapped := jsonHeadersToHTTPHeaders(map[string]any{
+			"Retry-After": "5",
+			"retry-after": "30",
+		})
+		if got := mapped.Get("Retry-After"); got != "30" {
+			t.Fatalf("duplicate Retry-After = %q, want 30 (attempt %d)", got, attempt)
+		}
+	}
+}
+
 // Mirrors Rust's
 // `safety_buffering_prefers_wire_retry_model_and_only_falls_back_when_omitted`:
 // the payload's own wire `retry_model` wins, an explicit null suppresses the

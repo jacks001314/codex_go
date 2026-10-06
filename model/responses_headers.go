@@ -2,6 +2,7 @@ package model
 
 import (
 	"net/http"
+	"sort"
 	"strconv"
 )
 
@@ -19,7 +20,17 @@ func jsonHeadersToHTTPHeaders(headers map[string]any) http.Header {
 		return nil
 	}
 	mapped := http.Header{}
-	for name, value := range headers {
+	// Rust's JSON map is ordered, so duplicate case-variant names resolve to the
+	// entry that sorts last (e.g. `retry-after` after `Retry-After`, #51440).
+	// Go map iteration is randomized, so sort the keys to keep the result
+	// deterministic and identical to Rust's.
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		value := headers[name]
 		if !validHTTPHeaderName(name) {
 			continue
 		}
