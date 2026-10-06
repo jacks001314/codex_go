@@ -11515,11 +11515,19 @@ func applyMCPAppMetadata(data map[string]any, output map[string]any) {
 	if data == nil || output == nil {
 		return
 	}
-	if appUI := mcpAppUIFromOutput(output); appUI != nil {
+	appUI := mcpAppUIFromOutput(output)
+	if appUI != nil {
 		data["mcpAppUi"] = *appUI
-		if strings.TrimSpace(appUI.ResourceURI) != "" {
-			data["mcpAppResourceUri"] = strings.TrimSpace(appUI.ResourceURI)
-		}
+	}
+	// Rust #48764: the resource URI is preserved even when the widget
+	// presentation is unset because the descriptor declared no explicit
+	// display-mode preference.
+	resourceURI := strings.TrimSpace(stringFromMap(output, "mcp_app_resource_uri"))
+	if resourceURI == "" && appUI != nil {
+		resourceURI = strings.TrimSpace(appUI.ResourceURI)
+	}
+	if resourceURI != "" {
+		data["mcpAppResourceUri"] = resourceURI
 	}
 	if pluginID := strings.TrimSpace(stringFromMap(output, "plugin_id")); pluginID != "" {
 		data["pluginId"] = pluginID

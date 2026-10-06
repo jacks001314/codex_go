@@ -136,3 +136,53 @@ func TestMCPAppUIStaysNullWithoutDescriptorWidgets(t *testing.T) {
 		t.Fatalf("wire mcpAppUi = %#v, want null", decoded["mcpAppUi"])
 	}
 }
+
+// TestMCPAppResourceURIWithoutDisplayPreferenceLikeRust mirrors Rust #48764:
+// when a descriptor declares a widget URI but no explicit display-mode
+// preference, the tool-call item keeps mcpAppResourceUri while mcpAppUi stays
+// unset so clients can apply resource display defaults.
+func TestMCPAppResourceURIWithoutDisplayPreferenceLikeRust(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	execution := &turn.ToolExecutionResult{
+		Invocation: &tool.Invocation{
+			CallID:   "call-widget",
+			ToolName: tool.NamespacedName("mcp__plain", "widget"),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{}`},
+		},
+		Output: &tool.Output{
+			CallID:      "call-widget",
+			ToolName:    tool.NamespacedName("mcp__plain", "widget"),
+			Success:     true,
+			Body:        "ok",
+			Data:        map[string]any{"mcpToolCall": true, "server": "plain", "tool": "widget", "mcp_app_resource_uri": "ui://widget/x"},
+			CompletedAt: now,
+		},
+		StartedAt:  now,
+		FinishedAt: now,
+	}
+	item, ok := sessionItemForAppToolCall("turn-1", execution, now, nil)
+	if !ok {
+		t.Fatal("sessionItemForAppToolCall() did not produce an item")
+	}
+	if item.Data["mcpAppUi"] != nil {
+		t.Fatalf("mcpAppUi should stay unset: %#v", item.Data["mcpAppUi"])
+	}
+	if item.Data["mcpAppResourceUri"] != "ui://widget/x" {
+		t.Fatalf("mcpAppResourceUri = %#v", item.Data["mcpAppResourceUri"])
+	}
+	threadItem := BuildThreadItem(item)
+	encoded, err := json.Marshal(&threadItem)
+	if err != nil {
+		t.Fatalf("Marshal(thread item) error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal(thread item) error = %v", err)
+	}
+	if decoded["mcpAppUi"] != nil {
+		t.Fatalf("wire mcpAppUi = %#v, want null", decoded["mcpAppUi"])
+	}
+	if decoded["mcpAppResourceUri"] != "ui://widget/x" {
+		t.Fatalf("wire mcpAppResourceUri = %#v", decoded["mcpAppResourceUri"])
+	}
+}

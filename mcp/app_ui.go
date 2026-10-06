@@ -32,19 +32,31 @@ type McpAppUI struct {
 
 // MCPAppUIFromToolMeta mirrors Rust's `get_mcp_app_resource_uri` plus the
 // `mcp_tool_metadata` display-mode mapping (#45805): the resource URI comes from
-// `ui.resourceUri`, then `ui/resourceUri`, then `openai/outputTemplate`, and the
-// display mode is `fullscreen` only when `openai/ui.preferredModelDisplayMode`
-// says so - anything else (including an unsupported mode) is `inline`. Nil means
-// the tool declares no widget, so clients fall back to catalog discovery.
+// `ui.resourceUri`, then `ui/resourceUri`, then `openai/outputTemplate`. Since
+// Rust #48764 the presentation is only populated when the descriptor also
+// declares an explicit `inline` or `fullscreen` preference; missing or
+// unsupported preferences return nil so clients can apply resource display
+// defaults. Use MCPAppResourceURIFromToolMeta to read the URI independently.
 func MCPAppUIFromToolMeta(meta any) *McpAppUI {
 	resourceURI := mcpToolUIResourceURI(meta)
 	if resourceURI == "" {
 		return nil
 	}
+	mode, explicit := mcpToolPreferredModelDisplayMode(meta)
+	if !explicit {
+		return nil
+	}
 	return &McpAppUI{
 		ResourceURI:               resourceURI,
-		PreferredModelDisplayMode: mcpToolPreferredModelDisplayMode(meta),
+		PreferredModelDisplayMode: mode,
 	}
+}
+
+// MCPAppResourceURIFromToolMeta returns the widget resource URI declared by a
+// tool descriptor, independent of any display-mode preference (Rust #48764:
+// `mcpAppResourceUri` is preserved even when `mcpAppUi` is unset).
+func MCPAppResourceURIFromToolMeta(meta any) string {
+	return mcpToolUIResourceURI(meta)
 }
 
 func mcpToolUIResourceURI(meta any) string {
@@ -63,19 +75,23 @@ func mcpToolUIResourceURI(meta any) string {
 	return stringFromMetadata(base[mcpToolOpenAIOutputTemplateMetaKey])
 }
 
-func mcpToolPreferredModelDisplayMode(meta any) McpAppDisplayMode {
+func mcpToolPreferredModelDisplayMode(meta any) (McpAppDisplayMode, bool) {
 	base := metadataMap(meta)
 	if base == nil {
-		return McpAppDisplayModeInline
+		return "", false
 	}
 	ui := metadataMap(base[mcpToolOpenAIUIMetaKey])
 	if ui == nil {
-		return McpAppDisplayModeInline
+		return "", false
 	}
-	if stringFromMetadata(ui[mcpToolPreferredModelDisplayModeKey]) == string(McpAppDisplayModeFullscreen) {
-		return McpAppDisplayModeFullscreen
+	switch stringFromMetadata(ui[mcpToolPreferredModelDisplayModeKey]) {
+	case string(McpAppDisplayModeInline):
+		return McpAppDisplayModeInline, true
+	case string(McpAppDisplayModeFullscreen):
+		return McpAppDisplayModeFullscreen, true
+	default:
+		return "", false
 	}
-	return McpAppDisplayModeInline
 }
 
 // MCPToolCallLinkID returns the trusted `_codex_apps` link id for a Codex Apps
@@ -138,6 +154,11 @@ func MCPAppUIFromMetadataMap(value map[string]any) *McpAppUI {
 func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any, connectorID string, connectorName string, pluginID string) {
 	if data == nil {
 		return
+	}
+	if resourceURI := MCPAppResourceURIFromToolMeta(toolMeta); resourceURI != "" {
+		// Rust #48764: the legacy resource URI is preserved independently of
+		// the presentation so clients can apply resource display defaults.
+		data["mcp_app_resource_uri"] = resourceURI
 	}
 	if appUI := MCPAppUIFromToolMeta(toolMeta); appUI != nil {
 		data["mcp_app_ui"] = *appUI

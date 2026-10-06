@@ -6,41 +6,50 @@ import (
 	"testing"
 )
 
-// TestMCPAppUIFromToolMetaCoversDescriptorDeclarations mirrors Rust #45805's
-// parameterized coverage: the resource URI may be declared as `ui.resourceUri`,
-// `ui/resourceUri`, or `openai/outputTemplate`, the display mode is
-// `fullscreen` only for an explicit fullscreen preference, and anything else
-// (including an unsupported mode) defaults to `inline`.
+// TestMCPAppUIFromToolMetaCoversDescriptorDeclarations mirrors Rust #45805 plus
+// #48764: the resource URI may be declared as `ui.resourceUri`, `ui/resourceUri`,
+// or `openai/outputTemplate`, and the presentation is only populated for an
+// explicit `inline` or `fullscreen` preference. A missing or unsupported
+// preference leaves the presentation unset while the resource URI is still
+// reported independently.
 func TestMCPAppUIFromToolMetaCoversDescriptorDeclarations(t *testing.T) {
 	cases := []struct {
-		name string
-		meta any
-		want *McpAppUI
+		name    string
+		meta    any
+		want    *McpAppUI
+		wantURI string
 	}{
 		{
-			name: "ui resource uri",
-			meta: map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/a"}},
-			want: &McpAppUI{ResourceURI: "ui://widget/a", PreferredModelDisplayMode: McpAppDisplayModeInline},
+			name:    "ui resource uri without a preference",
+			meta:    map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/a"}},
+			wantURI: "ui://widget/a",
 		},
 		{
-			name: "flat ui resource uri with fullscreen",
-			meta: map[string]any{"ui/resourceUri": "ui://widget/b", "openai/ui": map[string]any{"preferredModelDisplayMode": "fullscreen"}},
-			want: &McpAppUI{ResourceURI: "ui://widget/b", PreferredModelDisplayMode: McpAppDisplayModeFullscreen},
+			name:    "flat ui resource uri with fullscreen",
+			meta:    map[string]any{"ui/resourceUri": "ui://widget/b", "openai/ui": map[string]any{"preferredModelDisplayMode": "fullscreen"}},
+			want:    &McpAppUI{ResourceURI: "ui://widget/b", PreferredModelDisplayMode: McpAppDisplayModeFullscreen},
+			wantURI: "ui://widget/b",
 		},
 		{
-			name: "legacy output template",
-			meta: map[string]any{"openai/outputTemplate": "ui://widget/c"},
-			want: &McpAppUI{ResourceURI: "ui://widget/c", PreferredModelDisplayMode: McpAppDisplayModeInline},
+			name:    "explicit inline preference",
+			meta:    map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/g"}, "openai/ui": map[string]any{"preferredModelDisplayMode": "inline"}},
+			want:    &McpAppUI{ResourceURI: "ui://widget/g", PreferredModelDisplayMode: McpAppDisplayModeInline},
+			wantURI: "ui://widget/g",
 		},
 		{
-			name: "unsupported display mode defaults to inline",
-			meta: map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/d"}, "openai/ui": map[string]any{"preferredModelDisplayMode": "sidebar"}},
-			want: &McpAppUI{ResourceURI: "ui://widget/d", PreferredModelDisplayMode: McpAppDisplayModeInline},
+			name:    "legacy output template",
+			meta:    map[string]any{"openai/outputTemplate": "ui://widget/c"},
+			wantURI: "ui://widget/c",
 		},
 		{
-			name: "nested ui resource uri wins over the flat key",
-			meta: map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/e"}, "ui/resourceUri": "ui://widget/f"},
-			want: &McpAppUI{ResourceURI: "ui://widget/e", PreferredModelDisplayMode: McpAppDisplayModeInline},
+			name:    "unsupported display mode leaves the presentation unset",
+			meta:    map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/d"}, "openai/ui": map[string]any{"preferredModelDisplayMode": "sidebar"}},
+			wantURI: "ui://widget/d",
+		},
+		{
+			name:    "nested ui resource uri wins over the flat key",
+			meta:    map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/e"}, "ui/resourceUri": "ui://widget/f"},
+			wantURI: "ui://widget/e",
 		},
 		{name: "result-only widget declares nothing", meta: map[string]any{"other": true}},
 		{name: "no metadata"},
@@ -52,10 +61,14 @@ func TestMCPAppUIFromToolMetaCoversDescriptorDeclarations(t *testing.T) {
 				if got != nil {
 					t.Fatalf("MCPAppUIFromToolMeta() = %#v, want nil", got)
 				}
-				return
-			}
-			if got == nil || !reflect.DeepEqual(*got, *tc.want) {
+			} else if got == nil || !reflect.DeepEqual(*got, *tc.want) {
 				t.Fatalf("MCPAppUIFromToolMeta() = %#v, want %#v", got, tc.want)
+			}
+			if uri := MCPAppResourceURIFromToolMeta(tc.meta); uri != tc.wantURI {
+				t.Fatalf("MCPAppResourceURIFromToolMeta() = %q, want %q", uri, tc.wantURI)
+			}
+			if tc.want == nil {
+				return
 			}
 			// The wire shape stays camelCase, matching the v2 schema.
 			encoded, err := json.Marshal(got)
@@ -93,17 +106,25 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 	if !ok || appUI.ResourceURI != "ui://widgets/calendar" || appUI.PreferredModelDisplayMode != McpAppDisplayModeFullscreen {
 		t.Fatalf("mcp_app_ui = %#v", data["mcp_app_ui"])
 	}
+	if data["mcp_app_resource_uri"] != "ui://widgets/calendar" {
+		t.Fatalf("mcp_app_resource_uri = %#v", data["mcp_app_resource_uri"])
+	}
 	if data["connector_id"] != "calendar" || data["connector_name"] != "Calendar" ||
 		data["link_id"] != "link_calendar" || data["action_name"] != "create_event" ||
 		data["plugin_id"] != "sample@openai-curated" {
 		t.Fatalf("app identity = %#v", data)
 	}
 
-	// A non-Codex-Apps server keeps the widget but never the trusted identity.
+	// A descriptor without an explicit display-mode preference keeps the
+	// resource URI but leaves the presentation unset (Rust #48764), and a
+	// non-Codex-Apps server never contributes the trusted identity.
 	plain := map[string]any{}
 	ApplyMCPAppOutputMetadata(plain, "plain_server", map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/x"}}, "calendar", "Calendar", "sample@openai-curated")
-	if _, ok := plain["mcp_app_ui"].(McpAppUI); !ok {
-		t.Fatalf("mcp_app_ui = %#v", plain["mcp_app_ui"])
+	if _, present := plain["mcp_app_ui"]; present {
+		t.Fatalf("mcp_app_ui should be unset without a preference: %#v", plain["mcp_app_ui"])
+	}
+	if plain["mcp_app_resource_uri"] != "ui://widget/x" {
+		t.Fatalf("mcp_app_resource_uri = %#v", plain["mcp_app_resource_uri"])
 	}
 	if _, present := plain["connector_id"]; present {
 		t.Fatalf("untrusted server contributed connector identity: %#v", plain)
@@ -118,6 +139,9 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 	ApplyMCPAppOutputMetadata(empty, RuntimeCodexAppsMCPServerName, map[string]any{}, "calendar", "Calendar", "")
 	if _, present := empty["mcp_app_ui"]; present {
 		t.Fatalf("unexpected mcp_app_ui: %#v", empty)
+	}
+	if _, present := empty["mcp_app_resource_uri"]; present {
+		t.Fatalf("unexpected mcp_app_resource_uri: %#v", empty)
 	}
 }
 
