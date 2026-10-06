@@ -290,8 +290,8 @@ func prepareDaemonPackage(daemon *Daemon, settings *DaemonSettings, mode daemonI
 		if err := linkUnixPackageAlias(stage); err != nil {
 			return err
 		}
-		if err := os.Rename(stage, release); err != nil {
-			return fmt.Errorf("failed to publish the daemon package %s: %w", release, err)
+		if err := publishDaemonRelease(stage, release); err != nil {
+			return err
 		}
 		staged = true
 	}
