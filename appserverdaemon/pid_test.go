@@ -10,7 +10,7 @@ import (
 
 func TestPIDBackendCommandArgsAndEnv(t *testing.T) {
 	disabled := NewPIDBackend(BackendPaths{RemoteControlEnabled: false})
-	if got, want := disabled.CommandArgs(), []string{"app-server", "--listen", "unix://"}; !reflect.DeepEqual(got, want) {
+	if got, want := disabled.CommandArgs(), []string{"app-server", "--listen", "unix://", "--analytics-default-enabled"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("disabled CommandArgs = %#v, want %#v", got, want)
 	}
 	if got := disabled.CommandEnv(); !reflect.DeepEqual(got, map[string]string{RemoteControlDisabledEnvVar: "1"}) {
@@ -18,7 +18,7 @@ func TestPIDBackendCommandArgsAndEnv(t *testing.T) {
 	}
 
 	enabled := NewPIDBackend(BackendPaths{RemoteControlEnabled: true})
-	if got, want := enabled.CommandArgs(), []string{"app-server", "--remote-control", "--listen", "unix://"}; !reflect.DeepEqual(got, want) {
+	if got, want := enabled.CommandArgs(), []string{"app-server", "--remote-control", "--listen", "unix://", "--analytics-default-enabled"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("enabled CommandArgs = %#v, want %#v", got, want)
 	}
 	if got := enabled.CommandEnv(); got != nil {
@@ -109,7 +109,7 @@ func TestPIDBackendCommandArgsReplaysFeatureOverridesLikeRust(t *testing.T) {
 		},
 	})
 	want := []string{
-		"app-server", "--listen", "unix://",
+		"app-server", "--listen", "unix://", "--analytics-default-enabled",
 		"-c", "features.auth_elicitation=false",
 		"-c", "features.code_mode_host=true",
 	}
@@ -123,7 +123,7 @@ func TestPIDBackendCommandArgsReplaysFeatureOverridesLikeRust(t *testing.T) {
 		FeatureOverrides:     map[string]bool{"code_mode_host": true},
 	})
 	wantRemote := []string{
-		"app-server", "--remote-control", "--listen", "unix://",
+		"app-server", "--remote-control", "--listen", "unix://", "--analytics-default-enabled",
 		"-c", "features.code_mode_host=true",
 	}
 	if got := remote.CommandArgs(); !reflect.DeepEqual(got, wantRemote) {

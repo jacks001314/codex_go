@@ -121,6 +121,9 @@ func (b *PIDBackend) CommandArgs() []string {
 		} else {
 			args = []string{"app-server", "--listen", "unix://"}
 		}
+		// Match first-party clients' default while preserving explicit analytics
+		// opt-outs (Rust PidBackend::command_args, #49426).
+		args = append(args, "--analytics-default-enabled")
 		// Replay the stored feature overrides so a shared server keeps the
 		// services the launch that started it asked for (Rust
 		// PidBackend::command_args).
