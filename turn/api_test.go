@@ -65,6 +65,65 @@ func TestTurnStartResponseMarshalRustShape(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51415: turn/start accepts optional parentTurnId/rootTurnId, a
+// new turn defaults to its own root when none is supplied, and the returned
+// turn exposes rootTurnId.
+func TestTurnLineageExposureLikeRust(t *testing.T) {
+	service := NewTurnService()
+	service.SetClock(func() time.Time { return time.Unix(123, 0) })
+
+	first, err := service.Start(&TurnStartParams{ThreadID: "thread-1"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if first.Turn.RootTurnID != first.Turn.ID {
+		t.Fatalf("default root = %q, want own id %q", first.Turn.RootTurnID, first.Turn.ID)
+	}
+
+	second, err := service.Start(&TurnStartParams{ThreadID: "thread-2", ParentTurnID: "parent-turn", RootTurnID: "root-turn"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if second.Turn.RootTurnID != "root-turn" {
+		t.Fatalf("explicit root = %q, want root-turn", second.Turn.RootTurnID)
+	}
+	data, err := json.Marshal(second)
+	if err != nil {
+		t.Fatalf("Marshal error = %v", err)
+	}
+	var payload struct {
+		Turn struct {
+			RootTurnID *string `json:"rootTurnId"`
+		} `json:"turn"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal error = %v", err)
+	}
+	if payload.Turn.RootTurnID == nil || *payload.Turn.RootTurnID != "root-turn" {
+		t.Fatalf("marshaled rootTurnId = %#v", payload.Turn.RootTurnID)
+	}
+
+	raw := []byte(`{"threadId":"thread-3","parentTurnId":"p","rootTurnId":"r","input":[]}`)
+	var params TurnStartParams
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatalf("Unmarshal params error = %v", err)
+	}
+	if params.ParentTurnID != "p" || params.RootTurnID != "r" {
+		t.Fatalf("decoded lineage = %q/%q", params.ParentTurnID, params.RootTurnID)
+	}
+	encoded, err := json.Marshal(&params)
+	if err != nil {
+		t.Fatalf("Marshal params error = %v", err)
+	}
+	var round map[string]any
+	if err := json.Unmarshal(encoded, &round); err != nil {
+		t.Fatalf("Unmarshal encoded params error = %v", err)
+	}
+	if round["parentTurnId"] != "p" || round["rootTurnId"] != "r" {
+		t.Fatalf("encoded lineage = %#v", round)
+	}
+}
+
 func TestTurnStartParamsMarshalIncludesCollaborationMode(t *testing.T) {
 	params := TurnStartParams{
 		ThreadID: "thread-plan",

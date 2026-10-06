@@ -838,7 +838,11 @@ func SystemErrorStatus() ThreadStatus {
 }
 
 type Turn struct {
-	ID          string        `json:"id"`
+	ID string `json:"id"`
+	// RootTurnID is the first turn in the chain of work that led to this turn
+	// (Rust #51415). Pass it as `rootTurnId` when starting work on behalf of
+	// this turn. It is null in older history or a review/start response.
+	RootTurnID  *string       `json:"rootTurnId"`
 	Items       []ThreadItem  `json:"items"`
 	ItemsView   TurnItemsView `json:"itemsView"`
 	Status      TurnStatus    `json:"status"`
@@ -859,6 +863,7 @@ func (t *Turn) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(struct {
 		ID          string        `json:"id"`
+		RootTurnID  *string       `json:"rootTurnId"`
 		Items       []ThreadItem  `json:"items"`
 		ItemsView   TurnItemsView `json:"itemsView"`
 		Status      TurnStatus    `json:"status"`
@@ -868,6 +873,7 @@ func (t *Turn) MarshalJSON() ([]byte, error) {
 		DurationMS  *int64        `json:"durationMs"`
 	}{
 		ID:          t.ID,
+		RootTurnID:  t.RootTurnID,
 		Items:       items,
 		ItemsView:   itemsView,
 		Status:      t.Status,
@@ -5767,6 +5773,7 @@ func applyTurnSnapshot(turn *Turn, snapshot session.TurnSnapshot) {
 	if turnID := strings.TrimSpace(snapshot.ID); turnID != "" {
 		turn.ID = turnID
 	}
+	turn.RootTurnID = stringPtrIfNotEmpty(strings.TrimSpace(snapshot.RootTurnID))
 	turn.Status = turnStatusFromSnapshot(snapshot.Status)
 	turn.StartedAt = cloneInt64PtrAppserver(snapshot.StartedAt)
 	turn.CompletedAt = cloneInt64PtrAppserver(snapshot.CompletedAt)

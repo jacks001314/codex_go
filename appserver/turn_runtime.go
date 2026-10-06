@@ -1432,11 +1432,12 @@ func (r *RuntimeRouter) startReviewRuntimeAsync(params *review.StartParams, resp
 		startedAt = time.Now().UTC().Unix()
 	}
 	record := &turn.TurnRecord{
-		ID:        turnID,
-		ThreadID:  turnParams.ThreadID,
-		Status:    turn.TurnStatusInProgress,
-		Prompt:    promptFromTurnStart(turnParams),
-		StartedAt: startedAt,
+		ID:         turnID,
+		ThreadID:   turnParams.ThreadID,
+		Status:     turn.TurnStatusInProgress,
+		RootTurnID: rootTurnIDForTurn(turnParams, turnID),
+		Prompt:     promptFromTurnStart(turnParams),
+		StartedAt:  startedAt,
 	}
 	paramsCopy := cloneTurnStartParams(turnParams)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1896,7 +1897,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.emitRuntimeSubAgentCompletedActivity(threadID, turnID, params.ParentTurnID)
 	// Rust's turn task timer records the end-to-end duration when the task ends.
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
-	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
+	completedTurn := completedTurnNotificationTurn(turnID, rootTurnIDForTurn(params, turnID), TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	if summary := finalAgentMessageSummary(threadItems); len(summary) > 0 {
 		completedTurn.Items = summary
 		completedTurn.ItemsView = TurnItemsSummary
@@ -2259,7 +2260,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 	r.finishStateThreadGoalTurn(threadID, turnID, completedAt, model.AgentUsageTotalTokens(result.Usage), nil)
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, completedAt, durationMS)
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
-	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
+	completedTurn := completedTurnNotificationTurn(turnID, rootTurnIDForTurn(params, turnID), TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: reviewFinalAgentMessage(result)})
@@ -2419,9 +2420,10 @@ func shouldNotifyRuntimeItemCompleted(item ThreadItem) bool {
 	}
 }
 
-func completedTurnNotificationTurn(turnID string, status TurnStatus, appErr *TurnError, startedAt *int64, completedAt *int64, durationMS *int64) Turn {
+func completedTurnNotificationTurn(turnID string, rootTurnID string, status TurnStatus, appErr *TurnError, startedAt *int64, completedAt *int64, durationMS *int64) Turn {
 	return Turn{
 		ID:          turnID,
+		RootTurnID:  stringPtrIfNotEmpty(strings.TrimSpace(rootTurnID)),
 		Items:       []ThreadItem{},
 		ItemsView:   TurnItemsNotLoaded,
 		Status:      status,
@@ -3757,6 +3759,15 @@ func rootTurnIDForTurn(params *turn.TurnStartParams, turnID string) string {
 	return strings.TrimSpace(turnID)
 }
 
+// analyticsRootTurnID resolves the effective root turn id for a completion
+// notification from a possibly-nil analytics context (Rust #51415).
+func analyticsRootTurnID(analytics *turnCompletionAnalyticsContext, turnID string) string {
+	if analytics == nil {
+		return rootTurnIDForTurn(nil, turnID)
+	}
+	return rootTurnIDForTurn(analytics.Params, turnID)
+}
+
 func (r *RuntimeRouter) appendRuntimeTurnComplete(threadID string, turnID string, completedAt time.Time, durationMS int64) error {
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
 		return recorder.AppendTurnComplete(turnID, completedAt, durationMS)
@@ -4011,7 +4022,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	})
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusFailed, appErr, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
@@ -4057,7 +4068,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted})
@@ -4085,7 +4096,7 @@ func (r *RuntimeRouter) finishReviewRuntimeInterrupted(threadID string, turnID s
 	r.completeTurnRecord(threadID, turnID, TurnStatusInterrupted)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
-		Turn:     completedTurnNotificationTurn(turnID, TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
+		Turn:     completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusInterrupted, nil, nil, &completedAt, &durationMS),
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
@@ -4110,7 +4121,7 @@ func (r *RuntimeRouter) finishReviewRuntimeFallbackCompleted(threadID string, tu
 	_ = r.appendRuntimeTurnComplete(threadID, turnID, now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
 	r.completeTurnRecord(threadID, turnID, TurnStatusCompleted)
-	completedTurn := completedTurnNotificationTurn(turnID, TurnStatusCompleted, nil, &recordStartedAt, &completedAt, &durationMS)
+	completedTurn := completedTurnNotificationTurn(turnID, analyticsRootTurnID(analytics, turnID), TurnStatusCompleted, nil, &recordStartedAt, &completedAt, &durationMS)
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{
 		ThreadID: threadID,
 		Turn:     completedTurn,
@@ -6673,6 +6684,7 @@ func appTurnFromTurnRecord(record *turn.TurnRecord, items []ThreadItem, status T
 	startedAt := record.StartedAt
 	return Turn{
 		ID:          record.ID,
+		RootTurnID:  stringPtrIfNotEmpty(strings.TrimSpace(record.RootTurnID)),
 		Items:       append([]ThreadItem(nil), items...),
 		ItemsView:   TurnItemsFull,
 		Status:      status,

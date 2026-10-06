@@ -3176,6 +3176,7 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 		ThreadID: params.ThreadID,
 		Turn: completedTurnNotificationTurn(
 			turnID,
+			turnID,
 			TurnStatusCompleted,
 			nil,
 			&turnRecord.StartedAt,
@@ -13291,10 +13292,11 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshotWithItems(threadID string, incl
 		createdAt = now
 	}
 	turn := &Turn{
-		ID:        turnID,
-		ItemsView: TurnItemsNotLoaded,
-		Status:    TurnStatusInProgress,
-		StartedAt: &startedAt,
+		ID:         turnID,
+		RootTurnID: stringPtrIfNotEmpty(rootTurnIDForTurn(params, turnID)),
+		ItemsView:  TurnItemsNotLoaded,
+		Status:     TurnStatusInProgress,
+		StartedAt:  &startedAt,
 	}
 	if !includeItems {
 		return turn

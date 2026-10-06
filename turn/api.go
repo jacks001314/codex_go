@@ -273,9 +273,13 @@ type TurnStartParams struct {
 	AdditionalContext      map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
 	DynamicTools           []DynamicToolSpec                 `json:"dynamicTools,omitempty"`
 	ExperimentalRawEvents  bool                              `json:"-"`
-	ParentTurnID           string                            `json:"-"`
-	RootTurnID             string                            `json:"-"`
-	AdditionalInputItems   []any                             `json:"-"`
+	// ParentTurnID is the turn that caused this new turn to start; RootTurnID
+	// is the first turn in the chain of work that led to it (Rust #51415). Both
+	// are optional client inputs on `turn/start` and are ignored when the
+	// request adds input to an already-active turn.
+	ParentTurnID         string `json:"parentTurnId,omitempty"`
+	RootTurnID           string `json:"rootTurnId,omitempty"`
+	AdditionalInputItems []any  `json:"-"`
 	// Trace carries the W3C trace context of the request that started this turn
 	// (Rust TurnInputRequest::with_trace), so the model request continues the
 	// caller's trace.
@@ -298,6 +302,8 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		Input               []TurnUserInput     `json:"input"`
 		ToolOutput          *TurnToolOutput     `json:"toolOutput,omitempty"`
 		TurnTrigger         string              `json:"turnTrigger,omitempty"`
+		ParentTurnID        string              `json:"parentTurnId,omitempty"`
+		RootTurnID          string              `json:"rootTurnId,omitempty"`
 		CWD                 string              `json:"cwd,omitempty"`
 		ApprovalPolicy      any                 `json:"approvalPolicy,omitempty"`
 		ApprovalsReviewer   *string             `json:"approvalsReviewer,omitempty"`
@@ -316,6 +322,8 @@ func (p *TurnStartParams) MarshalJSON() ([]byte, error) {
 		Input:               userInputsForJSONWithPrompt(p.Input, p.Prompt),
 		ToolOutput:          p.ToolOutput,
 		TurnTrigger:         p.TurnTrigger,
+		ParentTurnID:        p.ParentTurnID,
+		RootTurnID:          p.RootTurnID,
 		CWD:                 p.CWD,
 		ApprovalPolicy:      p.ApprovalPolicy,
 		ApprovalsReviewer:   p.ApprovalsReviewer,
@@ -550,9 +558,12 @@ type TurnSettingsUpdateResponse struct{}
 type TurnInterruptResponse struct{}
 
 type TurnRecord struct {
-	ID          string          `json:"id"`
-	ThreadID    string          `json:"threadId"`
-	Status      string          `json:"status"`
+	ID       string `json:"id"`
+	ThreadID string `json:"threadId"`
+	Status   string `json:"status"`
+	// RootTurnID is the first turn in the chain of work that led to this turn
+	// (Rust #51415). Empty means unknown (older history), serialized as null.
+	RootTurnID  string          `json:"rootTurnId,omitempty"`
 	Prompt      string          `json:"prompt,omitempty"`
 	StartedAt   int64           `json:"startedAt"`
 	CompletedAt *int64          `json:"completedAt"`
@@ -563,6 +574,7 @@ func (r *TurnRecord) MarshalJSON() ([]byte, error) {
 	status := normalizeTurnStatus(r.Status)
 	return json.Marshal(struct {
 		ID          string           `json:"id"`
+		RootTurnID  *string          `json:"rootTurnId"`
 		Items       []map[string]any `json:"items"`
 		ItemsView   string           `json:"itemsView"`
 		Status      string           `json:"status"`
@@ -572,6 +584,7 @@ func (r *TurnRecord) MarshalJSON() ([]byte, error) {
 		DurationMS  *int64           `json:"durationMs"`
 	}{
 		ID:          r.ID,
+		RootTurnID:  stringPtrIfNotEmpty(r.RootTurnID),
 		Items:       []map[string]any{},
 		ItemsView:   "notLoaded",
 		Status:      status,
@@ -628,13 +641,15 @@ func (s *TurnService) Start(params *TurnStartParams) (*TurnStartResponse, error)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++
+	turnID := fmt.Sprintf("turn-%d", s.nextID)
 	turn := TurnRecord{
-		ID:        fmt.Sprintf("turn-%d", s.nextID),
-		ThreadID:  params.ThreadID,
-		Status:    TurnStatusInProgress,
-		Prompt:    firstNonEmpty(params.Prompt, textFromInputs(params.Input)),
-		StartedAt: s.now().UTC().Unix(),
-		Inputs:    append([]TurnUserInput(nil), params.Input...),
+		ID:         turnID,
+		ThreadID:   params.ThreadID,
+		Status:     TurnStatusInProgress,
+		RootTurnID: firstNonEmpty(strings.TrimSpace(params.RootTurnID), turnID),
+		Prompt:     firstNonEmpty(params.Prompt, textFromInputs(params.Input)),
+		StartedAt:  s.now().UTC().Unix(),
+		Inputs:     append([]TurnUserInput(nil), params.Input...),
 	}
 	s.active[params.ThreadID] = turn
 	return &TurnStartResponse{Turn: turn}, nil

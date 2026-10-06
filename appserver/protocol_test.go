@@ -14,6 +14,42 @@ import (
 	"codex_go/turn"
 )
 
+// Mirrors Rust #51415: a turn always serializes rootTurnId (null when unknown),
+// and a persisted turn snapshot's root is projected into history reads.
+func TestTurnRootTurnIDExposureLikeRust(t *testing.T) {
+	unknown := Turn{ID: "turn-1", Items: []ThreadItem{}, Status: TurnStatusCompleted}
+	data, err := json.Marshal(&unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	root, present := payload["rootTurnId"]
+	if !present || root != nil {
+		t.Fatalf("unknown root must serialize null: %#v", payload)
+	}
+
+	known := Turn{ID: "turn-2", RootTurnID: stringPtrIfNotEmpty("root-a"), Items: []ThreadItem{}, Status: TurnStatusCompleted}
+	data, err = json.Marshal(&known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["rootTurnId"] != "root-a" {
+		t.Fatalf("known root = %#v", payload["rootTurnId"])
+	}
+
+	turnValue := Turn{ID: "turn-3"}
+	applyTurnSnapshot(&turnValue, session.TurnSnapshot{ID: "turn-3", Status: string(TurnStatusCompleted), RootTurnID: "root-b"})
+	if turnValue.RootTurnID == nil || *turnValue.RootTurnID != "root-b" {
+		t.Fatalf("snapshot root = %#v", turnValue.RootTurnID)
+	}
+}
+
 func TestOutgoingMessagesMatchRustJSONRPCShape(t *testing.T) {
 	cases := []struct {
 		name  string
