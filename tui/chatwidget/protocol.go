@@ -17,6 +17,7 @@ const (
 	NotificationThreadTokenUsageUpdated     ServerNotificationKind = "thread_token_usage_updated"
 	NotificationThreadNameUpdated           ServerNotificationKind = "thread_name_updated"
 	NotificationThreadGoalUpdated           ServerNotificationKind = "thread_goal_updated"
+	NotificationThreadPredictionUpdated     ServerNotificationKind = "thread_prediction_updated"
 	NotificationThreadGoalCleared           ServerNotificationKind = "thread_goal_cleared"
 	NotificationThreadSettingsUpdated       ServerNotificationKind = "thread_settings_updated"
 	NotificationTurnStarted                 ServerNotificationKind = "turn_started"

@@ -23,7 +23,7 @@ import (
 
 func isThreadAttachmentMethod(method Method) bool {
 	switch method {
-	case MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove:
+	case MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentOwnerList, MethodThreadAttachmentRemove:
 		return true
 	default:
 		return false
@@ -44,6 +44,14 @@ func (r *Router) handleThreadAttachmentList(request *Request) (*ThreadAttachment
 		return nil, err
 	}
 	return r.listThreadAttachments(&params)
+}
+
+func (r *Router) handleThreadAttachmentOwnerList(request *Request) (*ThreadAttachmentOwnerListResponse, error) {
+	var params ThreadAttachmentOwnerListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.listThreadAttachmentOwners(&params)
 }
 
 func (r *Router) handleThreadAttachmentRemove(request *Request) (*ThreadAttachmentRemoveResponse, error) {
@@ -146,6 +154,118 @@ func (r *Router) listThreadAttachments(params *ThreadAttachmentListParams) (*Thr
 		page = append(page, attachment)
 	}
 	return &ThreadAttachmentListResponse{Data: page, NextCursor: nextCursor}, nil
+}
+
+// listThreadAttachmentOwners returns the threads that currently own an exact
+// attachment identity, including archived threads by default. Results are
+// ordered by thread id and use a keyset cursor, mirroring Rust's state-backed
+// `list_thread_attachment_threads`.
+func (r *Router) listThreadAttachmentOwners(params *ThreadAttachmentOwnerListParams) (*ThreadAttachmentOwnerListResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	limit := defaultThreadAttachmentListLimit
+	if params.Limit != nil {
+		limit = int(*params.Limit)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > maxThreadAttachmentListPageSize {
+		limit = maxThreadAttachmentListPageSize
+	}
+	if r == nil || r.store == nil {
+		return nil, invalidParams("thread attachment owner lookup is unavailable")
+	}
+	anchor, err := parseThreadAttachmentOwnerCursor(params.Cursor, params.AttachmentType, params.IdentityKey, params.Archived)
+	if err != nil {
+		return nil, err
+	}
+	records, err := r.store.AllRecords()
+	if err != nil {
+		return nil, err
+	}
+	owners := make([]ThreadAttachmentOwner, 0, len(records))
+	for i := range records {
+		record := &records[i]
+		if params.Archived != nil && record.Archived != *params.Archived {
+			continue
+		}
+		if !threadRecordHasAttachmentIdentity(record, params.AttachmentType, params.IdentityKey) {
+			continue
+		}
+		owners = append(owners, ThreadAttachmentOwner{ThreadID: string(record.ID), Archived: record.Archived})
+	}
+	sort.SliceStable(owners, func(i, j int) bool { return owners[i].ThreadID < owners[j].ThreadID })
+	if anchor != nil {
+		filtered := owners[:0]
+		for _, owner := range owners {
+			if owner.ThreadID > anchor.ThreadID {
+				filtered = append(filtered, owner)
+			}
+		}
+		owners = filtered
+	}
+	page := owners
+	var nextCursor *string
+	if len(owners) > limit {
+		page = owners[:limit]
+		encoded, encodeErr := encodeThreadAttachmentOwnerCursor(params, page[len(page)-1].ThreadID)
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		nextCursor = &encoded
+	}
+	return &ThreadAttachmentOwnerListResponse{Data: page, NextCursor: nextCursor}, nil
+}
+
+func threadRecordHasAttachmentIdentity(record *session.Record, attachmentType string, identityKey string) bool {
+	if record == nil {
+		return false
+	}
+	for _, attachment := range threadAttachmentsFromExtra(record.Metadata.Extra) {
+		if attachment.AttachmentType == attachmentType && attachment.IdentityKey == identityKey {
+			return true
+		}
+	}
+	return false
+}
+
+func parseThreadAttachmentOwnerCursor(cursor *string, attachmentType string, identityKey string, archived *bool) (*threadAttachmentOwnerCursor, error) {
+	if cursor == nil || strings.TrimSpace(*cursor) == "" {
+		return nil, nil
+	}
+	var parsed threadAttachmentOwnerCursor
+	if err := json.Unmarshal([]byte(*cursor), &parsed); err != nil {
+		return nil, invalidParams("invalid thread attachment request: invalid pagination cursor")
+	}
+	if parsed.AttachmentType != attachmentType ||
+		parsed.IdentityKey != identityKey ||
+		!equalThreadAttachmentBoolPtr(parsed.Archived, archived) ||
+		!validUUIDString(parsed.ThreadID) {
+		return nil, invalidParams("invalid thread attachment request: invalid pagination cursor")
+	}
+	return &parsed, nil
+}
+
+func encodeThreadAttachmentOwnerCursor(params *ThreadAttachmentOwnerListParams, threadID string) (string, error) {
+	encoded, err := json.Marshal(threadAttachmentOwnerCursor{
+		AttachmentType: params.AttachmentType,
+		IdentityKey:    params.IdentityKey,
+		Archived:       params.Archived,
+		ThreadID:       threadID,
+	})
+	if err != nil {
+		return "", invalidParams("invalid thread attachment request: invalid pagination cursor")
+	}
+	return string(encoded), nil
+}
+
+func equalThreadAttachmentBoolPtr(a *bool, b *bool) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (r *Router) removeThreadAttachment(params *ThreadAttachmentRemoveParams) (*ThreadAttachmentRemoveResponse, *ThreadAttachment, error) {
@@ -308,6 +428,8 @@ func (r *RuntimeRouter) handleThreadAttachmentRuntime(request *Request) (any, er
 		return r.threadAttachmentAddRuntime(request)
 	case MethodThreadAttachmentList:
 		return r.threadAttachmentListRuntime(request)
+	case MethodThreadAttachmentOwnerList:
+		return r.threadAttachmentOwnerListRuntime(request)
 	case MethodThreadAttachmentRemove:
 		return r.threadAttachmentRemoveRuntime(request)
 	default:
@@ -348,6 +470,14 @@ func (r *RuntimeRouter) threadAttachmentListRuntime(request *Request) (*ThreadAt
 		return nil, err
 	}
 	return r.services.ThreadRouter.listThreadAttachments(&params)
+}
+
+func (r *RuntimeRouter) threadAttachmentOwnerListRuntime(request *Request) (*ThreadAttachmentOwnerListResponse, error) {
+	var params ThreadAttachmentOwnerListParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	return r.services.ThreadRouter.listThreadAttachmentOwners(&params)
 }
 
 func (r *RuntimeRouter) threadAttachmentRemoveRuntime(request *Request) (*ThreadAttachmentRemoveResponse, error) {

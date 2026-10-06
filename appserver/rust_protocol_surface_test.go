@@ -41,6 +41,7 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 		string(MethodThreadMetadataUpdate):                   true,
 		string(MethodThreadAttachmentAdd):                    true,
 		string(MethodThreadAttachmentList):                   true,
+		string(MethodThreadAttachmentOwnerList):              true,
 		string(MethodThreadAttachmentRemove):                 true,
 		string(MethodThreadSettingsUpdate):                   true,
 		string(MethodThreadShellCommand):                     true,

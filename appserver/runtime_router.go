@@ -16756,6 +16756,7 @@ func isThreadMethod(method Method) bool {
 		MethodThreadCompactStart, MethodThreadApproveGuardianDeniedAction,
 		MethodThreadMetadataUpdate, MethodThreadSectionMove, MethodThreadList, MethodThreadRead,
 		MethodThreadAttachmentAdd, MethodThreadAttachmentList, MethodThreadAttachmentRemove,
+		MethodThreadAttachmentOwnerList,
 		MethodThreadSearch, MethodThreadLoadedList, MethodThreadItemsList,
 		MethodThreadTurnsList, MethodThreadRevert,
 		MethodThreadQueueAdd, MethodThreadQueueList, MethodThreadQueueUpdate,

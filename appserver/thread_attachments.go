@@ -83,6 +83,48 @@ type ThreadAttachmentListResponse struct {
 	NextCursor *string            `json:"nextCursor"`
 }
 
+// ThreadAttachmentOwnerListParams mirrors Rust ThreadAttachmentOwnerListParams:
+// reverse lookup by exact attachment identity within this server's store.
+type ThreadAttachmentOwnerListParams struct {
+	AttachmentType string `json:"attachmentType"`
+	IdentityKey    string `json:"identityKey"`
+	// Archived omitted or null returns all matches; false returns non-archived
+	// threads only, true returns archived threads only.
+	Archived *bool   `json:"archived,omitempty"`
+	Cursor   *string `json:"cursor,omitempty"`
+	Limit    *uint32 `json:"limit,omitempty"`
+}
+
+func (p *ThreadAttachmentOwnerListParams) Validate() error {
+	if p == nil {
+		return validateThreadAttachmentIdentity("", "")
+	}
+	return validateThreadAttachmentIdentity(p.AttachmentType, p.IdentityKey)
+}
+
+// ThreadAttachmentOwner mirrors Rust ThreadAttachmentOwner.
+type ThreadAttachmentOwner struct {
+	ThreadID string `json:"threadId"`
+	// Archived is the owning thread's archive state, not its run state.
+	Archived bool `json:"archived"`
+}
+
+// ThreadAttachmentOwnerListResponse mirrors Rust ThreadAttachmentOwnerListResponse.
+type ThreadAttachmentOwnerListResponse struct {
+	Data       []ThreadAttachmentOwner `json:"data"`
+	NextCursor *string                 `json:"nextCursor"`
+}
+
+// threadAttachmentOwnerCursor mirrors Rust AttachmentThreadsCursor. It is opaque
+// to clients and round-tripped verbatim; the field names stay snake_case to
+// match the Rust serialization.
+type threadAttachmentOwnerCursor struct {
+	AttachmentType string `json:"attachment_type"`
+	IdentityKey    string `json:"identity_key"`
+	Archived       *bool  `json:"archived"`
+	ThreadID       string `json:"thread_id"`
+}
+
 type ThreadAttachmentRemoveParams struct {
 	ThreadID       string `json:"threadId"`
 	AttachmentType string `json:"attachmentType"`

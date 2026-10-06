@@ -113,6 +113,98 @@ func TestRuntimeRouterThreadAttachmentLifecycle(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #50094: thread/attachmentOwner/list returns the threads that own
+// an exact attachment identity, with archive filtering and keyset pagination.
+func TestRuntimeRouterThreadAttachmentOwnerList(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	startThread := func(id int64) string {
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadStart, ThreadStartParams{CWD: "D:/repo"}))
+		if response.Error != nil {
+			t.Fatalf("thread start error: %+v", response.Error)
+		}
+		return response.Result.(*ThreadStartResponse).Thread.ID
+	}
+	addAttachment := func(id int64, threadID string, attachmentType string, identityKey string) {
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadAttachmentAdd, ThreadAttachmentAddParams{
+			ThreadID:       threadID,
+			AttachmentType: attachmentType,
+			IdentityKey:    identityKey,
+			Payload:        json.RawMessage(`{"text":"x"}`),
+		}))
+		if response.Error != nil {
+			t.Fatalf("thread/attachment/add error: %+v", response.Error)
+		}
+	}
+	owners := func(id int64, params ThreadAttachmentOwnerListParams) *ThreadAttachmentOwnerListResponse {
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadAttachmentOwnerList, params))
+		if response.Error != nil {
+			t.Fatalf("thread/attachmentOwner/list error: %+v", response.Error)
+		}
+		return response.Result.(*ThreadAttachmentOwnerListResponse)
+	}
+
+	threadA := startThread(1)
+	threadB := startThread(2)
+	addAttachment(3, threadA, "note", "id-1")
+	addAttachment(4, threadB, "note", "id-1")
+	addAttachment(5, threadB, "note", "id-2")
+
+	wantOrder := []string{threadA, threadB}
+	if threadA > threadB {
+		wantOrder = []string{threadB, threadA}
+	}
+	both := owners(6, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1"})
+	if len(both.Data) != 2 || both.NextCursor != nil {
+		t.Fatalf("owner list = %#v", both)
+	}
+	if both.Data[0].ThreadID != wantOrder[0] || both.Data[1].ThreadID != wantOrder[1] || both.Data[0].Archived || both.Data[1].Archived {
+		t.Fatalf("owners = %#v, want %v", both.Data, wantOrder)
+	}
+
+	// Exact identity and type matching only.
+	onlyB := owners(7, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-2"})
+	if len(onlyB.Data) != 1 || onlyB.Data[0].ThreadID != threadB {
+		t.Fatalf("id-2 owners = %#v", onlyB.Data)
+	}
+	none := owners(8, ThreadAttachmentOwnerListParams{AttachmentType: "other", IdentityKey: "id-1"})
+	if len(none.Data) != 0 || none.NextCursor != nil {
+		t.Fatalf("other-type owners = %#v", none)
+	}
+
+	// Keyset pagination follows the thread-id order.
+	limit := uint32(1)
+	firstPage := owners(9, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1", Limit: &limit})
+	if len(firstPage.Data) != 1 || firstPage.Data[0].ThreadID != wantOrder[0] || firstPage.NextCursor == nil {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+	secondPage := owners(10, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1", Limit: &limit, Cursor: firstPage.NextCursor})
+	if len(secondPage.Data) != 1 || secondPage.Data[0].ThreadID != wantOrder[1] || secondPage.NextCursor != nil {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+	bad := "not-a-cursor"
+	if response := router.Handle(requestWithParams(t, IntID(11), MethodThreadAttachmentOwnerList, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1", Cursor: &bad})); response.Error == nil {
+		t.Fatalf("invalid cursor accepted: %#v", response.Result)
+	}
+
+	// Archive filtering.
+	archived, nonArchived := true, false
+	if _, err := store.UpdateMetadata(session.ThreadID(threadA), &session.MetadataPatch{Archived: &archived}, true); err != nil {
+		t.Fatalf("archive thread error: %v", err)
+	}
+	onlyArchived := owners(13, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1", Archived: &archived})
+	if len(onlyArchived.Data) != 1 || onlyArchived.Data[0].ThreadID != threadA || !onlyArchived.Data[0].Archived {
+		t.Fatalf("archived owners = %#v", onlyArchived.Data)
+	}
+	onlyActive := owners(14, ThreadAttachmentOwnerListParams{AttachmentType: "note", IdentityKey: "id-1", Archived: &nonArchived})
+	if len(onlyActive.Data) != 1 || onlyActive.Data[0].ThreadID != threadB {
+		t.Fatalf("non-archived owners = %#v", onlyActive.Data)
+	}
+}
+
 func TestRuntimeRouterThreadAttachmentListPagination(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRuntimeRouter(RuntimeServices{

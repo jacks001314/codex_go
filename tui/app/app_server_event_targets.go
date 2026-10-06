@@ -21,6 +21,7 @@ const (
 	ServerNotificationThreadNameUpdated                   = "thread_name_updated"
 	ServerNotificationThreadTokenUsageUpdated             = "thread_token_usage_updated"
 	ServerNotificationThreadGoalUpdated                   = "thread_goal_updated"
+	ServerNotificationThreadPredictionUpdated             = "thread_prediction_updated"
 	ServerNotificationThreadGoalCleared                   = "thread_goal_cleared"
 	ServerNotificationThreadSettingsUpdated               = "thread_settings_updated"
 	ServerNotificationHookStarted                         = "hook_started"

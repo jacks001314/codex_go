@@ -1087,6 +1087,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadAttachmentAdd(request)
 	case MethodThreadAttachmentList:
 		return r.handleThreadAttachmentList(request)
+	case MethodThreadAttachmentOwnerList:
+		return r.handleThreadAttachmentOwnerList(request)
 	case MethodThreadAttachmentRemove:
 		return r.handleThreadAttachmentRemove(request)
 	case MethodThreadSectionMove:
