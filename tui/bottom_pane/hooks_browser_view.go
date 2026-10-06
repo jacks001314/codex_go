@@ -1,6 +1,7 @@
 package bottompane
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -430,12 +431,16 @@ func (v *HooksBrowserView) handlerRows(width int) []string {
 	}
 	v.State.ClampSelection(len(handlers))
 	v.State.EnsureVisible(len(handlers), v.maxVisibleRows())
+	// Rust #51433: the row number is right-aligned to the width of the largest
+	// index (at least two columns) so titles line up across the page.
+	indexWidth := max(2, len(formatInt(len(handlers))))
 	start := v.State.ScrollTop
 	end := min(start+v.maxVisibleRows(), len(handlers))
 	for idx := start; idx < end; idx++ {
 		hook := handlers[idx]
-		row := HookHandlerRow(hook, idx)
+		row := HookHandlerRow(hook, idx, indexWidth)
 		row = truncateHookRow(row, width)
+		row = dimHookHandlerIndex(row, indexWidth)
 		if v.State.HasSelection && idx == v.State.SelectedIdx {
 			row = tui.RenderSelectedRow(row)
 		}
@@ -601,14 +606,41 @@ func HookEventDescription(event appserver.HookEventName) string {
 	}
 }
 
-func HookHandlerRow(hook appserver.HookMetadata, idx int) string {
+// HookHandlerTitle returns the hook's trimmed status message, falling back to
+// the placeholder title when it is missing or blank (Rust #51433).
+func HookHandlerTitle(hook appserver.HookMetadata) string {
+	if hook.StatusMessage != nil {
+		if trimmed := strings.TrimSpace(*hook.StatusMessage); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "Unnamed hook"
+}
+
+// dimHookHandlerIndex dims the aligned row-number span (Rust #51433 renders the
+// index with `.dim()`). The number follows the four-rune "[m] " prefix; the span
+// is inserted after truncation so width accounting stays on the plain text.
+func dimHookHandlerIndex(row string, indexWidth int) string {
+	const prefixRunes = 4
+	runes := []rune(row)
+	if indexWidth <= 0 || len(runes) < prefixRunes+indexWidth {
+		return row
+	}
+	const faintOn = "\x1b[2m"
+	const reset = "\x1b[0m"
+	return string(runes[:prefixRunes]) +
+		faintOn + string(runes[prefixRunes:prefixRunes+indexWidth]) + reset +
+		string(runes[prefixRunes+indexWidth:])
+}
+
+func HookHandlerRow(hook appserver.HookMetadata, idx int, indexWidth int) string {
 	marker := " "
 	if HookNeedsReviewMetadata(hook) {
 		marker = "!"
 	} else if HookIsActive(hook) {
 		marker = "x"
 	}
-	row := "[" + marker + "] Hook " + formatInt(idx+1)
+	row := "[" + marker + "] " + fmt.Sprintf("%*d", indexWidth, idx+1) + "  " + HookHandlerTitle(hook)
 	switch hook.TrustStatus {
 	case appserver.HookTrustModified:
 		row += " · modified"

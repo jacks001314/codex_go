@@ -47,7 +47,7 @@ func TestHooksBrowserRowsOpenReturnAndSelectionColorBar(t *testing.T) {
 		t.Fatalf("page=%s event=%s", view.Page, view.HandlerEvent)
 	}
 	rows = view.Rows(80)
-	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("[x] Hook 1")) {
+	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("[x] \x1b[2m 1\x1b[0m  Unnamed hook")) {
 		t.Fatalf("handler rows missing selected hook:\n%s", strings.Join(rows, "\n"))
 	}
 	view.HandleKey("esc")
@@ -161,6 +161,54 @@ func TestHooksBrowserDetailRowsPreserveRustFormatting(t *testing.T) {
 	}
 	if got := truncateHookRow("abcdef", 4); got != "abc…" {
 		t.Fatalf("truncated row = %q", got)
+	}
+}
+
+// TestHookHandlerRowAlignsDimmedIndexLikeRust pins the row shape from Rust
+// #51433: the status marker, the right-aligned (dimmed) row number sized to the
+// largest index, the title, and the trust suffix.
+func TestHookHandlerRowAlignsDimmedIndexLikeRust(t *testing.T) {
+	hook := hookBrowserTestHook("path:x", appserver.HookEventPreToolUse, true, false, 0)
+	row := HookHandlerRow(hook, 0, 3)
+	if row != "[x]   1  Unnamed hook" {
+		t.Fatalf("HookHandlerRow = %q", row)
+	}
+	if dimmed := dimHookHandlerIndex(row, 3); dimmed != "[x] \x1b[2m  1\x1b[0m  Unnamed hook" {
+		t.Fatalf("dimHookHandlerIndex = %q", dimmed)
+	}
+	// A short row (already narrower than the index span) is left untouched.
+	if got := dimHookHandlerIndex("[x]", 3); got != "[x]" {
+		t.Fatalf("dimHookHandlerIndex(short) = %q", got)
+	}
+}
+
+// TestHooksBrowserHandlerTitlesFromStatusMessageLikeRust mirrors Rust #51433:
+// handler titles come from the trimmed status message, blank and missing
+// messages fall back to "Unnamed hook", and the trust suffix is retained.
+func TestHooksBrowserHandlerTitlesFromStatusMessageLikeRust(t *testing.T) {
+	wide := hookBrowserTestHook("path:one", appserver.HookEventPreToolUse, true, false, 0)
+	wideMessage := "  检查 🦀 shell commands  "
+	wide.StatusMessage = &wideMessage
+	blank := hookBrowserTestHook("path:two", appserver.HookEventPreToolUse, true, false, 1)
+	blankMessage := " \t\n "
+	blank.StatusMessage = &blankMessage
+	modified := hookBrowserTestHook("path:three", appserver.HookEventPreToolUse, true, false, 2)
+	modified.TrustStatus = appserver.HookTrustModified
+	modifiedMessage := "Review shell"
+	modified.StatusMessage = &modifiedMessage
+
+	view := NewHooksBrowserView(appserver.HookListEntry{Hooks: []appserver.HookMetadata{wide, blank, modified}})
+	view.OpenSelectedEvent()
+	rows := view.Rows(120)
+	joined := strings.Join(rows, "\n")
+	if !bottomPaneContainsRow(rows, tui.RenderSelectedRow("[x] \x1b[2m 1\x1b[0m  检查 🦀 shell commands")) {
+		t.Fatalf("missing trimmed wide-character title:\n%s", joined)
+	}
+	if !bottomPaneContainsRow(rows, "[x] \x1b[2m 2\x1b[0m  Unnamed hook") {
+		t.Fatalf("blank status message did not fall back:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Review shell") || !strings.Contains(joined, "modified") {
+		t.Fatalf("trust suffix lost:\n%s", joined)
 	}
 }
 
