@@ -24,6 +24,24 @@ import (
 	"codex_go/network"
 )
 
+// otlpMetricsTemporality mirrors Rust #51220's otlp_metrics_temporality: only a
+// configured OTLP exporter (HTTP or gRPC) honors the environment preference.
+// The built-in Statsig route keeps Delta. `lowmemory` selects delta for the
+// counters and histograms this client exports, matching the SDK's low-memory
+// selector.
+func otlpMetricsTemporality(configuredOTLP bool, preference string) int {
+	if !configuredOTLP {
+		return otlpTemporalityDelta
+	}
+	switch {
+	case strings.EqualFold(preference, "cumulative"):
+		return otlpTemporalityCumulative
+	default:
+		// `delta`, `lowmemory`, unset, empty, and unknown values all keep delta.
+		return otlpTemporalityDelta
+	}
+}
+
 // Rust parity: codex-rs/otel/src/metrics (client.rs + config.rs) and
 // codex-rs/otel/src/otlp.rs. Metrics are exported over OTLP/HTTP with DELTA
 // temporality, matching the Rust client's `with_temporality(Temporality::Delta)`
@@ -33,7 +51,14 @@ import (
 
 const (
 	// OTLP aggregation temporality values (opentelemetry-proto).
-	otlpTemporalityDelta = 1
+	otlpTemporalityDelta      = 1
+	otlpTemporalityCumulative = 2
+
+	// MetricsTemporalityPreferenceEnv selects the temporality of configured OTLP
+	// metrics exporters (Rust #51220). It accepts `delta`, `cumulative`, and
+	// `lowmemory` case-insensitively; unset, empty, or unrecognized values keep
+	// the delta default. The built-in Statsig exporter is unaffected.
+	MetricsTemporalityPreferenceEnv = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE"
 
 	// MetricsExporterTimeoutEnv / MetricsExporterSignalTimeoutEnv mirror the OTLP
 	// timeout environment variables Rust resolves per signal

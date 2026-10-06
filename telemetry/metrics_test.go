@@ -506,6 +506,76 @@ func TestMetricsClientExportsToLoopbackServer(t *testing.T) {
 	}
 }
 
+// TestOTLPMetricsTemporalityLikeRust pins Rust #51220's selection: only a
+// configured OTLP exporter honors the preference, `cumulative` is
+// case-insensitive, and everything else (including the low-memory selector for
+// these instruments) keeps delta.
+func TestOTLPMetricsTemporalityLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		configured bool
+		preference string
+		want       int
+	}{
+		{false, "cumulative", otlpTemporalityDelta},
+		{false, "lowmemory", otlpTemporalityDelta},
+		{true, "", otlpTemporalityDelta},
+		{true, "delta", otlpTemporalityDelta},
+		{true, "lowmemory", otlpTemporalityDelta},
+		{true, " unknown ", otlpTemporalityDelta},
+		{true, "CUMULATIVE", otlpTemporalityCumulative},
+		{true, "cumulative", otlpTemporalityCumulative},
+	} {
+		if got := otlpMetricsTemporality(testCase.configured, testCase.preference); got != testCase.want {
+			t.Fatalf("otlpMetricsTemporality(%v, %q) = %d, want %d", testCase.configured, testCase.preference, got, testCase.want)
+		}
+	}
+}
+
+// TestMetricsClientHonorsCumulativeTemporalityLikeRust mirrors Rust #51220's
+// loopback coverage: a configured OTLP exporter exports cumulative sums and
+// histograms when the environment asks for it, while the built-in Statsig route
+// keeps delta.
+func TestMetricsClientHonorsCumulativeTemporalityLikeRust(t *testing.T) {
+	t.Setenv(MetricsTemporalityPreferenceEnv, "cumulative")
+	doer := &recordingHTTPDoer{}
+	client := newTestMetricsClient(t, doer, MetricsClientOptions{})
+	client.Counter("codex.turn.tool.call", 2, map[string]string{"tool": "shell"})
+	client.HistogramWithBounds("codex.turn.e2e_duration_ms", 7, []float64{5, 10}, nil)
+	if err := client.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	requests := doer.snapshot()
+	if len(requests) != 1 {
+		t.Fatalf("exported requests = %d, want 1", len(requests))
+	}
+	metrics := metricsByName(t, requests[0])
+	if got := metrics["codex.turn.tool.call"]["sum"].(map[string]any)["aggregationTemporality"].(float64); got != float64(otlpTemporalityCumulative) {
+		t.Fatalf("counter temporality = %v, want cumulative", got)
+	}
+	if got := metrics["codex.turn.e2e_duration_ms"]["histogram"].(map[string]any)["aggregationTemporality"].(float64); got != float64(otlpTemporalityCumulative) {
+		t.Fatalf("histogram temporality = %v, want cumulative", got)
+	}
+
+	// The built-in Statsig route selects delta before resolution, ignoring the
+	// preference.
+	previous := StatsigMetricsRouteEnabled
+	StatsigMetricsRouteEnabled = "true"
+	defer func() { StatsigMetricsRouteEnabled = previous }()
+	statsigDoer := &recordingHTTPDoer{}
+	statsig := newTestMetricsClient(t, statsigDoer, MetricsClientOptions{Statsig: true})
+	statsig.Counter("codex.turn.tool.call", 1, nil)
+	if err := statsig.Flush(context.Background()); err != nil {
+		t.Fatalf("Statsig Flush() error = %v", err)
+	}
+	statsigRequests := statsigDoer.snapshot()
+	if len(statsigRequests) != 1 {
+		t.Fatalf("Statsig exported requests = %d, want 1", len(statsigRequests))
+	}
+	if got := metricsByName(t, statsigRequests[0])["codex.turn.tool.call"]["sum"].(map[string]any)["aggregationTemporality"].(float64); got != float64(otlpTemporalityDelta) {
+		t.Fatalf("Statsig counter temporality = %v, want delta", got)
+	}
+}
+
 func attributeMap(raw any) map[string]string {
 	attributes := map[string]string{}
 	entries, ok := raw.([]any)

@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -104,6 +105,10 @@ type MetricsClient struct {
 	serviceName    string
 	defaultTags    map[string]string
 	disabled       map[string]bool
+	// temporality is the OTLP aggregation temporality this client exports sums
+	// and histograms with: delta unless a configured exporter requests otherwise
+	// through MetricsTemporalityPreferenceEnv (Rust #51220).
+	temporality int
 
 	mu          sync.Mutex
 	counters    map[instrumentKey]map[string]*counterSeries
@@ -186,6 +191,13 @@ func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 	if options.ServiceName != "" {
 		client.serviceName = options.ServiceName
 	}
+	// Rust #51220 selects the temporality before resolving the Statsig route, so
+	// the built-in exporter always stays delta while a configured OTLP exporter
+	// honors OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE.
+	client.temporality = otlpMetricsTemporality(
+		!options.Statsig,
+		os.Getenv(MetricsTemporalityPreferenceEnv),
+	)
 	client.serviceVersion = options.ServiceVersion
 	client.environment = options.Environment
 	if options.Transport == MetricsTransportGRPC {
@@ -509,6 +521,7 @@ func (c *MetricsClient) snapshot() OTLPExportMetricsRequest {
 			Unit:        key.unit,
 			Sum:         dataPoints,
 			Monotonic:   true,
+			Temporality: c.temporality,
 		})
 	}
 	for _, key := range sortedInstrumentKeys(c.histograms) {
@@ -538,6 +551,7 @@ func (c *MetricsClient) snapshot() OTLPExportMetricsRequest {
 			Description: key.description,
 			Unit:        key.unit,
 			Histogram:   dataPoints,
+			Temporality: c.temporality,
 		})
 	}
 	for _, key := range sortedInstrumentKeys(c.gauges) {
