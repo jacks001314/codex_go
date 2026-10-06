@@ -698,6 +698,33 @@ func TestRequestUserInputStateCapturesOptionNotesAndUnanswered(t *testing.T) {
 	}
 }
 
+// TestRequestUserInputBodyLinksCompleteQuestionURLsLikeRust mirrors Rust #51449:
+// web URLs in a question render as terminal hyperlinks whose destination is the
+// complete URL (including the query string), and the question's explicit
+// newlines and blank lines survive.
+func TestRequestUserInputBodyLinksCompleteQuestionURLsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	state, err := NewRequestUserInputState([]RequestUserInputQuestion{{
+		ID:       "q1",
+		Question: "Review the release\n\nReview " + url + " before choosing.",
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewRequestUserInputState() error = %v", err)
+	}
+	body := state.RenderBody(40)
+	if !strings.Contains(body, OSC8Hyperlink(url, url)) {
+		t.Fatalf("question body did not link the complete URL:\n%q", body)
+	}
+	visible := StripOSC8(body)
+	if !strings.Contains(visible, url) {
+		t.Fatalf("wrapped question split the URL:\n%q", visible)
+	}
+	// The explicit blank line between the two question paragraphs survives.
+	if !strings.Contains(visible, "Review the release\n\nReview") {
+		t.Fatalf("question newlines were not preserved:\n%q", visible)
+	}
+}
+
 func TestRequestUserInputStatePreservesOtherAndMasksSecretDraft(t *testing.T) {
 	state, err := NewRequestUserInputState([]RequestUserInputQuestion{{
 		ID:       "secret",

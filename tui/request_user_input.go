@@ -274,7 +274,11 @@ func (s *RequestUserInputState) RenderBody(width int) string {
 		progress += " · auto-resolves in 1m 00s"
 	}
 	lines = append(lines, progress)
-	lines = append(lines, question.Question)
+	// Rust #51449: the question text keeps its explicit newlines and blank
+	// lines, and its web URLs are terminal hyperlinks whose complete destination
+	// survives wrapping (Go's URL-preserving wrapper never splits them).
+	questionLines := wrapRequestUserInputQuestion(question.Question, width)
+	tailLines := []string{}
 	if len(question.Options) == 0 {
 		answer := s.Draft
 		if answer == "" {
@@ -282,7 +286,7 @@ func (s *RequestUserInputState) RenderBody(width int) string {
 		} else if question.IsSecret {
 			answer = maskRequestUserInputText(answer)
 		}
-		lines = append(lines, "Answer: "+answer)
+		tailLines = append(tailLines, "Answer: "+answer)
 	} else if s.NotesVisible {
 		notes := s.Draft
 		if notes == "" {
@@ -290,13 +294,48 @@ func (s *RequestUserInputState) RenderBody(width int) string {
 		} else if question.IsSecret {
 			notes = maskRequestUserInputText(notes)
 		}
-		lines = append(lines, "Notes: "+notes)
+		tailLines = append(tailLines, "Notes: "+notes)
 	}
-	body := strings.Join(lines, "\n")
-	if width > 0 {
-		body = strings.Join(WrapLines(strings.Split(body, "\n"), WrapOptions{Width: width, BreakWords: true}), "\n")
+	return assembleRequestUserInputBody(lines, questionLines, tailLines, width)
+}
+
+// assembleRequestUserInputBody wraps the header/progress and answer/notes lines
+// but leaves the question lines alone: they are already wrapped and their web
+// URLs carry OSC-8 hyperlink sequences that a second wrap would corrupt
+// (Rust #51449 wrapped_question_lines).
+func assembleRequestUserInputBody(headLines []string, questionLines []string, tailLines []string, width int) string {
+	wrap := func(values []string) []string {
+		if width <= 0 || len(values) == 0 {
+			return values
+		}
+		return WrapLines(values, WrapOptions{Width: width, BreakWords: true})
 	}
-	return body
+	body := []string{}
+	body = append(body, wrap(headLines)...)
+	body = append(body, questionLines...)
+	body = append(body, wrap(tailLines)...)
+	return strings.Join(body, "\n")
+}
+
+// wrapRequestUserInputQuestion preserves the question's explicit newlines and
+// blank lines, wraps each source line without splitting web URLs, and turns
+// complete URLs into terminal hyperlinks whose destination is the full URL
+// (Rust #51449).
+func wrapRequestUserInputQuestion(question string, width int) []string {
+	if question == "" {
+		return nil
+	}
+	out := []string{}
+	for _, sourceLine := range strings.Split(question, "\n") {
+		wrapped := []string{sourceLine}
+		if width > 0 {
+			wrapped = WrapLines([]string{sourceLine}, WrapOptions{Width: width, BreakWords: true})
+		}
+		for _, line := range wrapped {
+			out = append(out, AnnotateCompleteWebURLsInLine(line))
+		}
+	}
+	return out
 }
 
 func normalizeRequestUserInputQuestions(questions []RequestUserInputQuestion) []RequestUserInputQuestion {

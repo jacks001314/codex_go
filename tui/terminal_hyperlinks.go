@@ -21,6 +21,19 @@ type TerminalHyperlink struct {
 // hyperlink sequences. ANSI styling around a URL (e.g. cyan link text) is
 // preserved because the URL bytes are a contiguous run that is wrapped in place.
 func AnnotateWebURLsInLine(line string) string {
+	return annotateWebURLsInLine(line, true)
+}
+
+// AnnotateCompleteWebURLsInLine annotates a line that the caller rendered from
+// a complete source fragment under URL-preserving wrapping (Rust #51449
+// remap_source_wrapped_line). A URL that reaches the end of such a line is
+// whole, so it is annotated instead of being skipped as a hard-wrapped
+// fragment.
+func AnnotateCompleteWebURLsInLine(line string) string {
+	return annotateWebURLsInLine(line, false)
+}
+
+func annotateWebURLsInLine(line string, skipFragmentsAtLineEnd bool) string {
 	if !strings.Contains(line, "http") {
 		return line
 	}
@@ -40,7 +53,7 @@ func AnnotateWebURLsInLine(line string) string {
 		// A URL fragment that runs to the end of the line may have been hard-wrapped
 		// by the renderer; annotating a truncated fragment would point the
 		// hyperlink at an incomplete target. Skip such fragments (Rust remap_wrapped_line).
-		if isLineEnd(line, loc[1]) {
+		if skipFragmentsAtLineEnd && isLineEnd(line, loc[1]) {
 			sb.WriteString(line[cursor:loc[1]])
 			cursor = loc[1]
 			continue
