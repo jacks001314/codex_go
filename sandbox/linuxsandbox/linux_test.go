@@ -108,6 +108,37 @@ func TestLinuxDenyReadGlobExpansion(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51407's native-fallback case: deny-read glob expansion runs
+// before sandbox confinement, so it must never execute an external binary
+// (which could resolve a writable workspace `rg`). Go always walks with the
+// in-process `doublestar` matcher, which is Rust's protected-lookup fallback,
+// and that walker must still mask dotfiles such as `.env.local`.
+func TestLinuxDenyReadGlobExpansionMatchesDotfilesWithoutExternalBinary(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env.local"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write .env.local: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", ".env.local"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write nested/.env.local: %v", err)
+	}
+	matches, err := expandLinuxDenyGlob(filepath.Join(root, "**", ".env.local"), root, nil)
+	if err != nil {
+		t.Fatalf("expandLinuxDenyGlob() error = %v", err)
+	}
+	got := map[string]bool{}
+	for _, match := range matches {
+		got[match] = true
+	}
+	for _, want := range []string{filepath.Join(root, ".env.local"), filepath.Join(root, "nested", ".env.local")} {
+		if !got[want] {
+			t.Fatalf("deny glob matches = %#v, want %s", matches, want)
+		}
+	}
+}
+
 func TestAppendUnreadableRootBwrapArgs(t *testing.T) {
 	dir := t.TempDir()
 	var args []string
