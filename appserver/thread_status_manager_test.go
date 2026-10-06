@@ -60,3 +60,46 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("Resolve system error = %#v", got)
 	}
 }
+
+// TestManagerTracksRunningTurnCountIncrementallyLikeRust mirrors Rust #49084:
+// the running-turn count is maintained as runtimes change instead of rescanning
+// the runtime map on every status mutation.
+func TestManagerTracksRunningTurnCountIncrementallyLikeRust(t *testing.T) {
+	manager := NewThreadStatusManager()
+	if got := manager.RunningTurnCount(); got != 0 {
+		t.Fatalf("initial running count = %d, want 0", got)
+	}
+	manager.NoteTurnStarted("thread-a")
+	manager.NoteTurnStarted("thread-b")
+	if got := manager.RunningTurnCount(); got != 2 {
+		t.Fatalf("running count = %d, want 2", got)
+	}
+	// Duplicate starts must not double count.
+	manager.NoteTurnStarted("thread-a")
+	if got := manager.RunningTurnCount(); got != 2 {
+		t.Fatalf("duplicate start count = %d, want 2", got)
+	}
+	// Completing a turn frees its slot.
+	manager.NoteTurnCompleted("thread-a")
+	if got := manager.RunningTurnCount(); got != 1 {
+		t.Fatalf("after completion count = %d, want 1", got)
+	}
+	// Removing a running thread decrements the count.
+	manager.RemoveThread("thread-b")
+	if got := manager.RunningTurnCount(); got != 0 {
+		t.Fatalf("after removal count = %d, want 0", got)
+	}
+	// Removing a non-running thread leaves the count stable.
+	manager.NoteTurnStarted("thread-c")
+	manager.NoteTurnCompleted("thread-c")
+	manager.RemoveThread("thread-c")
+	if got := manager.RunningTurnCount(); got != 0 {
+		t.Fatalf("after idle removal count = %d, want 0", got)
+	}
+	// A system error also stops counting the thread as running.
+	manager.NoteTurnStarted("thread-d")
+	manager.NoteSystemError("thread-d")
+	if got := manager.RunningTurnCount(); got != 0 {
+		t.Fatalf("after system error count = %d, want 0", got)
+	}
+}

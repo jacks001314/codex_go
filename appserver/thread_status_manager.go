@@ -10,8 +10,9 @@ type ThreadStatusNotification struct {
 }
 
 type ThreadStatusManager struct {
-	mu       sync.Mutex
-	runtimes map[string]*runtimeFacts
+	mu               sync.Mutex
+	runtimes         map[string]*runtimeFacts
+	runningTurnCount int
 }
 
 func NewThreadStatusManager() *ThreadStatusManager {
@@ -31,7 +32,14 @@ func (m *ThreadStatusManager) RemoveThread(threadID string) *ThreadStatusNotific
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	previous, hadPrevious := m.statusForLocked(threadID)
-	delete(m.runtimes, threadID)
+	if removed, ok := m.runtimes[threadID]; ok {
+		delete(m.runtimes, threadID)
+		// Rust #49084: a removed running thread no longer counts toward
+		// graceful-restart draining.
+		if removed.running {
+			m.runningTurnCount--
+		}
+	}
 	next := NotLoadedStatus()
 	if hadPrevious && !equalStatus(previous, next) {
 		return &ThreadStatusNotification{ThreadID: threadID, Status: next}
@@ -81,13 +89,9 @@ func (m *ThreadStatusManager) RunningTurnCount() int {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	count := 0
-	for _, runtime := range m.runtimes {
-		if runtime.running {
-			count++
-		}
-	}
-	return count
+	// Rust #49084 maintains the count incrementally instead of rescanning the
+	// runtime map while holding the state lock.
+	return m.runningTurnCount
 }
 
 func (m *ThreadStatusManager) NoteTurnStarted(threadID string) *ThreadStatusNotification {
@@ -181,7 +185,14 @@ func (m *ThreadStatusManager) mutate(threadID string, emit bool, apply func(*run
 		runtime = &runtimeFacts{}
 		m.runtimes[threadID] = runtime
 	}
+	wasRunning := runtime.running
 	apply(runtime)
+	switch {
+	case !wasRunning && runtime.running:
+		m.runningTurnCount++
+	case wasRunning && !runtime.running:
+		m.runningTurnCount--
+	}
 	next := loadedThreadStatus(runtime)
 	if !emit || (hadPrevious && equalStatus(previous, next)) {
 		return nil
