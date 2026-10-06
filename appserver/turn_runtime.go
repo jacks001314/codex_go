@@ -10107,6 +10107,19 @@ func (r *RuntimeRouter) trackSkillInvocationEvent(ctx context.Context, threadID 
 	if invokeType == telemetry.SkillInvocationTypeImplicit {
 		r.recordSkillShadowInvocation(threadID, turnID, skill)
 	}
+	// Rust #49689: emit the OTEL `codex.skill_invocation` log for every detected
+	// invocation, independent of the analytics exporter.
+	if r != nil {
+		if sessionTelemetry := r.sessionTelemetryForThread(threadID); sessionTelemetry != nil {
+			sessionTelemetry.SkillInvocation(ctx, telemetry.SkillInvocationEvent{
+				TurnID:         turnID,
+				SkillName:      skill.Name,
+				Scope:          skillInvocationScope(skill.Scope),
+				PluginID:       skill.PluginID,
+				InvocationType: invokeType,
+			})
+		}
+	}
 	if r == nil || r.services.Analytics == nil || r.threadAnalyticsDisabled(threadID) {
 		return
 	}
