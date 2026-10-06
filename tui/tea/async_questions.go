@@ -442,7 +442,7 @@ func (m *Model) asyncQuestionChoicesVisible() bool {
 func (m *Model) asyncQuestionBlockRows(question bottompane.AsyncUserInputQuestion) int {
 	width := max(m.width-2, 1)
 	rows := 0
-	rows += len(wrapAsyncQuestionText(question.Title, width, 0))
+	rows += len(wrapAsyncQuestionTitleLines(question.Title, width))
 	for index, label := range question.Options {
 		rows += len(wrapAsyncQuestionText(label, width, asyncQuestionChoicePrefixWidth(index)))
 	}
@@ -484,7 +484,7 @@ func (m *Model) renderAsyncQuestions() []string {
 		return lines
 	}
 	width := max(m.width-2, 8)
-	for _, line := range wrapAsyncQuestionText(question.Title, width, 0) {
+	for _, line := range wrapAsyncQuestionTitleLines(question.Title, width) {
 		lines = append(lines, m.accentAsyncQuestionText(line))
 	}
 	if len(question.Options) > 0 {
@@ -586,6 +586,27 @@ func wrapAsyncQuestionText(text string, width int, indent int) []string {
 				line = strings.Repeat(" ", indent) + strings.TrimLeft(line, " ")
 			}
 			out = append(out, line)
+		}
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
+}
+
+// wrapAsyncQuestionTitleLines wraps an asynchronous question title with
+// URL-preserving wrapping and turns web URLs into terminal hyperlinks whose
+// complete destination survives wrapping and clipping (Rust #51391:
+// wrapped_question_lines renders through HyperlinkParagraph).
+func wrapAsyncQuestionTitleLines(title string, width int) []string {
+	if width <= 0 {
+		width = 1
+	}
+	out := []string{}
+	for _, paragraph := range strings.Split(title, "\n") {
+		wrapped := codextui.AdaptiveWrapLine(paragraph, codextui.WrapOptions{Width: width, BreakWords: true})
+		for _, line := range wrapped {
+			out = append(out, codextui.AnnotateCompleteWebURLsInLine(line))
 		}
 	}
 	if len(out) == 0 {

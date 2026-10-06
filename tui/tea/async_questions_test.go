@@ -677,3 +677,26 @@ func TestAsyncQuestionsBufferedLiveQuestionsAppearOnAgentSwitch(t *testing.T) {
 		t.Fatalf("buffered question = %#v (ok=%v)", question, ok)
 	}
 }
+
+// TestAsyncQuestionTitleLinksWrappedURLsLikeRust mirrors Rust #51391: a web URL
+// in an asynchronous question title is rendered as a terminal hyperlink whose
+// complete destination survives wrapping.
+func TestAsyncQuestionTitleLinksWrappedURLsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	title := "Open " + url + " to review, please?"
+	model := NewModel(codextui.NewState(nil), Options{Width: 40, Height: 40})
+	model.State.SetThreadID("thread-question-url")
+	model = feedAsyncQuestions(t, model, "question-url", []any{map[string]any{"title": title}})
+	updated, _ := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyUp, Alt: true})
+	model = updated.(*Model)
+	if !model.asyncQuestions.Expanded() {
+		t.Fatal("Alt+Up must focus the question editor")
+	}
+	view := model.View()
+	if !strings.Contains(view, "\x1b]8;;"+url+"\x07") {
+		t.Fatalf("view missing hyperlink to %q:\n%q", url, view)
+	}
+	if !strings.Contains(codextui.StripOSC8(view), url) {
+		t.Fatalf("view missing complete URL %q:\n%q", url, view)
+	}
+}
