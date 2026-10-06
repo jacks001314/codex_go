@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"time"
 
 	"codex_go/appserver"
@@ -60,12 +59,11 @@ func runRemoteControlForeground(ctx context.Context, opts cli.RemoteControlOptio
 	if !opts.JSON {
 		fmt.Fprintln(stdout, "Starting app-server with remote control enabled...")
 	}
-	socketDir, err := os.MkdirTemp("", "codex-rc-")
+	socketPath, cleanupSocket, err := foregroundRemoteControlSocketPath()
 	if err != nil {
-		return fmt.Errorf("failed to create private app-server socket directory: %w", err)
+		return err
 	}
-	defer os.RemoveAll(socketDir)
-	socketPath := filepath.Join(socketDir, "rc.sock")
+	defer cleanupSocket()
 
 	serverCtx, cancelServer := context.WithCancel(ctx)
 	defer cancelServer()
