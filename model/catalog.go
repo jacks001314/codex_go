@@ -106,9 +106,6 @@ func isH1Heading(line string) bool {
 
 type ModelMessages struct {
 	InstructionsTemplate string                     `json:"instructions_template,omitempty"`
-	PersonalityDefault   string                     `json:"-"`
-	PersonalityFriendly  string                     `json:"-"`
-	PersonalityPragmatic string                     `json:"-"`
 	CollaborationModes   *CollaborationModeMessages `json:"collaboration_modes,omitempty"`
 	MultiAgent           *MultiAgentMessages        `json:"multi_agent,omitempty"`
 	TokenBudget          *ModelTokenBudgetConfig    `json:"token_budget,omitempty"`
@@ -296,7 +293,6 @@ func (m *ModelMessages) MultiAgentToolParametersOverride(toolName string) *strin
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		InstructionsTemplate   string                     `json:"instructions_template"`
-		InstructionsVariables  map[string]string          `json:"instructions_variables"`
 		CollaborationModes     *CollaborationModeMessages `json:"collaboration_modes"`
 		MultiAgent             *MultiAgentMessages        `json:"multi_agent"`
 		TokenBudget            *ModelTokenBudgetConfig    `json:"token_budget"`
@@ -322,55 +318,13 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	m.GuardianV2 = raw.GuardianV2
 	m.Tools = raw.Tools
-	if raw.InstructionsVariables != nil {
-		m.PersonalityDefault = raw.InstructionsVariables["personality_default"]
-		m.PersonalityFriendly = raw.InstructionsVariables["personality_friendly"]
-		m.PersonalityPragmatic = raw.InstructionsVariables["personality_pragmatic"]
-	}
 	return nil
-}
-
-func (m *ModelMessages) SupportsPersonality() bool {
-	if m == nil || !strings.Contains(m.InstructionsTemplate, personalityPlaceholder) {
-		return false
-	}
-	return m.PersonalityFriendly != "" && m.PersonalityPragmatic != ""
-}
-
-func (m *ModelMessages) PersonalityMessage(personality string) (string, bool) {
-	if m == nil {
-		return "", false
-	}
-	switch strings.ToLower(strings.TrimSpace(personality)) {
-	case "none":
-		return "", true
-	case "friendly":
-		if m.PersonalityFriendly != "" {
-			return m.PersonalityFriendly, true
-		}
-	case "pragmatic":
-		if m.PersonalityPragmatic != "" {
-			return m.PersonalityPragmatic, true
-		}
-	case "":
-		return m.PersonalityDefault, true
-	default:
-		return m.PersonalityDefault, true
-	}
-	return "", false
 }
 
 func (m *ModelInfo) SupportsPersonality() bool {
 	// Rust #44946 retires Friendly/Pragmatic personality selection: generated
 	// model presets always report `supports_personality = false`.
 	return false
-}
-
-func (m *ModelInfo) PersonalityMessage(personality string) (string, bool) {
-	if m == nil || m.ModelMessages == nil {
-		return "", false
-	}
-	return m.ModelMessages.PersonalityMessage(personality)
 }
 
 func (m *ModelInfo) ModelInstructions(personality string) string {
@@ -1520,10 +1474,10 @@ func WithConfigOverrides(model ModelInfo, config *ModelsManagerConfig) ModelInfo
 }
 
 // setInstructionsTemplate mirrors Rust's model_messages.instructions_template
-// override: the template becomes the sole instruction source and any
-// personality variables are cleared while the remaining message fields
-// (approvals, collaboration modes, token budget, ...) are preserved
-// (Rust df72fdb415).
+// override: the template becomes the sole instruction source while the
+// remaining message fields (approvals, collaboration modes, token budget, ...)
+// are preserved (Rust df72fdb415; legacy personality variables no longer exist,
+// Rust #51223).
 func setInstructionsTemplate(model *ModelInfo, template string) {
 	if model == nil || model.ModelMessages == nil {
 		if model == nil {
@@ -1533,9 +1487,6 @@ func setInstructionsTemplate(model *ModelInfo, template string) {
 	}
 	messages := model.ModelMessages
 	messages.InstructionsTemplate = template
-	messages.PersonalityDefault = ""
-	messages.PersonalityFriendly = ""
-	messages.PersonalityPragmatic = ""
 	// Rust #38619: a base-instructions override replaces the message set, so
 	// catalog-provided multi-agent role/mode messages are cleared too.
 	messages.MultiAgent = nil

@@ -13537,8 +13537,6 @@ func TestRuntimeRouterModelSwitchWorldStateDiffs(t *testing.T) {
 	t.Cleanup(func() { _ = router.Close() })
 	modelMessages := &model.ModelMessages{
 		InstructionsTemplate: "BASE {{ personality }}",
-		PersonalityFriendly:  "friendly spec",
-		PersonalityPragmatic: "pragmatic spec",
 	}
 	oldModel := &model.ModelInfo{Slug: "gpt-old", ModelMessages: modelMessages}
 
@@ -26733,9 +26731,6 @@ func personalityModelServiceForRuntimeTest() *model.ModelService {
 		BaseInstructions: "Base default instructions",
 		ModelMessages: &model.ModelMessages{
 			InstructionsTemplate: "Base {{ personality }}",
-			PersonalityDefault:   "default personality",
-			PersonalityFriendly:  "friendly personality",
-			PersonalityPragmatic: "pragmatic personality",
 		},
 	}}}))
 }

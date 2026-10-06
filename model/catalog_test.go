@@ -334,8 +334,13 @@ func TestModelInfoUnmarshalRustCatalogShape(t *testing.T) {
 	if !model.NodeReplAutoReviewRequired || !model.NodeReplDisabled {
 		t.Fatalf("node repl policy = %#v", model)
 	}
-	if model.ModelMessages == nil || model.ModelMessages.PersonalityFriendly != "Friendly" {
+	// Rust #51223: legacy `instructions_variables` are accepted but ignored, so
+	// the literal template survives and personality stays unsupported.
+	if model.ModelMessages == nil || model.ModelMessages.InstructionsTemplate != "Hello {{ personality }}" {
 		t.Fatalf("model messages = %#v", model.ModelMessages)
+	}
+	if model.SupportsPersonality() {
+		t.Fatal("legacy instructions_variables must not enable personality")
 	}
 	if model.ModelMessages.CollaborationModes == nil || model.ModelMessages.CollaborationModes.Default == nil || *model.ModelMessages.CollaborationModes.Default != "" || model.ModelMessages.CollaborationModes.Plan != nil {
 		t.Fatalf("collaboration mode messages = %#v", model.ModelMessages.CollaborationModes)
@@ -1120,9 +1125,6 @@ func TestWithConfigOverrides(t *testing.T) {
 	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != "custom instructions" {
 		t.Fatalf("ModelMessages = %#v, want instructions_template = custom instructions", updated.ModelMessages)
 	}
-	if updated.ModelMessages.PersonalityDefault != "" || updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
-		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
-	}
 }
 
 func TestPersonalityDisabledFallsBackToBaseInstructionsForLocalPersonalityModels(t *testing.T) {
@@ -1134,9 +1136,6 @@ func TestPersonalityDisabledFallsBackToBaseInstructionsForLocalPersonalityModels
 	if updated.ModelMessages == nil || updated.ModelMessages.InstructionsTemplate != BaseInstructions {
 		t.Fatalf("ModelMessages = %#v, want instructions_template = BaseInstructions", updated.ModelMessages)
 	}
-	if updated.ModelMessages.PersonalityFriendly != "" || updated.ModelMessages.PersonalityPragmatic != "" {
-		t.Fatalf("personality variables should be cleared: %#v", updated.ModelMessages)
-	}
 }
 
 func TestRetiredPersonalityLeavesLegacyTemplateLiteral(t *testing.T) {
@@ -1144,9 +1143,6 @@ func TestRetiredPersonalityLeavesLegacyTemplateLiteral(t *testing.T) {
 		BaseInstructions: "base",
 		ModelMessages: &ModelMessages{
 			InstructionsTemplate: "Hello {{ personality }}",
-			PersonalityDefault:   "default",
-			PersonalityFriendly:  "friendly",
-			PersonalityPragmatic: "pragmatic",
 		},
 	}
 	updated := WithConfigOverrides(model, &ModelsManagerConfig{})
@@ -1172,8 +1168,6 @@ func TestInstructionOverridesPreserveCollaborationModeMessages(t *testing.T) {
 				BaseInstructions: "base",
 				ModelMessages: &ModelMessages{
 					InstructionsTemplate: "Hello {{ personality }}",
-					PersonalityFriendly:  "friendly",
-					PersonalityPragmatic: "pragmatic",
 					CollaborationModes: &CollaborationModeMessages{
 						Default: &defaultInstructions,
 						Plan:    &planInstructions,
@@ -1196,9 +1190,6 @@ func TestModelInstructionsIgnoresLegacyPersonalityVariables(t *testing.T) {
 		BaseInstructions: "base",
 		ModelMessages: &ModelMessages{
 			InstructionsTemplate: "Hello {{ personality }}",
-			PersonalityDefault:   "default",
-			PersonalityFriendly:  "friendly",
-			PersonalityPragmatic: "pragmatic",
 		},
 	}
 	for _, personality := range []string{"friendly", "pragmatic", "none", ""} {
