@@ -555,7 +555,10 @@ func (m *Model) renderBackendBanner() string {
 		lines = append(lines, "", "  "+hint)
 	}
 	for index, line := range lines {
-		lines[index] = fitTerminalLine(line, width)
+		// Truncate to the terminal width first, then annotate web URLs: the
+		// OSC-8 sequences are invisible and must not count toward the width, so
+		// the complete destination survives (Rust #51452).
+		lines[index] = codextui.AnnotateCompleteWebURLsInLine(fitTerminalLine(line, width))
 	}
 	return strings.Join(lines, "\n")
 }

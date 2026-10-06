@@ -20,6 +20,26 @@ func backendBannerFallbackModel(t *testing.T, currentModel string) *Model {
 	return model
 }
 
+// TestModelBackendBannerLinksCompleteURLsLikeRust mirrors Rust #51452: a web URL
+// in the inline banner renders as a terminal hyperlink whose destination is the
+// complete URL.
+func TestModelBackendBannerLinksCompleteURLsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	model := backendBannerFallbackModel(t, "gpt-5")
+	model.SetBackendBanner(&BackendBannerView{
+		BannerType:  "information",
+		Title:       "Release notes",
+		Description: "Review " + url + " before continuing.",
+	})
+	rendered := model.renderBackendBanner()
+	if !strings.Contains(rendered, codextui.OSC8Hyperlink(url, url)) {
+		t.Fatalf("banner did not link the complete URL:\n%q", rendered)
+	}
+	if !strings.Contains(codextui.StripOSC8(rendered), url) {
+		t.Fatalf("banner split the URL:\n%q", codextui.StripOSC8(rendered))
+	}
+}
+
 // TestModelBackendBannerFallbackSwitchesToFallback pins Rust's non-reserve
 // fallback: a blocked model with an ordered fallback list switches to the first
 // picker-visible candidate and reports it.
