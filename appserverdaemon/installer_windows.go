@@ -11,6 +11,8 @@ import "context"
 func runInstallerProcess(ctx context.Context, script []byte, env map[string]string) error {
 	return runWindowsUpdateInstallerWithInput(ctx, "powershell.exe", []string{
 		"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-		"-Command", "try { Invoke-Expression ([Console]::In.ReadToEnd()) } catch { Write-Error $_; exit 1 }",
+		// Force UTF-8 output so non-ASCII installer diagnostics survive the
+		// captured stderr tail (Rust #50499).
+		"-Command", "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); try { Invoke-Expression ([Console]::In.ReadToEnd()) } catch { Write-Error $_; exit 1 }",
 	}, script, env)
 }

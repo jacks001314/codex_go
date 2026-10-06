@@ -55,6 +55,12 @@ func runWindowsUpdateInstallerWithInput(ctx context.Context, command string, arg
 	if script != nil {
 		cmd.Stdin = bytes.NewReader(script)
 	}
+	// Keep the last installer diagnostics so a failed run reports them, and
+	// bound the drain so a descendant holding the pipe open cannot stall the
+	// updater (Rust update_loop's bounded stderr drain, #50499).
+	tail := &installerStderrTail{}
+	cmd.Stderr = tail
+	cmd.WaitDelay = installerStderrDrainTimeout
 	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("invoke standalone Codex updater: %w", err)
@@ -80,7 +86,10 @@ func runWindowsUpdateInstallerWithInput(ctx context.Context, command string, arg
 		_ = cmd.Wait()
 		return err
 	}
-	return cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		return installerExitError(err, tail)
+	}
+	return nil
 }
 
 func resumeUpdateInstallerProcess(handle windows.Handle) error {

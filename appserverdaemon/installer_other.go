@@ -5,7 +5,6 @@ package appserverdaemon
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -23,7 +22,12 @@ func runInstallerProcess(ctx context.Context, script []byte, env map[string]stri
 	command := exec.CommandContext(ctx, "/bin/sh", "-s")
 	command.Stdin = bytes.NewReader(script)
 	command.Stdout = io.Discard
-	command.Stderr = io.Discard
+	// Keep the last installer diagnostics so a failed run reports them, and
+	// bound the drain so a descendant holding the pipe open cannot stall the
+	// updater (Rust update_loop's bounded stderr drain, #50499).
+	tail := &installerStderrTail{}
+	command.Stderr = tail
+	command.WaitDelay = installerStderrDrainTimeout
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	environment := os.Environ()
 	for name, value := range env {
@@ -31,7 +35,7 @@ func runInstallerProcess(ctx context.Context, script []byte, env map[string]stri
 	}
 	command.Env = environment
 	if err := command.Run(); err != nil {
-		return fmt.Errorf("standalone Codex updater exited with error: %w", err)
+		return installerExitError(err, tail)
 	}
 	return nil
 }

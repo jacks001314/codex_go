@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Guarded installer invocation (Rust app-server-daemon/src/update_loop.rs:
@@ -37,7 +39,62 @@ const (
 	// InstallerUpdateFromRelease names the release an update started from
 	// (Rust run_installer_script's CODEX_UPDATE_FROM_RELEASE).
 	installerUpdateFromRelease = "CODEX_UPDATE_FROM_RELEASE"
+
+	// installerStderrTailBytes bounds the captured installer diagnostics (Rust
+	// update_loop::INSTALLER_STDERR_TAIL_BYTES). A failed install previously
+	// reported only an exit status; the tail is appended to the error so the
+	// manual-update response carries the installer's own diagnostics.
+	installerStderrTailBytes = 2 * 1024
+	// installerStderrDrainTimeout bounds waiting for the installer's stderr pipe
+	// to close after it exits (Rust INSTALLER_STDERR_DRAIN_TIMEOUT), so a
+	// descendant holding the pipe open cannot delay error reporting.
+	installerStderrDrainTimeout = time.Second
 )
+
+// installerStderrTail retains the last installerStderrTailBytes bytes written to
+// it (Rust's rolling `VecDeque` tail).
+type installerStderrTail struct {
+	mu   sync.Mutex
+	tail []byte
+}
+
+func (t *installerStderrTail) Write(p []byte) (int, error) {
+	if t == nil {
+		return len(p), nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(p) >= installerStderrTailBytes {
+		t.tail = append(t.tail[:0], p[len(p)-installerStderrTailBytes:]...)
+		return len(p), nil
+	}
+	retained := installerStderrTailBytes - len(p)
+	if len(t.tail) > retained {
+		t.tail = append(t.tail[:0], t.tail[len(t.tail)-retained:]...)
+	}
+	t.tail = append(t.tail, p...)
+	return len(p), nil
+}
+
+func (t *installerStderrTail) String() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(append([]byte(nil), t.tail...))
+}
+
+// installerExitError reports a failed installer run, appending the captured
+// stderr tail when the installer produced diagnostics (Rust run_installer_script's
+// failure branch).
+func installerExitError(err error, tail *installerStderrTail) error {
+	detail := strings.TrimSpace(tail.String())
+	if detail == "" {
+		return fmt.Errorf("standalone Codex updater exited with error: %w", err)
+	}
+	return fmt.Errorf("standalone Codex updater exited with error: %w:\n%s", err, detail)
+}
 
 type installerModeKind int
 
