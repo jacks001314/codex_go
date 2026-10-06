@@ -90,3 +90,18 @@ func TestInstallLogDBHandlerRestoresPreviousLogger(t *testing.T) {
 		t.Fatalf("installed logs = %#v, %v", rows, err)
 	}
 }
+
+// Mirrors Rust's `post_sampling_token_estimate_is_disabled_by_always_on_sinks`
+// (#50054): the always-on log-DB sink filter must never persist the
+// post-sampling token estimate target, checked directly on the sink filter.
+func TestPostSamplingTokenEstimateIsDisabledByAlwaysOnSinks(t *testing.T) {
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		if persistSlogRecord("codex_core::post_sampling_token_estimate", level) {
+			t.Fatalf("persistSlogRecord(post_sampling, %v) = true, want false", level)
+		}
+	}
+	// A regular target keeps being persisted.
+	if !persistSlogRecord("codex_test", slog.LevelInfo) {
+		t.Fatal("persistSlogRecord(codex_test) = false, want true")
+	}
+}
