@@ -514,6 +514,9 @@ func (r *Recorder) AppendItemCompleted(item json.RawMessage, turnID string, star
 	if len(item) == 0 {
 		return errors.New("completed item payload is required")
 	}
+	// Mirror Rust's persisted ItemCompleted representation (rollout/src/policy.rs)
+	// so oversized fields are capped before they reach the durable rollout.
+	item = applyPersistedItemTruncation(item)
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return errors.New("completed item turn id is required")

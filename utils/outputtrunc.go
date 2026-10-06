@@ -188,6 +188,23 @@ func TruncateMiddleChars(s string, maxBytes int) string {
 	return truncateWithByteEstimate(s, maxBytes, false)
 }
 
+// TruncateMiddleWithMarker retains a UTF-8-safe prefix and suffix around marker
+// so the complete result (including the marker) fits maxBytes. Mirrors Rust
+// `truncate_middle_with_marker` (codex-rs/utils/string/src/truncate.rs): when
+// the marker does not fit, the longest original prefix that does is returned.
+func TruncateMiddleWithMarker(s string, maxBytes int, marker string) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	if maxBytes < len(marker) {
+		return s[:floorCharBoundary(s, maxBytes)]
+	}
+	leftBudget, rightBudget := splitBudget(maxBytes - len(marker))
+	prefixEnd := floorCharBoundary(s, leftBudget)
+	suffixStart := ceilCharBoundary(s, len(s)-rightBudget)
+	return s[:prefixEnd] + marker + s[suffixStart:]
+}
+
 func TruncateMiddleWithTokenBudget(s string, maxTokens int) (string, *uint64) {
 	if s == "" {
 		return "", nil

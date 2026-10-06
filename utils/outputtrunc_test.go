@@ -3,6 +3,7 @@ package utils
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTruncateBytesAndTokens(t *testing.T) {
@@ -95,6 +96,27 @@ func TestTruncateFunctionOutputItemsRetainsFileImages(t *testing.T) {
 func TestApproxTokenConversions(t *testing.T) {
 	if ApproxTokensFromByteCountInt64(-1) != 0 || ApproxTokensFromByteCountInt64(0) != 0 || ApproxTokensFromByteCountInt64(5) != 2 {
 		t.Fatalf("unexpected int64 token conversion")
+	}
+}
+
+// TestTruncateMiddleWithMarkerLikeRust mirrors Rust
+// truncate_middle_with_marker (codex-rs/utils/string/src/truncate.rs).
+func TestTruncateMiddleWithMarkerLikeRust(t *testing.T) {
+	if got := TruncateMiddleWithMarker("short", 32, "|M|"); got != "short" {
+		t.Fatalf("short = %q, want unchanged", got)
+	}
+	// A marker wider than the budget falls back to the longest prefix that fits.
+	if got := TruncateMiddleWithMarker("abcdef", 3, "|||||"); got != "abc" {
+		t.Fatalf("marker-too-wide = %q, want %q", got, "abc")
+	}
+	// 4 content bytes split 2/2 around the 3-byte marker.
+	if got := TruncateMiddleWithMarker("0123456789", 7, "|M|"); got != "01|M|89" {
+		t.Fatalf("middle = %q, want %q", got, "01|M|89")
+	}
+	// UTF-8 boundaries are respected and the marker sits outside the budget.
+	got := TruncateMiddleWithMarker("é中😀é中😀", 9, "|M|")
+	if len(got) > 9 || !utf8.ValidString(got) {
+		t.Fatalf("utf8 result = %q (len %d)", got, len(got))
 	}
 }
 
