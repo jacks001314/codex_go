@@ -10244,7 +10244,6 @@ func (r *RuntimeRouter) handleModelProviderCapabilitiesRead(request *Request) (*
 			if providerInfo, err := model.ProviderForConfigID(read.Config, providerID, strings.TrimSpace(stringFromMap(read.Config, "openai_base_url"))); err == nil && providerInfo != nil {
 				capabilities := model.CreateRuntimeProviderForID(providerID, *providerInfo, nil).Capabilities()
 				return &model.ProviderCapabilitiesReadResponse{
-					NamespaceTools:  capabilities.NamespaceTools,
 					ImageGeneration: capabilities.ImageGeneration,
 					WebSearch:       capabilities.WebSearch,
 				}, nil

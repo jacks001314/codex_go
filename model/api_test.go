@@ -293,7 +293,7 @@ func TestProviderCapabilities(t *testing.T) {
 		InputModalities:            []string{"text", "image"},
 	}}})
 	response := NewModelService(manager).ProviderCapabilities(&ProviderCapabilitiesReadParams{})
-	if !response.NamespaceTools || !response.ImageGeneration || response.WebSearch {
+	if !response.ImageGeneration || response.WebSearch {
 		t.Fatalf("response = %#v", response)
 	}
 	encoded, err := json.Marshal(response)
@@ -304,7 +304,7 @@ func TestProviderCapabilities(t *testing.T) {
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		t.Fatalf("UnmarshalJSON returned error: %v", err)
 	}
-	if len(payload) != 3 || payload["namespaceTools"] != true || payload["imageGeneration"] != true || payload["webSearch"] != false {
+	if len(payload) != 2 || payload["imageGeneration"] != true || payload["webSearch"] != false {
 		t.Fatalf("payload = %#v", payload)
 	}
 }

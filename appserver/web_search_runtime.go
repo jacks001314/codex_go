@@ -83,7 +83,7 @@ func (r *RuntimeRouter) webSearchOptionsForTurn(cfg *config.Config, params *turn
 }
 
 func appStandaloneWebSearchEnabled(capabilities model.ProviderCapabilities, info *model.ModelInfo, featureSettings map[string]bool) bool {
-	if info == nil || !capabilities.NamespaceTools || !capabilities.WebSearch {
+	if info == nil || !capabilities.WebSearch {
 		return false
 	}
 	return info.UseResponsesLite || features.Enabled(featureSettings, "standalone_web_search")

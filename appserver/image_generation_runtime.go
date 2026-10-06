@@ -139,7 +139,7 @@ func appImageGenerationStandaloneEnabled(provider model.ProviderInfo, capabiliti
 	if info == nil {
 		return false
 	}
-	if !capabilities.NamespaceTools || !capabilities.ImageGeneration {
+	if !capabilities.ImageGeneration {
 		return false
 	}
 	if !appModelInfoSupportsImageInput(info) {

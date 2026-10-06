@@ -9,7 +9,7 @@ import (
 
 func TestAppImageGenerationStandaloneDisabledForFreePlan(t *testing.T) {
 	provider := model.ProviderInfo{Name: model.OpenAIProviderName, RequiresOpenAIAuth: true}
-	capabilities := model.ProviderCapabilities{NamespaceTools: true, ImageGeneration: true}
+	capabilities := model.ProviderCapabilities{ImageGeneration: true}
 	info := &model.ModelInfo{InputModalities: []string{"text", "image"}}
 	features := map[string]bool{"image_generation": true}
 

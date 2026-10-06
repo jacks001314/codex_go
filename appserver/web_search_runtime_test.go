@@ -93,7 +93,7 @@ func TestWebSearchRuntimeDisabledModeDoesNotExposeStandaloneTool(t *testing.T) {
 }
 
 func TestAppStandaloneWebSearchEnabledMatchesRustPlanning(t *testing.T) {
-	capabilities := model.ProviderCapabilities{NamespaceTools: true, WebSearch: true}
+	capabilities := model.ProviderCapabilities{WebSearch: true}
 	for _, test := range []struct {
 		name     string
 		caps     model.ProviderCapabilities
@@ -104,8 +104,7 @@ func TestAppStandaloneWebSearchEnabledMatchesRustPlanning(t *testing.T) {
 		{name: "responses lite without feature", caps: capabilities, info: &model.ModelInfo{UseResponsesLite: true}, want: true},
 		{name: "standard with feature", caps: capabilities, info: &model.ModelInfo{}, features: map[string]bool{"standalone_web_search": true}, want: true},
 		{name: "standard without feature", caps: capabilities, info: &model.ModelInfo{}, want: false},
-		{name: "missing namespace tools", caps: model.ProviderCapabilities{WebSearch: true}, info: &model.ModelInfo{UseResponsesLite: true}, want: false},
-		{name: "missing web search capability", caps: model.ProviderCapabilities{NamespaceTools: true}, info: &model.ModelInfo{UseResponsesLite: true}, want: false},
+		{name: "missing web search capability", caps: model.ProviderCapabilities{}, info: &model.ModelInfo{UseResponsesLite: true}, want: false},
 		{name: "missing model info", caps: capabilities, want: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

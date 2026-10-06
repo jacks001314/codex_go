@@ -208,7 +208,6 @@ type ModelAvailabilityNux struct {
 type ProviderCapabilitiesReadParams struct{}
 
 type ProviderCapabilitiesReadResponse struct {
-	NamespaceTools  bool `json:"namespaceTools"`
 	ImageGeneration bool `json:"imageGeneration"`
 	WebSearch       bool `json:"webSearch"`
 }
@@ -334,7 +333,6 @@ func (s *ModelService) ProviderCapabilities(params *ProviderCapabilitiesReadPara
 	}
 	return &ProviderCapabilitiesReadResponse{
 		ImageGeneration: containsString(info.InputModalities, "image"),
-		NamespaceTools:  info.SupportsParallelToolCalls,
 		WebSearch:       info.SupportsSearchTool,
 	}
 }

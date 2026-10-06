@@ -252,7 +252,7 @@ func TestAmazonBedrockProviderCapabilitiesAndModels(t *testing.T) {
 	capabilities := provider.Capabilities()
 	// Rust AmazonBedrockModelProvider::capabilities: the default provider is the
 	// Mantle endpoint, where web search is available (Runtime is not).
-	if !capabilities.NamespaceTools || capabilities.ImageGeneration || !capabilities.WebSearch {
+	if capabilities.ImageGeneration || !capabilities.WebSearch {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
 	if provider.ApprovalReviewPreferredModel() != AmazonBedrockGPT54ModelID {

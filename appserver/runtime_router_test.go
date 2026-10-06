@@ -8032,7 +8032,6 @@ func TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust(t *testing.T) {
 				InputModalities:           []string{"text", "image"},
 			},
 			want: model.ProviderCapabilitiesReadResponse{
-				NamespaceTools:  true,
 				ImageGeneration: true,
 				WebSearch:       true,
 			},
@@ -8048,7 +8047,6 @@ func TestRuntimeRouterModelProviderCapabilitiesReadMatchesRust(t *testing.T) {
 				InputModalities:           []string{"text"},
 			},
 			want: model.ProviderCapabilitiesReadResponse{
-				NamespaceTools:  true,
 				ImageGeneration: false,
 				WebSearch:       false,
 			},
@@ -8081,15 +8079,15 @@ func TestRuntimeRouterModelProviderCapabilitiesReadUsesConfiguredProviderLikeRus
 	}{
 		{
 			provider: model.AmazonBedrockProviderID,
-			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: false, WebSearch: true},
+			want:     model.ProviderCapabilitiesReadResponse{ImageGeneration: false, WebSearch: true},
 		},
 		{
 			provider: model.AmazonBedrockRuntimeProviderID,
-			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: false, WebSearch: false},
+			want:     model.ProviderCapabilitiesReadResponse{ImageGeneration: false, WebSearch: false},
 		},
 		{
 			provider: "openai",
-			want:     model.ProviderCapabilitiesReadResponse{NamespaceTools: true, ImageGeneration: true, WebSearch: true},
+			want:     model.ProviderCapabilitiesReadResponse{ImageGeneration: true, WebSearch: true},
 		},
 	}
 	for _, tc := range cases {

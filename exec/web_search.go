@@ -44,7 +44,7 @@ func (r *Runner) webSearchOptionsForRun(
 	runtimeProvider := model.CreateRuntimeProviderForID(providerID, *providerInfo, snapshot)
 	modelInfo := execModelInfo(modelID, cfg)
 	capabilities := runtimeProvider.Capabilities()
-	standaloneEnabled := capabilities.NamespaceTools && capabilities.WebSearch &&
+	standaloneEnabled := capabilities.WebSearch &&
 		(modelInfo.UseResponsesLite || features.Enabled(cfg.FeatureSettings(), "standalone_web_search"))
 	if !standaloneEnabled {
 		return nil, nil

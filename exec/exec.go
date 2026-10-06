@@ -1482,7 +1482,7 @@ func imageGenerationStandaloneEnabled(provider model.ProviderInfo, capabilities 
 	if info == nil {
 		return false
 	}
-	if !capabilities.NamespaceTools || !capabilities.ImageGeneration {
+	if !capabilities.ImageGeneration {
 		return false
 	}
 	if !modelInfoSupportsImageInputExec(info) {

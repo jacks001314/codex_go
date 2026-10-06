@@ -21,14 +21,12 @@ const (
 )
 
 type ProviderCapabilities struct {
-	NamespaceTools  bool
 	ImageGeneration bool
 	WebSearch       bool
 }
 
 func DefaultProviderCapabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		NamespaceTools:  true,
 		ImageGeneration: true,
 		WebSearch:       true,
 	}
@@ -328,7 +326,6 @@ func (p *AmazonBedrockProvider) Info() ProviderInfo {
 
 func (p *AmazonBedrockProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		NamespaceTools:  true,
 		ImageGeneration: false,
 		// Rust AmazonBedrockModelProvider::capabilities: web search is available
 		// on the Mantle endpoint and unsupported on the Bedrock Runtime endpoint.
