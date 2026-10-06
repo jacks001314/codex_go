@@ -76,3 +76,40 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 		t.Fatalf("inactive turn step settings = %#v", settings)
 	}
 }
+
+// Mirrors Rust #50128: current_turn_model returns the model selected for the
+// named running turn's next step, ignoring other turn ids and reporting nothing
+// once the turn stops running.
+func TestCurrentTurnModelLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	params := &turn.TurnStartParams{ThreadID: "thread-1", Model: "gpt-initial"}
+	if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, params); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	if !router.threads.UpdateTurn("thread-1", "turn-1", func(active *activeRuntimeTurn) {
+		active.RunConfig = &appTurnRunConfig{Model: "gpt-initial"}
+	}) {
+		t.Fatal("UpdateTurn() did not find the registered turn")
+	}
+	if got := router.currentTurnModel("thread-1", "other-turn"); got != "" {
+		t.Fatalf("currentTurnModel(mismatched) = %q, want empty", got)
+	}
+	if got := router.currentTurnModel("thread-1", "turn-1"); got != "gpt-initial" {
+		t.Fatalf("currentTurnModel(initial) = %q, want gpt-initial", got)
+	}
+	updated := "gpt-updated"
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Model:    &updated,
+	})
+	if got := router.currentTurnModel("thread-1", "turn-1"); got != "gpt-updated" {
+		t.Fatalf("currentTurnModel(after update) = %q, want gpt-updated", got)
+	}
+	if _, ok := router.threads.ConsumeTurn("thread-1", "turn-1", true); !ok {
+		t.Fatal("ConsumeTurn() did not find the active turn")
+	}
+	if got := router.currentTurnModel("thread-1", "turn-1"); got != "" {
+		t.Fatalf("currentTurnModel(completed) = %q, want empty", got)
+	}
+}

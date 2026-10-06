@@ -7807,6 +7807,26 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 	}
 }
 
+// currentTurnModel returns the model slug selected for the named running turn's
+// next step, independent of settings staged for future turns. It returns "" when
+// the turn id does not match or the turn is no longer running (Rust
+// CodexThread::current_turn_model, #50128).
+func (r *RuntimeRouter) currentTurnModel(threadID string, expectedTurnID string) string {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(expectedTurnID))
+	if active == nil {
+		return ""
+	}
+	if active.RunConfig != nil {
+		if model := strings.TrimSpace(active.RunConfig.Model); model != "" {
+			return model
+		}
+	}
+	if active.Params != nil {
+		return strings.TrimSpace(active.Params.Model)
+	}
+	return ""
+}
+
 // stepTurnClientMetadata refreshes the captured model and reasoning effort inside
 // a turn's request metadata document while preserving every other entry
 // (Rust ExecutionMetadata::apply_to writes both into the metadata extra).
