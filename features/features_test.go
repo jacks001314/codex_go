@@ -17,6 +17,20 @@ func TestKnownFeature(t *testing.T) {
 	}
 }
 
+func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
+	// Rust (codex-rs/features/src/lib.rs #50464): an under-development,
+	// default-disabled flag exposed for top-level and profile feature settings.
+	if !Known("incremental_tools") {
+		t.Fatal("incremental_tools should be known")
+	}
+	if got := StageFor("incremental_tools"); got != StageUnderDevelopment {
+		t.Fatalf("StageFor(incremental_tools) = %q, want %q", got, StageUnderDevelopment)
+	}
+	if Defaults()["incremental_tools"] {
+		t.Fatal("incremental_tools default = true, want false")
+	}
+}
+
 func TestSorted(t *testing.T) {
 	sorted := Sorted()
 	if len(sorted) != len(Registry) {

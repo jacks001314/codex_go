@@ -155,6 +155,9 @@ var Registry = []Spec{
 	{Key: "tool_search", Stage: StageRemoved},
 	{Key: "tool_search_always_defer_mcp_tools", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "deferred_tool_world_state", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs #50464): track top-level tool
+	// definitions in world state and emit incremental context updates.
+	{Key: "incremental_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "non_prefixed_mcp_tool_names", Stage: StageUnderDevelopment},
 	{Key: "omit_app_server_notification_media", Stage: StageUnderDevelopment},
 	{Key: "unavailable_dummy_tools", Stage: StageRemoved},
