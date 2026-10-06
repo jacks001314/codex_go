@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -340,6 +341,57 @@ func TestRuntimeAgentControllerPersistsSpawnMetadataAndGraph(t *testing.T) {
 	}
 	if _, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "reviewer", NicknameCandidates: []string{"Scout"}}); err != nil {
 		t.Fatalf("spawn after close error = %v", err)
+	}
+}
+
+// Mirrors Rust #50082: a fresh V2 subagent inherits the parent's client-defined
+// dynamic tools when the disabled-by-default `multi_agent_v2_dynamic_tools`
+// feature is enabled. V1 or a disabled feature inherits nothing.
+func TestRuntimeAgentControllerSpawnInheritsDynamicToolsLikeRust(t *testing.T) {
+	dynamicTools := []json.RawMessage{json.RawMessage(`{"type":"function","name":"echo","description":"Echo","parameters":{"type":"object","properties":{}}}`)}
+	for _, testCase := range []struct {
+		name        string
+		version     agent.MultiAgentVersion
+		featureOn   bool
+		wantInherit bool
+	}{
+		{name: "v2 feature on", version: agent.VersionV2, featureOn: true, wantInherit: true},
+		{name: "v2 feature off", version: agent.VersionV2, featureOn: false, wantInherit: false},
+		{name: "v1 feature on", version: agent.VersionV1, featureOn: true, wantInherit: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			home := t.TempDir()
+			store := session.NewStore(t.TempDir())
+			now := time.Now().UTC()
+			parent := &session.Record{ID: "parent", SessionID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+				Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4", ModelProvider: "openai", DynamicTools: dynamicTools}}
+			if err := store.Create(parent); err != nil {
+				t.Fatal(err)
+			}
+			router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
+			if testCase.featureOn {
+				if err := os.WriteFile(config.ConfigPath(home), []byte("[features]\nmulti_agent_v2_dynamic_tools = true\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			controller := newRuntimeAgentControllerForTurn(router, "parent", "parent-turn", "root-turn", "", "", parent.Metadata.CWD, 4, testCase.version, nil).(*runtimeAgentController)
+			if err := router.threads.RegisterTurn("parent", "parent-turn", func() {}, now.UnixMilli(), &turn.TurnStartParams{ThreadID: "parent"}); err != nil {
+				t.Fatal(err)
+			}
+			forkTurns := "none"
+			child, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{ResolvedRole: "worker", ForkTurns: &forkTurns})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := store.Read(session.ThreadID(child.AgentID), false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inherited := len(record.Metadata.DynamicTools) == 1
+			if inherited != testCase.wantInherit {
+				t.Fatalf("inherited=%t (tools=%#v), want %t", inherited, record.Metadata.DynamicTools, testCase.wantInherit)
+			}
+		})
 	}
 }
 

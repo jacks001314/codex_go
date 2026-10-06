@@ -12,6 +12,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
@@ -143,12 +144,14 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	providerID := ""
 	developerInstructions := ""
+	var parentDynamicTools []json.RawMessage
 	if parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), false, false); readErr == nil && parent != nil {
 		if modelID == "" {
 			modelID = parent.Metadata.Model
 		}
 		providerID = parent.Metadata.ModelProvider
 		developerInstructions = parent.Metadata.Instructions
+		parentDynamicTools = parent.Metadata.DynamicTools
 	}
 	if args.DeveloperInstructions != nil {
 		developerInstructions = *args.DeveloperInstructions
@@ -203,6 +206,11 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	record.Metadata.AgentDepth = c.depth + 1
 	record.Metadata.Instructions = developerInstructions
 	record.Metadata.MultiAgentVersion = string(c.version)
+	// Rust #50082: a fresh V2 subagent inherits the parent's client-defined
+	// dynamic tools when the disabled-by-default feature is enabled.
+	if c.version == agent.VersionV2 && forkTurns == "none" && len(parentDynamicTools) > 0 && c.multiAgentV2DynamicToolsEnabled() {
+		record.Metadata.DynamicTools = cloneRawMessages(parentDynamicTools)
+	}
 	record.Metadata.SessionPrefix = session.PrefixForSessionID(string(threadID))
 	record.Metadata.Extra = extra
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
@@ -387,6 +395,24 @@ func (c *runtimeAgentController) capturedSpawnSettings() (string, string, string
 		effort = appReasoningEffortForTurn(cfg, params)
 	}
 	return strings.TrimSpace(params.Model), effort, stringPtrValue(params.Summary)
+}
+
+// multiAgentV2DynamicToolsEnabled reports whether the disabled-by-default
+// `multi_agent_v2_dynamic_tools` feature is enabled for the active parent turn
+// (Rust #50082).
+func (c *runtimeAgentController) multiAgentV2DynamicToolsEnabled() bool {
+	if c == nil || c.router == nil {
+		return false
+	}
+	active := c.router.threads.ActiveTurn(c.parentID)
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := c.router.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "multi_agent_v2_dynamic_tools")
 }
 
 func (c *runtimeAgentController) SendInput(ctx context.Context, args *agent.SendInputArgs) (*agent.SendInputResult, error) {

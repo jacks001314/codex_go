@@ -126,6 +126,9 @@ var Registry = []Spec{
 	{Key: "multi_agent", Stage: StageStable, DefaultEnabled: true},
 	{Key: "multi_agent_v2", Stage: StageStable},
 	{Key: "multi_agent_mode", Stage: StageRemoved},
+	// Rust (codex-rs/features/src/lib.rs #50082): inherit client-defined
+	// dynamic tools in fresh V2 subagents (disabled by default).
+	{Key: "multi_agent_v2_dynamic_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #47913): keep sampling through
 	// reasoning and commentary boundaries when agent mail arrives; pending mail
 	// is delivered at the next normal input boundary instead.
