@@ -181,9 +181,12 @@ func (e *requestFailure) Error() string {
 }
 
 type Server struct {
-	mu         sync.Mutex
-	processes  map[string]*processState
-	handles    map[string]*os.File
+	mu        sync.Mutex
+	processes map[string]*processState
+	handles   map[string]*fileHandleEntry
+	// fileSlots bounds both registered handles and in-flight opens, so a burst
+	// of concurrent opens cannot exceed the per-connection limit (Rust #50162).
+	fileSlots  chan struct{}
 	httpClient *http.Client
 	requests   *serverRequestSender
 	// webSocketAuth gates incoming WebSocket upgrades when configured (Rust
@@ -193,6 +196,10 @@ type Server struct {
 	registryMu         sync.Mutex
 	sessions           map[string]*serverSessionEntry
 	detachedSessionTTL time.Duration
+}
+
+type fileHandleEntry struct {
+	file *os.File
 }
 
 type serverSessionEntry struct {
@@ -781,7 +788,8 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 	}
 	return &Server{
 		processes:          map[string]*processState{},
-		handles:            map[string]*os.File{},
+		handles:            map[string]*fileHandleEntry{},
+		fileSlots:          make(chan struct{}, maxOpenFileReads),
 		httpClient:         httpClient,
 		sessions:           map[string]*serverSessionEntry{},
 		detachedSessionTTL: 30 * time.Second,
@@ -791,7 +799,8 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 func newSessionServer(httpClient *http.Client) *Server {
 	return &Server{
 		processes:  map[string]*processState{},
-		handles:    map[string]*os.File{},
+		handles:    map[string]*fileHandleEntry{},
+		fileSlots:  make(chan struct{}, maxOpenFileReads),
 		httpClient: httpClient,
 	}
 }
@@ -951,10 +960,19 @@ func (s *Server) shutdown() {
 	}
 	handles := make([]*os.File, 0, len(s.handles))
 	for _, handle := range s.handles {
-		handles = append(handles, handle)
+		handles = append(handles, handle.file)
 	}
 	s.processes = map[string]*processState{}
-	s.handles = map[string]*os.File{}
+	s.handles = map[string]*fileHandleEntry{}
+	// Drop every reservation so a later connection starts with full capacity.
+	for {
+		select {
+		case <-s.fileSlots:
+			continue
+		default:
+		}
+		break
+	}
 	s.mu.Unlock()
 	if requests != nil {
 		requests.close()
@@ -2231,24 +2249,51 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 			return nil, requestError(-32600, fmt.Sprintf("fs/open path %s traverses symlink %s", params.Path, linkPath))
 		}
 	}
+	// Reject an obvious duplicate before reserving capacity (Rust #50162).
+	s.mu.Lock()
+	_, exists := s.handles[params.HandleID]
+	s.mu.Unlock()
+	if exists {
+		return nil, requestError(-32600, fmt.Sprintf("file read handle `%s` already exists", params.HandleID))
+	}
+	// Reserve a slot before opening so in-flight opens, not just registered
+	// handles, count against the per-connection limit.
+	if !s.reserveFileSlot() {
+		return nil, requestError(-32600, fmt.Sprintf("at most %d file reads may be open per connection", maxOpenFileReads))
+	}
 	file, err := openRegularFileForRead(path)
 	if err != nil {
+		s.releaseFileSlot()
 		return nil, err
 	}
 	s.mu.Lock()
-	if s.handles[params.HandleID] != nil {
+	if _, ok := s.handles[params.HandleID]; ok {
 		s.mu.Unlock()
 		_ = file.Close()
+		s.releaseFileSlot()
 		return nil, requestError(-32600, fmt.Sprintf("file read handle `%s` already exists", params.HandleID))
 	}
-	if len(s.handles) >= maxOpenFileReads {
-		s.mu.Unlock()
-		_ = file.Close()
-		return nil, requestError(-32600, fmt.Sprintf("at most %d file reads may be open per connection", maxOpenFileReads))
-	}
-	s.handles[params.HandleID] = file
+	s.handles[params.HandleID] = &fileHandleEntry{file: file}
 	s.mu.Unlock()
 	return &FSOpenResponse{HandleID: params.HandleID}, nil
+}
+
+// reserveFileSlot reserves one of the bounded per-connection file slots.
+func (s *Server) reserveFileSlot() bool {
+	select {
+	case s.fileSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseFileSlot returns a slot; it never blocks and cannot underflow.
+func (s *Server) releaseFileSlot() {
+	select {
+	case <-s.fileSlots:
+	default:
+	}
 }
 
 func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, error) {
@@ -2265,11 +2310,12 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 		return nil, requestError(-32600, "file read offset overflowed")
 	}
 	s.mu.Lock()
-	file := s.handles[params.HandleID]
+	entry := s.handles[params.HandleID]
 	s.mu.Unlock()
-	if file == nil {
+	if entry == nil {
 		return nil, requestError(-32004, fmt.Sprintf("unknown file read handle `%s`", params.HandleID))
 	}
+	file := entry.file
 	buffer := make([]byte, params.Len)
 	bytesRead := 0
 	for bytesRead < params.Len {
@@ -2302,11 +2348,12 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	file := s.handles[params.HandleID]
+	entry := s.handles[params.HandleID]
 	delete(s.handles, params.HandleID)
 	s.mu.Unlock()
-	if file != nil {
-		if err := file.Close(); err != nil {
+	if entry != nil {
+		s.releaseFileSlot()
+		if err := entry.file.Close(); err != nil {
 			return nil, err
 		}
 	}
@@ -2315,10 +2362,15 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
 
 func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
 	s.mu.Lock()
-	if s.handles[handleID] == file {
+	removed := false
+	if entry := s.handles[handleID]; entry != nil && entry.file == file {
 		delete(s.handles, handleID)
+		removed = true
 	}
 	s.mu.Unlock()
+	if removed {
+		s.releaseFileSlot()
+	}
 	_ = file.Close()
 }
 

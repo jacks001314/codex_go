@@ -1182,6 +1182,90 @@ func TestFilesystemHandleAndReadLimitsMatchRust(t *testing.T) {
 	_, _ = server.closeFile(&FSCloseParams{HandleID: ""})
 }
 
+// Mirrors Rust #50162: capacity bounds registered handles and in-flight opens,
+// and is released on failed opens and on close.
+func TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust(t *testing.T) {
+	server := NewServer()
+	path := filepath.Join(t.TempDir(), "value.txt")
+	if err := os.WriteFile(path, []byte("abcdef"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// A failed open releases its reserved slot.
+	if _, err := server.openFile(&FSOpenParams{HandleID: "missing", Path: filepath.Join(t.TempDir(), "absent.txt")}); err == nil {
+		t.Fatal("openFile(missing) error = nil")
+	}
+	if len(server.fileSlots) != 0 {
+		t.Fatalf("slots in use after failed open = %d, want 0", len(server.fileSlots))
+	}
+
+	// A rejected duplicate releases its reserved slot as well.
+	if _, err := server.openFile(&FSOpenParams{HandleID: "dup", Path: path}); err != nil {
+		t.Fatalf("openFile(dup) error = %v", err)
+	}
+	if _, err := server.openFile(&FSOpenParams{HandleID: "dup", Path: path}); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate open error = %v", err)
+	}
+	if len(server.fileSlots) != 1 {
+		t.Fatalf("slots in use after duplicate = %d, want 1", len(server.fileSlots))
+	}
+
+	// Fill the capacity; the limit applies to registered handles.
+	for i := 1; i < maxOpenFileReads; i++ {
+		if _, err := server.openFile(&FSOpenParams{HandleID: fmt.Sprintf("h-%d", i), Path: path}); err != nil {
+			t.Fatalf("openFile(h-%d) error = %v", i, err)
+		}
+	}
+	if len(server.fileSlots) != maxOpenFileReads {
+		t.Fatalf("slots in use = %d, want %d", len(server.fileSlots), maxOpenFileReads)
+	}
+	if _, err := server.openFile(&FSOpenParams{HandleID: "overflow", Path: path}); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("overflow open error = %v", err)
+	}
+
+	// Closing one handle restores exactly one slot and admits a new open.
+	if _, err := server.closeFile(&FSCloseParams{HandleID: "h-1"}); err != nil {
+		t.Fatalf("closeFile(h-1) error = %v", err)
+	}
+	if len(server.fileSlots) != maxOpenFileReads-1 {
+		t.Fatalf("slots in use after close = %d, want %d", len(server.fileSlots), maxOpenFileReads-1)
+	}
+	if _, err := server.openFile(&FSOpenParams{HandleID: "reused", Path: path}); err != nil {
+		t.Fatalf("openFile(reused) error = %v", err)
+	}
+}
+
+// Mirrors Rust #50162's concurrent-duplicate-ID coverage: exactly one open of a
+// contested handle ID wins, and the losers release their reserved slots.
+func TestFilesystemConcurrentDuplicateHandleIDsLikeRust(t *testing.T) {
+	server := NewServer()
+	path := filepath.Join(t.TempDir(), "value.txt")
+	if err := os.WriteFile(path, []byte("abcdef"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	var mu sync.Mutex
+	successes := 0
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := server.openFile(&FSOpenParams{HandleID: "race", Path: path}); err == nil {
+				mu.Lock()
+				successes++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if successes != 1 {
+		t.Fatalf("concurrent duplicate opens succeeded %d times, want 1", successes)
+	}
+	if len(server.fileSlots) != 1 {
+		t.Fatalf("slots in use = %d, want 1", len(server.fileSlots))
+	}
+}
+
 func TestFilesystemSandboxContextRunsThroughHelperLikeRust(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
