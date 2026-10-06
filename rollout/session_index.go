@@ -107,11 +107,25 @@ func FindThreadNamesByIDs(codexHome string, threadIDs map[string]struct{}) (map[
 	if err != nil {
 		return nil, err
 	}
+	// Rust #49297: scan the append-only index backwards so the first nonempty,
+	// trimmed name seen for an id is its latest usable name, and stop once every
+	// requested id has been resolved. Whitespace-only names are skipped.
+	remaining := make(map[string]struct{}, len(threadIDs))
+	for id := range threadIDs {
+		remaining[id] = struct{}{}
+	}
 	names := make(map[string]string, len(threadIDs))
-	for _, entry := range entries {
-		if _, ok := threadIDs[entry.ID]; ok && strings.TrimSpace(entry.ThreadName) != "" {
-			names[entry.ID] = entry.ThreadName
+	for i := len(entries) - 1; i >= 0 && len(remaining) > 0; i-- {
+		entry := entries[i]
+		if _, ok := remaining[entry.ID]; !ok {
+			continue
 		}
+		name := strings.TrimSpace(entry.ThreadName)
+		if name == "" {
+			continue
+		}
+		names[entry.ID] = name
+		delete(remaining, entry.ID)
 	}
 	return names, nil
 }

@@ -148,3 +148,45 @@ func TestFindThreadMetaCandidatesSortsByMtimeAndFiltersLikeRust(t *testing.T) {
 		t.Fatalf("provider-filtered candidates = %#v, want the bedrock rollout", withBedrock)
 	}
 }
+
+// TestFindThreadNamesByIDsScansBackwardsLikeRust mirrors Rust #49297: the batch
+// lookup resolves each id to its latest nonempty, trimmed name, skipping
+// whitespace-only names, malformed entries, and a partial final write.
+func TestFindThreadNamesByIDsScansBackwardsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionIndexFilename)
+	contents := "{\"id\":\"renamed\",\"thread_name\":\"old\",\"updated_at\":\"1\"}\n" +
+		"not-json\n" +
+		"{\"id\":\"renamed\",\"thread_name\":\"  latest  \",\"updated_at\":\"2\"}\n" +
+		"{\"id\":\"blank\",\"thread_name\":\"real\",\"updated_at\":\"3\"}\n" +
+		"{\"id\":\"blank\",\"thread_name\":\"   \",\"updated_at\":\"4\"}\n" +
+		"{\"id\":\"unicode\",\"thread_name\":\"  主题  \",\"updated_at\":\"5\"}\n" +
+		"{\"id\":\"partial\",\"thread_name\":\"trunc"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	names, err := FindThreadNamesByIDs(home, map[string]struct{}{
+		"renamed": {}, "blank": {}, "unicode": {}, "partial": {}, "missing": {},
+	})
+	if err != nil {
+		t.Fatalf("FindThreadNamesByIDs() error = %v", err)
+	}
+	if len(names) != 3 {
+		t.Fatalf("names = %#v", names)
+	}
+	if names["renamed"] != "latest" {
+		t.Fatalf("renamed = %q, want the trimmed latest name", names["renamed"])
+	}
+	if names["blank"] != "real" {
+		t.Fatalf("blank = %q, want the earlier nonempty name", names["blank"])
+	}
+	if names["unicode"] != "主题" {
+		t.Fatalf("unicode = %q", names["unicode"])
+	}
+	if _, ok := names["partial"]; ok {
+		t.Fatalf("partial entry should be skipped: %#v", names)
+	}
+	if _, ok := names["missing"]; ok {
+		t.Fatalf("missing id should be absent: %#v", names)
+	}
+}
