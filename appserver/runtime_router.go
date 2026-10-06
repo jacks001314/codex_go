@@ -3543,7 +3543,18 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return
 	}
-	submission, err := r.services.ThreadRouter.store.DequeueFirstSubmission(session.ThreadID(strings.TrimSpace(threadID)))
+	threadID = strings.TrimSpace(threadID)
+	// Rust #51427: a wakeup can outlive the reservation it was built on. An
+	// interrupt or a replacement turn can claim the thread while the completing
+	// turn is still finishing, and starting the queued turn would then recreate
+	// a turn whose reservation is no longer ours. Recheck immediately before
+	// dispatching, and leave the submission queued when the thread is busy; the
+	// store still holds the front of the queue because Go has not removed it
+	// yet, mirroring Rust re-attaching the pending input before its final check.
+	if r.threads.ActiveTurn(threadID) != nil {
+		return
+	}
+	submission, err := r.services.ThreadRouter.store.DequeueFirstSubmission(session.ThreadID(threadID))
 	if err != nil || submission == nil {
 		return
 	}
