@@ -30,9 +30,13 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 		return 0, "", fmt.Errorf("failed to create pid directory %s: %w", filepath.Dir(backend.PIDFile), err)
 	}
 	command := exec.Command(resolvePIDLaunchBinary(backend.CodexBin), backend.CommandArgs()...)
-	workingDir := filepath.Dir(backend.PIDFile)
-	if workingDir == "" {
-		workingDir = "."
+	// A Windows process pins its working directory for its lifetime. Launch both
+	// managed children from a dedicated workdir rather than the launching
+	// project's directory or the private state directory (whose ACL sandbox
+	// setup may broaden) (Rust #49850).
+	workingDir := filepath.Join(filepath.Dir(backend.PIDFile), daemonWorkDirName)
+	if err := os.MkdirAll(workingDir, 0o700); err != nil {
+		return 0, "", fmt.Errorf("failed to create daemon working directory %s: %w", workingDir, err)
 	}
 	command.Dir = workingDir
 	command.SysProcAttr = &syscall.SysProcAttr{

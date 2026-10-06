@@ -23,6 +23,9 @@ const (
 	// PIDStopForceTimeout is how long stop waits after the grace period for the
 	// forced termination to take effect (Rust #43572).
 	PIDStopForceTimeout = 10 * time.Second
+	// daemonWorkDirName is the dedicated subdirectory managed Windows daemon
+	// children use as their working directory (Rust #49850).
+	daemonWorkDirName = "workdir"
 )
 
 type BackendPaths struct {
