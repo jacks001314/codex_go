@@ -388,7 +388,7 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	providerLower := strings.ToLower(strings.TrimSpace(s.Provider))
 	if providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex") {
 		rows = append(rows,
-			"Visit https://chatgpt.com/codex/settings/usage for up-to-date",
+			AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/codex/settings/usage for up-to-date"),
 			"information on rate limits and credits", "",
 		)
 	}

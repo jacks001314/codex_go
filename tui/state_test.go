@@ -262,3 +262,17 @@ func TestValidApprovalPolicy(t *testing.T) {
 		t.Fatalf("ValidApprovalPolicy(always) = true, want false")
 	}
 }
+
+// TestStatusCardLinksChatGPTUsageURLLikeRust mirrors Rust #51457: the ChatGPT
+// usage link renders as a terminal hyperlink whose complete destination is
+// preserved.
+func TestStatusCardLinksChatGPTUsageURLLikeRust(t *testing.T) {
+	const url = "https://chatgpt.com/codex/settings/usage"
+	card := NewState(nil).RenderStatusCardWidth(100)
+	if !strings.Contains(card, "\x1b]8;;"+url+"\x07") {
+		t.Fatalf("status card missing hyperlink to %q:\n%s", url, card)
+	}
+	if !strings.Contains(StripOSC8(card), url) {
+		t.Fatalf("status card missing complete URL %q:\n%s", url, card)
+	}
+}
