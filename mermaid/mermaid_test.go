@@ -114,6 +114,7 @@ func TestQuotedFlowchartLabelsRejectMalformedAndUnsafeText(t *testing.T) {
 		`"embedded"quote"`,
 		`""`,
 		`"<b>HTML</b>"`,
+		`"before <b"`,
 		"\"\x1b\"",
 	} {
 		for _, source := range []string{
@@ -171,7 +172,6 @@ func TestFlowchartRejectsUnsupportedInput(t *testing.T) {
 		"flowchart TD; A([same]); A[same]",
 		"flowchart TD; A{same}; A([same])",
 		"flowchart TD; A -->|unclosed B",
-		"flowchart TD; A[foo;bar]",
 		"flowchart TD; A -->|yes\u2510| B",
 	}
 	for _, source := range sources {
@@ -188,6 +188,118 @@ func TestFlowchartRejectsUnsupportedInput(t *testing.T) {
 	}
 }
 
+// TestPreservesPunctuationAndSemicolonsLikeRust mirrors Rust #48814: flowchart
+// labels may carry printable punctuation and semicolons (protected by their
+// delimiters), quotes protect flowchart delimiters, and class bodies keep their
+// semicolons as member text.
+func TestPreservesPunctuationAndSemicolonsLikeRust(t *testing.T) {
+	output, err := Render("flowchart TD; A[foo;bar] --> B", 100)
+	if err != nil {
+		t.Fatalf("Render(A[foo;bar]) error = %v", err)
+	}
+	if !strings.Contains(output, "foo;bar") {
+		t.Fatalf("semicolon label not preserved: %q", output)
+	}
+	for _, source := range []string{
+		"flowchart TD; A[\"a[b|c{d}e]\"]",
+		"flowchart TD; A -->|\"x;y|z\"| B",
+		"classDiagram\nclass A; A --> B : {ok}",
+		"classDiagram\nclass A; class B {\n+id;name\n}",
+		"classDiagram\nclass A {\nstring a;b\nObject[] elementData\n}\nA : +get()",
+		"stateDiagram-v2; state \"a;b\" as A; A-->B: [ready]",
+		"erDiagram; A {; string value \"a;b\"; }",
+		"sequenceDiagram\nU->>A: data[0] = {x: 1}",
+		"sequenceDiagram; A->>B: say \"hello; B->>A: world\"",
+	} {
+		if _, err := Render(source, 100); err != nil {
+			t.Fatalf("Render(%q) error = %v, want success", source, err)
+		}
+	}
+}
+
+// Mirrors Rust's #48814 addition to `quoted_flowchart_labels_match_unquoted_labels`:
+// quoted flowchart delimiters protect `[`, `{`, `|`, `;`, and `<`/`?` text so the
+// parsed graph keeps the literal label and edge text.
+func TestQuotedFlowchartDelimitersProtectPunctuation(t *testing.T) {
+	statements, err := splitStatements(`graph TD;A["chimpansen hoppar ()[]"] -->|"x | y; z"| B{"x < 3?"};`)
+	if err != nil {
+		t.Fatalf("splitStatements error = %v", err)
+	}
+	parsed, err := parseFlowchart(statements[0], statements[1:])
+	if err != nil {
+		t.Fatalf("parseFlowchart error = %v", err)
+	}
+	want := &graph{}
+	a, _ := want.node("A")
+	b, _ := want.node("B")
+	want.nodes[a].label = "chimpansen hoppar ()[]"
+	want.nodes[a].declared = true
+	want.nodes[b].label = "x < 3?"
+	want.nodes[b].shape = shapeDecision
+	want.nodes[b].declared = true
+	want.edges = append(want.edges, directedEdge(a, b, "x | y; z"))
+	if !graphsEqual(parsed, want) {
+		t.Fatalf("parse = %#v, want %#v", parsed, want)
+	}
+	// `;`-separated class statements render the same as newline-separated ones.
+	for _, source := range []string{
+		"classDiagram\nclass A; A --> B : {ok}",
+		"classDiagram\nclass A; class B {\n+id\n}",
+	} {
+		withSeparators, err := Render(source, 100)
+		if err != nil {
+			t.Fatalf("Render(%q) error = %v", source, err)
+		}
+		withNewlines, err := Render(strings.ReplaceAll(source, ";", "\n"), 100)
+		if err != nil {
+			t.Fatalf("Render(newlines) error = %v", err)
+		}
+		if withSeparators != withNewlines {
+			t.Fatalf("separator mismatch for %q:\n%s\nwant:\n%s", source, withSeparators, withNewlines)
+		}
+	}
+}
+
+// Mirrors Rust's `entity_labels_keep_source_fallback` (#48814): undecoded entity
+// escapes must be rejected across every family before statement splitting can
+// truncate them into literal label text.
+func TestEntityLabelsKeepSourceFallback(t *testing.T) {
+	for _, entity := range []string{"&amp;", "&#38;", "&#x26;", "#9829;", "#semi;"} {
+		for _, source := range []string{
+			"sequenceDiagram\nA->>B: " + entity,
+			"classDiagram\nclass A {\n" + entity + "\n}",
+			"stateDiagram-v2; A-->B: " + entity,
+			"erDiagram\nA {\nstring value \"" + entity + "\"\n}",
+			"flowchart TD; A[\"" + entity + "\"]",
+			"flowchart TD; A -->|\"" + entity + "\"| B",
+		} {
+			if _, err := Render(source, 100); err != ErrUnsupported {
+				t.Fatalf("Render(%q) error = %v, want ErrUnsupported", source, err)
+			}
+		}
+	}
+}
+
+// Mirrors Rust's `flowchart_ampersands_preserve_statement_separators`: bare
+// ampersands are plain label text, and comments do not affect splitting.
+func TestFlowchartAmpersandsPreserveStatementSeparators(t *testing.T) {
+	const source = "flowchart TD; A[R&D] -->|R&D| B[Review & confirm]; B --> C"
+	withComment, err := Render("%% &amp;\n"+source, 100)
+	if err != nil {
+		t.Fatalf("Render(with comment) error = %v", err)
+	}
+	split, err := Render(strings.ReplaceAll(source, ";", "\n"), 100)
+	if err != nil {
+		t.Fatalf("Render(split) error = %v", err)
+	}
+	if withComment != split {
+		t.Fatalf("comment changed output:\n%s\nwant:\n%s", withComment, split)
+	}
+	if !strings.Contains(split, "Review & confirm") {
+		t.Fatalf("output missing ampersand label:\n%s", split)
+	}
+}
+
 // Mirrors Rust's `source_graph_and_width_limits`.
 func TestSourceGraphAndWidthLimits(t *testing.T) {
 	var manyNodes strings.Builder
@@ -197,6 +309,7 @@ func TestSourceGraphAndWidthLimits(t *testing.T) {
 	for _, source := range []string{
 		strings.Repeat(" ", 16*1024+1),
 		"graph TD; A[" + strings.Repeat("x", 41) + "]",
+		"graph TD; A[\"" + strings.Repeat("[]", 21) + "\"]",
 		"graph TD; A([" + strings.Repeat("x", 41) + "])",
 		"graph TD; " + manyNodes.String(),
 		"graph TD; " + strings.Repeat("A-->B;", 25),
@@ -290,6 +403,50 @@ func TestStateDescriptionsAccumulateInSourceOrder(t *testing.T) {
 		want.nodes[0] = node{id: "S", label: "Ready", shape: shapeRectangle, declared: true, members: members}
 		if !graphsEqual(parsed, want) {
 			t.Fatalf("parseState(%v) = %#v, want %#v", descriptions, parsed, want)
+		}
+	}
+}
+
+// Mirrors Rust's `rejects_incomplete_and_unsupported_families`, including the
+// #48814 additions that must stay rejected after punctuation/semicolon support.
+func TestRejectsIncompleteAndUnsupportedFamilies(t *testing.T) {
+	for _, source := range []string{
+		"sequenceDiagram; A->>B: hello; nonsense",
+		"sequenceDiagram; A->>B: hello; activate B",
+		"sequenceDiagram; participant A as x; participant A as y",
+		"sequenceDiagram; alt ready; A->>B: hi",
+		"sequenceDiagram; A->>B: hi; end",
+		"sequenceDiagram; loop retry; else no; end",
+		"sequenceDiagram; alt one; else two; else three; end",
+		"sequenceDiagram; A->>B: <br/>",
+		"sequenceDiagram; A->>B: \u001b[31m",
+		"sequenceDiagram; participant A as e\u0301",
+		"stateDiagram-v2; state Processing {; A-->B; }",
+		"stateDiagram-v2; A --> B: ok; garbage text",
+		"stateDiagram-v2; accDescr: Order lifecycle; [*] --> Ready",
+		"stateDiagram; ACCDESCR: Order lifecycle; [*] --> Ready",
+		"stateDiagram-v2; A:::highlight; A --> B",
+		"stateDiagram-v2; A --> B:::highlight",
+		"classDiagram; accTitle: Account model; class Account",
+		"classDiagram; class A {; +foo()",
+		"classDiagram; class A; A --? B",
+		"classDiagram; A --> B; click A",
+		"classDiagram; class A {; +<html>; }",
+		"erDiagram; A ||--o{ B",
+		"erDiagram; A ||--|| B: \"owns\"",
+		"erDiagram; A {; string value \"x\"junk\"; }",
+		"classDiagram\nclass A {\nstring a;b }\n}",
+		"erDiagram; A ||--?? B : owns",
+		"erDiagram; A {; int x KEY; }",
+		"erDiagram; A {; int x PK \"open comment; }",
+		"erDiagram; A {; int x; }; A ||--|| B : uses; trailing junk",
+		"erDiagram; accDescr {; A model; }; CUSTOMER",
+		"erDiagram; ACCDESCR {; A model; }; CUSTOMER",
+		"erDiagram; A ||--|| B:::highlight : owns",
+		"%%{init: {}}%%\nclassDiagram; class A",
+	} {
+		if _, err := Render(source, 200); err != ErrUnsupported {
+			t.Fatalf("Render(%q) error = %v, want ErrUnsupported", source, err)
 		}
 	}
 }

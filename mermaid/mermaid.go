@@ -2,7 +2,6 @@ package mermaid
 
 import (
 	"strings"
-	"unicode"
 )
 
 // Rust parity: codex-rs/mermaid/src/lib.rs's bounds.
@@ -55,23 +54,9 @@ func RenderSpans(source string, maxWidth int) ([][]Span, error) {
 	if len(source) > maxSource {
 		return nil, ErrLimit
 	}
-	lines := splitSourceLines(source)
-	statements := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), "%%") {
-			continue
-		}
-		for _, part := range strings.Split(line, ";") {
-			trimmed := strings.TrimSpace(part)
-			if trimmed != "" {
-				statements = append(statements, trimmed)
-			}
-		}
-	}
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeftFunc(line, unicode.IsSpace), "%%{") {
-			return nil, ErrUnsupported
-		}
+	statements, err := splitStatements(source)
+	if err != nil {
+		return nil, err
 	}
 	if len(statements) == 0 {
 		return nil, ErrUnsupported

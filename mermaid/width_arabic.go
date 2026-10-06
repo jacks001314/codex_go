@@ -9,7 +9,7 @@ import (
 // This file reproduces the Arabic lam-alef ligature rule of `unicode-width`
 // 0.2.1's `UnicodeWidthStr::width`, which is what Rust's Mermaid renderer uses.
 // `uniseg` (Go's string-width source) does not collapse the ligature, so without
-// this `checkLabelText` accepted labels Rust rejects.
+// this `checkLabel` accepted labels Rust rejects.
 
 // lamAlefTransparentSpec is the crate's transparent-zero-width set
 // (`is_transparent_zero_width`): the zero-width characters that do not interrupt

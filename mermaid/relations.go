@@ -29,6 +29,9 @@ func parseRelations(header string, body []string) (*graph, error) {
 				}
 				member = parsed
 			} else {
+				if strings.ContainsAny(line, "{}") {
+					return nil, ErrUnsupported
+				}
 				if err := checkLabel(line); err != nil {
 					return nil, err
 				}
@@ -195,6 +198,10 @@ func parseRelations(header string, body []string) (*graph, error) {
 		switch {
 		case strings.HasPrefix(rest, ":") && !strings.HasPrefix(rest, "::"):
 			label = strings.TrimSpace(rest[1:])
+			// ER quotes delimit a token; keep fallback until that grammar is normalized.
+			if er && strings.Contains(label, "\"") {
+				return nil, ErrUnsupported
+			}
 			if err := checkLabel(label); err != nil {
 				return nil, err
 			}
@@ -290,6 +297,9 @@ func erAttribute(line string) (string, error) {
 			return "", ErrUnsupported
 		}
 		value := rawComment[:len(rawComment)-1]
+		if strings.Contains(value, "\"") {
+			return "", ErrUnsupported
+		}
 		if err := checkLabel(value); err != nil {
 			return "", err
 		}

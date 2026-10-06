@@ -31,17 +31,16 @@ func parseFlowchart(header string, body []string) (*graph, error) {
 			rest = strings.TrimLeftFunc(rest[len("-->"):], unicode.IsSpace)
 			label := ""
 			if strings.HasPrefix(rest, "|") {
-				after := rest[1:]
-				index := strings.Index(after, "|")
-				if index < 0 {
-					return nil, ErrUnsupported
+				rawLabel, remaining, err := delimitedLabel(rest[1:], "|")
+				if err != nil {
+					return nil, err
 				}
-				parsed, err := flowchartLabel(after[:index])
+				parsed, err := flowchartLabel(rawLabel)
 				if err != nil {
 					return nil, err
 				}
 				label = parsed
-				rest = after[index+1:]
+				rest = remaining
 			}
 			to, err := flowchartNode(&rest, g)
 			if err != nil {
@@ -102,16 +101,15 @@ func flowchartNode(rest *string, g *graph) (int, error) {
 	if declared == nil {
 		return index, nil
 	}
-	after := (*rest)[len(declared.open):]
-	closeIndex := strings.Index(after, declared.close)
-	if closeIndex < 0 {
-		return 0, ErrUnsupported
-	}
-	label, err := flowchartLabel(after[:closeIndex])
+	rawLabel, remaining, err := delimitedLabel((*rest)[len(declared.open):], declared.close)
 	if err != nil {
 		return 0, err
 	}
-	*rest = after[closeIndex+len(declared.close):]
+	label, err := flowchartLabel(rawLabel)
+	if err != nil {
+		return 0, err
+	}
+	*rest = remaining
 	current := &g.nodes[index]
 	if current.declared && (current.label != label || current.shape != declared.shape) {
 		return 0, ErrUnsupported
@@ -134,23 +132,26 @@ func flowchartLabel(label string) (string, error) {
 			return "", ErrUnsupported
 		}
 		resolved = quoted[:len(quoted)-1]
+	} else if strings.ContainsAny(label, "[]{}|") {
+		// Unquoted labels must not carry structural delimiters.
+		return "", ErrUnsupported
 	}
-	if err := checkLabelText(resolved); err != nil {
+	if strings.Contains(resolved, "\"") {
+		return "", ErrUnsupported
+	}
+	if err := checkLabel(resolved); err != nil {
 		return "", err
 	}
 	return resolved, nil
 }
 
-// checkLabel mirrors `parse::check_label`: only delimited flowchart labels
-// support literal ampersands; other families must keep rejecting them.
+// checkLabel mirrors `parse::check_label`: markup needs deliberate
+// decoding/layout, but printable punctuation (including ampersands and
+// comparison operators) is plain text.
 func checkLabel(label string) error {
-	if strings.Contains(label, "&") {
+	if labelContainsMarkup(label) {
 		return ErrUnsupported
 	}
-	return checkLabelText(label)
-}
-
-func checkLabelText(label string) error {
 	if strings.TrimSpace(label) == "" {
 		return ErrUnsupported
 	}
@@ -162,8 +163,7 @@ func checkLabelText(label string) error {
 			return ErrUnsupported
 		}
 		switch ch {
-		case '[', ']', '{', '}', '|', '<', '>', '"', '\\',
-			'\u250c', '\u2510', '\u2514', '\u2518', '\u251c', '\u2524', '\u256a', '\u25c4':
+		case '\u250c', '\u2510', '\u2514', '\u2518', '\u251c', '\u2524', '\u256a', '\u25c4':
 			return ErrUnsupported
 		}
 		if charWidth(ch) <= 0 {
@@ -184,6 +184,26 @@ func checkLabelText(label string) error {
 		return ErrLimit
 	}
 	return nil
+}
+
+// labelContainsMarkup reports whether the label opens an HTML-like tag, which
+// would need deliberate decoding/layout. A bare `<` used as a comparison
+// operator is plain text.
+func labelContainsMarkup(label string) bool {
+	for i := 0; i < len(label); i++ {
+		if label[i] != '<' {
+			continue
+		}
+		after := label[i+1:]
+		if after == "" {
+			continue
+		}
+		ch := after[0]
+		if ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch == '/' || ch == '!' || ch == '?' {
+			return true
+		}
+	}
+	return false
 }
 
 // identifier consumes a leading ASCII identifier and enforces the label bound.
