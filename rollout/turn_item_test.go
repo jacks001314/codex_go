@@ -162,6 +162,61 @@ func TestCoreTurnItemJSONFromSessionItemConvertsPlainToolItemsLikeRust(t *testin
 	}
 }
 
+// Mirrors Rust #50402: a written command item keeps a single
+// `aggregated_output`, drops `stdout`/`stderr`/`formatted_output`, and clears
+// `interaction_input` for every non-in-progress status.
+func TestCoreCommandItemConsolidatesOutputLikeRust(t *testing.T) {
+	turnID := "turn-1"
+	cases := []struct {
+		name              string
+		status            string
+		wantInteraction   string
+		wantInteractionOK bool
+	}{
+		{name: "completed drops interaction input", status: "completed"},
+		{name: "failed drops interaction input", status: "failed"},
+		{name: "in progress keeps interaction input", status: "inProgress", wantInteraction: "typed", wantInteractionOK: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			item := session.Item{
+				ID: "exec-1", Type: "CommandExecution", Text: "hello world\n", CreatedAt: time.Unix(1, 0),
+				Data: map[string]any{
+					"command": []string{"echo", "hello world"}, "cwd": t.TempDir(), "source": "agent",
+					"status": testCase.status, "interactionInput": "typed",
+					"stdout": "hello world\n", "stderr": "", "aggregatedOutput": "hello world\n",
+					"formattedOutput": "hello world\n", "exitCode": int64(0), "durationMs": int64(42),
+				},
+				Metadata: map[string]any{"turnId": turnID},
+			}
+			raw, _, err := CoreTurnItemJSONFromSessionItem(&item)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var core map[string]any
+			if err := json.Unmarshal(raw, &core); err != nil {
+				t.Fatal(err)
+			}
+			if core["aggregated_output"] != "hello world\n" {
+				t.Fatalf("aggregated_output = %#v", core["aggregated_output"])
+			}
+			for _, dropped := range []string{"stdout", "stderr", "formatted_output"} {
+				if _, present := core[dropped]; present {
+					t.Fatalf("%s must not be persisted: %#v", dropped, core)
+				}
+			}
+			interaction, hasInteraction := core["interaction_input"]
+			if testCase.wantInteractionOK {
+				if !hasInteraction || interaction != testCase.wantInteraction {
+					t.Fatalf("interaction_input = %#v present=%t, want %q", interaction, hasInteraction, testCase.wantInteraction)
+				}
+			} else if hasInteraction {
+				t.Fatalf("interaction_input must be cleared for %s: %#v", testCase.status, core)
+			}
+		})
+	}
+}
+
 func TestCoreAndPublicThreadItemWireConversionsMatchRustShapes(t *testing.T) {
 	turnID := "turn-1"
 	command := session.Item{

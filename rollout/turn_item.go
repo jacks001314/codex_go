@@ -379,16 +379,21 @@ func populateCoreCommand(core map[string]any, item *session.Item, values map[str
 	core["cwd"] = pathURIString(anyString(values, "cwd"))
 	core["parsed_cmd"] = coreParsedCommands(firstAny(values, "parsed_cmd", "parsedCmd", "commandActions", "command_actions"), rolloutShellJoin(args))
 	core["source"] = snakeEnum(defaultString(anyString(values, "source"), "agent"))
-	copyOptional(core, "interaction_input", firstAny(values, "interactionInput", "interaction_input"))
-	core["status"] = snakeEnum(commandStatus(item, values))
-	copyOptional(core, "stdout", firstAny(values, "stdout"))
-	copyOptional(core, "stderr", firstAny(values, "stderr"))
+	status := snakeEnum(commandStatus(item, values))
+	core["status"] = status
+	// Rust #50402: only an in-progress command item carries the interaction
+	// input; completed/declined items drop it.
+	if status == "in_progress" {
+		copyOptional(core, "interaction_input", firstAny(values, "interactionInput", "interaction_input"))
+	}
+	// Rust #50402 consolidated the command output into `aggregated_output`:
+	// `stdout`, `stderr` and the model-facing `formatted_output` are no longer
+	// part of a command item.
 	copyOptional(core, "aggregated_output", firstNonNil(firstAny(values, "aggregatedOutput", "aggregated_output", "output"), nonEmptyAny(item.Text)))
 	copyOptional(core, "exit_code", firstAny(values, "exitCode", "exit_code"))
 	if duration, ok := durationFromMS(firstAny(values, "durationMs", "duration_ms")); ok {
 		core["duration"] = duration
 	}
-	copyOptional(core, "formatted_output", firstAny(values, "formattedOutput", "formatted_output"))
 }
 
 func populatePublicCommand(out, core map[string]any) {
