@@ -23,12 +23,19 @@ const (
 type ProviderCapabilities struct {
 	ImageGeneration bool
 	WebSearch       bool
+	// ExternalWebAccess reports whether hosted web search may access the live
+	// web (Rust ProviderCapabilities::external_web_access, #50459).
+	ExternalWebAccess bool
+	// RemoteCompaction is the provider's remote context-compaction protocol.
+	RemoteCompaction RemoteCompactionSupport
 }
 
 func DefaultProviderCapabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		ImageGeneration: true,
-		WebSearch:       true,
+		ImageGeneration:   true,
+		WebSearch:         true,
+		ExternalWebAccess: true,
+		RemoteCompaction:  RemoteCompactionUnsupported,
 	}
 }
 
@@ -142,7 +149,12 @@ func (p *ConfiguredProvider) Info() ProviderInfo {
 }
 
 func (p *ConfiguredProvider) Capabilities() ProviderCapabilities {
-	return DefaultProviderCapabilities()
+	return ProviderCapabilities{
+		ImageGeneration:   true,
+		WebSearch:         true,
+		ExternalWebAccess: p.info.ExternalWebAccess(),
+		RemoteCompaction:  p.info.RemoteCompactionSupport(),
+	}
 }
 
 func (p *ConfiguredProvider) ApprovalReviewPreferredModel() string {
@@ -328,8 +340,11 @@ func (p *AmazonBedrockProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
 		ImageGeneration: false,
 		// Rust AmazonBedrockModelProvider::capabilities: web search is available
-		// on the Mantle endpoint and unsupported on the Bedrock Runtime endpoint.
-		WebSearch: p.info.Name == AmazonBedrockProviderName,
+		// on the Mantle endpoint and unsupported on the Bedrock Runtime endpoint;
+		// live web access is disallowed and remote compaction v2 is supported.
+		WebSearch:         p.info.Name == AmazonBedrockProviderName,
+		ExternalWebAccess: false,
+		RemoteCompaction:  RemoteCompactionV2,
 	}
 }
 

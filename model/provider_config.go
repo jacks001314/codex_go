@@ -51,6 +51,42 @@ func RequiredModelProviderDefinition(providerID string, definition any) (*Provid
 	return &provider, nil
 }
 
+// providerCapabilitiesOverrideFromConfig parses a provider's
+// `capabilities` table (Rust ModelProviderCapabilities, #50459). Unknown or
+// malformed values are rejected like Rust's deny_unknown_fields.
+func providerCapabilitiesOverrideFromConfig(values map[string]any) (*ProviderCapabilitiesOverride, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := &ProviderCapabilitiesOverride{}
+	for key := range values {
+		if key != "external_web_access" && key != "remote_compaction" {
+			return nil, fmt.Errorf("model_providers capabilities has unknown field `%s`", key)
+		}
+	}
+	if raw, ok := values["external_web_access"]; ok {
+		value, ok := raw.(bool)
+		if !ok {
+			return nil, fmt.Errorf("model_providers capabilities.external_web_access must be a boolean")
+		}
+		out.ExternalWebAccess = &value
+	}
+	if raw, ok := values["remote_compaction"]; ok {
+		text, ok := raw.(string)
+		if !ok {
+			return nil, fmt.Errorf("model_providers capabilities.remote_compaction must be a string")
+		}
+		support := RemoteCompactionSupport(strings.TrimSpace(text))
+		switch support {
+		case RemoteCompactionUnsupported, RemoteCompactionV2:
+			out.RemoteCompaction = &support
+		default:
+			return nil, fmt.Errorf("model_providers capabilities.remote_compaction must be `unsupported` or `v2`")
+		}
+	}
+	return out, nil
+}
+
 func providerCredentialExportTimeoutMSConfig(values map[string]any) (uint64, error) {
 	raw := configValue(values, "timeout_ms")
 	if raw == nil {
@@ -192,6 +228,13 @@ func providerInfoFromConfig(values map[string]any, validate bool) (*ProviderInfo
 		RequiresOpenAIAuth:          boolConfig(values, "requires_openai_auth"),
 		SupportsWebsockets:          boolConfig(values, "supports_websockets"),
 		SupportsStandaloneWebSearch: boolConfig(values, "supports_standalone_web_search"),
+	}
+	if capabilitiesConfig, ok := configValue(values, "capabilities").(map[string]any); ok {
+		capabilities, err := providerCapabilitiesOverrideFromConfig(capabilitiesConfig)
+		if err != nil {
+			return nil, err
+		}
+		provider.Capabilities = capabilities
 	}
 	if wireAPI := stringConfig(values, "wire_api"); wireAPI != "" {
 		parsed, err := ParseWireAPI(wireAPI)

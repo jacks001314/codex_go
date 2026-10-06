@@ -327,6 +327,27 @@ func gatewayOAuthHostIsLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// RemoteCompactionSupport mirrors Rust's RemoteCompactionSupport: whether a
+// provider supports the remote context-compaction protocol (snake_case values).
+type RemoteCompactionSupport string
+
+const (
+	// RemoteCompactionUnsupported uses local compaction.
+	RemoteCompactionUnsupported RemoteCompactionSupport = "unsupported"
+	// RemoteCompactionV2 sends compaction_trigger items over the Responses endpoint.
+	RemoteCompactionV2 RemoteCompactionSupport = "v2"
+)
+
+// ProviderCapabilitiesOverride mirrors Rust's ModelProviderCapabilities:
+// optional API capability overrides for a custom provider. Unspecified
+// capabilities inherit the provider's existing defaults (Rust #50459).
+type ProviderCapabilitiesOverride struct {
+	// ExternalWebAccess controls whether hosted web search may access the live web.
+	ExternalWebAccess *bool `json:"external_web_access,omitempty"`
+	// RemoteCompaction overrides the remote compaction protocol.
+	RemoteCompaction *RemoteCompactionSupport `json:"remote_compaction,omitempty"`
+}
+
 type ProviderInfo struct {
 	Name    string `json:"name,omitempty"`
 	BaseURL string `json:"base_url,omitempty"`
@@ -353,6 +374,9 @@ type ProviderInfo struct {
 	RequiresOpenAIAuth          bool                 `json:"requires_openai_auth,omitempty"`
 	SupportsWebsockets          bool                 `json:"supports_websockets,omitempty"`
 	SupportsStandaloneWebSearch bool                 `json:"supports_standalone_web_search,omitempty"`
+	// Capabilities carries optional API capability overrides for a custom
+	// Responses-compatible provider (Rust ModelProviderCapabilities, #50459).
+	Capabilities *ProviderCapabilitiesOverride `json:"capabilities,omitempty"`
 	// IncludeInternalMetadata is Rust's runtime-only
 	// `ModelProviderInfo::include_internal_metadata` grant: a provider carrying it
 	// may receive internal tool metadata even when its endpoint would fail the
@@ -608,8 +632,40 @@ func (p *ProviderInfo) UsesOpenAIActorAuthorization() bool {
 	return false
 }
 
+// RemoteCompactionSupport resolves the provider's remote context-compaction
+// protocol: explicit `capabilities.remote_compaction` overrides the default
+// (v2 for OpenAI/Azure/Bedrock, unsupported otherwise) (Rust #50459).
+func (p *ProviderInfo) RemoteCompactionSupport() RemoteCompactionSupport {
+	if p == nil {
+		return RemoteCompactionUnsupported
+	}
+	if p.Capabilities != nil && p.Capabilities.RemoteCompaction != nil {
+		return *p.Capabilities.RemoteCompaction
+	}
+	if p.IsOpenAI() || IsAzureResponsesProvider(p.Name, p.BaseURL) || p.IsAmazonBedrock() {
+		return RemoteCompactionV2
+	}
+	return RemoteCompactionUnsupported
+}
+
 func (p *ProviderInfo) SupportsRemoteCompaction() bool {
-	return p.IsOpenAI() || IsAzureResponsesProvider(p.Name, p.BaseURL) || p.IsAmazonBedrock()
+	return p.RemoteCompactionSupport() == RemoteCompactionV2
+}
+
+// ExternalWebAccess resolves whether hosted web search may access the live web:
+// explicit `capabilities.external_web_access` overrides the default (enabled
+// except for the Bedrock provider) (Rust #50459).
+func (p *ProviderInfo) ExternalWebAccess() bool {
+	if p == nil {
+		return true
+	}
+	if p.Capabilities != nil && p.Capabilities.ExternalWebAccess != nil {
+		return *p.Capabilities.ExternalWebAccess
+	}
+	if p.IsAmazonBedrock() {
+		return false
+	}
+	return true
 }
 
 func (p *ProviderInfo) HasCommandAuth() bool {
@@ -865,6 +921,7 @@ func (p *ProviderInfo) isZero() bool {
 		p.StreamMaxRetries == nil &&
 		p.StreamIdleTimeoutMS == nil &&
 		p.WebsocketConnectTimeoutMS == nil &&
+		p.Capabilities == nil &&
 		!p.RequiresOpenAIAuth &&
 		!p.SupportsWebsockets
 }

@@ -89,6 +89,28 @@ func TestSearchResponseKeepsOpaqueResults(t *testing.T) {
 
 func boolPtrSearch(value bool) *bool { return &value }
 
+// TestRestrictToProviderWebAccessLikeRust mirrors Rust
+// resolve_web_search_mode_for_turn (#50459): a provider that disallows external
+// web access pins live/indexed search to cached, leaving other modes untouched.
+func TestRestrictToProviderWebAccessLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		mode     WebSearchMode
+		external bool
+		want     WebSearchMode
+	}{
+		{WebSearchModeLive, true, WebSearchModeLive},
+		{WebSearchModeIndexed, true, WebSearchModeIndexed},
+		{WebSearchModeLive, false, WebSearchModeCached},
+		{WebSearchModeIndexed, false, WebSearchModeCached},
+		{WebSearchModeCached, false, WebSearchModeCached},
+		{WebSearchModeDisabled, false, WebSearchModeDisabled},
+	} {
+		if got := test.mode.RestrictToProviderWebAccess(test.external); got != test.want {
+			t.Fatalf("%q.RestrictToProviderWebAccess(%v) = %q, want %q", test.mode, test.external, got, test.want)
+		}
+	}
+}
+
 func externalModePtr(value ExternalWebAccessMode) *ExternalWebAccessMode { return &value }
 
 func equalBoolPtr(left, right *bool) bool {

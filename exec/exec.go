@@ -1467,7 +1467,8 @@ func (r *Runner) hostedToolsForRun(cfg *config.Config, resolvedAuth *auth.Resolv
 	capabilities := runtimeProvider.Capabilities()
 	tools := []any{}
 	if standaloneWebSearch == nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
-		mode := execWebSearchMode(cfg, forceLiveWebSearch)
+		// A provider that disallows external web access pins hosted search to cached.
+		mode := execWebSearchMode(cfg, forceLiveWebSearch).RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, codexapi.SearchSettingsForMode(mode, execWebSearchToolConfig(cfg)), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

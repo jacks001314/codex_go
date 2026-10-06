@@ -7,6 +7,18 @@ import (
 
 type WebSearchMode string
 
+// RestrictToProviderWebAccess downgrades live/indexed search to cached when the
+// provider disallows external web access (Rust #50459, resolve_web_search_mode_for_turn).
+func (m WebSearchMode) RestrictToProviderWebAccess(externalWebAccess bool) WebSearchMode {
+	if externalWebAccess {
+		return m
+	}
+	if m == WebSearchModeLive || m == WebSearchModeIndexed {
+		return WebSearchModeCached
+	}
+	return m
+}
+
 const (
 	WebSearchModeDisabled WebSearchMode = "disabled"
 	WebSearchModeCached   WebSearchMode = "cached"

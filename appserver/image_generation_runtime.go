@@ -111,7 +111,8 @@ func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRun
 		standaloneWebSearchRegistered = turnRuntimes[0].StandaloneWebSearchRegistered()
 	}
 	if !standaloneWebSearchRegistered && modelInfo != nil && !modelInfo.UseResponsesLite && capabilities.WebSearch {
-		mode := webSearchModeFromConfig(cfg)
+		// A provider that disallows external web access pins hosted search to cached.
+		mode := webSearchModeFromConfig(cfg).RestrictToProviderWebAccess(capabilities.ExternalWebAccess)
 		if hosted := turn.HostedWebSearchTool(mode, webSearchSettingsFromConfig(cfg, mode), modelInfo.WebSearchToolType); hosted != nil {
 			tools = append(tools, hosted)
 		}

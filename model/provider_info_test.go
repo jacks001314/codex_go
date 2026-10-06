@@ -143,6 +143,74 @@ func TestSupportsRemoteCompaction(t *testing.T) {
 	}
 }
 
+func ptrRemoteCompaction(value RemoteCompactionSupport) *RemoteCompactionSupport {
+	return &value
+}
+
+// TestProviderCapabilityOverridesLikeRust mirrors Rust #50459: explicit
+// `capabilities` overrides replace the provider defaults, unspecified
+// capabilities are preserved, and malformed values are rejected.
+func TestProviderCapabilityOverridesLikeRust(t *testing.T) {
+	custom := ProviderInfo{Name: "Example", BaseURL: "https://example.com/v1"}
+	if !custom.ExternalWebAccess() {
+		t.Fatal("custom provider should default to external web access")
+	}
+	if custom.SupportsRemoteCompaction() {
+		t.Fatal("custom provider should default to unsupported remote compaction")
+	}
+
+	disabled := false
+	overridden := ProviderInfo{
+		Name:    "Example",
+		BaseURL: "https://example.com/v1",
+		Capabilities: &ProviderCapabilitiesOverride{
+			ExternalWebAccess: &disabled,
+			RemoteCompaction:  ptrRemoteCompaction(RemoteCompactionV2),
+		},
+	}
+	if overridden.ExternalWebAccess() {
+		t.Fatal("override should disable external web access")
+	}
+	if !overridden.SupportsRemoteCompaction() {
+		t.Fatal("override should enable remote compaction v2")
+	}
+
+	openAI := CreateOpenAIProvider("")
+	openAI.Capabilities = &ProviderCapabilitiesOverride{RemoteCompaction: ptrRemoteCompaction(RemoteCompactionUnsupported)}
+	if (&openAI).SupportsRemoteCompaction() {
+		t.Fatal("unsupported override should disable remote compaction for OpenAI")
+	}
+
+	parsed, err := ProviderInfoFromConfig(map[string]any{
+		"name":         "Example",
+		"base_url":     "https://example.com/v1",
+		"capabilities": map[string]any{"external_web_access": false, "remote_compaction": "v2"},
+	})
+	if err != nil {
+		t.Fatalf("ProviderInfoFromConfig: %v", err)
+	}
+	if parsed.Capabilities == nil || parsed.Capabilities.ExternalWebAccess == nil || *parsed.Capabilities.ExternalWebAccess {
+		t.Fatalf("capabilities.external_web_access = %#v", parsed.Capabilities)
+	}
+	if parsed.Capabilities.RemoteCompaction == nil || *parsed.Capabilities.RemoteCompaction != RemoteCompactionV2 {
+		t.Fatalf("capabilities.remote_compaction = %#v", parsed.Capabilities)
+	}
+
+	for _, malformed := range []map[string]any{
+		{"external_web_access": "yes"},
+		{"remote_compaction": "v3"},
+		{"unknown": true},
+	} {
+		if _, err := ProviderInfoFromConfig(map[string]any{
+			"name":         "Example",
+			"base_url":     "https://example.com/v1",
+			"capabilities": malformed,
+		}); err == nil {
+			t.Fatalf("expected malformed capabilities to be rejected: %#v", malformed)
+		}
+	}
+}
+
 func TestIsAzureResponsesProviderMatchesRustMarkers(t *testing.T) {
 	cases := []string{
 		"https://foo.openai.azure.com/openai",
