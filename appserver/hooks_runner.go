@@ -519,7 +519,7 @@ func selectHookHandlers(hooks []HookMetadata, event HookEventName, matcherInputs
 		if !hookTrustAllowsExecution(&metadata) {
 			continue
 		}
-		if !hookMatches(event, metadata.Matcher, matcherInputs) {
+		if !hookMatches(event, metadata.Matcher, metadata.compiledMatcher, matcherInputs) {
 			continue
 		}
 		out = append(out, cloneMetadata(metadata))
@@ -535,18 +535,18 @@ func hookTrustAllowsExecution(metadata *HookMetadata) bool {
 	return metadata.BypassTrust || metadata.IsManaged || metadata.TrustStatus == HookTrustManaged || metadata.TrustStatus == HookTrustTrusted
 }
 
-func hookMatches(event HookEventName, matcher *string, matcherInputs []string) bool {
+func hookMatches(event HookEventName, matcher *string, compiled *regexp.Regexp, matcherInputs []string) bool {
 	switch event {
 	case HookEventPreToolUse, HookEventPermissionRequest, HookEventPostToolUse, HookEventPreCompact, HookEventPostCompact, HookEventSessionStart, HookEventSubagentStart, HookEventSubagentStop:
 		if len(matcherInputs) == 0 {
-			return matchesHookMatcher(matcher, nil)
+			return matchesHookMatcher(matcher, compiled, nil)
 		}
 		for _, input := range matcherInputs {
 			input := strings.TrimSpace(input)
 			if input == "" {
 				continue
 			}
-			if matchesHookMatcher(matcher, &input) {
+			if matchesHookMatcher(matcher, compiled, &input) {
 				return true
 			}
 		}
@@ -558,7 +558,7 @@ func hookMatches(event HookEventName, matcher *string, matcherInputs []string) b
 	}
 }
 
-func matchesHookMatcher(matcher *string, input *string) bool {
+func matchesHookMatcher(matcher *string, compiled *regexp.Regexp, input *string) bool {
 	if matcher == nil {
 		return true
 	}
@@ -580,11 +580,34 @@ func matchesHookMatcher(matcher *string, input *string) bool {
 	if input == nil {
 		return false
 	}
+	// Rust #49379: reuse the matcher compiled during discovery. Handlers built
+	// outside discovery (or with an uncompilable pattern) fall back to an
+	// on-demand compile.
+	if compiled != nil {
+		return compiled.MatchString(*input)
+	}
 	regex, err := regexp.Compile(value)
 	if err != nil {
 		return false
 	}
 	return regex.MatchString(*input)
+}
+
+// compiledHookMatcher precompiles a regex matcher during discovery (Rust
+// #49379). Match-all and exact-name matchers need no regex, so they return nil.
+func compiledHookMatcher(matcher *string) *regexp.Regexp {
+	if matcher == nil {
+		return nil
+	}
+	value := strings.TrimSpace(*matcher)
+	if value == "" || value == "*" || isExactHookMatcher(value) {
+		return nil
+	}
+	regex, err := regexp.Compile(value)
+	if err != nil {
+		return nil
+	}
+	return regex
 }
 
 func validateHookMatcherPattern(matcher string) error {

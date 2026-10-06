@@ -795,6 +795,9 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			return displayOrder
 		}
 	}
+	// Rust #49379: compile the matcher once during discovery so dispatch never
+	// recompiles it for each input.
+	compiledMatcher := compiledHookMatcher(matcher)
 	for handlerIndex := range group.Hooks {
 		handler := group.Hooks[handlerIndex]
 		handlerType := handler.hookHandlerType()
@@ -834,6 +837,7 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				PluginID:               cloneString(source.PluginID),
 				DisplayOrder:           displayOrder,
 				Builtin:                builtin,
+				compiledMatcher:        compiledMatcher,
 				Enabled:                hookEnabled(false, builtin, state),
 				IsManaged:              false,
 				CurrentHash:            currentHash,
@@ -868,27 +872,28 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			currentHash := hookDiscoveryHashHandler(event, matcher, HookHandlerMCPTool, "", server, toolName, inputTemplate, timeoutSec, handler.statusMessage(), nil)
 			state := source.State(key)
 			metadata := HookMetadata{
-				Key:           key,
-				EventName:     event,
-				HandlerType:   HookHandlerMCPTool,
-				ExecutionMode: HookExecutionSync,
-				Matcher:       cloneString(matcher),
-				Server:        &server,
-				Tool:          &toolName,
-				Input:         inputTemplate,
-				TimeoutSec:    timeoutSec,
-				StatusMessage: handler.statusMessage(),
-				SourcePath:    source.Path,
-				Source:        source.Source,
-				PluginID:      cloneString(source.PluginID),
-				DisplayOrder:  displayOrder,
-				Builtin:       builtin,
-				Enabled:       hookEnabled(false, builtin, state),
-				IsManaged:     false,
-				CurrentHash:   currentHash,
-				TrustStatus:   hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
-				BypassTrust:   source.BypassTrust,
-				Env:           cloneHookEnv(source.Env),
+				Key:             key,
+				EventName:       event,
+				HandlerType:     HookHandlerMCPTool,
+				ExecutionMode:   HookExecutionSync,
+				Matcher:         cloneString(matcher),
+				Server:          &server,
+				Tool:            &toolName,
+				Input:           inputTemplate,
+				TimeoutSec:      timeoutSec,
+				StatusMessage:   handler.statusMessage(),
+				SourcePath:      source.Path,
+				compiledMatcher: compiledMatcher,
+				Source:          source.Source,
+				PluginID:        cloneString(source.PluginID),
+				DisplayOrder:    displayOrder,
+				Builtin:         builtin,
+				Enabled:         hookEnabled(false, builtin, state),
+				IsManaged:       false,
+				CurrentHash:     currentHash,
+				TrustStatus:     hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
+				BypassTrust:     source.BypassTrust,
+				Env:             cloneHookEnv(source.Env),
 			}
 			entry.Hooks = append(entry.Hooks, metadata)
 			displayOrder++

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -206,6 +207,10 @@ type HookMetadata struct {
 	TrustStatus HookTrustStatus   `json:"trustStatus"`
 	BypassTrust bool              `json:"-"`
 	Env         map[string]string `json:"-"`
+	// compiledMatcher is the handler's regex matcher compiled once during
+	// discovery and reused on every dispatch (Rust #49379). Nil for match-all
+	// and exact-name matchers, and for handlers built outside discovery.
+	compiledMatcher *regexp.Regexp
 }
 
 func (m *HookMetadata) Validate() error {

@@ -898,3 +898,51 @@ func TestHookMetadataMarshalOmitsUnsetAdditionalContextLimitLikeRust(t *testing.
 func int64Ptr(value int64) *int64 {
 	return &value
 }
+
+// TestHookDiscoveryCompilesRegexMatcherLikeRust mirrors Rust #49379: a regex
+// matcher is compiled once during discovery and reused on dispatch, while
+// match-all and exact-name matchers carry no compiled regex.
+func TestHookDiscoveryCompilesRegexMatcherLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	hooksDir := filepath.Join(cwd, ".gcode")
+	if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{
+		"hooks": {
+			"PreToolUse": [
+				{"matcher": "^Bash$", "hooks": [{"type": "command", "command": "echo regex"}]},
+				{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo exact"}]},
+				{"matcher": "*", "hooks": [{"type": "command", "command": "echo all"}]}
+			]
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewHookDiscoveryService("")
+	response := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+	if len(response.Data) != 1 || len(response.Data[0].Hooks) != 3 {
+		t.Fatalf("Discover() = %+v", response)
+	}
+	byCommand := map[string]HookMetadata{}
+	for _, hook := range response.Data[0].Hooks {
+		byCommand[ptrStringValue(hook.Command)] = hook
+	}
+	regexHook, ok := byCommand["echo regex"]
+	if !ok || regexHook.compiledMatcher == nil {
+		t.Fatalf("regex matcher was not compiled during discovery: %#v", byCommand)
+	}
+	if !hookMatches(HookEventPreToolUse, regexHook.Matcher, regexHook.compiledMatcher, []string{"Bash"}) {
+		t.Fatal("compiled matcher did not match Bash")
+	}
+	if hookMatches(HookEventPreToolUse, regexHook.Matcher, regexHook.compiledMatcher, []string{"Read"}) {
+		t.Fatal("compiled matcher matched Read")
+	}
+	for _, command := range []string{"echo exact", "echo all"} {
+		hook, ok := byCommand[command]
+		if !ok || hook.compiledMatcher != nil {
+			t.Fatalf("matcher %q should not carry a compiled regex: %#v", command, byCommand[command])
+		}
+	}
+}
