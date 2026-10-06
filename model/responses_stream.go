@@ -2260,6 +2260,11 @@ func responseFailedError(data []byte) error {
 	if len(rawError) == 0 || string(rawError) == "null" {
 		return errResponsesStreamFailed
 	}
+	// Rust #50418: a streamed `response.failed` may carry retry advice in the
+	// nested `error.headers`, parsed with the HTTP Retry-After rules and
+	// preferred over rate-limit message advice (falling back when absent or
+	// invalid). Flex failures remain terminal and ignore it.
+	retryAfterHeader, hasRetryAfterHeader := responsesFailedRetryAfterFromRawError(rawError)
 	// Rust checks the Flex shape with `Value::get("code")` before decoding the
 	// strict error body, so a Flex-capacity failure ends the turn even when
 	// another field is malformed (Rust #47967, #48229).
@@ -2272,6 +2277,12 @@ func responseFailedError(data []byte) error {
 	}
 	var errBody responsesFailedErrorBody
 	if err := json.Unmarshal(rawError, &errBody); err != nil {
+		if hasRetryAfterHeader {
+			return (&codexapi.APIError{
+				Kind:    codexapi.ErrorRetryable,
+				Message: errResponsesStreamFailed.Error(),
+			}).WithRetryDelay(retryAfterHeader)
+		}
 		return errResponsesStreamFailed
 	}
 	code := ""
@@ -2317,12 +2328,21 @@ func responseFailedError(data []byte) error {
 		}
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded":
-		return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
+		overloaded := &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
+		if hasRetryAfterHeader {
+			return overloaded.WithRetryDelay(retryAfterHeader)
+		}
+		return overloaded
 	}
 	// Rust #45602: `slow_down` is a retryable rate limit, not a terminal server
 	// overload.
 	if code == "rate_limit_exceeded" || code == "slow_down" {
 		retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
+		// Rust #50418: a valid Retry-After header beats message advice; an
+		// absent or invalid header falls back to the plaintext duration.
+		if hasRetryAfterHeader {
+			return retryable.WithRetryDelay(retryAfterHeader)
+		}
 		if delay, ok := responseFailedRetryDelay(code, message); ok {
 			return retryable.WithRetryDelay(delay)
 		}
@@ -2331,10 +2351,75 @@ func responseFailedError(data []byte) error {
 	// Rust's fallback arm reports an unclassified failure as retryable; a
 	// malformed payload never reaches here (it degrades to the sentinel above).
 	retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
+	if hasRetryAfterHeader {
+		return retryable.WithRetryDelay(retryAfterHeader)
+	}
 	if delay, ok := responseFailedRetryDelay(code, message); ok {
 		return retryable.WithRetryDelay(delay)
 	}
 	return retryable
+}
+
+// responsesFailedRetryAfterFromRawError extracts Retry-After advice from a
+// streamed `response.failed` error object (Rust #50418). It mirrors
+// `RetryAfter::from_headers(json_headers_to_http_headers(error.headers))`: the
+// nested `headers` object is mapped through the shared JSON header conversion
+// and then parsed with the HTTP Retry-After rules.
+func responsesFailedRetryAfterFromRawError(rawError []byte) (time.Duration, bool) {
+	var envelope struct {
+		Headers map[string]any `json:"headers"`
+	}
+	if err := json.Unmarshal(rawError, &envelope); err != nil {
+		return 0, false
+	}
+	if len(envelope.Headers) == 0 {
+		return 0, false
+	}
+	return responsesRetryAfterFromHeaderValue(jsonHeadersToHTTPHeaders(envelope.Headers).Get("Retry-After"), time.Now())
+}
+
+// responsesRetryAfterFromHeaderValue mirrors Rust's `RetryAfter::from_header`:
+// a non-empty all-ASCII-digit value is a delay in seconds; otherwise the value
+// is parsed as an HTTP date and its remaining (never negative) delay is used.
+// Any other value is invalid and reports no advice.
+func responsesRetryAfterFromHeaderValue(value string, now time.Time) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	if asciiDigitsOnly(value) {
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		// Rust's `Instant::checked_add` rejects a delay that cannot be
+		// represented; Go's Duration is nanoseconds, so reject the same way.
+		if seconds > uint64(math.MaxInt64/int64(time.Second)) {
+			return 0, false
+		}
+		return time.Duration(seconds) * time.Second, true
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0, false
+	}
+	delay := when.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	return delay, true
+}
+
+func asciiDigitsOnly(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < '0' || value[index] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // flexUnavailableErrorBody recognizes Rust's `parse_flex_unavailable`
@@ -2391,7 +2476,24 @@ func responseFailedRetryDelay(code, message string) (time.Duration, bool) {
 		return 0, false
 	}
 	if strings.EqualFold(matches[2], "ms") {
-		return time.Duration(value * float64(time.Millisecond)), true
+		// Rust casts the parsed value to u64 (saturating) before from_millis;
+		// clamp so the Go Duration cannot overflow.
+		millis := value * float64(time.Millisecond)
+		if millis > float64(math.MaxInt64) {
+			return time.Duration(math.MaxInt64), true
+		}
+		if millis < 0 {
+			millis = 0
+		}
+		return time.Duration(millis), true
+	}
+	// Rust #50418: `Duration::try_from_secs_f64` rejects negative, non-finite
+	// and unrepresentable plaintext durations instead of panicking.
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, false
+	}
+	if value > float64(math.MaxInt64)/float64(time.Second) {
+		return 0, false
 	}
 	return time.Duration(value * float64(time.Second)), true
 }
