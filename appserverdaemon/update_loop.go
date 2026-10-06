@@ -170,8 +170,13 @@ func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *Upd
 				return nil
 			}
 			control, err := UpdateOnce(ctx, runner, runningIdentity, options)
-			if err != nil && errors.Is(err, context.Canceled) {
-				return nil
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return nil
+				}
+				// A scheduled update failure is retried on the next interval, but
+				// surface it so the daemon log explains the retry (Rust #49819).
+				daemon.Diagnostic("warning: scheduled daemon update failed: %v", err)
 			}
 			if control == UpdateLoopStop {
 				return nil
