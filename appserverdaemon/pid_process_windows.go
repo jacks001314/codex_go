@@ -38,7 +38,6 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	if err := os.MkdirAll(workingDir, 0o700); err != nil {
 		return 0, "", fmt.Errorf("failed to create daemon working directory %s: %w", workingDir, err)
 	}
-	command.Dir = workingDir
 	command.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_BREAKAWAY_FROM_JOB,
 	}
@@ -80,6 +79,12 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	// Handoff suppression belongs to the foreground CLI, not its long-lived
 	// children (Rust pid_start's `env_remove(HANDOFF_ENV)`).
 	command.Env = withoutEnvVar(command.Env, TelemetryHandoffEnv)
+	// Absolutize process-scoped paths before changing cwd, then pin the pinned
+	// workdir (Rust background_command::set_working_directory, #49819).
+	if err := setWorkingDirectory(command, filepath.Dir(backend.PIDFile)); err != nil {
+		return 0, "", err
+	}
+	command.Dir = workingDir
 	if err := startDetachedCommand(command); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -44,6 +45,11 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 	// Handoff suppression belongs to the foreground CLI, not its long-lived
 	// children (Rust pid_start's `env_remove(HANDOFF_ENV)`).
 	command.Env = withoutEnvVar(command.Env, TelemetryHandoffEnv)
+	// Absolutize process-scoped paths and recover a deleted cwd before launch
+	// (Rust background_command::set_working_directory, #49819).
+	if err := setWorkingDirectory(command, filepath.Dir(backend.PIDFile)); err != nil {
+		return 0, "", err
+	}
 	if err := command.Start(); err != nil {
 		return 0, "", fmt.Errorf("failed to spawn detached app-server process using %s: %w", backend.CodexBin, err)
 	}
