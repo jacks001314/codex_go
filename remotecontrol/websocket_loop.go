@@ -14,7 +14,7 @@ const remoteControlWebsocketLoopStatusPollInterval = 100 * time.Millisecond
 
 type RemoteControlWebsocketConnectFunc func(ctx context.Context, options *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error)
 
-type RemoteControlReconnectDelayFunc func(reconnectAttempt *uint64) (time.Duration, bool)
+type RemoteControlReconnectDelayFunc func(reconnectAttempt *uint64) time.Duration
 
 type RemoteControlAuthRevisionFunc func(ctx context.Context) (uint64, error)
 
@@ -446,11 +446,9 @@ func (l *RemoteControlWebsocketLoop) remoteControlEnabled() bool {
 
 func (l *RemoteControlWebsocketLoop) nextReconnectDelay(reconnectAttempt *uint64) time.Duration {
 	if l != nil && l.options.ReconnectDelay != nil {
-		delay, _ := l.options.ReconnectDelay(reconnectAttempt)
-		return delay
+		return l.options.ReconnectDelay(reconnectAttempt)
 	}
-	delay, _ := NextReconnectDelay(reconnectAttempt)
-	return delay
+	return NextReconnectDelay(reconnectAttempt)
 }
 
 func (l *RemoteControlWebsocketLoop) statusPollInterval() time.Duration {

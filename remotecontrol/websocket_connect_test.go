@@ -44,24 +44,31 @@ func TestBuildRemoteControlWebsocketRequestRejectsMissingTokenAndInvalidHeader(t
 	}
 }
 
-func TestNextReconnectDelayMatchesRustBackoffAndCapReset(t *testing.T) {
+func TestNextReconnectDelayStaysCappedLikeRust(t *testing.T) {
 	var attempt uint64
-	delay, reset := nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 200*time.Millisecond || reset || attempt != 1 {
-		t.Fatalf("first delay/reset/attempt = %v/%v/%d", delay, reset, attempt)
+	delay := nextReconnectDelayWithJitter(&attempt, 1)
+	if delay != 200*time.Millisecond || attempt != 1 {
+		t.Fatalf("first delay/attempt = %v/%d", delay, attempt)
 	}
-	delay, reset = nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 200*time.Millisecond || reset || attempt != 2 {
-		t.Fatalf("second delay/reset/attempt = %v/%v/%d", delay, reset, attempt)
+	delay = nextReconnectDelayWithJitter(&attempt, 1)
+	if delay != 200*time.Millisecond || attempt != 2 {
+		t.Fatalf("second delay/attempt = %v/%d", delay, attempt)
 	}
-	delay, reset = nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 400*time.Millisecond || reset || attempt != 3 {
-		t.Fatalf("third delay/reset/attempt = %v/%v/%d", delay, reset, attempt)
+	delay = nextReconnectDelayWithJitter(&attempt, 1)
+	if delay != 400*time.Millisecond || attempt != 3 {
+		t.Fatalf("third delay/attempt = %v/%d", delay, attempt)
 	}
-	attempt = 10
-	delay, reset = nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != RemoteControlReconnectBackoffCap || !reset || attempt != 0 {
-		t.Fatalf("cap delay/reset/attempt = %v/%v/%d", delay, reset, attempt)
+	// A sustained failure streak stays at the 30s cap and never resets the
+	// attempt counter back to fast retries (Rust #49330).
+	attempt = 25
+	for i := 0; i < 5; i++ {
+		delay = nextReconnectDelayWithJitter(&attempt, 1)
+		if delay != RemoteControlReconnectBackoffCap {
+			t.Fatalf("capped delay[%d] = %v, want %v", i, delay, RemoteControlReconnectBackoffCap)
+		}
+	}
+	if attempt != 25 {
+		t.Fatalf("attempt advanced while capped: %d, want 25", attempt)
 	}
 }
 

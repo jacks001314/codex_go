@@ -70,26 +70,25 @@ func BuildRemoteControlWebsocketRequest(websocketURL string, enrollment *Enrollm
 	return request, nil
 }
 
-func NextReconnectDelay(reconnectAttempt *uint64) (time.Duration, bool) {
+func NextReconnectDelay(reconnectAttempt *uint64) time.Duration {
 	return nextReconnectDelayWithJitter(reconnectAttempt, reconnectJitter())
 }
 
-func nextReconnectDelayWithJitter(reconnectAttempt *uint64, jitter float64) (time.Duration, bool) {
+func nextReconnectDelayWithJitter(reconnectAttempt *uint64, jitter float64) time.Duration {
 	if reconnectAttempt == nil {
 		var attempt uint64
 		reconnectAttempt = &attempt
 	}
 	delay := remoteControlBackoff(*reconnectAttempt, jitter)
-	if delay > RemoteControlReconnectBackoffCap {
-		delay = RemoteControlReconnectBackoffCap
+	if delay >= RemoteControlReconnectBackoffCap {
+		// Rust #49330: stay at the cap during sustained failures (including
+		// duplicate-presence conflicts) and stop advancing the exponent, so a
+		// long failure streak cannot overflow it. Success and auth changes
+		// reset the attempt counter in the connect loop.
+		return RemoteControlReconnectBackoffCap
 	}
-	reset := delay == RemoteControlReconnectBackoffCap
-	if reset {
-		*reconnectAttempt = 0
-	} else {
-		*reconnectAttempt = *reconnectAttempt + 1
-	}
-	return delay, reset
+	*reconnectAttempt = *reconnectAttempt + 1
+	return delay
 }
 
 func WebsocketResponseReportsMissingRemoteAppServer(response *http.Response, body []byte) bool {

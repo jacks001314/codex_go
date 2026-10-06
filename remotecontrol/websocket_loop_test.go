@@ -19,8 +19,8 @@ func TestRemoteControlWebsocketLoopConnectsAndForwardsRemoteClient(t *testing.T)
 	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
 		StatusPollInterval:        time.Millisecond,
 		ConnectionShutdownTimeout: 100 * time.Millisecond,
-		ReconnectDelay: func(reconnectAttempt *uint64) (time.Duration, bool) {
-			return time.Millisecond, false
+		ReconnectDelay: func(reconnectAttempt *uint64) time.Duration {
+			return time.Millisecond
 		},
 		Connect: func(ctx context.Context, options *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
@@ -101,7 +101,7 @@ func TestRemoteControlWebsocketLoopRetiresOnAuthOwnerChangeWhileConnected(t *tes
 		StatusPollInterval:        time.Millisecond,
 		ConnectionShutdownTimeout: 100 * time.Millisecond,
 		AuthRevision:              func(context.Context) (uint64, error) { return authRevision.Load(), nil },
-		ReconnectDelay:            func(*uint64) (time.Duration, bool) { return time.Millisecond, false },
+		ReconnectDelay:            func(*uint64) time.Duration { return time.Millisecond },
 		Connect: func(_ context.Context, options *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			var cursor *string
 			if options != nil && options.SubscribeCursor != nil {
@@ -230,7 +230,7 @@ func TestRemoteControlWebsocketLoopRetiresAuthenticatedSessionOnAuthChangeDuring
 		StatusPollInterval:        time.Millisecond,
 		ConnectionShutdownTimeout: 100 * time.Millisecond,
 		AuthRevision:              func(context.Context) (uint64, error) { return authRevision.Load(), nil },
-		ReconnectDelay:            func(*uint64) (time.Duration, bool) { return time.Hour, false },
+		ReconnectDelay:            func(*uint64) time.Duration { return time.Hour },
 		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			connectAttempts <- connectCount.Add(1)
 			return nil, nil, fmt.Errorf("connect failed")
@@ -294,12 +294,12 @@ func TestRemoteControlWebsocketLoopAuthChangeWakesReconnectBackoff(t *testing.T)
 		AuthRevision: func(context.Context) (uint64, error) {
 			return authRevision.Load(), nil
 		},
-		ReconnectDelay: func(reconnectAttempt *uint64) (time.Duration, bool) {
+		ReconnectDelay: func(reconnectAttempt *uint64) time.Duration {
 			if reconnectAttempt != nil {
 				delayAttempts <- *reconnectAttempt
 				*reconnectAttempt = *reconnectAttempt + 1
 			}
-			return time.Hour, false
+			return time.Hour
 		},
 		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			attempt := connectCount.Add(1)
@@ -381,9 +381,9 @@ func TestRemoteControlWebsocketLoopAuthRevisionDuringConnectWakesWithoutRecovery
 		AuthRevision: func(context.Context) (uint64, error) {
 			return authRevision.Load(), nil
 		},
-		ReconnectDelay: func(*uint64) (time.Duration, bool) {
+		ReconnectDelay: func(*uint64) time.Duration {
 			delayAttempts <- struct{}{}
-			return time.Hour, false
+			return time.Hour
 		},
 		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			attempt := connectCount.Add(1)
@@ -457,9 +457,9 @@ func TestRemoteControlWebsocketLoopRecoveryRevisionIsMarkedSeen(t *testing.T) {
 		AuthRevision: func(context.Context) (uint64, error) {
 			return authRevision.Load(), nil
 		},
-		ReconnectDelay: func(*uint64) (time.Duration, bool) {
+		ReconnectDelay: func(*uint64) time.Duration {
 			delayAttempts <- struct{}{}
-			return time.Hour, false
+			return time.Hour
 		},
 		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
 			attempt := connectCount.Add(1)
