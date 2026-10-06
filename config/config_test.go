@@ -230,6 +230,62 @@ func TestMergeConfigMapsNormalizesKeyAliasesLikeRust(t *testing.T) {
 	})
 }
 
+func TestMergeConfigMapsNormalizesNestedKeyAliasesLikeRust(t *testing.T) {
+	// Mirrors Rust key_aliases.rs: `tui.whimsy` is aliased to the nested
+	// canonical path `tui.effects.starfield` (#47908/#47904), and #50354 skips
+	// subtrees that are not on a registered legacy path.
+	t.Run("legacy_whimsy_creates_nested_starfield", func(t *testing.T) {
+		base := map[string]any{"tui": map[string]any{"whimsy": false}}
+		overlay := map[string]any{"tui": map[string]any{"effects": map[string]any{"shimmer": false}}}
+		mergeConfigMaps(base, overlay)
+		tui := base["tui"].(map[string]any)
+		if _, exists := tui["whimsy"]; exists {
+			t.Fatalf("legacy whimsy survived normalization: %#v", tui)
+		}
+		effects, ok := tui["effects"].(map[string]any)
+		if !ok {
+			t.Fatalf("effects missing: %#v", tui)
+		}
+		if effects["starfield"] != false || effects["shimmer"] != false {
+			t.Fatalf("effects = %#v, want starfield=false shimmer=false", effects)
+		}
+	})
+	t.Run("canonical_starfield_wins_over_legacy_whimsy", func(t *testing.T) {
+		base := map[string]any{}
+		overlay := map[string]any{"tui": map[string]any{
+			"whimsy":  false,
+			"effects": map[string]any{"starfield": true},
+		}}
+		mergeConfigMaps(base, overlay)
+		tui := base["tui"].(map[string]any)
+		if _, exists := tui["whimsy"]; exists {
+			t.Fatalf("legacy whimsy survived normalization: %#v", tui)
+		}
+		effects := tui["effects"].(map[string]any)
+		if effects["starfield"] != true {
+			t.Fatalf("starfield = %v, want true (canonical wins)", effects["starfield"])
+		}
+	})
+	t.Run("overlay_legacy_whimsy_overrides_base_starfield", func(t *testing.T) {
+		base := map[string]any{"tui": map[string]any{"effects": map[string]any{"starfield": true}}}
+		overlay := map[string]any{"tui": map[string]any{"whimsy": false}}
+		mergeConfigMaps(base, overlay)
+		effects := base["tui"].(map[string]any)["effects"].(map[string]any)
+		if effects["starfield"] != false {
+			t.Fatalf("starfield = %v, want false", effects["starfield"])
+		}
+	})
+	t.Run("unrelated_subtree_not_normalized", func(t *testing.T) {
+		base := map[string]any{}
+		overlay := map[string]any{"other": map[string]any{"whimsy": true}}
+		mergeConfigMaps(base, overlay)
+		other := base["other"].(map[string]any)
+		if other["whimsy"] != true {
+			t.Fatalf("unrelated subtree changed: %#v", other)
+		}
+	})
+}
+
 func TestMergeConfigMapsMultiAgentV2BooleanTableLikeRust(t *testing.T) {
 	// Mirrors Rust merge_tests.rs merge_multi_agent_v2_table_preserves_legacy_
 	// boolean_toggle and merge_multi_agent_v2_boolean_preserves_existing_

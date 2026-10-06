@@ -3052,32 +3052,121 @@ func normalizeNetworkDomainKeys(table map[string]any) {
 	}
 }
 
-// normalizeConfigKeyAliases mirrors Rust normalize_key_aliases
-// (config/src/key_aliases.rs): within a known table, a legacy key is moved to
-// its canonical name (or_insert semantics - the canonical value wins when both
-// are present in the same layer), so an overlay's legacy key overrides a
-// base layer's canonical key exactly like Rust's merge_toml_values.
+// configKeyAlias mirrors Rust's `ConfigKeyAlias` (config/src/key_aliases.rs).
+// `canonical` may point at a nested path below the legacy key's containing
+// table (e.g. `tui.whimsy` -> `tui.effects.starfield`), so normalization can
+// create intermediate tables while moving the value.
+type configKeyAlias struct {
+	legacy    []string
+	canonical []string
+}
+
+// configKeyAliases mirrors Rust's `CONFIG_KEY_ALIASES` table.
+var configKeyAliases = []configKeyAlias{
+	{legacy: []string{"tui", "whimsy"}, canonical: []string{"tui", "effects", "starfield"}},
+	{legacy: []string{"memories", "no_memories_if_mcp_or_web_search"}, canonical: []string{"memories", "disable_on_external_context"}},
+	{legacy: []string{"agents", "max_threads"}, canonical: []string{"agents", "max_concurrent_threads_per_session"}},
+}
+
+// normalizeConfigKeyAliases mirrors Rust normalize_table_key_aliases
+// (config/src/key_aliases.rs): within the table reached by `path`, a legacy key
+// is moved to its canonical path (or_insert semantics - the canonical value wins
+// when both are present in the same layer), so an overlay's legacy key overrides
+// a base layer's canonical key exactly like Rust's merge_toml_values.
+//
+// Rust normalizes a whole layer ahead of merging (#47903/#47904) and applies the
+// subtree guard from #50354 ("alias normalization cannot affect subtrees outside
+// the registered legacy paths") so unrelated subtrees are cloned untouched. Go
+// normalizes each layer in place at the merge site, so the same guard is
+// expressed as an early return when `path` is not a prefix of any registered
+// legacy path.
 func normalizeConfigKeyAliases(path []string, table map[string]any) {
-	if len(path) != 1 {
+	if len(table) == 0 || !configPathIsAliasPrefix(path) {
 		return
 	}
-	switch path[0] {
-	case "memories":
-		normalizeConfigKeyAlias(table, "no_memories_if_mcp_or_web_search", "disable_on_external_context")
-	case "agents":
-		normalizeConfigKeyAlias(table, "max_threads", "max_concurrent_threads_per_session")
+	for _, alias := range configKeyAliases {
+		if len(alias.legacy) == 0 {
+			continue
+		}
+		tablePath := alias.legacy[:len(alias.legacy)-1]
+		legacyKey := alias.legacy[len(alias.legacy)-1]
+		if !stringSlicesEqual(tablePath, path) {
+			continue
+		}
+		if !stringSlicesHasPrefix(alias.canonical, tablePath) {
+			continue
+		}
+		canonicalPath := alias.canonical[len(tablePath):]
+		if len(canonicalPath) == 0 {
+			continue
+		}
+		legacyValue, ok := table[legacyKey]
+		if !ok {
+			continue
+		}
+		delete(table, legacyKey)
+		insertAtCanonicalPath(table, canonicalPath, legacyValue)
 	}
 }
 
-func normalizeConfigKeyAlias(table map[string]any, legacyKey, canonicalKey string) {
-	legacyValue, ok := table[legacyKey]
-	if !ok {
-		return
+// configPathIsAliasPrefix reports whether `path` equals the first len(path)
+// elements of at least one registered legacy path (Rust's
+// `alias.legacy.get(..path.len())` equality check).
+func configPathIsAliasPrefix(path []string) bool {
+	for _, alias := range configKeyAliases {
+		if len(alias.legacy) < len(path) {
+			continue
+		}
+		if stringSlicesEqual(alias.legacy[:len(path)], path) {
+			return true
+		}
 	}
-	if _, exists := table[canonicalKey]; !exists {
-		table[canonicalKey] = legacyValue
+	return false
+}
+
+// insertAtCanonicalPath inserts `value` at `canonicalPath` inside `table`,
+// creating intermediate tables as needed and keeping an existing canonical value
+// (Rust's `entry(..).or_insert(value)`). A non-table intermediate aborts the
+// insert, mirroring Rust's `continue 'aliases`.
+func insertAtCanonicalPath(table map[string]any, canonicalPath []string, value any) {
+	key := canonicalPath[len(canonicalPath)-1]
+	destination := table
+	for _, parent := range canonicalPath[:len(canonicalPath)-1] {
+		child, ok := destination[parent]
+		if !ok {
+			nested := map[string]any{}
+			destination[parent] = nested
+			destination = nested
+			continue
+		}
+		childTable, ok := child.(map[string]any)
+		if !ok {
+			return
+		}
+		destination = childTable
 	}
-	delete(table, legacyKey)
+	if _, exists := destination[key]; !exists {
+		destination[key] = value
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func stringSlicesHasPrefix(value, prefix []string) bool {
+	if len(prefix) > len(value) {
+		return false
+	}
+	return stringSlicesEqual(value[:len(prefix)], prefix)
 }
 
 func cloneConfigValue(value any) any {
