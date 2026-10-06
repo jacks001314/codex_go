@@ -119,6 +119,33 @@ func TestTerminalHyperlinks(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51391: trailing question punctuation after an unmatched closing
+// delimiter is excluded, while `?` inside balanced parentheses stays in the URL.
+func TestWebLinksInTextTrailingQuestionPunctuation(t *testing.T) {
+	for _, text := range []string{
+		"See (https://example.com/a).",
+		"See (https://example.com/a)?",
+	} {
+		links := WebLinksInText(text)
+		if len(links) != 1 || links[0].Destination != "https://example.com/a" {
+			t.Fatalf("WebLinksInText(%q) = %#v", text, links)
+		}
+		if links[0].Start != 5 || links[0].End != 26 {
+			t.Fatalf("WebLinksInText(%q) columns = %d..%d, want 5..26", text, links[0].Start, links[0].End)
+		}
+	}
+	for _, destination := range []string{
+		"https://en.wikipedia.org/wiki/Function_(mathematics)",
+		"https://en.wikipedia.org/wiki/Function_(mathematics)?q=(alpha)?",
+	} {
+		text := "See (" + destination + ")."
+		links := WebLinksInText(text)
+		if len(links) != 1 || links[0].Destination != destination {
+			t.Fatalf("WebLinksInText(%q) = %#v, want destination %q", text, links, destination)
+		}
+	}
+}
+
 func TestTerminalPaletteBestColorForLevel(t *testing.T) {
 	target := RGB{R: 1, G: 2, B: 3}
 	trueColor := BestColorForLevel(target, ColorTrue)
