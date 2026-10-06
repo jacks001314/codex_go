@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,27 @@ import (
 )
 
 const realtimeMultipartBoundary = "codex-realtime-call-boundary"
+
+// realtimeDialError carries the HTTP status of a rejected realtime websocket
+// handshake so callers can distinguish retryable activation failures.
+type realtimeDialError struct {
+	statusCode int
+	err        error
+}
+
+func (e *realtimeDialError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *realtimeDialError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
 
 type TransportBackendConfig struct {
 	WebsocketBaseURL  string
@@ -339,7 +361,15 @@ func (m *Manager) startRealtimeSideband(sideband *realtimeSideband) {
 			if sideband.existingCall {
 				initialization = realtimeInitializeExistingCall
 			}
-			connection, err := dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, initialization)
+			var (
+				connection *realtimeTransportSession
+				err        error
+			)
+			if initialization == realtimeInitializeExistingCall {
+				connection, err = dialExistingCallSideband(sideband.ctx, sideband)
+			} else {
+				connection, err = dialRealtimeTransport(sideband.ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, initialization)
+			}
 			if err != nil {
 				if realtimeHandshakeTerminal(err) {
 					return
@@ -440,13 +470,70 @@ func sleepSidebandReconnect(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
+// realtimeExistingCallActivationDelays is the bounded retry budget for joining a
+// client-created call whose sideband can briefly return 404 while ICE activates
+// the call (Rust #51460: 100/300/800 ms).
+var realtimeExistingCallActivationDelays = []time.Duration{
+	100 * time.Millisecond,
+	300 * time.Millisecond,
+	800 * time.Millisecond,
+}
+
+// dialExistingCallSideband joins a client-created call, retrying a 404 handshake
+// up to three times while the call activates. Any other failure and an exhausted
+// activation budget return the original error.
+func dialExistingCallSideband(ctx context.Context, sideband *realtimeSideband) (*realtimeTransportSession, error) {
+	if sideband == nil {
+		return nil, fmt.Errorf("connect realtime sideband: missing sideband")
+	}
+	var lastErr error
+	for attempt := 0; attempt <= len(realtimeExistingCallActivationDelays); attempt++ {
+		connection, err := dialRealtimeTransport(ctx, sideband.threadID, sideband.backend, sideband.config, sideband.callID, realtimeInitializeExistingCall)
+		if err == nil {
+			return connection, nil
+		}
+		lastErr = err
+		if !realtimeHandshakeNotFound(err) || attempt == len(realtimeExistingCallActivationDelays) {
+			return nil, lastErr
+		}
+		if !sleepSidebandReconnect(ctx, realtimeExistingCallActivationDelays[attempt]) {
+			return nil, lastErr
+		}
+	}
+	return nil, lastErr
+}
+
 func realtimeHandshakeTerminal(err error) bool {
 	if err == nil {
 		return false
 	}
+	if status, ok := realtimeHandshakeStatus(err); ok {
+		return status == http.StatusNotFound || status == http.StatusGone
+	}
 	text := err.Error()
 	return strings.Contains(text, "404") || strings.Contains(text, "410") ||
 		strings.Contains(text, "not found") || strings.Contains(text, "gone")
+}
+
+// realtimeHandshakeNotFound reports whether a handshake failed because the call
+// is not yet activated (HTTP 404).
+func realtimeHandshakeNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if status, ok := realtimeHandshakeStatus(err); ok {
+		return status == http.StatusNotFound
+	}
+	text := err.Error()
+	return strings.Contains(text, "404") || strings.Contains(text, "not found")
+}
+
+func realtimeHandshakeStatus(err error) (int, bool) {
+	var dialErr *realtimeDialError
+	if errors.As(err, &dialErr) && dialErr.statusCode != 0 {
+		return dialErr.statusCode, true
+	}
+	return 0, false
 }
 
 func (m *Manager) startRealtimeConnection(connection *realtimeTransportSession) {

@@ -52,9 +52,13 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 			headers.Set("openai-alpha", "quicksilver=v2")
 		}
 	}
-	conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: backend.HTTPClient, HTTPHeader: headers})
+	conn, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: backend.HTTPClient, HTTPHeader: headers})
 	if err != nil {
-		return nil, fmt.Errorf("connect realtime websocket: %w", err)
+		wrapped := fmt.Errorf("connect realtime websocket: %w", err)
+		if response != nil {
+			return nil, &realtimeDialError{statusCode: response.StatusCode, err: wrapped}
+		}
+		return nil, wrapped
 	}
 	connectionCtx, cancel := context.WithCancel(ctx)
 	connection := &realtimeTransportSession{threadID: threadID, config: *config, conn: conn, ctx: connectionCtx, cancel: cancel}

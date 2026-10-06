@@ -237,3 +237,85 @@ func TestExistingCallSidebandJoinsWithoutSessionUpdate(t *testing.T) {
 		}
 	}
 }
+
+// newExistingCallActivationServer serves a websocket that rejects the first
+// rejectCount handshakes with the given status before accepting, counting the
+// total number of handshake attempts.
+func newExistingCallActivationServer(t *testing.T, rejectCount int, status int) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		attempts++
+		current := attempts
+		mu.Unlock()
+		if current <= rejectCount {
+			http.Error(writer, http.StatusText(status), status)
+			return
+		}
+		conn, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		<-request.Context().Done()
+	}))
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return attempts
+	}
+	return server, count
+}
+
+// TestExistingCallSidebandRetriesActivationLikeRust mirrors Rust #51460: a
+// client-created call whose sideband returns 404 while ICE activates is retried
+// up to three times before the attachment succeeds.
+func TestExistingCallSidebandRetriesActivationLikeRust(t *testing.T) {
+	server, attempts := newExistingCallActivationServer(t, 3, http.StatusNotFound)
+	defer server.Close()
+
+	sideband := newRealtimeSideband("thread-activation", "rtc_activation", &TransportBackendConfig{SidebandBaseURL: server.URL}, &SessionConfig{Version: VersionV3})
+	defer sideband.cancel()
+	connection, err := dialExistingCallSideband(sideband.ctx, sideband)
+	if err != nil {
+		t.Fatalf("dial existing call sideband: %v", err)
+	}
+	defer connection.closeNow()
+	if got := attempts(); got != 4 {
+		t.Fatalf("handshake attempts = %d, want 4", got)
+	}
+}
+
+// TestExistingCallSidebandGivesUpAfterActivationBudgetLikeRust verifies the
+// bounded retry budget: four 404 responses exhaust the activation retries.
+func TestExistingCallSidebandGivesUpAfterActivationBudgetLikeRust(t *testing.T) {
+	server, attempts := newExistingCallActivationServer(t, 4, http.StatusNotFound)
+	defer server.Close()
+
+	sideband := newRealtimeSideband("thread-activation", "rtc_activation", &TransportBackendConfig{SidebandBaseURL: server.URL}, &SessionConfig{Version: VersionV3})
+	defer sideband.cancel()
+	if _, err := dialExistingCallSideband(sideband.ctx, sideband); err == nil {
+		t.Fatal("dial existing call sideband should fail after the activation budget is exhausted")
+	}
+	if got := attempts(); got != 4 {
+		t.Fatalf("handshake attempts = %d, want 4", got)
+	}
+}
+
+// TestExistingCallSidebandDoesNotRetryGoneLikeRust verifies that a 410 handshake
+// is terminal and never retried during activation.
+func TestExistingCallSidebandDoesNotRetryGoneLikeRust(t *testing.T) {
+	server, attempts := newExistingCallActivationServer(t, 1, http.StatusGone)
+	defer server.Close()
+
+	sideband := newRealtimeSideband("thread-activation", "rtc_activation", &TransportBackendConfig{SidebandBaseURL: server.URL}, &SessionConfig{Version: VersionV3})
+	defer sideband.cancel()
+	if _, err := dialExistingCallSideband(sideband.ctx, sideband); err == nil {
+		t.Fatal("dial existing call sideband should fail on a 410 handshake")
+	}
+	if got := attempts(); got != 1 {
+		t.Fatalf("handshake attempts = %d, want 1", got)
+	}
+}
