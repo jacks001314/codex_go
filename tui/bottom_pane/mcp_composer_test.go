@@ -3,6 +3,8 @@ package bottompane
 import (
 	"strings"
 	"testing"
+
+	codextui "codex_go/tui"
 )
 
 func TestElicitationFormBuildsFieldsAndSubmitsContent(t *testing.T) {
@@ -67,6 +69,33 @@ func TestElicitationFormBuildsFieldsAndSubmitsContent(t *testing.T) {
 	}
 	if lines := strings.Join(form.RenderLines(80), "\n"); !strings.Contains(lines, "Connect docs") || !strings.Contains(lines, "******") {
 		t.Fatalf("render lines = %s", lines)
+	}
+}
+
+// TestElicitationFormPromptLinksCompleteWrappedURLsLikeRust mirrors Rust #51450:
+// a web URL in the elicitation prompt renders as a terminal hyperlink whose
+// destination is the complete URL, and the prompt's explicit newlines survive.
+func TestElicitationFormPromptLinksCompleteWrappedURLsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"confirmed": map[string]any{"type": "boolean", "title": "Continue"}},
+		"required":   []any{"confirmed"},
+	}
+	form, err := NewElicitationFormRequest("docs", "request-1", "Review the release\n\nReview "+url+" before choosing.", schema, nil)
+	if err != nil {
+		t.Fatalf("NewElicitationFormRequest error = %v", err)
+	}
+	rendered := strings.Join(form.RenderLines(40), "\n")
+	if !strings.Contains(rendered, codextui.OSC8Hyperlink(url, url)) {
+		t.Fatalf("prompt did not link the complete URL:\n%q", rendered)
+	}
+	visible := codextui.StripOSC8(rendered)
+	if !strings.Contains(visible, url) {
+		t.Fatalf("wrapped prompt split the URL:\n%q", visible)
+	}
+	if !strings.Contains(visible, "Review the release\n\nReview") {
+		t.Fatalf("prompt newlines were not preserved:\n%q", visible)
 	}
 }
 

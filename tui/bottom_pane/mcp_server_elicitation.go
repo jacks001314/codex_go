@@ -334,13 +334,31 @@ func (r *ElicitationFormRequest) Cancel() ElicitationDecision {
 	return ElicitationDecision{Action: ElicitationCancel}
 }
 
+// wrapElicitationPromptLines wraps the elicitation prompt, preserving its
+// explicit newlines and keeping web URLs whole while annotating them as
+// terminal hyperlinks, so the complete destination survives wrapping
+// (Rust #51450 wrapped_prompt_lines).
+func wrapElicitationPromptLines(prompt string, width int) []string {
+	out := []string{}
+	for _, sourceLine := range strings.Split(prompt, "\n") {
+		wrapped := []string{sourceLine}
+		if width > 0 {
+			wrapped = tui.AdaptiveWrapLine(sourceLine, tui.WrapOptions{Width: width, BreakWords: true})
+		}
+		for _, line := range wrapped {
+			out = append(out, tui.AnnotateCompleteWebURLsInLine(line))
+		}
+	}
+	return out
+}
+
 func (r *ElicitationFormRequest) RenderLines(width int) []string {
 	if r == nil {
 		return nil
 	}
 	lines := []string{}
 	if r.Message != "" {
-		lines = append(lines, tui.AdaptiveWrapLine(r.Message, tui.WrapOptions{Width: width, BreakWords: true})...)
+		lines = append(lines, wrapElicitationPromptLines(r.Message, width)...)
 	}
 	for _, field := range r.Fields {
 		label := field.Title
