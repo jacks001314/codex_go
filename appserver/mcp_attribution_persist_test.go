@@ -13,7 +13,7 @@ import (
 // response-item kinds carry the checkpoint.
 func TestShouldPersistResponseItemMatchesRust(t *testing.T) {
 	persisted := []string{
-		"message", "agent_message", "reasoning", "local_shell_call", "function_call",
+		"additional_tools", "message", "agent_message", "reasoning", "local_shell_call", "function_call",
 		"tool_search_call", "function_call_output", "tool_search_output",
 		"custom_tool_call", "custom_tool_call_output", "web_search_call",
 		"image_generation_call", "configuration_update", "compaction", "context_compaction",
@@ -23,7 +23,7 @@ func TestShouldPersistResponseItemMatchesRust(t *testing.T) {
 			t.Fatalf("shouldPersistResponseItem(%q) = false, want true", kind)
 		}
 	}
-	for _, kind := range []string{"additional_tools", "compaction_trigger", "other", ""} {
+	for _, kind := range []string{"compaction_trigger", "other", ""} {
 		if shouldPersistResponseItem(session.Item{Type: kind}) {
 			t.Fatalf("shouldPersistResponseItem(%q) = true, want false", kind)
 		}

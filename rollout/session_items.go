@@ -66,6 +66,23 @@ func AppendSessionItems(recorder *Recorder, items []session.Item, now time.Time)
 				}
 				continue
 			}
+			// Additional tool definitions have no core TurnItem variant; persist
+			// them as trusted response_item lines (Rust #50435).
+			if payload, metadata, ok := additionalToolsRolloutItem(&items[i]); ok {
+				createdAt := itemTime(items[i].CreatedAt, now)
+				line := Line{
+					Type:         "response_item",
+					Timestamp:    createdAt.UTC().Format(time.RFC3339Nano),
+					Item:         payload,
+					ItemMetadata: metadata,
+					ItemID:       items[i].ID,
+					TurnID:       sessionItemTurnID(&items[i], i),
+				}
+				if err := recorder.AppendLine(line); err != nil {
+					return fmt.Errorf("append paginated response item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)
+				}
+				continue
+			}
 			raw, turnID, err := CoreTurnItemJSONFromSessionItem(&items[i])
 			if err != nil {
 				return fmt.Errorf("encode paginated session item %d (%s/%s): %w", i, items[i].Type, items[i].ID, err)

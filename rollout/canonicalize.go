@@ -251,9 +251,14 @@ func writeCanonicalPaginated(file *os.File, meta *SessionMeta, items []session.I
 		}
 		raw, _, err := CoreTurnItemJSONFromSessionItem(item)
 		if err != nil || len(raw) == 0 {
-			// Harness-authored configuration updates persist as trusted
-			// response_item lines (Rust #43110); other unsupported items drop.
-			if payload, metadata, ok := configurationUpdateRolloutItem(item); ok {
+			// Harness-authored configuration updates and additional tool
+			// definitions persist as trusted response_item lines (Rust
+			// #43110/#50435); other unsupported items drop.
+			payload, metadata, ok := configurationUpdateRolloutItem(item)
+			if !ok {
+				payload, metadata, ok = additionalToolsRolloutItem(item)
+			}
+			if ok {
 				ordinalCopy := ordinal
 				line := Line{
 					Type:         "response_item",

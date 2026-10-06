@@ -20,13 +20,13 @@ import (
 // only carriers of the MCP attribution checkpoint.
 func shouldPersistResponseItem(item session.Item) bool {
 	switch item.Type {
-	case "message", "agent_message", "reasoning", "local_shell_call", "function_call",
+	case "additional_tools", "message", "agent_message", "reasoning", "local_shell_call", "function_call",
 		"tool_search_call", "function_call_output", "tool_search_output",
 		"custom_tool_call", "custom_tool_call_output", "web_search_call",
 		"image_generation_call", "configuration_update", "compaction", "context_compaction":
 		return true
 	default:
-		// additional_tools, compaction_trigger and other kinds are not persisted.
+		// compaction_trigger and other kinds are not persisted.
 		return false
 	}
 }

@@ -115,6 +115,19 @@ func (r *Recorder) appendPaginatedItem(item Item, now time.Time) error {
 		}
 		return r.AppendLine(line)
 	}
+	// Additional tool definitions have no core TurnItem variant; persist them as
+	// trusted response_item lines (Rust #50435).
+	if payload, metadata, ok := additionalToolsRolloutItem(&sessionItem); ok {
+		line := Line{
+			Type:         "response_item",
+			Timestamp:    now.UTC().Format(time.RFC3339Nano),
+			Item:         payload,
+			ItemMetadata: metadata,
+			ItemID:       item.ID,
+			TurnID:       sessionItemExactTurnID(&sessionItem),
+		}
+		return r.AppendLine(line)
+	}
 	raw, turnID, err := CoreTurnItemJSONFromSessionItem(&sessionItem)
 	if err != nil || len(raw) == 0 {
 		return err
