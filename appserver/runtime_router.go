@@ -13722,6 +13722,17 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		modelID := firstNonEmpty(strings.TrimSpace(params.Model), stringConfigValue(cfg, "model"))
 		turnModelInfo = r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	}
+	// Rust effective_tool_mode (core/src/tools/mod.rs): the model/feature
+	// resolved mode decides the tool surface. Only CodeModeOnly matters for the
+	// MCP resource helpers (#50546), and it never falls back to direct.
+	turnToolMode := ""
+	if turnModelInfo != nil {
+		var featureSettings map[string]bool
+		if cfg != nil {
+			featureSettings = cfg.FeatureSettings()
+		}
+		turnToolMode = model.ResolveToolMode(turnModelInfo.ToolMode, featureSettings)
+	}
 	modelHasClock := false
 	if turnModelInfo != nil {
 		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
@@ -13761,11 +13772,12 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return nil, err
 		}
 	}
-	if r != nil && r.services.ToolRouter != nil && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
+	if r != nil && r.services.ToolRouter != nil && turnToolMode != model.ToolModeCodeModeOnly && turn.SupportsLegacyShellCommand(selectedEnvironmentIDs(params)) && executorSkillProviders == nil && !requestUserInputDefaultMode && !waitForEnvironmentEnabled && !enableCurrentTimeTool && !enableSleepTool && !disableUpdatePlan && !disableWaitAgent && webSearchOptions == nil && imageGenerationOptions == nil && len(goalToolExecutors) == 0 && (params == nil || len(params.DynamicTools) == 0) && len(candidates) == 0 && len(mcpTools) == 0 {
 		return r.services.ToolRouter, nil
 	}
 	options := turn.DefaultToolRegistryOptions(cwd)
 	options.CodexVersion = appServerVersion()
+	options.ToolMode = turnToolMode
 	// Rust #46010: the host-owned apps result metadata is exposed only when the
 	// session analytics client is enabled; that state gates the MCP executor's
 	// capture, and the dispatcher's recorder decides whether it is kept.

@@ -1284,6 +1284,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.CodeModeShowCellOverhead = run.CodeModeShowCellOverhead
 		options.DisableCodeModeFallback = run.DisableCodeModeFallback
+		options.ToolMode = run.ToolMode
 	}
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval

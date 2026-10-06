@@ -130,8 +130,12 @@ type ToolRegistryOptions struct {
 	CodeModeDefaultExecYieldTime time.Duration
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
-	CodeModeShowCellOverhead   bool
-	DisableCodeModeFallback    bool
+	CodeModeShowCellOverhead bool
+	DisableCodeModeFallback  bool
+	// ToolMode is the turn's resolved tool mode (Rust `effective_tool_mode`).
+	// CodeModeOnly keeps the MCP resource helpers registered even without
+	// configured servers (Rust #50546).
+	ToolMode                   string
 	EnableApplyPatch           bool
 	EnableMCP                  bool
 	EnableRequestPermissions   bool
@@ -460,16 +464,15 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if err := registerMCPTools(registry, options); err != nil {
 			return nil, err
 		}
-		// Rust registers the MCP resource tools whenever MCP servers are
-		// configured, independently of tool search (add_mcp_resource_tools in
-		// codex-rs/core/src/tools/spec_plan.rs). Gating them on tool search
-		// being disabled left them hidden behind deferred discovery, so models
-		// could not list or read MCP resources even though the servers were
-		// configured and their other tools were searchable.
-		if options.MCPService.HasServers() {
-			if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
-				return nil, err
-			}
+	}
+	// Rust add_mcp_resource_tools registers the MCP resource helpers whenever
+	// MCP servers are configured, and - since #50546 - always in CodeModeOnly so
+	// their definitions stay stable as the first server is added or the last is
+	// removed. They are independent of tool search, so models can list or read
+	// resources even when the servers' other tools are deferred.
+	if options.MCPService.HasServers() || options.ToolMode == model.ToolModeCodeModeOnly {
+		if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
+			return nil, err
 		}
 	}
 	if options.WebSearch != nil {

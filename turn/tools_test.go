@@ -146,6 +146,74 @@ func TestBuildToolRegistryAppliesSpawnCatalogDescriptionLikeRust(t *testing.T) {
 	}
 }
 
+// TestBuildToolRegistryRegistersMCPResourceHelpersInCodeModeOnlyLikeRust mirrors
+// Rust #50546 (add_mcp_resource_tools): the three MCP resource helpers are
+// registered whenever servers are configured, and always in CodeModeOnly so
+// their definitions stay stable as the first server is added or the last is
+// removed.
+func TestBuildToolRegistryRegistersMCPResourceHelpersInCodeModeOnlyLikeRust(t *testing.T) {
+	resourceNames := []tool.ToolName{
+		tool.PlainName("list_mcp_resources"),
+		tool.PlainName("list_mcp_resource_templates"),
+		tool.PlainName("read_mcp_resource"),
+	}
+	assertRegistered := func(t *testing.T, registry *tool.Registry, want bool) {
+		t.Helper()
+		for _, name := range resourceNames {
+			if _, ok := registry.Lookup(name); ok != want {
+				t.Fatalf("tool %s registered = %v, want %v", name.Key(), ok, want)
+			}
+		}
+	}
+
+	// CodeModeOnly without any configured server still exposes the helpers.
+	codeModeOnly := DefaultToolRegistryOptions(t.TempDir())
+	codeModeOnly.EnableMCP = false
+	codeModeOnly.MCPService = mcp.NewMCPService(nil)
+	codeModeOnly.ToolMode = model.ToolModeCodeModeOnly
+	registry, err := BuildToolRegistry(codeModeOnly)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(CodeModeOnly) error = %v", err)
+	}
+	assertRegistered(t, registry, true)
+
+	// A server appearing or going away keeps the definitions registered: the
+	// same CodeModeOnly gate holds with servers configured.
+	codeModeOnlyWithServer := DefaultToolRegistryOptions(t.TempDir())
+	codeModeOnlyWithServer.EnableMCP = false
+	codeModeOnlyWithServer.MCPService = mcp.NewMCPService(nil)
+	codeModeOnlyWithServer.MCPService.SetServerConfig("calendar", &mcp.ServerConfig{Enabled: true})
+	codeModeOnlyWithServer.ToolMode = model.ToolModeCodeModeOnly
+	registry, err = BuildToolRegistry(codeModeOnlyWithServer)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(CodeModeOnly, server) error = %v", err)
+	}
+	assertRegistered(t, registry, true)
+
+	// Direct mode without servers leaves the helpers off.
+	direct := DefaultToolRegistryOptions(t.TempDir())
+	direct.EnableMCP = false
+	direct.MCPService = mcp.NewMCPService(nil)
+	direct.ToolMode = model.ToolModeDirect
+	registry, err = BuildToolRegistry(direct)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(direct) error = %v", err)
+	}
+	assertRegistered(t, registry, false)
+
+	// A configured server still exposes the helpers outside CodeModeOnly.
+	directWithServer := DefaultToolRegistryOptions(t.TempDir())
+	directWithServer.EnableMCP = false
+	directWithServer.MCPService = mcp.NewMCPService(nil)
+	directWithServer.MCPService.SetServerConfig("calendar", &mcp.ServerConfig{Enabled: true})
+	directWithServer.ToolMode = model.ToolModeDirect
+	registry, err = BuildToolRegistry(directWithServer)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(direct, server) error = %v", err)
+	}
+	assertRegistered(t, registry, true)
+}
+
 func TestBuildToolRegistryHonorsToolDisableOptions(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.DisableUpdatePlan = true
