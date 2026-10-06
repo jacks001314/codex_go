@@ -91,7 +91,13 @@ jobs:
             exit 0
           fi
           tag="latest"
-          [[ "$VERSION" == *-alpha.* ]] && tag="alpha"
+          # A prerelease must never move the stable `latest` dist-tag (mirrors
+          # #51425: only publish the stable installer alias for non-prereleases).
+          if [[ "$VERSION" == *-alpha.* ]]; then
+            tag="alpha"
+          elif [[ "$VERSION" == *-* ]]; then
+            tag="prerelease"
+          fi
           echo "Publishing @jacks001314/codex-go@$VERSION with tag '$tag'"
           node npm/scripts/publish-packages.mjs --directory "dist/v$VERSION/npm" --tag "$tag"
 
