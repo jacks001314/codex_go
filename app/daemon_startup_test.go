@@ -369,3 +369,37 @@ func TestInteractiveDaemonAutoStartFallsBackUnderRestrictiveLauncherLikeRust(t *
 		t.Fatalf("unrelated failure warning = %q, want none", got)
 	}
 }
+
+// TestDaemonAutoStartSkipsWSLDrvfsHomeLikeRust mirrors Rust #50555: an
+// automatic launch whose CODEX_HOME lives on a Windows-mounted WSL filesystem
+// stays embedded and reports the exclusion, while other homes are unaffected.
+func TestDaemonAutoStartSkipsWSLDrvfsHomeLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	originalDetector := daemonWSLDrvfsDetector
+	originalReason := daemonAutoStartExclusionReason
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonWSLDrvfsDetector = originalDetector
+		daemonAutoStartExclusionReason = originalReason
+	})
+	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
+
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
+	daemonWSLDrvfsDetector = func(string) bool { return true }
+	daemonAutoStartExclusionReason = ""
+	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil || endpoint != nil {
+		t.Fatalf("WSL DrvFS auto-start = %#v, err = %v; want embedded", endpoint, err)
+	}
+	want := "Running without the shared background server: a Windows-mounted WSL CODEX_HOME (DrvFS/9p) requires embedded mode."
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != want {
+		t.Fatalf("WSL DrvFS warning = %q, want %q", got, want)
+	}
+
+	// A home on a normal filesystem is not excluded.
+	daemonWSLDrvfsDetector = func(string) bool { return false }
+	daemonAutoStartExclusionReason = ""
+	if got := daemonAutoStartExclusionWarning(&cli.RootOptions{}); got != "" {
+		t.Fatalf("non-DrVFS home warning = %q, want none", got)
+	}
+}

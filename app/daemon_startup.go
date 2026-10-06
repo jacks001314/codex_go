@@ -349,6 +349,13 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	if !daemonAutoStartFeature(root) {
 		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
 	}
+	// Rust #50555: a Windows-mounted WSL CODEX_HOME (DrvFS/9p) does not reliably
+	// support the managed daemon's Unix-style state, so automatic startup stays
+	// embedded and reports the exclusion.
+	if daemonWSLDrvfsDetector(auth.DefaultCodexHome()) {
+		daemonAutoStartExclusionReason = wslDrvfsExclusion
+		return nil, nil
+	}
 	socketPath, err := daemonAutoStartStart(root)
 	if err != nil {
 		// Rust #48491: a Windows launcher that forbids detaching a background
@@ -370,6 +377,14 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 // detachedLaunchRestrictionExclusion is the exclusion reason Rust reports when
 // the Windows launcher forbids detaching the shared background server.
 const detachedLaunchRestrictionExclusion = "this Windows launcher"
+
+// wslDrvfsExclusion is the exclusion reason Rust reports for a Windows-mounted
+// WSL CODEX_HOME (Rust daemon_startup::WSL_DRVFS_EXCLUSION, #50555).
+const wslDrvfsExclusion = "a Windows-mounted WSL CODEX_HOME (DrvFS/9p)"
+
+// daemonWSLDrvfsDetector is the DrvFS probe seam (Rust uses_wsl_drvfs); tests
+// replace it to exercise the exclusion without a real WSL mount.
+var daemonWSLDrvfsDetector = usesWSLDrvfs
 
 // daemonAutoStartExclusionReason records an exclusion automatic startup
 // discovered at runtime (Rust startup_orchestration's `daemon_exclusion`), such
