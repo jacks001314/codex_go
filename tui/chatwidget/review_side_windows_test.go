@@ -3,7 +3,32 @@ package chatwidget
 import (
 	"strings"
 	"testing"
+
+	codextui "codex_go/tui"
 )
+
+// TestWindowsSandboxPromptsLinkHelpURLsLikeRust mirrors Rust #51459: the
+// "Learn more" help URL stays a complete terminal hyperlink in both the setup
+// and fallback sandbox prompts.
+func TestWindowsSandboxPromptsLinkHelpURLsLikeRust(t *testing.T) {
+	const url = "https://developers.openai.com/codex/windows"
+	osc8Open := "\x1b]8;;" + url + "\x07"
+	views := []SelectionView{
+		NewWindowsSandboxEnablePromptView(true, true),
+		NewWindowsSandboxEnablePromptView(false, true),
+		NewWindowsSandboxFallbackPromptView(true, false),
+		NewWindowsSandboxFallbackPromptView(false, false),
+	}
+	for _, view := range views {
+		joined := strings.Join(view.HeaderLines, "\n")
+		if !strings.Contains(joined, osc8Open) {
+			t.Fatalf("prompt header missing hyperlink to %q: %q", url, joined)
+		}
+		if !strings.Contains(codextui.StripOSC8(joined), url) {
+			t.Fatalf("prompt header missing complete URL %q: %q", url, joined)
+		}
+	}
+}
 
 func TestReviewPresetViewMatchesRustOrder(t *testing.T) {
 	view := NewReviewPresetView()

@@ -1,6 +1,10 @@
 package chatwidget
 
-import "strings"
+import (
+	"strings"
+
+	codextui "codex_go/tui"
+)
 
 const windowsSandboxPromptFooter = "Press enter to confirm or esc to go back"
 
@@ -54,6 +58,7 @@ func NewWindowsSandboxEnablePromptView(allowUnelevated bool, setupChoiceRequired
 			"Learn more <https://developers.openai.com/codex/windows>",
 		)
 	}
+	header = annotateWindowsSandboxHelpLinks(header)
 	items := []SelectionItem{{
 		Name:            "Set up default sandbox (requires Administrator permissions)",
 		Action:          WindowsSandboxActionSetupElevated,
@@ -88,6 +93,7 @@ func NewWindowsSandboxFallbackPromptView(allowUnelevated bool, setupChoiceRequir
 		header = append(header, "Your organization requires the default sandbox before Codex can continue.")
 	}
 	header = append(header, "Learn more <https://developers.openai.com/codex/windows>")
+	header = annotateWindowsSandboxHelpLinks(header)
 	items := []SelectionItem{{
 		Name:            "Try setting up admin sandbox again",
 		Action:          WindowsSandboxActionSetupElevated,
@@ -122,6 +128,17 @@ func WindowsSandboxSetupInProgressStatus() WindowsSandboxSetupStatus {
 		Details:              "Hang tight, this may take a few minutes",
 		InterruptHintVisible: false,
 	}
+}
+
+// annotateWindowsSandboxHelpLinks turns the "Learn more" help URL in each
+// prompt header line into a terminal hyperlink whose complete destination
+// survives wrapping and clipping (Rust #51459: HyperlinkText).
+func annotateWindowsSandboxHelpLinks(header []string) []string {
+	out := make([]string, len(header))
+	for i, line := range header {
+		out[i] = codextui.AnnotateCompleteWebURLsInLine(line)
+	}
+	return out
 }
 
 func WindowsSandboxSetupClearedStatus() WindowsSandboxSetupStatus {
