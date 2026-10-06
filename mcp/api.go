@@ -255,6 +255,9 @@ type MCPServerStatus struct {
 	// plugin-contributed server is a selected-plugin server. It is intentionally
 	// internal: the wire status uses PluginID for plugin attribution instead.
 	source CatalogSource
+	// hostOwnedApps marks the host-owned codex_apps registration (Rust #51421);
+	// internal-only.
+	hostOwnedApps bool
 	// RuntimeStatus reports the current thread-runtime connection state; nil
 	// when unavailable or the active configuration changed (Rust #40068).
 	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
@@ -749,13 +752,14 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 				pluginID = cloneStringPtr(&registration.PluginID)
 			}
 			service.servers[name] = MCPServerStatus{
-				Name:       name,
-				PluginID:   pluginID,
-				Server:     info,
-				ServerInfo: &info,
-				State:      MCPServerReady,
-				AuthStatus: authStatus,
-				source:     SourceFromRegistration(&registration),
+				Name:          name,
+				PluginID:      pluginID,
+				Server:        info,
+				ServerInfo:    &info,
+				State:         MCPServerReady,
+				AuthStatus:    authStatus,
+				source:        SourceFromRegistration(&registration),
+				hostOwnedApps: isHostOwnedCodexAppsRegistration(name, registration),
 			}
 		}
 		service.permissionProfile = cloneMCPPermissionProfile(runtime.PermissionProfile)

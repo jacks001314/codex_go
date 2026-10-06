@@ -213,6 +213,24 @@ func (r *RuntimeRouter) mcpTurnMetadataProvider(threadID string, turnID string) 
 	}
 }
 
+// mcpTurnRootTurnIDProvider returns the issuing turn's root turn id for
+// host-owned Apps calls (Rust #51421). The MCP turn-metadata document omits the
+// root, so it is read from the raw Responses metadata document.
+func (r *RuntimeRouter) mcpTurnRootTurnIDProvider(threadID string, turnID string) func() string {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	return func() string {
+		if r == nil {
+			return ""
+		}
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		if active == nil || active.RunConfig == nil {
+			return ""
+		}
+		return turn.RootTurnIDFromResponsesMetadata(active.RunConfig.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader])
+	}
+}
+
 func (r *RuntimeRouter) attributeCommandExecutionItem(item *ThreadItem) {
 	if r == nil || item == nil || threadItemWireType(item) != "commandExecution" || r.services.Plugins == nil || r.services.Config == nil {
 		return

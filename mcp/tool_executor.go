@@ -88,7 +88,14 @@ type ToolExecutorOptions struct {
 	// MCP server (Rust build_mcp_tool_call_request_meta's
 	// x-codex-turn-metadata entry). Nil omits the entry; the callback is invoked
 	// per call so live turn state (the user-input flag) is current.
-	TurnMetadata                  func() map[string]any
+	TurnMetadata func() map[string]any
+	// TurnRootTurnID supplies the issuing turn's root turn id for host-owned
+	// Apps calls (Rust #51421). Nil or empty omits the field.
+	TurnRootTurnID func() string
+	// HostOwnedApps marks the captured host-owned codex_apps registration
+	// (Rust #51421). Only it receives the turn's root turn id; user-configured
+	// and extension-owned Apps servers omit it.
+	HostOwnedApps                 bool
 	Binding                       *Binding
 	OpenAIFileRewriter            *OpenAIFileRewriter
 	OpenAIFileInputOptionalFields map[string][]string
@@ -169,6 +176,8 @@ type ToolExecutor struct {
 	windowID                      string
 	requestMeta                   map[string]any
 	turnMetadata                  func() map[string]any
+	turnRootTurnID                func() string
+	hostOwnedApps                 bool
 	binding                       *Binding
 	openAIFileRewriter            *OpenAIFileRewriter
 	openAIFileInputOptionalFields map[string][]string
@@ -208,6 +217,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.windowID = strings.TrimSpace(options.WindowID)
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.turnMetadata = options.TurnMetadata
+	executor.turnRootTurnID = options.TurnRootTurnID
+	executor.hostOwnedApps = options.HostOwnedApps
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
 	executor.connectorName = strings.TrimSpace(options.ConnectorName)
@@ -626,6 +637,15 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 		}
 		if len(callID) > 0 && strings.TrimSpace(callID[0]) != "" {
 			appsMeta["call_id"] = strings.TrimSpace(callID[0])
+		}
+		// Rust #51421: Core lineage is trusted, so any tool-supplied root turn id
+		// is dropped; only the host-owned Apps registration receives the issuing
+		// turn's root turn id.
+		delete(appsMeta, "root_turn_id")
+		if e.hostOwnedApps && e.turnRootTurnID != nil {
+			if root := strings.TrimSpace(e.turnRootTurnID()); root != "" {
+				appsMeta["root_turn_id"] = root
+			}
 		}
 		requestMeta["_codex_apps"] = appsMeta
 	}

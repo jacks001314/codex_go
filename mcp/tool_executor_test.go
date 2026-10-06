@@ -173,6 +173,39 @@ func TestCodexAppsMCPToolRequestMetaIncludesCallIDLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51421: only the host-owned Apps registration receives the
+// issuing turn's root turn id (replacing any untrusted tool-supplied value);
+// a user-configured Apps server omits the field entirely.
+func TestCodexAppsMCPToolRequestMetaRootTurnIDLikeRust(t *testing.T) {
+	base := func() map[string]any {
+		return map[string]any{"_codex_apps": map[string]any{"connector_id": "calendar", "root_turn_id": "tool-supplied"}}
+	}
+
+	host := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:     RuntimeCodexAppsMCPServerName,
+		HostOwnedApps:  true,
+		TurnRootTurnID: func() string { return "causal-root" },
+		RequestMeta:    base(),
+	})
+	apps, ok := host.requestMetaForCall("call-1").(map[string]any)["_codex_apps"].(map[string]any)
+	if !ok || apps["root_turn_id"] != "causal-root" {
+		t.Fatalf("host-owned root_turn_id = %#v", apps["root_turn_id"])
+	}
+
+	userConfigured := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:     RuntimeCodexAppsMCPServerName,
+		TurnRootTurnID: func() string { return "causal-root" },
+		RequestMeta:    base(),
+	})
+	apps, ok = userConfigured.requestMetaForCall("call-2").(map[string]any)["_codex_apps"].(map[string]any)
+	if !ok {
+		t.Fatal("missing _codex_apps meta")
+	}
+	if _, present := apps["root_turn_id"]; present {
+		t.Fatalf("user-configured Apps must omit root_turn_id: %#v", apps)
+	}
+}
+
 func TestMCPToolExecutorAttachesConfirmationPoliciesForNodeREPL(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{
 		ServerName: "node_repl",

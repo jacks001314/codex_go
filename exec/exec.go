@@ -1351,6 +1351,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 					userInputRequested.Load(),
 				)
 			}
+			options.MCPTurnRootTurnID = func() string {
+				return turn.RootTurnIDFromResponsesMetadata(clientMetadata[codexapi.ClientCodexTurnMetadataHeader])
+			}
 		}
 	}
 	if run != nil && strings.TrimSpace(run.Model) != "" {

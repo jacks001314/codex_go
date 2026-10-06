@@ -50,6 +50,9 @@ type ToolRegistryOptions struct {
 	// reports in `_meta` (Rust build_mcp_tool_call_request_meta). Nil omits the
 	// entry; the callback runs per call so live turn state is current.
 	MCPTurnMetadata func() map[string]any
+	// MCPTurnRootTurnID supplies the issuing turn's root turn id for host-owned
+	// Apps calls (Rust #51421). Nil omits the field.
+	MCPTurnRootTurnID func() string
 	// MCPToolApproval enables Rust's custom-MCP-server tool approval policy
 	// (mcp_tool_call.rs maybe_request_mcp_tool_approval). Nil leaves the gate
 	// off, which mirrors a runtime without a client to ask.
@@ -754,6 +757,8 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			PluginID:                          info.PluginID,
 			Model:                             options.Model,
 			TurnMetadata:                      options.MCPTurnMetadata,
+			TurnRootTurnID:                    options.MCPTurnRootTurnID,
+			HostOwnedApps:                     info.HostOwnedApps,
 			AuthElicitation:                   options.MCPAuthElicitation,
 			ToolApproval:                      options.MCPToolApproval,
 			ConfirmationPolicies:              mcpActorConfirmationPolicies(options.ModelConfirmationPolicies),

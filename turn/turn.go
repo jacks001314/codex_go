@@ -567,6 +567,23 @@ func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool) m
 	return document
 }
 
+// RootTurnIDFromResponsesMetadata extracts the turn's root turn id from the
+// Responses request metadata document (Rust #51421). The MCP turn-metadata
+// document deliberately omits the root, so host-owned Apps calls read it from
+// the raw document instead. It returns "" when absent or malformed.
+func RootTurnIDFromResponsesMetadata(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var document map[string]any
+	if err := json.Unmarshal([]byte(raw), &document); err != nil {
+		return ""
+	}
+	value, _ := document[codexapi.RootTurnIDKey].(string)
+	return strings.TrimSpace(value)
+}
+
 func MergeClientMetadata(base map[string]string, overlay map[string]string) map[string]string {
 	if len(base) == 0 && len(overlay) == 0 {
 		return nil

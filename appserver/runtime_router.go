@@ -14117,6 +14117,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	// Rust build_mcp_tool_call_request_meta: MCP tool calls report the turn's
 	// metadata document in `_meta`.
 	options.MCPTurnMetadata = r.mcpTurnMetadataProvider(threadID, strings.TrimSpace(turnID))
+	options.MCPTurnRootTurnID = r.mcpTurnRootTurnIDProvider(threadID, strings.TrimSpace(turnID))
 	options.RequestUserInputAvailableModes = requestUserInputModes
 	options.EnableCurrentTimeTool = enableCurrentTimeTool
 	options.EnableSleepTool = enableSleepTool

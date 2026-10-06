@@ -504,3 +504,21 @@ func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
 		t.Fatalf("malformed metadata produced a document: %#v", document)
 	}
 }
+
+// Mirrors Rust #51421: the issuing turn's root turn id is read from the raw
+// Responses metadata document (the MCP document deliberately omits it).
+func TestRootTurnIDFromResponsesMetadataLikeRust(t *testing.T) {
+	raw := `{"turn_id":"turn-1","root_turn_id":"root-turn","model":"gpt-5.4"}`
+	if got := RootTurnIDFromResponsesMetadata(raw); got != "root-turn" {
+		t.Fatalf("root turn id = %q, want root-turn", got)
+	}
+	if got := RootTurnIDFromResponsesMetadata(`{"turn_id":"turn-1"}`); got != "" {
+		t.Fatalf("missing root turn id = %q, want empty", got)
+	}
+	if got := RootTurnIDFromResponsesMetadata("   "); got != "" {
+		t.Fatalf("blank metadata = %q, want empty", got)
+	}
+	if got := RootTurnIDFromResponsesMetadata("{"); got != "" {
+		t.Fatalf("malformed metadata = %q, want empty", got)
+	}
+}
