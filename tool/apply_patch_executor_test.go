@@ -464,7 +464,8 @@ func assertApplyPatchMissing(t *testing.T, path string) {
 	}
 }
 
-func TestApplyPatchExecutorPreserveLineEndingsOption(t *testing.T) {
+// Rust #51203: the apply_patch tool always preserves line endings.
+func TestApplyPatchExecutorPreservesLineEndingsByDefault(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "crlf.txt")
 	run := func(executor *ApplyPatchExecutor) string {
@@ -491,10 +492,7 @@ func TestApplyPatchExecutorPreserveLineEndingsOption(t *testing.T) {
 		return string(data)
 	}
 
-	if got := run(NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})); got != "after\n" {
-		t.Fatalf("default mode target = %q, want %q", got, "after\n")
-	}
-	if got := run(NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir, PreserveLineEndings: true})); got != "after\r\n" {
-		t.Fatalf("preserve mode target = %q, want %q", got, "after\r\n")
+	if got := run(NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})); got != "after\r\n" {
+		t.Fatalf("target = %q, want %q", got, "after\r\n")
 	}
 }

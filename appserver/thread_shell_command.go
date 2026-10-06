@@ -15,7 +15,6 @@ import (
 	"codex_go/config"
 	"codex_go/envutil"
 	"codex_go/execpolicy"
-	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
 	usershell "codex_go/shell"
@@ -130,7 +129,7 @@ func (r *RuntimeRouter) threadShellCommandEnv(run *threadShellCommandRun, cfg *c
 				}
 			}
 		}
-		env = envutil.InjectApplyPatchEnv(env, features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings"))
+		env = envutil.InjectApplyPatchEnv(env)
 	}
 	// Rust 97729885d4: the shared root-session identity, falling back to the
 	// thread id when the thread record has none.

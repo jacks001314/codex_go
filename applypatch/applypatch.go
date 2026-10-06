@@ -65,8 +65,7 @@ type Action struct {
 }
 
 type ApplyOptions struct {
-	CWD            string
-	FileUpdateMode FileUpdateMode
+	CWD string
 	// NoFollowSymlinks mirrors Rust #39659: reject patches whose paths
 	// traverse symlinks in any component, used when an otherwise-required
 	// sandbox is bypassed.
@@ -264,7 +263,7 @@ func (a *Action) Verify(options *ApplyOptions) error {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.preflight(cwd, applyFileUpdateMode(options))
+	return a.preflight(cwd)
 }
 
 // ApplyVerified commits an action after Verify has succeeded.
@@ -279,20 +278,13 @@ func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.applyCommitted(cwd, applyFileUpdateMode(options))
+	return a.applyCommitted(cwd)
 }
 
-func applyFileUpdateMode(options *ApplyOptions) FileUpdateMode {
-	if options != nil {
-		return options.FileUpdateMode
-	}
-	return UpdateModeNormalizeToLF
-}
-
-func (a *Action) applyCommitted(cwd string, mode FileUpdateMode) (*ApplyResult, error) {
+func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
 	result := &ApplyResult{}
 	for _, change := range a.Hunks {
-		applied, err := applyChange(cwd, &change, mode)
+		applied, err := applyChange(cwd, &change)
 		if err != nil {
 			return nil, err
 		}
@@ -302,7 +294,7 @@ func (a *Action) applyCommitted(cwd string, mode FileUpdateMode) (*ApplyResult, 
 	return result, nil
 }
 
-func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
+func (a *Action) preflight(cwd string) error {
 	if a != nil && a.NoFollowSymlinks {
 		for _, name := range a.FilePaths() {
 			resolved, err := resolveWorkspacePath(cwd, name)
@@ -415,7 +407,7 @@ func (a *Action) preflight(cwd string, mode FileUpdateMode) error {
 			shadowAction.Hunks[index].MovePath = moveShadow
 		}
 	}
-	_, err = shadowAction.applyCommitted(tempDir, mode)
+	_, err = shadowAction.applyCommitted(tempDir)
 	return err
 }
 
@@ -543,7 +535,7 @@ func (a *Action) addChange(change Change) {
 	a.Hunks = append(a.Hunks, change)
 }
 
-func applyChange(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile, error) {
+func applyChange(cwd string, change *Change) (*AppliedFile, error) {
 	if change == nil {
 		return nil, fmt.Errorf("%w: nil change", ErrInvalidPatch)
 	}
@@ -553,7 +545,7 @@ func applyChange(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile,
 	case ChangeDelete:
 		return applyDelete(cwd, change)
 	case ChangeUpdate:
-		return applyUpdate(cwd, change, mode)
+		return applyUpdate(cwd, change)
 	default:
 		return nil, fmt.Errorf("%w: unknown change kind %q", ErrInvalidPatch, change.Kind)
 	}
@@ -606,7 +598,7 @@ func applyDelete(cwd string, change *Change) (*AppliedFile, error) {
 	}, nil
 }
 
-func applyUpdate(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile, error) {
+func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
 	path, err := resolveWorkspacePath(cwd, change.Path)
 	if err != nil {
 		return nil, err
@@ -615,7 +607,7 @@ func applyUpdate(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile,
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file to update %s: %w", path, err)
 	}
-	updated, err := applyUpdateDiffToContent(string(data), change, mode)
+	updated, err := applyUpdateDiffToContent(string(data), change)
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s", err, path)
 	}
@@ -652,54 +644,17 @@ func applyUpdate(cwd string, change *Change, mode FileUpdateMode) (*AppliedFile,
 	}, nil
 }
 
-func applyUnifiedDiffToContent(content string, diff string, mode FileUpdateMode) (string, error) {
-	if mode == UpdateModePreserveLineEndings {
-		return applyUnifiedDiffToContentPreserving(content, diff)
-	}
-	// Rust NormalizeToLf splits on '\n' and rejoins with '\n' (21aa552e87),
-	// which drops the '\r' from CRLF endings during matching.
-	content = strings.ReplaceAll(content, "\r\n", "\n")
-	chunks, err := parseUpdateChunks(diff)
-	if err != nil {
-		return "", err
-	}
-	if len(chunks) == 0 {
-		return "", fmt.Errorf("%w: empty update hunk", ErrInvalidPatch)
-	}
-	current := content
-	for _, chunk := range chunks {
-		next, ok := replaceFirstChunk(current, chunk)
-		if !ok {
-			return "", fmt.Errorf("failed to find expected lines:\n%s", chunk.Old)
-		}
-		current = next
-	}
-	return current, nil
+// applyUnifiedDiffToContent always preserves the target file's existing line
+// endings (Rust #51203 removed the legacy LF-normalizing mode).
+func applyUnifiedDiffToContent(content string, diff string) (string, error) {
+	return applyUnifiedDiffToContentPreserving(content, diff)
 }
 
-func applyUpdateDiffToContent(content string, change *Change, mode FileUpdateMode) (string, error) {
+func applyUpdateDiffToContent(content string, change *Change) (string, error) {
 	if change != nil && change.MovePath != "" && strings.TrimSpace(change.UnifiedDiff) == "" {
 		return content, nil
 	}
-	return applyUnifiedDiffToContent(content, change.UnifiedDiff, mode)
-}
-
-func replaceFirstChunk(content string, chunk *updateChunk) (string, bool) {
-	if chunk == nil {
-		return content, false
-	}
-	if index := strings.Index(content, chunk.Old); index >= 0 {
-		return content[:index] + chunk.New + content[index+len(chunk.Old):], true
-	}
-	oldNoFinalNewline := strings.TrimSuffix(chunk.Old, "\n")
-	if oldNoFinalNewline == chunk.Old || oldNoFinalNewline == "" {
-		return content, false
-	}
-	index := strings.LastIndex(content, oldNoFinalNewline)
-	if index < 0 || index+len(oldNoFinalNewline) != len(content) {
-		return content, false
-	}
-	return content[:index] + chunk.New, true
+	return applyUnifiedDiffToContent(content, change.UnifiedDiff)
 }
 
 type updateChunk struct {

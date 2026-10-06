@@ -117,22 +117,16 @@ func TestScrubCommandEnvInheritsFilteredEnvironment(t *testing.T) {
 	}
 }
 
-func TestInjectApplyPatchEnvFollowsPreserveLineEndingsFeature(t *testing.T) {
+// Rust #51203: line-ending preservation is always on, so injection overrides a
+// stale inherited value rather than following a feature flag.
+func TestInjectApplyPatchEnvAlwaysEnablesPreservation(t *testing.T) {
 	env := map[string]string{
 		"KEEP":                               "value",
 		applypatch.PreserveLineEndingsEnvVar: "stale",
 	}
-	out := InjectApplyPatchEnv(env, false)
-	if got := out[applypatch.PreserveLineEndingsEnvVar]; got != "" {
-		t.Fatalf("disabled mode left stale var = %q", got)
-	}
-	if out["KEEP"] != "value" {
-		t.Fatalf("KEEP = %q, want value", out["KEEP"])
-	}
-
-	out = InjectApplyPatchEnv(out, true)
+	out := InjectApplyPatchEnv(env)
 	if got := out[applypatch.PreserveLineEndingsEnvVar]; got != "1" {
-		t.Fatalf("enabled mode var = %q, want 1", got)
+		t.Fatalf("preserve var = %q, want 1", got)
 	}
 	if out["KEEP"] != "value" {
 		t.Fatalf("KEEP = %q, want value", out["KEEP"])
@@ -142,19 +136,15 @@ func TestInjectApplyPatchEnvFollowsPreserveLineEndingsFeature(t *testing.T) {
 func TestInjectApplyPatchEnvRemovesDifferentlyCasedStaleKey(t *testing.T) {
 	env := InjectApplyPatchEnv(map[string]string{
 		"codex_apply_patch_preserve_line_endings": "0",
-	}, true)
+	})
 	if len(env) != 1 || env[applypatch.PreserveLineEndingsEnvVar] != "1" {
 		t.Fatalf("InjectApplyPatchEnv() = %#v", env)
 	}
 }
 
 func TestInjectApplyPatchEnvHandlesNilMap(t *testing.T) {
-	out := InjectApplyPatchEnv(nil, false)
-	if out == nil || len(out) != 0 {
-		t.Fatalf("InjectApplyPatchEnv(nil, false) = %#v, want empty map", out)
-	}
-	out = InjectApplyPatchEnv(nil, true)
+	out := InjectApplyPatchEnv(nil)
 	if out == nil || out[applypatch.PreserveLineEndingsEnvVar] != "1" {
-		t.Fatalf("InjectApplyPatchEnv(nil, true) = %#v", out)
+		t.Fatalf("InjectApplyPatchEnv(nil) = %#v", out)
 	}
 }

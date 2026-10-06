@@ -7,30 +7,9 @@ import (
 	"testing"
 )
 
-func TestFileUpdateModeFromEnv(t *testing.T) {
-	old := os.Getenv(PreserveLineEndingsEnvVar)
-	defer func() {
-		if old == "" {
-			_ = os.Unsetenv(PreserveLineEndingsEnvVar)
-		} else {
-			_ = os.Setenv(PreserveLineEndingsEnvVar, old)
-		}
-	}()
-	_ = os.Unsetenv(PreserveLineEndingsEnvVar)
-	if got := FileUpdateModeFromEnv(); got != UpdateModeNormalizeToLF {
-		t.Fatalf("FileUpdateModeFromEnv() = %v, want NormalizeToLF", got)
-	}
-	_ = os.Setenv(PreserveLineEndingsEnvVar, "1")
-	if got := FileUpdateModeFromEnv(); got != UpdateModePreserveLineEndings {
-		t.Fatalf("FileUpdateModeFromEnv() = %v, want PreserveLineEndings", got)
-	}
-	_ = os.Setenv(PreserveLineEndingsEnvVar, "0")
-	if got := FileUpdateModeFromEnv(); got != UpdateModeNormalizeToLF {
-		t.Fatalf("FileUpdateModeFromEnv() = %v, want NormalizeToLF for non-1 value", got)
-	}
-}
-
-func TestPreserveModeCLIUsesEnvVar(t *testing.T) {
+// Rust #51203: standalone apply_patch always preserves line endings, so a stale
+// compatibility env value must not restore the legacy normalization behavior.
+func TestCLIPreservesLineEndingsByDefault(t *testing.T) {
 	old := os.Getenv(PreserveLineEndingsEnvVar)
 	defer func() {
 		if old == "" {
@@ -45,7 +24,7 @@ func TestPreserveModeCLIUsesEnvVar(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch := "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-one\n+uno\n*** End Patch"
-	_ = os.Setenv(PreserveLineEndingsEnvVar, "1")
+	_ = os.Setenv(PreserveLineEndingsEnvVar, "0")
 	var stdout, stderr strings.Builder
 	if code := RunCLI([]string{patch}, nil, &stdout, &stderr, dir); code != 0 {
 		t.Fatalf("RunCLI() code = %d, stderr = %q", code, stderr.String())
@@ -55,7 +34,7 @@ func TestPreserveModeCLIUsesEnvVar(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != "uno\r\n" {
-		t.Fatalf("preserve mode target = %q, want %q", data, "uno\r\n")
+		t.Fatalf("target = %q, want %q", data, "uno\r\n")
 	}
 }
 
@@ -101,7 +80,7 @@ func TestApplyPreserveRejectsOverlappingEndOfFileChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	patch := "*** Begin Patch\n*** Update File: overlapping.txt\n@@\n-one\n+first\n@@\n-one\n+second\n*** End of File\n*** End Patch"
-	_, err := Apply(patch, &ApplyOptions{CWD: dir, FileUpdateMode: UpdateModePreserveLineEndings})
+	_, err := Apply(patch, &ApplyOptions{CWD: dir})
 	if err == nil {
 		t.Fatal("Apply() error = nil, want overlapping chunk failure")
 	}
@@ -117,7 +96,8 @@ func TestApplyPreserveRejectsOverlappingEndOfFileChunks(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultModeNormalizesLineEndings(t *testing.T) {
+// Rust #51203: updating a CRLF file preserves its endings without an opt-in.
+func TestApplyPreservesLineEndingsByDefault(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "crlf.txt")
 	if err := os.WriteFile(target, []byte("one\r\n"), 0o600); err != nil {
@@ -131,8 +111,8 @@ func TestApplyDefaultModeNormalizesLineEndings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "uno\n" {
-		t.Fatalf("normalize mode target = %q, want %q", data, "uno\n")
+	if string(data) != "uno\r\n" {
+		t.Fatalf("default mode target = %q, want %q", data, "uno\r\n")
 	}
 }
 
@@ -143,7 +123,7 @@ func assertPreservingUpdate(t *testing.T, name string, original string, patch st
 	if err := os.WriteFile(target, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := Apply(patch, &ApplyOptions{CWD: dir, FileUpdateMode: UpdateModePreserveLineEndings})
+	result, err := Apply(patch, &ApplyOptions{CWD: dir})
 	if err != nil {
 		t.Fatalf("Apply() error = %v", err)
 	}
@@ -170,7 +150,7 @@ func TestPreserveModeVerificationMatchesApplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	options := &ApplyOptions{CWD: dir, FileUpdateMode: UpdateModePreserveLineEndings}
+	options := &ApplyOptions{CWD: dir}
 	if err := action.Verify(options); err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}

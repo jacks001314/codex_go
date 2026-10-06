@@ -2,38 +2,17 @@ package applypatch
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"unicode"
 )
 
-// PreserveLineEndingsEnvVar carries the selected apply_patch update mode
-// through arg0-dispatched standalone apply_patch processes. Mirrors Rust
-// CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR (21aa552e87).
+// PreserveLineEndingsEnvVar is the compatibility opt-in for older standalone
+// apply_patch executables. Current executables always preserve line endings;
+// the variable is still exported so child environments can set it for older
+// patch binaries. Mirrors Rust
+// CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.
 const PreserveLineEndingsEnvVar = "CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS"
-
-// FileUpdateMode controls how updates reconstruct the target file after
-// matching a patch. Mirrors Rust ApplyPatchFileUpdateMode (21aa552e87).
-type FileUpdateMode int
-
-const (
-	// UpdateModeNormalizeToLF preserves the historical behavior of
-	// normalizing updated files to LF.
-	UpdateModeNormalizeToLF FileUpdateMode = iota
-	// UpdateModePreserveLineEndings preserves existing line endings and uses
-	// the file's preferred ending for new lines.
-	UpdateModePreserveLineEndings
-)
-
-// FileUpdateModeFromEnv reads the update mode selected for an
-// arg0-dispatched apply_patch process.
-func FileUpdateModeFromEnv() FileUpdateMode {
-	if os.Getenv(PreserveLineEndingsEnvVar) == "1" {
-		return UpdateModePreserveLineEndings
-	}
-	return UpdateModeNormalizeToLF
-}
 
 type lineEnding int
 
@@ -163,12 +142,12 @@ func (f *sourceFile) intoContents() string {
 	return builder.String()
 }
 
-// seekSequence mirrors Rust seek_sequence (21aa552e87): find pattern lines
-// within lines beginning at or after start, trying exact match, then ignoring
-// trailing whitespace, then leading and trailing whitespace, then normalized
-// Unicode punctuation. When eof is true the search anchors at the end of the
-// file first (preserve mode keeps the start bound).
-func seekSequence(lines []string, pattern []string, start int, eof bool, preserve bool) int {
+// seekSequence mirrors Rust seek_sequence: find pattern lines within lines
+// beginning at or after start, trying exact match, then ignoring trailing
+// whitespace, then leading and trailing whitespace, then normalized Unicode
+// punctuation. When eof is true the search anchors at the end of the file while
+// keeping the start bound.
+func seekSequence(lines []string, pattern []string, start int, eof bool) int {
 	if len(pattern) == 0 {
 		return start
 	}
@@ -177,12 +156,7 @@ func seekSequence(lines []string, pattern []string, start int, eof bool, preserv
 	}
 	searchStart := start
 	if eof && len(lines) >= len(pattern) {
-		eofStart := len(lines) - len(pattern)
-		if preserve {
-			if eofStart > start {
-				searchStart = eofStart
-			}
-		} else {
+		if eofStart := len(lines) - len(pattern); eofStart > start {
 			searchStart = eofStart
 		}
 	}
@@ -296,7 +270,7 @@ func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk
 			continue
 		}
 		if strings.TrimSpace(chunk.changeContext) != "" {
-			idx := seekSequence(originalLines, []string{chunk.changeContext}, lineIndex, false, true)
+			idx := seekSequence(originalLines, []string{chunk.changeContext}, lineIndex, false)
 			if idx < 0 {
 				return nil, fmt.Errorf("failed to find context '%s'", chunk.changeContext)
 			}
@@ -313,7 +287,7 @@ func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk
 
 		pattern := chunk.oldLines
 		newSlice := chunk.newLines
-		found := seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile, true)
+		found := seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile)
 		if found < 0 && len(pattern) > 0 && pattern[len(pattern)-1] == "" {
 			// Retry without the trailing empty line that represents the final
 			// newline in the file.
@@ -321,7 +295,7 @@ func computeReplacementsPreserving(originalLines []string, chunks []*updateChunk
 			if len(newSlice) > 0 && newSlice[len(newSlice)-1] == "" {
 				newSlice = newSlice[:len(newSlice)-1]
 			}
-			found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile, true)
+			found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile)
 		}
 		if found < 0 {
 			return nil, fmt.Errorf("failed to find expected lines:\n%s", strings.Join(chunk.oldLines, "\n"))

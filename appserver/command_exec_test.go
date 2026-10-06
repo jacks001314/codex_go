@@ -1270,23 +1270,14 @@ func TestCommandExecApplyPatchPreserveLineEndingsEnvInjection(t *testing.T) {
 		},
 	}
 
-	// Enabled: the active feature configuration overrides the client value.
-	response, err := service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{ApplyPatchPreserveLineEndings: true})
+	// Rust #51203: line-ending preservation is always on, so the runtime value
+	// overrides the stale client-provided value.
+	response, err := service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{})
 	if err != nil {
-		t.Fatalf("ExecuteWithOptions(enabled) error = %v", err)
+		t.Fatalf("ExecuteWithOptions() error = %v", err)
 	}
 	if response.ExitCode != 0 || strings.TrimSpace(response.Stdout) != "1" {
-		t.Fatalf("enabled response = %+v, want stdout %q", response, "1")
-	}
-
-	// Disabled: stale client-provided values must be removed.
-	response, err = service.ExecuteWithOptions(context.Background(), params, cwd, nil, &CommandExecOptions{})
-	if err != nil {
-		t.Fatalf("ExecuteWithOptions(disabled) error = %v", err)
-	}
-	disabledOut := strings.TrimSpace(response.Stdout)
-	if response.ExitCode != 0 || disabledOut == "1" || disabledOut == "0" {
-		t.Fatalf("disabled response = %+v, want the stale client value removed", response)
+		t.Fatalf("response = %+v, want stdout %q", response, "1")
 	}
 }
 

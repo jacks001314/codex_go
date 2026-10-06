@@ -93,9 +93,9 @@ var Registry = []Spec{
 	{Key: "chronicle", Stage: StageUnderDevelopment},
 	{Key: "apply_patch_freeform", Stage: StageRemoved},
 	{Key: "apply_patch_streaming_events", Stage: StageUnderDevelopment},
-	// Rust (codex-rs/features/src/lib.rs c9c6c0daa9): preserve CRLF, CR, and
-	// mixed line endings when apply_patch updates files.
-	{Key: "apply_patch_preserve_line_endings", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #51203): removed compatibility flag.
+	// Patches always preserve existing line endings.
+	{Key: "apply_patch_preserve_line_endings", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "exec_permission_approvals", Stage: StageUnderDevelopment},
 	{Key: "hooks", Stage: StageStable, DefaultEnabled: true},
 	{Key: "request_permissions_tool", Stage: StageUnderDevelopment},

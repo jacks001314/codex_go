@@ -75,12 +75,12 @@ func ScrubSlice(values []string) []string {
 	return out
 }
 
-// InjectApplyPatchEnv carries the configured apply-patch line-ending rollout
-// state into child-process environments (Rust exec_env::inject_apply_patch_env,
-// c9c6c0daa9). It removes any inherited or client-provided value
-// (case-insensitively) and only sets the runtime variable when preservation is
-// enabled, keeping the active feature configuration authoritative.
-func InjectApplyPatchEnv(env map[string]string, preserveLineEndings bool) map[string]string {
+// InjectApplyPatchEnv enables line-ending preservation for older standalone
+// patch executables, including those provided by remote executors (Rust
+// exec_env::inject_apply_patch_env, #51203). It removes any inherited or
+// client-provided value (case-insensitively) and always sets the runtime
+// variable so a stale value cannot restore the legacy normalization behavior.
+func InjectApplyPatchEnv(env map[string]string) map[string]string {
 	if env == nil {
 		env = make(map[string]string)
 	}
@@ -89,9 +89,7 @@ func InjectApplyPatchEnv(env map[string]string, preserveLineEndings bool) map[st
 			delete(env, key)
 		}
 	}
-	if preserveLineEndings {
-		env[applypatch.PreserveLineEndingsEnvVar] = "1"
-	}
+	env[applypatch.PreserveLineEndingsEnvVar] = "1"
 	return env
 }
 

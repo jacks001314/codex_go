@@ -151,9 +151,6 @@ type CommandExecOptions struct {
 	// permissionProfile override the allow-list disallows is rejected (Rust
 	// command_exec_processor).
 	PermissionRequirements *config.ConfigRequirements
-	// ApplyPatchPreserveLineEndings carries the apply_patch line-ending
-	// rollout state (Rust c9c6c0daa9) into command/exec child processes.
-	ApplyPatchPreserveLineEndings bool
 }
 
 var runCommandExecSandboxed = func(ctx context.Context, req *tool.ShellRequest) (*tool.ShellResult, error) {
@@ -194,10 +191,6 @@ type commandExecSandboxResolution struct {
 type commandExecSessionKey struct {
 	connectionID string
 	processID    string
-}
-
-func applyPatchPreserveLineEndings(options *CommandExecOptions) bool {
-	return options != nil && options.ApplyPatchPreserveLineEndings
 }
 
 func NewCommandExecService() *CommandExecService {
@@ -255,9 +248,9 @@ func (s *CommandExecService) ExecuteWithOptions(ctx context.Context, params *Com
 	// Rust c4513cb982: model-reachable exec children must not inherit Codex
 	// launch context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubMap(envMap)
-	// Rust c9c6c0daa9: carry the apply_patch line-ending rollout state into
+	// Rust #51203: always enable apply_patch line-ending preservation for
 	// command/exec children, authoritative over client-provided values.
-	envMap = envutil.InjectApplyPatchEnv(envMap, applyPatchPreserveLineEndings(options))
+	envMap = envutil.InjectApplyPatchEnv(envMap)
 	cmd.Env = commandExecEnvList(envMap)
 
 	outputCap := s.outputBytesCap(params)
@@ -356,7 +349,7 @@ func (s *CommandExecService) executeSandboxedBuffered(ctx context.Context, param
 	}
 	envMap := commandExecEnvMap(os.Environ(), params.Env)
 	commandExecInjectNetworkProxyEnv(envMap, resolution)
-	envMap = envutil.InjectApplyPatchEnv(envMap, applyPatchPreserveLineEndings(options))
+	envMap = envutil.InjectApplyPatchEnv(envMap)
 	result, err := runCommandExecSandboxed(ctx, &tool.ShellRequest{
 		Command:               append([]string(nil), params.Command...),
 		CWD:                   commandExecCWD(params, defaultCWD),

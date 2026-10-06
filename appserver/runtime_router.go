@@ -12122,11 +12122,6 @@ func (r *RuntimeRouter) handleProcessSpawn(request *Request) (*ProcessSpawnRespo
 		return nil, err
 	}
 	processOptions := &ProcessSpawnOptions{ConnectionID: request.normalizedConnectionID()}
-	if r != nil && r.services.Config != nil {
-		// Rust c9c6c0daa9: the active feature configuration is authoritative over
-		// client-provided environment values.
-		processOptions.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
-	}
 	return r.requireProcesses().SpawnWithOptions(nil, &params, r.notify, processOptions)
 }
 
@@ -12154,18 +12149,6 @@ func (r *RuntimeRouter) handleProcessResizePty(request *Request) (*ProcessResize
 	return r.requireProcesses().ResizeWithConnection(request.normalizedConnectionID(), &params)
 }
 
-func (r *RuntimeRouter) applyPatchPreserveLineEndingsFromConfig() bool {
-	if r == nil || r.services.Config == nil {
-		return false
-	}
-	read, err := r.services.Config.Read(&config.ConfigReadParams{})
-	if err != nil || read == nil {
-		return false
-	}
-	cfg := &config.Config{Values: read.Config}
-	return features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings")
-}
-
 func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecResponse, error) {
 	var params CommandExecParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -12180,9 +12163,6 @@ func (r *RuntimeRouter) handleCommandExec(request *Request) (*CommandExecRespons
 		if requirements := r.services.Config.Requirements(); requirements != nil {
 			options.PermissionRequirements = requirements.Requirements
 		}
-		// Rust c9c6c0daa9: the active feature configuration is authoritative over
-		// client-provided environment values.
-		options.ApplyPatchPreserveLineEndings = r.applyPatchPreserveLineEndingsFromConfig()
 		managedDenyRead, denyReadErr := r.commandExecManagedDenyReadEntries()
 		if denyReadErr != nil {
 			// Rust #44669: invalid managed denials fail the request instead of
@@ -13860,17 +13840,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if options.ApplyPatch != nil && permissionProfile != nil && permissionProfile.Profile != nil {
 		options.ApplyPatch.PermissionProfile = permissionProfile.Profile
 		options.ApplyPatch.SandboxPolicy = nil
-	}
-	if cfg != nil {
-		// Rust c9c6c0daa9: apply_patch_preserve_line_endings controls the
-		// in-process tool mode and the rollout env var for child processes.
-		preserveLineEndings := features.Enabled(cfg.FeatureSettings(), "apply_patch_preserve_line_endings")
-		if options.ApplyPatch != nil {
-			options.ApplyPatch.PreserveLineEndings = preserveLineEndings
-		}
-		if options.Shell != nil {
-			options.Shell.PreserveLineEndings = preserveLineEndings
-		}
 	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	if options.Shell != nil {

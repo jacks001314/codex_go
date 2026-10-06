@@ -68,10 +68,6 @@ type ShellExecutorOptions struct {
 	CodexVersion            string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
 	ManagedNetworkResolver  ManagedNetworkResolver
-	// PreserveLineEndings mirrors Rust Feature::ApplyPatchPreserveLineEndings
-	// (c9c6c0daa9): carry the rollout state into shell child processes so
-	// arg0-dispatched apply_patch preserves CRLF/CR line endings.
-	PreserveLineEndings bool
 	// PluginMetricsResolver resolves a trusted plugin analytics operation for
 	// one shell command (Rust #38252).
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
@@ -116,7 +112,6 @@ type ShellExecutor struct {
 	codexVersion             string
 	unifiedExecEnvironments  []UnifiedExecEnvironment
 	managedNetworkResolver   ManagedNetworkResolver
-	preserveLineEndings      bool
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) string
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
@@ -188,7 +183,6 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.codexVersion = strings.TrimSpace(options.CodexVersion)
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
-	executor.preserveLineEndings = options.PreserveLineEndings
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.snapshotProvider = options.SnapshotProvider
 	executor.pluginMeasurementTracker = options.PluginMeasurementTracker
@@ -614,9 +608,9 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if invocationPermissionPreapproved(invocation) {
 		validation.PermissionsPreapproved = true
 	}
-	// Rust c9c6c0daa9: the active feature configuration is authoritative over
-	// inherited, shell snapshot, and client-provided environment values.
-	validation.Env = envutil.InjectApplyPatchEnv(validation.Env, e.preserveLineEndings)
+	// Rust #51203: always enable apply_patch line-ending preservation,
+	// authoritative over inherited, shell snapshot, and client-provided values.
+	validation.Env = envutil.InjectApplyPatchEnv(validation.Env)
 	// Rust 97729885d4: expose the shared root-session identity to shell commands.
 	validation.Env = injectSessionIDEnv(validation.Env, e.sessionID)
 	// Rust #42395: expose the running harness version to shell commands.
