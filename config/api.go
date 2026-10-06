@@ -745,6 +745,7 @@ func simpleModelNamespace(namespace string) bool {
 }
 
 type BrowserUseRequirements struct {
+	Extension                     *BrowserUseExtensionRequirements  `json:"extension,omitempty"`
 	AllowWebmcp                   *bool                             `json:"allowWebmcp"`
 	AllowHistoryAccess            *bool                             `json:"allowHistoryAccess,omitempty"`
 	DisableAutoReview             *bool                             `json:"disableAutoReview,omitempty"`
@@ -753,8 +754,22 @@ type BrowserUseRequirements struct {
 	Origins                       map[string]BrowserUseOriginPolicy `json:"origins,omitempty"`
 }
 
+// BrowserUseExtensionRequirements mirrors Rust's
+// BrowserUseExtensionRequirements (#51194): the managed request headers the
+// browser extension should send.
+type BrowserUseExtensionRequirements struct {
+	RequestHeaders *[]RequestHeader `json:"requestHeaders"`
+}
+
+// RequestHeader mirrors Rust's RequestHeader (#51194).
+type RequestHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
+		Extension                     *BrowserUseExtensionRequirements  `json:"extension"`
 		AllowWebmcp                   *bool                             `json:"allowWebmcp"`
 		AllowHistoryAccess            *bool                             `json:"allowHistoryAccess"`
 		DisableAutoReview             *bool                             `json:"disableAutoReview"`
@@ -762,6 +777,7 @@ func (r *BrowserUseRequirements) MarshalJSON() ([]byte, error) {
 		DefaultOriginPolicy           *BrowserUseOriginPolicy           `json:"defaultOriginPolicy"`
 		Origins                       map[string]BrowserUseOriginPolicy `json:"origins"`
 	}{
+		Extension:                     cloneBrowserUseExtensionRequirements(r.Extension),
 		AllowWebmcp:                   cloneBoolPtr(r.AllowWebmcp),
 		AllowHistoryAccess:            cloneBoolPtr(r.AllowHistoryAccess),
 		DisableAutoReview:             cloneBoolPtr(r.DisableAutoReview),
@@ -3866,6 +3882,7 @@ func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
 		return nil
 	}
 	return &BrowserUseRequirements{
+		Extension:                     cloneBrowserUseExtensionRequirements(value.Extension),
 		AllowWebmcp:                   cloneBoolPtr(value.AllowWebmcp),
 		AllowHistoryAccess:            cloneBoolPtr(value.AllowHistoryAccess),
 		DisableAutoReview:             cloneBoolPtr(value.DisableAutoReview),
@@ -3873,6 +3890,21 @@ func cloneBrowserUse(value *BrowserUseRequirements) *BrowserUseRequirements {
 		DefaultOriginPolicy:           cloneBrowserUseOriginPolicy(value.DefaultOriginPolicy),
 		Origins:                       cloneBrowserUseOriginPolicies(value.Origins),
 	}
+}
+
+func cloneBrowserUseExtensionRequirements(value *BrowserUseExtensionRequirements) *BrowserUseExtensionRequirements {
+	if value == nil {
+		return nil
+	}
+	return &BrowserUseExtensionRequirements{RequestHeaders: cloneRequestHeaders(value.RequestHeaders)}
+}
+
+func cloneRequestHeaders(value *[]RequestHeader) *[]RequestHeader {
+	if value == nil {
+		return nil
+	}
+	out := append([]RequestHeader(nil), (*value)...)
+	return &out
 }
 
 func cloneAllowDenyRequirementPtr(value *AllowDenyRequirement) *AllowDenyRequirement {

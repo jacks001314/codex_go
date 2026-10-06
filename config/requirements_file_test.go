@@ -353,6 +353,62 @@ func TestApplicationNetworkRequirementsParseAndValidate(t *testing.T) {
 	}
 }
 
+// TestBrowserUseExtensionRequestHeadersRequirementLikeRust mirrors Rust #51194:
+// `[browser_use.extension] request_headers` is parsed as name/value pairs with
+// template values preserved, malformed entries rejected, and an extension table
+// without headers treated as empty.
+func TestBrowserUseExtensionRequestHeadersRequirementLikeRust(t *testing.T) {
+	withHeader, err := ParseRequirementsTOML([]byte("[browser_use.extension]\nrequest_headers = [{ name = \"x-browser-agent\", value = \"ChatGPT/{{session_id}}\" }]\n"))
+	if err != nil {
+		t.Fatalf("ParseRequirementsTOML error = %v", err)
+	}
+	if withHeader == nil || withHeader.BrowserUse == nil || withHeader.BrowserUse.Extension == nil || withHeader.BrowserUse.Extension.RequestHeaders == nil {
+		t.Fatalf("extension headers not parsed: %#v", withHeader)
+	}
+	headers := *withHeader.BrowserUse.Extension.RequestHeaders
+	if len(headers) != 1 || headers[0].Name != "x-browser-agent" || headers[0].Value != "ChatGPT/{{session_id}}" {
+		t.Fatalf("headers = %#v", headers)
+	}
+
+	emptyList, err := ParseRequirementsTOML([]byte("[browser_use.extension]\nrequest_headers = []\n"))
+	if err != nil {
+		t.Fatalf("empty-list parse error = %v", err)
+	}
+	if emptyList == nil || emptyList.BrowserUse == nil || emptyList.BrowserUse.Extension == nil ||
+		emptyList.BrowserUse.Extension.RequestHeaders == nil || len(*emptyList.BrowserUse.Extension.RequestHeaders) != 0 {
+		t.Fatalf("explicit empty header list should be a set value: %#v", emptyList)
+	}
+
+	// An extension table without headers yields no requirements.
+	noHeaders, err := ParseRequirementsTOML([]byte("[browser_use.extension]\n"))
+	if err != nil {
+		t.Fatalf("extension-only parse error = %v", err)
+	}
+	if noHeaders != nil {
+		t.Fatalf("extension without headers should be empty, got %#v", noHeaders)
+	}
+
+	// Request headers remain scoped to the extension table.
+	otherTable, err := ParseRequirementsTOML([]byte("[browser_use.iab]\nrequest_headers = [{ name = \"x-iab\", value = \"future\" }]\n"))
+	if err != nil {
+		t.Fatalf("iab parse error = %v", err)
+	}
+	if otherTable != nil {
+		t.Fatalf("non-extension request_headers should be ignored, got %#v", otherTable)
+	}
+
+	for _, body := range []string{
+		"[browser_use.extension]\nrequest_headers = true\n",
+		"[browser_use.extension]\nrequest_headers = [{ name = \"x-test\" }]\n",
+		"[browser_use.extension]\nrequest_headers = [{ name = \"x-test\", value = 1 }]\n",
+		"[browser_use.extension]\nrequest_headers = [{ name = \"x-test\", value = \"ok\", typo = true }]\n",
+	} {
+		if _, err := ParseRequirementsTOML([]byte(body)); err == nil {
+			t.Fatalf("expected malformed entry to be rejected: %q", body)
+		}
+	}
+}
+
 func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
 	requirements, err := ParseRequirementsTOML([]byte("[browser_use]\nallow_webmcp = false\n"))
 	if err != nil {
@@ -373,7 +429,7 @@ func TestBrowserUseAllowWebmcpRequirement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal browser_use requirements: %v", err)
 	}
-	if !strings.Contains(string(encoded), `"browserUse":{"allowWebmcp":null`) {
+	if !strings.Contains(string(encoded), `"browserUse":{"extension":null,"allowWebmcp":null`) {
 		t.Fatalf("allowWebmcp should serialize as null: %s", encoded)
 	}
 }

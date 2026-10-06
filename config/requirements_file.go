@@ -104,8 +104,15 @@ func validatePermissionProfileRequirements(requirements *ConfigRequirements) err
 	return nil
 }
 
-func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirements {
+func browserUseRequirementsFromMap(values map[string]any) (*BrowserUseRequirements, error) {
 	var out BrowserUseRequirements
+	if nested, ok := mapAnyKey(values, "extension"); ok {
+		extension, err := browserUseExtensionRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.Extension = extension
+	}
 	if value, ok := boolAnyKey(values, "allow_webmcp", "allowWebmcp"); ok {
 		out.AllowWebmcp = &value
 	}
@@ -124,7 +131,73 @@ func browserUseRequirementsFromMap(values map[string]any) *BrowserUseRequirement
 	if nested, ok := mapAnyKey(values, "origins"); ok {
 		out.Origins = browserUseOriginPoliciesFromMap(nested)
 	}
-	return &out
+	// Mirrors Rust BrowserUseRequirementsToml::is_empty: a browser_use table
+	// without any set field (including an extension table with no headers) is
+	// treated as absent.
+	if browserUseRequirementsIsEmpty(&out) {
+		return nil, nil
+	}
+	return &out, nil
+}
+
+// browserUseExtensionRequirementsFromMap parses
+// `[browser_use.extension]` (Rust #51194). Malformed entries are rejected like
+// Rust's `deny_unknown_fields` + required `name`/`value`.
+func browserUseExtensionRequirementsFromMap(values map[string]any) (*BrowserUseExtensionRequirements, error) {
+	var out BrowserUseExtensionRequirements
+	raw, ok := anyKey(values, "request_headers", "requestHeaders")
+	if !ok {
+		return &out, nil
+	}
+	headers, err := requestHeadersFromAny(raw)
+	if err != nil {
+		return nil, err
+	}
+	out.RequestHeaders = &headers
+	return &out, nil
+}
+
+func requestHeadersFromAny(value any) ([]RequestHeader, error) {
+	items, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("browser_use.extension.request_headers must be an array")
+	}
+	headers := make([]RequestHeader, 0, len(items))
+	for i := range items {
+		entry, ok := items[i].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("browser_use.extension.request_headers[%d] must be a table", i)
+		}
+		for key := range entry {
+			if key != "name" && key != "value" {
+				return nil, fmt.Errorf("browser_use.extension.request_headers[%d] has unknown field `%s`", i, key)
+			}
+		}
+		name, nameOK := entry["name"].(string)
+		headerValue, valueOK := entry["value"].(string)
+		if !nameOK {
+			return nil, fmt.Errorf("browser_use.extension.request_headers[%d] requires a string `name`", i)
+		}
+		if !valueOK {
+			return nil, fmt.Errorf("browser_use.extension.request_headers[%d] requires a string `value`", i)
+		}
+		headers = append(headers, RequestHeader{Name: name, Value: headerValue})
+	}
+	return headers, nil
+}
+
+func browserUseRequirementsIsEmpty(r *BrowserUseRequirements) bool {
+	if r == nil {
+		return true
+	}
+	extensionEmpty := r.Extension == nil || r.Extension.RequestHeaders == nil
+	return extensionEmpty &&
+		r.AllowWebmcp == nil &&
+		r.AllowHistoryAccess == nil &&
+		r.DisableAutoReview == nil &&
+		r.AllowGlobalPersistentApproval == nil &&
+		r.DefaultOriginPolicy == nil &&
+		len(r.Origins) == 0
 }
 
 func browserUseOriginPoliciesFromMap(values map[string]any) map[string]BrowserUseOriginPolicy {
@@ -354,7 +427,11 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		out.ModelProviders = cloneMap(nested)
 	}
 	if nested, ok := mapAnyKey(values, "browser_use", "browserUse"); ok {
-		out.BrowserUse = browserUseRequirementsFromMap(nested)
+		parsed, err := browserUseRequirementsFromMap(nested)
+		if err != nil {
+			return nil, err
+		}
+		out.BrowserUse = parsed
 	}
 	if nested, ok := mapAnyKey(values, "in_app_browser", "inAppBrowser"); ok {
 		out.InAppBrowser = inAppBrowserRequirementsFromMap(nested)
