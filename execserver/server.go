@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -45,6 +46,7 @@ const (
 	MethodFSReadFile              = "fs/readFile"
 	MethodFSOpen                  = "fs/open"
 	MethodFSReadBlock             = "fs/readBlock"
+	MethodFSWriteBlock            = "fs/writeBlock"
 	MethodFSClose                 = "fs/close"
 	MethodFSWriteFile             = "fs/writeFile"
 	MethodFSCreateDirectory       = "fs/createDirectory"
@@ -87,7 +89,14 @@ const (
 	maxOpenFileReads              = 128
 	maxFileReadHandleIDBytes      = 32
 	fileReadChunkSize             = 1024 * 1024
+	fileWriteChunkSize            = 1024 * 1024
 	maxReadFileBytes              = 512 * 1024 * 1024
+)
+
+// fs/open modes (Rust #50177). Read is the default for legacy callers.
+const (
+	fsOpenModeRead    = "read"
+	fsOpenModeReplace = "replace"
 )
 
 var execServerExitedProcessRetention = 30 * time.Second
@@ -360,6 +369,9 @@ type EnvironmentCapabilities struct {
 	// Rust #38356: whether this executor can stream files while enforcing
 	// sandboxed filesystem reads.
 	SandboxedFileStreaming bool `json:"sandboxedFileStreaming"`
+	// Rust #50177: whether `fs/open` supports replacement mode and
+	// `fs/writeBlock` is supported.
+	FileWriteStreaming bool `json:"fileWriteStreaming"`
 }
 
 type EnvironmentStatus struct {
@@ -504,6 +516,9 @@ type FSOpenParams struct {
 	HandleID string                    `json:"handleId"`
 	Path     string                    `json:"path"`
 	Sandbox  *FileSystemSandboxContext `json:"sandbox,omitempty"`
+	// Mode selects read (default) or `replace` (create/truncate for positional
+	// writes) opens (Rust #50177).
+	Mode string `json:"mode,omitempty"`
 	// FollowSymlinks controls whether traversal follows links in path
 	// components (Rust #39659). Defaults to true; unsandboxed callers can
 	// disable it to reject links.
@@ -524,6 +539,19 @@ type FSReadBlockResponse struct {
 	Chunk string `json:"chunk"`
 	EOF   bool   `json:"eof"`
 }
+
+// FSWriteBlockParams writes a nonempty block of at most `fileWriteChunkSize`
+// decoded bytes at `offset` (Rust #50177). Chunk is base64-encoded like the
+// read response.
+type FSWriteBlockParams struct {
+	HandleID string `json:"handleId"`
+	Offset   uint64 `json:"offset"`
+	Chunk    string `json:"chunk"`
+}
+
+// FSWriteBlockResponse confirms that every byte in the requested block was
+// written.
+type FSWriteBlockResponse struct{}
 
 type FSCloseParams struct {
 	HandleID string `json:"handleId"`
@@ -1332,6 +1360,13 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		}
 		result, err := s.serverForConnection(ctx).readBlock(&params)
 		return result, mapFSRequestError(err)
+	case MethodFSWriteBlock:
+		var params FSWriteBlockParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		result, err := s.serverForConnection(ctx).writeBlock(&params)
+		return result, mapFSRequestError(err)
 	case MethodFSClose:
 		var params FSCloseParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1445,7 +1480,7 @@ func execServerMethodFamily(method string) string {
 		return "exec"
 	case MethodHTTPRequest:
 		return "http"
-	case MethodFSReadFile, MethodFSOpen, MethodFSReadBlock, MethodFSClose, MethodFSWriteFile, MethodFSCreateDirectory,
+	case MethodFSReadFile, MethodFSOpen, MethodFSReadBlock, MethodFSWriteBlock, MethodFSClose, MethodFSWriteFile, MethodFSCreateDirectory,
 		MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk, MethodFSRemove, MethodFSCopy:
 		return "filesystem"
 	default:
@@ -2233,9 +2268,21 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	if err := validateFileReadHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
+	// Rust #50177: `replace` creates or truncates the file for positional
+	// writes; `read` (the default) preserves the read-only open.
+	mode := strings.ToLower(strings.TrimSpace(params.Mode))
+	if mode == "" {
+		mode = fsOpenModeRead
+	}
+	if mode != fsOpenModeRead && mode != fsOpenModeReplace {
+		return nil, requestError(-32600, fmt.Sprintf("unsupported fs/open mode `%s`", params.Mode))
+	}
 	if required, _, _, _, _, err := prepareFSSandbox(params.Sandbox); err != nil {
 		return nil, err
 	} else if required {
+		if mode == fsOpenModeReplace {
+			return nil, requestError(-32600, "streaming file writes do not support platform sandboxing")
+		}
 		return nil, requestError(-32600, "streaming file reads do not support platform sandboxing")
 	}
 	path, err := resolvePath(params.Path)
@@ -2254,14 +2301,18 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	_, exists := s.handles[params.HandleID]
 	s.mu.Unlock()
 	if exists {
-		return nil, requestError(-32600, fmt.Sprintf("file read handle `%s` already exists", params.HandleID))
+		return nil, requestError(-32600, fmt.Sprintf("file handle `%s` already exists", params.HandleID))
 	}
 	// Reserve a slot before opening so in-flight opens, not just registered
 	// handles, count against the per-connection limit.
 	if !s.reserveFileSlot() {
-		return nil, requestError(-32600, fmt.Sprintf("at most %d file reads may be open per connection", maxOpenFileReads))
+		return nil, requestError(-32600, fmt.Sprintf("at most %d file handles may be open per connection", maxOpenFileReads))
 	}
-	file, err := openRegularFileForRead(path)
+	openFile := openRegularFileForRead
+	if mode == fsOpenModeReplace {
+		openFile = openRegularFileForWrite
+	}
+	file, err := openFile(path)
 	if err != nil {
 		s.releaseFileSlot()
 		return nil, err
@@ -2271,7 +2322,7 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 		s.mu.Unlock()
 		_ = file.Close()
 		s.releaseFileSlot()
-		return nil, requestError(-32600, fmt.Sprintf("file read handle `%s` already exists", params.HandleID))
+		return nil, requestError(-32600, fmt.Sprintf("file handle `%s` already exists", params.HandleID))
 	}
 	s.handles[params.HandleID] = &fileHandleEntry{file: file}
 	s.mu.Unlock()
@@ -2313,7 +2364,7 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 	entry := s.handles[params.HandleID]
 	s.mu.Unlock()
 	if entry == nil {
-		return nil, requestError(-32004, fmt.Sprintf("unknown file read handle `%s`", params.HandleID))
+		return nil, requestError(-32004, fmt.Sprintf("unknown file handle `%s`", params.HandleID))
 	}
 	file := entry.file
 	buffer := make([]byte, params.Len)
@@ -2338,6 +2389,51 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 		Chunk: base64.StdEncoding.EncodeToString(buffer[:bytesRead]),
 		EOF:   bytesRead < params.Len,
 	}, nil
+}
+
+// writeBlock implements `fs/writeBlock` (Rust #50177): a positional write of a
+// nonempty block of at most `fileWriteChunkSize` decoded bytes. Ranges beyond
+// the signed 64-bit file offset limit are rejected so Windows cannot interpret
+// a negative offset as a sentinel.
+func (s *Server) writeBlock(params *FSWriteBlockParams) (*FSWriteBlockResponse, error) {
+	if params == nil {
+		return nil, errors.New("fs/writeBlock params are required")
+	}
+	if err := validateFileReadHandleID(params.HandleID); err != nil {
+		return nil, err
+	}
+	chunk, err := base64.StdEncoding.DecodeString(params.Chunk)
+	if err != nil {
+		return nil, requestError(-32600, "fs/writeBlock requires valid base64 chunk")
+	}
+	if len(chunk) < 1 || len(chunk) > fileWriteChunkSize {
+		return nil, requestError(-32600, fmt.Sprintf("file write block length must be between 1 and %d", fileWriteChunkSize))
+	}
+	end := params.Offset + uint64(len(chunk))
+	if end < params.Offset || end > uint64(math.MaxInt64) {
+		return nil, requestError(-32600, "file write range exceeds the signed 64-bit file offset limit")
+	}
+	s.mu.Lock()
+	entry := s.handles[params.HandleID]
+	s.mu.Unlock()
+	if entry == nil {
+		return nil, requestError(-32004, fmt.Sprintf("unknown file handle `%s`", params.HandleID))
+	}
+	file := entry.file
+	position := 0
+	for position < len(chunk) {
+		written, writeErr := file.WriteAt(chunk[position:], int64(params.Offset)+int64(position))
+		if written > 0 {
+			position += written
+		}
+		if writeErr != nil {
+			return nil, writeErr
+		}
+		if written == 0 {
+			return nil, errors.New("failed to write file block")
+		}
+	}
+	return &FSWriteBlockResponse{}, nil
 }
 
 func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
@@ -2376,7 +2472,7 @@ func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
 
 func validateFileReadHandleID(handleID string) error {
 	if len(handleID) > maxFileReadHandleIDBytes {
-		return requestError(-32600, fmt.Sprintf("file read handle ID must not exceed %d bytes", maxFileReadHandleIDBytes))
+		return requestError(-32600, fmt.Sprintf("file handle ID must not exceed %d bytes", maxFileReadHandleIDBytes))
 	}
 	return nil
 }
@@ -3279,6 +3375,9 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
 			EnvironmentConfigRead:  true,
 			SandboxedFileStreaming: true,
+			// Rust #50177: the executor supports replacement opens and
+			// positional `fs/writeBlock`.
+			FileWriteStreaming: true,
 		},
 	}
 }

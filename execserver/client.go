@@ -1110,6 +1110,19 @@ func (c *Client) FSReadBlock(ctx context.Context, params *FSReadBlockParams) (*F
 	return &response, nil
 }
 
+// FSWriteBlock writes a positional chunk to a handle opened with
+// `mode: "replace"` (Rust #50177).
+func (c *Client) FSWriteBlock(ctx context.Context, params *FSWriteBlockParams) (*FSWriteBlockResponse, error) {
+	if params == nil {
+		return nil, errors.New("fs/writeBlock params are required")
+	}
+	var response FSWriteBlockResponse
+	if err := c.call(ctx, MethodFSWriteBlock, params, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c *Client) FSClose(ctx context.Context, params *FSCloseParams) (*FSCloseResponse, error) {
 	var response FSCloseResponse
 	if err := c.call(ctx, MethodFSClose, params, &response); err != nil {

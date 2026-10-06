@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -175,6 +176,9 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 	if !info.Capabilities.SandboxedFileStreaming {
 		t.Fatalf("SandboxedFileStreaming = false, want true (Rust #38356)")
 	}
+	if !info.Capabilities.FileWriteStreaming {
+		t.Fatalf("FileWriteStreaming = false, want true (Rust #50177)")
+	}
 	if len(info.TemporaryDirectories) == 0 {
 		t.Fatalf("TemporaryDirectories empty, want TEMP/TMP (Rust 92fb33b758)")
 	}
@@ -197,13 +201,16 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 }
 
 func TestEnvironmentCapabilitiesSandboxedFileStreamingWire(t *testing.T) {
-	raw := []byte(`{"shell":{"name":"bash","path":"/bin/bash"},"capabilities":{"sandboxedFileStreaming":true}}`)
+	raw := []byte(`{"shell":{"name":"bash","path":"/bin/bash"},"capabilities":{"sandboxedFileStreaming":true,"fileWriteStreaming":true}}`)
 	var info EnvironmentInfo
 	if err := json.Unmarshal(raw, &info); err != nil {
 		t.Fatalf("Unmarshal EnvironmentInfo error = %v", err)
 	}
 	if !info.Capabilities.SandboxedFileStreaming {
 		t.Fatalf("SandboxedFileStreaming = false, want true from wire")
+	}
+	if !info.Capabilities.FileWriteStreaming {
+		t.Fatalf("FileWriteStreaming = false, want true from wire (Rust #50177)")
 	}
 	legacy := []byte(`{"shell":{"name":"bash","path":"/bin/bash"},"capabilities":{}}`)
 	var legacyInfo EnvironmentInfo
@@ -212,6 +219,9 @@ func TestEnvironmentCapabilitiesSandboxedFileStreamingWire(t *testing.T) {
 	}
 	if legacyInfo.Capabilities.SandboxedFileStreaming {
 		t.Fatal("legacy executor should default SandboxedFileStreaming to false")
+	}
+	if legacyInfo.Capabilities.FileWriteStreaming {
+		t.Fatal("legacy executor should default FileWriteStreaming to false")
 	}
 }
 
@@ -528,6 +538,117 @@ func TestSessionRegistryIsolatesFileHandlesLikeRust(t *testing.T) {
 	}
 	server.detachConnection(first)
 	server.detachConnection(second)
+}
+
+// Mirrors Rust #50177: `fs/open` mode "replace" creates or truncates a file for
+// positional `fs/writeBlock` writes, chunk/offset bounds are enforced, a read
+// handle rejects writes, and a rejected replacement open never truncates.
+func TestFileWriteStreamingLikeRust(t *testing.T) {
+	server := NewServer()
+	connection := withConnectionProtocolState(withHTTPBodyStreamRegistry(context.WithValue(context.Background(), processNotifierContextKey{}, processNotifier(func(string, any) {}))))
+	if _, err := server.handleRequest(connection, &request{
+		Method: MethodInitialize,
+		Params: mustMarshalRawMessage(t, InitializeParams{ClientName: "file-write-streaming-test"}),
+	}); err != nil {
+		t.Fatalf("initialize error = %v", err)
+	}
+	protocol := protocolStateFromContext(connection)
+	protocol.mu.Lock()
+	protocol.initialized = true
+	protocol.mu.Unlock()
+
+	path := filepath.Join(t.TempDir(), "stream.bin")
+	open := func(handleID string, mode string) error {
+		_, err := server.handleRequest(connection, &request{
+			Method: MethodFSOpen,
+			Params: mustMarshalRawMessage(t, FSOpenParams{HandleID: handleID, Path: pathToURI(path), Mode: mode}),
+		})
+		return err
+	}
+	write := func(handleID string, offset uint64, data []byte) error {
+		_, err := server.handleRequest(connection, &request{
+			Method: MethodFSWriteBlock,
+			Params: mustMarshalRawMessage(t, FSWriteBlockParams{HandleID: handleID, Offset: offset, Chunk: base64.StdEncoding.EncodeToString(data)}),
+		})
+		return err
+	}
+	closeHandle := func(handleID string) {
+		t.Helper()
+		if _, err := server.handleRequest(connection, &request{
+			Method: MethodFSClose,
+			Params: mustMarshalRawMessage(t, FSCloseParams{HandleID: handleID}),
+		}); err != nil {
+			t.Fatalf("close %s error = %v", handleID, err)
+		}
+	}
+
+	if err := open("w", "replace"); err != nil {
+		t.Fatalf("replace open error = %v", err)
+	}
+	if err := write("w", 0, []byte("hello")); err != nil {
+		t.Fatalf("write first block error = %v", err)
+	}
+	if err := write("w", 5, []byte("world")); err != nil {
+		t.Fatalf("write second block error = %v", err)
+	}
+	closeHandle("w")
+	if content, err := os.ReadFile(path); err != nil || string(content) != "helloworld" {
+		t.Fatalf("written content = %q err=%v", string(content), err)
+	}
+
+	// Replacement truncates an existing file.
+	if err := os.WriteFile(path, []byte("previous-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := open("w2", "replace"); err != nil {
+		t.Fatalf("replace open error = %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+		t.Fatalf("replacement did not truncate: info=%v err=%v", info, err)
+	}
+	closeHandle("w2")
+
+	// A duplicate handle is rejected without truncating the file.
+	if err := open("dup", "replace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("dup", 0, []byte("keep")); err != nil {
+		t.Fatal(err)
+	}
+	if err := open("dup", "replace"); err == nil {
+		t.Fatal("duplicate handle must be rejected")
+	}
+	if content, err := os.ReadFile(path); err != nil || string(content) != "keep" {
+		t.Fatalf("duplicate open truncated content: %q err=%v", string(content), err)
+	}
+	closeHandle("dup")
+
+	// Chunk and offset bounds are enforced.
+	if err := open("bounds", "replace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("bounds", 0, nil); err == nil {
+		t.Fatal("empty chunk must be rejected")
+	}
+	if err := write("bounds", 0, make([]byte, fileWriteChunkSize+1)); err == nil {
+		t.Fatal("oversized chunk must be rejected")
+	}
+	if err := write("bounds", math.MaxUint64, []byte("x")); err == nil {
+		t.Fatal("offset beyond the signed 64-bit limit must be rejected")
+	}
+	closeHandle("bounds")
+
+	// A read handle rejects writes (read/write handle permissions).
+	if err := os.WriteFile(path, []byte("readonly"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := open("r", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if err := write("r", 0, []byte("x")); err == nil {
+		t.Fatal("writing through a read handle must fail")
+	}
+	closeHandle("r")
 }
 
 func TestLongPollReadFailsAfterSessionDetachLikeRust(t *testing.T) {
