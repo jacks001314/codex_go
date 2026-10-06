@@ -132,6 +132,32 @@ func TestAppendUnreadableRootBwrapArgs(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #50059: every empty-file mask needs its own preserved descriptor
+// so multiple denied files cannot prevent bubblewrap from starting. Go opens a
+// per-path memfd instead of Rust's per-mask /dev/null file, but the distinct-fd
+// invariant is identical.
+func TestAppendUnreadableRootBwrapArgsUsesDistinctDescriptors(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.key")
+	second := filepath.Join(dir, "nested", "second.key")
+	var args []string
+	firstFD, err := appendUnreadableRootBwrapArgs(&args, first)
+	if err != nil {
+		t.Fatalf("append first unreadable args error = %v", err)
+	}
+	secondFD, err := appendUnreadableRootBwrapArgs(&args, second)
+	if err != nil {
+		t.Fatalf("append second unreadable args error = %v", err)
+	}
+	if firstFD < 0 || secondFD < 0 || firstFD == secondFD {
+		t.Fatalf("descriptors = %d, %d, want distinct non-negative", firstFD, secondFD)
+	}
+	if !containsArgWindow(args, []string{"--ro-bind-data", strconv.Itoa(firstFD), first}) ||
+		!containsArgWindow(args, []string{"--ro-bind-data", strconv.Itoa(secondFD), second}) {
+		t.Fatalf("args = %#v", args)
+	}
+}
+
 func containsArgWindow(args []string, window []string) bool {
 	for i := 0; i+len(window) <= len(args); i++ {
 		matched := true
