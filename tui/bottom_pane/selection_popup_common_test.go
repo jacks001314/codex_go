@@ -139,3 +139,19 @@ func containsStringSelectionTest(values []string, want string) bool {
 	}
 	return false
 }
+
+// TestGenericRowsLinkURLsLikeRust mirrors Rust #51472: web URLs in selection
+// labels and descriptions render as terminal hyperlinks with their complete
+// destination.
+func TestGenericRowsLinkURLsLikeRust(t *testing.T) {
+	url := "https://example.com/docs/page?section=2"
+	rows := []GenericDisplayRow{{Name: "open docs", Description: "see " + url}}
+	rendered := RenderGenericRows(rows, ScrollState{}, 10, "", 80, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil))
+	joined := strings.Join(rendered, "\n")
+	if !strings.Contains(joined, tui.OSC8Hyperlink(url, url)) {
+		t.Fatalf("selection row missing complete hyperlink:\n%s", joined)
+	}
+	if !strings.Contains(tui.StripOSC8(joined), url) {
+		t.Fatalf("visible text lost the URL:\n%s", joined)
+	}
+}

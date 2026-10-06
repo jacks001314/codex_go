@@ -202,6 +202,9 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 				if lineIdx > 0 && row.IsDisabled {
 					line = strings.TrimRight(line, " ")
 				}
+				// Rust #51472: web URLs in selection labels and descriptions
+				// render as terminal hyperlinks with complete destinations.
+				line = tui.AnnotateCompleteWebURLsInLine(line)
 				if state.HasSelection && state.SelectedIdx == actualIdx && !row.IsDisabled {
 					line = tui.RenderSelectedRow(line)
 				}
@@ -210,8 +213,15 @@ func renderGenericRows(rows []GenericDisplayRow, state ScrollState, maxResults i
 			continue
 		}
 		line := buildGenericDisplayLine(row, descCol, descriptionLayout)
+		truncated := false
 		if tui.DisplayWidth(line) > width {
 			line = tui.TruncateWithEllipsis(line, width)
+			truncated = true
+		}
+		// A truncated single-line row may hold an incomplete URL fragment;
+		// annotating it would point the hyperlink at a truncated destination.
+		if !truncated {
+			line = tui.AnnotateCompleteWebURLsInLine(line)
 		}
 		if state.HasSelection && state.SelectedIdx == actualIdx && !row.IsDisabled {
 			line = tui.RenderSelectedRow(line)
