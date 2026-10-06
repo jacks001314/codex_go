@@ -101,16 +101,17 @@ func TestApproxTokenConversions(t *testing.T) {
 // TestTruncateMiddleTokensKeepsPartialCharactersOutOfBothEnds mirrors Rust #49712:
 // multibyte characters straddling a retained boundary are dropped whole, the
 // retained prefix/suffix come from UTF-8 boundary lookups, and the original token
-// estimate is still reported. The marker itself is Go's ASCII "..."; Rust renders
-// U+2026 (recorded as a Go-only difference in update/plan_2026_10_01.md).
+// estimate is still reported. The marker uses U+2026 like Rust's
+// format_truncation_marker (codex-rs/utils/string/src/truncate.rs, #15572);
+// the earlier Go-only ASCII "..." divergence is removed.
 func TestTruncateMiddleTokensKeepsPartialCharactersOutOfBothEnds(t *testing.T) {
 	for _, tc := range []struct {
 		input    string
 		expected string
 	}{
-		{input: "a😀b😀c", expected: "a...2 tokens truncated...c"},
-		{input: "é中😀é", expected: "é...2 tokens truncated...é"},
-		{input: "😀😀😀", expected: "...2 tokens truncated..."},
+		{input: "a😀b😀c", expected: "a…2 tokens truncated…c"},
+		{input: "é中😀é", expected: "é…2 tokens truncated…é"},
+		{input: "😀😀😀", expected: "…2 tokens truncated…"},
 	} {
 		truncated, tokens := TruncateMiddleWithTokenBudget(tc.input, 1)
 		if truncated != tc.expected {

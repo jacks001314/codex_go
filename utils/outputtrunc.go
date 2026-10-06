@@ -345,9 +345,9 @@ func splitBudget(budget int) (int, int) {
 
 func formatTruncationMarker(useTokens bool, removedCount uint64) string {
 	if useTokens {
-		return fmt.Sprintf("...%d tokens truncated...", removedCount)
+		return fmt.Sprintf("\u2026%d tokens truncated\u2026", removedCount)
 	}
-	return fmt.Sprintf("...%d chars truncated...", removedCount)
+	return fmt.Sprintf("\u2026%d chars truncated\u2026", removedCount)
 }
 
 func removedUnits(useTokens bool, removedBytes int, removedChars int) uint64 {
