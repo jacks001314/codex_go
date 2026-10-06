@@ -239,3 +239,39 @@ func findHookEventRow(rows []HookEventRow, event appserver.HookEventName) HookEv
 	}
 	return HookEventRow{}
 }
+
+// TestHooksBrowserDetailLinksWrappedURLsLikeRust mirrors Rust #51473: a web URL
+// in a wrapped hook command detail stays a complete terminal hyperlink, and a
+// truncated detail never points at a truncated destination.
+func TestHooksBrowserDetailLinksWrappedURLsLikeRust(t *testing.T) {
+	url := "https://example.com/hooks/very/long/command?token=abc123"
+	lines := wrapHookDetail("Command", "curl "+url, 30, 0)
+	if len(lines) < 2 {
+		t.Fatalf("expected the command to wrap: %#v", lines)
+	}
+	linked := 0
+	visible := strings.Builder{}
+	for _, line := range lines {
+		if strings.Contains(line, tui.OSC8Hyperlink(url, url)) {
+			linked++
+		}
+		visible.WriteString(tui.StripOSC8(line))
+		visible.WriteString("\n")
+	}
+	if linked != 1 {
+		t.Fatalf("expected one complete hyperlink, got %d: %#v", linked, lines)
+	}
+	if !strings.Contains(visible.String(), url) {
+		t.Fatalf("visible text lost the URL:\n%s", visible.String())
+	}
+
+	// A truncated detail must not link a truncated destination, and the ellipsis
+	// stays outside any link.
+	truncated := wrapHookDetail("Command", url+" "+strings.Repeat("x", 40), 30, 1)
+	if len(truncated) != 1 || !strings.HasSuffix(truncated[0], "…") {
+		t.Fatalf("truncated detail = %#v", truncated)
+	}
+	if strings.Contains(truncated[0], "\x1b]8;;") {
+		t.Fatalf("truncated detail should not be hyperlinked: %q", truncated[0])
+	}
+}

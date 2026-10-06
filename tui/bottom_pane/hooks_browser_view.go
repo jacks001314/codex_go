@@ -737,40 +737,37 @@ func hookDetailPrefix(label string) string {
 
 func wrapHookDetail(label string, value string, width int, maxLines int) []string {
 	prefix := hookDetailPrefix(label)
-	full := prefix + value
-	if width <= 0 || len([]rune(full)) <= width {
-		return []string{full}
+	// Rust #51473: hook details wrap with URL preservation and turn web URLs
+	// into terminal hyperlinks whose complete destination survives wrapping.
+	// Truncation happens before annotation so the ellipsis stays outside links.
+	var lines []string
+	if width <= 0 || tui.DisplayWidth(prefix+value) <= width {
+		// A value that already fits keeps its exact spelling (including any
+		// trailing space), matching Rust's single-line detail rows.
+		lines = []string{prefix + value}
+	} else {
+		lines = tui.WrapLine(value, tui.WrapOptions{
+			Width:            width,
+			InitialIndent:    prefix,
+			SubsequentIndent: strings.Repeat(" ", len([]rune(prefix))),
+			BreakWords:       true,
+			PreserveURLs:     true,
+		})
 	}
-	words := strings.Fields(value)
-	if len(words) == 0 {
-		return []string{prefix}
-	}
-	lines := []string{}
-	current := prefix
-	for _, word := range words {
-		candidate := current
-		if strings.TrimSpace(current) != strings.TrimSpace(prefix) {
-			candidate += " "
-		}
-		candidate += word
-		if len([]rune(candidate)) > width && strings.TrimSpace(current) != strings.TrimSpace(prefix) {
-			lines = append(lines, current)
-			current = strings.Repeat(" ", len([]rune(prefix))) + word
-			if maxLines > 0 && len(lines) >= maxLines {
-				lines = lines[:maxLines]
-				lines[len(lines)-1] = tui.TruncateWithEllipsis(lines[len(lines)-1], width)
-				return lines
-			}
-			continue
-		}
-		current = candidate
-	}
-	if current != "" {
-		lines = append(lines, current)
-	}
+	truncated := false
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[:maxLines]
 		lines[len(lines)-1] = tui.TruncateWithEllipsis(lines[len(lines)-1], width)
+		truncated = true
+	}
+	for i := range lines {
+		// A line truncated by maxLines may hold an incomplete URL fragment;
+		// annotating it would point the hyperlink at a truncated destination
+		// (Rust clips the link to the visible range but keeps the full target).
+		if truncated && i == len(lines)-1 && strings.HasSuffix(lines[i], "…") {
+			continue
+		}
+		lines[i] = tui.AnnotateCompleteWebURLsInLine(lines[i])
 	}
 	return lines
 }
