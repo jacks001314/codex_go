@@ -11,7 +11,7 @@ func TestDeferredToolsStateFragmentRendersInitialAndDeltaLikeRust(t *testing.T) 
 		"gmail":   "access your Google Gmail Account & labels",
 		"hotline": "",
 	}, nil, false))
-	wantInitial := "<tools>\nDeferred tool namespaces:\n- app: control the Codex App\n- gmail: access your Google Gmail Account &amp; labels\n- hotline\n</tools>"
+	wantInitial := "<tools>\nDeferred tool namespaces:\n- app: control the Codex App\n- gmail: access your Google Gmail Account & labels\n- hotline\n</tools>"
 	if initial == nil || initial.Role != RoleDeveloper || initial.Content != wantInitial {
 		t.Fatalf("initial = %#v, want %q", initial, wantInitial)
 	}

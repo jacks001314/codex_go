@@ -1,11 +1,9 @@
 package context
 
 import (
-	"encoding/xml"
 	"fmt"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -21,8 +19,12 @@ func NormalizeDeferredToolNamespaces(namespaces map[string]string) map[string]st
 	out := make(map[string]string, len(namespaces))
 	for namespace, description := range namespaces {
 		firstLine := strings.TrimSpace(strings.SplitN(description, "\n", 2)[0])
-		if utf8.RuneCountInString(firstLine) > maxDeferredNamespaceDescriptionRunes {
-			firstLine = string([]rune(firstLine)[:maxDeferredNamespaceDescriptionRunes])
+		runes := []rune(firstLine)
+		if len(runes) > maxDeferredNamespaceDescriptionRunes {
+			// Rust #48574 truncates at a UTF-8 boundary and appends an ellipsis
+			// so a truncated description remains visibly incomplete.
+			prefixLen := maxDeferredNamespaceDescriptionRunes - len(deferredDescriptionTruncationSuffix)
+			firstLine = string(runes[:prefixLen]) + deferredDescriptionTruncationSuffix
 		}
 		out[namespace] = firstLine
 	}
@@ -69,19 +71,29 @@ type deferredNamespaceGroup struct {
 
 func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty bool) string {
 	bodyBudget := maxDeferredToolsFragmentBytes - len("<tools>") - len("</tools>")
+	emptyState := ""
+	if currentEmpty {
+		emptyState = "No deferred tool namespaces remain.\n"
+	}
 	fixedBytes := 1
 	for _, group := range groups {
 		if len(group.values) > 0 {
-			fixedBytes += len(group.label) + len(":\n") + deferredToolsOmittedLineReserveBytes
+			fixedBytes += len(group.label) + len(":\n")
 		}
 	}
-	if currentEmpty {
-		fixedBytes += len("No deferred tool namespaces remain.\n")
+	fixedBytes += len(emptyState)
+	entryBudget := bodyBudget - fixedBytes
+	if entryBudget < 0 {
+		entryBudget = 0
 	}
-	remaining := bodyBudget - fixedBytes
-	if remaining < 0 {
-		remaining = 0
+	omissionReserve := 0
+	for _, group := range groups {
+		if len(group.values) > 0 {
+			omissionReserve += deferredToolsOmittedLineReserveBytes
+		}
 	}
+	entries := truncateDeferredNamespaceRows(groups, entryBudget, omissionReserve)
+	entryIndex := 0
 	var rendered strings.Builder
 	rendered.WriteByte('\n')
 	for _, group := range groups {
@@ -96,34 +108,22 @@ func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty
 		}
 		sort.Strings(keys)
 		omitted := 0
-		for _, namespace := range keys {
-			entry := renderDeferredNamespace(namespace, group.values[namespace])
-			if len(entry) <= remaining {
-				remaining -= len(entry)
-				rendered.WriteString(entry)
-			} else {
+		for range keys {
+			entry := entries[entryIndex]
+			entryIndex++
+			if entry.omitted {
 				omitted++
+				continue
 			}
+			rendered.WriteString(entry.text)
 		}
 		if omitted > 0 {
 			fmt.Fprintf(&rendered, "... %d additional namespaces omitted.\n", omitted)
 		}
 	}
 	if currentEmpty {
-		rendered.WriteString("No deferred tool namespaces remain.\n")
+		rendered.WriteString(emptyState)
 	}
-	return rendered.String()
-}
-
-func renderDeferredNamespace(namespace string, description string) string {
-	var rendered strings.Builder
-	rendered.WriteString("- ")
-	_ = xml.EscapeText(&rendered, []byte(namespace))
-	if description != "" {
-		rendered.WriteString(": ")
-		_ = xml.EscapeText(&rendered, []byte(description))
-	}
-	rendered.WriteByte('\n')
 	return rendered.String()
 }
 
