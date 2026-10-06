@@ -112,35 +112,39 @@ type ThreadItem struct {
 	// Results carries the structured results a web search returned, mirroring
 	// Rust's `WebSearchItem { results }`. The pointer keeps Rust's distinction
 	// between an absent field and a present-but-empty array.
-	Results               *[]any                       `json:"results,omitempty"`
-	Changes               []FileChange                 `json:"changes,omitempty"`
-	Server                string                       `json:"server,omitempty"`
-	Tool                  string                       `json:"tool,omitempty"`
-	SenderThreadID        string                       `json:"sender_thread_id,omitempty"`
-	ReceiverThreadIDs     *[]string                    `json:"receiver_thread_ids,omitempty"`
-	Prompt                *string                      `json:"prompt,omitempty"`
-	AgentsStates          *map[string]CollabAgentState `json:"agents_states,omitempty"`
-	ActivityKind          string                       `json:"kind,omitempty"`
-	AgentThreadID         string                       `json:"agent_thread_id,omitempty"`
-	AgentPath             string                       `json:"agent_path,omitempty"`
-	Arguments             *any                         `json:"arguments,omitempty"`
-	Result                *MCPToolResult               `json:"result,omitempty"`
-	CallError             *MCPToolError                `json:"error,omitempty"`
-	Command               string                       `json:"command,omitempty"`
-	PluginID              string                       `json:"plugin_id,omitempty"`
-	ScriptPath            string                       `json:"script_path,omitempty"`
-	AggregatedOutput      *string                      `json:"aggregated_output,omitempty"`
-	ExitCode              *int                         `json:"exit_code,omitempty"`
-	Status                string                       `json:"status,omitempty"`
-	Stdout                string                       `json:"stdout,omitempty"`
-	Stderr                string                       `json:"stderr,omitempty"`
-	AutoApproved          *bool                        `json:"auto_approved,omitempty"`
-	RevisedPrompt         string                       `json:"revised_prompt,omitempty"`
-	SavedPath             string                       `json:"saved_path,omitempty"`
-	TransparentBackground *bool                        `json:"transparent_background,omitempty"`
-	Success               *bool                        `json:"success,omitempty"`
-	Items                 []TodoItem                   `json:"items,omitempty"`
-	Metadata              map[string]any               `json:"metadata,omitempty"`
+	Results           *[]any                       `json:"results,omitempty"`
+	Changes           []FileChange                 `json:"changes,omitempty"`
+	Server            string                       `json:"server,omitempty"`
+	Tool              string                       `json:"tool,omitempty"`
+	SenderThreadID    string                       `json:"sender_thread_id,omitempty"`
+	ReceiverThreadIDs *[]string                    `json:"receiver_thread_ids,omitempty"`
+	Prompt            *string                      `json:"prompt,omitempty"`
+	AgentsStates      *map[string]CollabAgentState `json:"agents_states,omitempty"`
+	ActivityKind      string                       `json:"kind,omitempty"`
+	AgentThreadID     string                       `json:"agent_thread_id,omitempty"`
+	AgentPath         string                       `json:"agent_path,omitempty"`
+	// Model and ReasoningEffort are the resolved settings of a started sub-agent
+	// activity (Rust #51463); older records and other activity kinds omit them.
+	Model                 *string        `json:"model,omitempty"`
+	ReasoningEffort       *string        `json:"reasoning_effort,omitempty"`
+	Arguments             *any           `json:"arguments,omitempty"`
+	Result                *MCPToolResult `json:"result,omitempty"`
+	CallError             *MCPToolError  `json:"error,omitempty"`
+	Command               string         `json:"command,omitempty"`
+	PluginID              string         `json:"plugin_id,omitempty"`
+	ScriptPath            string         `json:"script_path,omitempty"`
+	AggregatedOutput      *string        `json:"aggregated_output,omitempty"`
+	ExitCode              *int           `json:"exit_code,omitempty"`
+	Status                string         `json:"status,omitempty"`
+	Stdout                string         `json:"stdout,omitempty"`
+	Stderr                string         `json:"stderr,omitempty"`
+	AutoApproved          *bool          `json:"auto_approved,omitempty"`
+	RevisedPrompt         string         `json:"revised_prompt,omitempty"`
+	SavedPath             string         `json:"saved_path,omitempty"`
+	TransparentBackground *bool          `json:"transparent_background,omitempty"`
+	Success               *bool          `json:"success,omitempty"`
+	Items                 []TodoItem     `json:"items,omitempty"`
+	Metadata              map[string]any `json:"metadata,omitempty"`
 }
 
 type TodoItem struct {
@@ -351,12 +355,20 @@ func CollabToolCallItem(id string, collabTool string, senderThreadID string, rec
 }
 
 func SubAgentActivityItem(id string, kind string, agentThreadID string, agentPath string) ThreadItem {
+	return SubAgentActivityItemWithSettings(id, kind, agentThreadID, agentPath, nil, nil)
+}
+
+// SubAgentActivityItemWithSettings carries the resolved model and reasoning
+// effort of a started sub-agent activity (Rust #51463).
+func SubAgentActivityItemWithSettings(id string, kind string, agentThreadID string, agentPath string, model *string, reasoningEffort *string) ThreadItem {
 	return ThreadItem{
-		ID:            id,
-		Type:          "sub_agent_activity",
-		ActivityKind:  kind,
-		AgentThreadID: agentThreadID,
-		AgentPath:     agentPath,
+		ID:              id,
+		Type:            "sub_agent_activity",
+		ActivityKind:    kind,
+		AgentThreadID:   agentThreadID,
+		AgentPath:       agentPath,
+		Model:           model,
+		ReasoningEffort: reasoningEffort,
 	}
 }
 

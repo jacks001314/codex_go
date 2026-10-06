@@ -3540,11 +3540,22 @@ func subAgentActivityProtocolItem(execution *turn.ToolExecutionResult) (protocol
 	if kind == "" {
 		return protocol.ThreadItem{}, false
 	}
-	return protocol.SubAgentActivityItem(
+	// Rust #51463: a started activity reports the child's resolved model and
+	// reasoning effort; other kinds and older records leave them unset.
+	var resolvedModel, resolvedEffort *string
+	if model := strings.TrimSpace(execStringFromAny(raw["model"])); model != "" {
+		resolvedModel = &model
+	}
+	if effort := strings.TrimSpace(execStringFromAny(firstNonNil(raw["reasoning_effort"], raw["reasoningEffort"]))); effort != "" {
+		resolvedEffort = &effort
+	}
+	return protocol.SubAgentActivityItemWithSettings(
 		firstNonEmpty(execution.Invocation.CallID, "sub-agent-activity"),
 		kind,
 		execStringFromAny(firstNonNil(raw["agent_thread_id"], raw["agentThreadId"])),
 		execStringFromAny(firstNonNil(raw["agent_path"], raw["agentPath"])),
+		resolvedModel,
+		resolvedEffort,
 	), true
 }
 

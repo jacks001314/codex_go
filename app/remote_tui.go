@@ -4837,11 +4837,13 @@ func remoteProtocolItemFromPayload(payload appserver.ThreadItemPayload, complete
 		)
 		return item
 	case "subAgentActivity":
-		return protocol.SubAgentActivityItem(
+		return protocol.SubAgentActivityItemWithSettings(
 			id,
 			remotePayloadString(payload, "kind"),
 			remoteFirstPayloadString(payload, "agentThreadId", "agent_thread_id"),
 			remoteFirstPayloadString(payload, "agentPath", "agent_path", "path"),
+			remotePayloadOptionalString(payload, "model"),
+			remotePayloadOptionalString(payload, "reasoningEffort", "reasoning_effort"),
 		)
 	case "webSearch", "web_search":
 		action, _ := payload["action"].(map[string]any)

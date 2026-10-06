@@ -267,7 +267,35 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			return nil, err
 		}
 	}
-	return &agent.SpawnAgentResult{AgentID: string(threadID), TaskName: agentPath, Nickname: stringPtrIfNotEmpty(nickname)}, nil
+	return &agent.SpawnAgentResult{
+		AgentID:         string(threadID),
+		TaskName:        agentPath,
+		Nickname:        stringPtrIfNotEmpty(nickname),
+		Model:           modelID,
+		ReasoningEffort: c.resolvedSpawnReasoningEffort(modelID, args, capturedEffort),
+	}, nil
+}
+
+// resolvedSpawnReasoningEffort mirrors Rust #51463: the child's resolved startup
+// effort, falling back to the model's default reasoning level when neither a
+// requested nor an inherited effort applies.
+func (c *runtimeAgentController) resolvedSpawnReasoningEffort(modelID string, args *agent.SpawnAgentArgs, capturedEffort string) string {
+	if args != nil && args.ReasoningEffort != nil {
+		if value := strings.TrimSpace(*args.ReasoningEffort); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(capturedEffort); value != "" {
+		return value
+	}
+	if strings.TrimSpace(modelID) == "" {
+		return ""
+	}
+	manager := c.modelsManagerForSpawn()
+	if manager == nil {
+		return ""
+	}
+	return strings.TrimSpace(manager.GetModelInfo(modelID, nil).DefaultReasoningLevel)
 }
 
 // modelsManagerForSpawn mirrors the exec lane's accessor: the running agent's

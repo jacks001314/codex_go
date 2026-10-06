@@ -4577,7 +4577,11 @@ func TestExecV2SubAgentActivityEmitsInternalStartedAndCompletedLifecycle(t *test
 			CallID: "spawn-activity", ToolName: tool.NamespacedName(agent.MultiAgentV2Namespace, "spawn_agent"),
 		},
 		Output: &tool.Output{Success: true, Data: map[string]any{
-			"subAgentActivity": map[string]any{"kind": "started", "agent_thread_id": "child-thread", "agent_path": "/root/worker"},
+			"subAgentActivity": map[string]any{
+				"kind": "started", "agent_thread_id": "child-thread", "agent_path": "/root/worker",
+				// Rust #51463: a started activity carries the resolved model and effort.
+				"model": "gpt-5.1", "reasoning_effort": "high",
+			},
 		}},
 	})
 	if len(internal) != 2 || internal[0].Type != "item.started" || internal[1].Type != "item.completed" {
@@ -4585,7 +4589,9 @@ func TestExecV2SubAgentActivityEmitsInternalStartedAndCompletedLifecycle(t *test
 	}
 	for index, event := range internal {
 		if event.Item == nil || event.Item.ID != "spawn-activity" || event.Item.Type != "sub_agent_activity" ||
-			event.Item.ActivityKind != "started" || event.Item.AgentThreadID != "child-thread" || event.Item.AgentPath != "/root/worker" {
+			event.Item.ActivityKind != "started" || event.Item.AgentThreadID != "child-thread" || event.Item.AgentPath != "/root/worker" ||
+			event.Item.Model == nil || *event.Item.Model != "gpt-5.1" ||
+			event.Item.ReasoningEffort == nil || *event.Item.ReasoningEffort != "high" {
 			t.Fatalf("internal activity event %d = %#v", index, event)
 		}
 	}

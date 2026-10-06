@@ -77,6 +77,11 @@ type SpawnAgentResult struct {
 	AgentID  string  `json:"agent_id"`
 	TaskName string  `json:"task_name,omitempty"`
 	Nickname *string `json:"nickname,omitempty"`
+	// Model and ReasoningEffort are the child's resolved startup settings
+	// (Rust #51463). They are internal: the started sub-agent activity reports
+	// them but they are not part of the model-visible spawn result.
+	Model           string `json:"-"`
+	ReasoningEffort string `json:"-"`
 }
 
 type SendInputArgs struct {

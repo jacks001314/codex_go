@@ -352,6 +352,14 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 					"agent_thread_id": spawned.AgentID,
 					"agent_path":      firstNonEmptyAgentString(spawned.TaskName, args.TaskName),
 				}
+				// Rust #51463: the started activity records the resolved model and
+				// reasoning effort the child actually runs with.
+				if value := strings.TrimSpace(spawned.Model); value != "" {
+					activity["model"] = value
+				}
+				if value := strings.TrimSpace(spawned.ReasoningEffort); value != "" {
+					activity["reasoning_effort"] = value
+				}
 				output := map[string]any{"task_name": firstNonEmptyAgentString(spawned.TaskName, args.TaskName)}
 				if !e.hideSpawnMetadata {
 					output["nickname"] = spawned.Nickname

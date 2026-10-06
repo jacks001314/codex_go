@@ -1189,17 +1189,21 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 		})
 	case "subAgentActivity":
 		return json.Marshal(struct {
-			Type          string `json:"type"`
-			ID            string `json:"id"`
-			Kind          string `json:"kind"`
-			AgentThreadID string `json:"agentThreadId"`
-			AgentPath     string `json:"agentPath"`
+			Type            string  `json:"type"`
+			ID              string  `json:"id"`
+			Kind            string  `json:"kind"`
+			AgentThreadID   string  `json:"agentThreadId"`
+			AgentPath       string  `json:"agentPath"`
+			Model           *string `json:"model"`
+			ReasoningEffort *string `json:"reasoningEffort"`
 		}{
-			Type:          "subAgentActivity",
-			ID:            i.ID,
-			Kind:          threadItemStringFromData(i.Data, "kind"),
-			AgentThreadID: threadItemStringFromData(i.Data, "agentThreadId", "agent_thread_id"),
-			AgentPath:     threadItemStringFromData(i.Data, "agentPath", "agent_path", "path"),
+			Type:            "subAgentActivity",
+			ID:              i.ID,
+			Kind:            threadItemStringFromData(i.Data, "kind"),
+			AgentThreadID:   threadItemStringFromData(i.Data, "agentThreadId", "agent_thread_id"),
+			AgentPath:       threadItemStringFromData(i.Data, "agentPath", "agent_path", "path"),
+			Model:           threadItemStringPtrFromData(i.Data, "model"),
+			ReasoningEffort: threadItemStringPtrFromData(i.Data, "reasoningEffort", "reasoning_effort"),
 		})
 	case "webSearch":
 		return json.Marshal(struct {
@@ -6097,6 +6101,7 @@ func normalizeHistoryUnionData(payload map[string]any, marker string) map[string
 	copyHistoryAlias(data, "agentsStates", "agents_states")
 	copyHistoryAlias(data, "agentThreadId", "agent_thread_id")
 	copyHistoryAlias(data, "agentPath", "agent_path")
+	copyHistoryAlias(data, "reasoningEffort", "reasoning_effort")
 	copyHistoryAlias(data, "webSearchAction", "web_search_action")
 	copyHistoryAlias(data, "revisedPrompt", "revised_prompt")
 	copyHistoryAlias(data, "savedPath", "saved_path")

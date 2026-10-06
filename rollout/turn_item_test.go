@@ -367,3 +367,69 @@ func TestMCPAppUISurvivesTheRolloutRoundTrip(t *testing.T) {
 		t.Fatalf("public appContext = %#v", publicItem["appContext"])
 	}
 }
+
+// TestSubAgentActivityModelAndEffortRolloutRoundTripLikeRust mirrors Rust
+// #51463: the resolved model and reasoning effort persist through the core
+// rollout encoding and reach the public thread item, while an older record
+// without the fields stays null.
+func TestSubAgentActivityModelAndEffortRolloutRoundTripLikeRust(t *testing.T) {
+	now := time.Date(2026, 10, 6, 1, 2, 3, 0, time.UTC)
+	item := session.Item{
+		ID: "call-spawn", Type: "subAgentActivity", CreatedAt: now,
+		Data: map[string]any{
+			"kind":            "started",
+			"agentThreadId":   "child-thread",
+			"agentPath":       "/root/worker",
+			"model":           "gpt-5.1",
+			"reasoningEffort": "high",
+		},
+		Metadata: map[string]any{"turnId": "turn-1"},
+	}
+	raw, itemType, err := CoreTurnItemJSONFromSessionItem(&item)
+	if err != nil {
+		t.Fatalf("CoreTurnItemJSONFromSessionItem() error = %v", err)
+	}
+	if itemType == "" {
+		t.Fatalf("core item type = %q", itemType)
+	}
+	var core map[string]any
+	if err := json.Unmarshal(raw, &core); err != nil {
+		t.Fatalf("Unmarshal(core item) error = %v", err)
+	}
+	if core["model"] != "gpt-5.1" || core["reasoning_effort"] != "high" {
+		t.Fatalf("core = %#v", core)
+	}
+	public, _, publicType, err := PublicThreadItemJSONFromCore(raw)
+	if err != nil {
+		t.Fatalf("PublicThreadItemJSONFromCore() error = %v", err)
+	}
+	var publicItem map[string]any
+	if err := json.Unmarshal(public, &publicItem); err != nil {
+		t.Fatalf("Unmarshal(public item) error = %v", err)
+	}
+	if publicType != "subAgentActivity" || publicItem["model"] != "gpt-5.1" || publicItem["reasoningEffort"] != "high" {
+		t.Fatalf("public item = %#v (type %q)", publicItem, publicType)
+	}
+
+	// An older record without the fields keeps them null.
+	legacy := session.Item{
+		ID: "call-legacy", Type: "subAgentActivity", CreatedAt: now,
+		Data:     map[string]any{"kind": "started", "agentThreadId": "child-old", "agentPath": "/root/old"},
+		Metadata: map[string]any{"turnId": "turn-1"},
+	}
+	legacyRaw, _, err := CoreTurnItemJSONFromSessionItem(&legacy)
+	if err != nil {
+		t.Fatalf("CoreTurnItemJSONFromSessionItem(legacy) error = %v", err)
+	}
+	legacyPublic, _, _, err := PublicThreadItemJSONFromCore(legacyRaw)
+	if err != nil {
+		t.Fatalf("PublicThreadItemJSONFromCore(legacy) error = %v", err)
+	}
+	var legacyItem map[string]any
+	if err := json.Unmarshal(legacyPublic, &legacyItem); err != nil {
+		t.Fatalf("Unmarshal(legacy public item) error = %v", err)
+	}
+	if legacyItem["model"] != nil || legacyItem["reasoningEffort"] != nil {
+		t.Fatalf("legacy public item = %#v, want null model/effort", legacyItem)
+	}
+}

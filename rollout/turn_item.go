@@ -68,6 +68,10 @@ func CoreTurnItemJSONFromSessionItem(item *session.Item) (json.RawMessage, strin
 		core["kind"] = snakeEnum(anyString(values, "kind"))
 		core["agent_thread_id"] = anyString(values, "agentThreadId", "agent_thread_id")
 		core["agent_path"] = anyString(values, "agentPath", "agent_path", "path")
+		// Rust #51463: the resolved model and reasoning effort are optional and
+		// absent from older records and non-started activities.
+		copyOptional(core, "model", firstAny(values, "model"))
+		copyOptional(core, "reasoning_effort", firstAny(values, "reasoningEffort", "reasoning_effort"))
 	case "WebSearch":
 		core["query"] = firstNonEmptyString(anyString(values, "query"), item.Text)
 		core["action"] = coreWebSearchAction(firstAny(values, "action", "webSearchAction", "web_search_action"), core["query"].(string))
@@ -182,6 +186,8 @@ func PublicThreadItemJSONFromCore(raw json.RawMessage) (json.RawMessage, string,
 		out["kind"] = camelEnum(anyString(core, "kind"))
 		out["agentThreadId"] = anyString(core, "agent_thread_id", "agentThreadId")
 		out["agentPath"] = anyString(core, "agent_path", "agentPath")
+		copyOptional(out, "model", firstAny(core, "model"))
+		copyOptional(out, "reasoningEffort", firstAny(core, "reasoning_effort", "reasoningEffort"))
 	case "WebSearch":
 		out["query"] = anyString(core, "query")
 		out["action"] = publicWebSearchAction(firstAny(core, "action"))

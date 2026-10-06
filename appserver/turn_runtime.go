@@ -2971,6 +2971,10 @@ func appSubAgentActivityFromExecution(execution *turn.ToolExecutionResult) (map[
 		"kind":          kind,
 		"agentThreadId": firstNonEmpty(stringFromAny(raw["agent_thread_id"]), stringFromAny(raw["agentThreadId"])),
 		"agentPath":     firstNonEmpty(stringFromAny(raw["agent_path"]), stringFromAny(raw["agentPath"])),
+		// Rust #51463: the resolved model and reasoning effort are only present
+		// for started activities; other kinds and older records report null.
+		"model":           stringFromAny(raw["model"]),
+		"reasoningEffort": firstNonEmpty(stringFromAny(raw["reasoning_effort"]), stringFromAny(raw["reasoningEffort"])),
 	}, true
 }
 
