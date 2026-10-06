@@ -556,7 +556,20 @@ func BuildApprovalHeaderRows(request ApprovalRequest, width int) []string {
 			rows = appendWrappedApprovalRows(rows, request.Message, width)
 		}
 	}
-	return trimTrailingBlankRows(rows)
+	return annotateApprovalHeaderRows(trimTrailingBlankRows(rows))
+}
+
+// annotateApprovalHeaderRows turns web URLs in approval header rows into
+// terminal hyperlinks so the complete destination survives wrapping and
+// clipping (Rust #51439: command, permissions, patch, and MCP elicitation
+// headers render through HyperlinkText). Headers are wrapped with URL
+// preservation, so a URL that reaches the end of a row is whole and safe to
+// annotate.
+func annotateApprovalHeaderRows(rows []string) []string {
+	for i, row := range rows {
+		rows[i] = tui.AnnotateCompleteWebURLsInLine(row)
+	}
+	return rows
 }
 
 // appendApplyPatchApprovalHeaderRows mirrors Rust

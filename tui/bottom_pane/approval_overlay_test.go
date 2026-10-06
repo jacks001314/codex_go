@@ -2,6 +2,7 @@ package bottompane
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/sandbox"
@@ -528,4 +529,62 @@ func approvalOptionLabels(options []ApprovalOption) []string {
 		labels = append(labels, option.Label)
 	}
 	return labels
+}
+
+// TestApprovalHeadersPreserveWrappedURLDestinationsLikeRust mirrors Rust
+// bottom_pane/approval_overlay.rs (#51439): command, permission, patch, and
+// MCP elicitation approval headers render web URLs as terminal hyperlinks
+// whose complete destination survives wrapping.
+func TestApprovalHeadersPreserveWrappedURLDestinationsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	cases := []struct {
+		name    string
+		request ApprovalRequest
+	}{
+		{"exec", ApprovalRequest{
+			Kind:               ApprovalRequestExec,
+			ID:                 "exec-1",
+			Command:            []string{"echo", "hello"},
+			Reason:             url,
+			AvailableDecisions: []ApprovalCommandDecision{{Kind: ApprovalCommandAccept}, {Kind: ApprovalCommandCancel}},
+		}},
+		{"permissions", ApprovalRequest{
+			Kind:        ApprovalRequestPermissions,
+			CallID:      "permissions-1",
+			Reason:      url,
+			Permissions: approvalTestPermissions(),
+		}},
+		{"patch", ApprovalRequest{
+			Kind:   ApprovalRequestApplyPatch,
+			ID:     "patch-1",
+			Reason: url,
+		}},
+		{"elicitation", ApprovalRequest{
+			Kind:       ApprovalRequestMcpElicitation,
+			ServerName: "test-server",
+			RequestID:  "request-1",
+			Message:    url,
+		}},
+	}
+	osc8Open := "\x1b]8;;" + url + "\x07"
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := BuildApprovalHeaderRows(tc.request, 32)
+			linked := 0
+			visible := strings.Builder{}
+			for _, row := range rows {
+				if strings.Contains(row, osc8Open) {
+					linked++
+				}
+				visible.WriteString(tui.StripOSC8(row))
+				visible.WriteString("\n")
+			}
+			if linked != 1 {
+				t.Fatalf("expected exactly one hyperlinked URL, got %d; rows=%#v", linked, rows)
+			}
+			if !strings.Contains(visible.String(), url) {
+				t.Fatalf("visible rows missing complete URL %q: %#v", url, rows)
+			}
+		})
+	}
 }
