@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -88,6 +89,14 @@ func NewUnixSocketRouterWithOptions(codexHome string, options *RuntimeRouterOpti
 func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	if options == nil {
 		options = &UnixSocketOptions{}
+	}
+	// Rust #51470: a managed app-server daemon raises its soft file descriptor
+	// limit before serving the control socket. The adjustment is best-effort and
+	// preserves an already higher soft limit.
+	if options.ShutdownAccess == DaemonShutdownManaged {
+		if err := raiseManagedDaemonNoFileLimit(); err != nil {
+			slog.Warn("failed to raise managed app-server file descriptor limit", "error", err)
+		}
 	}
 	codexHome := strings.TrimSpace(options.CodexHome)
 	if codexHome == "" {
