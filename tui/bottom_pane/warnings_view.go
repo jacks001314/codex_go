@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/history_cell"
 	"github.com/mattn/go-runewidth"
 )
@@ -274,7 +275,15 @@ func (v *WarningsView) RenderLines(width int, height int, hints WarningsHints) [
 	rows = append(rows, truncateWarningLine(title, inner), "")
 	for index := 0; index < bodyHeight; index++ {
 		if offset+index < len(body) {
-			rows = append(rows, truncateWarningLine(body[offset+index], inner))
+			line := body[offset+index]
+			if codextui.TextContainsURLLike(line) {
+				// A web URL is kept whole (never truncated) and annotated as a
+				// terminal hyperlink, so the destination stays complete even when
+				// it is wider than the panel (Rust #51451).
+				rows = append(rows, codextui.AnnotateCompleteWebURLsInLine(line))
+			} else {
+				rows = append(rows, truncateWarningLine(line, inner))
+			}
 			continue
 		}
 		rows = append(rows, "")
@@ -329,30 +338,21 @@ func truncateWarningLine(text string, width int) string {
 	return string(runes)
 }
 
-// warningsWrapText wraps whitespace-separated words to width, mirroring
-// `textwrap::wrap` for the viewer's plain diagnostics; a word longer than the
-// width occupies its own line.
+// warningsWrapText wraps whitespace-separated words to width, mirroring the
+// viewer's plain diagnostics; a word longer than the width occupies its own
+// line, except that web URLs stay whole so their complete destination survives
+// as a hyperlink (Rust #51451).
 func warningsWrapText(text string, width int) []string {
 	if width < 1 {
 		return nil
 	}
 	var out []string
 	for _, sourceLine := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		words := strings.Fields(sourceLine)
-		if len(words) == 0 {
+		if strings.TrimSpace(sourceLine) == "" {
 			out = append(out, "")
 			continue
 		}
-		current := words[0]
-		for _, word := range words[1:] {
-			if runewidth.StringWidth(current)+1+runewidth.StringWidth(word) <= width {
-				current += " " + word
-				continue
-			}
-			out = append(out, current)
-			current = word
-		}
-		out = append(out, current)
+		out = append(out, codextui.WrapLines([]string{sourceLine}, codextui.WrapOptions{Width: width, BreakWords: true})...)
 	}
 	return out
 }

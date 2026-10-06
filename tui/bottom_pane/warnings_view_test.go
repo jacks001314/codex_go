@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	codextui "codex_go/tui"
 	"codex_go/tui/history_cell"
 )
 
@@ -25,6 +26,39 @@ func warningsEntriesForTest() []historycell.WarningEntry {
 			Source:  "Startup",
 			Details: "Not yet viewed",
 		},
+	}
+}
+
+// TestWarningsViewLinksWrappedURLsLikeRust mirrors Rust #51451: a warning's web
+// URL stays clickable with its complete destination after wrapping and while
+// scrolling the viewer.
+func TestWarningsViewLinksWrappedURLsLikeRust(t *testing.T) {
+	url := "https://github.com/openai/codex/pull/12345?diff=split"
+	entries := warningsEntriesForTest()
+	entries[0].Details = "Review the release notes\n\n" +
+		strings.Repeat("Long context line.\n", 3) +
+		"Review " + url + " before continuing."
+	view := NewWarningsView(entries)
+
+	link := codextui.OSC8Hyperlink(url, url)
+	found := false
+	for attempt := 0; attempt < 20 && !found; attempt++ {
+		rows := view.RenderLines(32, 6, WarningsHints{})
+		if rows == nil {
+			t.Fatal("RenderLines() returned nil")
+		}
+		rendered := strings.Join(rows, "\n")
+		if strings.Contains(rendered, link) {
+			found = true
+			if !strings.Contains(codextui.StripOSC8(rendered), url) {
+				t.Fatalf("wrapped warning split the URL:\n%s", codextui.StripOSC8(rendered))
+			}
+			break
+		}
+		view.MoveDown()
+	}
+	if !found {
+		t.Fatalf("warning URL was never linked with the complete destination")
 	}
 }
 
