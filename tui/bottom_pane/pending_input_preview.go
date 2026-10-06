@@ -103,7 +103,12 @@ func pushPreview(lines *[]string, width int, text string) {
 		})...)
 	}
 	limit := min(len(wrapped), PreviewLineLimit)
-	*lines = append(*lines, wrapped[:limit]...)
+	// Rust #51471: pending steers, rejected steers, and queued follow-ups render
+	// their web URLs as terminal hyperlinks. The wrapping keeps URLs whole, so
+	// each retained line carries a complete destination.
+	for _, line := range wrapped[:limit] {
+		*lines = append(*lines, tui.AnnotateCompleteWebURLsInLine(line))
+	}
 	if len(wrapped) > PreviewLineLimit {
 		*lines = append(*lines, "    \u2026")
 	}

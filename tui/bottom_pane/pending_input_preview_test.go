@@ -3,7 +3,36 @@ package bottompane
 import (
 	"strings"
 	"testing"
+
+	"codex_go/tui"
 )
+
+// TestPendingInputPreviewLinksURLsLikeRust mirrors Rust #51471: pending steers,
+// rejected steers, and queued follow-ups render web URLs as terminal hyperlinks
+// with their complete destination.
+func TestPendingInputPreviewLinksURLsLikeRust(t *testing.T) {
+	url := "https://example.com/docs/guide?page=2"
+	preview := NewPendingInputPreview()
+	preview.PendingSteers = []string{"see " + url}
+	preview.RejectedSteers = []string{"retry " + url}
+	preview.QueuedMessages = []string{"queued " + url}
+	lines := preview.RenderLines(48)
+	linked := 0
+	visible := strings.Builder{}
+	for _, line := range lines {
+		if strings.Contains(line, tui.OSC8Hyperlink(url, url)) {
+			linked++
+		}
+		visible.WriteString(tui.StripOSC8(line))
+		visible.WriteString("\n")
+	}
+	if linked != 3 {
+		t.Fatalf("expected three complete hyperlinks, got %d:\n%s", linked, strings.Join(lines, "\n"))
+	}
+	if !strings.Contains(visible.String(), url) {
+		t.Fatalf("visible text lost the URL:\n%s", visible.String())
+	}
+}
 
 // TestPendingInputPreviewKeepsQueuedGroupWithQuestions covers Rust #42903: while
 // async questions are pending the queued follow-up group stays visible, keeps
