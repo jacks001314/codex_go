@@ -226,3 +226,26 @@ func TestSharedMCPTypesPreambleStableInCodeModeOnly(t *testing.T) {
 		t.Fatalf("direct mode must not include the MCP preamble: %q", direct)
 	}
 }
+
+// Mirrors Rust #50562: the deferred-tool discovery guidance is always present,
+// so the exec description stays stable as the deferred-tool catalog changes.
+func TestDeferredNestedToolsGuidanceStableAcrossCatalogChanges(t *testing.T) {
+	deferred := []ToolDefinition{{
+		Name:        "deferred_echo",
+		ToolName:    tool.ToolName{Name: "deferred_echo"},
+		Description: "Echo a value.",
+	}}
+	for _, codeModeOnly := range []bool{false, true} {
+		empty := BuildExecToolDescriptionWithDeferred(nil, nil, nil, codeModeOnly, false)
+		populated := BuildExecToolDescriptionWithDeferred(nil, deferred, nil, codeModeOnly, true)
+		if !strings.Contains(empty, deferredNestedToolsGuidance) {
+			t.Fatalf("code_mode_only=%t: guidance missing with an empty deferred catalog: %q", codeModeOnly, empty)
+		}
+		if !strings.Contains(populated, deferredNestedToolsGuidance) {
+			t.Fatalf("code_mode_only=%t: guidance missing with a populated deferred catalog: %q", codeModeOnly, populated)
+		}
+		if !strings.Contains(deferredNestedToolsGuidance, "Tool availability can change between calls") {
+			t.Fatalf("guidance must note that availability can change: %q", deferredNestedToolsGuidance)
+		}
+	}
+}

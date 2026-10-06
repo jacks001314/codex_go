@@ -30,8 +30,13 @@ NEWLINE: /\r?\n/
 SOURCE: /[\s\S]+/
 `
 
-const deferredNestedToolsGuidance = `Some deferred nested tools may be omitted from this description. They are still available on the global tools object and listed in ALL_TOOLS.
-To find one, filter ALL_TOOLS by name and description.`
+// deferredNestedToolsGuidance mirrors Rust's `DEFERRED_NESTED_TOOLS_GUIDANCE`
+// (#50562): it is emitted unconditionally because tool availability can change
+// between calls, so conditioning it on the current catalog would change the
+// `exec` description mid-session.
+const deferredNestedToolsGuidance = "Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.\n" +
+	"To find one, filter `ALL_TOOLS` by `name` and `description`.\n\n" +
+	"Tool availability can change between calls."
 
 // mcpTypescriptPreamble mirrors Rust's `MCP_TYPESCRIPT_PREAMBLE`: the shared MCP
 // TypeScript definitions emitted whenever `code_mode_only` is enabled (Rust
@@ -276,10 +281,9 @@ func BuildExecToolDescription(definitions []ToolDefinition, namespaces map[strin
 }
 
 func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferredDefinitions []ToolDefinition, namespaces map[string]NamespaceDescription, codeModeOnly bool, deferredToolsAvailable bool) string {
-	sections := []string{execDescriptionTemplate}
-	if deferredToolsAvailable || len(deferredDefinitions) > 0 {
-		sections = append(sections, deferredNestedToolsGuidance)
-	}
+	// Rust #50562: the discovery guidance is always present so the `exec`
+	// description stays stable as the deferred-tool catalog changes.
+	sections := []string{execDescriptionTemplate, deferredNestedToolsGuidance}
 	if !codeModeOnly {
 		return strings.Join(sections, "\n\n")
 	}

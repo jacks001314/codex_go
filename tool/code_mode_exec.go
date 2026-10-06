@@ -24,6 +24,16 @@ const CodeModeWaitToolName = "wait"
 
 const CodeModeDefaultExecYieldTime = 30 * time.Second
 
+// codeModeDeferredNestedToolsGuidance mirrors Rust's
+// `DEFERRED_NESTED_TOOLS_GUIDANCE` (code-mode-protocol, #50562). It is emitted
+// unconditionally so the `exec` description stays stable as the deferred-tool
+// catalog changes. It is duplicated here (rather than imported from the
+// `codemode` package, which imports `tool`) to keep this inline description
+// self-contained.
+const codeModeDeferredNestedToolsGuidance = "Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.\n" +
+	"To find one, filter `ALL_TOOLS` by `name` and `description`.\n\n" +
+	"Tool availability can change between calls."
+
 const (
 	codeModeMaxFrameBytes       = 64 * 1024 * 1024
 	codeModeMaxPendingCallbacks = 1024
@@ -557,6 +567,9 @@ Global helpers:
 - ALL_TOOLS: Metadata for enabled nested tools as { name, description } entries.
 - yield_control(): Yields accumulated output while the script keeps running.`
 	description = strings.Replace(description, "Defaults to 10000 ms.", fmt.Sprintf("Defaults to %d ms.", defaultYieldTimeMS), 1)
+	// Rust #50562: emit the discovery guidance unconditionally so the exec
+	// description does not change as the deferred-tool catalog changes.
+	description += "\n\n" + codeModeDeferredNestedToolsGuidance
 
 	if registry == nil {
 		return description
