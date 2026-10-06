@@ -642,6 +642,56 @@ func TestModelExternalEditorReportsError(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #51411: repeated image-paste presses inside a sliding 250 ms
+// window are suppressed (and the window refreshed), a press after the window
+// pastes again, and any other key clears the window.
+func TestImagePasteSuppressionWindowLikeRust(t *testing.T) {
+	model := NewModel(nil, Options{Width: 80, Height: 24})
+	start := time.Unix(0, 0)
+	now := start
+	model.now = func() time.Time { return now }
+
+	if model.noteImagePastePress(model.currentTime()) {
+		t.Fatal("first image-paste press must not be suppressed")
+	}
+	if want := start.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
+		t.Fatalf("window = %s, want %s", model.suppressImagePasteUntil, want)
+	}
+
+	now = start.Add(100 * time.Millisecond)
+	if !model.noteImagePastePress(model.currentTime()) {
+		t.Fatal("repeat inside the window must be suppressed")
+	}
+	if want := now.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
+		t.Fatalf("refreshed window = %s, want %s", model.suppressImagePasteUntil, want)
+	}
+
+	now = now.Add(imagePasteRepeatWindow + time.Millisecond)
+	if model.noteImagePastePress(model.currentTime()) {
+		t.Fatal("press after the window expires must not be suppressed")
+	}
+}
+
+// A suppressed Ctrl+V press is ignored before any clipboard access, and a
+// different key (or a keymap-reset path) clears the window.
+func TestModelImagePasteSuppressionWiringLikeRust(t *testing.T) {
+	model := NewModel(nil, Options{Width: 80, Height: 24})
+	now := time.Unix(0, 0)
+	model.now = func() time.Time { return now }
+	model.suppressImagePasteUntil = now.Add(time.Second)
+
+	model.Update(key(bubbletea.KeyCtrlV))
+	if want := now.Add(imagePasteRepeatWindow); !model.suppressImagePasteUntil.Equal(want) {
+		t.Fatalf("suppressed Ctrl+V window = %s, want %s", model.suppressImagePasteUntil, want)
+	}
+
+	model.suppressImagePasteUntil = now.Add(time.Second)
+	model.Update(runes("x"))
+	if !model.suppressImagePasteUntil.IsZero() {
+		t.Fatalf("other key must clear the window, got %s", model.suppressImagePasteUntil)
+	}
+}
+
 func TestModelPasteBurstEnterInsertsNewlineWithoutSubmitting(t *testing.T) {
 	now := time.Unix(0, 0)
 	var requests []SubmitRequest

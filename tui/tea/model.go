@@ -58,6 +58,9 @@ const (
 	regionChromeMinWidth  = 100
 	footerHelpText        = "Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands"
 	mcpStartupFinishLag   = 4 * time.Second
+	// imagePasteRepeatWindow mirrors Rust's IMAGE_PASTE_REPEAT_WINDOW (#51411):
+	// the sliding window that suppresses auto-repeat image-paste presses.
+	imagePasteRepeatWindow = 250 * time.Millisecond
 )
 
 // SubmitFunc lets the runtime layer attach prompt execution without coupling
@@ -1842,7 +1845,12 @@ type Model struct {
 	// follows a short prefix - including a single Unicode rune inserted without a
 	// held first character - still belongs to the paste burst.
 	composerLastCharAt *time.Time
-	now                func() time.Time
+	// suppressImagePasteUntil mirrors Rust #51411: legacy terminals report key
+	// auto-repeat as new presses, so an image-paste burst is suppressed within a
+	// sliding 250 ms window that refreshes after each suppressed press and after
+	// a paste. Any other key press clears the window so a fresh paste proceeds.
+	suppressImagePasteUntil time.Time
+	now                     func() time.Time
 }
 
 // transcriptMessageKey identifies the render inputs for a single transcript
@@ -2723,6 +2731,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		cmd := m.applyStreamMessage(msg.Message)
 		return m, bubbletea.Batch(cmd, waitForStream(msg.Messages))
 	case bubbletea.KeyMsg:
+		// Rust #51411: any key other than the image-paste shortcut clears the
+		// suppression window so a fresh paste can proceed immediately.
+		if m != nil && msg.Type != bubbletea.KeyCtrlV {
+			m.suppressImagePasteUntil = time.Time{}
+		}
 		// The warnings viewer (#48205/#48206) owns the keyboard while it is open;
 		// no key is forwarded to the draft.
 		if m.warningsView != nil {
@@ -2791,6 +2804,13 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 			// terminals. Read the native clipboard explicitly and insert it into
 			// the focused composer.
 			if m.modal == nil && m.overlay == nil {
+				// Rust #51411: legacy terminals deliver key auto-repeat as new
+				// presses, so a repeated image-paste press inside the sliding
+				// window is ignored (and the window refreshed) to avoid a burst
+				// of duplicate pastes during a slow paste.
+				if m.noteImagePastePress(m.currentTime()) {
+					return m, nil
+				}
 				if path, err := pasteImageFromClipboard(); err == nil {
 					m.attachments = append(m.attachments, bottompane.ComposerAttachment{Kind: bottompane.AttachmentImage, Path: path})
 					m.notice = "Attached image " + path
@@ -3805,6 +3825,19 @@ func (m *Model) currentTime() time.Time {
 		return m.now()
 	}
 	return time.Now()
+}
+
+// noteImagePastePress applies Rust #51411's sliding suppression window for the
+// image-paste shortcut. It refreshes the window to `now + imagePasteRepeatWindow`
+// and reports whether the press landed inside it, so the caller can ignore an
+// auto-repeat. Any other key press clears the window (see the KeyMsg handler).
+func (m *Model) noteImagePastePress(now time.Time) bool {
+	if m == nil {
+		return false
+	}
+	suppressed := now.Before(m.suppressImagePasteUntil)
+	m.suppressImagePasteUntil = now.Add(imagePasteRepeatWindow)
+	return suppressed
 }
 
 func (m *Model) noteComposerRunes(runes []rune, now time.Time) {
