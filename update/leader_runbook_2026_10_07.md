@@ -29,6 +29,12 @@
 - A2A：`type=request/response/message` + `mode=async`，不 sleep 不轮询；同一 request 不可重发。
 - 提交编号只在 main 侧编排（车道自编号常撞号）。
 
+## R7 并入必须「整提交并入」（2026-10-07 血案教训）
+- `git cherry-pick -n <sha>` 之后**不要按路径子集 `git commit -- <paths>`**，除非先证明该车道提交的**文件集互不相交**。
+- 正确做法二选一：① 整提交一次 commit；② 先 `git show --name-only <lane-sha>` 与 `git show --name-only <my-commit>` **比对文件集**，缺哪个补哪个。
+- **实例**：sync534 `e721afed`(#49339) 与 sync535 `e9ff5187`(#47932) 漏掉 `appserver/runtime_router_test.go`（Bedrock provider-fallback 断言仍期望旧的 `gpt-5.6-sol`），导致 main 上 `TestRuntimeRouterThreadStartProviderModelFallbackUsesBedrockStaticCatalog` 失败，直到 sync545 跑全包才发现 → 用 **sync546 `4ba47a09`** 回补（`git checkout 35205331 -- appserver/runtime_router_test.go`）。
+- **附加规则**：每次并入后跑**受影响包的整包测试**（不只是 `-run` 子集），并把「新增失败」与基线清单逐条比对。
+
 ## R5 已知基线失败（勿「修」）
 `appserver` 4（GatewayOAuth / OtelProviderReloads 偶发 / PluginList per-repo / TurnStartFileChangeApplyFailure）·
 `tool` 3 · `execserver` 3（symlink / TemporaryDirectories / sandbox helper）· `config` 4 · `model` 2
