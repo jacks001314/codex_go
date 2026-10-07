@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -313,4 +314,80 @@ func dedupeSortedStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+// TestRustAppServerProtocolFieldsAgainstGoLikeRust pins the app-server protocol
+// fields from the upstream delta between 5f3180c793 and 18e28fe1b9 that the Go
+// port models directly. It reads the Rust definitions and requires the matching
+// Go field/tag to exist, so a Rust rename or removal fails instead of silently
+// drifting.
+//
+// Rust #51157 (environment.rs): EnvironmentAddParams.skills -> EnvironmentSkillsParams.required
+// Rust #49598 (thread.rs): ThreadGoalMutationOrigin + ThreadGoalSetParams/ClearParams.origin
+// Rust #51217 (thread_data.rs): MisalignmentErrorDetails.review_target
+func TestRustAppServerProtocolFieldsAgainstGoLikeRust(t *testing.T) {
+	root := rustAppserverRustRoot(t)
+	v2 := filepath.Join(root, "app-server-protocol", "src", "protocol", "v2")
+
+	environment := readRustProtocolSource(t, filepath.Join(v2, "environment.rs"))
+	for _, want := range []string{
+		"pub skills: Option<EnvironmentSkillsParams>,",
+		"pub struct EnvironmentSkillsParams {",
+		"pub required: Option<Vec<String>>,",
+	} {
+		if !strings.Contains(environment, want) {
+			t.Fatalf("Rust environment.rs no longer declares %q", want)
+		}
+	}
+
+	thread := readRustProtocolSource(t, filepath.Join(v2, "thread.rs"))
+	for _, want := range []string{
+		"pub enum ThreadGoalMutationOrigin {",
+		"pub origin: Option<ThreadGoalMutationOrigin>,",
+	} {
+		if !strings.Contains(thread, want) {
+			t.Fatalf("Rust thread.rs no longer declares %q", want)
+		}
+	}
+	if got := strings.Count(thread, "pub origin: Option<ThreadGoalMutationOrigin>,"); got != 2 {
+		t.Fatalf("Rust thread.rs origin field count = %d, want 2 (set + clear)", got)
+	}
+
+	threadData := readRustProtocolSource(t, filepath.Join(v2, "thread_data.rs"))
+	if !strings.Contains(threadData, "pub review_target: Option<String>,") {
+		t.Fatalf("Rust thread_data.rs no longer declares the review_target field")
+	}
+
+	// Go side: decode Rust-shaped params so the fields are proven reachable.
+	var envParams EnvironmentAddParams
+	if err := json.Unmarshal([]byte(`{"environmentId":"remote-a","execServerUrl":"ws://127.0.0.1:8765","connectTimeoutMs":300000,"skills":{"required":["parity-skill"]}}`), &envParams); err != nil {
+		t.Fatalf("decode EnvironmentAddParams: %v", err)
+	}
+	if envParams.Skills == nil || len(envParams.Skills.Required) != 1 || envParams.Skills.Required[0] != "parity-skill" {
+		t.Fatalf("EnvironmentAddParams.skills = %#v, want required=[parity-skill]", envParams.Skills)
+	}
+
+	var setParams GoalSetParams
+	if err := json.Unmarshal([]byte(`{"threadId":"goal-thread","origin":"user","objective":"ship it"}`), &setParams); err != nil {
+		t.Fatalf("decode GoalSetParams: %v", err)
+	}
+	if setParams.Origin == nil || *setParams.Origin != ThreadGoalMutationOriginUser {
+		t.Fatalf("GoalSetParams.origin = %#v, want user", setParams.Origin)
+	}
+
+	var clearParams GoalClearParams
+	if err := json.Unmarshal([]byte(`{"threadId":"thr_123","origin":"automatic"}`), &clearParams); err != nil {
+		t.Fatalf("decode GoalClearParams: %v", err)
+	}
+	if clearParams.Origin == nil || *clearParams.Origin != ThreadGoalMutationOriginAutomatic {
+		t.Fatalf("GoalClearParams.origin = %#v, want automatic", clearParams.Origin)
+	}
+
+	var errNotif ErrorNotification
+	if err := json.Unmarshal([]byte(`{"error":{"message":"blocked","codexErrorInfo":"misalignmentPolicyViolation","misalignment":{"errorType":"unauthorized_data_transfer","reviewTarget":"blk_1"}}}`), &errNotif); err != nil {
+		t.Fatalf("decode ErrorNotification: %v", err)
+	}
+	if errNotif.Error.Misalignment == nil || errNotif.Error.Misalignment.ReviewTarget == nil || *errNotif.Error.Misalignment.ReviewTarget != "blk_1" {
+		t.Fatalf("TurnError.misalignment.reviewTarget = %#v, want blk_1", errNotif.Error.Misalignment)
+	}
 }

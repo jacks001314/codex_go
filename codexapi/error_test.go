@@ -1,7 +1,9 @@
 package codexapi
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,5 +55,28 @@ func TestLegacyAPIErrorFieldsRemainCompatible(t *testing.T) {
 	}
 	if got := RetryDelay(err); got != 2*time.Second {
 		t.Fatalf("legacy RetryDelay() = %v", got)
+	}
+}
+
+// TestMisalignmentReviewTargetLikeRust covers the ReviewTarget field added to
+// the Responses-API misalignment block details by Rust #51217
+// ("Preserve review targets and scope misalignment continuation metadata",
+// codex-protocol/src/protocol.rs MisalignmentErrorDetails::review_target). The
+// opaque target must survive a JSON round trip so the app-server can forward it
+// to clients.
+func TestMisalignmentReviewTargetLikeRust(t *testing.T) {
+	var details MisalignmentDetails
+	if err := json.Unmarshal([]byte(`{"errorType":"unauthorized_data_transfer","detailedExplanation":"explain","steer":{"message":"continue"},"reviewTarget":"blk_123"}`), &details); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if details.ReviewTarget == nil || *details.ReviewTarget != "blk_123" {
+		t.Fatalf("ReviewTarget = %#v, want blk_123", details.ReviewTarget)
+	}
+	encoded, err := json.Marshal(details)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"reviewTarget":"blk_123"`) {
+		t.Fatalf("encoded details = %s, want reviewTarget key", encoded)
 	}
 }

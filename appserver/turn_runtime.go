@@ -4223,7 +4223,13 @@ func misalignmentDetailsFromError(err error) *MisalignmentErrorDetails {
 		return nil
 	}
 	m := apiErr.Misalignment
-	out := &MisalignmentErrorDetails{ErrorType: m.ErrorType, DetailedExplanation: m.DetailedExplanation}
+	out := &MisalignmentErrorDetails{
+		ErrorType:           m.ErrorType,
+		DetailedExplanation: m.DetailedExplanation,
+		// Rust #51217: the opaque review target rides along with the
+		// explanation so clients can ask for target-based continuation.
+		ReviewTarget: m.ReviewTarget,
+	}
 	if m.Steer != nil {
 		out.Steer = &MisalignmentSteer{Message: m.Steer.Message}
 	}

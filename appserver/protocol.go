@@ -934,6 +934,10 @@ type MisalignmentErrorDetails struct {
 	ErrorType           *string            `json:"errorType,omitempty"`
 	DetailedExplanation *string            `json:"detailedExplanation,omitempty"`
 	Steer               *MisalignmentSteer `json:"steer,omitempty"`
+	// ReviewTarget is the opaque server-issued block target carried by the
+	// Responses API for a resumable misalignment block (Rust #51217). Its
+	// presence alone does not enable target-based continuation.
+	ReviewTarget *string `json:"reviewTarget,omitempty"`
 }
 
 type MisalignmentSteer struct {

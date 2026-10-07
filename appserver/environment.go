@@ -147,10 +147,23 @@ type EnvironmentAddParams struct {
 	EnvironmentID    string  `json:"environmentId"`
 	ExecServerURL    string  `json:"execServerUrl"`
 	ConnectTimeoutMS *uint64 `json:"connectTimeoutMs,omitempty"`
+	// Skills lists the skills this environment is required to supply, checked
+	// before model inference (Rust #51157). Rust serializes the field even when
+	// absent (as `null`); Go omits it when nil, matching the surrounding
+	// nullable-optional fields on this struct.
+	Skills *EnvironmentSkillsParams `json:"skills,omitempty"`
 	// AuthBearerToken is the optional raw bearer token for executor
 	// authentication, including reconnects (Rust #47648). It requires a secure
 	// transport or a loopback destination and is never echoed in diagnostics.
 	AuthBearerToken *string `json:"authBearerToken,omitempty"`
+}
+
+// EnvironmentSkillsParams mirrors Rust EnvironmentSkillsParams (Rust #51157):
+// the exact skill catalog names an environment must provide.
+type EnvironmentSkillsParams struct {
+	// Required is the set of exact catalog names that must be available from
+	// this environment before a turn's first model request.
+	Required []string `json:"required,omitempty"`
 }
 
 func (m *EnvironmentManager) SetHTTPClient(httpClient *http.Client) {

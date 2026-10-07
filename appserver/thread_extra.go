@@ -67,13 +67,24 @@ func (g *Goal) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// ThreadGoalMutationOrigin mirrors Rust ThreadGoalMutationOrigin (Rust #49598):
+// it distinguishes explicit user actions from automatic goal lifecycle
+// mutations. A missing origin does not supply user authorization.
+type ThreadGoalMutationOrigin string
+
+const (
+	ThreadGoalMutationOriginUser      ThreadGoalMutationOrigin = "user"
+	ThreadGoalMutationOriginAutomatic ThreadGoalMutationOrigin = "automatic"
+)
+
 type GoalSetParams struct {
-	ThreadID           string      `json:"threadId"`
-	Objective          *string     `json:"objective,omitempty"`
-	TokenBudget        *int64      `json:"tokenBudget,omitempty"`
-	TokenBudgetSet     bool        `json:"-"`
-	Status             *GoalStatus `json:"status,omitempty"`
-	MaxGoalTokenBudget *int64      `json:"-"`
+	ThreadID           string                    `json:"threadId"`
+	Objective          *string                   `json:"objective,omitempty"`
+	TokenBudget        *int64                    `json:"tokenBudget,omitempty"`
+	TokenBudgetSet     bool                      `json:"-"`
+	Status             *GoalStatus               `json:"status,omitempty"`
+	Origin             *ThreadGoalMutationOrigin `json:"origin,omitempty"`
+	MaxGoalTokenBudget *int64                    `json:"-"`
 }
 
 func (p *GoalSetParams) UnmarshalJSON(data []byte) error {
@@ -141,7 +152,8 @@ type GoalGetResponse struct {
 }
 
 type GoalClearParams struct {
-	ThreadID string `json:"threadId"`
+	ThreadID string                    `json:"threadId"`
+	Origin   *ThreadGoalMutationOrigin `json:"origin,omitempty"`
 }
 
 func (p *GoalClearParams) Validate() error {
