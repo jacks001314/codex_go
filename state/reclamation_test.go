@@ -2,7 +2,10 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -163,7 +166,7 @@ func TestReclamationWorkerDefersToTheHomeOwnerLikeRust(t *testing.T) {
 			t.Fatalf("reclamation targets = %#v, want only the logs database", worker.targets)
 		}
 		worker.idleInterval = time.Millisecond
-		worker.probe = func(context.Context, reclamationTarget, reclamationOptions) reclamationResult {
+		worker.probe = func(context.Context, reclamationTarget, reclamationOptions, <-chan struct{}) reclamationResult {
 			counter.Add(1)
 			return reclamationResult{pass: reclamationPass{outcome: reclamationOutcomeActive}}
 		}
@@ -199,7 +202,7 @@ func TestReclamationWorkerCloseWaitsForThePassLikeRust(t *testing.T) {
 	worker.idleInterval = time.Millisecond
 	started := make(chan struct{})
 	release := make(chan struct{})
-	worker.probe = func(context.Context, reclamationTarget, reclamationOptions) reclamationResult {
+	worker.probe = func(context.Context, reclamationTarget, reclamationOptions, <-chan struct{}) reclamationResult {
 		select {
 		case started <- struct{}{}:
 		default:
@@ -295,4 +298,195 @@ func waitForReclamation(t *testing.T, done func() bool, what string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// reclamationLogsDB seeds a migrated logs database whose free pages exceed the
+// 64 MiB admission threshold, mirroring the fixture in Rust
+// `interrupted_reclamation_releases_writer_and_resumes_without_data_loss`
+// (Rust #49069, upstream 33a0f766a6).
+func reclamationLogsDB(t *testing.T, rows int64) (SqliteConfig, *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	config := mustSqliteConfig(t, t.TempDir())
+	db, err := config.OpenReadWrite(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := migrateRuntimeDB(ctx, db, RuntimeDBLogs); err != nil {
+		t.Fatalf("migrate logs database: %v", err)
+	}
+	seed := fmt.Sprintf(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < %d) `+
+		`INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id, process_uuid) `+
+		`SELECT unixepoch(), 0, 'INFO', 'fixture', printf('%%032768d', i), 'thread-'||i, 'process-'||(i%%17) FROM n`, rows)
+	if _, err := db.ExecContext(ctx, seed); err != nil {
+		t.Fatalf("seed logs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM logs WHERE id%4 != 0`); err != nil {
+		t.Fatalf("delete logs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("checkpoint logs: %v", err)
+	}
+	return config, db
+}
+
+func reclamationMaintenanceConn(t *testing.T, path string) *sql.Conn {
+	t.Helper()
+	ctx := context.Background()
+	db, err := openReclamationDB(ctx, path)
+	if err != nil {
+		t.Fatalf("openReclamationDB: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("maintenance Conn: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func reclamationQueryInt(t *testing.T, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, query string) int64 {
+	t.Helper()
+	var value int64
+	if err := q.QueryRowContext(context.Background(), query).Scan(&value); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+	return value
+}
+
+// TestReclamationPassPreservesTheReserveLikeRust covers Rust `reclaim_pages`:
+// one pass reclaims until only the reserve is free, reports exactly the pages it
+// removed and leaves the retained rows and the file intact.
+func TestReclamationPassPreservesTheReserveLikeRust(t *testing.T) {
+	ctx := context.Background()
+	config, db := reclamationLogsDB(t, 4096)
+	pageSize := reclamationQueryInt(t, db, `PRAGMA page_size`)
+	pagesBefore := reclamationQueryInt(t, db, `PRAGMA page_count`)
+	freeBefore := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	bytesBefore := int64(len(mustReadFile(t, config.LogsDBPath())))
+	conn := reclamationMaintenanceConn(t, config.LogsDBPath())
+
+	pass, err := reclaimPages(ctx, conn, reclamationOptions{
+		budget:     reclamationBudget{deadline: time.Now().Add(2 * time.Minute), pages: 1 << 20},
+		batchPages: 1024,
+	}, nil)
+	if err != nil {
+		t.Fatalf("reclaimPages: %v", err)
+	}
+	if pass.outcome != reclamationOutcomeIdle {
+		t.Fatalf("outcome = %v, pages = %d, free = %d, reserve = %d", pass.outcome, pass.pages,
+			reclamationQueryInt(t, db, `PRAGMA freelist_count`), reclamationReservePages(pageSize, pagesBefore))
+	}
+	wantReserve := reclamationReservePages(pageSize, pagesBefore)
+	free := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	if free != wantReserve {
+		t.Fatalf("free pages after the pass = %d, want the %d-page reserve", free, wantReserve)
+	}
+	if free*pageSize < reclamationReserveBytes {
+		t.Fatalf("reserve = %d bytes, want at least %d", free*pageSize, reclamationReserveBytes)
+	}
+	// Rust asserts the reported pages equal the freelist delta, and that the
+	// database shrinks by at least that many pages.
+	if got, want := freeBefore-free, int64(pass.pages); got != want {
+		t.Fatalf("freelist shrank by %d pages but the pass reported %d", got, want)
+	}
+	if pass.pages == 0 {
+		t.Fatalf("pass reclaimed nothing from a database with a large freelist")
+	}
+	pagesAfter := reclamationQueryInt(t, db, `PRAGMA page_count`)
+	if pagesAfter > pagesBefore-int64(pass.pages) {
+		t.Fatalf("database went from %d to %d pages after reclaiming %d", pagesBefore, pagesAfter, pass.pages)
+	}
+	bytesAfter := int64(len(mustReadFile(t, config.LogsDBPath())))
+	if bytesAfter >= bytesBefore {
+		t.Fatalf("reclamation must shrink the database: %d -> %d bytes", bytesBefore, bytesAfter)
+	}
+	// The retained rows are untouched and the database stays healthy.
+	var rows, longest int64
+	if err := db.QueryRowContext(ctx, `SELECT count(*), max(length(feedback_log_body)) FROM logs`).Scan(&rows, &longest); err != nil {
+		t.Fatalf("count logs: %v", err)
+	}
+	if rows != 1024 || longest != 32768 {
+		t.Fatalf("retained rows changed: count=%d longest=%d", rows, longest)
+	}
+	var integrity string
+	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		t.Fatalf("integrity_check: %v", err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", integrity)
+	}
+}
+
+// TestReclamationWorkerReclaimsLogsPagesLikeRust covers the wiring end to end:
+// the runtime's worker owns the home and shrinks the logs database without any
+// test-visible hook.
+func TestReclamationWorkerReclaimsLogsPagesLikeRust(t *testing.T) {
+	config, db := reclamationLogsDB(t, 4096)
+	freeBefore := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	worker := newSqliteReclamationWorker(config)
+	if worker == nil {
+		t.Fatalf("the logs database must opt into background reclamation")
+	}
+	// Only the ownership election is sped up; the pass keeps Rust's budget.
+	worker.idleInterval = time.Millisecond
+	go worker.run()
+	defer worker.close()
+	waitForReclamation(t, func() bool {
+		return reclamationQueryInt(t, db, `PRAGMA freelist_count`) < freeBefore
+	}, "the worker to reclaim log database pages")
+}
+
+// TestReclamationPassDefersWhileAnotherWriterHoldsTheLockLikeRust covers Rust's
+// contention path: a second writer defers the pass instead of queueing behind
+// it, because the maintenance connection uses no busy wait.
+func TestReclamationPassDefersWhileAnotherWriterHoldsTheLockLikeRust(t *testing.T) {
+	ctx := context.Background()
+	config, db := reclamationLogsDB(t, 4096)
+	writer, err := config.OpenReadWrite(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	writerConn, err := writer.Conn(ctx)
+	if err != nil {
+		t.Fatalf("writer Conn: %v", err)
+	}
+	defer func() { _ = writerConn.Close() }()
+	if _, err := writerConn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("writer BEGIN IMMEDIATE: %v", err)
+	}
+	defer func() { _, _ = writerConn.ExecContext(context.Background(), `ROLLBACK`) }()
+
+	freeBefore := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	conn := reclamationMaintenanceConn(t, config.LogsDBPath())
+	pass, err := reclaimPages(ctx, conn, reclamationOptions{
+		budget:     reclamationBudget{deadline: time.Now().Add(30 * time.Second), pages: 1024},
+		batchPages: 64,
+	}, nil)
+	if err != nil {
+		t.Fatalf("reclaimPages must defer instead of failing: %v", err)
+	}
+	if pass.outcome != reclamationOutcomeContended {
+		t.Fatalf("outcome = %v, want contended while another writer holds the lock", pass.outcome)
+	}
+	if pass.pages != 0 {
+		t.Fatalf("pages = %d, want 0 while another writer holds the lock", pass.pages)
+	}
+	if free := reclamationQueryInt(t, db, `PRAGMA freelist_count`); free != freeBefore {
+		t.Fatalf("freelist changed from %d to %d while another writer held the lock", freeBefore, free)
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return content
 }
