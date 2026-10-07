@@ -3,6 +3,7 @@
 package codexuds
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -433,6 +434,17 @@ func closeGuard(guard *os.File) {
 	if guard != nil {
 		_ = guard.Close()
 	}
+}
+
+// connectUnixSocket dials socketPath directly: Windows encodes the path into
+// the AF_UNIX sun_path field and rejects an over-long path before connecting
+// (Rust uds::windows platform has no symlink retry).
+func connectUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, "unix", strings.TrimSpace(socketPath))
 }
 
 // prepareControlSocketPath refuses to take over a socket that already answers

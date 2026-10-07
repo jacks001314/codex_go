@@ -9,6 +9,7 @@
 package codexuds
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -58,4 +59,12 @@ func PrepareControlSocketPath(socketPath string) error {
 // (Rust uds::UnixStream::ensure_non_elevated_peer).
 func EnsureNonElevatedPeer(conn net.Conn) error {
 	return ensureNonElevatedPeer(conn)
+}
+
+// ConnectUnixSocket connects to an advertised Unix socket path. On Unix an
+// advertised path can exceed the kernel's sun_path limit even when its symlink
+// target is short enough to connect to, so the path is resolved and the
+// connection retried (Rust uds::UnixStream::connect -> platform::connect_stream).
+func ConnectUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	return connectUnixSocket(ctx, socketPath)
 }

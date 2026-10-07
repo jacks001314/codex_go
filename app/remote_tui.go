@@ -2837,8 +2837,9 @@ func (c *remoteAppServerTUIClient) close() {
 }
 
 func remoteDialUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
-	var dialer net.Dialer
-	return dialer.DialContext(ctx, "unix", socketPath)
+	// Rust app-server-client connects through codex_uds::UnixStream::connect, so
+	// an advertised path that is a long symlink resolves to its socket target.
+	return codexuds.ConnectUnixSocket(ctx, socketPath)
 }
 
 // remoteDialUnixSocketWebSocket dials the control socket and upgrades it to the

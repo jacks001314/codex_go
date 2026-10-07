@@ -3,10 +3,13 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
 	"strings"
+
+	"codex_go/codexuds"
 )
 
 func bridgeStdioToUDS(socketPath string, stdin io.Reader, stdout io.Writer) error {
@@ -14,7 +17,7 @@ func bridgeStdioToUDS(socketPath string, stdin io.Reader, stdout io.Writer) erro
 	if socketPath == "" {
 		return errors.New("stdio-to-uds requires SOCKET_PATH")
 	}
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := codexuds.ConnectUnixSocket(context.Background(), socketPath)
 	if err != nil {
 		return err
 	}

@@ -3,11 +3,13 @@
 package codexuds
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // socketDirectoryMode keeps the rendezvous directory owner-only: owner
@@ -69,4 +71,26 @@ func prepareControlSocketPath(socketPath string) error {
 // peer.
 func ensureNonElevatedPeer(net.Conn) error {
 	return nil
+}
+
+// connectUnixSocket connects to socketPath, retrying through the resolved
+// symlink target when the kernel rejects the advertised path with EINVAL
+// (Rust uds::platform::connect_stream).
+func connectUnixSocket(ctx context.Context, socketPath string) (net.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	socketPath = strings.TrimSpace(socketPath)
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err == nil || !errors.Is(err, syscall.EINVAL) {
+		return conn, err
+	}
+	// The advertised path may exceed sun_path even when its symlink target is a
+	// short socket path. Resolve it before retrying.
+	resolved, resolveErr := filepath.EvalSymlinks(socketPath)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+	return dialer.DialContext(ctx, "unix", resolved)
 }
