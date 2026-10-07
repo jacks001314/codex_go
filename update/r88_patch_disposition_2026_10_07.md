@@ -103,3 +103,16 @@ Test-Path C:\rw\codex-rs\core\tests\windows_sandbox.rs         -> False
 * 台账：`update/r86_landing_ledger_2026_10_07.md`
 * 收尾单一事实源：`update/r88_shutdown_status_2026_10_07.md`
 * 覆盖审计：`update/verify_round88b_sync652_659_2026_10_07.md`（GREEN）、`update/verify_main_c9fbd10f_2026_10_07.md`（GREEN）
+
+---
+
+## 7. 更新（2026-10-07 收尾后）
+
+按 leader 指示，**已落主的 63 个补丁文件已从 `update/r86_patches/` 删除**（commit `dd3e83a3`）：
+
+* 删除清单即 §0 表中「已在 main 里」的 63 个；
+* 完整副本仍在 git 历史里，可随时取回：`git show 08caefa8:update/r86_patches/<name>`，
+  或列出全部删除项 `git log --diff-filter=D --name-only -- update/r86_patches`；
+* 目录内现仅保留 3 个未落主补丁，并在 `update/r86_patches/README.md` 中写明原因与解锁条件。
+
+因此 §0 / §1 中「66 个文件」描述的是**删除前**的存档状态；当前目录为 4 个文件（3 补丁 + README）。
