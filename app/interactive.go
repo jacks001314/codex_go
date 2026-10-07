@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -866,7 +867,13 @@ func isRealTerminal(value any) bool {
 
 func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
-	settings := interactiveTUISettings(root)
+	// Rust #51510: the TUI bootstrap carries the live local settings into the new
+	// thread (app/new_session.rs load_new_session_config plus
+	// session_lifecycle.rs `self.local_settings = local_settings`). A failed
+	// configuration reload keeps the live record instead of the zero record a
+	// failed resolve would otherwise hand to the Model.
+	liveSettings := interactiveNewThreadLocalSettings(root)
+	settings := liveSettings.Tui
 	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
@@ -1559,6 +1566,87 @@ func interactiveKeymapEditHandler(root *cli.RootOptions) codextea.KeymapEditFunc
 		}
 		return keymap, message, nil
 	}
+}
+
+// interactiveLocalSettings is the app-layer staging record for the client-owned
+// TUI preferences this launcher owns (Rust #51510 `LocalSettings`,
+// codex-rs/tui/src/local_settings.rs).
+//
+// Field mapping against Rust: `Tui` carries `LocalSettings::tui`, the
+// client-owned preference set (Go: codextea.SettingsWriteResult, whose nil
+// pointer fields keep the live value when the record is applied). NoAltScreen
+// carries the launcher-owned terminal half of the record: Rust
+// `LocalSettings::reloaded` restores `tui.alternate_screen` from the launch, so a
+// configuration reload may never change the terminal ownership of the running
+// TUI. Go carries that half as Model.noAltScreen / codextea.Options.NoAltScreen,
+// which is what this field preserves across a reload.
+//
+// Scope note: on this base tui/tea exposes the reload-outcome contract
+// (SettingsReloadOutcome / SettingsReloadOutcomeFor / ReloadedLocalSettings in
+// tui/tea/local_settings.go) but not Rust's `LocalSettings` record itself, so the
+// app layer carries the record and delegates the merge semantics to that
+// contract. If a tea-layer staging record lands, this type maps onto it
+// field-for-field.
+type interactiveLocalSettings struct {
+	Tui         codextea.SettingsWriteResult
+	NoAltScreen bool
+}
+
+// interactiveLocalSettingsFromLive mirrors Rust `LocalSettings::from(&config)`
+// (Rust #51510): the record is derived from launch state the host already owns -
+// the resolved preferences plus the launcher-owned terminal flag.
+func interactiveLocalSettingsFromLive(root *cli.RootOptions, settings codextea.SettingsWriteResult) interactiveLocalSettings {
+	return interactiveLocalSettings{
+		Tui:         settings,
+		NoAltScreen: root != nil && root.Shared.NoAltScreen,
+	}
+}
+
+// interactiveReloadLocalSettings mirrors the settings half of Rust
+// `App::load_new_session_config` (Rust #51510, app/new_session.rs): reloading the
+// configuration for a new thread stages the freshly reloaded preferences when the
+// reload succeeds and keeps the live record when it fails. Rust returns
+// `(self.config.clone(), self.local_settings.clone())` on failure, so the
+// settings a failed reload resolves to - here the zero record that
+// interactiveTUISettings returns - must never replace the live ones. The error is
+// returned for the caller to log, matching Rust's `tracing::warn!("failed to
+// refresh local settings before a new thread")`.
+func interactiveReloadLocalSettings(root *cli.RootOptions, live interactiveLocalSettings) (interactiveLocalSettings, error) {
+	reloaded, err := interactiveLoadSettings(root)
+	next := live
+	next.Tui = codextea.ReloadedLocalSettings(live.Tui, reloaded, codextea.SettingsReloadOutcomeFor(&reloaded, err))
+	return next, err
+}
+
+// interactiveLocalSettingsAfterTrustCheck mirrors Rust
+// `App::confirm_directory_trust` (Rust #51510, app/resume_config.rs), which
+// returns `Result<Option<LocalSettings>>` after a directory-trust check: the
+// staged record is replaced only when the check actually reloaded the
+// configuration, while a check that did not reload (nil result) leaves it alone.
+// The bool reports whether the record was replaced.
+func interactiveLocalSettingsAfterTrustCheck(staged interactiveLocalSettings, reloaded *codextea.SettingsWriteResult) (interactiveLocalSettings, bool) {
+	if reloaded == nil {
+		return staged, false
+	}
+	next := staged
+	next.Tui = codextea.ReloadedLocalSettings(staged.Tui, *reloaded, codextea.SettingsReloadOutcomeFor(reloaded, nil))
+	return next, true
+}
+
+// interactiveNewThreadLocalSettings is the app-layer new-thread entry (Rust
+// #51510, session_lifecycle.rs `self.local_settings = local_settings`): the TUI
+// bootstrap resolves the live record from the launch configuration and starts the
+// new thread with exactly that record, so a failed reload can only fail the
+// refresh - never the live settings.
+func interactiveNewThreadLocalSettings(root *cli.RootOptions) interactiveLocalSettings {
+	live := interactiveLocalSettingsFromLive(root, interactiveTUISettings(root))
+	refreshed, err := interactiveReloadLocalSettings(root, live)
+	if err != nil {
+		// Rust warns and carries the live settings forward instead of failing the
+		// new thread.
+		slog.Warn("failed to refresh local settings before a new thread", "error", err)
+	}
+	return refreshed
 }
 
 func interactiveTUISettings(root *cli.RootOptions) codextea.SettingsWriteResult {
