@@ -460,7 +460,9 @@ func RunSandboxedSnapshotCommand(
 	var stdout, stderr strings.Builder
 	process.Stdout = &stdout
 	process.Stderr = &stderr
-	if err := process.Run(); err != nil {
+	// The capture runs with its process group owned, so a failed capture
+	// takes the helpers its startup files spawned down with it (#49782).
+	if err := runSnapshotCaptureProcess(process); err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
 			return nil, err
@@ -481,7 +483,9 @@ func runSnapshotCommandDirect(ctx context.Context, command []string, cwd string,
 	var stdout, stderr strings.Builder
 	process.Stdout = &stdout
 	process.Stderr = &stderr
-	if err := process.Run(); err != nil {
+	// The capture runs with its process group owned, so a failed capture
+	// takes the helpers its startup files spawned down with it (#49782).
+	if err := runSnapshotCaptureProcess(process); err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
 			return nil, err
