@@ -151,6 +151,13 @@ type DialClientOptions struct {
 	// spoken to over line-delimited JSON-RPC instead of dialing a URL (Rust
 	// ExecServerTransportParams::StdioCommand). Each reconnect respawns it.
 	StdioCommand *StdioExecServerCommand
+	// Provisioned marks a connection to a provisioned (deferred) environment
+	// whose readiness has already been reported (Rust #48575 `985cf47a4e`). The
+	// executor may still be resuming, so only this initial connection retries
+	// `environment_offline` registry responses up to the fixed five-minute
+	// provisioning deadline; ordinary and reconnected transports keep the
+	// four-attempt / fourteen-second window.
+	Provisioned bool
 }
 
 type ProcessEventKind string

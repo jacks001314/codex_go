@@ -30,13 +30,35 @@ const (
 
 // Rust #39777: bounded retry window for transient environment-registry
 // failures while opening the initial Noise rendezvous connection.
-const (
-	initialRegistryMaxRetries          = 4
-	initialRegistryRequestTimeout      = 6 * time.Second
-	initialRegistryOperationTimeout    = 14 * time.Second
-	registryRecoveryInitialRetryMillis = 500
-	registryRecoveryMaxRetryInterval   = 5 * time.Second
+//
+// Rust #48575 (`985cf47a4e`) adds a separate fixed window for provisioned
+// executors, which may still be resuming after an earlier ready report: only
+// `environment_offline` responses on the initial connection to a provisioned
+// environment use `provisionedEnvironmentConnectTimeout`; every other error
+// keeps the four-attempt / fourteen-second limits below, and permanent errors
+// stop immediately.
+//
+// These are vars (the values are unchanged) so tests can compress the windows
+// instead of waiting them out.
+var (
+	initialRegistryMaxRetries            = 4
+	initialRegistryRequestTimeout        = 6 * time.Second
+	initialRegistryOperationTimeout      = 14 * time.Second
+	registryRecoveryInitialRetryMillis   = 500
+	registryRecoveryMaxRetryInterval     = 5 * time.Second
+	provisionedEnvironmentConnectTimeout = 5 * time.Minute
 )
+
+// ProvisionedEnvironmentConnectTimeout is the fixed window (Rust #48575
+// `PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT`) that an initial Noise rendezvous
+// connection to a provisioned environment may spend waiting for an executor
+// that is still resuming. Callers that bound the whole environment request
+// (for example the app-server's environment/info and environment/status RPCs)
+// use it instead of the ordinary connect timeout, which would cancel the
+// longer `environment_offline` retry window.
+func ProvisionedEnvironmentConnectTimeout() time.Duration {
+	return provisionedEnvironmentConnectTimeout
+}
 
 // CodexExecServerNoiseAuthTokenEnvVar is the shared execution-server credential
 // constant (single definition across the exec server and the environment
@@ -248,62 +270,101 @@ func DialNoiseRendezvousClient(
 		done:         make(chan struct{}),
 		cleanup:      identity.Destroy,
 	}
-	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		connectBundle := func() (*NoiseRendezvousConnectBundle, error) {
-			connectCtx, cancel := context.WithTimeout(ctx, initialRegistryRequestTimeout)
-			defer cancel()
-			bundle, err := provider.ConnectBundle(connectCtx, identity.PublicKey())
-			if err != nil && connectCtx.Err() == context.DeadlineExceeded {
-				return nil, fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)
+	// openWithProvisioningDeadline builds the connection opener for one
+	// deadline. Reconnects reuse the client's opener with no provisioning
+	// deadline, so only the initial connect to a provisioned environment gets the
+	// longer environment_offline window (Rust #48575).
+	openWithProvisioningDeadline := func(provisioningDeadline time.Time) clientConnectionOpener {
+		return func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
+			connectBundle := func() (*NoiseRendezvousConnectBundle, error) {
+				connectCtx, cancel := context.WithTimeout(ctx, initialRegistryRequestTimeout)
+				defer cancel()
+				bundle, err := provider.ConnectBundle(connectCtx, identity.PublicKey())
+				if err != nil && connectCtx.Err() == context.DeadlineExceeded {
+					return nil, fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)
+				}
+				return bundle, err
 			}
-			return bundle, err
-		}
-		openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, error) {
-			wire, err := dialNoiseHarnessConnection(ctx, bundle, identity, options.HTTPClient)
-			if err != nil {
-				return nil, nil, err
-			}
-			initialized, err := initializeClientConnection(ctx, wire, clientName, resumeSessionID, handleNotification)
-			if err != nil {
-				return nil, nil, err
-			}
-			return wire, initialized, nil
-		}
-		// Rust #39777: retry transient registry failures (timeouts,
-		// interrupted bodies, retryable HTTP statuses, temporarily offline
-		// environments) with a per-request timeout, exponential backoff, and an
-		// overall deadline; permanent registry errors return immediately.
-		retries := 0
-		deadline := time.Now().Add(initialRegistryOperationTimeout)
-		refreshedUnauthorizedBundle := false
-		for {
-			bundle, err := connectBundle()
-			if err != nil {
-				if !isRetryableRegistryError(err) || retries >= initialRegistryMaxRetries || !time.Now().Before(deadline) {
+			openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, error) {
+				wire, err := dialNoiseHarnessConnection(ctx, bundle, identity, options.HTTPClient)
+				if err != nil {
 					return nil, nil, err
 				}
-				retries++
-				delay := registryRecoveryRetryDelay(retries)
-				select {
-				case <-ctx.Done():
+				initialized, err := initializeClientConnection(ctx, wire, clientName, resumeSessionID, handleNotification)
+				if err != nil {
 					return nil, nil, err
-				case <-time.After(delay):
 				}
-				continue
+				return wire, initialized, nil
 			}
-			conn, initialized, err := openWithBundle(bundle)
-			if isUnauthorizedNoiseWebSocketError(err) && !refreshedUnauthorizedBundle {
-				refreshedUnauthorizedBundle = true
-				deadline = time.Now().Add(initialRegistryOperationTimeout)
-				retries = 0
-				continue
+			// Rust #39777: retry transient registry failures (timeouts,
+			// interrupted bodies, retryable HTTP statuses, temporarily offline
+			// environments) with a per-request timeout, exponential backoff, and
+			// an overall deadline; permanent registry errors return immediately.
+			retries := 0
+			deadline := time.Now().Add(initialRegistryOperationTimeout)
+			refreshedUnauthorizedBundle := false
+			for {
+				bundle, err := connectBundle()
+				if err != nil {
+					// Rust #48575: a provisioned executor may be resuming after an
+					// earlier ready report, so an `environment_offline` response on
+					// the initial connection waits out the fixed provisioning
+					// deadline instead of the ordinary retry window. Every other
+					// transient error keeps the four-attempt / fourteen-second
+					// limits, and permanent errors return immediately.
+					retryDeadline := time.Time{}
+					switch {
+					case !provisioningDeadline.IsZero() && isEnvironmentOfflineError(err):
+						retryDeadline = provisioningDeadline
+					case isRetryableRegistryError(err) && retries < initialRegistryMaxRetries:
+						retryDeadline = deadline
+					default:
+						return nil, nil, err
+					}
+					if !time.Now().Before(retryDeadline) {
+						return nil, nil, err
+					}
+					// Rust computes the delay from the pre-increment attempt so
+					// the first retry sleeps the base interval, and bounds the
+					// sleep plus the next registry request by the retry deadline
+					// (`timeout_at`), so a sleep that reaches the deadline stops
+					// the loop without another request.
+					delay := registryRecoveryRetryDelay(retries)
+					retries++
+					if remaining := time.Until(retryDeadline); remaining < delay {
+						delay = remaining
+					}
+					select {
+					case <-ctx.Done():
+						return nil, nil, err
+					case <-time.After(delay):
+					}
+					if !time.Now().Before(retryDeadline) {
+						return nil, nil, err
+					}
+					continue
+				}
+				conn, initialized, err := openWithBundle(bundle)
+				if isUnauthorizedNoiseWebSocketError(err) && !refreshedUnauthorizedBundle {
+					refreshedUnauthorizedBundle = true
+					deadline = time.Now().Add(initialRegistryOperationTimeout)
+					retries = 0
+					continue
+				}
+				return conn, initialized, err
 			}
-			return conn, initialized, err
 		}
 	}
-	conn, initialized, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
+	// Reconnects keep the ordinary registry window; only the initial connect to a
+	// provisioned environment carries the provisioning deadline.
+	client.open = openWithProvisioningDeadline(time.Time{})
+	initialDeadline := time.Time{}
+	if options.Provisioned {
+		initialDeadline = time.Now().Add(provisionedEnvironmentConnectTimeout)
+	}
+	conn, initialized, err := openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
 	if isUnauthorizedNoiseWebSocketError(err) {
-		conn, initialized, err = client.open(ctx, options.ResumeSessionID, client.handleNotification)
+		conn, initialized, err = openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
 	}
 	if err != nil {
 		identity.Destroy()
@@ -334,6 +395,24 @@ func isUnauthorizedNoiseWebSocketError(err error) bool {
 	return errors.As(err, &connectError) && connectError.statusCode == http.StatusUnauthorized
 }
 
+// isEnvironmentOfflineError reports whether err is the registry's
+// `environment_offline` conflict (HTTP 409 with code `environment_offline`).
+// Rust #48575 (`985cf47a4e`) promotes Rust's `is_environment_offline_error`
+// from a test-only helper to production so a provisioned environment's initial
+// connection can wait out an executor that is still resuming, while every other
+// registry error keeps the ordinary retry limits.
+func isEnvironmentOfflineError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var statusErr *remoteRegistryHTTPError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return statusErr.StatusCode == http.StatusConflict &&
+		statusErr.Code != nil && *statusErr.Code == "environment_offline"
+}
+
 // isRetryableRegistryError mirrors Rust is_retryable_registry_error (#39777):
 // connect/timeout failures, interrupted response bodies, retryable HTTP
 // statuses (5xx, 408, 429, 409 environment_offline) are transient, while
@@ -348,7 +427,7 @@ func isRetryableRegistryError(err error) bool {
 		case http.StatusRequestTimeout, http.StatusTooManyRequests:
 			return true
 		case http.StatusConflict:
-			return statusErr.Code != nil && *statusErr.Code == "environment_offline"
+			return isEnvironmentOfflineError(err)
 		default:
 			return statusErr.StatusCode >= 500
 		}
@@ -368,19 +447,27 @@ func isRetryableRegistryError(err error) bool {
 }
 
 // registryRecoveryRetryDelay returns the exponential backoff delay for a
-// registry retry attempt (Rust registry_recovery_retry_delay: 500ms base,
-// 2^attempt multiplier, 5s cap, with jitter).
+// registry retry attempt. It mirrors Rust `registry_recovery_retry_delay`
+// (codex-rs/exec-server/src/client_recovery.rs): 500ms base, 2^attempt
+// multiplier, 5s cap, plus jitter proportional to the (capped) base. The
+// proportional jitter matches the sibling registrationConflictRetryDelay and
+// keeps every delay scaled by registryRecoveryInitialRetryMillis /
+// registryRecoveryMaxRetryInterval so tests can compress the retry windows.
 func registryRecoveryRetryDelay(attempt int) time.Duration {
 	multiplier := 1 << uint(attempt)
 	if attempt > 4 {
 		multiplier = 1 << 4
 	}
-	base := registryRecoveryInitialRetryMillis * time.Millisecond * time.Duration(multiplier)
+	base := time.Duration(registryRecoveryInitialRetryMillis) * time.Millisecond * time.Duration(multiplier)
 	if base > registryRecoveryMaxRetryInterval {
 		base = registryRecoveryMaxRetryInterval
 	}
-	jitter := time.Duration((attempt*7919)%1000) * time.Millisecond
-	return base + jitter
+	baseMillis := int64(base / time.Millisecond)
+	if baseMillis <= 0 {
+		baseMillis = 1
+	}
+	jitter := int64(stableRegistryHash(attempt)) % (baseMillis/2 + 1)
+	return time.Duration(baseMillis)*time.Millisecond + time.Duration(jitter)*time.Millisecond
 }
 
 type noiseHarnessClientConnection struct {

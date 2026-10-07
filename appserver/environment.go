@@ -1125,10 +1125,10 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 	if record == nil {
 		return nil, errors.New("environment record is nil")
 	}
-	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, provisionedNoiseDialOptions(record, "codex-go"))
 		if err != nil {
 			return nil, err
 		}
@@ -1222,10 +1222,10 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 	if record == nil {
 		return nil, errors.New("environment record is nil")
 	}
-	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, provisionedNoiseDialOptions(record, "codex-go"))
 		if err != nil {
 			return nil, err
 		}
@@ -1314,6 +1314,47 @@ func environmentConnectTimeout(connectTimeoutMS *uint64) time.Duration {
 		return defaultEnvironmentConnectTimeout
 	}
 	return timeout
+}
+
+// provisionedReady reports whether the record is a provisioned (deferred)
+// environment whose provisioning has completed successfully, so its executor
+// may still be resuming. Rust keeps the same record from Pending through Ready
+// (EnvironmentManager::report_environment_provisioning_status) and only then
+// dials it over the Deferred Noise transport.
+func (record *EnvironmentRecord) provisionedReady() bool {
+	if record == nil || record.Provisioning == nil {
+		return false
+	}
+	status, _, _ := record.Provisioning.Current()
+	return status == ProvisioningReady
+}
+
+// environmentConnectDeadlineForRecord bounds one environment request. Rust
+// #48575 lets the initial connection to a provisioned environment wait out a
+// resuming executor for a fixed five-minute window, so the whole request gets
+// that window instead of the ordinary connect timeout; every other record keeps
+// the existing timeout verbatim.
+func environmentConnectDeadlineForRecord(record *EnvironmentRecord) time.Duration {
+	if record.provisionedReady() {
+		return execserverclient.ProvisionedEnvironmentConnectTimeout()
+	}
+	return environmentConnectTimeout(record.ConnectTimeoutMS)
+}
+
+// provisionedNoiseDialOptions builds the Noise dial options for one record. A
+// provisioned environment marks its initial connection so the executor has the
+// five-minute `environment_offline` window (Rust #48575); ordinary records keep
+// the default four-attempt / fourteen-second retry limits.
+func provisionedNoiseDialOptions(record *EnvironmentRecord, clientName string) execserverclient.DialClientOptions {
+	options := execserverclient.DialClientOptions{ClientName: clientName}
+	if record == nil {
+		return options
+	}
+	options.HTTPClient = record.HTTPClient
+	if record.provisionedReady() {
+		options.Provisioned = true
+	}
+	return options
 }
 
 func writeExecServerJSON(ctx context.Context, conn *websocket.Conn, value any) error {
