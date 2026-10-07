@@ -153,3 +153,189 @@ func TestNewThreadKeepsLiveSettingsAfterFailedReloadLikeRust(t *testing.T) {
 func boolPtrTea(value bool) *bool {
 	return &value
 }
+
+// Rust #51510: `LocalSettings::reloaded(&config)` adopts the reloaded
+// preferences but restores the fields owned by this launch
+// (`transcript_mode`, `tui.alternate_screen`), so a configuration reload can
+// never change the running TUI's terminal ownership. Counterpart Rust test:
+// `new_thread_keeps_live_settings_after_failed_reload`
+// (codex-rs/tui/src/app/config_persistence.rs).
+func TestLocalSettingsReloadedRestoresLauncherOwnedFieldsLikeRust(t *testing.T) {
+	live := LocalSettings{
+		Tui:             SettingsWriteResult{AnimationsEnabled: boolPtrTea(true)},
+		AlternateScreen: true,
+	}
+	reloaded := SettingsWriteResult{
+		AnimationsEnabled: boolPtrTea(false),
+		TUITheme:          "dracula",
+	}
+
+	got := live.Reloaded(reloaded)
+	if got.Tui.AnimationsEnabled == nil || *got.Tui.AnimationsEnabled {
+		t.Fatalf("reloaded() did not adopt the reloaded preferences: %#v", got.Tui.AnimationsEnabled)
+	}
+	if got.Tui.TUITheme != "dracula" {
+		t.Fatalf("reloaded() dropped the reloaded theme: %q", got.Tui.TUITheme)
+	}
+	if !got.AlternateScreen {
+		t.Fatal("reloaded() overwrote the launcher-owned alternate-screen setting")
+	}
+
+	// The Go shape of the same record can also hold the launch's own value.
+	got = LocalSettings{Tui: live.Tui}.Reloaded(reloaded)
+	if got.AlternateScreen {
+		t.Fatal("reloaded() invented an alternate-screen setting")
+	}
+}
+
+// Rust #51510, counterpart Rust test:
+// `new_thread_keeps_live_settings_after_failed_reload`. `load_new_session_config`
+// returns `(Config, LocalSettings)`; a failed reload yields
+// `(self.config.clone(), self.local_settings.clone())` so the live settings —
+// not preferences re-derived from the stale in-memory config — reach the new
+// thread.
+func TestLoadNewSessionConfigKeepsLiveSettingsLikeRust(t *testing.T) {
+	live := LocalSettings{
+		Tui: SettingsWriteResult{
+			AnimationsEnabled: boolPtrTea(true),
+			Rendering:         &RenderingSettings{Math: false},
+		},
+		AlternateScreen: true,
+	}
+	// The stale preferences a failed reload would resolve (invalid config.toml).
+	stale := SettingsWriteResult{
+		AnimationsEnabled: boolPtrTea(false),
+		Rendering:         &RenderingSettings{Math: true},
+	}
+
+	// A reload that fails keeps the live record, entirely untouched.
+	got, err := LoadNewSessionLocalSettings(live, func() (SettingsWriteResult, error) {
+		return stale, errors.New("invalid config.toml")
+	})
+	if err == nil {
+		t.Fatal("failed reload must report its error")
+	}
+	if got.Tui.AnimationsEnabled == nil || !*got.Tui.AnimationsEnabled {
+		t.Fatalf("failed reload replaced the live animations setting: %#v", got.Tui.AnimationsEnabled)
+	}
+	if got.Tui.Rendering == nil || got.Tui.Rendering.Math {
+		t.Fatalf("failed reload staged stale rendering preferences: %#v", got.Tui.Rendering)
+	}
+	if !got.AlternateScreen {
+		t.Fatal("failed reload changed the launcher-owned alternate-screen setting")
+	}
+
+	// A successful reload adopts its preferences and keeps this launch's screen.
+	got, err = LoadNewSessionLocalSettings(live, func() (SettingsWriteResult, error) {
+		return stale, nil
+	})
+	if err != nil {
+		t.Fatalf("successful reload reported an error: %v", err)
+	}
+	if got.Tui.AnimationsEnabled == nil || *got.Tui.AnimationsEnabled {
+		t.Fatalf("successful reload did not adopt the reloaded preferences: %#v", got.Tui.AnimationsEnabled)
+	}
+	if !got.AlternateScreen {
+		t.Fatal("successful reload changed the launcher-owned alternate-screen setting")
+	}
+
+	// No reload attempted (the host does not rebuild the configuration) keeps the
+	// live record and reports no error.
+	got, err = LoadNewSessionLocalSettings(live, nil)
+	if err != nil {
+		t.Fatalf("nil reload must not report an error: %v", err)
+	}
+	if got.Tui.AnimationsEnabled == nil || !*got.Tui.AnimationsEnabled || !got.AlternateScreen {
+		t.Fatalf("nil reload changed the live record: %#v", got)
+	}
+}
+
+// Rust #51510: `App::confirm_directory_trust` returns
+// `Result<Option<LocalSettings>>` — the staged record is replaced only when the
+// trust check actually reloaded configuration (`Ok(Some(..))`); a check that did
+// not reload (`Ok(None)`) leaves it alone. Counterpart Rust test:
+// `new_thread_keeps_live_settings_after_failed_reload`.
+func TestConfirmDirectoryTrustOnlyReplacesStagedSettingsLikeRust(t *testing.T) {
+	staged := LocalSettings{
+		Tui:             SettingsWriteResult{AnimationsEnabled: boolPtrTea(true)},
+		AlternateScreen: true,
+	}
+
+	// Ok(None): the trust check did not reload configuration.
+	got, replaced := LocalSettingsAfterTrustCheck(staged, nil)
+	if replaced {
+		t.Fatal("a trust check that did not reload configuration replaced the staged settings")
+	}
+	if got.Tui.AnimationsEnabled == nil || !*got.Tui.AnimationsEnabled || !got.AlternateScreen {
+		t.Fatalf("skipped trust check changed the staged settings: %#v", got)
+	}
+
+	// Ok(Some(..)): the trust check reloaded configuration.
+	reloaded := SettingsWriteResult{AnimationsEnabled: boolPtrTea(false), TUITheme: "dracula"}
+	got, replaced = LocalSettingsAfterTrustCheck(staged, &reloaded)
+	if !replaced {
+		t.Fatal("a reloading trust check must replace the staged settings")
+	}
+	if got.Tui.AnimationsEnabled == nil || *got.Tui.AnimationsEnabled {
+		t.Fatalf("trust check did not stage the reloaded preferences: %#v", got.Tui.AnimationsEnabled)
+	}
+	if got.Tui.TUITheme != "dracula" {
+		t.Fatalf("trust check dropped the reloaded theme: %q", got.Tui.TUITheme)
+	}
+	if !got.AlternateScreen {
+		t.Fatal("trust check changed the launcher-owned alternate-screen setting")
+	}
+}
+
+// Rust #51510: applying the staged record to the live state merges the
+// preferences with the "nil keeps the live value" rule and restores the
+// launcher-owned fields from the record, never from the reloaded source.
+// Counterpart Rust test: `new_thread_keeps_live_settings_after_failed_reload`.
+func TestApplyLocalSettingsKeepsLiveValuesLikeRust(t *testing.T) {
+	animations := true
+	colors := true
+	model := NewModel(codextui.NewState(nil), Options{
+		AnimationsEnabled:   &animations,
+		StatusLineUseColors: &colors,
+		NoAltScreen:         true,
+	})
+	model.featureSettings = map[string]bool{"foo": true}
+	model.tuiTheme = "live-theme"
+
+	// An empty staged record (the state after a failed reload) keeps every live
+	// preference and restores this launch's screen ownership.
+	model.applyLocalSettings(LocalSettings{AlternateScreen: true})
+	if !model.animationsEnabled {
+		t.Fatal("empty staged record cleared animationsEnabled")
+	}
+	if !model.statusLineUseColors {
+		t.Fatal("empty staged record cleared statusLineUseColors")
+	}
+	if !model.featureSettings["foo"] {
+		t.Fatalf("empty staged record cleared featureSettings: %#v", model.featureSettings)
+	}
+	if model.tuiTheme != "live-theme" {
+		t.Fatalf("empty staged record cleared tuiTheme: %q", model.tuiTheme)
+	}
+	if !model.noAltScreen {
+		t.Fatal("staged record lost this launch's alternate-screen setting")
+	}
+
+	// A partial record only changes the fields it carries.
+	model.applyLocalSettings(LocalSettings{
+		Tui:             SettingsWriteResult{AnimationsEnabled: boolPtrTea(false), TUITheme: "reloaded-theme"},
+		AlternateScreen: true,
+	})
+	if model.animationsEnabled {
+		t.Fatal("partial record did not adopt its animationsEnabled value")
+	}
+	if !model.statusLineUseColors {
+		t.Fatal("partial record cleared a preference it does not carry")
+	}
+	if model.tuiTheme != "reloaded-theme" {
+		t.Fatalf("partial record cleared tuiTheme: %q", model.tuiTheme)
+	}
+	if model.localSettings.Tui.TUITheme != "reloaded-theme" {
+		t.Fatalf("staged record did not adopt the reloaded preferences: %#v", model.localSettings.Tui)
+	}
+}

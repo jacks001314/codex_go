@@ -34,16 +34,6 @@ type AgentsOverviewNewWorktreeFunc func(cwd string) (AgentThreadSwitchResponse, 
 type AgentsOverviewNewSessionFunc func(cwd string) (AgentThreadSwitchResponse, error)
 type AgentsOverviewStopFunc func(threadID string) error
 type AgentsOverviewRenameFunc func(threadID string, name string) error
-
-// AgentsOverviewPinnedThreadsFunc lists the shared pinned-section tasks in
-// section order and reports whether the server supports shared thread sections
-// (Rust #51500 list_pinned_threads). supported=false disables pinning in the
-// dashboard, which is what Rust does when the server has no shared sections.
-type AgentsOverviewPinnedThreadsFunc func() (threadIDs []string, supported bool, err error)
-
-// AgentsOverviewTogglePinFunc pins or unpins one task in the shared section
-// (Rust #51500 thread/section/move with PINNED_THREAD_SECTION_ID).
-type AgentsOverviewTogglePinFunc func(threadID string, pinned bool) error
 type AgentsOverviewArchiveFunc func(threadID string) error
 type AgentsOverviewDeleteFunc func(threadID string) error
 type AgentsDaemonStartFunc func() error
@@ -74,19 +64,6 @@ type agentsOverviewListMsg struct {
 	rows      []agentsoverview.Row
 	err       error
 	requestID int
-	// pinsKnown is true when the pin listing ran successfully, pinsSupported
-	// reports whether the server has shared thread sections, and pinnedThreads
-	// is the shared section order (Rust #51500 list_pinned_threads result).
-	pinsKnown     bool
-	pinsSupported bool
-	pinnedThreads []string
-	pinErr        error
-}
-
-type agentsOverviewPinMsg struct {
-	threadID string
-	pinned   bool
-	err      error
 }
 
 type agentsOverviewNewSessionMsg struct {
@@ -164,7 +141,6 @@ func (m *Model) applyAgentsOverviewKeymapHints() {
 		{action: agentsoverview.ShortcutHintStop, key: "agents.stop"},
 		{action: agentsoverview.ShortcutHintHide, key: "agents.hide"},
 		{action: agentsoverview.ShortcutHintNewWorktree, key: "agents.new_worktree"},
-		{action: agentsoverview.ShortcutHintTogglePin, key: "agents.toggle_pin"},
 	} {
 		context, action, _ := strings.Cut(hint.key, ".")
 		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, context, action)
@@ -283,20 +259,7 @@ func (m *Model) refreshAgentsOverviewCmd() bubbletea.Cmd {
 	}
 	return func() bubbletea.Msg {
 		rows, err := m.onAgentsOverviewRefresh(currentThreadID)
-		message := agentsOverviewListMsg{rows: rows, err: err, requestID: requestID}
-		// Rust #51500: the same refresh also discovers the shared pinned section
-		// (including tasks outside the recent-task window). A failing pin listing
-		// is a warning that leaves the known pins alone.
-		if err == nil && m.onAgentsOverviewPinnedThreads != nil {
-			pinned, supported, pinErr := m.onAgentsOverviewPinnedThreads()
-			message.pinErr = pinErr
-			if pinErr == nil {
-				message.pinsKnown = true
-				message.pinsSupported = supported
-				message.pinnedThreads = pinned
-			}
-		}
-		return message
+		return agentsOverviewListMsg{rows: rows, err: err, requestID: requestID}
 	}
 }
 
@@ -317,23 +280,6 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return nil
 	}
 	m.agentsOverviewNotice = ""
-	switch {
-	case message.pinErr != nil:
-		// Rust #51500: a failed pin listing keeps the pins the dashboard already
-		// knows about; only the listing error is reported.
-	case message.pinsKnown:
-		if message.pinsSupported {
-			m.agentsOverview.SetPinnedThreads(message.pinnedThreads)
-		} else {
-			// Rust #51500: disable pinning when the server does not support
-			// shared thread sections.
-			m.agentsOverview.ClearPinnedThreads()
-		}
-	case m.onAgentsOverviewPinnedThreads == nil:
-		// The host does not implement shared pinning, so the dashboard never
-		// advertises the pin shortcut.
-		m.agentsOverview.ClearPinnedThreads()
-	}
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
 	m.syncAgentsOverviewUsageLines()
 	usageCmd := m.refreshAgentsOverviewUsageCmd()
@@ -423,14 +369,6 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m.keyMatches("agents", "toggle_grouping", keySpec) {
 		m.agentsOverview.ToggleGrouping()
 	}
-	if m.keyMatches("agents", "toggle_pin", keySpec) {
-		// Rust #51500: `p` pins or unpins the selected task. The view reports
-		// whether the action is available and suppresses duplicates while a pin
-		// request is in flight (Rust pin_action_pending).
-		if threadID, pinned, ok := m.agentsOverview.TogglePinSelected(); ok {
-			return m.toggleAgentsOverviewPinCmd(threadID, pinned)
-		}
-	}
 	if m.keyMatches("agents", "new_task", keySpec) {
 		return m.newAgentsOverviewSessionCmd()
 	}
@@ -472,50 +410,6 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
-}
-
-// toggleAgentsOverviewPinCmd pins or unpins one task in the shared thread
-// section (Rust #51500 toggle_agents_overview_pin).
-func (m *Model) toggleAgentsOverviewPinCmd(threadID string, pinned bool) bubbletea.Cmd {
-	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewTogglePin == nil {
-		return nil
-	}
-	threadID = strings.TrimSpace(threadID)
-	if threadID == "" {
-		return nil
-	}
-	return func() bubbletea.Msg {
-		return agentsOverviewPinMsg{
-			threadID: threadID,
-			pinned:   pinned,
-			err:      m.onAgentsOverviewTogglePin(threadID, pinned),
-		}
-	}
-}
-
-// applyAgentsOverviewPin completes a pin/unpin request (Rust #51500
-// complete_agents_overview_pin): the local pin order is updated on success, the
-// failure is reported inline, and the dashboard refreshes the shared list so
-// pins from outside the recent-task window appear.
-func (m *Model) applyAgentsOverviewPin(message agentsOverviewPinMsg) bubbletea.Cmd {
-	if m == nil || m.agentsOverview == nil {
-		return nil
-	}
-	m.agentsOverview.SetPinPending(false)
-	if message.err != nil {
-		text := strings.TrimSpace(message.err.Error())
-		if text == "" {
-			text = "unknown error"
-		}
-		verb := "pin"
-		if !message.pinned {
-			verb = "unpin"
-		}
-		m.agentsOverviewNotice = "Failed to " + verb + " task: " + text
-		return nil
-	}
-	m.agentsOverview.ApplyPinChange(message.threadID, message.pinned)
-	return m.refreshAgentsOverviewCmd()
 }
 
 // newAgentsOverviewWorktreeCmd creates a worktree from the selected project's
@@ -615,6 +509,10 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 		return nil
 	}
 	m.setAgentsOverviewBlankSession(threadID, message.response)
+	// Rust #51510 (session_lifecycle.rs): a new thread adopts the *staged* local
+	// settings instead of re-deriving them from a configuration reload that may
+	// have failed, so live preferences survive into the new session.
+	m.applyLocalSettings(m.localSettings)
 	// Rust attaches a new session with a fresh chat widget, so the composer
 	// starts empty.
 	empty := ""

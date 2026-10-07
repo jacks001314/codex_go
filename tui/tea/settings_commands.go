@@ -376,9 +376,11 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		m.refreshTranscript()
 		return
 	}
-	if msg.Result.FeatureSettings != nil {
-		m.featureSettings = cloneBoolMapTea(msg.Result.FeatureSettings)
-	}
+	// Rust #51510: a successful reload stages its preferences on the local
+	// settings record and then applies the record to the live TUI state (Rust
+	// LocalSettings::reloaded + App::local_settings). A failed reload never
+	// reaches this point, so the staged record keeps the live settings.
+	m.applyLocalSettings(m.localSettings.Reloaded(msg.Result))
 	// Rust experimental_features::write readback: a saved value that differs from
 	// the selection (or a higher-priority setting winning) warns instead of
 	// reporting a plain save.
@@ -392,76 +394,6 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		}
 	}
 	m.pendingExperimentalFeatureUpdates = nil
-	if msg.Result.UseMemories != nil {
-		m.useMemories = *msg.Result.UseMemories
-	}
-	if msg.Result.GenerateMemories != nil {
-		m.generateMemories = *msg.Result.GenerateMemories
-	}
-	if msg.Result.FeedbackEnabled != nil {
-		m.feedbackEnabled = *msg.Result.FeedbackEnabled
-	}
-	if msg.Result.AnimationsEnabled != nil {
-		m.animationsEnabled = *msg.Result.AnimationsEnabled
-	}
-	if msg.Result.StatusLineUseColors != nil {
-		m.statusLineUseColors = *msg.Result.StatusLineUseColors
-		if m.statusControls != nil {
-			m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
-		}
-	}
-	if msg.Result.QuestionEscBack != nil {
-		m.questionEscBack = *msg.Result.QuestionEscBack
-	}
-	if msg.Result.AutoRecap != nil {
-		m.disableAutoRecap = !*msg.Result.AutoRecap
-	}
-	if msg.Result.ShowTooltips != nil {
-		m.showTooltips = *msg.Result.ShowTooltips
-	}
-	if msg.Result.RightClickPaste != nil {
-		m.setRightClickPasteMode(*msg.Result.RightClickPaste)
-	}
-	if msg.Result.Rendering != nil {
-		// Rust refreshes the Markdown rendering preferences when the resolved
-		// session settings become active (markdown_render::preferences::init).
-		markdown.InitRendering(markdown.Rendering{
-			Mermaid: msg.Result.Rendering.Mermaid,
-			Math:    msg.Result.Rendering.Math,
-			Tables:  msg.Result.Rendering.Tables,
-			Lists:   msg.Result.Rendering.Lists,
-		})
-	}
-	if msg.Result.Effects != nil {
-		m.effects = *msg.Result.Effects
-	}
-	if msg.Result.Notifications != nil {
-		m.notificationSettings = notificationSettingsOrDefault(msg.Result.Notifications)
-	}
-	if msg.Result.NotificationMethod != "" {
-		m.notificationMethod = notificationMethodOrDefault(msg.Result.NotificationMethod)
-	}
-	if msg.Result.NotificationCondition != "" {
-		m.notificationCondition = notificationConditionOrDefault(msg.Result.NotificationCondition)
-	}
-	if msg.Result.PermissionRequirements != nil {
-		m.permissionRequirements = clonePermissionRequirementsTea(msg.Result.PermissionRequirements)
-	}
-	if msg.Result.HideRateLimitModelNudge != nil {
-		m.hideRateLimitModelNudge = *msg.Result.HideRateLimitModelNudge
-		if m.hideRateLimitModelNudge {
-			m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptIdle
-		}
-	}
-	if strings.TrimSpace(msg.Result.TUITheme) != "" {
-		m.tuiTheme = strings.TrimSpace(msg.Result.TUITheme)
-	}
-	if strings.TrimSpace(msg.Result.TUIPet) != "" {
-		m.tuiPet = normalizePetIDTea(msg.Result.TUIPet)
-	}
-	if strings.TrimSpace(msg.Result.SessionPickerView) != "" {
-		m.sessionPickerDensity = normalizeSessionPickerDensityTea(msg.Result.SessionPickerView)
-	}
 	if msg.Kind == settingsWriteKindMemoriesEnable {
 		m.notice = ""
 		m.applyHistoryCell(historycell.NewWarningEvent("Memories will be enabled in the next session."))
@@ -499,6 +431,104 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		m.applyExperimentalWriteReadback(experimentalOverridden)
 	}
 	m.refreshTranscript()
+}
+
+// applyLocalSettings installs a staged local-settings record on the live TUI
+// state (Rust #51510): the record's preferences are merged into the model with
+// the usual "nil keeps the live value" rule, and the launcher-owned fields are
+// restored from the record — never from the reloaded source — so a configuration
+// reload cannot change this launch's terminal ownership (`Model.noAltScreen`,
+// the Go half of Rust's `transcript_mode` / `tui.alternate_screen` pair).
+func (m *Model) applyLocalSettings(settings LocalSettings) {
+	if m == nil {
+		return
+	}
+	m.localSettings = settings
+	m.applyLocalSettingsValues(settings.Tui)
+	m.noAltScreen = settings.AlternateScreen
+}
+
+// applyLocalSettingsValues applies one client-owned preference set to the live
+// TUI state (Rust #51510 / the field half of LocalSettings::reloaded). Every
+// nil pointer field keeps the live value, which is why a partial record — or an
+// empty one — can never clear a live preference.
+func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
+	if m == nil {
+		return
+	}
+	if result.FeatureSettings != nil {
+		m.featureSettings = cloneBoolMapTea(result.FeatureSettings)
+	}
+	if result.UseMemories != nil {
+		m.useMemories = *result.UseMemories
+	}
+	if result.GenerateMemories != nil {
+		m.generateMemories = *result.GenerateMemories
+	}
+	if result.FeedbackEnabled != nil {
+		m.feedbackEnabled = *result.FeedbackEnabled
+	}
+	if result.AnimationsEnabled != nil {
+		m.animationsEnabled = *result.AnimationsEnabled
+	}
+	if result.StatusLineUseColors != nil {
+		m.statusLineUseColors = *result.StatusLineUseColors
+		if m.statusControls != nil {
+			m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
+		}
+	}
+	if result.QuestionEscBack != nil {
+		m.questionEscBack = *result.QuestionEscBack
+	}
+	if result.AutoRecap != nil {
+		m.disableAutoRecap = !*result.AutoRecap
+	}
+	if result.ShowTooltips != nil {
+		m.showTooltips = *result.ShowTooltips
+	}
+	if result.RightClickPaste != nil {
+		m.setRightClickPasteMode(*result.RightClickPaste)
+	}
+	if result.Rendering != nil {
+		// Rust refreshes the Markdown rendering preferences when the resolved
+		// session settings become active (markdown_render::preferences::init).
+		markdown.InitRendering(markdown.Rendering{
+			Mermaid: result.Rendering.Mermaid,
+			Math:    result.Rendering.Math,
+			Tables:  result.Rendering.Tables,
+			Lists:   result.Rendering.Lists,
+		})
+	}
+	if result.Effects != nil {
+		m.effects = *result.Effects
+	}
+	if result.Notifications != nil {
+		m.notificationSettings = notificationSettingsOrDefault(result.Notifications)
+	}
+	if result.NotificationMethod != "" {
+		m.notificationMethod = notificationMethodOrDefault(result.NotificationMethod)
+	}
+	if result.NotificationCondition != "" {
+		m.notificationCondition = notificationConditionOrDefault(result.NotificationCondition)
+	}
+	if result.PermissionRequirements != nil {
+		m.permissionRequirements = clonePermissionRequirementsTea(result.PermissionRequirements)
+	}
+	if result.HideRateLimitModelNudge != nil {
+		m.hideRateLimitModelNudge = *result.HideRateLimitModelNudge
+		if m.hideRateLimitModelNudge {
+			m.rateLimitSwitchPrompt = chatwidget.RateLimitSwitchPromptIdle
+		}
+	}
+	if strings.TrimSpace(result.TUITheme) != "" {
+		m.tuiTheme = strings.TrimSpace(result.TUITheme)
+	}
+	if strings.TrimSpace(result.TUIPet) != "" {
+		m.tuiPet = normalizePetIDTea(result.TUIPet)
+	}
+	if strings.TrimSpace(result.SessionPickerView) != "" {
+		m.sessionPickerDensity = normalizeSessionPickerDensityTea(result.SessionPickerView)
+	}
 }
 
 func cloneBoolMapTea(values map[string]bool) map[string]bool {
