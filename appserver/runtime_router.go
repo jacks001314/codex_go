@@ -10651,7 +10651,10 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 	if r == nil || r.services.Plugins == nil {
 		return base
 	}
-	contributions := r.filterDisabledPluginMCPContributions(threadID, r.services.Plugins.EnabledMCPServerContributions())
+	contributions := r.filterDisabledPluginMCPContributions(
+		threadID,
+		r.filterRetiredPluginEMAAuthContributions(values, r.services.Plugins.EnabledMCPServerContributions()),
+	)
 	overlays := make([]mcp.ConfigOverlay, 0, len(contributions))
 	for _, contribution := range contributions {
 		server := mcp.ServerConfigFromValues(contribution.Config)
@@ -10681,6 +10684,31 @@ func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPSer
 		return base
 	}
 	return mcp.NewManager(nil).RuntimeConfig(*base, overlays)
+}
+
+// filterRetiredPluginEMAAuthContributions drops plugin MCP declarations for
+// servers whose host configuration still declares the retired enterprise
+// registration overlay (`[plugins.<id>.mcp_servers.<server>.ema_auth]`). Rust
+// #49260 removed the overlay and disables a plugin server that still declares
+// one instead of granting it enterprise authority; dropping the contribution is
+// the Go equivalent of that disabled server, since disabled servers never enter
+// the runtime catalog.
+func (r *RuntimeRouter) filterRetiredPluginEMAAuthContributions(values map[string]any, contributions []plugin.MCPServerContribution) []plugin.MCPServerContribution {
+	if len(contributions) == 0 {
+		return contributions
+	}
+	retired := config.RetiredPluginEMAAuthRegistrations(values["plugins"])
+	if len(retired) == 0 {
+		return contributions
+	}
+	filtered := make([]plugin.MCPServerContribution, 0, len(contributions))
+	for _, contribution := range contributions {
+		if retired[contribution.PluginID][contribution.Name] {
+			continue
+		}
+		filtered = append(filtered, contribution)
+	}
+	return filtered
 }
 
 // filterDisabledPluginMCPContributions drops MCP servers contributed by plugins

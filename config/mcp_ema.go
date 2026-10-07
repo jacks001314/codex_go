@@ -36,19 +36,6 @@ type MCPEnterpriseManagedAuthConfig struct {
 	IDP MCPServerIdPOAuthConfig `json:"idp"`
 }
 
-// PluginMCPServerEMAAuthConfig is a resource registration applied through an
-// existing per-plugin policy overlay. The enterprise IdP is selected separately
-// by trusted host configuration.
-type PluginMCPServerEMAAuthConfig struct {
-	// URL is the exact plugin endpoint approved by the host; it never overrides
-	// the plugin's own declaration.
-	URL                       string   `json:"url"`
-	ClientID                  string   `json:"client_id"`
-	AuthorizationServerIssuer string   `json:"authorization_server_issuer"`
-	Scopes                    []string `json:"scopes"`
-	Resource                  string   `json:"resource"`
-}
-
 func cloneMCPEnterpriseManagedAuth(config *MCPEnterpriseManagedAuthConfig) *MCPEnterpriseManagedAuthConfig {
 	if config == nil {
 		return nil
@@ -143,55 +130,6 @@ func parseMCPEnterpriseManagedAuth(section any) (*MCPEnterpriseManagedAuthConfig
 	return &MCPEnterpriseManagedAuthConfig{
 		IDP: MCPServerIdPOAuthConfig{Issuer: issuer, ClientID: clientID},
 	}, nil
-}
-
-// parsePluginMCPServerEMAAuth parses a strict plugin EMA registration.
-func parsePluginMCPServerEMAAuth(section any) (*PluginMCPServerEMAAuthConfig, error) {
-	table, ok := mcpEMATable(section)
-	if !ok {
-		return nil, errors.New("plugins.mcp_servers.ema_auth must be a table")
-	}
-	known := map[string]bool{
-		"url": true, "client_id": true, "authorization_server_issuer": true,
-		"scopes": true, "resource": true,
-	}
-	for _, key := range mcpEMASortedKeys(table) {
-		if !known[key] {
-			return nil, fmt.Errorf("unknown field `ema_auth.%s`", key)
-		}
-	}
-	for _, required := range []string{"url", "client_id", "authorization_server_issuer", "resource"} {
-		if _, ok := table[required]; !ok {
-			return nil, fmt.Errorf("missing field `%s`", required)
-		}
-	}
-	return &PluginMCPServerEMAAuthConfig{
-		URL:                       mcpEMAString(table["url"]),
-		ClientID:                  mcpEMAString(table["client_id"]),
-		AuthorizationServerIssuer: mcpEMAString(table["authorization_server_issuer"]),
-		Scopes:                    mcpEMAStringSlice(table["scopes"]),
-		Resource:                  mcpEMAString(table["resource"]),
-	}, nil
-}
-
-func equalMCPEMARegistration(left *PluginMCPServerEMAAuthConfig, right *PluginMCPServerEMAAuthConfig) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	if left.URL != right.URL || left.ClientID != right.ClientID ||
-		left.AuthorizationServerIssuer != right.AuthorizationServerIssuer ||
-		left.Resource != right.Resource {
-		return false
-	}
-	if len(left.Scopes) != len(right.Scopes) {
-		return false
-	}
-	for i := range left.Scopes {
-		if left.Scopes[i] != right.Scopes[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func layerConfigMap(layer Layer) map[string]any {
@@ -441,37 +379,6 @@ func mcpEMAReenabledOverNonProjectDenial(effectiveEnabled bool, nonProjectServer
 	return !*nonProjectServer.enabled
 }
 
-func mcpEMAPluginRegistration(values map[string]any, pluginName string, serverName string) *PluginMCPServerEMAAuthConfig {
-	if values == nil {
-		return nil
-	}
-	plugins, ok := mcpEMATable(values["plugins"])
-	if !ok {
-		return nil
-	}
-	plugin, ok := mcpEMATable(plugins[pluginName])
-	if !ok {
-		return nil
-	}
-	servers, ok := mcpEMATable(plugin["mcp_servers"])
-	if !ok {
-		return nil
-	}
-	server, ok := mcpEMATable(servers[serverName])
-	if !ok {
-		return nil
-	}
-	raw, ok := server["ema_auth"]
-	if !ok {
-		return nil
-	}
-	registration, err := parsePluginMCPServerEMAAuth(raw)
-	if err != nil {
-		return nil
-	}
-	return registration
-}
-
 func mcpEMAMergedConfig(layers []Layer) map[string]any {
 	merged := map[string]any{}
 	for _, layer := range layersLowToHigh(layers) {
@@ -539,70 +446,7 @@ func validateMCPEMAAuthSources(layers []Layer, servers map[string]any) error {
 			return fmt.Errorf("enterprise MCP server `%s` must define its transport, authorization, scopes, and resource in one non-project config layer", name)
 		}
 	}
-
-	effective := mcpEMAMergedConfig(layers)
-	plugins, ok := mcpEMATable(effective["plugins"])
-	if !ok {
-		return nil
-	}
-	for _, pluginName := range mcpEMASortedKeys(plugins) {
-		plugin, ok := mcpEMATable(plugins[pluginName])
-		if !ok {
-			continue
-		}
-		pluginServers, ok := mcpEMATable(plugin["mcp_servers"])
-		if !ok {
-			continue
-		}
-		for _, serverName := range mcpEMASortedKeys(pluginServers) {
-			server, ok := mcpEMATable(pluginServers[serverName])
-			if !ok {
-				continue
-			}
-			raw, ok := server["ema_auth"]
-			if !ok {
-				continue
-			}
-			nonProjectServer := mcpEMAPluginServerView(nonProject, pluginName, serverName)
-			effectiveEnabled := true
-			if enabled, ok := mcpEMABool(server["enabled"]); ok {
-				effectiveEnabled = enabled
-			}
-			if mcpEMAReenabledOverNonProjectDenial(effectiveEnabled, nonProjectServer) {
-				return fmt.Errorf("project configuration cannot re-enable enterprise MCP plugin `%s` server `%s`", pluginName, serverName)
-			}
-			registration, err := parsePluginMCPServerEMAAuth(raw)
-			if err != nil {
-				return err
-			}
-			if !hasTrustedAtomicMCPEMARegistration(layers, nonProject, func(config map[string]any) bool {
-				candidate := mcpEMAPluginRegistration(config, pluginName, serverName)
-				return equalMCPEMARegistration(candidate, registration)
-			}) {
-				return fmt.Errorf("enterprise MCP registration for plugin `%s` server `%s` must be defined in one non-project config layer", pluginName, serverName)
-			}
-		}
-	}
 	return nil
-}
-
-func mcpEMAPluginServerView(values map[string]any, pluginName string, serverName string) *mcpEMAServerView {
-	if values == nil {
-		return nil
-	}
-	plugins, ok := mcpEMATable(values["plugins"])
-	if !ok {
-		return nil
-	}
-	plugin, ok := mcpEMATable(plugins[pluginName])
-	if !ok {
-		return nil
-	}
-	servers, ok := mcpEMATable(plugin["mcp_servers"])
-	if !ok {
-		return nil
-	}
-	return mcpEMAServerViewFromRaw(servers[serverName])
 }
 
 // validateMCPXAAOptInSource mirrors Rust validate_xaa_opt_in_source: enabling
@@ -693,13 +537,20 @@ func XAAFeatureKey() string {
 	return featureflags.UseXAAKey
 }
 
-// validateKnownPluginEMAAuthFields strict-validates the per-plugin enterprise
-// registration policy (`[plugins.<id>.mcp_servers.<server>.ema_auth]`).
-func validateKnownPluginEMAAuthFields(value any) error {
+// RetiredPluginEMAAuthRegistrations reports the plugin MCP servers whose host
+// configuration still declares the retired enterprise registration overlay
+// (`[plugins.<id>.mcp_servers.<server>.ema_auth]`), keyed by plugin id and then
+// by the servers declared with that overlay. Rust #49260 removed the overlay
+// from the schema; a declaration that survives is unsupported and disables the
+// server instead of granting it enterprise authority, so the overlay is accepted
+// here (mirroring Rust's `unsupported_plugin_ema_auth` deserializer, which
+// ignores the value) and reported to the MCP catalog builder.
+func RetiredPluginEMAAuthRegistrations(value any) map[string]map[string]bool {
 	plugins, ok := mcpEMATable(value)
 	if !ok {
 		return nil
 	}
+	var retired map[string]map[string]bool
 	for _, pluginName := range mcpEMASortedKeys(plugins) {
 		plugin, ok := mcpEMATable(plugins[pluginName])
 		if !ok {
@@ -714,14 +565,17 @@ func validateKnownPluginEMAAuthFields(value any) error {
 			if !ok {
 				continue
 			}
-			raw, ok := server["ema_auth"]
-			if !ok {
+			if _, ok := server["ema_auth"]; !ok {
 				continue
 			}
-			if _, err := parsePluginMCPServerEMAAuth(raw); err != nil {
-				return fmt.Errorf("plugins.%s.mcp_servers.%s.ema_auth: %w", pluginName, serverName, err)
+			if retired == nil {
+				retired = map[string]map[string]bool{}
 			}
+			if retired[pluginName] == nil {
+				retired[pluginName] = map[string]bool{}
+			}
+			retired[pluginName][serverName] = true
 		}
 	}
-	return nil
+	return retired
 }

@@ -934,9 +934,6 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 			return fmt.Errorf("mcp_enterprise_managed_auth: %w", err)
 		}
 	}
-	if err := validateKnownPluginEMAAuthFields(values["plugins"]); err != nil {
-		return err
-	}
 	if err := validateKnownAgentsFields(values["agents"]); err != nil {
 		return err
 	}
