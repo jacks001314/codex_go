@@ -1127,6 +1127,26 @@ func TestTerminalTitleCheckSkipsUntrustedProjectLayerLikeRust(t *testing.T) {
 	}
 }
 
+// TestTerminalTitleAcceptsDaybreakItemLikeRust mirrors Rust #49861's
+// terminal_title_accepts_configured_items: the terminal-title diagnostics
+// accept the new `daybreak` item instead of reporting it as invalid.
+func TestTerminalTitleAcceptsDaybreakItemLikeRust(t *testing.T) {
+	items := []string{"project", "daybreak"}
+	check := terminalTitleCheckFromInputs(&terminalTitleInputs{
+		ConfiguredItems: &items,
+		CWD:             "/workspace/project",
+	})
+	if check.Status != CheckStatusOK || check.Summary != "terminal title configured" {
+		t.Fatalf("check = %+v", check)
+	}
+	if !containsDetail(check, "terminal title items: project-name, daybreak") {
+		t.Fatalf("details = %#v", check.Details)
+	}
+	if len(check.Issues) != 0 {
+		t.Fatalf("issues = %#v", check.Issues)
+	}
+}
+
 func TestTerminalTitleWarnsForInvalidConfiguredItems(t *testing.T) {
 	items := []string{"project", "bogus", "activity", "bogus"}
 	check := terminalTitleCheckFromInputs(&terminalTitleInputs{

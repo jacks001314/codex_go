@@ -4212,6 +4212,8 @@ func terminalTitleItemID(item string) string {
 		return "thread-id"
 	case "fast-mode":
 		return "fast-mode"
+	case "daybreak":
+		return "daybreak"
 	case "model", "model-name":
 		return "model"
 	case "model-with-reasoning":
