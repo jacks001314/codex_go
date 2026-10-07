@@ -251,9 +251,10 @@ func TestQuickCheckLockedDatabaseIsIncompleteLikeRust(t *testing.T) {
 	}
 }
 
-// The open path validates before migrations run, so opening a corrupted
-// database records an attempt. Phase A only detects (Rust #49701 recovery
-// policy lands separately).
+// The open path validates the freshly opened database before migrations run:
+// opening a corrupted database records exactly one validation attempt for that
+// file identity, and the runtime recovery policy then replaces the damaged file
+// (Rust #49701 `open_read_write_pool_with_spec`).
 func TestOpenRuntimeDBValidatesBeforeMigrateLikeRust(t *testing.T) {
 	ctx := context.Background()
 	config, err := NewSqliteConfig(t.TempDir())
@@ -269,7 +270,24 @@ func TestOpenRuntimeDBValidatesBeforeMigrateLikeRust(t *testing.T) {
 	if len(config.quickCheck.seen) != 1 {
 		t.Fatalf("validation attempts = %d, want 1", len(config.quickCheck.seen))
 	}
-	if got := quickCheck(ctx, db, 5*time.Second); got != QuickCheckCorruptedNeedsFixed {
-		t.Fatalf("quick_check on corrupt state db = %v, want %v", got, QuickCheckCorruptedNeedsFixed)
+	// The returned pool is the rebuilt database, not the damaged file.
+	if got := quickCheck(ctx, db, 5*time.Second); got != QuickCheckComplete {
+		t.Fatalf("rebuilt state db quick_check = %v, want %v", got, QuickCheckComplete)
+	}
+	// The rebuilt file has a new identity, so the next open validates again
+	// (Rust "replacement files are checked again").
+	if err := db.Close(); err != nil {
+		t.Fatalf("close rebuilt state db: %v", err)
+	}
+	reopened, err := config.OpenStateDB(ctx)
+	if err != nil {
+		t.Fatalf("reopen state db: %v", err)
+	}
+	defer reopened.Close()
+	if len(config.quickCheck.seen) != 2 {
+		t.Fatalf("validation attempts after reopen = %d, want 2", len(config.quickCheck.seen))
+	}
+	if got := quickCheck(ctx, reopened, 5*time.Second); got != QuickCheckComplete {
+		t.Fatalf("reopened state db quick_check = %v, want %v", got, QuickCheckComplete)
 	}
 }

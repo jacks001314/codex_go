@@ -16,7 +16,24 @@ type runtimeDBSpec struct {
 	kind  RuntimeDBKind
 	label string
 	path  func(SqliteConfig) string
+	// recovery decides what a confirmed quick-check corruption finding may do
+	// (Rust `RecoveryMode`, upstream 3620b2caf8 / #49701).
+	recovery dbRecoveryMode
 }
+
+// dbRecoveryMode mirrors Rust `RecoveryMode`.
+type dbRecoveryMode int
+
+const (
+	// dbRecoveryBackupAndRebuild preserves the damaged files and lets the
+	// runtime rebuild the database from saved data. It is the policy for every
+	// runtime database that supports recovery.
+	dbRecoveryBackupAndRebuild dbRecoveryMode = iota
+	// dbRecoveryUnavailable reports corruption without rebuilding. Rust gives
+	// thread history this policy: unrelated corruption must not disable lazy
+	// history reads.
+	dbRecoveryUnavailable
+)
 
 // SetMetrics installs the TaskMetrics used to emit SQLite log-persistence
 // telemetry (Rust #40726 codex.sqlite.log.write_*).
@@ -133,6 +150,29 @@ func (c SqliteConfig) openRuntimeDB(ctx context.Context, spec runtimeDBSpec) (*s
 	}
 	if outcome == QuickCheckCorruptedNeedsFixed {
 		logQuickCheckCorruption(path, spec.label)
+		if spec.recovery == dbRecoveryBackupAndRebuild {
+			// Preserve the damaged files, then reconnect so the runtime rebuilds
+			// the database from scratch (Rust `open_read_write_pool_with_spec`).
+			// The rebuilt database is deliberately not re-validated: it was just
+			// created, and a later open checks its new file identity.
+			_ = db.Close()
+			backups, backupErr := BackupDBFilesForFreshStart(&DBRecoveryStartupError{
+				DatabasePath: path,
+				Detail:       "PRAGMA quick_check(1) reported corruption",
+			}, time.Time{})
+			if backupErr != nil {
+				return nil, &RuntimeDBInitError{Label: spec.label, Operation: "recover", Path: path, Err: backupErr}
+			}
+			for _, backup := range backups {
+				slog.Warn("preserved corrupt sqlite database before rebuilding",
+					"database", backup.OriginalPath, "backup", backup.BackupPath)
+			}
+			rebuilt, reopenErr := c.OpenReadWrite(ctx, path)
+			if reopenErr != nil {
+				return nil, &RuntimeDBInitError{Label: spec.label, Operation: "open", Path: path, Err: reopenErr}
+			}
+			db = rebuilt
+		}
 	}
 	if err := migrateRuntimeDB(ctx, db, spec.kind); err != nil {
 		_ = db.Close()
@@ -164,7 +204,12 @@ func (c SqliteConfig) OpenMemoriesV2DB(ctx context.Context) (*sql.DB, error) {
 }
 
 func (c SqliteConfig) OpenThreadHistoryDB(ctx context.Context) (*sql.DB, error) {
-	return c.openRuntimeDB(ctx, runtimeDBSpec{kind: RuntimeDBThreadHistory, label: "thread history DB", path: SqliteConfig.ThreadHistoryDBPath})
+	return c.openRuntimeDB(ctx, runtimeDBSpec{
+		kind:     RuntimeDBThreadHistory,
+		label:    "thread history DB",
+		path:     SqliteConfig.ThreadHistoryDBPath,
+		recovery: dbRecoveryUnavailable,
+	})
 }
 
 func (r *StateRuntime) SQLite() SqliteConfig         { return r.sqlite }
