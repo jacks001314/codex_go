@@ -105,7 +105,7 @@ func goalTokenDelta(last, current model.AgentUsage) int64 {
 }
 
 func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetResponse, *Goal, *session.Record, error) {
-	record, _, err := r.materializedGoalThread(params.ThreadID, true)
+	record, rolloutPath, err := r.materializedGoalThread(params.ThreadID, true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -123,6 +123,15 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 		return nil, nil, record, fmt.Errorf("failed to read thread goal: %w", err)
 	}
 	existing := apiGoalFromState(existingState)
+	// Rust #49598 validates that an update-only request has a goal before it
+	// records anything, then records the explicit user instruction before the
+	// goal state changes; a recording failure leaves the goal state unchanged.
+	if params.Objective == nil && existingState == nil {
+		return nil, existing, record, jsonRPCInvalidRequest(fmt.Sprintf("cannot update goal for thread %s: no goal exists", strings.TrimSpace(params.ThreadID)))
+	}
+	if err := r.recordUserGoalSetInstruction(params, rolloutPath); err != nil {
+		return nil, existing, record, err
+	}
 	var persisted *state.ThreadGoal
 	if params.Objective != nil {
 		objective := strings.TrimSpace(*params.Objective)
@@ -153,9 +162,6 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 			persisted, err = r.services.StateRuntime.UpdateThreadGoal(ctx, params.ThreadID, update)
 		}
 	} else {
-		if existingState == nil {
-			return nil, nil, record, jsonRPCInvalidRequest(fmt.Sprintf("cannot update goal for thread %s: no goal exists", strings.TrimSpace(params.ThreadID)))
-		}
 		update := stateGoalUpdate(params, existingState.GoalID, params.MaxGoalTokenBudget)
 		if err := validateGoalBudgetAgainstMax(update.TokenBudget, params.MaxGoalTokenBudget); err != nil {
 			return nil, nil, record, err
@@ -200,7 +206,7 @@ func (r *RuntimeRouter) getStateThreadGoal(params *GoalGetParams) (*GoalGetRespo
 }
 
 func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClearResponse, *Goal, *session.Record, error) {
-	record, _, err := r.materializedGoalThread(params.ThreadID, true)
+	record, rolloutPath, err := r.materializedGoalThread(params.ThreadID, true)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -212,6 +218,11 @@ func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClea
 		}
 	}()
 	r.prepareExternalGoalMutation(params.ThreadID)
+	// Rust #49598 records a clear instruction, even when no goal row exists,
+	// before deleting goal state.
+	if err := r.recordUserGoalClearInstruction(params, rolloutPath); err != nil {
+		return nil, nil, record, err
+	}
 	deleted, err := r.services.StateRuntime.DeleteThreadGoal(context.Background(), params.ThreadID)
 	if err != nil {
 		return nil, nil, record, fmt.Errorf("failed to clear thread goal: %w", err)
