@@ -84,11 +84,34 @@ type remoteRegistrationResponse struct {
 
 type registryErrorBody struct {
 	Error *registryError `json:"error"`
+	// Detail carries a structured registry error under the non-canonical
+	// `detail` envelope key (Rust #50465 `ef8cfe5e96`).
+	Detail json.RawMessage `json:"detail"`
 }
 
 type registryError struct {
 	Code    *string `json:"code"`
 	Message *string `json:"message"`
+}
+
+// intoError mirrors Rust RegistryErrorBody::into_error (#50465 `ef8cfe5e96`):
+// the canonical `error` envelope stays authoritative when both are present, and
+// a structured `detail` object is accepted as a fallback. An absent, null or
+// non-object `detail` yields no error, exactly like `serde_json::from_value::<
+// RegistryError>(detail).ok()`.
+func (b registryErrorBody) intoError() *registryError {
+	if b.Error != nil {
+		return b.Error
+	}
+	detail := bytes.TrimSpace(b.Detail)
+	if len(detail) == 0 || bytes.Equal(detail, []byte("null")) {
+		return nil
+	}
+	var parsed registryError
+	if err := json.Unmarshal(detail, &parsed); err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 // remoteReconnectBackoff retains exponential backoff across short-lived
@@ -307,12 +330,14 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 	return &decoded, nil
 }
 
-// registerRemoteEnvironmentWithRetry mirrors Rust #41219
+// registerRemoteEnvironmentWithRetry mirrors Rust #41219/#50465
 // (EnvironmentRegistryClient::register_environment_with_retry). Retrying
 // ambiguous failures is unsafe because a timed-out request may still have
-// replaced a newer registration, so only explicit `503 registration_conflict`
-// responses are retried with jittered exponential backoff. The enclosing remote
-// transport future owns cancellation; retries spawn no background work.
+// replaced a newer registration, so only confirmed pre-write failures are
+// retried with jittered exponential backoff: HTTP 503 `registration_conflict`
+// and HTTP 502 `authentication_service_unavailable` (Rust #50465
+// `ef8cfe5e96`). The enclosing remote transport future owns cancellation;
+// retries spawn no background work.
 func registerRemoteEnvironmentWithRetry(ctx context.Context, cfg RemoteEnvironmentConfig, key RemotePublicKey) (*remoteRegistrationResponse, error) {
 	// Competing executors for the same environment must not retry in lockstep.
 	retryKey := uuid.NewString()
@@ -323,9 +348,7 @@ func registerRemoteEnvironmentWithRetry(ctx context.Context, cfg RemoteEnvironme
 			return registration, nil
 		}
 		var httpErr *remoteRegistryHTTPError
-		if !errors.As(err, &httpErr) ||
-			httpErr.StatusCode != http.StatusServiceUnavailable ||
-			httpErr.Code == nil || *httpErr.Code != "registration_conflict" {
+		if !errors.As(err, &httpErr) || !retryableRegistryRegistrationError(httpErr) {
 			return nil, err
 		}
 		attempt++
@@ -333,6 +356,26 @@ func registerRemoteEnvironmentWithRetry(ctx context.Context, cfg RemoteEnvironme
 		if sleepErr := sleepContext(ctx, delay); sleepErr != nil {
 			return nil, sleepErr
 		}
+	}
+}
+
+// retryableRegistryRegistrationError mirrors the retry predicate in Rust
+// registration_retry.rs (#50465 `ef8cfe5e96`): a registration may only be
+// replayed for a confirmed failure before the write completed — HTTP 503
+// `registration_conflict` or HTTP 502 `authentication_service_unavailable`.
+// Every other status/code stays terminal so an ambiguous request that might
+// have replaced a newer registration is never replayed.
+func retryableRegistryRegistrationError(err *remoteRegistryHTTPError) bool {
+	if err == nil || err.Code == nil {
+		return false
+	}
+	switch err.StatusCode {
+	case http.StatusServiceUnavailable:
+		return *err.Code == "registration_conflict"
+	case http.StatusBadGateway:
+		return *err.Code == "authentication_service_unavailable"
+	default:
+		return false
 	}
 }
 
@@ -387,17 +430,19 @@ func (e *remoteRegistryHTTPError) Error() string {
 
 func registryHTTPErrorMessage(body string) (*string, string) {
 	var decoded registryErrorBody
-	if err := json.Unmarshal([]byte(body), &decoded); err == nil && decoded.Error != nil {
-		message := ""
-		if decoded.Error.Message != nil {
-			message = *decoded.Error.Message
-		} else {
-			message = previewErrorBody(body)
-			if message == "" {
-				message = "empty error body"
+	if err := json.Unmarshal([]byte(body), &decoded); err == nil {
+		if registryErr := decoded.intoError(); registryErr != nil {
+			message := ""
+			if registryErr.Message != nil {
+				message = *registryErr.Message
+			} else {
+				message = previewErrorBody(body)
+				if message == "" {
+					message = "empty error body"
+				}
 			}
+			return registryErr.Code, message
 		}
-		return decoded.Error.Code, message
 	}
 	message := previewErrorBody(body)
 	if message == "" {
@@ -408,8 +453,10 @@ func registryHTTPErrorMessage(body string) (*string, string) {
 
 func registryErrorMessage(body string) string {
 	var decoded registryErrorBody
-	if err := json.Unmarshal([]byte(body), &decoded); err == nil && decoded.Error != nil && decoded.Error.Message != nil {
-		return *decoded.Error.Message
+	if err := json.Unmarshal([]byte(body), &decoded); err == nil {
+		if registryErr := decoded.intoError(); registryErr != nil && registryErr.Message != nil {
+			return *registryErr.Message
+		}
 	}
 	if preview := previewErrorBody(body); preview != "" {
 		return preview
