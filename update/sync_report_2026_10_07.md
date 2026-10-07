@@ -93,3 +93,14 @@
   - 结构性差异（详见计划第三十二轮）：项发布位置（dispatcher 统一发布 vs handler 内 emit）、无对应锁等待、post-tool hooks/输出处理的 ctx 门控沿用既有实现。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./turn/ ./tool/ ./appserver/` 无输出；`go test ./turn/... -count=1` 全通过；`go test ./tool/... -count=1` 仅 3 项既有环境失败（已 stash 复现确认与本轮无关）。
 - 剩余：第三十一轮拆解的 8 项不变，继续按序推进。
+
+## 追加（当日第七批：sync398）
+
+- `sync398`（上游 #51515 "Expose detailed agent tree shutdown failure reports"）：Agent 树关闭失败明细报告。
+  - 新增 `agent/shutdown_report.go`：`AgentTreeShutdownFailure` / `AgentTreeShutdownReport`（`String()` 与 Rust `Display` 同字段同序、payload-free、实现 `Error()`）/ `MaxRetainedShutdownFailures = 64` / `AgentTreeShutdownState` 记录器（截断 + `OmittedFailures` + 每条 `slog.Warn` + 快照读取）。
+  - `agent/tools.go`：`CloseAgentResult.ShutdownReport`（真实消费者 = close_agent 工具输出）。
+  - `appserver/agent_controller.go`：关闭期间记录 `list_descendants` / `turn_interrupt` / `close_spawn_edge` 失败；新增 `agentShutdownErrorKind` 稳定类别映射；非空报告回填结果。
+  - 测试：`agent/shutdown_report_test.go`（3 个）+ `appserver/agent_controller_shutdown_test.go`（2 个）。
+  - 结构性差异（详见计划第三十三轮）：Go 无 TaskTracker/teardown guard/resident eviction，故无 `wait()/wait_detailed()`，报告在 `CloseAgent` 内组装随结果返回；失败点更少；V2 exec 控制器无失败可记录。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./agent/ ./appserver/` 无输出；`go test ./agent/... -count=1` 全通过；`go test ./appserver/ -count=1` 仅 3 项既有基线失败。
+- 剩余 7 项：继续按序推进（#51491 → #51480 → #51503 → #51482 → #51517 → TUI）。
