@@ -36,11 +36,14 @@ type Config struct {
 	// means the policy did not set it, which leaves socket permissions to an
 	// attachment policy when no socket map is supplied either.
 	DangerouslyAllowAllUnixSockets *bool
-	AllowLocalBinding              bool
-	Domains                        map[string]DomainPermission
-	UnixSockets                    map[string]UnixSocketPermission
-	MITM                           bool
-	MITMHooks                      []MITMHook
+	// AllowLocalBinding mirrors Rust's Option<bool> (#47898): nil means the
+	// setting was omitted, so a policy that also omits it inherits this value
+	// instead of collapsing to an explicit denial.
+	AllowLocalBinding *bool
+	Domains           map[string]DomainPermission
+	UnixSockets       map[string]UnixSocketPermission
+	MITM              bool
+	MITMHooks         []MITMHook
 }
 
 type UnixSocketPermission string
@@ -152,8 +155,12 @@ type EnvironmentNetworkPolicy struct {
 	UnixSockets                    map[string]UnixSocketPermission
 	AllowUpstreamProxy             bool
 	DangerouslyAllowAllUnixSockets bool
-	AllowLocalBinding              bool
-	ManagedAllowedDomainsOnly      bool
+	// AllowLocalBinding mirrors Rust's Option<bool> (#47898): an absent JSON
+	// field decodes to nil, which inherits the controller's setting; an
+	// explicit value narrows it, and an explicit false from either side stays a
+	// hard denial. Rust serializes the omission as null (no skip attribute).
+	AllowLocalBinding         *bool `json:"allowLocalBinding"`
+	ManagedAllowedDomainsOnly bool
 }
 
 // EnvironmentNetworkPolicyFromConfig captures proxy activation and traffic
@@ -166,7 +173,7 @@ func EnvironmentNetworkPolicyFromConfig(config *Config, managedAllowedDomainsOnl
 		UnixSockets:                    copyUnixSocketMap(config.UnixSockets),
 		AllowUpstreamProxy:             config.AllowUpstreamProxy,
 		DangerouslyAllowAllUnixSockets: boolPointerValue(config.DangerouslyAllowAllUnixSockets),
-		AllowLocalBinding:              config.AllowLocalBinding,
+		AllowLocalBinding:              cloneBool(config.AllowLocalBinding),
 		ManagedAllowedDomainsOnly:      managedAllowedDomainsOnly,
 	}
 }
@@ -219,7 +226,19 @@ func (p *EnvironmentNetworkPolicy) ApplyTo(config *Config) {
 	config.DangerouslyAllowAllUnixSockets = &effectiveAllowAll
 	// The attachment policy can only narrow the inherited traffic permissions.
 	config.AllowUpstreamProxy = config.AllowUpstreamProxy && p.AllowUpstreamProxy
-	config.AllowLocalBinding = config.AllowLocalBinding && p.AllowLocalBinding
+	// Rust #47898: omission inherits the local-binding policy; an explicit false
+	// from either the controller or the owner remains a restriction. The
+	// executor-side default is resolved after composition, in
+	// NewSpecForEnvironment.
+	switch {
+	case p.AllowLocalBinding == nil:
+		// The owner did not set it: keep the controller's value (also possibly omitted).
+	case config.AllowLocalBinding == nil:
+		config.AllowLocalBinding = cloneBool(p.AllowLocalBinding)
+	default:
+		combined := *config.AllowLocalBinding && *p.AllowLocalBinding
+		config.AllowLocalBinding = &combined
+	}
 }
 
 // NewSpecForEnvironment resolves a remote environment's network policy for a
@@ -237,6 +256,13 @@ func NewSpecForEnvironment(config Config, requirements *Requirements, permission
 		next.config = cloneConfig(&spec.config)
 		controllerAllowAll := next.config.DangerouslyAllowAllUnixSockets
 		policy.ApplyTo(&next.config)
+		// Rust #47898 resolves the executor-side default after composing the owner
+		// policy (LocalBindingPolicy::DefaultFalse: an omitted setting is false
+		// unless a policy requires true; Go has no require-true policy).
+		if next.config.AllowLocalBinding == nil {
+			resolved := false
+			next.config.AllowLocalBinding = &resolved
+		}
 		next.hardDenyAllowlistMisses = spec.hardDenyAllowlistMisses || policy.ManagedAllowedDomainsOnly || !managedSandboxActive(permissionKind)
 		// Rust #46004: record how the controller and attachment policies
 		// composed, so an unexpected socket grant is diagnosable.
@@ -385,7 +411,7 @@ func ValidateAgainstConstraints(config *Config, constraints *Constraints) error 
 	if constraints.DangerouslyAllowAllUnixSockets != nil && boolPointerValue(config.DangerouslyAllowAllUnixSockets) != *constraints.DangerouslyAllowAllUnixSockets {
 		return fmt.Errorf("dangerously_allow_all_unix_sockets violates constraints")
 	}
-	if constraints.AllowLocalBinding != nil && config.AllowLocalBinding != *constraints.AllowLocalBinding {
+	if constraints.AllowLocalBinding != nil && boolPointerValue(config.AllowLocalBinding) != *constraints.AllowLocalBinding {
 		return fmt.Errorf("allow_local_binding violates constraints")
 	}
 	if constraints.AllowlistExpansionEnabled != nil && !*constraints.AllowlistExpansionEnabled {
@@ -479,7 +505,7 @@ func applyRequirements(config Config, requirements *Requirements, permissionKind
 		constraints.DangerouslyAllowAllUnixSockets = requirements.DangerouslyAllowAllUnixSockets
 	}
 	if requirements.AllowLocalBinding != nil {
-		config.AllowLocalBinding = *requirements.AllowLocalBinding
+		config.AllowLocalBinding = cloneBool(requirements.AllowLocalBinding)
 		constraints.AllowLocalBinding = requirements.AllowLocalBinding
 	}
 	if len(requirements.AllowedDomains) > 0 || hardDeny {
@@ -581,6 +607,7 @@ func cloneConfig(config *Config) Config {
 	}
 	cloned := *config
 	cloned.DangerouslyAllowAllUnixSockets = cloneBool(config.DangerouslyAllowAllUnixSockets)
+	cloned.AllowLocalBinding = cloneBool(config.AllowLocalBinding)
 	if config.Domains != nil {
 		cloned.Domains = make(map[string]DomainPermission, len(config.Domains))
 		for host, permission := range config.Domains {

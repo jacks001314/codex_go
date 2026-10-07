@@ -171,3 +171,76 @@ func TestEnvironmentNetworkPolicyRequiresProxyWireLikeRust(t *testing.T) {
 		t.Fatalf("policy without a proxy requirement = %s", got)
 	}
 }
+
+// Mirrors Rust network_proxy_spec_tests.rs
+// ::environment_local_binding_preserves_explicit_denials_and_inherits_omitted_settings
+// (#47898): an owner policy that omits allow_local_binding inherits the
+// controller's setting, an explicit false from either side is a hard denial,
+// and the executor-side default is resolved after composition.
+func TestEnvironmentLocalBindingInheritsOmittedSettingsLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		controller *bool
+		owner      *bool
+		want       bool
+	}{
+		{"managed_omitted_inherits_controller_grant", boolTestPtr(true), nil, true},
+		{"owner_omitted_inherits_controller_denial", boolTestPtr(false), nil, false},
+		{"owner_explicit_deny_wins", boolTestPtr(true), boolTestPtr(false), false},
+		{"controller_explicit_deny_wins", boolTestPtr(false), boolTestPtr(true), false},
+		{"owner_grant_without_controller", nil, boolTestPtr(true), true},
+		{"both_omitted_resolve_to_default", nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			controller := Config{Enabled: true, AllowLocalBinding: tc.controller}
+			policy := &EnvironmentNetworkPolicy{AllowLocalBinding: tc.owner}
+			spec, err := NewSpecForEnvironment(controller, nil, PermissionManaged, policy, nil)
+			if err != nil {
+				t.Fatalf("NewSpecForEnvironment() error = %v", err)
+			}
+			got := spec.Config().AllowLocalBinding
+			if got == nil {
+				t.Fatalf("resolved AllowLocalBinding = nil, want %v", tc.want)
+			}
+			if *got != tc.want {
+				t.Fatalf("resolved AllowLocalBinding = %v, want %v", *got, tc.want)
+			}
+		})
+	}
+}
+
+// Mirrors Rust's #[serde(rename_all = "camelCase")] Option<bool> wire shape
+// (#47898): an omitted setting serializes as null and a missing or null field
+// decodes back to nil (inherit), while an explicit bool stays explicit.
+func TestEnvironmentNetworkPolicyLocalBindingWireLikeRust(t *testing.T) {
+	omitempty, err := json.Marshal(EnvironmentNetworkPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(omitempty), `"allowLocalBinding":null`) {
+		t.Fatalf("omitted local binding wire = %s", omitempty)
+	}
+	explicit, err := json.Marshal(EnvironmentNetworkPolicy{AllowLocalBinding: boolTestPtr(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(explicit), `"allowLocalBinding":false`) {
+		t.Fatalf("explicit local binding wire = %s", explicit)
+	}
+	for _, raw := range []string{`{}`, `{"allowLocalBinding":null}`, `{"allowLocalBinding":true}`} {
+		var policy EnvironmentNetworkPolicy
+		if err := json.Unmarshal([]byte(raw), &policy); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		switch raw {
+		case `{"allowLocalBinding":true}`:
+			if policy.AllowLocalBinding == nil || !*policy.AllowLocalBinding {
+				t.Fatalf("decode %s = %#v, want explicit true", raw, policy.AllowLocalBinding)
+			}
+		default:
+			if policy.AllowLocalBinding != nil {
+				t.Fatalf("decode %s = %v, want nil (inherit)", raw, *policy.AllowLocalBinding)
+			}
+		}
+	}
+}
