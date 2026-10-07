@@ -337,7 +337,7 @@ statusMessage = "running listed hook"
 	if hook.TimeoutSec != 5 || hook.StatusMessage == nil || *hook.StatusMessage != "running listed hook" {
 		t.Fatalf("hook timeout/status = %+v", hook)
 	}
-	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, 5, hook.StatusMessage, nil) {
+	if hook.CurrentHash != hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, 5, hook.StatusMessage, nil) {
 		t.Fatalf("hash = %q, want normalized hook hash", hook.CurrentHash)
 	}
 }
@@ -828,9 +828,9 @@ func TestHookDiscoveryParsesAdditionalContextLimitFromJSON(t *testing.T) {
 	}
 	// The hash must include the limit (Rust NormalizedHookIdentity), so a hook
 	// with a different limit hashes differently.
-	withLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, hook.TimeoutSec, hook.StatusMessage, hook.AdditionalContextLimit)
+	withLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, hook.AdditionalContextLimit)
 	limit := int64(1)
-	otherLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, hook.TimeoutSec, hook.StatusMessage, &limit)
+	otherLimit := hookDiscoveryHash(HookEventPreToolUse, hook.Matcher, *hook.Command, false, hook.TimeoutSec, hook.StatusMessage, &limit)
 	if withLimit == otherLimit {
 		t.Fatal("additionalContextLimit must participate in the hook identity hash")
 	}
@@ -944,5 +944,216 @@ func TestHookDiscoveryCompilesRegexMatcherLikeRust(t *testing.T) {
 		if !ok || hook.compiledMatcher != nil {
 			t.Fatalf("matcher %q should not carry a compiled regex: %#v", command, byCommand[command])
 		}
+	}
+}
+
+// TestHookTrustHashMatchesRustCanonicalFingerprint pins the hook trust identity to the
+// Rust canonical fingerprint of #49295. Each expected hash was produced by running
+// Rust's hook_hash (codex-rs/hooks/src/engine/discovery.rs) on the same hook definition,
+// which serializes the normalized identity through codex_config::version_for_toml
+// (codex-rs/config/src/fingerprint.rs) and hashes the canonical JSON with SHA-256:
+//
+//	{ event_name, matcher?, hooks: [handler] }
+//
+// The tables below cover the handler shapes and normalizations Rust applies before
+// hashing: command vs mcp_tool handlers (only command handlers carry `async`), an
+// omitted mcp_tool input (an empty table is still hashed), the matcher-less events, the
+// SessionEnd/Interrupt timeout default and clamp, and the additionalContextLimit
+// normalization.
+func TestHookTrustHashMatchesRustCanonicalFingerprint(t *testing.T) {
+	commandCases := []struct {
+		name        string
+		body        string
+		wantHash    string
+		wantTimeout int64
+	}{
+		{
+			name: "command PreToolUse async with status and limit",
+			body: `[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 /tmp/listed-hook.py"
+timeout = 5
+async = true
+statusMessage = "running listed hook"
+additionalContextLimit = 4096
+`,
+			wantHash:    "sha256:77af324465e1bd97065037ee4fb25d0d8f60bd6aa701379f5a6749d96dbae897",
+			wantTimeout: 5,
+		},
+		{
+			name: "command PreToolUse default timeout",
+			body: `[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo hi"
+`,
+			wantHash:    "sha256:3bbce6504b48cc6f0d7fe24bd36273633d1bfa5879bc87f4ed7ccd16f24d1415",
+			wantTimeout: 600,
+		},
+		{
+			name: "command PreToolUse limit equal to the 2500 default is normalized away",
+			body: `[hooks]
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "echo hi"
+timeout = 600
+additionalContextLimit = 2500
+`,
+			wantHash:    "sha256:3bbce6504b48cc6f0d7fe24bd36273633d1bfa5879bc87f4ed7ccd16f24d1415",
+			wantTimeout: 600,
+		},
+		{
+			name: "command SessionEnd default timeout is one second",
+			body: `[hooks]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "echo hi"
+`,
+			wantHash:    "sha256:c6e3af8b1627dcaa3a876a10d15499bd53226a6b955017999d0eaabae8e2fd46",
+			wantTimeout: 1,
+		},
+		{
+			name: "command SessionEnd keeps its matcher",
+			body: `[hooks]
+
+[[hooks.SessionEnd]]
+matcher = "clear|other"
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "echo hi"
+`,
+			wantHash:    "sha256:57175c124df70b6856653dbd75f44f5bd038e4c622688d0ab699b2bd3b472b4d",
+			wantTimeout: 1,
+		},
+		{
+			name: "command SessionEnd timeout clamps to three seconds",
+			body: `[hooks]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "echo hi"
+timeout = 600
+`,
+			wantHash:    "sha256:823aeab1cf10994923a9a4c0236d0b3c702cfbafc61158f8adceebe65399f28d",
+			wantTimeout: 3,
+		},
+		{
+			name: "command Interrupt drops its matcher",
+			body: `[hooks]
+
+[[hooks.Interrupt]]
+matcher = "^interrupted$"
+
+[[hooks.Interrupt.hooks]]
+type = "command"
+command = "echo hi"
+`,
+			wantHash:    "sha256:954a9910f8d7089fe12d362d16c1f0e39597fbb05e205a2ead31b938a2d25afa",
+			wantTimeout: 1,
+		},
+		{
+			name: "command Stop drops additionalContextLimit",
+			body: `[hooks]
+
+[[hooks.Stop]]
+matcher = "Bash"
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "echo hi"
+timeout = 600
+additionalContextLimit = 1000
+`,
+			wantHash:    "sha256:f2aa169c7a1cf9b7cc9b61ce5ecec0315e0f7d13ac35935b1aa74440f9a839f8",
+			wantTimeout: 600,
+		},
+		{
+			name: "command UserPromptSubmit drops its matcher",
+			body: `[hooks]
+
+[[hooks.UserPromptSubmit]]
+matcher = "Bash"
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "echo hi"
+timeout = 600
+`,
+			wantHash:    "sha256:4ac11110e7e52a7ace4a63994f6a554e0c891264e3e3733d1f0541b1cd0b3b3e",
+			wantTimeout: 600,
+		},
+	}
+	for _, test := range commandCases {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			cwd := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(test.body), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			response := NewHookDiscoveryService(home).Discover(&HookListParams{CWDs: []string{cwd}}, "")
+			if len(response.Data) != 1 || len(response.Data[0].Hooks) != 1 {
+				t.Fatalf("Discover() = %+v", response)
+			}
+			hook := response.Data[0].Hooks[0]
+			if hook.CurrentHash != test.wantHash {
+				t.Fatalf("CurrentHash = %s, want %s", hook.CurrentHash, test.wantHash)
+			}
+			if hook.TimeoutSec != test.wantTimeout {
+				t.Fatalf("TimeoutSec = %d, want %d", hook.TimeoutSec, test.wantTimeout)
+			}
+		})
+	}
+
+	mcpCases := []struct {
+		name     string
+		body     string
+		wantHash string
+	}{
+		{
+			name:     "mcp_tool hashes server/tool/input without async",
+			body:     `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"mcp_tool","server":"security","tool":"inspect","input":{"path":"${tool_input.path}"},"timeout":9,"statusMessage":"checking security policy"}]}]}}`,
+			wantHash: "sha256:bf65d7061da938acf0d44d7c58e6011a854e67d6a3625940b5f40b0f97259aab",
+		},
+		{
+			name:     "mcp_tool without input hashes an empty table",
+			body:     `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"mcp_tool","server":"security","tool":"inspect"}]}]}}`,
+			wantHash: "sha256:59b5ad65a4dde7b4e024c13ae6fbdb658773007c78f873d7c1902d788569c357",
+		},
+	}
+	for _, test := range mcpCases {
+		t.Run(test.name, func(t *testing.T) {
+			cwd := t.TempDir()
+			hooksDir := filepath.Join(cwd, ".gcode")
+			if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), []byte(test.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			service := NewHookDiscoveryService("")
+			service.McpToolHooksEnabled = true
+			response := service.Discover(&HookListParams{CWDs: []string{cwd}}, "")
+			if len(response.Data) != 1 || len(response.Data[0].Hooks) != 1 {
+				t.Fatalf("Discover() = %+v", response)
+			}
+			if got := response.Data[0].Hooks[0].CurrentHash; got != test.wantHash {
+				t.Fatalf("CurrentHash = %s, want %s", got, test.wantHash)
+			}
+		})
 	}
 }

@@ -1,8 +1,6 @@
 package appserver
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,6 +16,13 @@ import (
 )
 
 const defaultDiscoveredHookTimeoutSec int64 = 600
+
+// Mirrors Rust hooks/src/events/session_end.rs and output_spill.rs constants.
+const (
+	sessionEndHookDefaultTimeoutSec int64 = 1
+	sessionEndHookMaxTimeoutSec     int64 = 3
+	defaultHookOutputTokenLimit     int64 = 2500
+)
 
 type HookDiscoveryService struct {
 	CodexHome         string
@@ -108,10 +113,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 						entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("skipping empty hook command in managed requirements for %s", event.name))
 						continue
 					}
-					timeout := defaultDiscoveredHookTimeoutSec
-					if handler.TimeoutSec != nil {
-						timeout = int64(*handler.TimeoutSec)
-					}
+					timeout := hookNormalizedCommandTimeout(event.name, handler.TimeoutSec)
 					entry.Hooks = append(entry.Hooks, HookMetadata{
 						Key:           key,
 						EventName:     event.name,
@@ -126,7 +128,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 						DisplayOrder:  displayOrder,
 						Enabled:       true,
 						IsManaged:     true,
-						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, command, timeout, handler.StatusMessage, nil),
+						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, handler.Command, handler.Async, timeout, handler.StatusMessage, nil),
 						TrustStatus:   HookTrustManaged,
 					})
 					displayOrder++
@@ -816,10 +818,10 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping empty hook command in %s", source.Path))
 				continue
 			}
-			timeoutSec := handler.timeoutSec()
+			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			additionalContextLimit := handler.additionalContextLimit()
-			currentHash := hookDiscoveryHash(event, matcher, command, timeoutSec, handler.statusMessage(), additionalContextLimit)
+			currentHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit)
 			state := source.State(key)
 			displayCommand := expandHookEnvPlaceholders(command, source.Env)
 			metadata := HookMetadata{
@@ -866,10 +868,10 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping MCP tool hook in %s: MCP tool hooks are not supported for SessionEnd", source.Path))
 				continue
 			}
-			timeoutSec := handler.timeoutSec()
+			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			inputTemplate := cloneHookInput(handler.Input)
-			currentHash := hookDiscoveryHashHandler(event, matcher, HookHandlerMCPTool, "", server, toolName, inputTemplate, timeoutSec, handler.statusMessage(), nil)
+			currentHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil)
 			state := source.State(key)
 			metadata := HookMetadata{
 				Key:             key,
@@ -959,9 +961,15 @@ func (h *hookJSONHandlerConfigWire) commandForPlatform() string {
 	return h.Command
 }
 
-func (h *hookJSONHandlerConfigWire) timeoutSec() int64 {
+// timeoutSecForEvent resolves this handler's configured timeout and normalizes it the
+// way Rust's normalize_command_hook does (hooks/src/engine/discovery.rs): SessionEnd and
+// Interrupt default to one second and clamp to 1..=3s
+// (hooks/src/events/session_end.rs SESSION_END_DEFAULT_TIMEOUT_SEC/MAX_TIMEOUT_SEC);
+// every other hook defaults to ten minutes and is floored at one second. The normalized
+// value is what both the reported timeout and the hook trust hash use.
+func (h *hookJSONHandlerConfigWire) timeoutSecForEvent(event HookEventName) int64 {
 	if h == nil {
-		return defaultDiscoveredHookTimeoutSec
+		return hookNormalizedCommandTimeout(event, nil)
 	}
 	value := h.Timeout
 	if value == nil {
@@ -970,16 +978,46 @@ func (h *hookJSONHandlerConfigWire) timeoutSec() int64 {
 	if value == nil {
 		value = h.TimeoutSecAlias
 	}
-	if value == nil {
-		return defaultDiscoveredHookTimeoutSec
+	return hookNormalizedCommandTimeout(event, value)
+}
+
+// hookNormalizedCommandTimeout mirrors Rust normalize_command_hook
+// (hooks/src/engine/discovery.rs): SessionEnd and Interrupt use 1s by default and clamp
+// to SESSION_END_MAX_TIMEOUT_SEC (3s); every other event uses 600s by default and never
+// goes below one second.
+func hookNormalizedCommandTimeout(event HookEventName, raw *uint64) int64 {
+	value := int64(0)
+	if raw != nil {
+		value = hookTimeoutToInt64(*raw)
 	}
-	if *value == 0 {
-		return 1
+	switch event {
+	case HookEventSessionEnd, HookEventInterrupt:
+		if raw == nil {
+			return sessionEndHookDefaultTimeoutSec
+		}
+		if value < 1 {
+			return 1
+		}
+		if value > sessionEndHookMaxTimeoutSec {
+			return sessionEndHookMaxTimeoutSec
+		}
+		return value
+	default:
+		if raw == nil {
+			return defaultDiscoveredHookTimeoutSec
+		}
+		if value < 1 {
+			return 1
+		}
+		return value
 	}
-	if *value > uint64(^uint64(0)>>1) {
+}
+
+func hookTimeoutToInt64(value uint64) int64 {
+	if value > uint64(^uint64(0)>>1) {
 		return int64(^uint64(0) >> 1)
 	}
-	return int64(*value)
+	return int64(value)
 }
 
 func (h *hookJSONHandlerConfigWire) statusMessage() *string {
@@ -1122,45 +1160,86 @@ func normalizedHookMatcher(event HookEventName, matcher *string) *string {
 	return &value
 }
 
-func hookDiscoveryHash(event HookEventName, matcher *string, command string, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
-	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, "", "", nil, timeoutSec, statusMessage, additionalContextLimit)
+// hookHashMatcher mirrors Rust matcher_pattern_for_event
+// (hooks/src/events/common.rs): UserPromptSubmit, Stop and Interrupt carry no matcher in
+// the hashed identity; every other event keeps the configured matcher verbatim.
+func hookHashMatcher(event HookEventName, matcher *string) *string {
+	switch event {
+	case HookEventUserPromptSubmit, HookEventStop, HookEventInterrupt:
+		return nil
+	}
+	return matcher
 }
 
-func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
+// hookHashAdditionalContextLimit mirrors the additionalContextLimit normalization in
+// Rust discovery.rs::append_matcher_groups: the limit survives only for events that can
+// emit additionalContext, and an explicit default (2,500 tokens) is normalized away
+// before hashing.
+func hookHashAdditionalContextLimit(event HookEventName, limit *int64) *int64 {
+	if limit == nil {
+		return nil
+	}
+	switch event {
+	case HookEventPreToolUse, HookEventPostToolUse, HookEventSessionStart, HookEventUserPromptSubmit, HookEventSubagentStart:
+	default:
+		return nil
+	}
+	if *limit == defaultHookOutputTokenLimit {
+		return nil
+	}
+	return limit
+}
+
+func hookDiscoveryHash(event HookEventName, matcher *string, command string, async bool, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
+	return hookDiscoveryHashHandler(event, matcher, HookHandlerCommand, command, async, "", "", nil, timeoutSec, statusMessage, additionalContextLimit)
+}
+
+// hookDiscoveryHashHandler fingerprints one normalized hook identity, mirroring Rust
+// hooks/src/engine/discovery.rs::hook_hash -> codex_config::version_for_toml
+// (codex-rs/config/src/fingerprint.rs, #49295 "Simplify configuration fingerprint
+// canonicalization"). The identity is
+//
+//	{ event_name, matcher?, hooks: [handler] }
+//
+// hashed as the canonical JSON "sha256:<hex>" through config.VersionForTOML. The handler
+// keys follow Rust's HookHandlerConfig serialization: command hooks carry
+// command/async/timeout, mcp_tool hooks carry server/tool/input/timeout and no async,
+// `input` is always present (an omitted input serializes as an empty table), None
+// options are dropped, and additionalContextLimit is skipped when unset. All inputs are
+// the raw config-derived values (untrimmed), so a Rust-written trusted_hash validates in
+// Go for the same hook definition.
+func hookDiscoveryHashHandler(event HookEventName, matcher *string, handlerType HookHandlerType, command string, async bool, server string, tool string, input map[string]any, timeoutSec int64, statusMessage *string, additionalContextLimit *int64) string {
 	handler := map[string]any{
 		"type":    string(handlerType),
 		"timeout": timeoutSec,
-		"async":   false,
 	}
 	switch handlerType {
 	case HookHandlerCommand:
 		handler["command"] = command
+		handler["async"] = async
 	case HookHandlerMCPTool:
 		handler["server"] = server
 		handler["tool"] = tool
-		if len(input) > 0 {
-			handler["input"] = input
+		mcpInput := input
+		if mcpInput == nil {
+			mcpInput = map[string]any{}
 		}
+		handler["input"] = mcpInput
 	}
 	if statusMessage != nil {
 		handler["statusMessage"] = *statusMessage
 	}
-	if additionalContextLimit != nil {
-		handler["additionalContextLimit"] = *additionalContextLimit
+	if limit := hookHashAdditionalContextLimit(event, additionalContextLimit); limit != nil {
+		handler["additionalContextLimit"] = *limit
 	}
 	identity := map[string]any{
 		"event_name": hookEventKeyLabel(event),
 		"hooks":      []any{handler},
 	}
-	if matcher != nil {
-		identity["matcher"] = *matcher
+	if hashedMatcher := hookHashMatcher(event, matcher); hashedMatcher != nil {
+		identity["matcher"] = *hashedMatcher
 	}
-	data, err := json.Marshal(identity)
-	if err != nil {
-		data = []byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d", hookEventKeyLabel(event), string(handlerType), ptrStringValue(matcher), command, server, timeoutSec))
-	}
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return config.VersionForTOML(identity)
 }
 
 func cloneHookInput(input map[string]any) map[string]any {
