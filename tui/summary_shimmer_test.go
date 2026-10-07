@@ -6,12 +6,16 @@ import (
 )
 
 // TestSummaryShimmerMidpointMatchesRust covers the Rust #43921 midpoint vector:
-// at 1s the "Working" band produces the exact interpolated brightness levels
-// between fg (240,240,240) and bg (16,16,16).
+// the "Working" band produces the exact interpolated brightness levels between
+// fg (240,240,240) and bg (16,16,16). Rust #48757 moved the sample to 1100 ms
+// (600 ms initial delay + half of the one-second sweep) while keeping the same
+// midpoint levels, so the vector is unchanged:
+// codex-rs/tui/src/summary_shimmer_tests.rs
+// `working_has_overlapping_highlights_without_frame_to_frame_flashes`.
 func TestSummaryShimmerMidpointMatchesRust(t *testing.T) {
 	fg := RGB{R: 240, G: 240, B: 240}
 	bg := RGB{R: 16, G: 16, B: 16}
-	spans := SummaryShimmerSpansAt("Working", time.Second, MotionAnimated, fg, bg, true)
+	spans := SummaryShimmerSpansAt("Working", 1100*time.Millisecond, MotionAnimated, fg, bg, true)
 	want := []uint8{128, 156, 212, 240, 212, 156, 128}
 	if len(spans) != len(want) {
 		t.Fatalf("spans = %#v", spans)
@@ -53,12 +57,14 @@ func TestSummaryShimmerReducedMotionAndUnknownPalette(t *testing.T) {
 }
 
 // TestSummaryShimmerSweepIsSmooth matches Rust's frame-to-frame smoothness
-// check and the overlapping-highlight rule.
+// check and the overlapping-highlight rule. Rust #48757 samples two sweeps and
+// the intervening gap at the status row's 32 ms cadence, and raises the allowed
+// brightness change to the faster sweep's bound.
 func TestSummaryShimmerSweepIsSmooth(t *testing.T) {
 	fg := RGB{R: 240, G: 240, B: 240}
 	bg := RGB{R: 16, G: 16, B: 16}
 	var previous []uint8
-	for ms := 0; ms <= 2000; ms += 16 {
+	for ms := 0; ms <= 5600; ms += 32 {
 		spans := SummaryShimmerSpansAt("Working", time.Duration(ms)*time.Millisecond, MotionAnimated, fg, bg, true)
 		brightness := make([]uint8, 0, len(spans))
 		for _, span := range spans {
@@ -85,7 +91,9 @@ func TestSummaryShimmerSweepIsSmooth(t *testing.T) {
 			if diff < 0 {
 				diff = -diff
 			}
-			if diff > 7 {
+			// At this speed the cosine band's maximum change over 32 ms is
+			// 112 * sin(PI * (13 * 0.032) / 6), rounded up (Rust #48757).
+			if diff > 25 {
 				t.Fatalf("at %dms brightness jumped by %d: %v -> %v", ms, diff, previous, brightness)
 			}
 		}
@@ -176,5 +184,67 @@ func TestTerminalColorProbeQueryMatchesRust(t *testing.T) {
 	}
 	if terminalColorProbeTimeout != 100*time.Millisecond {
 		t.Fatalf("probe timeout = %s, want 100ms (Rust DEFAULT_TIMEOUT)", terminalColorProbeTimeout)
+	}
+}
+
+// TestSummaryShimmerCadenceLikeRust covers the Rust #48757 cadence against
+// codex-rs/tui/src/summary_shimmer.rs: the band is parked at its rest position
+// during the 600 ms initial delay, sweeps across the label for one second,
+// rests at the end for the remainder of the four-second interval, and repeats.
+func TestSummaryShimmerCadenceLikeRust(t *testing.T) {
+	fg := RGB{R: 240, G: 240, B: 240}
+	bg := RGB{R: 16, G: 16, B: 16}
+	levelsAt := func(elapsed time.Duration) []uint8 {
+		t.Helper()
+		spans := SummaryShimmerSpansAt("Working", elapsed, MotionAnimated, fg, bg, true)
+		levels := make([]uint8, 0, len(spans))
+		for _, span := range spans {
+			if span.Style != SummaryShimmerColor {
+				t.Fatalf("span at %v style = %v, want color", elapsed, span.Style)
+			}
+			levels = append(levels, span.Foreground.R)
+		}
+		return levels
+	}
+	same := func(a, b []uint8) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	rest := levelsAt(0)
+	for i, level := range rest {
+		// The band sits before the first grapheme during the delay, so every
+		// glyph is the halfway blend of fg and bg.
+		if level != 128 {
+			t.Fatalf("rest level %d = %d, want 128", i, level)
+		}
+	}
+	// The delay holds the resting frame; the sweep only starts 600 ms in.
+	if got := levelsAt(500 * time.Millisecond); !same(got, rest) {
+		t.Fatalf("500ms levels = %v, want the resting frame %v", got, rest)
+	}
+	// Midpoint of the first sweep: the Rust #48757 midpoint vector.
+	midpoint := levelsAt(1100 * time.Millisecond)
+	want := []uint8{128, 156, 212, 240, 212, 156, 128}
+	if !same(midpoint, want) {
+		t.Fatalf("1100ms levels = %v, want %v", midpoint, want)
+	}
+	// One second after the sweep started the band has left the label and the
+	// gap holds the resting frame until the next sweep.
+	if got := levelsAt(1600 * time.Millisecond); !same(got, rest) {
+		t.Fatalf("1600ms levels = %v, want the resting frame %v", got, rest)
+	}
+	if got := levelsAt(3600 * time.Millisecond); !same(got, rest) {
+		t.Fatalf("3600ms levels = %v, want the resting frame %v", got, rest)
+	}
+	// The next sweep starts four seconds after the previous one.
+	if got := levelsAt(5100 * time.Millisecond); !same(got, midpoint) {
+		t.Fatalf("5100ms levels = %v, want the next sweep's midpoint %v", got, midpoint)
 	}
 }

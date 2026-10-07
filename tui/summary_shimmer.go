@@ -7,12 +7,21 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// Rust parity: codex-rs/tui/src/summary_shimmer.rs (#43921). Smooth,
-// whole-grapheme status shimmer with a two-second sweep. Only brightness
-// changes: the moving band uses the terminal foreground, while the remaining
-// text blends halfway into the background. The wave spans at least six
-// terminal columns so short labels do not flash one letter at a time. Unknown
-// palettes use static dim text instead of a stepped animation.
+// Rust parity: codex-rs/tui/src/summary_shimmer.rs (#43921, cadence from
+// #48757). Smooth, whole-grapheme status shimmer with the desktop's cadenced
+// sweep: new headers wait 600 ms, then sweep for one second every four seconds.
+// Only brightness changes: the moving band uses the terminal foreground, while
+// the remaining text blends halfway into the background. The wave spans at
+// least six terminal columns so short labels do not flash one letter at a time.
+// Unknown palettes use static dim text instead of a stepped animation.
+
+// Rust #48757 matches the desktop app's thinking and reasoning header timings:
+// a 600 ms initial delay, then a one-second sweep every four seconds.
+const (
+	summaryShimmerStartDelay      = 600 * time.Millisecond
+	summaryShimmerSweepSeconds    = 1.0
+	summaryShimmerIntervalSeconds = 4.0
+)
 
 // SummaryShimmerStyle selects how a shimmer span is rendered.
 type SummaryShimmerStyle int
@@ -62,7 +71,18 @@ func SummaryShimmerSpansAt(text string, elapsed time.Duration, motion MotionMode
 func summaryShimmerTruecolor(text string, elapsed time.Duration, fg RGB, bg RGB) []SummaryShimmerSpan {
 	width := float64(DisplayWidth(text))
 	halfWidth := math.Max(width*0.1, 3.0)
-	position := math.Mod(elapsed.Seconds(), 2.0)/2.0*(width+2.0*halfWidth) - halfWidth
+	// Rust #48757: `elapsed.saturating_sub(START_DELAY)` then the sweep position
+	// is clamped to the one-second sweep window, so the band rests at the end
+	// during the gap before the next sweep starts.
+	since := elapsed - summaryShimmerStartDelay
+	if since < 0 {
+		since = 0
+	}
+	sweep := math.Mod(since.Seconds(), summaryShimmerIntervalSeconds)
+	if sweep > summaryShimmerSweepSeconds {
+		sweep = summaryShimmerSweepSeconds
+	}
+	position := sweep/summaryShimmerSweepSeconds*(width+2.0*halfWidth) - halfWidth
 	spans := []SummaryShimmerSpan{}
 	column := 0.0
 	graphemes := uniseg.NewGraphemes(text)
