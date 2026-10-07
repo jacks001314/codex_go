@@ -2449,11 +2449,18 @@ func parseMisalignmentDetails(raw json.RawMessage) *codexapi.MisalignmentDetails
 		Steer               *struct {
 			Message string `json:"message"`
 		} `json:"steer"`
+		// ReviewTarget is the opaque server-issued block target (Rust #51217).
+		// It is echoed verbatim only on an explicit continuation.
+		ReviewTarget *string `json:"review_target"`
 	}
 	if err := json.Unmarshal(raw, &details); err != nil {
 		return nil
 	}
-	out := &codexapi.MisalignmentDetails{ErrorType: details.ErrorType, DetailedExplanation: details.DetailedExplanation}
+	out := &codexapi.MisalignmentDetails{
+		ErrorType:           details.ErrorType,
+		DetailedExplanation: details.DetailedExplanation,
+		ReviewTarget:        details.ReviewTarget,
+	}
 	if details.Steer != nil {
 		out.Steer = &codexapi.MisalignmentSteer{Message: details.Steer.Message}
 	}

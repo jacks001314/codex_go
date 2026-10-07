@@ -108,7 +108,7 @@ func TestResponseFailedErrorClassifiesPolicyCodesLikeRust(t *testing.T) {
 }
 
 func TestResponseFailedErrorParsesMisalignmentDetailsLikeRust(t *testing.T) {
-	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy.","misalignment":{"error_type":"unauthorized_data_transfer","detailed_explanation":"Sensitive customer explanation","steer":{"message":"Sensitive customer steering"}}}}}`
+	raw := `{"type":"response.failed","response":{"error":{"code":"misalignment_policy_violation","message":"This request violated the misalignment policy.","misalignment":{"error_type":"unauthorized_data_transfer","detailed_explanation":"Sensitive customer explanation","steer":{"message":"Sensitive customer steering"},"review_target":"RB._~:-opaque"}}}}`
 	err := responseFailedError([]byte(raw))
 	var apiErr *codexapi.APIError
 	if !errors.As(err, &apiErr) {
@@ -128,6 +128,12 @@ func TestResponseFailedErrorParsesMisalignmentDetailsLikeRust(t *testing.T) {
 	}
 	if apiErr.Misalignment.Steer == nil || apiErr.Misalignment.Steer.Message != "Sensitive customer steering" {
 		t.Fatalf("steer = %#v", apiErr.Misalignment.Steer)
+	}
+	// Rust #51217 (`Preserve review targets and scope misalignment continuation
+	// metadata`, protocol/src/protocol.rs MisalignmentErrorDetails::review_target)
+	// keeps the opaque review target verbatim on the error body.
+	if apiErr.Misalignment.ReviewTarget == nil || *apiErr.Misalignment.ReviewTarget != "RB._~:-opaque" {
+		t.Fatalf("review_target = %#v, want RB._~:-opaque", apiErr.Misalignment.ReviewTarget)
 	}
 }
 
