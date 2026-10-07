@@ -305,15 +305,19 @@ func keySpecFromKeyMsg(message bubbletea.KeyMsg) string {
 	if key.Type == bubbletea.KeyCtrlUnderscore && !key.Alt {
 		return "ctrl-7"
 	}
-	// Windows conhost cannot encode Ctrl+/ as a C0 byte, so it delivers the
-	// physical key as a KEY_EVENT_RECORD whose Char is NUL; bubbletea's
-	// coninput reader drops the virtual-key code and surfaces that record as
-	// KeyRunes with a single NUL rune. The ANSI byte path never produces this
-	// shape (a NUL byte becomes keyNUL there), so it only occurs on the
-	// Windows console path. Treat it as the Ctrl+/ alias that crossterm
-	// resolves for the same physical key.
+	// Ctrl+Space is delivered as the NUL byte/character. On the ANSI byte path
+	// bubbletea surfaces a lone NUL as KeyCtrlAt (keyNUL) with no runes; on the
+	// Windows console path (VK_SPACE with Ctrl) conhost reports a KEY_EVENT_RECORD
+	// whose Char is NUL, which bubbletea's coninput reader surfaces as KeyRunes
+	// with a single NUL rune. Rust normalizes a NUL character to Ctrl+Space
+	// (tui/src/key_hint.rs: `0x00 => Some(' ')`), so both shapes must resolve to
+	// `ctrl-space` instead of the `ctrl-@` spelling that Key.String() would
+	// otherwise produce. Ctrl+/ is the 0x1f byte handled above, not this path.
+	if key.Type == bubbletea.KeyCtrlAt && !key.Alt {
+		return "ctrl-space"
+	}
 	if key.Type == bubbletea.KeyRunes && len(key.Runes) == 1 && key.Runes[0] == 0 && !key.Alt && !key.Paste {
-		return "ctrl-7"
+		return "ctrl-space"
 	}
 	if key.Type == bubbletea.KeyRunes {
 		if len(key.Runes) != 1 || key.Paste {
