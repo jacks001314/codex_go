@@ -239,7 +239,7 @@ func TestRunHostDeviceControlSequence(t *testing.T) {
 		NewSimpleMessage(TypeInitializeRuntime),
 		NewSimpleMessage(TypeStartTransport),
 		NewSDPMessage(TypeApplyAnswer, mustSDP(t, "v=0\r\no=answer\r\n")),
-		NewSimpleMessage(TypeOpenDevices),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{}),
 		NewAudioControlsMessage(AudioControls{MicrophoneMuted: true}),
 		NewSimpleMessage(TypeInspectAudio),
 		NewSimpleMessage(TypeClose),
@@ -369,6 +369,135 @@ func TestRunHostRejectsDeviceListAsRequest(t *testing.T) {
 	}
 }
 
+// selectingRuntime records the channel plan the helper asks its runtime for,
+// mirroring a native runtime that mixes selected microphone channels.
+type selectingRuntime struct {
+	controllableRuntime
+	inputs        []Device
+	outputs       []Device
+	inputDeviceID string
+	inputChannels int
+	inputSelected []uint16
+}
+
+func (r *selectingRuntime) ListInputDevices(context.Context) ([]Device, error) {
+	return r.inputs, nil
+}
+
+func (r *selectingRuntime) ListOutputDevices(context.Context) ([]Device, error) {
+	return r.outputs, nil
+}
+
+func (r *selectingRuntime) OpenInputChannels(_ context.Context, deviceID string, channels int, selected []uint16) (AudioSource, error) {
+	r.inputDeviceID = deviceID
+	r.inputChannels = channels
+	r.inputSelected = selected
+	r.source = &fakeAudioSource{}
+	return r.source, nil
+}
+
+// TestRunHostOpensSelectedDevicesLikeRust mirrors Rust
+// `voice-host/src/devices.rs:154`: a named selection resolves through the same
+// enumeration ListDevices reports, and an explicit channel selection mixes only
+// those one-based channels.
+func TestRunHostOpensSelectedDevicesLikeRust(t *testing.T) {
+	runtime := &selectingRuntime{
+		inputs:  []Device{{ID: "host-input", Name: "Interface", Channels: 4, IsDefault: true}},
+		outputs: []Device{{ID: "host-output", Name: "Headphones", Channels: 2}},
+	}
+	microphone := "Interface"
+	speaker := "Headphones"
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		NewSimpleMessage(TypeInitializeRuntime),
+		NewSimpleMessage(TypeStartTransport),
+		NewSDPMessage(TypeApplyAnswer, mustSDP(t, "v=0\r\no=answer\r\n")),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{Microphone: &microphone, Speaker: &speaker, Channel: []uint16{2, 2}}),
+		NewSimpleMessage(TypeClose),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", runtime, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{offer: "v=0\r\no=offer\r\n"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses := readAllFrames(t, output.Bytes())
+	expected := []MessageType{TypeReady, TypeRuntimeReady, TypeOffer, TypeTransportReady, TypeDevicesOpened, TypeClosed}
+	if len(responses) != len(expected) {
+		t.Fatalf("responses = %d, want %d: %#v", len(responses), len(expected), responses)
+	}
+	for i, want := range expected {
+		if responses[i].Type != want {
+			t.Fatalf("response %d = %q, want %q", i, responses[i].Type, want)
+		}
+	}
+	if runtime.inputDeviceID != "host-input" || runtime.inputChannels != 4 {
+		t.Fatalf("capture open = %q channels=%d", runtime.inputDeviceID, runtime.inputChannels)
+	}
+	if len(runtime.inputSelected) != 2 || runtime.inputSelected[0] != 2 || runtime.inputSelected[1] != 2 {
+		t.Fatalf("channel selection = %v", runtime.inputSelected)
+	}
+	if runtime.source == nil || runtime.sink == nil || !runtime.source.closed || !runtime.sink.closed {
+		t.Fatalf("devices were not closed: source=%#v sink=%#v", runtime.source, runtime.sink)
+	}
+}
+
+// TestRunHostRejectsStaleDeviceSelectionLikeRust pins that a name that no
+// longer matches an eligible endpoint fails instead of opening another one,
+// mirroring Rust's "selected audio device unavailable".
+func TestRunHostRejectsStaleDeviceSelectionLikeRust(t *testing.T) {
+	runtime := &selectingRuntime{inputs: []Device{{ID: "host-input", Name: "Interface", Channels: 2}}}
+	missing := "Gone"
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		NewSimpleMessage(TypeInitializeRuntime),
+		NewSimpleMessage(TypeStartTransport),
+		NewSDPMessage(TypeApplyAnswer, mustSDP(t, "v=0\r\no=answer\r\n")),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{Microphone: &missing}),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", runtime, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{offer: "v=0\r\no=offer\r\n"}, nil
+	})
+	if !errors.Is(err, errSelectedDeviceUnavailable) {
+		t.Fatalf("error = %v, want errSelectedDeviceUnavailable", err)
+	}
+	var exitErr *HelperExitError
+	if !errors.As(err, &exitErr) || exitErr.Stage != HelperExitOpenDevices {
+		t.Fatalf("stage = %#v, want openDevices", err)
+	}
+}
+
+// TestRunHostRejectsChannelSelectionWithoutMixingRuntime pins that a runtime
+// without channel mixing rejects an explicit selection instead of opening every
+// input. Rust has no equivalent: its helper always mixes.
+func TestRunHostRejectsChannelSelectionWithoutMixingRuntime(t *testing.T) {
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		NewSimpleMessage(TypeInitializeRuntime),
+		NewSimpleMessage(TypeStartTransport),
+		NewSDPMessage(TypeApplyAnswer, mustSDP(t, "v=0\r\no=answer\r\n")),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{Channel: []uint16{1}}),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", &controllableRuntime{}, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{offer: "v=0\r\no=offer\r\n"}, nil
+	})
+	if !errors.Is(err, errSelectedChannelsUnavailable) {
+		t.Fatalf("error = %v, want errSelectedChannelsUnavailable", err)
+	}
+}
+
+// TestRunHostRequiresSelectionOnOpenDevices pins the one-way contract: a frame
+// without the required selection object never reaches the device arm.
+func TestRunHostRequiresSelectionOnOpenDevices(t *testing.T) {
+	var message Message
+	if err := json.Unmarshal([]byte(`{"type":"openDevices"}`), &message); err == nil {
+		t.Fatal("openDevices without a selection object was accepted")
+	}
+}
+
 func TestRunHostRejectsOutOfOrderDeviceControls(t *testing.T) {
 	answered := concatFrames(t,
 		NewHello(1, "build-commit"),
@@ -382,11 +511,11 @@ func TestRunHostRejectsOutOfOrderDeviceControls(t *testing.T) {
 	}{
 		{
 			name:    "open devices before runtime",
-			message: []Message{NewHello(1, "build-commit"), NewSimpleMessage(TypeOpenDevices)},
+			message: []Message{NewHello(1, "build-commit"), mustOpenDevicesMessage(t, AudioDeviceSelection{})},
 		},
 		{
 			name:    "open devices before answer",
-			message: []Message{NewHello(1, "build-commit"), NewSimpleMessage(TypeInitializeRuntime), NewSimpleMessage(TypeOpenDevices)},
+			message: []Message{NewHello(1, "build-commit"), NewSimpleMessage(TypeInitializeRuntime), mustOpenDevicesMessage(t, AudioDeviceSelection{})},
 		},
 		{
 			name:    "controls before devices",
@@ -417,8 +546,8 @@ func TestRunHostRejectsDuplicateOpenDevices(t *testing.T) {
 		NewSimpleMessage(TypeInitializeRuntime),
 		NewSimpleMessage(TypeStartTransport),
 		NewSDPMessage(TypeApplyAnswer, mustSDP(t, "v=0\r\no=answer\r\n")),
-		NewSimpleMessage(TypeOpenDevices),
-		NewSimpleMessage(TypeOpenDevices),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{}),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{}),
 	)
 	var output bytes.Buffer
 	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", &controllableRuntime{}, func() (VoiceTransport, error) {

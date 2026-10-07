@@ -128,10 +128,24 @@ func (h *VoiceHost) ApplyAnswer(ctx context.Context, sdp SessionDescription) err
 	return nil
 }
 
-// OpenDevices opens the local microphone and speaker. It is only valid after a
-// successful answer, so nothing captures audio before the peer is ready.
+// OpenDevices opens the local microphone and speaker with the system defaults.
+// It is only valid after a successful answer, so nothing captures audio before
+// the peer is ready.
 func (h *VoiceHost) OpenDevices(ctx context.Context) error {
-	response, err := h.exchange(ctx, NewSimpleMessage(TypeOpenDevices), hostDeviceDeadline)
+	return h.OpenDevicesWithSelection(ctx, AudioDeviceSelection{})
+}
+
+// OpenDevicesWithSelection opens the local microphone and speaker with the
+// fixed local device preferences for the conversation. A nil microphone or
+// speaker keeps the system default and a nil channel keeps the device's full
+// mix. The helper resolves names through the same enumeration ListDevices
+// reports, so a stale name fails rather than opening another endpoint.
+func (h *VoiceHost) OpenDevicesWithSelection(ctx context.Context, selection AudioDeviceSelection) error {
+	message, err := NewOpenDevicesMessage(selection)
+	if err != nil {
+		return err
+	}
+	response, err := h.exchange(ctx, message, hostDeviceDeadline)
 	if err != nil {
 		return err
 	}

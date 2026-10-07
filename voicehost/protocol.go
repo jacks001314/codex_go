@@ -107,14 +107,15 @@ func (s *SessionDescription) UnmarshalJSON(data []byte) error {
 // Message is a bounded same-build control message. Unknown fields and invalid
 // sequences fail closed without echoing input.
 type Message struct {
-	Type        MessageType         `json:"type"`
-	Protocol    *uint32             `json:"protocol,omitempty"`
-	BuildCommit string              `json:"buildCommit,omitempty"`
-	SDP         *SessionDescription `json:"sdp,omitempty"`
-	Kind        *AudioDeviceKind    `json:"kind,omitempty"`
-	Devices     []AudioDevice       `json:"devices,omitempty"`
-	Controls    *AudioControls      `json:"controls,omitempty"`
-	State       *AudioState         `json:"state,omitempty"`
+	Type        MessageType           `json:"type"`
+	Protocol    *uint32               `json:"protocol,omitempty"`
+	BuildCommit string                `json:"buildCommit,omitempty"`
+	SDP         *SessionDescription   `json:"sdp,omitempty"`
+	Selection   *AudioDeviceSelection `json:"selection,omitempty"`
+	Kind        *AudioDeviceKind      `json:"kind,omitempty"`
+	Devices     []AudioDevice         `json:"devices,omitempty"`
+	Controls    *AudioControls        `json:"controls,omitempty"`
+	State       *AudioState           `json:"state,omitempty"`
 }
 
 // AudioControls carries the ordered privacy transitions for an active session.
@@ -250,6 +251,84 @@ func (d *AudioDevice) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AudioDeviceSelection is the local device preference set fixed for the
+// lifetime of a voice conversation. Every component is optional: a nil
+// microphone or speaker keeps the system default, and a nil channel keeps the
+// device's full mix. It mirrors the Rust protocol's AudioDeviceSelection,
+// which denies unknown fields, and channel numbers are one-based.
+type AudioDeviceSelection struct {
+	Microphone *string  `json:"microphone"`
+	Speaker    *string  `json:"speaker"`
+	Channel    []uint16 `json:"channel"`
+}
+
+// UnmarshalJSON rejects unknown selection fields so a same-build parent can
+// never send a selection the helper silently ignores.
+func (s *AudioDeviceSelection) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+	}
+	if fields == nil {
+		return fmt.Errorf("%w: selection object is required", ErrInvalidMessage)
+	}
+	for key := range fields {
+		switch key {
+		case "microphone", "speaker", "channel":
+		default:
+			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
+		}
+	}
+	selection := AudioDeviceSelection{}
+	if raw, ok := fields["microphone"]; ok {
+		name, err := optionalStringField(raw, "microphone")
+		if err != nil {
+			return err
+		}
+		selection.Microphone = name
+	}
+	if raw, ok := fields["speaker"]; ok {
+		name, err := optionalStringField(raw, "speaker")
+		if err != nil {
+			return err
+		}
+		selection.Speaker = name
+	}
+	if raw, ok := fields["channel"]; ok {
+		var channels *[]uint16
+		if err := json.Unmarshal(raw, &channels); err != nil {
+			return fmt.Errorf("%w: field channel must be an array of integers", ErrInvalidMessage)
+		}
+		if channels != nil {
+			selection.Channel = *channels
+		}
+	}
+	if err := selection.Validate(); err != nil {
+		return err
+	}
+	*s = selection
+	return nil
+}
+
+// Validate rejects channel numbers the Rust helper cannot represent; the wire
+// carries one-based channels and zero is not a valid selection.
+func (s AudioDeviceSelection) Validate() error {
+	for _, channel := range s.Channel {
+		if channel == 0 {
+			return fmt.Errorf("%w: channel numbers are one-based", ErrInvalidMessage)
+		}
+	}
+	return nil
+}
+
+func optionalStringField(raw json.RawMessage, name string) (*string, error) {
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("%w: field %s must be a string", ErrInvalidMessage, name)
+	}
+	return value, nil
+}
+
 func requireBoolField(fields map[string]json.RawMessage, name string) (bool, error) {
 	raw, ok := fields[name]
 	if !ok {
@@ -301,6 +380,16 @@ func NewAudioStateMessage(state AudioState) Message {
 	return Message{Type: TypeAudioState, State: &state}
 }
 
+// NewOpenDevicesMessage returns a message opening the selected (or default)
+// local devices. Rust requires the selection object on the wire, so the
+// message always carries one.
+func NewOpenDevicesMessage(selection AudioDeviceSelection) (Message, error) {
+	if err := selection.Validate(); err != nil {
+		return Message{}, err
+	}
+	return Message{Type: TypeOpenDevices, Selection: &selection}, nil
+}
+
 // NewListDevicesMessage returns a message asking the helper to enumerate local
 // devices for one direction.
 func NewListDevicesMessage(kind AudioDeviceKind) (Message, error) {
@@ -330,7 +419,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	}
 	for key := range fields {
 		switch key {
-		case "type", "protocol", "buildCommit", "sdp", "kind", "devices", "controls", "state":
+		case "type", "protocol", "buildCommit", "sdp", "selection", "kind", "devices", "controls", "state":
 		default:
 			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
 		}
@@ -369,6 +458,17 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("%w: missing field sdp", ErrInvalidMessage)
 		}
 		message.SDP = wire.SDP
+	case TypeOpenDevices:
+		var wire struct {
+			Selection *AudioDeviceSelection `json:"selection"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		if wire.Selection == nil {
+			return fmt.Errorf("%w: missing field selection", ErrInvalidMessage)
+		}
+		message.Selection = wire.Selection
 	case TypeListDevices:
 		var wire struct {
 			Kind *AudioDeviceKind `json:"kind"`
@@ -414,7 +514,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 		}
 		message.State = wire.State
 	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport,
-		TypeTransportReady, TypeTransportTimedOut, TypeOpenDevices, TypeDevicesOpened,
+		TypeTransportReady, TypeTransportTimedOut, TypeDevicesOpened,
 		TypeAudioControlsApplied, TypeInspectAudio, TypeClose, TypeClosed:
 	default:
 		return fmt.Errorf("%w: unknown message type %q", ErrInvalidMessage, messageType)
@@ -443,6 +543,13 @@ func (m Message) Validate() error {
 		if m.SDP == nil || m.SDP.sdp == "" {
 			return fmt.Errorf("%w: sdp is required", ErrInvalidMessage)
 		}
+	case TypeOpenDevices:
+		if m.Selection == nil {
+			return fmt.Errorf("%w: selection is required", ErrInvalidMessage)
+		}
+		if err := m.Selection.Validate(); err != nil {
+			return err
+		}
 	case TypeListDevices:
 		if m.Kind == nil {
 			return fmt.Errorf("%w: kind is required", ErrInvalidMessage)
@@ -463,7 +570,7 @@ func (m Message) Validate() error {
 			return fmt.Errorf("%w: state is required", ErrInvalidMessage)
 		}
 	case TypeReady, TypeInitializeRuntime, TypeRuntimeReady, TypeStartTransport,
-		TypeTransportReady, TypeTransportTimedOut, TypeOpenDevices, TypeDevicesOpened,
+		TypeTransportReady, TypeTransportTimedOut, TypeDevicesOpened,
 		TypeAudioControlsApplied, TypeInspectAudio, TypeClose, TypeClosed:
 	default:
 		return fmt.Errorf("%w: unknown message type %q", ErrInvalidMessage, m.Type)
@@ -488,6 +595,11 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			Type MessageType         `json:"type"`
 			SDP  *SessionDescription `json:"sdp"`
 		}{Type: m.Type, SDP: m.SDP})
+	case TypeOpenDevices:
+		return json.Marshal(struct {
+			Type      MessageType           `json:"type"`
+			Selection *AudioDeviceSelection `json:"selection"`
+		}{Type: m.Type, Selection: m.Selection})
 	case TypeListDevices:
 		return json.Marshal(struct {
 			Type MessageType     `json:"type"`

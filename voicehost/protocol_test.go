@@ -23,6 +23,7 @@ func TestProtocolRoundTrip(t *testing.T) {
 		NewSDPMessage(TypeOffer, sdp),
 		NewSDPMessage(TypeApplyAnswer, sdp),
 		NewSimpleMessage(TypeTransportReady),
+		mustOpenDevicesMessage(t, AudioDeviceSelection{}),
 		mustListDevicesMessage(t, AudioDeviceKindInput),
 		NewDeviceListMessage([]AudioDevice{{Name: "Interface", Channels: 2, IsDefault: true}}),
 		NewSimpleMessage(TypeClose),
@@ -48,6 +49,17 @@ func TestProtocolRoundTrip(t *testing.T) {
 			t.Fatalf("%s unexpectedly carries SDP", got.Type)
 		}
 	}
+}
+
+func pointerTo(value string) *string { return &value }
+
+func mustOpenDevicesMessage(t *testing.T, selection AudioDeviceSelection) Message {
+	t.Helper()
+	message, err := NewOpenDevicesMessage(selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
 }
 
 func mustListDevicesMessage(t *testing.T, kind AudioDeviceKind) Message {
@@ -213,7 +225,20 @@ func TestProtocolAudioMessagesMatchRustWireShape(t *testing.T) {
 			want:    `{"type":"deviceList","devices":[{"name":"Interface","channels":2,"isDefault":true}]}`,
 		},
 		{name: "device list empty", message: NewDeviceListMessage(nil), want: `{"type":"deviceList","devices":[]}`},
-		{name: "open devices", message: NewSimpleMessage(TypeOpenDevices), want: `{"type":"openDevices"}`},
+		{
+			name:    "open devices",
+			message: mustOpenDevicesMessage(t, AudioDeviceSelection{}),
+			want:    `{"type":"openDevices","selection":{"microphone":null,"speaker":null,"channel":null}}`,
+		},
+		{
+			name: "open devices with selection",
+			message: mustOpenDevicesMessage(t, AudioDeviceSelection{
+				Microphone: pointerTo("Interface"),
+				Speaker:    pointerTo("Headphones"),
+				Channel:    []uint16{1, 2},
+			}),
+			want: `{"type":"openDevices","selection":{"microphone":"Interface","speaker":"Headphones","channel":[1,2]}}`,
+		},
 		{name: "devices opened", message: NewSimpleMessage(TypeDevicesOpened), want: `{"type":"devicesOpened"}`},
 		{name: "audio controls applied", message: NewSimpleMessage(TypeAudioControlsApplied), want: `{"type":"audioControlsApplied"}`},
 		{name: "inspect audio", message: NewSimpleMessage(TypeInspectAudio), want: `{"type":"inspectAudio"}`},
@@ -273,6 +298,12 @@ func TestProtocolRejectsInvalidAudioMessages(t *testing.T) {
 		{name: "state empty", payload: `{"type":"audioState","state":{}}`},
 		{name: "state unknown field", payload: `{"type":"audioState","state":{"microphonePeak":0,"speakerPeak":0,"extra":1}}`},
 		{name: "state negative", payload: `{"type":"audioState","state":{"microphonePeak":-1,"speakerPeak":0}}`},
+		{name: "open devices missing selection", payload: `{"type":"openDevices"}`},
+		{name: "open devices null selection", payload: `{"type":"openDevices","selection":null}`},
+		{name: "open devices selection unknown field", payload: `{"type":"openDevices","selection":{"microphone":null,"speaker":null,"channel":null,"extra":1}}`},
+		{name: "open devices selection wrong type", payload: `{"type":"openDevices","selection":{"microphone":7}}`},
+		{name: "open devices zero channel", payload: `{"type":"openDevices","selection":{"channel":[0]}}`},
+		{name: "open devices channel not an array", payload: `{"type":"openDevices","selection":{"channel":1}}`},
 		{name: "list devices missing kind", payload: `{"type":"listDevices"}`},
 		{name: "list devices null kind", payload: `{"type":"listDevices","kind":null}`},
 		{name: "list devices unknown kind", payload: `{"type":"listDevices","kind":"bogus"}`},

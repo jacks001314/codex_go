@@ -345,11 +345,13 @@ func runHost(
 			reply = NewDeviceListMessage(listed)
 		case TypeOpenDevices:
 			// Devices open only after negotiation so nothing captures audio
-			// before the peer is ready.
-			if devices != nil || !runtimeStarted || !answered {
+			// before the peer is ready. Rust `voice-host/src/main.rs:174`
+			// requires the selection object on the wire; an unset selection
+			// keeps the system default.
+			if devices != nil || !runtimeStarted || !answered || message.Selection == nil {
 				return withExitStage(HelperExitControlSequence, ErrInvalidVoiceControlSequence)
 			}
-			opened, err := openHostDevices(ctx, runtime)
+			opened, err := openHostDevices(ctx, runtime, *message.Selection)
 			if err != nil {
 				return withExitStage(HelperExitOpenDevices, err)
 			}
@@ -419,21 +421,21 @@ func runHost(
 // runtime without opening a stream. Rust enumerates through cpal directly, so
 // its listing works before the private runtime initializes; the Go runtime owns
 // the only device backend and reports ErrRuntimeNotInitialized until Start.
-func listHostDevices(ctx context.Context, runtime Runtime, kind AudioDeviceKind) ([]AudioDevice, error) {
-	var (
-		devices []Device
-		err     error
-	)
+func enumerateHostDevices(ctx context.Context, runtime Runtime, kind AudioDeviceKind) ([]Device, error) {
 	switch kind {
 	case AudioDeviceKindInput:
-		devices, err = runtime.ListInputDevices(ctx)
+		return runtime.ListInputDevices(ctx)
 	case AudioDeviceKindOutput:
-		devices, err = runtime.ListOutputDevices(ctx)
+		return runtime.ListOutputDevices(ctx)
 	default:
 		// Validate rejects unknown kinds before this arm runs; keep the
 		// closed set explicit for direct callers.
 		return nil, ErrInvalidVoiceControlSequence
 	}
+}
+
+func listHostDevices(ctx context.Context, runtime Runtime, kind AudioDeviceKind) ([]AudioDevice, error) {
+	devices, err := enumerateHostDevices(ctx, runtime, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -448,19 +450,58 @@ func listHostDevices(ctx context.Context, runtime Runtime, kind AudioDeviceKind)
 	return listed, nil
 }
 
-// openHostDevices opens the default input and output devices for one session.
-// A failed output open releases the input so a retry starts clean.
-func openHostDevices(ctx context.Context, runtime Runtime) (*hostDevices, error) {
-	source, err := runtime.OpenInput(ctx, "")
+// openHostDevices opens the selected input and output devices for one session.
+// Rust `voice-host/src/devices.rs:154` resolves a named selection through the
+// same enumeration the picker uses and never opens a stream while listing. A
+// failed output open releases the input so a retry starts clean.
+func openHostDevices(ctx context.Context, runtime Runtime, selection AudioDeviceSelection) (*hostDevices, error) {
+	input, err := resolveHostDevice(ctx, runtime, AudioDeviceKindInput, selection.Microphone)
 	if err != nil {
 		return nil, err
 	}
-	sink, err := runtime.OpenOutput(ctx, "")
+	output, err := resolveHostDevice(ctx, runtime, AudioDeviceKindOutput, selection.Speaker)
+	if err != nil {
+		return nil, err
+	}
+	var source AudioSource
+	if selection.Channel != nil {
+		selecting, ok := runtime.(ChannelSelectingRuntime)
+		if !ok {
+			return nil, errSelectedChannelsUnavailable
+		}
+		source, err = selecting.OpenInputChannels(ctx, input.ID, int(input.Channels), selection.Channel)
+	} else {
+		source, err = runtime.OpenInput(ctx, input.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	sink, err := runtime.OpenOutput(ctx, output.ID)
 	if err != nil {
 		_ = source.Close()
 		return nil, err
 	}
 	return &hostDevices{source: source, sink: sink}, nil
+}
+
+// resolveHostDevice maps a selected device name to the host-local device the
+// runtime can open. A nil name keeps the system default, which the runtime
+// substitutes with an empty device id; a name that no longer matches an
+// eligible device fails instead of silently opening another one.
+func resolveHostDevice(ctx context.Context, runtime Runtime, kind AudioDeviceKind, name *string) (Device, error) {
+	if name == nil {
+		return Device{}, nil
+	}
+	devices, err := enumerateHostDevices(ctx, runtime, kind)
+	if err != nil {
+		return Device{}, err
+	}
+	for _, device := range devices {
+		if device.Name == *name {
+			return device, nil
+		}
+	}
+	return Device{}, errSelectedDeviceUnavailable
 }
 
 // openHostMedia binds the media session to the transport's audio track and the

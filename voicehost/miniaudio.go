@@ -122,6 +122,21 @@ func (r *MiniAudioRuntime) OpenInput(ctx context.Context, deviceID string) (Audi
 	return r.openSource(ctx, malgo.Capture, deviceID)
 }
 
+// OpenInputChannels opens a capture device with its native channel count and
+// mixes the selected one-based channels down to the mono pipeline, mirroring
+// the Rust helper's InputChannel. A nil selection keeps every channel; an empty
+// or out-of-range selection is rejected without falling back to other inputs.
+func (r *MiniAudioRuntime) OpenInputChannels(ctx context.Context, deviceID string, channels int, selected []uint16) (AudioSource, error) {
+	if channels <= 0 {
+		return nil, errSelectedChannelsUnavailable
+	}
+	plan, err := newInputChannel(selected, channels)
+	if err != nil {
+		return nil, err
+	}
+	return r.openSourceWithMix(ctx, deviceID, channels, plan)
+}
+
 // OpenOutput opens a playback device and returns a PCM sink.
 func (r *MiniAudioRuntime) OpenOutput(ctx context.Context, deviceID string) (AudioSink, error) {
 	return r.openSink(ctx, malgo.Playback, deviceID)
@@ -199,15 +214,33 @@ func (r *MiniAudioRuntime) listDevices(ctx context.Context, kind malgo.DeviceTyp
 }
 
 func (r *MiniAudioRuntime) openSource(ctx context.Context, kind malgo.DeviceType, deviceID string) (AudioSource, error) {
-	device, buffer, format, err := r.openDevice(ctx, kind, deviceID, defaultSessionFormat)
+	return r.openDeviceAsSource(ctx, kind, deviceID, nil)
+}
+
+// openSourceWithMix opens a capture device that delivers its native channel
+// count and mixes the plan down to the mono pipeline format.
+func (r *MiniAudioRuntime) openSourceWithMix(ctx context.Context, deviceID string, channels int, plan inputChannel) (AudioSource, error) {
+	mix := &captureMix{channels: channels, plan: plan}
+	return r.openDeviceAsSource(ctx, malgo.Capture, deviceID, mix)
+}
+
+func (r *MiniAudioRuntime) openDeviceAsSource(ctx context.Context, kind malgo.DeviceType, deviceID string, mix *captureMix) (AudioSource, error) {
+	device, buffer, format, err := r.openDevice(ctx, kind, deviceID, defaultSessionFormat, mix)
 	if err != nil {
 		return nil, err
 	}
 	return &miniaudioSource{device: device, buffer: buffer, format: format, runtime: r, pipeline: r.currentPipeline()}, nil
 }
 
+// captureMix describes a capture device that opens with its native channel
+// count and mixes the plan's channels down to the pipeline's mono format.
+type captureMix struct {
+	channels int
+	plan     inputChannel
+}
+
 func (r *MiniAudioRuntime) openSink(ctx context.Context, kind malgo.DeviceType, deviceID string) (AudioSink, error) {
-	device, buffer, format, err := r.openDevice(ctx, kind, deviceID, defaultSessionFormat)
+	device, buffer, format, err := r.openDevice(ctx, kind, deviceID, defaultSessionFormat, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +259,7 @@ func (r *MiniAudioRuntime) currentPipeline() *pcmPipeline {
 	return r.pipeline
 }
 
-func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType, deviceID string, format AudioFormat) (*malgo.Device, *pcmBuffer, AudioFormat, error) {
+func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType, deviceID string, format AudioFormat, mix *captureMix) (*malgo.Device, *pcmBuffer, AudioFormat, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -263,8 +296,14 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 	pipeline := r.pipeline
 	switch kind {
 	case malgo.Capture:
+		captureChannels := format.Channels
+		if mix != nil && mix.channels > 0 {
+			// The selected device delivers its native channel count; the
+			// callback mixes it down to the pipeline's mono format.
+			captureChannels = mix.channels
+		}
 		config.Capture.Format = miniaudioFormat
-		config.Capture.Channels = uint32(format.Channels)
+		config.Capture.Channels = uint32(captureChannels)
 		if nativeID != nil {
 			config.Capture.DeviceID = unsafe.Pointer(nativeID)
 		}
@@ -272,7 +311,11 @@ func (r *MiniAudioRuntime) openDevice(ctx context.Context, kind malgo.DeviceType
 			Data: func(_, input []byte, _ uint32) {
 				// Capture admits callbacks through the packer so only complete
 				// blocks with a live generation reach the encoder.
-				pipeline.pushCapture(s16leSamples(input), time.Now())
+				samples := s16leSamples(input)
+				if mix != nil {
+					samples = mix.plan.mix(samples, mix.channels)
+				}
+				pipeline.pushCapture(samples, time.Now())
 			},
 		})
 		if err != nil {

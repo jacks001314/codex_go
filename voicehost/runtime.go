@@ -78,6 +78,18 @@ type Runtime interface {
 	OpenOutput(ctx context.Context, deviceID string) (AudioSink, error)
 }
 
+// ChannelSelectingRuntime is implemented by runtimes that can open a capture
+// device with its native channel count and mix a selected subset of its
+// channels down to the mono pipeline. The Rust helper always opens the device's
+// default configuration and mixes; a runtime without this interface still
+// opens the system default through OpenInput and rejects explicit channel
+// selections.
+type ChannelSelectingRuntime interface {
+	// OpenInputChannels opens a capture device and mixes the selected
+	// one-based channels. A nil selection keeps every channel.
+	OpenInputChannels(ctx context.Context, deviceID string, channels int, selected []uint16) (AudioSource, error)
+}
+
 // ControlRuntime is implemented by runtimes that apply ordered privacy
 // controls and report accumulated levels for devices opened by the helper. A
 // runtime that does not implement it still speaks the control protocol; the

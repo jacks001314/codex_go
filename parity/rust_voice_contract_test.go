@@ -250,6 +250,7 @@ func voiceRoundTripMessages(t *testing.T) []voicehost.Message {
 	controls := voicehost.AudioControls{}
 	state := voicehost.AudioState{}
 	kind := voicehost.AudioDeviceKindInput
+	deviceName := "Interface"
 	devices := []voicehost.AudioDevice{{Name: "Interface", Channels: 2, IsDefault: true}}
 	return []voicehost.Message{
 		{Type: voicehost.TypeHello, Protocol: &protocol, BuildCommit: "test"},
@@ -263,7 +264,7 @@ func voiceRoundTripMessages(t *testing.T) []voicehost.Message {
 		{Type: voicehost.TypeTransportTimedOut},
 		{Type: voicehost.TypeListDevices, Kind: &kind},
 		{Type: voicehost.TypeDeviceList, Devices: devices},
-		{Type: voicehost.TypeOpenDevices},
+		{Type: voicehost.TypeOpenDevices, Selection: &voicehost.AudioDeviceSelection{Microphone: &deviceName, Speaker: &deviceName, Channel: []uint16{1, 2}}},
 		{Type: voicehost.TypeDevicesOpened},
 		{Type: voicehost.TypeSetAudioControls, Controls: &controls},
 		{Type: voicehost.TypeAudioControlsApplied},
