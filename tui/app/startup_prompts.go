@@ -42,6 +42,19 @@ type ModelMigrationAcceptedActions struct {
 	PersistModelSelection  bool
 }
 
+// ModelUpgrade mirrors Rust's `ModelUpgrade` (protocol/src/openai_models.rs):
+// the migration metadata a saved model selection carries once its catalog entry
+// is gone. The startup prompt reads the replacement id, the config key its
+// acknowledgement is stored under, and the migration markdown.
+type ModelUpgrade struct {
+	ID                 string
+	MigrationConfigKey string
+	ModelLink          *string
+	UpgradeCopy        *string
+	MigrationMarkdown  *string
+	RetirementAt       *int64
+}
+
 type ProjectConfigDisabledFolder struct {
 	Folder string
 	Reason string
@@ -87,7 +100,64 @@ func PrepareStartupTooltipOverrideDecision(isFirstRun bool, showTooltips bool, a
 	}
 }
 
-func ShouldShowModelMigrationPrompt(currentModel string, targetModel string, seenMigrations map[string]string, availableModels []model.ModelSummary) bool {
+// ModelUpgradeForMigration mirrors Rust's `model_upgrade_for_migration`
+// (#47932): a saved model selection can outlive its catalog entry, so the
+// catalog preset's own upgrade wins when the model is still listed, and
+// otherwise the fallback migration metadata is scoped to the provider that owns
+// the model slug - other providers may still support the same slug.
+func ModelUpgradeForMigration(modelProviderID string, modelSlug string, availableModels []model.ModelSummary) (ModelUpgrade, bool) {
+	modelSlug = strings.TrimSpace(modelSlug)
+	for _, preset := range availableModels {
+		if strings.TrimSpace(preset.Model) != modelSlug {
+			continue
+		}
+		// Rust returns the preset's own upgrade (which may be absent) without
+		// consulting the fallback table, so a catalog entry that has no upgrade
+		// suppresses the provider-scoped fallback.
+		if preset.Upgrade == nil {
+			return ModelUpgrade{}, false
+		}
+		upgrade := ModelUpgrade{
+			ID:                 strings.TrimSpace(*preset.Upgrade),
+			MigrationConfigKey: modelSlug,
+		}
+		if info := preset.UpgradeInfo; info != nil {
+			upgrade.ModelLink = cloneStringPointer(info.ModelLink)
+			upgrade.UpgradeCopy = cloneStringPointer(info.UpgradeCopy)
+			upgrade.MigrationMarkdown = cloneStringPointer(info.MigrationMarkdown)
+			if info.RetirementAt != nil {
+				retirementAt := *info.RetirementAt
+				upgrade.RetirementAt = &retirementAt
+			}
+		}
+		return upgrade, true
+	}
+
+	var targetModel, currentName, targetName string
+	switch {
+	case modelProviderID == model.OpenAIProviderID && modelSlug == "gpt-5.4":
+		targetModel, currentName, targetName = "gpt-6-sol", "GPT-5.4", "GPT-6 Sol"
+	case modelProviderID == model.AmazonBedrockProviderID && modelSlug == "openai.gpt-5.4":
+		targetModel, currentName, targetName = "openai.gpt-6-sol", "GPT-5.4 on Amazon Bedrock", "GPT-6 Sol on Amazon Bedrock"
+	case modelProviderID == model.OpenAIProviderID && modelSlug == "gpt-5.4-mini":
+		targetModel, currentName, targetName = "gpt-6-luna", "GPT-5.4 Mini", "GPT-6 Luna"
+	default:
+		return ModelUpgrade{}, false
+	}
+	availability := "no longer available"
+	if modelSlug == "openai.gpt-5.4" {
+		availability = "no longer offered in Codex"
+	}
+	markdown := currentName + " is " + availability + "\n\nCodex now uses " + targetName +
+		" in place of " + currentName + ". Switch to " + targetName + " to continue.\n"
+	return ModelUpgrade{
+		ID:                 targetModel,
+		MigrationConfigKey: modelSlug,
+		MigrationMarkdown:  &markdown,
+	}, true
+}
+
+func ShouldShowModelMigrationPrompt(modelProviderID string, currentModel string, targetModel string, seenMigrations map[string]string, availableModels []model.ModelSummary) bool {
 	currentModel = strings.TrimSpace(currentModel)
 	targetModel = strings.TrimSpace(targetModel)
 	if currentModel == "" || targetModel == "" || currentModel == targetModel {
@@ -99,10 +169,12 @@ func ShouldShowModelMigrationPrompt(currentModel string, targetModel string, see
 	if _, ok := TargetPresetForUpgrade(availableModels, targetModel); !ok {
 		return false
 	}
+	// The provider-scoped fallback migration links a saved selection that is no
+	// longer in the catalog to its replacement.
+	if upgrade, ok := ModelUpgradeForMigration(modelProviderID, currentModel, availableModels); ok && upgrade.ID == targetModel {
+		return true
+	}
 	for _, preset := range availableModels {
-		if strings.TrimSpace(preset.Model) == currentModel && preset.Upgrade != nil {
-			return true
-		}
 		if preset.Upgrade != nil && strings.TrimSpace(*preset.Upgrade) == targetModel {
 			return true
 		}

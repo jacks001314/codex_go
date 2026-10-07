@@ -165,6 +165,25 @@ func TestFallbackBundledModelsMatchCurrentRustDefault(t *testing.T) {
 	}
 }
 
+func TestFallbackBundledCatalogDropsGPT54LikeRust(t *testing.T) {
+	// Rust #47932 (694d8d45bd): gpt-5.4 is removed from the bundled catalog.
+	// The GPT-5.4 Mini entry stays because its migration target (GPT-6 Luna)
+	// still needs the saved-selection prompt.
+	presets := NewStaticModelsManager(fallbackBundledModelsResponse()).ListModels(RefreshOffline)
+	sawMini := false
+	for _, preset := range presets {
+		if preset.Model == "gpt-5.4" {
+			t.Fatalf("bundled catalog still lists %q", preset.Model)
+		}
+		if preset.Model == "gpt-5.4-mini" {
+			sawMini = true
+		}
+	}
+	if !sawMini {
+		t.Fatal("bundled catalog lost the gpt-5.4-mini entry")
+	}
+}
+
 func TestBundledGPT56ModelsAllowLongContextOverrideLikeRust(t *testing.T) {
 	// Rust #39102 raises the GPT-5.6 maximum context window to 872,000 tokens
 	// (models-manager/models.json max_context_window 272000 -> 872000).

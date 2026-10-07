@@ -74,20 +74,20 @@ func TestModelMigrationPromptDecisionMatchRust(t *testing.T) {
 		{ID: "gpt-5", Model: "gpt-5", Upgrade: &target},
 		{ID: "gpt-5.1", Model: "gpt-5.1", DefaultReasoningEffort: "high"},
 	}
-	if !ShouldShowModelMigrationPrompt("gpt-5", "gpt-5.1", nil, models) {
+	if !ShouldShowModelMigrationPrompt("openai", "gpt-5", "gpt-5.1", nil, models) {
 		t.Fatal("expected migration prompt")
 	}
-	if ShouldShowModelMigrationPrompt("gpt-5.1", "gpt-5.1", nil, models) {
+	if ShouldShowModelMigrationPrompt("openai", "gpt-5.1", "gpt-5.1", nil, models) {
 		t.Fatal("same model should not prompt")
 	}
-	if ShouldShowModelMigrationPrompt("gpt-5", "gpt-5.1", map[string]string{"gpt-5": "gpt-5.1"}, models) {
+	if ShouldShowModelMigrationPrompt("openai", "gpt-5", "gpt-5.1", map[string]string{"gpt-5": "gpt-5.1"}, models) {
 		t.Fatal("seen migration should not prompt")
 	}
 	hiddenTarget := []model.ModelSummary{
 		{ID: "gpt-5", Model: "gpt-5", Upgrade: &target},
 		{ID: "gpt-5.1", Model: "gpt-5.1", Hidden: true},
 	}
-	if ShouldShowModelMigrationPrompt("gpt-5", "gpt-5.1", nil, hiddenTarget) {
+	if ShouldShowModelMigrationPrompt("openai", "gpt-5", "gpt-5.1", nil, hiddenTarget) {
 		t.Fatal("hidden target should not prompt")
 	}
 	viaOtherPreset := []model.ModelSummary{
@@ -95,8 +95,113 @@ func TestModelMigrationPromptDecisionMatchRust(t *testing.T) {
 		{ID: "other", Model: "other", Upgrade: &target},
 		{ID: "gpt-5.1", Model: "gpt-5.1"},
 	}
-	if !ShouldShowModelMigrationPrompt("legacy", "gpt-5.1", nil, viaOtherPreset) {
+	if !ShouldShowModelMigrationPrompt("openai", "legacy", "gpt-5.1", nil, viaOtherPreset) {
 		t.Fatal("upgrade target referenced by any preset should prompt")
+	}
+}
+
+func TestModelUpgradeForMigrationScopesFallbackToProviderLikeRust(t *testing.T) {
+	// Rust #47932: a saved selection that outlived its catalog entry keeps its
+	// migration metadata, but the fallback is scoped to the owning provider
+	// because other providers may still support the same slug.
+	cases := []struct {
+		name         string
+		providerID   string
+		model        string
+		wantID       string
+		wantMarkdown string
+		wantOK       bool
+	}{
+		{
+			name:         "openai gpt-5.4",
+			providerID:   model.OpenAIProviderID,
+			model:        "gpt-5.4",
+			wantID:       "gpt-6-sol",
+			wantMarkdown: "GPT-5.4 is no longer available\n\nCodex now uses GPT-6 Sol in place of GPT-5.4. Switch to GPT-6 Sol to continue.\n",
+			wantOK:       true,
+		},
+		{
+			name:         "bedrock openai.gpt-5.4",
+			providerID:   model.AmazonBedrockProviderID,
+			model:        "openai.gpt-5.4",
+			wantID:       "openai.gpt-6-sol",
+			wantMarkdown: "GPT-5.4 on Amazon Bedrock is no longer offered in Codex\n\nCodex now uses GPT-6 Sol on Amazon Bedrock in place of GPT-5.4 on Amazon Bedrock. Switch to GPT-6 Sol on Amazon Bedrock to continue.\n",
+			wantOK:       true,
+		},
+		{
+			name:         "openai gpt-5.4-mini",
+			providerID:   model.OpenAIProviderID,
+			model:        "gpt-5.4-mini",
+			wantID:       "gpt-6-luna",
+			wantMarkdown: "GPT-5.4 Mini is no longer available\n\nCodex now uses GPT-6 Luna in place of GPT-5.4 Mini. Switch to GPT-6 Luna to continue.\n",
+			wantOK:       true,
+		},
+		{
+			name:       "bedrock does not migrate the OpenAI gpt-5.4 slug",
+			providerID: model.AmazonBedrockProviderID,
+			model:      "gpt-5.4",
+			wantOK:     false,
+		},
+		{
+			name:       "openai does not migrate the Bedrock openai.gpt-5.4 slug",
+			providerID: model.OpenAIProviderID,
+			model:      "openai.gpt-5.4",
+			wantOK:     false,
+		},
+	}
+	for _, tc := range cases {
+		upgrade, ok := ModelUpgradeForMigration(tc.providerID, tc.model, nil)
+		if ok != tc.wantOK {
+			t.Fatalf("%s: ok = %v, want %v", tc.name, ok, tc.wantOK)
+		}
+		if !ok {
+			continue
+		}
+		if upgrade.ID != tc.wantID {
+			t.Fatalf("%s: upgrade.ID = %q, want %q", tc.name, upgrade.ID, tc.wantID)
+		}
+		if upgrade.MigrationConfigKey != tc.model {
+			t.Fatalf("%s: migration config key = %q, want %q", tc.name, upgrade.MigrationConfigKey, tc.model)
+		}
+		if upgrade.MigrationMarkdown == nil || *upgrade.MigrationMarkdown != tc.wantMarkdown {
+			t.Fatalf("%s: markdown = %v, want %q", tc.name, upgrade.MigrationMarkdown, tc.wantMarkdown)
+		}
+	}
+}
+
+func TestModelUpgradeForMigrationPrefersCatalogMetadataLikeRust(t *testing.T) {
+	target := "gpt-5.6-luna"
+	markdown := "custom migration markdown"
+	models := []model.ModelSummary{{
+		ID:          "gpt-5.4",
+		Model:       "gpt-5.4",
+		Upgrade:     &target,
+		UpgradeInfo: &model.ModelUpgradeInfo{Model: target, MigrationMarkdown: &markdown},
+	}}
+	upgrade, ok := ModelUpgradeForMigration(model.OpenAIProviderID, "gpt-5.4", models)
+	if !ok {
+		t.Fatal("catalog preset upgrade should win over the fallback")
+	}
+	if upgrade.ID != target || upgrade.MigrationMarkdown == nil || *upgrade.MigrationMarkdown != markdown {
+		t.Fatalf("upgrade = %#v", upgrade)
+	}
+	// A catalog preset without an upgrade yields no migration metadata, exactly
+	// like Rust's `preset.upgrade.clone()`.
+	if _, ok := ModelUpgradeForMigration(model.OpenAIProviderID, "gpt-5.4", []model.ModelSummary{{ID: "gpt-5.4", Model: "gpt-5.4"}}); ok {
+		t.Fatal("preset without upgrade should not migrate")
+	}
+}
+
+func TestModelMigrationPromptUsesProviderScopedFallbackLikeRust(t *testing.T) {
+	models := []model.ModelSummary{{ID: "gpt-6-sol", Model: "gpt-6-sol"}}
+	if !ShouldShowModelMigrationPrompt(model.OpenAIProviderID, "gpt-5.4", "gpt-6-sol", nil, models) {
+		t.Fatal("a saved gpt-5.4 selection should prompt for the OpenAI fallback target")
+	}
+	if ShouldShowModelMigrationPrompt(model.AmazonBedrockProviderID, "gpt-5.4", "gpt-6-sol", nil, models) {
+		t.Fatal("the fallback must not apply to a provider that does not own the slug")
+	}
+	if ShouldShowModelMigrationPrompt(model.OpenAIProviderID, "gpt-5.4", "gpt-6-luna", nil, models) {
+		t.Fatal("the fallback must not prompt for an unrelated target")
 	}
 }
 
