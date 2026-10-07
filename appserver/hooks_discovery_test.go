@@ -108,6 +108,61 @@ func TestHookDiscoveryAppendsManagedRequirementHooks(t *testing.T) {
 	}
 }
 
+// Rust discovery resolves the managed command with `if cfg!(windows)
+// { command_windows.unwrap_or(command) }` (hooks/src/engine/discovery.rs:509-516) before
+// the empty check, the trust hash and the executed command are derived. This drives the
+// real assembly path (HookDiscoveryService.Discover -> appendManagedRequirementHooks)
+// with the platform seam forced, because the Windows branch cannot run natively on Linux.
+func TestManagedHookCommandUsesCommandWindowsOnWindowsLikeRust(t *testing.T) {
+	discover := func(t *testing.T, goos string, handler config.ConfiguredHookHandler) HookMetadata {
+		t.Helper()
+		previous := hookCommandOS
+		hookCommandOS = goos
+		t.Cleanup(func() { hookCommandOS = previous })
+
+		service := NewHookDiscoveryService("")
+		cfg := config.NewConfigService(t.TempDir())
+		managedDir := t.TempDir()
+		cfg.SetRequirements(&config.ConfigRequirements{Hooks: &config.ManagedHooksRequirements{
+			ManagedDir: &managedDir,
+			PreToolUse: []config.ConfiguredHookGroup{{Matcher: stringPtr("Bash"), Hooks: []config.ConfiguredHookHandler{handler}}},
+		}})
+		service.Config = cfg
+		response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+		if len(response.Data) != 1 {
+			t.Fatalf("discovery response = %#v", response.Data)
+		}
+		for _, hook := range response.Data[0].Hooks {
+			if hook.IsManaged && hook.Source == HookSourceCloudRequirements {
+				return hook
+			}
+		}
+		t.Fatalf("managed hook not appended: %#v", response.Data[0].Hooks)
+		return HookMetadata{}
+	}
+
+	windowsCommand := "echo windows"
+	handler := config.ConfiguredHookHandler{Type: "command", Command: "echo linux", CommandWindows: &windowsCommand}
+
+	windows := discover(t, "windows", handler)
+	if windows.Command == nil || *windows.Command != windowsCommand {
+		t.Fatalf("windows managed command = %v, want %q", windows.Command, windowsCommand)
+	}
+	linux := discover(t, "linux", handler)
+	if linux.Command == nil || *linux.Command != "echo linux" {
+		t.Fatalf("linux managed command = %v, want %q", linux.Command, "echo linux")
+	}
+	if windows.CurrentHash == linux.CurrentHash {
+		t.Fatalf("hashes must follow the platform command: windows=%s linux=%s", windows.CurrentHash, linux.CurrentHash)
+	}
+
+	// The Windows hash is the hash of the Windows spelling, not of `command`.
+	reference := discover(t, "linux", config.ConfiguredHookHandler{Type: "command", Command: windowsCommand})
+	if windows.CurrentHash != reference.CurrentHash {
+		t.Fatalf("windows hash = %s, want the hash of commandWindows %s", windows.CurrentHash, reference.CurrentHash)
+	}
+}
+
 func TestHookDiscoveryRequiredLoadErrorsForUnsupportedManagedHook(t *testing.T) {
 	service := NewHookDiscoveryService("")
 	cfg := config.NewConfigService(t.TempDir())

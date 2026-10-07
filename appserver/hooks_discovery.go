@@ -75,6 +75,21 @@ func (s *HookDiscoveryService) ManagedRequiredHookLoadErrors(cwd string) []strin
 	return append([]string(nil), response.Data[0].RequiredLoadErrors...)
 }
 
+// hookCommandOS is the platform seam for managed hook command selection. Rust resolves
+// the command during discovery with `if cfg!(windows) { command_windows.unwrap_or(command) }`
+// (hooks/src/engine/discovery.rs:509-516) before the empty check, the trust hash and the
+// executed command are derived, so the Windows spelling must be used here too.
+var hookCommandOS = runtime.GOOS
+
+// managedHookCommand mirrors Rust discovery.rs's platform selection for managed
+// requirement handlers: on Windows the handler's commandWindows replaces command.
+func managedHookCommand(handler config.ConfiguredHookHandler) string {
+	if hookCommandOS == "windows" && handler.CommandWindows != nil {
+		return *handler.CommandWindows
+	}
+	return handler.Command
+}
+
 func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntry) {
 	if s == nil || s.Config == nil || entry == nil {
 		return
@@ -108,7 +123,8 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 				key := hookDiscoveryKey("managed", event.name, groupIndex, handlerIndex)
 				switch handler.Type {
 				case string(HookHandlerCommand):
-					command := strings.TrimSpace(handler.Command)
+					resolved := managedHookCommand(handler)
+					command := strings.TrimSpace(resolved)
 					if command == "" {
 						entry.RequiredLoadErrors = append(entry.RequiredLoadErrors, fmt.Sprintf("skipping empty hook command in managed requirements for %s", event.name))
 						continue
@@ -128,7 +144,7 @@ func (s *HookDiscoveryService) appendManagedRequirementHooks(entry *HookListEntr
 						DisplayOrder:  displayOrder,
 						Enabled:       true,
 						IsManaged:     true,
-						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, handler.Command, handler.Async, timeout, handler.StatusMessage, nil),
+						CurrentHash:   hookDiscoveryHash(event.name, group.Matcher, resolved, handler.Async, timeout, handler.StatusMessage, nil),
 						TrustStatus:   HookTrustManaged,
 					})
 					displayOrder++
