@@ -57,15 +57,7 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 		if err != nil {
 			return appserver.Goal{}, err
 		}
-		params := appserver.GoalSetParams{
-			ThreadID:    strings.TrimSpace(threadID),
-			Objective:   trimStringPtrRemote(objective),
-			TokenBudget: cloneInt64PtrRemote(tokenBudget),
-			Status:      cloneGoalStatusPtrRemote(status),
-		}
-		if tokenBudget != nil {
-			params.TokenBudgetSet = true
-		}
+		params := tuiGoalSetParams(threadID, objective, tokenBudget, status)
 		if params.Objective != nil {
 			// Materialize oversized objectives into managed goal files before
 			// persisting, mirroring Rust goal_files::materialize_goal_draft.
@@ -98,7 +90,7 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 		if err := initializeLocalTUIConnection(router.Handle, interactiveGoalConnectionID); err != nil {
 			return false, err
 		}
-		response, err := localGoalRequest(router, appserver.IntID(4), appserver.MethodThreadGoalClear, appserver.GoalClearParams{ThreadID: strings.TrimSpace(threadID)})
+		response, err := localGoalRequest(router, appserver.IntID(4), appserver.MethodThreadGoalClear, tuiGoalClearParams(threadID))
 		if err != nil {
 			return false, err
 		}
@@ -133,6 +125,42 @@ func interactiveLocalGoalCallbacks(factory interactiveGoalRouterFactory) (codext
 		return materializeGoalDraft(localGoalFS(router), codexHome, draft)
 	}
 	return read, set, clear, editText, materialize
+}
+
+// goalMutationUserOrigin marks a TUI-initiated goal mutation as an explicit
+// user action (Rust #49598: codex-rs/tui/src/app_server_session.rs attaches
+// `origin: Some(ThreadGoalMutationOrigin::User)` to thread/goal/set and
+// thread/goal/clear). Automatic goal lifecycle mutations originate in the
+// app-server, so the TUI never sends "automatic"; an omitted origin supplies no
+// user authorization and therefore never reaches the model-visible history.
+func goalMutationUserOrigin() *appserver.ThreadGoalMutationOrigin {
+	origin := appserver.ThreadGoalMutationOriginUser
+	return &origin
+}
+
+// tuiGoalSetParams builds thread/goal/set params shared by the embedded and the
+// remote TUI hosts so both wire shapes stay identical.
+func tuiGoalSetParams(threadID string, objective *string, tokenBudget *int64, status *appserver.GoalStatus) appserver.GoalSetParams {
+	params := appserver.GoalSetParams{
+		ThreadID:    strings.TrimSpace(threadID),
+		Objective:   trimStringPtrRemote(objective),
+		TokenBudget: cloneInt64PtrRemote(tokenBudget),
+		Status:      cloneGoalStatusPtrRemote(status),
+		Origin:      goalMutationUserOrigin(),
+	}
+	if tokenBudget != nil {
+		params.TokenBudgetSet = true
+	}
+	return params
+}
+
+// tuiGoalClearParams builds thread/goal/clear params shared by the embedded and
+// the remote TUI hosts.
+func tuiGoalClearParams(threadID string) appserver.GoalClearParams {
+	return appserver.GoalClearParams{
+		ThreadID: strings.TrimSpace(threadID),
+		Origin:   goalMutationUserOrigin(),
+	}
 }
 
 // initializeLocalGoalConnection performs the initialize handshake and returns

@@ -258,3 +258,114 @@ func startLocalGoalTestThread(t *testing.T, store *session.Store) string {
 	}
 	return result.Thread.ID
 }
+
+// delegatingGoalRouter captures the raw goal-mutation payloads produced by the
+// TUI callbacks and forwards every request to a real app-server runtime router,
+// so assertions cover the production request-construction path rather than a
+// hand-built params struct.
+type delegatingGoalRouter struct {
+	inner     interactiveGoalRouter
+	setBodies []string
+	clrBodies []string
+}
+
+func (r *delegatingGoalRouter) Handle(request *appserver.Request) *appserver.Response {
+	switch request.Method {
+	case appserver.MethodThreadGoalSet:
+		r.setBodies = append(r.setBodies, string(request.Params))
+	case appserver.MethodThreadGoalClear:
+		r.clrBodies = append(r.clrBodies, string(request.Params))
+	}
+	return r.inner.Handle(request)
+}
+
+func (r *delegatingGoalRouter) Close() error { return r.inner.Close() }
+
+// Rust #49598 (upstream de02016798): codex-rs/tui/src/app_server_session.rs tags
+// TUI-initiated thread/goal/set and thread/goal/clear with
+// `origin: Some(ThreadGoalMutationOrigin::User)`; an omitted origin supplies no
+// user authorization. Mirrors the Rust test
+// `user_goal_updates_survive_resume_and_clear`.
+func TestTUIGoalMutationsCarryUserOriginLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	store := session.NewStore(filepath.Join(codexHome, "sessions"))
+	threadID := startLocalGoalTestThread(t, store)
+
+	var routers []*delegatingGoalRouter
+	factory := func() interactiveGoalRouter {
+		router := &delegatingGoalRouter{inner: appserver.NewDefaultRuntimeRouter(store, codexHome)}
+		routers = append(routers, router)
+		return router
+	}
+	_, set, clear, _, _ := interactiveLocalGoalCallbacks(factory)
+
+	objective := "keep the goal edit in user history"
+	status := appserver.GoalActive
+	if _, err := set(threadID, &objective, nil, &status); err != nil {
+		t.Fatalf("set goal: %v", err)
+	}
+	if _, err := clear(threadID); err != nil {
+		t.Fatalf("clear goal: %v", err)
+	}
+
+	var setBodies, clearBodies []string
+	for _, router := range routers {
+		setBodies = append(setBodies, router.setBodies...)
+		clearBodies = append(clearBodies, router.clrBodies...)
+	}
+	if len(setBodies) != 1 || len(clearBodies) != 1 {
+		t.Fatalf("set bodies=%d clear bodies=%d", len(setBodies), len(clearBodies))
+	}
+	for name, body := range map[string]string{"thread/goal/set": setBodies[0], "thread/goal/clear": clearBodies[0]} {
+		var decoded struct {
+			Origin *appserver.ThreadGoalMutationOrigin `json:"origin"`
+		}
+		if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+			t.Fatalf("%s params: %v", name, err)
+		}
+		if decoded.Origin == nil || *decoded.Origin != appserver.ThreadGoalMutationOriginUser {
+			t.Fatalf("%s origin=%v body=%s", name, decoded.Origin, body)
+		}
+		if !strings.Contains(body, `"origin":"user"`) {
+			t.Fatalf("%s wire body missing origin=user: %s", name, body)
+		}
+	}
+}
+
+// Rust #49598 (upstream de02016798): the embedded and the remote TUI hosts must
+// agree on the mutation payload, including the user origin. Both go through the
+// shared builders; the TUI never emits the "automatic" origin because automatic
+// lifecycle mutations are produced by the app-server itself.
+func TestTUIGoalMutationParamsShareUserOriginLikeRust(t *testing.T) {
+	objective := "shared params"
+	status := appserver.GoalPaused
+	budget := int64(120_000)
+	setParams := tuiGoalSetParams(" thread ", &objective, &budget, &status)
+	setRaw, err := json.Marshal(setParams)
+	if err != nil {
+		t.Fatalf("marshal set params: %v", err)
+	}
+	if !strings.Contains(string(setRaw), `"origin":"user"`) {
+		t.Fatalf("set params origin missing: %s", setRaw)
+	}
+	if setParams.TokenBudgetSet != true {
+		t.Fatalf("token budget set flag lost: %#v", setParams)
+	}
+	clearParams := tuiGoalClearParams(" thread ")
+	clearRaw, err := json.Marshal(clearParams)
+	if err != nil {
+		t.Fatalf("marshal clear params: %v", err)
+	}
+	if !strings.Contains(string(clearRaw), `"origin":"user"`) {
+		t.Fatalf("clear params origin missing: %s", clearRaw)
+	}
+	if strings.Contains(string(setRaw), `"automatic"`) || strings.Contains(string(clearRaw), `"automatic"`) {
+		t.Fatalf("TUI must not emit automatic origin: set=%s clear=%s", setRaw, clearRaw)
+	}
+	// The remote host reuses these builders, so the wire shape is identical.
+	for _, origin := range []*appserver.ThreadGoalMutationOrigin{setParams.Origin, clearParams.Origin} {
+		if origin == nil || *origin != appserver.ThreadGoalMutationOriginUser {
+			t.Fatalf("origin=%v", origin)
+		}
+	}
+}

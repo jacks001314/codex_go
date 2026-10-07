@@ -5020,6 +5020,11 @@ func TestInteractiveRemoteGoalCallbacksCallAppServer(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal set params = %#v", params))
 					return
 				}
+				// Rust #49598: the TUI tags thread/goal/set with origin=user.
+				if params.Origin == nil || *params.Origin != appserver.ThreadGoalMutationOriginUser {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal set origin = %v", params.Origin))
+					return
+				}
 				remoteTUITestWrite(ctx, conn, map[string]any{
 					"jsonrpc": "2.0",
 					"id":      req.ID,
@@ -5043,6 +5048,11 @@ func TestInteractiveRemoteGoalCallbacksCallAppServer(t *testing.T) {
 				}
 				if params.ThreadID != "thread-goal" {
 					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal clear threadID = %q", params.ThreadID))
+					return
+				}
+				// Rust #49598: the TUI tags thread/goal/clear with origin=user.
+				if params.Origin == nil || *params.Origin != appserver.ThreadGoalMutationOriginUser {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("goal clear origin = %v", params.Origin))
 					return
 				}
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"cleared": true}})

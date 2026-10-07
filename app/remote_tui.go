@@ -870,15 +870,7 @@ func interactiveRemoteSetGoal(ctx context.Context, endpoint *appserverdaemon.Rem
 		return appserver.Goal{}, err
 	}
 	defer client.close()
-	params := appserver.GoalSetParams{
-		ThreadID:    strings.TrimSpace(threadID),
-		Objective:   trimStringPtrRemote(objective),
-		TokenBudget: cloneInt64PtrRemote(tokenBudget),
-		Status:      cloneGoalStatusPtrRemote(status),
-	}
-	if tokenBudget != nil {
-		params.TokenBudgetSet = true
-	}
+	params := tuiGoalSetParams(threadID, objective, tokenBudget, status)
 	if params.Objective != nil {
 		materialized, materializeErr := materializeOversizedGoalObjective(
 			remoteGoalFS(reqCtx, client),
@@ -906,7 +898,7 @@ func interactiveRemoteClearGoal(ctx context.Context, endpoint *appserverdaemon.R
 	}
 	defer client.close()
 	var response appserver.GoalClearResponse
-	params := appserver.GoalClearParams{ThreadID: strings.TrimSpace(threadID)}
+	params := tuiGoalClearParams(threadID)
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadGoalClear, params, &response); err != nil {
 		return false, err
 	}
