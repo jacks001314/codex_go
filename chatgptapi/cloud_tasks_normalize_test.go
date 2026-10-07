@@ -1,0 +1,74 @@
+package chatgptapi
+
+import "testing"
+
+// Mirrors Rust #49147 (upstream 3a16c0b707, codex-rs/cloud-tasks/src/util.rs):
+// `normalize_base_url` replaced its trailing-slash removal loop with
+// `trim_end_matches('/')` and gained the table below covering unchanged URLs,
+// single and repeated trailing slashes, empty and slash-only inputs, and
+// ChatGPT URLs with and without `/backend-api`.
+//
+// Go already contains the loop-free equivalent (`strings.TrimRight(value, "/")`
+// in NormalizeCloudBaseURL), so this change is behaviour-preserving on both
+// sides; the landing is the regression coverage that Rust gained.
+//
+// Two expectations differ from the Rust table on purpose, and are asserted here
+// so the deviations stay visible:
+//
+//   - the empty and slash-only inputs resolve to DefaultCloudTasksBaseURL in Go,
+//     because Go's NormalizeCloudBaseURL substitutes the default itself whereas
+//     Rust's callers do it separately (`unwrap_or_else` in cloud-tasks/src/lib.rs);
+//   - surrounding whitespace is trimmed, which Rust's `trim_end_matches('/')`
+//     alone does not do.
+func TestNormalizeCloudBaseURLNormalizesURLsLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"unchanged", "https://example.com/path", "https://example.com/path"},
+		{"single trailing slash", "https://example.com/path/", "https://example.com/path"},
+		{"repeated trailing slashes", "https://example.com/path///", "https://example.com/path"},
+		{"chatgpt host gains backend-api", "https://chatgpt.com///", "https://chatgpt.com/backend-api"},
+		{"chatgpt host keeps backend-api", "https://chatgpt.com/backend-api///", "https://chatgpt.com/backend-api"},
+		{"chat.openai.com host gains backend-api", "https://chat.openai.com///", "https://chat.openai.com/backend-api"},
+		{"chat.openai.com host keeps backend-api", "https://chat.openai.com/backend-api///", "https://chat.openai.com/backend-api"},
+		{"path under backend-api is left alone", "https://chatgpt.com/backend-api/codex", "https://chatgpt.com/backend-api/codex"},
+		// Go deviations from the Rust table (see the comment above).
+		{"empty falls back to the default", "", DefaultCloudTasksBaseURL},
+		{"slash-only falls back to the default", "///", DefaultCloudTasksBaseURL},
+		{"surrounding whitespace is trimmed", "  https://example.com/path/  ", "https://example.com/path"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := NormalizeCloudBaseURL(testCase.input); got != testCase.want {
+				t.Fatalf("NormalizeCloudBaseURL(%q) = %q, want %q", testCase.input, got, testCase.want)
+			}
+		})
+	}
+}
+
+// The normalized base URL is what the production client stores and what
+// CloudTaskURL builds request paths from, so pin the consumer-visible result of
+// the trailing-slash form as Rust #49147's regression coverage does.
+//
+// Expected values mirror Rust's `task_url` (cloud-tasks/src/util.rs), which
+// strips a trailing `/backend-api` and renders the browser-friendly path on the
+// host root.
+func TestCloudTaskURLUsesNormalizedBaseURLLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"chatgpt host, slash-only", "https://chatgpt.com///", "https://chatgpt.com/codex/tasks/task_123"},
+		{"chatgpt host, backend-api with slashes", "https://chatgpt.com/backend-api///", "https://chatgpt.com/codex/tasks/task_123"},
+		{"chatgpt host, backend-api plain", "https://chatgpt.com/backend-api", "https://chatgpt.com/codex/tasks/task_123"},
+		{"custom host keeps its path", "https://example.com/path/", "https://example.com/path/codex/tasks/task_123"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := CloudTaskURL(testCase.input, "task_123"); got != testCase.want {
+				t.Fatalf("CloudTaskURL(%q, task_123) = %q, want %q", testCase.input, got, testCase.want)
+			}
+		})
+	}
+}
