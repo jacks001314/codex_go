@@ -65,3 +65,16 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 - **下一批待派（暂缓）**：`#49432`、`#49260`、`#49075`（均需 `appserver/runtime_router.go`，等 syncnext15 交付后成批派）。
 - 待补：新 verifier（在飞 ≤3 时创建）。
 - 附加规则（续 5/6/7/8）+ **R8 产出率优先** 见上文；**R3 增补**：对「已有 Go 端口的子系统」必须用行为探针判定。
+
+## R9 车道禁止提交（用户指令，长期生效，2026-10-07 起）
+
+用户原话：「每个 agent 都不要自己提交代码，由你 leader 自己验证和提交。」
+
+- 所有下属 Agent（车道）**不得**执行 `git commit` / `git push` / 创建 tag / 移动分支指针 / `git stash` 自己的改动。
+- 车道产物 = **工作区里的未提交改动**（含新增文件）；不再以「车道分支 + 提交」作为交付载体。
+- 队长职责扩展为「**验证 + 提交 + 发布**」：队长亲自进入车道 worktree 复核改动、跑门禁（gofmt / `go build ./...` / `go vet` / 受影响包整包测试对基线 / 反向对照 RC），再由**队长提交**并 push main。
+  - Windows 车道（同机同仓）：队长 `git -C <wt> add -A && git -C <wt> commit`（在车道分支上）→ cherry-pick 到 main。
+  - Linux 车道（跨节点）：车道 `git add -A -N && git diff --binary > /tmp/<lane>.patch` → `project_file_sync` 到镜像 `update/r86_patches/<lane>.patch`；队长 `git apply --index` 后复核提交。
+- 车道回报强制字段：`git status --porcelain` 原文 + `git diff --stat` + 每条落点 `file:line` + 门禁实跑输出 + **RC 原文**。
+- 配套变化：`git patch-id` 判等不再适用于车道交付（无 commit）；改为「队长提交后 `git diff <lane-wt>` 为空」等价校验。
+- 车道分支/ worktree 仅作隔离用途；回收前不再需要 `git log main..<branch>` 孤儿普查（车道不产生 commit）。
