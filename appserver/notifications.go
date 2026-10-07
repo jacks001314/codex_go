@@ -865,6 +865,60 @@ type MCPToolCallProgressNotification struct {
 type MCPServerOauthLoginCompletedNotification struct {
 	Name     string  `json:"name"`
 	ThreadID *string `json:"threadId"`
-	Success  bool    `json:"success"`
-	Error    *string `json:"error,omitempty"`
+	// LoginID identifies the explicit login attempt this completion belongs to.
+	//
+	// Rust models the field as `login_id: Option<String>` carrying
+	// `#[ts(optional, as = "Option<Option<String>>")]`
+	// (codex-rs/app-server-protocol/src/protocol/v2/mcp.rs:341-348), so the
+	// wire form is tri-state — the generated TypeScript is
+	// `loginId?: string | null`: an older server omits the key, a current
+	// server writes an explicit `null` (no id known) or the id. Unlike `error`,
+	// the Rust field has no `skip_serializing_if`, so Rust always writes the
+	// key and `None` becomes `"loginId": null`; the sibling account completion
+	// pins that shape on the wire
+	// (codex-rs/app-server/tests/suite/v2/workspace_routing.rs:482 asserts
+	// `json!({ "loginId": null, ... })`). Go keeps the same emitted shape —
+	// `null` when the attempt has no id — while `OptionalString` keeps the
+	// omitted-vs-explicit-null distinction when decoding (Rust #49276).
+	LoginID OptionalString `json:"loginId"`
+	Success bool           `json:"success"`
+	Error   *string        `json:"error,omitempty"`
+}
+
+// MarshalJSON pins the v2 wire shape of the completion notification.
+//
+// Invariant (mirrors Rust): the `loginId` key is ALWAYS written — the value is
+// the login attempt id, or `null` when the MCP layer recorded none. The Rust
+// field has no `skip_serializing_if` (contrast `error` in the same struct,
+// which does omit when `None`), so `None` serializes as `"loginId": null`
+// (Rust #49276; the generation points in
+// codex-rs/app-server/src/request_processors/mcp_processor.rs:254/356/366 all
+// set `login_id: Some(...)`, and the sibling
+// `account/login/completed` notification pins the no-id shape with
+// `json!({ "loginId": null, ... })` in
+// codex-rs/app-server/tests/suite/v2/workspace_routing.rs:482). `error` keeps
+// its `omitempty`, matching Rust's `skip_serializing_if`.
+//
+// A value receiver keeps value and pointer marshaling in agreement; without it
+// the `OptionalString` pointer-receiver marshaler would only apply to
+// addressable fields.
+func (n MCPServerOauthLoginCompletedNotification) MarshalJSON() ([]byte, error) {
+	var loginID *string
+	if n.LoginID.Value != nil {
+		value := *n.LoginID.Value
+		loginID = &value
+	}
+	return json.Marshal(struct {
+		Name     string  `json:"name"`
+		ThreadID *string `json:"threadId"`
+		LoginID  *string `json:"loginId"`
+		Success  bool    `json:"success"`
+		Error    *string `json:"error,omitempty"`
+	}{
+		Name:     n.Name,
+		ThreadID: n.ThreadID,
+		LoginID:  loginID,
+		Success:  n.Success,
+		Error:    n.Error,
+	})
 }

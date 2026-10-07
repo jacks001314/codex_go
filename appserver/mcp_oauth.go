@@ -32,12 +32,22 @@ func (h *appserverMCPOAuthLoginCompletionHandler) HandleMCPOAuthLoginCompleted(c
 	if value := strings.TrimSpace(completion.Error); value != "" {
 		errText = &value
 	}
+	// Rust always writes `loginId` (McpServerOauthLoginCompletedNotification has
+	// no `skip_serializing_if` on it, app-server-protocol/src/protocol/v2/mcp.rs:341-348):
+	// the key is present and carries the attempt id, or `null` when the MCP
+	// layer did not provide one (`mcp.MCPOAuthLoginCompletion.LoginID` is empty
+	// for that case — Rust's `Option::None`).
+	loginID := OptionalString{Set: true}
+	if value := strings.TrimSpace(completion.LoginID); value != "" {
+		loginID.Value = &value
+	}
 	if completion.Success && h.invalidateRuntimes != nil {
 		h.invalidateRuntimes()
 	}
 	h.notify(NotificationMCPServerOauthLoginCompleted, &MCPServerOauthLoginCompletedNotification{
 		Name:     name,
 		ThreadID: threadID,
+		LoginID:  loginID,
 		Success:  completion.Success,
 		Error:    errText,
 	})
