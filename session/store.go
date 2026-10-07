@@ -385,6 +385,10 @@ type ListOptions struct {
 	SectionID      *string
 	Search         string
 	ModelProviders []string
+	// CWDSet records that the caller supplied a cwd filter (even an empty one).
+	// Rust #51602: an explicitly empty cwd array matches nothing, while an
+	// omitted/null filter matches everything.
+	CWDSet         bool
 	CWDs           []string
 	Sources        []string
 	SourceKinds    []string
@@ -1889,6 +1893,11 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 		}
 	}
 	if len(options.ModelProviders) > 0 && !containsString(options.ModelProviders, record.Metadata.ModelProvider) {
+		return false
+	}
+	if options.CWDSet && len(options.CWDs) == 0 {
+		// Rust #51602: `cwd_filters.is_some_and(is_empty)` returns an empty page
+		// on the scan path, so an explicitly empty cwd array matches nothing.
 		return false
 	}
 	if len(options.CWDs) > 0 && !recordMatchesCWDs(record.Metadata.CWD, options.CWDs) {

@@ -198,3 +198,190 @@ func TestRouterThreadListExcludedThreadIDsValidateBoundAndIDs(t *testing.T) {
 		t.Fatalf("thread/list invalid exclusions message = %q, want prefix %q", response.Error.Message, want)
 	}
 }
+
+// Mirrors Rust #51602
+// (`thread_list_db_only_errors_distinguish_unavailable_database_from_empty_history`):
+// a `useStateDbOnly` request whose state database cannot serve the query fails
+// with JSON-RPC -32603 and Rust's "failed to list threads from state database"
+// message, instead of reporting an empty page that would look like exhausted
+// history. A healthy, empty state database still lists successfully, and a
+// scan-and-repair request keeps its filesystem fallback.
+func TestRouterThreadListStateDBOnlyQueryFailureIsNotExhaustedHistory(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	stateConfig, err := state.NewSqliteConfig(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := state.InitStateRuntime(ctx, stateConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(home)
+	router := NewRouter(store)
+	router.SetStateRuntime(runtime)
+
+	// A healthy, empty state database lists successfully: an empty page is the
+	// "history is exhausted" answer, not an error.
+	healthy := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{UseStateDBOnly: true}))
+	if healthy.Error != nil {
+		t.Fatalf("thread/list healthy db-only error = %+v", healthy.Error)
+	}
+	if data := healthy.Result.(*ThreadListResponse).Data; len(data) != 0 {
+		t.Fatalf("thread/list healthy db-only data = %#v, want empty", data)
+	}
+
+	// Close the database so the query cannot be served; the failure must surface
+	// as -32603 rather than as exhausted history.
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	for _, archived := range []bool{false, true} {
+		for name, cwd := range map[string]*ThreadListCwdFilter{
+			"null":  nil,
+			"empty": {Values: []string{}},
+		} {
+			response := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, ThreadListParams{
+				UseStateDBOnly: true,
+				Archived:       boolPtr(archived),
+				CWD:            cwd,
+			}))
+			if response.Error == nil || response.Error.Code != JSONRPCInternalErrorCode {
+				t.Fatalf("thread/list db-only archived=%v cwd=%s = %+v, want code %d", archived, name, response, JSONRPCInternalErrorCode)
+			}
+			if want := "failed to list threads from state database"; !strings.HasPrefix(response.Error.Message, want) {
+				t.Fatalf("thread/list db-only archived=%v cwd=%s message = %q, want prefix %q", archived, name, response.Error.Message, want)
+			}
+		}
+	}
+
+	// The default scan-and-repair request keeps its filesystem fallback, so it
+	// does not depend on the state database at all.
+	fallbackRouter := NewRouter(session.NewStore(t.TempDir()))
+	fallback := fallbackRouter.Handle(requestWithParams(t, IntID(3), MethodThreadList, ThreadListParams{}))
+	if fallback.Error != nil {
+		t.Fatalf("thread/list scan-and-repair error = %+v", fallback.Error)
+	}
+}
+
+// Mirrors the reordered `cwd_filters.is_some_and(is_empty)` check in Rust #51602
+// (`RolloutRecorder::list_threads_with_db_fallback`): an explicitly empty cwd
+// array matches nothing on the listing path, while an omitted or null cwd
+// filter keeps matching everything.
+func TestRouterThreadListExplicitEmptyCWDArrayMatchesNothing(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	ids := []string{uuid.NewString(), uuid.NewString()}
+	for i, id := range ids {
+		created := now.Add(time.Duration(i) * time.Minute)
+		if err := store.Create(&session.Record{
+			ID:        session.ThreadID(id),
+			SessionID: id,
+			Preview:   id,
+			CreatedAt: created,
+			UpdatedAt: created,
+			RecencyAt: created,
+			Metadata: session.Metadata{
+				CWD:           "D:/repo",
+				ModelProvider: "openai",
+				Source:        string(SessionSourceCli),
+				HistoryMode:   string(ThreadHistoryLegacy),
+			},
+		}); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+	}
+
+	empty := &ThreadListCwdFilter{Values: []string{}}
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadList, ThreadListParams{CWD: empty}))
+	if response.Error != nil {
+		t.Fatalf("thread/list empty cwd error = %+v", response.Error)
+	}
+	if data := response.Result.(*ThreadListResponse).Data; len(data) != 0 {
+		t.Fatalf("thread/list empty cwd data = %#v, want empty", data)
+	}
+
+	// Omitting the filter (or sending null) still lists every thread.
+	for name, params := range map[string]ThreadListParams{
+		"omitted": {},
+		"null":    {CWD: nil},
+		"one":     {CWD: &ThreadListCwdFilter{Values: []string{"D:/repo"}}},
+	} {
+		response := router.Handle(requestWithParams(t, IntID(2), MethodThreadList, params))
+		if response.Error != nil {
+			t.Fatalf("thread/list %s cwd error = %+v", name, response.Error)
+		}
+		if data := response.Result.(*ThreadListResponse).Data; len(data) != len(ids) {
+			t.Fatalf("thread/list %s cwd data = %#v, want %d threads", name, data, len(ids))
+		}
+	}
+}
+
+// Rust #51602 documents that "a successful response with `nextCursor: null`
+// still indicates exhaustion" and that a store must never repeat a cursor while
+// filling a page. codex_go's thread/list has no page-refill loop: it filters,
+// sorts and slices the whole in-memory listing once (session.ListRecords) and
+// derives nextCursor from the filtered slice, so paging to exhaustion always
+// advances and terminates with a nil cursor. This is the reproducible evidence
+// that the repeated-cursor guard the Rust commit adds to the app-server refill
+// loop has no reachable Go landing.
+func TestRouterThreadListPaginationNeverRepeatsACursor(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	now := fixedTime()
+	want := make([]string, 0, 5)
+	for i := 0; i < 5; i++ {
+		id := uuid.NewString()
+		created := now.Add(time.Duration(i) * time.Minute)
+		if err := store.Create(&session.Record{
+			ID:        session.ThreadID(id),
+			SessionID: id,
+			Preview:   id,
+			CreatedAt: created,
+			UpdatedAt: created,
+			RecencyAt: created,
+			Metadata: session.Metadata{
+				CWD:           "D:/repo",
+				ModelProvider: "openai",
+				Source:        string(SessionSourceCli),
+				HistoryMode:   string(ThreadHistoryLegacy),
+			},
+		}); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+		want = append([]string{id}, want...)
+	}
+
+	limit := 1
+	seen := map[string]bool{}
+	var cursor *string
+	var got []string
+	for pages := 0; ; pages++ {
+		if pages > len(want)+1 {
+			t.Fatalf("thread/list did not terminate after %d pages", pages)
+		}
+		response := router.Handle(requestWithParams(t, IntID(int64(pages+1)), MethodThreadList, ThreadListParams{Limit: &limit, Cursor: cursor}))
+		if response.Error != nil {
+			t.Fatalf("thread/list page %d error = %+v", pages, response.Error)
+		}
+		page := response.Result.(*ThreadListResponse)
+		got = append(got, threadListIDs(page.Data)...)
+		if page.NextCursor == nil {
+			// A successful response with a nil cursor is the exhaustion answer.
+			break
+		}
+		next := strings.TrimSpace(*page.NextCursor)
+		if next == "" {
+			t.Fatalf("thread/list page %d returned an empty cursor", pages)
+		}
+		if seen[next] {
+			t.Fatalf("thread/list repeated cursor %q on page %d", next, pages)
+		}
+		seen[next] = true
+		cursor = page.NextCursor
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("paged ids = %v, want %v", got, want)
+	}
+}

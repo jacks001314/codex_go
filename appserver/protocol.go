@@ -643,12 +643,14 @@ func (f *ThreadListCwdFilter) UnmarshalJSON(data []byte) error {
 }
 
 func (f *ThreadListCwdFilter) MarshalJSON() ([]byte, error) {
-	if f == nil || len(f.Values) == 0 {
+	if f == nil || f.Values == nil {
 		return []byte("null"), nil
 	}
 	if len(f.Values) == 1 {
 		return json.Marshal(f.Values[0])
 	}
+	// An explicitly provided empty filter stays `[]` (Rust
+	// ThreadListCwdFilter::Many(vec![])); only an absent filter is null.
 	return json.Marshal(f.Values)
 }
 
@@ -3467,6 +3469,7 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 	}
 	options.ModelProviders = append([]string(nil), params.ModelProviders...)
 	if params.CWD != nil {
+		options.CWDSet = true
 		options.CWDs = normalizeThreadListCWDs(params.CWD.Values)
 	}
 	if params.SearchTerm != nil {

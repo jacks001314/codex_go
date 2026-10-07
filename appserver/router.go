@@ -3031,6 +3031,13 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 			r.repairStateThreadListing(options.Search != "")
 		}
 		page, err = r.listRecordsFromState(options)
+		if err != nil && params.UseStateDBOnly {
+			// Rust #51602 (`RolloutRecorder::list_threads_with_db_fallback`): a
+			// database-only listing that cannot query the state database fails
+			// with -32603 and Rust's "failed to list threads from state
+			// database" message rather than looking like exhausted history.
+			return nil, fmt.Errorf("failed to list threads from state database: %w", err)
+		}
 	} else {
 		records, readErr := r.store.AllRecords()
 		if readErr != nil {
