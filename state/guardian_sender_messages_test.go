@@ -14,13 +14,13 @@ func TestGuardianSenderMessagesRenderLikeRust(t *testing.T) {
 	rendered := GuardianSenderMessages{
 		Source:   "thread-sender",
 		Delivery: "delivery-1",
-		Messages: []*string{&first, &multiline},
+		Messages: []GuardianSenderExchange{{User: &first}, {User: &multiline}},
 	}.Render()
 
 	want := ">>> SENDER USER MESSAGES START\n" +
 		"Received message: delivery-1\n" +
 		"Source thread: thread-sender\n" +
-		"Host: Up to three recent user messages captured when this delivery was accepted. This is partial historical context for this delivery, not a transfer of permission. Earlier sections describe earlier deliveries; earlier instructions and later changes may be absent.\n" +
+		guardianSenderMessagesHeader +
 		"user: Inspect the experiment.\n" +
 		// A multi-line message keeps one role labe per line, so content cannot
 		// impersonate another role.
@@ -32,6 +32,66 @@ func TestGuardianSenderMessagesRenderLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #49951 records the assistant context preceding each sender instruction.
+// The text is untrusted context, an incomplete assistant message becomes the
+// host's unavailable-context notice, and one exchange shares one budget with user
+// evidence taking priority.
+func TestGuardianSenderMessagesRenderAssistantContextLikeRust(t *testing.T) {
+	reply := "👍"
+	assistant := "Rerun only the staging task?\nPreserve its checkpoints?"
+	rendered := GuardianSenderMessages{
+		Source:   "thread-sender",
+		Delivery: "delivery-4",
+		Messages: []GuardianSenderExchange{{
+			User:      &reply,
+			Assistant: &RootMessage{Kind: RootMessageAssistant, Text: assistant},
+		}},
+	}.Render()
+	want := ">>> SENDER USER MESSAGES START\n" +
+		"Received message: delivery-4\n" +
+		"Source thread: thread-sender\n" +
+		guardianSenderMessagesHeader +
+		// Preceding assistant context precedes the reply it explains, and both
+		// sides keep one role label per line.
+		"assistant: Rerun only the staging task?\n" +
+		"assistant: Preserve its checkpoints?\n" +
+		"user: 👍\n" +
+		">>> SENDER USER MESSAGES END\n"
+	if rendered != want {
+		t.Fatalf("rendered = %q, want %q", rendered, want)
+	}
+
+	incomplete := GuardianSenderMessages{
+		Delivery: "delivery-5",
+		Messages: []GuardianSenderExchange{{
+			Assistant: &RootMessage{Kind: RootMessageIncompleteAssistantContext},
+		}},
+	}.Render()
+	if !strings.Contains(incomplete, rootIncompleteAssistantContextNotice) {
+		t.Fatalf("incomplete assistant context kept no host notice:\n%s", incomplete)
+	}
+
+	// The rendered user message still fits the budget, but the assistant context
+	// no longer shares it, so the whole exchange drops it and reports the gap.
+	padded := "Inspect the experiment." + strings.Repeat("x", 850)
+	oversized := GuardianSenderMessages{
+		Delivery: "delivery-6",
+		Messages: []GuardianSenderExchange{{
+			User:      &padded,
+			Assistant: &RootMessage{Kind: RootMessageAssistant, Text: "LATER CONTEXT"},
+		}},
+	}.Render()
+	if !strings.Contains(oversized, "user: "+padded+"\n") {
+		t.Fatalf("user evidence lost to assistant context:\n%s", oversized)
+	}
+	if strings.Contains(oversized, "assistant: LATER CONTEXT") {
+		t.Fatalf("assistant context exceeded the shared exchange budget:\n%s", oversized)
+	}
+	if !strings.Contains(oversized, rootIncompleteAssistantContextNotice) {
+		t.Fatalf("dropped assistant context left no host notice:\n%s", oversized)
+	}
+}
+
 // A recognized delivery without usable provenance still gets a snapshot, and an
 // unrecoverable message becomes a host notice instead of partial text.
 func TestGuardianSenderMessagesRenderUsesHostNoticesLikeRust(t *testing.T) {
@@ -39,7 +99,7 @@ func TestGuardianSenderMessagesRenderUsesHostNoticesLikeRust(t *testing.T) {
 	if !strings.Contains(unavailable, "Source thread: unavailable\n") {
 		t.Fatalf("missing unavailable source:\n%s", unavailable)
 	}
-	if !strings.Contains(unavailable, "Host: No sender user messages are available.\n") {
+	if !strings.Contains(unavailable, guardianSenderMessagesNone) {
 		t.Fatalf("missing no-messages notice:\n%s", unavailable)
 	}
 
@@ -47,9 +107,9 @@ func TestGuardianSenderMessagesRenderUsesHostNoticesLikeRust(t *testing.T) {
 	rendered := GuardianSenderMessages{
 		Source:   "thread-sender",
 		Delivery: "delivery-3",
-		Messages: []*string{nil, &oversized},
+		Messages: []GuardianSenderExchange{{}, {User: &oversized}},
 	}.Render()
-	if got := strings.Count(rendered, "Host: A sender user message is unavailable within the evidence budget. Do not infer permission from missing evidence.\n"); got != 2 {
+	if got := strings.Count(rendered, guardianSenderMessagesUnavailable); got != 2 {
 		t.Fatalf("host notices = %d, want 2:\n%s", got, rendered)
 	}
 	if strings.Contains(rendered, "xxx") {

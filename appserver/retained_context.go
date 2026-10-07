@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	codexctx "codex_go/context"
 	"codex_go/features"
 	"codex_go/retainedctx"
 	"codex_go/rollout"
@@ -623,9 +622,19 @@ func retainedSenderCandidates(items []session.Item) bool {
 // messages travel with one delivery.
 const senderContextMessageLimit = 3
 
-// senderContextNamespaces are the trusted namespaces Rust's
-// `capture_sender_user_messages` accepts for a delegation delivery.
-var senderContextNamespaces = map[string]bool{"codex_app": true, "codex_tui": true}
+// senderContextDeliveryRecognized mirrors the namespace/name tuple Rust's
+// `capture_sender_user_messages` accepts: the Desktop and TUI delegation tool,
+// and the cloud-thread producer's compact delivery (#49951).
+func senderContextDeliveryRecognized(namespace string, name string) bool {
+	switch strings.TrimSpace(namespace) {
+	case "codex_app", "codex_tui":
+		return strings.TrimSpace(name) == "send_message_to_thread"
+	case "cloud_threads":
+		return strings.TrimSpace(name) == "send_message"
+	default:
+		return false
+	}
+}
 
 // captureSenderDeliveries attaches the host-observed sender snapshot to each
 // standalone delegation output in the batch, mirroring Rust's
@@ -670,19 +679,19 @@ func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverTh
 	if deliveryID == "" {
 		return nil, false
 	}
-	if strings.TrimSpace(item.Name) != "send_message_to_thread" || !senderContextNamespaces[strings.TrimSpace(item.Namespace)] {
+	if !senderContextDeliveryRecognized(item.Namespace, item.Name) {
 		return nil, false
 	}
 	output := firstNonEmpty(item.Text, stringValueFromMap(item.Data, "output"))
 	sourceThreadID := ""
-	if source, _, ok := codexctx.ParseDelegatedPrompt(output); ok {
+	if source, ok := senderDelegationSource(output); ok {
 		if source = strings.TrimSpace(source); source != "" && source != receiverThreadID {
 			sourceThreadID = source
 		}
 	}
 	fragment := state.GuardianSenderMessages{Source: sourceThreadID, Delivery: deliveryID}
 	if sourceThreadID != "" {
-		fragment.Messages = senderContextMessages(r.retainedContextForThread(sourceThreadID))
+		fragment.Messages = senderContextExchanges(r.retainedContextForThread(sourceThreadID))
 	}
 	snapshot := &retainedctx.SenderUserMessages{
 		ReceiverTurnID:    receiverTurnID,
@@ -693,24 +702,84 @@ func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverTh
 	return snapshot, true
 }
 
-// senderContextMessages mirrors Rust's sender lookup: up to three recent
-// complete local user messages in acceptance order.
-func senderContextMessages(context *retainedctx.RetainedContext) []*string {
+// senderDelegationSource extracts the source thread id from a
+// `<codex_delegation>` envelope. Rust's sender capture accepts both the compact
+// XML a cloud producer serializes and the indented form Desktop and the TUI
+// write, so a recognized delivery keeps its provenance either way (#49951).
+func senderDelegationSource(text string) (string, bool) {
+	inner, ok := strings.CutPrefix(text, "<codex_delegation>")
+	if !ok {
+		return "", false
+	}
+	inner, ok = strings.CutSuffix(inner, "</codex_delegation>")
+	if !ok {
+		return "", false
+	}
+	inner, ok = strings.CutPrefix(strings.TrimSpace(inner), "<source_thread_id>")
+	if !ok {
+		return "", false
+	}
+	source, rest, ok := strings.Cut(inner, "</source_thread_id>")
+	if !ok {
+		return "", false
+	}
+	rest, ok = strings.CutPrefix(strings.TrimSpace(rest), "<input>")
+	if !ok {
+		return "", false
+	}
+	if _, ok := strings.CutSuffix(rest, "</input>"); !ok {
+		return "", false
+	}
+	return source, true
+}
+
+// senderContextExchanges mirrors Rust's sender lookup: up to three recent local
+// user messages in acceptance order, each paired with the assistant message
+// recorded immediately before it.
+func senderContextExchanges(context *retainedctx.RetainedContext) []state.GuardianSenderExchange {
 	if context == nil {
 		return nil
 	}
-	var messages []*string
+	var exchanges []state.GuardianSenderExchange
+	var assistant *retainedctx.RetainedUserMessage
 	for _, entry := range context.OrderedEntries() {
-		if entry.Order.Inherited || entry.Entry.UserMessage == nil || !entry.Entry.UserMessage.Complete {
+		if entry.Order.Inherited {
 			continue
 		}
-		text := entry.Entry.UserMessage.Text
-		messages = append(messages, &text)
+		switch {
+		case entry.Entry.UserMessage != nil:
+			message := entry.Entry.UserMessage
+			var user *string
+			if message.Complete {
+				text := message.Text
+				user = &text
+			}
+			exchanges = append(exchanges, state.GuardianSenderExchange{
+				User:      user,
+				Assistant: retainedAssistantContext(assistant),
+			})
+			assistant = nil
+		case entry.Entry.AssistantMessage != nil:
+			assistant = entry.Entry.AssistantMessage
+		}
 	}
-	if len(messages) > senderContextMessageLimit {
-		messages = messages[len(messages)-senderContextMessageLimit:]
+	if len(exchanges) > senderContextMessageLimit {
+		exchanges = exchanges[len(exchanges)-senderContextMessageLimit:]
 	}
-	return messages
+	return exchanges
+}
+
+// retainedAssistantContext renders the recorded assistant adjacency: complete
+// text is untrusted context, and an incomplete message is the host notice that
+// some original conversational context is unavailable.
+func retainedAssistantContext(message *retainedctx.RetainedUserMessage) *state.RootMessage {
+	if message == nil {
+		return nil
+	}
+	if message.Complete {
+		return &state.RootMessage{Kind: state.RootMessageAssistant, Text: message.Text}
+	}
+	return &state.RootMessage{Kind: state.RootMessageIncompleteAssistantContext}
 }
 
 // mergeSessionItemHarnessMetadata merges fields into the item's harness
