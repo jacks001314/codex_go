@@ -133,7 +133,7 @@ func (c ComputerActivityCell) DisplayLines(width int) []string {
 	}
 	if hidden > 0 && active < 0 {
 		lines = append(lines, "  \u2502 "+previewComputerActivityText(
-			strconv.Itoa(hidden)+" more \u00b7 ctrl+t", max(width-4, 0)))
+			strconv.Itoa(hidden)+" more \u00b7 "+tui.ModifierLabelPrefix(tui.ControlKeyLabel())+"t", max(width-4, 0)))
 	}
 	return lines
 }

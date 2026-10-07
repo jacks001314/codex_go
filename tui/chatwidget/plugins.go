@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	pluginapi "codex_go/plugin"
+	"codex_go/tui"
 	"codex_go/utils"
 )
 
@@ -1078,13 +1079,18 @@ func PluginSelectionItemsForEntries(entries []PluginCatalogEntry, preferredLocal
 }
 
 func PluginsPopupHintLine(canRemoveMarketplace bool, canUpgradeMarketplace bool) string {
+	// Rust #49804 (chatwidget/plugin_catalog.rs): the upgrade/remove chords render
+	// through the shared key-label table (^u / ^r on Linux, ⌃u / ⌃r on macOS).
+	ctrl := tui.ModifierLabelPrefix(tui.ControlKeyLabel())
+	upgrade := ctrl + "u upgrade"
+	remove := ctrl + "r remove"
 	switch {
 	case canRemoveMarketplace && canUpgradeMarketplace:
-		return "ctrl+u upgrade" + pluginSummarySeparator + "ctrl+r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return upgrade + pluginSummarySeparator + remove + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	case canRemoveMarketplace:
-		return "ctrl+r remove" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return remove + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	case canUpgradeMarketplace:
-		return "ctrl+u upgrade" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
+		return upgrade + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "esc close"
 	default:
 		return "←/→ tabs" + pluginSummarySeparator + "enter details" + pluginSummarySeparator + "space toggle" + pluginSummarySeparator + "esc close"
 	}

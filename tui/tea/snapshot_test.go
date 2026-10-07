@@ -136,7 +136,7 @@ Enter send | Ctrl+J newline | Ctrl+G editor | Ctrl+C quit | /help commands`)
 		if !strings.HasPrefix(view, "Resume a previous session\n\nType to search") {
 			t.Fatalf("session picker should start at the top of its full-screen surface:\n%s", view)
 		}
-		for _, want := range []string{"Newer Session", "1 / 1", "enter resume", "ctrl+o comfy"} {
+		for _, want := range []string{"Newer Session", "1 / 1", "enter resume", codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "o comfy"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("session picker snapshot missing %q:\n%s", want, view)
 			}

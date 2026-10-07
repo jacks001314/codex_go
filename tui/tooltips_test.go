@@ -55,12 +55,15 @@ func TestDefaultTooltipsMatchRustPlatformChain(t *testing.T) {
 func TestResolvedTooltipsRenderRustSnapshotLabels(t *testing.T) {
 	resolved := ResolvedTooltips(NewKeymapConfig())
 	alt := AltKeyLabel()
+	// Rust #49804: control renders as the platform label (^ on Linux, \u2303 on
+	// macOS), so the Rust snapshot labels are composed from the shared table.
+	ctrl := ModifierLabelPrefix(ControlKeyLabel())
 	want := []string{
 		"Press `` tab `` to queue a message when a task is running; otherwise it sends immediately (except `!`).",
-		"Use **/copy** or press `` ctrl+o `` to copy the latest agent response as Markdown.",
-		"Press `` ctrl+t `` to open the full transcript.",
-		"Press `` ctrl+g `` to edit your current draft in an external editor.",
-		"Press `` ctrl+r `` to search previously entered prompts.",
+		"Use **/copy** or press `` " + ctrl + "o `` to copy the latest agent response as Markdown.",
+		"Press `` " + ctrl + "t `` to open the full transcript.",
+		"Press `` " + ctrl + "g `` to edit your current draft in an external editor.",
+		"Press `` " + ctrl + "r `` to search previously entered prompts.",
 		"For models with adjustable reasoning, press `` " + alt + "+. `` to increase reasoning effort or `` " + alt + "+, `` to decrease it.",
 	}
 	for _, expected := range want {
@@ -297,7 +300,9 @@ func dateForTooltipTest(value string) time.Time {
 func TestRenderTooltipSubstitutesConfiguredBindingsLikeRust(t *testing.T) {
 	defaults := NewKeymapConfig()
 	got, ok := RenderTooltip("Press {key:global.open_transcript} to open the full transcript.", defaults)
-	if !ok || got != "Press `` ctrl+t `` to open the full transcript." {
+	// Rust #49804: the control label follows the platform table (^ on Linux).
+	want := "Press `` " + ModifierLabelPrefix(ControlKeyLabel()) + "t `` to open the full transcript."
+	if !ok || got != want {
 		t.Fatalf("default tip = %q, %v", got, ok)
 	}
 

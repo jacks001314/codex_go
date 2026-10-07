@@ -54,10 +54,12 @@ func (b KeyBinding) IsPress(message bubbletea.KeyMsg) bool {
 func (b KeyBinding) Label() string {
 	var label strings.Builder
 	if IsCtrlKeyType(b.Type) {
-		label.WriteString("ctrl+")
+		// Rust #49804: the control label is platform-specific (^ on Linux,
+		// ⌃ on macOS, ctrl elsewhere) and follows the #49136 separator rule.
+		label.WriteString(tui.ModifierLabelPrefix(tui.ControlKeyLabel()))
 	}
 	if b.Shift {
-		label.WriteString("shift+")
+		label.WriteString(tui.ModifierLabelPrefix(tui.ShiftKeyLabel()))
 	}
 	if b.Alt {
 		// Rust #49136: the option glyph attaches without a `+`.

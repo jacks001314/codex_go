@@ -451,7 +451,7 @@ func (m *Model) sideContextLabel() string {
 	if statusLabel := m.activeSide.ParentSideStatus.label(true); statusLabel != "" {
 		parts = append(parts, statusLabel)
 	}
-	parts = append(parts, "ctrl+/ to switch", "ctrl+c to close")
+	parts = append(parts, "ctrl+/ to switch", codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"c to close")
 	return "Side " + strings.Join(parts, " - ")
 }
 

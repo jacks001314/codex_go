@@ -61,7 +61,7 @@ func TestFooterLinesStatusAgentAndShortcutOverlayMatchRustCore(t *testing.T) {
 		"ctrl+r search history",
 		"ctrl+t to view transcript",
 		"ctrl+g to edit in external editor",
-		"shift+tab to change mode",
+		tui.ModifierLabelPrefix(tui.ShiftKeyLabel()) + "tab to change mode",
 		"ctrl+c to exit",
 		"customize shortcuts with /keymap",
 	} {
@@ -142,7 +142,7 @@ func TestFooterStatusIndicatorsMatchRustText(t *testing.T) {
 	if got, ok := GoalStatusIndicatorLine(&FooterGoalStatusIndicator{Kind: GoalStatusBlocked}); !ok || got != "Goal stalled (/goal resume)" {
 		t.Fatalf("stalled goal = %q ok=%v", got, ok)
 	}
-	if got := StatusLineRightIndicatorLine(CollaborationModePlan, active, true, true); got != "Plan mode (shift+tab to cycle)"+FooterContextJoiner+"IDE context" {
+	if got := StatusLineRightIndicatorLine(CollaborationModePlan, active, true, true); got != "Plan mode ("+tui.ModifierLabelPrefix(tui.ShiftKeyLabel())+"tab to cycle)"+FooterContextJoiner+"IDE context" {
 		t.Fatalf("mode right indicator = %q", got)
 	}
 	if got := StatusLineRightIndicatorLine("", active, true, false); got != "Pursuing goal (10K / 20K)"+FooterContextJoiner+"IDE context" {
@@ -175,4 +175,41 @@ func footerContainsLine(lines []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Rust #49804 (d2f2c40095, codex-rs/tui/src/bottom_pane/footer.rs): the
+// collaboration-mode cycle hint no longer hard-codes "shift+tab"; it renders
+// the modifier through the shared key-label table, so Linux keeps
+// `shift+tab to cycle` while macOS shows the shift glyph. Mirrors the Rust
+// assertions in `footer_mode_indicator_narrow_overlap_hides`.
+func TestFooterModeCycleHintUsesPlatformShiftLabelLikeRust(t *testing.T) {
+	shift := tui.ModifierLabelPrefix(tui.ShiftKeyLabel())
+	// The hint only changes text on macOS; assert the darwin cell of the same
+	// table so the platform link is explicit.
+	if mac := tui.ModifierLabelPrefix(tui.ModifierKeyLabelForPlatform(tui.KeyModifierShift, "darwin")); mac != "\u21e7" {
+		t.Fatalf("darwin shift label = %q", mac)
+	}
+	if got, want := FooterModeCycleHint, shift+"tab to cycle"; got != want {
+		t.Fatalf("cycle hint = %q, want %q", got, want)
+	}
+	if got, want := CollaborationModeLabel(CollaborationModePlan, true), "Plan mode ("+shift+"tab to cycle)"; got != want {
+		t.Fatalf("plan label = %q, want %q", got, want)
+	}
+	if got := CollaborationModeLabel(CollaborationModePlan, false); got != "Plan mode" {
+		t.Fatalf("plan label without cycle hint = %q", got)
+	}
+	overlay := FooterShortcutOverlayLines(FooterProps{CollaborationModesEnabled: true})
+	want := shift + "tab to change mode"
+	found := false
+	for _, line := range overlay {
+		if line == want {
+			found = true
+		}
+		if line == "shift+tab to change mode" && want != line {
+			t.Fatalf("overlay still hard-codes shift+tab: %#v", overlay)
+		}
+	}
+	if !found {
+		t.Fatalf("overlay missing %q: %#v", want, overlay)
+	}
 }

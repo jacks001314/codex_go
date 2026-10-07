@@ -3,6 +3,8 @@ package historycell
 import (
 	"strings"
 	"testing"
+
+	"codex_go/tui"
 )
 
 func computerCall(id string, title string, result *McpToolResult) McpToolCallCell {
@@ -78,7 +80,7 @@ func TestComputerActivityActiveAndFailurePreviews(t *testing.T) {
 	if !strings.Contains(joined, "Captured screenshot \u00b7 Type") {
 		t.Fatalf("screenshot preview missing:\n%s", joined)
 	}
-	if !strings.Contains(joined, "2 more \u00b7 ctrl+t") {
+	if !strings.Contains(joined, "2 more \u00b7 "+tui.ModifierLabelPrefix(tui.ControlKeyLabel())+"t") {
 		t.Fatalf("hidden-rows hint missing:\n%s", joined)
 	}
 
@@ -113,5 +115,25 @@ func TestComputerActivityTranscriptAndInterruption(t *testing.T) {
 	}
 	if joined := strings.Join(cell.DisplayLines(80), "\n"); !strings.Contains(joined, "Failed: Type") {
 		t.Fatalf("interrupted call should preview as failed:\n%s", joined)
+	}
+}
+
+// Rust #49804 (d2f2c40095, codex-rs/tui/src/history_cell/computer_activity.rs):
+// the hidden-rows hint renders ctrl+t through the shared key-label table, so
+// Linux shows ^t while macOS shows the control glyph. Mirrors the hidden-rows
+// assertion of the Rust computer-activity preview tests.
+func TestComputerActivityHiddenRowsHintUsesPlatformControlLabelLikeRust(t *testing.T) {
+	ctrl := tui.ModifierLabelPrefix(tui.ControlKeyLabel())
+	var cell ComputerActivityCell
+	for _, id := range []string{"cua-1", "cua-2", "cua-3", "cua-4", "cua-5"} {
+		cell.Complete(computerCall(id, "Click", nil), McpToolResult{Content: []string{"ok"}})
+	}
+	joined := strings.Join(cell.DisplayLines(80), "\n")
+	want := "more \u00b7 " + ctrl + "t"
+	if !strings.Contains(joined, want) {
+		t.Fatalf("hidden-rows hint missing %q:\n%s", want, joined)
+	}
+	if ctrl != "ctrl+" && strings.Contains(joined, "more \u00b7 ctrl+t") {
+		t.Fatalf("hidden-rows hint still hard-codes ctrl+t:\n%s", joined)
 	}
 }

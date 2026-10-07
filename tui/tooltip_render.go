@@ -162,7 +162,7 @@ func keybindingKeyLabel(part string) string {
 	for _, modifier := range []struct {
 		name  string
 		label string
-	}{{"ctrl", "ctrl"}, {"shift", "shift"}, {"alt", AltKeyLabel()}} {
+	}{{"ctrl", ControlKeyLabel()}, {"shift", ShiftKeyLabel()}, {"alt", AltKeyLabel()}} {
 		if modifiers[modifier.name] {
 			// Rust #49136: glyph modifier labels attach without a `+`.
 			label.WriteString(ModifierLabelPrefix(modifier.label))

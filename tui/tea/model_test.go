@@ -7532,7 +7532,7 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 		"2d ago",
 		"enter resume",
 		"esc exit",
-		"ctrl+o comfy",
+		codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "o comfy",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("resume picker missing %q:\n%s", want, view)
@@ -7630,7 +7630,7 @@ func TestModelResumePickerUsesConfiguredDensePreviewRows(t *testing.T) {
 	typeText(t, model, "/resume")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	for _, want := range []string{"18m ago", "请你写一段快速排序的代码使用go", "ctrl+o comfy"} {
+	for _, want := range []string{"18m ago", "请你写一段快速排序的代码使用go", codextui.ModifierLabelPrefix(codextui.ControlKeyLabel()) + "o comfy"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dense resume picker missing %q:\n%s", want, view)
 		}
@@ -7695,7 +7695,7 @@ func TestModelResumeCommandSearchFilterAndDirectMatchRust(t *testing.T) {
 		t.Fatalf("Tab+Right should toggle sort toolbar:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyCtrlO))
-	if view := model.View(); !strings.Contains(view, "ctrl+o dense") {
+	if view := model.View(); !strings.Contains(view, codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())+"o dense") {
 		t.Fatalf("Ctrl+O should toggle comfortable view footer:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyEsc))

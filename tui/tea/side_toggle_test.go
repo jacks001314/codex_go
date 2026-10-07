@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strings"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -69,5 +70,29 @@ func TestSideTogglePreservesParentAndSideSnapshots(t *testing.T) {
 	}
 	if model.activeSide == nil {
 		t.Fatal("toggle closed the side conversation")
+	}
+}
+
+// Rust #49804 (d2f2c40095, codex-rs/tui/src/app/side.rs side_context_label):
+// the side-conversation context label builds its close hint from the shared
+// key-label table, so Linux shows ^c while macOS shows the control glyph.
+// Mirrors the Rust `Side from main thread · ⌃/ to switch · ⌃c to close`
+// expectations in codex-rs/tui/src/app/tests.rs.
+func TestSideContextLabelUsesPlatformControlLabelLikeRust(t *testing.T) {
+	ctrl := codextui.ModifierLabelPrefix(codextui.ControlKeyLabel())
+	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 24})
+	model.activeSide = &activeSideConversation{ShowingSide: true}
+
+	got := model.sideContextLabel()
+	if !strings.Contains(got, "ctrl+/ to switch") || !strings.Contains(got, ctrl+"c to close") {
+		t.Fatalf("side context label = %q, want close hint %q", got, ctrl+"c to close")
+	}
+	if ctrl != "ctrl+" && strings.Contains(got, "ctrl+c to close") {
+		t.Fatalf("side context label still hard-codes ctrl+c: %q", got)
+	}
+
+	model.activeSide.ShowingSide = false
+	if got := model.sideContextLabel(); got != "ctrl+/ for side" {
+		t.Fatalf("hidden side label = %q", got)
 	}
 }

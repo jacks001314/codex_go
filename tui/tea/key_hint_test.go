@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+
+	"codex_go/tui"
 )
 
 func TestKeyBindingMatchesShiftedUppercase(t *testing.T) {
@@ -25,11 +27,16 @@ func TestKeyBindingLabelsAndPlainTextBoundary(t *testing.T) {
 	if got := AltKey('x').Label(); got != "alt+x" {
 		t.Fatalf("alt label = %q", got)
 	}
-	if got := PlainKey(bubbletea.KeyCtrlT).Label(); got != "ctrl+t" {
-		t.Fatalf("ctrl label = %q", got)
+	// Rust #49804: control (and shift) render through the platform modifier
+	// table, so Linux shows `^t` while macOS shows `\u2303t`.
+	ctrl := tui.ModifierLabelPrefix(tui.ControlKeyLabel())
+	if got := PlainKey(bubbletea.KeyCtrlT).Label(); got != ctrl+"t" {
+		t.Fatalf("ctrl label = %q, want %q", got, ctrl+"t")
 	}
-	if got := (KeyBinding{Type: bubbletea.KeyCtrlT, Shift: true, Alt: true}).Label(); got != "ctrl+shift+"+AltKeyLabel()+"+t" {
-		t.Fatalf("chord label = %q", got)
+	shift := tui.ModifierLabelPrefix(tui.ShiftKeyLabel())
+	wantChord := ctrl + shift + tui.ModifierLabelPrefix(AltKeyLabel()) + "t"
+	if got := (KeyBinding{Type: bubbletea.KeyCtrlT, Shift: true, Alt: true}).Label(); got != wantChord {
+		t.Fatalf("chord label = %q, want %q", got, wantChord)
 	}
 	if got := PlainKey(bubbletea.KeyUp).Label(); got != "\u2191" {
 		t.Fatalf("arrow label = %q", got)

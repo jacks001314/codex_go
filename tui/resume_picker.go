@@ -615,17 +615,20 @@ func (s *SessionPickerState) FooterLines(width int, existingSession bool) []stri
 		densityWide = "comfortable view"
 		densityCompact = "comfy"
 	}
+	// Rust #49804 (resume_picker.rs): the ctrl chords of the picker footer render
+	// through the shared key-label table (^ on Linux, ⌃ on macOS).
+	ctrl := ModifierLabelPrefix(ControlKeyLabel())
 	if width > 0 && width < 120 {
 		return []string{
 			separator,
-			"enter " + s.Action.Label() + "   esc " + escCompact + "   ctrl+c " + ctrlC + "   tab focus   \u2190/\u2192 option",
-			"ctrl+o " + densityCompact + "   ctrl+t preview   ctrl+e exp   \u2191/\u2193 browse",
+			"enter " + s.Action.Label() + "   esc " + escCompact + "   " + ctrl + "c " + ctrlC + "   tab focus   \u2190/\u2192 option",
+			ctrl + "o " + densityCompact + "   " + ctrl + "t preview   " + ctrl + "e exp   \u2191/\u2193 browse",
 		}
 	}
 	return []string{
 		separator,
-		"enter " + s.Action.Label() + "   esc " + escWide + "   ctrl+c " + ctrlC + "   tab focus sort/filter   \u2190/\u2192 change option",
-		"ctrl+o " + densityWide + "   ctrl+t transcript   ctrl+e expand   \u2191/\u2193 browse",
+		"enter " + s.Action.Label() + "   esc " + escWide + "   " + ctrl + "c " + ctrlC + "   tab focus sort/filter   \u2190/\u2192 change option",
+		ctrl + "o " + densityWide + "   " + ctrl + "t transcript   " + ctrl + "e expand   \u2191/\u2193 browse",
 	}
 }
 

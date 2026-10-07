@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pluginapi "codex_go/plugin"
+	"codex_go/tui"
 )
 
 func TestMarketplaceProductLabelsAndDisplayNamesMatchRust(t *testing.T) {
@@ -169,7 +170,7 @@ func TestPluginCatalogPopupModelMatchesRustTabsAndSelection(t *testing.T) {
 		t.Fatalf("curated tab = %#v", curated)
 	}
 	localOne := pluginCatalogModelTab(model, MarketplaceTabIDFromPath(localPathOne))
-	if localOne == nil || !strings.Contains(localOne.FooterHint, "ctrl+u upgrade") || !strings.Contains(localOne.FooterHint, "ctrl+r remove") {
+	if localOne == nil || !strings.Contains(localOne.FooterHint, tui.ModifierLabelPrefix(tui.ControlKeyLabel())+"u upgrade") || !strings.Contains(localOne.FooterHint, tui.ModifierLabelPrefix(tui.ControlKeyLabel())+"r remove") {
 		t.Fatalf("local one footer = %#v", localOne)
 	}
 	if len(localOne.Items) != 1 || localOne.Items[0].Toggle == nil || !localOne.Items[0].Toggle.IsOn || !strings.Contains(localOne.Items[0].SelectedDescription, "Space to disable; Enter view details.") {
@@ -456,4 +457,32 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Rust #49804 (d2f2c40095, codex-rs/tui/src/chatwidget/plugin_catalog.rs
+// plugins_popup_hint_line): the plugin-catalog footer builds upgrade/remove
+// hints from the shared key-label table, so Linux shows ^u/^r while macOS
+// shows the control glyph. Mirrors the Rust footer hints of
+// `plugins_popup_hint_line`.
+func TestPluginsPopupHintUsesPlatformControlLabelLikeRust(t *testing.T) {
+	ctrl := tui.ModifierLabelPrefix(tui.ControlKeyLabel())
+	both := PluginsPopupHintLine(true, true)
+	if !strings.Contains(both, ctrl+"u upgrade") || !strings.Contains(both, ctrl+"r remove") {
+		t.Fatalf("both-actions footer = %q", both)
+	}
+	removeOnly := PluginsPopupHintLine(true, false)
+	if !strings.Contains(removeOnly, ctrl+"r remove") || strings.Contains(removeOnly, "upgrade") {
+		t.Fatalf("remove-only footer = %q", removeOnly)
+	}
+	upgradeOnly := PluginsPopupHintLine(false, true)
+	if !strings.Contains(upgradeOnly, ctrl+"u upgrade") || strings.Contains(upgradeOnly, "remove") {
+		t.Fatalf("upgrade-only footer = %q", upgradeOnly)
+	}
+	none := PluginsPopupHintLine(false, false)
+	if strings.Contains(none, "upgrade") || strings.Contains(none, "remove") {
+		t.Fatalf("no-action footer = %q", none)
+	}
+	if ctrl != "ctrl+" && strings.Contains(both, "ctrl+u") {
+		t.Fatalf("footer still hard-codes ctrl+u: %q", both)
+	}
 }

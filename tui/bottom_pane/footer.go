@@ -10,13 +10,17 @@ import (
 // Rust parity subset: codex-rs/tui/src/bottom_pane/footer.rs.
 
 const (
-	FooterModeCycleHint   = "shift+tab to cycle"
 	FooterContextGapCols  = 1
 	FooterContextJoiner   = " \u00b7 "
 	DefaultQuitShortcut   = "ctrl+c"
 	DefaultQueueShortcut  = "tab"
 	DefaultToggleShortcut = "?"
 )
+
+// FooterModeCycleHint is the collaboration-mode cycle hint. Rust #49804
+// (bottom_pane/footer.rs) renders the modifier through the shared key-label
+// table, so Linux keeps `shift+tab to cycle` and macOS shows `⇧tab to cycle`.
+var FooterModeCycleHint = tui.ModifierLabelPrefix(tui.ShiftKeyLabel()) + "tab to cycle"
 
 type FooterState struct {
 	Left  string
@@ -233,7 +237,7 @@ func FooterShortcutOverlayLines(props FooterProps) []string {
 		props.KeyHints.ReasoningUp + " reasoning up",
 	}
 	if props.CollaborationModesEnabled {
-		lines = append(lines, "shift+tab to change mode")
+		lines = append(lines, tui.ModifierLabelPrefix(tui.ShiftKeyLabel())+"tab to change mode")
 	}
 	lines = append(lines, props.KeyHints.ShowTranscript+" to view transcript")
 	lines = append(lines, "")
