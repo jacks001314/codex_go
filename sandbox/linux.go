@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime"
 
+	"codex_go/sandbox/sandboxpath"
 	"codex_go/utils"
 )
 
@@ -14,6 +15,14 @@ import (
 // inspected: the message itself points at the bundled bubblewrap the sandbox
 // falls back to.
 func SystemBwrapWarning(profile *PermissionProfile) string {
+	return SystemBwrapWarningForCWD(profile, currentWorkingDirectory())
+}
+
+// SystemBwrapWarningForCWD is SystemBwrapWarning with the policy working
+// directory the sandbox resolves writable roots against (Rust #51211 passes
+// `config.cwd`). The launcher probe uses the command's effective profile, so a
+// bwrap inside a writable root no longer counts as the system launcher.
+func SystemBwrapWarningForCWD(profile *PermissionProfile, sandboxPolicyCWD string) string {
 	if runtime.GOOS != "linux" {
 		// The non-Linux Rust build has no bubblewrap warning at all.
 		return ""
@@ -22,10 +31,23 @@ func SystemBwrapWarning(profile *PermissionProfile) string {
 		return ""
 	}
 	return systemBwrapWarning(
-		findSystemBwrapInPath(os.Getenv("PATH"), currentWorkingDirectory()),
+		findSystemBwrapInPath(os.Getenv("PATH"), currentWorkingDirectory(), preSandboxFilesystemPolicy(profile, sandboxPolicyCWD)),
 		utils.IsWSL1(),
 		func(path string) bool { return probeSystemBwrapUserNamespaces(path, systemBwrapProbeTimeout) },
 	)
+}
+
+// preSandboxFilesystemPolicy mirrors the filesystem-policy view Rust
+// `PermissionProfile::file_system_sandbox_policy` hands the pre-sandbox PATH
+// filter: a full-disk-write policy enumerates no writable roots.
+func preSandboxFilesystemPolicy(profile *PermissionProfile, sandboxPolicyCWD string) sandboxpath.FilesystemPolicy {
+	if profile == nil || profile.SandboxPolicy == nil {
+		return sandboxpath.FilesystemPolicy{}
+	}
+	if profile.SandboxPolicy.HasFullDiskWriteAccess() {
+		return sandboxpath.FilesystemPolicy{FullDiskWriteAccess: true}
+	}
+	return sandboxpath.FilesystemPolicy{WritableRoots: profile.SandboxPolicy.GetWritableRootsWithCWD(sandboxPolicyCWD)}
 }
 
 func currentWorkingDirectory() string {

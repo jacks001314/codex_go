@@ -792,7 +792,10 @@ func buildInnerLinuxSandboxCommand(cmd *linuxSandboxCommand) ([]string, error) {
 }
 
 func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
-	launcher := resolveBwrapLauncher()
+	// Rust #51211 selects the launcher with the command's effective permissions
+	// before any proc-mount preflight, which uses a synthetic policy with no
+	// writable roots.
+	launcher := resolveBwrapLauncher(cmd.PermissionProfile, cmd.SandboxPolicyCWD)
 	if !launcher.available() {
 		return bwrapUnavailableError()
 	}

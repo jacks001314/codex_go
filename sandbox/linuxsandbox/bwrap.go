@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"codex_go/install"
+	"codex_go/sandbox/sandboxpath"
 )
 
 // Bubblewrap launcher selection and argv preparation (Rust
@@ -90,6 +91,19 @@ func selectBwrapLauncher(lookPath func(string) (string, error), probe func(strin
 		}
 	}
 	return bwrapLauncher{}
+}
+
+// selectBwrapLauncherForPolicy mirrors Rust preferred_bwrap_launcher: the first
+// system bwrap the command's own filesystem policy leaves eligible wins, and the
+// packaged launcher is the fallback (Rust #51211).
+func selectBwrapLauncherForPolicy(policy sandboxpath.FilesystemPolicy, pathEnv string, cwd string, probe func(string) (bwrapCapabilities, bool), bundled func() (string, bool)) bwrapLauncher {
+	lookPath := func(program string) (string, error) {
+		if found := sandboxpath.FindExecutableInPath(program, pathEnv, cwd, policy); found != "" {
+			return found, nil
+		}
+		return "", os.ErrNotExist
+	}
+	return selectBwrapLauncher(lookPath, probe, bundled)
 }
 
 // injectAsPid1 mirrors Rust exec_bwrap: a sandbox that unshares the pid

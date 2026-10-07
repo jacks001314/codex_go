@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"codex_go/sandbox/sandboxpath"
 )
 
 // TestShouldRequirePlatformSandboxLikeRust mirrors Rust
@@ -119,13 +121,16 @@ func TestFindSystemBwrapInPathLikeRust(t *testing.T) {
 		// behaviour under test on every host.
 		t.Skip("the system launcher is named bwrap on Unix only")
 	}
-	if got := findSystemBwrapInPath(binDir, directory); got != "" {
+	// A read-only policy grants no writes, so only the cwd exclusion can skip a
+	// candidate here.
+	noWrites := sandboxpath.FilesystemPolicy{}
+	if got := findSystemBwrapInPath(binDir, directory, noWrites); got != "" {
 		t.Fatalf("findSystemBwrapInPath(shadowed) = %q, want the project copy skipped", got)
 	}
-	if got := findSystemBwrapInPath(binDir, filepath.Join(directory, "elsewhere")); got == "" {
+	if got := findSystemBwrapInPath(binDir, filepath.Join(directory, "elsewhere"), noWrites); got == "" {
 		t.Fatal("findSystemBwrapInPath(outside cwd) skipped a legitimate launcher")
 	}
-	if got := findSystemBwrapInPath("", directory); got != "" {
+	if got := findSystemBwrapInPath("", directory, noWrites); got != "" {
 		t.Fatalf("findSystemBwrapInPath(empty PATH) = %q, want none", got)
 	}
 }
@@ -133,16 +138,44 @@ func TestFindSystemBwrapInPathLikeRust(t *testing.T) {
 // TestCanonicalHelpersKeepAbsolutes pins the small path helpers the search uses.
 func TestCanonicalHelpersKeepAbsolutes(t *testing.T) {
 	directory := t.TempDir()
-	if got := canonicalDirectory(directory); !filepath.IsAbs(got) || !strings.HasSuffix(got, filepath.Base(directory)) {
-		t.Fatalf("canonicalDirectory(%q) = %q", directory, got)
+	if got := sandboxpath.CanonicalDirectory(directory); !filepath.IsAbs(got) || !strings.HasSuffix(got, filepath.Base(directory)) {
+		t.Fatalf("CanonicalDirectory(%q) = %q", directory, got)
 	}
-	if got := canonicalDirectory(""); got != "" {
-		t.Fatalf("canonicalDirectory(empty) = %q, want empty", got)
+	if got := sandboxpath.CanonicalDirectory(""); got != "" {
+		t.Fatalf("CanonicalDirectory(empty) = %q, want empty", got)
 	}
-	if !pathIsInside(filepath.Join(directory, "child"), directory) {
-		t.Fatal("pathIsInside(child) = false")
+	if !sandboxpath.PathWithin(filepath.Join(directory, "child"), directory) {
+		t.Fatal("PathWithin(child) = false")
 	}
-	if pathIsInside(directory, filepath.Join(directory, "child")) {
-		t.Fatal("pathIsInside(parent) = true")
+	if sandboxpath.PathWithin(directory, filepath.Join(directory, "child")) {
+		t.Fatal("PathWithin(parent) = true")
+	}
+}
+
+// TestFindSystemBwrapInPathSkipsWritableRootLikeRust wires the startup-warning
+// probe to the filesystem policy (Rust #51211): a bwrap inside the profile's own
+// writable root is skipped, while a read-only profile still finds it.
+func TestFindSystemBwrapInPathSkipsWritableRootLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the system launcher is named bwrap on Unix only")
+	}
+	workspace := t.TempDir()
+	binDir := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("x"), 0o755); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	workspaceWrite := WorkspaceWritePermissionProfile()
+	writable := preSandboxFilesystemPolicy(&workspaceWrite, workspace)
+	if got := findSystemBwrapInPath(binDir, "/", writable); got != "" {
+		t.Fatalf("findSystemBwrapInPath(writable root) = %q, want the writable copy skipped", got)
+	}
+	readOnly := ReadOnlyPermissionProfile()
+	if got := findSystemBwrapInPath(binDir, "/", preSandboxFilesystemPolicy(&readOnly, workspace)); got == "" {
+		t.Fatal("findSystemBwrapInPath(read-only profile) skipped a legitimate candidate")
 	}
 }

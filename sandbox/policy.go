@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"codex_go/sandbox/sandboxpath"
 )
 
 type AskForApproval string
@@ -193,11 +195,11 @@ func (p *SandboxPolicy) MarshalJSON() ([]byte, error) {
 	}
 }
 
-type WritableRoot struct {
-	Root                   string
-	ReadOnlySubpaths       []string
-	ProtectedMetadataNames []string
-}
+// WritableRoot mirrors Rust `protocol::WritableRoot`: a writable root with the
+// subpaths that stay read-only even when the root is writable. The type lives in
+// the leaf package `sandboxpath` because the Linux sandbox helper shares it and
+// cannot import this package.
+type WritableRoot = sandboxpath.WritableRoot
 
 func NewReadOnlyPolicy() *SandboxPolicy {
 	return &SandboxPolicy{Kind: SandboxReadOnly}
@@ -330,76 +332,9 @@ func (p *SandboxPolicy) GetWritableRootsWithCWD(cwd string) []WritableRoot {
 	return buildWritableRoots(roots)
 }
 
-func (r *WritableRoot) IsPathWritable(path string) bool {
-	if r == nil {
-		return false
-	}
-	root := cleanAbs(r.Root)
-	target := cleanAbs(path)
-	if !sameOrWithin(target, root) {
-		return false
-	}
-	for _, subpath := range r.ReadOnlySubpaths {
-		if sameOrWithin(target, cleanAbs(subpath)) {
-			return false
-		}
-	}
-	if r.PathContainsProtectedMetadataName(target) {
-		return false
-	}
-	return true
-}
-
-func (r *WritableRoot) PathContainsProtectedMetadataName(path string) bool {
-	if r == nil {
-		return false
-	}
-	root := cleanAbs(r.Root)
-	target := cleanAbs(path)
-	rel, err := filepath.Rel(root, target)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return false
-	}
-	first := rel
-	if idx := strings.IndexAny(rel, `/\`); idx >= 0 {
-		first = rel[:idx]
-	}
-	for _, name := range r.ProtectedMetadataNames {
-		if first == name {
-			return true
-		}
-	}
-	return false
-}
-
+// buildWritableRoots mirrors the writable-root set the sandbox mounts.
 func buildWritableRoots(paths []string) []WritableRoot {
-	seen := map[string]bool{}
-	var out []WritableRoot
-	for _, path := range paths {
-		path = cleanAbs(path)
-		if path == "" || seen[path] {
-			continue
-		}
-		seen[path] = true
-		out = append(out, WritableRoot{
-			Root:                   path,
-			ReadOnlySubpaths:       protectedSubpaths(path),
-			ProtectedMetadataNames: []string{".git", ".agents", ".gcode", ".aws"},
-		})
-	}
-	return out
-}
-
-func protectedSubpaths(root string) []string {
-	return []string{
-		filepath.Join(root, ".git"),
-		filepath.Join(root, ".agents"),
-		filepath.Join(root, ".gcode"),
-		// AWS profiles can select credential helpers that the application
-		// executes, so a writable root keeps `.aws` protected by default
-		// (Rust #48176).
-		filepath.Join(root, ".aws"),
-	}
+	return sandboxpath.WritableRootsWithProtectedSubpaths(paths)
 }
 
 func cleanAbs(path string) string {

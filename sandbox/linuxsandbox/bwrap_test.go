@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"codex_go/sandbox/sandboxpath"
 )
 
 // TestParseBwrapHelpLikeRust mirrors Rust system_bwrap_capabilities: a launcher
@@ -152,4 +154,46 @@ func TestBundledBwrapResourceFallsBackToTheExecutableDirectory(t *testing.T) {
 		}
 	}
 	t.Fatalf("bundledBwrapCandidates() = %#v, want the executable-directory candidate %q", candidates, want)
+}
+
+// TestSelectBwrapLauncherForPolicySkipsWritableCandidateLikeRust mirrors Rust
+// linux-sandbox/tests/suite/bwrap_path.rs (Rust #51211): a `bwrap` the command's
+// own filesystem policy can replace must never be probed or launched, so the
+// packaged launcher wins. The control case proves the probe would otherwise run.
+func TestSelectBwrapLauncherForPolicySkipsWritableCandidateLikeRust(t *testing.T) {
+	workspace := t.TempDir()
+	bin := filepath.Join(workspace, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	marker := filepath.Join(t.TempDir(), "probe-marker")
+	stub := filepath.Join(bin, "bwrap")
+	stubBody := "#!/bin/sh\n: > \"$BWRAP_PROBE_MARKER\"\nprintf '%s\\n' '--as-pid-1 --perms --argv0'\n"
+	if err := os.WriteFile(stub, []byte(stubBody), 0o755); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+	t.Setenv("BWRAP_PROBE_MARKER", marker)
+	bundled := func() (string, bool) { return "/pkg/codex-resources/bwrap", true }
+
+	// The writable-root policy leaves the stub neither probed nor selected.
+	writable := sandboxpath.FilesystemPolicy{
+		WritableRoots: sandboxpath.WritableRootsWithProtectedSubpaths([]string{workspace}),
+	}
+	launcher := selectBwrapLauncherForPolicy(writable, bin, "/", probeBwrapHelp, bundled)
+	if launcher.Program != "/pkg/codex-resources/bwrap" || !launcher.Bundled {
+		t.Fatalf("launcher = %+v, want the packaged fallback", launcher)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a writable bwrap was probed before confinement")
+	}
+
+	// Control: without the writable grant the stub is probed and selected, which
+	// is exactly what the policy filter has to prevent.
+	launcher = selectBwrapLauncherForPolicy(sandboxpath.FilesystemPolicy{}, bin, "/", probeBwrapHelp, bundled)
+	if launcher.Program != stub || launcher.Bundled {
+		t.Fatalf("launcher = %+v, want the system stub %q", launcher, stub)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the control probe never ran (%v), so the test cannot attribute the skip to the filter", err)
+	}
 }

@@ -3,9 +3,10 @@ package sandbox
 import (
 	"bytes"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"codex_go/sandbox/sandboxpath"
 )
 
 // System-bubblewrap discovery and warning (Rust sandboxing/src/bwrap.rs).
@@ -68,68 +69,13 @@ func isUserNamespaceFailure(stderr string) bool {
 	return false
 }
 
-// findSystemBwrapInPath mirrors Rust find_system_bwrap_in_path: the first `bwrap`
-// on PATH whose canonical location is outside the working directory, so a
-// project cannot shadow the sandbox launcher with its own binary.
-func findSystemBwrapInPath(pathEnv string, cwd string) string {
-	canonicalCwd := canonicalDirectory(cwd)
-	for _, dir := range filepath.SplitList(pathEnv) {
-		if strings.TrimSpace(dir) == "" {
-			continue
-		}
-		candidate := filepath.Join(dir, "bwrap")
-		resolved := canonicalFile(candidate)
-		if resolved == "" {
-			continue
-		}
-		if canonicalCwd != "" && pathIsInside(resolved, canonicalCwd) {
-			continue
-		}
-		return resolved
-	}
-	return ""
-}
-
-func canonicalFile(path string) string {
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return ""
-	}
-	info, err := exec.LookPath(resolved)
-	if err != nil || strings.TrimSpace(info) == "" {
-		return ""
-	}
-	absolute, err := filepath.Abs(resolved)
-	if err != nil {
-		return ""
-	}
-	return absolute
-}
-
-func canonicalDirectory(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return ""
-	}
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		resolved = path
-	}
-	absolute, err := filepath.Abs(resolved)
-	if err != nil {
-		return ""
-	}
-	return absolute
-}
-
-func pathIsInside(path string, root string) bool {
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	if relative == "." {
-		return true
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+// findSystemBwrapInPath mirrors Rust find_system_bwrap_in_path: the first
+// `bwrap` on PATH whose canonical location the filesystem policy cannot replace
+// (Rust #51211). Candidates under the working directory are skipped, and so is
+// anything the policy may write and the current user can modify, so a project
+// cannot shadow the sandbox launcher with its own binary.
+func findSystemBwrapInPath(pathEnv string, cwd string, policy sandboxpath.FilesystemPolicy) string {
+	return sandboxpath.FindExecutableInPath("bwrap", pathEnv, cwd, policy)
 }
 
 // probeSystemBwrapUserNamespaces mirrors Rust
