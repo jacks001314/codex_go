@@ -42,8 +42,9 @@
 `applypatch` 1 · `mcp` 1 · `tui` 1（`TestSelectStartupTooltipMatchesRustPlanBranches`）· `tui/tea` 1（`TestModelAppCommandUsesRustHistoryMessages`）·
 并发 flake（隔离单跑全绿）：`TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications`、`TestStdioServerGoalSetResponsePrecedesGoalNotification`、`TestStartProcessHonorsArg0`。
 
-## R6 当前团队（2026-10-07 第 85 轮后）
-- 在跑：`syncnew1`(#51595/#51602)、`syncnew2`(#47932 余半 + #49262 余 2/3)、`syncnew3`(#48754/#49160 侦察估价)、
-  `sync51482`(#49119/#49099，收尾后回收)、`syncparity2`(#49069 阶段 C，收尾后回收)。
-- 已回收：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`。
-- 待补：新 verifier（等 `sync51482`/`syncparity2` 回收、宽度降下来后创建）。
+## R6 当前团队（2026-10-07 第 85 轮续 5 后）
+- 在跑（5）：`syncnext1`（§15 批次 #49082→#48983→#48772→#48819）、`syncnext2`（#49119 rollout 落盘半片 / #49099 穿透半片 / #49100）、
+  `syncnext3`（#49100，`plugin/`）、`syncnext4`（#49160 a + b/c2 判定，`config/ tui/ app/`）、`syncnext5`（#38470 Runtime 目录 + preferred-model 漂移，`model/`）。
+- 已回收：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`。
+- 待补：新 verifier（等宽度降下来后创建）。
+- **附加规则（第 85 轮续 5）**：车道可能在回报后**继续 amend 已交付 commit**；并入前必须比对最终 SHA 的 delta（`git diff <旧SHA> <新SHA>`）。
