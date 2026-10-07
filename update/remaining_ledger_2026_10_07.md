@@ -1214,3 +1214,10 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 - **#50525 已在 main**：`42fbf7f3` sync533，`config/config.go:801/809/858` 的 `knownTuiConfigFields` 为准。
 - **#49262 三段齐全**：`46d9a9eb`(mailbox_preemption) + `195943ab`(sync553) + `5aedba53`(sync555，车道 `555c0f57` 的纯增量 111 行)。
 - **appserver 基线以当前 main 为准**：`4fcf61c6` 实测恰 3 项 FAIL（见 runbook R5）；`bb2dedd1` 上的 4–5 项属历史，勿再引用。
+
+## 第 85 轮续 6 派单（10 条车道，宽度上限 10）
+
+- **已派新项**：`#51350`、`#49798` → `syncnext6`；`#50803`、`#49360` → `syncnext7`；`#51458`、`#50788` → `syncnext8`；`#50804`、`#51063` → `syncnext9`；`#51396`、`#51400` → `syncnext10`。
+- **#49100 去重**：已在 `syncnext3`；已发 `message` 令 `syncnext2` 剔除该顶，并对 `syncnext2` 的 `#49099` 穿透加「开工前请示」（`plugin/` 与 syncnext3 写集相邻）。
+- **写集相邻的请示约束**：`plugin/`（syncnext2↔syncnext3）、`tui/app/`（syncnext8↔syncnext4）、`appserver/` 线程元数据路径（syncnext9/syncnext10↔syncnext1）。
+- **#51350/#49798 的 N/A 口径**：#49798 与既有 sync 里已落的 #49805（`EnvironmentInfo` OnceCell 语义）高度重叠，**必须先在 Go 侧做判据**，已落则给决定性证据判 N/A，禁止重复造。
