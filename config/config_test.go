@@ -2356,13 +2356,20 @@ func TestDisablePasteBurstAccessorLikeRust(t *testing.T) {
 
 func TestLoadEffectiveStrictConfigAcceptsRealtimeAudioLikeRust(t *testing.T) {
 	// Mirrors Rust RealtimeAudioToml (config/src/config_toml.rs + core config
-	// test realtime_audio_loads_from_config_toml): [audio] microphone/speaker
-	// are accepted by strict config and unknown sub-fields are rejected
-	// (serde deny_unknown_fields).
+	// test realtime_audio_loads_from_config_toml, Rust #49836): [audio]
+	// microphone/speaker/microphone_channel are accepted by strict config and
+	// unknown sub-fields are rejected (serde deny_unknown_fields).
 	for _, body := range []string{
 		"[audio]\nmicrophone = \"USB Mic\"\nspeaker = \"Desk Speakers\"\n",
 		"[audio]\nmicrophone = \"USB Mic\"\n",
 		"[audio]\nspeaker = \"Desk Speakers\"\n",
+		// The two spellings the Rust test iterates over (`for selection in
+		// ["1", "[1, 2]"]`), plus the uint16 bound and the empty list the voice
+		// helper later rejects as an unusable explicit selection.
+		"[audio]\nmicrophone = \"USB Mic\"\nmicrophone_channel = 1\nspeaker = \"Desk Speakers\"\n",
+		"[audio]\nmicrophone_channel = [1, 2]\n",
+		"[audio]\nmicrophone_channel = 65535\n",
+		"[audio]\nmicrophone_channel = []\n",
 	} {
 		dir := t.TempDir()
 		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
@@ -2378,6 +2385,35 @@ func TestLoadEffectiveStrictConfigAcceptsRealtimeAudioLikeRust(t *testing.T) {
 	}
 	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
 		t.Fatal("LoadEffectiveWithOptions(audio.unknown_device) returned nil error, want unknown-field rejection")
+	}
+}
+
+// TestLoadEffectiveStrictConfigRejectsInvalidMicrophoneChannelLikeRust pins the
+// serde half of Rust #49836's `MicrophoneChannels`: the untagged
+// `Single(NonZeroU16) | Multiple(Vec<NonZeroU16>)` deserializer refuses zero,
+// out-of-uint16, fractional and non-numeric selections (core/config.schema.json
+// types the field as an integer with `minimum: 1` or an array of those).
+func TestLoadEffectiveStrictConfigRejectsInvalidMicrophoneChannelLikeRust(t *testing.T) {
+	for _, body := range []string{
+		"[audio]\nmicrophone_channel = 0\n",
+		"[audio]\nmicrophone_channel = -1\n",
+		"[audio]\nmicrophone_channel = 65536\n",
+		"[audio]\nmicrophone_channel = 1.5\n",
+		"[audio]\nmicrophone_channel = \"1\"\n",
+		"[audio]\nmicrophone_channel = true\n",
+		"[audio]\nmicrophone_channel = [1, 0]\n",
+		"[audio]\nmicrophone_channel = [1, 65536]\n",
+		"[audio]\nmicrophone_channel = [1.5]\n",
+		"[audio]\nmicrophone_channel = [[1]]\n",
+		"[audio]\nmicrophone_channel = { channel = 1 }\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil {
+			t.Fatalf("LoadEffectiveWithOptions(%q) returned nil error, want a microphone-channel rejection", body)
+		}
 	}
 }
 

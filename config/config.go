@@ -858,13 +858,28 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if audio, ok := values["audio"].(map[string]any); ok {
 		// Mirrors Rust RealtimeAudioToml (config/src/config_toml.rs, serde
 		// deny_unknown_fields): machine-local realtime audio device
-		// preferences (microphone/speaker) accepted so legacy config loads;
-		// the value is a compatibility no-op in Go.
-		known := map[string]bool{"microphone": true, "speaker": true}
+		// preferences (microphone/speaker/microphone_channel) accepted so
+		// legacy config loads; the device names are a compatibility no-op in
+		// Go.
+		known := map[string]bool{
+			"microphone":         true,
+			"microphone_channel": true,
+			"speaker":            true,
+		}
 		for key := range audio {
 			if !known[key] {
 				return fmt.Errorf("unknown configuration field `audio.%s`", key)
 			}
+		}
+		// Rust #49836: `audio.microphone_channel` is an untagged
+		// `Single(NonZeroU16) | Multiple(Vec<NonZeroU16>)`, whose schema is an
+		// integer no less than 1 (uint16) or an array of those, so zero,
+		// out-of-range, fractional and non-numeric entries are a serde type
+		// error upstream. The voice host re-decodes the value for the session,
+		// so this check keeps the strict loader from accepting a value Rust
+		// would refuse.
+		if err := validateMicrophoneChannelValues(audio["microphone_channel"]); err != nil {
+			return err
 		}
 	}
 	if notice, ok := values["notice"].(map[string]any); ok {
@@ -932,6 +947,55 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// validateMicrophoneChannelValues mirrors Rust's `MicrophoneChannels`
+// (config/src/config_toml.rs, Rust #49836): one one-based channel or a list of
+// them, each a `NonZeroU16`. A nil value is an unset selection and leaves the
+// voice host mixing every input channel.
+func validateMicrophoneChannelValues(raw any) error {
+	if raw == nil {
+		return nil
+	}
+	if _, ok := microphoneChannelNumber(raw); ok {
+		return nil
+	}
+	entries, ok := raw.([]any)
+	if !ok {
+		return fmt.Errorf("invalid `audio.microphone_channel`: expected a one-based channel number or a list of channel numbers")
+	}
+	for _, entry := range entries {
+		if _, ok := microphoneChannelNumber(entry); !ok {
+			return fmt.Errorf("invalid `audio.microphone_channel` entry: expected a one-based channel number no greater than 65535")
+		}
+	}
+	return nil
+}
+
+// microphoneChannelNumber decodes the numeric spellings a configuration value
+// can arrive in and enforces Rust's `NonZeroU16` range, so a fractional or
+// zero entry is rejected exactly like the untagged deserializer.
+func microphoneChannelNumber(raw any) (uint16, bool) {
+	switch value := raw.(type) {
+	case int:
+		return microphoneChannelRange(int64(value))
+	case int64:
+		return microphoneChannelRange(value)
+	case float64:
+		if value < 1 || value > 65535 || value != float64(int(value)) {
+			return 0, false
+		}
+		return uint16(value), true
+	default:
+		return 0, false
+	}
+}
+
+func microphoneChannelRange(value int64) (uint16, bool) {
+	if value < 1 || value > 65535 {
+		return 0, false
+	}
+	return uint16(value), true
 }
 
 func validateKnownAgentsFields(value any) error {
