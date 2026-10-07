@@ -2,8 +2,8 @@ package windowssandbox
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	coresandbox "codex_go/sandbox"
@@ -135,14 +135,39 @@ func (p *ResolvedWindowsSandboxPermissions) WritableRootsForCWD(cwd string, envM
 	return buildWindowsWritableRoots(roots)
 }
 
+// windowsTempEnvRoots resolves the writable temp roots from the workload
+// environment passed to the child (Rust #51512 resolve_workload_temp_paths):
+// only absolute TEMP/TMP values are honored, the host TEMP/TMP is never used as
+// a fallback, and duplicate Windows spellings collapse case-insensitively in
+// the same deterministic order the child environment block uses (uppercase key
+// order, first spelling wins), so permission resolution and the child
+// environment select the same value.
 func windowsTempEnvRoots(envMap map[string]string) []string {
-	var roots []string
-	seen := map[string]bool{}
-	for _, key := range []string{"TEMP", "TMP"} {
-		value := strings.TrimSpace(envMap[key])
-		if value == "" {
-			value = strings.TrimSpace(os.Getenv(key))
+	keys := make([]string, 0, len(envMap))
+	for key := range envMap {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		left, right := strings.ToUpper(keys[i]), strings.ToUpper(keys[j])
+		if left != right {
+			return left < right
 		}
+		return keys[i] < keys[j]
+	})
+
+	var roots []string
+	seenKeys := map[string]bool{}
+	seen := map[string]bool{}
+	for _, key := range keys {
+		upper := strings.ToUpper(key)
+		if upper != "TEMP" && upper != "TMP" {
+			continue
+		}
+		if seenKeys[upper] {
+			continue
+		}
+		seenKeys[upper] = true
+		value := strings.TrimSpace(envMap[key])
 		if value == "" || !isWindowsSandboxAbs(value) {
 			continue
 		}
