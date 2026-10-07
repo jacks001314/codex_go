@@ -1535,7 +1535,7 @@ func (s *ProxyServer) dialCheckedTarget(ctx context.Context, network string, add
 		}
 		return dialer.DialContext(ctx, network, address)
 	}
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	addresses, err := proxyLookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -1620,13 +1620,7 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 	}
 	allowed := allowMatcher.Match(request.Host)
 	if !settings.AllowLocalBinding {
-		normalizedHost := request.Host
-		parsedHost, _ := ParseProxyHost(normalizedHost)
-		if ip := proxyIPLiteral(normalizedHost); IsNonPublicProxyIP(ip) || IsLoopbackProxyHost(parsedHost) {
-			if !explicitLocalProxyAllowlisted(allowlist, normalizedHost) {
-				return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
-			}
-		} else if (allowed || s.policyDecider != nil) && proxyHostResolvesToNonPublicIP(normalizedHost, request.Port) {
+		if baselineLocalBindingReason(request, allowlist, allowed) != "" {
 			return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
 		}
 	}
@@ -1642,6 +1636,13 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 		decision := s.policyDecider.Decide(ctx, request)
 		decision.Source = ProxyDecisionSourceDecider
 		if decision.Allow {
+			// Rust #51650: approval permits DNS, but cannot bypass private-address
+			// or explicit deny policy. Re-run the local/private guard for the now
+			// authorized host before honoring the approval, so an approved host
+			// that resolves (or rebinds) to a non-public address is still rejected.
+			if !settings.AllowLocalBinding && approvedLocalBindingReason(request, allowlist) != "" {
+				return deny(ProxyReasonNotAllowedLocal, ProxyDecisionSourceBaselinePolicy)
+			}
 			decision.Reason = ProxyReasonNotAllowed
 			s.emitProxyPolicyAudit(request, decision, true)
 			return decision
@@ -1656,6 +1657,53 @@ func (s *ProxyServer) evaluateProxyPolicy(ctx context.Context, request ProxyPoli
 		return decision
 	}
 	return deny(ProxyReasonNotAllowed, ProxyDecisionSourceBaselinePolicy)
+}
+
+// baselineLocalBindingReason applies the pre-approval local/private guard.
+// Rust #51650: resolving a hostname discloses it to DNS, so the DNS-backed
+// branch only runs for a host that is already allowlisted. A request that is
+// merely *decidable* (policyDecider configured) is not yet authorized to touch
+// DNS; an approval grants that later, in approvedLocalBindingReason.
+func baselineLocalBindingReason(request ProxyPolicyRequest, allowlist []string, allowlisted bool) string {
+	if handled, reason := literalLocalBindingReason(request, allowlist); handled {
+		return reason
+	}
+	if allowlisted && proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
+		return ProxyReasonNotAllowedLocal
+	}
+	return ""
+}
+
+// approvedLocalBindingReason re-runs the local/private guard for an authorized
+// host. Approval grants DNS (so the lookup runs even for a host without a
+// persisted allowlist entry), but it cannot bypass the private-address
+// restriction. Mirrors Rust #51650's
+// host_blocked_with_local_binding(HostAuthorization::Approved) recheck after
+// the decider, and its inner-HTTPS re-check after an approved CONNECT.
+func approvedLocalBindingReason(request ProxyPolicyRequest, allowlist []string) string {
+	if handled, reason := literalLocalBindingReason(request, allowlist); handled {
+		return reason
+	}
+	if proxyHostResolvesToNonPublicIP(request.Host, request.Port) {
+		return ProxyReasonNotAllowedLocal
+	}
+	return ""
+}
+
+// literalLocalBindingReason classifies an explicit local/private literal without
+// any DNS lookup. handled reports whether the host was such a literal, so the
+// caller must not additionally fall through to the DNS-backed branch (mirrors
+// the original `if literal { .. } else if resolves_non_public { .. }`).
+func literalLocalBindingReason(request ProxyPolicyRequest, allowlist []string) (handled bool, reason string) {
+	normalizedHost := request.Host
+	parsedHost, _ := ParseProxyHost(normalizedHost)
+	if ip := proxyIPLiteral(normalizedHost); IsNonPublicProxyIP(ip) || IsLoopbackProxyHost(parsedHost) {
+		if !explicitLocalProxyAllowlisted(allowlist, normalizedHost) {
+			return true, ProxyReasonNotAllowedLocal
+		}
+		return true, ""
+	}
+	return false, ""
 }
 
 const maxProxyBlockedEvents = 200
@@ -1746,13 +1794,22 @@ func explicitLocalProxyAllowlisted(allowlist []string, host string) bool {
 	return false
 }
 
+// proxyLookupIPAddr resolves a proxy target host to its addresses. It is a
+// package-level indirection so tests can script the DNS layer and assert that a
+// host which is neither allowlisted nor approved never reaches DNS at all
+// (mirrors Rust #51650's injectable lookup in
+// NetworkProxyState::host_blocked_with_lookup).
+var proxyLookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
 func proxyHostResolvesToNonPublicIP(host string, _ uint16) bool {
 	if host == "" || proxyIPLiteral(host) != nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	addresses, err := proxyLookupIPAddr(ctx, host)
 	if err != nil {
 		return true
 	}
