@@ -263,10 +263,11 @@ func retainedInstructionSectionPair(fragments []RetainedInstructionFragment, leg
 }
 
 // RenderRetainedInstructionSections renders the retained snapshot as Rust's two
-// independent-snapshot sections without applying delivery deduplication: the
-// instruction prefix keeps the banners even when no fragment survives, matching
-// Rust's `remove_delivered_instructions`, which only empties the section's user
-// content.
+// asynchronous independent-snapshot sections without applying delivery
+// deduplication: the instruction prefix keeps the banners even when no fragment
+// survives, matching Rust's `remove_delivered_instructions`, which only empties
+// the section's user content. The split belongs to the asynchronous scorer, so
+// the stateful synchronous reviewer uses RetainedSyncInstructionSections (#51627).
 func RenderRetainedInstructionSections(context *retainedctx.RetainedContext) RetainedInstructionSections {
 	if context == nil {
 		return RetainedInstructionSections{}
@@ -276,6 +277,43 @@ func RenderRetainedInstructionSections(context *retainedctx.RetainedContext) Ret
 		return RetainedInstructionSections{}
 	}
 	return retainedInstructionSectionPair(fragments, HasLegacyRetainedOrder(context))
+}
+
+// RetainedSyncInstructionSections renders the retained snapshot the way Rust's
+// synchronous reviewer keeps it (#51627): one retained-user-instructions section
+// carrying the source-order banner, the bounded user originals, the assistant
+// originals and both omission notices. Rust reaches that layout because only the
+// asynchronous independent snapshot calls `deduplicate_transcript_instructions`;
+// `retain_new_instructions` leaves the synchronous composition untouched
+// ("Stateful reviewers retain their existing section order"), and
+// `render_retained_instructions` renders the assistant originals inside the same
+// section. The instruction prefix keeps the banners even when every fragment was
+// delivered, matching `remove_delivered_instructions`.
+func RetainedSyncInstructionSections(context *retainedctx.RetainedContext) RetainedInstructionSections {
+	if context == nil {
+		return RetainedInstructionSections{}
+	}
+	fragments := RenderRetainedInstructions(context)
+	if len(fragments) == 0 {
+		return RetainedInstructionSections{}
+	}
+	return RetainedInstructionSections{
+		Instructions: retainedInstructionsSectionItems(fragments, HasLegacyRetainedOrder(context)),
+	}
+}
+
+// RenderRetainedInstructionSectionsForPresentation selects the retained-snapshot
+// layout the reviewed consumer uses (#51627): the asynchronous action scorer
+// composes an independent snapshot per sample and separates the assistant
+// context into its own section after the transcript, while the stateful
+// synchronous reviewer keeps Rust's single retained section ahead of it.
+// SyncFull and SyncDelta are the synchronous reviewer's framings, so only
+// ActionPresentationAsync takes the split layout.
+func RenderRetainedInstructionSectionsForPresentation(context *retainedctx.RetainedContext, presentation ActionPresentation) RetainedInstructionSections {
+	if presentation == ActionPresentationAsync {
+		return RenderRetainedInstructionSections(context)
+	}
+	return RetainedSyncInstructionSections(context)
 }
 
 // RetainedAssistantContextSectionItems mirrors the retained assistant-context

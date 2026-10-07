@@ -386,20 +386,23 @@ func TestGuardianPromptIncludesRetainedInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("retained section footer missing from prompt:\n%s", prompt)
 	}
 
-	// #51627 splits the retained snapshot: the instruction prefix stays ahead of
-	// the transcript, while assistant originals and their notice follow it.
-	assistantAt := strings.Index(prompt, retainedAssistantContextStart)
-	if assistantAt < 0 || !strings.Contains(prompt, retainedAssistantContextEnd) {
-		t.Fatalf("retained assistant context section missing from prompt:\n%s", prompt)
+	// #51627 splits the retained snapshot only for the asynchronous independent
+	// snapshot, so the stateful synchronous reviewer's default framing keeps
+	// Rust's single retained section: the assistant originals stay inside it,
+	// ahead of the transcript, and no assistant-context section is emitted.
+	if strings.Contains(prompt, retainedAssistantContextStart) || strings.Contains(prompt, retainedAssistantContextEnd) {
+		t.Fatalf("the synchronous reviewer split the retained snapshot:\n%s", prompt)
 	}
-	if !(retainedAt < transcriptAt && transcriptAt < assistantAt) {
-		t.Fatalf("assistant section order = retained:%d transcript:%d assistant:%d\n%s", retainedAt, transcriptAt, assistantAt, prompt)
+	retainedEndAt := strings.Index(prompt, retainedUserInstructionsEnd)
+	assistantAt := strings.Index(prompt, "assistant: Deploy to staging?")
+	if retainedEndAt < retainedAt || assistantAt < 0 {
+		t.Fatalf("prompt is missing the retained section:\n%s", prompt)
 	}
-	if !strings.Contains(prompt[assistantAt:], "assistant: Deploy to staging?") {
-		t.Fatalf("assistant originals missing from the assistant section:\n%s", prompt)
+	if !(retainedAt < assistantAt && assistantAt < retainedEndAt) {
+		t.Fatalf("assistant originals must stay inside the retained section (retained:%d assistant:%d end:%d)\n%s", retainedAt, assistantAt, retainedEndAt, prompt)
 	}
-	if strings.Contains(prompt[:transcriptAt], "assistant: Deploy to staging?") {
-		t.Fatalf("assistant originals leaked into the instruction prefix:\n%s", prompt)
+	if transcriptAt < retainedEndAt {
+		t.Fatalf("the retained section must precede the transcript (end:%d transcript:%d)\n%s", retainedEndAt, transcriptAt, prompt)
 	}
 
 	// A review without a retained snapshot is unchanged.
@@ -411,6 +414,107 @@ func TestGuardianPromptIncludesRetainedInstructionsLikeRust(t *testing.T) {
 	}
 	if strings.Contains(withoutRetained, "RETAINED USER INSTRUCTIONS") {
 		t.Fatalf("nil retained context rendered a section:\n%s", withoutRetained)
+	}
+}
+
+// #51627 separates the retained assistant context only in the asynchronous
+// independent snapshot: `deduplicate_transcript_instructions` splits the two
+// retained sections and is called by the async scorer alone, while Rust's
+// `composition.rs` records that "stateful reviewers retain their existing
+// section order". The synchronous framings therefore keep one retained section
+// ahead of the transcript, and only ActionPresentationAsync moves the assistant
+// originals behind it.
+func TestGuardianRetainedSnapshotSplitOnlyForAsyncPresentationLikeRust(t *testing.T) {
+	build := func(presentation ActionPresentation) (string, *retainedctx.RetainedContext) {
+		context := &retainedctx.RetainedContext{}
+		context.RecordUserMessage(retainedctx.RetainedUserMessage{
+			TurnID:    "turn-1",
+			MessageID: retainedStringPtr("local-0"),
+			Text:      "Inspect staging only. Do not publish.",
+			Complete:  true,
+		}, retainedctx.LocalInputSource(retainedUint64Ptr(0)))
+		context.RecordAssistantMessage(retainedctx.RetainedUserMessage{
+			TurnID:    "turn-0",
+			MessageID: retainedStringPtr("assistant-0"),
+			Text:      "Deploy to staging?",
+			Complete:  true,
+		}, retainedctx.LocalInputSource(retainedUint64Ptr(1)))
+		prompt, err := BuildPromptWithOptions(
+			Action{Type: "network_access", Host: "example.com", Port: 443, Protocol: "https"},
+			[]string{"caller requested the host"},
+			BuildPromptOptions{Presentation: presentation, RetainedContext: context},
+		)
+		if err != nil {
+			t.Fatalf("BuildPromptWithOptions(%v) error = %v", presentation, err)
+		}
+		return prompt, context
+	}
+
+	// The synchronous framings keep the single retained section.
+	syncPrompt, _ := build(ActionPresentationSyncFull)
+	deltaPrompt, _ := build(ActionPresentationSyncDelta)
+	for name, prompt := range map[string]string{"SyncFull": syncPrompt, "SyncDelta": deltaPrompt} {
+		if strings.Contains(prompt, retainedAssistantContextStart) || strings.Contains(prompt, retainedAssistantContextEnd) {
+			t.Fatalf("%s split the retained snapshot:\n%s", name, prompt)
+		}
+		retainedAt := strings.Index(prompt, retainedUserInstructionsStart)
+		retainedEndAt := strings.Index(prompt, retainedUserInstructionsEnd)
+		transcriptAt := strings.Index(prompt, "Recent transcript:")
+		assistantAt := strings.Index(prompt, "assistant: Deploy to staging?")
+		if retainedAt < 0 || retainedEndAt < retainedAt || transcriptAt < 0 || assistantAt < 0 {
+			t.Fatalf("%s prompt is missing a section:\n%s", name, prompt)
+		}
+		if !(retainedAt < assistantAt && assistantAt < retainedEndAt && retainedEndAt < transcriptAt) {
+			t.Fatalf("%s order = retained:%d assistant:%d retainedEnd:%d transcript:%d\n%s", name, retainedAt, assistantAt, retainedEndAt, transcriptAt, prompt)
+		}
+		// The stateful reviewer's instruction prefix is the same for both
+		// synchronous framings; only the planned action's framing differs.
+		if start, end := retainedAt, transcriptAt; syncPrompt[start:end] != prompt[start:end] {
+			t.Fatalf("%s changed the synchronous retained evidence:\n%s", name, prompt)
+		}
+	}
+
+	// The asynchronous framing is the independent snapshot: it splits the
+	// instruction prefix from the assistant context that follows the transcript.
+	asyncPrompt, asyncContext := build(ActionPresentationAsync)
+	asyncRetainedAt := strings.Index(asyncPrompt, retainedUserInstructionsStart)
+	asyncRetainedEndAt := strings.Index(asyncPrompt, retainedUserInstructionsEnd)
+	asyncTranscriptAt := strings.Index(asyncPrompt, "Recent transcript:")
+	asyncAssistantAt := strings.Index(asyncPrompt, retainedAssistantContextStart)
+	if asyncAssistantAt < 0 || !strings.Contains(asyncPrompt, retainedAssistantContextEnd) {
+		t.Fatalf("the asynchronous framing must split the retained snapshot:\n%s", asyncPrompt)
+	}
+	if !(asyncRetainedAt < asyncRetainedEndAt && asyncRetainedEndAt < asyncTranscriptAt && asyncTranscriptAt < asyncAssistantAt) {
+		t.Fatalf("async order = retained:%d retainedEnd:%d transcript:%d assistant:%d\n%s", asyncRetainedAt, asyncRetainedEndAt, asyncTranscriptAt, asyncAssistantAt, asyncPrompt)
+	}
+	if strings.Contains(asyncPrompt[asyncRetainedAt:asyncRetainedEndAt], "assistant: Deploy to staging?") {
+		t.Fatalf("the assistant originals leaked into the asynchronous instruction prefix:\n%s", asyncPrompt)
+	}
+	if !strings.Contains(asyncPrompt[asyncAssistantAt:], "assistant: Deploy to staging?") {
+		t.Fatalf("the asynchronous assistant section lost the assistant originals:\n%s", asyncPrompt)
+	}
+
+	// Both layouts carry the same evidence: the split only changes framing, and
+	// the section selector is what ties each layout to its presentation.
+	syncSections := RenderRetainedInstructionSectionsForPresentation(asyncContext, ActionPresentationSyncFull)
+	if len(syncSections.AssistantContext) != 0 {
+		t.Fatalf("synchronous sections = %#v, want no assistant-context section", syncSections)
+	}
+	asyncSections := RenderRetainedInstructionSectionsForPresentation(asyncContext, ActionPresentationAsync)
+	if len(asyncSections.AssistantContext) == 0 {
+		t.Fatalf("asynchronous sections = %#v, want the assistant-context section", asyncSections)
+	}
+	rendered := RenderRetainedInstructions(asyncContext)
+	instructionsFragments, assistantFragments := SplitRetainedInstructionFragments(rendered)
+	split := append(append([]RetainedInstructionFragment{}, instructionsFragments...), assistantFragments...)
+	if got, want := retainedSplitSignatures(split), retainedSplitSignatures(rendered); !reflect.DeepEqual(got, want) {
+		t.Fatalf("the split changed the retained evidence: %#v vs %#v", got, want)
+	}
+	if strings.Contains(strings.Join(syncSections.Instructions, ""), retainedAssistantContextStart) {
+		t.Fatalf("the synchronous section framed an assistant-context section: %#v", syncSections.Instructions)
+	}
+	if !strings.Contains(strings.Join(syncSections.Instructions, ""), "assistant: Deploy to staging?") {
+		t.Fatalf("the synchronous section dropped the assistant originals: %#v", syncSections.Instructions)
 	}
 }
 

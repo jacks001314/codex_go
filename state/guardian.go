@@ -610,10 +610,14 @@ type BuildPromptOptions struct {
 // so the evidence stays a reusable history prefix across approval requests
 // (#46279). Rust's registry order places the root conversation, then the
 // retained user instructions, then the trusted user answers, then the
-// transcript, the retained assistant context (#51627), the node-repl evidence
-// and the parent-turn permission context, and finally the planned action with
-// its tool descriptions; the sections Go does not model (previous reviews,
-// trusted tool/skills) come from the review's inherited context instead.
+// transcript, the node-repl evidence and the parent-turn permission context, and
+// finally the planned action with its tool descriptions; the sections Go does not
+// model (previous reviews, trusted tool/skills) come from the review's inherited
+// context instead. The stateful synchronous reviewer keeps the retained snapshot
+// in that single instructions section (#51627); only the asynchronous framing
+// separates the retained assistant context into its own section after the
+// transcript, so growing assistant evidence cannot invalidate the instruction
+// prefix for independent snapshots.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
@@ -636,10 +640,11 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
 		writeGuardianPromptSection(&builder, strings.Join(items, ""))
 	}
-	// Retained snapshot sections are split (#51627): the instruction prefix
-	// precedes the transcript so growing assistant evidence cannot invalidate
-	// it, and the assistant context follows the transcript.
-	retainedSections := RenderRetainedInstructionSections(options.RetainedContext)
+	// The retained snapshot layout follows the reviewed consumer's framing
+	// (#51627): the stateful synchronous reviewer renders one section ahead of the
+	// transcript, while the asynchronous independent snapshot keeps the
+	// instruction prefix there and moves the assistant context behind it.
+	retainedSections := RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
 	if len(retainedSections.Instructions) > 0 {
 		writeGuardianPromptSection(&builder, strings.Join(retainedSections.Instructions, ""))
 	}

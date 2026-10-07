@@ -466,7 +466,12 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r.retainedContext != nil {
 		retainedContext = r.retainedContext(threadID, turnID)
 	}
+	// The approval reviewer is the synchronous, stateful consumer, so it renders
+	// the retained snapshot in Rust's synchronous layout (#51627): one retained
+	// section ahead of the transcript, with the assistant context inside it. The
+	// asynchronous independent snapshot's split belongs to ActionPresentationAsync.
 	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
+		Presentation:      state.ActionPresentationSyncFull,
 		NodeReplEvidence:  promptNodeReplEvidence,
 		PermissionContext: permissionContext,
 		RetainedContext:   retainedContext,
@@ -476,6 +481,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		root = r.rootUserAuthorization(threadID, turnID)
 		if len(root) > 0 {
 			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
+				Presentation:          state.ActionPresentationSyncFull,
 				NodeReplEvidence:      promptNodeReplEvidence,
 				RootUserAuthorization: root,
 				PermissionContext:     permissionContext,
