@@ -13182,7 +13182,7 @@ func (r *RuntimeRouter) selectedCapabilityMCPRootPaths(threadID string) []string
 // by environment readiness reports, deduplicated by root ID (Rust
 // ThreadEnvironments::inspect_selected_capability_roots, #38067, #38521).
 func (r *RuntimeRouter) inspectSelectedCapabilityRootsForThread(record *session.Record) SelectedCapabilityRootsStatus {
-	threadRoots := threadSelectedCapabilityRoots(record)
+	threadRoots := r.selectedCapabilityRootsForThread(record)
 	attachmentRoots := readyAttachmentRootsFromSelections(record)
 	merged := combineSelectedCapabilityRoots(threadRoots, attachmentRoots)
 	seen := make(map[string]struct{}, len(merged))
@@ -13198,6 +13198,20 @@ func (r *RuntimeRouter) inspectSelectedCapabilityRootsForThread(record *session.
 		return SelectedCapabilityRootsStatus{ReadyRoots: cloneSelectedCapabilityRoots(unique)}
 	}
 	return r.services.Environment.InspectSelectedCapabilityRoots(unique)
+}
+
+// selectedCapabilityRootsForThread restricts the thread's retained capability
+// roots to the environments its current selections name, restoring the original
+// root order (Rust #51493 TurnEnvironmentSnapshot::selected_capability_roots,
+// codex-rs/core/src/environment_selection.rs). Deselecting an environment drops
+// its roots from discovery without forgetting them, so reselecting restores
+// them.
+func (r *RuntimeRouter) selectedCapabilityRootsForThread(record *session.Record) []SelectedCapabilityRoot {
+	roots := threadSelectedCapabilityRoots(record)
+	if record == nil || len(roots) == 0 {
+		return roots
+	}
+	return restrictCapabilityRootsToSelections(roots, r.threadEnvironmentSelections(string(record.ID)))
 }
 
 // threadSelectedCapabilityRoots decodes the persisted thread capability roots
