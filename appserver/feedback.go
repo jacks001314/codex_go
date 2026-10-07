@@ -203,6 +203,9 @@ type FeedbackUploadOptions struct {
 	LogsOverride        []byte
 	AttachmentPaths     []FeedbackAttachmentPath
 	ExtraAttachmentPath []FeedbackAttachmentPath
+	// FeedbackArchiveDir is where a rollout archive is written before its bytes
+	// are attached (Rust #50446); empty uses the system temporary directory.
+	FeedbackArchiveDir string
 }
 
 type PreparedFeedbackUpload struct {
@@ -230,10 +233,17 @@ func (s *FeedbackSnapshot) PrepareUpload(options *FeedbackUploadOptions) *Prepar
 	}
 	paths := cloneAttachmentPaths(options.AttachmentPaths)
 	paths = append(paths, cloneAttachmentPaths(options.ExtraAttachmentPath)...)
+	// Rust #50446: rollouts are bundled into `rollouts.tar.gz`, diagnostics stay
+	// separate attachments, and a failed archive falls back to the individual
+	// rollout attachments.
+	rolloutAttachments, diagnosticAttachments, rolloutPaths, diagnosticPaths := feedbackPartitionRollouts(extra, paths)
+	archiveAttachments, fallbackPaths := FeedbackRolloutArchive(options.FeedbackArchiveDir, rolloutPaths, rolloutAttachments, FeedbackMaxDecodedUploadBytes)
+	attachments := s.Attachments(options.IncludeLogs, diagnosticAttachments, options.LogsOverride)
+	attachments = append(attachments, archiveAttachments...)
 	prepared := &PreparedFeedbackUpload{
 		Tags:            tags,
-		Attachments:     s.Attachments(options.IncludeLogs, extra, options.LogsOverride),
-		AttachmentPaths: DeduplicateFeedbackAttachmentPaths(paths),
+		Attachments:     attachments,
+		AttachmentPaths: DeduplicateFeedbackAttachmentPaths(append(diagnosticPaths, fallbackPaths...)),
 	}
 	s.LastPrepared = prepared.Clone()
 	return prepared

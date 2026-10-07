@@ -96,8 +96,20 @@ func TestFeedbackUploadFlushesSQLiteLogsForAgentSubtreeAndAttachesRollouts(t *te
 		t.Fatalf("feedback upload error = %+v", response.Error)
 	}
 	prepared := snapshot.LastPrepared
-	if prepared == nil || len(prepared.AttachmentPaths) != 2 {
-		t.Fatalf("feedback attachment paths = %#v", prepared)
+	if prepared == nil {
+		t.Fatalf("feedback upload was not prepared")
+	}
+	// Rust #50446: the parent and child rollouts are bundled into one
+	// `rollouts.tar.gz` attachment instead of two path-backed attachments.
+	archive := feedbackAttachmentByName(prepared.Attachments, FeedbackRolloutArchiveFilename)
+	if archive == nil {
+		t.Fatalf("feedback attachments = %#v", prepared.Attachments)
+	}
+	if len(prepared.AttachmentPaths) != 0 {
+		t.Fatalf("feedback attachment paths = %#v", prepared.AttachmentPaths)
+	}
+	if entries := readRolloutArchiveLikeRust(t, archive.Buffer); len(entries) != 2 {
+		t.Fatalf("rollout archive entries = %+v", entries)
 	}
 	logs := feedbackAttachmentByName(prepared.Attachments, "codex-logs.log")
 	if logs == nil || !strings.Contains(string(logs.Buffer), "parent persisted log") || !strings.Contains(string(logs.Buffer), "child persisted log") {
