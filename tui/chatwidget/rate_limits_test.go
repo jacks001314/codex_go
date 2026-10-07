@@ -173,7 +173,7 @@ func TestWorkspaceOwnerNudgePromptViewMatchesRust(t *testing.T) {
 		!strings.Contains(credits.Subtitle, "Notify owner?") ||
 		credits.InitialSelectedIndex != 1 ||
 		len(credits.Items) != 2 ||
-		!credits.Items[1].IsDefault {
+		credits.Items[1].Name != "No (default)" {
 		t.Fatalf("credits nudge = %#v", credits)
 	}
 	if credits.Items[0].Action != UsageMenuActionAddCreditsNudgeSend || credits.Items[1].Action != UsageMenuActionAddCreditsNudgeCancel {

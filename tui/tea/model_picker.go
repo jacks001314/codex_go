@@ -283,15 +283,10 @@ func modelPickerLabel(option codextui.ModelPickerOption) string {
 	if label == "" {
 		label = option.ID
 	}
-	markers := []string{}
+	// Rust #51235: model rows carry "(current)" and nothing else; the catalog
+	// default is still tracked by ModelPickerOption.IsDefault for preselection.
 	if option.IsCurrent {
-		markers = append(markers, "current")
-	}
-	if option.IsDefault {
-		markers = append(markers, "default")
-	}
-	if len(markers) > 0 {
-		label += " (" + strings.Join(markers, ", ") + ")"
+		label += " (current)"
 	}
 	return label
 }

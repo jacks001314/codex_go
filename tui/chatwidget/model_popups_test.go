@@ -57,7 +57,10 @@ func TestReasoningPopupDefaultHighlightAndWarningDescriptionMatchRust(t *testing
 
 	result := NewReasoningPopupView(config, preset)
 
-	if result.View.InitialSelectedIndex != 0 || !result.View.Items[0].IsCurrent || !result.View.Items[0].IsDefault {
+	// Rust #51235 removed the selection-item default marker; the reasoning
+	// effort keeps its "(default)" label (model_popups.rs effort_label).
+	if result.View.InitialSelectedIndex != 0 || !result.View.Items[0].IsCurrent ||
+		!strings.Contains(result.View.Items[0].Name, " (default)") {
 		t.Fatalf("default selection = index %d items=%#v", result.View.InitialSelectedIndex, result.View.Items)
 	}
 	selectedDescription := result.View.Items[1].SelectedDescription

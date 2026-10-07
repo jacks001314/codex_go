@@ -661,9 +661,6 @@ func (m *Model) openSelectionViewModal(kind ModalKind, view chatwidget.Selection
 		if item.IsCurrent {
 			markers = append(markers, "current")
 		}
-		if item.IsDefault {
-			markers = append(markers, "default")
-		}
 		if len(markers) > 0 {
 			label += " (" + strings.Join(markers, ", ") + ")"
 		}

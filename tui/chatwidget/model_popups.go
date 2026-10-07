@@ -27,7 +27,7 @@ type ReasoningEffortPopupOption struct {
 }
 
 type ModelPopupPreset struct {
-	Model                     string
+	Model string
 	// DisplayName is the catalog display name (Rust ModelPreset::display_name).
 	// Selection and persistence keep using Model; only labels use this.
 	DisplayName               string
@@ -81,7 +81,6 @@ func NewModelPopupView(config ModelPopupConfig, presets []ModelPopupPreset) Mode
 			Description:     strings.TrimSpace(preset.Description),
 			Action:          ModelMenuActionSelectModel,
 			IsCurrent:       modelID == currentModel,
-			IsDefault:       preset.IsDefault,
 			DismissOnSelect: true,
 		})
 	}
@@ -124,14 +123,13 @@ func NewAllModelsPopupView(config ModelPopupConfig, presets []ModelPopupPreset) 
 			Description:                strings.TrimSpace(preset.Description),
 			Action:                     ModelMenuActionOpenReasoning,
 			IsCurrent:                  modelID == currentModel,
-			IsDefault:                  preset.IsDefault,
 			DismissOnSelect:            singleEffort,
 			DismissParentOnChildAccept: !singleEffort,
 		})
 	}
 	return ModelPopupResult{View: SelectionView{
-		ViewID:      AllModelsSelectionViewID,
-		Title:       "Select Model and Effort",
+		ViewID: AllModelsSelectionViewID,
+		Title:  "Select Model and Effort",
 		// Rust #46503 removed the legacy-model instruction from the full picker.
 		Subtitle:    "",
 		HeaderLines: modelPopupWarningLines(config),
@@ -192,7 +190,6 @@ func NewReasoningPopupView(config ModelPopupConfig, preset ModelPopupPreset) Mod
 			SelectedDescription: reasoningSelectedDescription(modelID, effort, option.Description),
 			Action:              ModelMenuActionSelectModel,
 			IsCurrent:           isCurrent,
-			IsDefault:           effort == defaultEffort,
 			DismissOnSelect:     true,
 		})
 	}

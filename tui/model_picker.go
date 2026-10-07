@@ -186,12 +186,10 @@ func (p *ModelPicker) RenderRows(width int) []string {
 	items := make([]SelectionItem, 0, len(p.Options))
 	for _, option := range p.Options {
 		description := option.Description
+		// Rust #51235: rows mark the current model and nothing else.
 		markers := []string{}
 		if option.IsCurrent {
 			markers = append(markers, "current")
-		}
-		if option.IsDefault {
-			markers = append(markers, "default")
 		}
 		if len(markers) > 0 {
 			if description != "" {

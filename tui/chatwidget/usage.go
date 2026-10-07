@@ -36,7 +36,6 @@ type SelectionItem struct {
 	DisabledReason             string
 	DisabledGutterMarker       string
 	IsCurrent                  bool
-	IsDefault                  bool
 	Action                     UsageMenuAction
 	DismissOnSelect            bool
 	DismissParentOnChildAccept bool

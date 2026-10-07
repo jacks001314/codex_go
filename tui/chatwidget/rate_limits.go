@@ -169,9 +169,10 @@ func NewWorkspaceOwnerNudgePromptView(creditType AddCreditsNudgeCreditType) Sele
 				DismissOnSelect: true,
 			},
 			{
+				// Rust #51235: the negative option carries the default label
+				// itself now that selection items have no default marker.
 				ID:              "no",
-				Name:            "No",
-				IsDefault:       true,
+				Name:            "No (default)",
 				Action:          UsageMenuActionAddCreditsNudgeCancel,
 				DismissOnSelect: true,
 			},

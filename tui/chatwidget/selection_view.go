@@ -76,9 +76,6 @@ func selectionItemRow(index int, item SelectionItem, width int) string {
 	if item.IsCurrent {
 		row += " Currently selected"
 	}
-	if item.IsDefault {
-		row += " Default"
-	}
 	if item.Disabled {
 		reason := strings.TrimSpace(item.DisabledReason)
 		if reason == "" {
