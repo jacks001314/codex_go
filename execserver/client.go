@@ -43,7 +43,13 @@ type Client struct {
 	metadata       map[string]*inFlightMetadataRequest
 	cacheMu        sync.Mutex
 	discoveryCache *CapabilityDiscoveryCache
-	accepted       bool
+	// environmentInfoMu guards environmentInfoCache, which caches the executor
+	// metadata from the initialize handshake (or the first successful
+	// environment/info probe) for this client's lifetime, exactly like Rust's
+	// `ExecServerClient::environment_info` OnceCell (#49805).
+	environmentInfoMu    sync.Mutex
+	environmentInfoCache *EnvironmentInfo
+	accepted             bool
 	// reconnectDisabled mirrors Rust's stdio transport, which registers no
 	// reconnect strategy: a dropped stdio connection cannot resume its session.
 	reconnectDisabled bool
@@ -318,6 +324,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 	}
 	client.conn = conn
 	client.sessionID = initialized.SessionID
+	client.rememberEnvironmentInfo(initialized.EnvironmentInfo)
 	go client.readLoop(conn)
 	return client, nil
 }
@@ -949,6 +956,70 @@ func (c *Client) environmentInfoTimeoutError() error {
 	return fmt.Errorf("exec-server client %s timed out after %s", MethodEnvironmentInfo, environmentInfoTimeout)
 }
 
+// rememberEnvironmentInfo caches the executor metadata returned by the
+// initialize handshake. Rust sets its `environment_info` OnceCell from
+// `InitializeResponse::environment_info` and only probes when the handshake
+// omitted it (codex-rs/exec-server/src/client.rs), so capability gates do not
+// add a round trip per call.
+func (c *Client) rememberEnvironmentInfo(info *EnvironmentInfo) {
+	if c == nil || info == nil {
+		return
+	}
+	c.environmentInfoMu.Lock()
+	if c.environmentInfoCache == nil {
+		c.environmentInfoCache = info
+	}
+	c.environmentInfoMu.Unlock()
+}
+
+// cachedEnvironmentInfo returns the executor metadata for this connection:
+// the initialize handshake's value when present, otherwise one successful
+// environment/info probe (Rust `environment_info` -> `get_or_try_init`).
+func (c *Client) cachedEnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) {
+	if c == nil {
+		return nil, errors.New("exec-server client is nil")
+	}
+	c.environmentInfoMu.Lock()
+	cached := c.environmentInfoCache
+	c.environmentInfoMu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+	info, err := c.EnvironmentInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.environmentInfoMu.Lock()
+	if c.environmentInfoCache == nil {
+		c.environmentInfoCache = info
+	}
+	cached = c.environmentInfoCache
+	c.environmentInfoMu.Unlock()
+	return cached, nil
+}
+
+// errWritableFileStreamsUnsupported is returned before a writable file request
+// is sent to an executor that did not advertise `file_write_streaming`. It
+// mirrors Rust's
+// `ExecServerError::Protocol("exec-server does not support writable file streams")`
+// (Rust #49805 `e7798c9944`).
+var errWritableFileStreamsUnsupported = errors.New("exec-server does not support writable file streams")
+
+// requireFileWriteStreaming reports whether the executor supports positional
+// writes over an open handle. Older executors ignore the fs/open mode and could
+// silently return a read-only handle for a writable open, so both
+// `FsOpenMode::Replace` opens and block writes are rejected locally.
+func (c *Client) requireFileWriteStreaming(ctx context.Context) error {
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return err
+	}
+	if info == nil || !info.Capabilities.FileWriteStreaming {
+		return errWritableFileStreamsUnsupported
+	}
+	return nil
+}
+
 // retireProbedConnection closes the connection the probe ran on and requests
 // recovery. failTransport ignores a connection that is no longer current, which
 // matches Rust retiring only the connection it probed.
@@ -1064,6 +1135,14 @@ func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSR
 func (c *Client) FSOpen(ctx context.Context, params *FSOpenParams) (*FSOpenResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/open params are required")
+	}
+	// Rust #49805 `e7798c9944`: older executors ignore the mode field and could
+	// silently return a read-only handle, so a replacement open requires the
+	// file_write_streaming capability; read-only opens still reach the executor.
+	if params.Mode == fsOpenModeReplace {
+		if err := c.requireFileWriteStreaming(ctx); err != nil {
+			return nil, err
+		}
 	}
 	normalized := *params
 	path, err := normalizeFSPathForWire(params.Path)
@@ -1187,6 +1266,11 @@ func (c *Client) FSReadBlock(ctx context.Context, params *FSReadBlockParams) (*F
 func (c *Client) FSWriteBlock(ctx context.Context, params *FSWriteBlockParams) (*FSWriteBlockResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/writeBlock params are required")
+	}
+	// Rust #49805 `e7798c9944`: block writes require the executor's
+	// file_write_streaming capability, checked before the request is sent.
+	if err := c.requireFileWriteStreaming(ctx); err != nil {
+		return nil, err
 	}
 	var response FSWriteBlockResponse
 	if err := c.call(ctx, MethodFSWriteBlock, params, &response); err != nil {

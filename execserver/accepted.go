@@ -51,6 +51,7 @@ func ConnectAcceptedClient(conn *websocket.Conn, clientName string) (*Client, er
 	}
 	client.conn = wire
 	client.sessionID = initialized.SessionID
+	client.rememberEnvironmentInfo(initialized.EnvironmentInfo)
 	go client.readLoop(wire)
 	return client, nil
 }

@@ -297,6 +297,7 @@ func dialStdioCommandClient(ctx context.Context, clientName string, options Dial
 	}
 	client.conn = conn
 	client.sessionID = initialized.SessionID
+	client.rememberEnvironmentInfo(initialized.EnvironmentInfo)
 	go client.readLoop(conn)
 	return client, nil
 }

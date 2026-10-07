@@ -388,6 +388,7 @@ func DialNoiseRendezvousClient(
 	}
 	client.conn = conn
 	client.sessionID = initialized.SessionID
+	client.rememberEnvironmentInfo(initialized.EnvironmentInfo)
 	go client.readLoop(conn)
 	return client, nil
 }
