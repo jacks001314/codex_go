@@ -37,6 +37,7 @@ func (s *PluginService) ReloadConfig() error {
 	s.mu.Lock()
 	configPath := s.marketplaceConfigPath
 	installRoot := s.marketplaceInstallRoot
+	manifests := s.manifests
 	now := s.now
 	s.mu.Unlock()
 	values, err := readMarketplaceConfig(configPath)
@@ -44,7 +45,7 @@ func (s *PluginService) ReloadConfig() error {
 		return err
 	}
 	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
-	plugins := configuredPluginsFromConfig(values)
+	plugins := configuredPluginsFromConfig(values, manifests)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, marketplace := range marketplaces {
@@ -71,13 +72,14 @@ func (s *PluginService) ResolveConfigMarketplaces(values map[string]any) ([]Plug
 	}
 	s.mu.Lock()
 	installRoot := s.marketplaceInstallRoot
+	manifests := s.manifests
 	now := s.now
 	s.mu.Unlock()
 	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
 	if len(marketplaces) == 0 {
 		return nil, nil
 	}
-	details, loadErrors := loadMarketplacePlugins(marketplaces)
+	details, loadErrors := loadMarketplacePlugins(marketplaces, manifests)
 	summaries := make([]PluginSummary, 0, len(details))
 	for i := range details {
 		summaries = append(summaries, cloneSummary(details[i].Summary))
@@ -335,7 +337,7 @@ func configuredMarketplacesFromConfig(values map[string]any, installRoot string,
 	return out
 }
 
-func configuredPluginsFromConfig(values map[string]any) []PluginDetail {
+func configuredPluginsFromConfig(values map[string]any, cache *manifestCache) []PluginDetail {
 	table, ok := values["plugins"].(map[string]any)
 	if !ok {
 		return nil
@@ -360,7 +362,7 @@ func configuredPluginsFromConfig(values map[string]any) []PluginDetail {
 				SHA:    stringPtrIfNotEmpty(stringConfigValue(entry["sha"])),
 			},
 		}
-		manifest := readPluginManifestForRoot(pluginRoot)
+		manifest := readPluginManifestForRoot(pluginRoot, cache)
 		detail := marketplacePluginDetailFromManifest(name, marketplaceName, "", marketplacePath, pluginRoot, plugin, manifest)
 		detail.Summary.ID = id
 		detail.Summary.Installed = true

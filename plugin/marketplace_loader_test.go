@@ -22,7 +22,7 @@ func TestExplicitAgentMarketplaceManifestResolvesSourcesFromRepoRoot(t *testing.
 	if err := os.WriteFile(filepath.Join(pluginRoot, ".codex-plugin", "plugin.json"), []byte(`{"name":"api-docs"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	details, errs := loadMarketplacePlugins([]Marketplace{{Name: OpenAIAPICuratedMarketplaceName, RootPath: manifestPath}})
+	details, errs := loadMarketplacePlugins([]Marketplace{{Name: OpenAIAPICuratedMarketplaceName, RootPath: manifestPath}}, disabledManifestCache())
 	if len(errs) != 0 || len(details) != 1 || pluginRootFromManifestPath(details[0].ManifestPath) != pluginRoot {
 		t.Fatalf("details = %#v, errors = %#v", details, errs)
 	}

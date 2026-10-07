@@ -1762,7 +1762,7 @@ func (s *PluginService) refreshInstalledPluginsAfterMarketplaceUpgrade(marketpla
 	if len(installed) == 0 {
 		return nil
 	}
-	loadedDetails, loadErrors := loadMarketplacePlugins(targets)
+	loadedDetails, loadErrors := loadMarketplacePlugins(targets, s.manifests)
 	upgradeErrors := make([]MarketplaceUpgradeErrorInfo, 0, len(loadErrors))
 	for _, loadError := range loadErrors {
 		upgradeErrors = append(upgradeErrors, MarketplaceUpgradeErrorInfo{
@@ -1949,7 +1949,7 @@ func (s *PluginService) List(params *PluginListParams) *PluginListResponse {
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, loadErrors := loadMarketplacePlugins(marketplaces)
+	loadedDetails, loadErrors := loadMarketplacePlugins(marketplaces, s.manifests)
 	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
 	plugins := make([]PluginSummary, 0, len(details))
 	for _, detail := range details {
@@ -2092,7 +2092,7 @@ func (s *PluginService) DiscoverableInstallCandidatesContext(ctx context.Context
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
 	details = s.materializeInstalledDiscoverableDetailsBestEffort(details)
 	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(ctx, details); ok {
@@ -2305,7 +2305,7 @@ func (s *PluginService) Read(params *PluginReadParams) (*PluginReadResponse, err
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
 		if response := readPluginDetailResponse(detail, params); response != nil {
 			materialized, err := s.materializeMarketplacePluginDetail(&response.Plugin)
@@ -2351,7 +2351,7 @@ func (s *PluginService) readInstalledPluginSkill(params *PluginSkillReadParams) 
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
 		if !pluginDetailMatchesSkillRead(&detail, params) {
 			continue
@@ -2622,7 +2622,7 @@ func (s *PluginService) Install(params *PluginInstallParams) (*PluginInstallResp
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	for _, detail := range routePluginDetails(loadedDetails, target) {
 		if !pluginInstallRequestMatchesDetail(params, id, &detail) {
 			continue
@@ -2692,7 +2692,7 @@ func (s *PluginService) HydrateRecommendedPluginMetadata(remotePluginID string) 
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	s.mu.Unlock()
-	loadedDetails, _ := loadMarketplacePlugins(marketplaces)
+	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
 	for _, detail := range routePluginDetails(loadedDetails, target) {
 		if strings.TrimSpace(detail.Summary.RemotePluginID) != remotePluginID &&
 			strings.TrimSpace(detail.Summary.ID) != remotePluginID &&
@@ -2722,12 +2722,7 @@ func (s *PluginService) readPluginManifestForRootCached(pluginRoot string) *plug
 	if s != nil {
 		cache = s.manifests
 	}
-	resolved, err := parsePluginManifestAtRoot(pluginRoot, cache)
-	if err != nil || resolved == nil {
-		return nil
-	}
-	manifest := resolved.Manifest
-	return &manifest
+	return readPluginManifestForRoot(pluginRoot, cache)
 }
 
 func (s *PluginService) materializeMarketplacePluginDetail(detail *PluginDetail) (*PluginDetail, error) {

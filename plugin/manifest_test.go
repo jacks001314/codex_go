@@ -103,7 +103,7 @@ func TestAgentPluginSkillsOnlyIncludeDirectChildrenAndStayWithinRootLikeRust(t *
 	}
 	writeSkill(filepath.Join(root, "skills", "direct", "SKILL.md"), "direct")
 	writeSkill(filepath.Join(root, "skills", "group", "nested", "SKILL.md"), "nested")
-	manifest := readPluginManifestForRoot(root)
+	manifest := readPluginManifestForRoot(root, disabledManifestCache())
 	skilled := marketplacePluginSkillsForManifest(root, manifest)
 	if len(skilled) != 1 || skilled[0].Name != "direct" {
 		t.Fatalf("skills = %#v, want direct child only", skilled)

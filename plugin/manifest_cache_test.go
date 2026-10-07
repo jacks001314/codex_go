@@ -306,3 +306,24 @@ func TestPluginServiceManifestCacheIsWiredLikeRust(t *testing.T) {
 		t.Fatalf("service cache entries = %d, want 1 (the materialization path is cached)", got)
 	}
 }
+
+// Rust #49099: marketplace discovery loads plugin manifests through the
+// service's shared cache, so repeated plugin/list requests reuse parses.
+func TestPluginServiceMarketplaceDiscoveryUsesManifestCacheLikeRust(t *testing.T) {
+	root := t.TempDir()
+	writeTestMarketplacePlugin(t, root, "sample")
+	service := NewPluginService()
+	if service.manifests == nil {
+		t.Fatal("PluginService must own a manifest cache")
+	}
+	if _, err := service.AddMarketplace(&MarketplaceAddParams{Name: "debug", Source: root}); err != nil {
+		t.Fatalf("AddMarketplace error = %v", err)
+	}
+	list := service.List(&PluginListParams{})
+	if len(list.Plugins) != 1 {
+		t.Fatalf("List = %#v", list.Plugins)
+	}
+	if got := service.manifests.entries.Len(); got != 1 {
+		t.Fatalf("service cache entries = %d, want 1 (marketplace discovery must use the shared cache)", got)
+	}
+}

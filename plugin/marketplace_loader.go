@@ -53,13 +53,13 @@ type pluginManifestFile struct {
 	// OnboardingSkill is the declared relative skill path
 	// (`extensions["com.openai"].onboardingSkill`, Rust #46544).
 	OnboardingSkill string `json:"onboardingSkill"`
-	ManifestPath      string               `json:"-"`
-	SkillsPath        string               `json:"-"`
-	MCPServersPath    string               `json:"-"`
-	AgentPlugin       bool                 `json:"-"`
+	ManifestPath    string `json:"-"`
+	SkillsPath      string `json:"-"`
+	MCPServersPath  string `json:"-"`
+	AgentPlugin     bool   `json:"-"`
 }
 
-func loadMarketplacePlugins(marketplaces []Marketplace) ([]PluginDetail, []MarketplaceLoadErrorInfo) {
+func loadMarketplacePlugins(marketplaces []Marketplace, cache *manifestCache) ([]PluginDetail, []MarketplaceLoadErrorInfo) {
 	var details []PluginDetail
 	var errors []MarketplaceLoadErrorInfo
 	for _, marketplace := range marketplaces {
@@ -67,7 +67,7 @@ func loadMarketplacePlugins(marketplaces []Marketplace) ([]PluginDetail, []Marke
 		if manifestPath == "" {
 			continue
 		}
-		loaded, err := loadMarketplaceManifest(marketplace, manifestPath)
+		loaded, err := loadMarketplaceManifest(marketplace, manifestPath, cache)
 		if err != nil {
 			errors = append(errors, MarketplaceLoadErrorInfo{MarketplacePath: manifestPath, Message: err.Error()})
 			continue
@@ -101,7 +101,7 @@ func findMarketplaceManifestPath(root string) string {
 	return ""
 }
 
-func loadMarketplaceManifest(marketplace Marketplace, manifestPath string) ([]PluginDetail, error) {
+func loadMarketplaceManifest(marketplace Marketplace, manifestPath string, cache *manifestCache) ([]PluginDetail, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func loadMarketplaceManifest(marketplace Marketplace, manifestPath string) ([]Pl
 	root := marketplaceRootForManifest(marketplace.RootPath, manifestPath)
 	details := make([]PluginDetail, 0, len(manifest.Plugins))
 	for _, plugin := range manifest.Plugins {
-		detail, ok := loadMarketplacePluginDetail(root, marketplaceName, manifestPath, plugin)
+		detail, ok := loadMarketplacePluginDetail(root, marketplaceName, manifestPath, plugin, cache)
 		if ok {
 			details = append(details, detail)
 		}
@@ -143,7 +143,7 @@ func marketplaceRootForManifest(configuredRoot string, manifestPath string) stri
 	return dir
 }
 
-func loadMarketplacePluginDetail(marketplaceRoot string, marketplaceName string, marketplacePath string, plugin marketplaceManifestPlugin) (PluginDetail, bool) {
+func loadMarketplacePluginDetail(marketplaceRoot string, marketplaceName string, marketplacePath string, plugin marketplaceManifestPlugin, cache *manifestCache) (PluginDetail, bool) {
 	pluginName := strings.TrimSpace(plugin.Name)
 	if pluginName == "" {
 		return PluginDetail{}, false
@@ -153,7 +153,7 @@ func loadMarketplacePluginDetail(marketplaceRoot string, marketplaceName string,
 		return marketplacePluginDetailFromManifest(pluginName, marketplaceName, marketplaceRoot, marketplacePath, "", plugin, nil), true
 	}
 	pluginRoot := resolveMarketplacePluginPath(marketplaceRoot, plugin.Source.Path)
-	resolved, _ := loadPluginManifest(pluginRoot)
+	resolved, _ := parsePluginManifestAtRoot(pluginRoot, cache)
 	var manifest *pluginManifestFile
 	if resolved != nil {
 		manifest = &resolved.Manifest
@@ -222,16 +222,16 @@ func marketplacePluginDetailFromManifest(pluginName string, marketplaceName stri
 		Keywords:        keywords,
 	}
 	return PluginDetail{
-		MarketplaceName: marketplaceName,
-		MarketplacePath: stringPtrIfNotEmpty(marketplacePath),
-		MarketplaceRoot: marketplaceRoot,
-		Summary:         summary,
-		Description:     stringPtrIfNotEmpty(description),
-		ManifestPath:    manifestPath,
-		Skills:          marketplacePluginSkillsForManifest(pluginRoot, manifest),
-		Apps:            apps,
-		AppTemplates:    appTemplates,
-		MCPServers:      mcpServers,
+		MarketplaceName:     marketplaceName,
+		MarketplacePath:     stringPtrIfNotEmpty(marketplacePath),
+		MarketplaceRoot:     marketplaceRoot,
+		Summary:             summary,
+		Description:         stringPtrIfNotEmpty(description),
+		ManifestPath:        manifestPath,
+		Skills:              marketplacePluginSkillsForManifest(pluginRoot, manifest),
+		Apps:                apps,
+		AppTemplates:        appTemplates,
+		MCPServers:          mcpServers,
 		onboardingSkillPath: resolveOnboardingSkillPath(pluginRoot, manifest),
 	}
 }
@@ -364,8 +364,8 @@ func readPluginManifestFile(path string) *pluginManifestFile {
 	return &manifest
 }
 
-func readPluginManifestForRoot(pluginRoot string) *pluginManifestFile {
-	resolved, err := loadPluginManifest(pluginRoot)
+func readPluginManifestForRoot(pluginRoot string, cache *manifestCache) *pluginManifestFile {
+	resolved, err := parsePluginManifestAtRoot(pluginRoot, cache)
 	if err != nil || resolved == nil {
 		return nil
 	}
