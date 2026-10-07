@@ -82,8 +82,41 @@ func stripANSISGR(value string) string {
 	return builder.String()
 }
 
+// stripOSC8Hyperlinks removes OSC-8 hyperlink sequences. The markdown renderer
+// keeps link destinations attached to the preview text as OSC-8 escapes
+// (Rust #50431 mark_buffer_hyperlinks); those escapes are not printable, so
+// width measurement and plain rendering must ignore them instead of counting
+// the destination characters as visible cells.
+func stripOSC8Hyperlinks(value string) string {
+	if !strings.Contains(value, "\x1b]8;;") {
+		return value
+	}
+	var builder strings.Builder
+	for i := 0; i < len(value); {
+		if strings.HasPrefix(value[i:], "\x1b]8;;") {
+			i += len("\x1b]8;;")
+			for i < len(value) && value[i] != '\a' {
+				i++
+			}
+			if i < len(value) {
+				i++
+			}
+			continue
+		}
+		builder.WriteByte(value[i])
+		i++
+	}
+	return builder.String()
+}
+
+// stripTerminalEscapes removes every non-printable escape sequence the details
+// pane can carry: SGR styling and OSC-8 hyperlinks.
+func stripTerminalEscapes(value string) string {
+	return stripOSC8Hyperlinks(stripANSISGR(value))
+}
+
 func ansiAwareWidth(value string) int {
-	return runewidth.StringWidth(stripANSISGR(value))
+	return runewidth.StringWidth(stripTerminalEscapes(value))
 }
 
 // threadTitleSpan renders a row title with the thread's identity color when one
@@ -227,7 +260,7 @@ func renderLine(prefix string, spans []span, maxWidth int, styled bool) string {
 	text := ""
 	for _, s := range spans {
 		if s.raw {
-			text += stripANSISGR(s.text)
+			text += stripTerminalEscapes(s.text)
 			continue
 		}
 		text += s.text
