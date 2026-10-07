@@ -19,6 +19,15 @@ const (
 	MultiAgentV2MaxWait     = time.Hour
 )
 
+// multiAgentV2SpawnInheritedModelGuidance mirrors the V2 half of Rust's
+// SPAWN_AGENT_INHERITED_MODEL_GUIDANCE
+// (codex-rs/core/src/tools/handlers/multi_agents_spec.rs:17): the spawn_agent
+// description states that spawned agents inherit the current model by default
+// whenever the model overrides are exposed and the spawn metadata is not
+// hidden (Rust #26114, re-gated by #49786 for the model-catalog-in-context
+// variant, which has no Go carrier because that feature is unwired here).
+const multiAgentV2SpawnInheritedModelGuidance = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
+
 var multiAgentV2TaskNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 type V2ToolController interface {
@@ -171,6 +180,13 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 		// static text, and the usage hint is appended either way.
 		if override, ok := e.toolOverrides[string(e.kind)]; ok && override.Description != nil {
 			spec.Description = *override.Description
+		}
+		// Rust #26114: state the inherited-model default whenever the model
+		// overrides are exposed and the spawn metadata is not hidden. Rust
+		// composes this into the description before the usage hint, so the
+		// hint stays last (multi_agents_spec.rs:117-124).
+		if e.exposeSpawnModelOverrides && !e.hideSpawnMetadata {
+			spec.Description += "\n\n" + multiAgentV2SpawnInheritedModelGuidance
 		}
 		if e.usageHintText != nil && strings.TrimSpace(*e.usageHintText) != "" {
 			// Rust appends the configured multi_agent_v2.usage_hint_text to the
