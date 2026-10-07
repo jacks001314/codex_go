@@ -1228,3 +1228,18 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 2. **OSC-8 降级**：Go 的 URL 超链接是**内联转义字节**，行被拆开会破坏序列 ⇒ `wrapStatusRowLines` 在**需要换行时**按 `StripOSC8` 的可见文本换行（窄终端下超链接降级为纯文本，文本完整）；单行装得下时原样保留超链接。
 3. **Go 特有宽度策略**：原 44 列下限按裁定移除（`max(1, m.width-2)`，保留 2 列 gutter）；**100 列上限保留**（`tui/state.go:270 statusCardMaxWidth`，上游无上限）。宽终端输出逐字不变已断言（`RenderStatusCardWidth(101) == (200) == (100)`）。
 4. **双轨 formatter 不可合并**：`tui/status/format.go` 仅测试在用，活路径是 `tui/state.go renderStatusField`；因 `tui/status` → `codex_go/tui` 单向依赖，合并会形成 import cycle ⇒ 两处同步同一公式并互相注释指引。
+
+## 第 85 轮续 6／7 台账订正（sync556–561 + N/A 裁决）
+
+**已落地（✅）**：`#48772`→`8eb3100f` sync556 · `#48819`→`549148fd` sync557 · `#49119` 落盘半片→`500bc57a` sync558（**#49119 全闭环**）· `#49099` 穿透半片→`740d71b6` sync559（**#49099 全闭环**）· `#49160` part a→`2eb25440` sync560 · `#50788`→`1c2ab6b0` sync561。
+
+**判 N/A（决定性证据见 plan「第 85 轮续 6／7」表）**：`#49082` · `#48983` · `#49100`（队长裁决；车道另版实现 `7e153d74` 留档不并入）· `#51350` · `#49798`（Go 已覆盖）· `#51396`/`#51400`（子系统级）· `#51458`。
+
+**独立工单候选（子系统移植，非单 PR 补丁）**：
+1. **Guardian v2 异步评分器**（释放语义 + score publication + watch + wrapper-lag provenance + `CachedApproval` + `cached_approval_is_current`）——涵盖 `#51396`、`#51400`、`#51065`、`#51070`、`#49257`、`#49792`、`#50066`、`#50273`、`#51133`。
+2. **executor 侧 shell 快照子系统**（capture/parse/限额/回放）——涵盖 `#51350`、`#39957`、`#39958`、`#48078`。
+3. **TUI 用户核验提示视图**（透传 Title/Description/Challenge + 渲染）——涵盖 `#51458`、`#43708`、`#43712`。
+
+**新线索（仅登记）**：`appserver/agent_runtime.go:710 httpClientForConfig` → `network.NewHTTPClient`（clone transport）在 `handleAppRead`/`handleAppList` 呈「每请求一个新池」形状；对应上游属 chatgpt_client 流（#47703 一线），不属 #49100，当前窗口无对应 PR。
+
+**基线补充**：`TestOtelProviderReloadsAfterAccountChange` 在本机**隔离单跑也 FAIL**（环境依赖，不只是偶发），不计入回归。
