@@ -5756,6 +5756,12 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		return nil, nil, err
 	}
 	now := time.Now().UTC()
+	// Rust #51188 (`compact::assemble_compaction_history`): the replaced
+	// window's recorded declaration prefix (the `additional_tools` catalog plus
+	// the base-instruction developer message) opens the rebuilt history, ahead
+	// of the compaction summary and the window's first user message. Capture it
+	// from the history being replaced before the replacement overwrites it.
+	declarationPrefix := incrementalDeclarationPrefixItems(record.Items)
 	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
 	// Rust #49598 (`Session::replace_compacted_history`): goal edits are
 	// published outside the running compaction task, so an edit accepted after
@@ -5839,6 +5845,14 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		extra["auto_compact_context_window_id"] = windowID
 	}
 	record.Metadata.Extra = extra
+	// Rust #51188: place the replacement window's declaration prefix ahead of the
+	// rebuilt history before the checkpoint is persisted, so a cold replay reads
+	// the tool catalog before the compaction summary. The same call records the
+	// new window's catalog baseline, so the window's first turn replays the
+	// recorded declarations instead of re-declaring them.
+	if placeErr := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, r.windowNumberForThread(request.ThreadID)); placeErr != nil {
+		return nil, nil, placeErr
+	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, nil, err
 	}

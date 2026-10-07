@@ -2788,6 +2788,11 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 		return nil, err
 	}
 	now := r.now().UTC()
+	// Rust #51188 (`compact::assemble_compaction_history`): the replaced
+	// window's recorded declaration prefix opens the rebuilt history, ahead of
+	// the compaction summary. Capture it before the replacement overwrites the
+	// history (the runtime compaction path does the same).
+	declarationPrefix := incrementalDeclarationPrefixItems(record.Items)
 	record.Items = sessionItemsFromCompactItems(compacted.NewHistory, now)
 	record.UpdatedAt = now
 	record.RecencyAt = now
@@ -2799,6 +2804,11 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	// The compaction starts a new conversation window; persist the advanced
 	// number with the record and stamp it on the checkpoint below.
 	windowNumber := advanceRecordWindowNumber(record)
+	// Rust #51188: place the prefix ahead of the rebuilt history and record the
+	// new window's catalog baseline before the checkpoint is written.
+	if err := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, windowNumber); err != nil {
+		return nil, err
+	}
 	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
