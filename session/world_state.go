@@ -17,6 +17,13 @@ type WorldState struct {
 	MultiAgentMode          json.RawMessage `json:"multiAgentMode,omitempty"`
 	MultiAgentUsageHint     json.RawMessage `json:"multiAgentUsageHint,omitempty"`
 	Tools                   json.RawMessage `json:"tools,omitempty"`
+	// TopLevelTools carries the incremental Responses Lite tool catalog snapshot
+	// (Rust section id `top_level_tools`, #50540): the window it was recorded for
+	// and the stable hash of every declaration.
+	TopLevelTools json.RawMessage `json:"topLevelTools,omitempty"`
+	// BaseInstructions carries the recorded base-instruction snapshot (Rust
+	// section id `base_instructions`, #51188).
+	BaseInstructions json.RawMessage `json:"baseInstructions,omitempty"`
 }
 
 func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
@@ -37,6 +44,8 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.MultiAgentMode = append(json.RawMessage(nil), state.MultiAgentMode...)
 	state.MultiAgentUsageHint = append(json.RawMessage(nil), state.MultiAgentUsageHint...)
 	state.Tools = append(json.RawMessage(nil), state.Tools...)
+	state.TopLevelTools = append(json.RawMessage(nil), state.TopLevelTools...)
+	state.BaseInstructions = append(json.RawMessage(nil), state.BaseInstructions...)
 	return &state, nil
 }
 

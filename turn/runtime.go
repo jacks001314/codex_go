@@ -242,16 +242,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	loopRequest.ToolMode = effectiveToolMode
 	var visibleSpecs []tool.Spec
 	if len(loopRequest.Tools) == 0 {
-		visibleSpecs = r.router.ModelVisibleSpecs()
-		if effectiveToolMode == model.ToolModeDirect {
-			visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
-		} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
-			visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
-			visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
-		}
-		if codemode.HasExecTool(visibleSpecs) {
-			visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
-		}
+		visibleSpecs = r.modelVisibleSpecsForRequest(effectiveToolMode)
 		loopRequest.Tools = model.ResponsesToolsFromSpecs(visibleSpecs)
 	}
 	if effectiveToolMode == model.ToolModeCodeMode || effectiveToolMode == model.ToolModeCodeModeOnly {
@@ -285,6 +276,57 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		MaxTurns: r.maxTurns,
 		Now:      r.now,
 	}).Run(ctx, &loopRequest)
+}
+
+// modelVisibleSpecsForRequest resolves the model-visible tool specs a request
+// with no pinned tool list carries for an effective tool mode. Run and the
+// incremental Responses Lite catalog share it so the recorded declarations
+// match the tools the request would otherwise send (Rust #50540
+// `create_tools_json_for_responses_lite(model_visible_specs())`).
+func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.Spec {
+	if r == nil || r.router == nil {
+		return nil
+	}
+	visibleSpecs := r.router.ModelVisibleSpecs()
+	if effectiveToolMode == model.ToolModeDirect {
+		visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+	} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
+		visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
+		visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+	}
+	if codemode.HasExecTool(visibleSpecs) {
+		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+	}
+	return visibleSpecs
+}
+
+// effectiveToolModeForRequest mirrors PrepareToolMode's code-mode downgrade
+// without consuming the per-thread unavailability warning, so callers that only
+// inspect the turn's tools leave the warning for the request itself.
+func (r *Runtime) effectiveToolModeForRequest(requestedToolMode string, disableCodeModeFallback bool) string {
+	requestedToolMode = strings.ToLower(strings.TrimSpace(requestedToolMode))
+	if requestedToolMode == "" {
+		requestedToolMode = model.ToolModeDirect
+	}
+	if r == nil || r.router == nil {
+		return requestedToolMode
+	}
+	if err := r.router.CodeModeAvailability(); err != nil && requestedToolMode == model.ToolModeCodeMode && !disableCodeModeFallback {
+		return model.ToolModeDirect
+	}
+	return requestedToolMode
+}
+
+// ModelVisibleToolDefinitions returns the serialized Responses Lite tool
+// declarations (namespaces, their members and built-ins) for this turn's
+// visible tools. The incremental tool catalog diffs this value against the
+// catalog recorded for the context window (Rust
+// `create_tools_json_for_responses_lite(&model_visible_specs())`, #50540).
+func (r *Runtime) ModelVisibleToolDefinitions(toolMode string, disableCodeModeFallback bool) []any {
+	if r == nil {
+		return nil
+	}
+	return model.ResponsesToolsFromSpecs(r.modelVisibleSpecsForRequest(r.effectiveToolModeForRequest(toolMode, disableCodeModeFallback)))
 }
 
 // truncationPolicy resolves the effective model's output-truncation policy for
