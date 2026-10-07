@@ -160,9 +160,12 @@ func TestRuntimeRouterRetainedContextSurvivesCompactionLikeRust(t *testing.T) {
 }
 
 // Mirrors Rust's review prompt: the retained user-instruction section renders the
-// thread's original instructions, and a thread without evidence adds no section.
+// thread's original instructions ahead of the transcript, the assistant context
+// follows it in its own section (#51627), and a thread without evidence adds no
+// section.
 func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T) {
 	messageID := "user-1"
+	assistantID := "assistant-1"
 	retained := &retainedctx.RetainedContext{}
 	retained.RecordUserMessage(retainedctx.RetainedUserMessage{
 		TurnID:    "turn-1",
@@ -170,6 +173,13 @@ func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T)
 		Text:      "Keep the repository private.",
 		Complete:  true,
 	}, retainedctx.LocalInputSource(nil))
+	assistantOrder := uint64(1)
+	retained.RecordAssistantMessage(retainedctx.RetainedUserMessage{
+		TurnID:    "turn-1",
+		MessageID: &assistantID,
+		Text:      "Understood.",
+		Complete:  true,
+	}, retainedctx.LocalInputSource(&assistantOrder))
 
 	var captured *model.AgentRequest
 	reviewer := &modelGuardianReviewer{
@@ -179,6 +189,7 @@ func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T)
 		}),
 		store:           state.NewReviewStore(),
 		retainedContext: func(threadID, turnID string) *retainedctx.RetainedContext { return retained },
+		transcript:      func(threadID string) []string { return []string{"agent listed files"} },
 	}
 	if _, _, err := reviewer.Review(context.Background(), "thread-1", "turn-1", "call-1", state.Action{Type: "command", Command: "ls", CWD: "/repo"}); err != nil {
 		t.Fatalf("Review() error = %v", err)
@@ -190,10 +201,27 @@ func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T)
 		">>> RETAINED USER INSTRUCTIONS START",
 		"Retained source order: 0\nuser: Keep the repository private.\n",
 		">>> RETAINED USER INSTRUCTIONS END",
+		">>> RETAINED ASSISTANT CONTEXT START",
+		"assistant: Understood.",
+		">>> RETAINED ASSISTANT CONTEXT END",
 	} {
 		if !strings.Contains(captured.Prompt, want) {
 			t.Fatalf("prompt is missing %q:\n%s", want, captured.Prompt)
 		}
+	}
+	// #51627: the instruction prefix precedes the transcript so growing assistant
+	// evidence cannot invalidate it, and the assistant context follows it.
+	instructionsAt := strings.Index(captured.Prompt, ">>> RETAINED USER INSTRUCTIONS START")
+	transcriptAt := strings.Index(captured.Prompt, "Recent transcript:")
+	assistantAt := strings.Index(captured.Prompt, ">>> RETAINED ASSISTANT CONTEXT START")
+	if instructionsAt < 0 || transcriptAt < 0 || assistantAt < 0 {
+		t.Fatalf("prompt is missing a section:\n%s", captured.Prompt)
+	}
+	if !(instructionsAt < transcriptAt && transcriptAt < assistantAt) {
+		t.Fatalf("section order = instructions:%d transcript:%d assistant:%d\n%s", instructionsAt, transcriptAt, assistantAt, captured.Prompt)
+	}
+	if strings.Contains(captured.Prompt[:transcriptAt], "assistant: Understood.") {
+		t.Fatalf("assistant context leaked into the instruction prefix:\n%s", captured.Prompt)
 	}
 
 	open := &modelGuardianReviewer{
@@ -207,7 +235,8 @@ func TestModelGuardianReviewerIncludesRetainedInstructionsLikeRust(t *testing.T)
 	if _, _, err := open.Review(context.Background(), "thread-1", "turn-1", "call-2", state.Action{Type: "command", Command: "ls", CWD: "/repo"}); err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
-	if strings.Contains(captured.Prompt, "RETAINED USER INSTRUCTIONS") {
+	if strings.Contains(captured.Prompt, "RETAINED USER INSTRUCTIONS") ||
+		strings.Contains(captured.Prompt, "RETAINED ASSISTANT CONTEXT") {
 		t.Fatalf("a thread without retained evidence rendered a section:\n%s", captured.Prompt)
 	}
 }
@@ -299,6 +328,20 @@ func TestRuntimeRouterRetainsAssistantContextLikeRust(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "assistant: Understood.") {
 		t.Fatalf("prompt is missing the assistant context:\n%s", prompt)
+	}
+	// #51627 keeps the assistant originals in their own marked section, outside
+	// the retained user-instruction prefix.
+	if !strings.Contains(prompt, ">>> RETAINED ASSISTANT CONTEXT START") ||
+		!strings.Contains(prompt, ">>> RETAINED ASSISTANT CONTEXT END") {
+		t.Fatalf("prompt is missing the retained assistant context framing:\n%s", prompt)
+	}
+	userStart := strings.Index(prompt, ">>> RETAINED USER INSTRUCTIONS START")
+	userEnd := strings.Index(prompt, ">>> RETAINED USER INSTRUCTIONS END")
+	if userStart < 0 || userEnd < userStart {
+		t.Fatalf("prompt is missing the retained user-instruction framing:\n%s", prompt)
+	}
+	if strings.Contains(prompt[userStart:userEnd], "assistant: Understood.") {
+		t.Fatalf("assistant originals leaked into the instruction prefix:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, state.RootMessage{Kind: state.RootMessageIncompleteAssistantContext}.Render()) {
 		t.Fatalf("prompt is missing the omitted-assistant-context notice:\n%s", prompt)
