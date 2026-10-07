@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/base64"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,6 +43,14 @@ type EnvironmentFileSystem interface {
 	GetMetadata(ctx context.Context, path string, sandbox *execserver.FileSystemSandboxContext) (*execserver.FSGetMetadataResponse, error)
 	// ReadFile returns the file's bytes.
 	ReadFile(ctx context.Context, path string, sandbox *execserver.FileSystemSandboxContext) ([]byte, error)
+	// WriteFile replaces the file's contents (Rust `ExecutorFileSystem::write_file`,
+	// codex-rs/file-system/src/lib.rs:629).
+	WriteFile(ctx context.Context, path string, data []byte, sandbox *execserver.FileSystemSandboxContext) error
+	// CreateDirectory creates the directory, recursively when recursive is set
+	// (Rust `ExecutorFileSystem::create_directory`).
+	CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error
+	// Remove deletes the path (Rust `ExecutorFileSystem::remove`).
+	Remove(ctx context.Context, path string, force bool, recursive bool, sandbox *execserver.FileSystemSandboxContext) error
 	// CWD is the environment working directory relative paths resolve against.
 	CWD() string
 }
@@ -135,6 +144,24 @@ func (f localEnvironmentFileSystem) ReadFile(_ context.Context, path string, san
 	return decodeBase64File(response.DataBase64)
 }
 
+func (f localEnvironmentFileSystem) WriteFile(_ context.Context, path string, data []byte, _ *execserver.FileSystemSandboxContext) error {
+	resolved := f.resolve(path)
+	if dir := filepath.Dir(resolved); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(resolved, data, 0o600)
+}
+
+func (f localEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {
+	return os.MkdirAll(f.resolve(path), 0o755)
+}
+
+func (f localEnvironmentFileSystem) Remove(_ context.Context, path string, _ bool, _ bool, _ *execserver.FileSystemSandboxContext) error {
+	return os.Remove(f.resolve(path))
+}
+
 func (f localEnvironmentFileSystem) resolve(path string) string {
 	return resolveEnvironmentPath(f.cwd, path)
 }
@@ -177,6 +204,49 @@ func (f remoteEnvironmentFileSystem) ReadFile(ctx context.Context, path string, 
 		return nil, err
 	}
 	return decodeBase64File(response.DataBase64)
+}
+
+func (f remoteEnvironmentFileSystem) WriteFile(ctx context.Context, path string, data []byte, sandbox *execserver.FileSystemSandboxContext) error {
+	client, err := f.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.FSWriteFile(ctx, &execserver.FSWriteFileParams{
+		Path:       f.resolve(path),
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+		Sandbox:    sandbox,
+	})
+	return err
+}
+
+func (f remoteEnvironmentFileSystem) CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error {
+	client, err := f.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.FSCreateDirectory(ctx, &execserver.FSCreateDirectoryParams{
+		Path:      f.resolve(path),
+		Recursive: &recursive,
+		Sandbox:   sandbox,
+	})
+	return err
+}
+
+func (f remoteEnvironmentFileSystem) Remove(ctx context.Context, path string, force bool, recursive bool, sandbox *execserver.FileSystemSandboxContext) error {
+	client, err := f.client(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.FSRemove(ctx, &execserver.FSRemoveParams{
+		Path:      f.resolve(path),
+		Force:     &force,
+		Recursive: &recursive,
+		Sandbox:   sandbox,
+	})
+	return err
 }
 
 func (f remoteEnvironmentFileSystem) resolve(path string) string {

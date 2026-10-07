@@ -32,7 +32,7 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, cwd string
 	// sequentially and a failure after a partial success leaves the already
 	// applied changes on disk (scenario 015). The verify-first flow is only
 	// used by the app-server tool, matching Rust's verify_apply_patch_args.
-	result, err := action.applyCommitted(cwd)
+	result, err := action.applyCommitted(osFilesystem{}, cwd)
 	if err != nil {
 		writeCLIError(stderr, err)
 		return 1

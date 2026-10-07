@@ -30,17 +30,21 @@ type ApplyPatchExecutorOptions struct {
 	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so a
 	// patch-level environment id is resolved before verification.
 	EnvironmentCheck *UnifiedExecEnvironmentCheck
+	// EnvironmentFileSystems resolves the selected environment's filesystem so
+	// the patch is verified and applied through that environment (Rust #20647).
+	EnvironmentFileSystems EnvironmentFileSystemProvider
 }
 
 type ApplyPatchExecutor struct {
-	cwdPath              string
-	includeEnvironmentID bool
-	toolName             ToolName
-	approval             ApplyPatchApprovalFunc
-	decisionSink         ToolDecisionSink
-	permissionProfile    *sandbox.PermissionProfile
-	sandboxPolicy        *sandbox.SandboxPolicy
-	environmentCheck     *UnifiedExecEnvironmentCheck
+	cwdPath                string
+	includeEnvironmentID   bool
+	toolName               ToolName
+	approval               ApplyPatchApprovalFunc
+	decisionSink           ToolDecisionSink
+	permissionProfile      *sandbox.PermissionProfile
+	sandboxPolicy          *sandbox.SandboxPolicy
+	environmentCheck       *UnifiedExecEnvironmentCheck
+	environmentFileSystems EnvironmentFileSystemProvider
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -77,6 +81,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.permissionProfile = options.PermissionProfile
 	executor.sandboxPolicy = options.SandboxPolicy
 	executor.environmentCheck = options.EnvironmentCheck
+	executor.environmentFileSystems = options.EnvironmentFileSystems
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -121,13 +126,26 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
 	var environmentCheck *UnifiedExecEnvironmentCheck
+	var environmentFileSystems EnvironmentFileSystemProvider
 	if e != nil {
 		environmentCheck = e.environmentCheck
+		environmentFileSystems = e.environmentFileSystems
 	}
-	if _, err := ResolveToolEnvironment(environmentCheck, action.EnvironmentID, applyPatchUnavailableMessage); err != nil {
+	// Rust #20647: the patch resolves to a turn environment and executes on that
+	// environment's filesystem, so a remote selection patches the executor's
+	// files instead of the host process filesystem.
+	fileSystem, err := ResolveToolEnvironmentFileSystem(environmentCheck, environmentFileSystems, action.EnvironmentID, applyPatchUnavailableMessage, e.cwd())
+	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
-	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd()}
+	// The patch's working directory is the selected environment's, so the
+	// resolved paths (and the environment-relative requests built from them)
+	// address that environment's tree.
+	cwd := e.cwd()
+	if resolvedCWD := strings.TrimSpace(fileSystem.CWD()); resolvedCWD != "" {
+		cwd = resolvedCWD
+	}
+	applyOptions := &applypatch.ApplyOptions{CWD: cwd, FS: newEnvironmentApplyPatchFileSystem(ctx, fileSystem)}
 	// Rust #39659: when an otherwise-required sandbox is bypassed, disable
 	// symlink traversal so a verified path cannot be swapped for a link to a
 	// different file.
@@ -139,7 +157,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 			Success:    false,
 			Body:       body,
 			Error:      body,
-			Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, e.cwd())),
+			Data:       applyPatchApprovalData("failed", applyPatchFileChanges(action, cwd)),
 			LogPreview: shellLogPreview(body),
 		}, nil
 	}
@@ -149,12 +167,12 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	if err := action.Verify(applyOptions); err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
 	}
-	changes := applyPatchFileChanges(action, e.cwd())
+	changes := applyPatchFileChanges(action, cwd)
 	if e.approval != nil {
 		decision, approvalErr := e.approval(ctx, &ApplyPatchApprovalRequest{
 			Action:     action,
 			Changes:    changes,
-			CWD:        e.cwd(),
+			CWD:        cwd,
 			Patch:      patch,
 			Invocation: invocation,
 		})
@@ -209,7 +227,7 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	return &Output{
 		Success:    true,
 		Body:       body,
-		Data:       applyPatchResultData(result, action, e.cwd()),
+		Data:       applyPatchResultData(result, action, cwd),
 		LogPreview: shellLogPreview(body),
 	}, nil
 }

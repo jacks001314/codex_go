@@ -70,6 +70,57 @@ type ApplyOptions struct {
 	// traverse symlinks in any component, used when an otherwise-required
 	// sandbox is bypassed.
 	NoFollowSymlinks bool
+	// FS is the filesystem the patch reads and writes through. nil keeps the
+	// host process filesystem (osFilesystem), which is what every caller
+	// predating Rust #20647 passes; the environment-backed apply_patch handler
+	// injects the selected turn environment's filesystem so a remote executor's
+	// files are patched on that executor.
+	FS FileSystem
+}
+
+// FileSystem is the minimal filesystem surface apply_patch needs. Rust threads
+// the selected turn environment's `ExecutorFileSystem` through
+// `apply_patch_with_options` (codex-rs/apply-patch/src/lib.rs:329) and
+// `verify_apply_patch_args` (codex-rs/apply-patch/src/invocation.rs:168, Rust
+// #20647 `78421face0` "Route process tools to selected environments"), so both
+// the preflight verification and the committed write read and write through the
+// same engine. Go mirrors that by routing every os.* touch point in this file
+// through ApplyOptions.FS.
+type FileSystem interface {
+	ReadFile(path string) ([]byte, error)
+	WriteFile(path string, data []byte, perm os.FileMode) error
+	Stat(path string) (os.FileInfo, error)
+	Lstat(path string) (os.FileInfo, error)
+	Remove(path string) error
+	MkdirAll(path string, perm os.FileMode) error
+}
+
+// osFilesystem is the default FileSystem: the host process filesystem, kept for
+// every caller that does not inject an environment filesystem (nil FS).
+type osFilesystem struct{}
+
+func (osFilesystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+func (osFilesystem) WriteFile(path string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(path, data, perm)
+}
+
+func (osFilesystem) Stat(path string) (os.FileInfo, error)  { return os.Stat(path) }
+func (osFilesystem) Lstat(path string) (os.FileInfo, error) { return os.Lstat(path) }
+func (osFilesystem) Remove(path string) error               { return os.Remove(path) }
+
+func (osFilesystem) MkdirAll(path string, perm os.FileMode) error {
+	return os.MkdirAll(path, perm)
+}
+
+// applyOptionsFileSystem returns the filesystem a patch applies through,
+// defaulting to the host process filesystem when no environment filesystem was
+// injected.
+func applyOptionsFileSystem(options *ApplyOptions) FileSystem {
+	if options != nil && options.FS != nil {
+		return options.FS
+	}
+	return osFilesystem{}
 }
 
 type ApplyResult struct {
@@ -235,7 +286,7 @@ func (a *Action) FillDeleteContent(options *ApplyOptions) error {
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		data, err := applyOptionsFileSystem(options).ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read file to delete %s: %w", path, err)
 		}
@@ -263,7 +314,7 @@ func (a *Action) Verify(options *ApplyOptions) error {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.preflight(cwd)
+	return a.preflight(applyOptionsFileSystem(options), cwd)
 }
 
 // ApplyVerified commits an action after Verify has succeeded.
@@ -278,13 +329,13 @@ func (a *Action) ApplyVerified(options *ApplyOptions) (*ApplyResult, error) {
 	if options != nil && strings.TrimSpace(options.CWD) != "" {
 		cwd = options.CWD
 	}
-	return a.applyCommitted(cwd)
+	return a.applyCommitted(applyOptionsFileSystem(options), cwd)
 }
 
-func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
+func (a *Action) applyCommitted(fs FileSystem, cwd string) (*ApplyResult, error) {
 	result := &ApplyResult{}
 	for _, change := range a.Hunks {
-		applied, err := applyChange(cwd, &change)
+		applied, err := applyChange(fs, cwd, &change)
 		if err != nil {
 			return nil, err
 		}
@@ -294,7 +345,11 @@ func (a *Action) applyCommitted(cwd string) (*ApplyResult, error) {
 	return result, nil
 }
 
-func (a *Action) preflight(cwd string) error {
+func (a *Action) preflight(fs FileSystem, cwd string) error {
+	// The symlink walk stays on the host process filesystem: it is a Go
+	// host-path safety check (Rust #39659) for the unsandboxed local case, and
+	// no wire primitive models "is this component a symlink" over the exec
+	// server. Patch targets themselves are read through fs below.
 	if a != nil && a.NoFollowSymlinks {
 		for _, name := range a.FilePaths() {
 			resolved, err := resolveWorkspacePath(cwd, name)
@@ -366,7 +421,10 @@ func (a *Action) preflight(cwd string) error {
 		if shadowErr != nil {
 			return shadowErr
 		}
-		info, statErr := os.Stat(source)
+		// The target file's metadata and bytes come from the injected
+		// filesystem, so a file that exists only on a selected remote executor
+		// still passes verification instead of failing as "not found" locally.
+		info, statErr := fs.Stat(source)
 		if errors.Is(statErr, os.ErrNotExist) {
 			continue
 		}
@@ -380,7 +438,7 @@ func (a *Action) preflight(cwd string) error {
 		if targetErr != nil {
 			return targetErr
 		}
-		data, readErr := os.ReadFile(source)
+		data, readErr := fs.ReadFile(source)
 		if readErr != nil {
 			return readErr
 		}
@@ -407,7 +465,10 @@ func (a *Action) preflight(cwd string) error {
 			shadowAction.Hunks[index].MovePath = moveShadow
 		}
 	}
-	_, err = shadowAction.applyCommitted(tempDir)
+	// The shadow workspace is a purely local Go mechanism (Rust has no
+	// preflight copy step): the shadow tree lives in a host temp dir, so the
+	// dry-run applies through the host filesystem even when fs is remote.
+	_, err = shadowAction.applyCommitted(osFilesystem{}, tempDir)
 	return err
 }
 
@@ -535,31 +596,31 @@ func (a *Action) addChange(change Change) {
 	a.Hunks = append(a.Hunks, change)
 }
 
-func applyChange(cwd string, change *Change) (*AppliedFile, error) {
+func applyChange(fs FileSystem, cwd string, change *Change) (*AppliedFile, error) {
 	if change == nil {
 		return nil, fmt.Errorf("%w: nil change", ErrInvalidPatch)
 	}
 	switch change.Kind {
 	case ChangeAdd:
-		return applyAdd(cwd, change)
+		return applyAdd(fs, cwd, change)
 	case ChangeDelete:
-		return applyDelete(cwd, change)
+		return applyDelete(fs, cwd, change)
 	case ChangeUpdate:
-		return applyUpdate(cwd, change)
+		return applyUpdate(fs, cwd, change)
 	default:
 		return nil, fmt.Errorf("%w: unknown change kind %q", ErrInvalidPatch, change.Kind)
 	}
 }
 
-func applyAdd(cwd string, change *Change) (*AppliedFile, error) {
+func applyAdd(fs FileSystem, cwd string, change *Change) (*AppliedFile, error) {
 	path, err := resolveWorkspacePath(cwd, change.Path)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := fs.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(path, []byte(change.Content), 0o600); err != nil {
+	if err := fs.WriteFile(path, []byte(change.Content), 0o600); err != nil {
 		return nil, fmt.Errorf("failed to write file %s: %w", path, err)
 	}
 	return &AppliedFile{
@@ -573,18 +634,18 @@ func applyAdd(cwd string, change *Change) (*AppliedFile, error) {
 	}, nil
 }
 
-func applyDelete(cwd string, change *Change) (*AppliedFile, error) {
+func applyDelete(fs FileSystem, cwd string, change *Change) (*AppliedFile, error) {
 	path, err := resolveWorkspacePath(cwd, change.Path)
 	if err != nil {
 		return nil, err
 	}
-	if info, err := os.Stat(path); err != nil {
+	if info, err := fs.Stat(path); err != nil {
 		return nil, fmt.Errorf("Failed to delete file %s", path)
 	} else if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("Failed to delete file %s: not a regular file", path)
 	}
-	data, _ := os.ReadFile(path)
-	if err := os.Remove(path); err != nil {
+	data, _ := fs.ReadFile(path)
+	if err := fs.Remove(path); err != nil {
 		return nil, fmt.Errorf("Failed to delete file %s", path)
 	}
 	return &AppliedFile{
@@ -598,12 +659,12 @@ func applyDelete(cwd string, change *Change) (*AppliedFile, error) {
 	}, nil
 }
 
-func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
+func applyUpdate(fs FileSystem, cwd string, change *Change) (*AppliedFile, error) {
 	path, err := resolveWorkspacePath(cwd, change.Path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := fs.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file to update %s: %w", path, err)
 	}
@@ -620,14 +681,14 @@ func applyUpdate(cwd string, change *Change) (*AppliedFile, error) {
 		}
 		outDisplayPath = change.MovePath
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := fs.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(outPath, []byte(updated), 0o600); err != nil {
+	if err := fs.WriteFile(outPath, []byte(updated), 0o600); err != nil {
 		return nil, fmt.Errorf("failed to write file %s: %w", outPath, err)
 	}
 	if change.MovePath != "" && outPath != path {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := fs.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("failed to remove original file %s: %w", path, err)
 		}
 	}
