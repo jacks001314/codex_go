@@ -1426,11 +1426,15 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		// tool catalog (`CodexThread::mcp_server_status_snapshot` ->
 		// `McpRuntime::server_status_snapshot` ->
 		// `collect_mcp_server_status_snapshot_from_manager`), so a status read
-		// never repeats the initialize or tools/list round trips. This call did
-		// not materialize the catalog, so it records no catalog source (and thus
-		// no size telemetry), matching the Rust snapshot read.
-		if selectedServer != "" && threadID != "" && servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 {
-			notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
+		// never repeats the initialize or tools/list round trips. That snapshot
+		// only reads the manager's published server infos and tool catalog, so a
+		// server the thread has not started stays dormant: the read must not open
+		// a connection or materialize the catalog on this path (the reported
+		// runtime status is the thread's current one, not a fresh startup), and
+		// because nothing was materialized this call records no catalog source
+		// and reports no size telemetry.
+		if selectedServer != "" && threadID != "" {
+			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
 			continue
 		}
 		// Rust #38217: a required server with cached tool definitions may stay
