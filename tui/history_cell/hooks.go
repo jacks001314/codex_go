@@ -50,15 +50,25 @@ func NewHookRun(eventName string, status string, statusMessage string, entries [
 	}
 }
 
+// DisplayLines renders the hook cell as plain text. Hook system messages carry
+// ANSI styles, so the plain projection is the escape-stripped form of the
+// styled projection (Rust HookCell::display_lines + raw_lines).
 func (c HookRunCell) DisplayLines(width int) []string {
+	return PlainLines(c.DisplayStyledLines(width))
+}
+
+// DisplayStyledLines renders the hook cell with ANSI styles parsed into spans,
+// so colours and text styles survive across lines instead of leaking raw
+// escape bytes. Rust parity: HookCell::display_lines in hook_cell.rs.
+func (c HookRunCell) DisplayStyledLines(width int) []StyledLine {
 	width = max(width, 1)
-	lines := tui.AdaptiveWrapLine(c.header(true), tui.WrapOptions{
+	lines := WrapStyledLine(c.header(true), tui.WrapOptions{
 		Width:            width,
 		SubsequentIndent: "  ",
 		BreakWords:       true,
 	})
 	for _, entry := range c.Entries {
-		lines = append(lines, wrappedHookEntryLines(entry, width)...)
+		lines = append(lines, styledHookEntryLines(entry, width)...)
 	}
 	return lines
 }
@@ -102,20 +112,41 @@ func HookEventDisplayName(name string) string {
 }
 
 func wrappedHookEntryLines(entry HookOutputEntry, width int) []string {
+	return PlainLines(styledHookEntryLines(entry, width))
+}
+
+// styledHookEntryLines keeps the existing hook-entry shape (label prefix on the
+// first line, aligned continuation indent afterwards) while parsing ANSI styles
+// out of the entry text. Styles are parsed before the text is split so a style
+// opened on one line still applies on the next, and a text that ends with a
+// newline keeps its trailing blank line (Rust hook_cell.rs).
+func styledHookEntryLines(entry HookOutputEntry, width int) []StyledLine {
 	label := hookEntryLabel(entry.Kind)
-	text := strings.TrimRight(entry.Text, "\r\n")
-	if text == "" {
-		text = strings.TrimSuffix(label, " ")
+	text := strings.ReplaceAll(entry.Text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	trailingBlank := strings.HasSuffix(text, "\n")
+	text = strings.TrimRight(text, "\n")
+	spans := ParseANSISpans(text)
+	if SpanText(spans) == "" {
+		spans = ParseANSISpans(strings.TrimSuffix(label, " "))
 		label = ""
 	}
-	out := []string{}
-	for index, raw := range strings.Split(text, "\n") {
+	entryLines := StyledLinesFromSpans(spans)
+	if trailingBlank {
+		entryLines = append(entryLines, StyledLine{})
+	}
+	out := []StyledLine{}
+	for index, line := range entryLines {
 		initial := "  " + label
 		subsequent := "  " + strings.Repeat(" ", len([]rune(label)))
 		if index > 0 {
 			initial = subsequent
 		}
-		out = append(out, tui.AdaptiveWrapLine(raw, tui.WrapOptions{
+		if len(line) == 0 {
+			out = append(out, StyledLine{})
+			continue
+		}
+		out = append(out, WrapStyledSpans(line, tui.WrapOptions{
 			Width:            width,
 			InitialIndent:    initial,
 			SubsequentIndent: subsequent,
@@ -127,7 +158,9 @@ func wrappedHookEntryLines(entry HookOutputEntry, width int) []string {
 
 func rawHookEntryLines(entry HookOutputEntry) []string {
 	label := strings.TrimSpace(hookEntryLabel(entry.Kind))
-	text := strings.TrimRight(entry.Text, "\r\n")
+	// Hook system messages may carry ANSI styles; raw output keeps the text but
+	// never leaks escape sequences.
+	text := strings.TrimRight(PlainTextFromANSI(entry.Text), "\r\n")
 	if text == "" {
 		return []string{label}
 	}
