@@ -33,6 +33,10 @@ type RequestPermissionsExecutor struct {
 	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so the
 	// call resolves the selected environment before review.
 	EnvironmentCheck *UnifiedExecEnvironmentCheck
+	// EnvironmentFileSystems resolves the turn's usable executors so the call
+	// targets a real selected environment (Rust #20647 `78421face0`: the review
+	// records `turn_environment.selection()`), not just a readiness count.
+	EnvironmentFileSystems EnvironmentFileSystemProvider
 }
 
 func (e *RequestPermissionsExecutor) Spec() Spec {
@@ -73,7 +77,11 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 	if err := invocation.DecodeArguments(&args); err != nil {
 		return nil, RespondToModel("request_permissions arguments are invalid: " + err.Error())
 	}
-	resolvedEnvironmentID, err := ResolveToolEnvironment(e.EnvironmentCheck, requestPermissionsEnvironmentID(args), requestPermissionsUnavailableMessage)
+	// Rust #20647/#25858: resolve the call's environment against the turn's real
+	// executors (`turn_environments()` is ready-only), then hand the resolved
+	// environment's id to the review path
+	// (`session.request_permissions_for_environment(selection)`).
+	resolvedEnvironmentID, err := resolveToolEnvironmentID(e.EnvironmentCheck, e.EnvironmentFileSystems, requestPermissionsEnvironmentID(args), requestPermissionsUnavailableMessage)
 	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
@@ -151,8 +159,17 @@ func RegisterRequestPermissionsTool(registry *Registry, reviewer RequestPermissi
 // the turn readiness facts so an explicit environment_id is resolved through
 // ResolveToolEnvironment (Rust #50962).
 func RegisterRequestPermissionsToolWithOptions(registry *Registry, reviewer RequestPermissionsReviewer, environmentCheck *UnifiedExecEnvironmentCheck) error {
+	return RegisterRequestPermissionsToolWithFileSystems(registry, reviewer, environmentCheck, nil)
+}
+
+// RegisterRequestPermissionsToolWithFileSystems registers request_permissions
+// with the turn's environment filesystems, so an explicit selector or the
+// implicit primary resolves against the turn's usable executors (Rust #20647
+// `78421face0`; Rust #25858 `e29071e4c9` adds the environment id to
+// request_permissions).
+func RegisterRequestPermissionsToolWithFileSystems(registry *Registry, reviewer RequestPermissionsReviewer, environmentCheck *UnifiedExecEnvironmentCheck, environmentFileSystems EnvironmentFileSystemProvider) error {
 	if registry == nil {
 		return fmt.Errorf("registry is nil")
 	}
-	return registry.Register(&RequestPermissionsExecutor{Reviewer: reviewer, EnvironmentCheck: environmentCheck})
+	return registry.Register(&RequestPermissionsExecutor{Reviewer: reviewer, EnvironmentCheck: environmentCheck, EnvironmentFileSystems: environmentFileSystems})
 }
