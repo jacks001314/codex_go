@@ -1736,6 +1736,13 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
 		agent.AuthIssuer = cfg.ChatGPTBaseURL()
 		agent.AgentIdentity = agentIdentityOptionsForExec(cfg)
 		agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
+		// Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the OpenAI
+		// provider plus `api_key_cyber_access_programs`, with no model-discovery
+		// conjunct.
+		agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
+			cfg.FeatureSettings(),
+			firstNonEmpty(providerID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
+		)
 		// Rust sets the process-wide enforce_residency from config; the exec
 		// path mirrors it on every model request.
 		agent.Residency = managedResidencyForConfig(cfg)

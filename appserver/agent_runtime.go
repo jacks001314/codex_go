@@ -655,6 +655,12 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
 	contentItemKindsEnabled := features.Enabled(cfg.FeatureSettings(), "content_item_kinds")
 	agent.ContentItemKindsEnabled = &contentItemKindsEnabled
+	// Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the OpenAI provider
+	// plus `api_key_cyber_access_programs`, with no model-discovery conjunct.
+	agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
+		cfg.FeatureSettings(),
+		firstNonEmpty(runConfig.ProviderID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
+	)
 	agent.Residency = managedResidencyForConfig(cfg)
 	agent.AWS = provider.AWS
 	// Rust's SessionTelemetry records codex.api_request from the client's request

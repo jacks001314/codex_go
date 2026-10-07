@@ -134,6 +134,12 @@ type ResponsesAgentOptions struct {
 	// ImageStore is the attachment store image preparation uploads prepared
 	// images to (Rust `Session::image_store`, #51517). nil keeps images inline.
 	ImageStore attachmentstore.Store
+	// ApiKeyCyberAccessPrograms is the resolved Rust
+	// `ApiKeyCyberAccessPrograms` policy for this runner
+	// (ApiKeyCyberAccessProgramsFromConfig). The zero value drops an API-key
+	// session's explicit program, matching the feature's default-off behavior
+	// without failing the turn.
+	ApiKeyCyberAccessPrograms ApiKeyCyberAccessPrograms
 }
 
 type ResponsesAgentRunner struct {
@@ -193,6 +199,9 @@ type ResponsesAgentRunner struct {
 	// mirroring Rust's `passthrough_image_store()` default; a host with a
 	// durable backend installs its own store (Rust #51517).
 	ImageStore attachmentstore.Store
+	// ApiKeyCyberAccessPrograms carries the resolved API-key cyber-access
+	// program policy handed in through ResponsesAgentOptions.
+	ApiKeyCyberAccessPrograms ApiKeyCyberAccessPrograms
 	// inferenceTools retains the last model-visible tool list per conversation so
 	// each sampling request can count a catalog change on the turn profile
 	// (Rust #50964 `ModelClientState::last_inference_tools`). The pointer is
@@ -600,6 +609,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
 		Metrics:                    options.Metrics,
+		ApiKeyCyberAccessPrograms:  options.ApiKeyCyberAccessPrograms,
 		ImageStore:                 attachmentstore.StoreOrDefault(options.ImageStore),
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
@@ -1000,11 +1010,15 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		// support it before sending the request over the websocket transport.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
+	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
+	if err != nil {
+		return nil, err
+	}
 	apiRequest := &responsesAgentRequest{
 		Model: modelID, Instructions: instructions, Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: tools, ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
-		AccessPrograms: AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
+		AccessPrograms: accessPrograms,
 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
@@ -1514,6 +1528,10 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	inputItems = r.filterToolResultMetadataForDestination(inputItems)
 	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
 	// runner carries conversation context by sending full history in input.
+	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
+	if err != nil {
+		return nil, err
+	}
 	apiRequest := &responsesAgentRequest{
 		Model:                modelID,
 		Instructions:         instructions,
@@ -1525,7 +1543,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		ParallelToolCalls:    parallelToolCalls,
 		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
-		AccessPrograms:       AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
+		AccessPrograms:       accessPrograms,
 		ClientMetadata:       cloneStringMap(request.ClientMetadata),
 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
 		UseResponsesLite:     modelInfo.UseResponsesLite,
