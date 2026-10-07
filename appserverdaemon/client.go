@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"codex_go/codexuds"
 	"codex_go/remotecontrol"
 )
 
@@ -446,7 +447,12 @@ func dialUnixSocketWebSocketURL(dialPath string, handshakeURL string, timeout ti
 	var peerErr error
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
-			conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "unix", dialPath)
+			// Rust app-server-daemon connects through codex_uds::UnixStream::connect,
+			// so an advertised path that is a long symlink resolves to its socket
+			// target instead of failing with EINVAL (Rust #48772).
+			dialCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			conn, err := codexuds.ConnectUnixSocket(dialCtx, dialPath)
 			if err != nil {
 				return nil, err
 			}

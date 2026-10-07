@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexuds"
 	"codex_go/install"
 )
 
@@ -197,12 +198,17 @@ func exchangeManualUpdate(conn net.Conn, socketPath string) (*UpdateOutput, erro
 	return outcome.OK, nil
 }
 
-// connectManualUpdaterSocket dials the updater socket without waiting.
+// connectManualUpdaterSocket dials the updater socket without waiting. Rust
+// manual_update::request connects through codex_uds::UnixStream::connect, so an
+// advertised updater path that is a long symlink resolves to its socket target
+// instead of failing with EINVAL (Rust #48772).
 func connectManualUpdaterSocket(socketPath string, timeout time.Duration) (net.Conn, error) {
 	if timeout <= 0 {
 		timeout = manualUpdateConnectRetry
 	}
-	return net.DialTimeout("unix", socketPath, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return codexuds.ConnectUnixSocket(ctx, socketPath)
 }
 
 // startManualUpdateWorker starts the one-shot worker updater a manual request
