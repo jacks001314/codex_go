@@ -1243,3 +1243,13 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 **新线索（仅登记）**：`appserver/agent_runtime.go:710 httpClientForConfig` → `network.NewHTTPClient`（clone transport）在 `handleAppRead`/`handleAppList` 呈「每请求一个新池」形状；对应上游属 chatgpt_client 流（#47703 一线），不属 #49100，当前窗口无对应 PR。
 
 **基线补充**：`TestOtelProviderReloadsAfterAccountChange` 在本机**隔离单跑也 FAIL**（环境依赖，不只是偶发），不计入回归。
+
+## 第 85 轮续 8 台账订正（sync562–sync567 + N/A 裁决）
+
+**已落地（✅）**：`#49160` part b→`6e7e54f8` sync562（**part a/b 全闭环**）· `#38470` preferred-model→`91e796fd` sync563 · `#38470` Runtime 专属目录→`85f61b91` sync564（目录半 + preferred 半闭环，剩端点本体→syncnext17）· `#50803`→`adee1b30` sync565 · `#50804`→`a173ba7b` sync566 · `#51063`→`58c711c9` sync567。
+
+**本轮新增 N/A / 结构性待裁（决定性证据见 plan「第 85 轮续 8」表）**：`#49160 c2`（结构性待裁：本地 /cd 与远程 folder-trust 分处不相交路径，无 live driver 组合）· `#49160 b`（结构性待裁：Go 的 resume 请求从不带权限字段，`ResumePermissions` 0 命中）· `#51378`（N/A 结构缺失：12 符号全 0，无 WS 连接池）· `#50808`（N/A：Go `.snap` 数 0，清单 want 1375 已贴 prune 后）。
+
+**陈旧性订正（§2 快照 vs 当前 main）**：`#49425` 已落 sync526 `65f28ce0`；`#49028` 已判 N/A（`bb2dedd1`）。→ §2 全量重扫由 `syncnext21` 进行，产物 `/tmp/ledger_delta_58c711c9.md`。
+
+**换班（R1）**：回收 6（`syncnext4`/`5`/`7`/`9`/`13`/`14`），新建 4（`syncnext18`/`19`/`20`/`21`）。在飞 9 条（上限 10）。
