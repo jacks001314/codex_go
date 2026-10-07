@@ -2867,7 +2867,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 				if m.asyncQuestions.Expanded() && m.asyncQuestions.HasOptions() {
 					m.asyncQuestions.SelectOther()
 				}
-				m.composer.InsertString(pasted)
+				m.insertComposerPaste(pasted)
 				m.extendComposerPasteWindow(m.currentTime())
 				m.refreshSlashPopup()
 				return m, m.refreshSkillPopup()
@@ -2931,7 +2931,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 					return m, nil
 				}
 				if text != "" {
-					m.composer.InsertString(text)
+					m.insertComposerPaste(text)
 					m.extendComposerPasteWindow(m.currentTime())
 					m.refreshSlashPopup()
 				}

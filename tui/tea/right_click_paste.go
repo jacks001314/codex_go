@@ -206,7 +206,9 @@ func (m *Model) deliverRightClickPasteAtRender() {
 	decision := tuiapp.RightClickPasteDeliveryFor(*pending, true, current, currentOK, result.text, result.err)
 	switch decision.Kind {
 	case tuiapp.RightClickPasteDeliveryPaste:
-		m.composer.InsertString(decision.Text)
+		// Rust routes right-click/middle-click clipboard text through the same
+		// TuiEvent::Paste path, so it inherits blockquote continuation (#49357).
+		m.insertComposerPaste(decision.Text)
 		m.extendComposerPasteWindow(m.currentTime())
 		m.refreshSlashPopup()
 	case tuiapp.RightClickPasteDeliveryError:
