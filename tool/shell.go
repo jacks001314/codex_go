@@ -17,6 +17,7 @@ import (
 	"codex_go/safety"
 	"codex_go/sandbox"
 	shellutil "codex_go/shell"
+	"codex_go/utils"
 )
 
 const (
@@ -141,13 +142,18 @@ type ShellRequest struct {
 	UnifiedExecRemoteHTTPHeaders http.Header
 	// UnifiedExecRemoteStdioCommand selects a stdio executor instead of a URL.
 	UnifiedExecRemoteStdioCommand *execserver.StdioExecServerCommand
-	UnifiedExecEnvironmentID      string
-	UnifiedExecUserHomeDir        string
-	EnforceManagedNetwork         bool
-	ManagedNetwork                *network.ProxyManagedNetworkSandboxContext
-	RemoteNetworkProxy            *execserver.RemoteNetworkProxyLaunchConfig
-	NetworkPolicyDecider          network.ProxyPolicyDecider
-	NetworkPolicyDecisionTimeout  time.Duration
+	// LoginShellPackagePath mirrors Rust's `Feature::LoginShellPackagePath`
+	// (#49467): when enabled, a POSIX login-shell launch restores the
+	// executor-reported PATH directories inside the shell so nested commands
+	// still find bundled tools after login startup resets PATH.
+	LoginShellPackagePath        bool
+	UnifiedExecEnvironmentID     string
+	UnifiedExecUserHomeDir       string
+	EnforceManagedNetwork        bool
+	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
+	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
+	NetworkPolicyDecider         network.ProxyPolicyDecider
+	NetworkPolicyDecisionTimeout time.Duration
 }
 
 type UnifiedExecEnvironment struct {
@@ -271,10 +277,13 @@ type ShellValidationOptions struct {
 	// GranularSandboxApproval / GranularRules mirror Rust's granular
 	// AskForApproval sub-config (#40024): sandbox escalation is rejected only
 	// when the shared policy check rejects prompting.
-	GranularSandboxApproval         bool
-	GranularRules                   bool
-	PermissionsPreapproved          bool
-	AllowLoginShell                 bool
+	GranularSandboxApproval bool
+	GranularRules           bool
+	PermissionsPreapproved  bool
+	AllowLoginShell         bool
+	// LoginShellPackagePath mirrors Rust's `Feature::LoginShellPackagePath`
+	// (#49467) for this turn's shell launches.
+	LoginShellPackagePath           bool
 	ShellMode                       UnifiedExecShellMode
 	ZshForkShell                    *Shell
 	CWD                             string
@@ -361,6 +370,109 @@ func (s *Shell) DeriveExecArgs(command string, useLoginShell bool) []string {
 		}
 		return []string{s.Path, "-c", command}
 	}
+}
+
+// IsPosixLogin mirrors Rust `ShellInvocation::is_posix_login` (#49467): a POSIX
+// login shell is one of bash/zsh/sh started in login mode.
+func (s *Shell) IsPosixLogin(useLoginShell bool) bool {
+	if s == nil || !useLoginShell {
+		return false
+	}
+	switch s.Type {
+	case ShellBash, ShellZsh:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeriveExecArgsWithPathPrepends mirrors Rust `ShellInvocation::
+// derive_exec_args_with_path_prepends` (#49467): launch arguments that restore
+// the executor-reported `paths` to PATH inside the POSIX login shell before
+// running `command`, so `command` and its children still find bundled tools
+// when login startup resets PATH. The launch's login mode is unchanged.
+//
+// It reports ok=false when the launch cannot use the setup - not a POSIX login
+// shell, no directories, or a directory that is not a POSIX path or contains a
+// colon - and the caller must keep the original arguments then.
+func (s *Shell) DeriveExecArgsWithPathPrepends(command string, paths []string, useLoginShell bool) ([]string, bool) {
+	if !s.IsPosixLogin(useLoginShell) || len(paths) == 0 {
+		return nil, false
+	}
+	setup := make([]string, 0, len(paths))
+	// Prepend backwards so newly added directories retain the executor's order.
+	for index := len(paths) - 1; index >= 0; index-- {
+		path, ok := posixNativePathFromURI(paths[index])
+		if !ok {
+			return nil, false
+		}
+		// POSIX PATH has no way to escape a colon inside a single directory.
+		if strings.Contains(path, ":") {
+			return nil, false
+		}
+		quoted := shlexTryQuote(path)
+		// Padding ${PATH-} with colons makes `case` match whole entries, even at
+		// the ends; `-` also handles an unset PATH. Re-export a match so child
+		// commands inherit it; otherwise probe in a subshell, because assigning a
+		// read-only PATH can exit the login shell before the user's command runs.
+		// ${PATH:+...} adds `:` only when PATH is nonempty, so we never make the
+		// shell search the current directory.
+		setup = append(setup, `case ":${PATH-}:" in *:`+quoted+`:*) export PATH ;; `+
+			`*) if (export PATH=) 2>/dev/null; then `+
+			`export PATH=`+quoted+`${PATH:+:"$PATH"}; fi ;; esac`)
+	}
+	joined := strings.Join(setup, "; ")
+	// Keep setup on the first input line so shell diagnostics and `$LINENO` still
+	// refer to the original script. If the quoted path contains literal newlines,
+	// decode only the setup with eval in the current shell; the trailing `esac`
+	// keeps command substitution from trimming newlines in the path.
+	if strings.Contains(joined, "\n") {
+		escaped := strings.ReplaceAll(joined, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "\n", "\\n")
+		joined = `eval "$(command -p printf '%b' ` + shlexTryQuote(escaped) + `)"`
+	}
+	return s.DeriveExecArgs(joined+"; "+command, useLoginShell), true
+}
+
+// posixNativePathFromURI renders a file URI as a POSIX native path, mirroring
+// Rust's `PathUri::infer_path_convention` + `inferred_native_path_string` in
+// `derive_exec_args_with_path_prepends`.
+func posixNativePathFromURI(raw string) (string, bool) {
+	uri, err := utils.Parse(strings.TrimSpace(raw))
+	if err != nil || uri == nil {
+		return "", false
+	}
+	convention, ok := uri.InferConvention()
+	if !ok || convention != utils.ConventionPosix {
+		return "", false
+	}
+	return uri.NativePathString(), true
+}
+
+// shlexTryQuote quotes a directory the way Rust's `shlex::try_quote` does: a
+// string of shell-safe characters is returned unchanged, anything else is
+// wrapped in single quotes with embedded quotes escaped.
+func shlexTryQuote(value string) string {
+	if value != "" && isShellSafeWord(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// isShellSafeWord reports whether every character is in shlex's safe set:
+// alphanumerics plus the punctuation that needs no quoting in POSIX shells.
+func isShellSafeWord(value string) bool {
+	for _, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9':
+		case strings.ContainsRune("%+,-./:=@_", character):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ResolveCommand(args *ExecCommandArgs, sessionShell *Shell, allowLoginShell bool) (*ResolvedCommand, error) {
@@ -528,6 +640,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		RemoteNetworkProxy:              opts.RemoteNetworkProxy,
 		NetworkPolicyDecider:            opts.NetworkPolicyDecider,
 		NetworkPolicyDecisionTimeout:    opts.NetworkPolicyDecisionTimeout,
+		LoginShellPackagePath:           opts.LoginShellPackagePath,
 		ApprovalRequired:                approvalRequired,
 		ApprovalReason:                  approvalReason,
 		Justification:                   args.Justification,

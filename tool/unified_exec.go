@@ -599,6 +599,30 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
 }
 
+// loginShellFromArgv recovers the shell and login mode a launch's argv was
+// derived from. Rust carries both in `ShellInvocation` (#49360); until the Go
+// port threads that invocation through the launch request too, argv is the only
+// carrier available here, so callers must only use this on argv produced by
+// Shell.DeriveExecArgs.
+func loginShellFromArgv(argv []string) (*Shell, bool) {
+	if len(argv) < 3 {
+		return nil, false
+	}
+	shellType := DetectShellType(argv[0])
+	if shellType != ShellBash && shellType != ShellZsh {
+		return nil, false
+	}
+	return &Shell{Type: shellType, Path: argv[0]}, argv[1] == "-lc"
+}
+
+// unifiedExecExplicitPathOverride reports whether the launch's shell environment
+// policy sets PATH itself; Rust keeps that value instead of restoring the
+// executor's directories (#49467).
+func unifiedExecExplicitPathOverride(req *ShellRequest) bool {
+	_, overridden := snapshotExplicitOverrides(req)["PATH"]
+	return overridden
+}
+
 func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, callID string, processID int) (*ShellResult, error) {
 	// Rust #48575: a provisioned environment's executor may still be resuming
 	// after a ready report, so the initial dial gets the fixed five-minute
@@ -642,6 +666,23 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 			_ = client.Close()
 			m.releaseProcessID(processID)
 			return nil, errors.New("selected exec-server does not support executor-local network proxy launches")
+		}
+	}
+	// Rust #49467 (`Feature::LoginShellPackagePath`): login startup can reset
+	// PATH, so a POSIX login shell re-derives its argv with the directories the
+	// executor reports. The requested command still identifies the process in
+	// events; only the argv handed to the executor carries the PATH setup.
+	argv := append([]string(nil), req.Command...)
+	if req.LoginShellPackagePath && !unifiedExecExplicitPathOverride(req) {
+		if shell, useLoginShell := loginShellFromArgv(argv); shell.IsPosixLogin(useLoginShell) {
+			infoCtx, infoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			info, infoErr := client.EnvironmentInfo(infoCtx)
+			infoCancel()
+			if infoErr == nil && info != nil && len(info.PrependPathDirs) > 0 {
+				if derived, ok := shell.DeriveExecArgsWithPathPrepends(req.HookCommand, info.PrependPathDirs, useLoginShell); ok {
+					argv = derived
+				}
+			}
 		}
 	}
 	// Threads sharing an executor and sandbox retries can reuse a public handle
@@ -710,7 +751,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	openSession.processStartRequested(processID, remoteID)
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
-		Argv:                  append([]string(nil), req.Command...),
+		Argv:                  argv,
 		CWD:                   remoteCWD,
 		EnvPolicy:             envPolicy,
 		Env:                   cloneEnv(req.Env),

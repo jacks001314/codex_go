@@ -270,7 +270,11 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 				// since b258c028fe); the turn runtime overrides this from the
 				// effective config when available.
 				AllowLoginShell: true,
-				CWD:             cwd,
+				// Rust #49467: `Feature::LoginShellPackagePath` stays off unless
+				// the effective config opts in; the app-server and exec lanes
+				// override this from the turn's feature settings.
+				LoginShellPackagePath: featureflags.Enabled(nil, "login_shell_package_path"),
+				CWD:                   cwd,
 			},
 		},
 		ApplyPatch:                   &tool.ApplyPatchExecutorOptions{CWD: cwd},

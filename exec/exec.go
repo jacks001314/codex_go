@@ -1298,6 +1298,11 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		// gates have to be applied here as well as in the app-server router.
 		options.DisableUpdatePlan = !run.Config.UpdatePlanEnabled()
 		options.DisableGetContextRemaining = !features.Enabled(run.Config.FeatureSettings(), "token_budget")
+		// Rust #49467: the executor-reported PATH directories are restored only
+		// when `login_shell_package_path` is enabled for this run.
+		if options.Shell != nil {
+			options.Shell.Validation.LoginShellPackagePath = features.Enabled(run.Config.FeatureSettings(), "login_shell_package_path")
+		}
 	}
 	if run != nil && strings.TrimSpace(run.Model) != "" {
 		// Rust registers apply_patch only for models whose catalog metadata
