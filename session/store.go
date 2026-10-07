@@ -255,6 +255,12 @@ type Metadata struct {
 	Extra                      map[string]any              `json:"extra,omitempty"`
 	RolloutTurns               []TurnSnapshot              `json:"rollout_turns,omitempty"`
 	QueuedSubmissions          []QueuedSubmission          `json:"queued_submissions,omitempty"`
+	// TurnAttribution is the provenance of the newest surviving regular turn,
+	// reconstructed from the rollout (Rust #51402 `551bd409eb`). It rests on the
+	// same rollback / checkpoint / late-terminal replay Rust uses to restore a
+	// recovered turn's trigger, parent, root and initiating agent path. Older
+	// records omit it.
+	TurnAttribution *TurnAttribution `json:"turn_attribution,omitempty"`
 }
 
 // BaseInstructionsProvenance records whether persisted instructions were explicit or
@@ -2609,7 +2615,31 @@ func cloneMetadata(metadata Metadata) Metadata {
 	metadata.ContextWindow = append(json.RawMessage(nil), metadata.ContextWindow...)
 	metadata.TurnContext = append(json.RawMessage(nil), metadata.TurnContext...)
 	metadata.WorldState = append(json.RawMessage(nil), metadata.WorldState...)
+	metadata.TurnAttribution = cloneTurnAttribution(metadata.TurnAttribution)
 	return metadata
+}
+
+// cloneTurnAttribution deep-copies a regular-turn attribution so a cloned
+// record never shares its optional fields with the source (Rust clones
+// `TurnAttribution` by value).
+func cloneTurnAttribution(attribution *TurnAttribution) *TurnAttribution {
+	if attribution == nil {
+		return nil
+	}
+	clone := *attribution
+	clone.TurnTrigger = cloneStringPointer(attribution.TurnTrigger)
+	clone.ParentTurnID = cloneStringPointer(attribution.ParentTurnID)
+	clone.InitiatingAgentPath = cloneStringPointer(attribution.InitiatingAgentPath)
+	clone.RootTurnID = cloneStringPointer(attribution.RootTurnID)
+	return &clone
+}
+
+func cloneStringPointer(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func cloneBaseInstructionsProvenance(value *BaseInstructionsProvenance) *BaseInstructionsProvenance {
@@ -2625,6 +2655,11 @@ func forkMetadata(source *Record, options ForkOptions, now time.Time, itemCount 
 		return Metadata{}
 	}
 	metadata := cloneMetadata(source.Metadata)
+	// A forked agent clears the inherited regular-turn attribution: the fork
+	// starts its own turns, so the source thread's provenance does not apply to
+	// it (Rust #51402 `core/src/agent/control/spawn.rs`:
+	// `resume_metadata.turn_attribution = None`).
+	metadata.TurnAttribution = nil
 	if metadata.Extra == nil {
 		metadata.Extra = map[string]any{}
 	}

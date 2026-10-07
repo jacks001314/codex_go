@@ -470,8 +470,20 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		}
 	}
 	applyRolloutContextMetadata(record, lines)
+	applyRolloutTurnAttributionMetadata(record, lines)
 	applyRolloutTokenUsageMetadata(record, lines)
 	return record, nil
+}
+
+// applyRolloutTurnAttributionMetadata records the provenance of the newest
+// surviving regular turn (Rust #51402 `551bd409eb`), which a cold recovery
+// restores as the turn's start options. It is reconstructed from the surviving
+// turns, so a rolled-back or late-completed turn does not contribute.
+func applyRolloutTurnAttributionMetadata(record *session.Record, lines []Line) {
+	if record == nil {
+		return
+	}
+	record.Metadata.TurnAttribution = ReconstructTurnAttribution(lines)
 }
 
 func applyRolloutContextMetadata(record *session.Record, lines []Line) {

@@ -709,8 +709,18 @@ func (r *Recorder) AppendTurnStarted(turnID string, startedAt time.Time) error {
 
 // AppendTurnStartedWithRoot persists a turn-start event with root-turn
 // attribution (Rust #44611): the inherited root turn ID when available,
-// otherwise the caller passes the turn's own ID.
+// otherwise the caller passes the turn's own ID. No regular-turn attribution is
+// recorded, so non-regular tasks keep the pre-#51402 line shape.
 func (r *Recorder) AppendTurnStartedWithRoot(rootTurnID string, turnID string, startedAt time.Time) error {
+	return r.AppendTurnStartedWithAttribution(nil, rootTurnID, turnID, startedAt)
+}
+
+// AppendTurnStartedWithAttribution persists a turn-start event carrying both the
+// root-turn attribution (Rust #44611) and the regular-turn provenance Rust
+// #51402 records before startup work can be suspended (`TurnStartedEvent::
+// turn_attribution`). A nil attribution omits the field, which is what Rust
+// does for non-regular tasks and what older records look like.
+func (r *Recorder) AppendTurnStartedWithAttribution(attribution *TurnAttribution, rootTurnID string, turnID string, startedAt time.Time) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return nil
@@ -719,15 +729,17 @@ func (r *Recorder) AppendTurnStartedWithRoot(rootTurnID string, turnID string, s
 		startedAt = time.Now().UTC()
 	}
 	payload, err := json.Marshal(struct {
-		Type       string `json:"type"`
-		TurnID     string `json:"turn_id"`
-		RootTurnID string `json:"root_turn_id,omitempty"`
-		StartedAt  int64  `json:"started_at"`
+		Type            string           `json:"type"`
+		TurnID          string           `json:"turn_id"`
+		RootTurnID      string           `json:"root_turn_id,omitempty"`
+		StartedAt       int64            `json:"started_at"`
+		TurnAttribution *TurnAttribution `json:"turn_attribution,omitempty"`
 	}{
-		Type:       "task_started",
-		TurnID:     turnID,
-		RootTurnID: strings.TrimSpace(rootTurnID),
-		StartedAt:  startedAt.UTC().Unix(),
+		Type:            "task_started",
+		TurnID:          turnID,
+		RootTurnID:      strings.TrimSpace(rootTurnID),
+		StartedAt:       startedAt.UTC().Unix(),
+		TurnAttribution: attribution,
 	})
 	if err != nil {
 		return err

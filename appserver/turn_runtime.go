@@ -1555,7 +1555,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
 	r.bindRealtimeTurn(threadID, turnID)
-	_ = r.appendRuntimeTurnStarted(threadID, turnID, rootTurnIDForTurn(params, turnID), startedAt)
+	// Rust #51402: a regular turn persists its attribution before startup work
+	// can be suspended, so recovery restores the original trigger instead of
+	// substituting `retry`.
+	rootTurnID := rootTurnIDForTurn(params, turnID)
+	_ = r.appendRuntimeTurnStartedWithAttribution(threadID, turnID, rootTurnID, turnAttributionForParams(params, turnID, rootTurnID), startedAt)
 	// Rust first runs the previous-model inline compaction, then records a full
 	// context window and compacts before the next user turn.
 	// Do this before persisting/sending the new prompt so the prompt is retained
@@ -3775,6 +3779,41 @@ func (r *RuntimeRouter) appendRuntimeTurnStarted(threadID string, turnID string,
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
 		return recorder.AppendTurnStartedWithRoot(rootTurnID, turnID, startedAt)
 	})
+}
+
+func (r *RuntimeRouter) appendRuntimeTurnStartedWithAttribution(threadID string, turnID string, rootTurnID string, attribution *rollout.TurnAttribution, startedAt time.Time) error {
+	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
+		return recorder.AppendTurnStartedWithAttribution(attribution, rootTurnID, turnID, startedAt)
+	})
+}
+
+// turnAttributionForParams mirrors Rust #51402 `TurnContext::attribution()`:
+// the provenance of a regular turn, persisted on the `turn_started` event
+// before startup work can be suspended so recovery can restore the turn's
+// trigger, lineage and initiating agent path. An omitted lineage field stays
+// absent on the wire rather than becoming an empty string.
+func turnAttributionForParams(params *turn.TurnStartParams, turnID string, rootTurnID string) *rollout.TurnAttribution {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return nil
+	}
+	attribution := &rollout.TurnAttribution{TurnID: turnID}
+	if params == nil {
+		if root := strings.TrimSpace(rootTurnID); root != "" {
+			attribution.RootTurnID = &root
+		}
+		return attribution
+	}
+	if trigger := strings.TrimSpace(params.TurnTrigger); trigger != "" {
+		attribution.TurnTrigger = &trigger
+	}
+	if parent := strings.TrimSpace(params.ParentTurnID); parent != "" {
+		attribution.ParentTurnID = &parent
+	}
+	if root := strings.TrimSpace(rootTurnID); root != "" {
+		attribution.RootTurnID = &root
+	}
+	return attribution
 }
 
 // rootTurnIDForTurn mirrors Rust #44611: use the inherited root turn ID when
