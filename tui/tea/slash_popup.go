@@ -127,10 +127,13 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		ConnectorsEnabled:           features.Enabled(m.featureSettings, "apps") && m.hasChatGPTAccount,
 		PluginsCommandEnabled:       features.Enabled(m.featureSettings, "plugins"),
 		TokenActivityCommandEnabled: m.hasChatGPTAccount,
-		ServiceTierCommandsEnabled:  features.Enabled(m.featureSettings, "fast_mode"),
-		GoalCommandEnabled:          features.Enabled(m.featureSettings, "goals"),
-		AllowElevateSandbox:         m.windowsSandboxSetup != nil,
-		SideConversationActive:      m.inSideConversation(),
+		// Rust #51253 slash_dispatch: the tier commands are advertised when the
+		// policy-filtered list is non-empty, so Fast and Ultra Fast are offered
+		// independently.
+		ServiceTierCommandsEnabled: len(m.serviceTierCommands) > 0,
+		GoalCommandEnabled:         features.Enabled(m.featureSettings, "goals"),
+		AllowElevateSandbox:        m.windowsSandboxSetup != nil,
+		SideConversationActive:     m.inSideConversation(),
 	}
 	commands := bottompane.CommandsForInput(flags, m.serviceTierCommands)
 	items := make([]slashCommandPopupItem, 0, len(commands))

@@ -46,7 +46,10 @@ type ExperimentalFeaturesViewModel struct {
 type SettingsFeature string
 
 const (
-	SettingsFeatureFastMode               SettingsFeature = "fast_mode"
+	SettingsFeatureFastMode SettingsFeature = "fast_mode"
+	// SettingsFeatureUltrafastMode is the Ultra Fast policy (#51253). It gates
+	// the ultrafast service tier independently of fast_mode.
+	SettingsFeatureUltrafastMode          SettingsFeature = "ultrafast_mode"
 	SettingsFeaturePlugins                SettingsFeature = "plugins"
 	SettingsFeatureGoals                  SettingsFeature = "goals"
 	SettingsFeatureMentionsV2             SettingsFeature = "mentions_v2"
@@ -119,7 +122,9 @@ func (s *SettingsRuntimeState) SetFeatureEnabled(feature SettingsFeature, enable
 	s.Features[feature] = enabled
 	result := SettingsRuntimeUpdateResult{}
 	switch feature {
-	case SettingsFeatureFastMode:
+	case SettingsFeatureFastMode, SettingsFeatureUltrafastMode:
+		// Rust #51253: a Fast or Ultra Fast policy change refreshes the
+		// effective tier and the service-tier commands.
 		result.RefreshEffectiveServiceTier = true
 		result.SyncServiceTierCommands = true
 	case SettingsFeaturePlugins:

@@ -39,7 +39,9 @@ func (m *Model) applyFastServiceTier() bubbletea.Cmd {
 		return nil
 	}
 	fastTier := m.fastServiceTierCommand()
-	if !features.Enabled(m.featureSettings, "fast_mode") || fastTier == nil || strings.TrimSpace(fastTier.ID) == "" {
+	// Rust #51253 (can_toggle_fast_mode_from_keybinding): the fast toggle needs
+	// the Fast policy enabled and a fast tier the policy left in the catalog.
+	if fastTier == nil || strings.TrimSpace(fastTier.ID) == "" || !codextui.ServiceTierEnabled(m.featureSettings, fastTier.ID) {
 		m.notice = "Fast mode is unavailable for the current model."
 		m.refreshTranscript()
 		return nil
@@ -155,6 +157,7 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 	}
 	edits := make([]SettingsEdit, 0, len(items))
 	changed := 0
+	serviceTierPolicyChanged := false
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
@@ -163,8 +166,17 @@ func (m *Model) setExperimentalFeatures(items []chatwidget.ExperimentalFeatureOp
 		if features.Enabled(m.featureSettings, key) != item.Enabled {
 			changed++
 		}
+		previous := m.featureSettings[key]
 		m.featureSettings[key] = item.Enabled
+		if (key == codextui.FeatureKeyFastMode || key == codextui.FeatureKeyUltrafastMode) && previous != item.Enabled {
+			serviceTierPolicyChanged = true
+		}
 		edits = append(edits, experimentalFeatureEdit(item))
+	}
+	if serviceTierPolicyChanged {
+		// Rust #51253 (chatwidget/settings.rs set_feature_enabled): changing the
+		// Fast or Ultra Fast policy re-syncs the service-tier commands.
+		m.refreshServiceTierCommands()
 	}
 	switch {
 	case len(items) == 1:
@@ -457,7 +469,13 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		return
 	}
 	if result.FeatureSettings != nil {
+		previousFeatures := m.featureSettings
 		m.featureSettings = cloneBoolMapTea(result.FeatureSettings)
+		if serviceTierPolicyFeatureChanged(previousFeatures, m.featureSettings) {
+			// Rust #51253: a Fast or Ultra Fast policy change re-syncs the
+			// service-tier commands.
+			m.refreshServiceTierCommands()
+		}
 	}
 	if result.UseMemories != nil {
 		m.useMemories = *result.UseMemories

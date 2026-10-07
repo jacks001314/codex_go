@@ -88,10 +88,40 @@ func (m *Model) refreshServiceTierCommands() {
 	}
 	for _, option := range options {
 		if option.ID == m.State.Model {
-			m.serviceTierCommands = bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers)
+			m.serviceTierCommands = serviceTierCommandsForPolicy(m.featureSettings, bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers))
 			return
 		}
 	}
+}
+
+// serviceTierCommandsForPolicy drops the service tiers the selected policies
+// disable (Rust #51253 current_model_service_tier_commands: `.filter(|tier|
+// self.config.features.service_tier_enabled(&tier.id))`). A tier follows the
+// policy that owns it, so disabling fast_mode alone keeps Ultra Fast available
+// and vice versa.
+func serviceTierCommandsForPolicy(featureSettings map[string]bool, commands []bottompane.ServiceTierCommand) []bottompane.ServiceTierCommand {
+	filtered := make([]bottompane.ServiceTierCommand, 0, len(commands))
+	for _, command := range commands {
+		if codextui.ServiceTierEnabled(featureSettings, command.ID) {
+			filtered = append(filtered, command)
+		}
+	}
+	return filtered
+}
+
+// serviceTierPolicyFeatureChanged mirrors Rust ChatWidget::set_feature_enabled
+// (#51253, chatwidget/settings.rs): a Fast or Ultra Fast policy change refreshes
+// the effective tier and the service-tier commands, while other features leave
+// them alone.
+func serviceTierPolicyFeatureChanged(before map[string]bool, after map[string]bool) bool {
+	for _, key := range []string{codextui.FeatureKeyFastMode, codextui.FeatureKeyUltrafastMode} {
+		beforeValue, beforeSet := before[key]
+		afterValue, afterSet := after[key]
+		if beforeSet != afterSet || beforeValue != afterValue {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshModelPicker rebuilds an open model picker from the updated catalog,

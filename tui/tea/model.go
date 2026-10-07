@@ -1992,7 +1992,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		footerStyle:                     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		bottomStyle:                     lipgloss.NewStyle(),
 		modelPickerOpts:                 append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
-		serviceTierCommands:             append([]bottompane.ServiceTierCommand(nil), options.ServiceTierCommands...),
+		serviceTierCommands:             serviceTierCommandsForPolicy(options.FeatureSettings, options.ServiceTierCommands),
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
 		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),
