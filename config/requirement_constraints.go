@@ -65,6 +65,11 @@ func applyManagedConstrainedOverrides(values map[string]any, requirements *Confi
 		}
 		values["web_search"] = string(effective)
 	}
+	// Rust #49642: the managed `windows.allow_mxc = false` requirement rejects an
+	// explicit `windows.sandbox = "mxc"` at load, like the local #51547 opt-out.
+	if err := ValidateManagedWindowsMXCOptOut(values, requirements); err != nil {
+		return err
+	}
 	return nil
 }
 

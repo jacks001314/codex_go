@@ -324,6 +324,12 @@ func configRequirementsFromMapWithResolver(values map[string]any, remoteConfigs 
 		if present {
 			out.AllowedWindowsSandboxImplementations = implementations
 		}
+		// Rust #49642: `windows.allow_mxc = false` is a managed requirement that
+		// rejects an explicit `windows.sandbox = "mxc"` and disables automatic
+		// MXC selection (WindowsRequirementsToml.allow_mxc).
+		if value, ok := boolAnyKey(nested, "allow_mxc", "allowMxc"); ok {
+			out.AllowMXC = &value
+		}
 	}
 	if values, ok := boolMapAnyKey(values, "allowed_permission_profiles", "allowedPermissionProfiles"); ok {
 		out.AllowedPermissionProfiles = values
@@ -1108,6 +1114,7 @@ func configRequirementsEmpty(value *ConfigRequirements) bool {
 			value.AllowedApprovalsReviewers == nil &&
 			value.AllowedSandboxModes == nil &&
 			value.AllowedWindowsSandboxImplementations == nil &&
+			value.AllowMXC == nil &&
 			value.AllowedPermissionProfiles == nil &&
 			value.DefaultPermissions == nil &&
 			value.AdditionalDeveloperInstructions == nil &&

@@ -553,8 +553,14 @@ type ConfigRequirements struct {
 	AllowedApprovalsReviewers            []ApprovalsReviewer            `json:"allowedApprovalsReviewers,omitempty"`
 	AllowedSandboxModes                  []sandbox.SandboxMode          `json:"allowedSandboxModes,omitempty"`
 	AllowedWindowsSandboxImplementations []WindowsSandboxImplementation `json:"allowedWindowsSandboxImplementations,omitempty"`
-	AllowedPermissionProfiles            map[string]bool                `json:"allowedPermissionProfiles,omitempty"`
-	DefaultPermissions                   *string                        `json:"defaultPermissions,omitempty"`
+	// AllowMXC is the managed `windows.allow_mxc` requirement (Rust #49642,
+	// WindowsRequirementsToml.allow_mxc). When it is false an explicit
+	// `windows.sandbox = "mxc"` is rejected at load and automatic MXC selection
+	// is disabled. It is internal, like Permissions/GuardianPolicyConfig, and
+	// stays off the app-server wire schema.
+	AllowMXC                  *bool           `json:"-"`
+	AllowedPermissionProfiles map[string]bool `json:"allowedPermissionProfiles,omitempty"`
+	DefaultPermissions        *string         `json:"defaultPermissions,omitempty"`
 	// Permissions carries the managed [permissions] profile catalog from
 	// requirements (Rust ConfigRequirementsToml.permissions, #39752). It is
 	// internal and not part of the app-server wire ConfigRequirements schema.
@@ -3757,6 +3763,7 @@ func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
 	clone.AllowedApprovalsReviewers = cloneSlice(requirements.AllowedApprovalsReviewers)
 	clone.AllowedSandboxModes = cloneSlice(requirements.AllowedSandboxModes)
 	clone.AllowedWindowsSandboxImplementations = cloneSlice(requirements.AllowedWindowsSandboxImplementations)
+	clone.AllowMXC = cloneBoolPtr(requirements.AllowMXC)
 	clone.AllowedPermissionProfiles = cloneBoolMap(requirements.AllowedPermissionProfiles)
 	clone.Permissions = cloneMap(requirements.Permissions)
 	clone.AllowedWebSearchModes = cloneSlice(requirements.AllowedWebSearchModes)

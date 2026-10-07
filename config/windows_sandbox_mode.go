@@ -138,3 +138,30 @@ func WindowsAutomaticMXCAllowed(values map[string]any) bool {
 	allow, configured := WindowsAllowMXCFromValues(values)
 	return !configured || allow
 }
+
+// ValidateManagedWindowsMXCOptOut rejects an explicit `windows.sandbox = "mxc"`
+// when the managed `windows.allow_mxc = false` requirement forbids it,
+// mirroring Rust #49642's requirements validator (ConstraintError::InvalidValue
+// for `windows.sandbox`). It is the requirements-surface counterpart of
+// ValidateWindowsMXCOptOut (Rust #51547): an unset or true requirement preserves
+// the previous behavior.
+func ValidateManagedWindowsMXCOptOut(values map[string]any, requirements *ConfigRequirements) error {
+	if requirements == nil || requirements.AllowMXC == nil || *requirements.AllowMXC {
+		return nil
+	}
+	if mode, ok := WindowsSandboxModeFromValues(values); ok && mode == WindowsSandboxModeMxc {
+		return errors.New(`windows.sandbox = "mxc" is not allowed when the managed requirement windows.allow_mxc = false`)
+	}
+	return nil
+}
+
+// WindowsAutomaticMXCAllowedWithRequirements reports whether automatic MXC
+// selection is allowed for the configuration: the local `windows.allow_mxc`
+// opt-out (Rust #51547) and the managed `windows.allow_mxc = false` requirement
+// (Rust #49642's `config_allows_mxc` clause) both block it.
+func WindowsAutomaticMXCAllowedWithRequirements(values map[string]any, requirements *ConfigRequirements) bool {
+	if requirements != nil && requirements.AllowMXC != nil && !*requirements.AllowMXC {
+		return false
+	}
+	return WindowsAutomaticMXCAllowed(values)
+}
