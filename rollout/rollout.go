@@ -744,13 +744,18 @@ func (r *Recorder) AppendTurnStartedWithRoot(rootTurnID string, turnID string, s
 // turn "so resume/lazy replay can recover the latest durable baseline", and its
 // rollout reconstruction reads the model and compaction compatibility hash back
 // from the last record.
+// TurnContextSummaryPlaceholder is the legacy placeholder Rust persists for
+// `TurnContextItem::summary`: the active reasoning-summary setting is no longer
+// recorded, but older readers still expect the field, so the compatibility
+// value `"none"` is written instead (Rust #51492).
+const TurnContextSummaryPlaceholder = "none"
+
 type TurnContextRecord struct {
 	TurnID         string `json:"turn_id,omitempty"`
 	CWD            string `json:"cwd,omitempty"`
 	ApprovalPolicy string `json:"approval_policy,omitempty"`
 	SandboxPolicy  any    `json:"sandbox_policy,omitempty"`
 	Effort         string `json:"effort,omitempty"`
-	Personality    string `json:"personality,omitempty"`
 	Model          string `json:"model,omitempty"`
 	CompHash       string `json:"comp_hash,omitempty"`
 	// CyberAccessProgram is the turn's selected cyber access program (Rust
@@ -758,6 +763,12 @@ type TurnContextRecord struct {
 	// resume/fork replay can rebuild the model/program pair the turn used
 	// (Rust #48224).
 	CyberAccessProgram string `json:"cyber_access_program,omitempty"`
+	// Summary is the compatibility placeholder described by
+	// TurnContextSummaryPlaceholder. Rectified fields that Rust removed from
+	// `TurnContextItem` (#51492) — `personality` (Go-only field, removed here),
+	// plus `workspace_roots`, `current_date`, `timezone`, `network` and
+	// `multi_agent_mode` (never persisted by Go) — are deliberately absent.
+	Summary string `json:"summary,omitempty"`
 }
 
 // AppendTurnContext persists one turn-context record for the turn.

@@ -29,7 +29,6 @@ func TestAppendTurnContextRecordsPreviousTurnSettingsLikeRust(t *testing.T) {
 		ApprovalPolicy:     "never",
 		SandboxPolicy:      "read-only",
 		Effort:             "high",
-		Personality:        "friendly",
 		Model:              "gpt-5.4",
 		CompHash:           "hash-a",
 		CyberAccessProgram: "daybreak_blue",
@@ -89,5 +88,50 @@ func TestTurnContextSettingsKeepsAnAbsentAccessProgramAbsent(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "cyber_access_program") {
 		t.Fatalf("an absent program was serialized: %s", encoded)
+	}
+}
+
+// Mirrors Rust #51492: the persisted turn context drops the obsolete fields
+// (`personality`, `workspace_roots`, `current_date`, `timezone`, `network`,
+// `multi_agent_mode`) and records the legacy `summary` placeholder instead of
+// the active reasoning-summary setting. Reading stays tolerant of a record that
+// omits `summary` entirely, which is how newer Rust readers accept the field's
+// future removal.
+func TestTurnContextRecordOmitsRemovedFieldsAndWritesSummaryPlaceholder(t *testing.T) {
+	payload, err := json.Marshal(TurnContextRecord{
+		TurnID:             "turn-1",
+		CWD:                "/work",
+		ApprovalPolicy:     "never",
+		SandboxPolicy:      "read-only",
+		Effort:             "high",
+		Model:              "gpt-5.4",
+		CompHash:           "hash-a",
+		CyberAccessProgram: "daybreak_blue",
+		Summary:            TurnContextSummaryPlaceholder,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var values map[string]any
+	if err := json.Unmarshal(payload, &values); err != nil {
+		t.Fatal(err)
+	}
+	for _, removed := range []string{"personality", "workspace_roots", "current_date", "timezone", "network", "multi_agent_mode"} {
+		if _, ok := values[removed]; ok {
+			t.Fatalf("obsolete field %q was persisted: %s", removed, payload)
+		}
+	}
+	if got := values["summary"]; got != "none" {
+		t.Fatalf("summary = %#v, want the %q placeholder: %s", got, TurnContextSummaryPlaceholder, payload)
+	}
+
+	// A record written without `summary` still resolves its settings.
+	legacy, err := json.Marshal(map[string]any{"turn_id": "turn-1", "model": "gpt-5.4", "comp_hash": "hash-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, compHash, program, ok := TurnContextSettings(legacy)
+	if !ok || model != "gpt-5.4" || compHash != "hash-a" || program != "" {
+		t.Fatalf("TurnContextSettings(legacy) = %q, %q, %q, %v", model, compHash, program, ok)
 	}
 }

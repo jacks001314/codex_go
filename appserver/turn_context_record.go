@@ -32,12 +32,14 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 		ApprovalPolicy: strings.TrimSpace(runConfig.ApprovalPolicy),
 		SandboxPolicy:  nil,
 		Effort:         strings.TrimSpace(runConfig.ReasoningEffort),
-		Personality:    strings.TrimSpace(runConfig.Personality),
 		Model:          strings.TrimSpace(runConfig.Model),
 		CompHash:       strings.TrimSpace(r.modelCompHash(runConfig.Model)),
 		// The selected program is persisted with the model so resume/fork replay
 		// rebuilds the model/program pair the turn used (Rust #48224).
 		CyberAccessProgram: strings.TrimSpace(runConfig.CyberAccessProgram),
+		// The active reasoning-summary setting is no longer recorded; the legacy
+		// placeholder keeps older readers working (Rust #51492).
+		Summary: rollout.TurnContextSummaryPlaceholder,
 	}
 	if strings.TrimSpace(runConfig.SandboxPolicy) != "" {
 		turnContext.SandboxPolicy = runConfig.SandboxPolicy
