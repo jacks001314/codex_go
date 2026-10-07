@@ -48,15 +48,9 @@ const (
 	AmazonBedrockMantleClientHeader = "x-amzn-mantle-client-agent"
 	AmazonBedrockMantleClientValue  = "codex"
 	AmazonBedrockGPT55ModelID       = "openai.gpt-5.5"
-	// AmazonBedrockGPT54ModelID is no longer a Bedrock *catalog* entry and is
-	// no longer returned by any provider API: Rust #47932 (694d8d45bd) dropped
-	// the catalog entry and Rust #38470 (d5e256ceb2) moved the Bedrock
-	// preference APIs onto the GPT-5.6 Luna/Terra slugs. The constant is kept
-	// for callers that still classify the retired slug.
-	AmazonBedrockGPT54ModelID      = "openai.gpt-5.4"
-	AmazonBedrockGPT56SolModelID   = "openai.gpt-5.6-sol"
-	AmazonBedrockGPT56TerraModelID = "openai.gpt-5.6-terra"
-	AmazonBedrockGPT56LunaModelID  = "openai.gpt-5.6-luna"
+	AmazonBedrockGPT56SolModelID    = "openai.gpt-5.6-sol"
+	AmazonBedrockGPT56TerraModelID  = "openai.gpt-5.6-terra"
+	AmazonBedrockGPT56LunaModelID   = "openai.gpt-5.6-luna"
 	// AmazonBedrockGPT61SolModelID/GPT6SolModelID/GPT6LunaModelID are the
 	// Bedrock slugs for the bundled GPT-6 generation: Rust #47347
 	// (df30941072) added GPT-6 Sol and Luna, Rust #49339 (a6e9eaa9bd) added
