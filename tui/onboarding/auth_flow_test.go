@@ -367,3 +367,32 @@ func TestAPIKeyEntryStorageCopyLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// TestChatGPTSuccessMessageCopyLikeRust pins Rust #49031 ("Clarify ChatGPT
+// sign-in success copy", upstream d8fc718809) on the sign-in success screen:
+// the "Before you start" preamble is gone and the screen opens with
+// "You're in control"
+// (codex-rs/tui/src/onboarding/auth.rs::render_chatgpt_success_message; the
+// Rust assertion for this copy is chatgpt_success_message_renders_osc8_hyperlinks).
+// Go renders the reduced variant of that screen, so only the lines Go shares
+// with Rust carry the new copy.
+func TestChatGPTSuccessMessageCopyLikeRust(t *testing.T) {
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{CodexHome: t.TempDir()})
+	model.state = SignInChatGPTSuccessMessage
+	view := model.View()
+	for _, want := range []string{
+		"Signed in with your ChatGPT account",
+		"You're in control",
+		"Review the code it writes and commands it runs",
+		"Press enter to continue",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("success screen missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"Before you start", "autonomy you want to grant"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("success screen still renders the removed %q preamble:\n%s", unwanted, view)
+		}
+	}
+}

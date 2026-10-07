@@ -692,12 +692,20 @@ func (m *authFlowModel) renderDeviceCodeLogin() string {
 }
 
 func (m *authFlowModel) renderChatGPTSuccessMessage() string {
+	// Rust #49031 ("Clarify ChatGPT sign-in success copy", upstream
+	// d8fc718809) drops the "Before you start" preamble and opens the success
+	// screen with "You're in control" instead of "Decide how much autonomy you
+	// want to grant Codex"
+	// (codex-rs/tui/src/onboarding/auth.rs::render_chatgpt_success_message,
+	// covered upstream by chatgpt_success_message_renders_osc8_hyperlinks).
+	// Go renders the reduced variant of that screen: Rust's docs line,
+	// "Codex can make mistakes", the plan line and the preferences line were
+	// never part of this Go screen (see b714fb7a), so only the lines Go shares
+	// with Rust carry the new copy.
 	return strings.Join([]string{
 		authSuccessStyle.Render("? Signed in with your ChatGPT account"),
 		"",
-		"  Before you start:",
-		"",
-		"  Decide how much autonomy you want to grant Codex",
+		"  You're in control",
 		authDimStyle.Render("  Review the code it writes and commands it runs"),
 		"",
 		authCyanStyle.Render("  Press enter to continue"),
