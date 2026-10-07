@@ -138,7 +138,9 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			},
 		},
 		{
-			Path:     "core/tests/suite/windows_sandbox.rs",
+			// #51678 moved this file out of the sharded core suite (no test-name or
+			// case-count change), so the manifest tracks core/tests instead.
+			Path:     "core/tests/windows_sandbox.rs",
 			Owner:    "sandbox, execpolicy",
 			Focus:    "Windows restricted-token and elevated sandbox deny-read enforcement",
 			Platform: "Windows only",

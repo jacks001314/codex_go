@@ -138,7 +138,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #48224 added core/tests/suite/compact_program_tests.rs (the
 			// model/access-program compaction pairs).
 			// #48353 added the cloud-skills-across-executor-readiness snapshot.
-			Files: 322,
+			// #51678 then moved windows_sandbox.rs out to core/tests/windows_sandbox.rs
+			// (round-89 pin advance to 95ec468619), so the suite loses one file.
+			Files: 321,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

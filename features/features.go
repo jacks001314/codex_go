@@ -75,6 +75,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 509565820f): terminate active code-mode
 	// cells when their turn is interrupted.
 	{Key: "code_mode_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 95ec468619 #51690): place each tool
+	// description before its namespace description in Code Mode.
+	{Key: "code_mode_tool_description_first", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "code_mode_only", Stage: StageUnderDevelopment},
 	{Key: "js_repl_tools_only", Stage: StageRemoved},
 	{Key: "terminal_resize_reflow", Stage: StageRemoved, DefaultEnabled: true},

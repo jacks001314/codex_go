@@ -31,6 +31,25 @@ func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	}
 }
 
+// TestCodeModeToolDescriptionFirstRegisteredLikeRust pins Rust #51690, which
+// registers an under-development, default-disabled flag for placing each tool
+// description before its namespace description in Code Mode.
+func TestCodeModeToolDescriptionFirstRegisteredLikeRust(t *testing.T) {
+	const key = "code_mode_tool_description_first"
+	if !Known(key) {
+		t.Fatalf("%s should be known", key)
+	}
+	for _, spec := range Registry {
+		if spec.Key == key {
+			if spec.Stage != StageUnderDevelopment || spec.DefaultEnabled {
+				t.Fatalf("%s spec = %#v, want under development and disabled by default", key, spec)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s is missing from Registry", key)
+}
+
 func TestSorted(t *testing.T) {
 	sorted := Sorted()
 	if len(sorted) != len(Registry) {

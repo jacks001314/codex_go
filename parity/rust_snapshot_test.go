@@ -297,6 +297,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// 5b0b253035:codex-rs/<path>`, so the pins are blob (LF) digests of the
 		// upstream head rather than of a working tree that may be CRLF-converted
 		// by core.autocrlf on Windows.
+		// Round-89 re-anchor to head 95ec468619: the checkout advanced with the
+		// code_mode_tool_description_first registration (#51690); only
+		// core/tests/suite/mod.rs changed, and its pin is updated below.
 		// Previously re-pinned to upstream 18e28fe1b9 (#51556): every hash below
 		// was recomputed from the then-current Rust tree so the critical-file
 		// drift check tracks the protocol, exec, client and suite surfaces the
@@ -337,7 +340,10 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module
 		// list.
-		{Path: "core/tests/suite/mod.rs", SHA256: "62853612f780dde84b877b3263e50a384a9e753dc03854773c4daaf5e9119e80"},
+		// Re-pinned to upstream 95ec468619 (round-89 pin advance): the core suite
+		// module dropped its windows_sandbox module declaration when #51678 moved
+		// that file to core/tests/windows_sandbox.rs.
+		{Path: "core/tests/suite/mod.rs", SHA256: "4a94d1807b0411002c6d1aded283fe7978aef071f2f3f1698bcb52f0cde0969e"},
 	}
 }
 
