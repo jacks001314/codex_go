@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -67,7 +68,21 @@ type ShellExecutorOptions struct {
 	// inherited or client-provided values.
 	CodexVersion            string
 	UnifiedExecEnvironments []UnifiedExecEnvironment
-	ManagedNetworkResolver  ManagedNetworkResolver
+	// EnvironmentCheck carries the turn's environment readiness so the executor
+	// reports the same unusable-environment error as Rust's
+	// `resolve_tool_environment` (Rust #50741/#50962). Nil keeps the
+	// pre-#50962 behavior (an unknown/unselected environment is "unknown turn
+	// environment id", and no configured environment means the implicit local
+	// one).
+	EnvironmentCheck *UnifiedExecEnvironmentCheck
+	// IncludeShellParameter / IncludeLoginParameter / IncludeEnvironmentID are
+	// Rust #50962's ExecCommandHandlerOptions decisions, which its spec plan
+	// computes from the selected environments and the `stable_environment_tools`
+	// feature. Nil keeps Go's pre-#50962 derivation.
+	IncludeShellParameter  *bool
+	IncludeLoginParameter  *bool
+	IncludeEnvironmentID   *bool
+	ManagedNetworkResolver ManagedNetworkResolver
 	// PluginMetricsResolver resolves a trusted plugin analytics operation for
 	// one shell command (Rust #38252).
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
@@ -111,6 +126,10 @@ type ShellExecutor struct {
 	sessionID                string
 	codexVersion             string
 	unifiedExecEnvironments  []UnifiedExecEnvironment
+	environmentCheck         *UnifiedExecEnvironmentCheck
+	shellParameterOverride   *bool
+	loginParameterOverride   *bool
+	environmentIDOverride    *bool
 	managedNetworkResolver   ManagedNetworkResolver
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) string
@@ -182,6 +201,10 @@ func NewShellExecutor(options *ShellExecutorOptions) *ShellExecutor {
 	executor.sessionID = options.SessionID
 	executor.codexVersion = strings.TrimSpace(options.CodexVersion)
 	executor.unifiedExecEnvironments = cloneUnifiedExecEnvironments(options.UnifiedExecEnvironments)
+	executor.environmentCheck = cloneUnifiedExecEnvironmentCheck(options.EnvironmentCheck)
+	executor.shellParameterOverride = cloneBoolPtr(options.IncludeShellParameter)
+	executor.loginParameterOverride = cloneBoolPtr(options.IncludeLoginParameter)
+	executor.environmentIDOverride = cloneBoolPtr(options.IncludeEnvironmentID)
 	executor.managedNetworkResolver = options.ManagedNetworkResolver
 	executor.pluginMetricsResolver = options.PluginMetricsResolver
 	executor.snapshotProvider = options.SnapshotProvider
@@ -214,7 +237,7 @@ func (e *ShellExecutor) Spec() Spec {
 	if e.oneShot {
 		return e.oneShotExecSpec()
 	}
-	return Spec{
+	spec := Spec{
 		Name:        e.toolName,
 		Description: "Runs a shell command in the current workspace.",
 		InputSchema: map[string]any{
@@ -256,6 +279,8 @@ func (e *ShellExecutor) Spec() Spec {
 		},
 		Parallel: true,
 	}
+	e.applyExecCommandParameterGates(inputSchemaProperties(spec), true)
+	return spec
 }
 
 // oneShotExecSpec is the completion-only `exec_command` surface (Rust #41393):
@@ -287,6 +312,7 @@ func (e *ShellExecutor) oneShotExecSpec() Spec {
 		},
 		Parallel: true,
 	}
+	e.applyExecCommandParameterGates(inputSchemaProperties(spec), true)
 	return spec
 }
 
@@ -373,10 +399,15 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 			"type":        "number",
 			"description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
 		},
-		"shell": map[string]any{
+	}
+	// Rust #50962 `include_shell_parameter`: the zsh-fork shell mode pins the
+	// launch shell, so the argument only stays when a usable environment is
+	// remote (or the stable-environment-tools feature keeps it).
+	if e.includeShellParameter() {
+		properties["shell"] = map[string]any{
 			"type":        "string",
 			"description": "Shell binary to launch. Defaults to the user's default shell.",
-		},
+		}
 	}
 	if e.allowTTY {
 		properties["tty"] = map[string]any{
@@ -384,13 +415,13 @@ func (e *ShellExecutor) unifiedExecSpec() Spec {
 			"description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
 		}
 	}
-	if e.validation.AllowLoginShell {
+	if e.includeLoginParameter(e.validation.AllowLoginShell) {
 		properties["login"] = map[string]any{
 			"type":        "boolean",
 			"description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
 		}
 	}
-	if len(e.unifiedExecEnvironments) > 1 {
+	if e.includeEnvironmentID() {
 		properties["environment_id"] = map[string]any{
 			"type":        "string",
 			"description": "Environment id from <environment_context>. Omit to use the primary environment.",
@@ -543,7 +574,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if environment != nil {
 		environmentCWD := environment.CWD
-		remoteEnvironment := environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil
+		remoteEnvironment := environment.Remote()
 		if remoteEnvironment {
 			environmentCWD, err = resolveRemoteUnifiedExecCWD(environment.CWD, firstNonEmptyString(args.CWD, args.Workdir))
 			if err != nil {
@@ -674,7 +705,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		e.decisionSink.AutoApproved(toolName, callID)
 	}
 	var metricsSidecar *plugin.PluginMetricsSidecar
-	remoteEnvironment := environment != nil && (environment.ExecServerURL != "" || environment.NoiseProvider != nil || environment.ExecServerStdioCommand != nil)
+	remoteEnvironment := environment != nil && environment.Remote()
 	// Runtime grants are the launch's own, not the agent's: Rust keeps them in
 	// `internal_permissions`, merges them into the command's permissions, and
 	// carries them separately so a later write_stdin review does not treat them
@@ -841,23 +872,94 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}, nil
 }
 
+// resolveUnifiedExecEnvironment mirrors Rust's `resolve_tool_environment`
+// (Rust #50741/#50962): an environment the turn resolved is used directly, and
+// an environment that cannot be used reports either the tool's legacy message
+// (`stable_environment_tools` off, the upstream default) or the shared
+// waiting message (feature on, where a selected environment that is still
+// starting is not an unknown one).
 func (e *ShellExecutor) resolveUnifiedExecEnvironment(requested string) (*UnifiedExecEnvironment, error) {
-	if e == nil || len(e.unifiedExecEnvironments) == 0 {
+	if e == nil {
 		if requested != "" {
 			return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
 		}
 		return nil, nil
 	}
-	if requested == "" {
-		requested = e.unifiedExecEnvironments[0].ID
-	}
 	for i := range e.unifiedExecEnvironments {
-		if e.unifiedExecEnvironments[i].ID == requested {
+		if e.unifiedExecEnvironments[i].ID == requested && requested != "" {
 			environment := e.unifiedExecEnvironments[i]
 			return &environment, nil
 		}
 	}
-	return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+	if e.environmentCheck == nil {
+		// Pre-#50962 behavior: no configured environment means the implicit
+		// local one; anything else is unknown.
+		if len(e.unifiedExecEnvironments) == 0 {
+			if requested != "" {
+				return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+			}
+			return nil, nil
+		}
+		if requested == "" {
+			environment := e.unifiedExecEnvironments[0]
+			return &environment, nil
+		}
+		return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+	}
+	if requested == "" {
+		if len(e.unifiedExecEnvironments) > 0 {
+			environment := e.unifiedExecEnvironments[0]
+			return &environment, nil
+		}
+		if e.hasUsableEnvironment() {
+			// The usable environment is Go's implicit local executor.
+			return nil, nil
+		}
+		return nil, e.unavailableEnvironmentError("")
+	}
+	if isLocalEnvironmentID(requested) && e.hasUsableEnvironment() {
+		// Rust's local environment is a first-class ready turn environment; Go
+		// leaves it implicit whenever the host resolved no executor for it.
+		return nil, nil
+	}
+	if !e.environmentCheck.StableEnvironmentTools || !e.environmentCheck.selects(requested) {
+		return nil, fmt.Errorf("unknown turn environment id `%s`", requested)
+	}
+	return nil, e.unavailableEnvironmentError(requested)
+}
+
+// unavailableEnvironmentError is Rust's `legacy_unavailable_message` /
+// #50741 waiting message split (Rust #50962).
+func (e *ShellExecutor) unavailableEnvironmentError(requested string) error {
+	if e != nil && e.environmentCheck != nil && e.environmentCheck.StableEnvironmentTools {
+		return errors.New(UnifiedUnavailableEnvironmentMessage)
+	}
+	if requested != "" {
+		return fmt.Errorf("unknown turn environment id `%s`", requested)
+	}
+	return errors.New(UnifiedExecUnavailableMessage)
+}
+
+// selects reports whether the turn selected this environment, whether or not its
+// executor is usable yet (Rust `TurnEnvironmentSnapshot::all_selections`).
+func (e *UnifiedExecEnvironmentCheck) selects(environmentID string) bool {
+	if e == nil {
+		return false
+	}
+	for _, id := range e.SelectedEnvironmentIDs {
+		if id == environmentID {
+			return true
+		}
+	}
+	return false
+}
+
+// isLocalEnvironmentID reports whether an environment id names this process's
+// own environment (Rust's implicit local executor).
+func isLocalEnvironmentID(environmentID string) bool {
+	// Rust compares ids exactly (TurnEnvironmentSelection::environment_id);
+	// hosts normalize the selection ids they report.
+	return environmentID == execserver.LocalEnvironmentID
 }
 
 func cloneUnifiedExecEnvironments(values []UnifiedExecEnvironment) []UnifiedExecEnvironment {
@@ -1056,6 +1158,100 @@ func cloneNonNegativeInt(value *int) *int {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+// cloneUnifiedExecEnvironmentCheck deep-copies a readiness fact set so a turn's
+// selections cannot be mutated through the executor (Rust
+// TurnEnvironmentSnapshot is owned by the step context).
+func cloneUnifiedExecEnvironmentCheck(value *UnifiedExecEnvironmentCheck) *UnifiedExecEnvironmentCheck {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.SelectedEnvironmentIDs = append([]string(nil), value.SelectedEnvironmentIDs...)
+	return &cloned
+}
+
+// applyExecCommandParameterGates removes the `shell`/`login` arguments Rust
+// #50962 conditions on the turn's execution configuration
+// (`include_shell_parameter` / `include_login_parameter`). The argument schema
+// is built unconditionally above and pruned here so every exec_command surface
+// (interactive, completion-only and the plain fallback) shares one rule.
+func (e *ShellExecutor) applyExecCommandParameterGates(properties map[string]any, loginDefault bool) {
+	if len(properties) == 0 {
+		return
+	}
+	if !e.includeShellParameter() {
+		delete(properties, "shell")
+	}
+	if !e.includeLoginParameter(loginDefault) {
+		delete(properties, "login")
+	}
+}
+
+// inputSchemaProperties returns a spec's object property table.
+func inputSchemaProperties(spec Spec) map[string]any {
+	if spec.InputSchema == nil {
+		return nil
+	}
+	properties, _ := spec.InputSchema["properties"].(map[string]any)
+	return properties
+}
+
+// stableEnvironmentTools reports whether the default-off
+// `stable_environment_tools` feature is on for this executor (Rust #50962).
+func (e *ShellExecutor) stableEnvironmentTools() bool {
+	return e != nil && e.environmentCheck != nil && e.environmentCheck.StableEnvironmentTools
+}
+
+// includeShellParameter mirrors Rust #50962's `include_shell_parameter`: the
+// `shell` argument stays on the schema unless the turn pins a zsh-fork shell
+// and no usable environment is remote. Nil (an executor built without a tool
+// plan) keeps the pre-#50962 surface, which always had it.
+func (e *ShellExecutor) includeShellParameter() bool {
+	if e != nil && e.shellParameterOverride != nil {
+		return *e.shellParameterOverride
+	}
+	return true
+}
+
+// includeLoginParameter mirrors Rust #50962's `include_login_parameter`. The
+// caller-supplied default preserves the pre-#50962 per-surface rule the surface
+// used before the plan existed (the resumable `exec_command` conditioned it on
+// the turn's login-shell policy; the completion-only surfaces always had it).
+func (e *ShellExecutor) includeLoginParameter(defaultValue bool) bool {
+	if e != nil && e.loginParameterOverride != nil {
+		return *e.loginParameterOverride
+	}
+	return defaultValue
+}
+
+// includeEnvironmentID mirrors Rust #50962's `include_environment_id`
+// (`ToolEnvironmentMode::Multiple`). Nil keeps Go's pre-#50962 derivation, which
+// counts the resolved (usable) environments.
+func (e *ShellExecutor) includeEnvironmentID() bool {
+	if e != nil && e.environmentIDOverride != nil {
+		return *e.environmentIDOverride
+	}
+	return e != nil && len(e.unifiedExecEnvironments) > 1
+}
+
+// hasUsableEnvironment reports whether the turn has at least one usable selected
+// environment (Rust `TurnEnvironmentSnapshot::turn_environments().count() > 0`).
+// It is only authoritative when the host supplied the readiness fact set.
+func (e *ShellExecutor) hasUsableEnvironment() bool {
+	if e != nil && e.environmentCheck != nil {
+		return e.environmentCheck.ReadyEnvironmentCount > 0
+	}
+	return e != nil && len(e.unifiedExecEnvironments) > 0
 }
 
 func (e *ShellExecutor) PreToolUsePayload(invocation *Invocation) (*PreToolUsePayload, bool) {

@@ -10,6 +10,7 @@ import (
 	"codex_go/agentboard"
 	"codex_go/apps"
 	"codex_go/compact"
+	"codex_go/execserver"
 	featureflags "codex_go/features"
 	"codex_go/mcp"
 	"codex_go/model"
@@ -121,9 +122,16 @@ type ToolRegistryOptions struct {
 	ImageGeneration *ImageGenerationOptions
 	ViewImage       *tool.ViewImageOptions
 
-	EnableCore                   bool
-	EnableShell                  bool
-	EnableUnifiedExec            bool
+	EnableCore        bool
+	EnableShell       bool
+	EnableUnifiedExec bool
+	// StableEnvironmentTools mirrors the default-off `stable_environment_tools`
+	// feature (Rust #50962): environment-backed tools stay advertised while an
+	// executor starts, an explicit environment selector only needs to be a
+	// selected environment, and `shell`/`login` stay on the exec_command schema.
+	// The default (off) exposes environment-backed tools only when a usable
+	// environment exists, which is upstream's default.
+	StableEnvironmentTools       bool
 	EnableCodeMode               bool
 	CodeModeProvider             tool.CodeModeRemoteProvider
 	CodeModeRuntime              *tool.CodeModeRuntime
@@ -268,6 +276,7 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 		EnableCore:                   true,
 		EnableShell:                  true,
 		EnableUnifiedExec:            featureflags.Enabled(nil, "unified_exec"),
+		StableEnvironmentTools:       featureflags.Enabled(nil, "stable_environment_tools"),
 		// Rust registers the code-mode exec/wait executors from the effective
 		// tool mode, not the code_mode feature flag (finalize_tool_router in
 		// codex-rs/core/src/tools/spec_plan.rs). Register them unconditionally
@@ -281,11 +290,160 @@ func DefaultToolRegistryOptions(cwd string) *ToolRegistryOptions {
 	}
 }
 
+// TurnEnvironmentPlan mirrors the environment half of Rust's tool spec plan
+// (Rust #50741/#50962): whether environment-backed tools are advertised, which
+// selector mode the exec_command schema uses, and the readiness facts the
+// executors report when they cannot resolve an environment.
+type TurnEnvironmentPlan struct {
+	// Advertise is Rust's `advertise_environment_tools`: with the
+	// `stable_environment_tools` feature off, environment-backed tools (the
+	// shell family, apply_patch, view_image, request_permissions) exist only
+	// while the turn has a usable environment.
+	Advertise bool
+	// IncludeEnvironmentID is Rust's `include_environment_id`
+	// (`ToolEnvironmentMode::Multiple`). Nil keeps Go's pre-#50962 derivation
+	// from the resolved environment list, for hosts that do not model readiness.
+	IncludeEnvironmentID *bool
+	// Check carries the readiness facts to the executors. Nil means the host
+	// resolved no readiness, so the executors keep their pre-#50962 behavior.
+	Check *tool.UnifiedExecEnvironmentCheck
+}
+
+// resolveTurnEnvironmentPlan computes the plan from the host-supplied
+// selections, resolved executors and readiness waiter.
+func resolveTurnEnvironmentPlan(options *ToolRegistryOptions) TurnEnvironmentPlan {
+	stable := options != nil && options.StableEnvironmentTools
+	ready, known := readyEnvironmentCount(options)
+	plan := TurnEnvironmentPlan{Advertise: stable || !known || ready > 0}
+	if !known {
+		return plan
+	}
+	selected := 1
+	if options != nil && len(options.SelectedEnvironmentIDs) > 0 {
+		selected = len(options.SelectedEnvironmentIDs)
+	}
+	count := ready
+	if stable {
+		// Rust #50962: the selectors stay stable as readiness changes.
+		count = selected
+	}
+	multiple := count > 1
+	plan.IncludeEnvironmentID = &multiple
+	plan.Check = &tool.UnifiedExecEnvironmentCheck{
+		SelectedEnvironmentIDs: append([]string(nil), options.SelectedEnvironmentIDs...),
+		ReadyEnvironmentCount:  ready,
+		StableEnvironmentTools: stable,
+	}
+	return plan
+}
+
+// readyEnvironmentCount returns how many of the turn's selections have a usable
+// executor (Rust `TurnEnvironmentSnapshot::turn_environments().count()`), and
+// whether the host resolved readiness at all.
+//
+// Evidence for each input:
+//   - Shell.UnifiedExecEnvironments is the host-resolved usable set: the
+//     app-server drops selections whose configuration is pending or failed
+//     (Rust #38684) and ids with no executor record, and adds the provider's
+//     default environment.
+//   - EnvironmentWaiter is the host's readiness source; when the host has none
+//     and resolved no executors it also resolved no readiness, so the plan keeps
+//     the pre-#50962 advertisement decision.
+//   - Rust's environment manager always selects the implicit local environment,
+//     whose executor is ready; Go leaves that selection implicit, so a turn with
+//     no selections counts as one.
+func readyEnvironmentCount(options *ToolRegistryOptions) (int, bool) {
+	if options == nil {
+		return 1, false
+	}
+	resolved := 0
+	if options.Shell != nil {
+		for i := range options.Shell.UnifiedExecEnvironments {
+			if strings.TrimSpace(options.Shell.UnifiedExecEnvironments[i].ID) != "" {
+				resolved++
+			}
+		}
+	}
+	if len(options.SelectedEnvironmentIDs) == 0 {
+		if resolved > 0 {
+			return resolved, true
+		}
+		return 1, true
+	}
+	ready := resolved
+	for _, id := range options.SelectedEnvironmentIDs {
+		if isImplicitLocalEnvironmentID(id) {
+			ready++
+		}
+	}
+	if resolved > 0 || options.EnvironmentWaiter != nil {
+		return ready, true
+	}
+	return len(options.SelectedEnvironmentIDs), false
+}
+
+// isImplicitLocalEnvironmentID reports whether a selection names this process's
+// own environment — Rust's implicit local executor, which is always usable. The
+// host-reported selection ids are trimmed here; the executors compare the ids a
+// model passes exactly (Rust compares `TurnEnvironmentSelection::environment_id`
+// without normalizing).
+func isImplicitLocalEnvironmentID(environmentID string) bool {
+	return strings.TrimSpace(environmentID) == execserver.LocalEnvironmentID
+}
+
+// execCommandShellParameter mirrors Rust #50962's `include_shell_parameter`.
+func execCommandShellParameter(options *ToolRegistryOptions) bool {
+	if options == nil {
+		return true
+	}
+	if options.StableEnvironmentTools {
+		return true
+	}
+	if options.Shell == nil || options.Shell.Validation.ShellMode != tool.UnifiedExecShellModeZshFork {
+		return true
+	}
+	for i := range options.Shell.UnifiedExecEnvironments {
+		if options.Shell.UnifiedExecEnvironments[i].Remote() {
+			return true
+		}
+	}
+	return false
+}
+
+// execCommandLoginParameter mirrors Rust #50962's `include_login_parameter`:
+// with the feature off the `login` argument follows the usable environments'
+// login-shell policy, and the turn-level policy stands in for the implicit
+// local environment.
+func execCommandLoginParameter(options *ToolRegistryOptions) bool {
+	if options == nil || options.Shell == nil {
+		return true
+	}
+	if options.StableEnvironmentTools {
+		return true
+	}
+	environments := options.Shell.UnifiedExecEnvironments
+	if len(environments) == 0 {
+		return options.Shell.Validation.AllowLoginShell
+	}
+	allow := false
+	for i := range environments {
+		if environments[i].AllowLoginShell != nil {
+			allow = allow || *environments[i].AllowLoginShell
+			continue
+		}
+		allow = allow || options.Shell.Validation.AllowLoginShell
+	}
+	return allow
+}
+
 func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	if options == nil {
 		options = DefaultToolRegistryOptions("")
 	}
 	registry := tool.NewRegistry()
+	// Rust #50741/#50962: the environment-backed tools are advertised by the
+	// same readiness decision, so it is resolved once per registry.
+	environmentPlan := resolveTurnEnvironmentPlan(options)
 	var codeModeCommandTool tool.ToolName
 	if options.EnableCore {
 		if err := tool.RegisterCoreHandlersWithOptions(registry, &tool.CoreHandlerOptions{
@@ -333,7 +491,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			return nil, err
 		}
 	}
-	if options.EnableShell {
+	if options.EnableShell && environmentPlan.Advertise {
 		supportsShellCommand := SupportsLegacyShellCommand(options.SelectedEnvironmentIDs)
 		shellOptions := options.Shell
 		if shellOptions == nil {
@@ -346,6 +504,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		shellOptions.CodexVersion = options.CodexVersion
 		shellOptions.PluginMetricsResolver = options.PluginMetricsResolver
 		shellOptions.PluginMeasurementTracker = options.PluginMeasurementTracker
+		shellOptions.EnvironmentCheck = environmentPlan.Check
+		shellOptions.IncludeEnvironmentID = environmentPlan.IncludeEnvironmentID
+		shellParameter := execCommandShellParameter(options)
+		loginParameter := execCommandLoginParameter(options)
+		shellOptions.IncludeShellParameter = &shellParameter
+		shellOptions.IncludeLoginParameter = &loginParameter
 		shellOptions.UnifiedExec = nil
 		if options.EnableUnifiedExec {
 			shellOptions.ToolName = tool.PlainName(tool.DefaultExecCommandToolName)
@@ -394,12 +558,16 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			maxOutputTokens = shellOptions.MaxOutputTokens
 		}
 		if options.EnableUnifiedExec {
-			if err := tool.RegisterWriteStdinHandler(registry, options.UnifiedExec, maxOutputTokens); err != nil {
+			if err := tool.RegisterWriteStdinHandlerWithOptions(registry, &tool.WriteStdinOptions{
+				Manager:          options.UnifiedExec,
+				MaxOutputTokens:  maxOutputTokens,
+				EnvironmentCheck: environmentPlan.Check,
+			}); err != nil {
 				return nil, err
 			}
 		}
 	}
-	if options.EnableApplyPatch {
+	if options.EnableApplyPatch && environmentPlan.Advertise {
 		if err := tool.RegisterApplyPatchHandler(registry, options.ApplyPatch); err != nil {
 			return nil, err
 		}
@@ -447,7 +615,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			return nil, err
 		}
 	}
-	if options.ViewImage != nil {
+	if options.ViewImage != nil && environmentPlan.Advertise {
 		if err := registry.Register(tool.NewViewImageHandler(*options.ViewImage)); err != nil {
 			return nil, err
 		}
@@ -480,7 +648,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			return nil, err
 		}
 	}
-	if options.EnableRequestPermissions && options.RequestPermissionsReviewer != nil {
+	if options.EnableRequestPermissions && options.RequestPermissionsReviewer != nil && environmentPlan.Advertise {
 		if err := tool.RegisterRequestPermissionsTool(registry, options.RequestPermissionsReviewer); err != nil {
 			return nil, err
 		}

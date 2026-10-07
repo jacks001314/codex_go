@@ -178,6 +178,47 @@ type UnifiedExecEnvironment struct {
 	PermissionProfileJSON string
 }
 
+// Remote reports whether this environment runs on an executor other than this
+// process (Rust `Environment::is_remote`): a WebSocket or stdio exec-server
+// transport, or a noise rendezvous provider.
+func (e UnifiedExecEnvironment) Remote() bool {
+	return strings.TrimSpace(e.ExecServerURL) != "" || e.NoiseProvider != nil || e.ExecServerStdioCommand != nil
+}
+
+// UnifiedExecEnvironmentCheck carries a turn's environment readiness so a tool
+// can mirror Rust's `resolve_tool_environment` (Rust #50741/#50962).
+//
+// Rust keeps every selected environment in `TurnEnvironmentSnapshot`
+// (`all_selections()`) and the usable subset in `turn_environments()`. Go's
+// hosts resolve the same two facts: the turn's selections and the host-resolved
+// usable executors (which the app-server derives by dropping selections whose
+// configuration is pending or failed, Rust #38684). A nil check keeps the
+// pre-#50962 behavior for hosts that do not model readiness.
+type UnifiedExecEnvironmentCheck struct {
+	// SelectedEnvironmentIDs lists every environment the turn selected,
+	// including ones whose executor is not usable yet (Rust `all_selections()`).
+	SelectedEnvironmentIDs []string
+	// ReadyEnvironmentCount is the number of usable selected environments
+	// (Rust `turn_environments().count()`); Go counts the implicit local
+	// environment when the turn selects none.
+	ReadyEnvironmentCount int
+	// StableEnvironmentTools is the default-off `stable_environment_tools`
+	// feature (Rust #50962). When it is on the tools keep advertising while an
+	// executor starts, an explicit selector only has to be a selected
+	// environment, and an unusable environment reports the shared waiting
+	// message instead of the tool's legacy message.
+	StableEnvironmentTools bool
+}
+
+// UnifiedUnavailableEnvironmentMessage is the message Rust #50741 gives a tool
+// whose environment is not usable yet when `stable_environment_tools` is on.
+const UnifiedUnavailableEnvironmentMessage = "No usable execution environment is available. Wait for an environment to become available before using this tool."
+
+// UnifiedExecUnavailableMessage is the tool-specific message Rust restores for
+// `exec_command`/`write_stdin` when `stable_environment_tools` is off
+// (Rust #50962 `legacy_unavailable_message`).
+const UnifiedExecUnavailableMessage = "unified exec is unavailable in this session"
+
 type ShellSandboxProfile struct {
 	PolicyTag             string
 	NetworkEnabled        bool

@@ -10,22 +10,65 @@ import (
 const DefaultWriteStdinToolName = "write_stdin"
 
 type WriteStdinExecutor struct {
-	manager         *UnifiedExecManager
-	maxOutputTokens *int
+	manager          *UnifiedExecManager
+	maxOutputTokens  *int
+	environmentCheck *UnifiedExecEnvironmentCheck
+}
+
+// WriteStdinOptions configures the write_stdin executor.
+type WriteStdinOptions struct {
+	Manager         *UnifiedExecManager
+	MaxOutputTokens *int
+	// EnvironmentCheck mirrors the turn's environment readiness. Rust #50962
+	// only resolves the tool's environment while `stable_environment_tools` is
+	// on (the default-off path skips the check, so an existing session stays
+	// writable while readiness changes).
+	EnvironmentCheck *UnifiedExecEnvironmentCheck
 }
 
 func NewWriteStdinExecutor(manager *UnifiedExecManager, maxOutputTokens *int) *WriteStdinExecutor {
-	return &WriteStdinExecutor{manager: manager, maxOutputTokens: cloneNonNegativeInt(maxOutputTokens)}
+	return NewWriteStdinExecutorWithOptions(&WriteStdinOptions{Manager: manager, MaxOutputTokens: maxOutputTokens})
+}
+
+// NewWriteStdinExecutorWithOptions builds the write_stdin executor with the
+// turn's environment readiness facts.
+func NewWriteStdinExecutorWithOptions(options *WriteStdinOptions) *WriteStdinExecutor {
+	if options == nil {
+		options = &WriteStdinOptions{}
+	}
+	return &WriteStdinExecutor{
+		manager:          options.Manager,
+		maxOutputTokens:  cloneNonNegativeInt(options.MaxOutputTokens),
+		environmentCheck: cloneUnifiedExecEnvironmentCheck(options.EnvironmentCheck),
+	}
 }
 
 func RegisterWriteStdinHandler(registry *Registry, manager *UnifiedExecManager, maxOutputTokens *int) error {
+	return RegisterWriteStdinHandlerWithOptions(registry, &WriteStdinOptions{Manager: manager, MaxOutputTokens: maxOutputTokens})
+}
+
+// RegisterWriteStdinHandlerWithOptions registers write_stdin with the turn's
+// environment readiness facts (Rust #50962's flag-on environment check).
+func RegisterWriteStdinHandlerWithOptions(registry *Registry, options *WriteStdinOptions) error {
 	if registry == nil {
 		return fmt.Errorf("%w: registry is nil", ErrToolInvalidCall)
 	}
-	if manager == nil {
+	if options == nil || options.Manager == nil {
 		return nil
 	}
-	return registry.Register(NewWriteStdinExecutor(manager, maxOutputTokens))
+	return registry.Register(NewWriteStdinExecutorWithOptions(options))
+}
+
+// stableEnvironmentTools reports whether the default-off
+// `stable_environment_tools` feature is on for this turn (Rust #50962).
+func (e *WriteStdinExecutor) stableEnvironmentTools() bool {
+	return e != nil && e.environmentCheck != nil && e.environmentCheck.StableEnvironmentTools
+}
+
+// hasUsableEnvironment reports whether the turn has a usable selected
+// environment; only meaningful with the host-supplied readiness facts.
+func (e *WriteStdinExecutor) hasUsableEnvironment() bool {
+	return e != nil && e.environmentCheck != nil && e.environmentCheck.ReadyEnvironmentCount > 0
 }
 
 func (e *WriteStdinExecutor) Spec() Spec {
@@ -50,7 +93,13 @@ func (e *WriteStdinExecutor) Spec() Spec {
 
 func (e *WriteStdinExecutor) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
 	if e == nil || e.manager == nil {
-		return nil, RespondToModel("write_stdin failed: unified exec is unavailable in this session")
+		return nil, RespondToModel("write_stdin failed: " + UnifiedExecUnavailableMessage)
+	}
+	// Rust #50962: write_stdin only resolves the tool's environment while
+	// `stable_environment_tools` is on; the default path deliberately skips the
+	// readiness check so an in-flight session stays writable.
+	if e.stableEnvironmentTools() && !e.hasUsableEnvironment() {
+		return nil, RespondToModel(UnifiedUnavailableEnvironmentMessage)
 	}
 	var args WriteStdinArgs
 	if invocation == nil {
