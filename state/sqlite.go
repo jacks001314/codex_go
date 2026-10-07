@@ -43,8 +43,13 @@ type RuntimeDBPath struct {
 }
 
 // SqliteConfig is the single resolved home used by every Codex runtime DB.
+//
+// Copies share the quick-check attempt cache, exactly like Rust `SqliteConfig`
+// clones share one `SqliteQuickCheckManager` (upstream 3620b2caf8 / #49701); a
+// freshly constructed config validates the same files independently.
 type SqliteConfig struct {
 	sqliteHome string
+	quickCheck *sqliteQuickCheckManager
 }
 
 func NewSqliteConfig(sqliteHome string) (SqliteConfig, error) {
@@ -56,7 +61,7 @@ func NewSqliteConfig(sqliteHome string) (SqliteConfig, error) {
 	if err != nil {
 		return SqliteConfig{}, fmt.Errorf("resolve sqlite home: %w", err)
 	}
-	return SqliteConfig{sqliteHome: filepath.Clean(absolute)}, nil
+	return SqliteConfig{sqliteHome: filepath.Clean(absolute), quickCheck: &sqliteQuickCheckManager{}}, nil
 }
 
 func SqliteConfigForCodexHome(codexHome string) (SqliteConfig, error) {

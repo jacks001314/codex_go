@@ -123,6 +123,17 @@ func (c SqliteConfig) openRuntimeDB(ctx context.Context, spec runtimeDBSpec) (*s
 	if err != nil {
 		return nil, &RuntimeDBInitError{Label: spec.label, Operation: "open", Path: path, Err: err}
 	}
+	// A database can open successfully while containing corruption, so writable
+	// databases are validated with `PRAGMA quick_check(1)` before migrations run
+	// (Rust #49701, upstream 3620b2caf8, `open_read_write_pool_with_spec`).
+	outcome, validateErr := c.quickCheckDatabase(ctx, db, path)
+	if validateErr != nil {
+		_ = db.Close()
+		return nil, &RuntimeDBInitError{Label: spec.label, Operation: "open", Path: path, Err: validateErr}
+	}
+	if outcome == QuickCheckCorruptedNeedsFixed {
+		logQuickCheckCorruption(path, spec.label)
+	}
 	if err := migrateRuntimeDB(ctx, db, spec.kind); err != nil {
 		_ = db.Close()
 		return nil, &RuntimeDBInitError{Label: spec.label, Operation: "migrate", Path: path, Err: err}
