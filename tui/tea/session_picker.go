@@ -210,6 +210,12 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 	body := "Are you sure? This will archive the current session and exit Codex"
 	confirmLabel := "Yes, archive and exit"
 	confirmDescription := "Archive this session now"
+	// Rust #50764 (codex-rs/tui/src/chatwidget/slash_dispatch.rs):
+	// /archive stays available while a turn is running, and the confirmation warns
+	// that archiving stops the current turn. Cancelling leaves the turn running.
+	if kind == codextui.SessionSelectionArchive && m.isTaskRunning() {
+		body = "This will stop the current turn and archive the session."
+	}
 	if kind == codextui.SessionSelectionDelete {
 		title = "Delete this session?"
 		body = "Cannot be undone. Subagent threads will also be deleted."

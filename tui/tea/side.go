@@ -721,7 +721,8 @@ func sideSlashCommandAllowed(command codextui.Command) bool {
 func commandAvailableDuringTask(command codextui.Command) bool {
 	switch command {
 	case codextui.CommandNew,
-		codextui.CommandArchive,
+		// Rust #50764: /archive stays available during a running turn so the
+		// user can archive the current session without waiting for the turn.
 		codextui.CommandDelete,
 		codextui.CommandFork,
 		codextui.CommandInit,
