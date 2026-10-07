@@ -449,7 +449,7 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 			continue
 		}
 		blockedPlainNames[input.Name] = true
-		path := skillPathIdentity(input.Path)
+		path := skillMentionPathIdentity(input.Path)
 		if path == "" || seenPaths[path] {
 			continue
 		}
@@ -898,6 +898,93 @@ func skillPathIdentity(path string) string {
 		return identity
 	}
 	return "text\x00" + path
+}
+
+// skillMentionPathIdentity returns the identity of an explicit skill mention's
+// path.
+//
+// Rust #37177 (`codex-rs/skills/src/selection.rs`): the selected mention path is
+// first run through `AbsolutePathBuf::relative_to_current_dir`, which expands a
+// leading `~` and resolves a relative path against the process working
+// directory; that absolute path is then compared as a `PathUri`. Go applies the
+// same expansion and resolution before computing the identity. Locator
+// spellings that carry a URI scheme (such as the `environment://…` locators the
+// executor catalog exposes) are left untouched so those spellings keep matching
+// by their normalized text.
+func skillMentionPathIdentity(path string) string {
+	path = normalizeMentionSkillPath(path)
+	if path == "" {
+		return ""
+	}
+	if identity, ok := utils.PathIdentityKey(path); ok {
+		return identity
+	}
+	if !hasMentionURIScheme(path) {
+		if resolved, ok := resolveMentionHostPath(path); ok {
+			if identity, ok := utils.PathIdentityKey(resolved); ok {
+				return identity
+			}
+			return "text\x00" + resolved
+		}
+	}
+	return "text\x00" + path
+}
+
+// hasMentionURIScheme reports whether text carries a `scheme://` prefix.
+func hasMentionURIScheme(value string) bool {
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z':
+			continue
+		case char >= '0' && char <= '9', char == '+', char == '.', char == '-':
+			if index == 0 {
+				return false
+			}
+			continue
+		case char == ':':
+			return strings.HasPrefix(value[index:], "://")
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// resolveMentionHostPath mirrors `AbsolutePathBuf::relative_to_current_dir`:
+// expand a leading `~`, then absolutize against the process working directory.
+// ok is false only when the working directory is unavailable, which callers
+// treat like Rust's `Err` branch (the mention is skipped).
+func resolveMentionHostPath(path string) (string, bool) {
+	expanded := expandMentionHomeDirectory(path)
+	if filepath.IsAbs(expanded) {
+		return filepath.Clean(expanded), true
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	return filepath.Join(cwd, expanded), true
+}
+
+// expandMentionHomeDirectory mirrors `maybe_expand_home_directory`: only a bare
+// `~` or a `~/` (`~\` on Windows) prefix is expanded.
+func expandMentionHomeDirectory(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	rest := path[1:]
+	if rest != "" && !strings.HasPrefix(rest, "/") && !strings.HasPrefix(rest, `\`) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if rest == "" {
+		return home
+	}
+	return filepath.Join(home, strings.TrimLeft(rest, `\/`))
 }
 
 func isASCIIWhitespace(b byte) bool {

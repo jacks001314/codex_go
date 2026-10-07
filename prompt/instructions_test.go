@@ -467,6 +467,52 @@ func TestCollectExplicitSkillMentionsKeepsNativePathCharactersLikeRust(t *testin
 	}
 }
 
+// TestCollectExplicitSkillMentionsResolvesStructuredPathsLikeRust covers the
+// Rust #37177 rule in `codex-rs/skills/src/selection.rs`: a structured skill
+// mention (`UserInput::Skill`) runs its path through
+// `AbsolutePathBuf::relative_to_current_dir` before the identity comparison, so
+// relative and `~`-prefixed spellings select the same skill as the loaded
+// absolute path.
+func TestCollectExplicitSkillMentionsResolvesStructuredPathsLikeRust(t *testing.T) {
+	directory := t.TempDir()
+	t.Chdir(directory)
+	t.Setenv("HOME", directory)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	skill := InstructionsSkillMetadata{Name: "demo-skill", Path: filepath.Join(cwd, ".agents", "skills", "demo", "SKILL.md")}
+	for _, mention := range []string{
+		filepath.Join(".agents", "skills", "demo", "SKILL.md"),
+		filepath.Join(".", ".agents", "skills", "demo", "SKILL.md"),
+		"~/.agents/skills/demo/SKILL.md",
+	} {
+		selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+			Inputs: []SkillMentionInput{{Type: "skill", Name: "demo-skill", Path: mention}},
+			Skills: []InstructionsSkillMetadata{skill},
+		})
+		if len(selected) != 1 || selected[0].Path != skill.Path {
+			t.Fatalf("CollectExplicitSkillMentions(%q) = %#v, want the loaded skill", mention, selected)
+		}
+	}
+}
+
+// TestCollectExplicitSkillMentionsKeepsLocatorSpellingsLikeRust guards the other
+// half of the same rule: a locator that carries a URI scheme (the
+// `environment://…` spellings the executor catalog exposes) is not resolved
+// against the working directory, so those spellings keep matching exactly.
+func TestCollectExplicitSkillMentionsKeepsLocatorSpellingsLikeRust(t *testing.T) {
+	t.Chdir(t.TempDir())
+	skill := InstructionsSkillMetadata{Name: "demo-skill", Path: "environment://remote/demo/SKILL.md"}
+	selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+		Inputs: []SkillMentionInput{{Type: "skill", Name: "demo-skill", Path: "environment://remote/demo/SKILL.md"}},
+		Skills: []InstructionsSkillMetadata{skill},
+	})
+	if len(selected) != 1 || selected[0].Path != skill.Path {
+		t.Fatalf("CollectExplicitSkillMentions = %#v, want the locator skill", selected)
+	}
+}
+
 // TestCollectExplicitSkillMentionsKeepsPosixCaseSensitivityLikeRust pins the
 // other half of the identity rule: POSIX paths stay case-sensitive, so a
 // differently cased linked mention does not select the skill.
