@@ -43,10 +43,11 @@ const (
 	AmazonBedrockMantleClientHeader  = "x-amzn-mantle-client-agent"
 	AmazonBedrockMantleClientValue   = "codex"
 	AmazonBedrockGPT55ModelID        = "openai.gpt-5.5"
-	// AmazonBedrockGPT54ModelID is no longer a Bedrock *catalog* entry
-	// (Rust #47932, 694d8d45bd). The slug stays because the Bedrock provider
-	// preference APIs below still return it; Rust #38470 (d5e256ceb2) moved
-	// those to the GPT-5.6 Luna/Terra slugs.
+	// AmazonBedrockGPT54ModelID is no longer a Bedrock *catalog* entry and is
+	// no longer returned by any provider API: Rust #47932 (694d8d45bd) dropped
+	// the catalog entry and Rust #38470 (d5e256ceb2) moved the Bedrock
+	// preference APIs onto the GPT-5.6 Luna/Terra slugs. The constant is kept
+	// for callers that still classify the retired slug.
 	AmazonBedrockGPT54ModelID      = "openai.gpt-5.4"
 	AmazonBedrockGPT56SolModelID   = "openai.gpt-5.6-sol"
 	AmazonBedrockGPT56TerraModelID = "openai.gpt-5.6-terra"
@@ -60,13 +61,21 @@ const (
 	AmazonBedrockGPT6LunaModelID = "openai.gpt-6-luna"
 	// AmazonBedrockGPT6AstraModelID is the Bedrock slug for the bundled
 	// gpt-6-astra model (Rust #42619).
-	AmazonBedrockGPT6AstraModelID           = "openai.gpt-6-astra"
-	LegacyOllamaChatProviderID              = "ollama-chat"
-	OllamaChatProviderRemovedMessage        = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782"
-	LMStudioOSSProviderID                   = "lmstudio"
-	OllamaOSSProviderID                     = "ollama"
-	DefaultLMStudioPort              uint16 = 1234
-	DefaultOllamaPort                uint16 = 11434
+	AmazonBedrockGPT6AstraModelID = "openai.gpt-6-astra"
+	// AmazonBedrockRuntimeGlobalGPT56LunaModelID /
+	// AmazonBedrockRuntimeGlobalGPT56TerraModelID mirror Rust
+	// AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA_MODEL_ID /
+	// AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_TERRA_MODEL_ID
+	// (model-provider-info/src/lib.rs, #38470): the `global.` cross-region
+	// variants the Bedrock Runtime endpoint prefers for background work.
+	AmazonBedrockRuntimeGlobalGPT56LunaModelID         = "global.openai.gpt-5.6-luna"
+	AmazonBedrockRuntimeGlobalGPT56TerraModelID        = "global.openai.gpt-5.6-terra"
+	LegacyOllamaChatProviderID                         = "ollama-chat"
+	OllamaChatProviderRemovedMessage                   = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782"
+	LMStudioOSSProviderID                              = "lmstudio"
+	OllamaOSSProviderID                                = "ollama"
+	DefaultLMStudioPort                         uint16 = 1234
+	DefaultOllamaPort                           uint16 = 11434
 )
 
 const chatWireAPIRemovedMessage = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782"
@@ -628,6 +637,19 @@ func (p *ProviderInfo) IsAmazonBedrock() bool {
 	return strings.EqualFold(name, AmazonBedrockProviderName) ||
 		strings.EqualFold(name, AmazonBedrockRuntimeProviderName) ||
 		strings.EqualFold(name, AmazonBedrockProviderID) ||
+		strings.EqualFold(name, AmazonBedrockRuntimeProviderID)
+}
+
+// IsAmazonBedrockRuntime mirrors Rust ModelProviderInfo::is_amazon_bedrock_runtime
+// (model-provider-info/src/lib.rs, #38470): true only for the Bedrock Runtime
+// provider, which serves the regional bedrock-runtime endpoint and owns its own
+// cross-region model catalog and background-model preferences.
+func (p *ProviderInfo) IsAmazonBedrockRuntime() bool {
+	if p == nil {
+		return false
+	}
+	name := strings.TrimSpace(p.Name)
+	return strings.EqualFold(name, AmazonBedrockRuntimeProviderName) ||
 		strings.EqualFold(name, AmazonBedrockRuntimeProviderID)
 }
 

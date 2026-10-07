@@ -348,16 +348,31 @@ func (p *AmazonBedrockProvider) Capabilities() ProviderCapabilities {
 	}
 }
 
+// The three preferred-model accessors mirror Rust
+// AmazonBedrockModelProvider::{approval_review_preferred_model,
+// memory_extraction_preferred_model, memory_consolidation_preferred_model}
+// (codex-rs/model-provider/src/amazon_bedrock/mod.rs, #38470): the Mantle
+// endpoint prefers the GPT-5.6 Luna/Terra slugs while the Bedrock Runtime
+// endpoint prefers their `global.` cross-region variants.
 func (p *AmazonBedrockProvider) ApprovalReviewPreferredModel() string {
-	return AmazonBedrockGPT54ModelID
+	if p.info.IsAmazonBedrockRuntime() {
+		return AmazonBedrockRuntimeGlobalGPT56LunaModelID
+	}
+	return AmazonBedrockGPT56LunaModelID
 }
 
 func (p *AmazonBedrockProvider) MemoryExtractionPreferredModel() string {
-	return AmazonBedrockGPT54ModelID
+	if p.info.IsAmazonBedrockRuntime() {
+		return AmazonBedrockRuntimeGlobalGPT56LunaModelID
+	}
+	return AmazonBedrockGPT56LunaModelID
 }
 
 func (p *AmazonBedrockProvider) MemoryConsolidationPreferredModel() string {
-	return AmazonBedrockGPT54ModelID
+	if p.info.IsAmazonBedrockRuntime() {
+		return AmazonBedrockRuntimeGlobalGPT56TerraModelID
+	}
+	return AmazonBedrockGPT56TerraModelID
 }
 
 func (p *AmazonBedrockProvider) SupportsAttestation() bool {

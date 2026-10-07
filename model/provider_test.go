@@ -255,14 +255,50 @@ func TestAmazonBedrockProviderCapabilitiesAndModels(t *testing.T) {
 	if capabilities.ImageGeneration || !capabilities.WebSearch {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
-	if provider.ApprovalReviewPreferredModel() != AmazonBedrockGPT54ModelID {
-		t.Fatalf("approval model = %q", provider.ApprovalReviewPreferredModel())
+}
+
+// Mirrors Rust #38470 (d5e256ceb2)
+// `preferred_background_models_match_bedrock_endpoint` in
+// codex-rs/model-provider/src/amazon_bedrock/mod.rs: the Mantle endpoint
+// prefers the GPT-5.6 Luna/Terra slugs, while the Bedrock Runtime endpoint
+// prefers their `global.` cross-region variants. The same expectations are in
+// `preferred_background_models_match_bedrock_endpoint`'s assertions on
+// AMAZON_BEDROCK_GPT_5_6_LUNA/TERRA_MODEL_ID and
+// AMAZON_BEDROCK_RUNTIME_GLOBAL_GPT_5_6_LUNA/TERRA_MODEL_ID.
+func TestAmazonBedrockPreferredBackgroundModelsMatchEndpointLikeRust(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider RuntimeProvider
+		want     [3]string
+	}{
+		{
+			name:     "mantle",
+			provider: CreateRuntimeProvider(CreateAmazonBedrockProvider(nil), nil),
+			want: [3]string{
+				AmazonBedrockGPT56LunaModelID,
+				AmazonBedrockGPT56LunaModelID,
+				AmazonBedrockGPT56TerraModelID,
+			},
+		},
+		{
+			name:     "runtime",
+			provider: CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(nil), nil),
+			want: [3]string{
+				AmazonBedrockRuntimeGlobalGPT56LunaModelID,
+				AmazonBedrockRuntimeGlobalGPT56LunaModelID,
+				AmazonBedrockRuntimeGlobalGPT56TerraModelID,
+			},
+		},
 	}
-	if provider.MemoryExtractionPreferredModel() != AmazonBedrockGPT54ModelID {
-		t.Fatalf("memory extraction model = %q", provider.MemoryExtractionPreferredModel())
-	}
-	if provider.MemoryConsolidationPreferredModel() != AmazonBedrockGPT54ModelID {
-		t.Fatalf("memory consolidation model = %q", provider.MemoryConsolidationPreferredModel())
+	for _, testCase := range cases {
+		got := [3]string{
+			testCase.provider.ApprovalReviewPreferredModel(),
+			testCase.provider.MemoryExtractionPreferredModel(),
+			testCase.provider.MemoryConsolidationPreferredModel(),
+		}
+		if got != testCase.want {
+			t.Fatalf("%s preferred background models = %v, want %v", testCase.name, got, testCase.want)
+		}
 	}
 }
 
