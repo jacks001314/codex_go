@@ -1243,6 +1243,25 @@ func writeExecServerJSON(ctx context.Context, conn *websocket.Conn, value any) e
 	return conn.Write(ctx, websocket.MessageText, data)
 }
 
+// execServerRPCError is an exec-server JSON-RPC error response from the
+// websocket transport. It keeps the previous message formatting and carries the
+// server's code so callers can classify filesystem outcomes.
+type execServerRPCError struct {
+	RequestID int
+	Code      int
+	Message   string
+}
+
+func (e *execServerRPCError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("exec-server request %d failed with code %d", e.RequestID, e.Code)
+}
+
 func readExecServerResponse(ctx context.Context, conn *websocket.Conn, id int) (json.RawMessage, error) {
 	for {
 		messageType, data, err := conn.Read(ctx)
@@ -1260,10 +1279,10 @@ func readExecServerResponse(ctx context.Context, conn *websocket.Conn, id int) (
 			continue
 		}
 		if response.Error != nil {
-			if strings.TrimSpace(response.Error.Message) != "" {
-				return nil, errors.New(response.Error.Message)
-			}
-			return nil, fmt.Errorf("exec-server request %d failed with code %d", id, response.Error.Code)
+			// The typed error keeps the previous message while exposing the code, so
+			// callers can classify filesystem outcomes (Rust maps
+			// io::ErrorKind::NotFound through the same classification).
+			return nil, &execServerRPCError{RequestID: id, Code: response.Error.Code, Message: response.Error.Message}
 		}
 		if len(response.Result) == 0 {
 			return []byte("{}"), nil

@@ -260,6 +260,12 @@ func discoverEnvironmentSkillsWithCaller(ctx context.Context, environmentID stri
 	nextID := 3
 	pluginNamespaces := remotePluginNamespacesFromInventory(ctx, caller, &nextID, remoteFiles)
 	pluginNamespaces = remotePluginNamespacesFromRootAncestors(ctx, caller, &nextID, rootPath, pluginNamespaces)
+	// Rust #51491: classify the root's ownership independently of parsing. A
+	// failed probe must not be read as "standalone", so it is surfaced as a
+	// warning instead of being silently ignored.
+	if _, ownershipErr := executorPluginRootOwnership(rootPath, rootPath, nil, remotePluginManifestProbe(ctx, caller, &nextID)); ownershipErr != nil {
+		warnings = append(warnings, fmt.Sprintf("failed to classify plugin ownership for %s: %v", rootPath, ownershipErr))
+	}
 	entries := make([]SkillsListEntry, 0)
 	for _, entry := range walk.Entries {
 		if entry.Kind != "file" || remotePathBase(entry.Path) != SkillFilename {
@@ -437,10 +443,13 @@ func remotePluginNamespacesFromRootAncestors(ctx context.Context, caller remoteE
 
 func remotePluginNamespaceForRoot(ctx context.Context, caller remoteEnvironmentFSCaller, nextID *int, pluginRoot string) (remotePluginDescriptor, bool) {
 	candidates := make([]remotePluginManifestCandidate, 0, len(remoteDiscoverablePluginManifestPaths)+1)
+	// Share the manifest lookup with the ownership classifier rather than
+	// duplicating the metadata probe (Rust #51491 find_manifest).
+	probe := remotePluginManifestProbe(ctx, caller, nextID)
 	for priority, relativePath := range append([]string{remoteAgentPluginManifestPath}, remoteDiscoverablePluginManifestPaths...) {
 		manifestPath := remoteJoin(pluginRoot, relativePath)
-		metadata, err := getRemoteEnvironmentMetadata(ctx, caller, nextID, manifestPath)
-		if err != nil || metadata == nil || !metadata.IsFile {
+		exists, err := probe(manifestPath)
+		if err != nil || !exists {
 			continue
 		}
 		candidates = append(candidates, remotePluginManifestCandidate{path: manifestPath, priority: priority, agent: relativePath == remoteAgentPluginManifestPath})

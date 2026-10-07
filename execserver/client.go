@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -363,6 +364,24 @@ type rpcServerError struct {
 
 func (e *rpcServerError) Error() string {
 	return fmt.Sprintf("exec-server %s failed (%d): %s", e.Method, e.Code, e.Message)
+}
+
+// fsNotExistErrorCode mirrors Rust fs::ErrorKind::NotFound on the exec-server
+// wire: fsOperationFailure classifies os.IsNotExist as -32004.
+const fsNotExistErrorCode = -32004
+
+// IsFSNotExistError reports whether err means the filesystem entry does not
+// exist. Rust distinguishes NotFound from a real metadata failure (a failed
+// probe must not be read as "absent"), so callers need this classification.
+func IsFSNotExistError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	var serverError *rpcServerError
+	return errors.As(err, &serverError) && serverError.Code == fsNotExistErrorCode
 }
 
 // isSessionAlreadyAttachedError reports the server's "session ... is already
@@ -1463,7 +1482,10 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 	}
 	response := result.response
 	if response.Error != nil {
-		return fmt.Errorf("exec-server %s failed (%d): %s", method, response.Error.Code, response.Error.Message)
+		// The typed error keeps the previous message formatting while exposing the
+		// server's code, so callers can classify filesystem outcomes (Rust maps
+		// io::ErrorKind::NotFound through the same way).
+		return &rpcServerError{Method: method, Code: response.Error.Code, Message: response.Error.Message}
 	}
 	if target == nil || len(response.Result) == 0 || string(response.Result) == "null" {
 		return nil
