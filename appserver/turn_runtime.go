@@ -36,6 +36,7 @@ import (
 	"codex_go/eventmap"
 	"codex_go/execserver"
 	"codex_go/features"
+	"codex_go/gitutil"
 	"codex_go/install"
 	"codex_go/mcp"
 	"codex_go/memories"
@@ -10460,14 +10461,22 @@ func skillInvocationScope(scope string) string {
 	}
 }
 
+// skillInvocationRepo resolves the repository root and sanitized origin URL for
+// a host skill, mirroring Rust git-utils `get_git_repo_root` plus the
+// `get_git_origin_url` helper extracted by #49076. Only the origin URL is read;
+// the commit hash and branch that skill analytics never uses are not collected.
 func skillInvocationRepo(skillPath string) (string, string) {
 	current := filepath.Dir(skillPath)
 	for current != "" {
 		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
-			if info, ok := utils.CollectGitInfoFromDir(current); ok {
-				return current, info.RepositoryURL
+			repoURL, _ := utils.GitOriginURLFromDir(current)
+			// Rust git-utils `get_git_origin_url` returns a `SanitizedGitUrl`, so
+			// credentials embedded in the remote never reach skill analytics
+			// (Rust #40713); mirrors acceptedLineRepoHashFromRemoteURL.
+			if sanitized, err := gitutil.SanitizeGitURL(repoURL); err == nil {
+				repoURL = sanitized
 			}
-			return current, ""
+			return current, repoURL
 		}
 		parent := filepath.Dir(current)
 		if parent == current {

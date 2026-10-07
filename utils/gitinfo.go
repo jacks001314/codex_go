@@ -38,6 +38,19 @@ func CollectGitInfoFromDir(repoRoot string) (*GitInfo, bool) {
 	return info, true
 }
 
+// GitOriginURLFromDir returns the `origin` remote URL recorded in the
+// repository's `.git/config`, mirroring Rust git-utils `get_git_origin_url`
+// (#49076). Unlike CollectGitInfoFromDir it reads only the origin URL, so the
+// skill invocation analytics path no longer collects the commit hash and branch
+// it never uses. The bool reports whether repoRoot is a Git work tree.
+func GitOriginURLFromDir(repoRoot string) (string, bool) {
+	gitDir := filepath.Join(repoRoot, ".git")
+	if stat, err := os.Stat(gitDir); err != nil || !stat.IsDir() {
+		return "", false
+	}
+	return readGitInfoOriginURL(filepath.Join(gitDir, "config")), true
+}
+
 func RecentGitInfoCommitsFromLog(logText string, limit int) []GitInfoCommit {
 	if limit <= 0 {
 		return nil

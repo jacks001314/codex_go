@@ -92,3 +92,31 @@ func TestInfoJSONOmitsEmptyFields(t *testing.T) {
 		t.Fatalf("branch = %q", parsed["branch"])
 	}
 }
+
+// Mirrors Rust #49076: the origin-URL reader used by skill analytics returns the
+// `origin` remote URL without collecting the commit hash or branch, and reports
+// whether the directory is a Git work tree.
+func TestGitOriginURLFromDirLikeRust(t *testing.T) {
+	repo := t.TempDir()
+	gitDir := filepath.Join(repo, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	// No HEAD / refs exist: only the origin URL is required.
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[remote \"origin\"]\n  url = git@example.com:repo.git\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	if url, ok := GitOriginURLFromDir(repo); !ok || url != "git@example.com:repo.git" {
+		t.Fatalf("GitOriginURLFromDir() = %q/%v, want git@example.com:repo.git/true", url, ok)
+	}
+	// A repository without an origin remote still reports the work tree.
+	if err := os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]\n  bare = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	if url, ok := GitOriginURLFromDir(repo); !ok || url != "" {
+		t.Fatalf("GitOriginURLFromDir(no origin) = %q/%v, want \"\"/true", url, ok)
+	}
+	if url, ok := GitOriginURLFromDir(t.TempDir()); ok || url != "" {
+		t.Fatalf("GitOriginURLFromDir(non git) = %q/%v, want \"\"/false", url, ok)
+	}
+}
