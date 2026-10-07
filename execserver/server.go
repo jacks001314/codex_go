@@ -1411,7 +1411,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := validateFSWirePath("path", params.Path, params.Sandbox); err != nil {
 			return nil, err
 		}
-		result, err := readFile(&params)
+		result, err := readFileContext(ctx, &params)
 		return result, mapFSRequestError(err)
 	case MethodFSOpen:
 		var params FSOpenParams
@@ -2293,6 +2293,16 @@ func (s *Server) lookup(processID string) *processState {
 }
 
 func readFile(params *FSReadFileParams) (*FSReadFileResponse, error) {
+	return readFileContext(context.Background(), params)
+}
+
+// readFileContext reads a regular file in bounded chunks and checks the request
+// context before each chunk. Rust #49696: a caller that goes away cancels the
+// read between chunks instead of waiting for the whole file, while the 512 MiB
+// limit, the symlink options, and the regular-file validation stay unchanged.
+// In-process callers keep the context-free readFile entry point, because Go's
+// helper APIs carry no cancellation context.
+func readFileContext(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
 	var sandboxed FSReadFileResponse
 	if ran, err := runSandboxedFSOperation(params.Sandbox, MethodFSReadFile, params, &sandboxed); ran {
 		if err != nil {
@@ -2321,16 +2331,47 @@ func readFile(params *FSReadFileParams) (*FSReadFileResponse, error) {
 		return nil, err
 	}
 	if info.Size() > maxReadFileBytes {
-		return nil, requestError(-32600, fmt.Sprintf("file is too large to read: limit is %d bytes", maxReadFileBytes))
+		return nil, tooLargeFileError()
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxReadFileBytes+1))
+	data, err := readBoundedFileData(ctx, file)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxReadFileBytes {
-		return nil, requestError(-32600, fmt.Sprintf("file is too large to read: limit is %d bytes", maxReadFileBytes))
-	}
 	return &FSReadFileResponse{DataBase64: base64.StdEncoding.EncodeToString(data)}, nil
+}
+
+func tooLargeFileError() error {
+	return requestError(-32600, fmt.Sprintf("file is too large to read: limit is %d bytes", maxReadFileBytes))
+}
+
+// readBoundedFileData drains a reader in bounded chunks, cancelling between
+// chunks when the request context ends. Each chunk is capped at
+// fileReadChunkSize, the same bound the streamed read path uses, so a canceled
+// read stops within one chunk of the caller going away (Rust #49696).
+func readBoundedFileData(ctx context.Context, reader io.Reader) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	chunk := make([]byte, fileReadChunkSize)
+	data := make([]byte, 0, fileReadChunkSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		count, readErr := reader.Read(chunk)
+		if count > 0 {
+			if int64(len(data))+int64(count) > maxReadFileBytes {
+				return nil, tooLargeFileError()
+			}
+			data = append(data, chunk[:count]...)
+		}
+		if readErr == io.EOF {
+			return data, nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
 }
 
 func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
