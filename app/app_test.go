@@ -6207,3 +6207,43 @@ func TestInteractiveRemoteCloseSideSkipsInterruptForOtherThread(t *testing.T) {
 	default:
 	}
 }
+
+// TestLocalThreadStartStagesDaybreakDefaultLikeRust covers Rust #49861's
+// thread/start staging (app_server_session.rs:873/1830): a new persistent
+// thread carries `params.daybreak_enabled = config.daybreak_enabled`, and a
+// configuration without the key leaves the parameter unset.
+func TestLocalThreadStartStagesDaybreakDefaultLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	params := interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
+	if params.DaybreakEnabled == nil || !*params.DaybreakEnabled {
+		t.Fatalf("thread/start daybreakEnabled = %v, want true", params.DaybreakEnabled)
+	}
+
+	empty := t.TempDir()
+	t.Setenv("CODEX_HOME", empty)
+	if err := os.WriteFile(config.ConfigPath(empty), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	params = interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
+	if params.DaybreakEnabled != nil {
+		t.Fatalf("thread/start daybreakEnabled = %v, want unset", params.DaybreakEnabled)
+	}
+}
+
+// TestSettingsCarryDaybreakDefaultLikeRust checks the settings record the TUI
+// bootstrap reads before the first thread exists.
+func TestSettingsCarryDaybreakDefaultLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	settings := interactiveTUISettings(&cli.RootOptions{})
+	if !settings.DaybreakDefault {
+		t.Fatal("settings DaybreakDefault = false, want true")
+	}
+}

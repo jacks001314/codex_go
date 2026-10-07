@@ -25,6 +25,7 @@ import (
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/eventmap"
+	"codex_go/features"
 	"codex_go/filesearch"
 	"codex_go/plugin"
 	"codex_go/protocol"
@@ -282,6 +283,11 @@ type SettingsWriteResult struct {
 	GenerateMemories  *bool
 	FeedbackEnabled   *bool
 	DisablePasteBurst bool
+	// DaybreakDefault is the configured Daybreak preference for a *new* thread
+	// (`daybreak`, Rust Config::daybreak_enabled, #49861/#49856). The TUI's
+	// bootstrap thread is persistent, so Rust's `!config.ephemeral` guard
+	// always holds here.
+	DaybreakDefault bool
 	// AnimationsEnabled is the effective `tui.animations` value after the host
 	// motion preference is applied (Rust #44666). Nil preserves the current
 	// value.
@@ -1223,14 +1229,18 @@ type Options struct {
 	// StartupConfigWarnings carries the requirement-driven config warnings known
 	// at startup so they coalesce into the startup warnings entry (Rust
 	// config.startup_warnings -> ConfigWarning notifications).
-	StartupConfigWarnings   []string
-	InitialMessages         <-chan bubbletea.Msg
-	InitialHistoryCells     []historycell.HistoryCell
-	FeatureSettings         map[string]bool
-	UseMemories             *bool
-	GenerateMemories        *bool
-	FeedbackEnabled         *bool
-	DisablePasteBurst       bool
+	StartupConfigWarnings []string
+	InitialMessages       <-chan bubbletea.Msg
+	InitialHistoryCells   []historycell.HistoryCell
+	FeatureSettings       map[string]bool
+	UseMemories           *bool
+	GenerateMemories      *bool
+	FeedbackEnabled       *bool
+	DisablePasteBurst     bool
+	// DaybreakDefault seeds a new thread's Daybreak preference (Rust
+	// `params.daybreak_enabled = config.daybreak_enabled && !ephemeral`,
+	// #49861). The live value is still gated by the cli_daybreak feature.
+	DaybreakDefault         bool
 	Personality             chatwidget.Personality
 	HideRateLimitModelNudge *bool
 	TUITheme                string
@@ -2071,6 +2081,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
 		initialMessages:                 options.InitialMessages,
 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
+		daybreakEnabled:                 features.Enabled(options.FeatureSettings, "cli_daybreak") && options.DaybreakDefault,
 		disablePasteBurst:               options.DisablePasteBurst,
 		personality:                     initialPersonality(state, options.Personality),
 		tuiTheme:                        strings.TrimSpace(options.TUITheme),

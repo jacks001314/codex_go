@@ -1147,12 +1147,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
 		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
 		FeatureSettings:            settings.FeatureSettings,
-		UseMemories:                settings.UseMemories,
-		GenerateMemories:           settings.GenerateMemories,
-		FeedbackEnabled:            settings.FeedbackEnabled,
-		DisablePasteBurst:          settings.DisablePasteBurst,
-		ModelPickerOptions:         interactiveModelPickerOptions(root),
-		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
+		// Rust #49861: a fresh session starts from the configured Daybreak
+		// preference before any thread/resume reports the stored one.
+		DaybreakDefault:     settings.DaybreakDefault,
+		UseMemories:         settings.UseMemories,
+		GenerateMemories:    settings.GenerateMemories,
+		FeedbackEnabled:     settings.FeedbackEnabled,
+		DisablePasteBurst:   settings.DisablePasteBurst,
+		ModelPickerOptions:  interactiveModelPickerOptions(root),
+		ServiceTierCommands: interactiveServiceTierCommands(state.Model),
 		// Rust #51253: the server requirements the model catalog is constrained
 		// with, read by interactiveLoadSettings alongside the other preferences.
 		ServiceTierRequirements: settings.ServiceTierRequirements,
@@ -1326,6 +1329,14 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 			remoteCLIConfigOverrideKeys(root),
 			root != nil && strings.TrimSpace(root.Shared.Model) != "",
 			false)
+	}
+	// Rust #49861 (app_server_session.rs:873/1830): a new thread stages the
+	// configured Daybreak preference as its initial value
+	// (`params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true)`).
+	// The bootstrap thread is persistent, so the ephemeral guard is vacuous.
+	if interactiveTUISettings(root).DaybreakDefault {
+		enabled := true
+		threadStart.DaybreakEnabled = &enabled
 	}
 	return threadStart
 }
@@ -2010,7 +2021,11 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 	// activate (markdown_render::preferences::init).
 	markdown.InitRenderingFromConfig(config.TuiRenderingFromValues(values))
 	return codextea.SettingsWriteResult{
-		FeatureSettings:         featureSettings,
+		FeatureSettings: featureSettings,
+		// Rust #49861/#49856: the configured default for a *new* thread
+		// (Config::daybreak_enabled). The TUI's bootstrap thread is persistent,
+		// so Rust's `!config.ephemeral` guard always holds here.
+		DaybreakDefault:         loaded.DaybreakEnabled(),
 		UseMemories:             interactiveMemoryBoolFromConfig(values, "use_memories"),
 		GenerateMemories:        interactiveMemoryBoolFromConfig(values, "generate_memories"),
 		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
