@@ -927,8 +927,38 @@ func TestModelCtrlCInterruptsRunningTaskWithoutQuitting(t *testing.T) {
 	if countRole(state.Messages, codextui.RoleHistory) != 1 {
 		t.Fatalf("history messages after interrupt = %#v, want one", state.Messages)
 	}
-	if !strings.Contains(model.View(), "Interrupted current turn") {
+	if !strings.Contains(model.View(), "Conversation interrupted - use /feedback if something went wrong") {
 		t.Fatalf("interrupt notice missing:\n%s", model.View())
+	}
+}
+
+// Rust #48830 (1cc7e23612) renders an interrupted turn as the short, neutral
+// notice `\u25a0 Conversation interrupted - use /feedback if something went wrong`
+// (codex-rs/tui/src/chatwidget/input_restore.rs::on_interrupted_turn, asserted by
+// chatwidget/tests/review_mode.rs::interrupted_turn_error_message_snapshot) and
+// no longer suggests telling the model what to do differently.
+func TestModelTurnInterruptedNoticeLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.SetStatus("running")
+	model := NewModel(state, Options{
+		OnInterrupt: func() bubbletea.Cmd {
+			return func() bubbletea.Msg { return TurnInterruptedMsg{} }
+		},
+	})
+	_, cmd := model.Update(key(bubbletea.KeyCtrlC))
+	if cmd == nil {
+		t.Fatal("running Ctrl+C returned nil command")
+	}
+	model.Update(TurnInterruptedMsg{})
+	view := model.View()
+	if !strings.Contains(view, "\u25a0 Conversation interrupted - use /feedback if something went wrong") {
+		t.Fatalf("interrupted notice missing from the transcript:\n%s", view)
+	}
+	if strings.Contains(view, "tell the model what to do differently") {
+		t.Fatalf("interrupted notice must not tell the user what to do differently:\n%s", view)
+	}
+	if countRole(state.Messages, codextui.RoleHistory) != 1 {
+		t.Fatalf("history messages after interrupt = %#v, want one", state.Messages)
 	}
 }
 

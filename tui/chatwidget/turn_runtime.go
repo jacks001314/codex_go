@@ -696,13 +696,6 @@ func AppServerRateLimitErrorKind(info *TurnRuntimeCodexErrorInfo) (RateLimitErro
 	return "", false
 }
 
-func (s *TurnRuntimeState) InterruptedTurnMessage(reason TurnAbortReason) string {
-	if reason == TurnAbortBudgetLimited {
-		return "Goal budget reached - the turn was stopped."
-	}
-	return "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue."
-}
-
 func (s *TurnRuntimeState) MaybeSendNextQueuedInput() bool {
 	if s == nil || !s.SessionConfigured || s.InputQueue.SuppressQueueAutosend || s.MisalignmentPolicyViolation {
 		return false

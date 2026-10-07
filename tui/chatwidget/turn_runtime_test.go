@@ -318,20 +318,6 @@ func TestTurnRuntimeHandleNonRetryErrorClassifiesRustBranches(t *testing.T) {
 	})
 }
 
-func TestTurnRuntimeInterruptedTurnMessageMatchesRust(t *testing.T) {
-	state := TurnRuntimeState{}
-
-	if got := state.InterruptedTurnMessage(TurnAbortBudgetLimited); got != "Goal budget reached - the turn was stopped." {
-		t.Fatalf("budget message = %q", got)
-	}
-	if got := state.InterruptedTurnMessage(TurnAbortInterrupted); got != "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue." {
-		t.Fatalf("interrupt message = %q", got)
-	}
-}
-
-// Rust's chatwidget drains the runtime-metrics reader when a turn starts and
-// again when it completes, so the completion metadata reports this turn's
-// deltas only.
 func TestTurnRuntimeDrainsRuntimeMetricsSourceLikeRust(t *testing.T) {
 	drained := 0
 	next := historycell.RuntimeMetricsSummary{

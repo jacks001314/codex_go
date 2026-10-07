@@ -4871,7 +4871,14 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	m.notice = text
 	m.markActiveToolCallsFailed(text)
 	m.clearCurrentThreadAfterFailure(text)
-	m.addInfoHistoryMessage(text)
+	// Rust #48830 (1cc7e23612) input_restore.rs::on_interrupted_turn: the
+	// interrupted turn is recorded as a short, neutral notice - a plain
+	// history line whose "■" marker is part of the literal text, ending in
+	// the feedback command. Upstream dropped both the removed
+	// "tell the model what to do differently" wording and the
+	// `interrupted_turn_message` helper. Mirrors the Rust assertion in
+	// chatwidget/tests/review_mode.rs::interrupted_turn_error_message_snapshot.
+	m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{chatwidget.ConversationInterruptedNotice}))
 	m.refreshTranscript()
 }
 

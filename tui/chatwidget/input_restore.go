@@ -22,11 +22,23 @@ const (
 	InterruptedTurnNoticeError InterruptedTurnNoticeKind = "error"
 )
 
+// Rust #48830 (1cc7e23612) inlines both interrupted-turn notices at the
+// interruption site (codex-rs/tui/src/chatwidget/input_restore.rs::
+// on_interrupted_turn), so the notice text is derived from the abort reason
+// instead of being supplied by the caller.
+const (
+	// goalBudgetReachedNotice keeps the error event upstream renders for a
+	// budget-limited turn.
+	goalBudgetReachedNotice = "Goal budget reached - the turn was stopped."
+	// ConversationInterruptedNotice is the neutral interrupted-turn notice;
+	// the "\u25a0" marker is part of the cell's literal text.
+	ConversationInterruptedNotice = "\u25a0 Conversation interrupted - use /feedback if something went wrong"
+)
+
 type InterruptedTurnRestoreOptions struct {
-	Reason          TurnAbortReason
-	Composer        ThreadComposerState
-	NoticeMode      InterruptedTurnNoticeMode
-	InterruptNotice string
+	Reason     TurnAbortReason
+	Composer   ThreadComposerState
+	NoticeMode InterruptedTurnNoticeMode
 }
 
 type InterruptedTurnRestoreResult struct {
@@ -237,9 +249,14 @@ func (s *InputQueueState) OnInterruptedTurn(cancelEdit *CancelEditState, options
 		if sendPendingSteersImmediately {
 			result.NoticeKind = InterruptedTurnNoticeInfo
 			result.NoticeMessage = "Model interrupted to submit steer instructions."
-		} else {
+		} else if options.Reason == TurnAbortBudgetLimited {
 			result.NoticeKind = InterruptedTurnNoticeError
-			result.NoticeMessage = options.InterruptNotice
+			result.NoticeMessage = goalBudgetReachedNotice
+		} else {
+			// Rust #48830: an interrupted turn renders a neutral notice
+			// rather than an error event.
+			result.NoticeKind = InterruptedTurnNoticeInfo
+			result.NoticeMessage = ConversationInterruptedNotice
 		}
 	}
 

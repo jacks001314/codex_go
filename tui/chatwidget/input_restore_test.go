@@ -115,9 +115,8 @@ func TestInputRestoreInterruptedTurnSubmitsPendingSteersImmediatelyMatchRust(t *
 	}
 
 	result := state.OnInterruptedTurn(nil, InterruptedTurnRestoreOptions{
-		Reason:          TurnAbortInterrupted,
-		Composer:        ThreadComposerState{Text: "still editing"},
-		InterruptNotice: "Conversation interrupted",
+		Reason:   TurnAbortInterrupted,
+		Composer: ThreadComposerState{Text: "still editing"},
 	})
 
 	if result.SubmittedMessage == nil || result.SubmittedMessage.Text != "first pending\nsecond pending" {
@@ -151,9 +150,8 @@ func TestInputRestoreInterruptedTurnRestoresPendingQueuedAndComposerMatchRust(t 
 	}
 
 	result := state.OnInterruptedTurn(nil, InterruptedTurnRestoreOptions{
-		Reason:          TurnAbortInterrupted,
-		Composer:        ThreadComposerState{Text: "still editing"},
-		InterruptNotice: "Conversation interrupted",
+		Reason:   TurnAbortInterrupted,
+		Composer: ThreadComposerState{Text: "still editing"},
 	})
 
 	if result.SubmittedMessage != nil {
@@ -162,7 +160,7 @@ func TestInputRestoreInterruptedTurnRestoresPendingQueuedAndComposerMatchRust(t 
 	if result.RestoredComposer == nil || result.RestoredComposer.Text != "pending steer\nqueued draft\nstill editing" {
 		t.Fatalf("restored composer = %#v", result.RestoredComposer)
 	}
-	if result.NoticeKind != InterruptedTurnNoticeError || result.NoticeMessage != "Conversation interrupted" {
+	if result.NoticeKind != InterruptedTurnNoticeInfo || result.NoticeMessage != ConversationInterruptedNotice {
 		t.Fatalf("notice = %q %q", result.NoticeKind, result.NoticeMessage)
 	}
 	if len(state.PendingSteers) != 0 || len(state.QueuedUserMessages) != 0 {
@@ -177,8 +175,7 @@ func TestInputRestoreInterruptedTurnReturnsArmedCancelPromptAndSuppressesNoticeM
 	state := InputQueueState{}
 
 	result := state.OnInterruptedTurn(&cancel, InterruptedTurnRestoreOptions{
-		Reason:          TurnAbortInterrupted,
-		InterruptNotice: "Conversation interrupted",
+		Reason: TurnAbortInterrupted,
 	})
 
 	if result.CancelledPrompt == nil || result.CancelledPrompt.Text != "original prompt" {
@@ -192,5 +189,22 @@ func TestInputRestoreInterruptedTurnReturnsArmedCancelPromptAndSuppressesNoticeM
 	}
 	if !result.FinalizeTurn || !result.RequestRedraw {
 		t.Fatalf("interrupted turn should finalize and redraw: %#v", result)
+	}
+}
+
+// Rust #48830 (1cc7e23612) input_restore.rs::on_interrupted_turn selects the
+// notice from the abort reason instead of taking it from the caller: a
+// budget-limited turn keeps the error event, while an interrupted turn renders
+// the neutral notice. Mirrors the Rust assertion in
+// chatwidget/tests/review_mode.rs::interrupted_turn_error_message_snapshot.
+func TestInputRestoreInterruptedTurnNoticeByReasonLikeRust(t *testing.T) {
+	state := InputQueueState{}
+	limited := state.OnInterruptedTurn(nil, InterruptedTurnRestoreOptions{Reason: TurnAbortBudgetLimited})
+	if limited.NoticeKind != InterruptedTurnNoticeError || limited.NoticeMessage != goalBudgetReachedNotice {
+		t.Fatalf("budget-limited notice = %q %q", limited.NoticeKind, limited.NoticeMessage)
+	}
+	interrupted := state.OnInterruptedTurn(nil, InterruptedTurnRestoreOptions{Reason: TurnAbortInterrupted})
+	if interrupted.NoticeKind != InterruptedTurnNoticeInfo || interrupted.NoticeMessage != ConversationInterruptedNotice {
+		t.Fatalf("interrupted notice = %q %q", interrupted.NoticeKind, interrupted.NoticeMessage)
 	}
 }
