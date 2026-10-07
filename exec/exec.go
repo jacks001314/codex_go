@@ -1249,6 +1249,26 @@ func (r *Runner) applyUnifiedExecEnvironments(options *turn.ToolRegistryOptions)
 		return
 	}
 	options.Shell.UnifiedExecEnvironments = append([]tool.UnifiedExecEnvironment(nil), r.UnifiedExecEnvironments...)
+	// Rust #20647: apply_patch and request_permissions run on the selected
+	// environment's filesystem, so the environments the shell family dials also
+	// back those handlers.
+	options.EnvironmentFileSystems = tool.NewUnifiedExecEnvironmentFileSystems(options.Shell.UnifiedExecEnvironments, options.Shell.Validation.CWD)
+}
+
+// viewImageOptionsWithEnvironments attaches the host-resolved environments to
+// the view_image options so the handler reads through the selected environment
+// (Rust #20647 `78421face0`). The options are copied so the shared run config is
+// not mutated.
+func (r *Runner) viewImageOptionsWithEnvironments(options *tool.ViewImageOptions) *tool.ViewImageOptions {
+	if options == nil {
+		return nil
+	}
+	if options.EnvironmentFileSystems != nil {
+		return options
+	}
+	clone := *options
+	clone.EnvironmentFileSystems = tool.NewUnifiedExecEnvironmentFileSystems(r.UnifiedExecEnvironments, clone.CWD)
+	return &clone
 }
 
 func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.Router, error) {
@@ -1258,7 +1278,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	goalExecutors := r.goalToolExecutorsForRequest(req, run)
 	if r.ToolRouter != nil {
 		if run != nil && run.ViewImage != nil {
-			if err := r.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*run.ViewImage)); err != nil {
+			if err := r.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*r.viewImageOptionsWithEnvironments(run.ViewImage))); err != nil {
 				return nil, err
 			}
 		}
@@ -1349,7 +1369,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	if run != nil {
 		options.WebSearch = run.WebSearch
 		options.ImageGeneration = run.ImageGeneration
-		options.ViewImage = run.ViewImage
+		options.ViewImage = r.viewImageOptionsWithEnvironments(run.ViewImage)
 		// Rust build_mcp_tool_call_request_meta: MCP tool calls report the
 		// turn's metadata document in `_meta`.
 		if run.ClientMetadata != nil {

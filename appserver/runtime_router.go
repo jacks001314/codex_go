@@ -14073,6 +14073,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			return context.ModelSlug, context.ReasoningEffort
 		}
 		options.Shell.UnifiedExecEnvironments = r.unifiedExecEnvironmentsForTurn(params)
+		// Rust #20647: apply_patch and request_permissions execute on the
+		// selected turn environment's filesystem, so the same host-resolved
+		// environments the shell family dials back that filesystem for them.
+		options.EnvironmentFileSystems = tool.NewUnifiedExecEnvironmentFileSystems(options.Shell.UnifiedExecEnvironments, cwd)
 		options.Shell.Validation.ApprovalPolicy = approvalPolicy
 		if r.commandApprovalForSession(threadID) {
 			options.Shell.Validation.PermissionsPreapproved = true
@@ -14676,6 +14680,8 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 		CWD:                      cwd,
 		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
 		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
+		// Rust #20647: view_image reads the selected environment's filesystem.
+		EnvironmentFileSystems: tool.NewUnifiedExecEnvironmentFileSystems(r.unifiedExecEnvironmentsForTurn(params), cwd),
 	}
 }
 

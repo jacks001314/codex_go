@@ -33,6 +33,11 @@ type ToolRegistryOptions struct {
 	EnvironmentWaiter            tool.EnvironmentWaiter
 	SelectedEnvironmentIDs       []string
 	WaitForEnvironmentToolConfig *tool.WaitForEnvironmentToolConfig
+	// EnvironmentFileSystems resolves the selected environment's filesystem for
+	// the environment-backed handlers (apply_patch / view_image /
+	// request_permissions, Rust #20647 `78421face0`). Nil keeps every handler on
+	// the host process filesystem.
+	EnvironmentFileSystems tool.EnvironmentFileSystemProvider
 
 	Shell        *tool.ShellExecutorOptions
 	ApplyPatch   *tool.ApplyPatchExecutorOptions
@@ -574,6 +579,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if applyPatchOptions != nil {
 			clone := *applyPatchOptions
 			clone.EnvironmentCheck = environmentPlan.Check
+			clone.EnvironmentFileSystems = options.EnvironmentFileSystems
 			applyPatchOptions = &clone
 		}
 		if err := tool.RegisterApplyPatchHandler(registry, applyPatchOptions); err != nil {
@@ -628,6 +634,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		// environment_id resolves instead of being silently ignored.
 		viewImageOptions := *options.ViewImage
 		viewImageOptions.EnvironmentCheck = environmentPlan.Check
+		viewImageOptions.EnvironmentFileSystems = options.EnvironmentFileSystems
 		if err := registry.Register(tool.NewViewImageHandler(viewImageOptions)); err != nil {
 			return nil, err
 		}
@@ -661,7 +668,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.EnableRequestPermissions && options.RequestPermissionsReviewer != nil && environmentPlan.Advertise {
-		if err := tool.RegisterRequestPermissionsToolWithOptions(registry, options.RequestPermissionsReviewer, environmentPlan.Check); err != nil {
+		if err := tool.RegisterRequestPermissionsToolWithFileSystems(registry, options.RequestPermissionsReviewer, environmentPlan.Check, options.EnvironmentFileSystems); err != nil {
 			return nil, err
 		}
 	}

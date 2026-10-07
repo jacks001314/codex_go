@@ -620,3 +620,16 @@ for s in 0d5dbdc8 2e4c58bb 97d5500c 40f7a3a3 5e402ebc ad19d6b6 15ae7564 8a5e9e62
 
 ---
 *本文件由 `verify51482` 只读生成；未 commit、未 push、未修改任何既有文件。*
+
+## 8. 对抗式裁定（第二轮，verify51482 独立复核，main=`c30b56ca`）
+
+> 本节对象是 §7「下一步建议 1」点名的 §2.B 两条待裁定项；每条都给本次实跑命令与输出要点。
+
+### 8.A §2.B 两条裁定
+
+| #PR | SHA | 旧判定 | 新判定 | 决定性证据（本次实跑） |
+|---|---|---|---|---|
+| #49360 | `995138d71a` | ⬜(待裁定) | **⬜ 未落地（确认真缺口，且是 wire 面）** | ①Rust `exec-server-protocol/src/protocol.rs` 给 `EnvironmentInfo` 新增 `pub prepend_path_dirs: Vec<PathUri>`（`#[serde(default, skip_serializing_if="Vec::is_empty")]`），示例 JSON 出现 `"prependPathDirs": ["file:///C:/tools/bin", ...]` ②Go `rg -n -i 'prependPathDirs\|prepend_path_dirs' --glob '*.go' .` → **0 命中**；`execserver/server.go:413 EnvironmentInfo` 字段为 {Shell,ExecutorVersion,ProviderID,CWD,PlatformOS,UserHomeDir,TemporaryDirectories,Capabilities}，**无 prependPathDirs** ③同 PR 新增 `ShellInvocation{shell,use_login_shell}`（`core/src/shell.rs`）供 shell snapshot 与凭据代理使用；Go `rg -n 'use_login_shell\|UseLoginShell' --glob '*.go' .` → **0 命中**（Go 只有 `AllowLoginShell` 布尔，且从 argv 反推：`exec/exec.go:3301 commandFromShellInvocation`，语义与 Rust「显式携带」不同）。落点：`execserver/server.go`、`execserver/*client*.go`、`appserver/environment.go`、`tool/unified_exec.go`。 |
+| #49798 | `c538fbabe5` | ⬜(待裁定) | **➖ N/A（Rust 所有权重构，无 wire/行为差异）→ 建议不派单** | ①`git show c538fbabe5 \| grep -E '^[+-]' \| wc -l` = **21 行**，2 文件（`exec-server/src/client.rs`、`cli/tests/exec_server.rs`）②唯一签名改动 `pub async fn environment_info(&self) -> Result<Arc<EnvironmentInfo>, ExecServerError>`；`git show c538fbabe5 -- '*protocol*'` → **空**（未触碰任何协议/结构体定义）③本质是 `OnceCell<EnvironmentInfo>`→`OnceCell<Arc<EnvironmentInfo>>` + 测试 `Arc::ptr_eq`。Go 侧 `execserver/client.go:919 EnvironmentInfo()` 返回 `*EnvironmentInfo` 指针天然共享引用，无 Rust 的 clone 开销问题。⇒ 不构成 Go 功能缺口。 |
+
+**结论**：#49360 由「待裁定」升为**可派单 ⬜**（wire 字段 + 显式 shell 元数据）；#49798 由「待裁定」降为 **N/A**（可从派单队列移除）。§2.B 至此清空。
