@@ -111,6 +111,15 @@ func ModelName(model string) string {
 	return "Unknown"
 }
 
+// ReasoningEffortName renders a task's reasoning effort, using "Unknown" when
+// the task has none (Rust #50727).
+func ReasoningEffortName(effort string) string {
+	if value := strings.TrimSpace(effort); value != "" {
+		return value
+	}
+	return "Unknown"
+}
+
 func (g Group) Label() string {
 	switch g {
 	case GroupNeedsYou:
@@ -147,8 +156,11 @@ type Row struct {
 	CWD      string
 	// Model is the task's model; an empty value groups as "Unknown"
 	// (Rust #44957).
-	Model     string
-	GitBranch string
+	Model string
+	// ReasoningEffort is the task's resolved reasoning effort; an empty value
+	// renders as "Unknown" (Rust #50727).
+	ReasoningEffort string
+	GitBranch       string
 	// LastMessage is the latest agent message in the task's most recent turn,
 	// previewed for the details pane (Rust agents_overview_details
 	// last_message via thread/turns/list).

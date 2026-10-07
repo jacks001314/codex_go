@@ -20,8 +20,10 @@ func dashboardThreadRows() []*appserver.Thread {
 	branch := "main"
 	parent := "root-1"
 	name := "alpha"
+	model := "gpt-5.4"
+	effort := appserver.ReasoningEffort("high")
 	return []*appserver.Thread{
-		{ID: "root-1", Name: &name, Preview: "fix parser", CWD: "/work/a", Status: active, GitInfo: &appserver.GitInfo{Branch: &branch}},
+		{ID: "root-1", Name: &name, Preview: "fix parser", CWD: "/work/a", Status: active, Model: &model, ReasoningEffort: &effort, GitInfo: &appserver.GitInfo{Branch: &branch}},
 		{ID: "root-2", Preview: "idle task", CWD: "/work/b", Status: idle},
 		{ID: "root-3", Preview: "needs approval", CWD: "/work/c", Status: waiting},
 		{ID: "sub-1", ParentThreadID: &parent, Preview: "subagent", CWD: "/work/a", Status: active},
@@ -47,6 +49,10 @@ func TestAgentsOverviewRowsFromThreadsLikeRust(t *testing.T) {
 	}
 	if root1.Name != "alpha" || root1.GitBranch != "main" || root1.CWD != "/work/a" {
 		t.Fatalf("root-1 fields = %#v", root1)
+	}
+	// Rust #50727: the row carries the thread's model and reasoning effort.
+	if root1.Model != "gpt-5.4" || root1.ReasoningEffort != "high" {
+		t.Fatalf("root-1 model/reasoning = %#v", root1)
 	}
 	if byID["root-2"].Group != agentsoverview.GroupReady || byID["root-2"].StatusActive {
 		t.Fatalf("root-2 row = %#v", byID["root-2"])

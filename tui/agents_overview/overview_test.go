@@ -119,6 +119,52 @@ func TestModelGroupingLikeRust(t *testing.T) {
 	}
 }
 
+// TestTaskDetailsShowModelAndReasoningLikeRust covers #50727: the model and
+// reasoning effort render at the top of the task details, use "Unknown" when
+// unavailable, and long values are ellipsis-truncated to one line.
+func TestTaskDetailsShowModelAndReasoningLikeRust(t *testing.T) {
+	longModel := strings.Repeat("provider/", 12)
+	longReasoning := strings.Repeat("deliberate", 12)
+	rows := []Row{
+		{ThreadID: "t-1", Name: "alpha", CWD: "/work/a", Model: "gpt-5.4", ReasoningEffort: "high", Group: GroupWorking},
+		{ThreadID: "t-2", Name: "beta", CWD: "/work/b", Group: GroupReady},
+		{ThreadID: "t-3", Name: "gamma", CWD: "/work/c", Model: longModel, ReasoningEffort: longReasoning, Group: GroupReady},
+	}
+
+	details := strings.Join(New(rows, "t-1", false).Render(140, 40), "\n")
+	modelIndex := strings.Index(details, "Model: gpt-5.4")
+	reasoningIndex := strings.Index(details, "Reasoning: high")
+	projectIndex := strings.Index(details, "Project")
+	if modelIndex < 0 || reasoningIndex < 0 || projectIndex < 0 {
+		t.Fatalf("details missing model/reasoning/project:\n%s", details)
+	}
+	if !(modelIndex < reasoningIndex && reasoningIndex < projectIndex) {
+		t.Fatalf("details order model=%d reasoning=%d project=%d, want model then reasoning then project", modelIndex, reasoningIndex, projectIndex)
+	}
+
+	missing := strings.Join(New([]Row{{ThreadID: "t-9", Name: "n", CWD: "/work/z"}}, "", false).Render(140, 40), "\n")
+	if !strings.Contains(missing, "Model: Unknown") || !strings.Contains(missing, "Reasoning: Unknown") {
+		t.Fatalf("missing values should render as Unknown:\n%s", missing)
+	}
+
+	modelLine := ""
+	reasoningLine := ""
+	for _, line := range New(rows, "t-3", false).Render(140, 40) {
+		switch {
+		case strings.HasPrefix(line, "Model: "):
+			modelLine = line
+		case strings.HasPrefix(line, "Reasoning: "):
+			reasoningLine = line
+		}
+	}
+	if !strings.HasSuffix(modelLine, "\u2026") || !strings.Contains(modelLine, "provider/") {
+		t.Fatalf("long model line = %q, want ellipsis truncation", modelLine)
+	}
+	if !strings.HasSuffix(reasoningLine, "\u2026") || !strings.Contains(reasoningLine, "deliberate") {
+		t.Fatalf("long reasoning line = %q, want ellipsis truncation", reasoningLine)
+	}
+}
+
 func TestGroupForStatusLikeRust(t *testing.T) {
 	cases := []struct {
 		status           string

@@ -200,6 +200,23 @@ func truncateSpans(spans []span, maxWidth int) []span {
 	return out
 }
 
+// truncateSpansWithEllipsis clips a line to maxWidth and appends an ellipsis
+// when text was dropped, keeping the last span's style (Rust
+// line_truncation::truncate_line_with_ellipsis_if_overflow).
+func truncateSpansWithEllipsis(spans []span, maxWidth int) []span {
+	if maxWidth <= 0 {
+		return nil
+	}
+	if spansWidth(spans) <= maxWidth {
+		return spans
+	}
+	ellipsis := span{text: "\u2026", style: spanPlain}
+	if len(spans) > 0 {
+		ellipsis.style = spans[len(spans)-1].style
+	}
+	return append(truncateSpans(spans, maxWidth-1), ellipsis)
+}
+
 // renderLine renders a single line with the given inset prefix.
 func renderLine(prefix string, spans []span, maxWidth int, styled bool) string {
 	available := maxWidth - runewidth.StringWidth(prefix)

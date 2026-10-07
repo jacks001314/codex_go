@@ -388,14 +388,20 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
 		{text: row.Group.Label(), style: spanPlain},
 	})
 	lines = append(lines, nil)
-	lines = append(lines, []span{{text: "Project", style: spanDim}})
-	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
-	// Rust #44957: task details show the task's model.
-	lines = append(lines, []span{
+	// Rust #50727: the model and reasoning effort sit at the top of the task
+	// details, and long values are ellipsis-truncated to keep one line.
+	lines = append(lines, truncateSpansWithEllipsis([]span{
 		{text: "Model: ", style: spanDim},
 		{text: ModelName(row.Model), style: spanPlain},
-	})
-	// Rust #44970: token totals and estimated usage render after the model.
+	}, width))
+	lines = append(lines, truncateSpansWithEllipsis([]span{
+		{text: "Reasoning: ", style: spanDim},
+		{text: ReasoningEffortName(row.ReasoningEffort), style: spanPlain},
+	}, width))
+	lines = append(lines, nil)
+	lines = append(lines, []span{{text: "Project", style: spanDim}})
+	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
+	// Rust #44970: token totals and estimated usage render after the project.
 	usage := v.usageLinesFor(row.ThreadID)
 	for _, rendered := range usage {
 		lines = append(lines, []span{{text: rendered, style: spanDim}})

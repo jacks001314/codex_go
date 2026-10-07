@@ -84,6 +84,9 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 		if thread.Model != nil {
 			row.Model = strings.TrimSpace(*thread.Model)
 		}
+		if thread.ReasoningEffort != nil {
+			row.ReasoningEffort = strings.TrimSpace(string(*thread.ReasoningEffort))
+		}
 		if thread.Name != nil {
 			row.Name = strings.TrimSpace(*thread.Name)
 		}
