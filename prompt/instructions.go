@@ -449,17 +449,19 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 			continue
 		}
 		blockedPlainNames[input.Name] = true
-		path := skillMentionPathIdentity(input.Path)
-		if path == "" || seenPaths[path] {
+		paths := skillMentionPathIdentities(input.Path)
+		if len(paths) == 0 || skillMentionPathsSeen(paths, seenPaths) {
 			continue
 		}
 		for _, skill := range options.Skills {
-			if skillMentionPathSeen(skill, seenPaths) || !skillMatchesMentionPath(skill, path) {
+			if skillMentionPathSeen(skill, seenPaths) || !skillMatchesAnyIdentity(skill, paths) {
 				continue
 			}
 			selected = append(selected, skill)
 			markSkillMentionPaths(skill, seenPaths)
-			seenPaths[path] = true
+			for _, path := range paths {
+				seenPaths[path] = true
+			}
 			seenNames[skill.Name] = true
 			break
 		}
@@ -536,6 +538,28 @@ func skillMatchesMentionPath(skill InstructionsSkillMetadata, identity string) b
 	}
 	for _, candidate := range skillMentionPaths(skill) {
 		if candidate == identity {
+			return true
+		}
+	}
+	return false
+}
+
+// skillMatchesAnyIdentity reports whether the skill owns any of the mention's
+// candidate identities.
+func skillMatchesAnyIdentity(skill InstructionsSkillMetadata, identities []string) bool {
+	for _, identity := range identities {
+		if skillMatchesMentionPath(skill, identity) {
+			return true
+		}
+	}
+	return false
+}
+
+// skillMentionPathsSeen reports whether any candidate identity of one mention was
+// already consumed.
+func skillMentionPathsSeen(identities []string, seen map[string]bool) bool {
+	for _, identity := range identities {
+		if seen[identity] {
 			return true
 		}
 	}
@@ -900,34 +924,44 @@ func skillPathIdentity(path string) string {
 	return "text\x00" + path
 }
 
-// skillMentionPathIdentity returns the identity of an explicit skill mention's
-// path.
+// skillMentionPathIdentities returns the identity keys under which one
+// structured skill mention may match a loaded skill.
 //
 // Rust #37177 (`codex-rs/skills/src/selection.rs`): the selected mention path is
 // first run through `AbsolutePathBuf::relative_to_current_dir`, which expands a
 // leading `~` and resolves a relative path against the process working
-// directory; that absolute path is then compared as a `PathUri`. Go applies the
-// same expansion and resolution before computing the identity. Locator
-// spellings that carry a URI scheme (such as the `environment://…` locators the
-// executor catalog exposes) are left untouched so those spellings keep matching
-// by their normalized text.
-func skillMentionPathIdentity(path string) string {
-	path = normalizeMentionSkillPath(path)
-	if path == "" {
-		return ""
+// directory; that absolute path is then compared as a `PathUri`. Go therefore
+// also offers the host-resolved identity for a bare host spelling.
+//
+// The text identity is always offered as well, because Go shares this helper
+// between the two upstream selection layers: the extension layer
+// (`codex-rs/ext/skills/src/selection.rs`) matches skill packages by their
+// normalized text after `normalize_skill_path`, so `skill://…` locators and
+// package-relative resources such as `private/visible/SKILL.md` must keep
+// matching by text and are never resolved against the working directory.
+func skillMentionPathIdentities(path string) []string {
+	normalized := normalizeMentionSkillPath(path)
+	if normalized == "" {
+		return nil
 	}
-	if identity, ok := utils.PathIdentityKey(path); ok {
-		return identity
+	identity := skillPathIdentity(path)
+	if identity == "" {
+		return nil
 	}
-	if !hasMentionURIScheme(path) {
-		if resolved, ok := resolveMentionHostPath(path); ok {
-			if identity, ok := utils.PathIdentityKey(resolved); ok {
-				return identity
+	identities := []string{identity}
+	_, hasURIIdentity := utils.PathIdentityKey(normalized)
+	if normalized == path && !hasURIIdentity && !hasMentionURIScheme(normalized) {
+		if resolved, ok := resolveMentionHostPath(normalized); ok {
+			resolvedIdentity := "text\x00" + resolved
+			if parsed, ok := utils.PathIdentityKey(resolved); ok {
+				resolvedIdentity = parsed
 			}
-			return "text\x00" + resolved
+			if resolvedIdentity != identity {
+				identities = append(identities, resolvedIdentity)
+			}
 		}
 	}
-	return "text\x00" + path
+	return identities
 }
 
 // hasMentionURIScheme reports whether text carries a `scheme://` prefix.

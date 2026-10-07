@@ -513,6 +513,24 @@ func TestCollectExplicitSkillMentionsKeepsLocatorSpellingsLikeRust(t *testing.T)
 	}
 }
 
+// TestCollectExplicitSkillMentionsKeepsSkillLocatorSpellingsLikeRust mirrors the
+// extension-layer rule for `skill://` locators: `ext/skills/src/selection.rs`
+// strips the `skill://` prefix and compares the remaining text, so a locator
+// whose remainder looks like a relative host path (`skill://drive/docs/SKILL.md`)
+// is not resolved against the working directory and keeps matching exactly.
+func TestCollectExplicitSkillMentionsKeepsSkillLocatorSpellingsLikeRust(t *testing.T) {
+	t.Chdir(t.TempDir())
+	const locator = "skill://drive/docs/SKILL.md"
+	skill := InstructionsSkillMetadata{Name: "Drive:doc-search", Path: "/tmp/nowhere/SKILL.md", LocatorPath: locator}
+	selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+		Inputs: []SkillMentionInput{{Type: "skill", Name: "Drive:doc-search", Path: locator}},
+		Skills: []InstructionsSkillMetadata{skill},
+	})
+	if len(selected) != 1 || selected[0].LocatorPath != locator {
+		t.Fatalf("CollectExplicitSkillMentions = %#v, want the skill:// locator skill", selected)
+	}
+}
+
 // TestCollectExplicitSkillMentionsKeepsPosixCaseSensitivityLikeRust pins the
 // other half of the identity rule: POSIX paths stay case-sensitive, so a
 // differently cased linked mention does not select the skill.
