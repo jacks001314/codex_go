@@ -1030,12 +1030,18 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 	bundled := BundledModelsResponse()
 	return normalizeBedrockCatalog(ModelsResponse{
 		Models: []ModelInfo{
-			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 0),
+			// Rust #49339 (a6e9eaa9bd): GPT-6.1 Sol leads the Bedrock Mantle
+			// catalog and is the default (priority 0); Rust #47347 (df30941072)
+			// supplied the GPT-6 Sol/Luna entries that predate it.
+			bedrockModel(bundled, "gpt-6.1-sol", AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 0),
 			bedrockModel(bundled, "gpt-6-astra", AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1),
-			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 2),
-			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 3),
-			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 4),
-			gpt5BedrockModel(bundled, "gpt-5.4", AmazonBedrockGPT54ModelID, "GPT-5.4", 5),
+			bedrockModel(bundled, "gpt-6-sol", AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 2),
+			bedrockModel(bundled, "gpt-6-luna", AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 3),
+			bedrockModel(bundled, "gpt-5.6-sol", AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 4),
+			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5),
+			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6),
+			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 7),
+			gpt5BedrockModel(bundled, "gpt-5.4", AmazonBedrockGPT54ModelID, "GPT-5.4", 8),
 		},
 	})
 }

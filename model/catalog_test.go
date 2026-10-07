@@ -193,7 +193,9 @@ func TestBedrockGPT56ModelsUseLongContextWindowLikeRust(t *testing.T) {
 	for _, model := range catalog.Models {
 		want := int64(272000)
 		switch model.Slug {
-		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID:
+		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT6SolModelID,
+			AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID,
+			AmazonBedrockGPT56LunaModelID:
 			want = 872000
 		}
 		if model.MaxContextWindow != want {
@@ -1331,8 +1333,11 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 	manager := NewStaticModelsManager(AmazonBedrockModelCatalog())
 	models := manager.ListModels(RefreshOffline)
 	want := []string{
-		AmazonBedrockGPT56SolModelID,
+		AmazonBedrockGPT61SolModelID,
 		AmazonBedrockGPT6AstraModelID,
+		AmazonBedrockGPT6SolModelID,
+		AmazonBedrockGPT6LunaModelID,
+		AmazonBedrockGPT56SolModelID,
 		AmazonBedrockGPT56TerraModelID,
 		AmazonBedrockGPT56LunaModelID,
 		AmazonBedrockGPT55ModelID,
@@ -1654,5 +1659,65 @@ func TestModelInfoFromSlugMatchesRustFallback(t *testing.T) {
 	}
 	if info.ModelMessages == nil || info.ModelMessages.InstructionsTemplate == "" {
 		t.Fatalf("model messages = %#v", info.ModelMessages)
+	}
+}
+
+// Mirrors Rust #49339 (a6e9eaa9bd) `catalog_uses_mantle_model_ids_in_priority_order`
+// together with `bedrock_models_preserve_source_metadata_with_supported_capabilities`
+// and `gpt_5_bedrock_models_use_bedrock_context_window` in
+// codex-rs/model-provider/src/amazon_bedrock/catalog.rs. The GPT-6 Sol/Luna
+// entries come from Rust #47347 (df30941072), which the Go catalog had not
+// backfilled before this change.
+func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
+	catalog := AmazonBedrockModelCatalog()
+
+	wantMetadata := []struct {
+		slug        string
+		displayName string
+		priority    int
+	}{
+		{AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol", 0},
+		{AmazonBedrockGPT6AstraModelID, "GPT-6-Astra", 1},
+		{AmazonBedrockGPT6SolModelID, "GPT-6 Sol", 2},
+		{AmazonBedrockGPT6LunaModelID, "GPT-6 Luna", 3},
+		{AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol", 4},
+		{AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5},
+		{AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6},
+		{AmazonBedrockGPT55ModelID, "GPT-5.5", 7},
+		// gpt-5.4 is not part of the Rust catalog; it trails here only because
+		// the bundled-catalog removal (Rust #47932) lands as its own commit.
+		{AmazonBedrockGPT54ModelID, "GPT-5.4", 8},
+	}
+	if len(catalog.Models) != len(wantMetadata) {
+		t.Fatalf("bedrock catalog len = %d, want %d", len(catalog.Models), len(wantMetadata))
+	}
+	for i, want := range wantMetadata {
+		model := catalog.Models[i]
+		if model.Slug != want.slug || model.DisplayName != want.displayName || model.Priority != want.priority {
+			t.Fatalf("model[%d] = (%s, %s, %d), want (%s, %s, %d)",
+				i, model.Slug, model.DisplayName, model.Priority, want.slug, want.displayName, want.priority)
+		}
+		if model.Visibility != VisibilityList {
+			t.Fatalf("%s visibility = %q, want list", model.Slug, model.Visibility)
+		}
+		if len(model.AdditionalSpeedTiers) != 0 || model.DefaultServiceTier != "" {
+			t.Fatalf("%s speed tiers = %#v default = %q", model.Slug, model.AdditionalSpeedTiers, model.DefaultServiceTier)
+		}
+		if model.WebSearchToolType != "text" {
+			t.Fatalf("%s WebSearchToolType = %q, want text", model.Slug, model.WebSearchToolType)
+		}
+		if model.ContextWindow != 272000 {
+			t.Fatalf("%s ContextWindow = %d, want 272000", model.Slug, model.ContextWindow)
+		}
+		wantMax := int64(272000)
+		switch model.Slug {
+		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID, AmazonBedrockGPT6SolModelID,
+			AmazonBedrockGPT6LunaModelID, AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID,
+			AmazonBedrockGPT56LunaModelID:
+			wantMax = 872000
+		}
+		if model.MaxContextWindow != wantMax {
+			t.Fatalf("%s MaxContextWindow = %d, want %d", model.Slug, model.MaxContextWindow, wantMax)
+		}
 	}
 }

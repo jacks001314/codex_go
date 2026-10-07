@@ -47,6 +47,13 @@ const (
 	AmazonBedrockGPT56SolModelID     = "openai.gpt-5.6-sol"
 	AmazonBedrockGPT56TerraModelID   = "openai.gpt-5.6-terra"
 	AmazonBedrockGPT56LunaModelID    = "openai.gpt-5.6-luna"
+	// AmazonBedrockGPT61SolModelID/GPT6SolModelID/GPT6LunaModelID are the
+	// Bedrock slugs for the bundled GPT-6 generation: Rust #47347
+	// (df30941072) added GPT-6 Sol and Luna, Rust #49339 (a6e9eaa9bd) added
+	// GPT-6.1 Sol.
+	AmazonBedrockGPT61SolModelID = "openai.gpt-6.1-sol"
+	AmazonBedrockGPT6SolModelID  = "openai.gpt-6-sol"
+	AmazonBedrockGPT6LunaModelID = "openai.gpt-6-luna"
 	// AmazonBedrockGPT6AstraModelID is the Bedrock slug for the bundled
 	// gpt-6-astra model (Rust #42619).
 	AmazonBedrockGPT6AstraModelID           = "openai.gpt-6-astra"
