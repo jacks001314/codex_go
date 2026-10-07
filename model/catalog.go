@@ -1041,7 +1041,6 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 			bedrockModel(bundled, "gpt-5.6-terra", AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5),
 			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6),
 			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 7),
-			gpt5BedrockModel(bundled, "gpt-5.4", AmazonBedrockGPT54ModelID, "GPT-5.4", 8),
 		},
 	})
 }

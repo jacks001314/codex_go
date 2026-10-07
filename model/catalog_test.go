@@ -1341,7 +1341,6 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
 		AmazonBedrockGPT56TerraModelID,
 		AmazonBedrockGPT56LunaModelID,
 		AmazonBedrockGPT55ModelID,
-		AmazonBedrockGPT54ModelID,
 	}
 	if len(models) != len(want) {
 		t.Fatalf("models len = %d", len(models))
@@ -1684,9 +1683,6 @@ func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
 		{AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra", 5},
 		{AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6},
 		{AmazonBedrockGPT55ModelID, "GPT-5.5", 7},
-		// gpt-5.4 is not part of the Rust catalog; it trails here only because
-		// the bundled-catalog removal (Rust #47932) lands as its own commit.
-		{AmazonBedrockGPT54ModelID, "GPT-5.4", 8},
 	}
 	if len(catalog.Models) != len(wantMetadata) {
 		t.Fatalf("bedrock catalog len = %d, want %d", len(catalog.Models), len(wantMetadata))
