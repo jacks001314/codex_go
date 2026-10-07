@@ -56,7 +56,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// (#48213).
 			// Re-pinned to upstream a6bd19261c (#48491): the restrictive Windows
 			// launcher adds the embedded-fallback warning snapshot.
-			Files: 40,
+			Files: 41,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -72,7 +72,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests",
-			Files: 21,
+			Files: 23,
 			Owner: "exec, app",
 			Focus: "exec JSON output, prompt/stdin, output schema, resume, sandbox, hooks",
 			Required: []string{
@@ -83,7 +83,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 		},
 		{
 			Path:  "exec/tests/suite",
-			Files: 18,
+			Files: 20,
 			Owner: "exec",
 			Focus: "codex exec end-to-end suite cases",
 			Required: []string{
@@ -100,7 +100,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// This pass adds the plugin-metadata, mcp-resource,
 			// thread-settings, project, environment and executor
 			// bearer-token fixtures (#46917-#48004).
-			Files: 154,
+			Files: 165,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -138,7 +138,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #48224 added core/tests/suite/compact_program_tests.rs (the
 			// model/access-program compaction pairs).
 			// #48353 added the cloud-skills-across-executor-readiness snapshot.
-			Files: 260,
+			Files: 322,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -162,7 +162,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// dynamic-activity, transcript-copy and transcript-composer suites.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// startup-warning, warnings-viewer and effect-toggle coverage.
-			Files: 123,
+			Files: 133,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -178,7 +178,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// history-projection, dynamic-activity and transcript-copy ones.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// warnings-viewer and markdown/effect snapshot set.
-			Files: 70,
+			Files: 79,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{

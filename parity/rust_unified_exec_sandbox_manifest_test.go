@@ -54,7 +54,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Tests: []string{
 				"exec_command_clamps_model_requested_max_output_tokens_to_policy",
 				"exec_command_does_not_expose_configured_noise_auth_token",
-				"exec_command_hides_and_rejects_login_when_disabled",
+				"exec_command_rejects_login_when_disabled",
 				"exec_command_hides_and_rejects_tty_when_disabled",
 				"exec_command_reports_chunk_and_exit_metadata",
 				"exec_command_runs_without_tty_when_tty_disabled",
@@ -98,11 +98,15 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			},
 		},
 		{
-			Path:      "core/tests/suite/unified_exec_process_events.rs",
-			Owner:     "execserver, turn, tool",
-			Focus:     "remote exec-server pushed process events, replay gaps, direct denials, and legacy exit metadata",
-			Platform:  "all; async websocket exec-server fixture",
-			TestCases: 8,
+			Path:     "core/tests/suite/unified_exec_process_events.rs",
+			Owner:    "execserver, turn, tool",
+			Focus:    "remote exec-server pushed process events, replay gaps, direct denials, and legacy exit metadata",
+			Platform: "all; async websocket exec-server fixture",
+			// Re-pinned to upstream 18e28fe1b9 (#50741): the process-event
+			// suite grew from 8 to 15 table-driven cases as environment-backed
+			// tool exposure and process-event replay were covered; the login
+			// test on unified_exec.rs also dropped its `hides_and_` prefix.
+			TestCases: 15,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
 			},
@@ -143,6 +147,9 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				// recursive deny-list payload transported through the
 				// environment.
 				"windows_elevated_unified_exec_enforces_large_recursive_deny_reads",
+				"windows_elevated_approved_git_pull_preserves_deny_read",
+				"windows_elevated_powershell_preserves_relative_paths",
+				"windows_elevated_temp_only_core_and_direct_spawn_enforce_carveouts",
 				"windows_elevated_does_not_create_missing_workspace_metadata",
 				"windows_elevated_enforces_deny_read_and_protects_setup_marker",
 				"windows_elevated_setup_rejects_default_root_deny",
@@ -161,7 +168,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"bash_permission_request_payload_omits_missing_description",
 				"default_exec_approval_requirement_keeps_prompt_when_granular_allows_sandbox_approval",
 				"default_exec_approval_requirement_rejects_sandbox_prompt_when_granular_disables_it",
-				"deny_read_blocks_explicit_escalation_and_policy_bypass",
+				"deny_read_preserves_the_sandbox_for_explicit_escalation_and_blocks_policy_bypass",
 				"exec_server_env_keeps_command_native_and_carries_sandbox_context",
 				"external_sandbox_skips_exec_approval_on_request",
 				"guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt",
@@ -185,6 +192,9 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"exec_command_reuses_foreign_windows_grant",
 				"shell_mode_for_environment_uses_direct_mode_for_remote_environments",
 				"test_get_command_rejects_explicit_login_when_disallowed",
+				"test_get_command_does_not_change_nested_login_or_powershell",
+				"test_get_command_keeps_path_prepends_after_login_startup",
+				"test_get_command_runs_login_shell_when_path_is_readonly",
 				"test_get_command_rejects_explicit_shell_in_zsh_fork_mode",
 				"test_get_command_respects_explicit_bash_shell",
 				"test_get_command_respects_explicit_cmd_shell",

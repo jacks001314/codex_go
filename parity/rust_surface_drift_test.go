@@ -32,12 +32,16 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	fields := rustStructPublicFields(t, filepath.Join(root, "config", "src", "config_toml.rs"), "ConfigToml")
 	// Re-pinned to upstream 8ae55c863d (#47074): ConfigToml gains `cloud`
 	// (CloudToml), the cloud-owned feature-settings table.
-	if len(fields) != 104 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 104", len(fields))
+	// Re-pinned to upstream 18e28fe1b9 (#51556): ConfigToml gains `daybreak`
+	// (default Daybreak preference for new threads and non-interactive turns),
+	// taking the top-level count from 104 to 105.
+	if len(fields) != 105 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 105", len(fields))
 	}
 	for _, required := range []string{
 		"agents",
 		"cloud",
+		"daybreak",
 		"features",
 		"model_auto_compact_token_limit",
 		"model_auto_compact_token_limit_scope",
