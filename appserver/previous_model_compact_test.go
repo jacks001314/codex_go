@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/auth"
 	"codex_go/compact"
 	"codex_go/config"
 	"codex_go/model"
@@ -186,28 +187,82 @@ func TestPreviousModelCompactionSkipsThreadsWithoutRecordedContext(t *testing.T)
 	}
 }
 
-// Mirrors Rust #46324: a failed compaction retries with the selected model for
-// every error except an aborted/interrupted turn or a budget stop.
+// Mirrors Rust #51117
+// (`compact_model_fallback::should_retry_with_current_model`): a failed
+// previous-model compaction retries with the selected model only when the error
+// is not an aborted/interrupted turn or a budget stop, the model/access-program
+// pair actually changes, and the selected provider is OpenAI with a cached
+// authentication the Codex backend or an API key can serve.
 func TestShouldRetryCompactionWithCurrentModelLikeRust(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CODEX_API_KEY", "")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+
+	home := t.TempDir()
+	// A configured provider that is not the built-in OpenAI one, so the
+	// provider arm can be observed.
+	configBody := "[model_providers.mock_provider]\nname = \"Mock\"\nbase_url = \"https://mock.example/v1\"\nwire_api = \"responses\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	account := auth.NewAccountManager()
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home), Account: account})
+
+	previous := compactionAttemptIdentity{Model: "gpt-previous", CyberAccessProgram: "standard"}
+	current := compactionAttemptIdentity{Model: "gpt-current", CyberAccessProgram: "standard", ProviderID: model.OpenAIProviderID}
+	// The same model and program retried with a different provider still cannot
+	// change the outcome of the attempt.
+	currentSamePair := current
+	currentSamePair.Model = "gpt-previous"
+
 	cases := []struct {
-		name string
-		err  error
-		want bool
+		name     string
+		err      error
+		previous compactionAttemptIdentity
+		current  compactionAttemptIdentity
+		auth     *auth.AuthDotJSON
+		want     bool
 	}{
-		{name: "context canceled", err: context.Canceled, want: false},
-		{name: "wrapped cancellation", err: errors.Join(errors.New("compact failed"), context.Canceled), want: false},
-		{name: "session budget exceeded", err: ErrSessionBudgetExceeded, want: false},
-		{name: "invalid request", err: errors.New("invalid request"), want: true},
-		{name: "overloaded", err: errors.New("server overloaded"), want: true},
-		{name: "nil", err: nil, want: false},
+		{name: "context canceled", err: context.Canceled, previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		{name: "wrapped cancellation", err: errors.Join(errors.New("compact failed"), context.Canceled), previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		{name: "session budget exceeded", err: ErrSessionBudgetExceeded, previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		{name: "nil error", err: nil, previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		{name: "same model and program", err: errors.New("server overloaded"), previous: previous, current: currentSamePair, auth: apiKeyAuth(), want: false},
+		{name: "same model with a changed program", err: errors.New("server overloaded"), previous: previous, current: func() compactionAttemptIdentity {
+			identity := currentSamePair
+			identity.CyberAccessProgram = "daybreak_blue"
+			return identity
+		}(), auth: apiKeyAuth(), want: true},
+		{name: "changed model with an api key", err: errors.New("server overloaded"), previous: previous, current: current, auth: apiKeyAuth(), want: true},
+		{name: "changed model with a codex backend session", err: errors.New("server overloaded"), previous: previous, current: current, auth: chatGPTAuth(), want: true},
+		{name: "changed model without cached auth", err: errors.New("server overloaded"), previous: previous, current: current, want: false},
+		{name: "changed model against another provider", err: errors.New("server overloaded"), previous: previous, current: func() compactionAttemptIdentity {
+			identity := current
+			identity.ProviderID = "mock_provider"
+			return identity
+		}(), auth: apiKeyAuth(), want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldRetryCompactionWithCurrentModel(tc.err); got != tc.want {
+			account.ApplyAuthSnapshot(tc.auth)
+			if got := router.shouldRetryCompactionWithCurrentModel(tc.err, tc.previous, tc.current); got != tc.want {
 				t.Fatalf("shouldRetryCompactionWithCurrentModel(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
 	}
+}
+
+// apiKeyAuth is an OpenAI API-key credential, which Rust accepts for a
+// current-model compaction retry (`is_api_key_auth`).
+func apiKeyAuth() *auth.AuthDotJSON {
+	return &auth.AuthDotJSON{AuthMode: "apikey", OpenAIAPIKey: "sk-test"}
+}
+
+// chatGPTAuth is a Codex-backend session, which Rust accepts for a
+// current-model compaction retry (`uses_codex_backend`).
+func chatGPTAuth() *auth.AuthDotJSON {
+	snapshot := auth.FromChatGPTAuthTokens("chatgpt-token", "account-1", nil)
+	return &snapshot
 }
 
 // registerThreadForTest creates a store-backed thread whose history estimates to
@@ -251,18 +306,27 @@ func (r *failingFirstCompactRunner) Compact(ctx context.Context, request *compac
 }
 
 // Mirrors Rust's previous-model compaction fallback: the previous-model attempt
-// runs with a remote-only compaction, and a retryable failure retries with the
-// selected model, while an interrupted turn stops after the first attempt.
+// runs with a remote-only compaction, and a failure retries with the selected
+// model only when #51117's predicate allows it, while an interrupted turn or a
+// missing cached auth stops after the first attempt.
 func TestRunPreviousModelInlineCompactFallsBackLikeRust(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("CODEX_API_KEY", "")
+	t.Setenv("CODEX_ACCESS_TOKEN", "")
+
 	cases := []struct {
 		name         string
 		firstErr     error
+		auth         *auth.AuthDotJSON
 		wantAttempts int
 		wantErr      bool
 	}{
-		{name: "retryable failure retries with the current model", firstErr: errors.New("server overloaded"), wantAttempts: 2},
-		{name: "interrupted turn does not retry", firstErr: context.Canceled, wantAttempts: 1, wantErr: true},
-		{name: "budget stop does not retry", firstErr: ErrSessionBudgetExceeded, wantAttempts: 1, wantErr: true},
+		{name: "retryable failure retries with the current model", firstErr: errors.New("server overloaded"), auth: apiKeyAuth(), wantAttempts: 2},
+		{name: "interrupted turn does not retry", firstErr: context.Canceled, auth: apiKeyAuth(), wantAttempts: 1, wantErr: true},
+		{name: "budget stop does not retry", firstErr: ErrSessionBudgetExceeded, auth: apiKeyAuth(), wantAttempts: 1, wantErr: true},
+		// Rust #51117: without a cached Codex-backend or API-key credential the
+		// selected model cannot be retried.
+		{name: "retryable failure without cached auth does not retry", firstErr: errors.New("server overloaded"), wantAttempts: 1, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,9 +334,12 @@ func TestRunPreviousModelInlineCompactFallsBackLikeRust(t *testing.T) {
 			home := t.TempDir()
 			store := session.NewStore(filepath.Join(home, "sessions"))
 			runner := &failingFirstCompactRunner{err: tc.firstErr, inner: &recordingCompactRunner{summary: "fallback summary"}}
+			account := auth.NewAccountManager()
+			account.ApplyAuthSnapshot(tc.auth)
 			router := NewRuntimeRouter(RuntimeServices{
 				ThreadRouter:  NewRouter(store),
 				Config:        config.NewConfigService(home),
+				Account:       account,
 				CompactRunner: runner,
 				Models: model.NewModelService(model.NewStaticModelsManager(model.ModelsResponse{Models: []model.ModelInfo{
 					{Slug: "gpt-previous", ContextWindow: 200000, CompHash: "hash-previous"},
