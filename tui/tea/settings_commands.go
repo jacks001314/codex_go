@@ -334,6 +334,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	m.pendingSettingsRequestID = 0
 	if msg.Err != nil {
+		// Rust #51510: a failed configuration reload preserves the live TUI
+		// settings, so msg.Result is never applied on this path; only the
+		// failure notice below is reported.
 		if msg.Kind == settingsWriteKindExperimental {
 			// Rust keeps the popup open with the failure as its status and retains
 			// the unconfirmed selections for an explicit retry.
@@ -364,6 +367,12 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		} else {
 			m.notice = "Failed to save settings: " + msg.Err.Error()
 		}
+		m.refreshTranscript()
+		return
+	}
+	// Rust #51510: only a reload that actually succeeded may stage its result
+	// onto the live TUI settings; a failed reload must keep the live settings.
+	if !ShouldStageReloadedLocalSettings(&msg.Result, msg.Err) {
 		m.refreshTranscript()
 		return
 	}
