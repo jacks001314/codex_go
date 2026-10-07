@@ -740,3 +740,105 @@ done < <(awk -F'\t' '/^\| #[0-9]/ && $5 ~ /⬜/ {gsub(/ /,"",$2); print $2}' upd
 台账冻结在 `c30b56ca` 后，main 又落地了 7 条原 ⬜：`#48776`（`3426c4d9 sync510`）、`#49357`（`98d4c7cb sync509`）、`#50209`（`52d5f5f1 sync506`）、`#50477`（`6866d3ed sync508`）、`#50505`（`5df0c760 sync499`）、`#50811`（`8cc01f75 sync507`）、`#51334`（`11be9802 sync511`）。
 另 `#48575` 只有 `plan:` 提交提及，**仍未落地**。
 ⇒ 263 条原 ⬜ 中 **7 条已真落地、256 条仍无提交提及**（后者仍含 §9 已判 ➖ 的 22 条）。
+
+---
+
+## 12. 队长第二批派单裁定（windows / CI / ext 面，verify51482）
+
+> ⚠️ 编号说明：队长来信称本章为「§9」，但**本文件 §9 已被第二轮 5 分片裁定占用**（队长来信所据快照为 635 行，此后已增至 700+ 行）。故本章记为 **§12**，对应队长来信第 2 批的 48 条。
+> 其中 **22 条已在 §9 裁定**，本章不重复论证、只给结论并指向 §9；**26 条为本章新裁**。
+> 参考点：Rust `5a3140176e`；Go main 扫描时 `f048c5ed`（本文件定稿前已到 `c5fd7e60`）。
+
+### 12.0 计数
+
+| 组 | 条数 | ✅ | ➖ N/A | ⬜ |
+|---|---|---|---|---|
+| 1 windows-sandbox-rs | 10 | 2 | 5 | 3 |
+| 2 windows-sandbox-service | 2 | 0 | 2 | 0 |
+| 3 CI / lock / 非生产 | 11 | 0 | 11 | 0 |
+| 4 ext（guardian 等） | 18 | 1 | 7 | 10 |
+| **合计** | **41**（另 7 条为队长口径差异，见 12.4） | **3** | **25** | **13** |
+
+### 12.1 组 1：windows-sandbox-rs（10 条）
+
+| #PR | SHA | 一句话语义 | 最终判定 | 决定性证据 |
+|---|---|---|---|---|
+| #49261 | `f35a0fdc5d` | 保留 runner 启动错误码 | ✅ | Go `elevated/runner_client_windows.go:88-95` 在 `SetErrorMode` 前取 `createProcessWithLogon` err（见 §9.A） |
+| #49308 | `50d9c5deac` | piped legacy 进程不开控制台 | ✅ | Go `sandbox/windowssandbox/process_windows.go:44,74` 走 `CREATE_NO_WINDOW`（见 §9.A） |
+| #48829 | `e6f4af1d92` | 等 provisioning 服务启动 | ➖ N/A | `git show --stat`=1 文件 `windows-sandbox-rs/src/provisioning_client.rs`；Go `rg -i 'WaitNamedPipe\|SandboxProvisioningResponse'`=**0**，无该 client |
+| #49389 | `9212b3eca8` | 串行化共享 Windows 账户的测试 | ➖ N/A | `git show --name-only` = `.config/nextest.toml` + `Cargo.toml`×4 + `**/tests/**` + `windows-sandbox-rs/BUILD.bazel`，**零生产 .rs**（生产代码过滤后为空） |
+| #50058 | `b06b7d2f77` | 升级 `windows-sys` 到 0.61.2 | ➖ N/A | `git show --stat`=99 文件，全部是 `Cargo.toml` + 随新 API 改写的 Windows 调用点；Go `go.mod:59 golang.org/x/sys v0.47.0` 是**独立**依赖，无对应动作（纯 Rust 依赖迁移） |
+| #50507 | `c542fb93ef` | 记录沙箱服务停止诊断 | ➖ N/A | `git show --name-only` 全在 `windows-sandbox-rs`+`windows-sandbox-service`；Go `rg 'service_diagnostics\|ServiceStopReason'`=**0** |
+| #51256 | `580b18cb74` | 注册 Core 安装时启动沙箱服务 | ➖ N/A | `git show --name-only` 全在 `windows-sandbox-rs`；Go 无 `windows-sandbox-service`/`CreateService`（`rg`=0） |
+| #49058 | `df3e439c02` | ACL 修复支持超长运行时路径 | ⬜ | Go **有**对应物 `sandbox/windowssandbox/acl_windows.go:178,103,141`，但全用按路径 `Get/SetNamedSecurityInfo`；`rg -i 'long.?path\|verbatim\|ExtendedPath' sandbox/`=**0**。落点 `sandbox/windowssandbox/acl_windows.go` |
+| #49325 | `26dd19ef47` | logon 失败 1056 重试一次 | ⬜ | Go `elevated/runner_client.go:150-171 RetryRunnerSpawnOnce` 只按 `isRefreshableWindowsError`（:194，仅 1326/1312）重试；`rg '1056\|SERVICE_ALREADY_RUNNING'`=**0**。落点 `elevated/runner_client.go` |
+| #49690 | `7e8878f605` | 提权沙箱保留 PowerShell 相对路径 | ⬜ | `git show --name-only`=`windows-sandbox-rs/src/acl.rs`、`setup.rs`、`setup_provisioning/*`（**生产**）；Go `rg -i 'relative_path\|relativePath' sandbox/`=**0**。落点 `sandbox/windowssandbox/` |
+
+### 12.2 组 2：windows-sandbox-service（2 条）
+
+| #PR | SHA | 语义 | 判定 | 证据 |
+|---|---|---|---|---|
+| #49067 | `5a5a4aa796` | 策略事件剔除配置值 | ➖ N/A | `git show --stat`=2 文件全在 `windows-sandbox-service/src/ipc.rs`；Go 无该包 |
+| #50480 | `8f7a0f7a87` | 已注册刷新跳过托管配置加载 | ➖ N/A | 全在 `windows-sandbox-service/src/{ipc/authentication.rs,machine_policy.rs}`；`rg 'machine_policy\|only_registered_refresh'`=**0** |
+
+### 12.3 组 3：CI / lock / 非生产（11 条，**全部 ➖ N/A**）
+
+判定命令（对 263 条统一跑）：`git show --stat --format= --name-only <sha> | grep -E '\.rs$' | grep -v -E '(^|/)tests?/|(^|/)tests\.rs$|_tests\.rs$'` → 为空即「零生产 .rs」。
+> 注：第一版漏了 basename 就叫 `tests.rs` 的文件（`core/src/session/tests.rs`、`windows-sandbox-rs/src/unified_exec/tests.rs`），已补进过滤式；补齐后 11 条全部为 0 生产 .rs（见 §12.5 ②）。
+
+| #PR | SHA | 文件面 | 判定 |
+|---|---|---|---|
+| #49074 | `22d1d9336f` | `MODULE.bazel`、`defs.bzl`、`BUILD.bazel`、`patches/*.patch` | ➖ N/A（Bazel） |
+| #49096 | `2ce64843be` | `MODULE.bazel.lock`、`Cargo.lock` | ➖ N/A（lock） |
+| #49114 | `69043f05c4` | `tests.rs`（唯一文件） | ➖ N/A（测试） |
+| #49246 | `0462dcc062` | `Cargo.lock`、`linux-sandbox/Cargo.toml`、`linux-sandbox/tests/suite/bundled_bwrap.rs` | ➖ N/A（测试 + manifest） |
+| #49318 | `b1e72963c3` | 22 个 `.snap` | ➖ N/A（快照） |
+| #49713 | `18131270fe` | `.codex/skills/babysit-pr/**`（SKILL.md/py/toml） | ➖ N/A（仓库内开发者工具） |
+| #49787 | `83cf88306e` | `BUILD.bazel`×2 | ➖ N/A（Bazel） |
+| #50166 | `7135b303d9` | `MODULE.bazel.lock`、`audit.toml`、`Cargo.{lock,toml}` | ➖ N/A（lock/审计配置） |
+| #51200 | `ade17c62b0` | `.bazelversion`、`MODULE.bazel.lock` | ➖ N/A（Bazel 版本钉） |
+| #51257 | `162fcb3976` | `scripts/install/install.ps1` | ➖ N/A（Rust 安装脚本；Go 无该脚本面） |
+| #49389 | `9212b3eca8` | 见 §12.1（同时属组 1） | ➖ N/A |
+
+**单独标出（不是 CI/lock）**：`#48604`（`9db8162d65`）先被 CI 过滤命中，实为**内容面**——删除内置 `plugin-creator` skill（`skills/src/assets/samples/plugin-creator/**` 的 SKILL.md/references/scripts + 一个 app-server 测试）。Go **仍内嵌**该 skill（`systemskills/systemskills.go:23 //go:embed assets/samples`、`systemskills_test.go:19` 断言含 `plugin-creator/references/plugin-json-spec.md`）⇒ 维持 **⬜**，落点 `systemskills/`。
+
+> 口径差异：队长说是 18 条纯 CI/lock，我按「零生产 .rs」实测**只有 11 条**（+`#48604` 属内容面）。多出的 7 条若在你的清单里，请把它们的 PR 号发我再裁。
+
+### 12.4 组 4：ext（18 条）
+
+| #PR | SHA | 语义 | 判定 | 证据 / 落点 |
+|---|---|---|---|---|
+| #51334 | `79cae5f7fb` | denial-limit 中断遥测 | **✅ 已落地** | 复核成立：`11be9802 sync511: count guardian denial-limit interruptions in telemetry (#51334)`；`telemetry/metric_names.go:78-81 GuardianDenialLimitReachedMetric` + `appserver/guardian_denial_limit_metric_test.go:15 TestGuardianDenialLimitReachedMetricLikeRust` |
+| #49257 | `4f16bdc265` | 缓存批准含不完整 root 上下文 | ➖ N/A | 全在 `ext/guardian-v2/src/async_scorer/`；Go 无 async scorer（`model/catalog.go:124` 自述） |
+| #49792 | `5f300d3f74` | async sampling 的 retained conversation | ➖ N/A | 全在 `ext/guardian-v2`、`ext/guardian-reviewer`、`guardian-context` |
+| #50066 | `d91294c39e` | Decisions 有界传输 | ➖ N/A | 全在 `ext/guardian-v2/src/async_scorer/decisions.rs`（Rust 侧 `#[cfg(test)]`） |
+| #50273 | `ca466061d6` | Decisions 一致率/时延指标 | ➖ N/A | 全在 `ext/guardian-v2/src/async_scorer/` |
+| #51065 | `315f0efb34` | 响应计时限定 snapshot sampling | ➖ N/A | `classification.rs`；`rg 'responses_duration\|sampling_started'`=0 |
+| #51070 | `823ea830c0` | Decisions 保留 trusted-tool 上下文 | ➖ N/A | `ext/guardian-v2/.../decisions.rs` + `guardian-context/src/trusted_tool.rs`；`rg 'trusted_tool\|TrustedTool'`=0 |
+| #51133 | `4c9f42f4f8` | Decisions 回退 `OPENAI_API_KEY` | ➖ N/A | 全在 `ext/guardian-v2/src/async_scorer/startup.rs` |
+| #49127 | `13f580ef09` | budget 前去重 cloud/executor 技能清单 | ⬜ | Rust `ext/skills/src/render_dedup.rs` + `world_state_catalogs.rs`（**生产**，非 Go 缺 `ext/` 就能免判）；Go `rg -i 'render_dedup\|dedup_before_budgeting\|WorldStateCatalog'`=**0**，`appserver/skills_test.go:652` 的 dedupe 是**路径去重**（#51482），语义不同。落点 `prompt/` + `appserver/skills_prompt.go:29-35` |
+| #49294 | `d79a95bdf8` | 评审/分类遥测记 Guardian context mode | ⬜ | `rg -F 'guardian_context_mode'`=**0**；`telemetry/guardian_v2_event.go` 仅 Outcome/RiskLevel。落点 `telemetry/guardian_v2_event.go` |
+| #49793 | `726f1492db` | Guardian v2 异步分类对话模式 | ⬜ | `rg 'async_classifier_mode\|async_classifier_conversation_token_limit'`=**0**。落点 `config/` + `appserver/guardian_reviewer.go` |
+| #49812 | `0f8df3d214` | 影子技能排序移出 turn 准备路径 | ⬜ | Go 有 `appserver/skill_shadow_selection.go`，但由 `appserver/turn_runtime.go:9100`**同步**调用，无 goroutine/信号量。落点 `appserver/skill_shadow_selection.go` |
+| #49898 | `da2e174a66` | 扩展文件系统访问限定到回调权限 | ⬜ | Rust 改 `core/src/session/*` + `ext/skills/*`；Go `rg -i 'CallbackPermission\|FileSystemAuthority\|ExtensionTool'`=**0**。落点 `session/` + `tool/` |
+| #51139 | `16cb72218c` | 父 checkpoint 恢复强制全新 Guardian 会话 | ⬜ | Rust `core/src/guardian/review_session_setup.rs` + `ext/guardian-reviewer/src/pool.rs`；Go `rg 'FreshParentCheckpoint\|ReviewerSelection\|guardianReviewerPool'`=**0**。落点 `appserver/guardian_reviewer.go` |
+| #51330 | `f5fa209bb0` | 度量 Guardian 审批决策总时长 | ⬜ | `rg 'codex.guardian.decision.duration_ms'`=**0**；`telemetry/metric_names.go:40` 只有 `codex.guardian.review.duration_ms`。落点 `telemetry/metric_names.go` + `appserver/guardian_reviewer.go:418` |
+| #51378 | `73178e7ca6` | Guardian v2 WS 池保活 + 并发补充 | ⬜ | Rust `codex-api/.../responses_websocket/connector.rs` + `ext/guardian-v2/.../sampler/connection_pool.rs`；Go `rg -i 'connectionPool\|replenish'`=**0**。落点 `codexapi/` |
+| #51396 | `57d57df608` | 迟到低风险分数完成 pending review | ⬜ | `appserver/guardian_reviewer.go:100-149` 只有 `GuardianV2ScoreProgress`；`rg 'completePending\|pendingReview'`=**0**。落点 `appserver/guardian_reviewer.go` |
+| #51400 | `a4ebc509f4` | 阻止后续分数释放更早的 pending review | ⬜ | `rg 'wrapperLag\|wrapper_lag\|pendingScore'`=**0**。落点 `appserver/guardian_reviewer.go` |
+
+### 12.5 复跑命令（3 条最能支撑本章裁定的）
+
+```bash
+# ① 零生产 .rs 判定（组 3 全部 11 条 + 组 1 的 #49389）
+cd /home/jacks/jacks_dev/codex
+for s in 22d1d9336f 2ce64843be 69043f05c4 0462dcc062 b1e72963c3 18131270fe 83cf88306e 7135b303d9 ade17c62b0 162fcb3976 9212b3eca8; do
+  echo "$s -> $(git show --stat --format= --name-only $s | grep -E '\.rs$' | grep -v -E '(^|/)tests?/|(^|/)tests\.rs$|_tests\.rs$' | wc -l) prod-rs"
+done
+# 实测输出：11 个 sha 全部 -> 0 prod-rs
+# ② ext 组新裁 4 条的 Go 符号面（全 0）
+cd /home/jacks/jacks_dev/codex_go
+rg -n -i 'render_dedup|dedup_before_budgeting|CallbackPermission|FileSystemAuthority|FreshParentCheckpoint|ReviewerSelection|connectionPool|replenish' --glob '*.go' .
+# ③ #51334 已落地
+git log --format='%h %s' --grep '#51334' main | head -1   # 11be9802 sync511: ...
+```
