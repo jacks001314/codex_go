@@ -114,6 +114,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if err != nil {
 		return "", err
 	}
+	out = colorOrderedListMarkers(out)
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width)
 	out = restoreMathPlaceholders(out, mathPlaceholders)
@@ -122,6 +123,65 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	out = restoreURLPlaceholders(out, urlPlaceholders)
 	return strings.TrimRight(out, "\n"), nil
+}
+
+// blockQuoteIndentToken is the indent the TUI paints in front of every
+// blockquote line (Rust markdown_render's blockquote indent token; the Go TUI
+// uses a box-drawing bar where Rust uses "> ").
+const blockQuoteIndentToken = "\u2502 "
+
+// orderedListMarkerRE matches the start of a rendered ordered list item: the
+// optional blockquote indent tokens, then any further indentation and the
+// ordinal marker itself ("1. ", "    2. ").
+var orderedListMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*)([ \t]*\d+\. )`)
+
+// orderedListMarkerSGR is the terminal-palette colour the Rust TUI paints the
+// ordered-list marker with (Rust #48800: MarkdownStyles::ordered_list_marker is
+// `Style::new().light_blue()`, the bright-blue ANSI palette entry / xterm index
+// 12). Rust paints palette colours through ratatui without a colour-level gate,
+// so the indexed sequence is emitted directly (same convention as
+// ThemeScopeForegroundSGR).
+const (
+	orderedListMarkerSGR      = "\x1b[38;5;12m"
+	orderedListMarkerResetSGR = "\x1b[39m"
+)
+
+// colorOrderedListMarkers repaints the indentation and the "N. " marker of every
+// rendered ordered list item with the terminal palette, leaving the item text in
+// the default colour (Rust markdown_render `ordered_list_marker`, #48800).
+//
+// glamour renders an item's ordinal and ". " prefix through the enclosing block
+// style, so the `Enumeration` style cannot carry the marker colour; the marker is
+// therefore repainted after rendering. Rendered code blocks and tables are still
+// the internal markers at this point in the pipeline, so their bodies are skipped
+// and never repainted.
+func colorOrderedListMarkers(rendered string) string {
+	if !strings.ContainsAny(rendered, "0123456789") {
+		return rendered
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	skippingCode := false
+	for index, line := range lines {
+		plain := utils.StripANSI(line)
+		if strings.Contains(plain, codeBlockStartMarker) {
+			skippingCode = true
+			continue
+		}
+		if skippingCode {
+			if strings.Contains(plain, codeBlockEndMarker) {
+				skippingCode = false
+			}
+			continue
+		}
+		if !orderedListMarkerRE.MatchString(line) {
+			continue
+		}
+		lines[index] = orderedListMarkerRE.ReplaceAllString(
+			line,
+			"$1"+orderedListMarkerSGR+"$2"+orderedListMarkerResetSGR,
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 var bareURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)
@@ -419,7 +479,7 @@ func codexMarkdownStyle() ansi.StyleConfig {
 	style.BlockQuote = ansi.StyleBlock{
 		StylePrimitive: ansi.StylePrimitive{Color: styleString("green")},
 		Indent:         styleUint(1),
-		IndentToken:    styleString("\u2502 "),
+		IndentToken:    styleString(blockQuoteIndentToken),
 	}
 	style.Table = ansi.StyleTable{
 		CenterSeparator: styleString("\u2502"),
