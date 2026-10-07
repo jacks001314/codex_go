@@ -54,6 +54,12 @@ type ProxyServer struct {
 	wait          sync.WaitGroup
 	closeOnce     sync.Once
 	tracker       proxyConnTracker
+	// proxyPrivateIPsViaUpstream selects routing for permitted private IP
+	// destinations without changing destination policy. It belongs to this
+	// proxy launch and is set by the execution host (Rust #48568
+	// NetworkProxyState::proxy_private_ips_via_upstream); the wire policy
+	// cannot override it.
+	proxyPrivateIPsViaUpstream atomic.Bool
 	// serveErr records the first listener failure so Wait can fail fast
 	// (Rust NetworkProxyHandle::wait).
 	serveErrMu sync.Mutex
@@ -146,6 +152,7 @@ func startProxyServer(parent context.Context, config ProxyConfig, runtimeConfig 
 		environmentID: config.EnvironmentID,
 	}
 	server.policy.Store(policy)
+	server.SetProxyPrivateIPsViaUpstream(config.PrivateIPsViaUpstream)
 	server.httpProxy, err = server.newHTTPProxy(baseEnv)
 	if err != nil {
 		_ = httpListener.Close()
@@ -459,7 +466,7 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 	upstreamProxy := proxyUpstreamFunc(true, baseEnv)
 	proxy.Tr = &http.Transport{
 		Proxy: func(request *http.Request) (*url.URL, error) {
-			if !s.runtimePolicy().settings.AllowUpstreamProxy || proxyRequestTargetsNonPublic(request) {
+			if !s.runtimePolicy().settings.AllowUpstreamProxy || !s.requestMayUseUpstreamProxy(request) {
 				return nil, nil
 			}
 			return upstreamProxy(request)
@@ -474,7 +481,7 @@ func (s *ProxyServer) newHTTPProxy(baseEnv map[string]string) (*goproxy.ProxyHtt
 		upstreamConnectDial = proxy.NewConnectDialToProxy(upstream.Raw)
 	}
 	proxy.ConnectDialWithReq = func(request *http.Request, networkName, address string) (net.Conn, error) {
-		if s.runtimePolicy().settings.AllowUpstreamProxy && upstreamConnectDial != nil && !proxyAddressTargetsNonPublic(address) {
+		if s.runtimePolicy().settings.AllowUpstreamProxy && upstreamConnectDial != nil && s.mayUseUpstreamProxyForAddress(address) {
 			return upstreamConnectDial(networkName, address)
 		}
 		return s.dialCheckedTarget(request.Context(), networkName, address)
@@ -491,17 +498,65 @@ func proxyRequestTargetsNonPublic(request *http.Request) bool {
 	return proxyAddressTargetsNonPublic(request.URL.Host)
 }
 
-func proxyAddressTargetsNonPublic(address string) bool {
+// proxyTargetAddressIsNonPublic classifies one request target address and also
+// returns its IP literal (nil for hostnames), so the upstream-routing decision
+// can reuse the same parse (Rust is_non_public_target).
+func proxyTargetAddressIsNonPublic(address string) (bool, net.IP) {
 	host := address
 	if parsed, _, err := net.SplitHostPort(address); err == nil {
 		host = parsed
 	}
 	normalized := NormalizeProxyHost(host)
 	parsed, _ := ParseProxyHost(normalized)
-	if IsLoopbackProxyHost(parsed) || IsNonPublicProxyIP(proxyIPLiteral(normalized)) {
+	ip := proxyIPLiteral(normalized)
+	return IsLoopbackProxyHost(parsed) || IsNonPublicProxyIP(ip), ip
+}
+
+func proxyAddressTargetsNonPublic(address string) bool {
+	nonPublic, _ := proxyTargetAddressIsNonPublic(address)
+	return nonPublic
+}
+
+// SetProxyPrivateIPsViaUpstream selects routing for permitted private IPs
+// without changing destination policy (Rust #48568
+// NetworkProxyState::set_proxy_private_ips_via_upstream). It is set by the
+// execution host at startup, independently of reloadable or remote policy.
+func (s *ProxyServer) SetProxyPrivateIPsViaUpstream(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.proxyPrivateIPsViaUpstream.Store(enabled)
+}
+
+func (s *ProxyServer) proxyPrivateIPsViaUpstreamEnabled() bool {
+	if s == nil {
+		return false
+	}
+	return s.proxyPrivateIPsViaUpstream.Load()
+}
+
+// requestMayUseUpstreamProxy is the managed-network half of the upstream proxy
+// decision for one HTTP request (Rust #48568 upstream.rs
+// ProxyConfig::proxy_for_target). A nil request keeps the upstream proxy
+// eligible, matching the previous behaviour.
+func (s *ProxyServer) requestMayUseUpstreamProxy(request *http.Request) bool {
+	if request == nil || request.URL == nil {
 		return true
 	}
-	return false
+	return s.mayUseUpstreamProxyForAddress(request.URL.Host)
+}
+
+// mayUseUpstreamProxyForAddress reports whether a request target may be routed
+// through a configured upstream proxy: every public target, plus — with the
+// executor's opt-in (#48568) — permitted private unicast targets. Loopback,
+// link-local, and other special-use targets always connect directly, and
+// destination policy still applies before any routing happens.
+func (s *ProxyServer) mayUseUpstreamProxyForAddress(address string) bool {
+	nonPublic, ip := proxyTargetAddressIsNonPublic(address)
+	if !nonPublic {
+		return true
+	}
+	return s.proxyPrivateIPsViaUpstreamEnabled() && IsPrivateNetworkProxyIP(ip)
 }
 
 func proxyUpstreamRootCAs(env map[string]string) (*x509.CertPool, error) {

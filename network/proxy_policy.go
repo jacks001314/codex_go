@@ -87,6 +87,27 @@ func IsNonPublicProxyIP(ip net.IP) bool {
 		ipv4InCIDR(ip4, [4]byte{240, 0, 0, 0}, 4)
 }
 
+// IsPrivateNetworkProxyIP reports whether ip is a private unicast destination
+// that an upstream VPN proxy may be able to reach (Rust #48568
+// network-proxy/src/policy.rs::is_private_network_ip): RFC 1918,
+// carrier-grade NAT (100.64.0.0/10), and IPv6 unique-local (fc00::/7)
+// addresses. Loopback, link-local, and other special-use addresses keep their
+// normal direct routing.
+func IsPrivateNetworkProxyIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	// Rust recurses into the IPv4 classification for IPv4-mapped IPv6 literals;
+	// net.IP.IsPrivate already unwraps those through To4.
+	if ip.IsPrivate() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ipv4InCIDR(ip4, [4]byte{100, 64, 0, 0}, 10)
+	}
+	return false
+}
+
 type ProxyDomainPatternKind string
 
 const (

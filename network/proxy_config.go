@@ -89,6 +89,12 @@ type ProxyConfig struct {
 	AuditMetadataProvider ProxyAuditMetadataProvider
 	EnvironmentID         string
 	HeaderInjections      []ProxyHeaderInjection
+	// PrivateIPsViaUpstream is trusted, executor-local startup routing: it
+	// allows permitted private unicast destinations to use the configured
+	// upstream proxy (Rust #48568 NetworkProxyState::proxy_private_ips_via_upstream).
+	// Unlike the settings table it is never serialized to remote executors and
+	// is never reloaded from the wire.
+	PrivateIPsViaUpstream bool
 }
 
 type ProxySettings struct {
