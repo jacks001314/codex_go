@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/install"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/utils"
@@ -2229,4 +2230,100 @@ func (stubEnvironmentConfigReader) ReadEnvironmentConfig(params *EnvironmentConf
 		},
 		Requirements: EnvironmentConfigLayerStack{},
 	}, nil
+}
+
+// TestEnvironmentInfoRoundTripsPrependPathDirsLikeRust mirrors Rust #49360
+// (`environment_info_preserves_executor_metadata`): executor-reported PATH
+// directories ride the wire as `prependPathDirs`, parse back into the same
+// list, and an empty list stays off the wire so legacy servers round-trip.
+func TestEnvironmentInfoRoundTripsPrependPathDirsLikeRust(t *testing.T) {
+	raw := []byte(`{"shell":{"name":"powershell","path":"powershell.exe"},` +
+		`"executorVersion":"1.2.3-alpha.4",` +
+		`"cwd":null,"userHomeDir":"file:///C:/Users/remote","platformOs":"windows",` +
+		`"prependPathDirs":["file:///C:/tools/bin","file:///D:/tools/bin"],` +
+		`"temporaryDirectories":["file:///C:/Temp"],"capabilities":{}}`)
+	var info EnvironmentInfo
+	if err := json.Unmarshal(raw, &info); err != nil {
+		t.Fatalf("Unmarshal EnvironmentInfo error = %v", err)
+	}
+	want := []string{"file:///C:/tools/bin", "file:///D:/tools/bin"}
+	if len(info.PrependPathDirs) != len(want) {
+		t.Fatalf("PrependPathDirs = %#v, want %#v", info.PrependPathDirs, want)
+	}
+	for i, dir := range want {
+		if info.PrependPathDirs[i] != dir {
+			t.Fatalf("PrependPathDirs[%d] = %q, want %q", i, info.PrependPathDirs[i], dir)
+		}
+	}
+	encoded, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal EnvironmentInfo error = %v", err)
+	}
+	// Rust keeps the field on the wire, in priority order, whenever it is set.
+	if !strings.Contains(string(encoded), `"prependPathDirs":["file:///C:/tools/bin","file:///D:/tools/bin"]`) {
+		t.Fatalf("marshaled environment info lost prependPathDirs: %s", encoded)
+	}
+
+	// Rust #49360: older servers omit the field, so it defaults to an empty list.
+	var legacy EnvironmentInfo
+	if err := json.Unmarshal([]byte(`{"shell":{"name":"zsh","path":"/bin/zsh"}}`), &legacy); err != nil {
+		t.Fatalf("Unmarshal legacy EnvironmentInfo error = %v", err)
+	}
+	if legacy.PrependPathDirs != nil {
+		t.Fatalf("legacy executor PrependPathDirs = %#v, want nil", legacy.PrependPathDirs)
+	}
+	empty, err := json.Marshal(EnvironmentInfo{Shell: ShellInfo{Name: "bash", Path: "/bin/bash"}})
+	if err != nil {
+		t.Fatalf("Marshal empty EnvironmentInfo error = %v", err)
+	}
+	if strings.Contains(string(empty), "prependPathDirs") {
+		t.Fatalf("empty prependPathDirs should be omitted from the wire: %s", empty)
+	}
+}
+
+// TestLocalEnvironmentInfoReportsPackagedPathDirLikeRust mirrors Rust #49360:
+// the local executor populates `prependPathDirs` from the install's packaged
+// `codex-path` directory (`InstallContext.package_layout.path_dir`), and
+// reports none when this install has no package layout.
+func TestLocalEnvironmentInfoReportsPackagedPathDirLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	previous := installContextForEnvironmentInfo
+	defer func() { installContextForEnvironmentInfo = previous }()
+	installContextForEnvironmentInfo = func() *install.InstallContext {
+		return &install.InstallContext{
+			PackageLayout: &install.CodexPackageLayout{PathDir: &dir},
+		}
+	}
+
+	info := localEnvironmentInfo()
+	uri, err := utils.FromHostNativePath(dir)
+	if err != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", dir, err)
+	}
+	if len(info.PrependPathDirs) != 1 || info.PrependPathDirs[0] != uri.String() {
+		t.Fatalf("PrependPathDirs = %#v, want [%q]", info.PrependPathDirs, uri.String())
+	}
+	encoded, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("Marshal EnvironmentInfo error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"prependPathDirs":["`+uri.String()+`"]`) {
+		t.Fatalf("environment/info did not report the packaged codex-path dir: %s", encoded)
+	}
+
+	// An install without a package layout reports no directories at all.
+	installContextForEnvironmentInfo = func() *install.InstallContext {
+		return &install.InstallContext{}
+	}
+	empty := localEnvironmentInfo()
+	if empty.PrependPathDirs != nil {
+		t.Fatalf("PrependPathDirs = %#v, want nil without a package layout", empty.PrependPathDirs)
+	}
+	emptyWire, err := json.Marshal(empty)
+	if err != nil {
+		t.Fatalf("Marshal EnvironmentInfo error = %v", err)
+	}
+	if strings.Contains(string(emptyWire), "prependPathDirs") {
+		t.Fatalf("environment/info should omit an empty prependPathDirs: %s", emptyWire)
+	}
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/install"
 	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/shell"
@@ -417,9 +418,13 @@ type EnvironmentInfo struct {
 	ExecutorVersion string `json:"executorVersion"`
 	// ProviderID is the opaque standard-build identity, absent for legacy or
 	// unstamped builds (Rust #43513).
-	ProviderID           string                  `json:"providerId,omitempty"`
-	CWD                  *string                 `json:"cwd"`
-	PlatformOS           string                  `json:"platformOs,omitempty"`
+	ProviderID string  `json:"providerId,omitempty"`
+	CWD        *string `json:"cwd"`
+	PlatformOS string  `json:"platformOs,omitempty"`
+	// PrependPathDirs are the executor's own directories to prepend to `PATH`
+	// when missing, in priority order. Empty (and omitted from the wire) for
+	// legacy exec-servers that do not report them (Rust #49360).
+	PrependPathDirs      []string                `json:"prependPathDirs,omitempty"`
 	UserHomeDir          string                  `json:"userHomeDir,omitempty"`
 	TemporaryDirectories []string                `json:"temporaryDirectories,omitempty"`
 	Capabilities         EnvironmentCapabilities `json:"capabilities"`
@@ -3513,6 +3518,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		ProviderID:           ExecServerProviderID(),
 		CWD:                  stringPtr(cwd),
 		PlatformOS:           runtime.GOOS,
+		PrependPathDirs:      localPrependPathDirs(),
 		UserHomeDir:          userHomeDir,
 		TemporaryDirectories: localTemporaryDirectories(cwdPath),
 		Capabilities: EnvironmentCapabilities{
@@ -3530,6 +3536,34 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			FileWriteStreaming: true,
 		},
 	}
+}
+
+// installContextForEnvironmentInfo returns the install context the local
+// executor reports its packaged directories from. It is a variable so tests
+// can substitute a layout with a packaged `codex-path` directory.
+var installContextForEnvironmentInfo = install.Current
+
+// localPrependPathDirs mirrors Rust #49360: the directories the executor wants
+// prepended to `PATH` when missing, populated from the install's packaged
+// `codex-path` directory (`InstallContext.package_layout.path_dir`). An install
+// without a package layout reports none, and the empty list is omitted on the
+// wire so older servers round-trip unchanged.
+func localPrependPathDirs() []string {
+	return prependPathDirsFromInstallContext(installContextForEnvironmentInfo())
+}
+
+// prependPathDirsFromInstallContext maps an install context's packaged
+// `codex-path` directory to the file-URI list carried by EnvironmentInfo.
+func prependPathDirsFromInstallContext(ctx *install.InstallContext) []string {
+	pathDir := strings.TrimSpace(ctx.PackagePathDir())
+	if pathDir == "" {
+		return nil
+	}
+	uri, err := utils.FromHostNativePath(pathDir)
+	if err != nil {
+		return nil
+	}
+	return []string{uri.String()}
 }
 
 // localTemporaryDirectories mirrors Rust 92fb33b758: executor-local default
