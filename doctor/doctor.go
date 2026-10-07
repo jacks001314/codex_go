@@ -1018,6 +1018,9 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 		"cwd: " + doctorCWD(opts),
 		"model: " + modelName,
 		"model provider: " + effectiveProviderIDForDoctor(opts, cfg),
+		// Rust #50200: report the configured TUI mode alongside the other
+		// configuration details.
+		"configured TUI mode: " + configuredTUIModeForDoctor(cfg),
 		"log dir: " + logDirForDoctor(codexHome, cfg),
 		"sqlite home: " + sqliteHomeForDoctor(codexHome, opts),
 		fmt.Sprintf("mcp servers: %d", len(mcpServersFromConfig(cfg))),
@@ -1025,6 +1028,32 @@ func configCheck(codexHome string, opts *Options) *DoctorCheck {
 	featureFlagDetails(cfg, &details)
 	configTomlDetailsForDoctor(codexHome, &details)
 	return NewCheck("config.load", "config", CheckStatusOK, "config loaded").DetailsList(details)
+}
+
+// configuredTUIModeForDoctor mirrors Rust #50200 (`config_check`): report
+// "fullscreen" when `tui.fullscreen_transcript` is enabled and "scrollback"
+// when it is disabled. Rust's `Tui::fullscreen_transcript` defaults to true
+// (`#[serde(default = "default_true")]`), so a missing `[tui]` table or key
+// reports fullscreen. Go's `[tui]` sub-table is not value-validated, so a
+// malformed value falls back to the same default (the rule
+// config.TuiEffectsFromValues already uses).
+func configuredTUIModeForDoctor(cfg *config.Config) string {
+	if fullscreenTranscriptConfigured(cfg) {
+		return "fullscreen"
+	}
+	return "scrollback"
+}
+
+func fullscreenTranscriptConfigured(cfg *config.Config) bool {
+	tui, ok := configValuesForDoctor(cfg)["tui"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := tui["fullscreen_transcript"].(bool)
+	if !ok {
+		return true
+	}
+	return enabled
 }
 
 // configLoadErrorDetails mirrors Rust #46962: report the typed location of a
