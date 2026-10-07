@@ -236,12 +236,28 @@ func (c *streamCore) setWidth(width int) {
 	}
 	hadPendingQueue := len(c.queue) > 0
 	hadLiveTail := c.hasTail()
+	previousWidth := c.width
+	previousTailStart, hadTailStart := c.activeTailSourceStart()
 	c.width = width
 	c.refreshProsePreview()
 	if c.rawSource == "" {
 		return
 	}
 	c.renderedLines = c.renderSourceLines(c.rawSource)
+	// Rust StreamCore::recompute_render: the emitted count is a rendered-line
+	// count, so when a tail is held back the emitted prefix is carried across the
+	// reflow in source terms. Without this, a resize that changes the height of
+	// the earlier lines swallows the held tail (Rust #48623
+	// resizing_does_not_drop_held_list_marker).
+	if hadTailStart {
+		previousPrefixLen := renderedLineCountBeforeSource(c.rawSource, previousTailStart, previousWidth, c.theme)
+		prefixLen := renderedLineCountBeforeSource(c.rawSource, previousTailStart, c.width, c.theme)
+		if c.emittedStableLen >= previousPrefixLen {
+			c.emittedStableLen = prefixLen + (c.emittedStableLen - previousPrefixLen)
+		} else {
+			c.emittedStableLen = min(c.emittedStableLen, prefixLen)
+		}
+	}
 	c.emittedStableLen = min(c.emittedStableLen, len(c.renderedLines))
 	if hadPendingQueue && c.emittedStableLen == len(c.renderedLines) && c.emittedStableLen > 0 {
 		c.emittedStableLen--
@@ -285,12 +301,61 @@ func (c *streamCore) computeTargetStableLen() int {
 	if c.hasVisualization {
 		return max(len(c.renderedLines), c.emittedStableLen)
 	}
-	state := c.holdbackScanner.State()
-	if state.Kind == TableHoldbackNone {
+	start, held := c.activeTailSourceStart()
+	if !held {
 		return max(len(c.renderedLines), c.emittedStableLen)
 	}
-	prefixLen := renderedLineCountBeforeSource(c.rawSource, state.SourceStart, c.width, c.theme)
+	prefixLen := renderedLineCountBeforeSource(c.rawSource, start, c.width, c.theme)
 	return max(prefixLen, c.emittedStableLen)
+}
+
+// activeTailSourceStart returns the committed-source offset the mutable tail
+// starts at, or false when nothing is held back. Candidates are combined by
+// keeping the earliest holdback, matching Rust's `active_tail_source_start`
+// (which takes the minimum of the table/fence, mutable-fence, pending-math and
+// bare-list-marker starts).
+func (c *streamCore) activeTailSourceStart() (int, bool) {
+	start, held := 0, false
+	if state := c.holdbackScanner.State(); state.Kind != TableHoldbackNone {
+		start, held = state.SourceStart, true
+	}
+	// Rust #48623 (streaming/controller.rs): a trailing bare list marker stays in
+	// the mutable tail, so a continuation that arrives in a later chunk, and a
+	// terminal resize, both re-render the item from the whole source instead of
+	// emitting a marker that the next chunk would change.
+	if markerStart, ok := bareListMarkerSourceStart(c.rawSource); ok && (!held || markerStart < start) {
+		start, held = markerStart, true
+	}
+	return start, held
+}
+
+// bareListMarkerSourceStart reports the source offset of a trailing bare list
+// marker in the committed source: a line that contains only "-", "+", "*", or an
+// ordinal such as "8." / "8)" (optionally behind blockquote markers). It mirrors
+// Rust's `active_tail_source_start` marker probe (#48623).
+func bareListMarkerSourceStart(source string) (int, bool) {
+	marker := strings.TrimRight(source, "\n")
+	start := strings.LastIndexByte(marker, '\n') + 1
+	line := strings.TrimSpace(marker[start:])
+	line = strings.TrimLeft(line, "> \t")
+	switch line {
+	case "-", "+", "*":
+		return start, true
+	}
+	if len(line) > 1 && (line[len(line)-1] == '.' || line[len(line)-1] == ')') {
+		digits := line[:len(line)-1]
+		allDigits := true
+		for index := 0; index < len(digits); index++ {
+			if digits[index] < '0' || digits[index] > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return start, true
+		}
+	}
+	return 0, false
 }
 
 func (c *streamCore) renderSourceLines(source string) []string {
