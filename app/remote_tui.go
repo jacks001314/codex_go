@@ -441,7 +441,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
 		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
-		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint),
+		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
@@ -461,7 +461,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return interactiveRemoteAgentThreadEntries(ctx, endpoint, currentThreadID)
 		},
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
-			return interactiveRemoteSwitchAgentThread(ctx, endpoint, threadID)
+			return interactiveRemoteSwitchAgentThread(ctx, endpoint, root, threadID)
 		},
 		AgentsOverviewEmbedded:  false,
 		OnAgentsOverviewRefresh: interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
@@ -1551,7 +1551,7 @@ func interactiveRemoteLogoutHandler(ctx context.Context, endpoint *appserverdaem
 	}
 }
 
-func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionResumeFunc {
+func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions) codextea.SessionResumeFunc {
 	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
 		threadID := strings.TrimSpace(selection.Target.ThreadID)
 		if threadID == "" {
@@ -1567,7 +1567,7 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		// the conversation the resume fails with the active-writer conflict and
 		// the TUI falls back to a read-only history snapshot.
 		var resumed appserver.ThreadResumeResponse
-		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: threadID}, &resumed)
+		resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, remoteTUIResumeParams(root, threadID), &resumed)
 		if resumeErr == nil && resumed.Thread != nil {
 			response := remoteTUIResumeResponseFromThread(resumed.Thread)
 			response.ThreadSettings = remoteTUISettingsFromResume(&resumed)
@@ -1584,6 +1584,20 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 		response.ReadOnly = true
 		return response, nil
 	}
+}
+
+// remoteTUIResumeParams builds the thread/resume request used when the remote
+// TUI attaches to a thread. Rust #49624 (tui/src/app_server_session.rs
+// resume_thread_with_permission_overrides -> thread_resume_params_from_config)
+// resumes a remote thread with `cwd = remote_cwd_override`, so the caller's
+// working directory is forwarded as the resumed thread's cwd override rather
+// than leaving the server's saved directory in place.
+func remoteTUIResumeParams(root *cli.RootOptions, threadID string) appserver.ThreadResumeParams {
+	params := appserver.ThreadResumeParams{ThreadID: strings.TrimSpace(threadID)}
+	if cwd := interactiveSessionPickerCWD(root); cwd != "" {
+		params.CWD = &cwd
+	}
+	return params
 }
 
 // remoteTUIResumeResponseFromThread builds the TUI resume response from a
@@ -1844,7 +1858,7 @@ func interactiveRemoteAgentThreadEntries(ctx context.Context, endpoint *appserve
 	return entries, nil
 }
 
-func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, threadID string) (codextea.AgentThreadSwitchResponse, error) {
+func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, threadID string) (codextea.AgentThreadSwitchResponse, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
 		return codextea.AgentThreadSwitchResponse{}, errors.New("agent switch requires a thread id")
@@ -1859,7 +1873,7 @@ func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserver
 	// task the resume fails with the active-writer conflict, so fall back to a
 	// frozen read-only history snapshot instead of refusing to open it.
 	var resumed appserver.ThreadResumeResponse
-	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, appserver.ThreadResumeParams{ThreadID: threadID}, &resumed)
+	resumeErr := remoteSessionRequest(ctx, client, appserver.MethodThreadResume, remoteTUIResumeParams(root, threadID), &resumed)
 	if resumeErr == nil && resumed.Thread != nil {
 		response := remoteTUIAgentSwitchResponseFromThread(resumed.Thread)
 		response.ThreadSettings = remoteTUISettingsFromResume(&resumed)

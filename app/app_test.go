@@ -5190,6 +5190,81 @@ func TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents(t *testing.T) {
 	}
 }
 
+// remoteResumeTestCWD is the caller working directory the remote resume tests
+// expect to be forwarded as the thread's cwd override (Rust #49624).
+const remoteResumeTestCWD = "/caller/worktree"
+
+// TestInteractiveRemoteResumeSessionForwardsCallerCWD covers Rust #49624: the
+// remote TUI resumes a thread with the caller's working directory as the
+// thread's cwd override (tui/src/app_server_session.rs
+// resume_thread_with_permission_overrides -> thread_resume_params_from_config
+// with remote_cwd_override), instead of leaving the server's saved cwd in place.
+func TestInteractiveRemoteResumeSessionForwardsCallerCWD(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 4)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadResume):
+				thread := remoteSessionTestThread("thread-resume", "resumed", false, 0)
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}})
+	if _, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionResume, Target: codextui.SessionTarget{ThreadID: "thread-resume"}}); err != nil {
+		t.Fatalf("resume session error = %v", err)
+	}
+	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("initialize method = %s", initialize.Method)
+	}
+	resume := remoteTUITestReadCapturedRequest(t, requests)
+	if resume.Method != string(appserver.MethodThreadResume) {
+		t.Fatalf("resume method = %s", resume.Method)
+	}
+	var params appserver.ThreadResumeParams
+	if err := json.Unmarshal(resume.Params, &params); err != nil {
+		t.Fatalf("decode thread/resume params: %v", err)
+	}
+	if params.ThreadID != "thread-resume" {
+		t.Fatalf("thread/resume threadId = %q", params.ThreadID)
+	}
+	if params.CWD == nil || *params.CWD != remoteResumeTestCWD {
+		t.Fatalf("thread/resume cwd = %v, want %q", params.CWD, remoteResumeTestCWD)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
 func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -5251,7 +5326,7 @@ func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, "thread-worker")
+	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, "thread-worker")
 	if err != nil {
 		t.Fatalf("switch agent error = %v", err)
 	}
@@ -5267,8 +5342,18 @@ func TestInteractiveRemoteSwitchAgentThreadReadsTranscript(t *testing.T) {
 	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
 		t.Fatalf("initialize method = %s", initialize.Method)
 	}
-	if resume := remoteTUITestReadCapturedRequest(t, requests); resume.Method != string(appserver.MethodThreadResume) {
+	resume := remoteTUITestReadCapturedRequest(t, requests)
+	if resume.Method != string(appserver.MethodThreadResume) {
 		t.Fatalf("resume method = %s", resume.Method)
+	}
+	// Rust #49624: a remote resume carries the caller's working directory
+	// as the resumed thread's cwd override.
+	var resumeParams appserver.ThreadResumeParams
+	if err := json.Unmarshal(resume.Params, &resumeParams); err != nil {
+		t.Fatalf("decode thread/resume params: %v", err)
+	}
+	if resumeParams.CWD == nil || *resumeParams.CWD != remoteResumeTestCWD {
+		t.Fatalf("thread/resume cwd = %v, want %q", resumeParams.CWD, remoteResumeTestCWD)
 	}
 	if response.ReadOnly || response.ThreadSettings == nil || response.ThreadSettings.CWD != "D:/repo" || response.ThreadSettings.Model != "gpt-5.2-codex" {
 		t.Fatalf("resume settings = %#v (readOnly=%v)", response.ThreadSettings, response.ReadOnly)
@@ -5344,7 +5429,7 @@ func TestInteractiveRemoteSwitchAgentThreadFallsBackToReadOnlyHistory(t *testing
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, "thread-worker")
+	response, err := interactiveRemoteSwitchAgentThread(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, "thread-worker")
 	if err != nil {
 		t.Fatalf("switch agent error = %v", err)
 	}
@@ -5360,8 +5445,18 @@ func TestInteractiveRemoteSwitchAgentThreadFallsBackToReadOnlyHistory(t *testing
 	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
 		t.Fatalf("initialize method = %s", initialize.Method)
 	}
-	if resume := remoteTUITestReadCapturedRequest(t, requests); resume.Method != string(appserver.MethodThreadResume) {
+	resume := remoteTUITestReadCapturedRequest(t, requests)
+	if resume.Method != string(appserver.MethodThreadResume) {
 		t.Fatalf("resume method = %s", resume.Method)
+	}
+	// Rust #49624: a remote resume carries the caller's working directory
+	// as the resumed thread's cwd override.
+	var resumeParams appserver.ThreadResumeParams
+	if err := json.Unmarshal(resume.Params, &resumeParams); err != nil {
+		t.Fatalf("decode thread/resume params: %v", err)
+	}
+	if resumeParams.CWD == nil || *resumeParams.CWD != remoteResumeTestCWD {
+		t.Fatalf("thread/resume cwd = %v, want %q", resumeParams.CWD, remoteResumeTestCWD)
 	}
 	if read := remoteTUITestReadCapturedRequest(t, requests); read.Method != string(appserver.MethodThreadRead) {
 		t.Fatalf("read method = %s", read.Method)
