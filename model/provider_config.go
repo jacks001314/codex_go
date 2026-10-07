@@ -188,6 +188,14 @@ func isBedrockProviderID(id string) bool {
 	return id == AmazonBedrockProviderID || id == AmazonBedrockRuntimeProviderID
 }
 
+// IsBedrockProviderID reports whether a model provider id names one of the two
+// bundled Amazon Bedrock providers. Rust #38470 (d5e256ceb2) added
+// `amazon-bedrock-runtime` next to `amazon-bedrock`; both resolve through the
+// same Bedrock runtime provider implementation.
+func IsBedrockProviderID(id string) bool {
+	return isBedrockProviderID(id)
+}
+
 func validateReservedModelProviderIDs(rawProviders map[string]any) error {
 	var conflicts []string
 	for id := range rawProviders {

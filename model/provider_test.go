@@ -257,6 +257,44 @@ func TestAmazonBedrockProviderCapabilitiesAndModels(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #38470's provider wiring: AmazonBedrockModelProvider::models_manager
+// builds its StaticModelsManager from `default_model_catalog`, so the Bedrock
+// Runtime provider serves its own cross-region catalog while Mantle keeps the
+// shared Bedrock catalog (codex-rs/model-provider/src/amazon_bedrock/mod.rs).
+// The Go production caller is ResponsesAgentRunner
+// (model/responses_agent.go), which calls runtimeProvider.ModelsManager(nil).
+// The runtime fallback expectation matches upstream
+// `thread_start_bedrock_runtime_prefers_global_cross_region_models`
+// (codex-rs/app-server/tests/suite/v2/thread_start.rs): a Mantle slug falls back
+// to the highest-priority Runtime variant, while supported cross-region slugs
+// are preserved.
+func TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust(t *testing.T) {
+	mantleManager := CreateRuntimeProvider(CreateAmazonBedrockProvider(nil), nil).ModelsManager(nil)
+	if got := mantleManager.GetDefaultModel("", true, RefreshOffline); got != AmazonBedrockGPT61SolModelID {
+		t.Fatalf("mantle default model = %q, want %q", got, AmazonBedrockGPT61SolModelID)
+	}
+	if got := mantleManager.GetDefaultModel(AmazonBedrockGPT56SolModelID, true, RefreshOffline); got != AmazonBedrockGPT56SolModelID {
+		t.Fatalf("mantle supported model = %q, want %q", got, AmazonBedrockGPT56SolModelID)
+	}
+
+	runtimeManager := CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(nil), nil).ModelsManager(nil)
+	globalSol := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID
+	if got := runtimeManager.GetDefaultModel("", true, RefreshOffline); got != globalSol {
+		t.Fatalf("runtime default model = %q, want %q", got, globalSol)
+	}
+	if got := runtimeManager.GetDefaultModel(AmazonBedrockGPT56SolModelID, true, RefreshOffline); got != globalSol {
+		t.Fatalf("runtime fallback model = %q, want %q", got, globalSol)
+	}
+	for _, supported := range []string{
+		bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56SolModelID,
+		bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56SolModelID,
+	} {
+		if got := runtimeManager.GetDefaultModel(supported, true, RefreshOffline); got != supported {
+			t.Fatalf("runtime supported model = %q, want %q", got, supported)
+		}
+	}
+}
+
 // Mirrors Rust #38470 (d5e256ceb2)
 // `preferred_background_models_match_bedrock_endpoint` in
 // codex-rs/model-provider/src/amazon_bedrock/mod.rs: the Mantle endpoint

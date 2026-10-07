@@ -5372,10 +5372,13 @@ func appendProjectTrustLevel(codexHome string, trustTarget string) error {
 
 func threadStartProviderFallbackModel(modelID string, providerID string, allowFallback bool) string {
 	modelID = strings.TrimSpace(modelID)
-	if !allowFallback || strings.TrimSpace(providerID) != model.AmazonBedrockProviderID {
+	if !allowFallback || !model.IsBedrockProviderID(strings.TrimSpace(providerID)) {
 		return modelID
 	}
-	manager := model.NewStaticModelsManager(model.AmazonBedrockModelCatalog())
+	// Rust #38470 (d5e256ceb2): the fallback resolves against the provider's own
+	// static catalog, so `amazon-bedrock-runtime` falls back to its global
+	// cross-region variants instead of the Mantle slugs.
+	manager := model.NewStaticModelsManager(model.AmazonBedrockCatalogForProviderID(providerID))
 	return manager.GetDefaultModel(modelID, true, model.RefreshOffline)
 }
 

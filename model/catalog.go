@@ -1030,27 +1030,117 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 			bedrockModel(bundled, "gpt-5.6-luna", AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna", 6),
 			gpt5BedrockModel(bundled, "gpt-5.5", AmazonBedrockGPT55ModelID, "GPT-5.5", 7),
 		},
-	})
+	}, bedrockEndpointMantle)
+}
+
+// AmazonBedrockRuntimeModelCatalog mirrors Rust #38470's
+// amazon_bedrock/runtime_catalog.rs::static_runtime_model_catalog: the Bedrock
+// Runtime endpoint owns a catalog of cross-region variants instead of the
+// Mantle slugs. Every supported base model is repeated as a `global.` and a
+// `us.` variant, all global variants lead the catalog (Rust #38617), and the
+// variants disable the web search tool the Runtime endpoint cannot host.
+func AmazonBedrockRuntimeModelCatalog() ModelsResponse {
+	base := make([]ModelInfo, 0, len(bedrockRuntimeBaseSlugs))
+	for _, model := range AmazonBedrockModelCatalog().Models {
+		if bedrockRuntimeBaseSlugs[model.Slug] {
+			base = append(base, model)
+		}
+	}
+	models := make([]ModelInfo, 0, len(base)*len(bedrockRuntimeRoutingVariants))
+	for routingPriority, routingVariant := range bedrockRuntimeRoutingVariants {
+		for _, model := range base {
+			variant := model
+			variant.Slug = routingVariant.slugPrefix + model.Slug
+			variant.DisplayName = fmt.Sprintf("%s (%s)", model.DisplayName, routingVariant.label)
+			// Rust #38617 keeps the base-model order inside each routing group
+			// and puts every global model before the US cross-region models.
+			variant.Priority = routingPriority*len(base) + model.Priority
+			// Rust static_runtime_model_catalog clears the search tool on every
+			// Runtime variant and leaves the review-model override alone.
+			variant.SupportsSearchTool = false
+			models = append(models, variant)
+		}
+	}
+	return normalizeBundledBedrockCatalog(ModelsResponse{Models: models}, bedrockEndpointRuntime)
+}
+
+// AmazonBedrockCatalogForProviderID resolves the static Bedrock catalog that
+// belongs to a bundled Bedrock provider id, mirroring Rust
+// AmazonBedrockModelProvider::default_model_catalog
+// (codex-rs/model-provider/src/amazon_bedrock/mod.rs, #38470): the Mantle
+// provider keeps the shared catalog while `amazon-bedrock-runtime` gets its own
+// cross-region catalog. Any other id resolves to the Mantle catalog so a caller
+// can pick a catalog with a single expression.
+func AmazonBedrockCatalogForProviderID(providerID string) ModelsResponse {
+	if strings.TrimSpace(providerID) == AmazonBedrockRuntimeProviderID {
+		return AmazonBedrockRuntimeModelCatalog()
+	}
+	return AmazonBedrockModelCatalog()
+}
+
+// bedrockRuntimeRoutingVariants mirrors Rust ROUTING_VARIANTS
+// (amazon_bedrock/runtime_catalog.rs, #38470) in order: the `global.` variants
+// come first and carry the routing label appended to each display name.
+var bedrockRuntimeRoutingVariants = []struct {
+	slugPrefix string
+	label      string
+}{
+	{bedrockRuntimeGlobalSlugPrefix, "Global"},
+	{bedrockRuntimeUSSlugPrefix, "US cross-region"},
+}
+
+const (
+	// bedrockRuntimeGlobalSlugPrefix / bedrockRuntimeUSSlugPrefix are the
+	// cross-region slug prefixes Rust applies in runtime_catalog.rs (#38470).
+	bedrockRuntimeGlobalSlugPrefix = "global."
+	bedrockRuntimeUSSlugPrefix     = "us."
+)
+
+// bedrockRuntimeBaseSlugs mirrors the slug filter in Rust
+// static_runtime_model_catalog: every Bedrock catalog entry except GPT-5.5 has
+// a Bedrock Runtime variant.
+var bedrockRuntimeBaseSlugs = map[string]bool{
+	AmazonBedrockGPT61SolModelID:   true,
+	AmazonBedrockGPT6AstraModelID:  true,
+	AmazonBedrockGPT6SolModelID:    true,
+	AmazonBedrockGPT6LunaModelID:   true,
+	AmazonBedrockGPT56SolModelID:   true,
+	AmazonBedrockGPT56TerraModelID: true,
+	AmazonBedrockGPT56LunaModelID:  true,
 }
 
 // bedrockUltrafastServiceTierID is the service tier Rust #50472 advertises for
 // the Bedrock GPT-6 Astra entry.
 const bedrockUltrafastServiceTierID = "ultrafast"
 
+// bedrockEndpoint mirrors Rust BedrockEndpoint
+// (codex-rs/model-provider/src/amazon_bedrock/mod.rs, #38470): the Mantle
+// endpoint and the regional Bedrock Runtime endpoint share one provider
+// implementation but own distinct static catalogs and tier metadata.
+type bedrockEndpoint int
+
+const (
+	bedrockEndpointMantle bedrockEndpoint = iota
+	bedrockEndpointRuntime
+)
+
 // normalizeBundledBedrockCatalog mirrors Rust #50472's
 // normalize_bundled_bedrock_catalog for the bundled catalog: the bundled
 // defaults must not inherit OpenAI-only speed/service tiers or opt into a
 // premium default, except that the GPT-6 Astra entry advertises the
-// `ultrafast` tier. Rust also advertises it for the Runtime endpoint's
-// `global.openai.gpt-6-astra` / `us.openai.gpt-6-astra` variants; Go has no
-// Bedrock Runtime catalog, so only the Mantle arm is reachable here.
-func normalizeBundledBedrockCatalog(catalog ModelsResponse) ModelsResponse {
+// `ultrafast` tier. Rust advertises it for the Mantle slug and for the Runtime
+// endpoint's `global.openai.gpt-6-astra` / `us.openai.gpt-6-astra` variants.
+func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndpoint) ModelsResponse {
 	for i := range catalog.Models {
 		model := &catalog.Models[i]
 		model.AdditionalSpeedTiers = nil
 		model.ServiceTiers = nil
 		model.DefaultServiceTier = ""
-		if model.Slug == AmazonBedrockGPT6AstraModelID {
+		advertisesUltrafast := (endpoint == bedrockEndpointMantle && model.Slug == AmazonBedrockGPT6AstraModelID) ||
+			(endpoint == bedrockEndpointRuntime &&
+				(model.Slug == bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT6AstraModelID ||
+					model.Slug == bedrockRuntimeUSSlugPrefix+AmazonBedrockGPT6AstraModelID))
+		if advertisesUltrafast {
 			model.ServiceTiers = []string{bedrockUltrafastServiceTierID}
 		}
 	}

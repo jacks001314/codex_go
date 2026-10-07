@@ -483,6 +483,12 @@ func (p *AmazonBedrockProvider) ModelsManager(configCatalog *ModelsResponse) Mod
 		catalog := WithDefaultOnlyServiceTier(*configCatalog)
 		return NewStaticModelsManager(catalog)
 	}
+	// Rust AmazonBedrockModelProvider::default_model_catalog (#38470): the
+	// Bedrock Runtime endpoint serves its own cross-region catalog, not the
+	// Mantle slugs.
+	if p.info.IsAmazonBedrockRuntime() {
+		return NewStaticModelsManager(AmazonBedrockRuntimeModelCatalog())
+	}
 	return NewStaticModelsManager(AmazonBedrockModelCatalog())
 }
 

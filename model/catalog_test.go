@@ -1766,3 +1766,121 @@ func TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors Rust #38470 (d5e256ceb2)
+// `runtime_catalog_includes_supported_cross_region_models_in_priority_order` in
+// codex-rs/model-provider/src/amazon_bedrock/runtime_catalog_tests.rs, at the
+// shape upstream has after #38617 (global-first grouping), #42619 (GPT-6-Astra),
+// #47347 (GPT-6 Sol/Luna), #49339 (GPT-6.1 Sol) and #50472 (ultrafast tiers)
+// extended the Runtime variant set to every Mantle model except GPT-5.5 (see
+// runtime_catalog.rs at upstream 5a3140176e). Asserts the whole catalog, not
+// just the newly added entries.
+func TestAmazonBedrockRuntimeModelCatalogLikeRust(t *testing.T) {
+	catalog := AmazonBedrockRuntimeModelCatalog()
+
+	want := []struct {
+		slug        string
+		displayName string
+		priority    int
+	}{
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol (Global)", 0},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6AstraModelID, "GPT-6-Astra (Global)", 1},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (Global)", 2},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (Global)", 3},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (Global)", 4},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (Global)", 5},
+		{bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (Global)", 6},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT61SolModelID, "GPT-6.1 Sol (US cross-region)", 7},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID, "GPT-6-Astra (US cross-region)", 8},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6SolModelID, "GPT-6 Sol (US cross-region)", 9},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6LunaModelID, "GPT-6 Luna (US cross-region)", 10},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56SolModelID, "GPT-5.6 Sol (US cross-region)", 11},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56TerraModelID, "GPT-5.6 Terra (US cross-region)", 12},
+		{bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT56LunaModelID, "GPT-5.6 Luna (US cross-region)", 13},
+	}
+	if len(catalog.Models) != len(want) {
+		t.Fatalf("runtime catalog len = %d, want %d", len(catalog.Models), len(want))
+	}
+	for i, expected := range want {
+		model := catalog.Models[i]
+		if model.Slug != expected.slug || model.DisplayName != expected.displayName || model.Priority != expected.priority {
+			t.Fatalf("model[%d] = (%s, %s, %d), want (%s, %s, %d)",
+				i, model.Slug, model.DisplayName, model.Priority, expected.slug, expected.displayName, expected.priority)
+		}
+		if model.Visibility != VisibilityList {
+			t.Fatalf("%s visibility = %q, want list", model.Slug, model.Visibility)
+		}
+		// The Runtime variants inherit the Mantle base metadata: GPT-5.5 has no
+		// cross-region variant, so every entry keeps the long-context window.
+		if model.ContextWindow != 272000 || model.MaxContextWindow != 872000 {
+			t.Fatalf("%s context window = %d/%d, want 272000/872000", model.Slug, model.ContextWindow, model.MaxContextWindow)
+		}
+		if model.WebSearchToolType != "text" {
+			t.Fatalf("%s WebSearchToolType = %q, want text", model.Slug, model.WebSearchToolType)
+		}
+		// Rust #50472 advertises `ultrafast` for the Runtime Astra variants only.
+		wantTiers := []string(nil)
+		switch model.Slug {
+		case bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT6AstraModelID,
+			bedrockRuntimeUSSlugPrefix + AmazonBedrockGPT6AstraModelID:
+			wantTiers = []string{bedrockUltrafastServiceTierID}
+		}
+		if len(model.ServiceTiers) != len(wantTiers) {
+			t.Fatalf("%s ServiceTiers = %#v, want %#v", model.Slug, model.ServiceTiers, wantTiers)
+		}
+		for tierIndex := range wantTiers {
+			if model.ServiceTiers[tierIndex] != wantTiers[tierIndex] {
+				t.Fatalf("%s ServiceTiers = %#v, want %#v", model.Slug, model.ServiceTiers, wantTiers)
+			}
+		}
+		if len(model.AdditionalSpeedTiers) != 0 || model.DefaultServiceTier != "" {
+			t.Fatalf("%s speed tiers = %#v default = %q, want none", model.Slug, model.AdditionalSpeedTiers, model.DefaultServiceTier)
+		}
+	}
+	for _, model := range catalog.Models {
+		if model.Slug == AmazonBedrockGPT55ModelID ||
+			strings.TrimSuffix(strings.TrimPrefix(model.Slug, bedrockRuntimeGlobalSlugPrefix), bedrockRuntimeUSSlugPrefix) == AmazonBedrockGPT55ModelID {
+			t.Fatalf("runtime catalog unexpectedly contains a GPT-5.5 variant: %s", model.Slug)
+		}
+	}
+}
+
+// Mirrors Rust #38470 (d5e256ceb2)
+// `runtime_catalog_disables_web_search_without_overriding_review_models` in
+// codex-rs/model-provider/src/amazon_bedrock/runtime_catalog_tests.rs: every
+// Runtime variant clears `supports_search_tool` (the Runtime endpoint cannot
+// host web search) and leaves `auto_review_model_override` unset. The Rust test
+// also pins `multi_agent_version`; Go's shared Bedrock normalizer still forces
+// multi-agent v1 for every Bedrock entry (Rust #39804 / f3cd299428, reverted
+// upstream by #49345 / 8ffd91e42a), so that field is deliberately not asserted
+// here.
+func TestAmazonBedrockRuntimeCatalogDisablesWebSearchLikeRust(t *testing.T) {
+	catalog := AmazonBedrockRuntimeModelCatalog()
+	if len(catalog.Models) == 0 {
+		t.Fatal("runtime catalog is empty")
+	}
+	for _, model := range catalog.Models {
+		if model.SupportsSearchTool {
+			t.Fatalf("%s SupportsSearchTool = true, want false", model.Slug)
+		}
+		if model.AutoReviewModelOverride != "" {
+			t.Fatalf("%s AutoReviewModelOverride = %q, want empty", model.Slug, model.AutoReviewModelOverride)
+		}
+	}
+}
+
+// Mirrors Rust AmazonBedrockModelProvider::default_model_catalog
+// (codex-rs/model-provider/src/amazon_bedrock/mod.rs, #38470): the Mantle
+// provider keeps the shared Bedrock catalog while `amazon-bedrock-runtime`
+// resolves to the cross-region catalog.
+func TestAmazonBedrockCatalogForProviderIDLikeRust(t *testing.T) {
+	mantle := AmazonBedrockCatalogForProviderID(AmazonBedrockProviderID)
+	if len(mantle.Models) != len(AmazonBedrockModelCatalog().Models) || mantle.Models[0].Slug != AmazonBedrockGPT61SolModelID {
+		t.Fatalf("mantle catalog = %#v", mantle.Models)
+	}
+	runtimeCatalog := AmazonBedrockCatalogForProviderID(AmazonBedrockRuntimeProviderID)
+	if len(runtimeCatalog.Models) != len(AmazonBedrockRuntimeModelCatalog().Models) ||
+		runtimeCatalog.Models[0].Slug != bedrockRuntimeGlobalSlugPrefix+AmazonBedrockGPT61SolModelID {
+		t.Fatalf("runtime catalog = %#v", runtimeCatalog.Models)
+	}
+}
