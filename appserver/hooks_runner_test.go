@@ -33,6 +33,37 @@ func TestSelectHookHandlersMatchesRustMatcherRules(t *testing.T) {
 	}
 }
 
+// Rust #33895 (hooks/src/events/session_end.rs SESSION_END_REASON, asserted by
+// hooks/src/events/session_end_tests.rs::session_end_matches_other_reason) dispatches
+// SessionEnd hooks with the fixed matcher input "other": a `clear` matcher is skipped,
+// while `other` and a missing matcher both run. RunSessionEnd is the production entry
+// point used by RuntimeRouter.runSessionEndHookOnce (archive / delete / shutdown).
+func TestRunSessionEndMatchesRustOtherReasonMatcher(t *testing.T) {
+	runner := NewHookRunner()
+	hooks := []HookMetadata{
+		hookRunnerMetadata("clear", HookEventSessionEnd, "clear", 0),
+		hookRunnerMetadata("other", HookEventSessionEnd, "other", 1),
+		hookRunnerMetadata("all", HookEventSessionEnd, "", 2),
+	}
+
+	result, err := runner.RunSessionEnd(context.Background(), &HookSessionEndRequest{
+		ThreadID: "thread-1",
+		CWD:      t.TempDir(),
+		Reason:   "other",
+		Hooks:    hooks,
+	})
+	if err != nil {
+		t.Fatalf("RunSessionEnd() error = %v", err)
+	}
+	got := make([]int64, 0, len(result.Runs))
+	for _, run := range result.Runs {
+		got = append(got, run.DisplayOrder)
+	}
+	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
+		t.Fatalf("session end display orders = %v, want [1 2] (Rust session_end_matches_other_reason)", got)
+	}
+}
+
 func TestHookRunnerRunsCommandAndNotifies(t *testing.T) {
 	sink := NewNotificationBuffer()
 	now := time.UnixMilli(1000)

@@ -1150,7 +1150,7 @@ func normalizedHookMatcher(event HookEventName, matcher *string) *string {
 	if matcher == nil {
 		return nil
 	}
-	if event == HookEventStop || event == HookEventSessionEnd || event == HookEventUserPromptSubmit {
+	if event == HookEventStop || event == HookEventUserPromptSubmit {
 		return nil
 	}
 	value := strings.TrimSpace(*matcher)

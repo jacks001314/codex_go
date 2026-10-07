@@ -535,9 +535,19 @@ func hookTrustAllowsExecution(metadata *HookMetadata) bool {
 	return metadata.BypassTrust || metadata.IsManaged || metadata.TrustStatus == HookTrustManaged || metadata.TrustStatus == HookTrustTrusted
 }
 
+// sessionEndHookMatcherInput mirrors Rust's SESSION_END_REASON
+// (hooks/src/events/session_end.rs): SessionEnd is dispatched with the fixed reason
+// "other" as the matcher input, both for the run path (#33895) and for previews.
+const sessionEndHookMatcherInput = "other"
+
 func hookMatches(event HookEventName, matcher *string, compiled *regexp.Regexp, matcherInputs []string) bool {
 	switch event {
-	case HookEventPreToolUse, HookEventPermissionRequest, HookEventPostToolUse, HookEventPreCompact, HookEventPostCompact, HookEventSessionStart, HookEventSubagentStart, HookEventSubagentStop:
+	case HookEventPreToolUse, HookEventPermissionRequest, HookEventPostToolUse, HookEventPreCompact, HookEventPostCompact, HookEventSessionStart, HookEventSessionEnd, HookEventSubagentStart, HookEventSubagentStop:
+		if len(matcherInputs) == 0 && event == HookEventSessionEnd {
+			// Rust dispatches SessionEnd against SESSION_END_REASON even when the
+			// caller carries no matcher inputs of its own.
+			matcherInputs = []string{sessionEndHookMatcherInput}
+		}
 		if len(matcherInputs) == 0 {
 			return matchesHookMatcher(matcher, compiled, nil)
 		}
@@ -551,7 +561,7 @@ func hookMatches(event HookEventName, matcher *string, compiled *regexp.Regexp, 
 			}
 		}
 		return false
-	case HookEventUserPromptSubmit, HookEventStop, HookEventSessionEnd, HookEventInterrupt:
+	case HookEventUserPromptSubmit, HookEventStop, HookEventInterrupt:
 		return true
 	default:
 		return false

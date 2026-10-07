@@ -960,6 +960,31 @@ func TestHookDiscoveryCompilesRegexMatcherLikeRust(t *testing.T) {
 // omitted mcp_tool input (an empty table is still hashed), the matcher-less events, the
 // SessionEnd/Interrupt timeout default and clamp, and the additionalContextLimit
 // normalization.
+// Rust hooks/src/events/common.rs::matcher_pattern_for_event (SessionEnd arm, added by
+// #33895) keeps the configured matcher for SessionEnd, so the discovered entry reports
+// it verbatim and dispatch can evaluate it against SESSION_END_REASON.
+func TestDiscoveredSessionEndHookKeepsItsMatcher(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "hooks.json"), []byte(`{"hooks":{"SessionEnd":[{"matcher":"clear|other","hooks":[{"type":"command","command":"echo hi"}]}],"Stop":[{"matcher":"clear","hooks":[{"type":"command","command":"echo hi"}]}]}}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	service := &HookDiscoveryService{CodexHome: home}
+	response := service.Discover(&HookListParams{CWDs: []string{t.TempDir()}}, "")
+	if response == nil || len(response.Data) != 1 || len(response.Data[0].Hooks) != 2 {
+		t.Fatalf("response = %+v", response)
+	}
+	hooks := map[HookEventName]*string{}
+	for i := range response.Data[0].Hooks {
+		hooks[response.Data[0].Hooks[i].EventName] = response.Data[0].Hooks[i].Matcher
+	}
+	if matcher := hooks[HookEventSessionEnd]; matcher == nil || *matcher != "clear|other" {
+		t.Fatalf("SessionEnd matcher = %v, want \"clear|other\"", matcher)
+	}
+	if matcher := hooks[HookEventStop]; matcher != nil {
+		t.Fatalf("Stop matcher = %v, want nil (matcher-less event)", matcher)
+	}
+}
+
 func TestHookTrustHashMatchesRustCanonicalFingerprint(t *testing.T) {
 	commandCases := []struct {
 		name        string
