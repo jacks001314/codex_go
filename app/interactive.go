@@ -282,11 +282,44 @@ type interactiveApprovalBroker struct {
 	allowSession bool
 }
 
+// interactiveElicitationBroker owns the in-process MCP elicitation publish/wait
+// path. It mirrors the Rust codex-mcp ElicitationRequestRouter (Rust #51611):
+// a published request keeps exactly one waiter, and when that waiter goes away,
+// response delivery fails, or the broker closes, the prompt is abandoned
+// exactly once so the consumer stops waiting for an answer that can never
+// arrive.
 type interactiveElicitationBroker struct {
 	mu      sync.Mutex
 	next    int
-	pending map[string]chan codextea.ModalResponse
+	closed  bool
+	pending map[string]*pendingInteractiveElicitation
 }
+
+// pendingInteractiveElicitation is one published, unanswered MCP elicitation.
+// send is retained so an abandonment can reach the same consumer the request
+// was published to. abandoned is closed when the request can no longer be
+// answered, which releases the waiting handler.
+type pendingInteractiveElicitation struct {
+	responses  chan codextea.ModalResponse
+	abandoned  chan struct{}
+	send       func(bubbletea.Msg)
+	serverName string
+	requestID  string
+	// published is set once the request event has been handed to the consumer.
+	// It mirrors Rust #51611, which only abandons requests that were actually
+	// published through an abandonment-eligible source.
+	published bool
+}
+
+// ErrInteractiveElicitationClosed reports a request refused after the broker
+// closed during shutdown, mirroring Rust #51611's "reject new requests on
+// unbounded sources" once the router is closing or closed.
+var ErrInteractiveElicitationClosed = errors.New("elicitation request router closed")
+
+// ErrInteractiveElicitationAbandoned reports a published elicitation whose
+// waiter was released without a response, mirroring Rust #51611's abandoned
+// request future.
+var ErrInteractiveElicitationAbandoned = errors.New("elicitation request abandoned")
 
 type interactiveUserInputBroker struct {
 	mu      sync.Mutex
@@ -308,7 +341,7 @@ func newInteractiveApprovalBroker() *interactiveApprovalBroker {
 }
 
 func newInteractiveElicitationBroker() *interactiveElicitationBroker {
-	return &interactiveElicitationBroker{pending: map[string]chan codextea.ModalResponse{}}
+	return &interactiveElicitationBroker{pending: map[string]*pendingInteractiveElicitation{}}
 }
 
 func newInteractiveUserInputBroker() *interactiveUserInputBroker {
@@ -516,11 +549,16 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if send == nil {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 		}
-		id, responses := b.registerRequest()
+		serverName := strings.TrimSpace(request.ServerName)
+		requestID := interactiveMCPRequestID(request)
+		id, responses, entry, err := b.registerRequest(send, serverName, requestID)
+		if err != nil {
+			return nil, err
+		}
 		send(codextea.ElicitationRequestMsg{
 			ID:              id,
-			ServerName:      request.ServerName,
-			RequestID:       interactiveMCPRequestID(request),
+			ServerName:      serverName,
+			RequestID:       requestID,
 			ThreadID:        request.ThreadID,
 			TurnID:          request.TurnID,
 			Message:         request.Message,
@@ -528,14 +566,22 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 			RequestedSchema: request.RequestedSchema,
 			Meta:            interactiveMCPMetaMap(request.Meta),
 		})
+		if !b.markPublished(id, entry) {
+			return nil, ErrInteractiveElicitationAbandoned
+		}
 		if ctx == nil {
 			ctx = context.Background()
 		}
 		select {
 		case response := <-responses:
 			return b.elicitationResponse(response), nil
+		case <-entry.abandoned:
+			return nil, ErrInteractiveElicitationAbandoned
 		case <-ctx.Done():
-			b.forgetRequest(id)
+			// The waiter is dropped: signal the abandonment so the TUI drops a
+			// prompt that can no longer be answered, then report the
+			// cancellation to the caller (Rust #51611).
+			b.abandon(id)
 			return nil, ctx.Err()
 		}
 	}
@@ -546,29 +592,119 @@ func (b *interactiveElicitationBroker) respond(response codextea.ModalResponse) 
 		return
 	}
 	b.mu.Lock()
-	ch := b.pending[response.ID]
+	entry := b.pending[response.ID]
 	delete(b.pending, response.ID)
 	b.mu.Unlock()
-	if ch != nil {
-		ch <- response
-		close(ch)
+	if entry != nil {
+		entry.responses <- response
+		close(entry.responses)
 	}
 }
 
-func (b *interactiveElicitationBroker) registerRequest() (string, <-chan codextea.ModalResponse) {
+func (b *interactiveElicitationBroker) registerRequest(send func(bubbletea.Msg), serverName, requestID string) (string, <-chan codextea.ModalResponse, *pendingInteractiveElicitation, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.closed {
+		return "", nil, nil, ErrInteractiveElicitationClosed
+	}
 	b.next++
 	id := fmt.Sprintf("elicitation-%d", b.next)
 	ch := make(chan codextea.ModalResponse, 1)
-	b.pending[id] = ch
-	return id, ch
+	if b.pending == nil {
+		b.pending = map[string]*pendingInteractiveElicitation{}
+	}
+	entry := &pendingInteractiveElicitation{
+		responses:  ch,
+		abandoned:  make(chan struct{}),
+		send:       send,
+		serverName: serverName,
+		requestID:  requestID,
+	}
+	b.pending[id] = entry
+	return id, ch, entry, nil
 }
 
-func (b *interactiveElicitationBroker) forgetRequest(id string) {
+// markPublished records that a registered request reached its consumer. It
+// mirrors Rust #51611, where an unbounded source only becomes
+// abandonment-eligible after its event is actually sent. If the router closed
+// while the request was being published the request is abandoned instead, and
+// the caller never enters its wait.
+func (b *interactiveElicitationBroker) markPublished(id string, entry *pendingInteractiveElicitation) bool {
+	if b == nil || entry == nil {
+		return false
+	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	if b.pending[id] != entry || b.closed {
+		delete(b.pending, id)
+		b.mu.Unlock()
+		b.release(id, entry)
+		return false
+	}
+	entry.published = true
+	b.mu.Unlock()
+	return true
+}
+
+// abandon removes a still-pending request and tells the consumer it can no
+// longer be answered. It emits exactly once: a request whose response was
+// delivered, or that was already abandoned, is gone from the map, so a late
+// abandonment is a silent no-op (Rust #51611's ElicitationRequestGuard).
+func (b *interactiveElicitationBroker) abandon(id string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	entry := b.pending[id]
 	delete(b.pending, id)
+	b.mu.Unlock()
+	b.release(id, entry)
+}
+
+// release publishes an abandonment for one elected request and unblocks its
+// waiter. Callers must have already removed the entry from the map so the
+// abandonment is emitted at most once.
+func (b *interactiveElicitationBroker) release(id string, entry *pendingInteractiveElicitation) {
+	if entry == nil {
+		return
+	}
+	close(entry.abandoned)
+	if entry.send != nil {
+		entry.send(codextea.ElicitationAbandonedMsg{
+			ID:         id,
+			ServerName: entry.serverName,
+			RequestID:  entry.requestID,
+		})
+	}
+}
+
+// close stops admitting new requests and abandons every pending one, mirroring
+// Rust #51611's ElicitationRequestRouter::close during MCP runtime shutdown.
+// Abandonment delivery is synchronous, so every terminal notification reaches
+// the consumer before close returns.
+func (b *interactiveElicitationBroker) close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	released := map[string]*pendingInteractiveElicitation{}
+	for id, entry := range b.pending {
+		// Only published requests are abandonment-eligible (Rust #51611). A
+		// request still mid-publication is released by its own publisher, which
+		// keeps the request event ordered before its abandonment.
+		if entry != nil && entry.published {
+			released[id] = entry
+			delete(b.pending, id)
+		}
+	}
+	b.mu.Unlock()
+	for id, entry := range released {
+		b.release(id, entry)
+	}
 }
 
 func (b *interactiveElicitationBroker) elicitationResponse(response codextea.ModalResponse) *mcp.MCPElicitationResponse {
@@ -914,6 +1050,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	}
 	approvalBroker := newInteractiveApprovalBroker()
 	elicitationBroker := newInteractiveElicitationBroker()
+	// Rust #51611 closes the elicitation router during MCP runtime shutdown:
+	// pending prompts are abandoned so their waiters never hang, and later
+	// requests are rejected.
+	defer elicitationBroker.close()
 	userInputBroker := newInteractiveUserInputBroker()
 	interrupts := newInteractiveInterruptController()
 	readGoal, setGoal, clearGoal, editGoalText, materializeGoalDraft := interactiveLocalGoalCallbacks(nil)

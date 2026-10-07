@@ -24,6 +24,37 @@ type ElicitationRequestMsg struct {
 	Meta            map[string]any
 }
 
+// ElicitationAbandonedMsg tells the TUI that a published MCP elicitation it is
+// displaying can no longer be answered. It mirrors Rust #51611's
+// EventMsg::ElicitationAbandoned: the request lost its response waiter,
+// response delivery failed, or the MCP runtime shut down, so the consumer
+// stops offering a prompt whose answer would never be read.
+type ElicitationAbandonedMsg struct {
+	ID         string
+	ServerName string
+	RequestID  string
+}
+
+// applyElicitationAbandoned dismisses the elicitation modal matching an
+// abandoned request. The modal id is the one the publisher chose
+// (firstNonEmpty(ID, RequestID)), so either identifier may match. Any other
+// modal is left untouched so an abandonment can never close an unrelated
+// prompt. No response is produced: the waiter that would consume it is gone
+// (Rust #51611 abandons without delivering a response).
+func (m *Model) applyElicitationAbandoned(message ElicitationAbandonedMsg) bubbletea.Cmd {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindElicitation {
+		return nil
+	}
+	modalID := strings.TrimSpace(m.modal.id)
+	for _, candidate := range []string{message.ID, message.RequestID} {
+		if candidate = strings.TrimSpace(candidate); candidate != "" && candidate == modalID {
+			m.modal = nil
+			return nil
+		}
+	}
+	return nil
+}
+
 func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cmd {
 	title := strings.TrimSpace(message.Title)
 	if title == "" {

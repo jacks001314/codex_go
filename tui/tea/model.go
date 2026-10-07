@@ -2829,6 +2829,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.openApprovalModal(msg)
 	case ElicitationRequestMsg:
 		return m, m.openElicitationModal(msg)
+	case ElicitationAbandonedMsg:
+		return m, m.applyElicitationAbandoned(msg)
 	case RequestUserInputMsg:
 		return m, m.openRequestUserInputModal(msg)
 	case requestUserInputTimeoutMsg:

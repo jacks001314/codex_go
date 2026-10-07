@@ -2831,6 +2831,12 @@ func (c *remoteAppServerTUIClient) connect(ctx context.Context) error {
 }
 
 func (c *remoteAppServerTUIClient) close() {
+	// Rust #51611 closes the elicitation router on MCP runtime shutdown: any
+	// prompt still waiting is abandoned so a dropped connection never leaves
+	// the TUI offering a request that can no longer be answered.
+	if c != nil {
+		c.brokers.elicitation.close()
+	}
 	if c != nil && c.transport != nil {
 		c.transport.close()
 	}
@@ -3409,15 +3415,20 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	if c == nil || c.brokers.elicitation == nil || c.messages == nil {
 		return &appserver.MCPElicitationRequestResponse{Action: appserver.MCPElicitationActionCancel}, nil
 	}
-	id, responses := c.brokers.elicitation.registerRequest()
+	serverName := remoteMCPServerName(params)
+	requestID := remoteMCPElicitationID(params)
+	id, responses, entry, err := c.brokers.elicitation.registerRequest(func(message bubbletea.Msg) { c.send(message) }, serverName, requestID)
+	if err != nil {
+		return nil, err
+	}
 	turnID := ""
 	if params != nil && params.TurnID != nil {
 		turnID = strings.TrimSpace(*params.TurnID)
 	}
 	c.send(codextea.ElicitationRequestMsg{
 		ID:              id,
-		ServerName:      remoteMCPServerName(params),
-		RequestID:       remoteMCPElicitationID(params),
+		ServerName:      serverName,
+		RequestID:       requestID,
 		ThreadID:        strings.TrimSpace(params.ThreadID),
 		TurnID:          turnID,
 		Message:         strings.TrimSpace(params.Message),
@@ -3425,14 +3436,22 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 		RequestedSchema: remoteMCPSchema(params),
 		Meta:            interactiveMCPMetaMap(params.Meta),
 	})
+	if !c.brokers.elicitation.markPublished(id, entry) {
+		return nil, ErrInteractiveElicitationAbandoned
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case response := <-responses:
 		return remoteMCPElicitationResponse(response), nil
+	case <-entry.abandoned:
+		return nil, ErrInteractiveElicitationAbandoned
 	case <-ctx.Done():
-		c.brokers.elicitation.forgetRequest(id)
+		// The waiter is dropped: abandon the published prompt exactly once so
+		// the TUI stops offering an answer that can no longer be delivered
+		// (Rust #51611).
+		c.brokers.elicitation.abandon(id)
 		return nil, ctx.Err()
 	}
 }
