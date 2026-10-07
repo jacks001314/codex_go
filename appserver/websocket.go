@@ -156,6 +156,12 @@ func prepareSharedStateRuntime(ctx context.Context, codexHome string, options *R
 	if options != nil {
 		*prepared = *options
 	}
+	// Corruption is detected inside the database opener, before the router is
+	// constructed, so the metrics sink is chosen here and reused for every later
+	// metric on this router (Rust #49701).
+	if prepared.DBCorruptionMetrics == nil {
+		prepared.DBCorruptionMetrics = state.NewTaskMetrics()
+	}
 	if prepared.StateRuntime != nil {
 		if prepared.EnableLogDB && prepared.logDBInstallation == nil {
 			prepared.logDBInstallation = state.InstallLogDBHandler(prepared.StateRuntime)

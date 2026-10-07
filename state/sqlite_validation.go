@@ -142,6 +142,20 @@ func (c SqliteConfig) quickCheckDatabase(ctx context.Context, db *sql.DB, path s
 	return c.quickCheck.quickCheckOnce(ctx, db, path, DefaultQuickCheckBudget)
 }
 
+// DBCorruptionMetric is the counter Rust `record_corruption` writes for a
+// confirmed `PRAGMA quick_check(1)` finding, tagged with the database kind.
+const DBCorruptionMetric = "codex.sqlite.corruption.count"
+
+// recordDBCorruption mirrors Rust `telemetry::record_corruption`: the tag is the
+// database kind, so memories v2 reports `memories` (it inherits the memories
+// spec) and no `memories_v2` or `queue` value exists in Go.
+func recordDBCorruption(metrics *TaskMetrics, kind RuntimeDBKind) {
+	if metrics == nil {
+		return
+	}
+	metrics.Counter(DBCorruptionMetric, 1, map[string]string{"db": string(kind)})
+}
+
 func logQuickCheckCorruption(path string, label string) {
 	slog.Error("sqlite quick check detected corruption", "database", path, "label", label)
 }

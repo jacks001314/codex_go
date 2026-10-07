@@ -150,6 +150,9 @@ func (c SqliteConfig) openRuntimeDB(ctx context.Context, spec runtimeDBSpec) (*s
 	}
 	if outcome == QuickCheckCorruptedNeedsFixed {
 		logQuickCheckCorruption(path, spec.label)
+		// Rust records the finding before the policy branch, so a report-only
+		// database (thread history) is counted even though it is not rebuilt.
+		recordDBCorruption(c.corruptionMetrics, spec.kind)
 		if spec.recovery == dbRecoveryBackupAndRebuild {
 			// Preserve the damaged files, then reconnect so the runtime rebuilds
 			// the database from scratch (Rust `open_read_write_pool_with_spec`).

@@ -50,6 +50,19 @@ type RuntimeDBPath struct {
 type SqliteConfig struct {
 	sqliteHome string
 	quickCheck *sqliteQuickCheckManager
+	// corruptionMetrics receives confirmed `PRAGMA quick_check(1)` findings.
+	// Rust threads a `telemetry_override` into `open_read_write_pool_with_spec`
+	// and calls `record_corruption` for both recovery branches (upstream
+	// 3620b2caf8 / #49701, `codex.sqlite.corruption.count`).
+	corruptionMetrics *TaskMetrics
+}
+
+// WithCorruptionMetrics returns a copy whose confirmed corruption findings are
+// recorded through metrics. A nil sink records nothing, matching callers that
+// have no telemetry sink installed.
+func (c SqliteConfig) WithCorruptionMetrics(metrics *TaskMetrics) SqliteConfig {
+	c.corruptionMetrics = metrics
+	return c
 }
 
 func NewSqliteConfig(sqliteHome string) (SqliteConfig, error) {

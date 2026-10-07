@@ -223,6 +223,7 @@ type RuntimeRouterOptions struct {
 	// EnvironmentManager::from_codex_home.
 	EnvironmentProviderSnapshot         *execserver.EnvironmentProviderSnapshot
 	StateRuntime                        *state.StateRuntime
+	DBCorruptionMetrics                 *state.TaskMetrics
 	EnableLogDB                         bool
 	logDBInstallation                   *state.LogDBInstallation
 	closeStateRuntimeOnRouterClose      bool
@@ -231,6 +232,7 @@ type RuntimeRouterOptions struct {
 
 type RuntimeRouter struct {
 	services              RuntimeServices
+	metrics               *state.TaskMetrics
 	config                *config.ConfigService
 	threads               *ThreadManager
 	servicesMu            sync.Mutex
@@ -1270,6 +1272,12 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	pluginService := plugin.NewPluginService()
 	pluginService.SetCodexHome(codexHome)
 	runtimeMetrics := state.NewTaskMetrics()
+	if options != nil && options.DBCorruptionMetrics != nil {
+		// Reuse the sink that was installed before the state runtime was opened
+		// so startup corruption telemetry and later SQLite telemetry share one
+		// instance (Rust #49701 records corruption inside the pool opener).
+		runtimeMetrics = options.DBCorruptionMetrics
+	}
 	// Rust records the curated-plugin startup-sync counters from the sync
 	// itself; the plugin package reports them through this observer.
 	pluginService.SetCuratedSyncMetricsObserver(func(sample plugin.CuratedSyncMetrics) {
@@ -1372,6 +1380,10 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		_ = services.Environment.ApplyProviderSnapshot(*options.EnvironmentProviderSnapshot)
 	}
 	router := NewRuntimeRouter(services)
+	// The metrics sink is created before the state runtime is opened so startup
+	// SQLite corruption telemetry and later metrics share one instance
+	// (Rust #49701 `codex.sqlite.corruption.count`).
+	router.metrics = runtimeMetrics
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
@@ -1394,6 +1406,15 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	return router
 }
 
+// taskMetrics exposes the router's metrics sink. Startup corruption telemetry
+// must record into this instance (Rust #49701).
+func (r *RuntimeRouter) taskMetrics() *state.TaskMetrics {
+	if r == nil {
+		return nil
+	}
+	return r.metrics
+}
+
 func (r *RuntimeRouter) StartupError() error {
 	if r == nil {
 		return errors.New("app-server runtime router is not configured")
@@ -1408,6 +1429,9 @@ func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *
 	sqliteConfig, err := state.SqliteConfigForCodexHomeWithOverride(codexHome, sqliteHomeOverride)
 	if err != nil {
 		return nil, false, err
+	}
+	if options != nil && options.DBCorruptionMetrics != nil {
+		sqliteConfig = sqliteConfig.WithCorruptionMetrics(options.DBCorruptionMetrics)
 	}
 	runtime, err := initStateRuntimeWithFreshStartOnCorruption(ctx, sqliteConfig, "openai")
 	if err != nil {
