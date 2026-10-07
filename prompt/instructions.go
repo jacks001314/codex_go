@@ -581,24 +581,33 @@ func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata,
 		}
 	}
 
+	// Rust #51482 keys these implicit-skill maps by PathUri
+	// (SkillLoadOutcome::implicit_skills_by_doc_path / implicit_skills_by_scripts_dir
+	// in ext/skills/src/host_outcome.rs): equivalent Windows case and separator
+	// spellings must resolve the same skill, while POSIX case stays significant.
 	byScriptsDir := make(map[string]InstructionsSkillMetadata, len(skills))
 	bySkillDocPath := make(map[string]InstructionsSkillMetadata, len(skills))
 	for _, skill := range skills {
 		if skill.Path == "" || strings.Contains(skill.Path, "://") {
 			continue
 		}
-		docPath := canonicalizeImplicitSkillPath(skill.Path)
-		bySkillDocPath[docPath] = skill
-		scriptsDir := canonicalizeImplicitSkillPath(filepath.Join(filepath.Dir(skill.Path), "scripts"))
-		byScriptsDir[scriptsDir] = skill
+		docKey := implicitSkillIdentityKey(skill.Path)
+		if docKey == "" {
+			continue
+		}
+		bySkillDocPath[docKey] = skill
+		if scriptsKey := implicitSkillIdentityKey(filepath.Join(filepath.Dir(skill.Path), "scripts")); scriptsKey != "" {
+			byScriptsDir[scriptsKey] = skill
+		}
 	}
 
 	if scriptToken := implicitSkillScriptToken(tokens); scriptToken != "" {
-		scriptPath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, scriptToken))
-		for path := scriptPath; ; path = filepath.Dir(path) {
-			if skill, ok := byScriptsDir[path]; ok {
-				copied := skill
-				return &copied
+		for path := resolveImplicitSkillPath(workdir, scriptToken); ; path = filepath.Dir(path) {
+			if key := implicitSkillIdentityKey(path); key != "" {
+				if skill, ok := byScriptsDir[key]; ok {
+					copied := skill
+					return &copied
+				}
 			}
 			parent := filepath.Dir(path)
 			if parent == path {
@@ -607,21 +616,72 @@ func DetectImplicitSkillInvocationForCommand(skills []InstructionsSkillMetadata,
 		}
 	}
 
+	docPathMatches := func(candidate string) *InstructionsSkillMetadata {
+		key := implicitSkillIdentityKey(candidate)
+		if key == "" {
+			return nil
+		}
+		skill, ok := bySkillDocPath[key]
+		if !ok {
+			return nil
+		}
+		copied := skill
+		return &copied
+	}
+
 	for _, path := range codexshell.ReadPaths(tokens) {
-		candidatePath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, path))
-		if skill, ok := bySkillDocPath[candidatePath]; ok {
-			copied := skill
-			return &copied
+		if skill := docPathMatches(resolveImplicitSkillPath(workdir, path)); skill != nil {
+			return skill
 		}
 	}
 	if path := powershellGetContentSkillPath(command); path != "" {
-		candidatePath := canonicalizeImplicitSkillPath(resolveImplicitSkillPath(workdir, path))
-		if skill, ok := bySkillDocPath[candidatePath]; ok {
-			copied := skill
-			return &copied
+		if skill := docPathMatches(resolveImplicitSkillPath(workdir, path)); skill != nil {
+			return skill
 		}
 	}
 	return nil
+}
+
+// implicitSkillIdentityKey reduces an implicit-invocation candidate path to the
+// path identity used as its map key.
+//
+// Rust #51482 stores SkillLoadOutcome's implicit skill maps as
+// HashMap<PathUri, SkillMetadata> and keys them with
+// PathUri::from_abs_path(&canonicalize_if_exists(path)): a path without a
+// host-absolute form never enters the maps (the `let Ok(path) = ...to_abs_path()
+// else { continue }` gate), host paths resolve through symlinks first, and
+// equality is PathUri identity so equivalent Windows case and separator
+// spellings agree.
+func implicitSkillIdentityKey(path string) string {
+	hostPath, ok := implicitSkillHostPath(path)
+	if !ok {
+		return ""
+	}
+	return skillPathIdentity(hostPath)
+}
+
+// implicitSkillHostPath returns the host-resolvable absolute spelling of a
+// candidate path, or ok=false when it has none (a foreign convention such as
+// Windows text observed on a POSIX host).
+func implicitSkillHostPath(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(trimmed); err == nil {
+		trimmed = resolved
+	}
+	if uri, ok := utils.InferredPathURI(trimmed); ok && uri != nil {
+		if _, err := uri.HostNativePath(); err != nil {
+			return "", false
+		}
+		return filepath.Clean(trimmed), true
+	}
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", false
+	}
+	return filepath.Clean(absolute), true
 }
 
 // powershellGetContentSkillPath recognizes the PowerShell `Get-Content`

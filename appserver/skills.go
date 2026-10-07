@@ -49,30 +49,30 @@ type SkillsListEntry struct {
 	Skills []SkillsListEntry `json:"skills,omitempty"`
 	Errors []SkillErrorInfo  `json:"errors,omitempty"`
 
-	Name             string             `json:"name,omitempty"`
-	Path             string             `json:"path,omitempty"`
-	DisplayPath      string             `json:"-"`
-	DiscoveryPath    string             `json:"-"`
-	Scope            string             `json:"scope,omitempty"`
-	Description      string             `json:"description,omitempty"`
-	ShortDescription string             `json:"shortDescription,omitempty"`
-	Interface        *SkillInterface    `json:"interface,omitempty"`
-	Dependencies     *SkillDependencies `json:"dependencies,omitempty"`
-	Enabled          bool               `json:"enabled"`
-	PluginID         string             `json:"-"`
-	RemotePluginID   string             `json:"-"`
-	Policy           *SkillPolicy       `json:"-"`
-	Contents         string             `json:"-"`
-	Root             string             `json:"-"`
-	RootOrder        int                `json:"-"`
-	HasRootOrder     bool               `json:"-"`
-	ApplicableCWDs   []string           `json:"-"`
-	AuthorityKind    string             `json:"-"`
-	AuthorityID      string             `json:"-"`
-	PackageID        string             `json:"-"`
-	ResourceID       string             `json:"-"`
-	EnvironmentID    string             `json:"-"`
-	SourcePath       string             `json:"-"`
+	Name             string              `json:"name,omitempty"`
+	Path             LegacyAppPathString `json:"path,omitempty"`
+	DisplayPath      string              `json:"-"`
+	DiscoveryPath    string              `json:"-"`
+	Scope            string              `json:"scope,omitempty"`
+	Description      string              `json:"description,omitempty"`
+	ShortDescription string              `json:"shortDescription,omitempty"`
+	Interface        *SkillInterface     `json:"interface,omitempty"`
+	Dependencies     *SkillDependencies  `json:"dependencies,omitempty"`
+	Enabled          bool                `json:"enabled"`
+	PluginID         string              `json:"-"`
+	RemotePluginID   string              `json:"-"`
+	Policy           *SkillPolicy        `json:"-"`
+	Contents         string              `json:"-"`
+	Root             string              `json:"-"`
+	RootOrder        int                 `json:"-"`
+	HasRootOrder     bool                `json:"-"`
+	ApplicableCWDs   []string            `json:"-"`
+	AuthorityKind    string              `json:"-"`
+	AuthorityID      string              `json:"-"`
+	PackageID        string              `json:"-"`
+	ResourceID       string              `json:"-"`
+	EnvironmentID    string              `json:"-"`
+	SourcePath       string              `json:"-"`
 }
 
 func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
@@ -99,14 +99,14 @@ func (e *SkillsListEntry) MarshalJSON() ([]byte, error) {
 		})
 	}
 	return json.Marshal(struct {
-		Name             string             `json:"name"`
-		Description      string             `json:"description"`
-		ShortDescription string             `json:"shortDescription,omitempty"`
-		Interface        *SkillInterface    `json:"interface,omitempty"`
-		Dependencies     *SkillDependencies `json:"dependencies,omitempty"`
-		Path             string             `json:"path"`
-		Scope            string             `json:"scope"`
-		Enabled          bool               `json:"enabled"`
+		Name             string              `json:"name"`
+		Description      string              `json:"description"`
+		ShortDescription string              `json:"shortDescription,omitempty"`
+		Interface        *SkillInterface     `json:"interface,omitempty"`
+		Dependencies     *SkillDependencies  `json:"dependencies,omitempty"`
+		Path             LegacyAppPathString `json:"path"`
+		Scope            string              `json:"scope"`
+		Enabled          bool                `json:"enabled"`
 	}{
 		Name:             e.Name,
 		Description:      e.Description,

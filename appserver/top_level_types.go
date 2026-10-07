@@ -3,6 +3,14 @@ package appserver
 import "encoding/json"
 
 type AbsolutePathBuf = string
+
+// LegacyAppPathString is a native path string carried on the app-server wire.
+// Rust #51482 moved the skill protocol surface (SkillMetadata.path /
+// SkillSummary.path / PluginReadResponse skills) from AbsolutePathBuf to
+// LegacyAppPathString so native spellings round-trip unchanged; Go's wire field
+// was already a plain native string, so this alias names the same type rather
+// than introducing validation.
+type LegacyAppPathString = string
 type ThreadId = string
 type GitSha = string
 type RequestId = RequestID

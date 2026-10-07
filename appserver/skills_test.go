@@ -1664,3 +1664,37 @@ func TestApplyConfigDisablesSkillByPathIdentityLikeRust(t *testing.T) {
 		t.Fatalf("dedupeSkillsByPath = %#v, want one entry for two spellings", deduped)
 	}
 }
+
+// TestSkillsListEntryPathIsLegacyAppPathStringLikeRust pins Rust #51482's
+// protocol surface change: `SkillMetadata.path` / `SkillSummary.path` are
+// `LegacyAppPathString` (the JSON schema and TypeScript bindings swapped
+// `AbsolutePathBuf` for it), so the app-server emits the native spelling
+// unchanged — no URI re-encoding, no absolute-path validation — and that wire
+// spelling still resolves to the document's path identity.
+func TestSkillsListEntryPathIsLegacyAppPathStringLikeRust(t *testing.T) {
+	for _, native := range []string{
+		`C:\Skills\demo skill%23\SKILL.md`,
+		"C:/Skills/Demo/SKILL.md",
+		"/tmp/demo skill#/SKILL.md",
+		"environment://remote/skills/demo%20app/SKILL.md",
+	} {
+		response := skillsListResponse(
+			[]SkillsListEntry{{Name: "demo", Path: native, Scope: "user", Enabled: true}},
+			nil, nil, nil,
+		)
+		encoded, err := json.Marshal(response)
+		if err != nil {
+			t.Fatalf("json.Marshal(%q) error = %v", native, err)
+		}
+		want, err := json.Marshal(native)
+		if err != nil {
+			t.Fatalf("json.Marshal(%q) error = %v", native, err)
+		}
+		if !strings.Contains(string(encoded), string(want)) {
+			t.Fatalf("wire path for %q was rewritten: %s", native, encoded)
+		}
+		if key := skillPathIdentityKey(native); key == "" {
+			t.Fatalf("skillPathIdentityKey(%q) = empty; wire paths must resolve to an identity", native)
+		}
+	}
+}

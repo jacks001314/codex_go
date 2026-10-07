@@ -482,3 +482,78 @@ func TestCollectExplicitSkillMentionsKeepsPosixCaseSensitivityLikeRust(t *testin
 		}
 	}
 }
+
+// TestDetectImplicitSkillInvocationForCommandMatchesPathIdentityLikeRust mirrors
+// Rust #51482's implicit-skill maps (`SkillLoadOutcome::implicit_skills_by_doc_path`
+// / `implicit_skills_by_scripts_dir` in `ext/skills/src/host_outcome.rs`, consulted
+// through `implicit_skill_for_doc_path` / `implicit_skill_for_scripts_dir`): they are
+// `HashMap<PathUri, SkillMetadata>` keyed by `PathUri::from_abs_path` over the
+// host-resolvable spelling (`to_abs_path()` gates out paths with no host-absolute
+// form), host paths resolve through symlinks first, and equality is path identity
+// rather than raw text.
+func TestDetectImplicitSkillInvocationForCommandMatchesPathIdentityLikeRust(t *testing.T) {
+	root := t.TempDir()
+	percentDir := filepath.Join(root, "demo%23skill")
+	fragmentDir := filepath.Join(root, "demo#skill")
+	for _, dir := range []string{percentDir, fragmentDir} {
+		if err := os.MkdirAll(filepath.Join(dir, "scripts"), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("skill"), 0o600); err != nil {
+			t.Fatalf("WriteFile(SKILL.md) error = %v", err)
+		}
+	}
+	skills := []InstructionsSkillMetadata{
+		{Name: "percent-skill", Path: filepath.Join(percentDir, "SKILL.md")},
+		{Name: "fragment-skill", Path: filepath.Join(fragmentDir, "SKILL.md")},
+	}
+
+	// Literal `%23` and `#` in native filenames stay distinct documents.
+	for _, tc := range []struct{ command, want string }{
+		{command: "cat " + filepath.Join(percentDir, "SKILL.md"), want: "percent-skill"},
+		{command: "cat " + filepath.Join(fragmentDir, "SKILL.md"), want: "fragment-skill"},
+		// A dot-segment spelling of a host path resolves the same document.
+		{command: "cat " + filepath.Join(root, ".", "demo%23skill", "SKILL.md"), want: "percent-skill"},
+	} {
+		got := DetectImplicitSkillInvocationForCommand(skills, tc.command, root)
+		if got == nil || got.Name != tc.want {
+			t.Fatalf("DetectImplicitSkillInvocationForCommand(%q) = %#v, want %s", tc.command, got, tc.want)
+		}
+	}
+
+	// A symlinked spelling of the host path resolves the same document and its
+	// scripts directory.
+	linkDir := filepath.Join(root, "linked-skill")
+	if err := os.Symlink(percentDir, linkDir); err != nil {
+		t.Skipf("Symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(percentDir, "scripts", "run.py"), []byte("print(1)"), 0o600); err != nil {
+		t.Fatalf("WriteFile(script) error = %v", err)
+	}
+	for _, tc := range []struct{ name, command string }{
+		{name: "symlinked document", command: "cat " + filepath.Join(linkDir, "SKILL.md")},
+		{name: "symlinked scripts dir", command: "python3 " + filepath.Join(linkDir, "scripts", "run.py")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DetectImplicitSkillInvocationForCommand(skills, tc.command, root)
+			if got == nil || got.Name != "percent-skill" {
+				t.Fatalf("DetectImplicitSkillInvocationForCommand(%q) = %#v, want percent-skill", tc.command, got)
+			}
+		})
+	}
+
+	// POSIX paths stay case-sensitive.
+	cased := []InstructionsSkillMetadata{{Name: "demo-skill", Path: filepath.Join(root, "Demo", "SKILL.md")}}
+	if got := DetectImplicitSkillInvocationForCommand(cased, "cat "+filepath.Join(root, "demo", "SKILL.md"), root); got != nil {
+		t.Fatalf("case-insensitive POSIX match = %#v, want none", got)
+	}
+
+	// A foreign spelling has no host-absolute form on a POSIX host, so Rust's
+	// `to_abs_path()` gate keeps it out of the implicit maps entirely.
+	if runtime.GOOS != "windows" {
+		foreign := []InstructionsSkillMetadata{{Name: "windows-skill", Path: `C:\Skills\Demo\SKILL.md`}}
+		if got := DetectImplicitSkillInvocationForCommand(foreign, `cat C:\Skills\Demo\SKILL.md`, `C:\Project`); got != nil {
+			t.Fatalf("foreign spelling matched on a %s host: %#v", runtime.GOOS, got)
+		}
+	}
+}
