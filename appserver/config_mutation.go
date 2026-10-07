@@ -7,6 +7,7 @@ package appserver
 // loaded thread is refreshed.
 
 import (
+	"log/slog"
 	"strings"
 
 	"codex_go/config"
@@ -74,7 +75,11 @@ func (r *RuntimeRouter) reloadUserConfigForLoadedThreads() {
 		return
 	}
 	if _, err := r.services.Config.Read(&config.ConfigReadParams{}); err != nil {
-		// Rust warns and keeps the previous runtime configuration.
+		// Rust reload_user_config_inner (#49260): a user configuration that
+		// cannot be rebuilt leaves every loaded session with enterprise MCP
+		// disabled rather than silently keeping its enterprise authority.
+		slog.Warn("failed to rebuild user config for runtime refresh", "error", err)
+		r.disableMCPEnterpriseAuthForLoadedThreads()
 		return
 	}
 	r.configureMCPFromConfig()

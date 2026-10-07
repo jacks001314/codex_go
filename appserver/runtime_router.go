@@ -321,29 +321,34 @@ type RuntimeRouter struct {
 	threadSessionSpans   map[string]*telemetry.Span
 	// shellSnapshots holds each live session's shell-snapshot builder (Rust
 	// keeps one ShellSnapshot per session and drops it with the session).
-	shellSnapshotsMu      sync.Mutex
-	shellSnapshots        map[string]*tool.SnapshotBuilder
-	mcpEventStreams       *mcpEventStreamManager
-	skillShadowMu         sync.Mutex
-	skillShadowState      map[string]*skillShadowThreadState
-	startupPrewarmMu      sync.Mutex
-	startupPrewarms       map[string]*startupPrewarmState
-	mcpRuntimes           *mcpRuntimeCoordinator
-	mcpConfigManaged      atomic.Bool
-	loginRuntimeMu        sync.Mutex
-	loginRuntimeCancels   map[string]context.CancelFunc
-	approvalSessionsMu    sync.RWMutex
-	commandApprovals      map[string]struct{}
-	fileApprovals         map[string]struct{}
-	serverRequestGuardsMu sync.Mutex
-	serverRequestGuards   map[string]*ThreadStatusActiveGuard
-	executedToolCallsMu   sync.Mutex
-	executedToolCalls     map[string]*turn.ExecutedToolCallRecorder
-	newContextWindowMu    sync.Mutex
-	newContextWindowReq   map[string]bool
-	contextWindowMu       sync.Mutex
-	contextWindowIDs      map[string]string
-	windowNumbers         map[string]uint64
+	shellSnapshotsMu sync.Mutex
+	shellSnapshots   map[string]*tool.SnapshotBuilder
+	mcpEventStreams  *mcpEventStreamManager
+	skillShadowMu    sync.Mutex
+	skillShadowState map[string]*skillShadowThreadState
+	startupPrewarmMu sync.Mutex
+	startupPrewarms  map[string]*startupPrewarmState
+	mcpRuntimes      *mcpRuntimeCoordinator
+	mcpConfigManaged atomic.Bool
+	// mcpConfigMu guards mcpAppliedRuntimeConfig, the process-wide runtime MCP
+	// configuration that was last published. A failed refresh republishes it
+	// with enterprise MCP disabled (Rust #49260 fail-closed reload).
+	mcpConfigMu             sync.Mutex
+	mcpAppliedRuntimeConfig *mcp.RuntimeConfig
+	loginRuntimeMu          sync.Mutex
+	loginRuntimeCancels     map[string]context.CancelFunc
+	approvalSessionsMu      sync.RWMutex
+	commandApprovals        map[string]struct{}
+	fileApprovals           map[string]struct{}
+	serverRequestGuardsMu   sync.Mutex
+	serverRequestGuards     map[string]*ThreadStatusActiveGuard
+	executedToolCallsMu     sync.Mutex
+	executedToolCalls       map[string]*turn.ExecutedToolCallRecorder
+	newContextWindowMu      sync.Mutex
+	newContextWindowReq     map[string]bool
+	contextWindowMu         sync.Mutex
+	contextWindowIDs        map[string]string
+	windowNumbers           map[string]uint64
 	// restoredWindows records the threads whose persisted window state was
 	// already loaded from their record (Rust restores the compacted item's
 	// window_number/window_ids when a thread resumes).
@@ -10536,26 +10541,45 @@ func (r *RuntimeRouter) handleMCPServerOauthCancel(request *Request) (*mcp.MCPSe
 }
 
 func (r *RuntimeRouter) handleMCPServerRefresh(request *Request) (*mcp.MCPServerRefreshResponse, error) {
+	var reloadErr error
 	if request != nil && request.Method == MethodConfigMCPServerReload {
-		r.configureMCPFromConfig()
+		// Rust config/mcpServer/reload runs the strict MCP reload, which reports
+		// an unloadable or rejected configuration to its caller (#49260).
+		reloadErr = r.reloadMCPConfigStrict()
 	}
 	response := r.requireMCP().Refresh()
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.refreshAll()
 	}
-	return response, nil
+	// Rust finishes publishing every refresh - including the fail-closed
+	// configuration - before a strict reload reports the failure, so an error
+	// can accompany partially applied changes.
+	return response, reloadErr
 }
 
 func (r *RuntimeRouter) configureMCPFromConfig() {
+	if err := r.configureMCPFromConfigChecked(); err != nil {
+		slog.Warn("failed to apply MCP configuration", "error", err)
+	}
+}
+
+// configureMCPFromConfigChecked re-reads the configuration and publishes the
+// process-wide runtime MCP configuration. It returns the load error (Rust
+// #49260) so a reload can fail closed and report it instead of silently keeping
+// the previous enterprise MCP authority.
+func (r *RuntimeRouter) configureMCPFromConfigChecked() error {
 	if r == nil || r.services.Config == nil {
-		return
+		return nil
 	}
 	if err := r.services.Config.ReloadRequirementsFromHome(); err != nil {
 		slog.Warn("failed to reload managed MCP requirements", "error", err)
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{})
-	if err != nil || read == nil {
-		return
+	if err != nil {
+		return err
+	}
+	if read == nil {
+		return nil
 	}
 	var snapshot *auth.AuthDotJSON
 	var runtimeAuth *mcp.RuntimeAuth
@@ -10581,7 +10605,9 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 	if current := r.services.Config.Requirements(); current != nil {
 		requirements = current.Requirements
 	}
-	r.requireMCP().ApplyRuntimeConfig(r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements))
+	appliedRuntimeConfig := r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements)
+	r.requireMCP().ApplyRuntimeConfig(appliedRuntimeConfig)
+	r.rememberAppliedMCPRuntimeConfig(appliedRuntimeConfig)
 	if snapshot != nil {
 		httpClient := r.httpClientForConfig(&config.Config{Values: read.Config})
 		r.requireMCP().SetTrustedAccess(mcp.ServiceTrustedAccessFromSnapshot(snapshot, r.chatGPTBaseURL(), httpClient))
@@ -10591,6 +10617,7 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 		r.mcpRuntimes.invalidateAll()
 	}
 	r.prewarmLoadedMCPThreads()
+	return nil
 }
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
