@@ -1953,34 +1953,102 @@ func interactiveEffectsSettings(values map[string]any) *codextea.EffectsSettings
 	}
 }
 
-// interactiveEmbeddedReasoningOverrides mirrors Rust new_thread_reasoning_overrides
-// (#43921, #46533) for the embedded TUI: new threads default to no reasoning
-// summaries, and concurrent reasoning summaries stay opt-in and are disabled
-// when summaries are off. The effective `model_reasoning_summary` config value
-// wins when set, and enabling `concurrent_reasoning_summaries` alone no longer
-// turns summaries on.
-func interactiveEmbeddedReasoningOverrides(root *cli.RootOptions) []string {
+// interactiveLaunchReasoningOverrides mirrors Rust #50811
+// (afb436df8b, codex-rs/tui/src/app_server_session.rs::config_request_overrides_from_config)
+// for the embedded TUI: reasoning summaries are no longer forced off for new
+// threads. Only an explicit launch choice may replace the destination server's
+// or the model's reasoning-summary configuration, and a launch choice is
+// forwarded whether it enables or disables summaries:
+//
+//   - a generic `-c key=value` override, or
+//   - a profile-scoped user config value that supplies the winning value
+//     (Rust `is_launch`: ConfigLayerSource::SessionFlags | User { profile: Some }).
+//
+// Keys without a launch origin are omitted entirely, so the server and model
+// defaults decide. Rust test:
+// app/tests/new_session_tests.rs::replacement_uses_server_defaults_and_preserves_explicit_launch_settings.
+func interactiveLaunchReasoningOverrides(root *cli.RootOptions) []string {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
 		return nil
 	}
-	summary := ""
-	if value, ok := loaded.Values["model_reasoning_summary"].(string); ok {
-		summary = strings.TrimSpace(value)
+	read, err := interactiveConfigService(root).Read(&config.ConfigReadParams{IncludeLayers: true})
+	if err != nil || read == nil {
+		return nil
 	}
-	if summary == "" {
-		summary = "none"
+	// The effective values carry the generic `-c` overrides and the selected
+	// profile; the layer stack identifies which of them were launch choices.
+	values := loaded.Values
+	layers := read.Layers
+	cliKeys := remoteCLIConfigOverrideKeys(root)
+	overrides := []string{}
+	for _, key := range []string{"model_reasoning_summary", "model_verbosity"} {
+		if !launchSettingForKey(layers, cliKeys, key) {
+			continue
+		}
+		value, ok := values[key].(string)
+		if !ok {
+			continue
+		}
+		if value = strings.TrimSpace(value); value == "" {
+			continue
+		}
+		overrides = append(overrides, key+"="+value)
 	}
-	explicitConcurrent := false
-	if features, ok := loaded.Values["features"].(map[string]any); ok {
-		if value, ok := features["concurrent_reasoning_summaries"].(bool); ok {
-			explicitConcurrent = value
+	if launchSettingForKey(layers, cliKeys, "features.concurrent_reasoning_summaries") {
+		if features, ok := values["features"].(map[string]any); ok {
+			if value, ok := features["concurrent_reasoning_summaries"].(bool); ok {
+				overrides = append(overrides, fmt.Sprintf("features.concurrent_reasoning_summaries=%t", value))
+			}
 		}
 	}
-	return []string{
-		"model_reasoning_summary=" + summary,
-		fmt.Sprintf("features.concurrent_reasoning_summaries=%t", explicitConcurrent && !strings.EqualFold(summary, "none")),
+	return overrides
+}
+
+// launchSettingForKey reports whether `key` is an explicit launch choice in the
+// Rust #50811 sense. `key` may be a dotted path (the concurrent-summary
+// feature), which config.HasLaunchSetting does not resolve, so the layer walk
+// happens here and keeps Rust's winning-layer predicate.
+func launchSettingForKey(layers []config.Layer, cliKVOverrides []string, key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
 	}
+	for _, override := range cliKVOverrides {
+		if strings.TrimSpace(override) == key {
+			return true
+		}
+	}
+	for index := len(layers) - 1; index >= 0; index-- {
+		values, ok := layers[index].Config.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, present := nestedConfigValue(values, key); !present {
+			continue
+		}
+		source := layers[index].Name
+		return source.Type == config.LayerSourceSessionFlags ||
+			(source.Type == config.LayerSourceUser && source.Profile != nil)
+	}
+	return false
+}
+
+// nestedConfigValue resolves a dotted config path inside one layer's table.
+func nestedConfigValue(values map[string]any, dotted string) (any, bool) {
+	var current any = values
+	for _, part := range strings.Split(dotted, ".") {
+		table, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		value, present := table[part]
+		if !present {
+			return nil, false
+		}
+		current = value
+	}
+	return current, true
 }
 
 func interactivePluginMarketplacesFromConfig(values map[string]any) (map[string]bool, map[string]bool) {
@@ -3456,10 +3524,11 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	if state != nil && strings.TrimSpace(state.Personality) != "" {
 		turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), "personality="+strings.TrimSpace(state.Personality))
 	}
-	// The embedded TUI defaults new threads to detailed reasoning summaries and
-	// keeps concurrent summaries opt-in (Rust #43921). exec re-resolves config
-	// per turn, so the overrides are applied to every interactive turn.
-	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveEmbeddedReasoningOverrides(root)...)
+	// Rust #50811: new embedded threads follow the server's and the model's
+	// reasoning-summary defaults; only explicit launch choices (profile or
+	// `-c` overrides) are forwarded. exec re-resolves config per turn, so the
+	// launch overrides are applied to every interactive turn.
+	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveLaunchReasoningOverrides(root)...)
 	additionalInstructions := ""
 	var additionalInputItems []any
 	if _, ok := runner.(*codexexec.Runner); ok {
