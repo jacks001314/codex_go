@@ -139,6 +139,54 @@ func TestLinuxDenyReadGlobExpansionMatchesDotfilesWithoutExternalBinary(t *testi
 	}
 }
 
+// Mirrors Rust #51527: user ripgrep configuration (for example `--quiet` in
+// `RIPGREP_CONFIG_PATH`) must not be able to suppress the file list used to
+// build Linux deny masks. Go never invokes ripgrep for this walk, so the
+// expansion is unaffected by any ripgrep configuration; this test freezes that
+// property by running the expansion with a suppressing config in the
+// environment and requiring every denied file to still be returned.
+func TestLinuxDenyReadGlobExpansionIgnoresRipgrepConfiguration(t *testing.T) {
+	root := t.TempDir()
+	denied := []string{
+		filepath.Join(root, "secret.key"),
+		filepath.Join(root, "nested", "secret.key"),
+	}
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	for _, path := range denied {
+		if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	allowed := filepath.Join(root, "allowed.pem")
+	if err := os.WriteFile(allowed, []byte("allowed"), 0o600); err != nil {
+		t.Fatalf("write allowed file: %v", err)
+	}
+	rgConfig := filepath.Join(root, "ripgrep.conf")
+	if err := os.WriteFile(rgConfig, []byte("--quiet\n"), 0o600); err != nil {
+		t.Fatalf("write ripgrep config: %v", err)
+	}
+	t.Setenv("RIPGREP_CONFIG_PATH", rgConfig)
+
+	matches, err := expandLinuxDenyGlob(filepath.Join(root, "**", "*.key"), root, nil)
+	if err != nil {
+		t.Fatalf("expandLinuxDenyGlob() error = %v", err)
+	}
+	got := map[string]bool{}
+	for _, match := range matches {
+		got[match] = true
+	}
+	for _, want := range denied {
+		if !got[want] {
+			t.Fatalf("deny glob matches = %#v, want %s despite ripgrep config", matches, want)
+		}
+	}
+	if got[allowed] {
+		t.Fatalf("deny glob matches = %#v, allowed file %s must not be masked", matches, allowed)
+	}
+}
+
 func TestAppendUnreadableRootBwrapArgs(t *testing.T) {
 	dir := t.TempDir()
 	var args []string
@@ -171,6 +219,11 @@ func TestAppendUnreadableRootBwrapArgsUsesDistinctDescriptors(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "first.key")
 	second := filepath.Join(dir, "nested", "second.key")
+	// `nested/` does not exist, so the mask targets the first missing path
+	// component, exactly like Rust `find_first_non_existent_component`
+	// (bwrap.rs) — masking the deepest missing path would leave that
+	// component unresolved.
+	maskedSecond := filepath.Join(dir, "nested")
 	var args []string
 	firstFD, err := appendUnreadableRootBwrapArgs(&args, first)
 	if err != nil {
@@ -184,7 +237,7 @@ func TestAppendUnreadableRootBwrapArgsUsesDistinctDescriptors(t *testing.T) {
 		t.Fatalf("descriptors = %d, %d, want distinct non-negative", firstFD, secondFD)
 	}
 	if !containsArgWindow(args, []string{"--ro-bind-data", strconv.Itoa(firstFD), first}) ||
-		!containsArgWindow(args, []string{"--ro-bind-data", strconv.Itoa(secondFD), second}) {
+		!containsArgWindow(args, []string{"--ro-bind-data", strconv.Itoa(secondFD), maskedSecond}) {
 		t.Fatalf("args = %#v", args)
 	}
 }
