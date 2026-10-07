@@ -3,6 +3,7 @@ package remotecontrol
 import (
 	"encoding/base64"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -44,31 +45,38 @@ func TestBuildRemoteControlWebsocketRequestRejectsMissingTokenAndInvalidHeader(t
 	}
 }
 
+// Rust #50348 `9d2b60303e`
+// (remote_control::websocket_retry_tests::reconnect_backoff_stays_capped_during_sustained_failures):
+// backoff ramps 5s -> 10s -> 20s and stays within [15s, 30s] once capped, with
+// the attempt counter advancing (saturating) on every call.
 func TestNextReconnectDelayStaysCappedLikeRust(t *testing.T) {
-	var attempt uint64
-	delay := nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 200*time.Millisecond || attempt != 1 {
-		t.Fatalf("first delay/attempt = %v/%d", delay, attempt)
-	}
-	delay = nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 200*time.Millisecond || attempt != 2 {
-		t.Fatalf("second delay/attempt = %v/%d", delay, attempt)
-	}
-	delay = nextReconnectDelayWithJitter(&attempt, 1)
-	if delay != 400*time.Millisecond || attempt != 3 {
-		t.Fatalf("third delay/attempt = %v/%d", delay, attempt)
-	}
-	// A sustained failure streak stays at the 30s cap and never resets the
-	// attempt counter back to fast retries (Rust #49330).
-	attempt = 25
-	for i := 0; i < 5; i++ {
-		delay = nextReconnectDelayWithJitter(&attempt, 1)
-		if delay != RemoteControlReconnectBackoffCap {
-			t.Fatalf("capped delay[%d] = %v, want %v", i, delay, RemoteControlReconnectBackoffCap)
+	// Deterministic shape with unit jitter: the exponential ramp starts at 5s.
+	var exact uint64
+	for _, want := range []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, RemoteControlReconnectBackoffCap, RemoteControlReconnectBackoffCap} {
+		if got := nextReconnectDelayWithJitter(&exact, 1); got != want {
+			t.Fatalf("delay for attempt %d = %v, want %v", exact, got, want)
 		}
 	}
-	if attempt != 25 {
-		t.Fatalf("attempt advanced while capped: %d, want 25", attempt)
+	if exact != 5 {
+		t.Fatalf("attempt counter after the ramp = %d, want 5 (advances even at the cap)", exact)
+	}
+
+	// Jitter bounds: exponential ramp, then saturated at the cap.
+	var attempt uint64
+	for _, maxDelay := range []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second} {
+		delay := NextReconnectDelay(&attempt)
+		if delay < maxDelay/2 || delay > maxDelay {
+			t.Fatalf("delay for attempt %d = %v, want within [%v, %v]", attempt-1, delay, maxDelay/2, maxDelay)
+		}
+	}
+	for _, start := range []uint64{attempt, 9, math.MaxUint64} {
+		streak := start
+		for i := 0; i < 1000; i++ {
+			delay := NextReconnectDelay(&streak)
+			if delay < 15*time.Second || delay > RemoteControlReconnectBackoffCap {
+				t.Fatalf("capped delay = %v, want within [15s, %v]", delay, RemoteControlReconnectBackoffCap)
+			}
+		}
 	}
 }
 

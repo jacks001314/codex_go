@@ -153,11 +153,17 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 			continue
 		}
 
-		reconnectAttempt = 0
+		connectedAt := time.Now()
 		l.manager.ResetAuthRecovery()
 		l.observeAuthRevision(ctx, &authRevision, &authRevisionKnown)
 		l.manager.PublishConnectionStatus(StatusConnected)
 		reason := l.runConnection(ctx, conn, &authRevision, &authRevisionKnown)
+		// Rust #50348 `9d2b60303e`: a successful handshake no longer resets the
+		// reconnect backoff; only a connection that stayed healthy for at least
+		// 60 seconds does, so short-lived connections keep backing off.
+		if time.Since(connectedAt) >= remoteControlReconnectBackoffResetAfter {
+			reconnectAttempt = 0
+		}
 		if reason == remoteControlConnectionEndedShutdown {
 			return nil
 		}
@@ -175,7 +181,10 @@ func (l *RemoteControlWebsocketLoop) Run(ctx context.Context) error {
 		if !l.remoteControlEnabled() {
 			continue
 		}
-		l.manager.PublishConnectionStatus(StatusErrored)
+		// Rust #50348 `9d2b60303e`: an automatically reconnecting (closed)
+		// socket reports `Connecting` while it backs off before token refresh
+		// or enrollment.
+		l.manager.PublishConnectionStatus(StatusConnecting)
 		delay := l.nextReconnectDelay(&reconnectAttempt)
 		l.markRecoveryAuthChangeSeenIfNeeded(ctx, &authRevision, &authRevisionKnown)
 		waitReason := l.waitForReconnect(ctx, delay, &authRevision, &authRevisionKnown)

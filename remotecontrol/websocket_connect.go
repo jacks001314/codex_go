@@ -12,20 +12,27 @@ import (
 )
 
 const (
-	RemoteControlProtocolVersion          = "3"
-	RemoteControlServerIDHeader           = "x-codex-server-id"
-	RemoteControlServerNameHeader         = "x-codex-name"
-	RemoteControlProtocolVersionHeader    = "x-codex-protocol-version"
-	RemoteControlSubscribeCursorHeader    = "x-codex-subscribe-cursor"
-	RemoteControlWebsocketConnectTimeout  = 30 * time.Second
-	RemoteControlReconnectBackoffCap      = 30 * time.Second
-	remoteControlReconnectInitialDelay    = 200 * time.Millisecond
-	remoteControlReconnectBackoffFactor   = 2.0
+	RemoteControlProtocolVersion         = "3"
+	RemoteControlServerIDHeader          = "x-codex-server-id"
+	RemoteControlServerNameHeader        = "x-codex-name"
+	RemoteControlProtocolVersionHeader   = "x-codex-protocol-version"
+	RemoteControlSubscribeCursorHeader   = "x-codex-subscribe-cursor"
+	RemoteControlWebsocketConnectTimeout = 30 * time.Second
+	RemoteControlReconnectBackoffCap     = 30 * time.Second
+	// Rust #50348 `9d2b60303e`: automatic remote control reconnects start at
+	// 5s with jitter between half and all of the delay.
+	remoteControlReconnectBackoffInitial  = 5 * time.Second
 	remoteAppServerNotFoundDetail         = "Remote app server not found"
 	remoteControlWebsocketAuthHeader      = "authorization"
-	remoteControlReconnectJitterMinFactor = 0.9
-	remoteControlReconnectJitterMaxFactor = 1.1
+	remoteControlReconnectJitterMinFactor = 0.5
+	remoteControlReconnectJitterMaxFactor = 1.0
 )
+
+// remoteControlReconnectBackoffResetAfter mirrors Rust #50348
+// `REMOTE_CONTROL_RECONNECT_BACKOFF_RESET_AFTER`: only a connection that stayed
+// healthy this long clears the reconnect backoff. A variable (not a constant)
+// so tests can shorten the healthy-connection window.
+var remoteControlReconnectBackoffResetAfter = 60 * time.Second
 
 func BuildRemoteControlWebsocketRequest(websocketURL string, enrollment *Enrollment, installationID string, subscribeCursor *string) (*http.Request, error) {
 	if enrollment == nil {
@@ -79,16 +86,45 @@ func nextReconnectDelayWithJitter(reconnectAttempt *uint64, jitter float64) time
 		var attempt uint64
 		reconnectAttempt = &attempt
 	}
-	delay := remoteControlBackoff(*reconnectAttempt, jitter)
-	if delay >= RemoteControlReconnectBackoffCap {
-		// Rust #49330: stay at the cap during sustained failures (including
-		// duplicate-presence conflicts) and stop advancing the exponent, so a
-		// long failure streak cannot overflow it. Success and auth changes
-		// reset the attempt counter in the connect loop.
+	if jitter <= 0 {
+		jitter = 1
+	}
+	backoff := remoteControlReconnectBackoff(*reconnectAttempt)
+	// Rust #50348 `9d2b60303e`: advance (saturating) on every attempt, even at
+	// the cap, matching `reconnect_attempt.saturating_add(1)`. Only a healthy
+	// connection (>= 60s) or an auth change resets the counter.
+	if *reconnectAttempt < math.MaxUint64 {
+		*reconnectAttempt = *reconnectAttempt + 1
+	}
+	// Jitter between half and all of the backoff spreads reconnects after a
+	// shared outage without dropping below the floor.
+	return time.Duration(float64(backoff) * jitter)
+}
+
+// remoteControlReconnectBackoff mirrors the exponential term of Rust #50348
+// `9d2b60303e` (remote_control::websocket::next_reconnect_delay):
+// `REMOTE_CONTROL_RECONNECT_BACKOFF_INITIAL.saturating_mul(2u32.saturating_pow(exponent))`
+// capped at 30s. `attempt` saturates through u32 like Rust's
+// `u32::try_from(reconnect_attempt).unwrap_or(u32::MAX)`.
+func remoteControlReconnectBackoff(attempt uint64) time.Duration {
+	exponent := attempt
+	if exponent > math.MaxUint32 {
+		exponent = math.MaxUint32
+	}
+	// 2^exponent saturates at u32::MAX, exactly like `u32::saturating_pow`.
+	factor := uint64(math.MaxUint32)
+	if exponent < 32 {
+		factor = uint64(1) << exponent
+	}
+	initialNanos := uint64(remoteControlReconnectBackoffInitial)
+	capNanos := uint64(RemoteControlReconnectBackoffCap)
+	// Rust multiplies as a `Duration` (saturating at `Duration::MAX`) before
+	// taking the minimum with the 30s cap, so any factor that would reach or
+	// exceed the cap yields the cap; this also keeps the product inside int64.
+	if factor >= capNanos/initialNanos {
 		return RemoteControlReconnectBackoffCap
 	}
-	*reconnectAttempt = *reconnectAttempt + 1
-	return delay
+	return time.Duration(initialNanos * factor)
 }
 
 func WebsocketResponseReportsMissingRemoteAppServer(response *http.Response, body []byte) bool {
@@ -125,25 +161,6 @@ func setRemoteControlWebsocketHeader(headers http.Header, name string, value str
 	}
 	headers.Set(name, value)
 	return nil
-}
-
-func remoteControlBackoff(attempt uint64, jitter float64) time.Duration {
-	if jitter <= 0 {
-		jitter = 1
-	}
-	exp := uint64(0)
-	if attempt > 0 {
-		exp = attempt - 1
-	}
-	if exp > 62 {
-		return RemoteControlReconnectBackoffCap
-	}
-	baseMillis := float64(remoteControlReconnectInitialDelay.Milliseconds()) * math.Pow(remoteControlReconnectBackoffFactor, float64(exp))
-	delayMillis := baseMillis * jitter
-	if delayMillis > float64(math.MaxInt64/int64(time.Millisecond)) {
-		return RemoteControlReconnectBackoffCap
-	}
-	return time.Duration(delayMillis) * time.Millisecond
 }
 
 func reconnectJitter() float64 {

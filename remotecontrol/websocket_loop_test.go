@@ -560,3 +560,145 @@ func TestRemoteControlWebsocketLoopPreservesRacingAuthRevision(t *testing.T) {
 		t.Fatalf("revision after observing racing change = %d, want 2", revision)
 	}
 }
+
+// Rust #50348 `9d2b60303e`
+// (remote_control::tests::retry_tests::reconnect_backoff_covers_refresh_and_resets_after_healthy_connection):
+// a short-lived connection keeps the increased reconnect backoff, and only a
+// connection that stays healthy past the reset window clears it. The
+// healthy-connection window is shortened so the test does not wait the real 60s.
+func TestRemoteControlWebsocketLoopRetainsBackoffUntilHealthyLikeRust(t *testing.T) {
+	previousReset := remoteControlReconnectBackoffResetAfter
+	remoteControlReconnectBackoffResetAfter = 150 * time.Millisecond
+	t.Cleanup(func() { remoteControlReconnectBackoffResetAfter = previousReset })
+
+	manager := NewManager("codex", "installation-id")
+	manager.Enable(&EnableParams{Ephemeral: true})
+	delayAttempts := make(chan uint64, 8)
+	healthyClient := make(chan *websocket.Conn, 1)
+	var connectCount atomic.Int64
+	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
+		StatusPollInterval:        time.Millisecond,
+		ConnectionShutdownTimeout: 100 * time.Millisecond,
+		ReconnectDelay: func(reconnectAttempt *uint64) time.Duration {
+			if reconnectAttempt != nil {
+				delayAttempts <- *reconnectAttempt
+				*reconnectAttempt = *reconnectAttempt + 1
+			}
+			return time.Millisecond
+		},
+		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+			switch connectCount.Add(1) {
+			case 1:
+				return nil, nil, fmt.Errorf("connect failed")
+			case 2:
+				// Short-lived: close the peer before the loop even starts reading,
+				// so the connection ends well inside the reset window.
+				clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
+				_ = clientConn.CloseNow()
+				return serverConn, nil, nil
+			default:
+				clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
+				select {
+				case healthyClient <- clientConn:
+				default:
+				}
+				return serverConn, nil, nil
+			}
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- loop.Run(ctx) }()
+
+	// A failed connect starts the backoff at attempt 0.
+	expectReconnectAttempt(t, delayAttempts, 0)
+	// A short-lived connection must retain the increased backoff.
+	expectReconnectAttempt(t, delayAttempts, 1)
+
+	// A connection that stays healthy past the reset window clears the backoff.
+	var clientConn *websocket.Conn
+	select {
+	case clientConn = <-healthyClient:
+	case <-time.After(3 * time.Second):
+		t.Fatal("remote control websocket loop did not open the healthy connection")
+	}
+	time.Sleep(remoteControlReconnectBackoffResetAfter + 120*time.Millisecond)
+	_ = clientConn.CloseNow()
+	expectReconnectAttempt(t, delayAttempts, 0)
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("loop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not stop")
+	}
+}
+
+func expectReconnectAttempt(t *testing.T, attempts <-chan uint64, want uint64) {
+	t.Helper()
+	select {
+	case got := <-attempts:
+		if got != want {
+			t.Fatalf("reconnect backoff attempt = %d, want %d", got, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("did not observe a reconnect backoff, want attempt %d", want)
+	}
+}
+
+// Rust #50348 `9d2b60303e`: a closed socket reports `Connecting` while it backs
+// off before the next automatic reconnect.
+func TestRemoteControlWebsocketLoopPublishesConnectingBeforeReconnectLikeRust(t *testing.T) {
+	manager := NewManager("codex", "installation-id")
+	manager.Enable(&EnableParams{Ephemeral: true})
+	backingOff := make(chan struct{}, 1)
+	var connectCount atomic.Int64
+	loop := NewRemoteControlWebsocketLoop(manager, &RemoteControlWebsocketLoopOptions{
+		StatusPollInterval:        time.Millisecond,
+		ConnectionShutdownTimeout: 100 * time.Millisecond,
+		ReconnectDelay: func(*uint64) time.Duration {
+			select {
+			case backingOff <- struct{}{}:
+			default:
+			}
+			return time.Hour
+		},
+		Connect: func(context.Context, *RemoteControlWebsocketConnectOptions) (*websocket.Conn, *http.Response, error) {
+			if connectCount.Add(1) == 1 {
+				clientConn, serverConn := connectedRemoteControlWebsocketPair(t)
+				_ = clientConn.CloseNow()
+				return serverConn, nil, nil
+			}
+			return nil, nil, fmt.Errorf("connect failed")
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- loop.Run(ctx) }()
+
+	select {
+	case <-backingOff:
+	case <-time.After(3 * time.Second):
+		t.Fatal("remote control websocket loop did not enter reconnect backoff")
+	}
+	if status := manager.StatusChanged(); status.Status != StatusConnecting {
+		t.Fatalf("status while backing off = %q, want %q", status.Status, StatusConnecting)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("loop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote control websocket loop did not stop")
+	}
+}
