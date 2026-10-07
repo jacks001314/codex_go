@@ -203,6 +203,16 @@ func TestRemoteAgentsDashboardSeedsRecentSessionsLikeRust(t *testing.T) {
 					remoteTUITestSendErr(serverErrs, err)
 					return
 				}
+				if params.SectionID.Set {
+					// Rust #51500: the command center also lists the shared
+					// pinned section. This server supports it and has no pinned
+					// tasks, so the recent seed below is unchanged.
+					remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{
+						"data":       []any{},
+						"nextCursor": nil,
+					}})
+					continue
+				}
 				interactive := len(params.SourceKinds) == 0
 				if params.SortKey == appserver.SortRecencyAt && !recencyRejected[interactive] {
 					// An older server rejects recency_at; the seed retries with updated_at.

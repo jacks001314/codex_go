@@ -76,6 +76,10 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 			ThreadID: strings.TrimSpace(thread.ID),
 			Preview:  strings.TrimSpace(thread.Preview),
 			CWD:      strings.TrimSpace(thread.CWD),
+			// Rust #51500: the command center decides whether a task can be
+			// pinned in the shared section from its thread source
+			// (agents_overview_discovery::supports_shared_pinning).
+			Source: agentsOverviewRowSource(string(thread.Source)),
 		}
 		if thread.Model != nil {
 			row.Model = strings.TrimSpace(*thread.Model)
@@ -104,6 +108,15 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID 
 	return rows
 }
 
+// agentsOverviewRowSource maps a thread source onto the dashboard's
+// SessionSource vocabulary (Rust #51500 supports_shared_pinning). It reuses the
+// app server's canonical mapper so legacy spellings ("app_server", "mcp") and
+// missing sources land on the same values the remote path reports rather than a
+// second, divergent table.
+func agentsOverviewRowSource(source string) string {
+	return string(appserver.SessionSourceFromString(source))
+}
+
 // agentsOverviewRowsFromRecords builds dashboard rows from local session-store
 // records (the Windows/no-daemon fallback). Status comes from the last
 // persisted rollout turn or the archived flag.
@@ -124,6 +137,11 @@ func agentsOverviewRowsFromRecords(records []session.Record, currentThreadID str
 			Preview:  strings.TrimSpace(record.Preview),
 			CWD:      strings.TrimSpace(record.Metadata.CWD),
 			Model:    strings.TrimSpace(record.Metadata.Model),
+			// Rust #51500: even the no-daemon fallback reports the persisted
+			// thread source (session.Metadata.Source), which is the same field
+			// the app server maps with SessionSourceFromString, so the pin
+			// rules see a real source instead of "unknown".
+			Source: agentsOverviewRowSource(record.Metadata.Source),
 		}
 		if branch, ok := record.Metadata.Git["branch"]; ok {
 			row.GitBranch = strings.TrimSpace(branch)
@@ -224,6 +242,14 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 			order = append(order, id)
 		}
 	}
+	// Rust #51500 (agents_overview_threads.rs): the shared pinned section seeds
+	// the command center's rows, not just the pin order, so a task pinned
+	// outside the loaded/recent window still appears in the Pinned group. The
+	// rows come from the same connection the listing uses; a server without
+	// shared thread sections (or a failed listing) leaves the rows untouched.
+	if pinned, supported, err := listAgentsOverviewPinnedThreads(agentsOverviewPinRequestOnClient(ctx, s.client)); err == nil && supported {
+		order = agentsOverviewSeedPinnedThreads(order, byID, pinned)
+	}
 	threads := make([]*appserver.Thread, 0, len(order))
 	for _, id := range order {
 		if thread, ok := byID[id]; ok && thread != nil {
@@ -243,6 +269,38 @@ func (s *remoteAgentsDashboardSource) List(ctx context.Context) ([]agentsovervie
 // recentSessionLimit seeds the agent command center with this many recent
 // sessions, in addition to loaded sessions (Rust RECENT_SESSION_LIMIT, #46579).
 const recentSessionLimit = 10
+
+// agentsOverviewSeedPinnedThreads merges the shared pinned section's tasks into
+// the command center's rows (Rust #51500, agents_overview_threads.rs: every
+// pinned thread is inserted into the row map beside the recent/loaded listing,
+// so a pinned task outside the recent-task window still has a row to rank).
+// A task the listing already carries keeps its place - this only fills in its
+// record when a loaded id had none - so the pin order never ranks two rows.
+func agentsOverviewSeedPinnedThreads(order []string, byID map[string]*appserver.Thread, pinned []appserver.Thread) []string {
+	listed := make(map[string]struct{}, len(order))
+	for _, id := range order {
+		listed[id] = struct{}{}
+	}
+	for index := range pinned {
+		thread := &pinned[index]
+		id := appserverThreadID(thread)
+		if id == "" {
+			continue
+		}
+		if existing, exists := byID[id]; exists {
+			if existing == nil {
+				byID[id] = thread
+			}
+			continue
+		}
+		if _, seen := listed[id]; !seen {
+			order = append(order, id)
+			listed[id] = struct{}{}
+		}
+		byID[id] = thread
+	}
+	return order
+}
 
 func appserverThreadID(thread *appserver.Thread) string {
 	if thread == nil {

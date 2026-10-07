@@ -404,6 +404,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return client.waitResponse(callCtx, id, nil)
 		},
 	})
+	// Rust #51500: shared task pinning. The dashboard learns the pinned section
+	// through thread/list + thread/section/move on the same endpoint as the rest
+	// of the command center; this is the only place the agents-overview options
+	// are built (the standalone `codex agents` dashboard drives the core
+	// directly instead of the tea model).
+	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
 	options := codextea.Options{
 		NoAltScreen:         root != nil && root.Shared.NoAltScreen,
 		LocalDaemonSession:  interactiveRemoteEndpointIsLocal(endpoint),
@@ -456,41 +462,45 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnSwitchAgent: func(threadID string) (codextea.AgentThreadSwitchResponse, error) {
 			return interactiveRemoteSwitchAgentThread(ctx, endpoint, threadID)
 		},
-		AgentsOverviewEmbedded:      false,
-		OnAgentsOverviewRefresh:     interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
-		OnAgentsOverviewUsage:       interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
-		OnAgentsOverviewNewSession:  interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
-		OnAgentsOverviewNewWorktree: interactiveRemoteAgentsOverviewNewWorktree(ctx, endpoint, root),
-		OnAgentsOverviewStop:        interactiveRemoteAgentsOverviewStop(ctx, endpoint),
-		OnAgentsOverviewArchive:     interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
-		OnAgentsOverviewDelete:      interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
-		OnAgentsOverviewRename:      interactiveRemoteAgentsOverviewRename(ctx, endpoint),
-		OnStartAgentsDaemon:         interactiveStartAgentsDaemon,
-		OnWriteSettings:             interactiveRemoteSettingsWriteHandler(ctx, endpoint),
-		OnUpdateCollaborationMode:   interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
-		OnWriteMemorySettings:       interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
-		OnResetMemories:             interactiveRemoteMemoryResetHandler(ctx, endpoint),
-		OnSubmitFeedback:            interactiveRemoteFeedbackSubmitHandler(ctx, endpoint),
-		OnReadIDEContext:            interactiveIDEContextReader,
-		OnApproveAutoReviewDenial:   interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
-		FeatureSettings:             settings.FeatureSettings,
-		UseMemories:                 settings.UseMemories,
-		GenerateMemories:            settings.GenerateMemories,
-		FeedbackEnabled:             settings.FeedbackEnabled,
-		ModelPickerOptions:          interactiveModelPickerOptions(root),
-		ServiceTierCommands:         interactiveServiceTierCommands(state.Model),
-		Personality:                 settings.Personality,
-		Notifications:               settings.Notifications,
-		NotificationMethod:          settings.NotificationMethod,
-		NotificationCondition:       settings.NotificationCondition,
-		PermissionRequirements:      settings.PermissionRequirements,
-		HideRateLimitModelNudge:     settings.HideRateLimitModelNudge,
-		TUITheme:                    settings.TUITheme,
-		StartupConfigWarnings:       remoteTUIStartupConfigWarnings(settings.TUITheme),
-		TUIPet:                      settings.TUIPet,
-		CodexHome:                   auth.DefaultCodexHome(),
-		PetEnv:                      environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:          interactiveNotificationPoster(stdout),
+		AgentsOverviewEmbedded:  false,
+		OnAgentsOverviewRefresh: interactiveRemoteAgentsOverviewRefresh(ctx, endpoint),
+		// Rust #51500: the shared pinned section backs the dashboard's pin
+		// group and its `p` shortcut.
+		OnAgentsOverviewPinnedThreads: interactiveRemoteAgentsOverviewPinnedThreads(agentsOverviewPinRequest),
+		OnAgentsOverviewTogglePin:     interactiveRemoteAgentsOverviewTogglePin(agentsOverviewPinRequest),
+		OnAgentsOverviewUsage:         interactiveRemoteAgentsOverviewUsage(ctx, endpoint),
+		OnAgentsOverviewNewSession:    interactiveRemoteAgentsOverviewNewSession(ctx, endpoint),
+		OnAgentsOverviewNewWorktree:   interactiveRemoteAgentsOverviewNewWorktree(ctx, endpoint, root),
+		OnAgentsOverviewStop:          interactiveRemoteAgentsOverviewStop(ctx, endpoint),
+		OnAgentsOverviewArchive:       interactiveRemoteAgentsOverviewArchive(ctx, endpoint),
+		OnAgentsOverviewDelete:        interactiveRemoteAgentsOverviewDelete(ctx, endpoint),
+		OnAgentsOverviewRename:        interactiveRemoteAgentsOverviewRename(ctx, endpoint),
+		OnStartAgentsDaemon:           interactiveStartAgentsDaemon,
+		OnWriteSettings:               interactiveRemoteSettingsWriteHandler(ctx, endpoint),
+		OnUpdateCollaborationMode:     interactiveRemoteCollaborationModeUpdateHandler(ctx, endpoint),
+		OnWriteMemorySettings:         interactiveRemoteMemorySettingsWriteHandler(ctx, endpoint),
+		OnResetMemories:               interactiveRemoteMemoryResetHandler(ctx, endpoint),
+		OnSubmitFeedback:              interactiveRemoteFeedbackSubmitHandler(ctx, endpoint),
+		OnReadIDEContext:              interactiveIDEContextReader,
+		OnApproveAutoReviewDenial:     interactiveRemoteApproveAutoReviewDenialHandler(ctx, endpoint),
+		FeatureSettings:               settings.FeatureSettings,
+		UseMemories:                   settings.UseMemories,
+		GenerateMemories:              settings.GenerateMemories,
+		FeedbackEnabled:               settings.FeedbackEnabled,
+		ModelPickerOptions:            interactiveModelPickerOptions(root),
+		ServiceTierCommands:           interactiveServiceTierCommands(state.Model),
+		Personality:                   settings.Personality,
+		Notifications:                 settings.Notifications,
+		NotificationMethod:            settings.NotificationMethod,
+		NotificationCondition:         settings.NotificationCondition,
+		PermissionRequirements:        settings.PermissionRequirements,
+		HideRateLimitModelNudge:       settings.HideRateLimitModelNudge,
+		TUITheme:                      settings.TUITheme,
+		StartupConfigWarnings:         remoteTUIStartupConfigWarnings(settings.TUITheme),
+		TUIPet:                        settings.TUIPet,
+		CodexHome:                     auth.DefaultCodexHome(),
+		PetEnv:                        environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:            interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			if state.ThreadName == "" && len(state.Messages) == 0 {
 				if title := interactiveAutoThreadTitle(request.Prompt); title != "" {
