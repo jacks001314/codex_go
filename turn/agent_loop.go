@@ -100,8 +100,12 @@ type AgentLoopRequest struct {
 	TaskKind                model.AgentTaskKind
 	ThreadID                string
 	TurnID                  string
-	Originator              string
-	InputItems              []any
+	// Ephemeral mirrors Rust's `turn_context.config.ephemeral`: the thread
+	// intentionally skips durable persistence, so attachment uploads made while
+	// preparing this turn's requests carry that intent (Rust #51517).
+	Ephemeral  bool
+	Originator string
+	InputItems []any
 	// PostPromptInputItems are appended after the prompt's user message (and
 	// after InputItems when there is no prompt) for the first sampling request,
 	// then folded into the turn's input for later iterations. Rust records
@@ -361,6 +365,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			TaskKind:                     request.TaskKind,
 			ThreadID:                     request.ThreadID,
 			TurnID:                       request.TurnID,
+			Ephemeral:                    request.Ephemeral,
 			Originator:                   request.Originator,
 			Store:                        request.Store,
 			PreviousResponseID:           previousResponseID,

@@ -1686,6 +1686,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		TaskKind:                     model.AgentTaskRegular,
 		ThreadID:                     threadID,
 		TurnID:                       turnID,
+		Ephemeral:                    r.threadIsEphemeral(threadID),
 		Originator:                   runConfig.Originator,
 		Store:                        runConfig.Store,
 		PreviousResponseID:           runConfig.PreviousResponseID,
@@ -2187,6 +2188,7 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		TaskKind:                     model.AgentTaskReview,
 		ThreadID:                     threadID,
 		TurnID:                       turnID,
+		Ephemeral:                    r.threadIsEphemeral(threadID),
 		Originator:                   runConfig.Originator,
 		Store:                        runConfig.Store,
 		PreviousResponseID:           runConfig.PreviousResponseID,
@@ -10953,6 +10955,19 @@ func (r *RuntimeRouter) preparedUserMessageInputItem(params *turn.TurnStartParam
 		}},
 	}
 	return item, notice
+}
+
+// threadIsEphemeral reports whether a thread intentionally skips durable
+// persistence, mirroring Rust's `turn_context.config.ephemeral` (Rust #51517).
+// The Go port keeps ephemeral threads in the ThreadManager's ephemeral record
+// map instead of carrying the flag on a turn configuration object, so the turn
+// runtime derives it from the thread id.
+func (r *RuntimeRouter) threadIsEphemeral(threadID string) bool {
+	if r == nil || r.threads == nil || strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	_, ok := r.threads.EphemeralRecord(session.ThreadID(threadID), false)
+	return ok
 }
 
 func (r *RuntimeRouter) imageResizeNoticeEnabledForTurn(params *turn.TurnStartParams) bool {

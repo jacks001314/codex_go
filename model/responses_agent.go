@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"codex_go/attachmentstore"
 	"codex_go/auth"
 	"codex_go/codexapi"
 	"codex_go/envutil"
@@ -129,6 +130,9 @@ type ResponsesAgentOptions struct {
 	// Metrics, when set, receives the per-attempt API request metrics (Rust's
 	// SessionTelemetry::record_api_request).
 	Metrics MetricsSink
+	// ImageStore is the attachment store image preparation uploads prepared
+	// images to (Rust `Session::image_store`, #51517). nil keeps images inline.
+	ImageStore attachmentstore.Store
 }
 
 type ResponsesAgentRunner struct {
@@ -183,6 +187,20 @@ type ResponsesAgentRunner struct {
 	// log-only and trace-safe halves of Rust's SessionTelemetry) when the app
 	// layer installs a sink.
 	Telemetry SessionTelemetrySink
+	// ImageStore is the attachment store image preparation hands prepared
+	// images to (Rust `Session::image_store`). A nil store keeps images inline,
+	// mirroring Rust's `passthrough_image_store()` default; a host with a
+	// durable backend installs its own store (Rust #51517).
+	ImageStore attachmentstore.Store
+}
+
+// imageStore returns the configured attachment store, defaulting to the inline
+// store like Rust's `ThreadManager::passthrough_image_store()`.
+func (r *ResponsesAgentRunner) imageStore() attachmentstore.Store {
+	if r == nil {
+		return attachmentstore.StoreOrDefault(nil)
+	}
+	return attachmentstore.StoreOrDefault(r.ImageStore)
 }
 
 type responsesTurnStateCache struct {
@@ -573,6 +591,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
 		Metrics:                    options.Metrics,
+		ImageStore:                 attachmentstore.StoreOrDefault(options.ImageStore),
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
@@ -730,7 +749,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		modelID = "gpt-5.5"
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProvider(request, r.providerName())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: responsesInstructions(request), Input: r.gateContentItemKinds(responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls, ClientMetadata: cloneStringMap(request.ClientMetadata),
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
@@ -953,7 +972,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		modelID = "gpt-5.5"
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
-	inputItems := responsesInputItemsForProvider(request, r.providerName())
+	inputItems := responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())
 	if !modelInfo.UseResponsesLite {
 		// Rust #44249: downgrade `original` image detail for models that do not
 		// support it before sending the request over the websocket transport.
@@ -1368,7 +1387,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	instructions := responsesInstructions(request)
-	inputItems := responsesInputItemsForProvider(request, r.providerName())
+	inputItems := responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())
 	tools := normalizeResponseToolParameters(cloneAnySlice(request.Tools))
 	if !request.DisableHostedImageGeneration {
 		tools = r.withHostedToolsForRequest(tools, &modelInfo)
@@ -2180,6 +2199,14 @@ func responsesUserMessage(prompt string) responsesInputMessage {
 }
 
 func responsesInputItems(request *AgentRequest) []any {
+	return responsesInputItemsWithStore(request, nil)
+}
+
+// responsesInputItemsWithStore is the store-aware form of responsesInputItems.
+// The attachment store (Rust `Session::image_store`) decides whether the images
+// the preparation pipeline re-encodes stay inline or become file references,
+// and the request's ephemeral intent travels on every upload (Rust #51517).
+func responsesInputItemsWithStore(request *AgentRequest, store attachmentstore.Store) []any {
 	if request == nil {
 		return nil
 	}
@@ -2204,8 +2231,17 @@ func responsesInputItems(request *AgentRequest) []any {
 	if !request.Store && !request.ItemIDsEnabled {
 		items = stripResponseInputItemIDs(items)
 	}
-	items = prepareResponseInputImages(items)
+	items = prepareResponseInputImagesWithStore(items, store, responsesImagePrepOrigin(request))
 	return items
+}
+
+// responsesImagePrepOrigin mirrors the origin Rust's image preparation carries
+// into every upload request: the receiving thread and its persistence intent.
+func responsesImagePrepOrigin(request *AgentRequest) eventmap.ImagePrepOrigin {
+	if request == nil {
+		return eventmap.ImagePrepOrigin{}
+	}
+	return eventmap.ImagePrepOrigin{ThreadID: request.ThreadID, Ephemeral: request.Ephemeral}
 }
 
 // dropConfigurationUpdateItems mirrors Rust ModelClient's
@@ -2241,6 +2277,13 @@ func isConfigurationUpdateResponseItem(item any) bool {
 // or replayed from history could reach the API and be rejected as an
 // unsupported image.
 func prepareResponseInputImages(items []any) []any {
+	return prepareResponseInputImagesWithStore(items, nil, eventmap.ImagePrepOrigin{})
+}
+
+// prepareResponseInputImagesWithStore is the store-aware form of
+// prepareResponseInputImages, mirroring Rust `prepare_response_items` which
+// takes the thread origin and the session image store.
+func prepareResponseInputImagesWithStore(items []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) []any {
 	if len(items) == 0 {
 		return items
 	}
@@ -2257,28 +2300,28 @@ func prepareResponseInputImages(items []any) []any {
 	if err := decoder.Decode(&normalized); err != nil {
 		return items
 	}
-	prepareResponseInputImageBlocks(normalized)
+	prepareResponseInputImageBlocks(normalized, store, origin)
 	return normalized
 }
 
-func prepareResponseInputImageBlocks(value any) {
+func prepareResponseInputImageBlocks(value any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
 	switch typed := value.(type) {
 	case map[string]any:
-		prepareResponseInputImageBlock(typed)
+		prepareResponseInputImageBlock(typed, store, origin)
 		md, _ := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 		kinds, _ := md["content_item_kinds"].([]any)
 		for _, key := range []string{"content", "output", "content_items"} {
 			if child, ok := typed[key]; ok {
 				if key == "content" && kinds != nil {
-					prepareResponseInputImageContentWithKinds(child, kinds)
+					prepareResponseInputImageContentWithKinds(child, kinds, store, origin)
 				} else {
-					prepareResponseInputImageBlocks(child)
+					prepareResponseInputImageBlocks(child, store, origin)
 				}
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			prepareResponseInputImageBlocks(child)
+			prepareResponseInputImageBlocks(child, store, origin)
 		}
 	}
 }
@@ -2287,14 +2330,14 @@ func prepareResponseInputImageBlocks(value any) {
 // while updating content_item_kinds for image-preparation failures, mirroring
 // Rust image_preparation.rs which tags failed images as images.preparation_error
 // (#40281).
-func prepareResponseInputImageContentWithKinds(value any, kinds []any) {
+func prepareResponseInputImageContentWithKinds(value any, kinds []any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
 	content, ok := value.([]any)
 	if !ok {
-		prepareResponseInputImageBlocks(value)
+		prepareResponseInputImageBlocks(value, store, origin)
 		return
 	}
 	for i, block := range content {
-		prepareResponseInputImageBlock(block.(map[string]any))
+		prepareResponseInputImageBlock(block.(map[string]any), store, origin)
 		if i < len(kinds) && kinds[i] == "user.image" {
 			if m, ok := block.(map[string]any); ok && m["type"] == "input_text" && blockWasPreparationError(m) {
 				kinds[i] = "images.preparation_error"
@@ -2312,17 +2355,19 @@ func blockWasPreparationError(block map[string]any) bool {
 	return strings.HasPrefix(strings.TrimSpace(text), imagePrepErrorPrefix)
 }
 
-func prepareResponseInputImageBlock(block map[string]any) {
+func prepareResponseInputImageBlock(block map[string]any, store attachmentstore.Store, origin eventmap.ImagePrepOrigin) {
 	itemType, _ := block["type"].(string)
 	if itemType != "input_image" && itemType != "image" {
 		return
 	}
 	imageURL, _ := block["image_url"].(string)
 	if strings.TrimSpace(imageURL) == "" {
+		// Already a file reference (or an unsupported shape): Rust's
+		// `ImageReference::File` branch leaves the item untouched.
 		return
 	}
 	detail := eventmap.ImagePrepDetail(responseToolString(block["detail"]))
-	prepared, err := eventmap.PrepareImagePrepImage(imageURL, detail)
+	prepared, err := eventmap.PrepareImagePrepImageWithStoreResult(store, origin, imageURL, detail)
 	if err != nil {
 		// Replace an image that cannot be processed with a placeholder text
 		// block, matching Rust image_preparation.rs.
@@ -2332,7 +2377,18 @@ func prepareResponseInputImageBlock(block map[string]any) {
 		block["text"] = eventmap.ImagePrepPlaceholderForError(err)
 		return
 	}
-	block["image_url"] = prepared
+	if prepared == nil {
+		return
+	}
+	if prepared.FileID != "" {
+		// The store kept the prepared bytes as a file reference, mirroring
+		// Rust's `ImageReference::File { file_id }`.
+		delete(block, "detail")
+		delete(block, "image_url")
+		block["file_id"] = prepared.FileID
+		return
+	}
+	block["image_url"] = prepared.URL
 }
 
 // gateContentItemKinds clears content_item_kinds from every request item when
@@ -2365,7 +2421,13 @@ func stripResponseItemContentKinds(items []any) []any {
 }
 
 func responsesInputItemsForProvider(request *AgentRequest, providerName string) []any {
-	items := responsesInputItems(request)
+	return responsesInputItemsForProviderWithStore(request, providerName, nil)
+}
+
+// responsesInputItemsForProviderWithStore is the store-aware form of
+// responsesInputItemsForProvider.
+func responsesInputItemsForProviderWithStore(request *AgentRequest, providerName string, store attachmentstore.Store) []any {
+	items := responsesInputItemsWithStore(request, store)
 	if strings.EqualFold(strings.TrimSpace(providerName), OpenAIProviderName) {
 		return items
 	}

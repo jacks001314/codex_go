@@ -16,6 +16,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/webp"
 
+	"codex_go/attachmentstore"
 	"codex_go/utils"
 )
 
@@ -146,8 +147,16 @@ type ImagePrepResize struct {
 // ImagePrepResult is the outcome of preparing one image: the replacement data
 // URL plus the resize record (nil when the image was unchanged) and the
 // effective detail used.
+//
+// EncodedBytes and MIME are the bytes the preparation produced, which the
+// attachment store receives on upload (Rust `PreparedInlineImage::encoded`).
+// FileID is set instead of URL when the store returned a file reference
+// (Rust `ImageReference::File`), in which case URL is empty.
 type ImagePrepResult struct {
 	URL             string
+	FileID          string
+	EncodedBytes    []byte
+	MIME            string
 	Resize          *ImagePrepResize
 	EffectiveDetail ImagePrepDetail
 }
@@ -175,11 +184,25 @@ const (
 	ImagePrepContentImage ImagePrepContentKind = "image"
 )
 
+// ImagePrepOrigin mirrors Rust image_preparation.rs `ImageOrigin`: the thread
+// receiving the attachment, its persistence intent, and the item the image came
+// from. Ephemeral travels on every upload request so a durable store can skip
+// persistence for ephemeral threads (Rust #51517).
+type ImagePrepOrigin struct {
+	ThreadID    string
+	Ephemeral   bool
+	MessageRole string
+	ItemID      string
+}
+
 type ImagePrepContentItem struct {
 	Kind     ImagePrepContentKind
 	Text     string
 	ImageURL string
-	Detail   ImagePrepDetail
+	// FileID, when set, replaces ImageURL: the store kept the prepared bytes as
+	// a file reference instead of an inline data URL (Rust `ImageReference::File`).
+	FileID string
+	Detail ImagePrepDetail
 }
 
 type ImagePrepResponseItemKind string
@@ -196,16 +219,23 @@ type ImagePrepResponseItem struct {
 }
 
 func PrepareImagePrepResponseItems(items []ImagePrepResponseItem) []ImagePrepResponseItem {
+	return PrepareImagePrepResponseItemsWithStore(attachmentstore.StoreOrDefault(nil), ImagePrepOrigin{}, items)
+}
+
+// PrepareImagePrepResponseItemsWithStore is the store-aware form of
+// PrepareImagePrepResponseItems, mirroring Rust `prepare_response_items` which
+// takes the thread's origin and the session image store.
+func PrepareImagePrepResponseItemsWithStore(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepResponseItem) []ImagePrepResponseItem {
 	out := make([]ImagePrepResponseItem, len(items))
 	for i := range items {
 		out[i] = items[i]
-		out[i].Content = prepareImagePrepContent(items[i].Content)
+		out[i].Content = prepareImagePrepContent(store, origin, items[i].Content)
 	}
 	return out
 }
 
 func PrepareImagePrepContent(items []ImagePrepContentItem) []ImagePrepContentItem {
-	return prepareImagePrepContent(items)
+	return prepareImagePrepContent(attachmentstore.StoreOrDefault(nil), ImagePrepOrigin{}, items)
 }
 
 // PrepareImagePrepContentWithNotices prepares image content items and reports
@@ -215,6 +245,15 @@ func PrepareImagePrepContent(items []ImagePrepContentItem) []ImagePrepContentIte
 // (image_number), so callers can build the ImageResizeNotice fragment with the
 // same numbering Rust uses.
 func PrepareImagePrepContentWithNotices(items []ImagePrepContentItem) ([]ImagePrepContentItem, []ImagePrepResize, error) {
+	return PrepareImagePrepContentWithNoticesAndStore(attachmentstore.StoreOrDefault(nil), ImagePrepOrigin{}, items)
+}
+
+// PrepareImagePrepContentWithNoticesAndStore prepares image content items like
+// PrepareImagePrepContentWithNotices, but hands every prepared image to the
+// attachment store with the thread's persistence intent (Rust #51517). The
+// store decides whether the prepared bytes stay inline or become a file
+// reference, exactly like Rust's `prepare_image` -> `AttachmentStore::upload`.
+func PrepareImagePrepContentWithNoticesAndStore(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepContentItem) ([]ImagePrepContentItem, []ImagePrepResize, error) {
 	out := make([]ImagePrepContentItem, len(items))
 	var resized []ImagePrepResize
 	imageCount := 0
@@ -231,7 +270,7 @@ func PrepareImagePrepContentWithNotices(items []ImagePrepContentItem) ([]ImagePr
 			continue
 		}
 		imageNumber++
-		prepared, err := PrepareImagePrepImageWithResult(item.ImageURL, item.Detail)
+		prepared, err := PrepareImagePrepImageWithStoreResult(store, origin, item.ImageURL, item.Detail)
 		if err != nil {
 			out[i] = ImagePrepContentItem{Kind: ImagePrepContentText, Text: ImagePrepPlaceholderForError(err)}
 			continue
@@ -240,7 +279,13 @@ func PrepareImagePrepContentWithNotices(items []ImagePrepContentItem) ([]ImagePr
 			out[i] = item
 			continue
 		}
-		item.ImageURL = prepared.URL
+		if prepared.FileID != "" {
+			item.FileID = prepared.FileID
+			item.ImageURL = ""
+		} else {
+			item.FileID = ""
+			item.ImageURL = prepared.URL
+		}
 		out[i] = item
 		if prepared.Resize != nil {
 			resized = append(resized, ImagePrepResize{
@@ -256,7 +301,7 @@ func PrepareImagePrepContentWithNotices(items []ImagePrepContentItem) ([]ImagePr
 	return out, resized, nil
 }
 
-func prepareImagePrepContent(items []ImagePrepContentItem) []ImagePrepContentItem {
+func prepareImagePrepContent(store attachmentstore.Store, origin ImagePrepOrigin, items []ImagePrepContentItem) []ImagePrepContentItem {
 	out := make([]ImagePrepContentItem, len(items))
 	for i := range items {
 		item := items[i]
@@ -264,26 +309,91 @@ func prepareImagePrepContent(items []ImagePrepContentItem) []ImagePrepContentIte
 			out[i] = item
 			continue
 		}
-		preparedURL, err := PrepareImagePrepImage(item.ImageURL, item.Detail)
+		prepared, err := PrepareImagePrepImageWithStoreResult(store, origin, item.ImageURL, item.Detail)
 		if err != nil {
 			out[i] = ImagePrepContentItem{Kind: ImagePrepContentText, Text: ImagePrepPlaceholderForError(err)}
 			continue
 		}
-		item.ImageURL = preparedURL
+		if prepared == nil {
+			out[i] = item
+			continue
+		}
+		if prepared.FileID != "" {
+			item.FileID = prepared.FileID
+			item.ImageURL = ""
+		} else {
+			item.FileID = ""
+			item.ImageURL = prepared.URL
+		}
 		out[i] = item
 	}
 	return out
 }
 
 func PrepareImagePrepImage(imageURL string, detail ImagePrepDetail) (string, error) {
-	result, err := PrepareImagePrepImageWithResult(imageURL, detail)
+	return PrepareImagePrepImageWithStore(attachmentstore.StoreOrDefault(nil), ImagePrepOrigin{}, imageURL, detail)
+}
+
+// PrepareImagePrepImageWithStore prepares one image and hands it to the
+// attachment store, returning the replacement reference: a data URL when the
+// store kept the bytes inline, or a file id when it stored them (Rust
+// `prepare_image` returning `ImageReference::Inline` / `ImageReference::File`).
+// A store failure leaves the prepared image inline, mirroring Rust's
+// `warn!(...)` fallback in image_preparation.rs.
+func PrepareImagePrepImageWithStore(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail) (string, error) {
+	result, err := PrepareImagePrepImageWithStoreResult(store, origin, imageURL, detail)
 	if err != nil {
 		return "", err
 	}
 	if result == nil {
 		return imageURL, nil
 	}
+	if result.FileID != "" {
+		return "", nil
+	}
 	return result.URL, nil
+}
+
+// PrepareImagePrepImageWithStoreResult is PrepareImagePrepImageWithStore
+// returning the full preparation record (reference plus resize metadata).
+func PrepareImagePrepImageWithStoreResult(store attachmentstore.Store, origin ImagePrepOrigin, imageURL string, detail ImagePrepDetail) (*ImagePrepResult, error) {
+	prepared, err := PrepareImagePrepImageWithResult(imageURL, detail)
+	if err != nil {
+		return nil, err
+	}
+	if prepared == nil {
+		return nil, nil
+	}
+	if len(prepared.EncodedBytes) == 0 {
+		return prepared, nil
+	}
+	prepared.FileID = ""
+	uploaded, uploadErr := attachmentstore.StoreOrDefault(store).Upload(attachmentstore.UploadRequest{
+		ThreadID:  origin.ThreadID,
+		Ephemeral: origin.Ephemeral,
+		Data:      prepared.EncodedBytes,
+	})
+	if uploadErr != nil {
+		// Rust keeps the prepared image inline when the store fails.
+		prepared.URL = imagePrepDataURL(prepared.MIME, prepared.EncodedBytes)
+		return prepared, nil
+	}
+	if uploaded.IsFile() {
+		prepared.FileID = uploaded.FileID
+		prepared.URL = ""
+		return prepared, nil
+	}
+	prepared.URL = imagePrepDataURL(prepared.MIME, uploaded.InlineBytes)
+	return prepared, nil
+}
+
+// imagePrepDataURL builds the inline data URL for uploaded bytes, mirroring
+// Rust `data_url_from_bytes(mime, bytes)`.
+func imagePrepDataURL(mime string, payload []byte) string {
+	if mime == "" {
+		mime = imagePrepMIME(imagePrepFormatPNG)
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(payload)
 }
 
 // PrepareImagePrepImageWithResult prepares one image with the Rust
@@ -351,14 +461,17 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 	targetWidth, targetHeight := PromptImageOutputDimensionsForLimits(sourceWidth, sourceHeight, limits)
 	if targetWidth == sourceWidth && targetHeight == sourceHeight {
 		if canImagePrepPreserveSourceBytes(format) {
+			// Use the canonical mime for the detected format rather than the
+			// media type declared in the original data URL. Sources such as
+			// the view_image tool label bytes application/octet-stream even
+			// when the payload is a valid PNG/JPEG/WebP; preserving that
+			// label would make the Responses API reject the image as an
+			// unsupported format (it only accepts webp/png/jpeg/gif).
+			mime := imagePrepMIME(format)
 			return &ImagePrepResult{
-				// Use the canonical mime for the detected format rather than the
-				// media type declared in the original data URL. Sources such as
-				// the view_image tool label bytes application/octet-stream even
-				// when the payload is a valid PNG/JPEG/WebP; preserving that
-				// label would make the Responses API reject the image as an
-				// unsupported format (it only accepts webp/png/jpeg/gif).
-				URL: "data:" + imagePrepMIME(format) + ";base64," + base64.StdEncoding.EncodeToString(payload),
+				URL:          imagePrepDataURL(mime, payload),
+				MIME:         mime,
+				EncodedBytes: payload,
 			}, nil
 		}
 		resized := resizeImagePrep(img, targetWidth, targetHeight)
@@ -367,7 +480,9 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 			return nil, err
 		}
 		return &ImagePrepResult{
-			URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(encoded),
+			URL:          imagePrepDataURL(mime, encoded),
+			MIME:         mime,
+			EncodedBytes: encoded,
 		}, nil
 	}
 	resized := resizeImagePrep(img, targetWidth, targetHeight)
@@ -389,7 +504,9 @@ func prepareImagePrepDecoded(payload []byte, limits PromptImageResizeLimits) (*I
 		return nil, err
 	}
 	return &ImagePrepResult{
-		URL: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(encoded),
+		URL:          imagePrepDataURL(mime, encoded),
+		MIME:         mime,
+		EncodedBytes: encoded,
 		Resize: &ImagePrepResize{
 			SourceWidth:    sourceWidth,
 			SourceHeight:   sourceHeight,
