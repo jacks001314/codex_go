@@ -29,15 +29,35 @@ const (
 // tests and the TUI.
 type TrustConfirmFunc func(cwd string, trustTarget string) (bool, error)
 
-// remoteProjectTrustStatus reads the remote app server's effective config and
-// reports the trust decision for cwd / trustTarget (Rust #39082: query remote
-// project config layers before starting a thread).
-func remoteProjectTrustStatus(ctx context.Context, client *remoteAppServerTUIClient, cwd string, trustTarget string) (TrustStatus, error) {
+// remoteProjectTrustRead is the config/read view the trust driver needs: the
+// decision plus the effective config and layer list the #49160 projectless
+// probe walks (Rust read_remote_project_trust requests include_layers).
+type remoteProjectTrustRead struct {
+	Status TrustStatus
+	Values map[string]any
+	Layers []config.Layer
+}
+
+// readRemoteProjectTrust reads the remote app server's effective config with
+// layers and reports the trust decision for cwd / trustTarget (Rust #39082 /
+// #49160: query remote project config layers before starting a thread).
+func readRemoteProjectTrust(ctx context.Context, client *remoteAppServerTUIClient, cwd string, trustTarget string) (remoteProjectTrustRead, error) {
 	var response config.ConfigReadResponse
-	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
-		return TrustStatusUndecided, err
+	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{IncludeLayers: true}, &response); err != nil {
+		return remoteProjectTrustRead{Status: TrustStatusUndecided}, err
 	}
-	return remoteTrustStatusFromValues(response.Config, cwd, trustTarget), nil
+	return remoteProjectTrustRead{
+		Status: remoteTrustStatusFromValues(response.Config, cwd, trustTarget),
+		Values: response.Config,
+		Layers: response.Layers,
+	}, nil
+}
+
+// remoteProjectTrustStatus reads the remote app server's effective config and
+// reports the trust decision for cwd / trustTarget.
+func remoteProjectTrustStatus(ctx context.Context, client *remoteAppServerTUIClient, cwd string, trustTarget string) (TrustStatus, error) {
+	read, err := readRemoteProjectTrust(ctx, client, cwd, trustTarget)
+	return read.Status, err
 }
 
 // remoteTrustStatusFromValues is the pure decision core (testable without a
@@ -77,32 +97,105 @@ func persistRemoteProjectTrust(ctx context.Context, client *remoteAppServerTUICl
 	}, &response)
 }
 
+// remoteTrustRequest carries the live trust-driver inputs. Root supplies the
+// launch overrides Rust reads from ConfigOverrides.
+type remoteTrustRequest struct {
+	CWD         string
+	TrustTarget string
+	Confirm     TrustConfirmFunc
+	Interactive bool
+	// Local reports that the connection runs on this host (Rust
+	// ProjectTrustHost::Local, app/remote_tui.go's local endpoint).
+	Local bool
+	Root  *cli.RootOptions
+}
+
 // ensureRemoteProjectTrust queries the remote trust decision and, when the
 // project has no existing decision, prompts (interactive only) and persists the
 // accepted trust (Rust #39082). Non-interactive sessions decline without
 // persisting so automation is never blocked by an interactive prompt.
-func ensureRemoteProjectTrust(ctx context.Context, client *remoteAppServerTUIClient, cwd string, trustTarget string, confirm TrustConfirmFunc, interactive bool) (TrustStatus, error) {
-	status, err := remoteProjectTrustStatus(ctx, client, cwd, trustTarget)
-	if err != nil || status != TrustStatusUndecided {
-		return status, err
+//
+// Rust #49160: a positively discovered local projectless folder with no saved
+// decision needs no folder-trust decision, so the prompt is skipped and nothing
+// is persisted (read_remote_project_trust returns Ok(None) and
+// onboarding/directory_trust.rs never renders the trust widget).
+func ensureRemoteProjectTrust(ctx context.Context, client *remoteAppServerTUIClient, req remoteTrustRequest) (TrustStatus, error) {
+	read, err := readRemoteProjectTrust(ctx, client, req.CWD, req.TrustTarget)
+	if err != nil || read.Status != TrustStatusUndecided {
+		return read.Status, err
 	}
-	if !interactive {
+	if projectlessRemoteTrustSkip(req, read) {
+		return TrustStatusTrusted, nil
+	}
+	if !req.Interactive {
 		return TrustStatusDeclined, nil
 	}
+	confirm := req.Confirm
 	if confirm == nil {
 		confirm = defaultTrustConfirm
 	}
-	trusted, err := confirm(cwd, trustTargetForDecision(cwd, trustTarget))
+	trusted, err := confirm(req.CWD, trustTargetForDecision(req.CWD, req.TrustTarget))
 	if err != nil {
 		return TrustStatusUndecided, err
 	}
 	if !trusted {
 		return TrustStatusDeclined, nil
 	}
-	if err := persistRemoteProjectTrust(ctx, client, trustTargetForDecision(cwd, trustTarget), true); err != nil {
+	if err := persistRemoteProjectTrust(ctx, client, trustTargetForDecision(req.CWD, req.TrustTarget), true); err != nil {
 		return TrustStatusUndecided, err
 	}
 	return TrustStatusTrusted, nil
+}
+
+// projectlessRemoteTrustSkip reports whether the trust driver may skip the
+// folder-trust prompt for this read. Only a local connection qualifies: Rust
+// computes `projectless` inside the `host == ProjectTrustHost::Local` branch of
+// read_remote_project_trust.
+func projectlessRemoteTrustSkip(req remoteTrustRequest, read remoteProjectTrustRead) bool {
+	if !req.Local {
+		return false
+	}
+	return ProjectlessFolderTrustEligible(ProjectlessFolderTrustInputs{
+		CWD:     req.CWD,
+		Local:   true,
+		Markers: (&config.Config{Values: read.Values}).ProjectRootMarkers(),
+		// read.Status == Undecided means no explicit decision exists, so
+		// SavedTrustDecision stays false (Rust trust_level.is_none()).
+		ProjectLayers: projectConfigLayerCount(read.Layers),
+	})
+}
+
+// projectConfigLayerCount counts the `project` layers the server reported;
+// Rust's `project_layers.is_empty()` gate and `is_projectless()` both require
+// none before a folder may count as projectless.
+func projectConfigLayerCount(layers []config.Layer) int {
+	count := 0
+	for _, layer := range layers {
+		if layer.Name.Type == config.LayerSourceProject {
+			count++
+		}
+	}
+	return count
+}
+
+// projectlessLaunchOverrides reports launch-time sandbox / permission overrides
+// (Rust ConfigOverrides.sandbox_mode / permission_profile / default_permissions),
+// which keep the configured permissions instead of the implicit defaults.
+func projectlessLaunchOverrides(root *cli.RootOptions) bool {
+	if root == nil {
+		return false
+	}
+	if strings.TrimSpace(root.Shared.Sandbox) != "" {
+		return true
+	}
+	for _, key := range remoteCLIConfigOverrideKeys(root) {
+		switch strings.TrimSpace(key) {
+		case "sandbox_mode", "sandbox", "sandbox_workspace_write", "default_permissions",
+			"permissions", "permission_profile", "network":
+			return true
+		}
+	}
+	return false
 }
 
 func trustTargetForDecision(cwd string, trustTarget string) string {
@@ -144,7 +237,12 @@ func interactiveRemoteTrustCheck(ctx context.Context, endpoint *appserverdaemon.
 	if cwd == "" {
 		return
 	}
-	if status, err := ensureRemoteProjectTrust(reqCtx, client, cwd, "", nil, interactive); err != nil {
+	if status, err := ensureRemoteProjectTrust(reqCtx, client, remoteTrustRequest{
+		CWD:         cwd,
+		Interactive: interactive,
+		Local:       interactiveRemoteEndpointIsLocal(endpoint),
+		Root:        root,
+	}); err != nil {
 		slog.Warn("remote project trust check failed", "error", err)
 	} else if status == TrustStatusDeclined {
 		slog.Warn("remote project trust declined; project-local config, hooks, and exec policies will not load")

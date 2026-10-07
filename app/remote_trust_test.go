@@ -58,9 +58,12 @@ func TestEnsureRemoteProjectTrustNonInteractiveDeclinesLikeRust(t *testing.T) {
 	// Without a server client this exercises the non-interactive fast path:
 	// the status query fails (no server) and the error propagates; the
 	// decision core is covered by remoteTrustStatusFromValues above.
-	status, err := ensureRemoteProjectTrust(context.Background(), nil, "/workspace/project", "", func(string, string) (bool, error) {
-		return true, nil
-	}, false)
+	status, err := ensureRemoteProjectTrust(context.Background(), nil, remoteTrustRequest{
+		CWD: "/workspace/project",
+		Confirm: func(string, string) (bool, error) {
+			return true, nil
+		},
+	})
 	if status != TrustStatusUndecided || err == nil {
 		t.Fatalf("ensure without client = %q, %v; want undecided + error", status, err)
 	}

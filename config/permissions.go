@@ -148,6 +148,16 @@ func permissionProfileAllowedByRequirements(allowed map[string]bool, profileID s
 	return false
 }
 
+// PermissionProfileAllowedByRequirements reports whether the managed
+// allowed_permission_profiles allow-list admits profileID, resolving the
+// built-in `:workspace` / `:read-only` / `:danger-full-access` aliases. A nil
+// allow-list admits every profile. It is the exported form of
+// permissionProfileAllowedByRequirements (Rust `is_permission_allowed`), used by
+// the #49160 projectless defaults gate.
+func PermissionProfileAllowedByRequirements(allowed map[string]bool, profileID string) bool {
+	return permissionProfileAllowedByRequirements(allowed, profileID)
+}
+
 // resolveRequirementDefaultPermissionProfile mirrors Rust's
 // resolve_default_permissions: when a managed allow-list is present, the
 // selected profile falls back to the required default - the requirement's

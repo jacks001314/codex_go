@@ -1161,13 +1161,14 @@ func interactiveAutoThreadTitle(prompt string) string {
 	return string(runes)
 }
 
-func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State, store *session.Store) (string, error) {
-	if state == nil {
-		return "", errors.New("interactive TUI state is nil")
-	}
-	if store == nil {
-		return "", errors.New("interactive TUI session store is nil")
-	}
+// interactiveLocalThreadStartParams builds the thread/start parameters for the
+// local TUI bootstrap thread.
+//
+// Rust #49160 applies the implicit projectless defaults while preparing fresh
+// startup config (tui/src/app/startup.rs -> tui/src/projectless.rs) and then
+// layers the managed new-thread defaults on top (tui/src/app/startup.rs +
+// managed_new_thread_defaults.rs, #44693); the ordering is preserved here.
+func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.State) appserver.ThreadStartParams {
 	threadStart := appserver.ThreadStartParams{
 		CWD:            strings.TrimSpace(state.CWD),
 		Model:          strings.TrimSpace(state.Model),
@@ -1175,14 +1176,72 @@ func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State
 		ApprovalPolicy: strings.TrimSpace(state.ApprovalPolicy),
 		Sandbox:        strings.TrimSpace(state.Sandbox),
 	}
-	// Rust applies the managed new-thread defaults to the startup config
-	// (tui/src/app/startup.rs + managed_new_thread_defaults.rs, #44693).
+	if defaults, ok := interactiveProjectlessThreadDefaults(root, state); ok {
+		threadStart.Sandbox = string(defaults.SandboxMode)
+		threadStart.ApprovalPolicy = projectlessApprovalPolicyParam(defaults)
+	}
 	if defaults, layers, ok := localNewThreadModelDefaults(auth.DefaultCodexHome()); ok {
 		applyManagedDefaultsToThreadStartParams(&threadStart, state, defaults, layers,
 			remoteCLIConfigOverrideKeys(root),
 			root != nil && strings.TrimSpace(root.Shared.Model) != "",
 			false)
 	}
+	return threadStart
+}
+
+// interactiveProjectlessThreadDefaults reports the implicit workspace-write /
+// granular-approval selection for a fresh local session in a positively
+// discovered projectless folder (Rust #49160, tui/src/projectless.rs
+// apply_defaults). It reports ok=false whenever the folder contributes project
+// configuration, a trust decision exists, the launch selected its own
+// permissions, or managed policy keeps the configured selection.
+func interactiveProjectlessThreadDefaults(root *cli.RootOptions, state *codextui.State) (ProjectlessFolderDefaults, bool) {
+	if state == nil {
+		return ProjectlessFolderDefaults{}, false
+	}
+	cwd := strings.TrimSpace(state.CWD)
+	if cwd == "" {
+		return ProjectlessFolderDefaults{}, false
+	}
+	// An explicit CLI/TUI selection is an explicit override (Rust
+	// ConfigOverrides.sandbox_mode / approval_policy).
+	if strings.TrimSpace(state.Sandbox) != "" || strings.TrimSpace(state.ApprovalPolicy) != "" {
+		return ProjectlessFolderDefaults{}, false
+	}
+	options := interactiveKeymapLoadOptions(root)
+	if options != nil {
+		// Classify the folder the thread starts in, not the launch cwd.
+		options.CWD = cwd
+	}
+	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), options)
+	if err != nil || loaded == nil {
+		return ProjectlessFolderDefaults{}, false
+	}
+	if !loaded.IsProjectless() {
+		// Rust `config.config_layer_stack.is_projectless()`: the loader
+		// classification also accounts for project-local `.gcode` layers.
+		return ProjectlessFolderDefaults{}, false
+	}
+	_, savedDecision := config.ProjectTrustLevelForTarget(loaded.Values, cwd)
+	return ProjectlessImplicitDefaults(ProjectlessFolderTrustInputs{
+		CWD:                cwd,
+		Local:              true,
+		Markers:            (&config.Config{Values: loaded.Values}).ProjectRootMarkers(),
+		Effective:          loaded.Values,
+		Requirements:       loaded.Requirements,
+		SavedTrustDecision: savedDecision,
+		ExplicitOverrides:  projectlessLaunchOverrides(root),
+	})
+}
+
+func interactiveStartLocalTUIThread(root *cli.RootOptions, state *codextui.State, store *session.Store) (string, error) {
+	if state == nil {
+		return "", errors.New("interactive TUI state is nil")
+	}
+	if store == nil {
+		return "", errors.New("interactive TUI session store is nil")
+	}
+	threadStart := interactiveLocalThreadStartParams(root, state)
 	params, err := json.Marshal(threadStart)
 	if err != nil {
 		return "", err
