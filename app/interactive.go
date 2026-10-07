@@ -983,6 +983,12 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		// here would fall back to the builtin catalog and fail to persist.
 		OnVoiceSettings:  interactiveLocalVoiceSettings(voiceSession.ensureRouter),
 		OnVoiceSaveVoice: interactiveLocalVoiceSaver(voiceSession.ensureRouter),
+		// Rust #49437/#49836: the device rows list through a short-lived local
+		// helper and persist audio.microphone / audio.speaker /
+		// audio.microphone_channel through the embedded config service.
+		OnVoiceListDevices:      voiceListDevicesCmd(voice),
+		OnVoiceSaveDevice:       voiceSaveDeviceCmd(localVoiceAudioConfig(voiceSession.ensureRouter)),
+		OnVoiceSaveInputChannel: voiceSaveInputChannelCmd(localVoiceAudioConfig(voiceSession.ensureRouter)),
 		OnVoiceAppendSpeech: interactiveLocalSpeechSender(voiceSession.ensureRouter, func() string {
 			return state.ThreadID
 		}),

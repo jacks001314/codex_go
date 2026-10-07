@@ -425,25 +425,28 @@ func strPtr(value string) *string { return &value }
 
 // Rust #49437 app/tests/realtime_requests.rs
 // `audio_device_is_machine_local_across_project_and_remote_transitions`: the
-// machine-local audio is a staged record the runtime resolves at launch and
-// after a reload, and it is what a voice conversation starts with.
+// machine-local audio is the record a voice conversation starts with. Go's
+// runtime re-reads audio.* from the active configuration when a conversation
+// starts (app/voice.go voiceRuntime.startCmd), so the settings read is the
+// record's single source and the device rows always show what a conversation
+// would open.
 func TestModelVoiceAudioStagingLikeRust(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{Width: 100, Height: 30})
-	if got := model.VoiceAudioPreferences(); got.Microphone != nil || got.Speaker != nil || got.MicrophoneChannel != nil {
-		t.Fatalf("fresh stage = %#v", got)
+	if got := model.voiceAudio; got.Microphone != nil || got.Speaker != nil || got.MicrophoneChannel != nil {
+		t.Fatalf("fresh record = %#v", got)
 	}
 
 	mic := "Machine mic"
-	model.Update(VoiceAudioStagedMsg{Audio: chatwidget.VoiceAudioPreferences{
+	model.Update(VoiceSettingsMsg{Audio: chatwidget.VoiceAudioPreferences{
 		Microphone:        &mic,
 		MicrophoneChannel: &chatwidget.MicrophoneChannels{Values: []uint16{1, 2}},
 	}})
-	got := model.VoiceAudioPreferences()
+	got := model.voiceAudio
 	if got.Microphone == nil || *got.Microphone != "Machine mic" {
-		t.Fatalf("staged microphone = %#v", got.Microphone)
+		t.Fatalf("recorded microphone = %#v", got.Microphone)
 	}
 	if got.MicrophoneChannel == nil || len(got.MicrophoneChannel.Values) != 2 {
-		t.Fatalf("staged channels = %#v", got.MicrophoneChannel)
+		t.Fatalf("recorded channels = %#v", got.MicrophoneChannel)
 	}
 
 	// /voice settings carries the same record into the hierarchy.
@@ -456,14 +459,14 @@ func TestModelVoiceAudioStagingLikeRust(t *testing.T) {
 		}
 	}
 	runTeaCmd(t, model, model.applyVoiceCommand("settings"))
-	if got := model.VoiceAudioPreferences(); got.Microphone == nil || *got.Microphone != "Machine mic" {
+	if got := model.voiceAudio; got.Microphone == nil || *got.Microphone != "Machine mic" {
 		t.Fatalf("settings did not carry the audio record: %#v", got)
 	}
 
-	// A configuration reload stages the machine audio it resolved; a machine
-	// without audio clears the record instead of keeping a stale device.
-	model.Update(VoiceAudioStagedMsg{Audio: chatwidget.VoiceAudioPreferences{}})
-	if got := model.VoiceAudioPreferences(); got.Microphone != nil {
-		t.Fatalf("reload kept %#v", got.Microphone)
+	// A machine without an audio preference clears the record instead of
+	// keeping a stale device.
+	model.Update(VoiceSettingsMsg{})
+	if got := model.voiceAudio; got.Microphone != nil || got.MicrophoneChannel != nil {
+		t.Fatalf("empty record kept %#v", got)
 	}
 }

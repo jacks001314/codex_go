@@ -28,19 +28,22 @@ type VoiceDevicesMsg struct {
 // VoiceDeviceSavedMsg reports a persisted audio.microphone / audio.speaker
 // selection (Rust App::persist_realtime_device). ChannelOverridden reports that
 // saving an input device could not clear a channel override coming from another
-// configuration layer.
+// configuration layer, and Overridden reports that the stored value is not the
+// effective one because another layer wins (Rust persist_realtime_audio).
 type VoiceDeviceSavedMsg struct {
 	Kind              voicehost.AudioDeviceKind
 	Name              *string
 	ChannelOverridden bool
+	Overridden        bool
 	Err               error
 }
 
 // VoiceInputChannelSavedMsg reports a persisted audio.microphone_channel
 // selection (Rust App::persist_realtime_input_channel).
 type VoiceInputChannelSavedMsg struct {
-	Channel *chatwidget.MicrophoneChannels
-	Err     error
+	Channel    *chatwidget.MicrophoneChannels
+	Overridden bool
+	Err        error
 }
 
 // Device-list failure copy (Rust #49437 list_realtime_devices).
@@ -139,6 +142,10 @@ func (m *Model) applyVoiceDeviceSaved(msg VoiceDeviceSavedMsg) {
 		m.notice = voiceAudioChannelOverriddenNote
 		return
 	}
+	if msg.Overridden {
+		m.notice = voiceAudioOverriddenNotice
+		return
+	}
 	m.notice = voiceAudioSavedNotice
 }
 
@@ -162,6 +169,10 @@ func (m *Model) applyVoiceInputChannelSaved(msg VoiceInputChannelSavedMsg) {
 		return
 	}
 	m.voiceAudio.MicrophoneChannel = msg.Channel
+	if msg.Overridden {
+		m.notice = voiceAudioOverriddenNotice
+		return
+	}
 	m.notice = voiceAudioSavedNotice
 }
 

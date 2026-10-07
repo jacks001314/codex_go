@@ -581,6 +581,12 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		OnVoicePeaks:     voice.peaks,
 		OnVoiceSettings:  interactiveRemoteVoiceSettings(endpoint),
 		OnVoiceSaveVoice: interactiveRemoteVoiceSaver(endpoint),
+		// Rust #49437/#49836: the device rows list through a short-lived local
+		// helper (audio runs on the TUI's machine) and persist audio.microphone
+		// / audio.speaker / audio.microphone_channel through the endpoint.
+		OnVoiceListDevices:      voiceListDevicesCmd(voice),
+		OnVoiceSaveDevice:       voiceSaveDeviceCmd(remoteVoiceAudioConfig(endpoint)),
+		OnVoiceSaveInputChannel: voiceSaveInputChannelCmd(remoteVoiceAudioConfig(endpoint)),
 		OnVoiceAppendSpeech: interactiveRemoteSpeechSender(endpoint, func() string {
 			return state.ThreadID
 		}),

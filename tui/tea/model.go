@@ -593,16 +593,6 @@ type VoiceSettingsMsg struct {
 	Err   error
 }
 
-// VoiceAudioStagedMsg stages the machine-local audio preferences without
-// opening the settings tree, the Go counterpart of the audio half of Rust
-// `LocalSettings::from(&config)` / `reloaded(&config)` (#49437): the runtime
-// resolves audio.microphone / audio.speaker / audio.microphone_channel out of
-// the machine's configuration at launch and after a reload, and the TUI keeps
-// the staged value so the next voice conversation starts with it.
-type VoiceAudioStagedMsg struct {
-	Audio chatwidget.VoiceAudioPreferences
-}
-
 // VoiceSavedMsg reports a persisted voice preference.
 type VoiceSavedMsg struct {
 	Voice string
@@ -2563,9 +2553,6 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, bubbletea.Batch(cmd, m.refreshStatusControlsCmd())
 	case VoiceSettingsMsg:
 		m.applyVoiceSettings(msg)
-		return m, nil
-	case VoiceAudioStagedMsg:
-		m.voiceAudio = msg.Audio
 		return m, nil
 	case VoiceHelperAttachedMsg:
 		if m.VoiceConversation.Running() && msg.AttemptID == m.VoiceConversation.AttemptID {
@@ -7499,17 +7486,6 @@ func (m *Model) applyVoiceSettings(msg VoiceSettingsMsg) {
 	m.voiceChoices = append([]string(nil), msg.Voices...)
 	m.voiceAudio = msg.Audio
 	m.openVoiceSettingsView()
-}
-
-// VoiceAudioPreferences returns the machine-local audio selection this launch
-// staged (Rust #49437 ChatWidget::local_settings.audio). The runtime forwards it
-// to the helper when a voice conversation starts; the TUI never opens audio on
-// its own.
-func (m *Model) VoiceAudioPreferences() chatwidget.VoiceAudioPreferences {
-	if m == nil {
-		return chatwidget.VoiceAudioPreferences{}
-	}
-	return m.voiceAudio
 }
 
 // applyVoicePickerOption persists the selected voice, or returns to the "Voice

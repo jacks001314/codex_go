@@ -7,6 +7,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"codex_go/appserverdaemon"
 	"codex_go/config"
 	"codex_go/realtime"
+	"codex_go/tui/chatwidget"
 	codextea "codex_go/tui/tea"
 	"codex_go/voicehost"
 )
@@ -442,6 +444,10 @@ func interactiveRemoteVoiceSettings(endpoint *appserverdaemon.RemoteAppServerEnd
 			return codextea.VoiceSettingsMsg{
 				Voices:  RealtimeVoiceNames(voices.V1),
 				Current: current,
+				// Rust #49437: the settings tree shows the machine-local
+				// audio.microphone / audio.speaker / audio.microphone_channel
+				// selection alongside the voice catalog.
+				Audio: voiceAudioPreferencesFromSelection(settings.Audio),
 			}
 		}
 	}
@@ -520,5 +526,280 @@ func interactiveRemoteSpeechSender(endpoint *appserverdaemon.RemoteAppServerEndp
 			}, &response)
 			return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: err}
 		}
+	}
+}
+
+// Machine-local audio device settings (Rust #49437 / #49836
+// codex-rs/tui/src/app/realtime_settings.rs).
+//
+// The helper owns the audio devices, so enumerating them always starts a
+// short-lived local helper process — even when the app-server is remote, since
+// "audio runs on the TUI's machine" (Rust persist_realtime_audio). The saved
+// preference lives in the active configuration service: audio.microphone and
+// audio.speaker name devices, audio.microphone_channel selects capture
+// channels, and saving an input device clears the saved channel.
+
+const (
+	// voiceDeviceListTimeout bounds one helper connect, runtime initialization
+	// and device listing.
+	voiceDeviceListTimeout = 90 * time.Second
+	// voiceAudioWriteTimeout bounds one audio setting write plus its read-back.
+	voiceAudioWriteTimeout = 30 * time.Second
+)
+
+// voiceAudioConfig is the mode-specific configuration surface the audio device
+// settings need: the write path plus the effective read-back used to report
+// whether the saved value is the one in effect (Rust App::persist_realtime_audio).
+type voiceAudioConfig struct {
+	write func(ctx context.Context, edits []config.ConfigEdit) error
+	read  func(ctx context.Context) (voicehost.AudioDeviceSelection, error)
+}
+
+// voiceAudioPreferencesFromSelection renders the machine-local preference the
+// settings tree shows (Rust LocalSettings::audio).
+func voiceAudioPreferencesFromSelection(selection voicehost.AudioDeviceSelection) chatwidget.VoiceAudioPreferences {
+	preferences := chatwidget.VoiceAudioPreferences{
+		Microphone: selection.Microphone,
+		Speaker:    selection.Speaker,
+	}
+	if len(selection.Channel) > 0 {
+		channels := make([]uint16, len(selection.Channel))
+		copy(channels, selection.Channel)
+		preferences.MicrophoneChannel = &chatwidget.MicrophoneChannels{Values: channels}
+	}
+	return preferences
+}
+
+// effectiveAudioSelection resolves audio.* out of effective configuration
+// values. A present but unusable preference is an error rather than a silently
+// ignored setting.
+func effectiveAudioSelection(values map[string]any) (voicehost.AudioDeviceSelection, error) {
+	selection, problem := audioSelectionFromConfigValues(values["audio"])
+	if problem != "" {
+		return voicehost.AudioDeviceSelection{}, errors.New(problem)
+	}
+	return selection, nil
+}
+
+// connectVoiceHelper starts one throwaway helper for a listing request, using
+// the same package and build identity a conversation would start.
+func connectVoiceHelper(ctx context.Context, runtime *voiceRuntime) (*voicehost.VoiceHost, error) {
+	if runtime == nil {
+		return nil, errors.New("voice runtime is unavailable")
+	}
+	packageDir := strings.TrimSpace(runtime.options.packageDir)
+	if packageDir == "" {
+		packageDir = voicehost.VoicePackageDir()
+		if packageDir == "" {
+			return nil, errors.New("voice package unavailable")
+		}
+	}
+	buildCommit := strings.TrimSpace(runtime.options.buildCommit)
+	if buildCommit == "" {
+		buildCommit = voicehost.DefaultBuildCommit()
+	}
+	return voicehost.ConnectPackage(ctx, packageDir, buildCommit)
+}
+
+// voiceListDevicesCmd enumerates one direction through the local helper (Rust
+// App::list_realtime_devices). Listing never opens a stream, and the helper is
+// retired as soon as the answer arrives.
+func voiceListDevicesCmd(runtime *voiceRuntime) func(kind voicehost.AudioDeviceKind) bubbletea.Cmd {
+	return func(kind voicehost.AudioDeviceKind) bubbletea.Cmd {
+		return func() bubbletea.Msg {
+			if kind != voicehost.AudioDeviceKindInput && kind != voicehost.AudioDeviceKindOutput {
+				return codextea.VoiceDevicesMsg{Kind: kind, Err: errors.New("unknown audio device direction")}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), voiceDeviceListTimeout)
+			defer cancel()
+			host, err := connectVoiceHelper(ctx, runtime)
+			if err != nil {
+				return codextea.VoiceDevicesMsg{Kind: kind, Err: err}
+			}
+			// The Go helper enumerates through the miniaudio context it later
+			// captures with, so the runtime must be initialized first.
+			if err := host.InitializeRuntime(ctx); err != nil {
+				_ = host.Close(context.Background())
+				return codextea.VoiceDevicesMsg{Kind: kind, Err: err}
+			}
+			devices, listErr := host.ListDevices(ctx, kind)
+			_ = host.Close(context.Background())
+			return codextea.VoiceDevicesMsg{Kind: kind, Devices: devices, Err: listErr}
+		}
+	}
+}
+
+// voiceAudioDeviceKey maps one direction to its configuration key (Rust
+// persist_realtime_device).
+func voiceAudioDeviceKey(kind voicehost.AudioDeviceKind) (string, error) {
+	switch kind {
+	case voicehost.AudioDeviceKindInput:
+		return "microphone", nil
+	case voicehost.AudioDeviceKindOutput:
+		return "speaker", nil
+	default:
+		return "", errors.New("unknown audio device direction")
+	}
+}
+
+// voiceSaveDeviceCmd persists audio.microphone / audio.speaker and reports
+// whether the stored value is the effective one (Rust
+// App::persist_realtime_device → persist_realtime_audio).
+func voiceSaveDeviceCmd(cfg voiceAudioConfig) func(kind voicehost.AudioDeviceKind, name *string) bubbletea.Cmd {
+	return func(kind voicehost.AudioDeviceKind, name *string) bubbletea.Cmd {
+		return func() bubbletea.Msg {
+			key, err := voiceAudioDeviceKey(kind)
+			if err != nil {
+				return codextea.VoiceDeviceSavedMsg{Kind: kind, Name: name, Err: err}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), voiceAudioWriteTimeout)
+			defer cancel()
+			edits := []config.ConfigEdit{{
+				KeyPath:       "audio." + key,
+				Value:         deviceConfigValue(name),
+				MergeStrategy: config.MergeReplace,
+			}}
+			if key == "microphone" {
+				// Rust #49437: saving an input device clears the saved channel
+				// selection; another layer can still override it.
+				edits = append(edits, config.ConfigEdit{
+					KeyPath:       "audio.microphone_channel",
+					Value:         nil,
+					MergeStrategy: config.MergeReplace,
+				})
+			}
+			if err := cfg.write(ctx, edits); err != nil {
+				return codextea.VoiceDeviceSavedMsg{Kind: kind, Name: name, Err: err}
+			}
+			effective, err := cfg.read(ctx)
+			if err != nil {
+				return codextea.VoiceDeviceSavedMsg{Kind: kind, Name: name, Err: fmt.Errorf("Audio setting was saved, but effective settings could not be read: %w", err)}
+			}
+			return codextea.VoiceDeviceSavedMsg{
+				Kind:              kind,
+				Name:              name,
+				ChannelOverridden: key == "microphone" && len(effective.Channel) > 0,
+				Overridden:        !deviceValueMatches(effective, key, name),
+			}
+		}
+	}
+}
+
+// voiceSaveInputChannelCmd persists audio.microphone_channel (Rust
+// App::persist_realtime_input_channel).
+func voiceSaveInputChannelCmd(cfg voiceAudioConfig) func(channel *chatwidget.MicrophoneChannels) bubbletea.Cmd {
+	return func(channel *chatwidget.MicrophoneChannels) bubbletea.Cmd {
+		return func() bubbletea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), voiceAudioWriteTimeout)
+			defer cancel()
+			if err := cfg.write(ctx, []config.ConfigEdit{{
+				KeyPath:       "audio.microphone_channel",
+				Value:         channelConfigValue(channel),
+				MergeStrategy: config.MergeReplace,
+			}}); err != nil {
+				return codextea.VoiceInputChannelSavedMsg{Channel: channel, Err: err}
+			}
+			effective, err := cfg.read(ctx)
+			if err != nil {
+				return codextea.VoiceInputChannelSavedMsg{Channel: channel, Err: fmt.Errorf("Audio setting was saved, but effective settings could not be read: %w", err)}
+			}
+			return codextea.VoiceInputChannelSavedMsg{
+				Channel:    channel,
+				Overridden: !channelsValueMatches(effective.Channel, channel),
+			}
+		}
+	}
+}
+
+// deviceConfigValue renders the stored value: nil clears the key (Rust
+// ConfigEdit::ClearPath), a name stores the device.
+func deviceConfigValue(name *string) any {
+	if name == nil {
+		return nil
+	}
+	return strings.TrimSpace(*name)
+}
+
+// channelConfigValue renders the stored channel selection: nil clears it, a
+// single channel stays a scalar and several stay a list, mirroring Rust
+// MicrophoneChannels::Single | Multiple.
+func channelConfigValue(channel *chatwidget.MicrophoneChannels) any {
+	if channel == nil || len(channel.Values) == 0 {
+		return nil
+	}
+	if len(channel.Values) == 1 {
+		return channel.Values[0]
+	}
+	values := make([]uint16, len(channel.Values))
+	copy(values, channel.Values)
+	return values
+}
+
+// deviceValueMatches reports whether the effective audio preference equals the
+// value just written.
+func deviceValueMatches(effective voicehost.AudioDeviceSelection, key string, name *string) bool {
+	if key == "speaker" {
+		return deviceNameMatches(effective.Speaker, name)
+	}
+	return deviceNameMatches(effective.Microphone, name)
+}
+
+func deviceNameMatches(current *string, want *string) bool {
+	if want == nil {
+		return current == nil
+	}
+	if current == nil {
+		return false
+	}
+	return strings.TrimSpace(*current) == strings.TrimSpace(*want)
+}
+
+// channelsValueMatches reports whether the effective capture-channel selection
+// equals the value just written; an absent and an empty selection both mean
+// "all channels (mixed)".
+func channelsValueMatches(current []uint16, want *chatwidget.MicrophoneChannels) bool {
+	var wantValues []uint16
+	if want != nil {
+		wantValues = want.Values
+	}
+	if len(current) != len(wantValues) {
+		return false
+	}
+	for index := range current {
+		if current[index] != wantValues[index] {
+			return false
+		}
+	}
+	return true
+}
+
+// remoteVoiceAudioConfig writes audio.* through the remote app-server and
+// re-reads the effective values so the host can report saved vs overridden.
+func remoteVoiceAudioConfig(endpoint *appserverdaemon.RemoteAppServerEndpoint) voiceAudioConfig {
+	return voiceAudioConfig{
+		write: func(ctx context.Context, edits []config.ConfigEdit) error {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return err
+			}
+			defer client.close()
+			var response config.ConfigWriteResponse
+			return remoteSessionRequest(ctx, client, appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+				Edits:            edits,
+				ReloadUserConfig: true,
+			}, &response)
+		},
+		read: func(ctx context.Context) (voicehost.AudioDeviceSelection, error) {
+			client, err := openRemoteSessionClient(ctx, endpoint)
+			if err != nil {
+				return voicehost.AudioDeviceSelection{}, err
+			}
+			defer client.close()
+			var response config.ConfigReadResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRead, config.ConfigReadParams{}, &response); err != nil {
+				return voicehost.AudioDeviceSelection{}, err
+			}
+			return effectiveAudioSelection(response.Config)
+		},
 	}
 }

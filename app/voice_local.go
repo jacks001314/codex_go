@@ -22,6 +22,7 @@ import (
 	"codex_go/config"
 	"codex_go/realtime"
 	codextea "codex_go/tui/tea"
+	"codex_go/voicehost"
 )
 
 // interactiveVoiceConnectionID keeps the voice relay on its own app-server
@@ -228,6 +229,10 @@ func interactiveLocalVoiceSettings(factory interactiveVoiceRouterFactory) func()
 			return codextea.VoiceSettingsMsg{
 				Voices:  RealtimeVoiceNames(catalog.V1),
 				Current: name,
+				// Rust #49437: the settings tree shows the machine-local
+				// audio.microphone / audio.speaker / audio.microphone_channel
+				// selection alongside the voice catalog.
+				Audio: voiceAudioPreferencesFromSelection(current.Audio),
 			}
 		}
 	}
@@ -290,5 +295,42 @@ func interactiveLocalSpeechSender(factory interactiveVoiceRouterFactory, threadI
 			})
 			return codextea.VoiceSpeechResultMsg{ItemID: itemID, Err: err}
 		}
+	}
+}
+
+// localVoiceAudioConfig is the embedded TUI's audio setting surface: the
+// in-process app-server writes audio.* through config/batchWrite and reports the
+// effective values back through config/read (Rust App::persist_realtime_audio).
+func localVoiceAudioConfig(factory interactiveVoiceRouterFactory) voiceAudioConfig {
+	if factory == nil {
+		factory = func() interactiveVoiceRouter { return nil }
+	}
+	return voiceAudioConfig{
+		write: func(ctx context.Context, edits []config.ConfigEdit) error {
+			router := factory()
+			if router == nil {
+				return errors.New("audio setting failed in TUI: app-server is unavailable")
+			}
+			_, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigBatchWrite, config.ConfigBatchWriteParams{
+				Edits:            edits,
+				ReloadUserConfig: true,
+			})
+			return err
+		},
+		read: func(ctx context.Context) (voicehost.AudioDeviceSelection, error) {
+			router := factory()
+			if router == nil {
+				return voicehost.AudioDeviceSelection{}, errors.New("audio setting failed in TUI: app-server is unavailable")
+			}
+			result, err := localVoiceRequest(router, appserver.IntID(2), appserver.MethodConfigRead, config.ConfigReadParams{})
+			if err != nil {
+				return voicehost.AudioDeviceSelection{}, err
+			}
+			response, ok := result.(*config.ConfigReadResponse)
+			if !ok || response == nil {
+				return voicehost.AudioDeviceSelection{}, errors.New("audio setting failed in TUI: unexpected config read response")
+			}
+			return effectiveAudioSelection(response.Config)
+		},
 	}
 }
