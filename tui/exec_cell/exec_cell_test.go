@@ -154,7 +154,7 @@ func TestExecCellDisplayMatchesRustContinuationAndOutputLayout(t *testing.T) {
 	if outputRows > ToolCallMaxLines {
 		t.Fatalf("output rows = %d, want at most %d: %#v", outputRows, ToolCallMaxLines, clean)
 	}
-	if !strings.Contains(strings.Join(clean, "\n"), transcriptHint) {
+	if !strings.Contains(strings.Join(clean, "\n"), tui.TranscriptDisclosureHint()) {
 		t.Fatalf("truncated output should advertise transcript: %#v", clean)
 	}
 }
@@ -175,7 +175,7 @@ func TestExecCellDisplayUsesSharedThreeRowPreviewLikeRust(t *testing.T) {
 	}, false)
 
 	clean := utils.StripANSI(strings.Join(cell.DisplayLines(80), "\n"))
-	if !strings.Contains(clean, "+3 lines ("+transcriptHint+")") {
+	if !strings.Contains(clean, "+3 lines ("+tui.TranscriptDisclosureHint()+")") {
 		t.Fatalf("preview should report three hidden lines: %q", clean)
 	}
 	outputRows := 0
@@ -194,7 +194,7 @@ func TestExecCellDisplayUsesSharedThreeRowPreviewLikeRust(t *testing.T) {
 			t.Fatalf("transcript dropped %q: %q", line, transcript)
 		}
 	}
-	if strings.Contains(transcript, transcriptHint) {
+	if strings.Contains(transcript, tui.TranscriptDisclosureHint()) {
 		t.Fatalf("transcript should not advertise a truncated preview: %q", transcript)
 	}
 }
@@ -330,5 +330,31 @@ func TestExecCellExploringGroupStaysOpenLikeRust(t *testing.T) {
 	}
 	if display = strings.Join(next.DisplayLines(80), "\n"); !strings.Contains(display, "Explored") {
 		t.Fatalf("completed exploring group display:\n%s", display)
+	}
+}
+
+// Mirrors Rust #48761: the compact activity marker keeps the shortcut hint only
+// while it fits the available width.
+func TestExecCellDropsDisclosureHintWhenItDoesNotFitLikeRust(t *testing.T) {
+	cell := NewExecCell(ExecCall{
+		CallID:  "call-hint",
+		Command: []string{"bash", "-lc", "run"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n",
+			FormattedOutput:  "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+	wide := strings.Join(cell.DisplayLinesWithTheme(120, "dracula"), "\n")
+	if !strings.Contains(wide, "+7 lines ("+tui.TranscriptHint+")") {
+		t.Fatalf("wide render lost the transcript hint: %q", wide)
+	}
+	narrow := strings.Join(cell.DisplayLinesWithTheme(16, "dracula"), "\n")
+	if strings.Contains(narrow, "to view transcript") {
+		t.Fatalf("narrow render kept the transcript hint: %q", narrow)
+	}
+	if !strings.Contains(narrow, "+7 lines") {
+		t.Fatalf("narrow render lost the hidden-line count: %q", narrow)
 	}
 }

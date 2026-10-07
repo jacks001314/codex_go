@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -17,10 +18,39 @@ const (
 	// MaxPreviewLineBytes bounds how much of one logical line is considered
 	// before wrapping, so a megabyte-long result cannot stall the renderer.
 	MaxPreviewLineBytes = 16 * 1024
-	// TranscriptHint tells the user where the hidden output lives
+	// TranscriptHint is the built-in disclosure hint for hidden output
 	// (Rust TRANSCRIPT_HINT).
 	TranscriptHint = "ctrl+t to view transcript"
+	// transcriptDefaultBinding is the built-in `open_transcript` shortcut
+	// (tui/keymap.go), used when no resolver is installed.
+	transcriptDefaultBinding = "ctrl+t"
 )
+
+// openTranscriptHint resolves the configured `open_transcript` shortcut label
+// (Rust #48761 `keymap.primary_hint(KeymapContext::Global, "open_transcript")`).
+// The installed resolver runs on every render, so a runtime remap is reflected
+// immediately; nil keeps the built-in default binding.
+var openTranscriptHint func() string
+
+// SetOpenTranscriptHintProvider installs the resolver used by the hidden-output
+// disclosure hints. A resolver returning "" reports an unbound action, so the
+// hints omit the shortcut entirely (Rust #48761).
+func SetOpenTranscriptHintProvider(resolve func() string) {
+	openTranscriptHint = resolve
+}
+
+// TranscriptDisclosureHint returns "<binding> to view transcript", or "" when
+// the `open_transcript` action is unbound (Rust #48761).
+func TranscriptDisclosureHint() string {
+	label := transcriptDefaultBinding
+	if openTranscriptHint != nil {
+		label = strings.TrimSpace(openTranscriptHint())
+	}
+	if label == "" {
+		return ""
+	}
+	return label + " to view transcript"
+}
 
 // ToolOutputPreview collects the leading preview rows of a tool result.
 type ToolOutputPreview struct {
@@ -76,7 +106,15 @@ func (p *ToolOutputPreview) Finish() []string {
 		if p.omitted == 1 {
 			unit = "line"
 		}
-		marker := "+" + strconv.Itoa(p.omitted) + " " + unit + " (" + TranscriptHint + ")"
+		marker := "+" + strconv.Itoa(p.omitted) + " " + unit
+		if hint := TranscriptDisclosureHint(); hint != "" {
+			// Rust #48761: keep the shortcut hint only while the marker still fits,
+			// so the disclosure control never crowds out the hidden-line count.
+			withHint := marker + " (" + hint + ")"
+			if p.width > 0 && DisplayWidth(withHint) <= p.width {
+				marker = withHint
+			}
+		}
 		out = append(out, TruncateWithEllipsis(marker, p.width))
 	}
 	return out

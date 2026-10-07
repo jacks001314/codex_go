@@ -2265,6 +2265,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 		completedThreadIDs:              map[string]bool{},
 		now:                             time.Now,
 	}
+	// Rust #48761: the hidden-output disclosure hints use the configured
+	// `open_transcript` shortcut, resolved on every render so a runtime remap is
+	// reflected immediately.
+	codextui.SetOpenTranscriptHintProvider(model.openTranscriptHint)
 	if threadID := strings.TrimSpace(state.ThreadID); threadID != "" {
 		model.markThreadCompleted(threadID)
 	}
@@ -6276,6 +6280,20 @@ func (m *Model) mergeStartupWarnings(incoming historycell.StartupWarningsCell) {
 	merged.TranscriptHint = m.startupWarningsHint()
 	m.startupWarnings = merged
 	m.renderStartupWarnings()
+}
+
+// openTranscriptHint reports the resolved `open_transcript` shortcut label for
+// the hidden-output disclosure hints, or "" when the action is unbound
+// (Rust #48761 `primary_hint(KeymapContext::Global, "open_transcript")`).
+func (m *Model) openTranscriptHint() string {
+	if m == nil {
+		return ""
+	}
+	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "global", "open_transcript")
+	if len(bindings) == 0 {
+		return ""
+	}
+	return displayKeyBinding(bindings[0])
 }
 
 // startupWarningsHint mirrors Rust's primary_binding(open_transcript) lookup:

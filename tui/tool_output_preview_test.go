@@ -78,9 +78,10 @@ func TestToolOutputPreviewBoundsLongInput(t *testing.T) {
 	if len(got) != PreviewLines+1 {
 		t.Fatalf("preview rows = %d, want %d (%#v)", len(got), PreviewLines+1, got)
 	}
-	// The marker is truncated to the preview width, so only its prefix survives.
-	if marker := got[len(got)-1]; !strings.HasPrefix(marker, "+1 line (") {
-		t.Fatalf("preview marker = %q", got[len(got)-1])
+	// Rust #48761: a marker whose full form does not fit the preview width drops
+	// the shortcut hint instead of truncating it, keeping the hidden-line count.
+	if marker := got[len(got)-1]; marker != "+1 line" {
+		t.Fatalf("preview marker = %q, want \"+1 line\"", got[len(got)-1])
 	}
 
 	// The 16 KiB input bound keeps a huge line bounded and still reported.
@@ -98,5 +99,33 @@ func TestToolOutputPreviewTruncatesTheMarkerToWidth(t *testing.T) {
 	marker := got[len(got)-1]
 	if DisplayWidth(marker) > 12 {
 		t.Fatalf("marker = %q (width %d), want at most 12", marker, DisplayWidth(marker))
+	}
+}
+
+// Mirrors Rust #48761: the hidden-output hints use the configured
+// `open_transcript` shortcut, and an unbound action drops the hint entirely.
+func TestTranscriptDisclosureHintFollowsKeymapLikeRust(t *testing.T) {
+	defer SetOpenTranscriptHintProvider(nil)
+	if got := TranscriptDisclosureHint(); got != TranscriptHint {
+		t.Fatalf("default hint = %q, want %q", got, TranscriptHint)
+	}
+	if got := ToolOutputPreviewLines([]string{"one", "two", "three", "four"}, 60, 4); got[3] != "+1 line ("+TranscriptHint+")" {
+		t.Fatalf("default preview = %#v", got)
+	}
+
+	SetOpenTranscriptHintProvider(func() string { return "left" })
+	if got := TranscriptDisclosureHint(); got != "left to view transcript" {
+		t.Fatalf("remapped hint = %q, want \"left to view transcript\"", got)
+	}
+	if got := ToolOutputPreviewLines([]string{"one", "two", "three", "four"}, 60, 4); got[3] != "+1 line (left to view transcript)" {
+		t.Fatalf("remapped preview = %#v", got)
+	}
+
+	SetOpenTranscriptHintProvider(func() string { return "" })
+	if got := TranscriptDisclosureHint(); got != "" {
+		t.Fatalf("unbound hint = %q, want empty", got)
+	}
+	if got := ToolOutputPreviewLines([]string{"one", "two", "three", "four"}, 60, 4); got[3] != "+1 line" {
+		t.Fatalf("unbound preview = %#v", got)
 	}
 }

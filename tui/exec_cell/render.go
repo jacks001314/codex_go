@@ -16,7 +16,6 @@ const (
 	UserShellToolCallMaxLines = 50
 	maxInteractionPreview     = 80
 	commandContinuationLines  = 2
-	transcriptHint            = "ctrl+t to view transcript"
 	ansiReset                 = "\x1b[0m"
 	ansiBold                  = "\x1b[1m"
 	ansiDim                   = "\x1b[2m"
@@ -353,7 +352,17 @@ func truncateOutputLinesMiddle(lines []string, maxRows int, width int, omittedHi
 	if omittedHint != nil {
 		estimatedOmitted--
 	}
-	ellipsis := "    " + OutputEllipsisText(estimatedOmitted)
+	hint := tui.TranscriptDisclosureHint()
+	ellipsisText := func(omitted int) string {
+		// Rust #48761: keep the shortcut hint out of the marker when it would not
+		// fit the available width.
+		withHint := "    " + outputEllipsisText(omitted, hint)
+		if hint == "" || tui.DisplayWidth(withHint) <= width {
+			return withHint
+		}
+		return "    " + outputEllipsisText(omitted, "")
+	}
+	ellipsis := ellipsisText(estimatedOmitted)
 	ellipsisRows := max(1, (tui.DisplayWidth(ellipsis)+width-1)/width)
 	if ellipsisRows >= maxRows {
 		return []string{ellipsis}
@@ -378,7 +387,7 @@ func truncateOutputLinesMiddle(lines []string, maxRows int, width int, omittedHi
 	if omittedHint != nil && additional > 0 {
 		additional--
 	}
-	ellipsis = "    " + OutputEllipsisText(baseOmitted+additional)
+	ellipsis = ellipsisText(baseOmitted + additional)
 	out := append([]string(nil), lines[:headEnd]...)
 	out = append(out, ellipsis)
 	out = append(out, lines[tailStart:]...)
@@ -410,8 +419,19 @@ func SummarizeInteractionInput(input string) string {
 	return string(runes[:maxInteractionPreview]) + "..."
 }
 
+// OutputEllipsisText renders the hidden-output marker together with the
+// configured `open_transcript` hint (Rust #48761); an unbound action drops the
+// parenthetical entirely.
 func OutputEllipsisText(omitted int) string {
-	return "… +" + tui.FormatInt(int64(omitted)) + " lines (" + transcriptHint + ")"
+	return outputEllipsisText(omitted, tui.TranscriptDisclosureHint())
+}
+
+func outputEllipsisText(omitted int, hint string) string {
+	base := "… +" + tui.FormatInt(int64(omitted)) + " lines"
+	if hint == "" {
+		return base
+	}
+	return base + " (" + hint + ")"
 }
 
 func StripShellCommand(command []string) string {
