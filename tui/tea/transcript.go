@@ -332,14 +332,17 @@ func appendAssistantDeltaToMessages(messages []codextui.Message, delta string) [
 }
 
 // mergeAssistantFinalToMessages is a helper for merging final assistant text.
+// The stored body keeps the response's own trailing whitespace (Markdown hard
+// breaks and code padding, Rust #48549); only trailing blank lines and a
+// trailing newline are dropped.
 func mergeAssistantFinalToMessages(messages []codextui.Message, text string) []codextui.Message {
-	text = strings.TrimSpace(text)
+	text = codextui.NormalizeCompletedAssistantMarkdown(text)
 	if text == "" {
 		return messages
 	}
 	index := len(messages) - 1
 	if index >= 0 && messages[index].Role == codextui.RoleAssistant {
-		current := strings.TrimSpace(messages[index].Text)
+		current := codextui.NormalizeCompletedAssistantMarkdown(messages[index].Text)
 		switch {
 		case current == text:
 			return messages
@@ -475,7 +478,10 @@ func assistantFinalExistsInCurrentTurn(messages []codextui.Message, text string)
 		case codextui.RoleUser:
 			return false
 		case codextui.RoleAssistant:
-			if strings.TrimSpace(message.Text) == text {
+			// Compare the same normalized body the caller passes in, so a
+			// response that keeps its trailing hard break is still recognized
+			// as already present in this turn.
+			if codextui.NormalizeCompletedAssistantMarkdown(message.Text) == text {
 				return true
 			}
 		}

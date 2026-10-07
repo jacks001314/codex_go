@@ -3,6 +3,8 @@ package chatwidget
 import (
 	"regexp"
 	"strings"
+
+	codextui "codex_go/tui"
 )
 
 const (
@@ -27,7 +29,7 @@ var fencedCodeBlockRe = regexp.MustCompile("(?s)```([^\n]*)\n(.*?)\n```")
 // 0 is always the whole response, followed by each fenced code block (labelled
 // by its language) and each blockquote, preserving source whitespace.
 func CopyTargetsFromMarkdown(markdown string) []CopyTarget {
-	markdown = strings.TrimSpace(markdown)
+	markdown = codextui.NormalizeCompletedAssistantMarkdown(markdown)
 	if markdown == "" {
 		return nil
 	}
