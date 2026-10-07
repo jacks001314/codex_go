@@ -1911,7 +1911,7 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 		}
 	}
 	if params.IncludeTurns {
-		if unmaterializedThread(record) && !threadUsesPaginatedHistory(record) {
+		if r.threadRolloutMissing(record) && !threadUsesPaginatedHistory(record) {
 			return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; includeTurns is unavailable before first user message", record.ID))
 		}
 		r.attachRolloutTurnSnapshots(record)
@@ -2322,6 +2322,12 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 		return nil, err
 	}
 	defer closeTemporaryWriters(lifecycleLocks)
+	// Rust #48828: a fresh thread has no rollout until its first turn. Persist
+	// the loaded persistent thread before looking it up for archival so a
+	// thread without turns can be archived.
+	if err := r.materializeThreadForArchive(session.ThreadID(params.ThreadID)); err != nil {
+		return nil, err
+	}
 	if rootRecord, readErr := r.readThreadRecord(session.ThreadID(params.ThreadID), true, false); readErr == nil && unmaterializedThread(rootRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", params.ThreadID))
 	} else if readErr != nil && !errors.Is(readErr, session.ErrThreadNotFound) {
@@ -2910,6 +2916,58 @@ func (r *Router) handleThreadSectionMove(request *Request) (*ThreadSectionMoveRe
 	return &ThreadSectionMoveResponse{}, nil
 }
 
+// materializeThreadForArchive flushes the rollout of a loaded, non-ephemeral
+// thread before archival, so a thread that has no turns yet can be archived
+// (Rust #48828 `thread_archive_response`). Rust persists only a thread that the
+// thread manager still holds (`get_thread`) and skips ephemeral threads;
+// everything else keeps the pre-existing rollout lookup, which reports
+// "no rollout found for thread id" for an unmaterialized record.
+func (r *Router) materializeThreadForArchive(threadID session.ThreadID) error {
+	if r == nil {
+		return nil
+	}
+	liveThread := r.threadManager().LiveThread(threadID)
+	if liveThread == nil {
+		// A cold thread is not the loaded thread Rust persists; leaving it alone
+		// keeps archive's missing-rollout behavior for cold threads.
+		return nil
+	}
+	record, err := liveThread.Read(true, false)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) {
+			return nil
+		}
+		return err
+	}
+	if record == nil || threadRecordEphemeral(record) {
+		// Rust: an ephemeral thread must not be persisted.
+		return nil
+	}
+	if path := strings.TrimSpace(r.threadRolloutPath(record)); path != "" {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil
+		}
+	}
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = r.now().UTC()
+	}
+	if err := r.createThreadRollout(record, now); err != nil {
+		// Rust maps a failed `persist_thread` to the archive mutation error.
+		return jsonRPCInvalidRequest(fmt.Sprintf("failed to archive session: %v", err))
+	}
+	return nil
+}
+
+// threadRecordEphemeral reports whether a record belongs to an ephemeral
+// thread (Rust's `config_snapshot().ephemeral`).
+func threadRecordEphemeral(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	return boolFromMap(record.Metadata.Extra, "ephemeral")
+}
+
 // materializeThreadForSectionMove flushes a non-ephemeral thread's rollout
 // when it exists in the store but has no persisted file yet (Rust #39523).
 func (r *Router) materializeThreadForSectionMove(threadID session.ThreadID) error {
@@ -3306,7 +3364,7 @@ func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {
 			return nil, threadTurnsListReadError(params.ThreadID, err)
 		}
 	}
-	if unmaterializedThread(record) {
+	if r.threadRolloutMissing(record) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/turns/list is unavailable before first user message", record.ID))
 	}
 	r.attachRolloutTurnSnapshots(record)
@@ -3994,6 +4052,27 @@ func paginatedRolloutHistory(record *session.Record) bool {
 
 func threadUsesPaginatedHistory(record *session.Record) bool {
 	return record != nil && strings.EqualFold(strings.TrimSpace(record.Metadata.HistoryMode), string(ThreadHistoryPaginated))
+}
+
+// threadRolloutMissing reports whether an unmaterialized record still has no
+// rollout file anywhere the store resolves one. Rust's read gates resolve the
+// rollout path through the thread store, which follows an archived thread to
+// its archived rollout; #48828 made archiving a thread without turns reachable,
+// so the includeTurns and turns-list gates must see the archived file instead
+// of the record's original `rollout_path` (which archival moved away).
+func (r *Router) threadRolloutMissing(record *session.Record) bool {
+	if !unmaterializedThread(record) {
+		return false
+	}
+	if r == nil || record == nil {
+		return true
+	}
+	path := strings.TrimSpace(r.threadRolloutPath(record))
+	if path == "" {
+		return true
+	}
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }
 
 func unmaterializedThread(record *session.Record) bool {

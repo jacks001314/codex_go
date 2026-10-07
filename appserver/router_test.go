@@ -915,6 +915,63 @@ func TestRouterStartWithoutPromptReturnsUnmaterializedPath(t *testing.T) {
 	}
 }
 
+// Rust parity: #48828 allows archiving a thread before its first turn. Rust's
+// `thread_archive_without_turns` (which replaced
+// `thread_archive_requires_materialized_rollout`) archives a freshly started
+// thread in both history modes, then reads it back with empty turn history and
+// the archived rollout path. Before the fix the archive failed with
+// "no rollout found for thread id <id>" from the unmaterialized-record check.
+func TestRouterArchiveWithoutTurnsMaterializesRolloutLikeRust(t *testing.T) {
+	for _, mode := range []ThreadHistoryMode{ThreadHistoryLegacy, ThreadHistoryPaginated} {
+		t.Run(string(mode), func(t *testing.T) {
+			store := session.NewStore(t.TempDir())
+			router := NewRouter(store)
+			router.SetClock(func() time.Time { return fixedTime() })
+
+			start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
+				CWD:         "D:/repo",
+				HistoryMode: mode,
+			}))
+			if start.Error != nil {
+				t.Fatalf("start error: %+v", start.Error)
+			}
+			thread := start.Result.(*ThreadStartResponse).Thread
+			if thread.Path == nil {
+				t.Fatalf("start thread path = %+v, want the precomputed rollout path", thread.Path)
+			}
+			if _, err := os.Stat(*thread.Path); !os.IsNotExist(err) {
+				t.Fatalf("fresh thread rollout exists before archive, stat err = %v", err)
+			}
+			if _, err := rollout.FindThreadPath(store.Root(), thread.ID, false); err == nil {
+				t.Fatal("thread id should not be discoverable before rollout materialization")
+			}
+
+			// Archiving materializes the empty rollout without creating a user turn.
+			archive := router.Handle(requestWithParams(t, IntID(2), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
+			if archive.Error != nil {
+				t.Fatalf("archive without turns error: %+v", archive.Error)
+			}
+			assertJSONPayload(t, archive.Result, "thread/archive result", map[string]any{})
+
+			archivedPath, err := rollout.FindThreadPath(store.Root(), thread.ID, true)
+			if err != nil {
+				t.Fatalf("archived rollout path error: %v", err)
+			}
+			read := router.Handle(requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID, IncludeTurns: true}))
+			if read.Error != nil {
+				t.Fatalf("thread/read error: %+v", read.Error)
+			}
+			readThread := read.Result.(*ThreadReadResponse).Thread
+			if len(readThread.Turns) != 0 {
+				t.Fatalf("archived thread turns = %+v, want an empty turn history", readThread.Turns)
+			}
+			if readThread.Path == nil || *readThread.Path != archivedPath {
+				t.Fatalf("archived thread path = %v, want %q", readThread.Path, archivedPath)
+			}
+		})
+	}
+}
+
 func TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	router := NewRouter(store)
