@@ -141,6 +141,25 @@ func (h *VoiceHost) OpenDevices(ctx context.Context) error {
 	return nil
 }
 
+// ListDevices enumerates the helper's local devices for one direction. Listing
+// never opens a stream. The Go runtime enumerates through the same miniaudio
+// context it uses for capture, so the helper must have answered
+// InitializeRuntime first; Rust's cpal-based listing has no such prerequisite.
+func (h *VoiceHost) ListDevices(ctx context.Context, kind AudioDeviceKind) ([]AudioDevice, error) {
+	message, err := NewListDevicesMessage(kind)
+	if err != nil {
+		return nil, err
+	}
+	response, err := h.exchange(ctx, message, hostDeviceDeadline)
+	if err != nil {
+		return nil, err
+	}
+	if response.Type != TypeDeviceList {
+		return nil, fmt.Errorf("unexpected voice helper response %q", response.Type)
+	}
+	return response.Devices, nil
+}
+
 // SetAudioControls applies an ordered privacy snapshot and returns only after
 // the helper has invalidated the previous capture and render generations.
 func (h *VoiceHost) SetAudioControls(ctx context.Context, controls AudioControls) error {

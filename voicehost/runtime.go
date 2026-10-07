@@ -35,10 +35,13 @@ type Frame struct {
 	CapturedAt time.Time
 }
 
-// Device describes an input or output audio device.
+// Device describes an input or output audio device. Channels is the channel
+// count of the device's default stream configuration, which the wire
+// AudioDevice reports; ID stays host-local and never crosses the pipe.
 type Device struct {
 	ID        string
 	Name      string
+	Channels  uint16
 	IsDefault bool
 }
 

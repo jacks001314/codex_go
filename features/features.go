@@ -108,9 +108,10 @@ var Registry = []Spec{
 	{Key: "windows_sandbox_service", Stage: StageUnderDevelopment},
 	{Key: "elevated_windows_sandbox", Stage: StageRemoved},
 	{Key: "remote_models", Stage: StageRemoved},
-	// Rust (codex-rs/features/src/lib.rs #44392): opt-in model discovery for
-	// OpenAI API keys.
-	{Key: "api_key_model_discovery", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #44392, promoted by 7d4c7a0767
+	// #49807): API-key model discovery is stable and enabled by default while
+	// explicit user opt-outs and provider catalog requirements still apply.
+	{Key: "api_key_model_discovery", Stage: StageStable, DefaultEnabled: true},
 	{Key: "enable_request_compression", Stage: StageStable, DefaultEnabled: true},
 	{
 		Key:                         "network_proxy",
@@ -296,6 +297,51 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #42385): experimental context
 	// management activation.
 	{Key: "context_management", Stage: StageUnderDevelopment},
+	// Rust (codex-rs/features/src/lib.rs 17a9df60e4 #49403): keep bundled
+	// tools such as ripgrep available when login shell startup resets PATH.
+	{
+		Key:                         "login_shell_package_path",
+		Stage:                       StageExperimental,
+		ExperimentalName:            "Bundled tools in login shells",
+		ExperimentalMenuDescription: "Keep bundled tools such as ripgrep available when login shell startup resets PATH.",
+		ExperimentalAnnouncement:    "",
+	},
+	// Rust (codex-rs/features/src/lib.rs 335c7f8eca #50962): gate stable
+	// environment tool exposure behind a feature flag.
+	{Key: "stable_environment_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 4d15794336 #51209): ranked tool
+	// discovery for JavaScript code mode.
+	{Key: "code_mode_tool_search", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 58ae3ba611 #50687): keep third-party
+	// tools deferred in strict Code Mode Only.
+	{Key: "code_mode_only_strict_3p_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 5ad6891696 #51207): gate the CLI
+	// Daybreak controls and model selection behind an opt-in.
+	{Key: "cli_daybreak", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 7c35e1551f #49406): explicit cyber
+	// access programs with OpenAI API keys.
+	{Key: "api_key_cyber_access_programs", Stage: StageStable, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 2e5fea64ee #49560): opt-in model
+	// catalog in multi-agent context.
+	{Key: "model_catalog_in_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 3bbf8ec3a1 #49784): requirements gate
+	// for the browser annotation API.
+	{Key: "browser_annotation_api", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs 6996cde697 #49683): managed feature
+	// gate for in-app voice.
+	{Key: "in_app_voice", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs 6288753b46 #49057): handoff-aware root
+	// context for Guardian reviews.
+	{Key: "guardian_root_handoff_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 41ed72c32b #49036): opt-in
+	// conversation history retrieval for Guardian reviews.
+	{Key: "guardian_conversation_history_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 59f18e8133 #50099): opt-in Decisions
+	// comparison for Guardian V2.
+	{Key: "guardianv2_decisions_comparison", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs 7ac954ea24 #51253): enforce the Fast
+	// and Ultra Fast service-tier policies independently.
+	{Key: "ultrafast_mode", Stage: StageStable, DefaultEnabled: true},
 }
 
 func preventIdleSleepStage() Stage {

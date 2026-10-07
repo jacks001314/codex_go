@@ -3,7 +3,9 @@ package voicehost
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +42,28 @@ func (r *recordingRuntime) OpenInput(context.Context, string) (AudioSource, erro
 
 func (r *recordingRuntime) OpenOutput(context.Context, string) (AudioSink, error) {
 	return nil, ErrRuntimeNotInitialized
+}
+
+// listingRuntime enumerates fixed devices only while its runtime is started,
+// matching the miniaudio runtime that owns the only device backend.
+type listingRuntime struct {
+	recordingRuntime
+	inputs  []Device
+	outputs []Device
+}
+
+func (r *listingRuntime) ListInputDevices(context.Context) ([]Device, error) {
+	if !r.started {
+		return nil, ErrRuntimeNotInitialized
+	}
+	return r.inputs, nil
+}
+
+func (r *listingRuntime) ListOutputDevices(context.Context) ([]Device, error) {
+	if !r.started {
+		return nil, ErrRuntimeNotInitialized
+	}
+	return r.outputs, nil
 }
 
 type fakeVoiceTransport struct {
@@ -255,6 +279,93 @@ func TestRunHostDeviceControlSequence(t *testing.T) {
 	}
 	if runtime.source == nil || runtime.sink == nil || !runtime.source.closed || !runtime.sink.closed {
 		t.Fatalf("devices were not closed: source=%#v sink=%#v", runtime.source, runtime.sink)
+	}
+}
+
+// TestRunHostListDevicesBeforeOpenDevices mirrors the Rust helper, which answers
+// enumeration without a stage guard: devices are listed while the session still
+// has no transport, no answer and no open streams.
+func TestRunHostListDevicesBeforeOpenDevices(t *testing.T) {
+	runtime := &listingRuntime{
+		inputs:  []Device{{ID: "host-input", Name: "Interface", Channels: 16, IsDefault: true}},
+		outputs: []Device{{ID: "host-output", Name: "Headphones", Channels: 2}},
+	}
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		NewSimpleMessage(TypeInitializeRuntime),
+		mustListDevicesMessage(t, AudioDeviceKindInput),
+		mustListDevicesMessage(t, AudioDeviceKindOutput),
+		NewSimpleMessage(TypeClose),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", runtime, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses := readAllFrames(t, output.Bytes())
+	expected := []MessageType{TypeReady, TypeRuntimeReady, TypeDeviceList, TypeDeviceList, TypeClosed}
+	if len(responses) != len(expected) {
+		t.Fatalf("responses = %d, want %d: %#v", len(responses), len(expected), responses)
+	}
+	for i, want := range expected {
+		if responses[i].Type != want {
+			t.Fatalf("response %d = %q, want %q", i, responses[i].Type, want)
+		}
+	}
+	if got := responses[2].Devices; len(got) != 1 || got[0].Name != "Interface" || got[0].Channels != 16 || !got[0].IsDefault {
+		t.Fatalf("input devices = %#v", got)
+	}
+	if got := responses[3].Devices; len(got) != 1 || got[0].Name != "Headphones" || got[0].Channels != 2 || got[0].IsDefault {
+		t.Fatalf("output devices = %#v", got)
+	}
+	// The host-local device ID never crosses the pipe.
+	encoded, err := json.Marshal(responses[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "host-input") || strings.Contains(string(encoded), `"id"`) {
+		t.Fatalf("device list leaked host-local identity: %s", encoded)
+	}
+}
+
+// TestRunHostListDevicesBeforeRuntimeInitializationFails documents that the Go
+// runtime owns the only device backend, so enumeration requires a started
+// runtime. A failure exits with the loop's ControlSequence stage, matching the
+// Rust arm that sets no phase of its own.
+func TestRunHostListDevicesBeforeRuntimeInitializationFails(t *testing.T) {
+	runtime := &listingRuntime{inputs: []Device{{ID: "host-input", Name: "Interface", Channels: 2}}}
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		mustListDevicesMessage(t, AudioDeviceKindInput),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", runtime, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{}, nil
+	})
+	if !errors.Is(err, ErrRuntimeNotInitialized) {
+		t.Fatalf("error = %v, want ErrRuntimeNotInitialized", err)
+	}
+	var exitErr *HelperExitError
+	if !errors.As(err, &exitErr) || exitErr.Stage != HelperExitControlSequence {
+		t.Fatalf("stage = %#v, want controlSequence", err)
+	}
+}
+
+// TestRunHostRejectsDeviceListAsRequest pins the one-way surface: the helper
+// never accepts a device list from the parent.
+func TestRunHostRejectsDeviceListAsRequest(t *testing.T) {
+	input := concatFrames(t,
+		NewHello(1, "build-commit"),
+		NewDeviceListMessage([]AudioDevice{{Name: "Interface", Channels: 2, IsDefault: true}}),
+	)
+	var output bytes.Buffer
+	err := runHost(context.Background(), bytes.NewReader(input), &output, "build-commit", &listingRuntime{}, func() (VoiceTransport, error) {
+		return &fakeVoiceTransport{}, nil
+	})
+	if !errors.Is(err, ErrInvalidVoiceControlSequence) {
+		t.Fatalf("error = %v, want ErrInvalidVoiceControlSequence", err)
 	}
 }
 

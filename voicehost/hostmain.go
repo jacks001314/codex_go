@@ -329,6 +329,20 @@ func runHost(
 			}
 			runtimeStarted = true
 			reply = NewSimpleMessage(TypeRuntimeReady)
+		case TypeListDevices:
+			// Rust `voice-host/src/main.rs:171` answers enumeration before
+			// devices are opened, so this arm carries no stage guard of its
+			// own; a parent may list devices at any point in the session.
+			if message.Kind == nil {
+				return withExitStage(HelperExitControlSequence, ErrInvalidVoiceControlSequence)
+			}
+			listed, err := listHostDevices(ctx, runtime, *message.Kind)
+			if err != nil {
+				// The Rust arm sets no phase of its own, so a listing failure
+				// exits with the loop's ControlSequence stage.
+				return withExitStage(HelperExitControlSequence, err)
+			}
+			reply = NewDeviceListMessage(listed)
 		case TypeOpenDevices:
 			// Devices open only after negotiation so nothing captures audio
 			// before the peer is ready.
@@ -399,6 +413,39 @@ func runHost(
 			return withExitStage(HelperExitReply, err)
 		}
 	}
+}
+
+// listHostDevices enumerates local devices for one direction through the
+// runtime without opening a stream. Rust enumerates through cpal directly, so
+// its listing works before the private runtime initializes; the Go runtime owns
+// the only device backend and reports ErrRuntimeNotInitialized until Start.
+func listHostDevices(ctx context.Context, runtime Runtime, kind AudioDeviceKind) ([]AudioDevice, error) {
+	var (
+		devices []Device
+		err     error
+	)
+	switch kind {
+	case AudioDeviceKindInput:
+		devices, err = runtime.ListInputDevices(ctx)
+	case AudioDeviceKindOutput:
+		devices, err = runtime.ListOutputDevices(ctx)
+	default:
+		// Validate rejects unknown kinds before this arm runs; keep the
+		// closed set explicit for direct callers.
+		return nil, ErrInvalidVoiceControlSequence
+	}
+	if err != nil {
+		return nil, err
+	}
+	listed := make([]AudioDevice, 0, len(devices))
+	for _, device := range devices {
+		listed = append(listed, AudioDevice{
+			Name:      device.Name,
+			Channels:  device.Channels,
+			IsDefault: device.IsDefault,
+		})
+	}
+	return listed, nil
 }
 
 // openHostDevices opens the default input and output devices for one session.

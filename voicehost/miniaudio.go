@@ -181,9 +181,17 @@ func (r *MiniAudioRuntime) listDevices(ctx context.Context, kind malgo.DeviceTyp
 	}
 	devices := make([]Device, 0, len(infos))
 	for _, info := range infos {
+		// The Rust helper reports the default stream configuration's channel
+		// count. miniaudio exposes per-format counts, so use the first native
+		// format and fall back to a single channel when none is advertised.
+		channels := uint16(1)
+		if len(info.Formats) > 0 {
+			channels = uint16(info.Formats[0].Channels)
+		}
 		devices = append(devices, Device{
 			ID:        info.ID.String(),
 			Name:      info.Name(),
+			Channels:  channels,
 			IsDefault: info.IsDefault != 0,
 		})
 	}

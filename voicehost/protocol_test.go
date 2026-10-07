@@ -23,6 +23,8 @@ func TestProtocolRoundTrip(t *testing.T) {
 		NewSDPMessage(TypeOffer, sdp),
 		NewSDPMessage(TypeApplyAnswer, sdp),
 		NewSimpleMessage(TypeTransportReady),
+		mustListDevicesMessage(t, AudioDeviceKindInput),
+		NewDeviceListMessage([]AudioDevice{{Name: "Interface", Channels: 2, IsDefault: true}}),
 		NewSimpleMessage(TypeClose),
 		NewSimpleMessage(TypeClosed),
 	}
@@ -45,6 +47,29 @@ func TestProtocolRoundTrip(t *testing.T) {
 		} else if got.SDP != nil {
 			t.Fatalf("%s unexpectedly carries SDP", got.Type)
 		}
+	}
+}
+
+func mustListDevicesMessage(t *testing.T, kind AudioDeviceKind) Message {
+	t.Helper()
+	message, err := NewListDevicesMessage(kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return message
+}
+
+// TestProtocolListDevicesRejectsUnknownKind pins the closed device-kind set: a
+// kind cannot be constructed for an unknown direction, matching the Rust enum.
+func TestProtocolListDevicesRejectsUnknownKind(t *testing.T) {
+	if _, err := NewListDevicesMessage(AudioDeviceKind("speaker")); !errors.Is(err, ErrInvalidMessage) {
+		t.Fatalf("error = %v, want ErrInvalidMessage", err)
+	}
+	if AudioDeviceKindInput.IsValid() != true || AudioDeviceKindOutput.IsValid() != true {
+		t.Fatal("declared device kinds must be valid")
+	}
+	if AudioDeviceKind("").IsValid() {
+		t.Fatal("empty device kind accepted")
 	}
 }
 
@@ -177,6 +202,17 @@ func TestProtocolAudioMessagesMatchRustWireShape(t *testing.T) {
 		want    string
 	}{
 		{name: "transport timed out", message: NewSimpleMessage(TypeTransportTimedOut), want: `{"type":"transportTimedOut"}`},
+		{
+			name:    "list devices",
+			message: mustListDevicesMessage(t, AudioDeviceKindOutput),
+			want:    `{"type":"listDevices","kind":"output"}`,
+		},
+		{
+			name:    "device list",
+			message: NewDeviceListMessage([]AudioDevice{{Name: "Interface", Channels: 2, IsDefault: true}}),
+			want:    `{"type":"deviceList","devices":[{"name":"Interface","channels":2,"isDefault":true}]}`,
+		},
+		{name: "device list empty", message: NewDeviceListMessage(nil), want: `{"type":"deviceList","devices":[]}`},
 		{name: "open devices", message: NewSimpleMessage(TypeOpenDevices), want: `{"type":"openDevices"}`},
 		{name: "devices opened", message: NewSimpleMessage(TypeDevicesOpened), want: `{"type":"devicesOpened"}`},
 		{name: "audio controls applied", message: NewSimpleMessage(TypeAudioControlsApplied), want: `{"type":"audioControlsApplied"}`},
@@ -237,6 +273,18 @@ func TestProtocolRejectsInvalidAudioMessages(t *testing.T) {
 		{name: "state empty", payload: `{"type":"audioState","state":{}}`},
 		{name: "state unknown field", payload: `{"type":"audioState","state":{"microphonePeak":0,"speakerPeak":0,"extra":1}}`},
 		{name: "state negative", payload: `{"type":"audioState","state":{"microphonePeak":-1,"speakerPeak":0}}`},
+		{name: "list devices missing kind", payload: `{"type":"listDevices"}`},
+		{name: "list devices null kind", payload: `{"type":"listDevices","kind":null}`},
+		{name: "list devices unknown kind", payload: `{"type":"listDevices","kind":"bogus"}`},
+		{name: "list devices wrong kind type", payload: `{"type":"listDevices","kind":7}`},
+		{name: "device list missing devices", payload: `{"type":"deviceList"}`},
+		{name: "device list null devices", payload: `{"type":"deviceList","devices":null}`},
+		{name: "device list not an array", payload: `{"type":"deviceList","devices":{}}`},
+		{name: "device empty object", payload: `{"type":"deviceList","devices":[{}]}`},
+		{name: "device missing channels", payload: `{"type":"deviceList","devices":[{"name":"a","isDefault":false}]}`},
+		{name: "device missing isDefault", payload: `{"type":"deviceList","devices":[{"name":"a","channels":2}]}`},
+		{name: "device unknown field", payload: `{"type":"deviceList","devices":[{"name":"a","channels":2,"isDefault":true,"extra":1}]}`},
+		{name: "device negative channels", payload: `{"type":"deviceList","devices":[{"name":"a","channels":-1,"isDefault":true}]}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

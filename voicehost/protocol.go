@@ -34,7 +34,11 @@ const (
 	// TypeTransportTimedOut reports that answer negotiation exceeded its
 	// deadline. The helper exits after sending it and the parent reaps the
 	// process before considering a fresh negotiation.
-	TypeTransportTimedOut    MessageType = "transportTimedOut"
+	TypeTransportTimedOut MessageType = "transportTimedOut"
+	// TypeListDevices asks the helper to enumerate local devices for one
+	// direction without opening a stream; TypeDeviceList carries the reply.
+	TypeListDevices          MessageType = "listDevices"
+	TypeDeviceList           MessageType = "deviceList"
 	TypeOpenDevices          MessageType = "openDevices"
 	TypeDevicesOpened        MessageType = "devicesOpened"
 	TypeSetAudioControls     MessageType = "setAudioControls"
@@ -107,6 +111,8 @@ type Message struct {
 	Protocol    *uint32             `json:"protocol,omitempty"`
 	BuildCommit string              `json:"buildCommit,omitempty"`
 	SDP         *SessionDescription `json:"sdp,omitempty"`
+	Kind        *AudioDeviceKind    `json:"kind,omitempty"`
+	Devices     []AudioDevice       `json:"devices,omitempty"`
 	Controls    *AudioControls      `json:"controls,omitempty"`
 	State       *AudioState         `json:"state,omitempty"`
 }
@@ -182,6 +188,68 @@ func (s *AudioState) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// AudioDeviceKind is the direction of a local audio device, shared by
+// enumeration and capture/playback selection. The values are the Rust enum's
+// camelCase variant names.
+type AudioDeviceKind string
+
+const (
+	// AudioDeviceKindInput enumerates capture devices.
+	AudioDeviceKindInput AudioDeviceKind = "input"
+	// AudioDeviceKindOutput enumerates playback devices.
+	AudioDeviceKindOutput AudioDeviceKind = "output"
+)
+
+// IsValid reports whether the kind is one of the closed Rust variant names.
+func (k AudioDeviceKind) IsValid() bool {
+	return k == AudioDeviceKindInput || k == AudioDeviceKindOutput
+}
+
+// AudioDevice is local device metadata; enumeration never opens a stream. It
+// mirrors the Rust protocol's AudioDevice, which denies unknown fields and
+// applies no defaults.
+type AudioDevice struct {
+	Name      string `json:"name"`
+	Channels  uint16 `json:"channels"`
+	IsDefault bool   `json:"isDefault"`
+}
+
+// UnmarshalJSON rejects unknown or missing device fields.
+func (d *AudioDevice) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+	}
+	if fields == nil {
+		return fmt.Errorf("%w: device object is required", ErrInvalidMessage)
+	}
+	for key := range fields {
+		switch key {
+		case "name", "channels", "isDefault":
+		default:
+			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
+		}
+	}
+	nameRaw, ok := fields["name"]
+	if !ok {
+		return fmt.Errorf("%w: missing field name", ErrInvalidMessage)
+	}
+	var name string
+	if err := json.Unmarshal(nameRaw, &name); err != nil {
+		return fmt.Errorf("%w: field name must be a string", ErrInvalidMessage)
+	}
+	channels, err := requireUint16Field(fields, "channels")
+	if err != nil {
+		return err
+	}
+	isDefault, err := requireBoolField(fields, "isDefault")
+	if err != nil {
+		return err
+	}
+	*d = AudioDevice{Name: name, Channels: channels, IsDefault: isDefault}
+	return nil
+}
+
 func requireBoolField(fields map[string]json.RawMessage, name string) (bool, error) {
 	raw, ok := fields[name]
 	if !ok {
@@ -233,6 +301,24 @@ func NewAudioStateMessage(state AudioState) Message {
 	return Message{Type: TypeAudioState, State: &state}
 }
 
+// NewListDevicesMessage returns a message asking the helper to enumerate local
+// devices for one direction.
+func NewListDevicesMessage(kind AudioDeviceKind) (Message, error) {
+	if !kind.IsValid() {
+		return Message{}, fmt.Errorf("%w: unknown device kind %q", ErrInvalidMessage, kind)
+	}
+	return Message{Type: TypeListDevices, Kind: &kind}, nil
+}
+
+// NewDeviceListMessage returns a message carrying enumerated local devices. An
+// empty list is legal, so a nil slice is normalized rather than dropped.
+func NewDeviceListMessage(devices []AudioDevice) Message {
+	if devices == nil {
+		devices = []AudioDevice{}
+	}
+	return Message{Type: TypeDeviceList, Devices: devices}
+}
+
 // UnmarshalJSON rejects unknown fields and validates each message variant.
 func (m *Message) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
@@ -244,7 +330,7 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 	}
 	for key := range fields {
 		switch key {
-		case "type", "protocol", "buildCommit", "sdp", "controls", "state":
+		case "type", "protocol", "buildCommit", "sdp", "kind", "devices", "controls", "state":
 		default:
 			return fmt.Errorf("%w: unknown field %q", ErrInvalidMessage, key)
 		}
@@ -283,6 +369,28 @@ func (m *Message) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("%w: missing field sdp", ErrInvalidMessage)
 		}
 		message.SDP = wire.SDP
+	case TypeListDevices:
+		var wire struct {
+			Kind *AudioDeviceKind `json:"kind"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		if wire.Kind == nil {
+			return fmt.Errorf("%w: missing field kind", ErrInvalidMessage)
+		}
+		message.Kind = wire.Kind
+	case TypeDeviceList:
+		var wire struct {
+			Devices *[]AudioDevice `json:"devices"`
+		}
+		if err := json.Unmarshal(data, &wire); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidMessage, err)
+		}
+		if wire.Devices == nil {
+			return fmt.Errorf("%w: missing field devices", ErrInvalidMessage)
+		}
+		message.Devices = *wire.Devices
 	case TypeSetAudioControls:
 		var wire struct {
 			Controls *AudioControls `json:"controls"`
@@ -335,6 +443,17 @@ func (m Message) Validate() error {
 		if m.SDP == nil || m.SDP.sdp == "" {
 			return fmt.Errorf("%w: sdp is required", ErrInvalidMessage)
 		}
+	case TypeListDevices:
+		if m.Kind == nil {
+			return fmt.Errorf("%w: kind is required", ErrInvalidMessage)
+		}
+		if !m.Kind.IsValid() {
+			return fmt.Errorf("%w: unknown device kind %q", ErrInvalidMessage, *m.Kind)
+		}
+	case TypeDeviceList:
+		if m.Devices == nil {
+			return fmt.Errorf("%w: devices are required", ErrInvalidMessage)
+		}
 	case TypeSetAudioControls:
 		if m.Controls == nil {
 			return fmt.Errorf("%w: controls are required", ErrInvalidMessage)
@@ -369,6 +488,16 @@ func (m Message) MarshalJSON() ([]byte, error) {
 			Type MessageType         `json:"type"`
 			SDP  *SessionDescription `json:"sdp"`
 		}{Type: m.Type, SDP: m.SDP})
+	case TypeListDevices:
+		return json.Marshal(struct {
+			Type MessageType     `json:"type"`
+			Kind AudioDeviceKind `json:"kind"`
+		}{Type: m.Type, Kind: *m.Kind})
+	case TypeDeviceList:
+		return json.Marshal(struct {
+			Type    MessageType   `json:"type"`
+			Devices []AudioDevice `json:"devices"`
+		}{Type: m.Type, Devices: m.Devices})
 	case TypeSetAudioControls:
 		return json.Marshal(struct {
 			Type     MessageType    `json:"type"`
