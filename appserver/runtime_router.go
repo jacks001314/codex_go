@@ -3679,7 +3679,11 @@ func (r *RuntimeRouter) handleThreadQueueStartRuntime(request *Request) (*Thread
 	if err != nil {
 		return nil, jsonRPCInvalidRequest("queued submission payload is invalid")
 	}
-	startParams, err := json.Marshal(turn.TurnStartParams{ThreadID: threadID, Input: input})
+	// Rust #40665: a submission opened from the queue is classified with
+	// turn_trigger = "queue" (codex-rs/ext/queue/src/service.rs), so the reserved
+	// Responses turn metadata attributes the turn to the queue rather than to
+	// the client that submitted it.
+	startParams, err := json.Marshal(turn.TurnStartParams{ThreadID: threadID, Input: input, TurnTrigger: "queue"})
 	if err != nil {
 		return nil, err
 	}
@@ -3740,7 +3744,9 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 		return
 	}
 	r.notify(NotificationThreadQueueChanged, &ThreadIDNotification{ThreadID: threadID})
-	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Input: input}))
+	// Rust #40665: the FIFO wakeup is queue dispatch too, so the started turn
+	// carries the same queue trigger as thread/queue/start.
+	_, _ = r.handleTurnStart(requestWithInternalParams(MethodTurnStart, turn.TurnStartParams{ThreadID: threadID, Input: input, TurnTrigger: "queue"}))
 }
 
 // maybeDispatchQueuedSubmissionIfIdle discovers pending queued work when a

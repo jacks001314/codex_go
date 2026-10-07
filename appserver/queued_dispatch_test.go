@@ -129,3 +129,83 @@ func TestRuntimeRouterQueuedDispatchKeepsSubmissionWhenReservationInvalidatedLik
 		t.Fatalf("pending queued submissions after invalidated wakeup = %+v, want the submission retained", pending)
 	}
 }
+
+// TestRuntimeRouterQueuedDispatchCarriesQueueTurnTriggerLikeRust mirrors Rust
+// #40665 (codex-rs/ext/queue/src/service.rs sets turn_trigger = Some("queue")): a
+// turn admitted from the durable queue is classified with the queue trigger, so
+// the reserved Responses turn metadata attributes it to the queue rather than to
+// the client that originally submitted the message.
+func TestRuntimeRouterQueuedDispatchCarriesQueueTurnTriggerLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-queue-trigger")
+	if err := store.Create(&session.Record{ID: threadID, SessionID: string(threadID), Metadata: session.Metadata{HistoryMode: "legacy"}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := store.EnqueueSubmission(threadID, session.QueuedSubmission{
+		ID:    "q-1",
+		Input: []any{map[string]any{"type": "text", "text": "hello"}},
+	}); err != nil {
+		t.Fatalf("EnqueueSubmission() error = %v", err)
+	}
+
+	agent := newBlockingReviewRuntimeAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.markResponseThreadLoaded(&ThreadResumeResponse{Thread: &Thread{ID: string(threadID)}}, "conn-1")
+	router.maybeDispatchQueuedSubmissionIfIdle(string(threadID))
+	waitForBlockingReviewRuntimeAgentRequest(t, agent)
+
+	active := router.threads.ActiveTurn(string(threadID))
+	if active == nil || active.Params == nil {
+		t.Fatalf("queued turn was not started: %#v", active)
+	}
+	if active.Params.TurnTrigger != "queue" {
+		t.Fatalf("idle queued dispatch turn trigger = %q, want queue", active.Params.TurnTrigger)
+	}
+}
+
+// TestRuntimeRouterThreadQueueStartCarriesQueueTurnTriggerLikeRust covers the
+// explicit thread/queue/start RPC: opening a queued submission reports the same
+// queue trigger as the idle wakeup above.
+func TestRuntimeRouterThreadQueueStartCarriesQueueTurnTriggerLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := session.ThreadID("thread-queue-start-trigger")
+	if err := store.Create(&session.Record{ID: threadID, SessionID: string(threadID), Metadata: session.Metadata{HistoryMode: "legacy"}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := store.EnqueueSubmission(threadID, session.QueuedSubmission{
+		ID:    "q-1",
+		Input: []any{map[string]any{"type": "text", "text": "hello"}},
+	}); err != nil {
+		t.Fatalf("EnqueueSubmission() error = %v", err)
+	}
+
+	agent := newBlockingReviewRuntimeAgent()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		ThreadExtras: NewThreadExtraService(),
+		Turns:        turn.NewTurnService(),
+		Agent:        agent,
+		ThreadStatus: NewThreadStatusManager(),
+	})
+	router.markResponseThreadLoaded(&ThreadResumeResponse{Thread: &Thread{ID: string(threadID)}}, "conn-1")
+	queuedID := "q-1"
+	response := router.Handle(requestWithParams(t, IntID(7), MethodThreadQueueStart, &ThreadQueueStartParams{ThreadID: string(threadID), QueuedSubmissionID: &queuedID}))
+	if response.Error != nil {
+		t.Fatalf("thread/queue/start error = %+v", response.Error)
+	}
+	waitForBlockingReviewRuntimeAgentRequest(t, agent)
+
+	active := router.threads.ActiveTurn(string(threadID))
+	if active == nil || active.Params == nil {
+		t.Fatalf("queued turn was not started: %#v", active)
+	}
+	if active.Params.TurnTrigger != "queue" {
+		t.Fatalf("thread/queue/start turn trigger = %q, want queue", active.Params.TurnTrigger)
+	}
+}
