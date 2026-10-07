@@ -390,6 +390,10 @@ type ListOptions struct {
 	SourceKinds    []string
 	Relation       *RelationFilter
 	IncludeHistory bool
+	// ExcludedThreadIDs drops threads before the page size is applied, mirroring
+	// Rust's ThreadListParams::excluded_thread_ids (#51595). Empty means no
+	// exclusions.
+	ExcludedThreadIDs []ThreadID
 }
 
 type RelationFilter struct {
@@ -1902,6 +1906,9 @@ func matchesListOptions(record *Record, options *ListOptions, all []Record) bool
 	if options.Relation != nil && !recordMatchesRelation(record, options.Relation, all) {
 		return false
 	}
+	if len(options.ExcludedThreadIDs) > 0 && containsThreadID(options.ExcludedThreadIDs, record.ID) {
+		return false
+	}
 	return true
 }
 
@@ -2854,6 +2861,15 @@ func cloneRawMessages(values []json.RawMessage) []json.RawMessage {
 }
 
 func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func containsThreadID(values []ThreadID, needle ThreadID) bool {
 	for _, value := range values {
 		if value == needle {
 			return true

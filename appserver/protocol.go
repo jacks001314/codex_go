@@ -245,6 +245,9 @@ const (
 const (
 	defaultPageSize       = 50
 	maxThreadListPageSize = 100
+	// maxThreadListExcludedIDs mirrors Rust's THREAD_LIST_MAX_EXCLUDED_IDS
+	// (#51595); duplicates count toward the bound.
+	maxThreadListExcludedIDs = 100
 )
 
 const (
@@ -2316,20 +2319,25 @@ func (p *ThreadSectionMoveParams) Validate() error {
 type ThreadSectionMoveResponse struct{}
 
 type ThreadListParams struct {
-	Cursor           *string              `json:"cursor,omitempty"`
-	Limit            *int                 `json:"limit,omitempty"`
-	SortKey          SortKey              `json:"sortKey,omitempty"`
-	SortDirection    SortDirection        `json:"sortDirection,omitempty"`
-	ModelProviders   []string             `json:"modelProviders,omitempty"`
-	SourceKinds      []ThreadSourceKind   `json:"sourceKinds,omitempty"`
-	Originators      []string             `json:"originators,omitempty"`
-	Archived         *bool                `json:"archived,omitempty"`
-	SectionID        OptionalString       `json:"sectionId,omitempty"`
-	CWD              *ThreadListCwdFilter `json:"cwd,omitempty"`
-	UseStateDBOnly   bool                 `json:"useStateDbOnly,omitempty"`
-	SearchTerm       *string              `json:"searchTerm,omitempty"`
-	ParentThreadID   *string              `json:"parentThreadId,omitempty"`
-	AncestorThreadID *string              `json:"ancestorThreadId,omitempty"`
+	Cursor *string `json:"cursor,omitempty"`
+	Limit  *int    `json:"limit,omitempty"`
+	// ExcludedThreadIDs drops these threads before the result limit is applied
+	// (Rust ThreadListParams::excluded_thread_ids, #51595). Up to 100 entries;
+	// invalid IDs or a larger list are rejected, never truncated. Callers must
+	// send the same exclusions on each page.
+	ExcludedThreadIDs *[]string            `json:"excludedThreadIds,omitempty"`
+	SortKey           SortKey              `json:"sortKey,omitempty"`
+	SortDirection     SortDirection        `json:"sortDirection,omitempty"`
+	ModelProviders    []string             `json:"modelProviders,omitempty"`
+	SourceKinds       []ThreadSourceKind   `json:"sourceKinds,omitempty"`
+	Originators       []string             `json:"originators,omitempty"`
+	Archived          *bool                `json:"archived,omitempty"`
+	SectionID         OptionalString       `json:"sectionId,omitempty"`
+	CWD               *ThreadListCwdFilter `json:"cwd,omitempty"`
+	UseStateDBOnly    bool                 `json:"useStateDbOnly,omitempty"`
+	SearchTerm        *string              `json:"searchTerm,omitempty"`
+	ParentThreadID    *string              `json:"parentThreadId,omitempty"`
+	AncestorThreadID  *string              `json:"ancestorThreadId,omitempty"`
 }
 
 func (p ThreadListParams) MarshalJSON() ([]byte, error) {
@@ -2481,6 +2489,18 @@ func (p *ThreadListParams) Validate() error {
 	}
 	if p.ParentThreadID != nil && p.AncestorThreadID != nil {
 		return jsonRPCInvalidRequest("parentThreadId and ancestorThreadId are mutually exclusive")
+	}
+	if p.ExcludedThreadIDs != nil {
+		// Rust rejects rather than truncating, and duplicates count toward the
+		// bound (#51595).
+		if len(*p.ExcludedThreadIDs) > maxThreadListExcludedIDs {
+			return invalidParams(fmt.Sprintf("excludedThreadIds accepts at most %d entries", maxThreadListExcludedIDs))
+		}
+		for _, id := range *p.ExcludedThreadIDs {
+			if !validUUIDString(id) {
+				return invalidParams("invalid excluded thread id: invalid UUID")
+			}
+		}
 	}
 	if p.Limit != nil && *p.Limit < 0 {
 		return invalidLimitError()
@@ -3404,6 +3424,12 @@ func BuildListOptions(params *ThreadListParams) (session.ListOptions, error) {
 		}
 		if options.PageSize > maxThreadListPageSize {
 			options.PageSize = maxThreadListPageSize
+		}
+	}
+	if params.ExcludedThreadIDs != nil && len(*params.ExcludedThreadIDs) > 0 {
+		options.ExcludedThreadIDs = make([]session.ThreadID, 0, len(*params.ExcludedThreadIDs))
+		for _, id := range *params.ExcludedThreadIDs {
+			options.ExcludedThreadIDs = append(options.ExcludedThreadIDs, session.ThreadID(id))
 		}
 	}
 	switch params.SortKey {
