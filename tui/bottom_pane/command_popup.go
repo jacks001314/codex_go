@@ -1,6 +1,7 @@
 package bottompane
 
 import (
+	"sort"
 	"strings"
 
 	codextui "codex_go/tui"
@@ -18,6 +19,9 @@ type CommandPopupItem struct {
 	Command      SlashCommandItem
 	MatchIndices []int
 	IsAlias      bool
+	// Unavailable marks a known command that cannot run in the active side
+	// conversation. Rust #50756 shows it as a disabled row when searched.
+	Unavailable bool
 }
 
 func FilterCommandPopupItems(items []CommandPopupItem, query string) []CommandPopupItem {
@@ -26,6 +30,11 @@ func FilterCommandPopupItems(items []CommandPopupItem, query string) []CommandPo
 		out := make([]CommandPopupItem, 0, len(items))
 		for _, item := range items {
 			if item.IsAlias || popupAliasCommand(item.Name) {
+				continue
+			}
+			// Rust #50756: keep commands that are unavailable in a side
+			// conversation hidden from the unfiltered `/` menu.
+			if item.Unavailable {
 				continue
 			}
 			item.MatchIndices = nil
@@ -46,7 +55,12 @@ func FilterCommandPopupItems(items []CommandPopupItem, query string) []CommandPo
 			prefix = append(prefix, item)
 		}
 	}
-	return append(exact, prefix...)
+	out := append(exact, prefix...)
+	// Rust #50756: rank available matches before unavailable ones while searching.
+	sort.SliceStable(out, func(i, j int) bool {
+		return !out[i].Unavailable && out[j].Unavailable
+	})
+	return out
 }
 
 type CommandPopupFlags struct {
@@ -64,6 +78,9 @@ type CommandPopup struct {
 	commandFilter string
 	commands      []CommandPopupItem
 	state         ScrollState
+	// sideConversationActive is kept so availability matches the Rust popup that
+	// stores the flag and re-derives the disabled rows on every filter.
+	sideConversationActive bool
 }
 
 func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierCommand) *CommandPopup {
@@ -77,18 +94,28 @@ func NewCommandPopup(flags CommandPopupFlags, serviceTierCommands []ServiceTierC
 		AllowElevateSandbox:         flags.WindowsDegradedSandboxActive,
 		SideConversationActive:      flags.SideConversationActive,
 	}
-	commands := CommandsForInput(builtinFlags, serviceTierCommands)
+	// Rust #50756: build the full command list and mark side-unavailable commands
+	// as disabled rows instead of hiding them, so a search can explain why a
+	// known command cannot run here.
+	popupBuiltinFlags := builtinFlags
+	popupBuiltinFlags.SideConversationActive = false
+	commands := CommandsForInput(popupBuiltinFlags, serviceTierCommands)
 	items := make([]CommandPopupItem, 0, len(commands))
 	for _, command := range commands {
 		if command.Kind == SlashCommandItemBuiltin &&
 			(strings.HasPrefix(command.CommandText(), "debug") || command.Command == codextui.CommandApps) {
 			continue
 		}
-		items = append(items, commandPopupItemFromSlashCommand(command))
+		item := commandPopupItemFromSlashCommand(command)
+		if flags.SideConversationActive && !command.AvailableInSideConversation() {
+			item.Unavailable = true
+		}
+		items = append(items, item)
 	}
 	popup := &CommandPopup{
-		commands: items,
-		state:    NewScrollState(),
+		commands:               items,
+		state:                  NewScrollState(),
+		sideConversationActive: flags.SideConversationActive,
 	}
 	popup.refreshSelection()
 	return popup
@@ -148,6 +175,10 @@ func (p *CommandPopup) SelectedItem() (CommandPopupItem, bool) {
 	if p == nil || !p.state.HasSelection || p.state.SelectedIdx < 0 || p.state.SelectedIdx >= len(items) {
 		return CommandPopupItem{}, false
 	}
+	// Rust #50756: disabled rows are never selectable for completion or dispatch.
+	if items[p.state.SelectedIdx].Unavailable {
+		return CommandPopupItem{}, false
+	}
 	return items[p.state.SelectedIdx], true
 }
 
@@ -156,7 +187,13 @@ func (p *CommandPopup) MoveUp() {
 		return
 	}
 	length := len(p.FilteredItems())
-	p.state.MoveUpWrap(length)
+	// Rust #50756: walk past disabled rows until an available one is selected.
+	for range length {
+		p.state.MoveUpWrap(length)
+		if _, ok := p.SelectedItem(); ok {
+			break
+		}
+	}
 	p.state.EnsureVisible(length, min(MaxPopupRows, length))
 }
 
@@ -165,7 +202,13 @@ func (p *CommandPopup) MoveDown() {
 		return
 	}
 	length := len(p.FilteredItems())
-	p.state.MoveDownWrap(length)
+	// Rust #50756: walk past disabled rows until an available one is selected.
+	for range length {
+		p.state.MoveDownWrap(length)
+		if _, ok := p.SelectedItem(); ok {
+			break
+		}
+	}
 	p.state.EnsureVisible(length, min(MaxPopupRows, length))
 }
 
@@ -229,11 +272,18 @@ func commandPopupMatchIndices(query string) []int {
 func commandPopupDisplayRows(items []CommandPopupItem) []GenericDisplayRow {
 	rows := make([]GenericDisplayRow, 0, len(items))
 	for _, item := range items {
-		rows = append(rows, GenericDisplayRow{
+		row := GenericDisplayRow{
 			Name:         "/" + item.Name,
 			MatchIndices: item.MatchIndices,
 			Description:  item.Description,
-		})
+		}
+		if item.Unavailable {
+			// Rust #50756 renders the row dim with a disabled reason and no
+			// selection marker.
+			row.IsDisabled = true
+			row.DisabledReason = "not available in a side conversation"
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }

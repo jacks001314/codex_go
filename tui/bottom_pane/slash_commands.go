@@ -249,6 +249,10 @@ func FindSlashCommand(name string, flags BuiltinCommandFlags, serviceTierCommand
 
 func HasSlashCommandPrefix(name string, flags BuiltinCommandFlags, serviceTierCommands []ServiceTierCommand) bool {
 	name = normalizeSlashCommandName(name)
+	// Rust #50756: a side conversation can describe a known command as unavailable
+	// in the popup even though dispatch still rejects it, so the prefix check runs
+	// over the unfiltered command set (`/arch` keeps the popup open for `/archive`).
+	flags.SideConversationActive = false
 	for _, command := range CommandsForInput(flags, serviceTierCommands) {
 		commandText := command.CommandText()
 		if command.IsAlias && commandText != "quit" && commandText != "btw" {

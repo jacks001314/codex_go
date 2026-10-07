@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"sort"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -16,6 +17,11 @@ const slashPopupMaxRows = 8
 type slashCommandPopupItem struct {
 	Name        string
 	Description string
+	// Unavailable marks a known command that cannot run in the active side
+	// conversation (Rust #50756). Unavailable rows stay hidden from the
+	// unfiltered `/` menu, render disabled while searching, and are never
+	// selected, completed or dispatched.
+	Unavailable bool
 }
 
 type slashCommandPopup struct {
@@ -37,10 +43,9 @@ func (m *Model) refreshSlashPopup() {
 	previousQuery := m.slashPopup.Query
 	previous := m.selectedSlashPopupName()
 	items := filterSlashPopupItems(m.slashPopupCatalog(), query)
-	selected := 0
-	if len(items) == 0 {
-		selected = -1
-	} else if previous != "" && previousQuery == query {
+	// Rust #50756: default to the first selectable (non-disabled) row.
+	selected := firstSelectableSlashPopupIndex(items)
+	if previous != "" && previousQuery == query {
 		for i, item := range items {
 			if item.Name == previous {
 				selected = i
@@ -97,6 +102,11 @@ func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashC
 	if query == "" {
 		out := make([]slashCommandPopupItem, 0, len(items))
 		for _, item := range items {
+			// Rust #50756: a side conversation keeps its unavailable commands
+			// out of the unfiltered `/` menu; they surface only once searched.
+			if item.Unavailable {
+				continue
+			}
 			if popupAliasCommandTea(item.Name) {
 				continue
 			}
@@ -115,13 +125,30 @@ func filterSlashPopupItems(items []slashCommandPopupItem, query string) []slashC
 			prefix = append(prefix, item)
 		}
 	}
-	return append(exact, prefix...)
+	out := append(exact, prefix...)
+	// Rust #50756: rank available matches before unavailable (disabled) ones.
+	sort.SliceStable(out, func(i, j int) bool {
+		return !out[i].Unavailable && out[j].Unavailable
+	})
+	return out
+}
+
+// firstSelectableSlashPopupIndex returns the index of the first row the user can
+// actually select, or -1 when every row is disabled (Rust #50756).
+func firstSelectableSlashPopupIndex(items []slashCommandPopupItem) int {
+	for i, item := range items {
+		if !item.Unavailable {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 	if m == nil {
 		return nil
 	}
+	sideConversationActive := m.inSideConversation()
 	flags := bottompane.BuiltinCommandFlags{
 		CollaborationModesEnabled:   features.Enabled(m.featureSettings, "collaboration_modes"),
 		ConnectorsEnabled:           features.Enabled(m.featureSettings, "apps") && m.hasChatGPTAccount,
@@ -133,7 +160,10 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		ServiceTierCommandsEnabled: len(m.serviceTierCommands) > 0,
 		GoalCommandEnabled:         features.Enabled(m.featureSettings, "goals"),
 		AllowElevateSandbox:        m.windowsSandboxSetup != nil,
-		SideConversationActive:     m.inSideConversation(),
+		// Rust #50756: build the unfiltered catalog so side-unavailable commands
+		// can be carried as disabled rows instead of being dropped, and mark
+		// them here.
+		SideConversationActive: false,
 	}
 	commands := bottompane.CommandsForInput(flags, m.serviceTierCommands)
 	items := make([]slashCommandPopupItem, 0, len(commands))
@@ -141,7 +171,11 @@ func (m *Model) slashPopupCatalog() []slashCommandPopupItem {
 		if command.Kind == bottompane.SlashCommandItemBuiltin && slashPopupHiddenCommand(command.Name) {
 			continue
 		}
-		items = append(items, slashPopupItemFromCommand(command))
+		item := slashPopupItemFromCommand(command)
+		if sideConversationActive && !command.AvailableInSideConversation() {
+			item.Unavailable = true
+		}
+		items = append(items, item)
 	}
 	return items
 }
@@ -209,17 +243,26 @@ func (m *Model) updateSlashPopupKey(msg bubbletea.KeyMsg) (bubbletea.Cmd, bool) 
 }
 
 func (m *Model) moveSlashPopupSelection(delta int) {
-	if m == nil || len(m.slashPopup.Items) == 0 {
+	if m == nil || delta == 0 || len(m.slashPopup.Items) == 0 {
 		return
 	}
-	next := m.slashPopup.Selected + delta
-	switch {
-	case next < 0:
-		next = len(m.slashPopup.Items) - 1
-	case next >= len(m.slashPopup.Items):
-		next = 0
+	items := m.slashPopup.Items
+	index := m.slashPopup.Selected
+	// Rust #50756: keyboard navigation walks past disabled rows.
+	for range len(items) {
+		index += delta
+		if index < 0 {
+			index = len(items) - 1
+		}
+		if index >= len(items) {
+			index = 0
+		}
+		if !items[index].Unavailable {
+			m.slashPopup.Selected = index
+			return
+		}
 	}
-	m.slashPopup.Selected = next
+	m.slashPopup.Selected = -1
 }
 
 func (m *Model) completeSelectedSlashCommand() {
@@ -257,7 +300,12 @@ func (m *Model) currentSlashPopupItem() (slashCommandPopupItem, bool) {
 	if m == nil || m.slashPopup.Selected < 0 || m.slashPopup.Selected >= len(m.slashPopup.Items) {
 		return slashCommandPopupItem{}, false
 	}
-	return m.slashPopup.Items[m.slashPopup.Selected], true
+	item := m.slashPopup.Items[m.slashPopup.Selected]
+	// Rust #50756: a disabled row is never selectable for completion or dispatch.
+	if item.Unavailable {
+		return slashCommandPopupItem{}, false
+	}
+	return item, true
 }
 
 func (m *Model) renderSlashPopup() string {
@@ -305,10 +353,14 @@ func slashPopupVisibleRange(length int, selected int, maxRows int) slashPopupRan
 	return slashPopupRange{start: start, end: end}
 }
 
+// slashPopupDisabledReason is the row reason Rust #50756 shows for a side
+// conversation command that is known but cannot run here.
+const slashPopupDisabledReason = "not available in a side conversation"
+
 func slashPopupNameWidth(items []slashCommandPopupItem) int {
 	width := codextui.DisplayWidth("/experimental")
 	for _, item := range items {
-		if n := codextui.DisplayWidth("/" + item.Name); n > width {
+		if n := codextui.DisplayWidth(slashPopupDisplayName(item)); n > width {
 			width = n
 		}
 	}
@@ -318,15 +370,41 @@ func slashPopupNameWidth(items []slashCommandPopupItem) int {
 	return width
 }
 
+// slashPopupDisplayName renders the name column, marking disabled rows the way
+// Rust #50756 does.
+func slashPopupDisplayName(item slashCommandPopupItem) string {
+	name := "/" + item.Name
+	if item.Unavailable {
+		name += " (disabled)"
+	}
+	return name
+}
+
+// slashPopupDisplayDescription appends the disabled reason Rust #50756 shows.
+func slashPopupDisplayDescription(item slashCommandPopupItem) string {
+	if !item.Unavailable {
+		return item.Description
+	}
+	if item.Description == "" {
+		return "(disabled: " + slashPopupDisabledReason + ")"
+	}
+	return item.Description + " (disabled: " + slashPopupDisabledReason + ")"
+}
+
 func slashPopupRenderLine(item slashCommandPopupItem, selected bool, nameWidth int, width int) string {
 	prefix := codextui.SelectionPrefix(selected)
 	availableDescription := width - codextui.DisplayWidth(prefix) - nameWidth - 1
 	if availableDescription < 0 {
 		availableDescription = 0
 	}
-	name := codextui.TruncateWithEllipsis("/"+item.Name, nameWidth)
-	description := codextui.TruncateWithEllipsis(item.Description, availableDescription)
+	name := codextui.TruncateWithEllipsis(slashPopupDisplayName(item), nameWidth)
+	description := codextui.TruncateWithEllipsis(slashPopupDisplayDescription(item), availableDescription)
 	rawName := padRightDisplay(name, nameWidth)
+	if item.Unavailable {
+		// Rust #50756 dims the disabled row and never draws the selection marker.
+		dim := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+		return prefix + dim.Render(rawName+" "+description)
+	}
 	if selected {
 		return codextui.RenderSelectedRow(prefix + rawName + " " + description)
 	}
