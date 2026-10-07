@@ -137,3 +137,17 @@
   - 差异（详见计划第三十九轮）：Go 无 extension-api 贡献者回调，暴露面 = 投影出的 runtime config / `MCPService`；`plugin` 不引入 `mcp` 依赖；权威派生改为由同一快照产出。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./mcp/ ./appserver/` 无输出；`./mcp/` 4/4 新测试 PASS（仅 1 项既有 stdio drain 环境失败，已 stash 复现）；`./appserver/` 3/3 新测试 PASS 且仅 3 项既有基线失败；`./plugin/ ./turn/ ./exec/` 全通过。
 - 剩余 5 项：继续按序推进（#51480 余下 → #51482 → #51517 → TUI）。
+
+## 追加（当日第十一批：sync402）
+
+- `sync402`（上游 #51517 "Pass thread persistence intent to attachment uploads"）：附件上传携带线程持久化意图。
+  - 新增包 `attachmentstore/`（对照 `codex-rs/attachment-store`）：`UploadRequest{ThreadID,Ephemeral,FileName,Data}` + 逐字复刻的脱敏 `Debug`、`UploadResult`（Inline/File）、`ResolveRequest`/`AttachmentMetadata`/`FormatSpecificMetadata`/`ImageMetadata`、`Store` 接口、`InlineStore`、`ErrorKind`+`StoreError`、`StoreOrDefault`。
+  - `eventmap/image_prep.go`：`ImagePrepOrigin`（线程 id + 持久化意图）、`ImagePrepContentItem.FileID`、`ImagePrepResult.EncodedBytes/MIME/FileID`；准备后的字节交给 store：Inline → 重建 data URL、File → 记录 file id、失败 → 保留内联已准备图片；原有导出函数委托到内联 store（生产行为不变）。
+  - `model/`：`AgentRequest.Ephemeral`、runner `ImageStore`（+ options 字段）、请求期图像准备链（消息/工具输出/历史回放）传递 store 与 origin，文件引用改写为区块 `file_id`。
+  - `turn/`：`AgentLoopRequest.Ephemeral` → `model.AgentRequest.Ephemeral`（两条运行路径）。
+  - `appserver/`：`RuntimeRouter.threadIsEphemeral`（由 `ThreadManager.EphemeralRecord` 派生，对应 Rust `turn_context.config.ephemeral`），在 turn/start 与 review 路径填写。
+  - `exec/`：`runAgentTurn` 用 `req.Exec.Ephemeral`。
+  - 测试：`attachmentstore` 5 个（含 Rust `attachment_debug_output_redacts_bytes` 等 4 个逐条移植）、`eventmap` 4 个（含 `upload_failure_keeps_resized_image_inline`）、`model` 4 个、`appserver` 1 个（真实 turn 观测持久化意图）。
+  - 差异（详见计划第四十轮）：Rust 的 async trait → Go 同步接口；serde 未移植（无消费者，只移植脱敏 Debug）；无 Guardian 集成套件对应物（用两层等价断言覆盖）；默认 store 与上游一致（内联），差别在接口契约与 `exec --ephemeral`／ephemeral 线程两条真实路径的接通。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet` 仅既有锁拷贝告警（行号下移）；`./attachmentstore/ ./eventmap/ ./turn/ ./exec/` 全通过；`./model/` 仅 2 项既有基线失败；`./appserver/` 仅 3 项既有基线失败。
+- 剩余 4 项：**#51480 余下 → #51482 → TUI(#51510 → #51500)**（3 路并行下属 Agent 承担）。
