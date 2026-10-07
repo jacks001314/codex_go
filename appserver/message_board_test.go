@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -546,3 +547,96 @@ func TestProjectConfigCannotSetRemoteMessageBoardLikeRust(t *testing.T) {
 		t.Fatalf("project config still supplies message_board_remote: %#v", multiAgent)
 	}
 }
+
+// Rust parity: the remote board settings load from user configuration through
+// the same loader path as the rest of `features.multi_agent_v2` (Rust
+// `features/src/tests.rs` parses `message_board_remote` together with the other
+// V2 overrides).
+func TestUserConfigTOMLSuppliesRemoteMessageBoardLikeRust(t *testing.T) {
+	home := t.TempDir()
+	toml := strings.Join([]string{
+		`[features]`,
+		`agent_message_board = true`,
+		`[features.multi_agent_v2]`,
+		`enabled = true`,
+		`[features.multi_agent_v2.message_board_remote]`,
+		`url = "https://board.example/v1"`,
+		`bearer_token_env_var = "CODEX_BOARD_TOKEN"`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.NewConfigService(home).Read(&config.ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	cfg := &config.Config{Values: loaded.Config}
+	v2, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatalf("MultiAgentV2Config() error = %v", err)
+	}
+	if v2.MessageBoardRemote == nil {
+		t.Fatalf("user TOML did not supply message_board_remote: %#v", loaded.Config)
+	}
+	if v2.MessageBoardRemote.URL != "https://board.example/v1" {
+		t.Fatalf("remote URL = %q", v2.MessageBoardRemote.URL)
+	}
+	if v2.MessageBoardRemote.BearerTokenEnvVar == nil || *v2.MessageBoardRemote.BearerTokenEnvVar != "CODEX_BOARD_TOKEN" {
+		t.Fatalf("remote credential env var = %v", v2.MessageBoardRemote.BearerTokenEnvVar)
+	}
+	if !messageBoardEnabledForTurn(cfg, true, v2) {
+		t.Fatal("the configured remote board did not enable an ephemeral session")
+	}
+}
+
+// Rust parity: #49267 reads the board credential from `bearer_token_env_var`
+// when it is named, reports a missing environment as a missing credential, and
+// requires a credential when neither source is configured.
+func TestRemoteMessageBoardCredentialResolutionLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(session.NewStore(t.TempDir())),
+		Config:       config.NewConfigService(t.TempDir()),
+	})
+	defer router.Close()
+	host := &messageBoardHost{router: router, tree: "thread-1", caller: "thread-1"}
+	const token = "research-board-credential-for-runtime-test"
+
+	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{URL: "https://board.example"}); err == nil ||
+		!strings.Contains(err.Error(), "remote message board requires a credential") {
+		t.Fatalf("credentialless remote board error = %v", err)
+	}
+	missingEnvVar := "CODEX_BOARD_TOKEN_MISSING_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	_ = os.Unsetenv(missingEnvVar)
+	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+		URL: "https://board.example", BearerTokenEnvVar: &missingEnvVar,
+	}); err == nil || !strings.Contains(err.Error(), "message-board credential environment variable is missing or invalid") {
+		t.Fatalf("missing environment error = %v", err)
+	}
+	envVar := "CODEX_BOARD_TOKEN_" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	t.Setenv(envVar, token)
+	board, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+		URL: "https://board.example", BearerTokenEnvVar: &envVar,
+	})
+	if err != nil {
+		t.Fatalf("environment credential error = %v", err)
+	}
+	remote, ok := board.(*agentboard.RemoteBoard)
+	if !ok || remote.Identity() != "thread-1" {
+		t.Fatalf("remote board = %#v, want the session identity board", board)
+	}
+	// The environment wins over a directly supplied credential, and a
+	// credential Rust's AccessToken rejects is rejected here too.
+	t.Setenv(envVar, "short")
+	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+		URL: "https://board.example", BearerToken: ptrTo(token), BearerTokenEnvVar: &envVar,
+	}); err == nil || !strings.Contains(err.Error(), "credentials must contain") {
+		t.Fatalf("invalid environment credential error = %v", err)
+	}
+	if _, err := router.openRemoteMessageBoard(context.Background(), nil, host, "thread-1", &config.RemoteMessageBoardConfig{
+		URL: "https://board.example", BearerToken: ptrTo("short"),
+	}); err == nil || !strings.Contains(err.Error(), "credentials must contain") {
+		t.Fatalf("invalid direct credential error = %v", err)
+	}
+}
+
+func ptrTo[T any](value T) *T { return &value }
