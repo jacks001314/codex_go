@@ -633,3 +633,104 @@ for s in 0d5dbdc8 2e4c58bb 97d5500c 40f7a3a3 5e402ebc ad19d6b6 15ae7564 8a5e9e62
 | #49798 | `c538fbabe5` | ⬜(待裁定) | **➖ N/A（Rust 所有权重构，无 wire/行为差异）→ 建议不派单** | ①`git show c538fbabe5 \| grep -E '^[+-]' \| wc -l` = **21 行**，2 文件（`exec-server/src/client.rs`、`cli/tests/exec_server.rs`）②唯一签名改动 `pub async fn environment_info(&self) -> Result<Arc<EnvironmentInfo>, ExecServerError>`；`git show c538fbabe5 -- '*protocol*'` → **空**（未触碰任何协议/结构体定义）③本质是 `OnceCell<EnvironmentInfo>`→`OnceCell<Arc<EnvironmentInfo>>` + 测试 `Arc::ptr_eq`。Go 侧 `execserver/client.go:919 EnvironmentInfo()` 返回 `*EnvironmentInfo` 指针天然共享引用，无 Rust 的 clone 开销问题。⇒ 不构成 Go 功能缺口。 |
 
 **结论**：#49360 由「待裁定」升为**可派单 ⬜**（wire 字段 + 显式 shell 元数据）；#49798 由「待裁定」降为 **N/A**（可从派单队列移除）。§2.B 至此清空。
+
+---
+
+# 第二轮：对抗式裁定（verify51482 + 5 个只读子审计，2026-10-07 下午）
+
+> 本节由 `verify51482` 组织，5 个只读子审计分片执行（全程未 commit / 未 push / 未改文件）。
+> **参考点**：Rust `5a3140176e`；Go main 是**移动靶**，五个分片分别落在 `38ecbbf5`（A/B/C/E 起点）、`ac106a9f`（D）。
+> ⚠️ 本节结论**取代** §2/§5 的机械判定（见 §10 的口径更正直）。
+
+## 9. 分片判定汇总
+
+| 分片 | 覆盖 crate | 条数 | ✅ | ➖ | ⬜ | Go 参考 HEAD |
+|---|---|---|---|---|---|---|
+| A | `ext/` `windows-sandbox-rs` `windows-sandbox-service` `.github`/Bazel | 19 | 2 | 12 | 5 | `38ecbbf5` |
+| B | `cli` `exec-server` `rmcp-client` `app-server-daemon` `thread-store` | 24 | 4 | 2 | 18 | `38ecbbf5` |
+| C | `state` `analytics` `config` `telemetry` `rollout` `codex-api` … | 26 | 0 | 6 | 20 | `38ecbbf5` |
+| D | `app-server` | 34 | 8 | 2 | 24 | `ac106a9f` |
+| E | `tui` | 83 | 9 | 0 | 74 | `38ecbbf5` |
+| **合计** | | **186** | **23** | **22** | **141** | |
+
+### 9.A 判定为 ✅ 已落地（推翻台账的 ⬜，共 23 条）
+
+| #PR | Go 证据 |
+|---|---|
+| #49261 | `elevated/runner_client_windows.go:88-95` 在 `SetErrorMode` 前取 `createProcessWithLogon` 错误（无 Rust 那处 bug） |
+| #49308 | `sandbox/windowssandbox/process_windows.go:44,74` piped 与常规都走 `CREATE_NO_WINDOW` |
+| #49702 | `execserver/server.go:90,197-199,2414,2455` 已是 file-handle 术语 + 128 上限（纯重命名对齐） |
+| #49778 | `execserver/server.go:50 MethodFSWriteBlock`、`:97 fs/open` modes、`:437-439 FileWriteStreaming` |
+| #49811 | `execserver/server.go:1467` 分派 + `:2544 writeBlock`（Go 实现比 Rust 占位更完整） |
+| #49939 | `turn/api.go:38 CyberAccessProgram` + `model/catalog.go:394-395` + `turn/agent_loop.go:428` |
+| #48779 | `features/features.go:214` + `appserver/guardian_reviewer.go:329-350 ResetAfterParentCompaction` + `retainedctx/` |
+| #49280 | `appserver/environment_capability_roots.go:70 restrictCapabilityRootsToSelections`（测试引 Rust 测试名） |
+| #49642 | `config/windows_sandbox_mode.go:104-140`（`windows.allow_mxc` 显式+自动两条路径） |
+| #49796 | `state/guardian_retained_context.go:37,265`（`DeduplicateRetainedInstructions`） |
+| #49806 | `appserver/common_types.go:36 type CodexErrorInfo any`（未知变体天然被接受） |
+| #49880 | `state/state.go:110-138 TurnState.RecordGrantedPermissions`（授权挂在 turn 上） |
+| #50531 | `realtime/transport.go:766,781,793`（`FlushTranscriptTailOnEnd`） |
+| #51221 | `appserver/runtime_router.go:3421-3475 turnEnvironmentSelections`（+ `mcp.TurnEnvironmentSelection`） |
+| #49144 | `app/interactive.go:1957`（`git log -S` 首现于上游 `ff3c82c8a9`） |
+| #49472 | `tui/tea/permissions.go:63`（`git log -S` 首现于上游 `b588812e8c`） |
+| #49857 | `tui/history_cell/notices.go:94`（首现于上游 `f58ed54a9d`） |
+| #50140 | `tui/tea/permissions.go:108`（首现于上游 `cb6da58876`） |
+| #50396 | `tui/keymap.go:140-141`（`half_page_up/down`，最近改动为上游 `d61c7a824f`） |
+| #50431 | `tui/markdown/render.go:267,343`（`mark_buffer_hyperlinks`） |
+| #50503 | `tui/bottom_pane/chat_composer/history_search.go:244`（首现于上游 `9ce35d337a`） |
+| #50505 | Go 提交 `5df0c760 sync499`（标题带 `#50505`）+ `app/agents_dashboard.go:817` |
+| #50811 | Go 提交 `8cc01f75 sync507` + `app/interactive.go:1956` |
+
+### 9.B 判定为 ➖ N/A（共 22 条，均可从派单队列移除）
+
+- **Go 无对应子系统**（`ext/` 不存在；Go 自述 `model/catalog.go:124` 无 async scorer；无 `windows-sandbox-service`）：
+  `#48829` `#49067` `#49257` `#49792` `#50066` `#50273` `#50480` `#50507` `#51065` `#51070` `#51133` `#49489` `#51256`
+- **纯测试/CI/Bazel/lock，或删除日志行**：
+  `#48727`（Rust 测试支撑 crate）`#49706`（`.github`/Bazel/Dylint）`#48686`（删 info 日志，Go 无该行）
+- **Rust 运行时/所有权专属，无可观测行为差**（子审计已给 Go 侧决定性证据）：
+  `#49692` `#49694` `#49708`（tokio `spawn_blocking` 调度；Go 同步实现且有等价断言）`#49972`（`Arc<Vec<u8>>`，线格式不变）`#49411`（借用生命周期修复）`#49798`（`OnceCell<Arc>`；见 §8.A）
+
+### 9.C 分片内部「需人工裁定 / 勿直接派单」（Go 有近似符号面）
+
+- D：`#48779`（✅ 但注释引 `c2bcb9a26b`，需比对）`#49993` `#49795` `#49785` `#49432` `#49260`
+- E：`#50105` `#50112` `#50359` `#49112` `#50564` `#50467` `#49079`（Go 文件存在但归因到更早的 PR）
+- C：`#49305`（Go 本地列举是单次整表查询，可能本就不存在 Rust 的 N+1 路径）；`#49675`（部分满足：`model` 已排首位，`stream`/`service_tier` 仍在 `input` 后）
+
+### 9.D 各分片剩余 ⬜（141 条，清单见各分片原始报告）
+
+分片 ⬜ 数：A 5、B 18、C 20、D 24、E 74。**注意** E 的 74 条里 `#50505`/`#50811` 在扫描后已被 sync499/sync507 落地（见 §10），实际应减 2。
+
+## 10. 口径更正与移动靶（**本节优先级最高**）
+
+### 10.A 台账 §5「真·剩余 4 条」**已全部落地**（本次实跑，HEAD `98d4c7cb`）
+
+| #PR | 最新状态 | 命令证据 |
+|---|---|---|
+| #51402 | ✅ | 5 个 sync commit（sync450/451/452/461/468） |
+| #50477 | ✅ | `6866d3ed sync508: use the host default output cap for TUI workspace commands (#50477)`；`tui/workspace_command.go:15-24 DefaultWorkspaceCommandOutputBytesCap` |
+| #49357 | ✅ | `98d4c7cb sync509: continue Markdown blockquotes when pasting multiline text (#49357)` |
+| #50209 | ✅ | `25842147 sync505` + `52d5f5f1 sync506`；`app/interactive.go:1931-1941 interactiveMouseScrollSpeed` |
+
+⇒ §5 的四条旧结论（含我 2026-10-07 上午的复核）**全部过期**，不要把 `#50477/#49357/#50209` 再当缺口派单。
+
+### 10.B 机械 ⬜ 判据的系统性偏差（重要）
+
+台账 §2 的 ⬜ 判据是「PR 号 grep=0 **且** 最长标识符在 Go 0 命中」。但**最长标识符多为 Rust 测试函数名**（`snake_case`、Go 必为 0 命中）⇒ **系统性假阴性**。
+实测量化：分片抽样的 186 条里，**45 条（24%）并非真缺口**（23 ✅ + 22 ➖）。E 分片独立复核也独立指出同一结论（其原话：台账「固定点是旧 main，判据取最长标识符…系统性假阴性」）。
+
+**更正后的口径建议**：⬜ 只能当**派单队列**；派单前必须先跑 §9 式的「生产 diff → Go 行为定位」，或直接重扫下面这条命令。
+
+### 10.C 对当前 main 的重扫（可复跑）
+
+```bash
+cd /home/jacks/jacks_dev/codex_go
+head=$(git rev-parse --short HEAD)     # 本次 = 98d4c7cb
+while read pr; do
+  printf '%s\t%s\n' "$pr" "$(git log --format='%h %s' --grep "$pr" main | head -1)"
+done < <(awk -F'\t' '/^\| #[0-9]/ && $5 ~ /⬜/ {gsub(/ /,"",$2); print $2}' update/remaining_ledger_2026_10_07.md)
+```
+本次结果：263 条里 **6 条**已有提交提及（`#49357 #50209 #50477 #50505 #50811` 为真落地；`#48575` 是 `plan:` 提及、**仍是 ⬜**）⇒ **257 条仍无提交提及**（其中含 §9 已判 ➖ 的 22 条与「待裁定」若干）。
+
+### 10.D 结论边界
+- 本台账的 `✅` 是下界、`⬜` 是上界；**唯一权威口径 = 派单时以当时 main 重跑 §10.C**。
+- 未 commit / 未 push / 未改任何既有文件（本文件为新建，`git status` 显示 `?? update/remaining_ledger_2026_10_07.md`）。

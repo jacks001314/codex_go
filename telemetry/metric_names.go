@@ -74,6 +74,11 @@ const (
 	ThreadSkillsKeptTotalMetric                 = "codex.thread.skills.kept_total"
 	ThreadSkillsDescriptionTruncatedCharsMetric = "codex.thread.skills.description_truncated_chars"
 	ThreadSkillsTruncatedMetric                 = "codex.thread.skills.truncated"
+
+	// GuardianDenialLimitReachedMetric counts the turn interruptions automatic
+	// approval review caused by reaching the turn's denial limit (Rust #51334,
+	// ext/guardian-reviewer/src/review.rs `codex.guardian.denial_limit_reached`).
+	GuardianDenialLimitReachedMetric = "codex.guardian.denial_limit_reached"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local

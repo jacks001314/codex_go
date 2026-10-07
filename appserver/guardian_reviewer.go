@@ -767,7 +767,18 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 	if r.specialty != nil && strings.TrimSpace(r.specialty(threadID, turnID)) == model.ModelSpecialtyCyber {
 		policy = state.CircuitBreakerPolicyCyber
 	}
-	if action := r.breaker.RecordDenialWithPolicy(turnID, policy); action.InterruptTurn && r.interrupt != nil {
+	action := r.breaker.RecordDenialWithPolicy(turnID, policy)
+	if !action.InterruptTurn {
+		return
+	}
+	// Rust's ReviewDenials::record_denial returns the denial-limit warning only
+	// once per turn, and the reviewer counts that interruption immediately
+	// before it interrupts the turn (Rust #51334,
+	// codex-rs/ext/guardian-reviewer/src/review.rs).
+	if r.metrics != nil {
+		r.metrics.Counter(telemetry.GuardianDenialLimitReachedMetric, 1, nil)
+	}
+	if r.interrupt != nil {
 		r.interrupt(threadID, turnID)
 	}
 }
