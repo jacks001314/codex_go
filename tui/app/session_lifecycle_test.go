@@ -3,12 +3,9 @@ package app
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"codex_go/appserver"
-	codextui "codex_go/tui"
 )
 
 func TestSessionLifecycleThreadReadErrorClassifiersMatchRust(t *testing.T) {
@@ -210,59 +207,6 @@ func TestStartupThreadStartedDecisionMatchRust(t *testing.T) {
 	failed := StartupThreadStartedDecisionForResult(true, "", errors.New(" boom "))
 	if !failed.PendingCleared || failed.EnqueuePrimaryThread || failed.MaybeSendQueuedInput || failed.ErrorMessage != "Failed to start a fresh session through the app server:  boom " {
 		t.Fatalf("pending startup failed = %#v", failed)
-	}
-}
-
-func TestSessionSummaryForThreadMatchRust(t *testing.T) {
-	if summary := SessionSummaryForThread(codextui.TokenUsage{}, "", "", ""); summary != nil {
-		t.Fatalf("empty summary = %#v", summary)
-	}
-
-	rolloutPath := filepath.Join(t.TempDir(), "rollout.jsonl")
-	if summary := SessionSummaryForThread(codextui.TokenUsage{}, "123e4567-e89b-12d3-a456-426614174000", "", rolloutPath); summary != nil {
-		t.Fatalf("missing rollout summary = %#v", summary)
-	}
-	if err := os.WriteFile(rolloutPath, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write rollout: %v", err)
-	}
-
-	summary := SessionSummaryForThread(codextui.TokenUsage{
-		InputTokens:  10,
-		OutputTokens: 2,
-		TotalTokens:  12,
-	}, "123e4567-e89b-12d3-a456-426614174000", "", rolloutPath)
-	if summary == nil || summary.UsageLine != "Token usage: total=12 input=10 output=2" || summary.ResumeHint != "codex resume 123e4567-e89b-12d3-a456-426614174000" {
-		t.Fatalf("summary = %#v", summary)
-	}
-
-	named := SessionSummaryForThread(codextui.TokenUsage{}, "123e4567-e89b-12d3-a456-426614174000", "my-session", rolloutPath)
-	if named == nil || named.ResumeHint != "codex resume, then select my-session (123e4567-e89b-12d3-a456-426614174000)" {
-		t.Fatalf("named summary = %#v", named)
-	}
-
-	upper := SessionSummaryForThread(codextui.TokenUsage{}, "123E4567-E89B-12D3-A456-426614174000", "", rolloutPath)
-	if upper == nil || upper.ResumeHint != "codex resume 123e4567-e89b-12d3-a456-426614174000" {
-		t.Fatalf("uppercase thread summary = %#v", upper)
-	}
-
-	spacedID := SessionSummaryForThread(codextui.TokenUsage{}, " 123e4567-e89b-12d3-a456-426614174000 ", "", rolloutPath)
-	if spacedID != nil {
-		t.Fatalf("spaced thread id summary = %#v, want nil", spacedID)
-	}
-
-	spacedName := " my-session "
-	named = SessionSummaryForThread(codextui.TokenUsage{}, "123e4567-e89b-12d3-a456-426614174000", spacedName, rolloutPath)
-	if named == nil || named.ResumeHint != "codex resume, then select "+spacedName+" (123e4567-e89b-12d3-a456-426614174000)" {
-		t.Fatalf("spaced name summary = %#v", named)
-	}
-
-	spacedRolloutPath := filepath.Join(t.TempDir(), " rollout.jsonl ")
-	if err := os.WriteFile(spacedRolloutPath, []byte("{}\n"), 0o600); err != nil {
-		t.Fatalf("write spaced rollout: %v", err)
-	}
-	spacedRollout := SessionSummaryForThread(codextui.TokenUsage{}, "123e4567-e89b-12d3-a456-426614174000", "", spacedRolloutPath)
-	if spacedRollout == nil || spacedRollout.ResumeHint != "codex resume 123e4567-e89b-12d3-a456-426614174000" {
-		t.Fatalf("spaced rollout path summary = %#v", spacedRollout)
 	}
 }
 

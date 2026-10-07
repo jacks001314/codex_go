@@ -1,10 +1,7 @@
 package app
 
 import (
-	"os"
-
 	"codex_go/appserver"
-	codextui "codex_go/tui"
 )
 
 // Rust parity subset: codex-rs/tui/src/app/session_lifecycle.rs.
@@ -63,11 +60,6 @@ type StartupThreadStartedDecision struct {
 	MaybeSendQueuedInput      bool
 	ErrorMessage              string
 	IgnoreUnexpectedCompleted bool
-}
-
-type SessionSummaryHint struct {
-	UsageLine  string
-	ResumeHint string
 }
 
 // ThreadAttachPresentation mirrors Rust ThreadAttachPresentation (#48121): a
@@ -314,37 +306,6 @@ func StartupThreadStartedDecisionForResult(pendingStartup bool, startedThreadID 
 		decision.ErrorMessage = "Failed to start a fresh session through the app server: " + resultErr.Error()
 	}
 	return decision
-}
-
-func SessionSummaryForThread(tokenUsage codextui.TokenUsage, threadID string, threadName string, rolloutPath string) *SessionSummaryHint {
-	usageLine := ""
-	if !tokenUsage.IsZero() {
-		usageLine = tokenUsage.String()
-	}
-	resumeHint := ResumeHintForResumableThread(threadID, threadName, rolloutPath)
-	if usageLine == "" && resumeHint == "" {
-		return nil
-	}
-	return &SessionSummaryHint{UsageLine: usageLine, ResumeHint: resumeHint}
-}
-
-func ResumeHintForResumableThread(threadID string, threadName string, rolloutPath string) string {
-	threadID, ok := ParseAppServerThreadID(threadID)
-	if !ok || !RolloutPathIsResumable(rolloutPath) {
-		return ""
-	}
-	if threadName != "" {
-		return "codex resume, then select " + threadName + " (" + threadID + ")"
-	}
-	return "codex resume " + threadID
-}
-
-func RolloutPathIsResumable(rolloutPath string) bool {
-	if rolloutPath == "" {
-		return false
-	}
-	info, err := os.Stat(rolloutPath)
-	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 func ApplyLoadedSubagentBackfill(nav *AgentNavigationState, loaded []LoadedSubagentThread) {
