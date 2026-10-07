@@ -706,7 +706,13 @@ func (m *ThreadManager) AppendEphemeralItems(threadID session.ThreadID, items []
 		record.UpdatedAt = item.CreatedAt
 		record.RecencyAt = item.CreatedAt
 		if strings.TrimSpace(record.Preview) == "" {
-			record.Preview = runtimeSessionItemPreviewText(&item)
+			// Rust #50462: prefer the delegated-task preview so an ephemeral
+			// delegated thread is discoverable before any user follow-up.
+			if preview, ok := session.DelegatedItemPreview(&item); ok {
+				record.Preview = preview
+			} else {
+				record.Preview = runtimeSessionItemPreviewText(&item)
+			}
 		}
 	}
 	return cloneRuntimeSessionRecord(record), true

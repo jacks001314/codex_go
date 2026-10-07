@@ -2769,6 +2769,11 @@ func itemPreviewText(item *Item) string {
 	if item == nil {
 		return ""
 	}
+	// Rust #50462: a recognized delegated tool output supplies the preview so a
+	// delegated thread stays discoverable before any user follow-up.
+	if preview, ok := DelegatedItemPreview(item); ok {
+		return preview
+	}
 	if strings.TrimSpace(item.Text) != "" {
 		return item.Text
 	}

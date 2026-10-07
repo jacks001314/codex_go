@@ -360,3 +360,41 @@ func TestRuntimeRouterNotifyTurnCompletedOnce(t *testing.T) {
 		t.Fatalf("turn/completed notifications = %d, want 1", completed)
 	}
 }
+
+// Rust #50462 (codex-rs/thread-store/src/thread_metadata_sync_preview_tests.rs:
+// delegated_output_emits_only_first_preview_in_live_patch): the app-server
+// ephemeral record derives its preview from a delegated tool output and never
+// moves it for later outputs.
+func TestThreadManagerDelegatedPreviewLikeRust(t *testing.T) {
+	manager := NewThreadManager(nil)
+	if !manager.SaveEphemeralRecord(&session.Record{
+		ID:       "thread-delegated",
+		Metadata: session.Metadata{Extra: map[string]any{"ephemeral": true}},
+	}) {
+		t.Fatal("SaveEphemeralRecord() = false")
+	}
+	delegated := func(id, text string) session.Item {
+		return session.Item{
+			ID:        id,
+			Type:      "function_call_output",
+			Name:      "send_message_to_thread",
+			Namespace: "codex_tui",
+			Text: "<codex_delegation>\n  <source_thread_id>source</source_thread_id>\n  <input>" + text +
+				"</input>\n</codex_delegation>",
+		}
+	}
+	record, ok := manager.AppendEphemeralItems("thread-delegated", []session.Item{delegated("output-0", "run &lt;tests&gt; &amp; report")})
+	if !ok || record == nil {
+		t.Fatal("AppendEphemeralItems() = nil, false")
+	}
+	if record.Preview != "run <tests> & report" {
+		t.Fatalf("delegated preview = %q, want %q", record.Preview, "run <tests> & report")
+	}
+	record, ok = manager.AppendEphemeralItems("thread-delegated", []session.Item{delegated("output-1", "later task")})
+	if !ok || record == nil {
+		t.Fatal("second AppendEphemeralItems() = nil, false")
+	}
+	if record.Preview != "run <tests> & report" {
+		t.Fatalf("later delegated preview = %q, want the first preview", record.Preview)
+	}
+}

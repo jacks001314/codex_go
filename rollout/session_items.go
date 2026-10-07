@@ -2038,6 +2038,11 @@ func previewFromSessionItems(items []session.Item) string {
 		}
 	}
 	for i := range items {
+		// Rust #50462: a recognized delegated tool output supplies the preview so
+		// a delegated thread stays discoverable before any user follow-up.
+		if preview, ok := session.DelegatedItemPreview(&items[i]); ok {
+			return preview
+		}
 		if strings.TrimSpace(items[i].Text) != "" {
 			return strings.TrimSpace(items[i].Text)
 		}

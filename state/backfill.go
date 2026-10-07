@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"codex_go/rollout"
+	"codex_go/session"
 )
 
 type BackfillStatus string
@@ -445,6 +446,10 @@ func applyEventToBackfill(metadata *rolloutThreadMetadata, raw json.RawMessage) 
 		itemType := normalizeBackfillKind(stringFromJSON(item["type"]))
 		if itemType == "user_message" {
 			applyUserPreviewToBackfill(metadata, userTextFromEvent(item), true)
+		} else if preview, ok := delegatedPreviewFromBackfillItem(item); ok {
+			// Rust #50462 (codex-rs/state/src/extract.rs): delegated turns have no
+			// user message but must still be discoverable; fill only the preview.
+			applyDelegatedPreviewToBackfill(metadata, preview)
 		}
 	case "thread_goal_updated":
 		goal, _ := event["goal"].(map[string]any)
@@ -461,6 +466,38 @@ func applyEventToBackfill(metadata *rolloutThreadMetadata, raw json.RawMessage) 
 			metadata.sandboxPolicy = serializedJSONValue(value)
 		}
 		assignNonEmpty(&metadata.approvalMode, stringFromJSON(settings["approval_policy"]))
+	}
+}
+
+// delegatedPreviewFromBackfillItem mirrors the `else if let
+// TurnItem::FunctionCallOutput(output)` arm of apply_event_msg (Rust #50462,
+// codex-rs/state/src/extract.rs). It reuses the shared decoder in the session
+// package, which owns the Go counterpart of FunctionCallOutputItem.
+func delegatedPreviewFromBackfillItem(item map[string]any) (string, bool) {
+	probe := session.Item{
+		Type:      normalizeBackfillKind(stringFromJSON(item["type"])),
+		Namespace: strings.TrimSpace(stringFromJSON(item["namespace"])),
+		Name:      strings.TrimSpace(stringFromJSON(item["name"])),
+	}
+	if text, ok := item["output"].(string); ok {
+		probe.Text = text
+	} else if output, ok := item["output"]; ok {
+		probe.Data = map[string]any{"output": output}
+	} else if text, ok := item["text"].(string); ok {
+		probe.Text = text
+	}
+	return session.DelegatedItemPreview(&probe)
+}
+
+// applyDelegatedPreviewToBackfill fills an empty preview without replacing an
+// existing preview and without setting the title or first_user_message, matching
+// Rust `set_preview_if_empty` (Rust #50462).
+func applyDelegatedPreviewToBackfill(metadata *rolloutThreadMetadata, preview string) {
+	if metadata == nil || strings.TrimSpace(preview) == "" {
+		return
+	}
+	if metadata.preview == "" {
+		metadata.preview = preview
 	}
 }
 

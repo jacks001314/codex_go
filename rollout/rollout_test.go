@@ -1827,3 +1827,30 @@ func TestForkedFromOrdinalResolvesCutoffLikeRust(t *testing.T) {
 		t.Fatalf("no-fork cutoff = %v, want nil", got)
 	}
 }
+
+// Rust #50462 (codex-rs/thread-store/src/local/tests/delegated_preview_tests.rs:
+// delegated_thread_is_listed_before_user_followup): a rollout-derived record
+// exposes the decoded delegated task as its preview, before any user follow-up.
+func TestRecordFromPathReadsDelegatedPreviewLikeRust(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, SessionsSubdir, "rollout-2026-10-02T12-00-00-thread-1.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	data := strings.Join([]string{
+		`{"timestamp":"2026-10-02T12:00:00Z","type":"session_meta","payload":{"id":"thread-1","timestamp":"2026-10-02T12:00:00Z","source":"cli","model_provider":"openai","cwd":"/repo","history_mode":"legacy"}}`,
+		`{"timestamp":"2026-10-02T12:00:01Z","type":"event_msg","payload":{"type":"item_completed","item":{"id":"delegated-output","type":"function_call_output","name":"create_thread","namespace":"codex_app","output":"<codex_delegation>\n  <source_thread_id>source</source_thread_id>\n  <input>Inspect &lt;main&gt; &amp; report findings.</input>\n</codex_delegation>"}}}`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	record, err := RecordFromPath(path, false)
+	if err != nil {
+		t.Fatalf("RecordFromPath() error = %v", err)
+	}
+	if record.Preview != "Inspect <main> & report findings." {
+		t.Fatalf("RecordFromPath() preview = %q, want decoded delegated input", record.Preview)
+	}
+}
