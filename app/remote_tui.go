@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -142,6 +143,25 @@ func (c *remoteTUIInterruptController) clearActive(threadID string, turnID strin
 		c.turnID = ""
 	}
 	c.mu.Unlock()
+}
+
+// activeTurn reports the controller's tracked active turn when it belongs to
+// threadID. Rust's `App::active_turn_id_for_thread` performs the same lookup
+// before it interrupts a side thread.
+func (c *remoteTUIInterruptController) activeTurn(threadID string) (string, string) {
+	if c == nil {
+		return "", ""
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return "", ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.threadID != threadID {
+		return "", ""
+	}
+	return c.threadID, c.turnID
 }
 
 func (c *remoteTUIInterruptController) interruptCommand() bubbletea.Cmd {
@@ -693,7 +713,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return interactiveRemoteStartSide(ctx, root, endpoint, state, params, taskToolsHost)
 		},
 		OnCloseSide: func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
-			return interactiveRemoteCloseSide(ctx, endpoint, params)
+			return interactiveRemoteCloseSide(ctx, endpoint, params, interrupts)
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}
@@ -1235,7 +1255,7 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
 	}, nil
 }
 
-func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
+func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, params codextea.SideCloseParams, interrupts ...*remoteTUIInterruptController) (codextea.SideCloseResponse, error) {
 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
 	defer cancel()
 	sideThreadID := strings.TrimSpace(params.SideThreadID)
@@ -1247,12 +1267,41 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
 		return codextea.SideCloseResponse{}, err
 	}
 	defer client.close()
+	// Rust `App::discard_side_thread` interrupts the side thread's running turn
+	// through `AppServerSession::turn_interrupt` before it unsubscribes; a side
+	// thread that is only unsubscribed keeps its turn running on the server, since
+	// the app-server unloads an abandoned thread only once it is inactive. The
+	// interrupt is best effort, like `discard_side_thread_in_background`.
+	if active := activeRemoteTUISideTurn(interrupts, sideThreadID); active != nil {
+		var interruptResponse turn.TurnInterruptResponse
+		if err := remoteSessionRequest(reqCtx, client, appserver.MethodTurnInterrupt, *active, &interruptResponse); err != nil {
+			slog.Warn("failed to interrupt side conversation", "side_thread_id", sideThreadID, "error", err)
+		}
+	}
 	var response appserver.ThreadUnsubscribeResponse
 	unsubscribeParams := appserver.ThreadUnsubscribeParams{ThreadID: sideThreadID}
 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadUnsubscribe, unsubscribeParams, &response); err != nil {
 		return codextea.SideCloseResponse{}, err
 	}
 	return codextea.SideCloseResponse{}, nil
+}
+
+// activeRemoteTUISideTurn returns the turn/interrupt params for the side thread's
+// in-flight turn when the TUI is currently tracking one, mirroring Rust's
+// `App::active_turn_id_for_thread` lookup. It returns nil when no controller is
+// wired or the tracked turn belongs to another thread.
+func activeRemoteTUISideTurn(interrupts []*remoteTUIInterruptController, sideThreadID string) *turn.TurnInterruptParams {
+	for _, controller := range interrupts {
+		if controller == nil {
+			continue
+		}
+		threadID, turnID := controller.activeTurn(sideThreadID)
+		if threadID == "" || turnID == "" {
+			continue
+		}
+		return &turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}
+	}
+	return nil
 }
 
 // remoteTUIStartupConfigWarnings reports the TUI-side startup warnings for the

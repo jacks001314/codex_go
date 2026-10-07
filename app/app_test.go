@@ -6058,3 +6058,152 @@ func remoteTUITestHandleConfigRequest(ctx context.Context, conn *websocket.Conn,
 		return false
 	}
 }
+
+// Rust #50454 sibling: `App::discard_side_thread` interrupts the side thread's
+// running turn before it unsubscribes, so a closed side conversation stops
+// executing on the app-server instead of being left running.
+func TestInteractiveRemoteCloseSideInterruptsRunningSideTurnLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 8)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodTurnInterrupt):
+				var params turn.TurnInterruptParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-side" || params.TurnID != "turn-side-1" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("turn/interrupt params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadUnsubscribe):
+				var params appserver.ThreadUnsubscribeParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-side" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("unsubscribe params = %#v", params))
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"status": string(appserver.ThreadUnsubscribeStatusUnsubscribed)},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	interrupts.setActive("thread-side", "turn-side-1")
+	if _, err := interactiveRemoteCloseSide(ctx, endpoint, codextea.SideCloseParams{ParentThreadID: "thread-parent", SideThreadID: "thread-side"}, interrupts); err != nil {
+		t.Fatalf("interactiveRemoteCloseSide error = %v", err)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodTurnInterrupt) {
+		t.Fatalf("second request = %q, want %s before %s", got.Method, appserver.MethodTurnInterrupt, appserver.MethodThreadUnsubscribe)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadUnsubscribe) {
+		t.Fatalf("third request = %q", got.Method)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
+
+// The interrupt is scoped to the side thread: a turn tracked for another thread
+// must not be interrupted while the side conversation is unsubscribed.
+func TestInteractiveRemoteCloseSideSkipsInterruptForOtherThread(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	requests := make(chan remoteTUITestRequest, 8)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
+					return
+				}
+				remoteTUITestSendErr(serverErrs, err)
+				return
+			}
+			requests <- req
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodTurnInterrupt):
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected turn/interrupt for a side thread that is not the tracked active turn"))
+				return
+			case string(appserver.MethodThreadUnsubscribe):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"status": string(appserver.ThreadUnsubscribeStatusUnsubscribed)},
+				})
+				return
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
+	interrupts.setActive("thread-other", "turn-other-1")
+	if _, err := interactiveRemoteCloseSide(ctx, endpoint, codextea.SideCloseParams{ParentThreadID: "thread-parent", SideThreadID: "thread-side"}, interrupts); err != nil {
+		t.Fatalf("interactiveRemoteCloseSide error = %v", err)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
+		t.Fatalf("first request = %q", got.Method)
+	}
+	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadUnsubscribe) {
+		t.Fatalf("second request = %q, want %s", got.Method, appserver.MethodThreadUnsubscribe)
+	}
+	select {
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	default:
+	}
+}
