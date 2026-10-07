@@ -47,24 +47,21 @@
 `applypatch` 1 · `mcp` 1 · `tui` 1（`TestSelectStartupTooltipMatchesRustPlanBranches`）· `tui/tea` 1（`TestModelAppCommandUsesRustHistoryMessages`）·
 并发 flake（隔离单跑全绿）：`TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications`、`TestStdioServerGoalSetResponsePrecedesGoalNotification`、`TestStartProcessHonorsArg0`。
 
-## R6 当前团队（2026-10-07 第 85 轮续 8 三；派生宽度上限 10，稳态 4–6 落地 + ≤1 裁决）
+## R6 当前团队（2026-10-07 第 85 轮续 8 四；宽度上限 10，稳态 4–6 落地 + ≤1 裁决）
 
-main = `01e2e701`（已 push）。在跑 **7 条**：
+main = `757aba59`（已 push）。在跑 **7 条**：
 
 | 车道 | agent_id | 任务 | 写范围 |
 |---|---|---|---|
-| syncnext15 | `agent-1f27bd953dc51f2c8a30bcc4` | #49360 (b) hook PATH prepend（已放行方案 A） | tool/shell*.go+unified_exec.go、appserver/runtime_router.go、turn/tools.go |
-| syncnext18 | `agent-ffb3dfd067e731baff9d95ad` | #49295 已并；追加：`appserver/hooks_discovery.go` 哈希与 `config.VersionForTOML` 统一 | appserver/hooks_discovery*.go |
+| syncnext15 | `agent-1f27bd953dc51f2c8a30bcc4` | #49360 (b) hook PATH prepend | tool/shell*.go+unified_exec.go、appserver/runtime_router.go、turn/tools.go |
+| syncnext18 | `agent-ffb3dfd067e731baff9d95ad` | `appserver/hooks_discovery.go` 哈希统一（收尾） | appserver/hooks_discovery*.go |
 | syncnext23 | `agent-ac3df535dc42cff961b49dbc` | #48611 + #49032 | context/ session/ features/ state/ |
 | syncnext24 | `agent-a4ee3c22dcf584158c31fc20` | #49441 | codexapi/ |
-| syncnext26 | `agent-6caeba3d11ad9222bb8bc7e1` | 只读裁决批次 2（9 项，已剔除 3 项重复） | 只读 |
-| syncnext27 | `agent-558ead9e9ae4b783c8627b98` | #48824（voicehost/media.go）+ #48565（sandbox/seatbelt.go） | voicehost/ sandbox/ |
-| syncnext28 | `agent-da7d92480b8c072ac06a3056` | #48895（mermaid/parse.go）+ #49058（acl_windows.go） | mermaid/ sandbox/windowssandbox/ |
+| syncnext27 | `agent-558ead9e9ae4b783c8627b98` | #48824（voicehost）；#48565 转为复核 N/A | voicehost/ sandbox/ |
+| syncnext28 | `agent-da7d92480b8c072ac06a3056` | #48895（mermaid）+ #49058（ACL 长路径） | mermaid/ sandbox/windowssandbox/ |
+| syncnext29 | `agent-5e1ba3bf4c240eac7c4430e0` | #48828（归档前物化）+ #49267（远程 message board） | appserver/router*.go、message_board*.go、config/config.go |
 
-- 已回收（累计 30）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`–`3`、`syncnext1`–`12`、`syncnext13`、`syncnext14`、`syncnext16`、`syncnext17`、`syncnext19`、`syncnext20`、`syncnext21`、`syncnext22`、`syncnext25`。
+- 已回收（累计 31，含本轮 `syncnext26`）。
+- **下一批待派（暂缓）**：`#49432`、`#49260`、`#49075`（均需 `appserver/runtime_router.go`，等 syncnext15 交付后成批派）。
 - 待补：新 verifier（在飞 ≤3 时创建）。
-- 附加规则（续 5）：车道可能 amend 已交付 commit；并入前比对最终 SHA 的 delta。
-- 附加规则（续 6）：写集相邻的车道**开工前先请示**。
-- 附加规则（续 7）：反向对照必须打在真正的被测接线上；「撤销后仍绿」= 改错位置。
-- 附加规则（续 8）：派单前复核台账陈旧行与 sha（`git log --grep '#<PR>'` + 非测试 `.go` 符号面）。
-- **R8（产出率优先）**：宽度 10 是上限非目标；不为凑宽度补位；疑似 N/A 集中交 1 条只读车道成批判；优先「落点已钉 + 有生产接线」的功能缺口。
+- 附加规则（续 5/6/7/8）+ **R8 产出率优先** 见上文；**R3 增补**：对「已有 Go 端口的子系统」必须用行为探针判定。
