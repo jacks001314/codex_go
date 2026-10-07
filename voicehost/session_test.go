@@ -125,6 +125,31 @@ func (f *fakeSessionHost) snapshot() fakeSessionSnapshot {
 	}
 }
 
+// selectionRecordingHost is a fakeSessionHost that also advertises the
+// selection-aware device surface, so the actor's forwarding can be asserted
+// without a helper process.
+type selectionRecordingHost struct {
+	fakeSessionHost
+	openCalls    int
+	selection    AudioDeviceSelection
+	selectionErr error
+}
+
+func (h *selectionRecordingHost) OpenDevicesWithSelection(_ context.Context, selection AudioDeviceSelection) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.openCalls++
+	h.selection = selection
+	h.devicesOpened = true
+	return h.deviceErr
+}
+
+func (h *selectionRecordingHost) recordedSelection() (int, AudioDeviceSelection) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.openCalls, h.selection
+}
+
 // withSessionHost substitutes the helper connector for one test.
 func withSessionHost(t *testing.T, host *fakeSessionHost, connectErr error) {
 	t.Helper()
@@ -380,5 +405,81 @@ func TestReportFailureKeepsNestedClassification(t *testing.T) {
 	}
 	if err := reportFailure(ConnectionTransport, ConnectionAudioDevices); !errors.Is(err, ConnectionAudioDevices) {
 		t.Fatalf("nested classification = %v", err)
+	}
+}
+
+// TestSessionOptionsAudioSelectionReachesHelperLikeRust pins the Rust webrtc
+// facade contract: the selection captured when the session starts is what the
+// helper receives when devices open, through the single open_devices entry
+// point (codex-rs/realtime-webrtc/src/client.rs `open_devices(selection)`,
+// upstream #49437/#49836).
+func TestSessionOptionsAudioSelectionReachesHelperLikeRust(t *testing.T) {
+	microphone := "Studio mic"
+	speaker := "Headphones"
+	host := &selectionRecordingHost{}
+	previous := connectSessionHost
+	connectSessionHost = func(context.Context, string, string) (sessionHost, error) { return host, nil }
+	t.Cleanup(func() { connectSessionHost = previous })
+
+	started, err := startTestSession(t, SessionOptions{
+		Executable: "fake-helper",
+		AudioSelection: AudioDeviceSelection{
+			Microphone: &microphone,
+			Speaker:    &speaker,
+			Channel:    []uint16{1, 2},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer started.Handle.Close()
+	host.handle = started.Handle
+	if err := started.Handle.ApplyAnswerSDP("v=0\r\no=answer\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	calls, recorded := host.recordedSelection()
+	if calls != 1 {
+		t.Fatalf("selection-aware opens = %d, want 1", calls)
+	}
+	if recorded.Microphone == nil || *recorded.Microphone != microphone {
+		t.Fatalf("microphone = %#v", recorded.Microphone)
+	}
+	if recorded.Speaker == nil || *recorded.Speaker != speaker {
+		t.Fatalf("speaker = %#v", recorded.Speaker)
+	}
+	if len(recorded.Channel) != 2 || recorded.Channel[0] != 1 || recorded.Channel[1] != 2 {
+		t.Fatalf("channels = %#v", recorded.Channel)
+	}
+}
+
+// TestSessionOptionsDefaultSelectionUsesDefaultDevicesLikeRust pins that a
+// session without a stored preference keeps the previous default-device path,
+// because the zero selection is exactly what OpenDevices sends.
+func TestSessionOptionsDefaultSelectionUsesDefaultDevicesLikeRust(t *testing.T) {
+	host := &selectionRecordingHost{}
+	previous := connectSessionHost
+	connectSessionHost = func(context.Context, string, string) (sessionHost, error) { return host, nil }
+	t.Cleanup(func() { connectSessionHost = previous })
+
+	started, err := startTestSession(t, SessionOptions{Executable: "fake-helper"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer started.Handle.Close()
+	host.handle = started.Handle
+	if err := started.Handle.ApplyAnswerSDP("v=0\r\no=answer\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	calls, recorded := host.recordedSelection()
+	if calls != 1 {
+		t.Fatalf("selection-aware opens = %d, want 1", calls)
+	}
+	if recorded.Microphone != nil || recorded.Speaker != nil || recorded.Channel != nil {
+		t.Fatalf("selection = %#v, want the default devices", recorded)
+	}
+	// The default path and the zero selection must stay indistinguishable: the
+	// helper's own default path is the zero-value message.
+	if message, err := NewOpenDevicesMessage(recorded); err != nil || message.Selection == nil {
+		t.Fatalf("default open frame = %#v, %v", message, err)
 	}
 }

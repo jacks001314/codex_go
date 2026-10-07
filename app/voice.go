@@ -55,6 +55,15 @@ type VoiceSettings struct {
 	// explicit name.
 	Voice    string
 	VoiceSet bool
+	// Audio is the machine-local device preference the conversation opens with
+	// (Rust `audio.microphone` / `audio.speaker` / `audio.microphone_channel`).
+	// It mirrors the Rust webrtc facade, whose single open_devices entry point
+	// always carries a selection; the zero value keeps the system defaults.
+	Audio voicehost.AudioDeviceSelection
+	// AudioErr reports an `audio` preference that cannot be used. The Rust TUI
+	// surfaces that error and never starts the conversation, so a broken
+	// preference must not silently open other devices.
+	AudioErr string
 }
 
 // voiceRuntime owns at most one helper process for the TUI.
@@ -88,14 +97,21 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), voiceStartTimeout)
 		defer cancel()
+		settings := r.voiceSettings(ctx)
+		if settings.AudioErr != "" {
+			// The helper is not started at all: the Rust TUI refuses to open a
+			// conversation whose stored audio preference cannot be read.
+			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: errors.New(settings.AudioErr)}
+		}
 		started, err := startVoiceSession(ctx, voicehost.SessionOptions{
-			PackageDir:  r.options.packageDir,
-			BuildCommit: r.options.buildCommit,
+			PackageDir:     r.options.packageDir,
+			BuildCommit:    r.options.buildCommit,
+			AudioSelection: settings.Audio,
 		})
 		if err != nil {
 			return codextea.VoiceAnswerResultMsg{AttemptID: attemptID, Err: err}
 		}
-		if err := r.options.startSession(ctx, r.startParams(ctx, threadID, started.OfferSDP)); err != nil {
+		if err := r.options.startSession(ctx, r.startParams(ctx, threadID, started.OfferSDP, settings)); err != nil {
 			// The app-server never accepted the offer, so the helper is
 			// retired before the caller sees the failure.
 			started.Handle.Close()
@@ -106,10 +122,20 @@ func (r *voiceRuntime) startCmd(threadID string, attemptID uint64) bubbletea.Cmd
 	}
 }
 
+// voiceSettings reads the effective realtime settings once per start attempt.
+// A runtime without a reader keeps the built-in defaults, which is what the
+// Rust TUI does when the server cannot report the configuration.
+func (r *voiceRuntime) voiceSettings(ctx context.Context) VoiceSettings {
+	if r.options.realtimeSettings == nil {
+		return VoiceSettings{}
+	}
+	return r.options.realtimeSettings(ctx)
+}
+
 // startParams builds the app-server start request the TUI sends for a voice
 // session: a V3 WebRTC conversation with client-managed handoffs and no startup
 // context, carrying the configured model and voice.
-func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSDP string) realtime.StartParams {
+func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSDP string, settings VoiceSettings) realtime.StartParams {
 	clientManagedHandoffs := true
 	includeStartupContext := false
 	version := realtime.VersionV3
@@ -120,10 +146,6 @@ func (r *voiceRuntime) startParams(ctx context.Context, threadID string, offerSD
 		IncludeStartupContext: &includeStartupContext,
 		Transport:             realtime.WebRTCTransport(offerSDP),
 		Version:               &version,
-	}
-	settings := VoiceSettings{}
-	if r.options.realtimeSettings != nil {
-		settings = r.options.realtimeSettings(ctx)
 	}
 	if model := strings.TrimSpace(settings.Model); model != "" {
 		params.Model = &model
@@ -272,6 +294,7 @@ func RealtimeSettingsFromConfigValues(values map[string]any) VoiceSettings {
 	if model, ok := values["experimental_realtime_ws_model"].(string); ok {
 		settings.Model = model
 	}
+	settings.Audio, settings.AudioErr = audioSelectionFromConfigValues(values["audio"])
 	table, _ := values["realtime"].(map[string]any)
 	raw, present := table["voice"]
 	if !present || raw == nil {
@@ -282,6 +305,101 @@ func RealtimeSettingsFromConfigValues(values map[string]any) VoiceSettings {
 		settings.VoiceSet = true
 	}
 	return settings
+}
+
+// audioSelectionFromConfigValues reads the machine-local realtime audio
+// preference (Rust `RealtimeAudioToml`, config/src/config_toml.rs) out of the
+// effective configuration. `microphone` and `speaker` name devices, and
+// `microphone_channel` is either one one-based channel or a list of them
+// (`MicrophoneChannels` is an untagged Single|Multiple). A present value that
+// cannot be used is reported so the caller can refuse to start.
+func audioSelectionFromConfigValues(raw any) (voicehost.AudioDeviceSelection, string) {
+	table, ok := raw.(map[string]any)
+	if !ok {
+		return voicehost.AudioDeviceSelection{}, ""
+	}
+	selection := voicehost.AudioDeviceSelection{}
+	if value, present := table["microphone"]; present && value != nil {
+		name, ok := value.(string)
+		if !ok {
+			return voicehost.AudioDeviceSelection{}, "audio.microphone must be a string"
+		}
+		selection.Microphone = &name
+	}
+	if value, present := table["speaker"]; present && value != nil {
+		name, ok := value.(string)
+		if !ok {
+			return voicehost.AudioDeviceSelection{}, "audio.speaker must be a string"
+		}
+		selection.Speaker = &name
+	}
+	if value, present := table["microphone_channel"]; present && value != nil {
+		channels, err := microphoneChannelsFromConfigValue(value)
+		if err != nil {
+			return voicehost.AudioDeviceSelection{}, err.Error()
+		}
+		selection.Channel = channels
+	}
+	return selection, ""
+}
+
+// microphoneChannelsFromConfigValue decodes both spellings of the one-based
+// channel selection. Zero, out-of-range and fractional entries are rejected
+// while decoding, exactly like the NonZeroU16 deserializer upstream. An empty
+// list stays a valid but unusable explicit selection: the helper rejects it
+// later with its own "selected microphone channels unavailable" error.
+func microphoneChannelsFromConfigValue(raw any) ([]uint16, error) {
+	if channel, ok := oneBasedChannel(raw); ok {
+		return []uint16{channel}, nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil, errors.New("audio.microphone_channel must be a one-based channel number or a list of channel numbers")
+	}
+	channels := make([]uint16, 0, len(list))
+	for _, item := range list {
+		channel, ok := oneBasedChannel(item)
+		if !ok {
+			return nil, errors.New("audio.microphone_channel entries must be one-based channel numbers")
+		}
+		channels = append(channels, channel)
+	}
+	return channels, nil
+}
+
+// oneBasedChannel accepts the integral spellings a configuration value can
+// arrive in and enforces the helper's one-based uint16 range.
+func oneBasedChannel(raw any) (uint16, bool) {
+	var number float64
+	switch value := raw.(type) {
+	case int:
+		number = float64(value)
+	case int32:
+		number = float64(value)
+	case int64:
+		number = float64(value)
+	case uint:
+		number = float64(value)
+	case uint16:
+		if value == 0 {
+			return 0, false
+		}
+		return value, true
+	case uint32:
+		number = float64(value)
+	case uint64:
+		number = float64(value)
+	case float32:
+		number = float64(value)
+	case float64:
+		number = value
+	default:
+		return 0, false
+	}
+	if number < 1 || number > 65535 || number != float64(int64(number)) {
+		return 0, false
+	}
+	return uint16(number), true
 }
 
 // interactiveRemoteRealtimeVoices asks the app-server which voices it supports.

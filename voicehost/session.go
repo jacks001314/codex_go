@@ -119,6 +119,12 @@ type SessionOptions struct {
 	// BuildCommit is the exact helper build identity. It defaults to the build
 	// commit reported by the environment.
 	BuildCommit string
+	// AudioSelection fixes the local microphone and speaker for the
+	// conversation, mirroring the Rust webrtc facade's single open_devices
+	// entry point that always carries a selection. The zero value keeps the
+	// system defaults, so a session without a stored preference opens exactly
+	// the devices OpenDevices opens.
+	AudioSelection AudioDeviceSelection
 }
 
 // buildCommit is the identity stamped by release builders. It must match the
@@ -256,6 +262,14 @@ type sessionHost interface {
 
 var _ sessionHost = (*VoiceHost)(nil)
 
+// audioSelectionHost is the optional helper surface that fixes the local device
+// preference for the conversation. *VoiceHost implements it; a fake that only
+// exercises the actor keeps the default devices, which is what OpenDevices
+// already sends.
+type audioSelectionHost interface {
+	OpenDevicesWithSelection(ctx context.Context, selection AudioDeviceSelection) error
+}
+
 // connectSessionHost opens a helper for one session. Tests replace it to run
 // the actor against a fake. It is only called from the startup goroutine.
 var connectSessionHost = func(ctx context.Context, executable, buildCommit string) (sessionHost, error) {
@@ -299,9 +313,10 @@ func (RealtimeSession) StartWithOptions(ctx context.Context, options SessionOpti
 
 	actorContext, cancel := context.WithCancel(context.Background())
 	owner := &sessionOwner{
-		commands: make(chan sessionCommand, sessionCommandBuffer),
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		commands:  make(chan sessionCommand, sessionCommandBuffer),
+		cancel:    cancel,
+		done:      make(chan struct{}),
+		selection: options.AudioSelection,
 	}
 	handle := &SessionHandle{owner: owner}
 	offer := make(chan sessionOffer, 1)
@@ -432,6 +447,7 @@ type sessionOwner struct {
 	controlsMu sync.Mutex
 	controls   AudioControls
 	state      sessionState
+	selection  AudioDeviceSelection
 }
 
 // SessionHandle controls one running session. It is safe for concurrent use.
@@ -615,7 +631,7 @@ func (o *sessionOwner) applyAnswer(ctx context.Context, host sessionHost, sdp Se
 		return reportFailure(ConnectionTransport, err)
 	}
 	if err := withTimeout(ctx, sessionDeviceTimeout, func(step context.Context) error {
-		return host.OpenDevices(step)
+		return o.openDevices(step, host)
 	}); err != nil {
 		return reportFailure(ConnectionAudioDevices, err)
 	}
@@ -623,6 +639,16 @@ func (o *sessionOwner) applyAnswer(ctx context.Context, host sessionHost, sdp Se
 		return reportFailure(ConnectionAudioControls, err)
 	}
 	return nil
+}
+
+// openDevices opens the conversation's devices with the selection captured
+// with the session options. A helper that can carry a selection opens the
+// caller's preference; a helper that cannot keeps the default-device path.
+func (o *sessionOwner) openDevices(ctx context.Context, host sessionHost) error {
+	if aware, ok := host.(audioSelectionHost); ok {
+		return aware.OpenDevicesWithSelection(ctx, o.selection)
+	}
+	return host.OpenDevices(ctx)
 }
 
 // applyStartupControls drains privacy transitions queued during device startup

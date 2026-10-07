@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -223,7 +224,9 @@ func TestRealtimeSettingsFromConfigValues(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := RealtimeSettingsFromConfigValues(test.values); got != test.want {
+			// The struct carries an audio selection (pointer + channel slice),
+			// so the table compares structurally rather than with ==.
+			if got := RealtimeSettingsFromConfigValues(test.values); !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("settings = %#v, want %#v", got, test.want)
 			}
 		})
@@ -296,5 +299,220 @@ func TestInteractiveRemoteSpeechSenderReportsTransportFailure(t *testing.T) {
 	}
 	if result.ItemID != "item-2" || result.Err == nil {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+// TestVoiceRuntimePassesAudioSelectionLikeRust pins the app half of the Rust
+// realtime facade: the machine-local device preference is handed to the helper
+// session, which the facade opens through its single open_devices(selection)
+// entry point (Rust #49437/#49836, codex-rs/tui/src/chatwidget/realtime.rs).
+func TestVoiceRuntimePassesAudioSelectionLikeRust(t *testing.T) {
+	microphone := "Studio mic"
+	speaker := "Headphones"
+	captured := withFakeVoiceSession(t, &voicehost.StartedSession{
+		OfferSDP: "v=0 offer",
+		Handle:   &voicehost.SessionHandle{},
+	}, nil)
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		realtimeSettings: func(context.Context) VoiceSettings {
+			return VoiceSettings{Audio: voicehost.AudioDeviceSelection{
+				Microphone: &microphone,
+				Speaker:    &speaker,
+				Channel:    []uint16{1, 2},
+			}}
+		},
+		startSession: func(context.Context, realtime.StartParams) error { return nil },
+	})
+	if msg := runtime.startCmd("thread-audio", 9)(); msg != nil {
+		if _, ok := msg.(codextea.VoiceHelperAttachedMsg); !ok {
+			t.Fatalf("start reported %#v", msg)
+		}
+	}
+	want := voicehost.AudioDeviceSelection{
+		Microphone: &microphone,
+		Speaker:    &speaker,
+		Channel:    []uint16{1, 2},
+	}
+	if !reflect.DeepEqual(captured.AudioSelection, want) {
+		t.Fatalf("session selection = %#v, want %#v", captured.AudioSelection, want)
+	}
+}
+
+// TestVoiceRuntimeKeepsDefaultDevicesWithoutAudioLikeRust pins the other half
+// of the contract: a run without a stored preference opens exactly the default
+// devices, which is the zero AudioDeviceSelection.
+func TestVoiceRuntimeKeepsDefaultDevicesWithoutAudioLikeRust(t *testing.T) {
+	captured := withFakeVoiceSession(t, &voicehost.StartedSession{
+		OfferSDP: "v=0 offer",
+		Handle:   &voicehost.SessionHandle{},
+	}, nil)
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		realtimeSettings: func(context.Context) VoiceSettings {
+			return VoiceSettings{Model: "gpt-realtime-test"}
+		},
+		startSession: func(context.Context, realtime.StartParams) error { return nil },
+	})
+	if msg := runtime.startCmd("thread-default", 10)(); msg != nil {
+		if _, ok := msg.(codextea.VoiceHelperAttachedMsg); !ok {
+			t.Fatalf("start reported %#v", msg)
+		}
+	}
+	if captured.AudioSelection.Microphone != nil || captured.AudioSelection.Speaker != nil {
+		t.Fatalf("session selection = %#v, want the system defaults", captured.AudioSelection)
+	}
+	if captured.AudioSelection.Channel != nil {
+		t.Fatalf("session channels = %#v, want the device's full mix", captured.AudioSelection.Channel)
+	}
+}
+
+// TestVoiceRuntimeRefusesUnusableAudioSelectionLikeRust mirrors the Rust TUI,
+// where an unreadable local audio preference surfaces an error and never starts
+// the conversation, so a broken selection cannot silently open other devices
+// (Rust realtime_settings.rs `realtime_audio_settings`;
+// microphone_channel_is_machine_local_across_project_and_remote_transitions).
+func TestVoiceRuntimeRefusesUnusableAudioSelectionLikeRust(t *testing.T) {
+	previous := startVoiceSession
+	startVoiceSession = func(context.Context, voicehost.SessionOptions) (*voicehost.StartedSession, error) {
+		t.Fatal("the helper started although the audio preference was unusable")
+		return nil, nil
+	}
+	t.Cleanup(func() { startVoiceSession = previous })
+	runtime := newVoiceRuntime(voiceRuntimeOptions{
+		realtimeSettings: func(context.Context) VoiceSettings {
+			return VoiceSettings{AudioErr: "audio.microphone_channel entries must be one-based channel numbers"}
+		},
+		startSession: func(context.Context, realtime.StartParams) error {
+			t.Fatal("the start RPC ran for an unusable audio preference")
+			return nil
+		},
+	})
+	msg := runtime.startCmd("thread-bad-audio", 11)()
+	result, ok := msg.(codextea.VoiceAnswerResultMsg)
+	if !ok || result.Err == nil || result.AttemptID != 11 {
+		t.Fatalf("message = %#v", msg)
+	}
+	if !strings.Contains(result.Err.Error(), "microphone_channel") {
+		t.Fatalf("error = %v", result.Err)
+	}
+	if runtime.running() {
+		t.Fatal("a refused session retained a helper")
+	}
+}
+
+// TestRealtimeSettingsFromConfigValuesParsesAudioLikeRust covers the two
+// spellings of RealtimeAudioToml.microphone_channel: the scalar form and the
+// list form of the untagged MicrophoneChannels enum.
+func TestRealtimeSettingsFromConfigValuesParsesAudioLikeRust(t *testing.T) {
+	microphone := "Studio mic"
+	speaker := "Headphones"
+	tests := []struct {
+		name string
+		raw  any
+		want voicehost.AudioDeviceSelection
+	}{
+		{name: "absent", raw: nil, want: voicehost.AudioDeviceSelection{}},
+		{
+			name: "devices and scalar channel",
+			raw: map[string]any{
+				"microphone":         "Studio mic",
+				"speaker":            "Headphones",
+				"microphone_channel": 2,
+			},
+			want: voicehost.AudioDeviceSelection{Microphone: &microphone, Speaker: &speaker, Channel: []uint16{2}},
+		},
+		{
+			name: "channel list",
+			raw:  map[string]any{"microphone_channel": []any{1, 2}},
+			want: voicehost.AudioDeviceSelection{Channel: []uint16{1, 2}},
+		},
+		{
+			name: "json numbers",
+			raw:  map[string]any{"microphone_channel": []any{float64(3)}},
+			want: voicehost.AudioDeviceSelection{Channel: []uint16{3}},
+		},
+		{
+			name: "empty list stays an explicit selection",
+			raw:  map[string]any{"microphone_channel": []any{}},
+			want: voicehost.AudioDeviceSelection{Channel: []uint16{}},
+		},
+		{
+			name: "null channel keeps the full mix",
+			raw:  map[string]any{"microphone_channel": nil},
+			want: voicehost.AudioDeviceSelection{},
+		},
+		{
+			name: "null devices keep the system defaults",
+			raw:  map[string]any{"microphone": nil, "speaker": nil},
+			want: voicehost.AudioDeviceSelection{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RealtimeSettingsFromConfigValues(map[string]any{"audio": test.raw})
+			if got.AudioErr != "" {
+				t.Fatalf("settings reported %q", got.AudioErr)
+			}
+			if !reflect.DeepEqual(got.Audio, test.want) {
+				t.Fatalf("audio = %#v, want %#v", got.Audio, test.want)
+			}
+		})
+	}
+}
+
+// TestRealtimeSettingsFromConfigValuesReportsUnusableAudioLikeRust pins the
+// strictness of the upstream deserializer: NonZeroU16 and the typed device
+// names reject unusable values instead of degrading to the device defaults.
+func TestRealtimeSettingsFromConfigValuesReportsUnusableAudioLikeRust(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]any
+		want string
+	}{
+		{
+			name: "zero channel",
+			raw:  map[string]any{"microphone_channel": 0},
+			want: "audio.microphone_channel must be a one-based channel number or a list of channel numbers",
+		},
+		{
+			name: "fractional channel",
+			raw:  map[string]any{"microphone_channel": 1.5},
+			want: "audio.microphone_channel must be a one-based channel number or a list of channel numbers",
+		},
+		{
+			name: "out of range channel",
+			raw:  map[string]any{"microphone_channel": 70000},
+			want: "audio.microphone_channel must be a one-based channel number or a list of channel numbers",
+		},
+		{
+			name: "non numeric channel",
+			raw:  map[string]any{"microphone_channel": "two"},
+			want: "audio.microphone_channel must be a one-based channel number or a list of channel numbers",
+		},
+		{
+			name: "list with a zero channel",
+			raw:  map[string]any{"microphone_channel": []any{1, 0}},
+			want: "audio.microphone_channel entries must be one-based channel numbers",
+		},
+		{
+			name: "non string microphone",
+			raw:  map[string]any{"microphone": 3},
+			want: "audio.microphone must be a string",
+		},
+		{
+			name: "non string speaker",
+			raw:  map[string]any{"speaker": false},
+			want: "audio.speaker must be a string",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := RealtimeSettingsFromConfigValues(map[string]any{"audio": test.raw})
+			if got.AudioErr != test.want {
+				t.Fatalf("audio error = %q, want %q", got.AudioErr, test.want)
+			}
+			if got.Audio.Microphone != nil || got.Audio.Speaker != nil || got.Audio.Channel != nil {
+				t.Fatalf("an unusable audio section still produced a selection: %#v", got.Audio)
+			}
+		})
 	}
 }
