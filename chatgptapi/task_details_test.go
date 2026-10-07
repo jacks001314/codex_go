@@ -186,11 +186,13 @@ func TestCloudClientGetThreadUsageMatchesRust(t *testing.T) {
 					"thread_id":                      "thread-1",
 					"estimated_usage_credits_micros": 1234,
 					"estimated_usage_usd_micros":     567,
+					"native_usage_usd_micros":        890,
 					"groups": []map[string]any{{
 						"model":                          "gpt-5.2-codex",
 						"reasoning_effort":               "high",
 						"speed":                          "default",
 						"estimated_usage_credits_micros": 1234,
+						"native_usage_usd_micros":        890,
 						"net_new_input_tokens":           10,
 						"cached_input_tokens":            20,
 						"input_tokens":                   30,
@@ -218,12 +220,53 @@ func TestCloudClientGetThreadUsageMatchesRust(t *testing.T) {
 	if usage.ThreadID != "thread-1" || usage.EstimatedUsageCreditsMicros != 1234 || usage.EstimatedUsageUSDMicros == nil || *usage.EstimatedUsageUSDMicros != 567 {
 		t.Fatalf("usage = %+v", usage)
 	}
+	// Rust #50442: the backend's native dollar amount is carried alongside the
+	// credit and estimated-dollar figures.
+	if usage.NativeUsageUSDMicros == nil || *usage.NativeUsageUSDMicros != 890 {
+		t.Fatalf("native usage = %+v", usage.NativeUsageUSDMicros)
+	}
 	if len(usage.Groups) != 1 || usage.Groups[0].Model == nil || *usage.Groups[0].Model != "gpt-5.2-codex" || usage.Groups[0].OutputTokens == nil || *usage.Groups[0].OutputTokens != 40 {
 		t.Fatalf("groups = %+v", usage.Groups)
+	}
+	if usage.Groups[0].NativeUsageUSDMicros == nil || *usage.Groups[0].NativeUsageUSDMicros != 890 {
+		t.Fatalf("group native usage = %+v", usage.Groups[0].NativeUsageUSDMicros)
 	}
 
 	if _, err := client.GetThreadUsage(context.Background(), "missing"); err == nil || !strings.Contains(err.Error(), "did not contain requested thread") {
 		t.Fatalf("missing thread error = %v", err)
+	}
+}
+
+// TestThreadUsagePreservesUnknownAndZeroNativeAmountsLikeRust mirrors Rust
+// #50442 `thread_usage_preserves_unknown_and_zero_native_group_amounts`: a
+// missing or null native amount stays absent, while an explicit zero stays
+// present as zero.
+func TestThreadUsagePreservesUnknownAndZeroNativeAmountsLikeRust(t *testing.T) {
+	var usage ThreadUsage
+	raw := `{
+		"thread_id": "thread-123",
+		"estimated_usage_credits_micros": 0,
+		"native_usage_usd_micros": null,
+		"groups": [
+			{ "model": "legacy", "estimated_usage_credits_micros": 0 },
+			{ "model": "unknown", "estimated_usage_credits_micros": 0, "native_usage_usd_micros": null },
+			{ "model": "zero", "estimated_usage_credits_micros": 0, "native_usage_usd_micros": 0 }
+		]
+	}`
+	if err := json.Unmarshal([]byte(raw), &usage); err != nil {
+		t.Fatalf("decode legacy and current backend responses: %v", err)
+	}
+	if usage.NativeUsageUSDMicros != nil {
+		t.Fatalf("null native total decoded as %v", *usage.NativeUsageUSDMicros)
+	}
+	if len(usage.Groups) != 3 {
+		t.Fatalf("groups = %+v", usage.Groups)
+	}
+	if usage.Groups[0].NativeUsageUSDMicros != nil || usage.Groups[1].NativeUsageUSDMicros != nil {
+		t.Fatalf("absent native group amounts decoded as %+v / %+v", usage.Groups[0].NativeUsageUSDMicros, usage.Groups[1].NativeUsageUSDMicros)
+	}
+	if usage.Groups[2].NativeUsageUSDMicros == nil || *usage.Groups[2].NativeUsageUSDMicros != 0 {
+		t.Fatalf("explicit zero native group amount = %+v", usage.Groups[2].NativeUsageUSDMicros)
 	}
 }
 

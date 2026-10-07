@@ -413,11 +413,13 @@ func (c *CloudClient) GetTokenUsageProfile(ctx context.Context) (*TokenUsageProf
 	return &profile, nil
 }
 
-// ThreadUsage is the backend-estimated usage for a single Codex thread.
+// ThreadUsage is the usage for a single Codex thread: backend credit estimates
+// alongside the native dollar amounts the backend reports (Rust #50442).
 type ThreadUsage struct {
 	ThreadID                    string                      `json:"thread_id"`
 	EstimatedUsageCreditsMicros int64                       `json:"estimated_usage_credits_micros"`
 	EstimatedUsageUSDMicros     *int64                      `json:"estimated_usage_usd_micros,omitempty"`
+	NativeUsageUSDMicros        *int64                      `json:"native_usage_usd_micros,omitempty"`
 	Groups                      []ThreadUsageBreakdownGroup `json:"groups"`
 }
 
@@ -428,6 +430,7 @@ type ThreadUsageBreakdownGroup struct {
 	ReasoningEffort             *string `json:"reasoning_effort,omitempty"`
 	Speed                       *string `json:"speed,omitempty"`
 	EstimatedUsageCreditsMicros int64   `json:"estimated_usage_credits_micros"`
+	NativeUsageUSDMicros        *int64  `json:"native_usage_usd_micros,omitempty"`
 	NetNewInputTokens           *int64  `json:"net_new_input_tokens,omitempty"`
 	CachedInputTokens           *int64  `json:"cached_input_tokens,omitempty"`
 	InputTokens                 *int64  `json:"input_tokens,omitempty"`
