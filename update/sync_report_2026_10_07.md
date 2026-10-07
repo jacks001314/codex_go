@@ -175,3 +175,18 @@
 - `sync409`（#50446）：新增 `appserver/rollout_archive.go`（GNU tar + gzip、有界写入、非法/重名条目跳过、失败回退）+ `PrepareUpload` 分流并归档；4 文件，commit `a9284006`。差异：Go 无 sentry envelope/上传层，归档在准备阶段物化。
 - 队列：`sync51480` 接手 ⑤ incremental tools 本体 + 队列 A（#50462 delegated preview）/ 队列 B（#50454 rollout persistence metrics）；`sync51482` 接手 ④ 静态 parity 重钉；`synctui` 仍负责 #51482 TUI 段 + #51500/#51510 的 app 层接线。
 - 未派项（待车道空闲）：`plugin/` disabled-skill 路径身份、结构化 skill 提及的 cwd 相对解析（上游 #37177 遗留）。
+
+## 追加（当日第十四批：sync410–sync415，三条并行车道合并 + 车道扩到 5）
+
+| 编号 | 上游 | 主题 | 落地 |
+|---|---|---|---|
+| `sync410` | #50540/#51188/#51202/#51119/#50441 | world-state 工具目录增量引擎 | 新增 `session/top_level_tools.go`（快照 + `TopLevelToolsHashes`/`TopLevelToolsUpdates`/`BaseInstructionsUpdate`/有序 `WorldStateUpdate`）+ `session/world_state.go` + `turn/runtime.go` 的 `modelVisibleSpecsForRequest`（记录声明 == 请求本来会发的工具）；4 文件 / +1028 −10 |
+| `sync411` | #51492/#51556 | 静态协议 parity 层重钉 | 两个 `.zst` 重 vendor + sha256 重钉 + `parity/rust_snapshot_test.go` 哈希/成员快照 + 目录清单 |
+| `sync412` | #50741/#51556 | 其余 parity 快照重钉 | ConfigToml 104→105（`daybreak`）、config.schema 101→102、`tooManyDenials` emission gap、fixture root 计数、TUI 快照 1331→1375、unified_exec/sandbox 用例表 |
+| `sync413` | #49598/#51157/#51217 | app-server 协议面补齐 | `EnvironmentSkillsParams`+`skills`、`ThreadGoalMutationOrigin`+`origin`、`MisalignmentErrorDetails.ReviewTarget`（含 codexapi 转发）+ 对照测试 |
+| `sync414` | #51510 | 配置重载失败保留实时设置（**按 Rust 形状重做**）| 新增 `tui/tea/local_settings.go` 的 `LocalSettings` 类型与 `LoadNewSessionLocalSettings`/`LocalSettingsAfterTrustCheck`/`Reloaded` 流程；7 个 LikeRust 测试 |
+| `sync415` | #51500 | 共享任务置顶（**按 Rust 形状重做**）| 新增 `tui/tea/agents_overview_pin.go` 传输层（`ListPinnedThreads`/`PinnedThreadsReader`/`PinToggler`/`OnAgentsOverviewPinRequest`）；15 个 LikeRust 测试（4 个 fake 端到端）|
+
+- 验证：`go build ./...` 通过；`gofmt -l` 空；`./appserver/ ./model/ ./session/ ./turn/ ./rollout/ ./tui/... ./codexapi/` 失败集合 = 既有基线；`CODEX_RUST_ROOT=/home/jacks/jacks_dev/codex/codex-rs go test ./parity/ -count=1` 由 **15 FAIL 降到 4 FAIL**（新增基线项，剩余属 execserver/features/voicehost，已派新车道）。
+- 工具学：parity 必须设 `CODEX_RUST_ROOT=/home/jacks/jacks_dev/codex/codex-rs`，否则全部 Skip 造成假通过。
+- 调度：派生宽度提升到 5，新增两条车道 —— `syncparity2`（parity 4 缺口：features/execserver/voicehost）、`syncmcpcfg`（mcp/api.go 与 config/api.go 的新协议字段 + `daybreak` 顶层键 + `plugin/` disabled-skill 路径身份）；既有 `sync51482` 转做 bedrock 方法族 + `review_target` 填充；`sync51480` 转做 reset 窗口号 + #50462/#50454；`synctui` 继续 app 层接线与 #51482 TUI 段。
