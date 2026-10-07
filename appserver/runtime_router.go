@@ -3280,6 +3280,9 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(params.ThreadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: params.ThreadID, Turn: appTurn})
 	_ = r.appendRuntimeTurnStarted(params.ThreadID, turnID, rootTurnIDForTurn(nil, turnID), startedAt)
+	// Rust #49262: the compaction task runs in its own `codex.compaction`
+	// phase span (core/src/tasks/compact.rs).
+	compactionSpan := r.startCompactionSpan(r.openRequestSpan(request), params.ThreadID, turnID)
 	_, err = r.compactThread(context.Background(), &runtimeCompactRequest{
 		ThreadID:     params.ThreadID,
 		TurnID:       turnID,
@@ -3288,6 +3291,9 @@ func (r *RuntimeRouter) handleThreadCompactStartRuntime(request *Request) (*Thre
 		Reason:       compact.ReasonUserRequested,
 		Phase:        compact.PhaseStandaloneTurn,
 	})
+	if compactionSpan != nil {
+		compactionSpan.End()
+	}
 	if err != nil {
 		r.finishTurnWithError(params.ThreadID, turnID, startedAt.UnixMilli(), err)
 		return nil, err

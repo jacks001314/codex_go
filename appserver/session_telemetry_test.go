@@ -1596,3 +1596,79 @@ func TestUnifiedExecSpansExportThroughTheRouterLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Rust #49262 also brackets a manual compaction task (`thread/compact/start`,
+// the Go analogue of `CompactTask::run`) with a `codex.compaction` span carrying
+// `codex.turn.phase = "compaction"` and the conversation and turn ids.
+func TestCompactionSpanExportedLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil || provider.Tracer() == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+
+	store := session.NewStore(t.TempDir())
+	const threadID = "thread-compaction-phase"
+	now := time.Now().UTC()
+	if err := store.Save(&session.Record{
+		ID: threadID, SessionID: threadID, CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4", Extra: map[string]any{}},
+		Items: []session.Item{
+			{ID: "u1", Type: "message", Role: "user", Text: "first request", CreatedAt: now},
+			{ID: "a1", Type: "agent_message", Role: "assistant", Text: "first answer", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Turns: turn.NewTurnService()})
+	router.SetNotificationSink(NewNotificationBuffer())
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+	router.requireThreadStatus().UpsertThread(threadID, false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadCompactStart, ThreadCompactStartParams{ThreadID: threadID}))
+	if response.Error != nil {
+		t.Fatalf("compact error: %+v", response.Error)
+	}
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case payload := <-traceBodies:
+			spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+			for _, entry := range spans {
+				span := entry.(map[string]any)
+				if span["name"] != CompactionSpanName {
+					continue
+				}
+				attributes := encodedAttributes(span)
+				if attributes[turn.TurnPhaseAttribute] != turn.TurnPhaseCompaction ||
+					attributes[turn.ConversationIDAttribute] != threadID ||
+					attributes[turn.TurnIDAttribute] != "turn-1" {
+					t.Fatalf("compaction span attributes = %#v", attributes)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no codex.compaction span was exported")
+		}
+	}
+}

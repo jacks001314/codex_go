@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"codex_go/telemetry"
+	"codex_go/turn"
 )
 
 // Rust parity: codex-core instruments its session turn-input handler with
@@ -58,4 +59,32 @@ func endTurnInputSpan(span *telemetry.Span, turnID string) {
 		span.SetAttribute(turnInputTurnIDAttribute, turnID)
 	}
 	span.End()
+}
+
+// CompactionSpanName is the span Rust opens around a compaction task
+// (`codex.compaction`, core/src/tasks/compact.rs, #49262) in addition to the
+// automatic compaction span in the turn loop.
+const CompactionSpanName = turn.CompactionPhaseSpanName
+
+// startCompactionSpan opens the `codex.compaction` phase span for a manual
+// compaction task (Go's analogue of Rust's `CompactTask::run`), carrying
+// `codex.turn.phase = "compaction"` plus the conversation and turn ids. A
+// router without an installed tracing provider has no span.
+func (r *RuntimeRouter) startCompactionSpan(parent *telemetry.Span, threadID string, turnID string) *telemetry.Span {
+	if r == nil {
+		return nil
+	}
+	tracer := r.requestTracer()
+	if tracer == nil {
+		return nil
+	}
+	attributes := map[string]string{
+		turn.TurnPhaseAttribute:      turn.TurnPhaseCompaction,
+		turn.ConversationIDAttribute: strings.TrimSpace(threadID),
+		turn.TurnIDAttribute:         strings.TrimSpace(turnID),
+	}
+	if parent != nil {
+		return tracer.StartSpanWithParent(parent, CompactionSpanName, attributes)
+	}
+	return tracer.StartSpan(CompactionSpanName, attributes)
 }
