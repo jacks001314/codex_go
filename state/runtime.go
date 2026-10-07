@@ -89,8 +89,13 @@ type StateRuntime struct {
 	threadHistoryDB *sql.DB
 	metrics         *TaskMetrics
 	closed          bool
-	threadUpdatedAt atomic.Int64
-	threadRecencyAt atomic.Int64
+	// logsMaintenanceMu guards the background diagnostic-log pruning tasks
+	// (Rust #49425, upstream 8ea2c0e0d4).
+	logsMaintenanceMu   sync.Mutex
+	logsMaintenanceDone chan struct{}
+	logsMaintenanceWG   sync.WaitGroup
+	threadUpdatedAt     atomic.Int64
+	threadRecencyAt     atomic.Int64
 }
 
 func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultProvider string) (*StateRuntime, error) {
@@ -128,9 +133,9 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 		_ = runtime.Close()
 		return nil, err
 	}
-	if err := runtime.runLogsStartupMaintenance(ctx, time.Now()); err != nil {
-		slog.Warn("failed to run startup maintenance for logs database", "path", sqliteConfig.LogsDBPath(), "error", err)
-	}
+	// Rust #49425: the diagnostic-log sweep runs immediately and then on a
+	// timer instead of only during startup.
+	runtime.startPeriodicLogsMaintenance(logsMaintenancePeriod)
 	return runtime, nil
 }
 
@@ -233,9 +238,22 @@ func (r *StateRuntime) Close() error {
 	}
 	r.threadHistoryMu.Lock()
 	historyDB := r.threadHistoryDB
+	alreadyClosed := r.closed
 	r.threadHistoryDB = nil
 	r.closed = true
 	r.threadHistoryMu.Unlock()
+	// Stop the background log maintenance and let an in-flight sweep finish
+	// before the pools are closed.
+	//
+	// Documented difference: Rust's task upgrades a `Weak<StateRuntime>` and
+	// stops on a closed `logs_pool`; Go keeps the runtime alive in the task, so
+	// Close signals the done channel first and then waits here.
+	r.logsMaintenanceMu.Lock()
+	if !alreadyClosed && r.logsMaintenanceDone != nil {
+		close(r.logsMaintenanceDone)
+	}
+	r.logsMaintenanceWG.Wait()
+	r.logsMaintenanceMu.Unlock()
 	r.memoriesV2Mu.Lock()
 	memoriesV2DB := r.memoriesV2DB
 	r.memoriesV2DB = nil

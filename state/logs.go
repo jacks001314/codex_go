@@ -13,7 +13,6 @@ import (
 const (
 	logPartitionSizeLimitBytes int64 = 10 * 1024 * 1024
 	logPartitionRowLimit       int64 = 1_000
-	logRetentionDays                 = 10
 )
 
 // logBatchByteBoundaries are the explicit byte histogram bucket boundaries for
@@ -229,17 +228,6 @@ func (r *StateRuntime) DeleteLogsBefore(ctx context.Context, cutoffTS int64) (in
 		return 0, fmt.Errorf("read deleted log count: %w", err)
 	}
 	return rows, nil
-}
-
-func (r *StateRuntime) runLogsStartupMaintenance(ctx context.Context, now time.Time) error {
-	cutoff := now.UTC().AddDate(0, 0, -logRetentionDays).Unix()
-	if _, err := r.DeleteLogsBefore(ctx, cutoff); err != nil {
-		return err
-	}
-	if _, err := r.logsDB.ExecContext(nonNilContext(ctx), `PRAGMA wal_checkpoint(PASSIVE)`); err != nil {
-		return fmt.Errorf("checkpoint logs database: %w", err)
-	}
-	return nil
 }
 
 func (r *StateRuntime) QueryLogs(ctx context.Context, query LogQuery) ([]LogRow, error) {
