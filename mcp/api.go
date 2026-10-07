@@ -167,6 +167,9 @@ type MCPListServerStatusParams struct {
 	Limit    *uint32                `json:"limit,omitempty"`
 	Detail   *MCPServerStatusDetail `json:"detail,omitempty"`
 	ThreadID *string                `json:"threadId,omitempty"`
+	// ServerName limits discovery to one server; combined with ThreadID the
+	// thread's existing MCP connection is reused (Rust #48783).
+	ServerName *string `json:"serverName,omitempty"`
 
 	// Turn-scoped catalog capture can stop waiting for optional startup after a
 	// shared grace period. Management RPCs leave NonBlockingOptional false.
@@ -397,6 +400,9 @@ func (r MCPServerOauthClientRegistration) Valid() bool {
 type MCPServerOauthLoginResponse struct {
 	AuthorizationURL string `json:"authorizationUrl,omitempty"`
 	URL              string `json:"url,omitempty"`
+	// LoginID identifies this login attempt across the response and the
+	// completion notification. Older servers omit the field (Rust #49276).
+	LoginID *string `json:"loginId,omitempty"`
 }
 
 func (r *MCPServerOauthLoginResponse) MarshalJSON() ([]byte, error) {
@@ -404,10 +410,17 @@ func (r *MCPServerOauthLoginResponse) MarshalJSON() ([]byte, error) {
 	if authorizationURL == "" {
 		authorizationURL = r.URL
 	}
+	var loginID *string
+	if r.LoginID != nil {
+		value := *r.LoginID
+		loginID = &value
+	}
 	return json.Marshal(struct {
-		AuthorizationURL string `json:"authorizationUrl"`
+		AuthorizationURL string  `json:"authorizationUrl"`
+		LoginID          *string `json:"loginId,omitempty"`
 	}{
 		AuthorizationURL: authorizationURL,
+		LoginID:          loginID,
 	})
 }
 

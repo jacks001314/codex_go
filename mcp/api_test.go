@@ -1958,3 +1958,64 @@ func TestServiceTrustedAccessFromSnapshotLikeRust(t *testing.T) {
 		t.Fatalf("cyber_trusted_access = %#v", cyber)
 	}
 }
+
+func TestMCPServerOauthLoginResponseLoginIDLikeRust(t *testing.T) {
+	// Mirrors Rust #49276 (4994306e9f): login_id identifies the explicit login
+	// attempt and is optional so older servers still deserialize (Rust test:
+	// mcp_oauth_login_response_accepts_older_servers_without_login_id).
+	var older MCPServerOauthLoginResponse
+	if err := json.Unmarshal([]byte(`{"authorizationUrl":"https://example.com/authorize"}`), &older); err != nil {
+		t.Fatalf("Unmarshal older login response returned error: %v", err)
+	}
+	if older.LoginID != nil {
+		t.Fatalf("older login response LoginID = %#v, want nil", older.LoginID)
+	}
+	encodedOlder, err := json.Marshal(&older)
+	if err != nil {
+		t.Fatalf("Marshal older login response returned error: %v", err)
+	}
+	if strings.Contains(string(encodedOlder), "loginId") {
+		t.Fatalf("omitted loginId should not be emitted: %s", encodedOlder)
+	}
+
+	loginID := "login-1"
+	current := MCPServerOauthLoginResponse{AuthorizationURL: "https://example.com/authorize", LoginID: &loginID}
+	encodedCurrent, err := json.Marshal(&current)
+	if err != nil {
+		t.Fatalf("Marshal current login response returned error: %v", err)
+	}
+	if !strings.Contains(string(encodedCurrent), `"loginId":"login-1"`) {
+		t.Fatalf("encoded current login response = %s", encodedCurrent)
+	}
+}
+
+func TestMCPListServerStatusParamsServerNameLikeRust(t *testing.T) {
+	// Mirrors Rust #48783 (ea64727556): serverName limits discovery to one
+	// server (with threadId the thread's MCP connection is reused). Rust test:
+	// mcp_server_status_list_reuses_thread_connection.
+	var params MCPListServerStatusParams
+	if err := json.Unmarshal([]byte(`{"serverName":"github","threadId":"t-1"}`), &params); err != nil {
+		t.Fatalf("Unmarshal params returned error: %v", err)
+	}
+	if params.ServerName == nil || *params.ServerName != "github" {
+		t.Fatalf("ServerName = %#v, want github", params.ServerName)
+	}
+	if params.ThreadID == nil || *params.ThreadID != "t-1" {
+		t.Fatalf("ThreadID = %#v, want t-1", params.ThreadID)
+	}
+
+	var bare MCPListServerStatusParams
+	if err := json.Unmarshal([]byte(`{}`), &bare); err != nil {
+		t.Fatalf("Unmarshal bare params returned error: %v", err)
+	}
+	if bare.ServerName != nil {
+		t.Fatalf("omitted serverName = %#v, want nil", bare.ServerName)
+	}
+	encoded, err := json.Marshal(&bare)
+	if err != nil {
+		t.Fatalf("Marshal bare params returned error: %v", err)
+	}
+	if strings.Contains(string(encoded), "serverName") {
+		t.Fatalf("omitted serverName should not be emitted: %s", encoded)
+	}
+}

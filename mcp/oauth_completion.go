@@ -8,8 +8,11 @@ import (
 type MCPOAuthLoginCompletion struct {
 	Name     string
 	ThreadID string
-	Success  bool
-	Error    string
+	// LoginID identifies the explicit login attempt this completion belongs to
+	// (Rust #49276); empty for older servers that omit it.
+	LoginID string
+	Success bool
+	Error   string
 }
 
 type MCPOAuthLoginCompletionHandler interface {
@@ -31,6 +34,7 @@ func normalizeMCPOAuthLoginCompletion(completion *MCPOAuthLoginCompletion) *MCPO
 	out := *completion
 	out.Name = strings.TrimSpace(out.Name)
 	out.ThreadID = strings.TrimSpace(out.ThreadID)
+	out.LoginID = strings.TrimSpace(out.LoginID)
 	out.Error = strings.TrimSpace(out.Error)
 	return &out
 }

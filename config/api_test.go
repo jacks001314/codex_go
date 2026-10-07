@@ -984,3 +984,26 @@ func TestAutoReviewRequiredForModelMatchesExactProviderAliasesLikeRust(t *testin
 		t.Fatalf("empty requirements should not require auto review")
 	}
 }
+
+func TestConfigRequirementsReadSupportsIndependentSpeedModesLikeRust(t *testing.T) {
+	// Mirrors Rust #51253 (7ac954ea24): configRequirements/read reports
+	// supportsIndependentSpeedModes: true unconditionally
+	// (app-server/src/request_processors/config_processor.rs), and older servers
+	// that omit the field leave clients on the shared Fast gate. Rust test:
+	// config_requirements_read_exposes_independent_speed_policy.
+	service := NewConfigService(t.TempDir())
+	read := service.Requirements()
+	if read.SupportsIndependentSpeedModes == nil || !*read.SupportsIndependentSpeedModes {
+		t.Fatalf("SupportsIndependentSpeedModes = %#v, want true", read.SupportsIndependentSpeedModes)
+	}
+	encoded, err := json.Marshal(read)
+	if err != nil {
+		t.Fatalf("Marshal(Requirements()) returned error: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"supportsIndependentSpeedModes":true`) {
+		t.Fatalf("encoded requirements = %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"requirements":null`) {
+		t.Fatalf("encoded requirements should keep the null requirements key: %s", encoded)
+	}
+}

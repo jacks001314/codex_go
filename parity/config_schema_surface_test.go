@@ -16,7 +16,6 @@ import (
 // reason so the list is auditable and can shrink as Go implements more keys.
 var configSchemaRustOnlyAllowlist = map[string]string{
 	"experimental_thread_store": "Rust experimental thread store; Go uses its own session store and app-server tests inject a store directly (Rust's ThreadStoreToml only has local/in_memory, and in_memory is schemars-skipped test plumbing)",
-	"daybreak":                  "Rust `daybreak` default preference (config_toml.rs ConfigToml::daybreak, surfaced in core/config.schema.json at upstream 18e28fe1b9); the Go config package is outside this task's write scope, so the key is tracked as a Rust-only surface with a follow-up to add it to config.KnownTopLevelConfigFields",
 }
 
 // configSchemaGoOnlyAllowlist lists Go-recognized keys absent from Rust's
@@ -61,13 +60,14 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	// Re-pinned to upstream 8ae55c863d (#47074): `cloud` joins the top-level
 	// surface as the cloud-owned feature-settings table.
 	// Re-pinned to upstream 18e28fe1b9 (#51556): `daybreak` joins the top-level
-	// surface (see the Rust-only allowlist for the Go follow-up), taking the
-	// count from 101 to 102.
+	// surface (ConfigToml::daybreak, #49856), taking the Rust count from 101 to
+	// 102. Go now recognizes `daybreak` too (config.KnownTopLevelConfigFields),
+	// so it is no longer a Rust-only key: the Go count moves from 108 to 109.
 	if len(rustKeys) != 102 {
 		t.Fatalf("Rust config.schema.json top-level property count = %d, want 102 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 108 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 108 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 109 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 109 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

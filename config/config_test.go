@@ -2478,3 +2478,47 @@ func TestGuardianV2PersistScoresParsesAndDefaultsLikeRust(t *testing.T) {
 		t.Fatal("disabled persist_scores = true, want false")
 	}
 }
+
+func TestDaybreakConfigKeyLikeRust(t *testing.T) {
+	// Mirrors Rust #49856 (c41a72cd3f): ConfigToml::daybreak is an optional
+	// default Daybreak preference, surfaced as
+	// Config::daybreak_enabled = cfg.daybreak.unwrap_or(false)
+	// (core/src/config/mod.rs:4317), and recognized by strict config.
+	found := false
+	for _, key := range KnownTopLevelConfigFields() {
+		if key == "daybreak" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("KnownTopLevelConfigFields is missing daybreak")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions(default) returned error: %v", err)
+	}
+	if cfg.DaybreakEnabled() {
+		t.Fatal("DaybreakEnabled default = true, want false")
+	}
+
+	enabled := t.TempDir()
+	if err := os.WriteFile(ConfigPath(enabled), []byte("daybreak = true\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfgEnabled, err := LoadEffectiveWithOptions(enabled, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions(daybreak) returned error: %v", err)
+	}
+	if !cfgEnabled.DaybreakEnabled() {
+		t.Fatal("DaybreakEnabled = false, want true")
+	}
+	if value, ok := cfgEnabled.Values["daybreak"]; !ok || value != true {
+		t.Fatalf("daybreak not carried in Values: %#v", cfgEnabled.Values["daybreak"])
+	}
+}

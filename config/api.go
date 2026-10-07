@@ -521,7 +521,11 @@ type ConfigWriteResponse struct {
 }
 
 type ConfigRequirementsReadResponse struct {
-	Requirements *ConfigRequirements `json:"requirements"`
+	// SupportsIndependentSpeedModes reports whether Fast and Ultra Fast
+	// requirements are enforced independently. Older servers omit this field and
+	// clients then use Fast mode as a shared speed gate (Rust #51253).
+	SupportsIndependentSpeedModes *bool               `json:"supportsIndependentSpeedModes"`
+	Requirements                  *ConfigRequirements `json:"requirements"`
 }
 
 // AuthCredentialsStoreMode mirrors Rust codex_config::types::AuthCredentialsStoreMode
@@ -2773,7 +2777,13 @@ func (s *ConfigService) currentUserConfigPath() (string, error) {
 func (s *ConfigService) Requirements() *ConfigRequirementsReadResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return &ConfigRequirementsReadResponse{Requirements: cloneRequirements(s.requirements)}
+	// Rust's app-server config_processor answers `Some(true)` unconditionally
+	// (#51253): the server enforces Fast and Ultra Fast policies independently.
+	supportsIndependentSpeedModes := true
+	return &ConfigRequirementsReadResponse{
+		SupportsIndependentSpeedModes: &supportsIndependentSpeedModes,
+		Requirements:                  cloneRequirements(s.requirements),
+	}
 }
 
 func (s *ConfigService) DetectExternalAgentConfig(params *ExternalAgentConfigDetectParams) *ExternalAgentConfigDetectResponse {
