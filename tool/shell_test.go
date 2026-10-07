@@ -78,8 +78,8 @@ func TestResolveCommandWithOptionsResolvesModelProvidedShellByType(t *testing.T)
 	if err != nil {
 		t.Fatalf("ResolveCommandWithOptions() error = %v", err)
 	}
-	if resolved.ShellType != ShellBash {
-		t.Fatalf("shell type = %q, want bash", resolved.ShellType)
+	if resolved.Shell.Shell.Type != ShellBash {
+		t.Fatalf("shell type = %q, want bash", resolved.Shell.Shell.Type)
 	}
 	if len(resolved.Command) != 3 || resolved.Command[0] != executable || resolved.Command[1] != "-lc" || resolved.Command[2] != "echo hello" {
 		t.Fatalf("resolved command = %#v, want [%s -lc echo hello]", resolved.Command, executable)
@@ -120,8 +120,8 @@ func TestResolveCommandUsesRequestedShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveCommand returned error: %v", err)
 	}
-	if resolved.ShellType != ShellZsh {
-		t.Fatalf("ShellType = %q", resolved.ShellType)
+	if resolved.Shell.Shell.Type != ShellZsh {
+		t.Fatalf("ShellType = %q", resolved.Shell.Shell.Type)
 	}
 	if len(resolved.Command) != 3 || resolved.Command[0] != executable {
 		t.Fatalf("Command = %#v", resolved.Command)
@@ -161,7 +161,7 @@ func TestResolveCommandMatchesRustUnifiedExecExplicitShells(t *testing.T) {
 			}
 			wantArgv := append([]string{executable}, tc.flags...)
 			wantArgv = append(wantArgv, "echo hello")
-			if resolved.ShellType != tc.wantType || !stringSlicesEqual(resolved.Command, wantArgv) {
+			if resolved.Shell.Shell.Type != tc.wantType || !stringSlicesEqual(resolved.Command, wantArgv) {
 				t.Fatalf("resolved = %#v", resolved)
 			}
 		})
@@ -194,7 +194,7 @@ func TestResolveCommandUsesZshForkShellWhenConfiguredLikeRust(t *testing.T) {
 		t.Fatalf("ResolveCommandWithOptions returned error: %v", err)
 	}
 	want := []string{"/opt/codex/zsh", "-lc", "echo hello"}
-	if resolved.ShellType != ShellZsh || !stringSlicesEqual(resolved.Command, want) {
+	if resolved.Shell.Shell.Type != ShellZsh || !resolved.Shell.UseLoginShell || !stringSlicesEqual(resolved.Command, want) {
 		t.Fatalf("resolved = %#v, want %v", resolved, want)
 	}
 }

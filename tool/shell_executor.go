@@ -776,13 +776,12 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	// the directories the local executor reports before running the model's
 	// script. Remote launches do the same in execRemote with their own executor's
 	// report; this runs before the snapshot replay so the restore and the script
-	// share one shell.
-	if !remoteEnvironment && req.LoginShellPackagePath && !unifiedExecExplicitPathOverride(req) {
-		if shell, useLoginShell := loginShellFromArgv(req.Command); shell.IsPosixLogin(useLoginShell) {
-			if dirs := localLaunchPrependPathDirs(); len(dirs) > 0 {
-				if derived, ok := shell.DeriveExecArgsWithPathPrepends(req.HookCommand, dirs, useLoginShell); ok {
-					req.Command = derived
-				}
+	// share one shell. The launch's own `ShellInvocation` decides the shell and
+	// the login mode (Rust #49360), not the derived argv.
+	if !remoteEnvironment && req.LoginShellPackagePath && req.Shell.IsPosixLogin() && !unifiedExecExplicitPathOverride(req) {
+		if dirs := localLaunchPrependPathDirs(); len(dirs) > 0 {
+			if derived, ok := req.Shell.Shell.DeriveExecArgsWithPathPrepends(req.HookCommand, dirs, req.Shell.UseLoginShell); ok {
+				req.Command = derived
 			}
 		}
 	}
@@ -790,11 +789,19 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		// Rust replays the session's shell snapshot in front of the model's
 		// script so the user's aliases, functions and options still apply. The
 		// wrapper re-checks the launch shape and leaves brokered launches alone.
+		// Rust #49360 (`shell_snapshot_request`): the launch's own invocation
+		// names the shell and decides POSIX-login eligibility, so a
+		// model-provided shell or an explicit `login: false` is honored instead
+		// of the session shell and the config permission.
+		snapshotShell := req.Shell.Shell
+		if snapshotShell == nil {
+			snapshotShell = sessionShell
+		}
 		snapshot := e.snapshotProvider(ctx, SnapshotProviderRequest{
-			ShellType:           sessionShell.Type,
-			ShellPath:           sessionShell.Path,
+			ShellType:           snapshotShell.Type,
+			ShellPath:           snapshotShell.Path,
 			CWD:                 req.CWD,
-			AllowLoginShell:     validation.AllowLoginShell,
+			AllowLoginShell:     req.Shell.IsPosixLogin(),
 			EnvironmentPolicy:   policyTable,
 			PermissionProfile:   validation.PermissionProfile,
 			PermissionProfileID: validation.PermissionProfileID,

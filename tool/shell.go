@@ -84,7 +84,12 @@ func (a *ExecCommandArgs) UnmarshalJSON(data []byte) error {
 }
 
 type ShellRequest struct {
-	Command         []string
+	Command []string
+	// Shell is the shell invocation the launch was resolved with (Rust #49360:
+	// `ExecCommandRequest.shell` / `UnifiedExecRequest.shell`). Hand-built
+	// requests may leave it empty; consumers then skip the invocation-driven
+	// behavior instead of guessing from Command.
+	Shell           ShellInvocation
 	HookCommand     string
 	CWD             string
 	TimeoutMS       uint64
@@ -302,8 +307,12 @@ type ShellValidationOptions struct {
 }
 
 type ResolvedCommand struct {
-	Command   []string
-	ShellType ShellType
+	Command []string
+	// Shell is the resolved shell invocation (Rust #49360:
+	// `handlers/unified_exec.rs ResolvedCommand.shell`). Downstream code - the
+	// launch, the shell snapshot and credential brokerage - reads the chosen
+	// shell and startup mode here instead of inferring them from `Command`.
+	Shell ShellInvocation
 }
 
 type UnifiedExecShellMode string
@@ -372,8 +381,23 @@ func (s *Shell) DeriveExecArgs(command string, useLoginShell bool) []string {
 	}
 }
 
-// IsPosixLogin mirrors Rust `ShellInvocation::is_posix_login` (#49467): a POSIX
-// login shell is one of bash/zsh/sh started in login mode.
+// ShellInvocation mirrors Rust `ShellInvocation` (#49360): the shell and startup
+// mode Codex chose for an exec command. The launch carries it alongside the
+// derived argv so later stages (PATH restoration, shell snapshots, credential
+// brokerage) do not have to re-infer `-lc` or the shell from the arguments.
+type ShellInvocation struct {
+	Shell         *Shell
+	UseLoginShell bool
+}
+
+// IsPosixLogin mirrors Rust `ShellInvocation::is_posix_login` (#49360/#49467):
+// the launch chose login mode and the shell is a POSIX login shell.
+func (i ShellInvocation) IsPosixLogin() bool {
+	return i.Shell.IsPosixLogin(i.UseLoginShell)
+}
+
+// IsPosixLogin mirrors Rust `Shell::is_posix_login`'s shell predicate (#49467): a
+// POSIX login shell is one of bash/zsh/sh started in login mode.
 func (s *Shell) IsPosixLogin(useLoginShell bool) bool {
 	if s == nil || !useLoginShell {
 		return false
@@ -505,8 +529,8 @@ func ResolveCommandWithOptions(args *ExecCommandArgs, sessionShell *Shell, opts 
 			shell = &Shell{Type: ShellZsh, Path: "zsh"}
 		}
 		return &ResolvedCommand{
-			Command:   shell.DeriveExecArgs(args.Cmd, useLoginShell),
-			ShellType: ShellZsh,
+			Command: shell.DeriveExecArgs(args.Cmd, useLoginShell),
+			Shell:   ShellInvocation{Shell: shell, UseLoginShell: useLoginShell},
 		}, nil
 	}
 	shell := sessionShell
@@ -523,8 +547,8 @@ func ResolveCommandWithOptions(args *ExecCommandArgs, sessionShell *Shell, opts 
 		shell = NewDefaultShell()
 	}
 	return &ResolvedCommand{
-		Command:   shell.DeriveExecArgs(args.Cmd, useLoginShell),
-		ShellType: shell.Type,
+		Command: shell.DeriveExecArgs(args.Cmd, useLoginShell),
+		Shell:   ShellInvocation{Shell: shell, UseLoginShell: useLoginShell},
 	}, nil
 }
 
@@ -558,10 +582,14 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	if err != nil {
 		return nil, err
 	}
-	if err := validateWindowsShellSafety(args.Cmd, resolved.ShellType, cwd); err != nil {
+	resolvedShellType := ShellUnknown
+	if resolved.Shell.Shell != nil {
+		resolvedShellType = resolved.Shell.Shell.Type
+	}
+	if err := validateWindowsShellSafety(args.Cmd, resolvedShellType, cwd); err != nil {
 		return nil, err
 	}
-	if resolved.ShellType == ShellPowerShell {
+	if resolvedShellType == ShellPowerShell {
 		resolved.Command = shellutil.PrefixPowerShellScriptWithUTF8(resolved.Command)
 	}
 	sandboxPermissions := args.SandboxPermissions
@@ -619,6 +647,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 	}
 	return &ShellRequest{
 		Command:                         resolved.Command,
+		Shell:                           resolved.Shell,
 		HookCommand:                     args.Cmd,
 		CWD:                             cwd,
 		TimeoutMS:                       timeoutMS,

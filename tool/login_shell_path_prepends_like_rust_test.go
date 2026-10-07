@@ -134,19 +134,29 @@ func TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust(t *testing.T) 
 	loginCommand := []string{"/bin/sh", "-lc", hookCommand}
 
 	explicitPATH := &execpolicy.EnvPolicy{Set: map[string]string{"PATH": "/user/configured/bin"}}
+	// Rust #49360 carries the invocation on the launch; the gate reads it
+	// instead of re-deriving the login mode from the command arguments.
+	loginShell := ShellInvocation{Shell: &Shell{Type: ShellBash, Path: "/bin/sh"}, UseLoginShell: true}
+	nonLoginShell := ShellInvocation{Shell: &Shell{Type: ShellBash, Path: "/bin/sh"}, UseLoginShell: false}
 	cases := []struct {
 		name          string
 		feature       bool
 		command       []string
+		shell         ShellInvocation
 		envPolicy     *execpolicy.EnvPolicy
 		dirs          []string
 		wantRewritten bool
 	}{
-		{name: "restores executor directories", feature: true, command: loginCommand, dirs: dirs, wantRewritten: true},
-		{name: "feature disabled", feature: false, command: loginCommand, dirs: dirs},
-		{name: "explicit PATH override", feature: true, command: loginCommand, envPolicy: explicitPATH, dirs: dirs},
-		{name: "executor reports no directories", feature: true, command: loginCommand},
-		{name: "non-login shell", feature: true, command: []string{"/bin/sh", "-c", hookCommand}, dirs: dirs},
+		{name: "restores executor directories", feature: true, command: loginCommand, shell: loginShell, dirs: dirs, wantRewritten: true},
+		{name: "feature disabled", feature: false, command: loginCommand, shell: loginShell, dirs: dirs},
+		{name: "explicit PATH override", feature: true, command: loginCommand, shell: loginShell, envPolicy: explicitPATH, dirs: dirs},
+		{name: "executor reports no directories", feature: true, command: loginCommand, shell: loginShell},
+		{name: "non-login shell", feature: true, command: []string{"/bin/sh", "-c", hookCommand}, shell: nonLoginShell, dirs: dirs},
+		// The invocation decides, not the derived argv (Rust #49360): a
+		// login-looking argv whose launch says non-login stays untouched, and a
+		// non-login argv whose launch says login is still restored.
+		{name: "invocation disagrees with argv", feature: true, command: loginCommand, shell: nonLoginShell, dirs: dirs},
+		{name: "login invocation with non-login argv", feature: true, command: []string{"/bin/sh", "-c", hookCommand}, shell: loginShell, dirs: dirs, wantRewritten: true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -160,6 +170,7 @@ func TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust(t *testing.T) 
 			go func() {
 				_, _ = manager.Exec(ctx, &ShellRequest{
 					Command:                  append([]string(nil), testCase.command...),
+					Shell:                    testCase.shell,
 					HookCommand:              hookCommand,
 					CWD:                      t.TempDir(),
 					UnifiedExecRemoteURL:     "ws" + strings.TrimPrefix(server.URL, "http"),
@@ -343,6 +354,24 @@ func TestBuildShellRequestCarriesLoginShellPackagePathLikeRust(t *testing.T) {
 	if request.HookCommand != "echo hi" {
 		t.Fatalf("HookCommand = %q, want the raw script", request.HookCommand)
 	}
+	// Rust #49360: the resolved invocation rides on the launch request.
+	if request.Shell.Shell == nil || request.Shell.Shell.Type != ShellBash || request.Shell.Shell.Path != "/bin/bash" {
+		t.Fatalf("ShellRequest.Shell = %#v, want the resolved bash invocation", request.Shell)
+	}
+	if !request.Shell.UseLoginShell || !request.Shell.IsPosixLogin() {
+		t.Fatalf("ShellRequest.Shell login mode = %#v, want a POSIX login invocation", request.Shell)
+	}
+	nonLogin := false
+	explicitNonLogin, err := BuildShellRequest(&ExecCommandArgs{Cmd: "echo hi", Login: &nonLogin}, shell, ShellValidationOptions{
+		AllowLoginShell: true,
+		CWD:             t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("BuildShellRequest(login:false) error = %v", err)
+	}
+	if explicitNonLogin.Shell.UseLoginShell || explicitNonLogin.Shell.IsPosixLogin() {
+		t.Fatalf("ShellRequest.Shell = %#v, want the explicit non-login invocation", explicitNonLogin.Shell)
+	}
 	defaulted, err := BuildShellRequest(&ExecCommandArgs{Cmd: "echo hi"}, shell, ShellValidationOptions{
 		AllowLoginShell: true,
 		CWD:             t.TempDir(),
@@ -486,6 +515,68 @@ func TestLocalShellLaunchRestoresExecutorPathDirsLikeRust(t *testing.T) {
 			if !strings.Contains(command[2], "export PATH="+first+`${PATH:+:"$PATH"}`) ||
 				!strings.Contains(command[2], "export PATH="+second+`${PATH:+:"$PATH"}`) {
 				t.Fatalf("script = %q, want both executor directories restored", command[2])
+			}
+		})
+	}
+}
+
+// TestSnapshotProviderSeesLaunchShellInvocationLikeRust pins Rust #49360's
+// snapshot half: `shell_snapshot_request`
+// (core/src/unified_exec/shell_snapshot.rs) gates on the launch's own
+// `ShellInvocation` (`is_posix_login()`) and names the snapshot's shell from
+// `request.shell.shell` - instead of matching the shell type, re-deriving
+// `-lc` from the command arguments, or falling back to the session shell.
+func TestSnapshotProviderSeesLaunchShellInvocationLikeRust(t *testing.T) {
+	zshFork := &Shell{Type: ShellZsh, Path: "/opt/codex/zsh"}
+	cases := []struct {
+		name        string
+		arguments   string
+		shellMode   UnifiedExecShellMode
+		zshFork     *Shell
+		wantType    ShellType
+		wantPath    string
+		wantAllowed bool
+	}{
+		{name: "login launch", arguments: `{"cmd":"echo hi"}`, wantType: ShellBash, wantPath: "/bin/bash", wantAllowed: true},
+		{name: "explicit non-login launch", arguments: `{"cmd":"echo hi","login":false}`, wantType: ShellBash, wantPath: "/bin/bash"},
+		{name: "zsh fork launch", arguments: `{"cmd":"echo hi"}`, shellMode: UnifiedExecShellModeZshFork, zshFork: zshFork, wantType: ShellZsh, wantPath: "/opt/codex/zsh", wantAllowed: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var requested *SnapshotProviderRequest
+			executor := NewShellExecutor(&ShellExecutorOptions{
+				Runner: &fakeShellRunner{result: &ShellResult{}},
+				Shell:  &Shell{Type: ShellBash, Path: "/bin/bash"},
+				Validation: ShellValidationOptions{
+					ApprovalPolicy:        sandbox.ApprovalOnRequest,
+					AllowLoginShell:       true,
+					CWD:                   t.TempDir(),
+					DefaultTimeoutMS:      5000,
+					ShellMode:             testCase.shellMode,
+					ZshForkShell:          testCase.zshFork,
+					LoginShellPackagePath: true,
+				},
+				SnapshotProvider: func(_ context.Context, request SnapshotProviderRequest) SnapshotProviderResult {
+					captured := request
+					requested = &captured
+					return SnapshotProviderResult{}
+				},
+			})
+			if _, err := executor.Execute(context.Background(), &Invocation{
+				CallID:   "call-snapshot-invocation",
+				ToolName: PlainName(DefaultExecCommandToolName),
+				Payload:  Payload{Kind: PayloadFunction, Arguments: testCase.arguments},
+			}); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if requested == nil {
+				t.Fatal("the snapshot provider was not asked for a snapshot")
+			}
+			if requested.ShellType != testCase.wantType || requested.ShellPath != testCase.wantPath {
+				t.Fatalf("provider request shell = %q %q, want %q %q", requested.ShellType, requested.ShellPath, testCase.wantType, testCase.wantPath)
+			}
+			if requested.AllowLoginShell != testCase.wantAllowed {
+				t.Fatalf("provider request AllowLoginShell = %v, want %v (the launch's is_posix_login)", requested.AllowLoginShell, testCase.wantAllowed)
 			}
 		})
 	}

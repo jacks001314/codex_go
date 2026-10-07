@@ -599,22 +599,6 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
 }
 
-// loginShellFromArgv recovers the shell and login mode a launch's argv was
-// derived from. Rust carries both in `ShellInvocation` (#49360); until the Go
-// port threads that invocation through the launch request too, argv is the only
-// carrier available here, so callers must only use this on argv produced by
-// Shell.DeriveExecArgs.
-func loginShellFromArgv(argv []string) (*Shell, bool) {
-	if len(argv) < 3 {
-		return nil, false
-	}
-	shellType := DetectShellType(argv[0])
-	if shellType != ShellBash && shellType != ShellZsh {
-		return nil, false
-	}
-	return &Shell{Type: shellType, Path: argv[0]}, argv[1] == "-lc"
-}
-
 // localLaunchPrependPathDirs reports the directories the local executor wants
 // prepended to PATH. The local launch runs in this process, so the executor's
 // report is the in-process one (Rust #49467 uses `Environment::info()` for the
@@ -676,18 +660,18 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	}
 	// Rust #49467 (`Feature::LoginShellPackagePath`): login startup can reset
 	// PATH, so a POSIX login shell re-derives its argv with the directories the
-	// executor reports. The requested command still identifies the process in
-	// events; only the argv handed to the executor carries the PATH setup.
+	// executor reports. The launch's own `ShellInvocation` decides the shell and
+	// the login mode (Rust #49360). The requested command still identifies the
+	// process in events; only the argv handed to the executor carries the PATH
+	// setup.
 	argv := append([]string(nil), req.Command...)
-	if req.LoginShellPackagePath && !unifiedExecExplicitPathOverride(req) {
-		if shell, useLoginShell := loginShellFromArgv(argv); shell.IsPosixLogin(useLoginShell) {
-			infoCtx, infoCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			info, infoErr := client.EnvironmentInfo(infoCtx)
-			infoCancel()
-			if infoErr == nil && info != nil && len(info.PrependPathDirs) > 0 {
-				if derived, ok := shell.DeriveExecArgsWithPathPrepends(req.HookCommand, info.PrependPathDirs, useLoginShell); ok {
-					argv = derived
-				}
+	if req.LoginShellPackagePath && req.Shell.IsPosixLogin() && !unifiedExecExplicitPathOverride(req) {
+		infoCtx, infoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		info, infoErr := client.EnvironmentInfo(infoCtx)
+		infoCancel()
+		if infoErr == nil && info != nil && len(info.PrependPathDirs) > 0 {
+			if derived, ok := req.Shell.Shell.DeriveExecArgsWithPathPrepends(req.HookCommand, info.PrependPathDirs, req.Shell.UseLoginShell); ok {
+				argv = derived
 			}
 		}
 	}
