@@ -261,6 +261,13 @@ type MCPServerStatus struct {
 	// hostOwnedApps marks the host-owned codex_apps registration (Rust #51421);
 	// internal-only.
 	hostOwnedApps bool
+	// catalogSource records how this status's tool catalog was obtained for the
+	// raw-catalog size telemetry (Rust's `catalog_source`, #51215):
+	// BindingCatalogSourceLive when this read queried the server, and
+	// BindingCatalogSourceCached when an already-materialized catalog was
+	// reused. Empty means this call did not materialize the catalog.
+	// Internal-only: the wire status never carries it.
+	catalogSource string
 	// RuntimeStatus reports the current thread-runtime connection state; nil
 	// when unavailable or the active configuration changed (Rust #40068).
 	RuntimeStatus *MCPConnectionStatus `json:"runtimeStatus,omitempty"`
@@ -691,6 +698,9 @@ type MCPService struct {
 	// metadata to eligible plugin MCP calls (Rust TrustedAccessContext,
 	// #40992/#41005).
 	TrustedAccess *TrustedAccessContext
+	// appsMCPProductSKU is the runtime's `apps_mcp_product_sku`, used to bound
+	// product SKU attribution on raw catalog size telemetry (Rust #51215).
+	appsMCPProductSKU string
 }
 
 // SetTrustedAccess installs the trusted-access context used to attach
@@ -723,8 +733,14 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU}
 	if runtime != nil {
+		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
+		// runtime config cannot distinguish an absent SKU from an empty one, so
+		// an empty value keeps the "codex" default.
+		if sku := strings.TrimSpace(runtime.AppsMCPProductSKU); sku != "" {
+			service.appsMCPProductSKU = sku
+		}
 		service.selectedEnvironments = runtime.SelectedEnvironments.Clone()
 		service.sharedHTTPClient = runtime.HTTPClient
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
@@ -895,6 +911,9 @@ func preserveMCPServerInventory(next map[string]MCPServerStatus, previous map[st
 	}
 	current.State = old.State
 	current.Error = cloneStringPtr(old.Error)
+	// The reused connection keeps its already-materialized catalog, which the
+	// raw size telemetry reports as the cached source (Rust #51215).
+	current.catalogSource = BindingCatalogSourceCached
 	current.Tools = append([]MCPToolInfo(nil), old.Tools...)
 	current.Resources = append([]MCPResource(nil), old.Resources...)
 	current.ResourceTemplates = append([]MCPResourceTemplate(nil), old.ResourceTemplates...)
@@ -1385,6 +1404,9 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		if params != nil && params.NonBlockingOptional &&
 			servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 &&
 			(config.Required || required[name]) {
+			// Rust #51215: the retained catalog is the cached source, so the raw
+			// size telemetry reports "cached" rather than a stale live read.
+			servers[i].catalogSource = BindingCatalogSourceCached
 			notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
 			continue
 		}
@@ -1425,6 +1447,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		for len(pending) > 0 {
 			applyResult(<-resultCh)
 		}
+		s.recordBindingCatalogTelemetry(servers)
 		return servers
 	}
 
@@ -1478,10 +1501,14 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		case <-timer.C:
 		}
 	}
+	s.recordBindingCatalogTelemetry(servers)
 	return servers
 }
 
 func (s *MCPService) inventoryStatusForConfig(index int, name string, config *ServerConfig, status MCPServerStatus, includeInventory bool, threadID string) mcpInventoryStatusResult {
+	// The catalog comes from the server itself on this path, so the raw size
+	// telemetry reports a live source even when discovery fails (Rust #51215).
+	status.catalogSource = BindingCatalogSourceLive
 	inventory, err := s.listInventoryForConfig(name, config, threadID)
 	status.ServerCapabilities = nil
 	if inventory != nil {
@@ -1576,6 +1603,7 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	current.State = status.State
 	current.Error = cloneStringPtr(status.Error)
 	current.AuthStatus = status.AuthStatus
+	current.catalogSource = status.catalogSource
 	// Capabilities come from the latest connection attempt; a failed
 	// initialization clears them (Rust #44826).
 	current.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
