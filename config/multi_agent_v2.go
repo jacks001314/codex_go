@@ -33,6 +33,20 @@ type MultiAgentV2Config struct {
 	// keep the message board in memory for a training session, including
 	// ephemeral sessions.
 	MessageBoardInMemory bool
+	// MessageBoardRemote mirrors `features.multi_agent_v2.message_board_remote`:
+	// a board provisioned by the research host. When set, the remote board is
+	// used in preference to local or in-memory storage, including in ephemeral
+	// sessions (Rust #49267).
+	MessageBoardRemote *RemoteMessageBoardConfig
+}
+
+// RemoteMessageBoardConfig mirrors Rust `RemoteMessageBoardConfigToml`: the URL
+// of a provisioned board plus the credential that authorizes this session,
+// supplied directly or through an environment variable.
+type RemoteMessageBoardConfig struct {
+	URL               string
+	BearerToken       *string
+	BearerTokenEnvVar *string
 }
 
 func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) {
@@ -112,6 +126,13 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		trimmed := strings.TrimSpace(value)
 		out.SubagentDeveloperInstructions = &trimmed
 	}
+	if value, exists := raw["message_board_remote"]; exists {
+		remote, err := parseRemoteMessageBoardConfig(value)
+		if err != nil {
+			return nil, err
+		}
+		out.MessageBoardRemote = remote
+	}
 	for key, target := range map[string]*bool{
 		"hide_spawn_agent_metadata":          &out.HideSpawnAgentMetadata,
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
@@ -124,6 +145,33 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		}
 	}
 	return out, nil
+}
+
+// parseRemoteMessageBoardConfig reads `features.multi_agent_v2.message_board_remote`.
+// Rust deserializes `RemoteMessageBoardConfigToml` with `url` required; an
+// unusable table is a configuration error rather than a silently ignored key.
+func parseRemoteMessageBoardConfig(value any) (*RemoteMessageBoardConfig, error) {
+	const label = "features.multi_agent_v2.message_board_remote"
+	table, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a table", label)
+	}
+	url, _ := table["url"].(string)
+	if strings.TrimSpace(url) == "" {
+		return nil, fmt.Errorf("%s.url is required", label)
+	}
+	remote := &RemoteMessageBoardConfig{URL: strings.TrimSpace(url)}
+	// The credential is used verbatim: AccessToken validation rejects padding
+	// and whitespace, so trimming here would accept a credential Rust rejects.
+	if token, ok := table["bearer_token"].(string); ok {
+		value := token
+		remote.BearerToken = &value
+	}
+	if name, ok := table["bearer_token_env_var"].(string); ok {
+		value := name
+		remote.BearerTokenEnvVar = &value
+	}
+	return remote, nil
 }
 
 func hasLegacyAgentMaxThreads(c *Config) bool {

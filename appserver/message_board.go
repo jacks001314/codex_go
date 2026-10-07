@@ -10,6 +10,7 @@ package appserver
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -67,12 +68,13 @@ func messageBoardFeatureEnabled(cfg *config.Config) bool {
 
 // messageBoardEnabledForTurn mirrors Rust's `install_agent_message_board` gate:
 // the board is available only when both features are enabled, and an ephemeral
-// session must not open durable storage unless the board is kept in memory.
+// session must not open local SQLite unless the board is kept in memory or is
+// served by a configured remote board (Rust #49267).
 func messageBoardEnabledForTurn(cfg *config.Config, ephemeral bool, v2Config *config.MultiAgentV2Config) bool {
 	if !messageBoardFeatureEnabled(cfg) || v2Config == nil {
 		return false
 	}
-	if ephemeral && !v2Config.MessageBoardInMemory {
+	if ephemeral && !v2Config.MessageBoardInMemory && v2Config.MessageBoardRemote == nil {
 		return false
 	}
 	return true
@@ -117,7 +119,16 @@ func (r *RuntimeRouter) messageBoardHandleForThread(ctx context.Context, cfg *co
 	}
 	host := &messageBoardHost{router: r, tree: tree, caller: caller}
 	var board agentboard.Board
-	if v2Config.MessageBoardInMemory {
+	// Rust #49267 selects the remote board ahead of local storage, including for
+	// an ephemeral session that has no in-memory board.
+	if v2Config.MessageBoardRemote != nil {
+		opened, err := r.openRemoteMessageBoard(ctx, cfg, host, tree, v2Config.MessageBoardRemote)
+		if err != nil {
+			r.messageBoardHandlesMu.Unlock()
+			return nil, err
+		}
+		board = opened
+	} else if v2Config.MessageBoardInMemory {
 		board = r.messageBoards.Open(tree, host)
 	} else {
 		sqliteConfig, err := r.messageBoardSqliteConfig(cfg)
@@ -134,6 +145,48 @@ func (r *RuntimeRouter) messageBoardHandleForThread(ctx context.Context, cfg *co
 	}
 	r.messageBoardHandles[caller] = board
 	r.messageBoardHandlesMu.Unlock()
+	return board, nil
+}
+
+// openRemoteMessageBoard opens the research host's board for this session
+// (Rust #49267). The runtime supplies the HTTP client and the caller's clock, so
+// board requests observe the application network policy and carry the session's
+// configured time; the board identity is the agent tree, exactly as it is for
+// the local and in-memory boards.
+func (r *RuntimeRouter) openRemoteMessageBoard(ctx context.Context, cfg *config.Config, host *messageBoardHost, tree string, remote *config.RemoteMessageBoardConfig) (agentboard.Board, error) {
+	if remote == nil {
+		return nil, jsonRPCInvalidRequest("remote message board requires a credential")
+	}
+	token := ""
+	switch {
+	case remote.BearerTokenEnvVar != nil:
+		// Rust reads the credential from the environment when the variable is
+		// named, and reports an unusable environment as a missing credential.
+		value, ok := os.LookupEnv(*remote.BearerTokenEnvVar)
+		if !ok {
+			return nil, jsonRPCInvalidRequest("message-board credential environment variable is missing or invalid")
+		}
+		token = value
+	case remote.BearerToken != nil:
+		token = *remote.BearerToken
+	default:
+		return nil, jsonRPCInvalidRequest("remote message board requires a credential")
+	}
+	if err := agentboard.ValidateRemoteBoardToken(token); err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
+	board, err := agentboard.NewRemoteBoard(agentboard.RemoteBoardOptions{
+		HTTP:     r.httpClientForConfig(cfg),
+		Endpoint: remote.URL,
+		Board:    tree,
+		Token:    token,
+		Clock: func(caller string) (time.Time, error) {
+			return host.CurrentTime(ctx, caller)
+		},
+	})
+	if err != nil {
+		return nil, jsonRPCInvalidRequest(err.Error())
+	}
 	return board, nil
 }
 

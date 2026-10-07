@@ -2,9 +2,15 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -286,5 +292,257 @@ func TestMessageBoardHostNotifyOnlyReachesRunningRecipientsLikeRust(t *testing.T
 	if _, err := host.Notify(context.Background(), otherTree, post); err == nil ||
 		!strings.Contains(err.Error(), "another board") {
 		t.Fatalf("Notify(other tree) error = %v", err)
+	}
+}
+
+// Rust parity: #49267 adds `features.multi_agent_v2.message_board_remote` with a
+// board URL and a bearer token supplied directly or through an environment
+// variable, and an ephemeral session may use the remote board without local
+// storage (Rust `RemoteMessageBoardConfigToml` / `install_agent_message_board`).
+func TestMessageBoardRemoteConfigParsesAndOpensEphemeralGateLikeRust(t *testing.T) {
+	remote := map[string]any{
+		"url":          "https://board.example/v1",
+		"bearer_token": "research-board-credential-for-runtime-test",
+	}
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{
+		"agent_message_board": true,
+		"multi_agent_v2": map[string]any{
+			"enabled":                 true,
+			"message_board_remote":    remote,
+			"message_board_in_memory": false,
+		},
+	}}}
+	v2, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatalf("MultiAgentV2Config() error = %v", err)
+	}
+	if v2.MessageBoardRemote == nil {
+		t.Fatal("message_board_remote was not parsed")
+	}
+	if v2.MessageBoardRemote.URL != "https://board.example/v1" {
+		t.Fatalf("remote URL = %q", v2.MessageBoardRemote.URL)
+	}
+	if v2.MessageBoardRemote.BearerToken == nil || *v2.MessageBoardRemote.BearerToken != "research-board-credential-for-runtime-test" {
+		t.Fatalf("remote bearer token = %v", v2.MessageBoardRemote.BearerToken)
+	}
+	if v2.MessageBoardRemote.BearerTokenEnvVar != nil {
+		t.Fatalf("remote bearer token env var = %v, want none", *v2.MessageBoardRemote.BearerTokenEnvVar)
+	}
+	// An ephemeral session may use the configured remote board; without it, the
+	// session must not open local SQLite storage.
+	if !messageBoardEnabledForTurn(cfg, true, v2) {
+		t.Fatal("an ephemeral session did not enable the configured remote board")
+	}
+	plain, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain.MessageBoardRemote = nil
+	if messageBoardEnabledForTurn(cfg, true, plain) {
+		t.Fatal("an ephemeral session without a remote board opened durable storage")
+	}
+
+	envCfg := &config.Config{Values: map[string]any{"features": map[string]any{
+		"multi_agent_v2": map[string]any{"message_board_remote": map[string]any{
+			"url": "https://board.example", "bearer_token_env_var": "CODEX_BOARD_TOKEN",
+		}},
+	}}}
+	envV2, err := envCfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatalf("MultiAgentV2Config(env) error = %v", err)
+	}
+	if envV2.MessageBoardRemote == nil || envV2.MessageBoardRemote.BearerTokenEnvVar == nil ||
+		*envV2.MessageBoardRemote.BearerTokenEnvVar != "CODEX_BOARD_TOKEN" {
+		t.Fatalf("remote env var config = %#v", envV2.MessageBoardRemote)
+	}
+
+	// Rust deserializes `url` as a required field.
+	missingURL := &config.Config{Values: map[string]any{"features": map[string]any{
+		"multi_agent_v2": map[string]any{"message_board_remote": map[string]any{"bearer_token": "x"}},
+	}}}
+	if _, err := missingURL.MultiAgentV2Config(0); err == nil ||
+		!strings.Contains(err.Error(), "features.multi_agent_v2.message_board_remote.url is required") {
+		t.Fatalf("missing url error = %v", err)
+	}
+}
+
+// Rust parity: #49267 serves an ephemeral session's board from the configured
+// remote endpoint in preference to local or in-memory storage, using the
+// runtime's HTTP client and clock (Rust scenario
+// `remote_board_uses_the_existing_tools_and_session_identity`): the request
+// carries the bearer credential, the session identity as the board and caller,
+// the caller's clock, and the post the service returned.
+func TestRemoteMessageBoardPrecedesLocalBoardsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+
+	const token = "research-board-credential-for-runtime-test"
+	const clockAt int64 = 1781717655
+	type boardCall struct {
+		path string
+		auth string
+		body map[string]any
+	}
+	var (
+		mu    sync.Mutex
+		calls []boardCall
+	)
+	post := map[string]any{
+		"message_id":   "00000000-0000-4000-8000-000000000001",
+		"thread_id":    "00000000-0000-4000-8000-000000000001",
+		"author":       "/root",
+		"channel_name": "design",
+		"created_at":   "2026-09-18T12:00:00Z",
+	}
+	board := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read board request body: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Errorf("decode board request body %q: %v", string(payload), err)
+		}
+		mu.Lock()
+		calls = append(calls, boardCall{path: r.URL.Path, auth: r.Header.Get("Authorization"), body: body})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(post); err != nil {
+			t.Errorf("encode board response: %v", err)
+		}
+	}))
+	defer board.Close()
+
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Config:       config.NewConfigService(home),
+		Turns:        turn.NewTurnService(),
+		ThreadStatus: NewThreadStatusManager(),
+		HTTPClient:   board.Client(),
+	})
+	defer router.Close()
+	// The remote board carries the caller's configured time, which the runtime
+	// resolves through the thread's connected client (Rust's external time
+	// provider).
+	router.SetServerRequestSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		if request.Method != ServerRequestCurrentTimeRead {
+			t.Errorf("server request method = %s, want %s", request.Method, ServerRequestCurrentTimeRead)
+			return
+		}
+		go func() {
+			_, _ = router.requireServerRequests().Resolve(OK(request.ID, &CurrentTimeReadResponse{CurrentTimeAt: clockAt}))
+		}()
+	}))
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir(), Prompt: "hello"}))
+	if start.Error != nil {
+		t.Fatalf("thread/start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	cfg := &config.Config{Values: map[string]any{"features": map[string]any{
+		"agent_message_board": true,
+		"multi_agent_v2": map[string]any{
+			"enabled": true,
+			"message_board_remote": map[string]any{
+				"url":          board.URL,
+				"bearer_token": token,
+			},
+		},
+	}}}
+	v2, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatalf("MultiAgentV2Config() error = %v", err)
+	}
+	options, err := router.messageBoardOptionsForTurn(context.Background(), cfg, threadID, v2, nil)
+	if err != nil || options == nil {
+		t.Fatalf("messageBoardOptionsForTurn() = %#v, %v", options, err)
+	}
+	remote, ok := options.Board.(*agentboard.RemoteBoard)
+	if !ok {
+		t.Fatalf("board = %T, want the configured remote board to take precedence", options.Board)
+	}
+	if remote.Identity() != threadID {
+		t.Fatalf("remote board identity = %q, want the session %q", remote.Identity(), threadID)
+	}
+	if options.Caller != threadID {
+		t.Fatalf("board caller = %q, want %q", options.Caller, threadID)
+	}
+
+	posted, err := options.Board.Post(context.Background(), threadID, agentboard.PostRequest{
+		RequestID:   "remote-post",
+		Destination: agentboard.PostDestination{Kind: "new_channel", Name: "design"},
+		Text:        "A remote decision.",
+	})
+	if err != nil {
+		t.Fatalf("remote Post() error = %v", err)
+	}
+	if posted.MessageID != "00000000-0000-4000-8000-000000000001" || posted.ChannelName != "design" {
+		t.Fatalf("remote Post() = %#v, want the service's returned post", posted)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("board requests = %d, want one remote call (%#v)", len(calls), calls)
+	}
+	call := calls[0]
+	if call.path != "/v1/boards/"+threadID+"/call" {
+		t.Fatalf("board request path = %q, want /v1/boards/%s/call", call.path, threadID)
+	}
+	if call.auth != "Bearer "+token {
+		t.Fatalf("board authorization = %q, want bearer authentication", call.auth)
+	}
+	if call.body["caller"] != threadID || call.body["method"] != "post" {
+		t.Fatalf("board request = %#v, want caller %s and method post", call.body, threadID)
+	}
+	if call.body["timestamp"] != time.Unix(clockAt, 0).UTC().Format(time.RFC3339) {
+		t.Fatalf("board timestamp = %v, want the caller's clock %s", call.body["timestamp"], time.Unix(clockAt, 0).UTC().Format(time.RFC3339))
+	}
+	params, _ := call.body["params"].(map[string]any)
+	if params["text"] != "A remote decision." {
+		t.Fatalf("board params = %#v, want the posted text", params)
+	}
+}
+
+// Rust parity: #49267 strips `features.multi_agent_v2.message_board_remote` from
+// project-local configuration (Rust `sanitize_project_config` removes the key
+// and reports it), so a repository cannot redirect the board or inject a
+// credential.
+func TestProjectConfigCannotSetRemoteMessageBoardLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	dotCodex := filepath.Join(dir, ".codex")
+	if err := os.MkdirAll(dotCodex, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dotCodex, "config.toml")
+	body := strings.Join([]string{
+		`model = "gpt-5"`,
+		`[features.multi_agent_v2.message_board_remote]`,
+		`url = "https://project.example.com/v1"`,
+		`bearer_token = "project-supplied-credential-000000000000000000"`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(configPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	warnings := config.ProjectIgnoredConfigKeysWarningsForLayers([]config.Layer{{
+		Name: config.LayerSource{Type: config.LayerSourceProject, File: configPath, DotCodexFolder: dotCodex},
+	}})
+	if len(warnings) != 1 {
+		t.Fatalf("project warnings = %#v, want one warning", warnings)
+	}
+	if !strings.Contains(warnings[0], "features.multi_agent_v2.message_board_remote") {
+		t.Fatalf("project warning = %q, want the remote board key reported as ignored", warnings[0])
+	}
+	// The stripped key never reaches the effective configuration, so the parsed
+	// V2 settings carry no remote board.
+	stripped, err := config.NewConfigService(dir).Read(&config.ConfigReadParams{CWD: &dir})
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	values, _ := stripped.Config["features"].(map[string]any)
+	multiAgent, _ := values["multi_agent_v2"].(map[string]any)
+	if _, ok := multiAgent["message_board_remote"]; ok {
+		t.Fatalf("project config still supplies message_board_remote: %#v", multiAgent)
 	}
 }

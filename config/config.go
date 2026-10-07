@@ -2835,6 +2835,15 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 				ignored = append(ignored, "features.shell_snapshot")
 			}
 		}
+		// Rust sanitize_project_config: the message board's remote endpoint and
+		// credential are user settings, so a project cannot redirect the board
+		// or supply a credential.
+		if multiAgentV2, ok := features["multi_agent_v2"].(map[string]any); ok {
+			if _, ok := multiAgentV2["message_board_remote"]; ok {
+				delete(multiAgentV2, "message_board_remote")
+				ignored = append(ignored, "features.multi_agent_v2.message_board_remote")
+			}
+		}
 		// Rust sanitize_project_config: project configuration cannot change the
 		// system-proxy switches.
 		for _, key := range []string{"respect_system_proxy", "system_proxy_fallback"} {
