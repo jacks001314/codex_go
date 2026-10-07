@@ -5717,6 +5717,14 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	now := time.Now().UTC()
 	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
+	// Rust #49598 (`Session::replace_compacted_history`): goal edits are
+	// published outside the running compaction task, so an edit accepted after
+	// the compaction input snapshot is neither summarized nor part of the
+	// replacement. Re-read the live history and keep those edits, in their
+	// original order, after it.
+	if latest, latestErr := r.threadRecord(session.ThreadID(request.ThreadID), true, true); latestErr == nil && latest != nil {
+		compactedItems = retainGoalInstructionsAcrossCompaction(compactedItems, latest.Items, userGoalInstructionIDs(history))
+	}
 	record.Items = compactedItems
 	compactionItem.CreatedAt = now
 	record.Items = append(record.Items, compactionItem)
