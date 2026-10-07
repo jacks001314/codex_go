@@ -16,6 +16,7 @@ import (
 
 	execserverclient "codex_go/execserver"
 	"codex_go/mcp"
+	"codex_go/turn"
 
 	"github.com/coder/websocket"
 )
@@ -465,6 +466,19 @@ func requiredEnvironmentSkills(skills *EnvironmentSkillsParams) []string {
 // requires nothing.
 func (m *EnvironmentManager) RequiredSkillsForSelections(selected *mcp.SelectedEnvironments) []mcp.EnvironmentSkillRequirements {
 	return mcp.RequiredEnvironmentSkills(selected, m.RequiredSkills)
+}
+
+// RequiredSkillsForTurn projects the skill requirements a turn must satisfy
+// before inference, mirroring Rust #51157: the turn's captured executor
+// selections contribute their registered `skills.required` names, and isolated
+// Guardian reviewers are exempt because they deliberately have no skill catalog
+// (Rust `guardian::is_basic_session_source`, Go `guardianTurnStart`). A nil or
+// non-turn parameter set requires nothing.
+func (m *EnvironmentManager) RequiredSkillsForTurn(params *turn.TurnStartParams) []mcp.EnvironmentSkillRequirements {
+	if params == nil || guardianTurnStart(params) {
+		return nil
+	}
+	return m.RequiredSkillsForSelections(turnEnvironmentSelections(params))
 }
 
 // RequiredSkills returns the skill catalog names the environment must supply

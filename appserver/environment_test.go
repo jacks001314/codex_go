@@ -17,6 +17,7 @@ import (
 
 	"codex_go/execserver"
 	"codex_go/mcp"
+	"codex_go/turn"
 
 	"github.com/coder/websocket"
 )
@@ -637,5 +638,46 @@ func TestRequiredSkillsForSelectionsWithoutSnapshotLikeRust(t *testing.T) {
 	var nilManager *EnvironmentManager
 	if got := nilManager.RequiredSkillsForSelections(mcp.NewSelectedEnvironments([]mcp.TurnEnvironmentSelection{{EnvironmentID: "required"}})); len(got) != 0 {
 		t.Fatalf("nil manager requirements = %#v, want none", got)
+	}
+}
+
+// TestRequiredSkillsForTurnExemptsGuardianReviewersLikeRust mirrors Rust
+// #51157's Guardian exemption (`guardian::is_basic_session_source`): an
+// isolated Guardian reviewer has no skill catalog, so its turn enforces no
+// environment requirements, while an ordinary turn with the same selections
+// still does. Go identifies the guardian through the turn's originator or its
+// `x-openai-subagent` metadata (guardianTurnStart).
+func TestRequiredSkillsForTurnExemptsGuardianReviewersLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID: "required",
+		ExecServerURL: "ws://example.test/exec",
+		Skills:        &EnvironmentSkillsParams{Required: []string{"review"}},
+	}); err != nil {
+		t.Fatalf("Add(required) error = %v", err)
+	}
+	environments := []map[string]any{{"environmentId": "required", "cwd": "/tmp/required"}}
+
+	ordinary := &turn.TurnStartParams{ThreadID: "thread-1", Environments: environments}
+	requirements := manager.RequiredSkillsForTurn(ordinary)
+	if len(requirements) != 1 || requirements[0].EnvironmentID != "required" {
+		t.Fatalf("ordinary requirements = %#v, want the required environment", requirements)
+	}
+	for _, guardian := range []*turn.TurnStartParams{
+		{ThreadID: "thread-1", Environments: environments, Originator: "guardian"},
+		{ThreadID: "thread-1", Environments: environments, ResponsesAPIMetadata: map[string]string{"x-openai-subagent": "guardian"}},
+		{ThreadID: "thread-1", Environments: environments, ResponsesAPIMetadata: map[string]string{"x-openai-subagent": "GUARDIAN"}},
+	} {
+		if got := manager.RequiredSkillsForTurn(guardian); len(got) != 0 {
+			t.Fatalf("guardian requirements = %#v, want none", got)
+		}
+	}
+	// A non-guardian sub-agent is not exempt.
+	other := &turn.TurnStartParams{ThreadID: "thread-1", Environments: environments, ResponsesAPIMetadata: map[string]string{"x-openai-subagent": "reviewer"}}
+	if got := manager.RequiredSkillsForTurn(other); len(got) != 1 {
+		t.Fatalf("non-guardian sub-agent requirements = %#v, want the required environment", got)
+	}
+	if got := manager.RequiredSkillsForTurn(nil); got != nil {
+		t.Fatalf("nil params requirements = %#v, want nil", got)
 	}
 }
