@@ -190,3 +190,9 @@
 - 验证：`go build ./...` 通过；`gofmt -l` 空；`./appserver/ ./model/ ./session/ ./turn/ ./rollout/ ./tui/... ./codexapi/` 失败集合 = 既有基线；`CODEX_RUST_ROOT=/home/jacks/jacks_dev/codex/codex-rs go test ./parity/ -count=1` 由 **15 FAIL 降到 4 FAIL**（新增基线项，剩余属 execserver/features/voicehost，已派新车道）。
 - 工具学：parity 必须设 `CODEX_RUST_ROOT=/home/jacks/jacks_dev/codex/codex-rs`，否则全部 Skip 造成假通过。
 - 调度：派生宽度提升到 5，新增两条车道 —— `syncparity2`（parity 4 缺口：features/execserver/voicehost）、`syncmcpcfg`（mcp/api.go 与 config/api.go 的新协议字段 + `daybreak` 顶层键 + `plugin/` disabled-skill 路径身份）；既有 `sync51482` 转做 bedrock 方法族 + `review_target` 填充；`sync51480` 转做 reset 窗口号 + #50462/#50454；`synctui` 继续 app 层接线与 #51482 TUI 段。
+
+## 追加（当日第十五批：sync416）
+
+- `sync416`（#51482 TUI 段，车道 synctui 交付）：`tui/chatwidget/skills.go` 新增 `SkillPathIdentity`（`utils.PathIdentityKey`）并让 `FindSkillMentions`/`UpdateSkillEnabled` 按路径身份匹配去重；`input_submission.go` 选中技能按身份（提交路径仍原生拼写）；`tui/tea/{skill_popup,manage_skills}.go` 改身份键；2 个 LikeRust 测试。6 文件 / +296 −28，main = `fe5b6b44`（已推送）。
+- 上游 head 复核：`git pull --ff-only` → Already up to date，`18e28fe1b9..HEAD` = 0，窗口未扩大。
+- 反向验证：parity 车道复核 `git diff --quiet 3ddfaae0 8f821398 -- <路径>` = IDENTICAL，且在 main 上复跑 parity 仍为 4 FAIL → 合并无回归。
