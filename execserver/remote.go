@@ -55,6 +55,10 @@ type RemoteEnvironmentConfig struct {
 	// PreferMXC mirrors Rust ExecServerRuntimeOptions::prefer_mxc: only the
 	// sandbox preference from startup `features.prefer_mxc` flags.
 	PreferMXC *bool
+	// ProxyPrivateIPsViaUpstream mirrors Rust #48568
+	// ExecServerRuntimeOptions::proxy_private_ips_via_upstream: the trusted
+	// startup routing bit carried into this executor's managed network proxy.
+	ProxyPrivateIPsViaUpstream bool
 	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
 	// session; nil advertises the capability as false.
 	EnvironmentConfigReader EnvironmentConfigReader
@@ -184,6 +188,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	server.SetPreferMXC(cfg.PreferMXC)
+	server.SetProxyPrivateIPsViaUpstream(cfg.ProxyPrivateIPsViaUpstream)
 	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	defer server.shutdownSessions()
 	backoff := newRemoteReconnectBackoff(cfg.Backoff, cfg.MaxBackoff)

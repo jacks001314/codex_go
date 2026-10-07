@@ -793,6 +793,9 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	httpClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	server := execserver.NewServerWithHTTPClient(httpClient)
 	server.SetPreferMXC(preferMXC)
+	// Rust #48568: carry the trusted startup routing flag into the executor's
+	// managed network proxy launch (exec-server/src/process_sandbox.rs).
+	server.SetProxyPrivateIPsViaUpstream(opts.ProxyPrivateIPsViaUpstream)
 	server.SetEnvironmentConfigReader(environmentConfigReader)
 	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
 	// combination was already validated against stdio/--remote/forward.
@@ -831,13 +834,14 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		headers := http.Header{}
 		headers.Set("Authorization", "Bearer "+accessToken)
 		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
-			BaseURL:                 baseURL,
-			EnvironmentID:           environmentID,
-			Name:                    strings.TrimSpace(opts.Name),
-			AuthHeaders:             headers,
-			HTTPClient:              policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
-			PreferMXC:               preferMXC,
-			EnvironmentConfigReader: environmentConfigReader,
+			BaseURL:                    baseURL,
+			EnvironmentID:              environmentID,
+			Name:                       strings.TrimSpace(opts.Name),
+			AuthHeaders:                headers,
+			HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+			PreferMXC:                  preferMXC,
+			ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+			EnvironmentConfigReader:    environmentConfigReader,
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -876,14 +880,15 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		}
 	}
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
-		BaseURL:                 baseURL,
-		EnvironmentID:           environmentID,
-		Name:                    strings.TrimSpace(opts.Name),
-		AuthHeaders:             headers,
-		ResolveAuthHeaders:      resolveHeaders,
-		HTTPClient:              policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
-		PreferMXC:               preferMXC,
-		EnvironmentConfigReader: environmentConfigReader,
+		BaseURL:                    baseURL,
+		EnvironmentID:              environmentID,
+		Name:                       strings.TrimSpace(opts.Name),
+		AuthHeaders:                headers,
+		ResolveAuthHeaders:         resolveHeaders,
+		HTTPClient:                 policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		PreferMXC:                  preferMXC,
+		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		EnvironmentConfigReader:    environmentConfigReader,
 	})
 }
 

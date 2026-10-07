@@ -269,10 +269,23 @@ type ExecServerOptions struct {
 	Name                 string
 	UseAgentIdentityAuth bool
 	ExitOnStdinClose     bool
+	// ProxyPrivateIPsViaUpstream mirrors Rust #48568
+	// (cli/src/exec_server_command.rs `--proxy-private-ips-via-upstream`): the
+	// trusted executor-local startup routing that lets permitted private IP
+	// destinations use the configured upstream proxy. Destination policy still
+	// decides access, and the setting defaults to disabled.
+	ProxyPrivateIPsViaUpstream bool
 	WebSocketAuthOptions
 }
 
 const execServerExitOnStdinCloseEnv = "CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE"
+
+// execServerProxyPrivateIPsViaUpstreamEnv mirrors Rust #48568's clap
+// `env = "CODEX_EXEC_SERVER_PROXY_PRIVATE_IPS_VIA_UPSTREAM"`: unset keeps the
+// flag/default, a value is parsed as a boolean, and a set-but-unparseable value
+// (including the empty string) is rejected like the sibling
+// CODEX_EXEC_SERVER_EXIT_ON_STDIN_CLOSE.
+const execServerProxyPrivateIPsViaUpstreamEnv = "CODEX_EXEC_SERVER_PROXY_PRIVATE_IPS_VIA_UPSTREAM"
 
 // WebSocketAuthOptions mirrors Rust's shared WebsocketAuthArgs (#47447): the
 // `--ws-*` flag family accepted by both `codex app-server` and
@@ -2382,6 +2395,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.UseAgentIdentityAuth = true
 		case arg == "--exit-on-stdin-close":
 			execServer.ExitOnStdinClose = true
+		case arg == "--proxy-private-ips-via-upstream":
+			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
+			execServer.ProxyPrivateIPsViaUpstream = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return fmt.Errorf("unknown exec-server option %s", arg)
@@ -2396,6 +2412,15 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 				return fmt.Errorf("invalid %s value %q: %w", execServerExitOnStdinCloseEnv, value, err)
 			}
 			execServer.ExitOnStdinClose = enabled
+		}
+	}
+	if !execServer.ProxyPrivateIPsViaUpstream {
+		if value, ok := os.LookupEnv(execServerProxyPrivateIPsViaUpstreamEnv); ok {
+			enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+			if err != nil {
+				return fmt.Errorf("invalid %s value %q: %w", execServerProxyPrivateIPsViaUpstreamEnv, value, err)
+			}
+			execServer.ProxyPrivateIPsViaUpstream = enabled
 		}
 	}
 	forward := strings.TrimSpace(execServer.Forward)

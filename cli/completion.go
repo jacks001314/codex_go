@@ -156,6 +156,8 @@ func codexCompletionSpec() *completionNode {
 		node("exec-server", []string{
 			"--strict-config", "--listen", "--remote", "--environment-id", "--name",
 			"--use-agent-identity-auth", "--exit-on-stdin-close",
+			// Rust #48568 adds the trusted private-IP upstream routing opt-in.
+			"--proxy-private-ips-via-upstream",
 			// Rust #47601 shares the WebSocket listener auth flags with the
 			// app-server listener.
 			"--ws-auth", "--ws-token-file", "--ws-token-sha256", "--ws-shared-secret-file",

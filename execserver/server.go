@@ -212,6 +212,12 @@ type Server struct {
 	// startup configuration or secrets. It is surfaced to
 	// `environmentConfig/read` as a session-flags layer.
 	preferMXC *bool
+	// proxyPrivateIPsViaUpstream mirrors Rust #48568
+	// ExecServerRuntimeOptions::proxy_private_ips_via_upstream: a trusted
+	// startup routing bit that lets permitted private IP destinations use the
+	// configured upstream proxy. It is carried into the executor-local managed
+	// network proxy launch; request policy still controls destination access.
+	proxyPrivateIPsViaUpstream bool
 	// environmentConfigReader implements `environmentConfig/read`
 	// (execserver/environment_config_read.go). It is nil on a bare stub, which
 	// is why the advertised capability follows this field.
@@ -242,6 +248,28 @@ func (s *Server) preferMXCValue() *bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.preferMXC
+}
+
+// SetProxyPrivateIPsViaUpstream records the trusted startup routing flag from
+// `codex exec-server --proxy-private-ips-via-upstream`
+// (Rust #48568, exec-server/src/process_sandbox.rs). Request policy is
+// unaffected: destination allowlists and denylists still decide access.
+func (s *Server) SetProxyPrivateIPsViaUpstream(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.proxyPrivateIPsViaUpstream = enabled
+}
+
+func (s *Server) proxyPrivateIPsViaUpstreamValue() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.proxyPrivateIPsViaUpstream
 }
 
 type fileHandleEntry struct {
@@ -877,6 +905,7 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 	}
 	if parent != nil {
 		server.SetPreferMXC(parent.preferMXCValue())
+		server.SetProxyPrivateIPsViaUpstream(parent.proxyPrivateIPsViaUpstreamValue())
 		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
 	}
 	return server
@@ -1937,6 +1966,10 @@ func (s *Server) prepareExecutorNetworkProxy(ctx context.Context, params *ExecPa
 	if err != nil {
 		return nil, nil, nil, requestError(-32602, "invalid network proxy config: "+err.Error())
 	}
+	// Rust #48568: the executor's trusted startup routing decides whether
+	// permitted private IPs may use the upstream proxy. The wire policy (and a
+	// remote controller launch) cannot enable it.
+	proxyConfig.PrivateIPsViaUpstream = s.proxyPrivateIPsViaUpstreamValue()
 	proxyConfig.EnvironmentID = stringValue(launch.EnvironmentID)
 	proxyConfig.AuditMetadata = network.ProxyAuditMetadata{
 		ConversationID: launch.AuditMetadata.ConversationID,
