@@ -212,6 +212,8 @@ type SandboxOptions struct {
 	User                  string
 	CurrentUser           bool
 	CodexHome             string
+	Uninstall             bool
+	UninstallHelp         bool
 	PermissionProfile     string
 	ConfigProfile         string
 	CWD                   string
@@ -1802,6 +1804,25 @@ func parsePluginMarketplace(args []string, marketplace *PluginMarketplaceOptions
 }
 
 func parseSandbox(args []string, sandbox *SandboxOptions) error {
+	// Rust #50437: `codex sandbox uninstall` is a clap subcommand, so it is
+	// recognized only before a command separator; commands after `--` (for
+	// example `codex sandbox -- uninstall --help`) are still forwarded to the
+	// sandbox as the command to run.
+	if len(args) > 0 && args[0] == "uninstall" {
+		sandbox.Uninstall = true
+		for i := 1; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "-h" || arg == "--help":
+				sandbox.UninstallHelp = true
+			default:
+				// clap reports the first unexpected argument for a no-argument
+				// subcommand with this wording.
+				return fmt.Errorf("unexpected argument '%s' found", arg)
+			}
+		}
+		return nil
+	}
 	if len(args) > 0 && args[0] == "setup" {
 		sandbox.Setup = true
 		for i := 1; i < len(args); i++ {

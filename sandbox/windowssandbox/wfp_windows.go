@@ -200,12 +200,16 @@ func installWFPFiltersForAccount(account string) (int, error) {
 }
 
 func openWFPEngine() (*wfpEngine, error) {
+	// Match Rust's INFINITE transaction wait timeout so setup does not fail
+	// simply because another WFP writer is active for a short window.
+	return openWFPEngineWithTimeout(infiniteTimeout)
+}
+
+func openWFPEngineWithTimeout(transactionWaitTimeoutMS uint32) (*wfpEngine, error) {
 	sessionName := ToWide(wfpSessionName)
 	session := fwpmSession0{
-		DisplayData: fwpmDisplayData0{Name: &sessionName[0]},
-		// Match Rust's INFINITE transaction wait timeout so setup does not fail
-		// simply because another WFP writer is active for a short window.
-		TxnWaitTimeoutInMSec: infiniteTimeout,
+		DisplayData:          fwpmDisplayData0{Name: &sessionName[0]},
+		TxnWaitTimeoutInMSec: transactionWaitTimeoutMS,
 	}
 	var handle windows.Handle
 	result, _, _ := procFwpmEngineOpen0.Call(

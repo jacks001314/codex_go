@@ -1177,6 +1177,55 @@ func TestParseSandboxRejectsMissingRequiredFlags(t *testing.T) {
 	}
 }
 
+func TestParseSandboxUninstallRespectsCommandSeparator(t *testing.T) {
+	// Rust #50437: `sandbox uninstall` is a subcommand, so `--` still forwards
+	// "uninstall --help" to the sandbox as the command to run.
+	parsed, err := Parse([]string{"sandbox", "uninstall"})
+	if err != nil {
+		t.Fatalf("Parse sandbox uninstall returned error: %v", err)
+	}
+	if !parsed.Sandbox.Uninstall || parsed.Sandbox.UninstallHelp {
+		t.Fatalf("Sandbox = %#v", parsed.Sandbox)
+	}
+
+	forwarded, err := Parse([]string{"sandbox", "--", "uninstall", "--help"})
+	if err != nil {
+		t.Fatalf("Parse forwarded command returned error: %v", err)
+	}
+	if forwarded.Sandbox.Uninstall {
+		t.Fatalf("forwarded command parsed as uninstall: %#v", forwarded.Sandbox)
+	}
+	if got := strings.Join(forwarded.Sandbox.Command, " "); got != "uninstall --help" {
+		t.Fatalf("forwarded command = %q, want %q", got, "uninstall --help")
+	}
+
+	profiled, err := Parse([]string{"sandbox", "--profile", "uninstall", "--", "uninstall", "--help"})
+	if err != nil {
+		t.Fatalf("Parse profiled forwarded command returned error: %v", err)
+	}
+	if profiled.Sandbox.Uninstall || profiled.Sandbox.ConfigProfile != "uninstall" {
+		t.Fatalf("profiled sandbox = %#v", profiled.Sandbox)
+	}
+	if got := strings.Join(profiled.Sandbox.Command, " "); got != "uninstall --help" {
+		t.Fatalf("profiled command = %q, want %q", got, "uninstall --help")
+	}
+}
+
+func TestParseSandboxUninstallHelpAndUnexpectedArguments(t *testing.T) {
+	help, err := Parse([]string{"sandbox", "uninstall", "--help"})
+	if err != nil {
+		t.Fatalf("Parse sandbox uninstall --help returned error: %v", err)
+	}
+	if !help.Sandbox.Uninstall || !help.Sandbox.UninstallHelp {
+		t.Fatalf("help sandbox = %#v", help.Sandbox)
+	}
+
+	_, err = Parse([]string{"sandbox", "uninstall", "unexpected"})
+	if err == nil || !strings.Contains(err.Error(), "unexpected argument") {
+		t.Fatalf("Parse(sandbox uninstall unexpected) error = %v, want unexpected argument", err)
+	}
+}
+
 func TestParseSandboxSetup(t *testing.T) {
 	parsed, err := Parse([]string{"sandbox", "setup", "--elevated", "--current-user"})
 	if err != nil {

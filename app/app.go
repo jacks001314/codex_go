@@ -274,6 +274,20 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 		fmt.Fprintf(stdout, "Windows elevated sandbox setup completed for %s at %s.\n", identity.RealUser, identity.CodexHome)
 		return nil
 	}
+	if opts.Uninstall {
+		if opts.UninstallHelp {
+			_, err := fmt.Fprint(stdout, sandboxUninstallHelpText())
+			return err
+		}
+		// Rust #50437 runs the uninstall subcommand before configuration is
+		// loaded, so the cleanup neither reads nor changes Codex home.
+		if runtime.GOOS != "windows" {
+			return errors.New("`codex sandbox uninstall` is only supported on Windows")
+		}
+		return windowssandbox.CleanUpLegacyWindowsSandbox(func(message string) {
+			fmt.Fprintln(stderr, message)
+		})
+	}
 	if len(opts.Command) == 0 {
 		return errors.New("sandbox requires COMMAND")
 	}
@@ -1380,6 +1394,22 @@ func uint64Value(value *uint64) uint64 {
 		return 0
 	}
 	return *value
+}
+
+// sandboxUninstallHelpText mirrors the clap help of `codex sandbox uninstall`
+// (Rust cli/src/sandbox_uninstall.rs about/after_help, #50437).
+func sandboxUninstallHelpText() string {
+	return strings.Join([]string{
+		"Usage: codex sandbox uninstall",
+		"",
+		"Remove the legacy Windows sandbox's machine-wide accounts and network rules",
+		"",
+		"Run as administrator after stopping apps using the legacy sandbox and its provisioning service, if installed.",
+		"Preserves Codex home, including sandbox directories and filesystem permissions.",
+		"",
+		"Options:",
+		"  -h, --help  Print help",
+	}, "\n") + "\n"
 }
 
 // appServerDaemonHelpText mirrors the clap help of `codex app-server daemon`

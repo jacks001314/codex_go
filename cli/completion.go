@@ -130,6 +130,7 @@ func codexCompletionSpec() *completionNode {
 		node("doctor", []string{"--json", "--summary", "--all", "--no-color", "--ascii", "--feedback"}),
 		node("sandbox", sandboxCompletionOptions(),
 			node("setup", []string{"--elevated", "--user", "--current-user", "--codex-home"}),
+			node("uninstall", nil),
 		),
 		node("debug", nil,
 			node("models", []string{"--bundled"}),
