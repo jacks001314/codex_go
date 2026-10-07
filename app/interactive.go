@@ -460,6 +460,62 @@ func (c *interactiveInterruptController) interrupt() bool {
 	return true
 }
 
+// interruptThread cancels the controller's in-flight turn when it belongs to
+// threadID, clearing the tracking state so a later steer cannot target the
+// interrupted turn. Rust's `App::active_turn_id_for_thread` performs the same
+// thread-scoped lookup before it interrupts a side thread (tui/src/app/side.rs
+// :549-558, called from discard_side_thread at tui/src/app/side.rs:428/433), and
+// the embedded TUI drives side turns through this same in-process controller
+// (interactiveTurnCommandWithRequest), so a side close has to interrupt the turn
+// it owns. The interrupt is best effort, like Rust's
+// `discard_side_thread_in_background` (tui/src/app/side.rs:450/459): a side
+// conversation without a running turn is not an error.
+func (c *interactiveInterruptController) interruptThread(threadID string) bool {
+	if c == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	c.mu.Lock()
+	if c.threadID != threadID {
+		c.mu.Unlock()
+		return false
+	}
+	cancel := c.cancel
+	turnID := c.turnID
+	mailbox := c.steerMailbox
+	c.cancel = nil
+	c.threadID = ""
+	c.turnID = ""
+	c.mu.Unlock()
+	// begin()'s done() drains the steer mailbox of the finishing turn; keep that
+	// guarantee when the interrupt short-circuits the turn.
+	if mailbox != nil && turnID != "" {
+		mailbox.Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})
+	}
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// interactiveLocalSideClose is the embedded TUI's OnCloseSide handler. Rust's
+// `App::discard_side_thread` interrupts the side thread's running turn before it
+// discards the thread, because an abandoned thread only unloads once it is
+// inactive; the embedded TUI has the same requirement, since its side turn runs
+// on the in-process exec runner and the interrupt controller is its only
+// cancellation path. Deleting the session record without the interrupt would
+// leave the turn running against a thread that no longer exists.
+func interactiveLocalSideClose(interrupts *interactiveInterruptController, coordinator *interactiveLocalSideCoordinator) codextea.SideCloseFunc {
+	return func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
+		interrupts.interruptThread(params.SideThreadID)
+		return coordinator.Close(params)
+	}
+}
+
 func (b *interactiveApprovalBroker) shellApprovalFunc(send func(bubbletea.Msg)) tool.ShellApprovalFunc {
 	return func(ctx context.Context, request *tool.ShellApprovalRequest) (tool.ShellApprovalDecision, error) {
 		if b == nil {
@@ -1230,7 +1286,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnStartReviewCommand:      interactiveLocalReviewStartCommand(ctx, state, interrupts, nil),
 		OnStartCompactCommand:     interactiveLocalCompactStartCommand(ctx, state, nil),
 		OnStartSide:               sideCoordinator.Start,
-		OnCloseSide:               sideCoordinator.Close,
+		OnCloseSide:               interactiveLocalSideClose(interrupts, sideCoordinator),
 		OnSafetyBufferingRetry: func(threadID, turnID, model, prompt string) bubbletea.Cmd {
 			return interactiveLocalSafetyBufferingRetryCommand(ctx, root, interactiveTurnRunner(runner), state, store, threadID, turnID, model, prompt, approvalBroker, elicitationBroker, userInputBroker, interrupts)
 		},
