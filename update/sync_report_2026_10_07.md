@@ -104,3 +104,15 @@
   - 结构性差异（详见计划第三十三轮）：Go 无 TaskTracker/teardown guard/resident eviction，故无 `wait()/wait_detailed()`，报告在 `CloseAgent` 内组装随结果返回；失败点更少；V2 exec 控制器无失败可记录。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./agent/ ./appserver/` 无输出；`go test ./agent/... -count=1` 全通过；`go test ./appserver/ -count=1` 仅 3 项既有基线失败。
 - 剩余 7 项：继续按序推进（#51491 → #51480 → #51503 → #51482 → #51517 → TUI）。
+
+## 追加（当日第八批：sync399）
+
+- `sync399`（上游 #51491 "Classify executor capability root ownership independently of parsing"）：执行器能力根归属与解析解耦。
+  - `execserver/client.go`：`Client.call` 返回有类型 `*rpcServerError`（消息逐字不变）+ `fsNotExistErrorCode=-32004` + 导出 `IsFSNotExistError`。
+  - `appserver/environment.go`：websocket `readExecServerResponse` 返回有类型 `*execServerRPCError`，保住 code。
+  - 新增 `appserver/executor_plugin_ownership.go`：`PluginRootOwnership` / `ErrExecutorPluginDiscoveryFailed` / `executorPluginRootOwnership`（发现确定分支 + 祖先回退）/ `findPluginManifestPath`（祖先→manifest 优先级、错误顺序）/ `remotePluginManifestProbe` / `remoteFSNotExist`。
+  - `appserver/skills_remote.go`：`remotePluginNamespaceForRoot` 改用共享探测；`discoverEnvironmentSkillsWithCaller` 分类根归属并把失败上报为 warning（不再静默当作"无插件"）。
+  - 测试：`appserver/executor_plugin_ownership_test.go` 6 个。
+  - 差异（详见计划第三十四轮）：沙箱经 caller 注入而非显式参数；256 并发管线改为按序探测（同优先级/错误顺序）；`UnavailableEnvironment` 映射为探测错误；上游无生产调用方，Go 接入真实路径避免死代码。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./execserver/ ./appserver/` 无输出；`go test ./appserver/ -run <新测试>` 全通过；`./exec/...` 通过；`./execserver/...` 与 `./appserver/` 仅既有基线失败（均以 `git stash` 复现确认）。
+- 剩余 6 项：继续按序推进（#51480 → #51503 → #51482 → #51517 → TUI）。
