@@ -9155,6 +9155,12 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	if r == nil || r.services.Skills == nil {
 		return strings.TrimSpace(instructions), nil, nil, nil
 	}
+	// Rust #49584 (core/src/session/turn_context.rs): Guardian does not consume
+	// skills (guardian::is_basic_session_source), so a Guardian turn builds no
+	// host skill catalog and contributes no skill input items.
+	if guardianTurnStart(params) {
+		return strings.TrimSpace(instructions), nil, nil, nil
+	}
 	listParams := &SkillsListParams{}
 	if params != nil {
 		sessionConfig := &config.Config{Values: map[string]any{}}
