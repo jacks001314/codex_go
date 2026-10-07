@@ -42,25 +42,26 @@
 `applypatch` 1 · `mcp` 1 · `tui` 1（`TestSelectStartupTooltipMatchesRustPlanBranches`）· `tui/tea` 1（`TestModelAppCommandUsesRustHistoryMessages`）·
 并发 flake（隔离单跑全绿）：`TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications`、`TestStdioServerGoalSetResponsePrecedesGoalNotification`、`TestStartProcessHonorsArg0`。
 
-## R6 当前团队（2026-10-07 第 85 轮续 8；派生宽度上限 10）
+## R6 当前团队（2026-10-07 第 85 轮续 8 续；派生宽度上限 10）
 
-main = `58c711c9`（已 push，`git ls-remote origin main` 确认）。在跑 **9 条**：
+main = `35d4a827`（已 push，`git ls-remote origin main` 确认）。在跑 **10 条（达上限）**：
 
 | 车道 | agent_id | 任务 | 写范围 |
 |---|---|---|---|
-| syncnext11 | `agent-0499220c268f1de9da3cea7f` | #51117 压缩替换历史装完整上下文 | appserver/（previous_model_compact 面） |
 | syncnext12 | `agent-ac538099e50d4129bfabd665` | #51355 agent spawn 失败的有界诊断 | tool/ appserver/ telemetry/ |
-| syncnext15 | `agent-1f27bd953dc51f2c8a30bcc4` | #49360 半片 (a) wire prependPathDirs + (b) hook PATH prepend | execserver/（tool/ 需请示） |
+| syncnext15 | `agent-1f27bd953dc51f2c8a30bcc4` | #49360 (b) hook PATH prepend（已放行方案 A） | tool/shell*.go+unified_exec.go、appserver/runtime_router.go、turn/tools.go |
 | syncnext16 | `agent-ebe86f5566256cc8d0b52bdd` | #50913 已连接 TUI 新会话用服务端模型默认 | tui/app/ |
-| syncnext17 | `agent-240fb2ef70d965d923d3ec2d` | #38470 剩余：Bedrock Runtime 端点本体 | model/ auth/ |
 | syncnext18 | `agent-ffb3dfd067e731baff9d95ad` | #49295 config 指纹规范化 | config/ |
-| syncnext19 | `agent-340b61c21575b42e44b6772f` | #49305 thread 名解析批量读 | state/ session/ |
-| syncnext20 | `agent-089839f6fdd4d3e00d47fd84` | #48549 复制保留 Markdown 表格（先侦察） | tui/（非 app；tui/app/ 需请示） |
-| syncnext21 | `agent-99fe3f06e8de409cd30a4cd9` | §2 台账只读重扫（产物 /tmp/ledger_delta_58c711c9.md） | 只读，不 commit |
+| syncnext20 | `agent-089839f6fdd4d3e00d47fd84` | #48549 复制保留 Markdown 表格（先侦察） | tui/（非 app） |
+| syncnext22 | `agent-e02b67cf9f5435441aed1606` | 只读裁决：12 项子系统缺失候选（`/tmp/triage_syncnext22.md`） | 只读 |
+| syncnext23 | `agent-ac3df535dc42cff961b49dbc` | #48611 + #49032（context//state/ 面） | context/ session/ features/ state/（appserver/ 需请示） |
+| syncnext24 | `agent-a4ee3c22dcf584158c31fc20` | #49441（codexapi/） | codexapi/ |
+| syncnext25 | `agent-7822a4f310e55df53b876069` | #49444/#49147/#49300/#49416 小项 | rollout/ 等（避免 tui/） |
+| syncnext26 | `agent-6caeba3d11ad9222bb8bc7e1` | 只读裁决批次 2（12 项；`/tmp/triage2_syncnext26.md`） | 只读 |
 
-- 已回收（累计 21）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`、`syncnext1`、`syncnext2`、`syncnext3`、`syncnext4`、`syncnext5`、`syncnext6`、`syncnext7`、`syncnext8`、`syncnext9`、`syncnext10`、`syncnext13`、`syncnext14`。
+- 已回收（累计 25）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`、`syncnext1`–`syncnext11`、`syncnext13`、`syncnext14`、`syncnext17`、`syncnext19`、`syncnext21`。
 - 待补：新 verifier（在飞数量降到 ≤3 时创建）。
 - **附加规则（续 5）**：车道可能在回报后**继续 amend 已交付 commit**；并入前必须比对最终 SHA 的 delta。
 - **附加规则（续 6）**：写集相邻的车道**开工前先请示**。
-- **附加规则（续 7）**：**反向对照必须打在真正的被测接线上**；若「撤销后仍绿」= 改错位置，须重新定位后再报。
-- **附加规则（续 8）**：**派单前必须复核台账陈旧行**——`remaining_ledger §2` 固定于 `c30b56ca`，派单前对每个候选跑 `git log --grep '#<PR>'` + 非测试 `.go` 符号面 grep（实例：#49425 已落 sync526、#49028 已判 N/A，若照抄 §2 会重复劳动）。
+- **附加规则（续 7）**：**反向对照必须打在真正的被测接线上**；若「撤销后仍绿」= 改错位置，须重新定位后再报（本轮实例：sync569 的第一次反向对照因 `sed`/python 模式不匹配**未真正改到代码**，`ok` 是假绿，已重做）。
+- **附加规则（续 8）**：**派单前必须复核台账陈旧行与 sha**——`remaining_ledger §2` 固定于 `c30b56ca`（`#49425` 已落、`#49028` 已 N/A），且 sha 列有错（`#48824` 行的 sha 实为 `#48805`）；一律自行 `git log --grep '#<PR>'` 解析。队列现况以 `update/queue_delta_2026_10_07.md` 为准（still ⬜ 141）。
