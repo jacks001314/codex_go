@@ -246,6 +246,7 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 				{action: "archive", alias: "a"},
 				{action: "delete", alias: "delete"},
 				{action: "hide", alias: "h"},
+				{action: "toggle_pin", alias: "p"},
 				{action: "toggle_grouping", alias: "g"},
 			} {
 				if action == candidate.action && config.agentsAliasConfigured(candidate.alias) {

@@ -17,6 +17,7 @@ func TestKeymapActionCatalogIncludesRustActions(t *testing.T) {
 		"agents/rename",
 		"agents/stop",
 		"agents/toggle_grouping",
+		"agents/toggle_pin",
 		"global/open_external_editor",
 		"composer/submit",
 		"editor/insert_newline",
@@ -114,6 +115,7 @@ func TestAgentsKeymapActionsResolveDefaults(t *testing.T) {
 		"archive":         "a",
 		"hide":            "h",
 		"toggle_grouping": "g",
+		"toggle_pin":      "p",
 	} {
 		bindings, source, custom := ResolvedKeymapBindings(config, "agents", action)
 		if custom || source != "default" || strings.Join(bindings, ",") != want {

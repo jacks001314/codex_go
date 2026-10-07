@@ -958,8 +958,15 @@ type Options struct {
 	OnAgentsOverviewRename      AgentsOverviewRenameFunc
 	OnAgentsOverviewArchive     AgentsOverviewArchiveFunc
 	OnAgentsOverviewDelete      AgentsOverviewDeleteFunc
-	OnStartAgentsDaemon         AgentsDaemonStartFunc
-	OnClipboardWrite            func(text string) error
+	// OnAgentsOverviewPinnedThreads lists the shared pinned-section tasks and
+	// reports whether the server supports shared thread sections (Rust #51500).
+	// Nil disables pinning in the dashboard, as does supported=false.
+	OnAgentsOverviewPinnedThreads AgentsOverviewPinnedThreadsFunc
+	// OnAgentsOverviewTogglePin pins or unpins one task in the shared section
+	// (Rust #51500 thread/section/move).
+	OnAgentsOverviewTogglePin AgentsOverviewTogglePinFunc
+	OnStartAgentsDaemon       AgentsDaemonStartFunc
+	OnClipboardWrite          func(text string) error
 	// OnExportTranscript renders the active conversation as Markdown for
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
 	// unavailable for this runtime.
@@ -1589,20 +1596,22 @@ type Model struct {
 	// permissionProfilesExplicit records the server's explicit-profile mode from
 	// the last discovery, and permissionProfilesDiscovered whether one has run
 	// (Rust #43340 PermissionDiscovery).
-	permissionProfilesExplicit   bool
-	permissionProfilesDiscovered bool
-	permissionProfilesErr        string
-	pendingServerProfile         string
-	agentsOverviewEmbedded       bool
-	onAgentsOverviewRefresh      AgentsOverviewRefreshFunc
-	onAgentsOverviewUsage        AgentsOverviewUsageReaderFunc
-	onAgentsOverviewNewSession   AgentsOverviewNewSessionFunc
-	onAgentsOverviewNewWorktree  AgentsOverviewNewWorktreeFunc
-	onAgentsOverviewStop         AgentsOverviewStopFunc
-	onAgentsOverviewRename       AgentsOverviewRenameFunc
-	onAgentsOverviewArchive      AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete       AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle      *agentsOverviewLifecycleRequest
+	permissionProfilesExplicit    bool
+	permissionProfilesDiscovered  bool
+	permissionProfilesErr         string
+	pendingServerProfile          string
+	agentsOverviewEmbedded        bool
+	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
+	onAgentsOverviewUsage         AgentsOverviewUsageReaderFunc
+	onAgentsOverviewNewSession    AgentsOverviewNewSessionFunc
+	onAgentsOverviewNewWorktree   AgentsOverviewNewWorktreeFunc
+	onAgentsOverviewStop          AgentsOverviewStopFunc
+	onAgentsOverviewRename        AgentsOverviewRenameFunc
+	onAgentsOverviewArchive       AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete        AgentsOverviewDeleteFunc
+	onAgentsOverviewPinnedThreads AgentsOverviewPinnedThreadsFunc
+	onAgentsOverviewTogglePin     AgentsOverviewTogglePinFunc
+	agentsOverviewLifecycle       *agentsOverviewLifecycleRequest
 	// agentsOverviewBlankSessions retains the live snapshot of a session started
 	// from the command center until its first turn materializes a rollout
 	// (Rust #45255 agents_overview.blank_sessions).
@@ -2012,6 +2021,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
 		onAgentsOverviewArchive:         options.OnAgentsOverviewArchive,
 		onAgentsOverviewDelete:          options.OnAgentsOverviewDelete,
+		onAgentsOverviewPinnedThreads:   options.OnAgentsOverviewPinnedThreads,
+		onAgentsOverviewTogglePin:       options.OnAgentsOverviewTogglePin,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
 		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
@@ -2655,6 +2666,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyAgentsOverviewNewSession(msg)
 	case agentsOverviewNewWorktreeMsg:
 		return m, m.applyAgentsOverviewNewWorktree(msg)
+	case agentsOverviewPinMsg:
+		return m, m.applyAgentsOverviewPin(msg)
 	case agentsOverviewStopMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())

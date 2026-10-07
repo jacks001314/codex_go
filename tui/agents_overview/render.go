@@ -148,6 +148,11 @@ func (v *View) footerHints() [][]span {
 	if binding, ok := v.shortcutHint(ShortcutHintDelete, "delete"); ok {
 		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " delete", style: spanDim}})
 	}
+	// Rust #51500: the pin shortcut is only advertised when the selected task
+	// can be pinned or unpinned (Rust agent_center/hints.rs "Pin/unpin").
+	if binding, ok := v.shortcutHint(ShortcutHintTogglePin, "p"); ok && v.CanToggleSelectedPin() {
+		hints = append(hints, []span{{text: binding, style: spanBold}, {text: " pin/unpin", style: spanDim}})
+	}
 	// Rust #45255: Esc only cancels metadata editing, so the list stays open and
 	// the hint appears only while editing; quitting is always advertised.
 	if v != nil && (v.State.Searching || v.State.Renaming) {

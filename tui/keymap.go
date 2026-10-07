@@ -162,6 +162,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("agents", "Agents", "hide", "Hide the selected task until explicitly resumed.", []string{"h"}),
 	keymapAction("agents", "Agents", "archive", "Archive the selected task and its child agents.", []string{"a"}),
 	keymapAction("agents", "Agents", "delete", "Permanently delete the selected task and its child agents.", []string{"delete"}),
+	keymapAction("agents", "Agents", "toggle_pin", "Pin or unpin the selected task in the shared sidebar section.", []string{"p"}),
 	keymapAction("agents", "Agents", "toggle_grouping", "Toggle grouping tasks by status or project.", []string{"g"}),
 	keymapAction("approval", "Approval", "open_fullscreen", "Open approval details fullscreen.", []string{"ctrl-a", "ctrl-shift-a"}),
 	keymapAction("approval", "Approval", "open_thread", "Open the approval source thread when available.", []string{"o"}),

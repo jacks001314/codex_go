@@ -156,6 +156,11 @@ type Row struct {
 	Group        Group
 	IsCurrent    bool
 	StatusActive bool // an active turn is running (enables ctrl+x stop)
+	// Source is the task's thread source (Rust SessionSource). The dashboard
+	// uses it to decide whether the task may be pinned in the shared section
+	// (Rust #51500 supports_shared_pinning). The host maps
+	// appserver.SessionSource to this string; empty means unknown.
+	Source string
 }
 
 // Title mirrors Rust: thread name, else preview, else "Untitled task".
@@ -209,6 +214,10 @@ const (
 	// ActionDeleteThread permanently deletes the selected row and its child
 	// agents after confirmation (Rust #44433).
 	ActionDeleteThread
+	// ActionTogglePin pins or unpins the selected row in the shared thread
+	// section (Rust #51500 agents.toggle_pin). The shared-section request and
+	// the follow-up refresh live in the host.
+	ActionTogglePin
 	// ActionExit closes the dashboard (exit_on_cancel standalone mode).
 	ActionExit
 )
@@ -240,6 +249,15 @@ type View struct {
 	ExitOnCancel bool
 	Completion   Completion
 	hints        map[string]string
+
+	// pinRanks maps a pinned thread id to its shared-section position (Rust
+	// #51500 pinned_thread_ranks). Nil means shared pinning is unavailable
+	// because the server does not support shared thread sections, which
+	// disables the pin shortcut.
+	pinRanks map[string]int
+	// pinPending is true while a pin/unpin request is in flight (Rust
+	// pin_action_pending); duplicate pin actions are suppressed meanwhile.
+	pinPending bool
 
 	// worktreesEnabled groups rows from linked checkouts of the same repository
 	// under the primary checkout (Rust #43279), and projectGroups carries the
@@ -423,6 +441,10 @@ const (
 	ShortcutHintHide           = "hide"
 	ShortcutHintArchive        = "archive"
 	ShortcutHintDelete         = "delete"
+	// ShortcutHintTogglePin is the pin/unpin shortcut (Rust #51500
+	// agents.toggle_pin); it is only advertised when the selected task can be
+	// pinned.
+	ShortcutHintTogglePin = "toggle_pin"
 )
 
 // SetShortcutHint overrides the displayed key for one dashboard action. An
@@ -500,24 +522,35 @@ func (v *View) Counts() (needsYou, working, ready int) {
 	return needsYou, working, ready
 }
 
-// VisibleIndices returns row indices passing the search filter, sorted by
-// project (cwd) or status group depending on the grouping preference. It
-// mirrors Rust AgentsOverviewView::visible_indices.
+// VisibleIndices returns row indices passing the search and hide filters,
+// pinned tasks first, then sorted by project (cwd) or status group depending on
+// the grouping preference. It mirrors Rust AgentsOverviewView::visible_indices
+// including its #51500 pinning partition: pinned tasks keep the shared-section
+// order and the remaining rows keep the active grouping order.
 func (v *View) VisibleIndices() []int {
 	if v == nil {
 		return nil
 	}
 	search := strings.ToLower(strings.TrimSpace(v.State.Search))
+	pinned := make([]int, 0, len(v.pinRanks))
 	visible := make([]int, 0, len(v.Rows))
 	for i := range v.Rows {
 		if v.isHidden(v.Rows[i].ThreadID) {
 			continue
 		}
 		searchable := strings.ToLower(strings.Join([]string{v.Rows[i].Name, v.Rows[i].Preview, v.Rows[i].CWD}, " "))
-		if search == "" || strings.Contains(searchable, search) {
-			visible = append(visible, i)
+		if search != "" && !strings.Contains(searchable, search) {
+			continue
 		}
+		// Rust #51500: pinned tasks render first in their own group; the search
+		// and status filters still apply to them.
+		if v.IsPinned(v.Rows[i].ThreadID) {
+			pinned = append(pinned, i)
+			continue
+		}
+		visible = append(visible, i)
 	}
+	v.sortPinnedBySectionPosition(pinned)
 	switch v.State.Grouping {
 	case GroupingModel:
 		// Model grouping: sort by model name while preserving host recency
@@ -536,7 +569,7 @@ func (v *View) VisibleIndices() []int {
 			return group.commonDir + "\x00" + group.relativeCWD
 		})
 	}
-	return visible
+	return append(pinned, visible...)
 }
 
 // stableSortByGroupKey sorts rows by a group key with an insertion sort, which
@@ -665,6 +698,11 @@ func (v *View) sameGroup(grouping Grouping, left int, right int) bool {
 	if v == nil || left < 0 || right < 0 || left >= len(v.Rows) || right >= len(v.Rows) {
 		return false
 	}
+	// Rust #51500: pinned tasks form their own group regardless of the active
+	// grouping preference.
+	if v.IsPinned(v.Rows[left].ThreadID) || v.IsPinned(v.Rows[right].ThreadID) {
+		return v.IsPinned(v.Rows[left].ThreadID) && v.IsPinned(v.Rows[right].ThreadID)
+	}
 	switch grouping {
 	case GroupingStatus:
 		return v.Rows[left].Group == v.Rows[right].Group
@@ -679,6 +717,10 @@ func (v *View) sameGroup(grouping Grouping, left int, right int) bool {
 func (v *View) groupHeading(grouping Grouping, index int) string {
 	if v == nil || index < 0 || index >= len(v.Rows) {
 		return ""
+	}
+	// Rust #51500: pinned tasks render under their own "Pinned" header.
+	if v.IsPinned(v.Rows[index].ThreadID) {
+		return PinnedGroupHeading
 	}
 	switch grouping {
 	case GroupingStatus:
@@ -952,6 +994,10 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	view.State = v.State
 	view.worktreesEnabled = v.worktreesEnabled
 	view.usageLines = v.usageLines
+	// Rust #51500: a refresh keeps the pinned-section order and any in-flight
+	// pin request.
+	view.pinRanks = v.pinRanks
+	view.pinPending = v.pinPending
 	view.recomputeProjectGroups()
 	view.pruneUsageLines()
 	// Hidden roots stay hidden across refreshes; if the restored selection
