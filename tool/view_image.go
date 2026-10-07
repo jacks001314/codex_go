@@ -10,7 +10,6 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"codex_go/utils"
@@ -30,6 +29,10 @@ type ViewImageOptions struct {
 	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so an
 	// explicit environment_id is resolved before the path is read.
 	EnvironmentCheck *UnifiedExecEnvironmentCheck
+	// EnvironmentFileSystems resolves the selected environment's filesystem so
+	// the image is read through the executor for a selected remote environment
+	// (Rust #20647 `78421face0`, `environment.get_filesystem()`).
+	EnvironmentFileSystems EnvironmentFileSystemProvider
 }
 
 type ViewImageHandler struct {
@@ -82,7 +85,6 @@ func (h *ViewImageHandler) Spec() Spec {
 }
 
 func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {
-	_ = ctx
 	if invocation == nil {
 		return nil, fmt.Errorf("%w: invocation is nil", ErrToolInvalidCall)
 	}
@@ -104,36 +106,41 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 		detail = "high"
 	}
 	var environmentCheck *UnifiedExecEnvironmentCheck
+	var environmentFileSystems EnvironmentFileSystemProvider
+	localCWD := ""
 	if h != nil {
 		environmentCheck = h.options.EnvironmentCheck
+		environmentFileSystems = h.options.EnvironmentFileSystems
+		localCWD = strings.TrimSpace(h.options.CWD)
 	}
-	if _, err := ResolveToolEnvironment(environmentCheck, args.EnvironmentID, viewImageUnavailableMessage); err != nil {
+	if localCWD == "" {
+		localCWD, _ = os.Getwd()
+	}
+	// Rust #20647: the image is read through the selected environment's
+	// filesystem, so a selected remote environment is read over the executor
+	// (codex-rs/core/src/tools/handlers/view_image.rs:158,
+	// `turn_environment.environment.get_filesystem()`).
+	fileSystem, err := ResolveToolEnvironmentFileSystem(environmentCheck, environmentFileSystems, args.EnvironmentID, viewImageUnavailableMessage, localCWD)
+	if err != nil {
 		return nil, RespondToModel(err.Error())
 	}
 	path := strings.TrimSpace(args.Path)
 	if path == "" {
 		return nil, RespondToModel("path must not be empty")
 	}
-	if !filepath.IsAbs(path) {
-		cwd := ""
-		if h != nil {
-			cwd = strings.TrimSpace(h.options.CWD)
-		}
-		if cwd == "" {
-			cwd, _ = os.Getwd()
-		}
-		path = filepath.Join(cwd, path)
-	}
-	info, err := os.Stat(path)
+	// The filesystem resolves a relative path against its own cwd; `modelPath` is
+	// the equivalent resolved path for messages.
+	modelPath := resolveEnvironmentPath(fileSystem.CWD(), path)
+	metadata, err := fileSystem.GetMetadata(ctx, path, nil)
 	if err != nil {
-		return nil, RespondToModel(fmt.Sprintf("unable to locate image at `%s`: %v", path, err))
+		return nil, RespondToModel(fmt.Sprintf("unable to locate image at `%s`: %v", modelPath, err))
 	}
-	if !info.Mode().IsRegular() {
-		return nil, RespondToModel(fmt.Sprintf("image path `%s` is not a file", path))
+	if !metadata.IsFile {
+		return nil, RespondToModel(fmt.Sprintf("image path `%s` is not a file", modelPath))
 	}
-	data, err := os.ReadFile(path)
+	data, err := fileSystem.ReadFile(ctx, path, nil)
 	if err != nil {
-		return nil, RespondToModel(fmt.Sprintf("unable to read image at `%s`: %v", path, err))
+		return nil, RespondToModel(fmt.Sprintf("unable to read image at `%s`: %v", modelPath, err))
 	}
 	// Reject non-images before their bytes can reach code mode without changing
 	// valid image bytes, metadata, or centralized image preparation.
