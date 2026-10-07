@@ -860,6 +860,10 @@ type rolloutEventPayload struct {
 	LocalImagesCamel   []string        `json:"localImages"`
 	TextElements       json.RawMessage `json:"text_elements"`
 	TextElementsCamel  json.RawMessage `json:"textElements"`
+	// TurnAttribution is the regular-turn provenance Rust #51402 persists on the
+	// `turn_started` event. Absent on older records and non-regular tasks.
+	TurnAttribution      *TurnAttribution `json:"turn_attribution"`
+	TurnAttributionCamel *TurnAttribution `json:"turnAttribution"`
 }
 
 func newRolloutReplayBuilder(fallback time.Time) *rolloutReplayBuilder {
