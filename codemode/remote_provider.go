@@ -370,6 +370,44 @@ func (s *remoteSession) connection(ctx context.Context) (*remoteConnection, erro
 		return nil, fmt.Errorf("code mode session is shutting down")
 	}
 	s.mu.Unlock()
+	// Rust #51185: the gRPC code-mode provider retries transient connection and
+	// session/open admissions (Unavailable/ResourceExhausted). Every other
+	// provider - including the WebSocket provider - keeps its single attempt, so
+	// this is a no-op for them. The loop only ever wraps admission; established
+	// execute/wait/terminate requests never pass through here, so no execution
+	// can be replayed.
+	attempts := 1
+	if retrier, ok := s.provider.(sessionAdmissionRetrier); ok {
+		if limit := retrier.sessionAdmissionRetries(); limit > attempts {
+			attempts = limit
+		}
+	}
+	for attempt := 1; ; attempt++ {
+		connection, err := s.admit(ctx)
+		if err == nil {
+			return connection, nil
+		}
+		if attempt >= attempts || !retryableSessionAdmissionError(err) {
+			return nil, err
+		}
+		delay := sessionAdmissionRetryDelay(attempt)
+		if ctx == nil {
+			time.Sleep(delay)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(delay):
+		}
+	}
+}
+
+// admit performs a single admission attempt: establish (or reuse) the provider
+// connection, then complete the session/open handshake. It reproduces the
+// pre-#51185 connection() body verbatim so non-retrying providers observe
+// identical behavior.
+func (s *remoteSession) admit(ctx context.Context) (*remoteConnection, error) {
 	connection, err := s.provider.connect(ctx)
 	if err != nil {
 		return nil, err

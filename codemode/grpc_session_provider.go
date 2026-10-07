@@ -11,11 +11,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"codex_go/tool"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // GrpcCodeModeSessionProvider mirrors Rust GrpcCodeModeSessionProvider
@@ -184,6 +187,55 @@ func grpcDialOptionsForEndpoint(endpoint string, httpClient *http.Client) []grpc
 		options = append(options, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 	return options
+}
+
+// Rust #51185: retry transient gRPC code-mode session admission failures.
+// Connecting and the initial session/open handshake are retried at most three
+// attempts with 100ms/200ms backoff, only for Unavailable/ResourceExhausted.
+// The retry never wraps Execute, so an established execution is never replayed.
+const (
+	grpcSessionAdmissionAttempts  = 3
+	grpcSessionAdmissionBaseDelay = 100 * time.Millisecond
+)
+
+// sessionAdmissionRetrier marks a provider whose session admission retries
+// transient gRPC failures (Rust #51185). Only the gRPC code-mode provider opts
+// in; the WebSocket provider keeps its single-attempt admission.
+type sessionAdmissionRetrier interface {
+	sessionAdmissionRetries() int
+}
+
+func (*GrpcCodeModeSessionProvider) sessionAdmissionRetries() int {
+	return grpcSessionAdmissionAttempts
+}
+
+// retryableSessionAdmissionError reports whether err is a transient gRPC
+// admission failure that Rust #51185 retries (Unavailable/ResourceExhausted).
+// It uses errors.As so the status raised by the transport survives the
+// fmt.Errorf wrappers in GrpcTransport.
+func retryableSessionAdmissionError(err error) bool {
+	var grpcStatus interface{ GRPCStatus() *status.Status }
+	if !errors.As(err, &grpcStatus) {
+		return false
+	}
+	st := grpcStatus.GRPCStatus()
+	if st == nil {
+		return false
+	}
+	switch st.Code() {
+	case codes.Unavailable, codes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+// sessionAdmissionRetryDelay mirrors Rust #51185's 100ms * retries backoff.
+func sessionAdmissionRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	return time.Duration(attempt) * grpcSessionAdmissionBaseDelay
 }
 
 var _ tool.CodeModeRemoteProvider = (*GrpcCodeModeSessionProvider)(nil)
