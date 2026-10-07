@@ -1309,6 +1309,17 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 		servers = append(servers, cloned)
 	}
 	s.mu.Unlock()
+	// Rust #48783: an unknown server name yields an empty page, and a known one
+	// limits both discovery and the returned page to that server.
+	if selected := mcpServerNameFilter(params); selected != "" {
+		filtered := make([]MCPServerStatus, 0, 1)
+		for _, status := range servers {
+			if status.effectiveName() == selected {
+				filtered = append(filtered, status)
+			}
+		}
+		servers = filtered
+	}
 	servers = s.populateStatusInventories(params, detail, observer, servers, configs, dynamicConfigs, threadID)
 	sort.SliceStable(servers, func(i int, j int) bool {
 		return servers[i].effectiveName() < servers[j].effectiveName()
@@ -1388,8 +1399,14 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		}
 	}
 	requiredIndexes := map[int]bool{}
+	// Rust #48783: a selected serverName restricts discovery to that server, so
+	// unrelated servers are neither started nor connected.
+	selectedServer := mcpServerNameFilter(params)
 	for i := range servers {
 		name := servers[i].effectiveName()
+		if selectedServer != "" && name != selectedServer {
+			continue
+		}
 		config, ok := configs[name]
 		if !ok {
 			continue
@@ -2797,6 +2814,15 @@ func (s *MCPServerStatus) effectiveName() string {
 		return s.Name
 	}
 	return s.Server.Name
+}
+
+// mcpServerNameFilter returns the trimmed `serverName` selection of a status
+// list request, or "" when the request wants the full inventory (Rust #48783).
+func mcpServerNameFilter(params *MCPListServerStatusParams) string {
+	if params == nil || params.ServerName == nil {
+		return ""
+	}
+	return strings.TrimSpace(*params.ServerName)
 }
 
 func paginateMCPStatuses(statuses []MCPServerStatus, params *MCPListServerStatusParams) ([]MCPServerStatus, *string, error) {
