@@ -61,3 +61,13 @@
 - 与 Rust 的差异（无 system 层 / MDM / macOS 管理 requirements / linked-worktree hooks 层；TOML 为解析后重序列化）已逐条记录在 `update/plan_2026_10_07.md` 第二十八轮。
 - 验证：`go build ./...`、`gofmt -l` 空、`go vet` 无输出、`go test ./config/ ./execserver/... ./app/ -run ...` 仅既有基线失败、`go test ./parity` 通过。
 
+
+## 追加（当日第四批：sync395）
+
+- `sync395`（上游 #51539 "Add completion-aware realtime attachment and session-scoped detach"）：把"替换会话先发旧 close、会话级 detach 不误关替换会话、启动参数诊断脱敏"三条语义落地到 Go 的 realtime 子系统。
+  - `realtime/realtime.go`：`StopParams.realtimeSessionId`（可选）+ `ErrRealtimeSessionMismatch`（陈旧 detach 不关闭、静默 no-op）；`StartWithOptions` 替换活动会话时先封存旧 timeline 并发 `thread/realtime/closed` 再发 `thread/realtime/started`；`StartParams.String()` 只输出 modality / initial item 数 / version。
+  - `appserver/realtime_runtime.go`：`stopRealtimeConversationAsync` 吞掉 mismatch（与 Rust detach 的静默语义一致）。
+  - 测试：`TestStartReplacementEmitsPreviousCloseLikeRust`、`TestStopSessionScopedDetachLikeRust`、`TestStartParamsStringRedactsCredentialsLikeRust`（+ 更新 `TestManagerLifecycle`）；app-server 全链路 `TestRealtimeStopScopedToSessionLeavesReplacementConnectedLikeRust`。
+  - 结构性差异（详见计划第二十九轮）：Go 的 `Manager.Start` 本身同步且失败经 error 通知回报，故不新增独立 attach op；陈旧 fanout 清理 Go 早已按连接身份判定。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./realtime/ ./appserver/ ./app/` 无输出；`go test ./realtime/... ./eventmap/... ./parity/... -count=1` 通过；`go test ./appserver/ -count=1` 仅既有基线失败（OAuth、plugin repo、file-change apply 三项 + 两项既有 flaky）。
+- 推送：`249ec903..c9d0c31c`（`git ls-remote` 确认 `origin/main = c9d0c31c`）。
