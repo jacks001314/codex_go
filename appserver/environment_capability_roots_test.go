@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"codex_go/session"
+	"codex_go/turn"
 )
 
 // Rust #51493
@@ -169,5 +170,46 @@ func assertReadyRootIDs(t *testing.T, status SelectedCapabilityRootsStatus, want
 		if got[i] != want[i] {
 			t.Fatalf("ReadyRoots = %v, want %v", got, want)
 		}
+	}
+}
+
+// Rust #51493 (`TurnEnvironmentSnapshot::selected_capability_roots` projects
+// Ready, Starting *and* Failed selections): an environment that is still pending
+// or already failed keeps the roots bound to it, so a pending/failed attachment
+// cannot silently drop that environment's capabilities. Binding is by
+// environment identity only, never by configuration state.
+func TestRestrictCapabilityRootsKeepsPendingAndFailedSelectionsLikeRust(t *testing.T) {
+	roots := []SelectedCapabilityRoot{
+		provisionedRoot("first", "other"),
+		provisionedRoot("second", "local"),
+	}
+	pending := map[string]any{
+		"environmentId": "other",
+		"cwd":           "/tmp/other",
+		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigPending}),
+	}
+	failed := map[string]any{
+		"environmentId": "local",
+		"cwd":           "/tmp/local",
+		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigFailed, Error: "boom"}),
+	}
+
+	// Both roots stay bound, in the thread's original order.
+	if got := restrictCapabilityRootsToSelections(roots, []map[string]any{pending, failed}); !sameRootIDs(got, roots) {
+		t.Fatalf("pending+failed selections = %v, want %v", rootIDs(got), rootIDs(roots))
+	}
+	// A pending environment is not a deselection: its roots stay in the view.
+	if got := restrictCapabilityRootsToSelections(roots, []map[string]any{pending}); !sameRootIDs(got, roots[0:1]) {
+		t.Fatalf("pending selection = %v, want [first]", rootIDs(got))
+	}
+	// A failed environment also keeps its roots; only removing it from the
+	// selection list hides them.
+	if got := restrictCapabilityRootsToSelections(roots, []map[string]any{failed}); !sameRootIDs(got, roots[1:2]) {
+		t.Fatalf("failed selection = %v, want [second]", rootIDs(got))
+	}
+	// Pending/failed entries do not become the turn's primary environment, but
+	// they are still captured by the selection list that drives discovery.
+	if primary := primaryTurnEnvironmentSelection(&turn.TurnStartParams{Environments: []map[string]any{pending, failed}}); primary != nil {
+		t.Fatalf("primary selection = %#v, want nil", primary)
 	}
 }

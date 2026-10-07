@@ -819,3 +819,65 @@ func TestRuntimeRouterRemoteCompactServiceTierLikeRust(t *testing.T) {
 		t.Fatalf("remoteCompactServiceTierForRecord(unsupported) = %q, want empty", got)
 	}
 }
+
+// Rust #51493 (child and grandchild threads): a parent selection whose
+// configuration is still pending is inherited verbatim when the child spawns,
+// and again when the child spawns a grandchild. The pending attachment must not
+// be resolved away or dropped at an inheritance boundary, so the same
+// environment stays pending all the way down.
+func TestRuntimeAgentControllerPendingEnvironmentConfigReachesGrandchildrenLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	parent := &session.Record{ID: "parent", CreatedAt: now, UpdatedAt: now, RecencyAt: now, Metadata: session.Metadata{CWD: "/primary"}}
+	if err := store.Create(parent); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	selections := []map[string]any{{
+		"environmentId": "remote-primary",
+		"cwd":           "/primary",
+		"config":        environmentConfigStateToAny(EnvironmentConfigState{Kind: EnvironmentConfigPending}),
+	}}
+
+	parentController := newRuntimeAgentControllerWithEnvironmentSelections(router, "parent", parent.Metadata.CWD, 4, agent.VersionV2, selections)
+	child, err := parentController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childRecord, err := store.Load(session.ThreadID(child.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childSelections := environmentSelectionsFromAny(childRecord.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey])
+	assertPendingSelectionLikeRust(t, "child", childSelections)
+
+	childController := newRuntimeAgentControllerWithEnvironmentSelections(router, child.AgentID, childRecord.Metadata.CWD, 4, agent.VersionV2, childSelections)
+	grandchild, err := childController.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grandchildRecord, err := store.Load(session.ThreadID(grandchild.AgentID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPendingSelectionLikeRust(t, "grandchild", environmentSelectionsFromAny(grandchildRecord.Metadata.Extra[runtimeEnvironmentSelectionsExtraKey]))
+
+	// Turn start inherits the same pending attachment instead of resolving it.
+	params := &turn.TurnStartParams{ThreadID: grandchild.AgentID}
+	router.inheritTurnEnvironmentSelections(params)
+	assertPendingSelectionLikeRust(t, "grandchild turn", params.Environments)
+}
+
+func assertPendingSelectionLikeRust(t *testing.T, name string, selections []map[string]any) {
+	t.Helper()
+	if len(selections) != 1 || selectionEnvironmentID(selections[0]) != "remote-primary" {
+		t.Fatalf("%s selections = %#v", name, selections)
+	}
+	state, err := environmentConfigStateFromAnyMap(selections[0])
+	if err != nil {
+		t.Fatalf("%s selection state: %v", name, err)
+	}
+	if state.Kind != EnvironmentConfigPending {
+		t.Fatalf("%s selection state = %q, want pending", name, state.Kind)
+	}
+}
