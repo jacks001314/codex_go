@@ -133,6 +133,9 @@ type ShellRequest struct {
 	UnifiedExecTurnID               string
 	UnifiedExecRemoteURL            string
 	UnifiedExecNoiseProvider        execserver.NoiseRendezvousConnectProvider
+	// UnifiedExecProvisioned marks the selected environment as provisioned so
+	// the initial remote dial waits out a resuming executor (Rust #48575).
+	UnifiedExecProvisioned bool
 	// UnifiedExecRemoteHTTPHeaders are sent on the remote executor's WebSocket
 	// upgrade and reconnects (Rust #47648 executor bearer tokens).
 	UnifiedExecRemoteHTTPHeaders http.Header
@@ -163,6 +166,14 @@ type UnifiedExecEnvironment struct {
 	// configured with a program instead of a URL (environments.toml entries).
 	ExecServerStdioCommand *execserver.StdioExecServerCommand
 	NoiseProvider          execserver.NoiseRendezvousConnectProvider
+	// Provisioned marks an environment registered through the app-server's
+	// deferred (provisioned) executor flow: provisioning has completed, but the
+	// executor may still be resuming, so an initial Noise connection waits out
+	// `environment_offline` responses for a fixed five-minute window instead of
+	// the ordinary retry limits (Rust #48575
+	// `PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT`). Ordinary environments keep the
+	// default connect budget and retry limits.
+	Provisioned bool
 	// ShellEnvironmentPolicy is this environment's resolved shell environment
 	// policy table (empty when the thread-derived policy applies), mirroring
 	// Rust protocol::EnvironmentConfig shell_environment_policy (#38902).
@@ -183,6 +194,19 @@ type UnifiedExecEnvironment struct {
 // transport, or a noise rendezvous provider.
 func (e UnifiedExecEnvironment) Remote() bool {
 	return strings.TrimSpace(e.ExecServerURL) != "" || e.NoiseProvider != nil || e.ExecServerStdioCommand != nil
+}
+
+// ConnectBudget returns the budget for an initial connection to this
+// environment. A provisioned environment whose executor may still be resuming
+// gets the fixed five-minute window (Rust #48575
+// `PROVISIONED_ENVIRONMENT_CONNECT_TIMEOUT`, applied by
+// `ExecServerClient::connect_for_transport`); every other environment keeps the
+// caller's ordinary budget.
+func (e UnifiedExecEnvironment) ConnectBudget(ordinary time.Duration) time.Duration {
+	if e.Provisioned {
+		return execserver.ProvisionedEnvironmentConnectTimeout()
+	}
+	return ordinary
 }
 
 // UnifiedExecEnvironmentCheck carries a turn's environment readiness so a tool

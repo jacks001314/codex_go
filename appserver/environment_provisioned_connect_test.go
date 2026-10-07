@@ -2,8 +2,10 @@ package appserver
 
 import (
 	"testing"
+	"time"
 
 	"codex_go/execserver"
+	"codex_go/turn"
 )
 
 // TestProvisionedEnvironmentConnectWindowLikeRust covers Rust #48575
@@ -68,5 +70,56 @@ func TestProvisionedEnvironmentConnectWindowLikeRust(t *testing.T) {
 	}
 	if options := provisionedNoiseDialOptions(&ordinary, "codex-go"); options.Provisioned {
 		t.Fatal("ordinary record marked its dial as provisioned")
+	}
+}
+
+// TestProvisionedEnvironmentTurnDialSitesLikeRust covers Rust #48575
+// (`985cf47a4e`) at the remaining provisioned Noise dial sites: the turn's
+// environment snapshot carries the record's provisioned flag, so the tools that
+// later dial that environment (unified exec, the environment filesystem and
+// remote skills discovery) all give a resuming executor the fixed five-minute
+// window instead of the ordinary retry limits. Ordinary records keep the
+// caller's budget verbatim.
+//
+// Rust reaches every one of these sites through the same Deferred transport
+// (`ExecServerClient::connect_for_transport`), so the flag is a property of the
+// environment, not of one call site.
+func TestProvisionedEnvironmentTurnDialSitesLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "/workspace")
+	registration, err := manager.RegisterDeferredNoiseEnvironment("tools", &failingNoiseProvider{})
+	if err != nil {
+		t.Fatalf("RegisterDeferredNoiseEnvironment() error = %v", err)
+	}
+	if err := registration.CompleteReady(provisionedReadyInfo("root", "tools")); err != nil {
+		t.Fatalf("CompleteReady() error = %v", err)
+	}
+	ordinary := EnvironmentRecord{EnvironmentID: "plain"}
+	manager.records["plain"] = ordinary
+
+	router := NewRuntimeRouter(RuntimeServices{Environment: manager})
+	environments := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{
+		Environments: []map[string]any{{"environmentId": "tools"}},
+	})
+	if len(environments) != 1 {
+		t.Fatalf("unified exec environments = %#v, want the provisioned environment", environments)
+	}
+	if !environments[0].Provisioned {
+		t.Fatal("provisioned environment was not marked on the turn's environment snapshot")
+	}
+	if got := environments[0].ConnectBudget(time.Second); got != execserver.ProvisionedEnvironmentConnectTimeout() {
+		t.Fatalf("provisioned connect budget = %v, want %v", got, execserver.ProvisionedEnvironmentConnectTimeout())
+	}
+
+	plain := router.unifiedExecEnvironmentsForTurn(&turn.TurnStartParams{
+		Environments: []map[string]any{{"environmentId": "plain"}},
+	})
+	if len(plain) != 1 {
+		t.Fatalf("unified exec environments = %#v, want the ordinary environment", plain)
+	}
+	if plain[0].Provisioned {
+		t.Fatal("ordinary environment was marked provisioned")
+	}
+	if got := plain[0].ConnectBudget(time.Second); got != time.Second {
+		t.Fatalf("ordinary connect budget = %v, want the caller's budget", got)
 	}
 }

@@ -178,11 +178,14 @@ func discoverRemoteEnvironmentSkillsWithSandbox(ctx context.Context, record *Env
 	if rootPath == "" {
 		return nil, nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	// Rust #48575: a provisioned record's initial Noise connection gets the
+	// fixed five-minute window, so the whole request is bounded by that window
+	// and the dial is marked provisioned; ordinary records are unchanged.
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	var caller remoteEnvironmentFSCaller
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, provisionedNoiseDialOptions(record, "codex-go"))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -311,11 +314,14 @@ func readRemoteEnvironmentSkillTextWithSandbox(ctx context.Context, record *Envi
 	if record == nil {
 		return "", errors.New("remote environment is unavailable")
 	}
-	ctx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(record.ConnectTimeoutMS))
+	// Rust #48575: a provisioned record's initial Noise connection gets the
+	// fixed five-minute window, so the whole request is bounded by that window
+	// and the dial is marked provisioned; ordinary records are unchanged.
+	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	var caller remoteEnvironmentFSCaller
 	if record.NoiseProvider != nil {
-		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, execserverclient.DialClientOptions{ClientName: "codex-go", HTTPClient: record.HTTPClient})
+		client, err := execserverclient.DialNoiseRendezvousClient(ctx, record.NoiseProvider, provisionedNoiseDialOptions(record, "codex-go"))
 		if err != nil {
 			return "", err
 		}

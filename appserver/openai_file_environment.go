@@ -77,12 +77,15 @@ func (f *environmentOpenAIFileSystem) dial(ctx context.Context) (*execserverclie
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, environmentConnectTimeout(f.record.ConnectTimeoutMS))
+	// Rust #48575: a provisioned record's initial Noise connection gets the
+	// fixed five-minute window, so this dial follows the record's provisioning
+	// state exactly like the registry and skills paths.
+	connectCtx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(&f.record))
 	defer cancel()
-	options := execServerClientOptions(&f.record, "codex-go-openai-file")
 	if f.record.NoiseProvider != nil {
-		return execserverclient.DialNoiseRendezvousClient(connectCtx, f.record.NoiseProvider, options)
+		return execserverclient.DialNoiseRendezvousClient(connectCtx, f.record.NoiseProvider, provisionedNoiseDialOptions(&f.record, "codex-go-openai-file"))
 	}
+	options := execServerClientOptions(&f.record, "codex-go-openai-file")
 	if recordUsesStdioTransport(&f.record) {
 		return execserverclient.DialClientWithOptions(connectCtx, "", options)
 	}

@@ -600,15 +600,27 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 }
 
 func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, callID string, processID int) (*ShellResult, error) {
-	connectCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Rust #48575: a provisioned environment's executor may still be resuming
+	// after a ready report, so the initial dial gets the fixed five-minute
+	// window instead of the ordinary ten-second budget; every other remote
+	// environment keeps the existing budget verbatim.
+	connectBudget := 10 * time.Second
+	if req.UnifiedExecProvisioned {
+		connectBudget = execserver.ProvisionedEnvironmentConnectTimeout()
+	}
+	connectCtx, cancel := context.WithTimeout(context.Background(), connectBudget)
 	defer cancel()
 	var client *execserver.Client
 	var err error
 	if req.UnifiedExecNoiseProvider != nil {
-		client, err = execserver.DialNoiseRendezvousClient(connectCtx, req.UnifiedExecNoiseProvider, execserver.DialClientOptions{ClientName: "codex-go-unified-exec"})
+		client, err = execserver.DialNoiseRendezvousClient(connectCtx, req.UnifiedExecNoiseProvider, execserver.DialClientOptions{
+			ClientName:  "codex-go-unified-exec",
+			Provisioned: req.UnifiedExecProvisioned,
+		})
 	} else {
 		client, err = execserver.DialClientWithOptions(connectCtx, req.UnifiedExecRemoteURL, execserver.DialClientOptions{
 			ClientName:   "codex-go-unified-exec",
+			Provisioned:  req.UnifiedExecProvisioned,
 			HTTPHeaders:  req.UnifiedExecRemoteHTTPHeaders.Clone(),
 			StdioCommand: req.UnifiedExecRemoteStdioCommand,
 		})

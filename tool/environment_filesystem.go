@@ -261,12 +261,16 @@ func (f remoteEnvironmentFileSystem) client(ctx context.Context) (*execserver.Cl
 }
 
 func dialEnvironmentFileSystemClient(ctx context.Context, environment UnifiedExecEnvironment) (*execserver.Client, error) {
-	connectCtx, cancel := context.WithTimeout(ctx, environmentFileSystemConnectTimeout)
+	// Rust #48575: an initial connection to a provisioned environment waits out
+	// a resuming executor for a fixed five-minute window, so the connect budget
+	// and the dial option both follow the environment's provisioned flag.
+	connectCtx, cancel := context.WithTimeout(ctx, environment.ConnectBudget(environmentFileSystemConnectTimeout))
 	defer cancel()
 	options := execserver.DialClientOptions{
 		ClientName:   "codex-go-environment-fs",
 		HTTPHeaders:  environment.ExecServerHTTPHeaders.Clone(),
 		StdioCommand: environment.ExecServerStdioCommand,
+		Provisioned:  environment.Provisioned,
 	}
 	if environment.NoiseProvider != nil {
 		return execserver.DialNoiseRendezvousClient(connectCtx, environment.NoiseProvider, options)

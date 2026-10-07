@@ -14853,6 +14853,12 @@ func (r *RuntimeRouter) unifiedExecEnvironmentsForTurn(params *turn.TurnStartPar
 			ExecServerHTTPHeaders:  record.ExecServerHeaders.Clone(),
 			ExecServerStdioCommand: record.StdioCommand,
 			NoiseProvider:          record.NoiseProvider,
+			// Rust #48575: a provisioned environment's executor may still be
+			// resuming, so every initial connection to it keeps the fixed
+			// five-minute window (the tools that dial this environment —
+			// unified exec, the environment filesystem and skills discovery —
+			// all read this flag).
+			Provisioned: record.provisionedReady(),
 		}
 		if state.Config != nil {
 			allowLoginShell := state.Config.AllowLoginShell
