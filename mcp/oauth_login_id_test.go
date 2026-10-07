@@ -21,7 +21,7 @@ func oauthLoginIDIssuer(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case "/token":

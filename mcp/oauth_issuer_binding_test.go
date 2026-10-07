@@ -205,24 +205,36 @@ func TestMCPOAuthDiscoveryIssuerBoundCallbacksRequireIssuer(t *testing.T) {
 	}
 }
 
-// Issuer-less metadata keeps the pre-existing Go behaviour. Rust additionally
-// requires the token endpoint to share the authorization endpoint's origin in
-// that case; that arm is deliberately not ported (see the note on
-// validateMCPOAuthAuthorizationServerEndpoints) and this test pins the current
-// contract so the difference stays visible.
-func TestMCPOAuthDiscoveryKeepsIssuerLessMetadataAccepted(t *testing.T) {
-	server := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
+// Issuer-less metadata must still bind the token endpoint to the authorization
+// endpoint's origin, matching Rust's fallback arm in
+// `validate_authorization_server_endpoints` (#39935). Without it an
+// issuer-less authorization server could point the authorization hand-off at
+// one origin and the code exchange at another.
+func TestMCPOAuthDiscoveryBindsIssuerLessTokenEndpointLikeRust(t *testing.T) {
+	sameOrigin := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
 		"authorization_endpoint": "https://issuer.example/authorize",
-		"token_endpoint":         "http://127.0.0.1:1/token",
+		"token_endpoint":         "https://issuer.example/token",
 	})
-	defer server.Close()
-
-	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
+	defer sameOrigin.Close()
+	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), sameOrigin.URL+"/mcp", sameOrigin.Client())
 	if err != nil {
-		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want issuer-less metadata still accepted", err)
+		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want issuer-less same-origin metadata accepted", err)
 	}
-	if discovery == nil {
-		t.Fatal("DiscoverStreamableHTTPOAuth() returned nil discovery")
+	if discovery == nil || discovery.AuthorizationEndpoint != "https://issuer.example/authorize" {
+		t.Fatalf("discovery = %#v, want the issuer-less same-origin endpoint accepted", discovery)
+	}
+
+	crossOrigin := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
+		"authorization_endpoint": "https://issuer.example/authorize",
+		"token_endpoint":         "https://tokens.example/token",
+	})
+	defer crossOrigin.Close()
+	discovery, err = DiscoverStreamableHTTPOAuth(context.Background(), crossOrigin.URL+"/mcp", crossOrigin.Client())
+	if err == nil || !strings.Contains(err.Error(), "OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks") {
+		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want the cross-origin token endpoint rejected", err)
+	}
+	if discovery != nil {
+		t.Fatalf("discovery = %#v, want the cross-origin token endpoint rejected", discovery)
 	}
 }
 

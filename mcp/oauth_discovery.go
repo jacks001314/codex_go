@@ -614,14 +614,10 @@ var mcpOAuthIssuerBindingExceptions = []mcpOAuthIssuerBindingException{
 // metadata's `authorization_servers` list (see DiscoverStreamableHTTPOAuth), so
 // the same check applies to every candidate the loop resolves.
 //
-// DELIBERATE GO DIFFERENCE (flagged for the lane leader): Rust additionally
-// requires, when the metadata carries **no** issuer at all, that the token
-// endpoint share the authorization endpoint's origin. Go's discovery has always
-// accepted issuer-less metadata whose token endpoint sits on another origin
-// (the existing discovery/login fixtures model exactly that shape), so porting
-// that arm would newly reject a large set of existing Go fixtures and test the
-// token endpoint rather than the issuer binding this PR is about. It is
-// therefore not ported here and remains an open item for a separate change.
+// When the metadata carries no issuer at all, the token endpoint must still
+// share the authorization endpoint's origin: Rust enforces the same fallback in
+// `validate_authorization_server_endpoints` (#39935), so an issuer-less
+// authorization server cannot silently hand tokens to a foreign origin.
 func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationServerMetadata) error {
 	if metadata == nil {
 		return nil
@@ -669,9 +665,12 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
 		return errors.New("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
 	}
 
-	// Issuer-less metadata: see the DELIBERATE GO DIFFERENCE note above. The
-	// token endpoint is still parsed above so a malformed token endpoint is
-	// rejected exactly like Rust does.
+	// Issuer-less metadata: Rust still requires the token endpoint to share the
+	// authorization endpoint's origin, so the browser hand-off and the token
+	// exchange cannot straddle two different authorization servers.
+	if !sameHTTPOrigin(authorizationEndpoint, tokenEndpoint) {
+		return errors.New("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+	}
 	return nil
 }
 

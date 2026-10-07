@@ -383,14 +383,18 @@ func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T)
 	for _, testCase := range []struct {
 		name     string
 		endpoint string
-		ok       bool
+		// tokenEndpoint shares the accepted endpoint's origin so the
+		// issuer-less token/authorization origin binding (#39935) is satisfied,
+		// leaving the scheme gate as the only thing under test.
+		tokenEndpoint string
+		ok            bool
 	}{
-		{name: "https", endpoint: "https://example.com/authorize", ok: true},
-		{name: "http", endpoint: "http://example.com/authorize", ok: true},
-		{name: "file", endpoint: "file:///etc/authorize"},
-		{name: "custom scheme", endpoint: "custom://example.com/authorize"},
-		{name: "malformed", endpoint: "://not a url"},
-		{name: "scheme relative", endpoint: "/authorize"},
+		{name: "https", endpoint: "https://example.com/authorize", tokenEndpoint: "https://example.com/token", ok: true},
+		{name: "http", endpoint: "http://example.com/authorize", tokenEndpoint: "http://example.com/token", ok: true},
+		{name: "file", endpoint: "file:///etc/authorize", tokenEndpoint: "https://example.com/token"},
+		{name: "custom scheme", endpoint: "custom://example.com/authorize", tokenEndpoint: "https://example.com/token"},
+		{name: "malformed", endpoint: "://not a url", tokenEndpoint: "https://example.com/token"},
+		{name: "scheme relative", endpoint: "/authorize", tokenEndpoint: "https://example.com/token"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -400,7 +404,7 @@ func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T)
 				}
 				writeJSON(t, w, map[string]any{
 					"authorization_endpoint": testCase.endpoint,
-					"token_endpoint":         "https://example.com/token",
+					"token_endpoint":         testCase.tokenEndpoint,
 				})
 			}))
 			defer server.Close()
@@ -972,7 +976,7 @@ func TestMCPServiceOauthLoginStartsCallbackServer(t *testing.T) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case "/token":
@@ -1053,7 +1057,7 @@ func TestMCPServiceOauthLoginUsesDynamicClientRegistration(t *testing.T) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 				"registration_endpoint":  "http://" + r.Host + "/register",
 			})
@@ -1146,7 +1150,7 @@ func TestMCPServiceOauthLoginUsesFinalRuntimeHTTPClientLikeRust(t *testing.T) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "https://" + runtimeHost + "/authorize",
 				"token_endpoint":         "https://" + runtimeHost + "/token",
 				"registration_endpoint":  "https://" + runtimeHost + "/register",
 			})
@@ -1268,7 +1272,7 @@ func TestMCPServiceOauthCancelCompletesActiveLogin(t *testing.T) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		default:

@@ -1177,7 +1177,7 @@ func TestHTTPMCPRefreshesExpiredOAuthToken(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
@@ -1343,7 +1343,7 @@ func TestHTTPMCPRefreshesOAuthTokenAfterUnauthorizedResponse(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
@@ -1433,7 +1433,7 @@ func TestHTTPMCPDeletesStoredOAuthTokenWhenRefreshIsPermanentFailure(t *testing.
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
@@ -1490,7 +1490,7 @@ func TestMCPStatusRecomputesOAuthStatusAfterRefreshDeletesToken(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
@@ -1809,7 +1809,7 @@ func TestHTTPMCPRefreshesOAuthTokenForSSEClientResponse(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
 			writeJSON(t, w, map[string]any{
-				"authorization_endpoint": "https://issuer.example.test/authorize",
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
