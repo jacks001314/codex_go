@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -121,20 +122,54 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	if err != nil {
 		return err
 	}
+	// Each connection attempt is correlated by its own request id and reported
+	// with credential-free, typed diagnostics (Rust #51483).
+	connectionAttempt := uint64(0)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		conn, response, err := cfg.Dial(ctx, registration.URL, &websocket.DialOptions{})
+		connectionAttempt++
+		requestID := newRendezvousRequestID()
+		conn, response, err := cfg.Dial(ctx, registration.URL, rendezvousDialOptions(requestID))
 		if err == nil {
 			backoff = cfg.Backoff
+			slog.Info("Noise executor connected to rendezvous",
+				"noise_event", "rendezvous_connection",
+				"noise_outcome", "ok",
+				"request_id", requestID,
+				"connection_attempt", connectionAttempt,
+			)
 			serveErr := server.serveNoiseRelayConnection(ctx, conn, cfg, registration, identity)
 			if ctx.Err() != nil {
 				return nil
 			}
 			if serveErr != nil {
 				err = serveErr
+			} else {
+				slog.Info("Noise executor disconnected from rendezvous",
+					"noise_event", "rendezvous_connection",
+					"noise_outcome", "disconnected",
+					"request_id", requestID,
+					"connection_attempt", connectionAttempt,
+				)
 			}
+		}
+		if err != nil {
+			// Raw error text is never logged: only typed categories, I/O kinds,
+			// HTTP status codes and allowlisted rejection reasons.
+			failure := classifyRendezvousFailure(err, response)
+			slog.Warn("Noise executor failed to connect to rendezvous",
+				"noise_event", "rendezvous_connection",
+				"noise_outcome", "error",
+				"noise_reason", "websocket_error",
+				"request_id", requestID,
+				"connection_attempt", connectionAttempt,
+				"error_kind", failure.ErrorKind,
+				"io_error_kind", failure.IOErrorKind,
+				"http_status", failure.HTTPStatus,
+				"rejection_reason", failure.RejectionReason,
+			)
 		}
 		if response != nil && response.StatusCode >= 400 && response.StatusCode < 500 {
 			registration, err = registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
