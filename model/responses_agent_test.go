@@ -4608,3 +4608,208 @@ func TestResponsesLiteWebSocketReusesRecordedDeclarationsLikeRust(t *testing.T) 
 		t.Fatalf("recorded declarations should appear exactly once, got %d", declarationCount)
 	}
 }
+
+// responsesBodyPrefix returns the first limit bytes of a serialized request body
+// for failure messages.
+func responsesBodyPrefix(body string, limit int) string {
+	if len(body) <= limit {
+		return body
+	}
+	return body[:limit] + "..."
+}
+
+// assertResponsesRoutingFieldsPrecedeInput checks the Rust #49675 contract: a
+// gateway must be able to route a Responses request from a partially read body,
+// so the routing fields appear before the potentially multi-megabyte input.
+func assertResponsesRoutingFieldsPrecedeInput(t *testing.T, body string, fields ...string) {
+	t.Helper()
+	inputPosition := strings.Index(body, `"input"`)
+	if inputPosition < 0 {
+		t.Fatalf("request body has no input field: %q", responsesBodyPrefix(body, 200))
+	}
+	for _, field := range fields {
+		position := strings.Index(body, `"`+field+`"`)
+		if position < 0 {
+			t.Fatalf("request body has no %q field: %q", field, responsesBodyPrefix(body, 200))
+		}
+		if position > inputPosition {
+			t.Fatalf("%q at byte %d must precede input at byte %d: %q", field, position, inputPosition, responsesBodyPrefix(body, 200))
+		}
+	}
+}
+
+// TestResponsesAgentRunnerWebSocketSendsRoutingFieldsBeforeInputLikeRust mirrors
+// Rust #49675's websocket coverage: the response.create message serializes
+// `model`, `stream` and `service_tier` ahead of the input. The Go payload is
+// assembled as a map, which encoding/json would otherwise emit in lexical key
+// order (putting `model` fourth, after `input`).
+func TestResponsesAgentRunnerWebSocketSendsRoutingFieldsBeforeInputLikeRust(t *testing.T) {
+	for _, useLite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lite=%t", useLite), func(t *testing.T) {
+			var received []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				conn, err := websocket.Accept(w, request, nil)
+				if err != nil {
+					t.Errorf("Accept() error = %v", err)
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "done")
+				conn.SetReadLimit(8 << 20)
+				_, data, err := conn.Read(request.Context())
+				if err != nil {
+					t.Errorf("Read() error = %v", err)
+					return
+				}
+				received = data
+				_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"ws-routing-1","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`))
+			}))
+			defer server.Close()
+
+			slug := "gpt-test"
+			if useLite {
+				slug = "gpt-test-lite"
+			}
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider:           &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+				SupportsWebsockets: true,
+				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+					Slug:             slug,
+					InputModalities:  []string{"text", "image"},
+					ServiceTiers:     []string{"priority"},
+					UseResponsesLite: useLite,
+				}}}),
+			})
+			largeInput := strings.Repeat("x", 2*1024*1024)
+			if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+				Model:       slug,
+				Prompt:      largeInput,
+				ServiceTier: "priority",
+			}); err != nil {
+				t.Fatalf("RunWebSocket error = %v", err)
+			}
+			if len(received) == 0 {
+				t.Fatal("no websocket request message recorded")
+			}
+			body := string(received)
+			if !strings.HasPrefix(body, `{"type":"response.create","model":"`+slug+`","stream":true,"service_tier":"priority"`) {
+				t.Fatalf("websocket routing prefix = %q", responsesBodyPrefix(body, 200))
+			}
+			assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream", "service_tier")
+			if len(received) <= 2*1024*1024 {
+				t.Fatalf("websocket message = %d bytes, want the large input to be present", len(received))
+			}
+			var parsed map[string]any
+			if err := json.Unmarshal(received, &parsed); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if parsed["type"] != "response.create" || parsed["model"] != slug || parsed["stream"] != true || parsed["service_tier"] != "priority" {
+				t.Fatalf("websocket payload = %#v", map[string]any{
+					"type": parsed["type"], "model": parsed["model"], "stream": parsed["stream"], "service_tier": parsed["service_tier"],
+				})
+			}
+		})
+	}
+}
+
+// TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeLargeInputLikeRust mirrors
+// Rust #49675's HTTP coverage: the /responses body serializes `model`, `stream`
+// and `service_tier` ahead of a 2 MiB input, for both the standard and the
+// responses-lite request shapes, and keeps the field values and the omission of
+// an unset service_tier.
+func TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeLargeInputLikeRust(t *testing.T) {
+	for _, useLite := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lite=%t", useLite), func(t *testing.T) {
+			var recorded []byte
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Errorf("ReadAll() error = %v", err)
+					return
+				}
+				recorded = body
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":"resp-routing","model":"gpt-test","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+			}))
+			defer server.Close()
+
+			slug := "gpt-test"
+			if useLite {
+				slug = "gpt-test-lite"
+			}
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+					Slug:             slug,
+					InputModalities:  []string{"text", "image"},
+					ServiceTiers:     []string{"priority"},
+					UseResponsesLite: useLite,
+				}}}),
+			})
+			largeInput := strings.Repeat("x", 2*1024*1024)
+			if _, err := runner.Run(context.Background(), &AgentRequest{
+				Model:       slug,
+				Prompt:      largeInput,
+				ServiceTier: "priority",
+			}); err != nil {
+				t.Fatalf("Run error = %v", err)
+			}
+			if len(recorded) == 0 {
+				t.Fatal("no HTTP request body recorded")
+			}
+			body := string(recorded)
+			if !strings.HasPrefix(body, `{"model":"`+slug+`","stream":false,"service_tier":"priority"`) {
+				t.Fatalf("HTTP routing prefix = %q", responsesBodyPrefix(body, 200))
+			}
+			assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream", "service_tier")
+			if len(recorded) <= 2*1024*1024 {
+				t.Fatalf("HTTP body = %d bytes, want the large input to be present", len(recorded))
+			}
+			var parsed map[string]any
+			if err := json.Unmarshal(recorded, &parsed); err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if parsed["model"] != slug || parsed["stream"] != false || parsed["service_tier"] != "priority" {
+				t.Fatalf("HTTP payload = %#v", map[string]any{"model": parsed["model"], "stream": parsed["stream"], "service_tier": parsed["service_tier"]})
+			}
+		})
+	}
+}
+
+// TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeOmittedServiceTierLikeRust
+// covers Rust #49675's "Preserve ... omission of unset service_tier" half: an
+// unset tier stays absent from the body while the routing fields still precede
+// the input.
+func TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeOmittedServiceTierLikeRust(t *testing.T) {
+	var recorded []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll() error = %v", err)
+			return
+		}
+		recorded = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp-routing","model":"gpt-test","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:         "gpt-test",
+			ServiceTiers: []string{"priority"},
+		}}}),
+	})
+	largeInput := strings.Repeat("x", 2*1024*1024)
+	if _, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: largeInput}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	body := string(recorded)
+	if !strings.HasPrefix(body, `{"model":"gpt-test","stream":false`) {
+		t.Fatalf("HTTP routing prefix = %q", responsesBodyPrefix(body, 200))
+	}
+	if strings.Contains(body, "service_tier") {
+		t.Fatalf("unset service_tier should be omitted: %q", responsesBodyPrefix(body, 200))
+	}
+	assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream")
+}

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,22 +293,25 @@ func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *
 }
 
 type responsesAgentRequest struct {
+	// Rust #49675: keep the routing fields first. encoding/json serializes
+	// struct fields in declaration order, and gateways may inspect a request
+	// body incrementally before buffering a potentially multi-megabyte input.
 	Model                string                  `json:"model"`
+	Stream               bool                    `json:"stream"`
+	ServiceTier          string                  `json:"service_tier,omitempty"`
 	Instructions         string                  `json:"instructions,omitempty"`
 	Input                []any                   `json:"input"`
 	Tools                []any                   `json:"tools,omitempty"`
 	ToolChoice           string                  `json:"tool_choice,omitempty"`
-	Stream               bool                    `json:"stream"`
-	Store                bool                    `json:"store"`
 	ParallelToolCalls    bool                    `json:"parallel_tool_calls"`
 	Reasoning            *responsesReasoning     `json:"reasoning,omitempty"`
+	Store                bool                    `json:"store"`
 	StreamOptions        *responsesStreamOptions `json:"stream_options,omitempty"`
 	Include              []string                `json:"include,omitempty"`
-	ServiceTier          string                  `json:"service_tier,omitempty"`
 	PromptCacheKey       string                  `json:"prompt_cache_key,omitempty"`
-	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
-	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
 	Text                 *responsesTextParam     `json:"text,omitempty"`
+	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
+	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
 	UseResponsesLite     bool                    `json:"-"`
 	IncludeTimingMetrics bool                    `json:"-"`
 	BetaFeaturesHeader   string                  `json:"-"`
@@ -839,7 +843,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
 	requestStartedAt := time.Now()
-	writeErr := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload))
+	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	// The prewarm dials a fresh connection (it returns early when one exists).
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), false)
@@ -1070,7 +1074,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
 	requestStartedAt := time.Now()
-	writeErr := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload))
+	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
 	if writeErr != nil {
@@ -1320,6 +1324,80 @@ func responseIDFromWebsocketEvent(event map[string]any) string {
 func mustJSONBytes(value any) []byte {
 	data, _ := json.Marshal(value)
 	return data
+}
+
+// responsesRequestWireOrder is the field order Rust gives Responses request
+// bodies (codex-api's ResponsesApiRequest and ResponseCreateWsRequest, #49675):
+// the routing fields come before the potentially multi-megabyte input so a
+// gateway can route a request from a partially read body. The websocket
+// builders hand their payload over as a map, which encoding/json would
+// otherwise emit in lexical key order.
+var responsesRequestWireOrder = []string{
+	"type",
+	"model",
+	"stream",
+	"service_tier",
+	"previous_response_id",
+	"instructions",
+	"input",
+	"tools",
+	"tool_choice",
+	"parallel_tool_calls",
+	"reasoning",
+	"store",
+	"stream_options",
+	"include",
+	"prompt_cache_key",
+	"text",
+	"generate",
+	"client_metadata",
+	"access_programs",
+}
+
+// marshalResponsesMessage encodes a Responses request payload with
+// responsesRequestWireOrder's fields first and any remaining fields in the
+// lexical order encoding/json uses for maps (Rust #49675). Values - including
+// explicit nils - are encoded exactly as mustJSONBytes would encode them, so
+// the routing-first order is the only visible change on the wire.
+func marshalResponsesMessage(entries map[string]any) []byte {
+	if len(entries) == 0 {
+		return []byte("{}")
+	}
+	keys := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, key := range responsesRequestWireOrder {
+		if _, ok := entries[key]; !ok {
+			continue
+		}
+		keys = append(keys, key)
+		seen[key] = struct{}{}
+	}
+	remaining := make([]string, 0, len(entries)-len(keys))
+	for key := range entries {
+		if _, ok := seen[key]; !ok {
+			remaining = append(remaining, key)
+		}
+	}
+	sort.Strings(remaining)
+	keys = append(keys, remaining...)
+
+	buffer := bytes.NewBuffer(make([]byte, 0, 256))
+	buffer.WriteByte('{')
+	for index, key := range keys {
+		if index > 0 {
+			buffer.WriteByte(',')
+		}
+		encodedKey := mustJSONBytes(key)
+		encodedValue := mustJSONBytes(entries[key])
+		if encodedKey == nil || encodedValue == nil {
+			return nil
+		}
+		buffer.Write(encodedKey)
+		buffer.WriteByte(':')
+		buffer.Write(encodedValue)
+	}
+	buffer.WriteByte('}')
+	return buffer.Bytes()
 }
 
 func NewResponsesAgentRunnerFromRuntimeProvider(providerID string, runtimeProvider RuntimeProvider, httpClient HTTPDoer) (*ResponsesAgentRunner, error) {
