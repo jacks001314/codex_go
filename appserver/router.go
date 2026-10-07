@@ -2615,6 +2615,53 @@ func (r *Router) handleThreadDecrementElicitation(request *Request) (*ThreadDecr
 	return &ThreadDecrementElicitationResponse{Count: count, Paused: count > 0}, nil
 }
 
+// materializeNamedPaginatedThread persists the live rollout of a paginated
+// thread that is named before its first turn, so the named thread can be
+// resumed immediately or after an app-server restart (Rust #49785
+// `update_thread_metadata` persists the live recorder before the SQLite
+// write). A legacy thread keeps the pre-existing behavior: naming it does not
+// materialize a rollout.
+func (r *Router) materializeNamedPaginatedThread(threadID session.ThreadID) error {
+	if r == nil {
+		return nil
+	}
+	liveThread := r.threadManager().LiveThread(threadID)
+	if liveThread == nil {
+		// Rust gates on `live_writer::rollout_path(store, thread_id).is_ok()`:
+		// without a live recorder there is nothing to persist.
+		return nil
+	}
+	record, err := liveThread.Read(true, false)
+	if err != nil {
+		if errors.Is(err, session.ErrThreadNotFound) {
+			return nil
+		}
+		return err
+	}
+	if record == nil || threadRecordEphemeral(record) {
+		// Rust persists through the in-memory store for an ephemeral thread,
+		// which never writes a rollout file.
+		return nil
+	}
+	if !threadUsesPaginatedHistory(record) {
+		return nil
+	}
+	if path := strings.TrimSpace(r.threadRolloutPath(record)); path != "" {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil
+		}
+	}
+	now := record.CreatedAt
+	if now.IsZero() {
+		now = r.now().UTC()
+	}
+	if err := r.createThreadRollout(record, now); err != nil {
+		// Rust propagates a failed persist before saving the name.
+		return jsonRPCInvalidRequest(fmt.Sprintf("failed to name session: %v", err))
+	}
+	return nil
+}
+
 func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, error) {
 	var params ThreadSetNameParams
 	if err := request.DecodeParams(&params); err != nil {
@@ -2625,6 +2672,9 @@ func (r *Router) handleThreadSetName(request *Request) (*ThreadSetNameResponse, 
 	}
 	patch := &session.MetadataPatch{Title: &params.Name}
 	threadID := session.ThreadID(params.ThreadID)
+	if err := r.materializeNamedPaginatedThread(threadID); err != nil {
+		return nil, err
+	}
 	record, err := r.updateThreadMetadata(threadID, patch, false)
 	if err != nil {
 		if errors.Is(err, session.ErrThreadArchived) {
