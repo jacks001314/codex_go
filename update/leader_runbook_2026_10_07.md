@@ -21,6 +21,11 @@
 - 不可落地必须给「正向陈述 + 可复跑命令 + 实际输出」，禁用「结构性等价 / 语义相同」代替证据。
 - 反向对照必须是「撤掉修复 ⇒ 具体测试 FAIL 原文」，恢复后 PASS。
 
+## R3 增补 · 行为探针（2026-10-07 第 85 轮续 8）
+- 「PR 号 0 命中 + Rust 最长标识符在 Go 0 命中」**只对「Go 无该子系统」成立**。对**已有 Go 端口的子系统**（如 `voicehost/`、`mermaid/`、`sandbox/`、`sandbox/windowssandbox/`）会**误判为 N/A**——本轮 4 项即如此。
+- 因此对「Go 有同子系统载体」的可疑项，**必须跑行为探针**：把 Rust 上游测试的输入/向量喂给 Go 真码（`go test -overlay=<tmp>/overlay.json`，测试文件放 /tmp，不落仓），比对可观测行为（计数、时间戳、返回错误）。
+- 判定「可落地」必须给出：载体 file:line + 探针命令与输出 + 落点行数与规模档（S/M/L）。
+
 ## R4 常用口径
 - parity 必须带 `CODEX_RUST_ROOT=/home/jacks/jacks_dev/codex/codex-rs`（否则全 Skip 假通过）。
 - push 必须 SSH：`git push git@github.com:jacks001314/codex_go.git main:main`。
@@ -42,34 +47,24 @@
 `applypatch` 1 · `mcp` 1 · `tui` 1（`TestSelectStartupTooltipMatchesRustPlanBranches`）· `tui/tea` 1（`TestModelAppCommandUsesRustHistoryMessages`）·
 并发 flake（隔离单跑全绿）：`TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications`、`TestStdioServerGoalSetResponsePrecedesGoalNotification`、`TestStartProcessHonorsArg0`。
 
-## R6 当前团队（2026-10-07 第 85 轮续 8 续；派生宽度上限 10）
+## R6 当前团队（2026-10-07 第 85 轮续 8 三；派生宽度上限 10，稳态 4–6 落地 + ≤1 裁决）
 
-main = `35d4a827`（已 push，`git ls-remote origin main` 确认）。在跑 **10 条（达上限）**：
+main = `01e2e701`（已 push）。在跑 **7 条**：
 
 | 车道 | agent_id | 任务 | 写范围 |
 |---|---|---|---|
-| syncnext12 | `agent-ac538099e50d4129bfabd665` | #51355 agent spawn 失败的有界诊断 | tool/ appserver/ telemetry/ |
 | syncnext15 | `agent-1f27bd953dc51f2c8a30bcc4` | #49360 (b) hook PATH prepend（已放行方案 A） | tool/shell*.go+unified_exec.go、appserver/runtime_router.go、turn/tools.go |
-| syncnext16 | `agent-ebe86f5566256cc8d0b52bdd` | #50913 已连接 TUI 新会话用服务端模型默认 | tui/app/ |
-| syncnext18 | `agent-ffb3dfd067e731baff9d95ad` | #49295 config 指纹规范化 | config/ |
-| syncnext20 | `agent-089839f6fdd4d3e00d47fd84` | #48549 复制保留 Markdown 表格（先侦察） | tui/（非 app） |
-| syncnext22 | `agent-e02b67cf9f5435441aed1606` | 只读裁决：12 项子系统缺失候选（`/tmp/triage_syncnext22.md`） | 只读 |
-| syncnext23 | `agent-ac3df535dc42cff961b49dbc` | #48611 + #49032（context//state/ 面） | context/ session/ features/ state/（appserver/ 需请示） |
-| syncnext24 | `agent-a4ee3c22dcf584158c31fc20` | #49441（codexapi/） | codexapi/ |
-| syncnext25 | `agent-7822a4f310e55df53b876069` | #49444/#49147/#49300/#49416 小项 | rollout/ 等（避免 tui/） |
-| syncnext26 | `agent-6caeba3d11ad9222bb8bc7e1` | 只读裁决批次 2（12 项；`/tmp/triage2_syncnext26.md`） | 只读 |
+| syncnext18 | `agent-ffb3dfd067e731baff9d95ad` | #49295 已并；追加：`appserver/hooks_discovery.go` 哈希与 `config.VersionForTOML` 统一 | appserver/hooks_discovery*.go |
+| syncnext23 | `agent-ac3df535dc42cff961b49dbc` | #48611 + #49032 | context/ session/ features/ state/ |
+| syncnext24 | `agent-a4ee3c22dcf584158c31fc20` | #49441 | codexapi/ |
+| syncnext26 | `agent-6caeba3d11ad9222bb8bc7e1` | 只读裁决批次 2（9 项，已剔除 3 项重复） | 只读 |
+| syncnext27 | `agent-558ead9e9ae4b783c8627b98` | #48824（voicehost/media.go）+ #48565（sandbox/seatbelt.go） | voicehost/ sandbox/ |
+| syncnext28 | `agent-da7d92480b8c072ac06a3056` | #48895（mermaid/parse.go）+ #49058（acl_windows.go） | mermaid/ sandbox/windowssandbox/ |
 
-- 已回收（累计 25）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`、`syncnext1`–`syncnext11`、`syncnext13`、`syncnext14`、`syncnext17`、`syncnext19`、`syncnext21`。
-- 待补：新 verifier（在飞数量降到 ≤3 时创建）。
-- **附加规则（续 5）**：车道可能在回报后**继续 amend 已交付 commit**；并入前必须比对最终 SHA 的 delta。
-- **附加规则（续 6）**：写集相邻的车道**开工前先请示**。
-- **附加规则（续 7）**：**反向对照必须打在真正的被测接线上**；若「撤销后仍绿」= 改错位置，须重新定位后再报（本轮实例：sync569 的第一次反向对照因 `sed`/python 模式不匹配**未真正改到代码**，`ok` 是假绿，已重做）。
-- **附加规则（续 8）**：**派单前必须复核台账陈旧行与 sha**——`remaining_ledger §2` 固定于 `c30b56ca`（`#49425` 已落、`#49028` 已 N/A），且 sha 列有错（`#48824` 行的 sha 实为 `#48805`）；一律自行 `git log --grep '#<PR>'` 解析。队列现况以 `update/queue_delta_2026_10_07.md` 为准（still ⬜ 141）。
-
-## R8 产出率优先（用户指令，2026-10-07，长期）
-- **宽度 10 是上限，不是目标**：**不为凑宽度派单**。补位只在三条同时成立时进行——① 新项已预侦察、② 落点已钉且有**生产接线**（非 helper-only）、③ 与在跑车道**文件级**不相交。
-- **不为 N/A 单开落地车道**：疑似「Go 无该子系统/纯测试快照」的项，集中交 **1 条只读裁决车道**成批判（每批 ≤12 项），只出判定表；N/A 不产生 commit，不得占落地车道额度。
-- **优先可落地项**：派单排序 = 落点确定度 × 影响面；先做有生产接线的**功能缺口**，再做清理/归一化类小项。
-- **禁止重复劳动**：派单前必须先按 R6 续 8 做陈旧性 + sha 复核（`git log --grep '#<PR>'` + 非测试 `.go` 符号面 + `git show --stat`）。
-- **节奏**：一个轮次内**最多新派一批**；车道回报**逐笔入库**（R2），既不积压、也不抢先补位——在飞数量下降由回报驱动，不主动填满。
-- **反例留档**：本轮（续 8）曾一次补位到宽度上限 10（含 2 条只读裁决车道）；后续稳态目标 **4–6 条落地车道 + ≤1 条裁决车道**。
+- 已回收（累计 30）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`–`3`、`syncnext1`–`12`、`syncnext13`、`syncnext14`、`syncnext16`、`syncnext17`、`syncnext19`、`syncnext20`、`syncnext21`、`syncnext22`、`syncnext25`。
+- 待补：新 verifier（在飞 ≤3 时创建）。
+- 附加规则（续 5）：车道可能 amend 已交付 commit；并入前比对最终 SHA 的 delta。
+- 附加规则（续 6）：写集相邻的车道**开工前先请示**。
+- 附加规则（续 7）：反向对照必须打在真正的被测接线上；「撤销后仍绿」= 改错位置。
+- 附加规则（续 8）：派单前复核台账陈旧行与 sha（`git log --grep '#<PR>'` + 非测试 `.go` 符号面）。
+- **R8（产出率优先）**：宽度 10 是上限非目标；不为凑宽度补位；疑似 N/A 集中交 1 条只读车道成批判；优先「落点已钉 + 有生产接线」的功能缺口。
