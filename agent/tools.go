@@ -35,6 +35,14 @@ const (
 	MultiAgentV1MaxWait     = time.Hour
 )
 
+// multiAgentV1SpawnInheritedModelGuidance mirrors Rust's
+// SPAWN_AGENT_INHERITED_MODEL_GUIDANCE
+// (codex-rs/core/src/tools/handlers/multi_agents_spec.rs:17) for the V1
+// spawn_agent description. Rust shares that one constant between the V1 and V2
+// spawn specs; Go keeps this V1-local copy beside the V1 executor so the change
+// stands alone (the V2 copy lives in agent/tools_v2.go).
+const multiAgentV1SpawnInheritedModelGuidance = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
+
 type ToolController interface {
 	SpawnAgent(ctx context.Context, args *SpawnAgentArgs) (*SpawnAgentResult, error)
 	SendInput(ctx context.Context, args *SendInputArgs) (*SendInputResult, error)
@@ -375,6 +383,15 @@ func (e *MultiAgentToolExecutor) Spec() tool.Spec {
 	spec := multiAgentToolSpec(e.kind)
 	if e.kind == MultiAgentToolSpawn && strings.TrimSpace(e.spawnDescription) != "" {
 		spec.Description += "\n\n" + e.spawnDescription
+	}
+	if e.kind == MultiAgentToolSpawn {
+		// Rust #26114 gates the V1 guidance only on
+		// hide_agent_type_model_reasoning (multi_agents_spec.rs:76-77), and the
+		// Go V1 registry never hides the spawn metadata
+		// (MultiAgentHandlerOptions.HideSpawnMetadata is consumed by the V2
+		// executors alone), so the inherited-model guidance always applies here
+		// and matches Rust's hide=false rendering.
+		spec.Description += "\n\n" + multiAgentV1SpawnInheritedModelGuidance
 	}
 	spec.Exposure = e.exposure
 	if spec.Exposure == tool.ExposureDiscoverable {

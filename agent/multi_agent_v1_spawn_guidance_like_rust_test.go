@@ -1,0 +1,45 @@
+package agent
+
+import (
+	"strings"
+	"testing"
+
+	"codex_go/tool"
+)
+
+// TestMultiAgentV1SpawnDescriptionIncludesInheritedModelGuidanceLikeRust
+// mirrors Rust #26114 for the V1 family (codex-rs/core/src/tools/handlers/
+// multi_agents_spec.rs:76-77): the V1 `spawn_agent` description carries
+// SPAWN_AGENT_INHERITED_MODEL_GUIDANCE, gated there only on
+// hide_agent_type_model_reasoning. Go's V1 spec keeps the spawn metadata
+// (model/reasoning_effort) visible because MultiAgentHandlerOptions.
+// HideSpawnMetadata is consumed by the V2 handlers only, so the guidance always
+// applies and matches Rust's hide=false rendering.
+func TestMultiAgentV1SpawnDescriptionIncludesInheritedModelGuidanceLikeRust(t *testing.T) {
+	for _, hide := range []bool{false, true} {
+		registry := tool.NewRegistry()
+		if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+			Controller:        NewMemoryToolController(),
+			Exposure:          tool.ExposureModelVisible,
+			HideSpawnMetadata: hide,
+		}); err != nil {
+			t.Fatalf("RegisterMultiAgentHandlersWithOptions() error = %v", err)
+		}
+		executor, ok := registry.Lookup(tool.NamespacedName(MultiAgentV1Namespace, "spawn_agent"))
+		if !ok {
+			t.Fatal("V1 spawn_agent was not registered")
+		}
+		description := executor.Spec().Description
+		if !strings.Contains(description, multiAgentV1SpawnInheritedModelGuidance) {
+			t.Fatalf("hide_spawn_metadata=%v: V1 spawn description is missing the inherited-model guidance: %q", hide, description)
+		}
+		// The guidance belongs to spawn_agent only.
+		send, ok := registry.Lookup(tool.NamespacedName(MultiAgentV1Namespace, "send_input"))
+		if !ok {
+			t.Fatal("V1 send_input was not registered")
+		}
+		if strings.Contains(send.Spec().Description, multiAgentV1SpawnInheritedModelGuidance) {
+			t.Fatalf("hide_spawn_metadata=%v: guidance leaked into a non-spawn V1 tool", hide)
+		}
+	}
+}
