@@ -3,6 +3,7 @@ package elevated
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,69 @@ func TestRetryRunnerSpawnOnceRefreshesOnlyRefreshableErrors(t *testing.T) {
 	})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("RetryRunnerSpawnOnce non-refreshable error = %v", err)
+	}
+}
+
+// Mirrors Rust logon_service_already_running_retries_once_without_refresh
+// (#49325, upstream 26dd19ef47): the retry reuses the original credentials and
+// never refreshes them.
+func TestRetryRunnerSpawnOnceRetriesServiceAlreadyRunningWithoutRefreshLikeRust(t *testing.T) {
+	creds := SandboxCredentials{Username: "sandbox-user", Password: "test-only"}
+	attempts := 0
+	got, err := RetryRunnerSpawnOnce(creds, nil, func(attempt SandboxCredentials) (int, error) {
+		attempts++
+		if attempt != creds {
+			t.Fatalf("attempt %d credentials = %#v, want %#v", attempts, attempt, creds)
+		}
+		if attempts == 1 {
+			return 0, fmt.Errorf("runner launch failed: %w", &RunnerLogonError{Code: errorServiceAlreadyRunning})
+		}
+		return 42, nil
+	}, func() (SandboxCredentials, error) {
+		t.Fatalf("1056 must not refresh credentials")
+		return SandboxCredentials{}, nil
+	})
+	if err != nil || got != 42 || attempts != 2 {
+		t.Fatalf("RetryRunnerSpawnOnce(1056) = (%d, %v, attempts %d), want (42, nil, 2)", got, err, attempts)
+	}
+}
+
+// Mirrors Rust logon_service_already_running_stops_after_two_failures.
+func TestRetryRunnerSpawnOnceServiceAlreadyRunningStopsAfterTwoFailuresLikeRust(t *testing.T) {
+	creds := SandboxCredentials{Username: "sandbox-user", Password: "test-only"}
+	attempts := 0
+	_, err := RetryRunnerSpawnOnce(creds, nil, func(SandboxCredentials) (struct{}, error) {
+		attempts++
+		return struct{}{}, &RunnerLogonError{Code: errorServiceAlreadyRunning}
+	}, func() (SandboxCredentials, error) {
+		t.Fatalf("1056 must not refresh credentials")
+		return SandboxCredentials{}, nil
+	})
+	var logonErr *RunnerLogonError
+	if attempts != 2 || !errors.As(err, &logonErr) || logonErr.Code != errorServiceAlreadyRunning {
+		t.Fatalf("RetryRunnerSpawnOnce(1056 twice) = (attempts %d, %v), want (2, RunnerLogonError 1056)", attempts, err)
+	}
+}
+
+// Mirrors Rust child_service_already_running_does_not_replay_command: the same
+// code coming from child startup is not eligible for the retry.
+func TestRetryRunnerSpawnOnceChildServiceAlreadyRunningDoesNotReplayLikeRust(t *testing.T) {
+	attempts := 0
+	_, err := RetryRunnerSpawnOnce(SandboxCredentials{Username: "sandbox-user", Password: "test-only"}, nil, func(SandboxCredentials) (struct{}, error) {
+		attempts++
+		return struct{}{}, &RunnerStartupError{Payload: ErrorPayload{
+			Message:          "child startup failed",
+			Stage:            ErrorStageSpawnChild,
+			WindowsErrorCode: uint32Ptr(errorServiceAlreadyRunning),
+		}}
+	}, func() (SandboxCredentials, error) {
+		t.Fatalf("1056 must not refresh credentials")
+		return SandboxCredentials{}, nil
+	})
+	var startupErr *RunnerStartupError
+	if attempts != 1 || !errors.As(err, &startupErr) || startupErr.Payload.WindowsErrorCode == nil ||
+		*startupErr.Payload.WindowsErrorCode != errorServiceAlreadyRunning {
+		t.Fatalf("child 1056 = (attempts %d, %v), want (1, RunnerStartupError 1056)", attempts, err)
 	}
 }
 

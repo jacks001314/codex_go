@@ -16,6 +16,11 @@ const (
 	errorLogonFailure            uint32 = 1326
 	errorNoSuchLogonSession      uint32 = 1312
 	errorNotFound                uint32 = 1168
+	// errorServiceAlreadyRunning is ERROR_SERVICE_ALREADY_RUNNING. Rust #49325
+	// (upstream 26dd19ef47) retries a runner logon that fails with this code once
+	// using the unchanged credentials: no runner - and therefore no user command -
+	// has started, so the retry cannot replay anything.
+	errorServiceAlreadyRunning uint32 = 1056
 )
 
 type RunnerLogonError struct {
@@ -156,6 +161,15 @@ func RetryRunnerSpawnOnce[T any](
 	result, err := spawn(creds)
 	if err == nil {
 		return result, nil
+	}
+	// Rust #49325 (upstream 26dd19ef47): a runner-logon failure with
+	// ERROR_SERVICE_ALREADY_RUNNING (1056) is retried once with the unchanged
+	// credentials and never refreshes them. Child startup failures carrying the
+	// same code stay ineligible, because only RunnerLogonError unlocks this
+	// branch and no user command has started to replay.
+	var logonErr *RunnerLogonError
+	if errors.As(err, &logonErr) && logonErr.Code == errorServiceAlreadyRunning {
+		return spawn(creds)
 	}
 	if !IsRefreshableSandboxCredsError(err, command) {
 		var zero T
