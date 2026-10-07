@@ -719,3 +719,111 @@ func waitRealtimeOperationError(t *testing.T, sink *NotificationBuffer, threadID
 	t.Fatalf("timed out waiting for realtime operation error on %s", threadID)
 	return nil
 }
+
+// Rust #51539 (`realtime_attachment::attachment_replacement_scenario` and
+// `handle_detach`): a detach scoped to a replaced conversation must leave the
+// replacement connected and publish no close event, while a start that
+// replaces an active conversation publishes the old close before its own
+// started event.
+func TestRealtimeStopScopedToSessionLeavesReplacementConnectedLikeRust(t *testing.T) {
+	sink := NewNotificationBuffer()
+	manager := realtime.NewManager()
+	router := NewRuntimeRouter(RuntimeServices{Realtime: manager})
+	t.Cleanup(func() { _ = router.Close() })
+	router.SetNotificationSink(sink)
+
+	const threadID = "thread-scoped-detach"
+	olderSession := "session-a"
+	newerSession := "session-b"
+	start := func(id int64, session string) {
+		t.Helper()
+		response := router.Handle(requestWithParams(t, IntID(id), MethodThreadRealtimeStart, map[string]any{
+			"threadId":          threadID,
+			"outputModality":    "text",
+			"realtimeSessionId": session,
+		}))
+		if response.Error != nil {
+			t.Fatalf("start %s returned JSON-RPC error: %+v", session, response.Error)
+		}
+		drainRealtimeOperations(t, router, threadID)
+	}
+	start(1, olderSession)
+	if got := countRealtimeNotifications(sink, NotificationThreadRealtimeClosed); got != 0 {
+		t.Fatalf("first start published a close event: %d", got)
+	}
+	start(2, newerSession)
+	if got := countRealtimeNotifications(sink, NotificationThreadRealtimeClosed); got != 1 {
+		t.Fatalf("replacement did not close the previous conversation: closed = %d", got)
+	}
+	closedIndex, startedIndex := -1, -1
+	for i, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationThreadRealtimeClosed:
+			if closedIndex == -1 {
+				closedIndex = i
+			}
+		case NotificationThreadRealtimeStarted:
+			startedIndex = i
+		}
+	}
+	if closedIndex == -1 || startedIndex == -1 || closedIndex > startedIndex {
+		t.Fatalf("replacement ordering = closed %d, started %d", closedIndex, startedIndex)
+	}
+
+	// A delayed detach for the replaced conversation is a silent no-op.
+	stop := router.Handle(requestWithParams(t, IntID(3), MethodThreadRealtimeStop, map[string]any{
+		"threadId":          threadID,
+		"realtimeSessionId": olderSession,
+	}))
+	if stop.Error != nil {
+		t.Fatalf("stale detach returned JSON-RPC error: %+v", stop.Error)
+	}
+	drainRealtimeOperations(t, router, threadID)
+	state, ok := manager.State(threadID)
+	if !ok || state == nil || state.ClosedAt != nil || state.Config.RealtimeSessionID != newerSession {
+		t.Fatalf("stale detach changed the replacement: ok=%v state=%#v", ok, state)
+	}
+	if got := countRealtimeNotifications(sink, NotificationThreadRealtimeClosed); got != 1 {
+		t.Fatalf("stale detach published a close event: closed = %d", got)
+	}
+
+	// A detach that matches the active conversation still closes it.
+	stop = router.Handle(requestWithParams(t, IntID(4), MethodThreadRealtimeStop, map[string]any{
+		"threadId":          threadID,
+		"realtimeSessionId": newerSession,
+	}))
+	if stop.Error != nil {
+		t.Fatalf("matching detach returned JSON-RPC error: %+v", stop.Error)
+	}
+	drainRealtimeOperations(t, router, threadID)
+	if got := countRealtimeNotifications(sink, NotificationThreadRealtimeClosed); got != 2 {
+		t.Fatalf("matching detach did not publish its close event: closed = %d", got)
+	}
+	final, ok := manager.State(threadID)
+	if !ok || final.ClosedAt == nil {
+		t.Fatalf("matching detach did not close the session: ok=%v state=%#v", ok, final)
+	}
+}
+
+func countRealtimeNotifications(sink *NotificationBuffer, method NotificationMethod) int {
+	count := 0
+	for _, notification := range sink.List() {
+		if notification.Method == method {
+			count++
+		}
+	}
+	return count
+}
+
+func drainRealtimeOperations(t *testing.T, router *RuntimeRouter, threadID string) {
+	t.Helper()
+	drained := make(chan struct{})
+	if !router.enqueueRealtimeOperation(threadID, func(context.Context) { close(drained) }) {
+		t.Fatal("enqueue realtime drain marker")
+	}
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("realtime operation queue did not drain")
+	}
+}

@@ -218,7 +218,12 @@ func (r *RuntimeRouter) stopRealtimeConversationAsync(params realtime.StopParams
 			return
 		}
 		_, notification, err := r.requireRealtime().Stop(&params, "requested")
-		if errors.Is(err, realtime.ErrRealtimeNotRunning) {
+		switch {
+		case errors.Is(err, realtime.ErrRealtimeSessionMismatch):
+			// Rust #51539: a delayed detach issued for a replaced conversation
+			// must leave the replacement connected and report nothing.
+			return
+		case errors.Is(err, realtime.ErrRealtimeNotRunning):
 			notification = []realtime.Notification{realtime.NewClosedNotification(params.ThreadID, "requested")}
 			err = nil
 		}

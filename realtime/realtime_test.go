@@ -1400,7 +1400,10 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	restarted, restartNotifications, err := manager.Start(&StartParams{ThreadID: "thread-a", OutputModality: OutputText})
 	restartNotifications = stripRealtimeTimelineNotifications(restartNotifications)
-	if err != nil || restarted == nil || restarted.TextInputs != 0 || len(restartNotifications) != 1 || restartNotifications[0].Method != NotificationStarted {
+	// Rust #51539: the replaced conversation reports its close before the
+	// replacement reports its start.
+	if err != nil || restarted == nil || restarted.TextInputs != 0 || len(restartNotifications) != 2 ||
+		restartNotifications[0].Method != NotificationClosed || restartNotifications[1].Method != NotificationStarted {
 		t.Fatalf("second start did not replace session: state=%#v notifications=%#v err=%v", restarted, restartNotifications, err)
 	}
 
@@ -1682,5 +1685,123 @@ func isRealtimeTimelineNotification(method NotificationMethod) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// Rust #51539 (`realtime_conversation_tests::natural_close_finishes_before_successor_and_ignores_old_identity`
+// and `realtime_attachment::attachment_replacement_scenario`): a replacement
+// publishes the previous conversation's close event before its own started
+// event.
+func TestStartReplacementEmitsPreviousCloseLikeRust(t *testing.T) {
+	manager := NewManager()
+	first, notifications, err := manager.Start(&StartParams{ThreadID: "thread-a", OutputModality: OutputText})
+	if err != nil || first == nil {
+		t.Fatalf("first start: state=%v err=%v", first, err)
+	}
+	notifications = stripRealtimeTimelineNotifications(notifications)
+	if len(notifications) != 1 || notifications[0].Method != NotificationStarted {
+		t.Fatalf("first notifications = %#v", notifications)
+	}
+
+	replacementSession := "session-b"
+	_, replacement, err := manager.Start(&StartParams{
+		ThreadID:          "thread-a",
+		OutputModality:    OutputText,
+		RealtimeSessionID: &replacementSession,
+	})
+	if err != nil {
+		t.Fatalf("replacement start: %v", err)
+	}
+	replacement = stripRealtimeTimelineNotifications(replacement)
+	if len(replacement) != 2 {
+		t.Fatalf("replacement notifications = %#v", replacement)
+	}
+	if replacement[0].Method != NotificationClosed || replacement[1].Method != NotificationStarted {
+		t.Fatalf("replacement order = %#v", replacement)
+	}
+	if closed := replacement[0].Params.(ClosedNotification); closed.ThreadID != "thread-a" {
+		t.Fatalf("replacement close = %#v", closed)
+	}
+	started := replacement[1].Params.(StartedNotification)
+	if started.RealtimeSessionID == nil || *started.RealtimeSessionID != replacementSession {
+		t.Fatalf("replacement start = %#v", started)
+	}
+}
+
+// Rust #51539 (`handle_detach`): a delayed detach from a replaced conversation
+// leaves the replacement connected and running.
+func TestStopSessionScopedDetachLikeRust(t *testing.T) {
+	manager := NewManager()
+	olderSession := "session-a"
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:          "thread-a",
+		OutputModality:    OutputText,
+		RealtimeSessionID: &olderSession,
+	}); err != nil {
+		t.Fatalf("older start: %v", err)
+	}
+	newerSession := "session-b"
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:          "thread-a",
+		OutputModality:    OutputText,
+		RealtimeSessionID: &newerSession,
+	}); err != nil {
+		t.Fatalf("newer start: %v", err)
+	}
+
+	if _, _, err := manager.Stop(&StopParams{ThreadID: "thread-a", RealtimeSessionID: &olderSession}, "requested"); !errors.Is(err, ErrRealtimeSessionMismatch) {
+		t.Fatalf("stale detach err = %v", err)
+	}
+	state, ok := manager.State("thread-a")
+	if !ok || state == nil || state.ClosedAt != nil || state.Config.RealtimeSessionID != newerSession {
+		t.Fatalf("stale detach closed the replacement: ok=%v state=%#v", ok, state)
+	}
+	if _, err := manager.AppendText(&AppendTextParams{ThreadID: "thread-a", Text: "still selected", Role: RoleUser}); err != nil {
+		t.Fatalf("replacement no longer accepts input: %v", err)
+	}
+
+	closed, notifications, err := manager.Stop(&StopParams{ThreadID: "thread-a", RealtimeSessionID: &newerSession}, "requested")
+	if err != nil || closed == nil || closed.ClosedAt == nil {
+		t.Fatalf("matching detach: state=%#v err=%v", closed, err)
+	}
+	if len(notifications) == 0 || notifications[len(notifications)-1].Method != NotificationClosed {
+		t.Fatalf("matching detach notifications = %#v", notifications)
+	}
+}
+
+// Rust #51539 (`conversation_start_params_tests::realtime_start_debug_redacts_text_and_transport`):
+// start diagnostics keep only routing-independent metadata so prompts and
+// transport endpoints carrying credentials never reach logs.
+func TestStartParamsStringRedactsCredentialsLikeRust(t *testing.T) {
+	secret := "credential-bearing-content"
+	prefix := secret
+	sessionID := secret
+	promptValue := secret
+	version := VersionV3
+	params := StartParams{
+		ThreadID:                secret,
+		CodexResponseItemPrefix: &prefix,
+		CodexResponseHandoffChannelPrefixes: map[string][]string{
+			secret: {secret},
+		},
+		OutputModality:    OutputAudio,
+		InitialItems:      []InitialTextItem{{Role: RoleDeveloper, Text: secret}},
+		Prompt:            OptionalString{Set: true, Value: &promptValue},
+		RealtimeSessionID: &sessionID,
+		Version:           &version,
+	}
+	for _, transport := range []*StartTransport{
+		{Type: "existingCall", CallID: secret},
+		WebRTCTransport(secret),
+	} {
+		params.Transport = transport
+		got := params.String()
+		want := "StartParams{output_modality: audio, initial_items_count: 1, version: Some(v3), ..}"
+		if got != want {
+			t.Fatalf("StartParams.String() = %q, want %q", got, want)
+		}
+		if strings.Contains(got, secret) {
+			t.Fatalf("StartParams.String() leaked credentials: %q", got)
+		}
 	}
 }

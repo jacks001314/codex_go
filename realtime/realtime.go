@@ -36,6 +36,11 @@ var (
 	ErrInvalidRealtimeRequest = errors.New("invalid realtime request")
 	ErrRealtimeNotRunning     = errors.New("realtime session is not running")
 	ErrRealtimeAlreadyRunning = errors.New("realtime session is already running")
+	// ErrRealtimeSessionMismatch reports that a session-scoped detach targeted a
+	// conversation that is no longer active. Rust #51539: an older detach must
+	// not close its replacement, so the manager leaves the current session
+	// untouched.
+	ErrRealtimeSessionMismatch = errors.New("realtime session id does not match the active session")
 )
 
 type Method string
@@ -298,6 +303,23 @@ type StartParams struct {
 	Transport           *StartTransport   `json:"transport,omitempty"`
 	Version             *Version          `json:"version,omitempty"`
 	Voice               *Voice            `json:"voice,omitempty"`
+}
+
+// String implements fmt.Stringer with the same redaction contract as Rust's
+// hand-written `Debug` for `ConversationStartParams` (#51539): diagnostics
+// expose only routing-independent metadata and never the prompt, handoff
+// prefixes or transport endpoints, which can carry credentials.
+func (p StartParams) String() string {
+	version := "None"
+	if p.Version != nil {
+		version = "Some(" + string(*p.Version) + ")"
+	}
+	return fmt.Sprintf(
+		"StartParams{output_modality: %s, initial_items_count: %d, version: %s, ..}",
+		p.OutputModality,
+		len(p.InitialItems),
+		version,
+	)
 }
 
 func (p StartParams) MarshalJSON() ([]byte, error) {
@@ -735,6 +757,11 @@ type AppendSpeechResponse struct{}
 
 type StopParams struct {
 	ThreadID string `json:"threadId"`
+	// RealtimeSessionID optionally scopes the detach to one conversation. When
+	// set, the session closes only if it is still the active conversation for
+	// the thread, so a delayed detach issued for a replaced conversation cannot
+	// close its replacement. Mirrors Rust #51539 `RealtimeConversationDetach`.
+	RealtimeSessionID *string `json:"realtimeSessionId,omitempty"`
 }
 
 func (p *StopParams) UnmarshalJSON(data []byte) error {
@@ -1413,6 +1440,8 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 		m.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: manager is shut down", ErrInvalidRealtimeRequest)
 	}
+	previousState := m.sessions[config.ThreadID]
+	previousReplaced := previousState != nil && previousState.ClosedAt == nil
 	previousConnection := m.connections[config.ThreadID]
 	previousSideband := m.sidebands[config.ThreadID]
 	delete(m.connections, config.ThreadID)
@@ -1437,6 +1466,14 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	}
 	if previousSideband != nil {
 		previousSideband.cancel()
+	}
+	var replacedNotifications []Notification
+	if previousReplaced {
+		// Rust #51539: emit the replaced conversation's close event before its
+		// replacement starts, so the old fanout cannot seal or clear the
+		// replacement's history segment.
+		replacedNotifications = append(replacedNotifications, m.takeSessionClosedNotifications(config.ThreadID)...)
+		replacedNotifications = append(replacedNotifications, NewClosedNotification(config.ThreadID, "requested"))
 	}
 
 	sdpAnswer := ""
@@ -1494,9 +1531,8 @@ func (m *Manager) StartWithOptions(params *StartParams, options *StartOptions) (
 	if sideband != nil {
 		m.startRealtimeSideband(sideband)
 	}
-	notifications := []Notification{
-		NewStartedNotification(config.ThreadID, config.RealtimeSessionID, config.Version),
-	}
+	notifications := append([]Notification(nil), replacedNotifications...)
+	notifications = append(notifications, NewStartedNotification(config.ThreadID, config.RealtimeSessionID, config.Version))
 	if config.Transport.Type == "webrtc" {
 		if sdpAnswer == "" {
 			sdpAnswer = "answer:" + config.Transport.SDP
@@ -1583,6 +1619,11 @@ func (m *Manager) Stop(params *StopParams, reason string) (*SessionState, []Noti
 	if !ok || state.ClosedAt != nil {
 		m.mu.Unlock()
 		return nil, nil, fmt.Errorf("%w: %s", ErrRealtimeNotRunning, params.ThreadID)
+	}
+	if params.RealtimeSessionID != nil && *params.RealtimeSessionID != state.Config.RealtimeSessionID {
+		// Rust #51539: publish nothing and leave the replacement connected.
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("%w: %s", ErrRealtimeSessionMismatch, *params.RealtimeSessionID)
 	}
 	now := m.now().UTC()
 	state.LastActivity = now
