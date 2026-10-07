@@ -163,27 +163,26 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
 	if c.version == agent.VersionV2 && forkTurns != "none" {
+		// Rust #51329: partial-history forks are gone. `all` and the legacy
+		// positive-integer spellings both inherit the parent's full history, so the
+		// child keeps the cached prompt prefix and inherits the scrub below.
+		if forkTurns != "all" {
+			count, parseErr := strconv.ParseUint(forkTurns, 10, 64)
+			if parseErr != nil || count == 0 {
+				return nil, fmt.Errorf("fork_turns must be `none` or `all`")
+			}
+		}
 		parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), true, true)
 		if readErr != nil || parent == nil {
 			return nil, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID))
 		}
 		forkOptions := session.ForkOptions{NewID: threadID, ParentThreadID: session.ThreadID(c.parentID), Now: now, Mode: session.ForkAll}
-		if forkTurns != "all" {
-			count, parseErr := strconv.Atoi(forkTurns)
-			if parseErr != nil || count <= 0 {
-				return nil, fmt.Errorf("fork_turns must be `none`, `all`, or a positive integer string")
-			}
-			forkOptions.Mode = session.ForkLastN
-			forkOptions.LastN = count
-		}
 		forked, forkErr := c.router.services.ThreadRouter.store.ForkRecord(parent, forkOptions)
 		if forkErr != nil {
 			return nil, forkErr
 		}
 		record = forked
-		if forkOptions.Mode == session.ForkAll {
-			record.Items = filterInheritedCurrentTimeReminders(record.Items)
-		}
+		record.Items = filterInheritedCurrentTimeReminders(record.Items)
 		// Rust spawn.rs's forked-item provenance: persist the scope of every copied
 		// conversational message, so a resume cannot recapture the parent's
 		// authorization as the child's own.
@@ -1081,12 +1080,23 @@ func filterInheritedCurrentTimeReminders(items []session.Item) []session.Item {
 // retainForkedDeveloperMessage filters fork-specific developer instruction
 // content items out of a developer message while preserving unrelated content
 // (Rust #39641). It returns false only when the message would be left empty.
+//
+// Rust #51329 additionally strips by harness-owned classification so that
+// persisted role/usage hints whose wording predates the current bundled
+// instructions are dropped even though they carry no marker tag; the
+// positional `content_item_kinds` metadata is the Go equivalent of Rust's
+// `AnnotatedContent::kind()`.
 func retainForkedDeveloperMessage(item *session.Item) bool {
 	if item == nil {
 		return false
 	}
+	isDeveloper := sessionItemRole(item) == "developer"
+	var kinds []string
+	if isDeveloper {
+		kinds = sessionItemContentItemKinds(item)
+	}
 	if len(item.Content) == 0 {
-		if isForkExcludedDeveloperText(item.Text) {
+		if forkExcludedContentItemKind(kinds, 0) || isForkExcludedDeveloperText(item.Text) {
 			return false
 		}
 		if sessionItemIsCurrentTimeReminder(item) {
@@ -1095,13 +1105,29 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 		return true
 	}
 	retained := item.Content[:0]
-	for _, part := range item.Content {
+	droppedByKind := false
+	retainedKinds := make([]string, 0, len(item.Content))
+	for index, part := range item.Content {
+		if forkExcludedContentItemKind(kinds, index) {
+			droppedByKind = true
+			continue
+		}
 		if part.Type == "input_text" && isForkExcludedDeveloperText(part.Text) {
 			continue
 		}
 		retained = append(retained, part)
+		if kinds != nil {
+			kind := "unknown"
+			if index < len(kinds) && kinds[index] != "" {
+				kind = kinds[index]
+			}
+			retainedKinds = append(retainedKinds, kind)
+		}
 	}
 	item.Content = retained
+	if droppedByKind {
+		rewriteSessionItemContentItemKinds(item, retainedKinds)
+	}
 	if len(retained) > 0 {
 		return true
 	}
@@ -1109,6 +1135,128 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 		return false
 	}
 	return strings.TrimSpace(item.Text) != ""
+}
+
+// forkExcludedContentItemKinds mirrors Rust #51329's kind-based scrub of
+// inherited developer content: a persisted multi-agent role or usage hint can
+// predate the bundled wording and therefore carry no marker tag, but a
+// harness-authored message still classifies every content item through
+// `internal_chat_message_metadata_passthrough.content_item_kinds`.
+var forkExcludedContentItemKinds = map[string]struct{}{
+	"multi_agent.role_instructions": {},
+	"multi_agent.usage_hint":        {},
+}
+
+func forkExcludedContentItemKind(kinds []string, index int) bool {
+	if index < 0 || index >= len(kinds) {
+		return false
+	}
+	_, excluded := forkExcludedContentItemKinds[kinds[index]]
+	return excluded
+}
+
+func sessionItemRole(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	if role := strings.TrimSpace(item.Role); role != "" {
+		return role
+	}
+	for _, object := range sessionItemObjects(item) {
+		if role, _ := object["role"].(string); strings.TrimSpace(role) != "" {
+			return strings.TrimSpace(role)
+		}
+	}
+	return ""
+}
+
+// sessionItemContentItemKinds returns the positional content classifications a
+// persisted response item carries (Rust `to_annotated_content`, #51329).
+func sessionItemContentItemKinds(item *session.Item) []string {
+	for _, object := range sessionItemObjects(item) {
+		metadata, _ := object["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if metadata == nil {
+			continue
+		}
+		values, ok := metadata["content_item_kinds"].([]any)
+		if !ok {
+			continue
+		}
+		kinds := make([]string, 0, len(values))
+		for _, value := range values {
+			kind, _ := value.(string)
+			kinds = append(kinds, strings.TrimSpace(kind))
+		}
+		return kinds
+	}
+	return nil
+}
+
+// rewriteSessionItemContentItemKinds realigns the positional classifications
+// after content items are dropped, mirroring Rust `set_annotated_content`
+// (#51329).
+func rewriteSessionItemContentItemKinds(item *session.Item, kinds []string) {
+	if item == nil {
+		return
+	}
+	values := make([]any, 0, len(kinds))
+	for _, kind := range kinds {
+		values = append(values, kind)
+	}
+	if len(item.Raw) > 0 {
+		var raw map[string]any
+		if json.Unmarshal(item.Raw, &raw) == nil {
+			if applyContentItemKinds(raw, values) {
+				if encoded, err := json.Marshal(raw); err == nil {
+					item.Raw = encoded
+				}
+			}
+		}
+	}
+	applyContentItemKinds(item.Data, values)
+}
+
+func applyContentItemKinds(object map[string]any, values []any) bool {
+	if object == nil {
+		return false
+	}
+	applied := false
+	targets := []map[string]any{object}
+	if inner, ok := object["item"].(map[string]any); ok {
+		targets = append(targets, inner)
+	}
+	for _, target := range targets {
+		metadata, _ := target["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if metadata == nil {
+			continue
+		}
+		if _, ok := metadata["content_item_kinds"]; !ok {
+			continue
+		}
+		metadata["content_item_kinds"] = values
+		applied = true
+	}
+	return applied
+}
+
+func sessionItemObjects(item *session.Item) []map[string]any {
+	if item == nil {
+		return nil
+	}
+	objects := make([]map[string]any, 0, 3)
+	if len(item.Raw) > 0 {
+		var raw map[string]any
+		if json.Unmarshal(item.Raw, &raw) == nil {
+			objects = append(objects, raw)
+			if inner, ok := raw["item"].(map[string]any); ok {
+				objects = append(objects, inner)
+			}
+		}
+	}
+	if item.Data != nil {
+		objects = append(objects, item.Data)
+	}
+	return objects
 }
 
 func isForkExcludedDeveloperText(text string) bool {

@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,6 +53,126 @@ func TestFilterInheritedDeveloperFragmentsDropsParentRoleGuidanceLikeRust(t *tes
 	filtered := filterInheritedCurrentTimeReminders(items)
 	if len(filtered) != 1 || filtered[0].ID != "keep" {
 		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
+	}
+}
+
+// Rust #51329 keeps stripping inherited `multi_agent.role_instructions` and
+// `multi_agent.usage_hint` content whose wording predates the current bundled
+// instructions. Go's fork filter is marker-based rather than kind-based, so the
+// persisted wording is irrelevant: any parent role/mode/usage-hint fragment is
+// removed.
+func TestFilterInheritedDeveloperFragmentsDropsStaleWordingLikeRust(t *testing.T) {
+	items := []session.Item{
+		{ID: "keep", Type: "message", Text: "ordinary developer message"},
+		{ID: "stale-hint", Type: "message", Text: "<multi_agent_usage_hint>an ancient hint wording that no bundled string matches</multi_agent_usage_hint>"},
+		{ID: "stale-role", Type: "message", Content: []session.ContentPart{{Type: "input_text", Text: "<multi_agent_role>an ancient role wording</multi_agent_role>"}}},
+	}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || filtered[0].ID != "keep" {
+		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
+	}
+}
+
+// Rust #51329 "unmarked bundled hints": a persisted developer hint can predate
+// the current bundled wording and carry no marker tag at all. Rust drops it by
+// the harness-owned `content_item_kinds` classification; Go reads the same
+// positional metadata off the persisted item.
+func TestFilterInheritedDeveloperFragmentsDropsUnmarkedHintByKindLikeRust(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "Previous parent root guidance."},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"multi_agent.usage_hint"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal hint item error = %v", err)
+	}
+	roleRaw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "an ancient role wording"},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"multi_agent.role_instructions"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal role item error = %v", err)
+	}
+	items := []session.Item{
+		{ID: "keep", Type: "message", Role: "developer", Text: "ordinary developer message"},
+		{ID: "unmarked-hint", Type: "message", Role: "developer", Raw: raw, Text: "Previous parent root guidance."},
+		{ID: "unmarked-role", Type: "message", Role: "developer", Raw: roleRaw, Text: "an ancient role wording"},
+	}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || filtered[0].ID != "keep" {
+		t.Fatalf("filtered = %#v, want only the ordinary developer message", filtered)
+	}
+}
+
+// Rust #51329 `set_annotated_content`: dropping a classified content item keeps
+// the surviving items' classifications aligned with their positions.
+func TestFilterInheritedDeveloperFragmentsRealignsContentItemKindsLikeRust(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "developer",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "Previous parent root guidance."},
+			map[string]any{"type": "input_text", "text": "Preserved compacted developer context."},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"multi_agent.usage_hint", "unknown"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mixed item error = %v", err)
+	}
+	items := []session.Item{{
+		ID:   "mixed",
+		Type: "message",
+		Role: "developer",
+		Raw:  raw,
+		Content: []session.ContentPart{
+			{Type: "input_text", Text: "Previous parent root guidance."},
+			{Type: "input_text", Text: "Preserved compacted developer context."},
+		},
+	}}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || len(filtered[0].Content) != 1 ||
+		filtered[0].Content[0].Text != "Preserved compacted developer context." {
+		t.Fatalf("filtered = %#v, want only the preserved content item", filtered)
+	}
+	kinds := sessionItemContentItemKinds(&filtered[0])
+	if len(kinds) != 1 || kinds[0] != "unknown" {
+		t.Fatalf("realigned kinds = %#v, want [unknown]", kinds)
+	}
+}
+
+// Rust #51329 scopes the kind-based scrub to developer messages; other roles are
+// kept untouched even when they somehow carry a hint classification.
+func TestFilterInheritedDeveloperFragmentsKeepsNonDeveloperKindContentLikeRust(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"type": "message",
+		"role": "user",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "user text"},
+		},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []any{"multi_agent.usage_hint"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal user item error = %v", err)
+	}
+	items := []session.Item{{ID: "user", Type: "message", Role: "user", Raw: raw, Text: "user text"}}
+	filtered := filterInheritedCurrentTimeReminders(items)
+	if len(filtered) != 1 || filtered[0].ID != "user" {
+		t.Fatalf("filtered = %#v, want the user message kept", filtered)
 	}
 }
 

@@ -40,7 +40,7 @@ const (
 
 	MultiAgentV2WaitAgentUsageHint = "When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling."
 
-	MultiAgentV2ModelOverrideUsageHint = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string."
+	MultiAgentV2ModelOverrideUsageHint = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"`."
 )
 
 // MultiAgentV2UsageHintOptions controls the rendered multi-agent V2 usage hint.

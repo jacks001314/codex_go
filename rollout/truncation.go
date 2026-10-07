@@ -52,49 +52,6 @@ func UserMessagePositions(items []TruncationItem) []int {
 	return positions
 }
 
-func ForkTurnPositions(items []TruncationItem) []int {
-	rollbackPositions := make([]int, 0)
-	forkPositions := make([]int, 0)
-	for index := range items {
-		item := &items[index]
-		switch item.Kind {
-		case TruncationItemResponse:
-			if rolloutItemIsUserTurnBoundary(item) {
-				rollbackPositions = append(rollbackPositions, index)
-			}
-			if isRealUserMessageBoundary(item.Response) || isTriggerTurnBoundary(item.Response) {
-				forkPositions = append(forkPositions, index)
-			}
-		case TruncationItemInterAgentCommunication, TruncationItemInterAgentMetadata:
-			rollbackPositions = append(rollbackPositions, index)
-			if item.TriggerTurn {
-				forkPositions = append(forkPositions, index)
-			}
-		case TruncationItemThreadRolledBack:
-			if item.NumTurns == 0 {
-				continue
-			}
-			start := len(rollbackPositions) - int(item.NumTurns)
-			if start < 0 {
-				start = 0
-			}
-			if len(rollbackPositions) == 0 {
-				continue
-			}
-			rollbackStart := rollbackPositions[start]
-			rollbackPositions = rollbackPositions[:start]
-			filtered := forkPositions[:0]
-			for _, position := range forkPositions {
-				if position < rollbackStart {
-					filtered = append(filtered, position)
-				}
-			}
-			forkPositions = filtered
-		}
-	}
-	return forkPositions
-}
-
 func TruncateBeforeNthUserMessageFromStart(items []TruncationItem, n int) []TruncationItem {
 	if n < 0 {
 		return cloneTruncationItems(items)
@@ -104,21 +61,6 @@ func TruncateBeforeNthUserMessageFromStart(items []TruncationItem, n int) []Trun
 		return cloneTruncationItems(items)
 	}
 	return cloneTruncationItems(items[:positions[n]])
-}
-
-func TruncateToLastNForkTurns(items []TruncationItem, n int) []TruncationItem {
-	if n <= 0 {
-		return nil
-	}
-	positions := ForkTurnPositions(items)
-	if len(positions) == 0 {
-		return nil
-	}
-	start := len(positions) - n
-	if start < 0 {
-		start = 0
-	}
-	return cloneTruncationItems(items[positions[start]:])
 }
 
 func TruncateAfterTurnID(items []TruncationItem, turnID string) ([]TruncationItem, error) {

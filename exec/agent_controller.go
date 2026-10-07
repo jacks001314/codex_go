@@ -989,16 +989,17 @@ func (c *execAgentController) parentInputItems(forkTurns *string) []any {
 	if err != nil || record == nil {
 		return nil
 	}
+	// Rust #51329: partial-history forks are gone, so `all` and the legacy
+	// positive-integer spellings both hand the child the parent's full history.
 	mode := execForkTurns(forkTurns)
 	if mode == "none" {
 		return nil
 	}
 	if mode != "all" {
-		count, parseErr := strconv.Atoi(mode)
-		if parseErr != nil || count <= 0 {
+		count, parseErr := strconv.ParseUint(mode, 10, 64)
+		if parseErr != nil || count == 0 {
 			return nil
 		}
-		record = execLastTurnsRecord(record, count)
 	}
 	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: record.Metadata.CWD})
 	return stripParentAgentMessages(items)
@@ -1379,33 +1380,6 @@ func execForkTurns(value *string) string {
 		return "all"
 	}
 	return strings.ToLower(strings.TrimSpace(*value))
-}
-
-func execLastTurnsRecord(record *session.Record, count int) *session.Record {
-	if record == nil || count <= 0 || len(record.Metadata.RolloutTurns) <= count {
-		return record
-	}
-	turns := record.Metadata.RolloutTurns[len(record.Metadata.RolloutTurns)-count:]
-	selected := make(map[string]bool, len(turns))
-	for _, snapshot := range turns {
-		selected[snapshot.ID] = true
-	}
-	cloned := *record
-	cloned.Items = make([]session.Item, 0, len(record.Items))
-	for _, item := range record.Items {
-		turnID := ""
-		if item.Metadata != nil {
-			turnID, _ = item.Metadata["turnId"].(string)
-			if turnID == "" {
-				turnID, _ = item.Metadata["turn_id"].(string)
-			}
-		}
-		if selected[turnID] {
-			cloned.Items = append(cloned.Items, item)
-		}
-	}
-	cloned.Metadata.RolloutTurns = append([]session.TurnSnapshot(nil), turns...)
-	return &cloned
 }
 
 func execAgentPrompt(message string, queued []string) string {

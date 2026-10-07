@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,14 +177,17 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 			// spawn_agent tool description.
 			spec.Description += "\n\n" + strings.TrimSpace(*e.usageHintText)
 		}
+		// Rust #51329: only `none` and `all` are described for `fork_turns`, and the
+		// agent type applies regardless of how much history is inherited, so the old
+		// "set fork_turns to a positive integer" guidance is gone.
 		properties := map[string]any{
 			"task_name":        map[string]any{"type": "string", "description": "Task name for the new agent. Use lowercase letters, digits, and underscores."},
 			"message":          map[string]any{"type": "string", "description": "Initial plain-text task for the new agent.", "encrypted": true},
-			"agent_type":       map[string]any{"type": "string", "description": "Agent type override for the new agent. Omit unless explicitly asked. Set `fork_turns` to `none` or a positive integer when an explicit override is needed."},
+			"agent_type":       map[string]any{"type": "string", "description": "Agent type override for the new agent. Omit unless explicitly asked. The selected role applies regardless of how much parent history is inherited."},
 			"model":            map[string]any{"type": "string", "description": "Model override for the new agent. Omit to inherit the parent model."},
 			"reasoning_effort": map[string]any{"type": "string", "description": "Reasoning effort override for the new agent. Omit to inherit the parent effort."},
 			"service_tier":     map[string]any{"type": "string", "description": "Service tier override for the new agent."},
-			"fork_turns":       map[string]any{"type": "string", "description": "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."},
+			"fork_turns":       map[string]any{"type": "string", "description": "Parent history to inherit. Defaults to `all`; use `none` to start without parent history. Only `all` and `none` are supported."},
 		}
 		if e.hideSpawnMetadata {
 			delete(properties, "service_tier")
@@ -502,6 +506,12 @@ func validateTargetMessage(target, message string) error {
 	return nil
 }
 
+// validateForkTurns mirrors Rust #51329's `parse_fork_turns`
+// (core/src/tools/handlers/multi_agents_v2/spawn.rs): `none` starts the child
+// without parent history, `all` inherits it, and a legacy positive integer
+// string is accepted but inherits the full history instead of truncating it, so
+// only `none` and `all` are described to the model. Zero and non-numeric values
+// are still rejected.
 func validateForkTurns(value *string) error {
 	if value == nil {
 		return nil
@@ -510,15 +520,10 @@ func validateForkTurns(value *string) error {
 	if strings.EqualFold(normalized, "none") || strings.EqualFold(normalized, "all") {
 		return nil
 	}
-	if normalized == "" || normalized[0] == '0' {
-		return fmt.Errorf("fork_turns must be `none`, `all`, or a positive integer string")
+	if count, err := strconv.ParseUint(normalized, 10, 64); err == nil && count > 0 {
+		return nil
 	}
-	for _, char := range normalized {
-		if char < '0' || char > '9' {
-			return fmt.Errorf("fork_turns must be `none`, `all`, or a positive integer string")
-		}
-	}
-	return nil
+	return fmt.Errorf("fork_turns must be `none` or `all`")
 }
 
 func execString(value *string) string {

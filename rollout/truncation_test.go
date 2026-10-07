@@ -24,9 +24,6 @@ func TestTruncationHelpers(t *testing.T) {
 	if got := TruncateBeforeNthUserMessageFromStart(items, 1); len(got) != 2 {
 		t.Fatalf("truncate before = %#v", got)
 	}
-	if got := TruncateToLastNForkTurns(items, 1); len(got) != 1 || got[0].Kind != TruncationItemInterAgentCommunication {
-		t.Fatalf("truncate last fork = %#v", got)
-	}
 }
 
 func TestTruncateAfterTurnID(t *testing.T) {
