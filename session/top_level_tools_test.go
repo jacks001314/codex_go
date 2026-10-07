@@ -419,3 +419,45 @@ func TestMergeWorldStateUpdatesOrderingLikeRust(t *testing.T) {
 		t.Fatalf("standalone notice = %#v", items[2])
 	}
 }
+
+// TestWorldStateSnapshotWindowScopingLikeRust covers the window scoping Rust
+// #50540/#51188 rely on when a context window is replaced: a snapshot recorded
+// for another window is absent, so the replacement window re-declares the full
+// catalog and base instructions instead of diffing against the old window.
+func TestWorldStateSnapshotWindowScopingLikeRust(t *testing.T) {
+	catalog, err := EncodeTopLevelToolsSnapshot(2, map[string]string{"functions.exec": "abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions, err := EncodeBaseInstructionsSnapshot(2, "def")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashes, ok := TopLevelToolsSnapshotForWindow(catalog, 2)
+	if !ok || hashes["functions.exec"] != "abc" {
+		t.Fatalf("window 2 snapshot = %#v, %v", hashes, ok)
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(catalog, 3); ok {
+		t.Fatal("a snapshot for window 2 must be absent for window 3")
+	}
+	if hash, ok := BaseInstructionsSnapshotForWindow(instructions, 2); !ok || hash != "def" {
+		t.Fatalf("window 2 base instructions = %q, %v", hash, ok)
+	}
+	if _, ok := BaseInstructionsSnapshotForWindow(instructions, 3); ok {
+		t.Fatal("base instructions for window 2 must be absent for window 3")
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(nil, 0); ok {
+		t.Fatal("a missing snapshot must be absent")
+	}
+	// Window zero is a real window (a fresh thread), so it must round-trip.
+	zero, err := EncodeTopLevelToolsSnapshot(0, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(zero, 0); !ok {
+		t.Fatalf("window 0 snapshot = %s, want it recorded", string(zero))
+	}
+	if _, ok := TopLevelToolsSnapshotForWindow(zero, 1); ok {
+		t.Fatal("window 0 must not match window 1")
+	}
+}
