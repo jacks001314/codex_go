@@ -383,3 +383,92 @@ func TestIncrementalToolCatalogRequestsReplayFromHistoryLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// TestIncrementalToolCatalogReplacementPrefixFirstLikeRust covers the position
+// semantics of Rust #51188 (`compact::assemble_compaction_history`, compared in
+// `assemble_compaction_history_keeps_prefix_first_and_summary_last` and
+// `assemble_compaction_history_keeps_compaction_last`): a window replacement -
+// a compaction or a context reset - rebuilds the history, and the re-derived
+// prefix (the `additional_tools` catalog plus the base-instruction developer
+// message) must open that rebuilt history while the compaction summary stays
+// last.
+func TestIncrementalToolCatalogReplacementPrefixFirstLikeRust(t *testing.T) {
+	router, _ := newResponsesLiteDeclarationRouter(t, "thread-incremental")
+	created := time.Now().UTC()
+	instructions := "Use the available tools to help the user."
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	if _, err := router.incrementalToolCatalogForTurn("thread-incremental", nil, definitions, instructions, "turn-1", created); err != nil {
+		t.Fatal(err)
+	}
+
+	// Replace the history the way a compaction does: the rebuilt conversation
+	// ends with the compaction summary and the compaction item.
+	record, err := router.threadRecord(session.ThreadID("thread-incremental"), true, true)
+	if err != nil || record == nil {
+		t.Fatalf("threadRecord error = %v", err)
+	}
+	record.Items = []session.Item{
+		{ID: "kept-user", Type: "message", Role: "user", Text: "earlier request", CreatedAt: created},
+		{ID: "summary", Type: "message", Role: "user", Text: "compaction summary", CreatedAt: created,
+			Data: map[string]any{"kind": "compaction_summary"}},
+		{ID: "compact-item", Type: "contextCompaction", CreatedAt: created},
+	}
+	if err := router.runtimeSaveThreadRecord(record); err != nil {
+		t.Fatal(err)
+	}
+	router.advanceWindowNumber("thread-incremental")
+
+	replacement := incrementalCatalogLikeRust("Updated execution instructions.", incrementalToolSearchLikeRust())
+	result, err := router.incrementalToolCatalogForTurn("thread-incremental", nil, replacement, instructions, "turn-2", created.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Active || !result.Prefix || len(result.SessionItems) != 2 {
+		t.Fatalf("replacement result = %#v, want a fresh window prefix", result)
+	}
+
+	record, err = router.threadRecord(session.ThreadID("thread-incremental"), true, true)
+	if err != nil || record == nil {
+		t.Fatalf("threadRecord error = %v", err)
+	}
+	if len(record.Items) != 5 {
+		t.Fatalf("rebuilt history = %#v, want the prefix plus the three compacted items", record.Items)
+	}
+	prefixCatalog, _ := record.Items[0].Data["kind"].(string)
+	if record.Items[0].Type != "additional_tools" || prefixCatalog != incrementalToolCatalogKind {
+		t.Fatalf("rebuilt history must open with the tool catalog, got %#v", record.Items[0])
+	}
+	if record.Items[1].Type != "message" || record.Items[1].Role != "developer" || record.Items[1].Text != instructions {
+		t.Fatalf("rebuilt history must continue with the base instructions, got %#v", record.Items[1])
+	}
+	if record.Items[2].ID != "kept-user" || record.Items[3].ID != "summary" || record.Items[4].ID != "compact-item" {
+		t.Fatalf("rebuilt history must keep the compacted items last, got %#v", record.Items)
+	}
+
+	// The model-visible history places the declarations ahead of the summary, so
+	// the next turn of the replaced window replays them in place.
+	history := incrementalHistoryItems(t, router, "thread-incremental")
+	if len(history) < 2 || incrementalInputType(t, history[0]) != "additional_tools" {
+		t.Fatalf("model-visible history = %#v, want the catalog first", history)
+	}
+	summaryIndex := -1
+	for i := range history {
+		if object, ok := history[i].(map[string]any); ok && strings.Contains(textFromInputItemContent(object["content"]), "compaction summary") {
+			summaryIndex = i
+			break
+		}
+	}
+	if summaryIndex < 2 {
+		t.Fatalf("summary index = %d in %#v, want the declarations ahead of it", summaryIndex, history)
+	}
+
+	// The replaced window keeps replaying its recorded catalog: no further
+	// updates and no re-recording, since the prefix is already in history.
+	replay, err := router.incrementalToolCatalogForTurn("thread-incremental", history, replacement, instructions, "turn-3", created.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !replay.Active || replay.Prefix || len(replay.SessionItems) != 0 {
+		t.Fatalf("replaced window turn = %#v, want a replay without updates", replay)
+	}
+}

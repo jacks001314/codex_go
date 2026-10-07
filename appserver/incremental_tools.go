@@ -161,6 +161,23 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 		record.Metadata.Extra = extra
 		updated = true
 	}
+	if len(result.SessionItems) > 0 && result.Prefix {
+		// A window replacement rebuilds the history, and the re-derived prefix
+		// opens it (Rust #51188 `assemble_compaction_history`: the tool
+		// declarations and the base-instruction developer message are chained
+		// ahead of the rebuilt history, which keeps the compaction summary
+		// last). Appending instead would place the catalog behind the summary,
+		// so the next turn would read the declarations after it even though the
+		// request that opened the window sent them first.
+		record.Items = append(append([]session.Item(nil), result.SessionItems...), record.Items...)
+		if record.UpdatedAt.Before(createdAt) {
+			record.UpdatedAt = createdAt
+		}
+		if record.RecencyAt.Before(createdAt) {
+			record.RecencyAt = createdAt
+		}
+		updated = true
+	}
 	if updated {
 		encoded, encodeErr := session.EncodeWorldState(state)
 		if encodeErr != nil {
@@ -171,13 +188,15 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 			return incrementalToolCatalogResult{}, saveErr
 		}
 	}
-	if len(result.SessionItems) > 0 {
-		// The window start records its declarations before the window's first
-		// user message, so the conversation only ever grows (Rust
+	if len(result.SessionItems) > 0 && !result.Prefix {
+		// A later turn of a live window only appends added or changed
+		// declarations, so the ones already sent keep their position (Rust
 		// `record_context_updates_and_set_reference_context_item`).
 		if _, appendErr := r.runtimeAppendItems(session.ThreadID(threadID), result.SessionItems); appendErr != nil {
 			return incrementalToolCatalogResult{}, appendErr
 		}
+	}
+	if len(result.SessionItems) > 0 {
 		_ = r.appendRuntimeRollout(threadID, result.SessionItems, createdAt)
 	}
 	return result, nil
