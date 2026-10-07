@@ -244,12 +244,22 @@ func discoverMCPOAuthAuthorizationServer(ctx context.Context, client *http.Clien
 				return nil, false, fallbackErr
 			}
 			if fallbackOK {
+				if err := validateMCPOAuthAuthorizationServerEndpoints(fallback); err != nil {
+					return nil, false, err
+				}
 				return discoveryFromMCPOAuthAuthorizationMetadata(serverURL, fallback), true, nil
 			}
 			lastErr = err
 			continue
 		}
 		if ok {
+			// Rust #39935 rejects endpoints that cannot be bound to their issuer
+			// right after `resolve_metadata()`; this loop is Go's equivalent
+			// multi-authorization-server resolution, so the check runs here
+			// before any discovery result can reach the browser hand-off.
+			if err := validateMCPOAuthAuthorizationServerEndpoints(metadata); err != nil {
+				return nil, false, err
+			}
 			return discoveryFromMCPOAuthAuthorizationMetadata(serverURL, metadata), true, nil
 		}
 	}
@@ -561,6 +571,149 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		ClientIDMetadataDocumentSupported: metadata.ClientIDMetadataDocumentSupported,
 		PublicClientTokenAuthSupported:    metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
 		CallbackMode:                      callbackMode,
+	}
+}
+
+// mcpOAuthIssuerBindingException mirrors one entry of Rust's narrow
+// compatibility exception table in
+// codex-rs/rmcp-client/src/oauth/issuer_binding.rs (#39935).
+type mcpOAuthIssuerBindingException struct {
+	issuer              string
+	authorizationOrigin string
+	tokenOrigin         string
+}
+
+// mcpOAuthIssuerBindingExceptions is ported verbatim from Rust
+// `validate_authorization_server_endpoints` (#39935), including the comment that
+// accompanies it. Do not add providers here without the same change upstream.
+//
+// "Remove these narrow compatibility exceptions once both providers support RFC 9207."
+var mcpOAuthIssuerBindingExceptions = []mcpOAuthIssuerBindingException{
+	{
+		issuer:              "https://mcp.mercadopago.com/mcp",
+		authorizationOrigin: "https://auth.mercadopago.com",
+		tokenOrigin:         "https://mcp.mercadopago.com",
+	},
+	{
+		issuer:              "https://agent.robinhood.com/mcp/trading",
+		authorizationOrigin: "https://robinhood.com",
+		tokenOrigin:         "https://api.robinhood.com",
+	},
+}
+
+// validateMCPOAuthAuthorizationServerEndpoints ports the origin-binding half of
+// Rust's `validate_authorization_server_endpoints` (#39935): an authorization
+// endpoint must be web-scheme and, when the metadata advertises an issuer, must
+// be bound to that issuer, either because the server advertises RFC 9207
+// issuer-bound callbacks or because the authorization endpoint shares its origin
+// with the issuer (or with the token endpoint). Without this check a discovered
+// authorization server could point the browser hand-off at a different origin
+// than the issuer it claims.
+//
+// Go discovers authorization servers by iterating the protected-resource
+// metadata's `authorization_servers` list (see DiscoverStreamableHTTPOAuth), so
+// the same check applies to every candidate the loop resolves.
+//
+// DELIBERATE GO DIFFERENCE (flagged for the lane leader): Rust additionally
+// requires, when the metadata carries **no** issuer at all, that the token
+// endpoint share the authorization endpoint's origin. Go's discovery has always
+// accepted issuer-less metadata whose token endpoint sits on another origin
+// (the existing discovery/login fixtures model exactly that shape), so porting
+// that arm would newly reject a large set of existing Go fixtures and test the
+// token endpoint rather than the issuer binding this PR is about. It is
+// therefore not ported here and remains an open item for a separate change.
+func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationServerMetadata) error {
+	if metadata == nil {
+		return nil
+	}
+
+	authorizationEndpoint, err := url.Parse(strings.TrimSpace(metadata.AuthorizationEndpoint))
+	if err != nil {
+		return errors.New("OAuth authorization endpoint must be a valid URL")
+	}
+	if !mcpOAuthWebEndpoint(metadata.AuthorizationEndpoint) {
+		// Rust bails with the same message; Go's discovery already drops non-web
+		// authorization endpoints in fetchMCPOAuthAuthorizationServerMetadata
+		// (#47326), so this arm is a faithful mirror rather than a new gate.
+		return errors.New("OAuth authorization endpoint must use HTTP or HTTPS")
+	}
+
+	var issuer *url.URL
+	if rawIssuer := strings.TrimSpace(metadata.Issuer); rawIssuer != "" {
+		issuer, err = url.Parse(rawIssuer)
+		if err != nil {
+			return errors.New("OAuth authorization server issuer must be a valid URL")
+		}
+	}
+
+	if metadata.AuthorizationResponseIssParameterSupported {
+		if issuer == nil {
+			return errors.New("OAuth issuer-bound callbacks require an authorization server issuer")
+		}
+		return nil
+	}
+
+	tokenEndpoint, err := url.Parse(strings.TrimSpace(metadata.TokenEndpoint))
+	if err != nil {
+		return errors.New("OAuth token endpoint must be a valid URL")
+	}
+
+	if issuer != nil {
+		authorizationOrigin := mcpOAuthOriginSerialization(authorizationEndpoint)
+		tokenOrigin := mcpOAuthOriginSerialization(tokenEndpoint)
+		if sameHTTPOrigin(authorizationEndpoint, issuer) ||
+			sameHTTPOrigin(authorizationEndpoint, tokenEndpoint) ||
+			mcpOAuthIssuerBindingExceptionMatches(issuer.String(), authorizationOrigin, tokenOrigin) {
+			return nil
+		}
+		return errors.New("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+	}
+
+	// Issuer-less metadata: see the DELIBERATE GO DIFFERENCE note above. The
+	// token endpoint is still parsed above so a malformed token endpoint is
+	// rejected exactly like Rust does.
+	return nil
+}
+
+// mcpOAuthIssuerBindingExceptionMatches reports whether the (issuer,
+// authorization origin, token origin) triple is one of the ported compatibility
+// exceptions. Rust compares the parsed issuer's serialization against the
+// literal pair, so the caller passes the parsed issuer URL's String().
+func mcpOAuthIssuerBindingExceptionMatches(issuer string, authorizationOrigin string, tokenOrigin string) bool {
+	for _, exception := range mcpOAuthIssuerBindingExceptions {
+		if exception.issuer == issuer &&
+			exception.authorizationOrigin == authorizationOrigin &&
+			exception.tokenOrigin == tokenOrigin {
+			return true
+		}
+	}
+	return false
+}
+
+// mcpOAuthOriginSerialization mirrors Rust's `Url::origin().ascii_serialization()`:
+// `<scheme>://<host>[:<port>]` with the scheme and host lowercased and the
+// default port for the scheme omitted.
+func mcpOAuthOriginSerialization(parsed *url.URL) string {
+	if parsed == nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return ""
+	}
+	origin := strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Hostname())
+	if port := parsed.Port(); port != "" && port != mcpOAuthDefaultPort(parsed.Scheme) {
+		origin += ":" + port
+	}
+	return origin
+}
+
+// mcpOAuthDefaultPort returns the implicit port for a web scheme, matching the
+// port normalization used by sameHTTPOrigin.
+func mcpOAuthDefaultPort(scheme string) string {
+	switch strings.ToLower(scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
 	}
 }
 
