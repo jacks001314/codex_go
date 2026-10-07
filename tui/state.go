@@ -112,6 +112,13 @@ type State struct {
 	AccountDisplay          string
 	AgentsSummary           string
 	HasChatGPTAccount       bool
+	// RemoteConnection reports that this TUI is attached to an app server,
+	// either an explicit remote server or the local background daemon (Rust
+	// `RemoteConnectionStatus`, #49145). The `tui` package cannot import
+	// `tui/status` (that package imports `tui`), so the card records the
+	// connection as a bool; the tea model seeds it from its LocalDaemonSession /
+	// RemoteAppServer options.
+	RemoteConnection bool
 }
 
 type RateLimitStatus struct {
@@ -297,7 +304,13 @@ func (s *State) RenderStatusCardWidth(width int) string {
 	// built-in providers).
 	provider := statusModelProvider(s.Provider, s.ThreadID)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
-	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
+	// Rust #49145: the reasoning summaries setting is client-owned, so the card
+	// keeps it only while no server connection owns the model settings.
+	modelDetails := "reasoning " + reasoning
+	if !s.RemoteConnection {
+		modelDetails += ", summaries auto"
+	}
+	model := displayValue(s.Model, "default") + " (" + modelDetails + ")"
 	header := ">_ gcode"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"

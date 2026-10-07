@@ -369,3 +369,36 @@ func TestStatusCardLinksChatGPTUsageURLLikeRust(t *testing.T) {
 		t.Fatalf("status card missing complete URL %q:\n%s", url, card)
 	}
 }
+
+// TestStateRenderStatusCardHidesReasoningSummariesForServerConnectionLikeRust
+// mirrors Rust #49145: the /status model row keeps "summaries auto" only while
+// no server connection owns the model settings. Rust's snapshots read
+// "gpt-5.1-codex-max (reasoning medium, summaries auto)" with no connection and
+// "gpt-5.1-codex-max (reasoning medium)" for a remote server or the local
+// background daemon.
+func TestStateRenderStatusCardHidesReasoningSummariesForServerConnectionLikeRust(t *testing.T) {
+	newState := func(remote bool) *State {
+		state := NewState(&Options{
+			Model:           "gpt-5.1-codex-max",
+			ReasoningEffort: "medium",
+			CWD:             "/workspace/tests",
+			ApprovalPolicy:  "on-request",
+			Sandbox:         "workspace-write",
+		})
+		state.RemoteConnection = remote
+		return state
+	}
+	card := newState(false).RenderStatusCardWidth(100)
+	if !strings.Contains(card, "gpt-5.1-codex-max (reasoning medium, summaries auto)") {
+		t.Fatalf("no-connection card must keep the summaries setting:\n%s", card)
+	}
+	for _, connection := range []string{"remote server", "local background server"} {
+		card := newState(true).RenderStatusCardWidth(100)
+		if !strings.Contains(card, "gpt-5.1-codex-max (reasoning medium)") {
+			t.Fatalf("%s card must render the bare reasoning details:\n%s", connection, card)
+		}
+		if strings.Contains(card, "summaries auto") {
+			t.Fatalf("%s card must hide the summaries setting:\n%s", connection, card)
+		}
+	}
+}
