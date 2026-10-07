@@ -65,13 +65,15 @@ func startRemoteTemporaryStructuredThread(ctx context.Context, client *remoteApp
 		}
 		overrides["mcp_servers"] = servers
 	}
+	// Rust #49912: the temporary thread inherits the app server's approval
+	// policy instead of forcing `never`, which can contradict managed
+	// approval requirements.
 	params := appserver.ThreadStartParams{
-		Model:          strings.TrimSpace(options.Model),
-		ModelProvider:  strings.TrimSpace(options.ModelProvider),
-		CWD:            cwd,
-		ApprovalPolicy: "never",
-		Ephemeral:      true,
-		Config:         overrides,
+		Model:         strings.TrimSpace(options.Model),
+		ModelProvider: strings.TrimSpace(options.ModelProvider),
+		CWD:           cwd,
+		Ephemeral:     true,
+		Config:        overrides,
 	}
 	if profile := strings.TrimSpace(options.PermissionProfile); profile != "" && !strings.HasPrefix(profile, ":") {
 		params.Permissions = &profile
@@ -120,9 +122,10 @@ func collectRemoteStructuredResponse(ctx context.Context, client *remoteAppServe
 			continue
 		}
 		if len(message.ID) > 0 {
-			// Server-initiated request (approvals, elicitations); answer with the
-			// client's default so the turn cannot stall.
-			_ = client.respondServerRequest(ctx, message)
+			// Rust #49912: a hidden structured thread must never prompt, so its
+			// tool and user-interaction requests are rejected instead of being
+			// answered with the client default.
+			_ = client.rejectTemporaryStructuredServerRequest(ctx, message)
 			continue
 		}
 		switch appserver.NotificationMethod(strings.TrimSpace(message.Method)) {
@@ -159,6 +162,25 @@ func collectRemoteStructuredResponse(ctx context.Context, client *remoteAppServe
 			return response, nil
 		}
 	}
+}
+
+// Rust #49912: hidden structured threads reject tool and user-interaction
+// requests with this app-server error code and message.
+const (
+	temporaryStructuredRejectionCode    = -32000
+	temporaryStructuredRejectionMessage = "temporary structured threads cannot request tools or user interaction"
+)
+
+// rejectTemporaryStructuredServerRequest answers a server-initiated request on
+// the recap's hidden thread with the Rust #49912 error, so tool and
+// user-interaction requests fail fast instead of prompting for a thread the
+// user cannot see.
+func (c *remoteAppServerTUIClient) rejectTemporaryStructuredServerRequest(ctx context.Context, message remoteAppServerMessage) error {
+	var id appserver.RequestID
+	if err := json.Unmarshal(message.ID, &id); err != nil {
+		return err
+	}
+	return c.writeJSON(ctx, appserver.ErrorResponse(id, temporaryStructuredRejectionCode, temporaryStructuredRejectionMessage, nil))
 }
 
 // unsubscribeRemoteTemporaryThread makes a bounded best-effort attempt to detach
