@@ -171,17 +171,19 @@ func sessionSummaryFromRecord(store *session.Store, record *session.Record) Sess
 		}
 	}
 	return SessionSummary{
-		ThreadID:  string(record.ID),
-		Path:      path,
-		Title:     strings.TrimSpace(record.Title),
-		Preview:   strings.TrimSpace(record.Preview),
-		CWD:       record.Metadata.CWD,
-		Branch:    record.Metadata.Git["branch"],
-		Provider:  strings.TrimSpace(record.Metadata.ModelProvider),
-		Model:     strings.TrimSpace(record.Metadata.Model),
-		CreatedAt: record.CreatedAt,
-		UpdatedAt: sessionRecordPickerTime(record),
-		Archived:  record.Archived,
+		ThreadID: string(record.ID),
+		Path:     path,
+		Title:    strings.TrimSpace(record.Title),
+		Preview:  strings.TrimSpace(record.Preview),
+		CWD:      record.Metadata.CWD,
+		Branch:   record.Metadata.Git["branch"],
+		Provider: strings.TrimSpace(record.Metadata.ModelProvider),
+		Model:    strings.TrimSpace(record.Metadata.Model),
+		// Rust session.daybreak_enabled (#49861): the stored thread preference.
+		DaybreakEnabled: record.Metadata.DaybreakEnabled != nil && *record.Metadata.DaybreakEnabled,
+		CreatedAt:       record.CreatedAt,
+		UpdatedAt:       sessionRecordPickerTime(record),
+		Archived:        record.Archived,
 	}
 }
 
@@ -206,17 +208,20 @@ func sessionSummaryFromAppServerThread(thread *appserver.Thread, archived bool) 
 		model = strings.TrimSpace(*thread.Model)
 	}
 	return SessionSummary{
-		ThreadID:  strings.TrimSpace(thread.ID),
-		Path:      path,
-		Title:     title,
-		Preview:   strings.TrimSpace(thread.Preview),
-		CWD:       thread.CWD,
-		Branch:    branch,
-		Provider:  strings.TrimSpace(thread.ModelProvider),
-		Model:     model,
-		CreatedAt: unixSecondsTime(thread.CreatedAt),
-		UpdatedAt: appServerThreadRecency(thread),
-		Archived:  archived,
+		ThreadID: strings.TrimSpace(thread.ID),
+		Path:     path,
+		Title:    title,
+		Preview:  strings.TrimSpace(thread.Preview),
+		CWD:      thread.CWD,
+		Branch:   branch,
+		Provider: strings.TrimSpace(thread.ModelProvider),
+		Model:    model,
+		// Rust session.daybreak_enabled (#49861): the app-server thread's
+		// persisted Daybreak preference.
+		DaybreakEnabled: thread.DaybreakEnabled != nil && *thread.DaybreakEnabled,
+		CreatedAt:       unixSecondsTime(thread.CreatedAt),
+		UpdatedAt:       appServerThreadRecency(thread),
+		Archived:        archived,
 	}
 }
 

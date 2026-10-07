@@ -403,6 +403,14 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 			m.State.Provider = provider
 		}
 	}
+	// Rust session_flow.rs / settings.rs (#49861): the resumed thread's
+	// persisted Daybreak preference is the live value, gated by the
+	// cli_daybreak feature. A summary without a preference clears it so the
+	// next thread cannot inherit the previous one's Daybreak state.
+	m.daybreakEnabled = false
+	if response.Summary != nil && response.Summary.DaybreakEnabled {
+		m.daybreakEnabled = features.Enabled(m.featureSettings, "cli_daybreak")
+	}
 	// Rust #43253/#43330: the resume response carries the thread's server-owned
 	// settings, and a read-only fallback replaces the composer with a notice.
 	if response.ThreadSettings != nil {

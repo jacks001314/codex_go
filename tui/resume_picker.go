@@ -167,10 +167,13 @@ type SessionSummary struct {
 	// Model is the thread's restored model from app-server metadata
 	// (Rust #43360): resuming or switching applies it so later turns use the
 	// thread's model instead of the local default.
-	Model     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Archived  bool
+	Model string
+	// DaybreakEnabled is the thread's persisted Daybreak preference, restored
+	// on resume (Rust session.daybreak_enabled, #49861).
+	DaybreakEnabled bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	Archived        bool
 }
 
 type SessionPickerState struct {

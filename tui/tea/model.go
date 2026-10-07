@@ -1392,8 +1392,11 @@ type Model struct {
 	rateLimitWarnings chatwidget.RateLimitWarningState
 	warningDisplay    chatwidget.WarningDisplayState
 
-	terminalFocused          bool
-	rawOutput                bool
+	terminalFocused bool
+	rawOutput       bool
+	// daybreakEnabled mirrors Rust `ChatWidget::daybreak_enabled` (#49861): the
+	// current thread's Daybreak preference, gated by the cli_daybreak feature.
+	daybreakEnabled          bool
 	rateLimitSwitchPrompt    chatwidget.RateLimitSwitchPromptState
 	hideRateLimitModelNudge  bool
 	rateLimitSwitchModel     string

@@ -24,6 +24,8 @@ func (m *Model) resetThreadScopedState() {
 	m.Transcript.startedThreadIDs = map[string]bool{}
 	m.Transcript.completedThreadIDs = map[string]bool{}
 	m.lastTurnError = ""
+	// The previous thread's Daybreak preference is thread-scoped (Rust #49861).
+	m.daybreakEnabled = false
 	m.needsFinalMessageSeparator = false
 	m.activeAssistantDeltaItemID = ""
 	m.Transcript.lastTurnError = ""
