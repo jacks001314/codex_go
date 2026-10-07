@@ -64,15 +64,15 @@ func RemoveThreadNameEntries(codexHome string, threadID string) error {
 	}
 	removed := false
 	var remaining bytes.Buffer
-	// Rust parity: str::lines() yields no trailing empty segment and keeps
-	// interior blank lines, so the rewritten index stays byte-identical apart
-	// from the removed entries. bytes.Split adds a final empty element when the
-	// data ends with '\n', so drop only that one.
+	// Rust parity: str::lines() yields no trailing empty segment, keeps interior
+	// blank lines, and drops a trailing carriage return. bytes.Split adds a final
+	// empty element when the data ends with '\n', so drop only that one.
 	lines := bytes.Split(data, []byte{'\n'})
 	if n := len(lines); n > 0 && len(lines[n-1]) == 0 {
 		lines = lines[:n-1]
 	}
 	for _, line := range lines {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
 		var entry SessionIndexEntry
 		if json.Unmarshal(bytes.TrimSpace(line), &entry) == nil && entry.ID == threadID {
 			removed = true
