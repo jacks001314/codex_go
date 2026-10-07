@@ -115,7 +115,7 @@ comm -23 <(窗口 PR 集) <(语料 PR 集) | wc -l                              
 | #49145 | `8d48f71922` | Hide reasoning summary settings in `/status` for server connecti | ⬜ 未落地 | ①`git log --grep="#49145"`=0 ②`rg '#49145' -g '*.go'`=0 ③最长标识符 `n/a` 在 Go 0 文件 ④`git show --stat 8d48f71922`=5 文件（codex-rs/tui/src/status/card.rs; codex-rs/tui/src/status/snapshots/codex_tui__status__tests__status_snapshot_local_background_server.snap）→ 落点候选 tui/（部分在 app/） |
 | #49147 | `3a16c0b707` | Simplify cloud task base URL normalization (#49147) | ⬜ 未落地 | ①`git log --grep="#49147"`=0 ②`rg '#49147' -g '*.go'`=0 ③最长标识符 `normalize_base_url_normalizes_urls` 在 Go 0 文件 ④`git show --stat 3a16c0b707`=1 文件（codex-rs/cloud-tasks/src/util.rs）→ 落点候选 （cloud-tasks：无直接 Go 包） |
 | #49153 | `c6c7c8d270` | Omit blockquote markers when copying quoted selections in the TU | ⬜ 未落地 | ①`git log --grep="#49153"`=0 ②`rg '#49153' -g '*.go'`=0 ③最长标识符 `blockquote_selection_copies_only_selected_content` 在 Go 0 文件 ④`git show --stat c6c7c8d270`=5 文件（codex-rs/tui/src/markdown_copy.rs; codex-rs/tui/src/markdown_render.rs）→ 落点候选 tui/（部分在 app/） |
-| #49160 | `0d7b8117d3` | Support projectless TUI sessions with workspace defaults (#49160 | ⬜ 未落地 | ①`git log --grep="#49160"`=0 ②`rg '#49160' -g '*.go'`=0 ③最长标识符 `local_projectless_defaults_respect_trust_scope_and_explicit_settings` 在 Go 0 文件 ④`git show --stat 0d7b8117d3`=55 文件（codex-rs/cli/tests/doctor_path_safety.rs; codex-rs/config/src/loader/mod.rs）→ 落点候选 cli/；config/ |
+| #49160 | `0d7b8117d3` | Support projectless TUI sessions with workspace defaults (#49160 | 🟡 部分（c1 已落） | c1 = `77732afa` sync554（`TrustCancelCurrentTask` + "Keep current directory" + `Escape()`）；a 已派 `syncnext4`，b/c2 先侦察后定 | ①`git log --grep="#49160"`=0 ②`rg '#49160' -g '*.go'`=0 ③最长标识符 `local_projectless_defaults_respect_trust_scope_and_explicit_settings` 在 Go 0 文件 ④`git show --stat 0d7b8117d3`=55 文件（codex-rs/cli/tests/doctor_path_safety.rs; codex-rs/config/src/loader/mod.rs）→ 落点候选 cli/；config/ |
 | #49161 | `3226512d47` | Honor app-server provider defaults in the TUI (#49161) | ⬜ 未落地 | ①`git log --grep="#49161"`=0 ②`rg '#49161' -g '*.go'`=0 ③最长标识符 `history_lookup_uses_server_provider_with_local_and_embedded_servers` 在 Go 0 文件 ④`git show --stat 3226512d47`=19 文件（codex-rs/tui/src/app/event_dispatch.rs; codex-rs/tui/src/app/reconnect.rs）→ 落点候选 tui/（部分在 app/） |
 | #49164 | `fbc169827e` | Suppress Windows console windows for background subprocesses (#4 | ⬜ 未落地 | ①`git log --grep="#49164"`=0 ②`rg '#49164' -g '*.go'`=0 ③最长标识符 `background_launches_keep_consoles_hidden_when_containment_fails` 在 Go 0 文件 ④`git show --stat fbc169827e`=44 文件（codex-rs/Cargo.lock; codex-rs/Cargo.toml）→ 落点候选 （codex-rs：无直接 Go 包）；appserver/ |
 | #49171 | `c248f6d48b` | Fix model provider lookup for TUI history (#49171) | ⬜ 未落地 | ①`git log --grep="#49171"`=0 ②`rg '#49171' -g '*.go'`=0 ③最长标识符 `n/a` 在 Go 0 文件 ④`git show --stat c248f6d48b`=1 文件（codex-rs/tui/src/app_server_session/provider_selection.rs）→ 落点候选 tui/（部分在 app/） |
@@ -398,7 +398,7 @@ comm -23 <(窗口 PR 集) <(语料 PR 集) | wc -l                              
 | #49084 | `88e9a8329d` | Track app-server running turns incrementally (#49084) | ✅ | Go commit: cbe9eb7f `plan: record sync368-371 (#51439/#51391/#49084/#48574)` |
 | #49098 | `f5430515a8` | Resolve Windows sandbox PowerShell fallbacks on the exec server  | ✅ | Go commit: 3b0a75b9 `sync457: resolve Windows sandbox PowerShell fallbacks on the exec server (#49098` |
 | #49136 | `d7f7fa4106` | Remove the plus separator after Option symbols in TUI key hints  | ✅ | Go commit: 46c64284 `sync434: keep option glyphs compact in TUI key hints (#49136)` |
-| #49262 | `a7660cd154` | Trace turn phases and correlate accepted input with turns (#4926 | ✅ | Go commit: 46d9a9eb `sync488: wire defer_mailbox_preemption into the app-server turn runtime (#49262,` |
+| #49262 | `a7660cd154` | Trace turn phases and correlate accepted input with turns (#4926 | ✅ | 三段齐全：① `46d9a9eb` sync488（mailbox_preemption 1/3）② `195943ab` sync553（`codex.turn_input` span + `codex.turn.phase`/sampling/tool_blocking span）③ `5aedba53` sync555（手动 compaction `codex.compaction` phase span，= 车道 `555c0f57` 的纯增量 111 行） | |
 | #49276 | `4994306e9f` | Enable enterprise MCP sign-in and account-scoped grant cleanup ( | ✅ | Go commit: f28cf25f `sync469: mint the MCP OAuth login id in the MCP layer (#49276)` |
 | #49286 | `65c3f40bef` | Model exec-server session attachment state as an enum (#49286) | ✅ | Go commit: e0ea0574 `sync458: pin exec-server session attachment-state invariants (#49286)` |
 | #49297 | `d5e6526362` | Scan the session index backwards for batch thread name lookups ( | ✅ | Go commit: 4d860670 `plan: record sync373 (#49297) and #49956/#49415/#49910 dispositions` |
@@ -1185,7 +1185,8 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 **同步登记的新缺口（不在 499 窗口内，另立项）**
 - Bedrock **Runtime 专属模型目录**缺失（`rg 'RuntimeModelCatalog|runtime_catalog'` 生产 0 命中；`rg '"global\.|"us\.' model/` = 0）。
 - `model/provider.go:352/356/360` preferred-model 漂移（Rust #38470 `d5e256ceb2`）。
-- 新窗口（`5a3140176e` 之后）2 项：`#51595`（`excludedThreadIds`，Go 0 命中）、`#51602`（listing 失败 vs history 耗尽未区分）。
+- 新窗口（`5a3140176e` 之后）2 项**均已落地**：`#51595` → `497bbe43` sync551（`excludedThreadIds`）、`#51602` → `891a49ba` sync552（listing 失败 vs history 耗尽：显式空 cwd / db-only -32603 / cursor 不复现）。
+- ⚠️ `#51595` 触及 vendored `app-server-exports-*.json.zst`：参照点 `5a3140176e` **不含**该 commit，两 .zst 现仍与上游一致（parity 绿）；**Rust pin 一旦推过 `1fbe15c962` 必须重新 vendor 这两个文件**，否则 `TestPrecomputedAppServerExportsMatchRustTarget` 变红。
 
 **计数口径提醒**：本台账的 `⬜` 行数是「表行数」；§13 的 111 是「去重后未落地 PR 数」。两者不可直接互换；以本节更新后的表行数为准，PR 去重数请按 §13 口径重算。
 
@@ -1203,6 +1204,6 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 | `#48819` | `456212ca21` | 6 文件 +140/−28（`otel/src/metrics/names.rs` 显式直方图桶 `context_log_buckets(max_exponent)` = `[f64; 511]`，15.0/17.0 两处） | Go 落点 `telemetry/`（对照既有 metric 常量与 `RecordDuration`/histogram 面）；`rg 'context_log_buckets'` 预期 = 0 |
 | `#48983` | `c0d26949be` | 4 文件 +149/−1（thread-store `update_thread_metadata` +16，避免时间戳更新触发整表元数据重写） | Go 落点 = `appserver/thread_attachments_runtime.go` / `router.go` 的线程元数据更新路径 + `state/` 查询层；需确认 Go 是否已有等价「窄更新」 |
 | `#49082` | `46d2585ea4` | 2 文件 +202/−5（turn.rs：Guardian `is_basic_session_source` 时**跳过 remote Git discovery** 以显示 diff 路径） | Go 落点 = turn diff 路径推导处（`rg 'CwdRelativeTurnDiffs|is_basic_session_source'`）；真缺口候选 |
-| ~~`#49100`~~ | `bfdb157178` | 2 文件 +154/−6（core-plugins manager 复用 HTTP 连接池） | **暂缓**：与 `sync51482` 在办的 `#49099` 同包（plugin），避免写集冲突，待其交付后再派 |
+| ~~`#49100`~~ | `bfdb157178` | 2 文件 +154/−6（core-plugins manager 复用 HTTP 连接池） | 已派 **`syncnext3`**（`agent-390a7b103148b523e72a2e61`，#49099 已并入 sync550，写集不再冲突） |
 
 **派单优先级建议**：`#49082` → `#48983` → `#48772` → `#48819`（按「落点确定度 × 影响面」排序；`#49100` 随 `#49099` 之后）。
