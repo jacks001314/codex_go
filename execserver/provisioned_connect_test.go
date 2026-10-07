@@ -284,3 +284,72 @@ func TestProvisionedNoiseConnectStopsOnPermanentRegistryErrorLikeRust(t *testing
 		t.Fatalf("registry calls = %d, want 11 (ten offline then the permanent error)", got)
 	}
 }
+
+// stalledNoiseProvider models Rust's SequenceNoiseConnectProvider `push_pending`
+// script (#48575): the first registry request returns first, and every later
+// request stalls until its request context expires.
+type stalledNoiseProvider struct {
+	mu    sync.Mutex
+	calls int
+	first error
+}
+
+func (p *stalledNoiseProvider) ConnectBundle(ctx context.Context, _ RemotePublicKey) (*NoiseRendezvousConnectBundle, error) {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	first := p.first
+	p.mu.Unlock()
+	if call == 1 {
+		return nil, first
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (p *stalledNoiseProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+// TestProvisionedNoiseConnectBoundsAStalledRetryRequestLikeRust ports Rust
+// `provisioned_noise_connection_bounds_a_stalled_retry_request`:
+// a registry request that stalls keeps the ordinary operation deadline rather
+// than the provisioning window. Rust classifies the request timeout as
+// retryable (`is_retryable_registry_error` -> `RouteAwareRequestError::is_timeout`)
+// and bounds each attempt with `timeout_at(retry_deadline, ..)`, so the connect
+// keeps retrying until the ordinary deadline and then returns the request
+// timeout. Go must classify the wrapped `context.DeadlineExceeded` the same way
+// and cap the attempt by the retry deadline.
+func TestProvisionedNoiseConnectBoundsAStalledRetryRequestLikeRust(t *testing.T) {
+	const operationWindow = 150 * time.Millisecond
+	compressRegistryWindows(t, operationWindow, 5*time.Second)
+	// A stalled attempt must be able to consume a serious slice of the
+	// operation window so the deadline, not the retry count, bounds the loop.
+	initialRegistryRequestTimeout = 120 * time.Millisecond
+
+	provider := &stalledNoiseProvider{first: registryConflictError(http.StatusConflict, "environment_offline")}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	started := time.Now()
+	_, err := DialNoiseRendezvousClient(ctx, provider, DialClientOptions{ClientName: "provisioned-stalled-test", Provisioned: true})
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("a stalled registry request must eventually time out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want a registry request timeout", err)
+	}
+	if calls := provider.callCount(); calls < 3 {
+		t.Fatalf("registry calls = %d, want the stalled request retried past the first offline response", calls)
+	}
+	if elapsed < operationWindow-30*time.Millisecond {
+		t.Fatalf("elapsed = %v, want the ordinary operation deadline %v to bound the stalled retries", elapsed, operationWindow)
+	}
+	if elapsed > operationWindow+25*time.Millisecond {
+		t.Fatalf("elapsed = %v, want the stalled request bounded by the operation deadline %v", elapsed, operationWindow)
+	}
+}

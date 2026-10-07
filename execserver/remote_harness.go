@@ -276,8 +276,21 @@ func DialNoiseRendezvousClient(
 	// longer environment_offline window (Rust #48575).
 	openWithProvisioningDeadline := func(provisioningDeadline time.Time) clientConnectionOpener {
 		return func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-			connectBundle := func() (*NoiseRendezvousConnectBundle, error) {
-				connectCtx, cancel := context.WithTimeout(ctx, initialRegistryRequestTimeout)
+			// connectBundle issues one registry request. bound, when non-zero,
+			// caps the request by the current retry deadline so a stalled request
+			// cannot outlive it; Rust wraps the sleep and the request in
+			// `timeout_at(retry_deadline, ..)` (#48575).
+			connectBundle := func(bound time.Time) (*NoiseRendezvousConnectBundle, error) {
+				timeout := initialRegistryRequestTimeout
+				if !bound.IsZero() {
+					if remaining := time.Until(bound); remaining < timeout {
+						timeout = remaining
+					}
+				}
+				if timeout <= 0 {
+					return nil, fmt.Errorf("environment registry request failed: %w", context.DeadlineExceeded)
+				}
+				connectCtx, cancel := context.WithTimeout(ctx, timeout)
 				defer cancel()
 				bundle, err := provider.ConnectBundle(connectCtx, identity.PublicKey())
 				if err != nil && connectCtx.Err() == context.DeadlineExceeded {
@@ -303,8 +316,9 @@ func DialNoiseRendezvousClient(
 			retries := 0
 			deadline := time.Now().Add(initialRegistryOperationTimeout)
 			refreshedUnauthorizedBundle := false
+			var requestBound time.Time
 			for {
-				bundle, err := connectBundle()
+				bundle, err := connectBundle(requestBound)
 				if err != nil {
 					// Rust #48575: a provisioned executor may be resuming after an
 					// earlier ready report, so an `environment_offline` response on
@@ -331,6 +345,7 @@ func DialNoiseRendezvousClient(
 					// the loop without another request.
 					delay := registryRecoveryRetryDelay(retries)
 					retries++
+					requestBound = retryDeadline
 					if remaining := time.Until(retryDeadline); remaining < delay {
 						delay = remaining
 					}
@@ -349,6 +364,7 @@ func DialNoiseRendezvousClient(
 					refreshedUnauthorizedBundle = true
 					deadline = time.Now().Add(initialRegistryOperationTimeout)
 					retries = 0
+					requestBound = time.Time{}
 					continue
 				}
 				return conn, initialized, err
@@ -431,6 +447,17 @@ func isRetryableRegistryError(err error) bool {
 		default:
 			return statusErr.StatusCode >= 500
 		}
+	}
+	// Rust's is_retryable_registry_error treats an EnvironmentRegistryRequest
+	// whose RouteAwareRequestError is a connect/timeout/body failure as
+	// transient (codex-rs/exec-server/src/client_recovery.rs). Go surfaces the
+	// per-request timeout as an error wrapping context.DeadlineExceeded (see
+	// connectBundle above); without this branch a stalled registry request would
+	// be classified as permanent and stop the initial connect immediately
+	// instead of being bounded by the ordinary operation deadline (Rust #48575
+	// `provisioned_noise_connection_bounds_a_stalled_retry_request`).
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
