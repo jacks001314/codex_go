@@ -536,6 +536,12 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if _, ok := cfg.Values["experimental_thread_store_endpoint"]; ok {
 		return nil, errors.New("`experimental_thread_store_endpoint` is no longer supported; remove it from config.toml")
 	}
+	// Rust #51547: `windows.allow_mxc = false` is an opt-out of the native MXC
+	// backend. An explicit `windows.sandbox = "mxc"` must fail the load with an
+	// actionable error instead of silently selecting a disallowed backend.
+	if err := ValidateWindowsMXCOptOut(cfg.Values); err != nil {
+		return nil, err
+	}
 	// Rust deserializes `mcp_oauth_credentials_store` as an enum, so an
 	// unrecognized value fails the load rather than silently defaulting.
 	if err := ValidateMCPOAuthCredentialsStoreMode(cfg.Values); err != nil {

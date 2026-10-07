@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // Rust parity: codex-rs/core/src/windows_sandbox.rs::resolve_windows_sandbox_mode
 // and codex-rs/core/src/config/mod.rs's requirement-constrained application of
@@ -96,4 +99,42 @@ func parseWindowsSandboxModeValue(value any) (WindowsSandboxMode, bool) {
 func stringValueFromAny(value any) string {
 	text, _ := value.(string)
 	return text
+}
+
+// WindowsAllowMXCFromValues reads the `windows.allow_mxc` opt-out added by Rust
+// #51547. The setting is absent by default (allow=true, configured=false), so
+// omitting it preserves the existing behavior; an explicit false blocks both
+// explicit MXC configuration and automatic MXC selection.
+func WindowsAllowMXCFromValues(values map[string]any) (allow bool, configured bool) {
+	table, ok := values["windows"].(map[string]any)
+	if !ok {
+		return true, false
+	}
+	value, ok := table["allow_mxc"].(bool)
+	if !ok {
+		return true, false
+	}
+	return value, true
+}
+
+// ValidateWindowsMXCOptOut rejects an explicit `windows.sandbox = "mxc"` when
+// `windows.allow_mxc` is false, mirroring Rust #51547's load-time failure
+// (`Config::load` returns InvalidInput with the same message).
+func ValidateWindowsMXCOptOut(values map[string]any) error {
+	if allow, configured := WindowsAllowMXCFromValues(values); configured && !allow {
+		if mode, ok := WindowsSandboxModeFromValues(values); ok && mode == WindowsSandboxModeMxc {
+			return errors.New(`windows.sandbox = "mxc" is not allowed when windows.allow_mxc = false`)
+		}
+	}
+	return nil
+}
+
+// WindowsAutomaticMXCAllowed reports whether automatic MXC selection is allowed
+// for the configuration (Rust #51547's `config_allows_mxc` opt-out clause).
+// Go does not select MXC implicitly - the backend requires an explicit
+// `windows.sandbox = "mxc"` - so this predicate only documents and freezes the
+// opt-out semantics for the automatic path.
+func WindowsAutomaticMXCAllowed(values map[string]any) bool {
+	allow, configured := WindowsAllowMXCFromValues(values)
+	return !configured || allow
 }
