@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -188,5 +189,48 @@ func TestFindThreadNamesByIDsScansBackwardsLikeRust(t *testing.T) {
 	}
 	if _, ok := names["missing"]; ok {
 		t.Fatalf("missing id should be absent: %#v", names)
+	}
+}
+
+// TestAppendAndRemoveThreadNamesPreserveOtherEntries mirrors Rust #49959:
+// appending an original and an updated name for one thread alongside another
+// thread's entry must leave the lookup resolving the updated name, and removing
+// the first thread's name entries must keep only the other thread's entry.
+func TestAppendAndRemoveThreadNamesPreserveOtherEntries(t *testing.T) {
+	home := t.TempDir()
+	removedID := "thread-removed"
+	retained := SessionIndexEntry{
+		ID:         "thread-retained",
+		ThreadName: "retained",
+		UpdatedAt:  "2024-01-01T00:00:00Z",
+	}
+	for _, entry := range []SessionIndexEntry{
+		{ID: removedID, ThreadName: "original", UpdatedAt: retained.UpdatedAt},
+		retained,
+		{ID: removedID, ThreadName: "renamed", UpdatedAt: retained.UpdatedAt},
+	} {
+		if err := AppendSessionIndexEntry(home, entry); err != nil {
+			t.Fatalf("AppendSessionIndexEntry(%q) error = %v", entry.ThreadName, err)
+		}
+	}
+
+	name, found, err := FindThreadNameByID(home, removedID)
+	if err != nil || !found || name != "renamed" {
+		t.Fatalf("FindThreadNameByID() = %q, %v, %v; want the latest appended name", name, found, err)
+	}
+
+	if err := RemoveThreadNameEntries(home, removedID); err != nil {
+		t.Fatalf("RemoveThreadNameEntries() error = %v", err)
+	}
+	data, err := os.ReadFile(sessionIndexPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	line, err := json.Marshal(retained)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if want := string(line) + "\n"; string(data) != want {
+		t.Fatalf("remaining session index = %q, want %q", data, want)
 	}
 }
