@@ -720,7 +720,10 @@ func (m *authFlowModel) renderAPIKeyEntry() string {
 	lines := []string{
 		"> " + lipgloss.NewStyle().Bold(true).Render("Use your own OpenAI API key for usage-based billing"),
 		"",
-		"  Paste or type your API key below. It will be stored locally in auth.json.",
+		// Rust #49361: credentials can live in a keyring backend, so the entry
+		// prompt must not claim the key is written to auth.json. Rust
+		// onboarding::auth snapshots api_key_entry / api_key_entry_narrow.
+		"  Paste or type your API key below.",
 		"",
 	}
 	if m.apiKeyPrepopulated {

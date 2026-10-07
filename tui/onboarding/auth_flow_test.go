@@ -338,3 +338,32 @@ func TestAuthFlowCopiesBrowserLoginURLLikeRust(t *testing.T) {
 		t.Fatalf("copy notice survived the cancel:\n%s", view)
 	}
 }
+
+// Rust #49361 onboarding/auth.rs `api_key_entry` / `api_key_entry_narrow`: the
+// API-key prompt no longer claims the key is stored in auth.json, because
+// credentials can use a keyring backend.
+func TestAPIKeyEntryStorageCopyLikeRust(t *testing.T) {
+	t.Setenv(auth.OpenAIAPIKeyEnv, "")
+	model := newAuthFlowModel(context.Background(), AuthFlowOptions{
+		CodexHome:      t.TempDir(),
+		ChatGPTAllowed: true,
+		APIKeyAllowed:  true,
+	})
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'3'}})
+	if model.state != SignInAPIKeyEntry {
+		t.Fatalf("API key state=%s", model.state)
+	}
+
+	for _, width := range []int{80, 40} {
+		model.width = width
+		view := model.View()
+		if !strings.Contains(view, "Paste or type your API key below.") {
+			t.Fatalf("width %d lost the entry prompt:\n%s", width, view)
+		}
+		for _, stale := range []string{"auth.json", "stored locally"} {
+			if strings.Contains(view, stale) {
+				t.Fatalf("width %d still claims %q:\n%s", width, stale, view)
+			}
+		}
+	}
+}
