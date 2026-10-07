@@ -9,6 +9,10 @@ import (
 
 const RequestPermissionsToolName = "request_permissions"
 
+// Rust #50962: request_permissions requires a usable primary environment and
+// reports this legacy message while `stable_environment_tools` is off.
+const requestPermissionsUnavailableMessage = "request_permissions requires a primary environment"
+
 // RequestPermissionsDecision is the Guardian-reviewed outcome for a
 // request_permissions call (Rust #38701).
 type RequestPermissionsDecision struct {
@@ -26,6 +30,9 @@ type RequestPermissionsReviewer func(ctx context.Context, threadID, turnID, call
 // path and the resulting decision drives the tool output.
 type RequestPermissionsExecutor struct {
 	Reviewer RequestPermissionsReviewer
+	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so the
+	// call resolves the selected environment before review.
+	EnvironmentCheck *UnifiedExecEnvironmentCheck
 }
 
 func (e *RequestPermissionsExecutor) Spec() Spec {
@@ -66,18 +73,16 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 	if err := invocation.DecodeArguments(&args); err != nil {
 		return nil, RespondToModel("request_permissions arguments are invalid: " + err.Error())
 	}
+	resolvedEnvironmentID, err := ResolveToolEnvironment(e.EnvironmentCheck, requestPermissionsEnvironmentID(args), requestPermissionsUnavailableMessage)
+	if err != nil {
+		return nil, RespondToModel(err.Error())
+	}
 	if len(args.Permissions) == 0 {
 		return nil, RespondToModel("request_permissions requires a permissions object")
 	}
 	threadID := strings.TrimSpace(invocationContextString(invocation, "thread_id"))
 	turnID := strings.TrimSpace(invocationContextString(invocation, "turn_id"))
-	environmentID := ""
-	if args.EnvironmentID != nil {
-		environmentID = strings.TrimSpace(*args.EnvironmentID)
-	} else if args.EnvironmentIDCamel != nil {
-		environmentID = strings.TrimSpace(*args.EnvironmentIDCamel)
-	}
-	decision, err := e.Reviewer(ctx, threadID, turnID, invocation.CallID, environmentID, strings.TrimSpace(args.Reason), cloneRequestPermissions(args.Permissions))
+	decision, err := e.Reviewer(ctx, threadID, turnID, invocation.CallID, resolvedEnvironmentID, strings.TrimSpace(args.Reason), cloneRequestPermissions(args.Permissions))
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +103,24 @@ func (e *RequestPermissionsExecutor) Execute(ctx context.Context, invocation *In
 		data["permissions"] = json.RawMessage(encoded)
 	}
 	return &Output{Success: true, Body: body, Data: data}, nil
+}
+
+// requestPermissionsEnvironmentID reads the call's own environment selector, which is
+// an advisory id until ResolveToolEnvironment validates it (Rust
+// `RequestPermissionsEnvironmentArgs::environment_id`).
+func requestPermissionsEnvironmentID(args struct {
+	Reason             string         `json:"reason"`
+	EnvironmentID      *string        `json:"environment_id"`
+	EnvironmentIDCamel *string        `json:"environmentId"`
+	Permissions        map[string]any `json:"permissions"`
+}) string {
+	if args.EnvironmentID != nil {
+		return strings.TrimSpace(*args.EnvironmentID)
+	}
+	if args.EnvironmentIDCamel != nil {
+		return strings.TrimSpace(*args.EnvironmentIDCamel)
+	}
+	return ""
 }
 
 func invocationContextString(invocation *Invocation, key string) string {
@@ -121,8 +144,15 @@ var _ Executor = (*RequestPermissionsExecutor)(nil)
 // RegisterRequestPermissionsTool registers the request_permissions executor
 // with the given reviewer, replacing any previous registration.
 func RegisterRequestPermissionsTool(registry *Registry, reviewer RequestPermissionsReviewer) error {
+	return RegisterRequestPermissionsToolWithOptions(registry, reviewer, nil)
+}
+
+// RegisterRequestPermissionsToolWithOptions registers request_permissions with
+// the turn readiness facts so an explicit environment_id is resolved through
+// ResolveToolEnvironment (Rust #50962).
+func RegisterRequestPermissionsToolWithOptions(registry *Registry, reviewer RequestPermissionsReviewer, environmentCheck *UnifiedExecEnvironmentCheck) error {
 	if registry == nil {
 		return fmt.Errorf("registry is nil")
 	}
-	return registry.Register(&RequestPermissionsExecutor{Reviewer: reviewer})
+	return registry.Register(&RequestPermissionsExecutor{Reviewer: reviewer, EnvironmentCheck: environmentCheck})
 }

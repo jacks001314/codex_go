@@ -6446,8 +6446,12 @@ func (r *RuntimeRouter) handleInitialize(request *Request) (*InitializeResponse,
 }
 
 // systemBwrapWarning is injectable so the startup wiring can be pinned without
-// depending on the host's bubblewrap installation.
-var systemBwrapWarning = sandbox.SystemBwrapWarning
+// depending on the host's bubblewrap installation. It takes the policy working
+// directory the launcher probe resolves writable roots against (Rust #51211
+// passes the effective permission profile and `config.cwd`, mirroring
+// `codex-rs/app-server/src/lib.rs`), so the cwd-less
+// `sandbox.SystemBwrapWarning` stays as the compatibility entry point.
+var systemBwrapWarning = sandbox.SystemBwrapWarningForCWD
 
 func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNotification {
 	if r == nil || r.services.Config == nil {
@@ -6462,7 +6466,7 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 	// Rust app-server startup: the bubblewrap warning joins the config warnings,
 	// so a session whose sandbox cannot use bubblewrap learns why.
 	if profile := r.services.Config.EffectivePermissionProfileForCWD(r.services.DefaultCWD); profile != nil {
-		if warning := systemBwrapWarning(profile); warning != "" {
+		if warning := systemBwrapWarning(profile, r.services.DefaultCWD); warning != "" {
 			warnings = append(warnings, config.ConfigWarningNotification{Summary: warning})
 		}
 	}
@@ -13930,6 +13934,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.ApplyPatch.PermissionProfile = permissionProfile.Profile
 		options.ApplyPatch.SandboxPolicy = nil
 	}
+	if options.ApplyPatch != nil {
+		options.ApplyPatch.IncludeEnvironmentID = r.includeEnvironmentIDForTurn(cfg, params)
+	}
 	approvalPolicy := turnApprovalPolicyForTurn(cfg, params)
 	if options.Shell != nil {
 		if managedNetwork != nil {
@@ -13982,6 +13989,13 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.Shell.Validation.WindowsSandboxLevel = windowsSandboxLevelForConfig(cfg)
 			// Rust #46554: legacy Windows sandboxes always use a private desktop.
 			options.Shell.Validation.WindowsSandboxPrivateDesktop = windowsSandboxPrivateDesktopForTurn()
+		}
+		if cfg != nil {
+			// Rust #50962 gates the stable environment tool surface behind the
+			// default-off `stable_environment_tools` feature. Turn options default
+			// to the off state, so the effective config has to be wired here or the
+			// flag stays unreachable from the app server.
+			options.StableEnvironmentTools = features.Enabled(cfg.FeatureSettings(), "stable_environment_tools")
 		}
 		if guardianTurnStart(params) {
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve
@@ -14568,6 +14582,23 @@ func runtimeToolsUseOpenAIFileUpload(tools []mcp.RuntimeToolInfo) bool {
 	return false
 }
 
+// includeEnvironmentIDForTurn mirrors the environment half of Rust's tool spec
+// plan (Rust #50741/#50962) for the schema decision on environment-backed
+// tools: with `stable_environment_tools` off the selector follows the usable
+// environments, and with it on the selector stays stable and follows the
+// turn's selections.
+func (r *RuntimeRouter) includeEnvironmentIDForTurn(cfg *config.Config, params *turn.TurnStartParams) bool {
+	if cfg != nil && features.Enabled(cfg.FeatureSettings(), "stable_environment_tools") {
+		return len(selectedEnvironmentIDs(params)) > 1
+	}
+	usable := len(r.unifiedExecEnvironmentsForTurn(params))
+	if usable == 0 {
+		// The implicit local environment is always available.
+		usable = 1
+	}
+	return usable > 1
+}
+
 func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn.TurnStartParams, cwd string) *tool.ViewImageOptions {
 	if cfg != nil && !features.Enabled(cfg.FeatureSettings(), "view_image") {
 		return nil
@@ -14584,7 +14615,7 @@ func (r *RuntimeRouter) viewImageOptionsForTurn(cfg *config.Config, params *turn
 	return &tool.ViewImageOptions{
 		CWD:                      cwd,
 		CanRequestOriginalDetail: info.SupportsImageDetailOriginal,
-		IncludeEnvironmentID:     len(selectedEnvironmentIDs(params)) > 1,
+		IncludeEnvironmentID:     r.includeEnvironmentIDForTurn(cfg, params),
 	}
 }
 

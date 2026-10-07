@@ -8,23 +8,29 @@ import (
 	"codex_go/sandbox"
 )
 
-// TestRuntimeRouterEmitsBwrapWarningLikeRust mirrors the Rust app-server startup:
-// a profile that needs the platform sandbox adds the bubblewrap warning to the
-// config warnings, and a profile that does not stays silent.
+// TestRuntimeRouterEmitsBwrapWarningLikeRust mirrors the Rust app-server startup
+// (`codex-rs/app-server/src/lib.rs`): a profile that needs the platform sandbox
+// adds the bubblewrap warning to the config warnings, and a profile that does
+// not stays silent. Rust #51211 passes the effective permission profile and
+// `config.cwd`, so the startup probe has to receive the router's cwd.
 func TestRuntimeRouterEmitsBwrapWarningLikeRust(t *testing.T) {
 	original := systemBwrapWarning
 	t.Cleanup(func() { systemBwrapWarning = original })
 
+	cwd := t.TempDir()
 	seen := 0
-	systemBwrapWarning = func(profile *sandbox.PermissionProfile) string {
+	systemBwrapWarning = func(profile *sandbox.PermissionProfile, policyCWD string) string {
 		seen++
 		if profile == nil {
 			t.Error("the startup warning was computed without a permission profile")
 			return ""
 		}
+		if policyCWD != cwd {
+			t.Errorf("startup warning cwd = %q, want the router cwd %q", policyCWD, cwd)
+		}
 		return "bubblewrap is unavailable for this test"
 	}
-	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir()), DefaultCWD: cwd})
 	sink := NewNotificationBuffer()
 	router.SetNotificationSink(sink)
 	response := router.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{
@@ -52,8 +58,8 @@ func TestRuntimeRouterEmitsBwrapWarningLikeRust(t *testing.T) {
 	}
 
 	// A silent warning contributes nothing.
-	systemBwrapWarning = func(*sandbox.PermissionProfile) string { return "" }
-	router2 := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir())})
+	systemBwrapWarning = func(*sandbox.PermissionProfile, string) string { return "" }
+	router2 := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(t.TempDir()), DefaultCWD: cwd})
 	silentSink := NewNotificationBuffer()
 	router2.SetNotificationSink(silentSink)
 	router2.Handle(requestWithParams(t, IntID(1), MethodInitialize, InitializeParams{

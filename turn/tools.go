@@ -568,7 +568,15 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.EnableApplyPatch && environmentPlan.Advertise {
-		if err := tool.RegisterApplyPatchHandler(registry, options.ApplyPatch); err != nil {
+		// Rust #50962: the readiness facts reach the handler so a patch-level
+		// environment id is resolved before verification.
+		applyPatchOptions := options.ApplyPatch
+		if applyPatchOptions != nil {
+			clone := *applyPatchOptions
+			clone.EnvironmentCheck = environmentPlan.Check
+			applyPatchOptions = &clone
+		}
+		if err := tool.RegisterApplyPatchHandler(registry, applyPatchOptions); err != nil {
 			return nil, err
 		}
 	}
@@ -616,7 +624,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.ViewImage != nil && environmentPlan.Advertise {
-		if err := registry.Register(tool.NewViewImageHandler(*options.ViewImage)); err != nil {
+		// Rust #50962: same readiness facts as the shell family, so an explicit
+		// environment_id resolves instead of being silently ignored.
+		viewImageOptions := *options.ViewImage
+		viewImageOptions.EnvironmentCheck = environmentPlan.Check
+		if err := registry.Register(tool.NewViewImageHandler(viewImageOptions)); err != nil {
 			return nil, err
 		}
 	}
@@ -649,7 +661,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 	}
 	if options.EnableRequestPermissions && options.RequestPermissionsReviewer != nil && environmentPlan.Advertise {
-		if err := tool.RegisterRequestPermissionsTool(registry, options.RequestPermissionsReviewer); err != nil {
+		if err := tool.RegisterRequestPermissionsToolWithOptions(registry, options.RequestPermissionsReviewer, environmentPlan.Check); err != nil {
 			return nil, err
 		}
 	}

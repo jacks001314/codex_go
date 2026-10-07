@@ -13,6 +13,10 @@ import (
 
 const DefaultApplyPatchToolName = "apply_patch"
 
+// Rust #50962: apply_patch reports this legacy message when no usable
+// environment exists and `stable_environment_tools` is off.
+const applyPatchUnavailableMessage = "apply_patch is unavailable in this session"
+
 type ApplyPatchExecutorOptions struct {
 	CWD                  string
 	IncludeEnvironmentID bool
@@ -23,6 +27,9 @@ type ApplyPatchExecutorOptions struct {
 	DecisionSink      ToolDecisionSink
 	PermissionProfile *sandbox.PermissionProfile
 	SandboxPolicy     *sandbox.SandboxPolicy
+	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so a
+	// patch-level environment id is resolved before verification.
+	EnvironmentCheck *UnifiedExecEnvironmentCheck
 }
 
 type ApplyPatchExecutor struct {
@@ -33,6 +40,7 @@ type ApplyPatchExecutor struct {
 	decisionSink         ToolDecisionSink
 	permissionProfile    *sandbox.PermissionProfile
 	sandboxPolicy        *sandbox.SandboxPolicy
+	environmentCheck     *UnifiedExecEnvironmentCheck
 }
 
 type ApplyPatchApprovalDecision struct {
@@ -68,6 +76,7 @@ func NewApplyPatchExecutor(options *ApplyPatchExecutorOptions) *ApplyPatchExecut
 	executor.decisionSink = options.DecisionSink
 	executor.permissionProfile = options.PermissionProfile
 	executor.sandboxPolicy = options.SandboxPolicy
+	executor.environmentCheck = options.EnvironmentCheck
 	if options.ToolName.Key() != "" {
 		executor.toolName = options.ToolName
 	}
@@ -110,6 +119,13 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 	action, err := applypatch.Parse(patch)
 	if err != nil {
 		return nil, RespondToModel("apply_patch verification failed: " + applypatch.FormatError(err))
+	}
+	var environmentCheck *UnifiedExecEnvironmentCheck
+	if e != nil {
+		environmentCheck = e.environmentCheck
+	}
+	if _, err := ResolveToolEnvironment(environmentCheck, action.EnvironmentID, applyPatchUnavailableMessage); err != nil {
+		return nil, RespondToModel(err.Error())
 	}
 	applyOptions := &applypatch.ApplyOptions{CWD: e.cwd()}
 	// Rust #39659: when an otherwise-required sandbox is bypassed, disable

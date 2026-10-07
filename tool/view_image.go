@@ -20,10 +20,16 @@ const ViewImageToolName = "view_image"
 
 const viewImageInvalidMessage = "unable to process image: invalid or unsupported image data"
 
+// Rust #50962: the legacy message for view_image when no environment can be used.
+const viewImageUnavailableMessage = "view_image is unavailable in this session"
+
 type ViewImageOptions struct {
 	CWD                      string
 	CanRequestOriginalDetail bool
 	IncludeEnvironmentID     bool
+	// EnvironmentCheck carries the turn readiness facts (Rust #50962) so an
+	// explicit environment_id is resolved before the path is read.
+	EnvironmentCheck *UnifiedExecEnvironmentCheck
 }
 
 type ViewImageHandler struct {
@@ -96,6 +102,13 @@ func (h *ViewImageHandler) Execute(ctx context.Context, invocation *Invocation) 
 	}
 	if detail == "original" && (h == nil || !h.options.CanRequestOriginalDetail) {
 		detail = "high"
+	}
+	var environmentCheck *UnifiedExecEnvironmentCheck
+	if h != nil {
+		environmentCheck = h.options.EnvironmentCheck
+	}
+	if _, err := ResolveToolEnvironment(environmentCheck, args.EnvironmentID, viewImageUnavailableMessage); err != nil {
+		return nil, RespondToModel(err.Error())
 	}
 	path := strings.TrimSpace(args.Path)
 	if path == "" {
