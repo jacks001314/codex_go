@@ -1293,6 +1293,12 @@ func (s *MCPService) ListStatusCheckedWithObserver(params *MCPListServerStatusPa
 	}
 	for _, status := range s.servers {
 		cloned := cloneMCPServerStatus(status)
+		// The catalog source is per call: the stored status keeps the source its catalog
+		// was last obtained with, but only a read that touches the catalog this time
+		// reports one (Rust #51215 emits the record where the catalog is materialized,
+		// not on every later status read), so a read that materializes nothing records
+		// no source and no event.
+		cloned.catalogSource = ""
 		if config, ok := configs[cloned.effectiveName()]; ok {
 			cloned.AuthStatus = s.authStatusForConfig(cloned.effectiveName(), &config)
 		}
@@ -1413,6 +1419,18 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		}
 		if dynamicConfigs[name] && (params == nil || params.Detail == nil) {
 			notifyMCPStartupObserver(observer, name, servers[i].State, servers[i].FailureReason, nil)
+			continue
+		}
+		// Rust #48783 (ea64727556): a thread-scoped read of one selected server
+		// answers from that thread's current connection and already materialized
+		// tool catalog (`CodexThread::mcp_server_status_snapshot` ->
+		// `McpRuntime::server_status_snapshot` ->
+		// `collect_mcp_server_status_snapshot_from_manager`), so a status read
+		// never repeats the initialize or tools/list round trips. This call did
+		// not materialize the catalog, so it records no catalog source (and thus
+		// no size telemetry), matching the Rust snapshot read.
+		if selectedServer != "" && threadID != "" && servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 {
+			notifyMCPStartupObserver(observer, name, MCPServerReady, nil, nil)
 			continue
 		}
 		// Rust #38217: a required server with cached tool definitions may stay
