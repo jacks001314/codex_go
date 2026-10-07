@@ -2144,3 +2144,61 @@ func TestBundledFallbackCarriesCatalogJSONBooleans(t *testing.T) {
 		}
 	}
 }
+
+// TestFallbackCatalogCarriesModelsJSONFieldValues pins the fallback catalog
+// entries that used to carry values different from the bundled catalog JSON
+// (codex-rs/models-manager/models.json @ b17c74cfd5): the two explicit
+// truncation/context-window errors and the stale picker copy of the 5.6 family
+// and gpt-5.5. Every assertion is the Rust value, so an edit that silently
+// reverts one of them fails here instead of only changing a number.
+func TestFallbackCatalogCarriesModelsJSONFieldValues(t *testing.T) {
+	catalog := fallbackBundledModelsResponse()
+	bySlug := make(map[string]ModelInfo, len(catalog.Models))
+	for _, model := range catalog.Models {
+		bySlug[model.Slug] = model
+	}
+
+	// models.json @ b17c74cfd5 descriptions (Rust renamed the 5.6 family to
+	// "Older ..." and gpt-5.5 to "Legacy ...").
+	wantDescription := []struct{ slug, want string }{
+		{"gpt-5.6-sol", "Older generation workhorse model."},
+		{"gpt-5.6-terra", "Older balanced model for straightforward work."},
+		{"gpt-5.6-luna", "Older fast and efficient model."},
+		{"gpt-5.5", "Legacy coding model."},
+	}
+	for _, testCase := range wantDescription {
+		slug, want := testCase.slug, testCase.want
+		model, ok := bySlug[slug]
+		if !ok {
+			t.Fatalf("fallback catalog lost %q", slug)
+		}
+		if model.Description != want {
+			t.Fatalf("%s description = %q, want %q (models.json @ b17c74cfd5)", slug, model.Description, want)
+		}
+	}
+
+	// models.json truncations by tokens, not bytes.
+	for _, slug := range []string{"gpt-5.5", "codex-auto-review"} {
+		model, ok := bySlug[slug]
+		if !ok {
+			t.Fatalf("fallback catalog lost %q", slug)
+		}
+		if model.TruncationPolicy.Mode != TruncationModeTokens || model.TruncationPolicy.Limit != 10000 {
+			t.Fatalf("%s truncation_policy = %+v, want {mode:tokens limit:10000}", slug, model.TruncationPolicy)
+		}
+	}
+
+	// models.json gives codex-auto-review the shared 872,000 token maximum; Go
+	// carried the legacy 1,000,000 value, which is the review model's context
+	// budget.
+	review, ok := bySlug["codex-auto-review"]
+	if !ok {
+		t.Fatal("fallback catalog lost codex-auto-review")
+	}
+	if review.MaxContextWindow != 872000 {
+		t.Fatalf("codex-auto-review max_context_window = %d, want 872000 (models.json @ b17c74cfd5)", review.MaxContextWindow)
+	}
+	if review.ContextWindow != 272000 {
+		t.Fatalf("codex-auto-review context_window = %d, want 272000", review.ContextWindow)
+	}
+}
