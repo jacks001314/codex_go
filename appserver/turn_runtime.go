@@ -5814,13 +5814,27 @@ func (r *RuntimeRouter) resetContextWindow(threadID string, turnID string) error
 	extra["compaction_phase"] = string(compact.PhaseMidTurn)
 	extra["compaction_status"] = string(compact.StatusCompleted)
 	extra["compaction_source"] = string(compact.SourceLocal)
-	// The new window re-arms the token-budget deliveries and clears the
-	// carried prefix baseline (Rust start_new_context_window advances the
-	// window and clears prefill).
+	// Rust `Session::start_new_context_window` advances the auto-compact window
+	// (`auto_compact_window.advance()`) and clears its prefill, so a reset starts
+	// a genuinely new context window: its identity changes and a responses-lite
+	// window re-derives its tool declarations from the current settings instead
+	// of replaying the previous window's catalog (Rust #51480
+	// `current_window_uses_incremental_tools`). The summarization path advances
+	// the same pair in compactThreadWithHistory.
+	r.advanceWindowNumber(threadID)
+	r.advanceContextWindowID(threadID)
 	extra["auto_compact_fallback_delivered"] = false
 	extra["token_budget_reminder_delivered"] = false
 	delete(extra, "auto_compact_window_prefill")
 	delete(extra, "auto_compact_window_prefill_server_observed")
+	// Persist the advanced window on the record so a resumed thread restores the
+	// new window instead of the one the reset replaced (Rust stamps
+	// window_number/window_ids on the compacted item; Go keeps the same pair on
+	// the record, see compactThreadWithHistory).
+	extra["auto_compact_window_number"] = r.windowNumberForThread(threadID)
+	if windowID := r.contextWindowIDForThread(threadID); windowID != "" {
+		extra["auto_compact_context_window_id"] = windowID
+	}
 	status := compactTokenStatusFromMetadata(extra)
 	status.ShouldCompact = false
 	status.NewContextWindowRequired = false
