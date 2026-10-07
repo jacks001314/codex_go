@@ -302,7 +302,10 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		{Path: "cli/src/lib.rs", SHA256: "cf24032f801314033b2ff21e6c5a85ad8c2898012e9fba279f3a5c91439c1ab6"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
-		{Path: "exec/src/lib.rs", SHA256: "51b62cef4893c6d07b51753fc2716fc05985cdc9de6673f2fa2d974779454d4b"},
+		// Re-pinned to upstream 1fbe15c962 (#51595): `thread/list` gained its
+		// excluded thread ids, the newest writer to exec/src/lib.rs after the
+		// 5a3140176e reference point.
+		{Path: "exec/src/lib.rs", SHA256: "8f53a22a562e913f652f971c9955b987c1966e7facc0940aa1aab4d5ab5c4ab9"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
