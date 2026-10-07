@@ -84,6 +84,11 @@ const (
 	ThreadSkillsDescriptionTruncatedCharsMetric = "codex.thread.skills.description_truncated_chars"
 	ThreadSkillsTruncatedMetric                 = "codex.thread.skills.truncated"
 
+	// GuardianDecisionDurationMetric measures the complete Guardian approval
+	// decision -- fast decisions, preparation and cancellation alongside the
+	// model review that GuardianReviewDurationMetric covers (Rust #51330,
+	// f5fa209bb0, ext/guardian-reviewer/src/routing.rs).
+	GuardianDecisionDurationMetric = "codex.guardian.decision.duration_ms"
 	// GuardianDenialLimitReachedMetric counts the turn interruptions automatic
 	// approval review caused by reaching the turn's denial limit (Rust #51334,
 	// ext/guardian-reviewer/src/review.rs `codex.guardian.denial_limit_reached`).

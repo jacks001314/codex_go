@@ -391,6 +391,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if r == nil || r.agent == nil {
 		return state.DecisionAborted, "", errors.New("guardian reviewer is unavailable")
 	}
+	// Rust #51330 (f5fa209bb0, ext/guardian-reviewer/src/routing.rs): the total
+	// decision timer wraps the complete approval decision -- fast decisions,
+	// preparation failures and cancellation, not just the model review that
+	// emitGuardianReviewMetrics times. Rust's `decide` has no unavailable arm, so
+	// the guard above stays outside the timer.
+	decisionStartedAt := time.Now()
+	defer r.recordGuardianDecisionDuration(decisionStartedAt)
 	// Rust #39001: skip approval review when the latest risk score lags by more
 	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed
 	// (no stale-score auto-approval), mirroring the stale-data guard while

@@ -245,6 +245,21 @@ func (r *modelGuardianReviewer) newGuardianReviewAttribution(threadID, turnID st
 
 // reviewMetricsDurationMS mirrors Rust's completion latency:
 // completed_at_ms - tracking.started_at_ms.
+// recordGuardianDecisionDuration records Rust's total approval-decision timer
+// (`codex.guardian.decision.duration_ms`, no tags), which wraps the whole
+// decision rather than the model-review segment emitGuardianReviewMetrics times
+// (Rust #51330, f5fa209bb0, ext/guardian-reviewer/src/routing.rs).
+func (r *modelGuardianReviewer) recordGuardianDecisionDuration(startedAt time.Time) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	duration := time.Since(startedAt)
+	if duration < 0 {
+		duration = 0
+	}
+	r.metrics.RecordDuration(telemetry.GuardianDecisionDurationMetric, duration, nil)
+}
+
 func guardianReviewMetricsDurationMS(startedAtMS int64, completedAt time.Time) int64 {
 	if startedAtMS <= 0 {
 		return 0
