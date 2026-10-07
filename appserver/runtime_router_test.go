@@ -12545,29 +12545,29 @@ func TestRuntimeRouterThreadStartProviderModelFallbackUsesBedrockStaticCatalog(t
 		t.Fatalf("configured fallback start error: %+v", configuredFallback.Error)
 	}
 	configuredResult := configuredFallback.Result.(*ThreadStartResponse)
-	// Rust #42619 orders the Bedrock catalog Sol, Astra, Terra, Luna, GPT-5.5,
-	// GPT-5.4, so the provider default is now the Sol slug.
-	if configuredResult.Model != model.AmazonBedrockGPT56SolModelID || configuredResult.ModelProvider != model.AmazonBedrockProviderID {
+	// Rust #49339 (a6e9eaa9bd) puts GPT-6.1 Sol at priority 0, so the Bedrock
+	// provider fallback resolves to the GPT-6.1 Sol slug.
+	if configuredResult.Model != model.AmazonBedrockGPT61SolModelID || configuredResult.ModelProvider != model.AmazonBedrockProviderID {
 		t.Fatalf("configured fallback response = model:%q provider:%q", configuredResult.Model, configuredResult.ModelProvider)
 	}
 	record, err := store.Read(session.ThreadID(configuredResult.Thread.ID), true, true)
 	if err != nil {
 		t.Fatalf("Read configured fallback record error = %v", err)
 	}
-	if record.Metadata.Model != model.AmazonBedrockGPT56SolModelID {
+	if record.Metadata.Model != model.AmazonBedrockGPT61SolModelID {
 		t.Fatalf("configured fallback metadata model = %q", record.Metadata.Model)
 	}
 
 	supported := router.Handle(requestWithParams(t, IntID(2), MethodThreadStart, ThreadStartParams{
 		CWD:                        t.TempDir(),
-		Model:                      model.AmazonBedrockGPT54ModelID,
+		Model:                      model.AmazonBedrockGPT55ModelID,
 		AllowProviderModelFallback: true,
 	}))
 	if supported.Error != nil {
 		t.Fatalf("supported fallback start error: %+v", supported.Error)
 	}
 	supportedResult := supported.Result.(*ThreadStartResponse)
-	if supportedResult.Model != model.AmazonBedrockGPT54ModelID {
+	if supportedResult.Model != model.AmazonBedrockGPT55ModelID {
 		t.Fatalf("supported fallback model = %q", supportedResult.Model)
 	}
 
