@@ -202,15 +202,16 @@ func TestModelViewCanShowRustStyleSessionHeader(t *testing.T) {
 	if strings.Contains(view, "model:") || strings.Contains(view, "╭") {
 		t.Fatalf("the welcome banner must replace the card header:\n%s", view)
 	}
-	greeting := false
-	for _, phrase := range historycell.Greetings {
+	// Rust #49395: session headers no longer bind a randomized startup greeting.
+	for _, phrase := range []string{
+		"Pull up a prompt.",
+		"Whoa, fancy meeting you here!",
+		"Look who\u2019s at the keyboard.",
+		"A long time ago, in a directory not so far away\u2026",
+	} {
 		if strings.Contains(view, phrase) {
-			greeting = true
-			break
+			t.Fatalf("session header must not carry a startup greeting %q:\n%s", phrase, view)
 		}
-	}
-	if !greeting {
-		t.Fatalf("welcome banner missing a selected greeting:\n%s", view)
 	}
 	if strings.Contains(view, "No messages yet.") {
 		t.Fatalf("session header view should replace empty transcript:\n%s", view)

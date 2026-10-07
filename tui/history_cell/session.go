@@ -15,10 +15,6 @@ type SessionHeaderHistoryCell struct {
 	ReasoningEffort string
 	Directory       string
 	YoloMode        bool
-	// Greeting is the session's selected startup greeting (Rust's shared
-	// `OnceLock<Greeting>`). When set, the header appends the greeting beneath
-	// the directory line.
-	Greeting string
 }
 
 func NewSessionHeader(model string, reasoningEffort string, directory string, version string) SessionHeaderHistoryCell {
@@ -32,13 +28,6 @@ func NewSessionHeader(model string, reasoningEffort string, directory string, ve
 
 func (c SessionHeaderHistoryCell) WithYoloMode(yoloMode bool) SessionHeaderHistoryCell {
 	c.YoloMode = yoloMode
-	return c
-}
-
-// WithGreeting binds the session's chosen greeting to the header
-// (Rust `history_cell::set_session_greeting`).
-func (c SessionHeaderHistoryCell) WithGreeting(greeting string) SessionHeaderHistoryCell {
-	c.Greeting = strings.TrimSpace(greeting)
 	return c
 }
 
@@ -56,10 +45,6 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 	if c.YoloMode {
 		lines = append(lines, "  permissions: YOLO mode")
 	}
-	if c.Greeting != "" {
-		// The tip/help that follows has its own normal composite separator.
-		lines = append(lines, "", "  "+c.Greeting)
-	}
 	for i := range lines {
 		lines[i] = tui.TruncateWithEllipsis(lines[i], width)
 	}
@@ -67,10 +52,6 @@ func (c SessionHeaderHistoryCell) DisplayLines(width int) []string {
 }
 
 func (c SessionHeaderHistoryCell) RawLines() []string {
-	if c.Greeting != "" {
-		// Rust's greeting raw output is the display lines at maximum width.
-		return c.DisplayLines(1 << 30)
-	}
 	lines := []string{
 		"gcode " + c.versionLabel(),
 		"model: " + strings.TrimSpace(c.Model+reasoningSuffix(c.ReasoningEffort)),
@@ -150,4 +131,3 @@ func (c SessionInfoCell) DisplayLines(width int) []string {
 func (c SessionInfoCell) RawLines() []string {
 	return joinCellLines(c.Parts, 0, true)
 }
-
