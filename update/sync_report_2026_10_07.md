@@ -81,3 +81,15 @@
   - 结构性差异（详见计划第三十轮）：Go 无法表达"显式空选择集"（空即未设置）；`has_same_workspace` 在 Go 无落点（Go 对 FromThread 选择直接取线程配置，不做跨选择匹配）；绑定时机为读取时派生而非构造时快照，语义等价。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./appserver/` 无输出；`go test ./appserver/... ./prompt/... ./parity/... ./turn/... -count=1` 仅既有基线失败（OAuth、plugin repo、file-change apply 三项 + 一项既有 flaky）。
 - 推送：`2e4c58bb..79a13c57`。
+
+## 追加（当日第六批：sync397）
+
+- 上游 head 复核：`git pull origin main` 拉到新提交 `18e28fe1b9`（#51556 "Complete dynamic tool lifecycles on cancellation"，前 head `e95abcdf49`）。
+- `sync397`（上游 #51556）：动态工具在取消时完成生命周期。
+  - `tool/registry.go`：`Spec.FinishesOnCancellation` + `Router.FinishesOnCancellation`（对应 Rust `CoreToolRuntime::finishes_on_cancellation`，默认 false）。
+  - `turn/dynamic_tool_runtime.go`：动态工具 spec 置 true；`Execute` 请求前观察取消（不触达 sink）；取消导致的请求失败改用专用消息 `dynamic tool call was cancelled before receiving a response`。
+  - `turn/tool_dispatcher.go`：新增 `ToolExecutionResult.Aborted`；声明 `FinishesOnCancellation` 的工具在 dispatch 被取消时转换为 respond-to-model 的 `tool call cancelled` 失败项并标记 aborted，未声明的工具保持 fatal 路径。
+  - 测试：`turn/dynamic_tool_cancellation_test.go` 5 个（`...SettlesWithFailedItemLikeRust`、`...BeforeRequestLikeRust`、`...FinishesOnCancellationSpecLikeRust`、`...ReportsAbortedOutcomeLikeRust`、`...WithoutObserverStaysFatalLikeRust`）。
+  - 结构性差异（详见计划第三十二轮）：项发布位置（dispatcher 统一发布 vs handler 内 emit）、无对应锁等待、post-tool hooks/输出处理的 ctx 门控沿用既有实现。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./turn/ ./tool/ ./appserver/` 无输出；`go test ./turn/... -count=1` 全通过；`go test ./tool/... -count=1` 仅 3 项既有环境失败（已 stash 复现确认与本轮无关）。
+- 剩余：第三十一轮拆解的 8 项不变，继续按序推进。
