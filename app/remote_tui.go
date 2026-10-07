@@ -455,6 +455,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
+		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
 		ShowSessionHeader:           true,
 		ShowTooltips:                settings.ShowTooltips,
 		SessionHeaderVersion:        doctor.Version(),

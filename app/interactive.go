@@ -1151,6 +1151,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SessionPickerItems:          interactiveSessionPickerItems(root),
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
+		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
 		ShowSessionHeader:           true,
 		ShowTooltips:                settings.ShowTooltips,
 		SessionHeaderVersion:        doctor.Version(),
@@ -2104,8 +2105,10 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		TUITheme:                interactiveTUIStringFromConfig(values, "theme"),
 		TUIPet:                  interactiveTUIStringFromConfig(values, "pet"),
 		SessionPickerView:       interactiveTUIStringFromConfig(values, "session_picker_view"),
-		PluginUserMarketplaces:  userMarketplaces,
-		PluginGitMarketplaces:   gitMarketplaces,
+		// Rust #50786: remember the Command Center grouping across launches.
+		AgentsOverviewGrouping: interactiveTUIStringFromConfig(values, "agents_overview_grouping"),
+		PluginUserMarketplaces: userMarketplaces,
+		PluginGitMarketplaces:  gitMarketplaces,
 	}
 }
 
