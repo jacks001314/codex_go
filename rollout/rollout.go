@@ -1176,6 +1176,14 @@ func Load(path string) ([]Line, int, error) {
 			return lines, parseErrors, readErr
 		}
 		raw = bytes.TrimRight(raw, "\r\n")
+		// Rust's `load_rollout_items` skips whitespace-only lines instead of
+		// counting them as parse errors (rollout/src/recorder.rs:
+		// `if line.trim().is_empty() { continue; }`), which keeps the reported
+		// parse-error count identical across representations that carry a blank
+		// separator line.
+		if len(bytes.TrimSpace(raw)) == 0 {
+			continue
+		}
 		var line Line
 		if err := unmarshalLine(raw, &line); err != nil {
 			parseErrors++
