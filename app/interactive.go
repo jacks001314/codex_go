@@ -1998,6 +1998,18 @@ func interactiveEffectsSettings(values map[string]any) *codextea.EffectsSettings
 // defaults decide. Rust test:
 // app/tests/new_session_tests.rs::replacement_uses_server_defaults_and_preserves_explicit_launch_settings.
 func interactiveLaunchReasoningOverrides(root *cli.RootOptions) []string {
+	overrides := launchReasoningOverrides(root)
+	values := make([]string, 0, len(overrides))
+	for _, override := range overrides {
+		values = append(values, fmt.Sprintf("%s=%v", override.Path, override.Value))
+	}
+	return values
+}
+
+// launchReasoningOverrides resolves the launch-scoped reasoning values as
+// dotted config paths (Rust #50811 config_request_overrides_from_config): the
+// value of each key whose winning layer is an explicit launch selection.
+func launchReasoningOverrides(root *cli.RootOptions) []config.Override {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil || loaded == nil {
 		return nil
@@ -2011,7 +2023,7 @@ func interactiveLaunchReasoningOverrides(root *cli.RootOptions) []string {
 	values := loaded.Values
 	layers := read.Layers
 	cliKeys := remoteCLIConfigOverrideKeys(root)
-	overrides := []string{}
+	overrides := []config.Override{}
 	for _, key := range []string{"model_reasoning_summary", "model_verbosity"} {
 		if !launchSettingForKey(layers, cliKeys, key) {
 			continue
@@ -2023,12 +2035,15 @@ func interactiveLaunchReasoningOverrides(root *cli.RootOptions) []string {
 		if value = strings.TrimSpace(value); value == "" {
 			continue
 		}
-		overrides = append(overrides, key+"="+value)
+		overrides = append(overrides, config.Override{Path: key, Value: value})
 	}
 	if launchSettingForKey(layers, cliKeys, "features.concurrent_reasoning_summaries") {
 		if features, ok := values["features"].(map[string]any); ok {
 			if value, ok := features["concurrent_reasoning_summaries"].(bool); ok {
-				overrides = append(overrides, fmt.Sprintf("features.concurrent_reasoning_summaries=%t", value))
+				overrides = append(overrides, config.Override{
+					Path:  "features.concurrent_reasoning_summaries",
+					Value: value,
+				})
 			}
 		}
 	}

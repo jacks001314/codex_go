@@ -103,3 +103,57 @@ func TestLaunchSettingForKeyMatchesRustIsLaunch(t *testing.T) {
 		t.Fatal("nestedConfigValue resolved through a non-table value")
 	}
 }
+
+// TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust covers the remote
+// half of Rust #50811 (afb436df8b): both launch origins forward their
+// reasoning-summary choices to the destination server, while a plain config-file
+// value is left to the server. Rust test:
+// app/tests/startup_defaults_tests.rs::fresh_startup_reads_destination_and_cleared_model_uses_catalog
+// (it asserts no `model_reasoning_summary` reaches thread/start config for
+// non-launch client settings).
+func TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	// A plain config-file value is not a launch choice.
+	if err := os.WriteFile(config.ConfigPath(home), []byte("model_reasoning_summary = \"detailed\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	values, err := remoteConfigValues(&cli.RootOptions{}, cli.SharedOptions{})
+	if err != nil {
+		t.Fatalf("remoteConfigValues: %v", err)
+	}
+	if _, present := values["model_reasoning_summary"]; present {
+		t.Fatalf("config-file value forwarded = %#v, want it left to the server", values)
+	}
+
+	// A selected profile supplies launch choices, including the nested feature.
+	profilePath, err := config.ResolveProfileConfigPath(home, "work")
+	if err != nil {
+		t.Fatalf("resolve profile: %v", err)
+	}
+	if err := os.WriteFile(profilePath, []byte("model_reasoning_summary = \"concise\"\n[features]\nconcurrent_reasoning_summaries = true\n"), 0o600); err != nil {
+		t.Fatalf("write profile: %v", err)
+	}
+	root := &cli.RootOptions{}
+	root.Shared.Profile = "work"
+	values, err = remoteConfigValues(root, cli.SharedOptions{})
+	if err != nil {
+		t.Fatalf("remoteConfigValues: %v", err)
+	}
+	if got, _ := values["model_reasoning_summary"].(string); got != "concise" {
+		t.Fatalf("profile summary forwarded = %q, want concise (%#v)", got, values)
+	}
+	features, _ := values["features"].(map[string]any)
+	if features == nil {
+		t.Fatalf("profile feature not forwarded: %#v", values)
+	}
+	if concurrent, _ := features["concurrent_reasoning_summaries"].(bool); !concurrent {
+		t.Fatalf("profile concurrent summaries forwarded = %#v, want true", features)
+	}
+
+	// The same launch resolution drives the embedded host.
+	if got := interactiveLaunchReasoningOverrides(root); !slices.Contains(got, "model_reasoning_summary=concise") {
+		t.Fatalf("embedded overrides = %#v, want the profile summary", got)
+	}
+}

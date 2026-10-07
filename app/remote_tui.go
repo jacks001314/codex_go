@@ -4760,6 +4760,11 @@ func remoteConfigValues(root *cli.RootOptions, shared cli.SharedOptions) (map[st
 	if effort := strings.TrimSpace(shared.ModelReasoningEffort); effort != "" {
 		values["model_reasoning_effort"] = effort
 	}
+	// Rust #50811: the destination server's config decides reasoning summaries,
+	// so only the client's explicit launch choices are forwarded. Generic `-c`
+	// overrides are already above; a selected profile is the second launch
+	// origin, so its reasoning-summary choices travel with the request too.
+	config.ApplyOverrides(values, launchReasoningOverrides(root))
 	if len(values) == 0 {
 		return nil, nil
 	}
