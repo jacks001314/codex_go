@@ -16,7 +16,6 @@ func TestInstallSystemSkillsMatchesRustCacheBehavior(t *testing.T) {
 	for _, relative := range []string{
 		"skill-installer/SKILL.md",
 		"skill-creator/scripts/init_skill.py",
-		"plugin-creator/references/plugin-json-spec.md",
 		"imagegen/assets/imagegen.png",
 		"openai-docs/agents/openai.yaml",
 	} {

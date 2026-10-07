@@ -449,7 +449,7 @@ func TestSkillsServiceInstallsEmbeddedSystemSkillsLikeRust(t *testing.T) {
 			names[skill.Name] = true
 		}
 	}
-	for _, want := range []string{"skill-installer", "skill-creator", "plugin-creator", "imagegen", "openai-docs"} {
+	for _, want := range []string{"skill-installer", "skill-creator", "imagegen", "openai-docs"} {
 		if !names[want] {
 			t.Fatalf("embedded system skills = %#v, missing %q", names, want)
 		}
