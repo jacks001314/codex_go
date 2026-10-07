@@ -1187,6 +1187,10 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		// Rust #48135: the instant-interrupt feature opts a sampling request into
 		// watching queued user input for code-mode yielding.
 		InstantInterrupt: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "instant_interrupt"),
+		// Rust #47913/#49262: the defer-mailbox-preemption feature keeps a
+		// response's planned tool calls when inter-agent mail is queued at a
+		// commentary/partial-answer boundary instead of cutting the response off.
+		DeferMailboxPreemption: run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "defer_mailbox_preemption"),
 	}).Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                  run.Prompt,
 		Instructions:            run.Instructions,

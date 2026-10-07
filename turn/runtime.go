@@ -41,6 +41,11 @@ type RuntimeOptions struct {
 	// when set, each sampling request watches the turn's queued user input and
 	// yields its code-mode observations once a user message arrives.
 	InstantInterrupt bool
+	// DeferMailboxPreemption mirrors the `features.defer_mailbox_preemption`
+	// gate (#47913, default off): when set, a response keeps its remaining tool
+	// calls even though inter-agent mail is queued at a commentary or
+	// partial-answer boundary (#49262, #51249).
+	DeferMailboxPreemption bool
 }
 
 type Runtime struct {
@@ -56,6 +61,7 @@ type Runtime struct {
 	truncationPolicyForModel     func(model string) *utils.TruncationPolicy
 	onToolOutputExternalContext  func(ctx context.Context, threadID string, invocation *tool.Invocation)
 	instantInterrupt             bool
+	deferMailboxPreemption       bool
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -83,6 +89,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		truncationPolicyForModel:     options.TruncationPolicyForModel,
 		onToolOutputExternalContext:  options.OnToolOutputExternalContext,
 		instantInterrupt:             options.InstantInterrupt,
+		deferMailboxPreemption:       options.DeferMailboxPreemption,
 	}
 }
 
@@ -279,8 +286,9 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
 			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
 		}),
-		MaxTurns: r.maxTurns,
-		Now:      r.now,
+		MaxTurns:               r.maxTurns,
+		Now:                    r.now,
+		DeferMailboxPreemption: r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
 }
 

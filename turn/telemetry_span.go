@@ -21,6 +21,15 @@ type SpanTracer interface {
 	StartSpan(ctx context.Context, parent model.TelemetrySpan, name string, attributes map[string]string) (context.Context, model.TelemetrySpan)
 }
 
+// TraceEventEmitter records a trace-safe event on the span the context carries
+// (Rust's `tracing::event!(target: "codex_otel.trace_safe")`). The turn loop
+// uses it for the events Rust emits from inside the sampling request
+// (`codex.mailbox_preemption`, Rust #49262/#51249). A tracer that does not
+// implement it drops the event, like a process without a tracing subscriber.
+type TraceEventEmitter interface {
+	EmitTraceSafeEvent(ctx context.Context, eventName string, fields map[string]string)
+}
+
 // SamplingRequestSpanName mirrors the span Rust's `run_sampling_request`
 // instrumentation reports.
 const SamplingRequestSpanName = "run_sampling_request"

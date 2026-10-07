@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"codex_go/codexapi"
+	"codex_go/eventmap"
 	"codex_go/model"
 	"codex_go/protocol"
+	"codex_go/state"
 	"codex_go/tool"
 )
 
@@ -20,6 +22,13 @@ type AgentLoopOptions struct {
 	MaxTurns          int
 	Now               func() time.Time
 	ExecutedToolCalls *ExecutedToolCallRecorder
+	// DeferMailboxPreemption mirrors the `features.defer_mailbox_preemption`
+	// gate (#47913, UnderDevelopment, default off): when set, a response keeps
+	// its remaining tool calls even after a commentary/partial-answer boundary
+	// completed while inter-agent mail is queued. The default keeps Rust's
+	// behavior, where the sampling request stops at that boundary and the queued
+	// mail reaches the next request (#49262, #51249).
+	DeferMailboxPreemption bool
 }
 
 type SamplingFollowUpContext struct {
@@ -72,11 +81,12 @@ type WarningCallback func(message string)
 type TokenUsageCallback func(usage model.AgentUsage)
 
 type AgentLoop struct {
-	agent             model.AgentRunner
-	dispatcher        *ToolDispatcher
-	steerMailbox      *SteerMailbox
-	now               func() time.Time
-	executedToolCalls *ExecutedToolCallRecorder
+	agent                  model.AgentRunner
+	dispatcher             *ToolDispatcher
+	steerMailbox           *SteerMailbox
+	now                    func() time.Time
+	executedToolCalls      *ExecutedToolCallRecorder
+	deferMailboxPreemption bool
 }
 
 // AgentStepSettings are the execution settings that issue one sampling step
@@ -244,11 +254,12 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 		now = time.Now
 	}
 	return &AgentLoop{
-		agent:             options.Agent,
-		dispatcher:        options.Dispatcher,
-		steerMailbox:      options.SteerMailbox,
-		now:               now,
-		executedToolCalls: options.ExecutedToolCalls,
+		agent:                  options.Agent,
+		dispatcher:             options.Dispatcher,
+		steerMailbox:           options.SteerMailbox,
+		now:                    now,
+		executedToolCalls:      options.ExecutedToolCalls,
+		deferMailboxPreemption: options.DeferMailboxPreemption,
 	}
 }
 
@@ -278,6 +289,13 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 	previousResponseID := strings.TrimSpace(request.PreviousResponseID)
 	clientMetadata := transformClientMetadata(request.ClientMetadata, request.ClientMetadataTransform)
 	for iteration := 0; ; iteration++ {
+		// Rust session/turn.rs accepts mailbox delivery for the current turn
+		// whenever a sampling request reported needs_follow_up: the turn is
+		// continuing, so mail queued after a terminal-looking item is consumed by
+		// this turn instead of waiting for a later one.
+		if iteration > 0 {
+			l.steerMailbox.AcceptMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID)
+		}
 		// The step's captured settings refresh the step first, so a mid-turn
 		// settings update applies here (Rust Session::update_step_settings); a
 		// steer's own metadata then wins for the keys it defines, and later
@@ -477,6 +495,27 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		if request.OnAssistantMessage != nil && responseHasAssistantMessage(response) {
 			request.OnAssistantMessage(response, iteration, len(toolItems) > 0)
 		}
+		// Rust #51249 (session/stream_events_utils.rs): a completed assistant
+		// message that carries the turn's user-visible answer switches the
+		// turn's mailbox delivery phase to the next turn, so late child mail
+		// waits there instead of extending an answer that was already shown.
+		// Commentary and partial-answer fragments keep the current turn open; a
+		// queued user message keeps it open too.
+		if responseDefersMailboxDelivery(response) && !l.steerMailbox.HasPendingUserInput(request.ThreadID, request.TurnID) {
+			l.steerMailbox.SetMailboxDeliveryPhase(request.ThreadID, request.TurnID, state.MailboxNextTurn)
+		}
+		// Rust #49262 (`codex.mailbox_preemption`): a completed assistant
+		// commentary/partial-answer message or reasoning item is the boundary at
+		// which queued inter-agent mail reaches the model without waiting for the
+		// rest of the response. The host cuts the response off here (its planned
+		// tool calls are not dispatched, matching the Rust snapshot for the
+		// non-deferred case in tests/suite/scenarios_mailbox_preemption_tests.rs),
+		// emits the trace-safe event, and the next iteration drains the mail.
+		if !l.deferMailboxPreemption && responsePreemptsForMailboxMail(response) && l.steerMailbox.HasPendingMailboxItems(request.ThreadID, request.TurnID) {
+			emitMailboxPreemptionEvent(stepCtx, request, request.ThreadID, request.TurnID)
+			endSamplingRequestSpan()
+			continue
+		}
 		if len(toolItems) > 0 && request.SamplingCompaction != nil {
 			compacted, err := request.SamplingCompaction(&SamplingCompactionContext{
 				Response:     response,
@@ -568,6 +607,114 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 	}
+}
+
+// mailboxPreemptionEventName mirrors the tracing event name Rust emits when a
+// sampling request stops to deliver queued inter-agent mail (Rust #49262).
+const mailboxPreemptionEventName = "codex.mailbox_preemption"
+
+// responseDefersMailboxDelivery reports whether the response completed an
+// assistant message that carries the turn's user-visible answer, which defers
+// mailbox delivery to the next turn
+// (eventmap.CompletedItemDefersMailboxDeliveryToNextTurn, Rust #51249).
+// Commentary and partial-answer fragments and every non-message item do not
+// defer.
+func responseDefersMailboxDelivery(response *model.AgentResponse) bool {
+	if response == nil {
+		return false
+	}
+	for i := range response.Items {
+		item := &response.Items[i]
+		if isToolAgentItem(item) {
+			continue
+		}
+		if eventmap.CompletedItemDefersMailboxDeliveryToNextTurn(mailboxDeliveryItem(item), false) {
+			return true
+		}
+	}
+	return false
+}
+
+// responsePreemptsForMailboxMail mirrors
+// core/src/session/turn.rs::preempt_for_mailbox_mail (#49262, extended by
+// #51249): a completed reasoning item, or an assistant message whose phase is
+// commentary or partial_answer, is a boundary where queued mailbox mail may
+// preempt the rest of the response and reach the next model request. An untagged
+// or final_answer assistant message already answers the turn and does not
+// preempt, and neither do mail items (Rust ResponseItem::AgentMessage) nor tool
+// calls.
+func responsePreemptsForMailboxMail(response *model.AgentResponse) bool {
+	if response == nil {
+		return false
+	}
+	for i := range response.Items {
+		item := &response.Items[i]
+		switch strings.TrimSpace(item.Type) {
+		case "reasoning":
+			return true
+		case "agent_message", "message", "":
+			switch agentItemPhase(item) {
+			case "commentary", "partial_answer":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// agentItemPhase reads the message phase a model response item carries (Rust
+// ResponseItem::Message::phase).
+func agentItemPhase(item *model.AgentItem) string {
+	if item == nil || len(item.Data) == 0 {
+		return ""
+	}
+	for _, key := range []string{"phase", "messagePhase", "message_phase"} {
+		if value, ok := item.Data[key]; ok {
+			if phase := strings.TrimSpace(fmt.Sprint(value)); phase != "" {
+				return phase
+			}
+		}
+	}
+	return ""
+}
+
+// mailboxDeliveryItem adapts a model-visible item to the event map's response
+// item so the loop can reuse Rust's deferral predicate. Only assistant messages
+// convert; every other kind falls through to the predicate's non-message arm.
+func mailboxDeliveryItem(item *model.AgentItem) *eventmap.ResponseItem {
+	if item == nil {
+		return nil
+	}
+	switch strings.TrimSpace(item.Type) {
+	case "agent_message", "message", "":
+	default:
+		return nil
+	}
+	return &eventmap.ResponseItem{
+		Kind:    eventmap.ResponseMessage,
+		ID:      item.ID,
+		Role:    "assistant",
+		Phase:   agentItemPhase(item),
+		Content: []eventmap.ContentItem{{Kind: eventmap.ContentOutputText, Text: item.Text}},
+	}
+}
+
+// emitMailboxPreemptionEvent records Rust's `codex.mailbox_preemption` event
+// (target `codex_otel.trace_safe`, INFO, conversation.id/turn.id) on the span the
+// sampling request opened. A tracer without the trace-event sink drops it, the
+// way Rust's tracing layer drops an event that has no enclosing span.
+func emitMailboxPreemptionEvent(ctx context.Context, request *AgentLoopRequest, threadID string, turnID string) {
+	if request == nil {
+		return
+	}
+	emitter, ok := request.Tracer.(TraceEventEmitter)
+	if !ok {
+		return
+	}
+	emitter.EmitTraceSafeEvent(ctx, mailboxPreemptionEventName, map[string]string{
+		"conversation.id": strings.TrimSpace(threadID),
+		"turn.id":         strings.TrimSpace(turnID),
+	})
 }
 
 func userMessageInputItemCount(items []any) int {

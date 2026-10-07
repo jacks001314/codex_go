@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestTurnStatePendingAndMailbox(t *testing.T) {
+func TestTurnStatePendingWaiters(t *testing.T) {
 	state := NewTurnState()
 	state.InsertPendingApproval("approval", 1)
 	state.pendingRequestPermissions["perm"] = 2
@@ -19,17 +19,6 @@ func TestTurnStatePendingAndMailbox(t *testing.T) {
 	state.ClearPendingWaiters()
 	if state.PendingWaiterCount() != 0 {
 		t.Fatalf("pending count after clear = %d", state.PendingWaiterCount())
-	}
-	if !state.AcceptsMailboxDeliveryForCurrentTurn() {
-		t.Fatal("default should accept mailbox for current turn")
-	}
-	state.SetMailboxDeliveryPhase(MailboxNextTurn)
-	if state.AcceptsMailboxDeliveryForCurrentTurn() {
-		t.Fatal("next turn phase should not accept current delivery")
-	}
-	state.AcceptMailboxDeliveryForCurrentTurn()
-	if !state.AcceptsMailboxDeliveryForCurrentTurn() {
-		t.Fatal("current phase not restored")
 	}
 }
 

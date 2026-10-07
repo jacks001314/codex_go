@@ -17,6 +17,14 @@ const (
 	TaskUserShellCommand TaskKind = "userShellCommand"
 )
 
+// MailboxDeliveryPhase mirrors codex-rs/core/src/state/turn.rs
+// (`MailboxDeliveryPhase`): after a turn records user-visible terminal output,
+// late mailbox input waits for a later turn instead of extending an answer that
+// was already shown; explicit same-turn work reopens the current turn.
+//
+// Rust keeps the value on TurnState and reads it from input_queue.rs. Go's turn
+// input queue is turn.SteerMailbox, which owns the per-turn value and imports
+// this enum, so TurnState itself carries no mailbox phase.
 type MailboxDeliveryPhase string
 
 const (
@@ -49,7 +57,6 @@ type TurnState struct {
 	pendingElicitations       map[string]any
 	pendingDynamicTools       map[string]any
 	pendingInput              []string
-	mailboxDeliveryPhase      MailboxDeliveryPhase
 	grantedPermissionsByEnvID map[string]map[string]any
 	strictAutoReviewEnabled   bool
 	toolCalls                 uint64
@@ -64,7 +71,6 @@ func NewTurnState() *TurnState {
 		pendingUserInput:          map[string]any{},
 		pendingElicitations:       map[string]any{},
 		pendingDynamicTools:       map[string]any{},
-		mailboxDeliveryPhase:      MailboxCurrentTurn,
 		grantedPermissionsByEnvID: map[string]map[string]any{},
 	}
 }
@@ -99,22 +105,6 @@ func (s *TurnState) PendingWaiterCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.pendingApprovals) + len(s.pendingRequestPermissions) + len(s.pendingUserInput) + len(s.pendingElicitations) + len(s.pendingDynamicTools)
-}
-
-func (s *TurnState) SetMailboxDeliveryPhase(phase MailboxDeliveryPhase) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mailboxDeliveryPhase = phase
-}
-
-func (s *TurnState) AcceptMailboxDeliveryForCurrentTurn() {
-	s.SetMailboxDeliveryPhase(MailboxCurrentTurn)
-}
-
-func (s *TurnState) AcceptsMailboxDeliveryForCurrentTurn() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.mailboxDeliveryPhase == MailboxCurrentTurn
 }
 
 func (s *TurnState) RecordGrantedPermissions(environmentID string, permissions map[string]any) {

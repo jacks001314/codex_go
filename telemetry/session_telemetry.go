@@ -144,6 +144,15 @@ func (t *SessionTelemetry) TraceEvent(ctx context.Context, eventName string, fie
 	span.AddEvent(eventName, attributes, t.now())
 }
 
+// EmitTraceSafeEvent records a trace-safe diagnostic event on the span the
+// context carries. Rust's instrumented code emits these as
+// `tracing::event!(target: "codex_otel.trace_safe")`, which the tracing layer
+// drops when no span is open; TraceEvent keeps that behavior, so an event
+// emitted outside a span is not exported.
+func (t *SessionTelemetry) EmitTraceSafeEvent(ctx context.Context, eventName string, fields map[string]string) {
+	t.TraceEvent(ctx, eventName, fields, nil)
+}
+
 // addLogMetadata adds the common fields Rust's log_event! prepends.
 func (t *SessionTelemetry) addLogMetadata(fields map[string]string) {
 	fields["event.timestamp"] = t.timestamp()
