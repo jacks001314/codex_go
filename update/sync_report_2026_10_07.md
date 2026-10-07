@@ -55,3 +55,9 @@
 - 交付镜像补同步：核验最近 30 个提交的 59 个改动文件，发现 `execserver/connection_diagnostics.go`、`connection_diagnostics_test.go`（`sync387`）此前未同步，已补齐；本轮共补同步 10 个文件，59/59 与本地 HEAD 一致。
 - 新增 `sync393`：exec-server 不再上报未实现的 `environmentConfig/read` 能力位（`execserver/server.go` + `server_test.go` + 新增不变式测试 `TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust`）；#51525 主体（执行器本地配置读取子系统）仍受原始 TOML 分层栈 / 类型化 `RequirementSource` 缺失阻塞，证据见 `update/plan_2026_10_07.md` 第二十七轮。
 
+## 追加（当日第三批：sync394）
+
+- `sync394`（上游 #51525 载体）：实现执行器本地配置读取 `environmentConfig/read` —— 新增分层本地配置加载器（`config/local_layers.go`）、协议与宿主实现（`execserver/environment_config_read.go`、`execserver/hostconfig`）、CLI 仅保留 `features.prefer_mxc` 的启动偏好（`app/app.go`）；能力位从上一轮的 `false` 复位为 `true`，裸 stub 仍上报 `false`。
+- 与 Rust 的差异（无 system 层 / MDM / macOS 管理 requirements / linked-worktree hooks 层；TOML 为解析后重序列化）已逐条记录在 `update/plan_2026_10_07.md` 第二十八轮。
+- 验证：`go build ./...`、`gofmt -l` 空、`go vet` 无输出、`go test ./config/ ./execserver/... ./app/ -run ...` 仅既有基线失败、`go test ./parity` 通过。
+
