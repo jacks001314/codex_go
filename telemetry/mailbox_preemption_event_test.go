@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/model"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -179,4 +180,131 @@ func (a *mailboxPreemptionTraceAgent) Run(_ context.Context, request *model.Agen
 			ID: "final-1", Type: "agent_message", Text: "The worker update is now included.", Data: map[string]any{"phase": "final_answer"},
 		}},
 	}, nil
+}
+
+// phaseTraceToolAgent issues one tool call, then finishes the turn.
+type phaseTraceToolAgent struct{ requests int }
+
+func (a *phaseTraceToolAgent) Run(_ context.Context, _ *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests++
+	if a.requests == 1 {
+		return &model.AgentResponse{
+			ResponseID: "resp-tool",
+			Items: []model.AgentItem{{
+				ID: "call-1", Type: "function_call", Name: "echo", CallID: "call-1", Arguments: `{}`,
+			}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Items:      []model.AgentItem{{ID: "final-1", Type: "agent_message", Text: "done"}},
+	}, nil
+}
+
+// Rust #49262: the turn loop's `codex.sampling` and `codex.tool_blocking` phase
+// spans export through the session tracer with `codex.turn.phase` plus the
+// conversation and turn ids, both nested under the sampling-request span.
+func TestTurnPhaseSpansExportLikeRust(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Errorf("span batch json error = %v payload=%s", err, payload)
+		}
+		bodies = append(bodies, body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	traces := NewTracesClient(TracesClientOptions{
+		ServiceName:    "codex-app-server",
+		Endpoint:       server.URL + "/v1/traces",
+		ExportInterval: -1,
+		Now:            func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+	})
+	if !traces.Enabled() {
+		t.Fatal("traces client is disabled")
+	}
+	tracer := traces.Tracer()
+	session := tracer.StartSpan("session_loop", map[string]string{ThreadIDAttribute: "thread-1"})
+	if session == nil {
+		t.Fatal("session span is nil")
+	}
+	sessionTelemetry := NewSessionTelemetry(SessionTelemetryMetadata{
+		ConversationID: "thread-1",
+		AppVersion:     "test",
+		Originator:     "codex_app_server",
+	})
+	sessionTelemetry.Tracer = tracer
+
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	executedToolCalls := turn.NewExecutedToolCallRecorder()
+	loop := turn.NewAgentLoop(&turn.AgentLoopOptions{
+		Agent:             &phaseTraceToolAgent{},
+		Dispatcher:        turn.NewToolDispatcher(&turn.ToolDispatcherOptions{Router: tool.NewRouter(registry), ExecutedToolCalls: executedToolCalls}),
+		ExecutedToolCalls: executedToolCalls,
+		MaxTurns:          3,
+	})
+	if _, err := loop.Run(WithSpan(context.Background(), session), &turn.AgentLoopRequest{
+		Prompt:   "run echo",
+		Model:    "gpt-test",
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Tracer:   sessionTelemetry,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	session.End()
+	if err := traces.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	var spans []map[string]any
+	for _, body := range bodies {
+		spans = append(spans, exportedSpans(t, body)...)
+	}
+	samplingRequestSpanIDs := map[string]bool{}
+	for _, span := range spans {
+		if span["name"] == turn.SamplingRequestSpanName {
+			if id, _ := span["spanId"].(string); id != "" {
+				samplingRequestSpanIDs[id] = true
+			}
+		}
+	}
+	if len(samplingRequestSpanIDs) == 0 {
+		t.Fatalf("no %s span was exported (spans=%#v)", turn.SamplingRequestSpanName, spans)
+	}
+	phases := map[string]int{}
+	for _, span := range spans {
+		name, _ := span["name"].(string)
+		if name != turn.SamplingPhaseSpanName && name != turn.ToolBlockingPhaseSpanName {
+			continue
+		}
+		phases[name]++
+		attributes := spanEventAttributes(t, map[string]any{"attributes": span["attributes"]})
+		wantPhase := turn.TurnPhaseSampling
+		if name == turn.ToolBlockingPhaseSpanName {
+			wantPhase = turn.TurnPhaseToolBlocking
+		}
+		if attributes[turn.TurnPhaseAttribute] != wantPhase ||
+			attributes[turn.ConversationIDAttribute] != "thread-1" ||
+			attributes[turn.TurnIDAttribute] != "turn-1" {
+			t.Fatalf("%s attributes = %#v", name, attributes)
+		}
+		if parent, _ := span["parentSpanId"].(string); !samplingRequestSpanIDs[parent] {
+			t.Fatalf("%s parent = %q, want a sampling-request span %#v", name, parent, samplingRequestSpanIDs)
+		}
+	}
+	// One sampling phase span per sampling request, and one tool-blocking span
+	// for the single tool round.
+	if phases[turn.SamplingPhaseSpanName] != 2 || phases[turn.ToolBlockingPhaseSpanName] != 1 {
+		t.Fatalf("phase spans = %#v (spans=%#v)", phases, spans)
+	}
 }

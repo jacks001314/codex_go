@@ -6649,6 +6649,11 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err != nil {
 		return nil, err
 	}
+	// Rust #49262: the accepted input is traced on `codex.turn_input`, which
+	// records the turn id once the submission has one.
+	inputSpan := r.startTurnInputSpan(r.openRequestSpan(request), params.ThreadID)
+	acceptedTurnID := ""
+	defer func() { endTurnInputSpan(inputSpan, acceptedTurnID) }()
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
@@ -6704,6 +6709,7 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 		}
 		return nil, err
 	}
+	acceptedTurnID = response.Turn.ID
 	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
 	_ = r.persistTurnEnvironmentSelections(params)
 	if hasSettingsUpdate {
@@ -7554,6 +7560,10 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Rust #49262: a steer joins the accepted turn's trace on `codex.turn_input`.
+	inputSpan := r.startTurnInputSpan(r.openRequestSpan(request), params.ThreadID)
+	acceptedTurnID := ""
+	defer func() { endTurnInputSpan(inputSpan, acceptedTurnID) }()
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
 	}
@@ -7571,6 +7581,7 @@ func (r *RuntimeRouter) handleTurnSteer(request *Request) (*turn.TurnSteerRespon
 		r.emitCodexTurnSteerAnalyticsEvent(context.Background(), connectionID, &params, nil, telemetry.TurnSteerResultRejected, turnSteerAnalyticsRejectionReason(err), createdAt)
 		return nil, turnSteerRuntimeError(err)
 	}
+	acceptedTurnID = response.TurnID
 	// Rust reports the steered user input like a turn start
 	// (SessionTelemetry::user_prompt).
 	r.emitUserPromptRecords(context.Background(), params.ThreadID, params.Prompt, params.Input)

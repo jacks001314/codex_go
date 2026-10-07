@@ -364,6 +364,20 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// Rust instruments the sampling request with `run_sampling_request`, so the
 		// client's spans and records land inside the turn's span tree.
 		stepCtx, samplingSpan := startSamplingRequestSpan(ctx, request, stepModel)
+		// Rust #49262: `codex.sampling` brackets the sampling phase and ends
+		// before the step's tools drain, so a blocked tool does not keep
+		// sampling open.
+		samplingPhaseSpan := startTurnPhaseSpan(ctx, request, samplingSpan, SamplingPhaseSpanName, TurnPhaseSampling, request.ThreadID, request.TurnID)
+		samplingPhaseEnded := false
+		endSamplingPhaseSpan := func() {
+			if samplingPhaseEnded {
+				return
+			}
+			samplingPhaseEnded = true
+			if samplingPhaseSpan != nil {
+				samplingPhaseSpan.End()
+			}
+		}
 		// Rust #48135: an instant-interrupt sampling request owns a preemption
 		// signal whose watcher cancels it as soon as the turn's queued input
 		// holds a user message. The signal reaches every code-mode call this
@@ -383,6 +397,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				return
 			}
 			samplingSpanEnded = true
+			endSamplingPhaseSpan()
 			if stopStepPreempt != nil {
 				stopStepPreempt()
 				stopStepPreempt = nil
@@ -528,6 +543,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			continue
 		}
 		if len(toolItems) > 0 && request.SamplingCompaction != nil {
+			// Rust #49262: the automatic compaction runs in its own
+			// `codex.compaction` phase span.
+			compactionSpan := startTurnPhaseSpan(ctx, request, samplingSpan, CompactionPhaseSpanName, TurnPhaseCompaction, request.ThreadID, request.TurnID)
 			compacted, err := request.SamplingCompaction(&SamplingCompactionContext{
 				Response:     response,
 				Usage:        result.Usage,
@@ -535,6 +553,9 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				HasToolCalls: true,
 				Result:       result,
 			})
+			if compactionSpan != nil {
+				compactionSpan.End()
+			}
 			if err != nil {
 				endSamplingRequestSpan()
 				return nil, err
@@ -594,9 +615,17 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			item := toolItems[i]
 			result.InputItems = append(result.InputItems, &item)
 		}
+		// Rust #49262: sampling has ended by now; the step's tools drain inside
+		// their own `codex.tool_blocking` phase span. The span is not entered, so
+		// the dispatch still runs under the sampling-request span.
+		endSamplingPhaseSpan()
+		toolBlockingSpan := startTurnPhaseSpan(ctx, request, samplingSpan, ToolBlockingPhaseSpanName, TurnPhaseToolBlocking, request.ThreadID, request.TurnID)
 		toolBlocking := timing.BeginToolBlocking(l.now())
 		executions, err := l.dispatcher.ExecuteToolItems(stepCtx, toolItems)
 		toolBlocking.CloseAt(l.now())
+		if toolBlockingSpan != nil {
+			toolBlockingSpan.End()
+		}
 		endSamplingRequestSpan()
 		if err != nil {
 			return nil, err

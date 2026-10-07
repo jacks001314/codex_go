@@ -55,6 +55,51 @@ func startSamplingRequestSpan(ctx context.Context, request *AgentLoopRequest, mo
 	return request.Tracer.StartSpan(ctx, nil, SamplingRequestSpanName, attributes)
 }
 
+// Rust #49262 (a7660cd154): turn-phase spans carry `codex.turn.phase` plus the
+// conversation and turn ids, so a trace can tell sampling time from time spent
+// waiting for tools and correlate a phase with the turn that owns it.
+const (
+	// TurnPhaseAttribute is the span attribute naming the turn phase.
+	TurnPhaseAttribute = "codex.turn.phase"
+	// ConversationIDAttribute is the span attribute carrying the thread id.
+	ConversationIDAttribute = "conversation.id"
+	// TurnIDAttribute is the span attribute carrying the turn id.
+	TurnIDAttribute = "turn.id"
+)
+
+// The phases Rust brackets with their own spans: sampling ends before the
+// step's tools drain, and compaction runs in its own span.
+const (
+	TurnPhaseSampling     = "sampling"
+	TurnPhaseToolBlocking = "tool_blocking"
+	TurnPhaseCompaction   = "compaction"
+)
+
+// The phase span names Rust's `trace_span!` macros report.
+const (
+	SamplingPhaseSpanName     = "codex.sampling"
+	ToolBlockingPhaseSpanName = "codex.tool_blocking"
+	CompactionPhaseSpanName   = "codex.compaction"
+)
+
+// startTurnPhaseSpan opens one of the turn's phase spans
+// (`codex.sampling` / `codex.tool_blocking` / `codex.compaction`) nested under
+// the given parent span. Rust's `trace_span!` creates the span without entering
+// it, so the caller keeps the ambient span it already had: the phase marker
+// brackets the phase but does not become the parent of the work inside it.
+func startTurnPhaseSpan(ctx context.Context, request *AgentLoopRequest, parent model.TelemetrySpan, name string, phase string, threadID string, turnID string) model.TelemetrySpan {
+	if request == nil || request.Tracer == nil {
+		return nil
+	}
+	attributes := map[string]string{
+		TurnPhaseAttribute:      phase,
+		ConversationIDAttribute: strings.TrimSpace(threadID),
+		TurnIDAttribute:         strings.TrimSpace(turnID),
+	}
+	_, span := request.Tracer.StartSpan(ctx, parent, name, attributes)
+	return span
+}
+
 // usageTagsDocument serializes the usage-tag document with sorted keys, the way
 // Rust's span field renders the JSON map.
 func usageTagsDocument(tags map[string]string) string {

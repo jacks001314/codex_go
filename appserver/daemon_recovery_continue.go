@@ -258,6 +258,11 @@ func (r *RuntimeRouter) startDaemonRecoveryContinuationTurn(params *turn.TurnSta
 	if err := r.runPendingSessionStartHook(context.Background(), params); err != nil {
 		return err
 	}
+	// Rust #49262: a recovered turn is traced on `codex.turn_input` too, which
+	// records the turn id once the recovery has started a turn.
+	inputSpan := r.startTurnInputSpan(nil, params.ThreadID)
+	acceptedTurnID := ""
+	defer func() { endTurnInputSpan(inputSpan, acceptedTurnID) }()
 	reservedRuntime := false
 	if r.hasRuntimeThreadStore() {
 		if err := r.reserveRuntimeThread(params.ThreadID); err != nil {
@@ -272,6 +277,7 @@ func (r *RuntimeRouter) startDaemonRecoveryContinuationTurn(params *turn.TurnSta
 		}
 		return err
 	}
+	acceptedTurnID = response.Turn.ID
 	_ = r.persistTurnStartRuntimeWorkspaceRoots(params)
 	_ = r.persistTurnEnvironmentSelections(params)
 	r.startTurnRuntimeAsync(params, response, "", nil)

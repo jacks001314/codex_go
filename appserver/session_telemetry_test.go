@@ -292,6 +292,136 @@ func TestTurnStartOpensSamplingRequestSpanLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #49262: the session's turn-input handler is instrumented with
+// `codex.turn_input`, whose span carries `conversation.id` and the accepted
+// `turn.id` and lives in the trace of the request that carried the input
+// (started, steered and recovered turns alike).
+func TestTurnInputSpanCarriesAcceptedTurnLikeRust(t *testing.T) {
+	traceBodies := make(chan map[string]any, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		payload := map[string]any{}
+		_ = json.NewDecoder(request.Body).Decode(&payload)
+		select {
+		case traceBodies <- payload:
+		default:
+		}
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	provider, err := telemetry.NewOtelProvider(telemetry.OtelSettings{
+		ServiceName:   otelAppServerServiceName,
+		TraceExporter: telemetry.OtelExporter{Kind: telemetry.OtelExporterOtlpHTTP, Endpoint: server.URL + "/v1/traces"},
+	})
+	if err != nil || provider == nil || provider.Tracer() == nil {
+		t.Fatalf("provider = %#v error = %v", provider, err)
+	}
+	home := t.TempDir()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter: NewRouter(store),
+		Turns:        turn.NewTurnService(),
+		Agent:        newRecordingRuntimeAgent("ok"),
+		ThreadStatus: NewThreadStatusManager(),
+		Config:       config.NewConfigService(home),
+	})
+	router.SetNotificationSink(sink)
+	router.installOtelProvider(provider, state.NewTaskMetrics())
+	defer router.Close()
+
+	start := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home}))
+	if start.Error != nil {
+		t.Fatalf("thread start error: %+v", start.Error)
+	}
+	threadID := start.Result.(*ThreadStartResponse).Thread.ID
+
+	runInput := func(id int64, connectionID string, method Method, params any, handle func(*Request) (string, error)) (string, string) {
+		t.Helper()
+		request := requestWithParams(t, IntID(id), method, params)
+		request.ConnectionID = connectionID
+		requestSpan := startRequestSpan(router.requestTracer(), request, "stdio")
+		if requestSpan == nil {
+			t.Fatal("the request span was not started")
+		}
+		router.registerRequestSpan(request, requestSpan)
+		turnID, err := handle(request)
+		router.unregisterRequestSpan(request)
+		requestSpan.End()
+		if err != nil {
+			t.Fatalf("%s error: %v", method, err)
+		}
+		return requestSpan.SpanID, turnID
+	}
+
+	startParent, startedTurnID := runInput(2, "conn-turn-start", MethodTurnStart, turn.TurnStartParams{
+		ThreadID: threadID,
+		Prompt:   "inspect",
+		CWD:      home,
+	}, func(request *Request) (string, error) {
+		response, err := router.handleTurnStart(request)
+		if err != nil || response == nil {
+			return "", err
+		}
+		return response.Turn.ID, nil
+	})
+	waitForTurnCompletedStatus(t, sink, startedTurnID, TurnStatusCompleted)
+
+	seeded, err := router.requireTurns().Start(&turn.TurnStartParams{ThreadID: threadID, Prompt: "seeded"})
+	if err != nil {
+		t.Fatalf("seed active turn error = %v", err)
+	}
+	steerParent, steeredTurnID := runInput(3, "conn-turn-steer", MethodTurnSteer, turn.TurnSteerParams{
+		ThreadID:       threadID,
+		ExpectedTurnID: seeded.Turn.ID,
+		Prompt:         "steer",
+	}, func(request *Request) (string, error) {
+		response, err := router.handleTurnSteer(request)
+		if err != nil || response == nil {
+			return "", err
+		}
+		return response.TurnID, nil
+	})
+	if steeredTurnID != seeded.Turn.ID {
+		t.Fatalf("steered turn = %q, want %q", steeredTurnID, seeded.Turn.ID)
+	}
+
+	if err := provider.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	want := map[string]string{startParent: startedTurnID, steerParent: steeredTurnID}
+	found := map[string]bool{}
+	deadline := time.After(3 * time.Second)
+	for len(found) < len(want) {
+		select {
+		case payload := <-traceBodies:
+			spans := payload["resourceSpans"].([]any)[0].(map[string]any)["scopeSpans"].([]any)[0].(map[string]any)["spans"].([]any)
+			for _, entry := range spans {
+				span := entry.(map[string]any)
+				if span["name"] != TurnInputSpanName {
+					continue
+				}
+				parent, _ := span["parentSpanId"].(string)
+				turnID, ok := want[parent]
+				if !ok {
+					t.Fatalf("turn_input span parent = %q, want one of %#v", parent, want)
+				}
+				attributes := encodedAttributes(span)
+				if attributes[turnInputConversationIDAttribute] != threadID || attributes[turnInputTurnIDAttribute] != turnID {
+					t.Fatalf("turn_input attributes = %#v, want thread %q turn %q", attributes, threadID, turnID)
+				}
+				found[parent] = true
+			}
+		case <-deadline:
+			t.Fatalf("codex.turn_input spans exported for %#v, want both %#v", found, want)
+		}
+	}
+	if !found[startParent] || !found[steerParent] {
+		t.Fatalf("found = %#v, want both request traces", found)
+	}
+}
+
 // Rust spawns every session inside a `thread_spawn` span (parented to the
 // spawning request's W3C carrier) and runs the thread's whole life inside a
 // `session_loop` span, so the turn's sampling request nests under it
