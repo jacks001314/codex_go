@@ -2,6 +2,10 @@ package telemetry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"math"
 	"strconv"
 	"testing"
 )
@@ -107,4 +111,29 @@ func exportedMetricsByName(t *testing.T, body map[string]any) map[string]map[str
 		metrics[metric["name"].(string)] = metric
 	}
 	return metrics
+}
+
+// TestContextLogBoundariesMatchRust pins the logarithmic boundary family to the
+// exact bytes Rust produces. `THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_BUCKETS`
+// is `context_log_buckets(17.0)` from codex-rs/otel/src/metrics/names.rs
+// (#48819) evaluated with `2.0_f64.powf`, whose libm `pow` is correctly rounded;
+// Go's math.Pow is not, so the digest below was taken from a rustc program that
+// mirrors `context_log_buckets` verbatim and dumps each boundary's float64 bits
+// little-endian. A drift (for example back to math.Pow) changes the digest.
+func TestContextLogBoundariesMatchRust(t *testing.T) {
+	const rustDigest = "8cacf78cbe23be0158fb5fa8f4be5d8768684969b45c3f48b8841d8e42c80fea"
+
+	boundaries := ThreadSkillsDescriptionTruncatedCharsBoundaries
+	if len(boundaries) != 511 {
+		t.Fatalf("boundaries = %d, want 511", len(boundaries))
+	}
+	digest := sha256.New()
+	for _, boundary := range boundaries {
+		var encoded [8]byte
+		binary.LittleEndian.PutUint64(encoded[:], math.Float64bits(boundary))
+		digest.Write(encoded[:])
+	}
+	if got := hex.EncodeToString(digest.Sum(nil)); got != rustDigest {
+		t.Fatalf("context log boundaries drifted from Rust: sha256 = %s, want %s", got, rustDigest)
+	}
 }
