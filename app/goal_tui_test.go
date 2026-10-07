@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"codex_go/appserver"
 	"codex_go/session"
+	"codex_go/state"
 	codextui "codex_go/tui"
 )
 
@@ -367,5 +369,202 @@ func TestTUIGoalMutationParamsShareUserOriginLikeRust(t *testing.T) {
 		if origin == nil || *origin != appserver.ThreadGoalMutationOriginUser {
 			t.Fatalf("origin=%v", origin)
 		}
+	}
+}
+
+// goalStateRuntime opens the local state database the way app/session.go does
+// before handing a router to the TUI. The recording half of Rust #49598 lives
+// behind the app-server's state-runtime branch
+// (`RuntimeRouter.setThreadGoal` -> `setStateThreadGoal` ->
+// `recordUserGoalSetInstruction`), so an end-to-end history assertion has to
+// drive a state-runtime-backed router.
+func goalStateRuntime(t *testing.T, codexHome string) *state.StateRuntime {
+	t.Helper()
+	sqliteConfig, err := state.SqliteConfigForCodexHome(codexHome)
+	if err != nil {
+		t.Fatalf("sqlite config: %v", err)
+	}
+	runtime, err := state.InitStateRuntime(context.Background(), sqliteConfig, "openai")
+	if err != nil {
+		t.Fatalf("init state runtime: %v", err)
+	}
+	return runtime
+}
+
+// goalThreadHistoryText returns the thread's durable model-visible history: the
+// rollout log a resumed thread replays. The recorded goal instruction is written
+// there by `RuntimeRouter.appendUserGoalInstructionToRollout`, which is the
+// surface Rust #49598 leaves for unloaded threads.
+func goalThreadHistoryText(t *testing.T, store *session.Store, codexHome string, threadID string) string {
+	t.Helper()
+	record, err := store.Read(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		t.Fatalf("read thread record: %v", err)
+	}
+	path := ""
+	if record.Metadata.Extra != nil {
+		path, _ = record.Metadata.Extra["rollout_path"].(string)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		t.Fatalf("thread %s has no rollout path: %#v", threadID, record.Metadata.Extra)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read thread rollout %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func assertUserGoalHistoryRecord(t *testing.T, store *session.Store, codexHome string, threadID string, wantText string) {
+	t.Helper()
+	history := goalThreadHistoryText(t, store, codexHome, threadID)
+	for _, line := range strings.Split(history, "\n") {
+		if !strings.Contains(line, wantText) {
+			continue
+		}
+		if !strings.Contains(line, `"content_item_kinds":["user.goal"]`) {
+			t.Fatalf("goal instruction %q is not annotated user.goal: %s", wantText, line)
+		}
+		return
+	}
+	t.Fatalf("user goal instruction %q missing from model history: %s", wantText, history)
+}
+
+func assertNoUserGoalHistoryRecord(t *testing.T, store *session.Store, codexHome string, threadID string, text string) {
+	t.Helper()
+	history := goalThreadHistoryText(t, store, codexHome, threadID)
+	if strings.Contains(history, `"user.goal"`) {
+		t.Fatalf("unexpected user goal record in model history: %s", history)
+	}
+	if strings.Contains(history, "User set the goal") || strings.Contains(history, "User cleared the goal") {
+		t.Fatalf("goal instruction recorded without user origin: %s", history)
+	}
+	// The goal state itself still changes, so the objective may appear in the
+	// goal-update event; it must never appear as a model input item.
+	for _, line := range strings.Split(history, "\n") {
+		if strings.Contains(line, text) && strings.Contains(line, `"input_text"`) {
+			t.Fatalf("goal objective reached the model as a user instruction: %s", line)
+		}
+	}
+}
+
+// Rust #49598 (upstream de02016798; TUI half codex-rs/tui/src/app_server_session.rs,
+// recording half app-server/src/request_processors/thread_goal_user_context.rs):
+// a TUI goal set and clear must reach the thread's model-visible history as user
+// instructions annotated `content_item_kinds=["user.goal"]`. Mirrors the Rust
+// test `user_goal_updates_survive_resume_and_clear`.
+func TestTUIGoalEditsEnterModelHistoryLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	store := session.NewStore(filepath.Join(codexHome, "sessions"))
+	threadID := startLocalGoalTestThread(t, store)
+
+	runtime := goalStateRuntime(t, codexHome)
+	defer runtime.Close()
+	factory := func() interactiveGoalRouter {
+		return appserver.NewDefaultRuntimeRouterWithOptions(store, codexHome, &appserver.RuntimeRouterOptions{StateRuntime: runtime})
+	}
+	_, set, clear, _, _ := interactiveLocalGoalCallbacks(factory)
+
+	objective := "Ship the end-to-end goal origin report."
+	status := appserver.GoalActive
+	if _, err := set(threadID, &objective, nil, &status); err != nil {
+		t.Fatalf("TUI set goal: %v", err)
+	}
+	// The instruction text is asserted as it appears in the rollout JSONL line,
+	// where the surrounding quotes of the objective are JSON-escaped.
+	assertUserGoalHistoryRecord(t, store, codexHome, threadID, `User set the goal: \"Ship the end-to-end goal origin report.\"`)
+	assertUserGoalHistoryRecord(t, store, codexHome, threadID, `User set goal status: \"active\".`)
+
+	if _, err := clear(threadID); err != nil {
+		t.Fatalf("TUI clear goal: %v", err)
+	}
+	assertUserGoalHistoryRecord(t, store, codexHome, threadID, "User cleared the goal.")
+}
+
+// Rust #49598: the `origin` on the request decides whether the mutation is
+// recorded as user authorization. The same state-runtime-backed mutation without
+// the user origin (omitted, and explicit `automatic`) must change goal state but
+// stay out of the model-visible history.
+func TestTUIGoalMutationsWithoutUserOriginStayOutOfHistoryLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		origin *appserver.ThreadGoalMutationOrigin
+	}{
+		{name: "omitted"},
+		{name: "automatic", origin: func() *appserver.ThreadGoalMutationOrigin {
+			origin := appserver.ThreadGoalMutationOriginAutomatic
+			return &origin
+		}()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			codexHome := t.TempDir()
+			store := session.NewStore(filepath.Join(codexHome, "sessions"))
+			threadID := startLocalGoalTestThread(t, store)
+
+			runtime := goalStateRuntime(t, codexHome)
+			defer runtime.Close()
+			router := appserver.NewDefaultRuntimeRouterWithOptions(store, codexHome, &appserver.RuntimeRouterOptions{StateRuntime: runtime})
+			defer router.Close()
+			if _, err := initializeLocalGoalConnection(router); err != nil {
+				t.Fatalf("initialize: %v", err)
+			}
+			objective := "Automatic lifecycle goal " + testCase.name + "."
+			status := appserver.GoalActive
+			params := appserver.GoalSetParams{
+				ThreadID:  threadID,
+				Objective: &objective,
+				Status:    &status,
+				Origin:    testCase.origin,
+			}
+			raw, err := json.Marshal(params)
+			if err != nil {
+				t.Fatalf("marshal set params: %v", err)
+			}
+			response := router.Handle(&appserver.Request{
+				JSONRPC:      "2.0",
+				ID:           appserver.IntID(7),
+				Method:       appserver.MethodThreadGoalSet,
+				Params:       raw,
+				ConnectionID: interactiveGoalConnectionID,
+			})
+			if response == nil || response.Error != nil {
+				t.Fatalf("thread/goal/set response = %#v", response)
+			}
+			// The mutation itself is applied: only the user-authorization record
+			// is gated on origin.
+			getParams, err := json.Marshal(appserver.GoalGetParams{ThreadID: threadID})
+			if err != nil {
+				t.Fatalf("marshal get params: %v", err)
+			}
+			getResponse := router.Handle(&appserver.Request{
+				JSONRPC:      "2.0",
+				ID:           appserver.IntID(8),
+				Method:       appserver.MethodThreadGoalGet,
+				Params:       getParams,
+				ConnectionID: interactiveGoalConnectionID,
+			})
+			got, ok := getResponse.Result.(*appserver.GoalGetResponse)
+			if getResponse.Error != nil || !ok || got == nil || got.Goal == nil || got.Goal.Objective != objective {
+				t.Fatalf("goal state after %s set = %#v err=%v", testCase.name, getResponse.Result, getResponse.Error)
+			}
+			assertNoUserGoalHistoryRecord(t, store, codexHome, threadID, objective)
+
+			clearParams, err := json.Marshal(appserver.GoalClearParams{ThreadID: threadID, Origin: testCase.origin})
+			if err != nil {
+				t.Fatalf("marshal clear params: %v", err)
+			}
+			clearResponse := router.Handle(&appserver.Request{
+				JSONRPC:      "2.0",
+				ID:           appserver.IntID(9),
+				Method:       appserver.MethodThreadGoalClear,
+				Params:       clearParams,
+				ConnectionID: interactiveGoalConnectionID,
+			})
+			if clearResponse == nil || clearResponse.Error != nil {
+				t.Fatalf("thread/goal/clear response = %#v", clearResponse)
+			}
+			assertNoUserGoalHistoryRecord(t, store, codexHome, threadID, "User cleared the goal.")
+		})
 	}
 }
