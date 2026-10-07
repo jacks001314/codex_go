@@ -29,6 +29,7 @@ const (
 	TerminalTitleTotalOutputTokens  TerminalTitleItem = "total-output-tokens"
 	TerminalTitleSessionID          TerminalTitleItem = "thread-id"
 	TerminalTitleFastMode           TerminalTitleItem = "fast-mode"
+	TerminalTitleDaybreak           TerminalTitleItem = "daybreak"
 	TerminalTitleModel              TerminalTitleItem = "model"
 	TerminalTitleModelWithReasoning TerminalTitleItem = "model-with-reasoning"
 	TerminalTitleReasoning          TerminalTitleItem = "reasoning"
@@ -71,6 +72,8 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleSessionID, true
 	case "fast-mode":
 		return TerminalTitleFastMode, true
+	case "daybreak":
+		return TerminalTitleDaybreak, true
 	case "model", "model-name":
 		return TerminalTitleModel, true
 	case "model-with-reasoning":
@@ -132,6 +135,8 @@ func (i TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return StatusPreviewSessionID, true
 	case TerminalTitleFastMode:
 		return StatusPreviewFastMode, true
+	case TerminalTitleDaybreak:
+		return StatusPreviewDaybreak, true
 	case TerminalTitleModel:
 		return StatusPreviewModel, true
 	case TerminalTitleModelWithReasoning:

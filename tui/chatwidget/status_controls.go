@@ -134,13 +134,19 @@ type StatusControlsRuntime struct {
 	// Fast/priority service tier. When false the fast-mode status item is
 	// omitted (Rust #39999 hides the value for catalogued unsupported models).
 	ModelSupportsFastMode bool
-	RawOutput             bool
-	ThreadTitle           string
-	WorkspaceHeadline     string
-	TaskProgress          string
-	CodexVersion          string
-	HasCodexBackendAuth   bool
-	RateLimitSnapshots    map[string]RateLimitSnapshot
+	// DaybreakEnabled is the thread's Daybreak preference, gated by the
+	// cli_daybreak feature (Rust `ChatWidget::daybreak_enabled`, #49861).
+	DaybreakEnabled bool
+	// SideConversationActive suppresses the Daybreak item while a side
+	// conversation owns the composer (Rust `side_conversation_active`, #49861).
+	SideConversationActive bool
+	RawOutput              bool
+	ThreadTitle            string
+	WorkspaceHeadline      string
+	TaskProgress           string
+	CodexVersion           string
+	HasCodexBackendAuth    bool
+	RateLimitSnapshots     map[string]RateLimitSnapshot
 }
 
 type StatusControlsState struct {
@@ -781,6 +787,13 @@ func (s *StatusControlsState) StatusLineValueForItem(item bottompane.StatusLineI
 			return "Fast on", true
 		}
 		return "Fast off", true
+	case bottompane.StatusLineDaybreak:
+		// Rust #49861: Daybreak is on only for the thread's own turns, so a
+		// side conversation always reports it as off.
+		if s.Runtime.DaybreakEnabled && !s.Runtime.SideConversationActive {
+			return "Daybreak on", true
+		}
+		return "Daybreak off", true
 	case bottompane.StatusLineRawOutput:
 		if s.Runtime.RawOutput {
 			return "raw output", true
@@ -908,6 +921,10 @@ func (s *StatusControlsState) TerminalTitleValueForItem(item TerminalTitleItem) 
 		return s.truncatedStatusLineValue(bottompane.StatusLineSessionID)
 	case TerminalTitleFastMode:
 		return s.truncatedStatusLineValue(bottompane.StatusLineFastMode)
+	case TerminalTitleDaybreak:
+		// Rust #49861: the terminal title carries the Daybreak item verbatim
+		// (no title-only truncation).
+		return s.StatusLineValueForItem(bottompane.StatusLineDaybreak)
 	case TerminalTitleModel:
 		value, ok := s.StatusLineValueForItem(bottompane.StatusLineModelName)
 		if !ok {
@@ -1235,6 +1252,7 @@ func AllStatusLineItems() []bottompane.StatusLineItem {
 		bottompane.StatusLineTotalOutputTokens,
 		bottompane.StatusLineSessionID,
 		bottompane.StatusLineFastMode,
+		bottompane.StatusLineDaybreak,
 		bottompane.StatusLineRawOutput,
 		bottompane.StatusLineThreadTitle,
 		bottompane.StatusLineWorkspaceHeadline,
@@ -1261,6 +1279,7 @@ func AllTerminalTitleItems() []TerminalTitleItem {
 		TerminalTitleTotalOutputTokens,
 		TerminalTitleSessionID,
 		TerminalTitleFastMode,
+		TerminalTitleDaybreak,
 		TerminalTitleModel,
 		TerminalTitleModelWithReasoning,
 		TerminalTitleReasoning,
@@ -1334,6 +1353,8 @@ func StatusLineItemDescription(item bottompane.StatusLineItem, previewData Statu
 		return "Current thread identifier (omitted until thread starts)"
 	case bottompane.StatusLineFastMode:
 		return "Whether Fast mode is currently active"
+	case bottompane.StatusLineDaybreak:
+		return "Whether Daybreak is enabled for this thread"
 	case bottompane.StatusLineRawOutput:
 		return "Whether raw scrollback mode is active"
 	case bottompane.StatusLineThreadTitle:
@@ -1383,6 +1404,8 @@ func TerminalTitleItemDescription(item TerminalTitleItem, previewData StatusSurf
 		return "Current thread identifier (omitted until thread starts)"
 	case TerminalTitleFastMode:
 		return "Whether Fast mode is currently active"
+	case TerminalTitleDaybreak:
+		return "Whether Daybreak is enabled for this thread"
 	case TerminalTitleModel:
 		return "Current model name"
 	case TerminalTitleModelWithReasoning:
@@ -1438,6 +1461,8 @@ func statusLineItemForPreviewItem(item StatusSurfacePreviewItem) (bottompane.Sta
 		return bottompane.StatusLineSessionID, true
 	case StatusPreviewFastMode:
 		return bottompane.StatusLineFastMode, true
+	case StatusPreviewDaybreak:
+		return bottompane.StatusLineDaybreak, true
 	case StatusPreviewRawOutput:
 		return bottompane.StatusLineRawOutput, true
 	case StatusPreviewWorkspaceHeadline:

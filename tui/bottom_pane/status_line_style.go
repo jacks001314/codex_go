@@ -39,6 +39,7 @@ const (
 	StatusLineCodexVersion
 	StatusLineSessionID
 	StatusLineFastMode
+	StatusLineDaybreak
 	StatusLineRawOutput
 	StatusLinePermissions
 	StatusLineApprovalMode
@@ -190,7 +191,7 @@ func StatusLineAccentForItem(item StatusLineItem) StatusLineAccent {
 		return StatusLineAccentLimit
 	case StatusLineCodexVersion, StatusLineHostname, StatusLineSessionID:
 		return StatusLineAccentMetadata
-	case StatusLineFastMode, StatusLineRawOutput, StatusLinePermissions, StatusLineApprovalMode:
+	case StatusLineFastMode, StatusLineDaybreak, StatusLineRawOutput, StatusLinePermissions, StatusLineApprovalMode:
 		return StatusLineAccentMode
 	case StatusLineThreadTitle, StatusLineWorkspaceHeadline:
 		return StatusLineAccentThread

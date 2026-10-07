@@ -39,6 +39,7 @@ const (
 	TerminalTitleTotalOutputTokens  TerminalTitleItem = "total-output-tokens"
 	TerminalTitleSessionID          TerminalTitleItem = "thread-id"
 	TerminalTitleFastMode           TerminalTitleItem = "fast-mode"
+	TerminalTitleDaybreak           TerminalTitleItem = "daybreak"
 	TerminalTitleModel              TerminalTitleItem = "model"
 	TerminalTitleModelWithReasoning TerminalTitleItem = "model-with-reasoning"
 	TerminalTitleReasoning          TerminalTitleItem = "reasoning"
@@ -71,6 +72,7 @@ const (
 	StatusPreviewTotalOutputTokens  StatusSurfacePreviewItem = "total-output-tokens"
 	StatusPreviewSessionID          StatusSurfacePreviewItem = "session-id"
 	StatusPreviewFastMode           StatusSurfacePreviewItem = "fast-mode"
+	StatusPreviewDaybreak           StatusSurfacePreviewItem = "daybreak"
 	StatusPreviewRawOutput          StatusSurfacePreviewItem = "raw-output"
 	StatusPreviewWorkspaceHeadline  StatusSurfacePreviewItem = "workspace-headline"
 	StatusPreviewModel              StatusSurfacePreviewItem = "model"
@@ -214,6 +216,8 @@ func ParseStatusLineItem(id string) (bottompane.StatusLineItem, bool) {
 		return bottompane.StatusLineSessionID, true
 	case "fast-mode":
 		return bottompane.StatusLineFastMode, true
+	case "daybreak":
+		return bottompane.StatusLineDaybreak, true
 	case "raw-output":
 		return bottompane.StatusLineRawOutput, true
 	case "thread-title":
@@ -273,6 +277,8 @@ func StatusLineItemID(item bottompane.StatusLineItem) string {
 		return "thread-id"
 	case bottompane.StatusLineFastMode:
 		return "fast-mode"
+	case bottompane.StatusLineDaybreak:
+		return "daybreak"
 	case bottompane.StatusLineRawOutput:
 		return "raw-output"
 	case bottompane.StatusLineThreadTitle:
@@ -322,6 +328,8 @@ func ParseTerminalTitleItem(id string) (TerminalTitleItem, bool) {
 		return TerminalTitleSessionID, true
 	case "fast-mode":
 		return TerminalTitleFastMode, true
+	case "daybreak":
+		return TerminalTitleDaybreak, true
 	case "model", "model-name":
 		return TerminalTitleModel, true
 	case "model-with-reasoning":
@@ -385,6 +393,8 @@ func (item TerminalTitleItem) PreviewItem() (StatusSurfacePreviewItem, bool) {
 		return StatusPreviewSessionID, true
 	case TerminalTitleFastMode:
 		return StatusPreviewFastMode, true
+	case TerminalTitleDaybreak:
+		return StatusPreviewDaybreak, true
 	case TerminalTitleModel:
 		return StatusPreviewModel, true
 	case TerminalTitleModelWithReasoning:
@@ -444,6 +454,8 @@ func StatusLineItemPreviewItem(item bottompane.StatusLineItem) StatusSurfacePrev
 		return StatusPreviewSessionID
 	case bottompane.StatusLineFastMode:
 		return StatusPreviewFastMode
+	case bottompane.StatusLineDaybreak:
+		return StatusPreviewDaybreak
 	case bottompane.StatusLineRawOutput:
 		return StatusPreviewRawOutput
 	case bottompane.StatusLineThreadTitle:
@@ -497,6 +509,7 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewTotalOutputTokens,
 		StatusPreviewSessionID,
 		StatusPreviewFastMode,
+		StatusPreviewDaybreak,
 		StatusPreviewRawOutput,
 		StatusPreviewWorkspaceHeadline,
 		StatusPreviewModel,
@@ -762,6 +775,8 @@ func statusSurfacePlaceholder(item StatusSurfacePreviewItem) string {
 		return "550e8400-e29b-41d4"
 	case StatusPreviewFastMode:
 		return "Fast on"
+	case StatusPreviewDaybreak:
+		return "Daybreak off"
 	case StatusPreviewRawOutput:
 		return "raw output"
 	case StatusPreviewWorkspaceHeadline:

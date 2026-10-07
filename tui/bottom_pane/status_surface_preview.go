@@ -38,6 +38,7 @@ const (
 	StatusPreviewTotalOutputTokens  StatusSurfacePreviewItem = "total-output-tokens"
 	StatusPreviewSessionID          StatusSurfacePreviewItem = "session-id"
 	StatusPreviewFastMode           StatusSurfacePreviewItem = "fast-mode"
+	StatusPreviewDaybreak           StatusSurfacePreviewItem = "daybreak"
 	StatusPreviewRawOutput          StatusSurfacePreviewItem = "raw-output"
 	StatusPreviewWorkspaceHeadline  StatusSurfacePreviewItem = "workspace-headline"
 	StatusPreviewModel              StatusSurfacePreviewItem = "model"
@@ -96,6 +97,7 @@ func StatusSurfacePreviewItems() []StatusSurfacePreviewItem {
 		StatusPreviewTotalOutputTokens,
 		StatusPreviewSessionID,
 		StatusPreviewFastMode,
+		StatusPreviewDaybreak,
 		StatusPreviewRawOutput,
 		StatusPreviewWorkspaceHeadline,
 		StatusPreviewModel,
@@ -251,6 +253,8 @@ func StatusSurfacePreviewPlaceholder(item StatusSurfacePreviewItem) string {
 		return "550e8400-e29b-41d4"
 	case StatusPreviewFastMode:
 		return "Fast on"
+	case StatusPreviewDaybreak:
+		return "Daybreak off"
 	case StatusPreviewRawOutput:
 		return "raw output"
 	case StatusPreviewWorkspaceHeadline:

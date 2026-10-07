@@ -99,6 +99,8 @@ func ParseStatusLineItem(id string) (StatusLineItem, bool) {
 		return StatusLineSessionID, true
 	case "fast-mode":
 		return StatusLineFastMode, true
+	case "daybreak":
+		return StatusLineDaybreak, true
 	case "raw-output":
 		return StatusLineRawOutput, true
 	case "thread-title":
@@ -160,6 +162,8 @@ func StatusLineItemID(item StatusLineItem) string {
 		return "thread-id"
 	case StatusLineFastMode:
 		return "fast-mode"
+	case StatusLineDaybreak:
+		return "daybreak"
 	case StatusLineRawOutput:
 		return "raw-output"
 	case StatusLineThreadTitle:
@@ -221,6 +225,8 @@ func StatusLineItemPreviewItem(item StatusLineItem) StatusSurfacePreviewItem {
 		return StatusPreviewSessionID
 	case StatusLineFastMode:
 		return StatusPreviewFastMode
+	case StatusLineDaybreak:
+		return StatusPreviewDaybreak
 	case StatusLineRawOutput:
 		return StatusPreviewRawOutput
 	case StatusLineThreadTitle:
@@ -263,6 +269,7 @@ func StatusLineItemDescription(item StatusLineItem, previewData StatusSurfacePre
 		StatusLineTotalOutputTokens:  "Total output tokens used in session",
 		StatusLineSessionID:          "Current thread identifier (omitted until thread starts)",
 		StatusLineFastMode:           "Whether Fast mode is currently active",
+		StatusLineDaybreak:           "Whether Daybreak is enabled for this thread",
 		StatusLineRawOutput:          "Whether raw scrollback mode is active",
 		StatusLineThreadTitle:        "Current thread title, or thread identifier when unnamed",
 		StatusLineWorkspaceHeadline:  "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)",
