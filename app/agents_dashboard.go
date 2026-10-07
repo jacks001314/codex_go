@@ -505,7 +505,10 @@ func (s *remoteAgentsDashboardSource) StartSession(ctx context.Context, cwd stri
 	// Rust agents_overview.rs applies the destination's server defaults and the
 	// managed new-thread defaults when creating a session (#43177/#43261/#44693).
 	if defaults, layers, effective, ok := s.client.remoteNewThreadModelDefaults(ctx, params.CWD); ok {
-		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx))
+		// The dashboard's new-session path is not a fresh-start bootstrap, so the
+		// server-owned rule (Rust #50913) does not apply; the launch carries no
+		// client model here either way.
+		applyServerEffectiveLaunchDefaults(&params, effective, layers, nil, false, s.client.serverCatalogDefaultModel(ctx), false)
 		applyManagedDefaultsToThreadStartParams(&params, s.client.state, defaults, layers, nil, false, false)
 	}
 	var started appserver.ThreadStartResponse

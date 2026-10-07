@@ -11,6 +11,10 @@ import (
 // server's effective config seeds model/reasoning effort unless the launch chose
 // them explicitly (CLI, generic override, or a selected profile), and the
 // server catalog default fills in a model the server did not configure.
+//
+// The connected fresh-start path passes `serverOwned` (Rust #50913): the client's
+// implicit model is dropped instead of forwarded, while an explicit profile
+// launch (`serverOwned == false`) keeps its resolved model.
 func TestApplyServerEffectiveLaunchDefaults(t *testing.T) {
 	effective := map[string]any{"model": "server-model", "model_reasoning_effort": "high"}
 	catalog := func() (string, bool) { return "catalog-default", true }
@@ -66,7 +70,7 @@ func TestApplyServerEffectiveLaunchDefaults(t *testing.T) {
 	}
 	for _, tc := range cases {
 		params := cloneThreadStartParams(tc.params)
-		applyServerEffectiveLaunchDefaults(&params, effective, tc.layers, tc.cliKeys, tc.harnessModelSet, catalog)
+		applyServerEffectiveLaunchDefaults(&params, effective, tc.layers, tc.cliKeys, tc.harnessModelSet, catalog, true)
 		if params.Model != tc.wantModel {
 			t.Fatalf("%s: model = %q, want %q", tc.name, params.Model, tc.wantModel)
 		}
@@ -77,16 +81,26 @@ func TestApplyServerEffectiveLaunchDefaults(t *testing.T) {
 
 	// A server with no configured model falls back to the catalog default.
 	params := appserver.ThreadStartParams{Model: "local-default"}
-	applyServerEffectiveLaunchDefaults(&params, map[string]any{}, nil, nil, false, catalog)
+	applyServerEffectiveLaunchDefaults(&params, map[string]any{}, nil, nil, false, catalog, true)
 	if params.Model != "catalog-default" {
 		t.Fatalf("catalog fallback model = %q", params.Model)
 	}
 
-	// Without a catalog default the bootstrap model is preserved.
+	// Rust #50913: a server-owned fresh start never forwards the implicit client
+	// model, so a server that configures no model and offers no catalog default
+	// leaves the launch unset for the app server to resolve.
 	params = appserver.ThreadStartParams{Model: "local-default"}
-	applyServerEffectiveLaunchDefaults(&params, map[string]any{}, nil, nil, false, nil)
-	if params.Model != "local-default" {
-		t.Fatalf("bootstrap model = %q, want it preserved", params.Model)
+	applyServerEffectiveLaunchDefaults(&params, map[string]any{}, nil, nil, false, nil, true)
+	if params.Model != "" {
+		t.Fatalf("implicit client model = %q, want it dropped", params.Model)
+	}
+
+	// An explicit profile launch keeps the resolved client model (Rust #50913:
+	// `uses_server_owned_fresh_bootstrap` is false for a selected profile).
+	params = appserver.ThreadStartParams{Model: "profile-model"}
+	applyServerEffectiveLaunchDefaults(&params, map[string]any{}, nil, nil, false, nil, false)
+	if params.Model != "profile-model" {
+		t.Fatalf("profile model = %q, want it preserved", params.Model)
 	}
 }
 
