@@ -1122,3 +1122,43 @@ rg -n 'no rollout found for thread id' appserver/router.go ; rg -n 'KeepsEmptyTh
 
 - 已核：§10.C 的脚本用的是 `done < <(awk …)` + `while read pr`，**不触发** zsh 的「`for p in $VAR` 不做词分割」陷阱。
 - 全库扫描 `rg -n 'for [a-z_]+ in \$[A-Z_]+' update/*.md` = **0 命中**（唯一记录该陷阱的是 `update/plan_2026_10_07.md:2456` 的说明文字）⇒ 无需修正。
+
+### 13.J §9.A 的 23 条 ✅ 的行号无关锚点（Task B；只追加，不改 §9.A 原文）
+
+> 回应队长「§9.A 的 `file:line` 会随 main 漂移」的提醒：对 §9.A 的 23 条 ✅ 各给一个**不依赖行号**的锚点（符号/类型/测试名 + `git log -S` 落点提交）。**§9.A 原文一字未改**。
+> 独立核验：23 条上游 SHA 已在 `/home/jacks/jacks_dev/codex` 逐个 `git log --oneline -1 <sha>` 验证，subject 与 PR 一致（本 Agent 自跑，非转述）。
+
+| #PR | 上游 SHA | 一句话语义 | 行号无关锚点（符号/类型/测试名） | 落点提交（`git log -S` 首现 / Go 提交） |
+|---|---|---|---|---|
+| #49261 | `f35a0fdc5d` | 保留 Windows sandbox runner 启动错误码 | `sandbox/windowssandbox/elevated/runner_client_windows.go` 的 `RunnerLogonError` / `runnerErrorModeFlag`（`SetErrorMode` 前先取 `createProcessWithLogon` err）；测试用例名含 `RunnerLogonError` | 符号随初始导入 `1d2759c3`（2026-07-07）；`-S previousErrorMode` → `eeacecb8`（2026-07-18） |
+| #49308 | `50d9c5deac` | piped/常规 legacy sandbox 进程都不开控制台 | `sandbox/windowssandbox/process_windows.go` 两条 `CreateProcessAsUser` 路径的 `windows.CREATE_NO_WINDOW`；旁证 `envutil.SuppressConsoleWindow` | `4291e281`「windows: suppress the console windows … (#48483)」（引号不同，见注 3） |
+| #49702 | `3b16b5a5b0` | 统一 exec-server file-handle 术语 + 句柄上限 | `execserver.maxOpenFileReads`(=128) / `maxFileReadHandleIDBytes`(=32) / `validateFileReadHandleID` / `(*Server).openFile`；测试 `TestSessionRegistryIsolatesFileHandlesLikeRust` | `d55dd3a7`「add」（2026-07-12） |
+| #49778 | `875bf9209b` | exec-server 流式写协议（`fs/writeBlock`/`fs/open` modes/`FileWriteStreaming`） | `execserver.MethodFSWriteBlock` / `FileWriteStreaming` / `fsOpenModeRead` / `fsOpenModeReplace`；测试 `TestFileWriteStreamingLikeRust` | `1da0383b`「sync352 (#50177)」（引 #50177，见注 3） |
+| #49811 | `c51f5bfb82` | 处理不支持/占位的 `fs/writeBlock` | `execserver.(*Server).writeBlock` + `server.go` 分派 `case MethodFSWriteBlock`；测试 `TestFileWriteStreamingLikeRust` | `1da0383b`「sync352 (#50177)」 |
+| #49939 | `6b4daafdb4` | 每 turn 的 Cyber access program 选择 | `turn.CyberAccessProgram`（+`CoreValue`）/ `turn.TurnStartParams.CyberAccessProgram` / `model.CyberAccessProgram`；测试 `TestCyberAccessProgramCoreValueLikeRust` | `ad257e72`「sync235 (#44893, #48224)」 |
+| #48779 | `21eb35513d` | 父压缩后保留独立 Guardian 历史 | `appserver.(*guardianSessionRunner).ResetAfterParentCompaction` / `features` key `guardian_reuse_parent_compaction` / `retainedctx` 包 | `9fb5d629`（2026-08-10，Guardian compaction reuse 批次） |
+| #49280 | `18194bfd35` | capability roots 限定到已捕获 turn 环境选择 | `appserver.restrictCapabilityRootsToSelections`；测试 `TestRestrictCapabilityRootsToSelectionsLikeRust` | `79a13c57`「sync396 (#51493)」（见注 3） |
+| #49642 | `67727e7cf1` | managed requirements 可禁用 Windows MXC sandbox | `config.WindowsAllowMXCFromValues` / `WindowsSandboxModeMxc`；测试 `TestWindowsMXCOptOutRejectsExplicitMXCConfigLikeRust` | `4481ffd8`「sync389 (#51547)」（见注 3） |
+| #49796 | `5ca55db09c` | 去重 Guardian retained-context 省略通知 | `state.DeduplicateRetainedInstructions`（`state/guardian_retained_context.go`）；测试 `TestDeduplicateRetainedInstructionsUsesTranscriptSourceProof` | `d1088aa3`「sync270」（2026-09-27） |
+| #49806 | `a5d56d8120` | app-server 协议接受未知 Codex 错误变体 | `appserver.CodexErrorInfo`（`type CodexErrorInfo any`）；旁证 `rollout.normalizeCodexErrorInfoClassification`；测试 `TestRecordFromPathToleratesUnknownCodexErrorClassifications` | `eeacecb8`「change dirs」（2026-07-18） |
+| #49880 | `1f52d40704` | 权限授权绑定到发起 turn | `state.(*TurnState).RecordGrantedPermissions`；测试 `TestTurnStatePermissionsAndCounters` | `eeacecb8`「change dirs」（2026-07-18） |
+| #50531 | `7d5f55bdad` | 关闭前持久化 realtime transcript tail | `realtime.FlushTranscriptTailOnEnd` / `(*realtimeTransportSession).takeTranscriptTail` / `(*Manager).flushRealtimeTranscriptTail`；测试 `TestNormalTransportCloseFlushesTranscriptTailBeforeClosed` | `02b7c37b`（2026-08-01） |
+| #51221 | `2dbcab90e2` | 分离 environment requests 与 runtime selections（absent vs 显式空） | `mcp.TurnEnvironmentSelection`（+`Ready/Pending/Failed`）/ `appserver.turnEnvironmentSelections`（`runtime_router.go`）；测试 `TestTurnEnvironmentSelectionsDistinguishAbsentFromExplicitlyEmptyLikeRust` | `TurnEnvironmentSelection` → `18a9c908`「sync401 (#51503)」；`turnEnvironmentSelections` → `a388b9be`「sync30 (#42147)」 |
+| #49144 | `ff3c82c8a9` | 保留 server reasoning summary/verbosity 设置 | `app.launchReasoningOverrides` / `launchSettingForKey`（键 `model_reasoning_summary`/`model_verbosity`）；测试 `TestInteractiveLaunchReasoningOverridesLikeRust` | `8cc01f75`「sync507 (#50811)」（同源路径，见注 2） |
+| #49472 | `b588812e8c` | TUI 使用 server 权威权限（命名 profile） | `tui/tea.(*Model).selectServerPermissionProfile` / `remoteNamedPermissionProfileActive` / `ErrNamedPermissionProfilesUnsupported` | `f5472801`「sync31 (#43340)」（2026-09-12） |
+| #49857 | `f58ed54a9d` | 用 model catalog 驱动 TUI cyber refusal 文案 | `tui/history_cell.NewCyberPolicyErrorEvent` / `tui.DaybreakNotice`；测试 `TestCyberPolicyCopyFollowsDaybreakNotice` | 首现 `92515576`「rich tui functions」（2026-07-09） |
+| #50140 | `cb6da58876` | 用 server permission catalog 驱动 TUI 权限快捷键 | `tui/tea.(*Model).showPermissionsMenu` / `openPermissionsMenu` / `permissionsRetryOptionID` | `45e288ba`「sync31 (#43340)」（2026-09-12） |
+| #50396 | `d61c7a824f` | 分页键遵循 pager 绑定 | `tui.keymapAction("pager", …, "half_page_up"/"half_page_down")` / `tui/chatwidget.PagerHalfPageUp`/`PagerHalfPageDown`；测试 `TestTranscriptOverlayPagerActionsPreserveAndFollowBottom` | 首现 `92515576`（2026-07-09） |
+| #50431 | `b6903c0669` | 保留 agents overview 预览里的终端超链接 | `tui/markdown.webFileLink` / `annotateWebLinkLabels` / `osc8FileLink`；测试 `TestRenderWithThemeMarksLinkLabel` | `f808ceca`「tui: mark web link labels …」（2026-08-22） |
+| #50503 | `9ce35d337a` | Enter 接受、Escape 取消 transcript Find | `tui/bottom_pane/chat_composer.(*HistorySearchSession).Accept`/`Cancel`/`FooterLine`（文案 `"enter accept | esc cancel"`）；测试 `TestHistorySearchSessionCancelAcceptNoMatchAndQueryEditingMatchRustCore` | 首现 `92515576`（2026-07-09） |
+| #50505 | `47379efd52` | 删除任务后保持 Command Center 选中相邻行 | `tui/agents_overview.(*View).PrepareRemoval`；测试 `TestPrepareRemovalSurvivesBatchedAndDuplicateRemovalsLikeRust` | `5df0c760`「sync499 (#50505)」 |
+| #50811 | `afb436df8b` | 新 TUI 线程尊重 server reasoning summary 默认 | `app.interactiveLaunchReasoningOverrides` / `launchReasoningOverrides`；测试 `TestInteractiveLaunchReasoningOverridesLikeRust` | `8cc01f75`「sync507 (#50811)」/ `2c0decdb`「sync500 (#50811)」 |
+
+**注：**
+1. **8 条无本 PR 号提交**（`git log --grep '#<PR>'`=0，靠 `git log -S` 定位）：`#49261 #49702 #49806 #49880 #50396 #50503 #49857 #49472`（另 `#48779` 为相关批次提交）。
+2. `#49144`/`#50811` 落在同一段 Go 代码（`launchReasoningOverrides` 家族）；语义互补（#49144=保留显式设置，#50811=尊重 server 默认）。**`#49144` 的 §9.A 行号 `app/interactive.go:1957` 已漂移**（队长实测 `:2027`）——即本节存在的原因。
+3. **落点提交的 PR 号与台账 PR 号不一致**（上游把多条改动合并落地）：`#49308`←`4291e281`(引 #48483)、`#49778`/`#49811`←`1da0383b`(引 #50177)、`#49280`←`79a13c57`(引 #51493)、`#49642`←`4481ffd8`(引 #51547)、`#51221`←`18a9c908`(引 #51503)。这不影响 ✅ 判定（行为已落地），但**复核者不要用这些 PR 号去 `git log --grep`**。
+4. **§9.A 一处路径笔误**：`#49261` 写作 `elevated/runner_client_windows.go`，真实路径为 `sandbox/windowssandbox/elevated/runner_client_windows.go`（不改原文，仅在此标注）。
+5. `#49702` 的「128 上限」在 Go 有两个语义：`maxOpenFileReads`=128（每连接句柄数）与 `maxFileReadHandleIDBytes`=32（句柄 ID 长度），已分开标注。
+
+> 复核方式：以本表 `符号` 定位（`rg -n -F '<符号>' --glob '*.go' .`），行号仅作辅助。
