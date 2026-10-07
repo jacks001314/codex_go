@@ -115,6 +115,15 @@ func ResponsesLiteDeclarationItems(tools []any, instructions string, threadID st
 	return out
 }
 
+// ResponsesLiteItemID derives the deterministic id of a harness-authored
+// responses-lite prefix item (Rust client.rs #40962): a UUIDv5 keyed by the
+// thread id plus the serialized payload, so an unchanged prefix item keeps its
+// identity across retries and resumed sessions. prefix is the item kind tag
+// ("at" for `additional_tools`, "msg" for a developer message).
+func ResponsesLiteItemID(prefix string, payload []byte, threadID string) string {
+	return responsesLiteItemID(prefix, payload, threadID)
+}
+
 // ToolDeclarationModeFromStored reads the mode a record froze for its window.
 func ToolDeclarationModeFromStored(stored map[string]any) ToolDeclarationMode {
 	return toolDeclarationModeFromStored(stored)

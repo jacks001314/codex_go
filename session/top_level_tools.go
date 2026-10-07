@@ -121,6 +121,29 @@ func DecodeBaseInstructionsSnapshot(raw json.RawMessage) (BaseInstructionsSnapsh
 	return snapshot, true
 }
 
+// TopLevelToolsSnapshotForWindow returns the recorded catalog hashes for a
+// specific context window. A snapshot recorded for another window is treated as
+// absent: a window replacement (compaction or context reset) re-derives the full
+// catalog from the current settings, so there is nothing to diff against.
+func TopLevelToolsSnapshotForWindow(raw json.RawMessage, window uint64) (map[string]string, bool) {
+	snapshot, ok := DecodeTopLevelToolsSnapshot(raw)
+	if !ok || snapshot.Window == nil || *snapshot.Window != window {
+		return nil, false
+	}
+	return snapshot.Hashes, true
+}
+
+// BaseInstructionsSnapshotForWindow returns the recorded base-instruction hash
+// for a specific context window, applying the same window-replacement rule as
+// TopLevelToolsSnapshotForWindow (#51188).
+func BaseInstructionsSnapshotForWindow(raw json.RawMessage, window uint64) (string, bool) {
+	snapshot, ok := DecodeBaseInstructionsSnapshot(raw)
+	if !ok || snapshot.Window == nil || *snapshot.Window != window {
+		return "", false
+	}
+	return snapshot.Hash, true
+}
+
 // EncodeTopLevelToolsSnapshot serializes a catalog snapshot for the record.
 func EncodeTopLevelToolsSnapshot(window uint64, hashes map[string]string) (json.RawMessage, error) {
 	if hashes == nil {

@@ -7102,9 +7102,43 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	// once and replays them unchanged. The recorded prefix is placed ahead of the
 	// conversation so a resumed window never moves the declarations it already
 	// sent, and the runner reuses the recorded items instead of rebuilding them.
-	declarationItems := r.responsesLiteWindowDeclarationItemsForTurn(threadID, historyItems, modelInfo.UseResponsesLite, features.Enabled(cfg.FeatureSettings(), "incremental_tools"), hostedTools, instructions)
-	if len(declarationItems) > 0 {
-		inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+	//
+	// Rust #50540: with incremental tools the catalog lives in the window's
+	// history instead. A window records its catalog and base instructions at its
+	// start, and a later turn of the same window appends only added or changed
+	// declarations (plus removal notices), so the declarations that were already
+	// sent keep their position.
+	declarationItems := []any{}
+	incrementalActive := false
+	if incrementalToolsEnabledForTurn(cfg, modelInfo) {
+		incremental, incrementalErr := r.incrementalToolCatalogForTurn(
+			threadID,
+			historyItems,
+			responsesLiteToolDeclarations(turnRuntime, toolMode, cfg.DisableCodeModeInProcessFallback(), hostedTools),
+			instructions,
+			turnID,
+			time.UnixMilli(startedAtMS).UTC(),
+		)
+		if incrementalErr != nil {
+			return nil, incrementalErr
+		}
+		incrementalActive = incremental.Active
+		if incremental.Active {
+			if incremental.Prefix {
+				declarationItems = incremental.Items
+				if len(declarationItems) > 0 {
+					inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+				}
+			} else if len(incremental.Items) > 0 {
+				inputItems = append(inputItems, incremental.Items...)
+			}
+		}
+	}
+	if !incrementalActive {
+		declarationItems = r.responsesLiteWindowDeclarationItemsForTurn(threadID, historyItems, modelInfo.UseResponsesLite, features.Enabled(cfg.FeatureSettings(), "incremental_tools"), hostedTools, instructions)
+		if len(declarationItems) > 0 {
+			inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+		}
 	}
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
