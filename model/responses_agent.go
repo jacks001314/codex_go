@@ -332,6 +332,44 @@ type responsesReasoning struct {
 	Context string `json:"context,omitempty"`
 }
 
+// MarshalJSON mirrors Rust's `serialize_reasoning_effort`
+// (codex-rs/codex-api/src/common.rs, #47590). Named reasoning levels stay JSON
+// strings, but a custom effort that parses as an unsigned integer is sent as a
+// JSON number, so `model_reasoning_effort = "64"` reaches the API as
+// `"effort": 64`. Named levels keep the struct's field order and omitempty
+// behavior, so their wire form is unchanged.
+func (r responsesReasoning) MarshalJSON() ([]byte, error) {
+	effort, err := reasoningEffortJSONValue(r.Effort)
+	if err != nil {
+		return nil, err
+	}
+	type wireReasoning struct {
+		Effort  json.RawMessage `json:"effort,omitempty"`
+		Summary string          `json:"summary,omitempty"`
+		Context string          `json:"context,omitempty"`
+	}
+	return json.Marshal(wireReasoning{Effort: effort, Summary: r.Summary, Context: r.Context})
+}
+
+// reasoningEffortJSONValue renders one reasoning effort the way Rust's
+// `ReasoningEffortConfig` serializer does (#47590): an empty effort stays
+// omitted, a custom value that `parse::<u64>()` accepts becomes the decimal
+// JSON number `serialize_u64` would emit (so `+007` collapses to `7`), and
+// everything else, including named levels and out-of-range or non-numeric
+// custom values, stays a JSON string.
+func reasoningEffortJSONValue(effort string) (json.RawMessage, error) {
+	if effort == "" {
+		return nil, nil
+	}
+	if !IsKnownReasoningEffort(effort) {
+		// Rust's `u64::from_str` accepts one optional leading '+'.
+		if value, err := strconv.ParseUint(strings.TrimPrefix(effort, "+"), 10, 64); err == nil {
+			return json.RawMessage(strconv.FormatUint(value, 10)), nil
+		}
+	}
+	return json.Marshal(effort)
+}
+
 type responsesStreamOptions struct {
 	ReasoningSummaryDelivery string `json:"reasoning_summary_delivery"`
 }

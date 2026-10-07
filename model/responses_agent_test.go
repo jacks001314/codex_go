@@ -4219,6 +4219,70 @@ func TestResponsesReasoningParamPersistentTranslatesToDisabled(t *testing.T) {
 	}
 }
 
+// TestResponsesReasoningEffortWireTypeLikeRust pins Rust #47590
+// (codex-rs/codex-api/src/common.rs serialize_reasoning_effort): the reasoning
+// effort is a JSON string for named levels, but a custom value that parses as
+// an unsigned integer must be sent as a JSON number. Only the wire type of the
+// effort field changes; the summary and context fields keep their order and
+// omitempty behavior.
+func TestResponsesReasoningEffortWireTypeLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		effort string
+		want   string
+	}{
+		{"named level", "high", `{"effort":"high"}`},
+		{"named level none", "none", `{"effort":"none"}`},
+		{"named level disabled", "disabled", `{"effort":"disabled"}`},
+		{"named level ultra", "ultra", `{"effort":"ultra"}`},
+		{"custom number", "64", `{"effort":64}`},
+		{"custom zero", "0", `{"effort":0}`},
+		{"custom plus sign", "+7", `{"effort":7}`},
+		{"custom leading zeros", "007", `{"effort":7}`},
+		{"custom u64 maximum", "18446744073709551615", `{"effort":18446744073709551615}`},
+		{"custom negative", "-1", `{"effort":"-1"}`},
+		{"custom beyond u64", "18446744073709551616", `{"effort":"18446744073709551616"}`},
+		{"custom plus only", "+", `{"effort":"+"}`},
+		{"custom non-numeric", "experimental", `{"effort":"experimental"}`},
+	}
+	for _, testCase := range cases {
+		body, err := json.Marshal(responsesReasoning{Effort: testCase.effort})
+		if err != nil {
+			t.Fatalf("%s: json.Marshal error = %v", testCase.name, err)
+		}
+		if string(body) != testCase.want {
+			t.Fatalf("%s: reasoning body = %s, want %s", testCase.name, body, testCase.want)
+		}
+	}
+
+	// The production path must reach the wire with the numeric form: a custom
+	// effort supplied through AgentRequest survives ResolveReasoningEffort
+	// unchanged and is embedded as a number inside the Responses request.
+	number := responsesReasoningParam(
+		&AgentRequest{ReasoningEffort: "64"},
+		&ModelInfo{SupportsReasoningSummaries: true, DefaultReasoningSummary: "none"},
+	)
+	if number == nil || number.Effort != "64" {
+		t.Fatalf("reasoning effort = %#v, want the custom value 64", number)
+	}
+	requestBody, err := json.Marshal(&responsesAgentRequest{Model: "gpt-5.5", Reasoning: number})
+	if err != nil {
+		t.Fatalf("json.Marshal request error = %v", err)
+	}
+	if !strings.Contains(string(requestBody), `"reasoning":{"effort":64}`) {
+		t.Fatalf("request body = %s, want a numeric reasoning effort", requestBody)
+	}
+
+	// Named levels and the other reasoning fields are untouched.
+	full, err := json.Marshal(responsesReasoning{Effort: "high", Summary: "detailed", Context: "all_turns"})
+	if err != nil {
+		t.Fatalf("json.Marshal full reasoning error = %v", err)
+	}
+	if string(full) != `{"effort":"high","summary":"detailed","context":"all_turns"}` {
+		t.Fatalf("full reasoning body = %s", full)
+	}
+}
+
 // TestResponsesAgentRunnerResetAuthOwnedCaches covers Rust #44489: a new
 // credential owner must not reuse the previous owner's websocket connection or
 // per-turn routing state.
