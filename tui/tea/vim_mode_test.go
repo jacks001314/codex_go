@@ -105,7 +105,9 @@ func TestVimSearchMotionsLikeRust(t *testing.T) {
 // TestVimSearchQueryFooterLikeRust pins the live search-query footer (#41586): a
 // forward search renders "/" + the typed query, and a backward search renders "?".
 func TestVimSearchQueryFooterLikeRust(t *testing.T) {
-	m := vimTestModel("")
+	// Rust #50788 keeps Vim search for nonempty drafts; the empty-draft `/`
+	// now opens slash commands, so the footer case needs a draft to search.
+	m := vimTestModel("hello world")
 	m = vimKeyPress(m, '/')
 	for _, r := range "hello" {
 		m = vimKeyPress(m, r)
@@ -122,6 +124,69 @@ func TestVimSearchQueryFooterLikeRust(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "?world") {
 		t.Fatalf("view does not show the backward search footer: %q", view)
+	}
+}
+
+// TestVimEmptyNormalSlashOpensCommandsLikeRust mirrors Rust #50788
+// (tui/src/bottom_pane/chat_composer.rs): with Vim enabled, a standalone `/`
+// on an empty normal-mode draft switches to Insert, inserts `/`, and opens
+// command completion, while nonempty drafts, `?`, and a pending operator keep
+// the Vim search behavior.
+func TestVimEmptyNormalSlashOpensCommandsLikeRust(t *testing.T) {
+	m := vimTestModel("")
+	m = vimKeyPress(m, '/')
+	if !m.vimInsert {
+		t.Fatalf("empty-draft slash did not switch to insert mode")
+	}
+	if m.vimSearchMode {
+		t.Fatalf("empty-draft slash started a Vim search")
+	}
+	if m.vimPendingOp != "" {
+		t.Fatalf("pending operator = %q, want none", m.vimPendingOp)
+	}
+	if got := m.composer.Value(); got != "/" {
+		t.Fatalf("draft after slash = %q, want /", got)
+	}
+	if !m.slashPopup.Active || len(m.slashPopup.Items) == 0 {
+		t.Fatalf("slash command popup not open: active=%v items=%d", m.slashPopup.Active, len(m.slashPopup.Items))
+	}
+	// Insert mode keeps typing, narrowing the command completion (Rust's
+	// snapshot shows `/model` selected with the picker open).
+	m = vimKeyPress(m, 'm')
+	if got := m.composer.Value(); got != "/m" {
+		t.Fatalf("draft after /m = %q, want /m", got)
+	}
+	if !m.vimInsert {
+		t.Fatalf("insert mode was left while filtering the command popup")
+	}
+	if !m.slashPopup.Active {
+		t.Fatalf("slash command popup closed while filtering")
+	}
+
+	// A nonempty draft still starts a forward search.
+	nonempty := vimTestModel("hello world")
+	nonempty = vimKeyPress(nonempty, '/')
+	if !nonempty.vimSearchMode || nonempty.vimInsert {
+		t.Fatalf("nonempty-draft slash: search=%v insert=%v, want search", nonempty.vimSearchMode, nonempty.vimInsert)
+	}
+
+	// `?` still starts a backward search on an empty draft.
+	backward := vimTestModel("")
+	backward = vimKeyPress(backward, '?')
+	if !backward.vimSearchMode || backward.vimInsert {
+		t.Fatalf("empty-draft ? : search=%v insert=%v, want search", backward.vimSearchMode, backward.vimInsert)
+	}
+	if got := backward.composer.Value(); got != "" {
+		t.Fatalf("empty-draft ? changed the draft: %q", got)
+	}
+
+	// A pending operator keeps the operator search (`d/`).
+	operator := vimTestModel("hello world hello")
+	operator.composer.SetCursor(6)
+	operator = vimKeyPress(operator, 'd')
+	operator = vimKeyPress(operator, '/')
+	if !operator.vimSearchMode || operator.vimSearchOp != "d" {
+		t.Fatalf("d/ on an operator: search=%v op=%q, want d search", operator.vimSearchMode, operator.vimSearchOp)
 	}
 }
 

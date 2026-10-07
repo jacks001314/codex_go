@@ -367,6 +367,14 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	case m.keyMatches("vim_normal", "move_line_end", keySpec):
 		m.composer.CursorEnd()
 	case m.keyMatches("vim_normal", "search_forward", keySpec):
+		// Rust #50788: a standalone `/` on an empty draft leaves Vim search and
+		// opens slash-command completion instead, so switch to Insert and let the
+		// key insert `/` through the normal composer path below.
+		if m.vimEmptyNormalSlashOpensCommands(msg) {
+			m.vimBeginEdit()
+			m.vimInsert = true
+			return false
+		}
 		m.startVimSearch(true, "")
 	case m.keyMatches("vim_normal", "search_backward", keySpec):
 		m.startVimSearch(false, "")
@@ -396,6 +404,29 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 		return false
 	}
 	return true
+}
+
+// vimEmptyNormalSlashOpensCommands reports whether this key is the standalone
+// Normal-mode `/` that opens slash-command completion instead of a Vim search,
+// mirroring Rust's chat_composer.rs #50788 guard: an unmodified `/` bound to the
+// Vim search key, an empty draft, no active popup, and no pending operator.
+// Rust also requires the composer's `slash_commands_enabled` config; Go's main
+// composer is the only Vim composer and always accepts slash commands, so that
+// term is unconditionally true here.
+func (m *Model) vimEmptyNormalSlashOpensCommands(msg bubbletea.KeyMsg) bool {
+	if m == nil || m.vimSearchMode || m.vimInsert {
+		return false
+	}
+	if m.vimPendingOp != "" || m.vimPendingObject != "" {
+		return false
+	}
+	if m.mentionPopup != nil {
+		return false
+	}
+	if m.composer.Value() != "" {
+		return false
+	}
+	return msg.Type == bubbletea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '/'
 }
 
 // vimCursorColumn returns the cursor column within the current logical line.
