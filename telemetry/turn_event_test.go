@@ -42,6 +42,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			AfterLastSamplingMS:       134,
 			SamplingRequestCount:      2,
 			SamplingRetryCount:        1,
+			ToolsChangeCount:          2,
 		},
 		DurationMS:  uint64PtrTelemetry(1234),
 		StartedAt:   uint64PtrTelemetry(455),
@@ -125,6 +126,7 @@ func TestCodexTurnEventSerializesExpectedRustShape(t *testing.T) {
 			"after_last_sampling_ms": 134,
 			"sampling_request_count": 2,
 			"sampling_retry_count": 1,
+			"tools_change_count": 2,
 			"duration_ms": 1234,
 			"started_at": 455,
 			"completed_at": 456

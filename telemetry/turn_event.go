@@ -119,9 +119,13 @@ type CodexTurnEventParams struct {
 	AfterLastSamplingMS                  uint64                       `json:"after_last_sampling_ms"`
 	SamplingRequestCount                 uint32                       `json:"sampling_request_count"`
 	SamplingRetryCount                   uint32                       `json:"sampling_retry_count"`
-	DurationMS                           *uint64                      `json:"duration_ms"`
-	StartedAt                            *uint64                      `json:"started_at"`
-	CompletedAt                          *uint64                      `json:"completed_at"`
+	// ToolsChangeCount is the number of sampling requests in the turn whose full
+	// model-visible tool list differed from the previous request's list
+	// (Rust #50964 `CodexTurnEventParams::tools_change_count`).
+	ToolsChangeCount uint32  `json:"tools_change_count"`
+	DurationMS       *uint64 `json:"duration_ms"`
+	StartedAt        *uint64 `json:"started_at"`
+	CompletedAt      *uint64 `json:"completed_at"`
 }
 
 type CodexTurnEventInput struct {
@@ -199,6 +203,8 @@ type CodexTurnTimingProfile struct {
 	AfterLastSamplingMS       uint64
 	SamplingRequestCount      uint32
 	SamplingRetryCount        uint32
+	// ToolsChangeCount mirrors Rust's `TurnProfile::tools_change_count` (#50964).
+	ToolsChangeCount uint32
 }
 
 func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
@@ -275,6 +281,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			AfterLastSamplingMS:                  input.TimingProfile.AfterLastSamplingMS,
 			SamplingRequestCount:                 input.TimingProfile.SamplingRequestCount,
 			SamplingRetryCount:                   input.TimingProfile.SamplingRetryCount,
+			ToolsChangeCount:                     input.TimingProfile.ToolsChangeCount,
 			DurationMS:                           input.DurationMS,
 			StartedAt:                            input.StartedAt,
 			CompletedAt:                          input.CompletedAt,

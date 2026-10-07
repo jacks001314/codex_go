@@ -6241,6 +6241,7 @@ func appTimingProfileCamelMap(profile *turn.Profile) map[string]any {
 		"pendingIdleAfterSamplingMs": profile.PendingIdleAfterSamplingMS,
 		"samplingRequestCount":       profile.SamplingRequestCount,
 		"samplingRetryCount":         profile.SamplingRetryCount,
+		"toolsChangeCount":           profile.ToolsChangeCount,
 		"totalMs":                    profile.TotalMS,
 	}
 }
@@ -6257,6 +6258,7 @@ func appTimingProfileSnakeMap(profile *turn.Profile) map[string]any {
 		"pending_idle_after_sampling_ms": profile.PendingIdleAfterSamplingMS,
 		"sampling_request_count":         profile.SamplingRequestCount,
 		"sampling_retry_count":           profile.SamplingRetryCount,
+		"tools_change_count":             profile.ToolsChangeCount,
 		"total_ms":                       profile.TotalMS,
 	}
 }
@@ -7769,6 +7771,7 @@ func analyticsTurnTimingProfile(result *turn.AgentLoopResult) telemetry.CodexTur
 		AfterLastSamplingMS:       profile.PendingIdleAfterSamplingMS,
 		SamplingRequestCount:      profile.SamplingRequestCount,
 		SamplingRetryCount:        profile.SamplingRetryCount,
+		ToolsChangeCount:          profile.ToolsChangeCount,
 	}
 }
 

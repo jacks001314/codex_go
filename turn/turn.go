@@ -18,7 +18,11 @@ type Profile struct {
 	PendingIdleAfterSamplingMS uint64
 	SamplingRequestCount       uint32
 	SamplingRetryCount         uint32
-	TotalMS                    uint64
+	// ToolsChangeCount counts sampling requests whose full model-visible tool
+	// list differed from the previous request's list (Rust #50964
+	// `TurnProfile::tools_change_count`).
+	ToolsChangeCount uint32
+	TotalMS          uint64
 }
 
 type profilePhase string
@@ -49,6 +53,7 @@ type profileState struct {
 	pendingIdleAfterSampling time.Duration
 	samplingRequestCount     uint32
 	samplingRetryCount       uint32
+	toolsChangeCount         uint32
 	completed                *Profile
 }
 
@@ -145,6 +150,17 @@ func (t *TimingState) RecordSamplingRetry() {
 	defer t.mu.Unlock()
 	if t.profile.completed == nil && !t.profile.startedAt.IsZero() {
 		t.profile.samplingRetryCount++
+	}
+}
+
+// RecordToolsChange counts one inference whose model-visible tool list changed.
+// Rust #50964 `TurnTimingState::record_tools_change` only counts while the
+// profile is active (started and not yet completed).
+func (t *TimingState) RecordToolsChange() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.profile.completed == nil && !t.profile.startedAt.IsZero() {
+		t.profile.toolsChangeCount++
 	}
 }
 
@@ -246,6 +262,7 @@ func (p *profileState) complete(now time.Time) Profile {
 		PendingIdleAfterSamplingMS: durationMS(p.pendingIdleAfterSampling),
 		SamplingRequestCount:       p.samplingRequestCount,
 		SamplingRetryCount:         p.samplingRetryCount,
+		ToolsChangeCount:           p.toolsChangeCount,
 		TotalMS:                    durationMS(now.Sub(p.startedAt)),
 	}
 	p.completed = &profile

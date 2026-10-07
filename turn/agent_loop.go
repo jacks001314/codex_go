@@ -312,6 +312,15 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			StripDirectCallMetadata(inputItems)
 		}
 		sampling := timing.BeginSampling(l.now())
+		// Rust #50964: before each sampling request the client compares the full
+		// model-visible tool list with the list retained from the previous request
+		// (`ModelClientSession::inference_tools_changed`) and, when it changed, the
+		// turn profile counts it (`TurnTimingState::record_tools_change`). The
+		// retained list survives turns and connection resets, so the first request
+		// only establishes the baseline.
+		if tracker, ok := l.agent.(model.InferenceToolTracker); ok && tracker.InferenceToolsChanged(request.ThreadID, request.Tools) {
+			timing.RecordToolsChange()
+		}
 		instructions := request.Instructions
 		if request.InstructionsProvider != nil {
 			instructions = request.InstructionsProvider()

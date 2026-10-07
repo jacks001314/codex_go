@@ -192,6 +192,11 @@ type ResponsesAgentRunner struct {
 	// mirroring Rust's `passthrough_image_store()` default; a host with a
 	// durable backend installs its own store (Rust #51517).
 	ImageStore attachmentstore.Store
+	// inferenceTools retains the last model-visible tool list per conversation so
+	// each sampling request can count a catalog change on the turn profile
+	// (Rust #50964 `ModelClientState::last_inference_tools`). The pointer is
+	// shared by WithStreamHandler clones.
+	inferenceTools *responsesInferenceToolCache
 }
 
 // imageStore returns the configured attachment store, defaulting to the inline
@@ -595,6 +600,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
+		inferenceTools:             &responsesInferenceToolCache{},
 	}
 }
 

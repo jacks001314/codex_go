@@ -167,7 +167,13 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			// history are stripped from the request (Rust #45185).
 			StripDirectCallMetadata(inputItems)
 		}
+		tools := MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools)
 		sampling := timing.BeginSampling(r.now())
+		// Rust #50964: the sampling request compares its full model-visible tool
+		// list against the retained one and counts a change on the turn profile.
+		if tracker, ok := r.agent.(model.InferenceToolTracker); ok && tracker.InferenceToolsChanged(request.ThreadID, tools) {
+			timing.RecordToolsChange()
+		}
 		instructions := request.Instructions
 		if request.InstructionsProvider != nil {
 			instructions = request.InstructionsProvider()
@@ -176,7 +182,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			Prompt:                       request.Prompt,
 			Instructions:                 instructions,
 			InputItems:                   inputItems,
-			Tools:                        MergeHostedTools(MergeHostedTools(request.Tools, r.hostedTools), request.HostedTools),
+			Tools:                        tools,
 			Model:                        request.Model,
 			ProviderID:                   request.ProviderID,
 			TaskKind:                     request.TaskKind,
