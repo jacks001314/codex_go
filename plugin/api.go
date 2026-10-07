@@ -1401,6 +1401,11 @@ type PluginService struct {
 	// plugin store, so the service owns the cache; it is the same
 	// manifestCache the store owns, with the same revision rules.
 	manifests *manifestCache
+	// remoteHTTPPool is the lazily created remote plugin connection pool shared
+	// by every remote plugin service configuration this service builds (Rust
+	// #49100 PluginsConfigInput::remote_http_clients). A shallow copy of the
+	// service shares the pool; independently created services do not.
+	remoteHTTPPool *RemotePluginHTTPPool
 }
 
 func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
@@ -1424,7 +1429,38 @@ func NewPluginService() *PluginService {
 		marketplaceRevision:           &GitMarketplaceRevisionResolver{},
 		targetCuratedMarketplace:      TargetCuratedOpenAI,
 		manifests:                     newManifestCache(),
+		remoteHTTPPool:                NewRemotePluginHTTPPool(),
 	}
+}
+
+// RemotePluginHTTPPool returns the service's remote plugin connection pool
+// (Rust #49100). Repeated service configurations built from this service share
+// it; a new service owns a new pool.
+func (s *PluginService) RemotePluginHTTPPool() *RemotePluginHTTPPool {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.remoteHTTPPool == nil {
+		s.remoteHTTPPool = NewRemotePluginHTTPPool()
+	}
+	return s.remoteHTTPPool
+}
+
+// NewRemotePluginProvider builds a remote plugin service configuration that
+// shares this service's connection pool while keeping the current endpoint,
+// product SKU and authentication (Rust #49100
+// PluginsConfigInput::remote_plugin_service_config). It is the constructor the
+// app-server uses for turn-scoped suggested-plugin providers.
+func (s *PluginService) NewRemotePluginProvider(baseURL string, accessToken string, accountID string, client HTTPDoer) *HTTPSuggestedPluginProvider {
+	var pool *RemotePluginHTTPPool
+	if s != nil {
+		pool = s.RemotePluginHTTPPool()
+		// get_or_init: the first service configuration creates the shared pool.
+		pool.Client()
+	}
+	return NewHTTPSuggestedPluginProviderWithPool(baseURL, accessToken, accountID, client, pool)
 }
 
 func (s *PluginService) SetClock(clock func() time.Time) {

@@ -42,15 +42,56 @@ type HTTPSuggestedPluginProvider struct {
 	AccessToken string
 	AccountID   string
 	HTTPClient  HTTPDoer
+	// ProductSKU is the value stamped on OAI-Product-Sku; empty falls back to
+	// CODEXProductSKU (Rust RemotePluginServiceConfig.product_sku, #49100).
+	ProductSKU string
+	// Pool is the owner's shared connection pool. It is used whenever
+	// HTTPClient is nil, so repeated service configurations reuse connections
+	// (Rust #49100).
+	Pool *RemotePluginHTTPPool
 }
 
 func NewHTTPSuggestedPluginProvider(baseURL string, accessToken string, accountID string, client HTTPDoer) *HTTPSuggestedPluginProvider {
+	return NewHTTPSuggestedPluginProviderWithPool(baseURL, accessToken, accountID, client, nil)
+}
+
+// NewHTTPSuggestedPluginProviderWithPool builds a remote plugin service
+// configuration that shares the owner's connection pool (Rust #49100,
+// PluginsConfigInput::remote_plugin_service_config).
+func NewHTTPSuggestedPluginProviderWithPool(baseURL string, accessToken string, accountID string, client HTTPDoer, pool *RemotePluginHTTPPool) *HTTPSuggestedPluginProvider {
 	return &HTTPSuggestedPluginProvider{
 		BaseURL:     strings.TrimSpace(baseURL),
 		AccessToken: strings.TrimSpace(accessToken),
 		AccountID:   strings.TrimSpace(accountID),
 		HTTPClient:  client,
+		Pool:        pool,
 	}
+}
+
+// httpClient resolves the transport for requests: an explicitly supplied doer
+// wins, otherwise the owner's shared pool, otherwise the process default.
+func (p *HTTPSuggestedPluginProvider) httpClient() HTTPDoer {
+	if p == nil {
+		return http.DefaultClient
+	}
+	if p.HTTPClient != nil {
+		return p.HTTPClient
+	}
+	if p.Pool != nil {
+		return p.Pool.Client()
+	}
+	return http.DefaultClient
+}
+
+// productSKU resolves the request's product SKU, falling back to the bundled
+// CODEX_PRODUCT_SKU (Rust #49100).
+func (p *HTTPSuggestedPluginProvider) productSKU() string {
+	if p != nil {
+		if sku := strings.TrimSpace(p.ProductSKU); sku != "" {
+			return sku
+		}
+	}
+	return CODEXProductSKU
 }
 
 func (p *HTTPSuggestedPluginProvider) ListSuggestedPlugins(ctx context.Context) (*SuggestedPluginList, error) {
@@ -75,12 +116,8 @@ func (p *HTTPSuggestedPluginProvider) ListSuggestedPlugins(ctx context.Context) 
 	if accountID := strings.TrimSpace(p.AccountID); accountID != "" {
 		request.Header.Set("ChatGPT-Account-ID", accountID)
 	}
-	request.Header.Set("OAI-Product-Sku", "codex")
-	client := p.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	response, err := client.Do(request)
+	request.Header.Set("OAI-Product-Sku", p.productSKU())
+	response, err := p.httpClient().Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -234,10 +271,10 @@ func decodeSuggestedPluginResponse(data []byte) (*SuggestedPluginList, error) {
 		seen[id] = true
 		displayName := strings.TrimSpace(firstNonEmpty(plugin.DisplayName, name))
 		plugins = append(plugins, SuggestedPlugin{
-			ID:              id,
-			RemotePluginID:  remoteID,
-			Name:            name,
-			DisplayName:     displayName,
+			ID:             id,
+			RemotePluginID: remoteID,
+			Name:           name,
+			DisplayName:    displayName,
 		})
 	}
 	sort.SliceStable(plugins, func(i int, j int) bool {

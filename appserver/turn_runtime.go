@@ -8580,7 +8580,11 @@ func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Conf
 	}
 	baseURL := cfg.ChatGPTBaseURL()
 	accountID := suggestedPluginAccountIDFromAuth(&resolved.Auth)
-	provider := plugin.NewHTTPSuggestedPluginProvider(baseURL, accessToken, accountID, client)
+	// Rust #49100: the provider shares the plugin service's lazily created
+	// remote connection pool instead of a per-construction pool, so repeated
+	// turns reuse connections while the endpoint, product SKU and
+	// authentication stay current.
+	provider := r.services.Plugins.NewRemotePluginProvider(baseURL, accessToken, accountID, client)
 	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 }
 
