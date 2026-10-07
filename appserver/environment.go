@@ -203,12 +203,12 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 			Shell:         m.defaultShell,
 			CWD:           cloneString(m.defaultCWD),
 			HTTPClient:    m.httpClient,
-			// TODO(#51157 environments.toml): Rust carries each provider entry's
-			// `skills: ScopedSkillsConfig` from `environments.toml` through
-			// `EnvironmentProviderEntry` into the registered environment. Go's
-			// `execserver.NamedEnvironment` does not carry the field yet, so TOML
-			// requirements cannot be projected here; see the sync report.
-			RequiredSkills: nil,
+			// Rust #51157: an `environments.toml` entry declares its own
+			// `skills.required`, and Rust carries it through
+			// `EnvironmentProviderEntry` into the registered environment so the
+			// pre-inference gate sees TOML requirements exactly like ones sent
+			// through `environment/add`.
+			RequiredSkills: append([]string(nil), environment.Skills.Required...),
 		}
 		switch environment.Transport.Kind {
 		case execserverclient.EnvironmentTransportStdio:

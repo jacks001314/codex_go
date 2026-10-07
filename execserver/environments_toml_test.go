@@ -486,3 +486,62 @@ func envTestStringSlicePtr() *[]string {
 	values := []string{}
 	return &values
 }
+
+// Rust parity: environment_toml.rs
+// `required_skills_from_toml_reach_their_environment` (Rust #51157). A
+// per-environment `skills.required` list reaches only the entry that declared
+// it, so a provider snapshot can hand each environment its own requirements.
+func TestRequiredSkillsFromTOMLReachTheirEnvironmentLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	contents := `include_local = false
+[[environments]]
+id = "training"
+url = "ws://127.0.0.1:4512"
+[environments.skills]
+required = ["computer-use"]
+
+[[environments]]
+id = "other"
+url = "ws://127.0.0.1:4513"
+`
+	if err := os.WriteFile(filepath.Join(codexHome, EnvironmentsTOMLFile), []byte(contents), 0o600); err != nil {
+		t.Fatalf("write environments.toml: %v", err)
+	}
+	snapshot, err := EnvironmentProviderFromCodexHome(codexHome)
+	if err != nil {
+		t.Fatalf("EnvironmentProviderFromCodexHome() error = %v", err)
+	}
+	requiredByID := map[string][]string{}
+	for _, environment := range snapshot.Environments {
+		requiredByID[environment.ID] = environment.Skills.Required
+	}
+	if got := requiredByID["training"]; len(got) != 1 || got[0] != "computer-use" {
+		t.Fatalf("training required skills = %#v, want [computer-use]", got)
+	}
+	if got := requiredByID["other"]; len(got) != 0 {
+		t.Fatalf("other required skills = %#v, want none", got)
+	}
+	if len(snapshot.Environments) != 2 {
+		t.Fatalf("environments = %#v, want the two configured entries", snapshot.Environments)
+	}
+}
+
+// Rust parity: `ScopedSkillsConfig` denies unknown fields (Rust #51157), so an
+// unrecognized key under `[environments.skills]` must fail the parse rather than
+// be silently dropped.
+func TestEnvironmentSkillsRejectUnknownFieldsLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "environments.toml")
+	contents := `[[environments]]
+id = "training"
+url = "ws://127.0.0.1:4512"
+[environments.skills]
+unknown = ["review"]
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadEnvironmentsTOML(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field `unknown`") {
+		t.Fatalf("LoadEnvironmentsTOML() error = %v, want an unknown-field rejection", err)
+	}
+}

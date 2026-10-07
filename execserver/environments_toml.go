@@ -90,6 +90,15 @@ type EnvironmentTransport struct {
 type NamedEnvironment struct {
 	ID        string
 	Transport EnvironmentTransport
+	// Skills carries the entry's declared requirements (`skills.required`),
+	// which `environments.toml` sets per environment (Rust #51157).
+	Skills ScopedSkills
+}
+
+// ScopedSkills mirrors Rust's `ScopedSkillsConfig` (Rust #51157): the skill
+// catalog names one environment (or plugin) must supply before inference.
+type ScopedSkills struct {
+	Required []string
 }
 
 // EnvironmentDefaultKind is how the default environment is selected.
@@ -139,6 +148,8 @@ type EnvironmentTOML struct {
 	CWD        *string
 	Connect    *float64
 	Initialize *float64
+	// Skills is the entry's `[environments.skills]` table (Rust #51157).
+	Skills *ScopedSkills
 }
 
 type environmentsTOMLDoc struct {
@@ -157,6 +168,13 @@ type environmentTOMLDoc struct {
 	CWD        *string            `toml:"cwd"`
 	Connect    *float64           `toml:"connect_timeout_sec"`
 	Initialize *float64           `toml:"initialize_timeout_sec"`
+	Skills     *scopedSkillsDoc   `toml:"skills"`
+}
+
+// scopedSkillsDoc is the `[environments.skills]` table; Rust's
+// `ScopedSkillsConfig` denies unknown fields and defaults `required` to empty.
+type scopedSkillsDoc struct {
+	Required []string `toml:"required"`
 }
 
 // ParseEnvironmentsTOML decodes `environments.toml`, rejecting unknown fields
@@ -176,7 +194,7 @@ func ParseEnvironmentsTOML(contents []byte, path string) (*EnvironmentsTOML, err
 			// parse failure rather than a validation failure.
 			return nil, protocolErrorf("failed to parse environment config `%s`: missing field `id`", path)
 		}
-		parsed.Environments = append(parsed.Environments, EnvironmentTOML{
+		parsedEntry := EnvironmentTOML{
 			ID:         *entry.ID,
 			URL:        entry.URL,
 			Token:      entry.Token,
@@ -186,7 +204,11 @@ func ParseEnvironmentsTOML(contents []byte, path string) (*EnvironmentsTOML, err
 			CWD:        entry.CWD,
 			Connect:    entry.Connect,
 			Initialize: entry.Initialize,
-		})
+		}
+		if entry.Skills != nil {
+			parsedEntry.Skills = &ScopedSkills{Required: append([]string(nil), entry.Skills.Required...)}
+		}
+		parsed.Environments = append(parsed.Environments, parsedEntry)
 	}
 	return parsed, nil
 }
@@ -259,15 +281,15 @@ func NewEnvironmentProviderSnapshot(config *EnvironmentsTOML, configDir string) 
 	}
 	environments := make([]NamedEnvironment, 0, len(config.Environments))
 	for _, entry := range config.Environments {
-		id, transport, err := parseEnvironmentTOML(entry, configDir)
+		named, err := parseEnvironmentTOML(entry, configDir)
 		if err != nil {
 			return EnvironmentProviderSnapshot{}, err
 		}
-		if ids[id] {
-			return EnvironmentProviderSnapshot{}, protocolErrorf("environment id `%s` is duplicated", id)
+		if ids[named.ID] {
+			return EnvironmentProviderSnapshot{}, protocolErrorf("environment id `%s` is duplicated", named.ID)
 		}
-		ids[id] = true
-		environments = append(environments, NamedEnvironment{ID: id, Transport: transport})
+		ids[named.ID] = true
+		environments = append(environments, named)
 	}
 	defaultSelection, err := normalizeDefaultEnvironment(config.Default, includeLocal, ids)
 	if err != nil {
@@ -280,28 +302,32 @@ func NewEnvironmentProviderSnapshot(config *EnvironmentsTOML, configDir string) 
 	}, nil
 }
 
-func parseEnvironmentTOML(entry EnvironmentTOML, configDir string) (string, EnvironmentTransport, error) {
+func parseEnvironmentTOML(entry EnvironmentTOML, configDir string) (NamedEnvironment, error) {
 	id := entry.ID
 	if err := validateEnvironmentID(id); err != nil {
-		return "", EnvironmentTransport{}, err
+		return NamedEnvironment{}, err
+	}
+	skills := ScopedSkills{}
+	if entry.Skills != nil {
+		skills.Required = append([]string(nil), entry.Skills.Required...)
 	}
 	hasArgs := entry.Args != nil
 	hasEnv := entry.Env != nil
 	hasCWD := entry.CWD != nil
 	if entry.Program == nil && (hasArgs || hasEnv || hasCWD) {
-		return "", EnvironmentTransport{}, protocolErrorf("environment `%s` args, env, and cwd require program", id)
+		return NamedEnvironment{}, protocolErrorf("environment `%s` args, env, and cwd require program", id)
 	}
 	if entry.URL == nil && entry.Token != nil {
-		return "", EnvironmentTransport{}, protocolErrorf("environment `%s` auth_bearer_token requires url", id)
+		return NamedEnvironment{}, protocolErrorf("environment `%s` auth_bearer_token requires url", id)
 	}
 	if entry.URL == nil && entry.Connect != nil {
-		return "", EnvironmentTransport{}, protocolErrorf("environment `%s` connect_timeout_sec requires url", id)
+		return NamedEnvironment{}, protocolErrorf("environment `%s` connect_timeout_sec requires url", id)
 	}
 	connectTimeout := DefaultRemoteExecServerConnectTimeout
 	if entry.Connect != nil {
 		duration, err := secondsToDuration(*entry.Connect)
 		if err != nil {
-			return "", EnvironmentTransport{}, err
+			return NamedEnvironment{}, err
 		}
 		connectTimeout = duration
 	}
@@ -309,7 +335,7 @@ func parseEnvironmentTOML(entry EnvironmentTOML, configDir string) (string, Envi
 	if entry.Initialize != nil {
 		duration, err := secondsToDuration(*entry.Initialize)
 		if err != nil {
-			return "", EnvironmentTransport{}, err
+			return NamedEnvironment{}, err
 		}
 		initializeTimeout = duration
 	}
@@ -318,23 +344,27 @@ func parseEnvironmentTOML(entry EnvironmentTOML, configDir string) (string, Envi
 	case entry.URL != nil && entry.Program == nil:
 		websocketURL, err := validateEnvironmentWebSocketURL(*entry.URL)
 		if err != nil {
-			return "", EnvironmentTransport{}, err
+			return NamedEnvironment{}, err
 		}
-		return id, EnvironmentTransport{
-			Kind:              EnvironmentTransportWebSocket,
-			WebSocketURL:      websocketURL,
-			HTTPHeaders:       environmentAuthHeaders(entry.Token),
-			ConnectTimeout:    connectTimeout,
-			InitializeTimeout: initializeTimeout,
+		return NamedEnvironment{
+			ID: id,
+			Transport: EnvironmentTransport{
+				Kind:              EnvironmentTransportWebSocket,
+				WebSocketURL:      websocketURL,
+				HTTPHeaders:       environmentAuthHeaders(entry.Token),
+				ConnectTimeout:    connectTimeout,
+				InitializeTimeout: initializeTimeout,
+			},
+			Skills: skills,
 		}, nil
 	case entry.URL == nil && entry.Program != nil:
 		program := strings.TrimSpace(*entry.Program)
 		if program == "" {
-			return "", EnvironmentTransport{}, protocolErrorf("environment `%s` program cannot be empty", id)
+			return NamedEnvironment{}, protocolErrorf("environment `%s` program cannot be empty", id)
 		}
 		cwd, err := normalizeStdioCWD(id, entry.CWD, configDir)
 		if err != nil {
-			return "", EnvironmentTransport{}, err
+			return NamedEnvironment{}, err
 		}
 		env := map[string]string{}
 		if entry.Env != nil {
@@ -346,18 +376,22 @@ func parseEnvironmentTOML(entry EnvironmentTOML, configDir string) (string, Envi
 		if entry.Args != nil {
 			args = append(args, (*entry.Args)...)
 		}
-		return id, EnvironmentTransport{
-			Kind:              EnvironmentTransportStdio,
-			InitializeTimeout: initializeTimeout,
-			Command: &StdioExecServerCommand{
-				Program: program,
-				Args:    args,
-				Env:     env,
-				CWD:     cwd,
+		return NamedEnvironment{
+			ID: id,
+			Transport: EnvironmentTransport{
+				Kind:              EnvironmentTransportStdio,
+				InitializeTimeout: initializeTimeout,
+				Command: &StdioExecServerCommand{
+					Program: program,
+					Args:    args,
+					Env:     env,
+					CWD:     cwd,
+				},
 			},
+			Skills: skills,
 		}, nil
 	default:
-		return "", EnvironmentTransport{}, protocolErrorf("environment `%s` must set exactly one of url or program", id)
+		return NamedEnvironment{}, protocolErrorf("environment `%s` must set exactly one of url or program", id)
 	}
 }
 
