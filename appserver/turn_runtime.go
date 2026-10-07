@@ -2239,6 +2239,11 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 			return
 		}
 		r.clearActiveRuntimeTurn(threadID, turnID)
+		// Rust #50804: a failed review turn forwards its error to the client
+		// before the review-exit lifecycle, so the observable order stays
+		// `enteredReviewMode` -> `error` -> `exitedReviewMode` -> `turn/completed`
+		// instead of losing the failure behind the exit item.
+		r.notifyReviewRuntimeFailure(threadID, turnID, err)
 		r.finishReviewRuntimeFallbackCompleted(threadID, turnID, record.StartedAt, startedAtMS, &turnCompletionAnalyticsContext{
 			ConnectionID: connectionID,
 			Params:       params,
@@ -4240,6 +4245,30 @@ func (r *RuntimeRouter) finishReviewRuntimeInterrupted(threadID string, turnID s
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
+}
+
+// notifyReviewRuntimeFailure reports a failed review turn's error to the
+// client before the review-exit lifecycle is emitted (Rust #50804
+// `review_overload_preserves_lifecycle_order`: the review sub-session's error
+// is forwarded while the review is still entered, so the observable order is
+// `enteredReviewMode` -> `error` -> `exitedReviewMode` -> `turn/completed`).
+// The review turn still completes as `completed` with the interrupted
+// placeholder output, exactly like Rust's `exit_review_mode(None)`.
+func (r *RuntimeRouter) notifyReviewRuntimeFailure(threadID string, turnID string, err error) {
+	if r == nil || err == nil {
+		return
+	}
+	fields := turnAnalyticsErrorFieldsFromError(err)
+	r.notify(NotificationError, &ErrorNotification{
+		Error: TurnError{
+			Message:        err.Error(),
+			CodexErrorInfo: fields.TurnError,
+			Misalignment:   misalignmentDetailsFromError(err),
+		},
+		WillRetry: false,
+		ThreadID:  threadID,
+		TurnID:    turnID,
+	})
 }
 
 func (r *RuntimeRouter) finishReviewRuntimeFallbackCompleted(threadID string, turnID string, recordStartedAt int64, startedAtMS int64, analytics *turnCompletionAnalyticsContext) {

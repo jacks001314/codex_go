@@ -7971,14 +7971,34 @@ func TestRuntimeRouterReviewStartRuntimeErrorEmitsFallbackExitAndCompletesLikeRu
 	}
 	completed := waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
 	if completed.Turn.Error != nil {
-		t.Fatalf("review runtime error should be swallowed like Rust, got turn error %#v", completed.Turn.Error)
+		t.Fatalf("review runtime error still completes the turn with the fallback output, got turn error %#v", completed.Turn.Error)
 	}
-	for _, notification := range sink.List() {
-		if notification.Method == NotificationError {
-			if payload, ok := notification.Params.(*ErrorNotification); ok && payload.TurnID == turnID {
-				t.Fatalf("review runtime error emitted generic error notification: %#v", payload)
+	// Rust #50804 (ab45264919): a failing review turn forwards its error to the
+	// client while the review is still entered, so the observable order is
+	// `enteredReviewMode` -> `error` -> `exitedReviewMode` -> `turn/completed`
+	// (codex-rs/core/tests/suite/review.rs::review_overload_preserves_lifecycle_order).
+	// The exit item above must therefore be preceded by the turn's error
+	// notification instead of the error being dropped by the review exit.
+	errorIndex := -1
+	exitedIndex := -1
+	for i, notification := range sink.List() {
+		switch notification.Method {
+		case NotificationError:
+			if payload, ok := notification.Params.(*ErrorNotification); ok && payload != nil && payload.TurnID == turnID {
+				errorIndex = i
+			}
+		case NotificationItemCompleted:
+			payload, ok := notification.Params.(*ItemCompletedNotification)
+			if ok && payload != nil && payload.TurnID == turnID && notificationItemMap(t, payload.Item)["type"] == "exitedReviewMode" {
+				exitedIndex = i
 			}
 		}
+	}
+	if errorIndex < 0 {
+		t.Fatalf("review runtime error emitted no error notification for turn %s", turnID)
+	}
+	if exitedIndex < 0 || errorIndex > exitedIndex {
+		t.Fatalf("review error notification index = %d, exited item index = %d, want the error before the exit item (#50804)", errorIndex, exitedIndex)
 	}
 }
 
