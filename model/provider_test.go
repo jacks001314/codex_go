@@ -412,6 +412,156 @@ func TestAmazonBedrockMantleBaseURL(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #38470 (d5e256ceb2) runtime::base_url and
+// `runtime_managed_auth_resolves_runtime_endpoint` in
+// codex-rs/model-provider/src/amazon_bedrock/mod.rs: the Bedrock Runtime
+// provider resolves `https://bedrock-runtime.{region}.amazonaws.com/openai/v1`,
+// while Mantle keeps `bedrock-mantle.{region}.api.aws`. Unlike Mantle, the
+// Runtime endpoint has no supported-region allowlist upstream, so regions
+// outside BEDROCK_MANTLE_SUPPORTED_REGIONS still resolve. The production call
+// points are AmazonBedrockProvider::APIProvider/RuntimeBaseURL
+// (model/provider.go), reached from ResponsesAgentRunner
+// (model/responses_agent.go) and APIAuth's bearer-token region check.
+func TestAmazonBedrockRuntimeEndpointLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		region string
+		want   string
+	}{
+		{
+			name:   "configured region",
+			region: "eu-west-1",
+			want:   "https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1",
+		},
+		{
+			name:   "region outside the Mantle allowlist",
+			region: "us-west-1",
+			want:   "https://bedrock-runtime.us-west-1.amazonaws.com/openai/v1",
+		},
+		{
+			name:   "gov-cloud region outside the Mantle allowlist",
+			region: "us-gov-west-1",
+			want:   "https://bedrock-runtime.us-gov-west-1.amazonaws.com/openai/v1",
+		},
+	}
+	for _, testCase := range cases {
+		provider := CreateRuntimeProvider(
+			CreateAmazonBedrockRuntimeProvider(&ProviderAWSAuthInfo{Region: testCase.region}),
+			nil,
+		)
+		baseURL, err := provider.RuntimeBaseURL()
+		if err != nil {
+			t.Fatalf("%s: RuntimeBaseURL returned error: %v", testCase.name, err)
+		}
+		if baseURL != testCase.want {
+			t.Fatalf("%s: baseURL = %q, want %q", testCase.name, baseURL, testCase.want)
+		}
+		apiProvider, err := provider.APIProvider()
+		if err != nil {
+			t.Fatalf("%s: APIProvider returned error: %v", testCase.name, err)
+		}
+		if apiProvider.BaseURL != testCase.want {
+			t.Fatalf("%s: APIProvider.BaseURL = %q, want %q", testCase.name, apiProvider.BaseURL, testCase.want)
+		}
+	}
+
+	mantle, err := CreateRuntimeProvider(
+		CreateAmazonBedrockProvider(&ProviderAWSAuthInfo{Region: "eu-west-1"}),
+		nil,
+	).RuntimeBaseURL()
+	if err != nil {
+		t.Fatalf("mantle RuntimeBaseURL returned error: %v", err)
+	}
+	if mantle != "https://bedrock-mantle.eu-west-1.api.aws/openai/v1" {
+		t.Fatalf("mantle baseURL = %q", mantle)
+	}
+
+	managed := CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(nil), &auth.AuthDotJSON{
+		AuthMode: "bedrock-api-key",
+		BedrockAPIKey: map[string]any{
+			"api_key": "managed-bedrock-api-key",
+			"region":  "eu-west-1",
+		},
+	})
+	managedBaseURL, err := managed.RuntimeBaseURL()
+	if err != nil {
+		t.Fatalf("managed RuntimeBaseURL returned error: %v", err)
+	}
+	if managedBaseURL != "https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1" {
+		t.Fatalf("managed baseURL = %q", managedBaseURL)
+	}
+}
+
+// Mirrors Rust #38470 (d5e256ceb2) runtime::aws_auth_config: the regional
+// Bedrock Runtime endpoint signs with SigV4 service `bedrock`, while Mantle
+// keeps `bedrock-mantle`. The production call point is
+// AmazonBedrockProvider::awsAuthConfig (model/provider.go), used by APIAuth for
+// the AWS SDK credential chain.
+func TestAmazonBedrockRuntimeSigV4ServiceLikeRust(t *testing.T) {
+	aws := &ProviderAWSAuthInfo{Profile: "codex-bedrock", Region: " us-west-2 "}
+	mantle := CreateRuntimeProvider(CreateAmazonBedrockProvider(aws), nil).(*AmazonBedrockProvider)
+	runtime := CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(aws), nil).(*AmazonBedrockProvider)
+
+	if got := mantle.awsAuthConfig(); got.Service != AmazonBedrockMantleServiceName ||
+		got.Profile != "codex-bedrock" || got.Region != "us-west-2" {
+		t.Fatalf("mantle awsAuthConfig = %#v", got)
+	}
+	if got := runtime.awsAuthConfig(); got.Service != AmazonBedrockRuntimeServiceName ||
+		got.Profile != "codex-bedrock" || got.Region != "us-west-2" {
+		t.Fatalf("runtime awsAuthConfig = %#v", got)
+	}
+	if AmazonBedrockRuntimeServiceName != "bedrock" {
+		t.Fatalf("AmazonBedrockRuntimeServiceName = %q, want %q", AmazonBedrockRuntimeServiceName, "bedrock")
+	}
+}
+
+// Mirrors Rust #38470 (d5e256ceb2) BedrockSigV4AuthProvider::apply_auth: only
+// the Mantle endpoint strips the snake_case compatibility headers before SigV4,
+// because the Mantle front door does not preserve them; the Bedrock Runtime
+// endpoint signs them. The production call point is the SignRequest closure
+// installed by AmazonBedrockProvider::APIAuth (model/provider.go), which passes
+// the provider's endpoint into signBedrockRequest.
+func TestSignBedrockRequestStripsCompatibilityHeadersOnlyForMantleLikeRust(t *testing.T) {
+	newSignedHeaders := func(t *testing.T, endpoint bedrockEndpoint) http.Header {
+		t.Helper()
+		awsContext, err := auth.NewAWSAuthContext(&auth.AWSAuthConfig{
+			Region:  "us-west-2",
+			Service: bedrockServiceNameForEndpoint(endpoint),
+		}, &auth.AWSAuthCredentials{
+			AccessKeyID:     "AKIDEXAMPLE",
+			SecretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+		})
+		if err != nil {
+			t.Fatalf("NewAWSAuthContext returned error: %v", err)
+		}
+		request, err := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses", nil)
+		if err != nil {
+			t.Fatalf("NewRequest returned error: %v", err)
+		}
+		request.Header.Set("session_id", "019dae79-15c3-70c3-8736-3219b8602b37")
+		request.Header.Set("thread_id", "thread-1")
+		if _, err := signBedrockRequest(awsContext, request, nil, endpoint); err != nil {
+			t.Fatalf("signBedrockRequest returned error: %v", err)
+		}
+		return request.Header
+	}
+
+	runtimeEndpoint := CreateRuntimeProvider(CreateAmazonBedrockRuntimeProvider(nil), nil).(*AmazonBedrockProvider).endpoint()
+	if runtimeEndpoint != bedrockEndpointRuntime {
+		t.Fatalf("runtime provider endpoint = %v, want bedrockEndpointRuntime", runtimeEndpoint)
+	}
+	runtimeHeaders := newSignedHeaders(t, runtimeEndpoint)
+	if runtimeHeaders.Get("session_id") != "019dae79-15c3-70c3-8736-3219b8602b37" ||
+		runtimeHeaders.Get("thread_id") != "thread-1" {
+		t.Fatalf("runtime headers dropped snake_case compatibility headers: %#v", runtimeHeaders)
+	}
+
+	mantleHeaders := newSignedHeaders(t, bedrockEndpointMantle)
+	if mantleHeaders.Get("session_id") != "" || mantleHeaders.Get("thread_id") != "" {
+		t.Fatalf("mantle headers kept snake_case compatibility headers: %#v", mantleHeaders)
+	}
+}
+
 func TestAmazonBedrockProviderAccountState(t *testing.T) {
 	provider := CreateRuntimeProvider(CreateAmazonBedrockProvider(nil), nil)
 	state, err := provider.AccountState()
@@ -610,9 +760,9 @@ func TestSignBedrockMantleRequestSetsFinalHost(t *testing.T) {
 	request.Header.Set("Content-Encoding", "zstd")
 	request.Header.Set("Content-Length", "999")
 
-	signed, err := signBedrockMantleRequest(awsContext, request, []byte(`{"model":"gpt-5.5"}`))
+	signed, err := signBedrockRequest(awsContext, request, []byte(`{"model":"gpt-5.5"}`), bedrockEndpointMantle)
 	if err != nil {
-		t.Fatalf("signBedrockMantleRequest returned error: %v", err)
+		t.Fatalf("signBedrockRequest returned error: %v", err)
 	}
 	if string(signed.Body) != `{"model":"gpt-5.5"}` {
 		t.Fatalf("signed body = %q", string(signed.Body))

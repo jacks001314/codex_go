@@ -332,6 +332,48 @@ var amazonBedrockMantleSupportedRegions = map[string]struct{}{
 	"sa-east-1":      {},
 }
 
+// The bedrockEndpoint selector (catalog.go) decides whether the Amazon Bedrock
+// provider targets the Mantle front door or the regional Bedrock Runtime
+// endpoint; the URL and SigV4 service below hang off it (#38470 d5e256ceb2).
+
+// bedrockEndpointForProviderName maps an Amazon Bedrock provider name onto the
+// endpoint it targets, mirroring Rust AmazonBedrockModelProvider::new's
+// selection through ModelProviderInfo::is_amazon_bedrock_runtime (d5e256ceb2).
+func bedrockEndpointForProviderName(name string) bedrockEndpoint {
+	if info := (ProviderInfo{Name: name}); info.IsAmazonBedrockRuntime() {
+		return bedrockEndpointRuntime
+	}
+	return bedrockEndpointMantle
+}
+
+// bedrockServiceNameForEndpoint mirrors Rust mantle::aws_auth_config /
+// runtime::aws_auth_config service selection (d5e256ceb2).
+func bedrockServiceNameForEndpoint(endpoint bedrockEndpoint) string {
+	if endpoint == bedrockEndpointRuntime {
+		return AmazonBedrockRuntimeServiceName
+	}
+	return AmazonBedrockMantleServiceName
+}
+
+// endpoint mirrors Rust AmazonBedrockModelProvider::new's endpoint selection
+// (d5e256ceb2): the provider is the Runtime variant exactly when its info is
+// the `amazon-bedrock-runtime` provider, otherwise it is Mantle.
+func (p *AmazonBedrockProvider) endpoint() bedrockEndpoint {
+	return bedrockEndpointForProviderName(p.info.Name)
+}
+
+// bedrockBaseURLForRegion mirrors Rust runtime::base_url / mantle::base_url
+// (d5e256ceb2): the Runtime endpoint is
+// `https://bedrock-runtime.{region}.amazonaws.com/openai/v1` and, unlike the
+// Mantle front door, has no supported-region allowlist; Mantle keeps
+// `https://bedrock-mantle.{region}.api.aws/openai/v1` plus its region check.
+func (p *AmazonBedrockProvider) bedrockBaseURLForRegion(region string) (string, error) {
+	if p.endpoint() == bedrockEndpointRuntime {
+		return amazonBedrockRuntimeBaseURL(region), nil
+	}
+	return amazonBedrockMantleBaseURL(region)
+}
+
 func (p *AmazonBedrockProvider) Info() ProviderInfo {
 	return p.info
 }
@@ -413,7 +455,7 @@ func (p *AmazonBedrockProvider) RuntimeBaseURL() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return amazonBedrockMantleBaseURL(region)
+	return p.bedrockBaseURLForRegion(region)
 }
 
 func (p *AmazonBedrockProvider) RuntimeBaseURLNoError() string {
@@ -421,9 +463,9 @@ func (p *AmazonBedrockProvider) RuntimeBaseURLNoError() string {
 	if err != nil || strings.TrimSpace(region) == "" {
 		region = "us-east-1"
 	}
-	baseURL, err := amazonBedrockMantleBaseURL(region)
+	baseURL, err := p.bedrockBaseURLForRegion(region)
 	if err != nil {
-		baseURL, _ = amazonBedrockMantleBaseURL("us-east-1")
+		baseURL, _ = p.bedrockBaseURLForRegion("us-east-1")
 	}
 	return baseURL
 }
@@ -454,7 +496,7 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 		if err != nil {
 			return AuthHeaders{}, fmt.Errorf("Amazon Bedrock bearer token auth requires model_providers.amazon-bedrock.aws.region, AWS_REGION, or AWS_DEFAULT_REGION")
 		}
-		if _, err := amazonBedrockMantleBaseURL(region); err != nil {
+		if _, err := p.bedrockBaseURLForRegion(region); err != nil {
 			return AuthHeaders{}, err
 		}
 		return AuthHeaders{Headers: headers}, nil
@@ -473,7 +515,7 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 	return AuthHeaders{
 		Headers: headers,
 		SignRequest: func(_ context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
-			return signBedrockMantleRequest(awsContext, request, body)
+			return signBedrockRequest(awsContext, request, body, p.endpoint())
 		},
 	}, nil
 }
@@ -539,8 +581,11 @@ func (p *AmazonBedrockProvider) resolveRegion() (string, error) {
 	return region, nil
 }
 
+// awsAuthConfig mirrors Rust mantle::aws_auth_config / runtime::aws_auth_config
+// (d5e256ceb2): the SigV4 service is endpoint-specific, `bedrock-mantle` for the
+// Mantle front door and `bedrock` for the regional Bedrock Runtime endpoint.
 func (p *AmazonBedrockProvider) awsAuthConfig() *auth.AWSAuthConfig {
-	config := &auth.AWSAuthConfig{Service: AmazonBedrockMantleServiceName}
+	config := &auth.AWSAuthConfig{Service: bedrockServiceNameForEndpoint(p.endpoint())}
 	if p != nil && p.info.AWS != nil {
 		config.Profile = strings.TrimSpace(p.info.AWS.Profile)
 		config.Region = strings.TrimSpace(p.info.AWS.Region)
@@ -569,11 +614,26 @@ func amazonBedrockMantleBaseURL(region string) (string, error) {
 	return fmt.Sprintf("https://bedrock-mantle.%s.api.aws/openai/v1", region), nil
 }
 
-func signBedrockMantleRequest(context *auth.AWSAuthContext, request *http.Request, body []byte) (*SignedRequest, error) {
+// amazonBedrockRuntimeBaseURL mirrors Rust runtime::base_url (d5e256ceb2):
+// the regional `bedrock-runtime` OpenAI-compatible endpoint. Unlike the Mantle
+// front door this endpoint has no supported-region allowlist upstream, so no
+// region check is applied here.
+func amazonBedrockRuntimeBaseURL(region string) string {
+	return fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com/openai/v1", strings.TrimSpace(region))
+}
+
+// signBedrockRequest signs an Amazon Bedrock OpenAI-compatible request with
+// SigV4. Rust BedrockSigV4AuthProvider::apply_auth (d5e256ceb2) only strips the
+// snake_case compatibility headers for the Mantle endpoint, because the Mantle
+// front door does not preserve them before SigV4 verification; the Bedrock
+// Runtime endpoint keeps them.
+func signBedrockRequest(context *auth.AWSAuthContext, request *http.Request, body []byte, endpoint bedrockEndpoint) (*SignedRequest, error) {
 	if request == nil {
 		return &SignedRequest{Body: body}, nil
 	}
-	removeHeadersNotPreservedByBedrockMantle(request.Header)
+	if endpoint == bedrockEndpointMantle {
+		removeHeadersNotPreservedByBedrockMantle(request.Header)
+	}
 	removeCompressionHeadersForPreparedBedrockBody(request.Header)
 	payloadHash := sha256.Sum256(body)
 	request.Header.Set("X-Amz-Content-Sha256", fmt.Sprintf("%x", payloadHash[:]))

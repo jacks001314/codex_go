@@ -3599,10 +3599,14 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	}
 	// Reload credentials and re-sign future requests. Configured credential
 	// export re-runs the exporter (#44028); otherwise the SDK chain reloads.
+	// Rust BedrockSigV4AuthProvider::apply_auth re-signs through the same
+	// endpoint-aware config, so the SigV4 service follows the provider's
+	// endpoint (#38470 d5e256ceb2).
+	endpoint := bedrockEndpointForProviderName(r.Provider.Name)
 	awsConfig := &auth.AWSAuthConfig{
 		Profile: strings.TrimSpace(r.AWS.Profile),
 		Region:  strings.TrimSpace(r.AWS.Region),
-		Service: AmazonBedrockMantleServiceName,
+		Service: bedrockServiceNameForEndpoint(endpoint),
 	}
 	var awsContext *auth.AWSAuthContext
 	var err error
@@ -3622,7 +3626,7 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 		r.Auth = &AuthHeaders{Headers: http.Header{}}
 	}
 	r.Auth.SignRequest = func(ctx context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
-		return signBedrockMantleRequest(awsContext, request, body)
+		return signBedrockRequest(awsContext, request, body, endpoint)
 	}
 	return nil
 }

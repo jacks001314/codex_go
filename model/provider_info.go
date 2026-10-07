@@ -40,9 +40,14 @@ const (
 	AmazonBedrockDefaultBaseURL      = "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
 	AmazonBedrockBearerTokenEnv      = "AWS_BEARER_TOKEN_BEDROCK"
 	AmazonBedrockMantleServiceName   = "bedrock-mantle"
-	AmazonBedrockMantleClientHeader  = "x-amzn-mantle-client-agent"
-	AmazonBedrockMantleClientValue   = "codex"
-	AmazonBedrockGPT55ModelID        = "openai.gpt-5.5"
+	// AmazonBedrockRuntimeServiceName mirrors Rust BEDROCK_RUNTIME_SERVICE_NAME
+	// (amazon_bedrock/runtime.rs, #38470 d5e256ceb2): the regional
+	// `bedrock-runtime` endpoint is signed with SigV4 service `bedrock`, not the
+	// Mantle front door's `bedrock-mantle`.
+	AmazonBedrockRuntimeServiceName = "bedrock"
+	AmazonBedrockMantleClientHeader = "x-amzn-mantle-client-agent"
+	AmazonBedrockMantleClientValue  = "codex"
+	AmazonBedrockGPT55ModelID       = "openai.gpt-5.5"
 	// AmazonBedrockGPT54ModelID is no longer a Bedrock *catalog* entry and is
 	// no longer returned by any provider API: Rust #47932 (694d8d45bd) dropped
 	// the catalog entry and Rust #38470 (d5e256ceb2) moved the Bedrock
