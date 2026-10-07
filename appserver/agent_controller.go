@@ -585,23 +585,58 @@ func (c *runtimeAgentController) CloseAgent(ctx context.Context, args *agent.Clo
 	}
 	previous := c.status(target)
 	// Rust's close_agent shuts down the target and any open descendants
-	// reachable from the spawn tree (shutdown_agent_tree).
+	// reachable from the spawn tree (shutdown_agent_tree). Rust #51515: the
+	// teardown records a bounded, payload-free failure report instead of
+	// dropping cleanup errors; the report travels back in the result.
+	state := agent.NewAgentTreeShutdownState(firstNonEmpty(c.rootID, target))
 	closeIDs := []string{target}
 	if c.router.services.SpawnGraph != nil {
 		openStatus := agent.ThreadSpawnEdgeOpen
 		if descendants, listErr := c.router.services.SpawnGraph.ListThreadSpawnDescendants(target, &openStatus); listErr == nil {
 			closeIDs = append(closeIDs, descendants...)
+		} else {
+			state.RecordFailure(agent.AgentTreeShutdownOperationFailed("list_descendants", "list_open_descendants", target, agentShutdownErrorKind(listErr)))
 		}
 	}
 	for _, id := range closeIDs {
-		c.closeAgentThread(id)
+		c.closeAgentThread(state, id)
 	}
-	return &agent.CloseAgentResult{PreviousStatus: previous}, nil
+	result := &agent.CloseAgentResult{PreviousStatus: previous}
+	if report := state.Report(); !report.Empty() {
+		result.ShutdownReport = &report
+	}
+	return result, nil
 }
 
-func (c *runtimeAgentController) closeAgentThread(threadID string) {
+// agentShutdownErrorKind maps an error to a stable, payload-free category for the
+// shutdown report (Rust #51515's thread_store_error_kind uses the same idea over
+// ThreadStoreError variants).
+func agentShutdownErrorKind(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, session.ErrThreadNotFound):
+		return "thread_store_not_found"
+	case errors.Is(err, session.ErrThreadArchived):
+		return "thread_store_archived"
+	case errors.Is(err, session.ErrThreadSectionMissing):
+		return "thread_store_section_missing"
+	case errors.Is(err, session.ErrConflict):
+		return "thread_store_conflict"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	default:
+		return "operation_error"
+	}
+}
+
+func (c *runtimeAgentController) closeAgentThread(state *agent.AgentTreeShutdownState, threadID string) {
 	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
-		_, _ = c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: active.ID}))
+		if _, err := c.router.handleTurnInterrupt(requestWithInternalParams(MethodTurnInterrupt, turn.TurnInterruptParams{ThreadID: threadID, TurnID: active.ID})); err != nil {
+			state.RecordFailure(agent.AgentTreeShutdownOperationFailed("turn_interrupt", "stop_active_turn", threadID, agentShutdownErrorKind(err)))
+		}
 	}
 	previous := c.status(threadID)
 	if previous.Kind != agent.AgentMessageStatusNotFound {
@@ -610,7 +645,9 @@ func (c *runtimeAgentController) closeAgentThread(threadID string) {
 			c.router.agentRegistry.ReleaseSpawnedThread(threadID)
 		}
 		if c.router.services.SpawnGraph != nil {
-			_ = c.router.services.SpawnGraph.SetThreadSpawnEdgeStatus(threadID, agent.ThreadSpawnEdgeClosed)
+			if err := c.router.services.SpawnGraph.SetThreadSpawnEdgeStatus(threadID, agent.ThreadSpawnEdgeClosed); err != nil {
+				state.RecordFailure(agent.AgentTreeShutdownOperationFailed("close_spawn_edge", "set_spawn_edge_closed", threadID, agentShutdownErrorKind(err)))
+			}
 		}
 	}
 }

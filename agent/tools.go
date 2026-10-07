@@ -119,6 +119,10 @@ type CloseAgentArgs struct {
 
 type CloseAgentResult struct {
 	PreviousStatus AgentMessageStatus `json:"previous_status"`
+	// ShutdownReport carries the cleanup failures observed while shutting down
+	// the target's agent tree (Rust #51515 AgentTreeShutdownReport). It is
+	// omitted when the tree shut down cleanly.
+	ShutdownReport *AgentTreeShutdownReport `json:"shutdown_report,omitempty"`
 }
 
 func (c *MemoryToolController) SpawnAgent(ctx context.Context, args *SpawnAgentArgs) (*SpawnAgentResult, error) {
