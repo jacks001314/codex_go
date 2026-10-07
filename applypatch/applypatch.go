@@ -337,7 +337,10 @@ func (a *Action) applyCommitted(fs FileSystem, cwd string) (*ApplyResult, error)
 	for _, change := range a.Hunks {
 		applied, err := applyChange(fs, cwd, &change)
 		if err != nil {
-			return nil, err
+			// Rust #51652: a failed apply keeps the changes committed before the
+			// failure (ApplyPatchFailure carries its delta), so the partial result
+			// is returned alongside the error instead of being dropped.
+			return result, err
 		}
 		result.Updated = append(result.Updated, *applied)
 		result.Changes = append(result.Changes, applied.Change)

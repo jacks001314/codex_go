@@ -213,6 +213,9 @@ func (e *ApplyPatchExecutor) Execute(ctx context.Context, invocation *Invocation
 		e.decisionSink.AutoApproved(toolName, callID)
 	}
 	result, err := action.ApplyVerified(applyOptions)
+	// Rust #51652: record committed AGENTS.md / AGENTS.override.md edits,
+	// including the changes committed before a later patch failure.
+	recordAgentsMdEditMetrics(result)
 	if err != nil {
 		body := "apply_patch failed: " + applypatch.FormatError(err)
 		return &Output{
