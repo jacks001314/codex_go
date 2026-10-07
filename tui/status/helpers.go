@@ -59,24 +59,7 @@ func ComposeAccountDisplay(accountDisplay *AccountStatus) *AccountStatus {
 }
 
 func PlanTypeDisplayName(planType auth.PlanType) string {
-	switch planType {
-	case auth.PlanEnterpriseCBPAutomation:
-		return "Enterprise (Automation)"
-	case auth.PlanTeam, auth.PlanSelfServeBusinessUsageBased:
-		return "Business"
-	case auth.PlanSelfServeBusinessProlite:
-		return "Business Premium"
-	case auth.PlanBusiness, auth.PlanEnt26, auth.PlanEnterpriseCBPUsageBased, auth.PlanEnterprise:
-		return "Enterprise"
-	case auth.PlanProlite:
-		return "Pro Lite"
-	case auth.PlanEduPlus:
-		return "Edu Plus"
-	case auth.PlanEduPro:
-		return "Edu Pro"
-	default:
-		return titleCase(string(planType))
-	}
+	return codextui.SubscriptionLabel(planType, codextui.SubscriptionStatus)
 }
 
 func FormatTokensCompact(value int64) string {
@@ -155,19 +138,6 @@ func FormatResetTimestamp(dt time.Time, capturedAt time.Time) string {
 		return timePart
 	}
 	return timePart + " on " + local.Format("2 Jan")
-}
-
-func titleCase(value string) string {
-	if value == "" {
-		return ""
-	}
-	runes := []rune(value)
-	first := strings.ToUpper(string(runes[0]))
-	rest := ""
-	if len(runes) > 1 {
-		rest = strings.ToLower(string(runes[1:]))
-	}
-	return first + rest
 }
 
 func relativeToHome(path string, home string) (string, bool) {
