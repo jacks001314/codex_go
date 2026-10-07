@@ -6796,10 +6796,16 @@ func (r *RuntimeRouter) persistThreadEnvironmentSelections(threadID string, envi
 	if runtimeRecordEphemeral(record) {
 		record.Metadata.Extra = extra
 		r.saveEphemeralThreadRecord(record)
+		// Rust #49075: the owner's first accepted attachment result follows the
+		// pending attachments its descendants inherited.
+		r.propagateInheritedEnvironmentConfigurations(threadID, environments)
 		return nil
 	}
-	_, err = r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true)
-	return err
+	if _, err = r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true); err != nil {
+		return err
+	}
+	r.propagateInheritedEnvironmentConfigurations(threadID, environments)
+	return nil
 }
 
 func environmentSelectionsFromAny(value any) []map[string]any {
