@@ -1376,7 +1376,15 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	tools = normalizeResponseToolParameters(tools)
 	parallelToolCalls := request.ParallelToolCalls && !modelInfo.UseResponsesLite
 	if modelInfo.UseResponsesLite {
-		inputItems = responsesLiteInputItems(inputItems, tools, instructions, request.ThreadID)
+		// Rust #51480: an existing context window keeps the tool declarations it
+		// already recorded. Only a window that has no declarations builds the
+		// `additional_tools` / base-instruction prefix for this request, so a
+		// resumed window never moves or duplicates declarations it already sent.
+		if WindowHasToolDeclarations(inputItems) {
+			inputItems = responsesLiteDeclaredInputItems(inputItems)
+		} else {
+			inputItems = responsesLiteInputItems(inputItems, tools, instructions, request.ThreadID)
+		}
 		instructions = ""
 		tools = nil
 	} else {
@@ -2460,6 +2468,73 @@ func responsesLiteInputItems(inputItems []any, tools []any, instructions string,
 		items = append(items, stripResponsesLiteImageDetails(inputItems[i]))
 	}
 	return items
+}
+
+// responsesLiteDeclaredInputItems returns the request input for a
+// responses-lite context window whose tool declarations are already recorded in
+// history (Rust #51480 `has_tool_declarations`): the recorded `additional_tools`
+// item and base-instruction developer message stay exactly where the window put
+// them, so only the per-model image-detail normalization still applies.
+func responsesLiteDeclaredInputItems(inputItems []any) []any {
+	items := make([]any, 0, len(inputItems))
+	for i := range inputItems {
+		items = append(items, stripResponsesLiteImageDetails(inputItems[i]))
+	}
+	return items
+}
+
+// WindowHasToolDeclarations reports whether a context window's history already
+// carries harness-authored tool declarations, mirroring Rust
+// `ContextManager::has_tool_declarations` (#51480). Responses Lite records the
+// `additional_tools` item once per context window; a window that has one must
+// not have its declarations rebuilt or moved by a later request, because moving
+// them inside an existing window invalidates the server-side prefix cache.
+func WindowHasToolDeclarations(items []any) bool {
+	for _, item := range items {
+		if responseInputItemType(item) == "additional_tools" {
+			return true
+		}
+	}
+	return false
+}
+
+// responseInputItemType reads the wire `type` of a request input item across the
+// representations the runner accepts: typed agent items, decoded JSON objects
+// and raw JSON payloads loaded from a rollout record.
+func responseInputItemType(item any) string {
+	switch typed := item.(type) {
+	case nil:
+		return ""
+	case *AgentItem:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.Type)
+	case AgentItem:
+		return strings.TrimSpace(typed.Type)
+	case map[string]any:
+		return strings.TrimSpace(responseToolString(typed["type"]))
+	case json.RawMessage:
+		var object map[string]any
+		if err := json.Unmarshal(typed, &object); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(responseToolString(object["type"]))
+	case []byte:
+		var object map[string]any
+		if err := json.Unmarshal(typed, &object); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(responseToolString(object["type"]))
+	case string:
+		var object map[string]any
+		if err := json.Unmarshal([]byte(typed), &object); err != nil {
+			return ""
+		}
+		return strings.TrimSpace(responseToolString(object["type"]))
+	default:
+		return ""
+	}
 }
 
 func responsesLiteAdditionalToolsItem(tools []any, threadID string) map[string]any {

@@ -116,3 +116,12 @@
   - 差异（详见计划第三十四轮）：沙箱经 caller 注入而非显式参数；256 并发管线改为按序探测（同优先级/错误顺序）；`UnavailableEnvironment` 映射为探测错误；上游无生产调用方，Go 接入真实路径避免死代码。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./execserver/ ./appserver/` 无输出；`go test ./appserver/ -run <新测试>` 全通过；`./exec/...` 通过；`./execserver/...` 与 `./appserver/` 仅既有基线失败（均以 `git stash` 复现确认）。
 - 剩余 6 项：继续按序推进（#51480 → #51503 → #51482 → #51517 → TUI）。
+
+## 追加（当日第九批：sync400）
+
+- `sync400`（上游 #51480 "Preserve tool declaration mode across resumed context windows"）：已有上下文窗口复用已记录的工具声明。
+  - `model/responses_agent.go`：新增 `WindowHasToolDeclarations`（对应 Rust `ContextManager::has_tool_declarations`，跨 map/原始 JSON/AgentItem 表示识别 `additional_tools`）+ `responsesLiteDeclaredInputItems`；`ResponsesAgentRunner.Run` 的 responses-lite 分支：窗口已有声明则**复用**（不再重建前置第二份），窗口无声明则维持原前缀构建。
+  - 测试：`model/responses_agent_test.go` 3 个（`TestWindowHasToolDeclarationsLikeRust`、`TestResponsesLiteReusesRecordedToolDeclarationsLikeRust`、`TestResponsesLiteBuildsDeclarationsForWindowWithoutThemLikeRust`）+ `session/history_test.go` 1 个（`TestInputItemsFromRecordPreservesToolDeclarationsLikeRust`）。
+  - 差异（详见计划第三十五轮）：Go 无 world state / 无历史化声明，"既有窗口无声明 → 退回 legacy 形态"需要先补声明历史化子系统，本轮明确记录；fork 过滤天然保留声明（语义等价）；Go 无 guardian 输入预算 / prompt 调试对齐点。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go test ./model/ -run <新测试>` 3/3 PASS；`./session/ ./context/ ./rollout/ ./turn/ ./exec/` 全通过；`./model/` 仅 2 项既有环境失败、`./appserver/` 仅 3 项既有基线失败（均 `git stash` 复现确认）。
+- 剩余 6 项：继续按序推进（#51480 余下 → #51503 → #51482 → #51517 → TUI）。

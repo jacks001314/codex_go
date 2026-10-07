@@ -4312,3 +4312,217 @@ func TestInterruptedIncompleteCompletesWithEndTurnFalseLikeRust(t *testing.T) {
 		t.Fatalf("non-interrupted incomplete error = %v", err)
 	}
 }
+
+// TestWindowHasToolDeclarationsLikeRust covers Rust
+// `ContextManager::has_tool_declarations` (#51480): a context window declares
+// its tools when its history carries the harness-authored `additional_tools`
+// item. Rollout-loaded raw JSON, decoded maps and typed agent items must all be
+// recognized, and ordinary conversation items must not count.
+func TestWindowHasToolDeclarationsLikeRust(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []any
+		want  bool
+	}{
+		{
+			name:  "empty window",
+			items: nil,
+			want:  false,
+		},
+		{
+			name: "conversation without declarations",
+			items: []any{
+				map[string]any{"type": "message", "role": "user", "content": "hi"},
+				map[string]any{"type": "function_call", "name": "shell"},
+			},
+			want: false,
+		},
+		{
+			name: "decoded additional_tools item",
+			items: []any{
+				map[string]any{"type": "additional_tools", "role": "developer", "tools": []any{}},
+				map[string]any{"type": "message", "role": "user", "content": "hi"},
+			},
+			want: true,
+		},
+		{
+			name: "raw rollout json item",
+			items: []any{
+				json.RawMessage(`{"id":"at_1","type":"additional_tools","role":"developer","tools":[]}`),
+			},
+			want: true,
+		},
+		{
+			name: "typed agent item",
+			items: []any{
+				&AgentItem{ID: "at_1", Type: "additional_tools"},
+			},
+			want: true,
+		},
+		{
+			name: "nil item ignored",
+			items: []any{
+				nil,
+				&AgentItem{ID: "at_1"},
+			},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := WindowHasToolDeclarations(tc.items); got != tc.want {
+			t.Fatalf("%s: WindowHasToolDeclarations = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestResponsesLiteReusesRecordedToolDeclarationsLikeRust covers Rust #51480's
+// "legacy resume"/existing-window half for the Go runner: a responses-lite
+// window whose history already holds its declarations must send those recorded
+// items verbatim instead of rebuilding and prepending a second copy, so the tool
+// declarations and base instructions keep their position inside the window.
+func TestResponsesLiteReusesRecordedToolDeclarationsLikeRust(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-lite","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"access_token": "token"},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:             "gpt-lite",
+			InputModalities:  []string{"text", "image"},
+			UseResponsesLite: true,
+		}}}),
+	})
+
+	recordedDeclarations := map[string]any{
+		"id":    "at_recorded",
+		"type":  "additional_tools",
+		"role":  "developer",
+		"tools": []any{map[string]any{"type": "function", "name": "echo"}},
+	}
+	recordedInstructions := map[string]any{
+		"id":   "msg_recorded",
+		"type": "message",
+		"role": "developer",
+		"content": []any{
+			map[string]any{"type": "input_text", "text": "You are a helpful assistant."},
+		},
+	}
+	history := []any{
+		recordedDeclarations,
+		recordedInstructions,
+		map[string]any{"type": "message", "role": "user", "content": "hello"},
+	}
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{
+		Model:      "gpt-lite",
+		Prompt:     "again",
+		InputItems: history,
+		Tools:      []any{map[string]any{"type": "function", "name": "echo"}},
+	}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	if _, ok := recordedBody["tools"]; ok {
+		t.Fatalf("responses lite should not include top-level tools: %#v", recordedBody["tools"])
+	}
+	if instructions, ok := recordedBody["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
+		t.Fatalf("responses lite should keep base instructions in the window: %#v", instructions)
+	}
+	inputs, ok := recordedBody["input"].([]any)
+	if !ok || len(inputs) == 0 {
+		t.Fatalf("input = %#v", recordedBody["input"])
+	}
+	declarationCount := 0
+	declarationIndex := -1
+	for i, raw := range inputs {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item["type"] == "additional_tools" {
+			declarationCount++
+			declarationIndex = i
+			if item["id"] != "at_recorded" {
+				t.Fatalf("rebuilt declaration replaced the recorded one: %#v", item)
+			}
+		}
+	}
+	if declarationCount != 1 {
+		t.Fatalf("recorded declarations should appear exactly once, got %d: %#v", declarationCount, inputs)
+	}
+	// The recorded declarations stay ahead of the conversation, as the window
+	// recorded them, and are not moved to a rebuilt prefix position.
+	if declarationIndex != 0 {
+		t.Fatalf("recorded declarations moved to index %d: %#v", declarationIndex, inputs)
+	}
+	first, _ := inputs[0].(map[string]any)
+	if first["type"] != "additional_tools" {
+		t.Fatalf("first input item = %#v", inputs[0])
+	}
+	second, ok := inputs[1].(map[string]any)
+	if !ok || second["id"] != "msg_recorded" {
+		t.Fatalf("recorded base instructions lost: %#v", inputs[1])
+	}
+}
+
+// TestResponsesLiteBuildsDeclarationsForWindowWithoutThemLikeRust guards the
+// other half of the #51480 decision: a responses-lite window that has not
+// declared its tools yet still gets the rebuilt `additional_tools` /
+// base-instruction prefix for this request.
+func TestResponsesLiteBuildsDeclarationsForWindowWithoutThemLikeRust(t *testing.T) {
+	var recordedBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		_, _ = w.Write([]byte(`{"id":"resp-1","model":"gpt-lite","output_text":"ok","output":[]}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		AuthSnapshot: &auth.AuthDotJSON{
+			AuthMode: "chatgpt",
+			Tokens:   map[string]any{"access_token": "token"},
+		},
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:             "gpt-lite",
+			InputModalities:  []string{"text", "image"},
+			UseResponsesLite: true,
+		}}}),
+	})
+
+	if _, err := runner.Run(context.Background(), &AgentRequest{
+		Model:        "gpt-lite",
+		Prompt:       "hello",
+		InputItems:   []any{map[string]any{"type": "message", "role": "user", "content": "first"}},
+		Instructions: "You are a helpful assistant.",
+		Tools:        []any{map[string]any{"type": "function", "name": "echo"}},
+	}); err != nil {
+		t.Fatalf("Run error = %v", err)
+	}
+	inputs, ok := recordedBody["input"].([]any)
+	if !ok || len(inputs) < 2 {
+		t.Fatalf("input = %#v", recordedBody["input"])
+	}
+	additionalTools, ok := inputs[0].(map[string]any)
+	if !ok || additionalTools["type"] != "additional_tools" {
+		t.Fatalf("additional_tools = %#v", inputs[0])
+	}
+	id, _ := additionalTools["id"].(string)
+	if !strings.HasPrefix(id, "at_") {
+		t.Fatalf("rebuilt additional_tools id = %q, want deterministic at_ id", id)
+	}
+	if _, ok := recordedBody["tools"]; ok {
+		t.Fatalf("responses lite should not include top-level tools: %#v", recordedBody["tools"])
+	}
+}

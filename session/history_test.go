@@ -569,3 +569,36 @@ func TestSanitizeHistoryInputItemPreservesContentItemKinds(t *testing.T) {
 		t.Fatalf("non-model-visible passthrough should be stripped: %#v", md)
 	}
 }
+
+// TestInputItemsFromRecordPreservesToolDeclarationsLikeRust covers the history
+// half of Rust #51480: a context window's recorded `additional_tools` item
+// (written as a trusted response_item rollout line, Rust #50435) must rebuild
+// into the request input, so the model runner can reuse the window's existing
+// declarations instead of rebuilding and moving them.
+func TestInputItemsFromRecordPreservesToolDeclarationsLikeRust(t *testing.T) {
+	declarations := json.RawMessage(`{"id":"at_1","type":"additional_tools","role":"developer","tools":[{"type":"function","name":"echo"}]}`)
+	instructions := json.RawMessage(`{"id":"msg_1","type":"message","role":"developer","content":[{"type":"input_text","text":"You are a helpful assistant."}]}`)
+	record := &Record{Items: []Item{
+		{Type: "additional_tools", Raw: declarations},
+		{Type: "message", Raw: instructions},
+	}}
+
+	items := InputItemsFromRecord(record, &HistoryBuildOptions{IncludeToolOutputs: true})
+	if len(items) != 2 {
+		t.Fatalf("items len = %d, want 2: %#v", len(items), items)
+	}
+	first, ok := items[0].(map[string]any)
+	if !ok || first["type"] != "additional_tools" {
+		t.Fatalf("first item = %#v, want additional_tools", items[0])
+	}
+	if first["id"] != "at_1" {
+		t.Fatalf("additional_tools id = %v, want at_1", first["id"])
+	}
+	if tools, ok := first["tools"].([]any); !ok || len(tools) != 1 {
+		t.Fatalf("additional_tools.tools = %#v", first["tools"])
+	}
+	second, ok := items[1].(map[string]any)
+	if !ok || second["type"] != "message" || second["role"] != "developer" {
+		t.Fatalf("second item = %#v, want developer message", items[1])
+	}
+}
