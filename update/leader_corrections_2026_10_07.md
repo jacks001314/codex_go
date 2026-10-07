@@ -46,3 +46,26 @@ main `a9e852bc` / `2eef2b1a` 时代（早已回答过的历史派单）。这类
 （`8c90ce4e` / `fb89d560`，patch-id 相同 `5d704a6c25b69fd5c64decb85ab7905317ba2dc2`）
 把它**改回硬编码**，方向与上游 `d2f2c40095` 相反，已驳回并令其删除分支
 （车道回报：`git branch -a | grep -c synctui9` = 0，两版不再被任何 ref 引用）。
+
+## C4. `#49325`：行为半已落地，上游的模块级测试半**不可移植**（记录为有意差异）
+
+- **已落地**（sync532 `fe88a5a8`）：`sandbox/windowssandbox/elevated/runner_client.go` 的
+  `RetryRunnerSpawnOnce` 增 `errorServiceAlreadyRunning = 1056` 常量与「同凭据重试一次、
+  **不刷新**」分支，位置与上游一致（在 refreshable 分支**之前**）；三条回归用例
+  （recovery / 两次上限 / child-startup 排除）逐条对照 Rust 测试名。
+- **未落地**：上游同 PR 还给 `windows-sandbox-rs/src/unified_exec/backends/elevated_tests.rs`
+  加了 +83 行「统一执行层」用例，断言重试**保留原始请求与凭据**、命令**只跑一次**。
+- **不可移植的判据（正向陈述 + 可复跑命令）**：
+  ```bash
+  cd /home/jacks/jacks_dev/codex_go
+  grep -n "RetryRunnerSpawnOnce" sandbox/windowssandbox/elevated_impl.go   # :72 与 :168 两个调用点
+  grep -n "go:build" sandbox/windowssandbox/elevated_impl.go               # 文件为 Windows-only
+  ```
+  该层的 spawn 闭包**硬编码** `elevated.SpawnRunnerTransport`（Windows 实现 / 非 Windows 走
+  `runner_client_stub.go`），没有注入口；要复刻上游那条用例必须**给生产代码加测试缝**，
+  与本轮纪律（不新增生产 API）冲突。故按「行为已落地、上游测试半无等价注入口」登记，
+  **不是静默省略**。
+- 复核命令（行为半可自证）：
+  ```bash
+  go test ./sandbox/windowssandbox/elevated/ -count=1   # 4 项 PASS（含 3 条 ...LikeRust）
+  ```
