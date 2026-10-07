@@ -369,7 +369,10 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			return
 		}
 		if msg.Kind == settingsWriteKindServiceTier {
-			m.notice = "Failed to save default service tier: " + msg.Err.Error()
+			// Rust #49835: report the underlying configuration error and explain
+			// how to retry saving the default without interrupting the task.
+			m.notice = "Failed to save default service tier: " + msg.Err.Error() +
+				"\nYou can continue this task. To save the default, resolve the error above, then switch to a different tier and back to the desired tier."
 		} else if msg.Kind == settingsWriteKindMemories {
 			if strings.HasPrefix(msg.Err.Error(), "Saved memory settings,") {
 				m.notice = msg.Err.Error()
