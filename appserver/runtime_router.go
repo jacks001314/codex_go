@@ -882,6 +882,10 @@ func (r *RuntimeRouter) noteAuthChanged() {
 		// owner must not reuse its websocket connection or routing state
 		// (Rust #44489).
 		r.resetAuthOwnedModelState()
+		// Rust #49432: the account-owned application policy is revoked here, so
+		// content clients and permits granted to the previous account stop
+		// working, while the separate local bootstrap policy stays usable.
+		r.invalidateApplicationNetworkPolicy()
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateAll()
