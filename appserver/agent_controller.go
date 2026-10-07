@@ -16,6 +16,7 @@ import (
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/telemetry"
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -86,14 +87,21 @@ func newRuntimeAgentControllerForTurn(router *RuntimeRouter, parentID string, pa
 }
 
 func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.SpawnAgentArgs) (*agent.SpawnAgentResult, error) {
+	if args == nil {
+		args = &agent.SpawnAgentArgs{}
+	}
+	// Rust's record_collab_spawn_failure labels every spawn failure with the fork
+	// mode the spawn would have used, so the label is resolved before the first
+	// failure can be reported.
+	forkMode := telemetry.AgentSpawnFailureForkModeNone
+	if c != nil {
+		forkMode = spawnFailureForkMode(c.version, args.ForkContext, runtimeForkTurns(args.ForkTurns))
+	}
 	if c == nil || c.router == nil || c.router.services.ThreadRouter == nil || c.router.services.ThreadRouter.store == nil {
-		return nil, fmt.Errorf("agent runtime is unavailable")
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, errAgentRuntimeUnavailable, tool.AgentErrorContextManagerUnavailable, forkMode)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if args == nil {
-		args = &agent.SpawnAgentArgs{}
 	}
 	if c.version == agent.VersionV1 && c.maxDepth >= 0 && c.depth+1 > c.maxDepth {
 		return nil, agent.ErrAgentDepthLimitReached
@@ -109,7 +117,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	reservation, err := registry.ReserveSpawnSlot(c.maxThreads)
 	if err != nil {
-		return nil, err
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextRegistryCapacity, forkMode)
 	}
 	committed := false
 	defer func() {
@@ -119,7 +127,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}()
 	nickname, err := reservation.ReserveAgentNickname(args.NicknameCandidates, "")
 	if err != nil && len(args.NicknameCandidates) > 0 {
-		return nil, err
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextNicknameUnavailable, forkMode)
 	}
 	agentPath := ""
 	if c.version == agent.VersionV2 {
@@ -129,7 +137,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		}
 		agentPath = runtimeCanonicalAgentPath(c.scopePath, taskName)
 		if err := reservation.ReserveAgentPath(agent.AgentPath(agentPath)); err != nil {
-			return nil, err
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextDuplicatePath, forkMode)
 		}
 	}
 	threadID := newThreadID()
@@ -170,17 +178,17 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		if forkTurns != "all" {
 			count, parseErr := strconv.ParseUint(forkTurns, 10, 64)
 			if parseErr != nil || count == 0 {
-				return nil, fmt.Errorf("fork_turns must be `none` or `all`")
+				return nil, recordRuntimeAgentSpawnFailure(c, ctx, fmt.Errorf("fork_turns must be `none` or `all`"), tool.AgentErrorContextForkHistory, forkMode)
 			}
 		}
 		parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), true, true)
 		if readErr != nil || parent == nil {
-			return nil, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID))
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID)), tool.AgentErrorContextForkHistory, forkMode)
 		}
 		forkOptions := session.ForkOptions{NewID: threadID, ParentThreadID: session.ThreadID(c.parentID), Now: now, Mode: session.ForkAll}
 		forked, forkErr := c.router.services.ThreadRouter.store.ForkRecord(parent, forkOptions)
 		if forkErr != nil {
-			return nil, forkErr
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, forkErr, tool.AgentErrorContextForkHistory, forkMode)
 		}
 		record = forked
 		record.Items = filterInheritedCurrentTimeReminders(record.Items)
@@ -191,7 +199,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	} else {
 		record = &session.Record{ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID), CreatedAt: now, UpdatedAt: now, RecencyAt: now}
 		if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
-			return nil, err
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
 	}
 	record.Metadata.CWD = c.cwd
@@ -215,12 +223,12 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	record.Metadata.Extra = extra
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
 		_ = c.router.services.ThreadRouter.store.Delete(threadID)
-		return nil, err
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 	}
 	if c.router.services.SpawnGraph != nil {
 		if err := c.router.services.SpawnGraph.UpsertThreadSpawnEdge(c.parentID, string(threadID), agent.ThreadSpawnEdgeOpen); err != nil {
 			_ = c.router.services.ThreadRouter.store.Delete(threadID)
-			return nil, err
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
 	}
 	reservation.Commit(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
@@ -268,7 +276,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		if _, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params)); err != nil {
 			registry.ReleaseSpawnedThread(string(threadID))
 			_ = c.router.services.ThreadRouter.store.Delete(threadID)
-			return nil, err
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
 		}
 	}
 	return &agent.SpawnAgentResult{

@@ -101,6 +101,12 @@ const (
 	// their parent thread, tagged by the delivery outcome (Rust #51331,
 	// core/src/agent/control/completion.rs).
 	MultiAgentResultDeliveryMetric = "codex.multi_agent.result_delivery"
+	// MultiAgentSpawnFailureMetric counts failed multi-agent spawns, tagged by
+	// the reason, the bounded failure origin (`detail`) and the error's semantic
+	// kind (`error_kind`) plus the fork mode and multi-agent version (Rust
+	// #51355, otel/src/metrics/names.rs `MULTI_AGENT_SPAWN_FAILURE_METRIC`, whose
+	// classifications were added in otel/src/events/session_telemetry.rs).
+	MultiAgentSpawnFailureMetric = "codex.multi_agent.spawn.failure"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local
