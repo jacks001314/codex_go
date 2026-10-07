@@ -25,6 +25,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
+	contextfrag "codex_go/context"
 	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/protocol"
@@ -3513,6 +3514,116 @@ func TestSessionItemsDoNotRepersistHistoricalInterAgentCompletion(t *testing.T) 
 	text := string(encoded)
 	if strings.Contains(text, "old_worker") || !strings.Contains(text, "new_worker") {
 		t.Fatalf("session items repersisted history or lost current completion: %s", text)
+	}
+}
+
+func TestSessionItemsPersistContentFilterGuidance(t *testing.T) {
+	createdAt := fixedExecTime()
+	rendered := contextfrag.Render(contextfrag.NewContentFilterGuidance(contextfrag.ContentFilterGuidanceDefault))
+	if rendered == nil {
+		t.Fatal("content-filter guidance fragment did not render")
+	}
+	// The shape model/responses_stream.go::contentFilterGuidanceInputItem hands
+	// to AgentRequest.OnConversationItem and turn/agent_loop.go appends to
+	// result.InputItems (Rust #49119).
+	guidance := map[string]any{
+		"type": "message",
+		"role": rendered.Role,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []string{rendered.ContentKind},
+		},
+	}
+	result := &turn.AgentLoopResult{
+		InputItems: []any{guidance}, InitialInputCount: 0,
+		Response: &model.AgentResponse{Items: []model.AgentItem{{
+			ID: "final", Type: "agent_message", Text: "final answer", Data: map[string]any{"phase": "final_answer"},
+		}}},
+	}
+	items := sessionItemsForTurnWithMode("turn-cf", "ask", nil, result, createdAt, nil, nil, false)
+
+	guidanceIndex, finalIndex := -1, -1
+	for index := range items {
+		if strings.Contains(string(items[index].Raw), contextfrag.ContentFilterGuidanceKind) {
+			guidanceIndex = index
+		}
+		if items[index].Type == "agent_message" && items[index].Text == "final answer" {
+			finalIndex = index
+		}
+	}
+	if guidanceIndex < 0 {
+		t.Fatalf("content-filter guidance missing from persisted session items: %#v", items)
+	}
+	if items[guidanceIndex].Role != contextfrag.RoleDeveloper || !strings.Contains(items[guidanceIndex].Text, contextfrag.ContentFilterGuidanceOpenTag) {
+		t.Fatalf("persisted guidance item = %#v", items[guidanceIndex])
+	}
+	if finalIndex >= 0 && guidanceIndex > finalIndex {
+		t.Fatalf("guidance persisted after the final answer: guidance=%d final=%d", guidanceIndex, finalIndex)
+	}
+
+	// Resume/compaction rebuilds the request from the rollout, so the guidance
+	// (and its content_item_kinds annotation) must survive the round trip.
+	replayed := session.InputItemsFromItems(items, &session.HistoryBuildOptions{IncludeToolOutputs: true})
+	replayedGuidance := 0
+	for _, value := range replayed {
+		raw, ok := value.(map[string]any)
+		if !ok || !strings.EqualFold(strings.TrimSpace(execStringFromAny(raw["role"])), contextfrag.RoleDeveloper) {
+			continue
+		}
+		if !strings.Contains(execTextFromInputItemContent(raw["content"]), contextfrag.ContentFilterGuidanceOpenTag) {
+			continue
+		}
+		replayedGuidance++
+		metadata, _ := raw["internal_chat_message_metadata_passthrough"].(map[string]any)
+		if metadata == nil {
+			t.Fatalf("replayed guidance lost its passthrough metadata: %#v", raw)
+		}
+		if kinds, _ := metadata["content_item_kinds"].([]any); len(kinds) != 1 || execStringFromAny(kinds[0]) != contextfrag.ContentFilterGuidanceKind {
+			t.Fatalf("replayed guidance content_item_kinds = %#v", metadata["content_item_kinds"])
+		}
+	}
+	if replayedGuidance != 1 {
+		t.Fatalf("replayed guidance count = %d, want 1: %#v", replayedGuidance, replayed)
+	}
+}
+
+func TestSessionItemsDoNotRepersistHistoricalContentFilterGuidance(t *testing.T) {
+	createdAt := fixedExecTime()
+	rendered := contextfrag.Render(contextfrag.NewContentFilterGuidance(contextfrag.ContentFilterGuidanceDefault))
+	historical := map[string]any{
+		"type":    "message",
+		"role":    rendered.Role,
+		"content": []map[string]any{{"type": "input_text", "text": strings.Replace(rendered.Content, "blocked", "old blocked", 1)}},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []string{rendered.ContentKind},
+		},
+	}
+	current := map[string]any{
+		"type":    "message",
+		"role":    rendered.Role,
+		"content": []map[string]any{{"type": "input_text", "text": rendered.Content}},
+		"internal_chat_message_metadata_passthrough": map[string]any{
+			"content_item_kinds": []string{rendered.ContentKind},
+		},
+	}
+	result := &turn.AgentLoopResult{
+		InputItems: []any{historical, current}, InitialInputCount: 1,
+		Response: &model.AgentResponse{Items: []model.AgentItem{{ID: "final", Type: "agent_message", Text: "final answer"}}},
+	}
+	items := sessionItemsForTurnWithMode("turn-cf", "continue", nil, result, createdAt, nil, nil, false)
+	encoded, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "old blocked") {
+		t.Fatalf("session items repersisted historical guidance: %s", text)
+	}
+	if !strings.Contains(text, contextfrag.ContentFilterGuidanceKind) {
+		t.Fatalf("session items lost the current guidance: %s", text)
 	}
 }
 

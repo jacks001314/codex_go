@@ -29,6 +29,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
+	contextfrag "codex_go/context"
 	"codex_go/doctor"
 	"codex_go/eventmap"
 	"codex_go/features"
@@ -5799,6 +5800,7 @@ func sessionItemsForTurnWithMode(turnID string, userPrompt string, userInputs []
 		executionIndex++
 	}
 	items = insertExecSteerSessionItems(items, execSteerSessionItems(turnID, result.SteerInputItems, createdAt, extraMetadata))
+	items = insertExecContentFilterGuidanceSessionItems(items, execContentFilterGuidanceSessionItems(turnID, currentTurnInputItems(result), createdAt, extraMetadata))
 	return insertExecInterAgentCompletionItems(items, execInterAgentCompletionSessionItems(turnID, currentTurnInputItems(result), createdAt, extraMetadata))
 }
 
@@ -5875,6 +5877,97 @@ func insertExecSteerSessionItems(items []session.Item, steers []session.Item) []
 	out := make([]session.Item, 0, len(items)+len(steers))
 	out = append(out, items[:insertAt]...)
 	out = append(out, steers...)
+	out = append(out, items[insertAt:]...)
+	return out
+}
+
+// execContentFilterGuidanceSessionItems persists the content-filter recovery
+// guidance that the sampling retry loop appended to the turn input through
+// AgentRequest.OnConversationItem (Rust #49119, upstream 8bd5a136ff,
+// core/src/session/turn.rs `sess.record_conversation_items(..)` appended the
+// resolved ContentFilterGuidance after every block). The guidance is a
+// developer message; recording it keeps the persisted rollout, and therefore
+// resume and compaction history, in step with the request that carried it.
+// The item is stored Raw so its
+// internal_chat_message_metadata_passthrough.content_item_kinds classification
+// replays through the history rebuild.
+func execContentFilterGuidanceSessionItems(turnID string, inputItems []any, createdAt time.Time, extraMetadata map[string]any) []session.Item {
+	out := make([]session.Item, 0)
+	for index, inputItem := range inputItems {
+		raw, ok := inputItem.(map[string]any)
+		if !ok || !execIsContentFilterGuidanceInputItem(raw) {
+			continue
+		}
+		text := strings.TrimSpace(execTextFromInputItemContent(raw["content"]))
+		content := execSessionContentFromInputItem(raw["content"])
+		if text == "" && len(content) == 0 {
+			continue
+		}
+		metadata := sessionMetadata(turnID, extraMetadata)
+		metadata["contentFilterGuidance"] = true
+		item := session.Item{
+			ID:        fmt.Sprintf("content-filter-guidance-%s-%d", safeSessionItemID(turnID), index+1),
+			Type:      "message",
+			Role:      strings.TrimSpace(execStringFromAny(raw["role"])),
+			Text:      text,
+			Content:   content,
+			CreatedAt: createdAt,
+			Metadata:  metadata,
+		}
+		if encoded, err := json.Marshal(raw); err == nil {
+			item.Raw = encoded
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// execIsContentFilterGuidanceInputItem reports whether an input item is the
+// developer guidance recorded after a content-filter block. The
+// content_item_kinds annotation identifies it; the rendered marker is the
+// fallback for a request whose annotation the content_item_kinds feature gate
+// stripped.
+func execIsContentFilterGuidanceInputItem(raw map[string]any) bool {
+	if raw == nil || !strings.EqualFold(strings.TrimSpace(execStringFromAny(raw["type"])), "message") {
+		return false
+	}
+	if metadata, ok := raw["internal_chat_message_metadata_passthrough"].(map[string]any); ok {
+		switch kinds := metadata["content_item_kinds"].(type) {
+		case []string:
+			for _, kind := range kinds {
+				if strings.TrimSpace(kind) == contextfrag.ContentFilterGuidanceKind {
+					return true
+				}
+			}
+		case []any:
+			for _, kind := range kinds {
+				if strings.TrimSpace(execStringFromAny(kind)) == contextfrag.ContentFilterGuidanceKind {
+					return true
+				}
+			}
+		}
+	}
+	return strings.Contains(execTextFromInputItemContent(raw["content"]), contextfrag.ContentFilterGuidanceOpenTag)
+}
+
+// insertExecContentFilterGuidanceSessionItems places the recorded guidance
+// before the turn's final assistant message, mirroring the steer insertion: the
+// guidance was appended ahead of the retried response, so the replayed history
+// keeps it before the answer it informed.
+func insertExecContentFilterGuidanceSessionItems(items []session.Item, guidance []session.Item) []session.Item {
+	if len(guidance) == 0 {
+		return items
+	}
+	insertAt := len(items)
+	for index := len(items) - 1; index >= 0; index-- {
+		if items[index].Type == "agent_message" && items[index].Role == "assistant" {
+			insertAt = index
+			break
+		}
+	}
+	out := make([]session.Item, 0, len(items)+len(guidance))
+	out = append(out, items[:insertAt]...)
+	out = append(out, guidance...)
 	out = append(out, items[insertAt:]...)
 	return out
 }

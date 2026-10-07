@@ -15,8 +15,13 @@ const ContentFilterGuidanceDefault = "Your previous response was blocked by a co
 const MaxContentFilterGuidanceBytes = 512
 
 const (
-	contentFilterGuidanceOpenTag  = "<content_filter_guidance>"
-	contentFilterGuidanceCloseTag = "</content_filter_guidance>"
+	// ContentFilterGuidanceOpenTag and ContentFilterGuidanceCloseTag are the
+	// rendered markers of the guidance fragment (Rust ContentFilterGuidance
+	// ::type_markers). They are exported so the rollout persistence path can
+	// recognize a recorded guidance message when its content_item_kinds
+	// annotation was stripped by the feature gate.
+	ContentFilterGuidanceOpenTag  = "<content_filter_guidance>"
+	ContentFilterGuidanceCloseTag = "</content_filter_guidance>"
 	// ContentFilterGuidanceKind is the stable classification of the rendered
 	// guidance (Rust ContentFilterGuidance::content_kind,
 	// `ContentItemKind("generic.content_filter_guidance")`).
@@ -48,8 +53,8 @@ func ResolveContentFilterGuidance(catalog *string) string {
 func NewContentFilterGuidance(text string) *SimpleFragment {
 	return NewSimpleFragmentWithKind(
 		RoleDeveloper,
-		contentFilterGuidanceOpenTag,
-		contentFilterGuidanceCloseTag,
+		ContentFilterGuidanceOpenTag,
+		ContentFilterGuidanceCloseTag,
 		"\n"+text+"\n",
 		ContentFilterGuidanceKind,
 	)
