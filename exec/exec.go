@@ -4670,6 +4670,14 @@ func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID strin
 		}
 		now := r.now().UTC()
 		compactedItems := execSessionItemsFromCompact(compacted.NewHistory, now)
+		// Rust #49598 (`Session::replace_compacted_history`): goal edits are
+		// published outside the running compaction task, so an edit accepted
+		// after the compaction input snapshot is neither summarized nor part of
+		// the replacement. Re-read the stored history and keep those edits, in
+		// their original order, after it.
+		if latest, latestErr := store.Read(session.ThreadID(threadID), true, true); latestErr == nil && latest != nil {
+			compactedItems = retainExecGoalInstructionsAcrossCompaction(compactedItems, latest.Items, execUserGoalInstructionIDs(request.History))
+		}
 		record.Items = compactedItems
 		record.UpdatedAt = now
 		record.RecencyAt = now
@@ -4897,7 +4905,16 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 		return false, errors.New("context compaction did not complete")
 	}
 	now := r.now().UTC()
-	record.Items = execSessionItemsFromCompact(compacted.NewHistory, now)
+	compactedItems := execSessionItemsFromCompact(compacted.NewHistory, now)
+	// Rust #49598 (`Session::replace_compacted_history`): goal edits are
+	// published outside the running compaction task, so an edit accepted after
+	// the compaction input snapshot is neither summarized nor part of the
+	// replacement. Re-read the stored history and keep those edits, in their
+	// original order, after it.
+	if latest, latestErr := session.NewStore(filepath.Join(r.CodexHome, "sessions")).Read(session.ThreadID(threadID), true, true); latestErr == nil && latest != nil {
+		compactedItems = retainExecGoalInstructionsAcrossCompaction(compactedItems, latest.Items, execUserGoalInstructionIDs(request.History))
+	}
+	record.Items = compactedItems
 	record.UpdatedAt = now
 	record.RecencyAt = now
 	extra := cloneExecAnyMap(record.Metadata.Extra)
