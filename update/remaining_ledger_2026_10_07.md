@@ -842,3 +842,283 @@ rg -n -i 'render_dedup|dedup_before_budgeting|CallbackPermission|FileSystemAutho
 # ③ #51334 已落地
 git log --format='%h %s' --grep '#51334' main | head -1   # 11be9802 sync511: ...
 ```
+
+---
+
+## 13. 第三批：§9.D 的 141 条 ⬜ 对抗式复核（verify51482，只追加）
+
+> 依据队长派单 `msg-1791354712261284000-1680`。对象 = **§9.D 的 141 条 ⬜**（E 74 + B 18 + C 20 + A 5 + D 24）。
+> 优先级：① E 分片 tui 74 条 → ② B 分片 18 条（cli/exec-server/rmcp-client/thread-store）→ ③ D 分片 app-server 24 条；另含 C 20 + A 5。
+> 参考点：Rust `5a3140176e`；Go main 复核窗口 `15c54dfa` → `edcfd073`（各分片在各自 HEAD 上复跑过 `git log --grep '#PR' main`）。
+> **判定口径**：`✅` 必须有 Go 侧 `file:line` 或 `git log -S` 硬锚点；无锚点但行为一致者记 **`✅(弱证据)`** 并单列，**不计入强 ✅**；`➖ N/A` 必须给「改动落在 Go 机制性不存在的面」的决定性证据，禁用「结构性等价」当理由。
+> **`➖ N/A` 判据（队长口径已确认）**：必须是**对 Go 树的正向陈述 + 可复跑命令**（如 `ls -d ext` 非零退出、`rg -n -i '<子系统入口标识符>' --glob '*.go' .` = 0 命中），**不能**只用「该 PR 号在 Go 提交里 0 命中」；理由：Rust 被改 crate 在 Go 移植中不存在 ⇒ 无落点，属结构性 N/A，区别于用户禁止的「结构性等价冻结」（后者是宣称已有等价物却不给证据）。
+> **行号漂移提醒**：本节 `file:line` 按复核时 HEAD 钉定，main 前进会漂；故 **§13.H 对每条 ✅ 另给「不依赖行号」的锚点（函数/常量/测试名 + 落点提交）**，复核者勿把「行号对不上」误当反证。
+
+### 13.0 计数
+
+| 分片 | 面 | 条数 | 强 ✅ | ✅(弱证据) | ➖ N/A | 维持 ⬜ |
+|---|---|---|---|---|---|---|
+| E | tui（48549–49810） | 37 | 4 | 5 | 1 | 27 |
+| E | tui（49816–51458） | 37 | 3 | 1 | 3 | 30 |
+| B | cli / exec-server / rmcp-client / thread-store | 18 | 1 | 0 | 4 | 13 |
+| C+A | 跨面（sqlite / analytics / config / model / mcp …） | 25 | 4 | 2 | 1 | 18 |
+| D | app-server | 24 | 0 | 1 | 0 | 23 |
+| **合计** | | **141** | **12** | **9** | **9** | **111** |
+
+- **强 ✅ 12**（有 PR 号/SHA 注释或 `git log -S` 首现的硬锚点）；
+- **✅(弱证据) 9**（行为已一致，但无 PR 锚点、或归因到相邻的另一 PR）——**不计入强 ✅ 计数**；
+- **➖ N/A 9**；
+- **⬜ 111**（真缺，均附「Go 缺什么 + 落点候选」）。
+
+> 队长点名复核项：`#51333` 在 C 分片，本轮独立复核 = **✅**（`8807c307 sync518`）。`#51331` **不在 §9.D 清单内**；顺带核实其真实落地提交为 `6b989619 sync522`（非 sync517），供队长更正。
+
+### 13.A E 分片 tui（48549–49810，37 条）
+
+| #PR | 上游 SHA | 一句话语义 | 判定 | 决定性证据 |
+|---|---|---|---|---|
+| #48549 | `75a714843b` | 复制 TUI 响应时保留 Markdown 表格与空白 | ✅(弱证据) | `rg '#48549' -g '*.go'` → `parity/rust_tui_snapshot_manifest_test.go:33`「…`#48548/#48549` added the table-copy continuation」；⚠️ Go 无「拖选转写复制」（`rg -F 'CopySelection\|SelectionText\|LogicalLineSource'`=0），表格复制只走 `/copy` whole-response |
+| #48626 | `449d42ced9` | 切换会话时不再显示上一会话摘要 | ⬜ | Go **仍保留**该 PR 删掉的机制：`tui/app/session_lifecycle.go:319 SessionSummaryForThread` + `:331 ResumeHintForResumableThread` + `session_lifecycle_test.go:216`（`git log -S` 首现 `9273d358`）；未见生产调用点 |
+| #48628 | `8f195c93d7` | 切任务时保留空白会话 | ✅(弱证据) | `tui/tea/agents_overview.go:598 setAgentsOverviewBlankSession`（注释引 Rust `agents_overview.blank_sessions`）、`model.go:1682 agentsOverviewBlankSessions`；测试 `agents_overview_test.go:156` |
+| #48754 | `819cdb726d` | `/status` 去边框 + 长值换行 | ⬜ | Go `/status` **仍画框**：`tui/state.go:432`（`╭─…╮`）、`:436`（`│ `）、`:438`（`╰`），`RenderStatusCardWidth`；该 PR 正是删边框 |
+| #48757 | `71b38795d8` | 状态 shimmer 节奏对齐桌面 | ✅ | `tui/summary_shimmer.go:11/18/74` 多处 `Rust #48757` + `summary_shimmer_test.go`；`git log --grep '#48757'` → `e81682ce sync514` |
+| #48761 | `e75b6b1e0c` | 紧凑活动显示隐藏输出行数 | ✅(弱证据) | `tui/exec_cell/render.go:232`「shared three-row preview with a hidden-line count」+ `exec_cell_test.go:165`；⚠️ 归因注释写的是 `#46492`；Rust `ActivityDisclosure`/「+ Show details」Go 0 命中 |
+| #48775 | `596f8c5c3c` | 固定转写头样式对齐原始 prompt | ⬜ | `rg -F 'PromptHeader\|prompt_header'`=0；Go `tui/` 无 `transcript_view/prompt_header` 等价物 |
+| #48776 | `89bf86d0bd` | 移除任务行 `current` 徽标 | ✅ | `tui/agents_overview/current_badge_like_rust_test.go:8`「Rust #48776 (89bf86d0bd, …)」；`git log --grep '#48776'` → `3426c4d9 sync510` |
+| #48799 | `4c8cf3964d` | 修 Windows 终端采集的 SGR 鼠标上报 | ➖ N/A | Go TUI **不自行开鼠标采集**：`rg -F 'EnablePointerCapture\|?1006\|MouseCellMotion\|EnableMouse'` 生产 0 命中（`tui/tea/right_click_paste.go:21` 注释说明「Go 故意不开 mouse tracking」）⇒ 机制性不存在 |
+| #48805 | `d9487a2930` | 模态框打开时仍可滚轮滚转写 | ⬜ | Go 有 overlay 时鼠标全交 overlay：`tui/tea/model.go:3095 if m.overlay != nil { … updateTranscriptOverlayMouse }`；`rg -F 'is_modal_scroll\|has_active_modal'`=0 |
+| #48827 | `6af89155d0` | Ghostty/Kitty 链接上显示手型指针 | ⬜ | `rg -F 'link_hover\|LinkHover\|set_link_pointer\|LinkAt'`=0 |
+| #48830 | `1cc7e23612` | 更短、中性的中断提示 | ⬜ | Go 仍是旧长文案：`tui/chatwidget/turn_runtime.go:703`「Conversation interrupted - tell the model what to do differently…」；`rg -F '■ Conversation interrupted'`=0 |
+| #49031 | `d8fc718809` | 澄清 ChatGPT 登录成功文案 | ✅ | `tui/onboarding/auth_flow.go:695`「Rust #49031 …」+ `auth_flow_test.go:371`；`git log --grep '#49031'` → `9951066a sync520` |
+| #49037 | `64bf4e7e62` | 全屏状态行显示 Plan 循环提示 | ✅(弱证据) | `tui/bottom_pane/footer.go:186/192/449 CollaborationModeLabel(…, ShowCycleHint)` + `:23 FooterModeCycleHint`；⚠️ 注释归 `Rust #49804`（相邻 PR），Rust 49037 的宽度门控无对应 |
+| #49041 | `3074be908a` | 行内代码选区按纯文本复制 | ⬜ | `rg -F 'IsInlineCode\|isInlineCode'`=0；`/copy` 只抽 whole/fenced code/blockquote（`copy_target.go:28`） |
+| #49043 | `4f63088cce` | 更新 Pro 套餐显示名（Pro Extra/Standard/Max） | ⬜ | `rg -F 'Pro Extra\|Pro Standard\|Pro (Max)'`=0；`tui/status/helpers.go:79` 仍 `PlanProlite → "Pro Lite"` |
+| #49073 | `15c08beee2` | 暴露 realtime 语音目录失败 | ⬜ | `app/voice.go:403-410` 远端取目录出错即静默 `return realtime.BuiltinVoices()`；无 `voice_catalog_failure_*` |
+| #49079 | `fe50d010e2` | 集中 TUI 订阅标签 | ⬜ | `rg 'subscription.rs\|SubscriptionDisplay'`=0；Go `Business Premium`/`Enterprise (Automation)` 另出 `#40301`/`02b7c37b` |
+| #49089 | `222e24b737` | 渲染 follow-up 指令标签 | ⬜ | `rg -F 'codex-followup'`=0；`tui/assistant_directives.go` 无 `[label]` 解析 |
+| #49093 | `19892aee0c` | 启动推广简化为平台化桌面端提示 | ⬜ | Go 仍旧文案 + Fast 促销：`tui/tooltips.go:23 AppTooltip`、`:159 PickPaidTooltip`、`tui/tea/model.go:6799 sessionShowFastStatus` |
+| #49105 | `136391a23e` | 重连后恢复未发送输入 | ⬜ | `rg -F 'reconnect_pending'`=0；重连仅走 `"Reconnecting..."` 提示 |
+| #49106 | `8f6517772b` | 命令中心历史翻页（Show more） | ⬜ | `rg -F 'ShowMore\|show_more'`=0；Go 的 `NextCursor` 在 `app/agents_dashboard.go:200`（`#49` 面板，不同面） |
+| #49112 | `0196495288` | X11 primary selection + 中键粘贴 | ⬜ | `rg -F 'PrimarySelection\|PasteSource\|middle-click'` 生产 0；`tui/tea/right_click_paste.go:209` 注释明说只走 clipboard |
+| #49145 | `8d48f71922` | 服务器连接下 `/status` 隐藏推理摘要设置 | ⬜ | `tui/state.go:288` 无条件 `" (reasoning …, summaries auto)"`，无 remote/server 门控 |
+| #49153 | `c6c7c8d270` | 复制引用选区时去掉 blockquote 标记 | ✅(弱证据) | `tui/chatwidget/copy_target.go:123 blockquoteTargetText`「strips the leading `>` markers … matching Rust CopyTarget::Quote」；⚠️ Go 走 `/copy` 选取目标 |
+| #49161 | `3226512d47` | 遵守 app-server provider 默认值 | ⬜ | `rg -F 'ProviderSelection\|ProviderDefaults'` 生产 0；Go 仅 `tui/oss_selection.go`（不同面） |
+| #49171 | `c248f6d48b` | 修 TUI 历史的 model provider 查找 | ⬜ | 同 #49161：Go 无 `provider_selection` |
+| #49290 | `4773a132c3` | TUI 新增 `/mcp login <name>` | ⬜ | slash 命令表（`tui/slash_command.go`）无 `login` |
+| #49357 | `1983c48fd1` | 粘贴多行文本时续写 Markdown 引用 | ✅ | `tui/tea/composer_paste.go:14`「Rust #49357, upstream 1983c48fd1」+ `composer_paste_test.go:13`；`git log --grep '#49357'` → `98d4c7cb sync509` |
+| #49564 | `0b43721d8d` | 复制选中文件路径为纯文本 | ⬜ | `rg -F 'Literal'`=0；`copy_target.go` 无文件路径目标 |
+| #49678 | `fcbed044c8` | 恢复问题答案时转义命令草稿 | ⬜ | `rg -F 'EscapeDraft\|escapeDraft'` 生产 0；composer 无 `\!`/`\\` 前缀转义 |
+| #49715 | `60947e2341` | TUI 账户安全设置提醒 | ⬜ | `rg -F 'SecuritySetup\|security setup'`=0，无 `security_setup` 模块/banner |
+| #49783 | `106772e3c6` | fork 时保留后台线程请求 | ⬜ | `rg -F 'dispatched_requests'` 生产 0；Go `RegisterBackgroundThread` 出 `#31`（dynamic-tools 宿主，不同面） |
+| #49799 | `606b139565` | TUI 保留服务器 web-search 设置 | ⬜ | `rg -F 'web_search' tui/app tui/app_server_session`=0（仅 `app/recap.go` 固定 `"web_search":"disabled"`） |
+| #49800 | `ec0cfa5da8` | 允许清理缺线程的 replay-only 侧会话 | ⬜ | `rg -F 'thread not found' tui/`=0；`tui/app/side.go` 无该容错 |
+| #49809 | `2fde968de8` | 跨会话/重连保留本地启动权限 | ⬜ | `rg -F 'rememberLaunch\|LaunchPermission\|ApprovalPolicyOverride'`=0 |
+| #49810 | `cca440697f` | 处理 Enter 前冲刷过期粘贴突发 | ⬜ | `FlushPasteBurstIfDue` 已定义（`tui/bottom_pane/bottom_pane_view.go:119`）但仅测试引用，未在 Enter 前调用 |
+
+**表尾：强 ✅ 4（48757 / 48776 / 49031 / 49357）/ ✅(弱证据) 5（48549 / 48628 / 48761 / 49037 / 49153）/ ➖ 1（48799）/ ⬜ 27。**
+
+### 13.B E 分片 tui（49816–51458，37 条）
+
+> 复核时 HEAD `f9ed456c`；37 条中只有 `#50112`/`#50477` 有带 PR 号的 Go 提交，`#50105` 有强锚点。
+
+| #PR | 上游 SHA | 一句话语义 | 判定 | 决定性证据 |
+|---|---|---|---|---|
+| #49816 | `1182834d13` | 删除浏览器打开成功提示 | ✅(弱证据) | `rg -F 'in your browser'` 无成功文案；打开路径仅失败时报错：`app/app_link_wiring.go:27-28`、`tui/tea/plugins.go:723-725`；⚠️ 无 #49816 注释/`git -S` 锚点 |
+| #49858 | `e1522188e9` | 持久化 `/daybreak` TUI 开关 | ⬜ | `rg -n '"daybreak"'` 仅 `config/config.go:170` 等；TUI slash 表无 daybreak。落点 `tui/slash_command.go`+`tui/app/config_persistence.go` |
+| #49859 | `cd4a9cbd25` | continuation/后台 turn 遵守 Daybreak 设置 | ⬜ | `tui/daybreak.go` 仅只读 `Notice{Apply,Astra,Limited}`；自述「the TUI never configures the app's access program」 |
+| #49875 | `7b88d09d61` | 启动呈现与执行配置解耦 | ⬜ | `rg 'StartupPresentation\|startup_presentation\|StartupDraft'`=0。落点 `tui/app/startup_*.go` |
+| #49876 | `d2b254fd17` | 移除 TUI personality 管线 | ⬜ | Go **仍保留** personality：`tui/chatwidget/settings.go:9-14,69`、`app/interactive.go:3569`（注入 `personality=` override） |
+| #49912 | `444da310e1` | 临时结构化线程遵守审批策略 | ⬜ | `app/recap.go:72` 仍硬编码 `ApprovalPolicy: "never"` |
+| #50013 | `b527ce4734` | 新建 TUI 线程遵守服务端模型默认值 | ⬜ | `rg 'StartupLaunchChoices'`=0；`app/remote_tui.go:4533` 无条件 `Model: shared.Model` |
+| #50039 | `a97fb78085` | Find 关闭查询后结果仍可读 | ⬜ | Go 无 `tui/transcript_view/`、无 `owned_transcript`。落点 `tui/`（需新建） |
+| #50045 | `1cc9917508` | Find 展开仅限当前匹配 | ⬜ | 同上；无 `search_presentation`/`disclosure` |
+| #50052 | `57a38c1beb` | 恢复草稿保留问题上下文 | ⬜ | `rg 'recovered_draft\|take_pending_drafts'`=0。落点 `tui/tea/async_questions.go` |
+| #50105 | `e58b493329` | 合并 composer footer 到 footer_state | ✅ | `tui/bottom_pane/chat_composer/footer_state.go:9`（"Rust parity … footer_state.rs"）+`:18 ComposerFooterModeQuitShortcutReminder`；`footer_test.go:10 TestFooterModeTransitionsMatchRust`（台账因最长标识符 `quit_shortcut_hint_visible` 假阴性） |
+| #50109 | `6ece7bfc21` | 全屏提示限高可滚动 | ⬜ | `rg 'wheel_at_edges'`=0。落点 `tui/tea/model.go` |
+| #50112 | `a0a7a63002` | 集中 loading glyph 与帧调度 | ✅ | `tui/motion.go:76-89 LoadingGlyph*` + `tui/loading_glyph_like_rust_test.go:8`「Rust #50112」；Go 提交 `ba951807 sync524 (#50112)` |
+| #50148 | `e7ea5f4a86` | TUI 增加 managed worktree 工具 | ⬜ | `rg 'create_worktree\|list_worktrees\|managed_worktree_tool_specs'`=0。落点 `mcp/`+`tui/tea/worktree_browser.go` |
+| #50199 | `3f97f2b3bd` | 账号更新后 `/status` 恢复 email | ⬜ | `rg 'refreshAccountEmail\|AccountEmailLoaded'`=0。落点 `tui/app/app_server_events.go` |
+| #50207 | `e3c2a83937` | 流式中稳定表格提前释放到 scrollback | ⬜ | `rg 'NeedsScrollbackReflow\|CompletedSourceLen'`=0。落点 `tui/streaming/` |
+| #50216 | `37f53199a6` | 任务重命名改用共享文本编辑器 | ⬜ | `tui/agents_overview/overview.go:1082` 手写 `editInput`；`rg 'new_single_line'`=0 |
+| #50219 | `14a477ea89` | tmux 选项探测限 1s | ➖ N/A | Go **无 tmux 选项探测**：`rg -i 'show-options\|mouse_capture\|show-hooks'`=0；tmux 仅用于 clipboard/notifications/size_monitor |
+| #50345 | `84d5437b6e` | subagent 选择器反映归档态 | ⬜ | `rg -i 'archiv' tui/tea/agent.go`=0 |
+| #50359 | `91168365a5` | hook 系统消息渲染 ANSI | ⬜ | `tui/history_cell/hooks.go` 纯文本；`rg -i 'ParseAnsi'` 仅生成器/测试 |
+| #50389 | `f88a6efe43` | transcript 导航前先看配置键位 | ⬜ | 属 owned_transcript；`tui/tea/model.go updateTranscriptOverlayKey` 无配置绑定优先级 |
+| #50416 | `dff5270b29` | 新/分叉会话 worktree 选项文案 | ⬜ | `rg -F 'Use current Git worktree'`=0；`tui/tea/worktree_browser.go:112` 用另一组标签 |
+| #50433 | `66561d0301` | API-key 账号可用 Daybreak | ⬜ | 同 #49858：TUI 无 `/daybreak` |
+| #50434 | `c536ffcb18` | owned transcript 键盘复制选区 | ⬜ | `rg -i 'copyMode\|copy_mode\|LiteralSelection'`=0。落点 `tui/tea/model.go` |
+| #50467 | `f5a2272c6c` | 选区复制为字面文本并保留富 HTML | ⬜ | `rg -i 'LiteralSelection\|render_selection'`=0 |
+| #50477 | `6c15cc4aaf` | TUI 工作区命令用 app-server 默认输出上限 | ✅ | Go 提交 `6866d3ed sync508 (#50477)`；`tui/workspace_command.go:19`「Rust #50477」+ `tui/workspace_parity_test.go:49/157` |
+| #50504 | `d42aecc56b` | 确认弹窗居中且保留背景 | ⬜ | `rg 'ViewStack\|CenteredView'`=0；`tui/tea/modal.go renderModal` 无居中/背景保留 |
+| #50510 | `af5d95f255` | Bedrock 后强制 GovCloud 确认 | ⬜ | `rg -i 'bedrock' tui/`=0。落点 `tui/onboarding/` |
+| #50564 | `b741e480e2` | 底部弹窗打开时仍可选择/复制 transcript | ⬜ | Go 无 transcript_view 子系统（同 #50434） |
+| #50727 | `3e238776e8` | 任务详情顶部显示 model+reasoning | ⬜ | `rg -n 'Reasoning:' tui/agents_overview/render.go`=0 |
+| #50756 | `cd7d9e128c` | 侧会话搜索时显示不可用 slash 命令 | ⬜ | `tui/bottom_pane/command_popup.go` filtered 时直接过滤 unavailable |
+| #50781 | `f365d5754b` | MCP 启动通知限自有线程 | ⬜ | `rg -i 'owns_thread\|ownsThread'`=0 |
+| #50788 | `b8dceb0d4f` | Vim Normal 空草稿 `/` 打开 slash | ⬜ | `tui/tea/vim_mode.go:264-270` 一律 `startVimSearch` |
+| #50808 | `e57fc9ea5a` | 精简 TUI 快照并合并行为测试 | ➖ N/A | 生产 `.rs` 各 hunk 头均落 `mod tests`（`git show … \| grep '^@@'` 全为 `… mod tests`）；97 文件 +285/−2243，多数 `.snap` 删除 |
+| #50913 | `c2f7fe89d8` | 已连接 TUI 新建线程用服务端模型默认值 | ⬜ | `rg 'uses_server_owned_fresh_bootstrap'`=0。落点 `app/remote_tui.go`+`tui/app/startup_*` |
+| #51192 | `0d3868a30c` | 恢复 TUI 时等待 SIGCONT | ➖ N/A | `rg -i 'SIGTSTP\|SIGCONT' --glob '*.go'`=0；`SuspendContext` 只被测试引用，无生产 caller |
+| #51458 | `858aea3449` | 用户核验提示中的 URL 可点击 | ⬜ | `rg -i 'userVerification' tui/`=0。落点 `tui/bottom_pane/` |
+
+**表尾：强 ✅ 3（50105 / 50112 / 50477）/ ✅(弱证据) 1（49816）/ ➖ 3（50219 / 50808 / 51192）/ ⬜ 30。**
+
+### 13.C B 分片（cli / exec-server / rmcp-client / thread-store，18 条）
+
+> 逐条 `git log --format='%h %s' --grep '#<PR>' main`：**仅 `#48575` 命中**（`c5fd7e60` 为 `plan:` 提及），其余 17 条为空。
+
+| #PR | 上游 SHA | 一句话语义 | 判定 | 决定性证据 |
+|---|---|---|---|---|
+| #48575 | `985cf47a4e` | 已置备 executor 初始连接给 5 分钟窗口 | ✅ | `execserver/remote_harness.go:49 provisionedEnvironmentConnectTimeout = 5*time.Minute`、`:59`、`:363`（注释点名 Rust #48575）；消费方 `appserver/environment.go:1339`；测试 `execserver/provisioned_connect_test.go`、`appserver/environment_provisioned_connect_test.go`；`git log -S → f048c5ed sync516 (#48575)` |
+| #48983 | `c0d26949be` | 仅更新时间戳时不做整条元数据重写 | ⬜ | `rg 'touch_thread_updated_at\|is_empty_except_updated_at'`=0；`session/store.go:1196 updateMetadataLocked` 改记录、无时间戳快路径。落点 `session/store.go` |
+| #49028 | `f817e16905` | macOS seatbelt 用数值 `TIOCSTI` 生成 ioctl 拒绝规则 | ➖ N/A | Go 无 `debug sandbox` 命令（`cli/cli.go:3357 parseDebug`）；`rg 'TIOCSTI\|file-ioctl'`=0；改动全在 Go 不存在的 `cli/src/debug_sandbox.rs` |
+| #49160 | `0d7b8117d3` | projectless TUI 会话 + workspace 默认权限 | ⬜ | `rg tui/ projectless`=0；`rg 'keep_current_directory'`=0。落点 `tui/`,`app/` |
+| #49782 | `1a913493dc` | 失败 shell 快照捕获清理进程组 | ➖ N/A | Go `execserver/` 无快照子系统：`rg 'capture_too_large\|waitid\|WNOWAIT\|kill_process_group'`=0；`ExecParams`（`execserver/server.go:430`）无 `shellSnapshot` 字段 |
+| #49805 | `e7798c9944` | 可写文件流按能力门控（缺能力先报错） | ⬜ | `execserver/client.go:1064 FSOpen`、`:1187 FSWriteBlock` 都不查 `Capabilities.FileWriteStreaming`。落点 `execserver/client.go` |
+| #49818 | `a73898c249` | sandboxed file open 用专用 `FsHelperOpenParams` | ➖ N/A（临界） | `rg 'FsHelperOpenParams'`=0；`execserver/fs_helper.go` 操作集无 `fs/open`；`execserver/server.go:2430` 明确拒绝沙箱化流式 open ⇒ 被改路径 Go 不存在 |
+| #49855 | `bc197b77bc` | 提权 Windows TUI 会话改用 embedded 模式 | ⬜ | 无「提权→embedded」选择；`rg 'Running as administrator'`=0；`app/daemon_startup.go` 无提权分支。落点 `app/daemon_startup.go` |
+| #49861 | `8ea2428c38` | 状态栏/终端标题加 Daybreak 项 | ⬜ | `tui/bottom_pane/status_surface_preview.go` 枚举无 Daybreak；`rg 'Daybreak on'`=0。落点 `tui/bottom_pane/` |
+| #49987 | `ecc78e4cf5` | 可续期 EMA HTTP 认证 + 凭据版本化 | ⬜ | `rg 'EmaCredentialLease\|EmaAuthenticated\|resourceBearer\|enterprise-credential-version'`=0。落点 `mcp/` |
+| #50019 | `9552906b2b` | 保护 `CODEX_GUARDIAN_DECISIONS_API_KEY` 不外泄 | ⬜ | `envutil/envutil.go:23 nonInheritableEnvVars` 不含该键；`rg 'CODEX_GUARDIAN_DECISIONS_API_KEY'`=0；`execserver/server.go:729 HTTPHeader` 无 `value_env_var` ⇒ denylist 无落点（仅默认 `*KEY*` 通配在 `ignore_default_excludes=false` 时覆盖） |
+| #50189 | `a20fe6335f` | OAuth 例外 Figma→Mercado Pago | ⬜ | `rg 'mercadopago\|robinhood'`=0；Go 已部分移植 issuer_binding，但**无授权/令牌端点 origin 绑定校验**。落点 `mcp/oauth_discovery.go` |
+| #50200 | `a75987455a` | `codex doctor` 报告配置的 TUI 模式 | ⬜ | `doctor/doctor.go:1013-1024` 无该明细；`rg 'configured TUI mode'`=0。落点 `doctor/doctor.go` |
+| #50437 | `12a30d4e6d` | `codex sandbox uninstall`（旧版 Windows 沙箱） | ⬜ | `rg 'uninstall'`（sandbox/ 与 cli/）=0；sandbox CLI 只解析 setup。落点 `cli/cli.go` |
+| #50465 | `ef8cfe5e96` | 重试注册表鉴权故障 + 抖动重连 | ⬜（半落地） | 抖动半边已在 Go（`execserver/remote.go:121 nextDelay`，来自更晚的 `#51502`）；**鉴权故障重试缺失**：`remote.go:315` 只重试 503；`rg 'authentication_service_unavailable'`=0。落点 `execserver/remote.go` |
+| #50525 | `b65ab465ce` | strict 校验拒绝未知 TUI 键 | ⬜ | `validateKnownTopLevelConfigFields`（`config/config.go:801`）**无 `[tui]` 子键校验**；`rg 'unknown_tui_toml_value_path'`=0。落点 `config/config.go` |
+| #50803 | `8f82b8a31c` | 合资格 remote-control 启动改用托管 daemon | ⬜ | `cli/cli.go:496 RemoteControlOptions` 无 `NoDaemon`；裸 `remote-control` 恒走前台（`app/remote_control.go:37-38`）；`rg 'daemon_eligible'`=0 |
+| #51350 | `e32365a2c6` | from-file 回放放宽 snapshot 体积上限 | ➖ N/A | 同 #49782：Go `execserver/` 无快照模块；`rg 'capture_too_large\|MAX_FILE_SNAPSHOT'`=0 |
+
+**表尾：强 ✅ 1（48575）/ ✅(弱证据) 0 / ➖ 4（49028 / 49782 / 49818 / 51350）/ ⬜ 13。**
+
+### 13.D C 分片 20 条 + A 分片 5 条
+
+> `git log --grep '#<PR>' main`：仅 `#49102 → dd900377`、`#50209 → 52d5f5f1`、`#51333 → 8807c307`、`#51334 → 11be9802` 命中。
+
+| #PR | 上游 SHA | 一句话语义 | 判定 | 决定性证据 |
+|---|---|---|---|---|
+| #49069 | `33a0f766a6` | 后台增量 vacuum 回收 SQLite 日志库空闲页 + 回收遥测 | ⬜ | `rg 'reclaim\|incremental_vacuum\|codex.sqlite.reclamation'`=0；`state/sqlite.go` 只有 #49102 的 auto_vacuum |
+| #49076 | `011f803f3c` | skill analytics 只取 git origin URL（免多余 git 命令） | ✅(弱证据) | `appserver/turn_runtime.go:10404 skillInvocationRepo` → `utils/gitinfo.go:22 CollectGitInfoFromDir` 纯读文件得 URL（**不跑 git 命令**）；⚠️ 无同名 helper |
+| #49102 | `c2d2f422e6` | 保留既有 vacuum 模式 + 直接返回 pool 初始化错误 | ✅ | `state/sqlite.go:176/189/205-220`、`state/sqlite_settings_test.go:13`；`git log '#49102' → dd900377 sync519` |
+| #49117 | `2e6cc4ed8d` | analytics 请求按线程 product SKU 归因 | ⬜ | `X-OpenAI-Product-Sku` 仅在 `mcp/config.go:1009`（非 analytics 客户端） |
+| #49294 | `d79a95bdf8` | guardian review/classification 遥测带 context mode | ⬜ | `rg 'context_mode\|GuardianContextMode'`=0 |
+| #49295 | `cf12c86dc5` | 配置指纹用 `sort_all_objects` 规范化（行为不变） | ✅(弱证据) | `config/api.go:3743 configVersion` 用 `json.Marshal`（递归排序键，天然规范化）；⚠️ 哈希为 FNV-1a（非 sha256），也可论证为 ➖ |
+| #49305 | `c2837d8ece` | 批量读线程元数据解析线程名（999 分块） | ➖ N/A | Go 线程名解析走单次索引文件读 `rollout/session_index.go:102 FindThreadNamesByIDs`；无逐线程 SQLite 元数据查询 ⇒ 无对偶 |
+| #49425 | `8ea2c0e0d4` | 后台每 30 分钟按龄+库大小定期裁剪日志 | ⬜ | `state/logs.go:234 runLogsStartupMaintenance` 仅启动期；`rg 'time.NewTicker' state/`=0 |
+| #49441 | `6ba4bf9e64` | 重试/回退遵守 server retry advice（含 WS→HTTP 前等截止） | ⬜ | `model/responses_agent.go:799-800/1038-1039/1083/1101` `disableWebsockets(); return r.Run(...)` **无 `Retry-After` 截止等待** |
+| #49517 | `d42056091a` | 命令中心 fork 快捷键 `agents.fork` | ⬜ | `tui/keymap.go:156-166` 无 `fork`；`rg 'agents.fork'`=0 |
+| #49675 | `ed0cc1a4ab` | 路由字段（model/stream/service_tier）排在大 input 前 | ⬜ | `model/responses_agent.go:294-312` 字段序 Input 在 Stream 前；WS payload 为 map（字母序） |
+| #49781 | `8953de1f1a` | MCP sandbox 元数据带 `useMxc` | ⬜ | `mcp/sandbox_state.go:7-12` 无 `useMxc` |
+| #49874 | `bdfbab9f4f` | usage/credit 链接改 `chatgpt.com/settings/usage` | ⬜ | Go 仍为旧 `chatgpt.com/codex/settings/usage`：`model/usage_limit.go:170,179`、`app/backend_banners.go:31`、`tui/state.go:391` |
+| #50209 | `4dd51f4a5f` | transcript 鼠标滚动速度可配置 `tui.mouse_scroll_speed` | ✅ | `app/interactive.go:1932`、`app/mouse_scroll_wiring_test.go:20,27`、`tui/tea/mouse_scroll_like_rust_test.go:43`；`git log '#50209' → 52d5f5f1 sync506` |
+| #50454 | `3c3a990da0` | rollout 持久化体积缩减指标 | ⬜ | `rg 'rollout.persistence\|bytes_removed\|turn_bytes'`=0 |
+| #50786 | `acf9818fae` | 命令中心分组跨启动记忆（`tui.agents_overview_grouping`） | ⬜ | `tui/agents_overview/overview.go:836 ToggleGrouping` 仅改内存；`config/` 无该键 |
+| #51156 | `c9253c4977` | base instructions 移入 input 的 developer 消息（standard Responses） | ⬜ | `model/responses_agent.go:758/982/1441 Instructions:` 仍顶层；仅 **lite** 路径置空并构 developer item ⇒ Go 处于 PR **之前** |
+| #51206 | `c19525e55e` | 恢复的 spawned subagent 记录初始化分析（mode=resumed） | ⬜ | `appserver/thread_analytics.go:20/27/35` 仅 thread/start\|resume\|fork 发事件；SpawnAgent/ResumeAgent 不发 |
+| #51230 | `80e0b51c9e` | 会话查找分页稳定 + 报告列表失败 | ⬜ | Go 列表为文件偏移游标（`rollout/rollout.go ListThreads`），无 CreatedAt+ThreadID DB-only 游标；`rg 'Could not load more sessions'`=0 |
+| #51333 | `5ddd19e8a9` | turn analytics 记录 multi-agent version | ✅ | `telemetry/turn_event.go:130,218`、`telemetry/turn_event_multi_agent_version_test.go:9`、`appserver/turn_analytics_multi_agent_version_test.go:14`；`git log '#51333' → 8807c307 sync518` |
+| #49058 | `df3e439c02` | Windows sandbox 长路径 ACL 修复（句柄 SetSecurityInfo） | ⬜ | `sandbox/windowssandbox/acl_windows.go:178 fileDACL` 用 `GetNamedSecurityInfo(path,…)`（原始路径、非句柄）；`rg '\\?\\\|MAX_PATH'`=0 |
+| #49325 | `26dd19ef47` | Windows runner logon 遇 1056 用同凭据重试一次 | ⬜ | `sandbox/windowssandbox/elevated/runner_client.go:163` 重试集仅 1326/1312（刷新凭据）；`rg '1056'`=0，无「同凭据重试」分支 |
+| #49812 | `0f8df3d214` | 影子技能排序移出 turn 准备路径（后台限流 2） | ⬜ | `appserver/turn_runtime.go:9108 r.runSkillShadowSelection(...)` **同步内联**；`skill_shadow_selection.go:59` 无后台 worker/并发上限 2 |
+| #51330 | `f5fa209bb0` | Guardian 决策总时长指标 `codex.guardian.decision.duration_ms` | ⬜ | `telemetry/metric_names.go:39-42,90` 无 `decision.duration_ms`；`rg 'GuardianDecision'`=0 |
+| #51334 | `79cae5f7fb` | Guardian denial-limit 中断计数 | ✅ | `telemetry/metric_names.go:90`、`appserver/guardian_reviewer.go:776-779`、`appserver/guardian_denial_limit_metric_test.go:10`；`git log '#51334' → 11be9802 sync511` |
+
+**表尾：强 ✅ 4（49102 / 50209 / 51333 / 51334）/ ✅(弱证据) 2（49076 / 49295）/ ➖ 1（49305）/ ⬜ 18。**
+
+### 13.E D 分片 app-server（24 条）
+
+> 24 条 PR 号在 Go 提交/源码（除 `update/`）中全部 0 命中；改动均落在 Go **确有对应包**的机制内（skills/systemskills、uds/appserverdaemon、plugin、state、model、guardian、remotecontrol、config），故 **0 条 ➖**。
+
+| #PR | 上游 SHA | 一句话语义 | 判定 | 决定性证据 |
+|---|---|---|---|---|
+| #48604 | `9db8162d65` | 删除内置 `plugin-creator` skill | ⬜ | Go **仍内嵌**：`systemskills/assets/samples/plugin-creator/SKILL.md` 存在；`systemskills/systemskills_test.go:19`、`appserver/skills_test.go:452` 断言含它 ⇒ 与 upstream **反向** |
+| #48772 | `fdbce2080c` | 长符号链接路径下的 unix socket 连接（canonicalize 重试） | ⬜ | `appserverdaemon/client.go:449 DialContext(…,"unix",dialPath)`；`socket_peer_other.go:9-11 prepareSocketDialPath` 原样返回；无 `InvalidInput`/canonicalize 兜底 |
+| #48828 | `81d5405882` | 允许「首轮之前」归档线程（归档前先 persist） | ⬜ | `appserver/router.go:2326` 对未 materialize 线程**直接报错** `"no rollout found for thread id …"`；`runtime_router_test.go:908` 断言该报错 ⇒ **与 PR 相反（强反证）** |
+| #49032 | `46fdd5ef39` | 避免建连/stderr span 日志导致的 SQLite 卡顿 | ✅(弱证据) | SQLite 半已落地：`state/sqlite.go:189 initializeDatabaseSettings`（`git log -S → dd900377 / #49102`）；stderr span 半：Go 用 `log/slog`、无 tracing span（`FmtSpan`=0）⇒ 机制性 N/A。⚠️ 归因 PR 为 #49102 |
+| #49099 | `1260716393` | 跨插件工作流缓存已解析 manifest | ⬜ | `plugin/manifest.go:118 loadPluginManifest` 每次重读；`rg 'ManifestCache'`=0 |
+| #49119 | `8bd5a136ff` | content-filter 重试附加恢复指引 + 独立错误 | ⬜ | `model/responses_stream.go:1255` 仅通用 `"Incomplete response returned…"`；`rg 'content_filter\|ContentFilterGuidance'`=0 |
+| #49135 | `458f7046a5` | 显式 provider 模型目录权威化 + slug 校验 | ⬜ | `model/provider.go:306` 标志仅来自 `authHasChatGPTAccount`，与 `model_catalog_url` 无关；`rg 'with_provider_catalog'`=0 |
+| #49260 | `af0d68a236` | 收敛企业 MCP 授权 + 刷新失败 fail-closed | ⬜ | 仅 `plugin/mcp_contributions.go:104`（注释引更早的 #44832）；`rg 'disable_mcp_enterprise_auth\|refresh_mcp'`=0 |
+| #49269 | `0b1b78a4f1` | 重载时保留线程 override 与云策略有效性 | ⬜ | `rg 'CloudConfigBundlePolicy\|StagedCloudConfigBundleCache\|commit_if_current'`=0 |
+| #49339 | `a6e9eaa9bd` | Bedrock 目录加 GPT-6.1 Sol 并设为默认 | ⬜ | `model/catalog.go:1026 AmazonBedrockModelCatalog()` 无 gpt-6.1-sol；`model/provider_info.go:45-52` 无该 ID |
+| #49432 | `d8f69ea8bc` | 鉴权变更时保留 bootstrap discovery（撤销旧账号访问） | ⬜ | `appserver/application_network.go:61`（引 #47411）有相邻面，但 `invalidateApplicationNetworkPolicy` **0 调用点**；`runtime_router.go:872 noteAuthChanged` 未撤销网络策略 |
+| #49600 | `92bc601ad6` | resume 时复用未变的历史快照 | ⬜ | `rg 'historyRevision\|HistorySnapshot\|reuse.*snapshot'`=0 |
+| #49714 | `f151a0f5c2` | API-key cyber access program 与模型发现解耦 | ⬜ | `model/access_programs.go:28 AccessProgramsForAuth` 仍**要求 ChatGPT 账号**；`features/features.go:323 api_key_cyber_access_programs` 无消费者 |
+| #49785 | `1f77c0cfa6` | 命名时持久化空的 paginated 线程 | ⬜ | `appserver/router.go:2610 handleThreadSetName` 无 persist 步骤；`router_test.go:918 TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized`、`runtime_router_test.go:670` 断言命名**不 materialize** ⇒ **与 PR 相反（强反证）** |
+| #49793 | `726f1492db` | Guardian v2 异步分类增加 conversation 模式 | ⬜ | `model/catalog.go:154 GuardianV2ModelConfig` 无 `async_classifier_mode`；`rg 'AsyncClassifierMode'`=0 |
+| #49795 | `47a8bd7321` | 避免分类器续写里重复同步 reviews | ⬜ | `rg 'PreviousReviews\|retain_new_reviews'`=0；`state/guardian.go:619` 注释自陈 Go 未建模 |
+| #49846 | `408f48ce0c` | 每轮捕获 host 提供的 extension data | ⬜ | `rg 'WithTurnExtensionData\|current_turn_extension_data\|ExtensionData'`=0 |
+| #49855 | `bc197b77bc` | 提权 Windows TUI 走 embedded 模式 | ⬜ | 仅有拒绝路径 `appserverdaemon/elevation.go:10 EnsureNonElevated`；`"elevated_windows"` 作为 selection reason `rg`=0 |
+| #49993 | `57ac6f5163` | 保留异步 Guardian 历史前缀（retained 段移到 transcript 之后） | ⬜ | `state/guardian.go:635-660 BuildPromptWithOptions` 仍把 retained 段渲染在 transcript **之前**，无 sync/async 分支 |
+| #50348 | `9d2b60303e` | 远端控制重连带抖动退避 | ⬜ | `remotecontrol/websocket_connect.go:73` 初始 200ms/抖动 0.9–1.1/cap 30s（引更早的 #49330）；本 PR 的 initial 5s/jitter 0.5–1.0/60s 重置均无 |
+| #50472 | `604061ce51` | Bedrock Astra 启用 Ultrafast service tier | ⬜ | `model/catalog.go:1046 normalizeBedrockCatalog` 对每模型 `ServiceTiers=nil`（=本 PR 要改的旧行为） |
+| #50803 | `8f82b8a31c` | 合格的 remote-control 启动走托管 daemon | ⬜ | `app/remote_control.go:33 runRemoteControl` 空子命令**恒定**前台；无 `--no-daemon`（`cli/cli.go:3177 parseRemoteControl`） |
+| #51396 | `57d57df608` | 迟到的低风险分数完成 pending Guardian review | ⬜ | `appserver/guardian_reviewer.go:99-104 guardianScoreProgress` 仅 `latestToolCall/latestScoredToolCall`；`rg 'completePending\|pendingReview'`=0 |
+| #51400 | `a4ebc509f4` | 阻止后续分数释放更早的 pending review | ⬜ | `rg 'scoreIndex\|wrapperLag\|pendingScore'`=0 |
+
+**表尾：强 ✅ 0 / ✅(弱证据) 1（49032）/ ➖ 0 / ⬜ 23。**
+**⚠️ 台账口径提示**：`#48828`、`#49785` 是「Go 明确实现为**相反**行为」的强反证——单靠标识符 grep 会漏（必须读代码/测试断言）。
+**⚠️ #49032 口径**：它属「半落地且归因到 #49102」；若口径要求「整 PR 行为齐备才算 ✅」，可降格为 ⬜。
+
+### 13.F 三条最能支撑「假阴性」判定的命令（原文）
+
+```bash
+# ① 最强硬锚点之一：#48575（B 分片）——从 Rust 测试名 grep 会漏，靠源码注释 + git log -S 才现形
+cd /home/jacks/jacks_dev/codex_go
+rg -n '#48575' execserver/ appserver/ ; git log --format='%h %s' --grep '#48575' main
+#   输出：execserver/remote_harness.go:34/52/276/309 命中「Rust #48575」
+#         f048c5ed sync516: give provisioned executors a longer initial connect window (#48575)
+
+# ② 纯标识符假阴性：#50105 / #50112（E 分片）——Rust 测试名在 Go 必为 0 命中
+rg -n 'ComposerFooterModeQuitShortcutReminder|LoadingGlyph' tui/ ; git log --format='%h %s' --grep '#50112' main | head -1
+#   输出：tui/bottom_pane/chat_composer/footer_state.go:18 ComposerFooterModeQuitShortcutReminder
+#         tui/loading_glyph_like_rust_test.go:8「Rust #50112」
+#         ba951807 sync524 … (#50112)
+
+# ③ 反向强反证：#48828 / #49785（D 分片）——Go 测试显式断言「与 PR 相反」的行为
+rg -n 'no rollout found for thread id' appserver/router.go ; rg -n 'KeepsEmptyThreadUnmaterialized' appserver/*_test.go
+#   输出：appserver/router.go:1343/1973/2118「no rollout found for thread id …」
+#         appserver/router_test.go:918 func TestRouterThreadSetNameKeepsEmptyThreadUnmaterialized
+```
+
+### 13.G 落盘与边界
+
+- 本节为**只追加**（未改 §0–§12 任一既有行）；参考点 Rust `5a3140176e`；main 复核窗口 `15c54dfa`→`edcfd073`。
+- 本轮**未 commit / 未 push / 未改 main**；§13 由队长合并。
+- 剩余 111 条 ⬜ 的**唯一权威口径**仍是「派单前以当时 main 复跑 §10.C 重扫」；本节的 `✅`/`➖` 是下界，`⬜` 是上界。
+- 队长点名更正：`#51333` 复核 = ✅（`8807c307 sync518`）；`#51331` **不在 §9.D**，其真实提交为 `6b989619 sync522`（队长来信写 sync517，属口径出入）。
+
+> **计数口径注**：§13 的 141「行」源自 §9.D 的 141 条分片槽位，其中 **`#49855`、`#50803` 各有一条跨分片重复**（同时落在 B 分片与 D 分片）⇒ **去重后唯一上游 PR = 139 条**。判定逐行给出（重复行判定一致：两条均为 ⬜），不影响三类计数（强 ✅12 / ✅(弱)9 / ➖9 / ⬜111）。
+
+### 13.H 每条 ✅ 的「不依赖行号」锚点（回应队长方法学提醒）
+
+> `file:line` 会随 main 漂移；下表对 **21 条 ✅（强 12 + 弱 9）** 各给一个**行号无关的锚点**（函数/常量/类型/测试名，或 `git log -S` 落点提交）。复核时以锚点为准。
+
+| #PR | 档 | 行号无关锚点（符号 / 测试名） | 落点提交（`git log --grep`） |
+|---|---|---|---|
+| #48757 | 强 ✅ | `tui/summary_shimmer.go` 注释 `Rust #48757`（shimmer 起止延迟 const） | `e81682ce sync514` |
+| #48776 | 强 ✅ | 测试 `TestCurrentTaskRowOmitsCurrentBadgeLikeRust`（`tui/agents_overview/current_badge_like_rust_test.go`） | `3426c4d9 sync510` |
+| #49031 | 强 ✅ | `tui/onboarding/auth_flow.go` 注释 `Rust #49031`；测试 `TestChatGPTSuccessMessageCopyLikeRust` | `9951066a sync520` |
+| #49357 | 强 ✅ | `tui/tea/composer_paste.go` 注释 `Rust #49357`；测试 `TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust` | `98d4c7cb sync509` |
+| #50105 | 强 ✅ | 类型常量 `ComposerFooterModeQuitShortcutReminder`（`tui/bottom_pane/chat_composer/footer_state.go`）；测试 `TestFooterModeTransitionsMatchRust` | （符号锚点，无 PR 号提交） |
+| #50112 | 强 ✅ | 常量 `LoadingGlyphFrameDuration` + 函数 `LoadingGlyph`（`tui/motion.go`）；测试 `TestLoadingGlyphLikeRust` | `ba951807 sync524` |
+| #50477 | 强 ✅ | `tui/workspace_command.go` 注释 `Rust #50477`；测试 `TestWorkspaceCommandUsesHostDefaultOutputCapLikeRust` | `6866d3ed sync508` |
+| #48575 | 强 ✅ | 常量 `provisionedEnvironmentConnectTimeout` + 函数 `ProvisionedEnvironmentConnectTimeout`（`execserver/remote_harness.go`）；测试 `TestProvisionedEnvironmentConnectWindowLikeRust` | `f048c5ed sync516` |
+| #49102 | 强 ✅ | 函数 `initializeDatabaseSettings`（`state/sqlite.go`）；测试 `TestOpenReadWritePoolInitializesFreshDatabaseSettingsLikeRust` | `dd900377 sync519` |
+| #50209 | 强 ✅ | 函数 `interactiveMouseScrollSpeed`（`app/interactive.go`）；测试 `TestInteractiveMouseScrollSpeedLikeRust` / `TestTranscriptWheelUsesConfiguredMouseScrollSpeedLikeRust` | `52d5f5f1 sync506` |
+| #51333 | 强 ✅ | 测试 `TestCodexTurnEventMultiAgentVersionLikeRust`（`telemetry/`）+ `TestRuntimeRouterTurnEventReportsMultiAgentVersionLikeRust`（`appserver/`） | `8807c307 sync518` |
+| #51334 | 强 ✅ | 常量 `GuardianDenialLimitReachedMetric`（`telemetry/metric_names.go`）；测试 `TestGuardianDenialLimitReachedMetricLikeRust` | `11be9802 sync511` |
+| #48549 | ✅(弱) | `parity/rust_tui_snapshot_manifest_test.go` 快照清单条目命名上游 sha `75a714843b`（**无生产符号**：Go 无拖选复制面） | （清单锚点） |
+| #48628 | ✅(弱) | 函数 `setAgentsOverviewBlankSession`（`tui/tea/agents_overview.go`） | （符号锚点） |
+| #48761 | ✅(弱) | `tui/exec_cell/render.go` 注释 `Rust #46492`「three-row preview with a hidden-line count」（**归因相邻 PR**） | （符号锚点） |
+| #49037 | ✅(弱) | 变量 `FooterModeCycleHint` / `CollaborationModeLabel(…, ShowCycleHint)`（`tui/bottom_pane/footer.go`，注释归 `Rust #49804`） | （符号锚点） |
+| #49153 | ✅(弱) | 函数 `blockquoteTargetText`（`tui/chatwidget/copy_target.go`，注释引 Rust `CopyTarget::Quote`） | （符号锚点） |
+| #49816 | ✅(弱) | 行为面：`app/app_link_wiring.go` 打开成功返回 nil、失败才 `StatusMsg`；`tui/tea/plugins.go` 仅 Err 加 error（**无符号，无 `git -S` 锚点**） | （无） |
+| #49076 | ✅(弱) | 函数 `CollectGitInfoFromDir`（`utils/gitinfo.go`）+ 调用方 `skillInvocationRepo`（`appserver/turn_runtime.go`） | （符号锚点） |
+| #49295 | ✅(弱) | 函数 `configVersion`（`config/api.go`，FNV-1a over `json.Marshal`） | （符号锚点） |
+| #49032 | ✅(弱) | 函数 `initializeDatabaseSettings`（`state/sqlite.go`，同 #49102） | `dd900377 sync519`（归因 #49102） |
+
+> 复核者请以本表锚点定位（`rg -n -F '<符号>'`）；行号仅作辅助。
+
+### 13.I 关于 §10.C 脚本的 zsh 陷阱核查
+
+- 已核：§10.C 的脚本用的是 `done < <(awk …)` + `while read pr`，**不触发** zsh 的「`for p in $VAR` 不做词分割」陷阱。
+- 全库扫描 `rg -n 'for [a-z_]+ in \$[A-Z_]+' update/*.md` = **0 命中**（唯一记录该陷阱的是 `update/plan_2026_10_07.md:2456` 的说明文字）⇒ 无需修正。
