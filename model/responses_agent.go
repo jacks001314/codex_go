@@ -3258,9 +3258,26 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 	if statusCode == http.StatusServiceUnavailable && payload.Error != nil {
 		switch responseErrorCode(payload.Error) {
 		case "server_is_overloaded":
-			return &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
+			// `map_api_error` attaches the response's `Retry-After` advice to
+			// every transport classification it maps
+			// (`ApiError::Transport(TransportError::Http { retry_after, .. })` ->
+			// `CodexErr::with_retry_after`), and Rust #49441 makes an overload
+			// retry only while that advice is present, so the classification has
+			// to keep it.
+			overloaded := &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
+			if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
+				return overloaded.WithRetryDelay(delay)
+			}
+			return overloaded
 		case "slow_down":
-			return &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
+			// The same `with_retry_after` arm keeps a retryable rate limit's
+			// advice (Rust #45602 classifies it), so the retry waits for the
+			// server's deadline instead of the local backoff.
+			slowDown := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
+			if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
+				return slowDown.WithRetryDelay(delay)
+			}
+			return slowDown
 		}
 	}
 	if statusCode == http.StatusTooManyRequests {

@@ -517,8 +517,15 @@ func isRetryableResponsesStreamError(err error) bool {
 	if errors.As(err, &apiError) {
 		details := apiError.Details()
 		switch details.Kind {
-		case codexapi.ErrorRetryable, codexapi.ErrorServerOverloaded:
+		case codexapi.ErrorRetryable:
 			return true
+		case codexapi.ErrorServerOverloaded:
+			// Rust #49441: `CodexErr::retry_delay` now answers
+			// `server_retry_delay()` for `ServerOverloaded`, so an overload
+			// retries only while the server supplied retry advice. A headerless
+			// overload is terminal at this layer; the request layer still spends
+			// its own budget on the 5xx.
+			return retryAdvicePresent(err)
 		case codexapi.ErrorRateLimitExceeded:
 			// Rust #45602: `slow_down` (and `rate_limit_exceeded`) are retryable
 			// rate limits, so the stream retries them even without a 5xx status.
@@ -534,9 +541,26 @@ func isRetryableResponsesStreamError(err error) bool {
 	}
 	var apiErr *ResponsesAPIError
 	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode == http.StatusTooManyRequests {
+			// Rust #49441: the 429 the Responses endpoint returns without a
+			// recognized usage-limit body is `CodexErr::RetryLimit`, whose
+			// `retry_delay` arm is the server advice too; a headerless 429 stays
+			// terminal here.
+			return retryAdvicePresent(err)
+		}
 		return apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode >= 500
 	}
 	return true
+}
+
+// retryAdvicePresent reports whether err carries server retry advice, mirroring
+// `CodexErr::server_retry_delay()` being `Some` (Rust #49441): the advice counts
+// even after it has elapsed (`RetryAfter::remaining_delay` saturates at zero and
+// stays present), so the presence of the deadline - not its size - gates the
+// retry.
+func retryAdvicePresent(err error) bool {
+	_, advised := codexapi.RetryDelayInfo(err)
+	return advised
 }
 
 func combinedResponsesStreamHandler(handlers ...ResponsesStreamHandler) ResponsesStreamHandler {
