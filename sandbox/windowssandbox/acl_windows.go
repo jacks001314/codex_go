@@ -100,7 +100,7 @@ func addACLACE(req ACLRequest, kind aclACEKind) (bool, error) {
 		runtime.KeepAlive(sd)
 		return false, err
 	}
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, newACL, nil); err != nil {
+	if err := setDACL(path, newACL); err != nil {
 		runtime.KeepAlive(sidBytes)
 		runtime.KeepAlive(sd)
 		runtime.KeepAlive(newACL)
@@ -138,7 +138,7 @@ func addAllowMaskACE(req ACLRequest, inheritance uint32) (bool, error) {
 		runtime.KeepAlive(sd)
 		return false, err
 	}
-	if err := windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, newACL, nil); err != nil {
+	if err := setDACL(path, newACL); err != nil {
 		runtime.KeepAlive(sidBytes)
 		runtime.KeepAlive(sd)
 		runtime.KeepAlive(newACL)
@@ -175,8 +175,16 @@ func validateACLRequest(req ACLRequest) (string, []byte, *windows.SID, error) {
 	return path, sidBytes, sid, nil
 }
 
+// fileDACL reads the DACL through a handle instead of the named-object API so
+// runtime paths beyond the legacy Windows path limit stay readable (Rust
+// `acl::fetch_dacl_handle`, which opens the target with `OpenOptions`).
 func fileDACL(path string) (*windows.SECURITY_DESCRIPTOR, *windows.ACL, error) {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	handle, err := openACLHandle(path, windows.READ_CONTROL, "open ACL target")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer windows.CloseHandle(handle)
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -188,6 +196,42 @@ func fileDACL(path string) (*windows.SECURITY_DESCRIPTOR, *windows.ACL, error) {
 		return nil, nil, err
 	}
 	return sd, dacl, nil
+}
+
+// setDACL replaces the DACL through a handle that requests ACL-write access, so
+// the update also works beyond the legacy Windows path limit. Only callers that
+// actually need to change the DACL reach this, which keeps no-op repairs
+// read-only (Rust `acl::ensure_allow_mask_aces_with_inheritance_impl`).
+func setDACL(path string, dacl *windows.ACL) error {
+	handle, err := openACLHandle(path, windows.READ_CONTROL|windows.WRITE_DAC, "open ACL target for update")
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(handle)
+	return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+// openACLHandle opens a path for ACL reads and updates. Requesting the security
+// rights directly on the handle (with backup semantics so directories open too)
+// is what lets the handle-based security APIs repair long runtime paths.
+func openACLHandle(path string, access uint32, operation string) (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(extendedACLPath(path))
+	if err != nil {
+		return windows.InvalidHandle, fmt.Errorf("%s %s: %w", operation, path, err)
+	}
+	handle, err := windows.CreateFile(
+		name,
+		access,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS,
+		0,
+	)
+	if err != nil {
+		return windows.InvalidHandle, fmt.Errorf("%s %s: %w", operation, path, err)
+	}
+	return handle, nil
 }
 
 func explicitAccessForSID(sid *windows.SID, kind aclACEKind, overrideMask uint32) windows.EXPLICIT_ACCESS {
