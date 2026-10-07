@@ -15,6 +15,7 @@ import (
 	"codex_go/features"
 	"codex_go/model"
 	"codex_go/session"
+	"codex_go/telemetry"
 	"codex_go/turn"
 )
 
@@ -742,12 +743,28 @@ func (c *runtimeAgentController) WaitForActivity(ctx context.Context, args *agen
 	mailbox := c.router.runtimeAgentActivityMailbox(c.rootID)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	// Rust's wait_agent V2 handler records the elapsed wait with the outcome it
+	// observed; a wait that was dropped (cancelled) has no outcome and is left
+	// out (Rust #51332, core/src/tools/handlers/multi_agents_v2/wait.rs).
+	started := time.Now()
+	recordWait := func(outcome string) {
+		if c == nil || c.router == nil || c.router.services.TurnMetrics == nil {
+			return
+		}
+		c.router.services.TurnMetrics.RecordDuration(
+			telemetry.MultiAgentWaitDurationMetric,
+			time.Since(started),
+			map[string]string{"outcome": outcome},
+		)
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case message := <-mailbox:
+		recordWait(telemetry.MultiAgentWaitOutcomeMailbox)
 		return &agent.WaitForActivityResult{Message: firstNonEmpty(message, "Wait completed.")}, nil
 	case <-timer.C:
+		recordWait(telemetry.MultiAgentWaitOutcomeTimedOut)
 		return &agent.WaitForActivityResult{Message: "Wait timed out.", TimedOut: true}, nil
 	}
 }

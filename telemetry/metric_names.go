@@ -79,6 +79,10 @@ const (
 	// approval review caused by reaching the turn's denial limit (Rust #51334,
 	// ext/guardian-reviewer/src/review.rs `codex.guardian.denial_limit_reached`).
 	GuardianDenialLimitReachedMetric = "codex.guardian.denial_limit_reached"
+	// MultiAgentWaitDurationMetric measures a completed multi-agent wait, tagged
+	// by the outcome the wait observed (Rust #51332,
+	// core/src/tools/handlers/multi_agents_v2/wait.rs).
+	MultiAgentWaitDurationMetric = "codex.multi_agent.wait.duration_ms"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local
