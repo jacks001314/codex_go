@@ -68,7 +68,8 @@ func (c FinalMessageSeparator) Label() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return strings.Join(parts, " \u00b7 ")
+	// Rust #48807: completion metadata is separated with a bullet.
+	return strings.Join(parts, " \u2022 ")
 }
 
 func (c FinalMessageSeparator) DisplayLines(width int) []string {
@@ -95,7 +96,8 @@ func (c FinalMessageSeparator) RawLines() []string {
 
 func (c FinalMessageSeparator) labelParts() []string {
 	parts := []string{}
-	if c.ElapsedSeconds != nil && *c.ElapsedSeconds > 60 {
+	// Rust #48807: every known duration is shown, not only turns above a minute.
+	if c.ElapsedSeconds != nil {
 		parts = append(parts, "Worked for "+formatElapsedFull(*c.ElapsedSeconds))
 	}
 	if c.CompletedAt != nil {
@@ -142,7 +144,8 @@ func sameSeparatorDate(a, b time.Time) bool {
 }
 
 // formatElapsedFull mirrors Rust's elapsed formatting: every nonzero unit down
-// to seconds ("1h 5m 3s", "5m 3s", "45s"). Callers only show it above 60s.
+// to seconds ("1h 5m 3s", "5m 3s", "45s"), and a sub-second turn as "<1s"
+// (Rust #48807).
 func formatElapsedFull(seconds int64) string {
 	hours := seconds / 3600
 	minutes := (seconds % 3600) / 60
@@ -152,6 +155,8 @@ func formatElapsedFull(seconds int64) string {
 		return fmt.Sprintf("%dh %dm %ds", hours, minutes, secs)
 	case minutes > 0:
 		return fmt.Sprintf("%dm %ds", minutes, secs)
+	case secs == 0:
+		return "<1s"
 	default:
 		return fmt.Sprintf("%ds", secs)
 	}
