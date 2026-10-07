@@ -118,6 +118,9 @@ type sqliteReclamationWorker struct {
 	// the schedule floor, so a test can drive scheduling without a database.
 	probe        func(ctx context.Context, target reclamationTarget, options reclamationOptions, shutdown <-chan struct{}) reclamationResult
 	idleInterval time.Duration
+
+	// metrics receives one sample per pass (Rust `record_reclamation`).
+	metrics *TaskMetrics
 }
 
 // newSqliteReclamationWorker mirrors Rust `SqliteReclamationWorker::spawn`'s
@@ -132,6 +135,7 @@ func newSqliteReclamationWorker(config SqliteConfig) *sqliteReclamationWorker {
 		finished: make(chan struct{}),
 		home:     config.Home(),
 		targets:  targets,
+		metrics:  config.reclamationMetrics,
 	}
 }
 
@@ -202,20 +206,21 @@ func (w *sqliteReclamationWorker) run() {
 // earliest remaining deadline (IDLE_INTERVAL when nothing is scheduled).
 func (w *sqliteReclamationWorker) visit(scheduled []time.Time, states []reclamationState) time.Duration {
 	for i, target := range w.targets {
+		started := time.Now()
 		if w.stopped() {
 			break
 		}
-		now := time.Now()
-		if scheduled[i].After(now) {
+		if scheduled[i].After(started) {
 			continue
 		}
 		result := w.probeFn()(context.Background(), target, reclamationOptions{
 			budget: reclamationBudget{
-				deadline: now.Add(reclamationPassDuration),
+				deadline: started.Add(reclamationPassDuration),
 				pages:    reclamationPassPages,
 			},
 			batchPages: states[i].batchPages,
 		}, w.shutdown)
+		recordReclamation(w.metrics, target.label, time.Since(started), result)
 		scheduled[i] = time.Now().Add(states[i].retryAfter(result))
 	}
 	delay := w.idle()
@@ -625,6 +630,80 @@ func reclamationDSN(path string) (string, error) {
 	query.Add("_pragma", "cache_size(-16384)")
 	u.RawQuery = query.Encode()
 	return u.String(), nil
+}
+
+// Metric names mirroring Rust `telemetry::record_reclamation` (upstream
+// 33a0f766a6 / #49069).
+const (
+	reclamationCountMetric    = "codex.sqlite.reclamation.count"
+	reclamationDurationMetric = "codex.sqlite.reclamation.duration_ms"
+	reclamationPagesMetric    = "codex.sqlite.reclamation.pages"
+)
+
+// recordReclamation mirrors Rust `telemetry::record_reclamation`: one counter,
+// one duration and — only for a pass that completed without an error — one page
+// histogram, tagged with the database, the status and the classified error.
+//
+// Documented differences from Rust: Rust resolves the process-level telemetry
+// sink and reports `success`/`failed`; Go threads the one `*TaskMetrics` instance
+// the router already holds (leader ruling for #49701's stage C) and keeps Rust's
+// tag values, which differ from the older `ok`/`error` pair used by
+// `codex.sqlite.log.write`.
+func recordReclamation(metrics *TaskMetrics, db string, duration time.Duration, result reclamationResult) {
+	if metrics == nil {
+		return
+	}
+	status, errorTag := "success", "none"
+	if result.err != nil {
+		status, errorTag = "failed", classifyReclamationError(result.err)
+	}
+	tags := map[string]string{"db": db, "status": status, "error": errorTag}
+	metrics.Counter(reclamationCountMetric, 1, tags)
+	metrics.RecordDuration(reclamationDurationMetric, duration, tags)
+	if result.err == nil {
+		metrics.Histogram(reclamationPagesMetric, int(result.pass.pages), tags)
+	}
+}
+
+// classifyReclamationError mirrors Rust `classify_error`/`classify_sqlite_code`:
+// the SQLite primary result code becomes a stable tag value, an interrupted
+// statement is `interrupt` and loose I/O failures are `io`.
+func classifyReclamationError(err error) string {
+	if err == nil {
+		return "none"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "interrupt"
+	}
+	var sqliteErr *modernsqlite.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() & 0xff {
+		case 5:
+			return "busy"
+		case 6:
+			return "locked"
+		case 8:
+			return "readonly"
+		case 10:
+			return "io"
+		case 11:
+			return "corrupt"
+		case 13:
+			return "full"
+		case 14:
+			return "cantopen"
+		case 17:
+			return "schema"
+		case 19:
+			return "constraint"
+		}
+		return "unknown"
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return "io"
+	}
+	return "unknown"
 }
 
 // reclamationTargets returns the databases that opted into background

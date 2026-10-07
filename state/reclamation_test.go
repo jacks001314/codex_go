@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -489,4 +491,310 @@ func mustReadFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return content
+}
+
+// reclamationBusyError produces the typed SQLITE_BUSY the driver reports for a
+// second writer, used to pin the error tag of the reclamation metrics.
+func reclamationBusyError(t *testing.T) error {
+	t.Helper()
+	ctx := context.Background()
+	config := mustSqliteConfig(t, t.TempDir())
+	db, err := config.OpenReadWrite(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if err := migrateRuntimeDB(ctx, db, RuntimeDBLogs); err != nil {
+		t.Fatalf("migrate logs database: %v", err)
+	}
+	holder, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("holder Conn: %v", err)
+	}
+	defer func() { _ = holder.Close() }()
+	if _, err := holder.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("holder BEGIN IMMEDIATE: %v", err)
+	}
+	defer func() { _, _ = holder.ExecContext(context.Background(), `ROLLBACK`) }()
+	maintenance, err := openReclamationDB(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("openReclamationDB: %v", err)
+	}
+	defer func() { _ = maintenance.Close() }()
+	conn, err := maintenance.Conn(ctx)
+	if err != nil {
+		t.Fatalf("maintenance Conn: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err == nil {
+		t.Fatalf("a second writer must not acquire the lock")
+	} else {
+		return err
+	}
+	return nil
+}
+
+// TestReclamationMetricsLikeRust covers Rust `telemetry::record_reclamation`
+// (Rust #49069, upstream 33a0f766a6): one counter and one duration per pass, a
+// page histogram only for a pass that completed, and the `db`/`status`/`error`
+// tags.
+func TestReclamationMetricsLikeRust(t *testing.T) {
+	metrics := NewTaskMetrics()
+	recordReclamation(metrics, "log DB", 25*time.Millisecond, reclamationResult{
+		pass: reclamationPass{pages: 7, outcome: reclamationOutcomeActive},
+	})
+	recordReclamation(metrics, "log DB", 3*time.Millisecond, reclamationResult{
+		pass: reclamationPass{outcome: reclamationOutcomeContended},
+		err:  reclamationBusyError(t),
+	})
+	// A runtime without telemetry records nothing.
+	recordReclamation(nil, "log DB", time.Millisecond, reclamationResult{})
+
+	records := metrics.Records()
+	if len(records) != 5 {
+		t.Fatalf("recorded %d metrics, want 5: %#v", len(records), records)
+	}
+	want := []struct {
+		name string
+		kind string
+		inc  int
+		val  int
+		tags map[string]string
+	}{
+		{
+			name: reclamationCountMetric, kind: "counter", inc: 1,
+			tags: map[string]string{"db": "log DB", "status": "success", "error": "none"},
+		},
+		{
+			name: reclamationDurationMetric, kind: "duration",
+			tags: map[string]string{"db": "log DB", "status": "success", "error": "none"},
+		},
+		{
+			name: reclamationPagesMetric, kind: "histogram", val: 7,
+			tags: map[string]string{"db": "log DB", "status": "success", "error": "none"},
+		},
+		{
+			name: reclamationCountMetric, kind: "counter", inc: 1,
+			tags: map[string]string{"db": "log DB", "status": "failed", "error": "busy"},
+		},
+		{
+			name: reclamationDurationMetric, kind: "duration",
+			tags: map[string]string{"db": "log DB", "status": "failed", "error": "busy"},
+		},
+	}
+	for i, expected := range want {
+		record := records[i]
+		if record.Name != expected.name || record.Kind != expected.kind {
+			t.Fatalf("metric %d = %s/%s, want %s/%s", i, record.Name, record.Kind, expected.name, expected.kind)
+		}
+		if record.Inc != expected.inc || record.Value != expected.val {
+			t.Fatalf("metric %d = inc %d value %d, want inc %d value %d", i, record.Inc, record.Value, expected.inc, expected.val)
+		}
+		if !reflect.DeepEqual(record.Tags, expected.tags) {
+			t.Fatalf("metric %d tags = %v, want %v", i, record.Tags, expected.tags)
+		}
+	}
+	if records[1].DurationMS != 25 {
+		t.Fatalf("duration = %v ms, want 25", records[1].DurationMS)
+	}
+	if got := classifyReclamationError(nil); got != "none" {
+		t.Fatalf("classifyReclamationError(nil) = %q, want none", got)
+	}
+	if got := classifyReclamationError(context.Canceled); got != "interrupt" {
+		t.Fatalf("classifyReclamationError(canceled) = %q, want interrupt", got)
+	}
+	if got := classifyReclamationError(&fs.PathError{Op: "read"}); got != "io" {
+		t.Fatalf("classifyReclamationError(path error) = %q, want io", got)
+	}
+	if got := classifyReclamationError(errors.New("boom")); got != "unknown" {
+		t.Fatalf("classifyReclamationError(other) = %q, want unknown", got)
+	}
+}
+
+type reclamationLogRow struct {
+	id   int64
+	body string
+}
+
+func reclamationRows(t *testing.T, ctx context.Context, db *sql.DB) []reclamationLogRow {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, `SELECT id, feedback_log_body FROM logs ORDER BY id`)
+	if err != nil {
+		t.Fatalf("select logs: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []reclamationLogRow
+	for rows.Next() {
+		var row reclamationLogRow
+		if err := rows.Scan(&row.id, &row.body); err != nil {
+			t.Fatalf("scan logs: %v", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate logs: %v", err)
+	}
+	return out
+}
+
+// TestReclamationResumesAfterInterruptedVacuumLikeRust mirrors Rust
+// `interrupted_reclamation_releases_writer_and_resumes_without_data_loss`
+// (Rust #49069, upstream 33a0f766a6): a pass interrupted at a vacuum commit must
+// release the writer, leave the rows intact, and a resumed pass must shrink the
+// database and keep `PRAGMA integrity_check` clean.
+func TestReclamationResumesAfterInterruptedVacuumLikeRust(t *testing.T) {
+	ctx := context.Background()
+	config, db := reclamationLogsDB(t, 4096)
+	before := reclamationRows(t, ctx, db)
+	freeBefore := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+
+	maintenance, err := openReclamationDB(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("openReclamationDB: %v", err)
+	}
+	conn, err := maintenance.Conn(ctx)
+	if err != nil {
+		t.Fatalf("maintenance Conn: %v", err)
+	}
+	// Rust interrupts with a commit hook that fires while SQLite still owns the
+	// writer lock; Go has no commit hook, so the watcher requests shutdown as soon
+	// as the first vacuum batch is visible.
+	freeWatcherFree := freeBefore
+	shutdown := make(chan struct{})
+	watcher := make(chan struct{})
+	go func() {
+		defer close(watcher)
+		for {
+			var free int64
+			if err := db.QueryRow(`PRAGMA freelist_count`).Scan(&free); err == nil && free < freeWatcherFree {
+				close(shutdown)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	interrupted, err := reclaimPages(ctx, conn, reclamationOptions{
+		budget:     reclamationBudget{deadline: time.Now().Add(30 * time.Second), pages: reclamationPassPages},
+		batchPages: reclamationBatchPages,
+	}, shutdown)
+	if err != nil {
+		t.Fatalf("reclaimPages: %v", err)
+	}
+	select {
+	case <-shutdown:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the pass never committed a vacuum batch")
+	}
+	<-watcher
+	if interrupted.pages == 0 || interrupted.pages > 4*reclamationBatchPages {
+		t.Fatalf("interrupted pass reclaimed %d pages, want 1..%d", interrupted.pages, 4*reclamationBatchPages)
+	}
+	if interrupted.outcome != reclamationOutcomeShutdown {
+		t.Fatalf("interrupted outcome = %v, want shutdown", interrupted.outcome)
+	}
+	if free := reclamationQueryInt(t, db, `PRAGMA freelist_count`); free != freeBefore-int64(interrupted.pages) {
+		t.Fatalf("freelist = %d after an interrupted pass, want %d", free, freeBefore-int64(interrupted.pages))
+	}
+	if got := reclamationRows(t, ctx, db); !reflect.DeepEqual(got, before) {
+		t.Fatalf("the interrupted pass changed retained rows")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close maintenance connection: %v", err)
+	}
+	if err := maintenance.Close(); err != nil {
+		t.Fatalf("close maintenance database: %v", err)
+	}
+
+	// A foreground write must acquire the lock immediately, without a busy retry.
+	writer, err := config.OpenReadWrite(ctx, config.LogsDBPath())
+	if err != nil {
+		t.Fatalf("OpenReadWrite: %v", err)
+	}
+	writerConn, err := writer.Conn(ctx)
+	if err != nil {
+		t.Fatalf("writer Conn: %v", err)
+	}
+	if _, err := writerConn.ExecContext(ctx, `PRAGMA busy_timeout = 0`); err != nil {
+		t.Fatalf("busy_timeout: %v", err)
+	}
+	if _, err := writerConn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		t.Fatalf("foreground write must not wait after an interrupted pass: %v", err)
+	}
+	before[0].body = "foreground write after interruption"
+	if _, err := writerConn.ExecContext(ctx, `UPDATE logs SET feedback_log_body = ? WHERE id = ?`, before[0].body, before[0].id); err != nil {
+		t.Fatalf("foreground update: %v", err)
+	}
+	if _, err := writerConn.ExecContext(ctx, `COMMIT`); err != nil {
+		t.Fatalf("foreground commit: %v", err)
+	}
+	if err := writerConn.Close(); err != nil {
+		t.Fatalf("close writer connection: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer database: %v", err)
+	}
+
+	// Flush earlier writes so only the resumed pass can shrink the main file.
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	bytesBeforeRetry := int64(len(mustReadFile(t, config.LogsDBPath())))
+	freeBeforeRetry := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	resumed := reclaimRuntimeDB(ctx, reclamationTarget{label: "log DB", path: config.LogsDBPath()}, reclamationOptions{
+		budget:     reclamationBudget{deadline: time.Now().Add(30 * time.Second), pages: reclamationBatchPages},
+		batchPages: reclamationBatchPages,
+	}, nil)
+	if resumed.err != nil {
+		t.Fatalf("resumed reclaim: %v", resumed.err)
+	}
+	if resumed.pass.pages == 0 {
+		t.Fatalf("the resumed pass reclaimed nothing")
+	}
+	freeAfterRetry := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
+	if got, want := freeBeforeRetry-freeAfterRetry, int64(resumed.pass.pages); got != want {
+		t.Fatalf("freelist shrank by %d pages but the resumed pass reported %d", got, want)
+	}
+	bytesAfterRetry := int64(len(mustReadFile(t, config.LogsDBPath())))
+	if bytesAfterRetry >= bytesBeforeRetry {
+		t.Fatalf("reclamation must shrink the database: %d -> %d bytes", bytesBeforeRetry, bytesAfterRetry)
+	}
+	if got := reclamationRows(t, ctx, db); !reflect.DeepEqual(got, before) {
+		t.Fatalf("reclamation lost or changed retained rows")
+	}
+	var integrity string
+	if err := db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&integrity); err != nil {
+		t.Fatalf("integrity_check: %v", err)
+	}
+	if integrity != "ok" {
+		t.Fatalf("integrity_check = %q, want ok", integrity)
+	}
+}
+
+// TestReclamationWorkerRecordsMetricsLikeRust covers the wiring: every pass the
+// worker runs reports through the sink the config carries.
+func TestReclamationWorkerRecordsMetricsLikeRust(t *testing.T) {
+	metrics := NewTaskMetrics()
+	config := mustSqliteConfig(t, t.TempDir()).WithReclamationMetrics(metrics)
+	worker := newSqliteReclamationWorker(config)
+	if worker == nil {
+		t.Fatalf("the logs database must opt into background reclamation")
+	}
+	if worker.metrics != metrics {
+		t.Fatalf("the worker must record through the config's metrics instance")
+	}
+	worker.idleInterval = time.Millisecond
+	worker.probe = func(context.Context, reclamationTarget, reclamationOptions, <-chan struct{}) reclamationResult {
+		return reclamationResult{pass: reclamationPass{pages: 3, outcome: reclamationOutcomeIdle}}
+	}
+	go worker.run()
+	defer worker.close()
+	waitForReclamation(t, func() bool {
+		for _, record := range metrics.Records() {
+			if record.Name == reclamationPagesMetric && record.Value == 3 {
+				return true
+			}
+		}
+		return false
+	}, "the worker to record a reclamation pass")
 }

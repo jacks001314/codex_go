@@ -62,6 +62,9 @@ type SqliteConfig struct {
 	// and calls `record_corruption` for both recovery branches (upstream
 	// 3620b2caf8 / #49701, `codex.sqlite.corruption.count`).
 	corruptionMetrics *TaskMetrics
+	// reclamationMetrics receives one `codex.sqlite.reclamation.*` sample per
+	// background reclamation pass (Rust #49069, upstream 33a0f766a6).
+	reclamationMetrics *TaskMetrics
 }
 
 // WithRecoveryCollector returns a copy that reports the backups taken while
@@ -76,6 +79,14 @@ func (c SqliteConfig) WithRecoveryCollector(collector *DBRecoveryCollector) Sqli
 // have no telemetry sink installed.
 func (c SqliteConfig) WithCorruptionMetrics(metrics *TaskMetrics) SqliteConfig {
 	c.corruptionMetrics = metrics
+	return c
+}
+
+// WithReclamationMetrics returns a copy whose background reclamation passes are
+// recorded through metrics. A nil sink records nothing, matching the worker of a
+// runtime that has no telemetry installed.
+func (c SqliteConfig) WithReclamationMetrics(metrics *TaskMetrics) SqliteConfig {
+	c.reclamationMetrics = metrics
 	return c
 }
 

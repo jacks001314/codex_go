@@ -1474,6 +1474,10 @@ func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *
 	}
 	if options != nil && options.DBCorruptionMetrics != nil {
 		sqliteConfig = sqliteConfig.WithCorruptionMetrics(options.DBCorruptionMetrics)
+		// Rust #49069 records reclamation through the same SQLite telemetry sink.
+		// Go's explicit option plumbing must inject the one instance the router
+		// already holds, so corruption and reclamation samples share it.
+		sqliteConfig = sqliteConfig.WithReclamationMetrics(options.DBCorruptionMetrics)
 	}
 	runtime, backups, err := initStateRuntimeWithFreshStartOnCorruption(ctx, sqliteConfig, "openai")
 	if err != nil {
