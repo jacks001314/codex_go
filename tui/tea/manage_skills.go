@@ -17,7 +17,12 @@ type skillToggleOperation struct {
 }
 
 type manageSkillsModalState struct {
-	view        *bottompane.SkillsToggleView
+	view *bottompane.SkillsToggleView
+	// initial and applied are keyed by the skill path identity
+	// (chatwidget.SkillPathIdentity), not by the path text: Rust #51482 keeps the
+	// skills-toggle state in `HashMap<PathUri, bool>` so two spellings of one
+	// Windows path are one entry. The item still carries the native path, which
+	// is what the write request and the checklist render.
 	initial     map[string]bool
 	applied     map[string]bool
 	eventCursor int
@@ -57,8 +62,9 @@ func (m *Model) openManageSkillsModal(response appserver.SkillsListResponse, cwd
 			Enabled:     item.Enabled,
 			Path:        item.Path,
 		})
-		initial[item.Path] = item.Enabled
-		applied[item.Path] = item.Enabled
+		identity := chatwidget.SkillPathIdentity(item.Path)
+		initial[identity] = item.Enabled
+		applied[identity] = item.Enabled
 	}
 	m.modal = &modalState{
 		kind: ModalKindManageSkills,
@@ -204,7 +210,7 @@ func (m *Model) applySkillEnabledWriteResult(message SkillEnabledWriteResultMsg)
 		m.addErrorHistoryMessage(text)
 		m.refreshTranscript()
 	} else {
-		state.applied[message.Path] = message.Enabled
+		state.applied[chatwidget.SkillPathIdentity(message.Path)] = message.Enabled
 		m.updateSkillInventoryEnabled(message.Path, message.Enabled)
 	}
 	return m.startNextSkillWrite()
@@ -214,14 +220,18 @@ func (m *Model) updateSkillInventoryEnabled(path string, enabled bool) {
 	if m == nil || m.skillsInventory == nil {
 		return
 	}
+	// Rust #51482 update_skill_enabled matches by parsed path identity
+	// (`skill.path.to_inferred_path_uri() == Some(&path)`), so every equivalent
+	// spelling of the written skill path flips together.
+	identity := chatwidget.SkillPathIdentity(path)
 	for index := range m.skillsInventory.Skills {
-		if strings.TrimSpace(m.skillsInventory.Skills[index].Path) == strings.TrimSpace(path) {
+		if chatwidget.SkillPathIdentity(m.skillsInventory.Skills[index].Path) == identity {
 			m.skillsInventory.Skills[index].Enabled = enabled
 		}
 	}
 	for dataIndex := range m.skillsInventory.Data {
 		for skillIndex := range m.skillsInventory.Data[dataIndex].Skills {
-			if strings.TrimSpace(m.skillsInventory.Data[dataIndex].Skills[skillIndex].Path) == strings.TrimSpace(path) {
+			if chatwidget.SkillPathIdentity(m.skillsInventory.Data[dataIndex].Skills[skillIndex].Path) == identity {
 				m.skillsInventory.Data[dataIndex].Skills[skillIndex].Enabled = enabled
 			}
 		}

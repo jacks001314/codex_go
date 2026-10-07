@@ -719,8 +719,10 @@ func skillPopupRenderLine(item skillPopupItem, selected bool, nameWidth int, wid
 }
 
 func skillPopupItemKey(item skillPopupItem) string {
+	// Rust #51482 matches TUI skill selections by parsed path identity, so the
+	// popup keys a candidate by its path identity rather than its text spelling.
 	if strings.TrimSpace(item.Path) != "" {
-		return strings.TrimSpace(item.Path)
+		return chatwidget.SkillPathIdentity(item.Path)
 	}
 	return strings.TrimSpace(item.Name)
 }

@@ -206,6 +206,10 @@ const ThreadModelUnavailableMessage = "Thread model is unavailable. Wait for the
 func appendSubmissionMentionItems(items []SubmittedInputItem, text string, bindings []string, catalog SubmissionMentionCatalog) []SubmittedInputItem {
 	mentions := CollectToolMentions(text, nil)
 	boundNames := map[string]bool{}
+	// Rust #51482 (input_submission.rs): selected skills are deduplicated by
+	// parsed path identity, so the same skill named twice — through a linked
+	// mention and through a bare `$name`, or through two spellings of one
+	// Windows path — is submitted once.
 	selectedSkillPaths := map[string]bool{}
 	selectedPluginIDs := map[string]bool{}
 	selectedAppIDs := map[string]bool{}
@@ -218,31 +222,37 @@ func appendSubmissionMentionItems(items []SubmittedInputItem, text string, bindi
 		if path == "" || !IsSkillMentionPath(path) {
 			continue
 		}
-		normalizedPath := NormalizeSkillMentionPath(path)
+		identity := SkillPathIdentity(path)
 		for _, skill := range catalog.Skills {
-			if NormalizeSkillMentionPath(skill.Path) != normalizedPath || selectedSkillPaths[normalizedPath] {
+			if strings.TrimSpace(skill.Path) == "" || SkillPathIdentity(skill.Path) != identity || selectedSkillPaths[identity] {
 				continue
 			}
-			selectedSkillPaths[normalizedPath] = true
+			selectedSkillPaths[identity] = true
 			items = append(items, SubmittedInputItem{
 				Kind: SubmittedInputSkill,
 				Name: strings.TrimSpace(skill.Name),
-				Path: normalizedPath,
+				// Rust #51482 keeps the structured skill input path in its native
+				// spelling (`PathBuf::from(skill.path.as_str())`): UserInput::Skill
+				// is still interpreted against the host filesystem.
+				Path: strings.TrimSpace(skill.Path),
 			})
 			break
 		}
 	}
 
 	for _, skill := range FindSkillMentions(mentions, catalog.Skills) {
-		path := NormalizeSkillMentionPath(skill.Path)
-		if path == "" || selectedSkillPaths[path] || boundNames[strings.TrimSpace(skill.Name)] {
+		if strings.TrimSpace(skill.Path) == "" {
 			continue
 		}
-		selectedSkillPaths[path] = true
+		identity := SkillPathIdentity(skill.Path)
+		if selectedSkillPaths[identity] || boundNames[strings.TrimSpace(skill.Name)] {
+			continue
+		}
+		selectedSkillPaths[identity] = true
 		items = append(items, SubmittedInputItem{
 			Kind: SubmittedInputSkill,
 			Name: strings.TrimSpace(skill.Name),
-			Path: path,
+			Path: strings.TrimSpace(skill.Path),
 		})
 	}
 

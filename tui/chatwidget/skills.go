@@ -7,6 +7,7 @@ import (
 
 	"codex_go/apps"
 	"codex_go/appserver"
+	"codex_go/utils"
 )
 
 // Rust parity: codex-rs/tui/src/app/startup_prompts.rs skill-load warnings and
@@ -400,34 +401,54 @@ func ExtractToolMentionsFromTextWithSigil(text string, sigil byte) ToolMentions 
 }
 
 func FindSkillMentions(mentions ToolMentions, skills []appserver.SkillsListEntry) []appserver.SkillsListEntry {
+	// Rust #51482 (find_skill_mentions_with_tool_mentions) returns early when
+	// there is nothing to match, before parsing any path identity.
+	if len(mentions.LinkedPaths) == 0 && len(mentions.Names) == 0 {
+		return nil
+	}
+	// Rust #51482: linked mention paths are matched by parsed path identity, not
+	// by their text, so equivalent Windows spellings (case, separators) select
+	// the same skill while literal spaces, `%` and `#` stay significant.
 	mentionSkillPaths := map[string]bool{}
 	for _, path := range mentions.LinkedPaths {
 		if IsSkillMentionPath(path) {
-			mentionSkillPaths[NormalizeSkillMentionPath(path)] = true
+			mentionSkillPaths[SkillPathIdentity(path)] = true
 		}
+	}
+	// Rust #51482 shares one parsed identity per skill between the linked-path
+	// pass and the name pass (parsed_skills).
+	type parsedSkill struct {
+		skill    appserver.SkillsListEntry
+		identity string
+	}
+	parsed := make([]parsedSkill, 0, len(skills))
+	for _, skill := range skills {
+		if strings.TrimSpace(skill.Path) == "" {
+			continue
+		}
+		parsed = append(parsed, parsedSkill{skill: skill, identity: SkillPathIdentity(skill.Path)})
 	}
 	seenNames := map[string]bool{}
 	seenPaths := map[string]bool{}
 	matches := []appserver.SkillsListEntry{}
-	for _, skill := range skills {
-		path := NormalizeSkillMentionPath(skill.Path)
-		if path == "" || seenPaths[path] || !mentionSkillPaths[path] {
+	// Linked paths stay ahead of plain names.
+	for _, entry := range parsed {
+		if seenPaths[entry.identity] || !mentionSkillPaths[entry.identity] {
 			continue
 		}
-		seenPaths[path] = true
-		seenNames[skill.Name] = true
-		matches = append(matches, cloneSkillEntry(skill))
+		seenPaths[entry.identity] = true
+		seenNames[entry.skill.Name] = true
+		matches = append(matches, cloneSkillEntry(entry.skill))
 	}
-	for _, skill := range skills {
-		path := NormalizeSkillMentionPath(skill.Path)
-		if path == "" || seenPaths[path] {
+	for _, entry := range parsed {
+		if seenPaths[entry.identity] {
 			continue
 		}
-		name := strings.TrimSpace(skill.Name)
+		name := strings.TrimSpace(entry.skill.Name)
 		if name != "" && mentions.Names[name] && !seenNames[name] {
-			seenPaths[path] = true
+			seenPaths[entry.identity] = true
 			seenNames[name] = true
-			matches = append(matches, cloneSkillEntry(skill))
+			matches = append(matches, cloneSkillEntry(entry.skill))
 		}
 	}
 	return matches
@@ -495,6 +516,24 @@ func IsSkillMentionPath(path string) bool {
 func NormalizeSkillMentionPath(path string) string {
 	path = strings.TrimSpace(path)
 	return strings.TrimPrefix(path, "skill://")
+}
+
+// SkillPathIdentity returns the path-identity key used to match skill paths
+// (Rust #51482 `Use PathUri for skill identity and path matching`): the parsed
+// PathUri identity, so equivalent Windows spellings — ASCII case and separator
+// differences — collapse to one key while literal spaces, `%` and `#` in native
+// filenames stay significant. Rust resolves
+// `AbsolutePathBuf::to_inferred_path_uri()` and drops paths it cannot parse
+// (they are always absolute there); Go also serves relative catalog fixtures, so
+// a path with no URI representation falls back to its mention-normalized text.
+// That fallback only ever applies to such relative text, which the URI layer
+// cannot confuse with an absolute spelling.
+func SkillPathIdentity(path string) string {
+	normalized := NormalizeSkillMentionPath(path)
+	if key, ok := utils.PathIdentityKey(normalized); ok {
+		return key
+	}
+	return "text\x00" + normalized
 }
 
 func AppIDFromMentionPath(path string) string {
