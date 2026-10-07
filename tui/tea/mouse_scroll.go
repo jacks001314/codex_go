@@ -71,6 +71,16 @@ func (m *Model) MouseScrollSpeed() float64 {
 	return m.mouseScroll.Speed()
 }
 
+// TranscriptYOffset reports the live transcript's scroll offset from the top of
+// the buffered output. This is the surface the wheel moves (Rust #50209), exposed
+// so the host's configuration wiring can assert the configured speed end to end.
+func (m *Model) TranscriptYOffset() int {
+	if m == nil {
+		return 0
+	}
+	return m.transcript.YOffset
+}
+
 // seedOverlayMouseScrollSpeed binds a newly created transcript overlay to the
 // live multiplier (Rust #50209 passes it to `TranscriptOverlay::new`).
 func (m *Model) seedOverlayMouseScrollSpeed() {

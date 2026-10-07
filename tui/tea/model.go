@@ -1002,6 +1002,11 @@ type Options struct {
 	// AutoRecap is the configured `tui.auto_recap` value (Rust local_settings).
 	// Nil keeps scheduled recaps enabled, matching Rust's config default.
 	AutoRecap *bool
+	// MouseScrollSpeed is the configured `tui.mouse_scroll_speed` multiplier for
+	// transcript wheel events (Rust #50209, local_settings.rs). Nil uses the
+	// default of one row per wheel event; a non-finite or non-positive value
+	// falls back to that same default.
+	MouseScrollSpeed *float64
 	// RightClickPaste is the configured `tui.right_click_paste` value (#48118):
 	// `auto` (the Windows/Linux default), `on` (also macOS) or `off`. An empty
 	// value or an unknown spelling resolves to `auto`.
@@ -2032,8 +2037,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		StatusBar:                       newStatusBarComponent(),
 		transcript:                      transcript,
 		activityFollow:                  true,
-		mouseScroll:                     codextui.NewMouseScrollAccumulator(nil),
-		mouseScrollSpeed:                codextui.MouseScrollSpeedDefault,
+		mouseScroll:                     codextui.NewMouseScrollAccumulator(options.MouseScrollSpeed),
+		mouseScrollSpeed:                codextui.NormalizeMouseScrollSpeed(options.MouseScrollSpeed),
 		retryMessageIndex:               -1,
 		startupWarningsIndex:            -1,
 		skillLoadWarnings:               chatwidget.NewSkillLoadWarningState(),

@@ -944,6 +944,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		Effects:                     settings.Effects,
 		QuestionEscBack:             settings.QuestionEscBack,
 		AutoRecap:                   settings.AutoRecap,
+		MouseScrollSpeed:            settings.MouseScrollSpeed,
 		RightClickPaste:             interactiveRightClickPasteValue(settings.RightClickPaste),
 		ShowRawReasoning:            interactiveShowRawAgentReasoning(root),
 		LocalWorktreeOperations:     true,
@@ -1819,6 +1820,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		StatusLineUseColors:     interactiveStatusLineUseColors(values),
 		QuestionEscBack:         interactiveQuestionEscBack(values),
 		AutoRecap:               interactiveAutoRecap(values),
+		MouseScrollSpeed:        interactiveMouseScrollSpeed(values),
 		RightClickPaste:         interactiveRightClickPaste(values),
 		Rendering:               interactiveRenderingSettings(values),
 		Effects:                 interactiveEffectsSettings(values),
@@ -1924,6 +1926,34 @@ func interactiveRightClickPasteValue(mode *string) string {
 		return string(tuiapp.RightClickPasteAuto)
 	}
 	return *mode
+}
+
+// interactiveMouseScrollSpeed resolves the configured `tui.mouse_scroll_speed`
+// multiplier for transcript wheel events (Rust #50209). Rust validates the value
+// as a finite positive number while parsing the config
+// (`codex-rs/config/src/tui_mouse_scroll.rs`, which rejects anything else with
+// "tui.mouse_scroll_speed must be a finite positive number"); Go's `[tui]`
+// sub-table is not value-validated, so an absent or unusable setting resolves to
+// the Rust default of one row per wheel event (`TranscriptView::default`,
+// `LocalSettings.mouse_scroll_speed.unwrap_or(1.0)`).
+func interactiveMouseScrollSpeed(values map[string]any) *float64 {
+	speed := codextui.MouseScrollSpeedDefault
+	if raw, ok := interactiveTUIConfig(values)["mouse_scroll_speed"]; ok {
+		switch configured := raw.(type) {
+		case float64:
+			speed = configured
+		case float32:
+			speed = float64(configured)
+		case int:
+			speed = float64(configured)
+		case int64:
+			speed = float64(configured)
+		}
+	}
+	if !codextui.MouseScrollSpeedValid(speed) {
+		speed = codextui.MouseScrollSpeedDefault
+	}
+	return &speed
 }
 
 // interactiveRenderingSettings resolves the `tui.rendering` preferences for the

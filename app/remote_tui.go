@@ -423,6 +423,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		Effects:             settings.Effects,
 		QuestionEscBack:     settings.QuestionEscBack,
 		AutoRecap:           settings.AutoRecap,
+		MouseScrollSpeed:    settings.MouseScrollSpeed,
 		RightClickPaste:     interactiveRightClickPasteValue(settings.RightClickPaste),
 		ShowRawReasoning:    showRawReasoning,
 		// Remote sessions only see the worktrees feature flag; managed worktree
