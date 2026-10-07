@@ -1272,9 +1272,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		},
 		HasChatGPTAccount: hasChatGPTAccount,
 	}
-	// Rust #46117: a launch that opted into daemon auto-start but was excluded
-	// reports the exclusion as a startup warning.
-	if warning := daemonAutoStartExclusionWarning(root); warning != "" {
+	// Rust #46117 + #49855: an elevated Windows session reports why the shared
+	// background server is disabled, and a launch that opted into daemon
+	// auto-start but was excluded reports the exclusion as a startup warning.
+	if warning := daemonStartupWarning(root); warning != "" {
 		options.InitialHistoryCells = append(options.InitialHistoryCells, historycell.NewStartupWarnings([]string{warning}))
 	}
 	model, err := codextea.Run(ctx, state, options, stdin, stdout)

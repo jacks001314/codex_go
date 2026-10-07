@@ -403,3 +403,107 @@ func TestDaemonAutoStartSkipsWSLDrvfsHomeLikeRust(t *testing.T) {
 		t.Fatalf("non-DrVFS home warning = %q, want none", got)
 	}
 }
+
+// TestElevatedWindowsLaunchUsesEmbeddedModeLikeRust mirrors Rust #49855: an
+// elevated local Windows session selects embedded mode before daemon discovery
+// or startup, reports ELEVATED_LAUNCH_WARNING, and never starts the shared
+// background server, while a non-elevated launch keeps the auto-start path.
+func TestElevatedWindowsLaunchUsesEmbeddedModeLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	originalStart := daemonAutoStartStart
+	originalDetector := daemonElevationDetector
+	originalReason := daemonAutoStartExclusionReason
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonAutoStartStart = originalStart
+		daemonElevationDetector = originalDetector
+		daemonAutoStartExclusionReason = originalReason
+	})
+	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
+
+	starts := 0
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
+		starts++
+		return "", errors.New("the elevated launch must not start the shared server")
+	}
+	daemonAutoStartExclusionReason = ""
+
+	// Elevated: embedded, without touching the daemon start path.
+	daemonElevationDetector = func() bool { return true }
+	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil || endpoint != nil {
+		t.Fatalf("elevated endpoint = %#v, err = %v; want embedded", endpoint, err)
+	}
+	if starts != 0 {
+		t.Fatalf("elevated launch started the shared server %d times, want 0", starts)
+	}
+	if got := daemonStartupWarning(&cli.RootOptions{}); got != elevatedLaunchWarning {
+		t.Fatalf("elevated warning = %q, want %q", got, elevatedLaunchWarning)
+	}
+
+	// Non-elevated: the auto-start path is untouched.
+	daemonElevationDetector = func() bool { return false }
+	daemonAutoStartStart = func(*cli.RootOptions) (string, error) {
+		return "/tmp/codex-elevated-parity.sock", nil
+	}
+	endpoint, err = interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil || endpoint == nil {
+		t.Fatalf("non-elevated endpoint = %#v, err = %v; want the shared server", endpoint, err)
+	}
+	if got := daemonStartupWarning(&cli.RootOptions{}); got != "" {
+		t.Fatalf("non-elevated warning = %q, want none", got)
+	}
+}
+
+// TestElevatedWindowsLaunchEmbeddedWithoutAutoStartLikeRust pins that the Rust
+// #49855 guard is independent of `features.daemon_auto_start`: an elevated
+// session stays embedded and warns even when auto-start is disabled, so it
+// cannot attach to a running shared server, while --no-daemon and the agents
+// overview keep their own behavior (the `!cli.no_daemon` / `!cli.agents_overview`
+// halves of the Rust guard).
+func TestElevatedWindowsLaunchEmbeddedWithoutAutoStartLikeRust(t *testing.T) {
+	originalFeature := daemonAutoStartFeature
+	originalDetector := daemonElevationDetector
+	originalReason := daemonAutoStartExclusionReason
+	t.Cleanup(func() {
+		daemonAutoStartFeature = originalFeature
+		daemonElevationDetector = originalDetector
+		daemonAutoStartExclusionReason = originalReason
+	})
+	t.Setenv(appserver.CodexExecServerURLEnvVar, "")
+
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return false }
+	daemonElevationDetector = func() bool { return true }
+	daemonAutoStartExclusionReason = ""
+
+	endpoint, err := interactiveDaemonEndpoint(&cli.RootOptions{})
+	if err != nil || endpoint != nil {
+		t.Fatalf("elevated endpoint = %#v, err = %v; want embedded", endpoint, err)
+	}
+	if got := daemonStartupWarning(&cli.RootOptions{}); got != elevatedLaunchWarning {
+		t.Fatalf("elevated warning = %q, want %q", got, elevatedLaunchWarning)
+	}
+
+	// The elevated warning wins over an auto-start exclusion warning.
+	daemonAutoStartFeature = func(*cli.RootOptions) bool { return true }
+	daemonAutoStartExclusionReason = wslDrvfsExclusion
+	if got := daemonStartupWarning(&cli.RootOptions{}); got != elevatedLaunchWarning {
+		t.Fatalf("precedence warning = %q, want %q", got, elevatedLaunchWarning)
+	}
+
+	// --no-daemon is its own exclusion: no elevated warning.
+	daemonAutoStartExclusionReason = ""
+	noDaemon := &cli.RootOptions{Shared: cli.SharedOptions{NoDaemon: true}}
+	if daemonElevatedLaunchExcluded(noDaemon, false) {
+		t.Fatal("--no-daemon launch counted as the elevated exclusion")
+	}
+	if got := daemonStartupWarning(noDaemon); got != "" {
+		t.Fatalf("--no-daemon warning = %q, want none", got)
+	}
+
+	// The agents overview keeps needing the shared server.
+	if daemonElevatedLaunchExcluded(&cli.RootOptions{}, true) {
+		t.Fatal("agents overview launch counted as the elevated exclusion")
+	}
+}

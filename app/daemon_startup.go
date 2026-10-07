@@ -346,6 +346,12 @@ func interactiveDaemonEndpoint(root *cli.RootOptions) (*appserverdaemon.RemoteAp
 	if daemonStartupExclusion(root, false) != "" {
 		return nil, nil
 	}
+	// Rust #49855: an elevated local Windows session selects embedded mode
+	// before daemon discovery or startup, so it neither starts nor reuses the
+	// shared background server.
+	if daemonElevatedLaunchExcluded(root, false) {
+		return nil, nil
+	}
 	if !daemonAutoStartFeature(root) {
 		return localDaemonEndpointForLaunch(root, false, defaultLocalDaemonSocketPath()), nil
 	}
@@ -382,6 +388,31 @@ const detachedLaunchRestrictionExclusion = "this Windows launcher"
 // WSL CODEX_HOME (Rust daemon_startup::WSL_DRVFS_EXCLUSION, #50555).
 const wslDrvfsExclusion = "a Windows-mounted WSL CODEX_HOME (DrvFS/9p)"
 
+// elevatedLaunchWarning is Rust #49855's ELEVATED_LAUNCH_WARNING text: the
+// shared background server refuses elevated launchers, so an administrator
+// session runs embedded and tells the user how to re-enable the shared server.
+const elevatedLaunchWarning = "Running as administrator: shared background server disabled. To enable it, restart Codex in a terminal without administrator permissions."
+
+// daemonElevationDetector is the elevation probe seam (Rust
+// app_server_daemon::is_elevated, #49855). Tests replace it to exercise the
+// elevated exclusion without an administrator token; off Windows the default
+// probe is always false, matching the Rust `#[cfg(windows)]` gate.
+var daemonElevationDetector = appserverdaemon.IsElevated
+
+// daemonElevatedLaunchExcluded mirrors the Rust #49855 startup guard: an
+// elevated local session without an explicit remote, without --no-daemon and
+// without the agents overview must not discover or start the shared background
+// server, because its clients would inherit administrator privileges.
+func daemonElevatedLaunchExcluded(root *cli.RootOptions, agentsOverview bool) bool {
+	if agentsOverview {
+		return false
+	}
+	if root != nil && (root.Shared.NoDaemon || strings.TrimSpace(root.Remote) != "") {
+		return false
+	}
+	return daemonElevationDetector()
+}
+
 // daemonWSLDrvfsDetector is the DrvFS probe seam (Rust uses_wsl_drvfs); tests
 // replace it to exercise the exclusion without a real WSL mount.
 var daemonWSLDrvfsDetector = usesWSLDrvfs
@@ -412,6 +443,17 @@ func daemonAutoStartExclusionWarning(root *cli.RootOptions) string {
 		return ""
 	}
 	return fmt.Sprintf("Running without the shared background server: %s requires embedded mode.", reason)
+}
+
+// daemonStartupWarning returns the warning an interactive launch reports about
+// the shared background server, or "" when it reports none. Rust #49855 gives
+// the elevated-session warning precedence over the auto-start exclusion warning
+// (`elevated_warning.map(str::to_string).or(compatibility_warning).or_else(..)`).
+func daemonStartupWarning(root *cli.RootOptions) string {
+	if daemonElevatedLaunchExcluded(root, false) {
+		return elevatedLaunchWarning
+	}
+	return daemonAutoStartExclusionWarning(root)
 }
 
 // interactiveRootNoDaemon reports whether either the root flags or the
