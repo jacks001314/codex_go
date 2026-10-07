@@ -1344,7 +1344,7 @@ func (c *execAgentController) ListAgents(ctx context.Context, args *agent.ListAg
 		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: "/root", AgentStatus: "running"})
 	}
 	for _, task := range s.tasks {
-		if prefix != "" && !strings.HasPrefix(task.path, prefix) {
+		if prefix != "" && !agent.AgentPath(task.path).MatchesPrefix(agent.AgentPath(prefix)) {
 			continue
 		}
 		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: task.path, AgentStatus: agent.V2AgentStatusValue(task.status)})

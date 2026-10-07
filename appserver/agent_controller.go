@@ -823,7 +823,7 @@ func (c *runtimeAgentController) ListAgents(ctx context.Context, args *agent.Lis
 	}
 	for _, metadata := range c.registry.LiveAgents() {
 		path := string(metadata.Path)
-		if prefix != "" && !strings.HasPrefix(path, prefix) {
+		if prefix != "" && !agent.AgentPath(path).MatchesPrefix(agent.AgentPath(prefix)) {
 			continue
 		}
 		result.Agents = append(result.Agents, agent.ListedAgent{AgentName: path, AgentStatus: agent.V2AgentStatusValue(c.status(metadata.ThreadID))})

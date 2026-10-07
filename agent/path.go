@@ -39,6 +39,18 @@ func (p AgentPath) IsRoot() bool {
 	return p == AgentPathRoot
 }
 
+// MatchesPrefix mirrors Rust's `agent_matches_prefix`
+// (codex-rs/core/src/agent/control.rs): the root prefix matches every path,
+// otherwise a path matches when it equals the prefix or continues it on a
+// `/` segment boundary. A raw string prefix would wrongly pull in siblings,
+// e.g. prefix "/root/work" must not match "/root/worker".
+func (p AgentPath) MatchesPrefix(prefix AgentPath) bool {
+	if prefix.IsRoot() {
+		return true
+	}
+	return p == prefix || strings.HasPrefix(string(p), string(prefix)+"/")
+}
+
 // AgentName returns the final path segment, or "root" for the root path.
 func (p AgentPath) AgentName() string {
 	if p == "" || p.IsRoot() {
