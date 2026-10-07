@@ -775,6 +775,12 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	// Rust #50505: choose the adjacent surviving task before the refresh can
+	// rebuild the list without the removed task, so archiving or deleting the
+	// selected task cannot jump the selection to the top of the list.
+	if m.agentsOverview != nil {
+		m.agentsOverview.PrepareRemoval(map[string]struct{}{strings.TrimSpace(msg.threadID): {}})
+	}
 	// Rust #45255: a removed task drops its retained (unmaterialized) session.
 	m.clearAgentsOverviewBlankSession(msg.threadID)
 	// Removing the current task leaves the dashboard open but unattached.

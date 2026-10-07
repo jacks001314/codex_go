@@ -690,8 +690,9 @@ type agentsDashboardRenameMsg struct {
 }
 
 type agentsDashboardLifecycleMsg struct {
-	action string
-	err    error
+	action   string
+	threadID string
+	err      error
 }
 
 type agentsDashboardModel struct {
@@ -813,6 +814,9 @@ func (m *agentsDashboardModel) Update(message bubbletea.Msg) (bubbletea.Model, b
 			m.notice = "Failed to " + label + " task: " + strings.TrimSpace(msg.err.Error())
 		} else {
 			m.notice = ""
+			// Rust #50505: remember the adjacent surviving task before the
+			// refreshed list drops the archived/deleted row.
+			m.view.PrepareRemoval(map[string]struct{}{strings.TrimSpace(msg.threadID): {}})
 		}
 		m.busy = false
 		return m, m.refreshCmd()
@@ -1008,7 +1012,7 @@ func (m *agentsDashboardModel) lifecycleCmd(action string, threadID string) bubb
 		} else {
 			err = m.source.Archive(m.ctx, threadID)
 		}
-		return agentsDashboardLifecycleMsg{action: action, err: err}
+		return agentsDashboardLifecycleMsg{action: action, threadID: threadID, err: err}
 	}
 }
 

@@ -187,3 +187,59 @@ func TestModelAgentsLifecycleFailureKeepsAttachmentLikeRust(t *testing.T) {
 		t.Fatalf("attachment dropped on failure: %q", model.State.ThreadID)
 	}
 }
+
+// TestModelAgentsArchiveKeepsSelectionAdjacentLikeRust covers Rust #50505
+// (47379efd52): archiving the selected task keeps the Command Center selection
+// on the next displayed task instead of jumping to the task at the top of the
+// list. Rust test:
+// agents_overview_actions_tests.rs::archiving_selects_the_next_displayed_task
+// (its selections snapshot walks Task 3 -> Other 2 -> Task 1 -> Task 4).
+func TestModelAgentsArchiveKeepsSelectionAdjacentLikeRust(t *testing.T) {
+	calls := &agentsLifecycleCalls{}
+	rows := agentsOverviewTestRows()
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return rows, nil
+		},
+		OnAgentsOverviewArchive: func(threadID string) error {
+			calls.archived = append(calls.archived, threadID)
+			return nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.agentsOverview.Selected = 1 // root-2 (beta)
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
+		t.Fatalf("selected task = %q, want root-2", got)
+	}
+
+	model.Update(agentsKeyEvent('a'))
+	model.Update(key(bubbletea.KeyDown)) // move the confirmation off Cancel
+	updated, command := model.Update(key(bubbletea.KeyEnter))
+	model = updated.(*Model)
+	if command == nil {
+		t.Fatal("confirmed archive returned no lifecycle command")
+	}
+	message := command()
+	if len(calls.archived) != 1 || calls.archived[0] != "root-2" {
+		t.Fatalf("archived = %#v, want [root-2]", calls.archived)
+	}
+
+	// The archived task is gone from the next shared-task listing.
+	rows = []agentsoverview.Row{rows[0], rows[2]}
+	updated, refresh := model.Update(message)
+	model = updated.(*Model)
+	if refresh == nil {
+		t.Fatal("archived task did not refresh the dashboard")
+	}
+	updated, _ = model.Update(refresh())
+	model = updated.(*Model)
+
+	if got := model.agentsOverview.SelectedThreadID(); got != "root-3" {
+		t.Fatalf("selection after archive = %q, want the adjacent root-3", got)
+	}
+	if got := model.agentsOverview.PendingSelectionAfterRemoval(); got != "" {
+		t.Fatalf("pending successor was not consumed: %q", got)
+	}
+}

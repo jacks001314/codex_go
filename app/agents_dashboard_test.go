@@ -346,3 +346,57 @@ func TestAgentsDashboardListErrorShowsNotice(t *testing.T) {
 		t.Fatalf("notice missing error:\n%s", finished.View())
 	}
 }
+
+// TestAgentsDashboardArchiveKeepsSelectionAdjacentLikeRust covers Rust #50505
+// (47379efd52): archiving the selected task keeps the standalone command
+// center on the next displayed task instead of jumping to the first row.
+// Rust test: agents_overview_actions_tests.rs::archiving_selects_the_next_displayed_task.
+func TestAgentsDashboardArchiveKeepsSelectionAdjacentLikeRust(t *testing.T) {
+	source := newFakeDashboardSource()
+	source.rows = []agentsoverview.Row{
+		{ThreadID: "root-1", Name: "alpha", CWD: "/work/a", Group: agentsoverview.GroupReady},
+		{ThreadID: "root-2", Name: "beta", CWD: "/work/b", Group: agentsoverview.GroupReady},
+		{ThreadID: "root-3", Name: "gamma", CWD: "/work/c", Group: agentsoverview.GroupReady},
+		{ThreadID: "root-4", Name: "delta", CWD: "/work/d", Group: agentsoverview.GroupReady},
+	}
+	model := newAgentsDashboardModel(context.Background(), source, nil)
+	model.Update(agentsDashboardListMsg{rows: source.rows})
+	model.view.Selected = 1 // root-2
+	if got := model.view.SelectedThreadID(); got != "root-2" {
+		t.Fatalf("selected task = %q, want root-2", got)
+	}
+
+	model.Update(keyRunes('a'))
+	updated, command := model.Update(keyRunes('y'))
+	model = updated.(*agentsDashboardModel)
+	if command == nil {
+		t.Fatal("confirmed archive returned no lifecycle command")
+	}
+	message := command()
+	if len(source.archived) != 1 || source.archived[0] != "root-2" {
+		t.Fatalf("archived = %#v, want [root-2]", source.archived)
+	}
+
+	// The archived task is gone from the next listing.
+	source.rows = []agentsoverview.Row{source.rows[0], source.rows[2], source.rows[3]}
+	updated, refresh := model.Update(message)
+	model = updated.(*agentsDashboardModel)
+	if refresh == nil {
+		t.Fatal("archived task did not refresh the dashboard")
+	}
+	listMessage := refresh()
+	updated, _ = model.Update(listMessage)
+	model = updated.(*agentsDashboardModel)
+
+	if got := model.view.SelectedThreadID(); got != "root-3" {
+		t.Fatalf("selection after archive = %q, want the adjacent root-3", got)
+	}
+	if got := model.view.PendingSelectionAfterRemoval(); got != "" {
+		t.Fatalf("pending successor was not consumed: %q", got)
+	}
+	// Later repaints keep the successor.
+	model.Update(agentsDashboardListMsg{rows: source.rows})
+	if got := model.view.SelectedThreadID(); got != "root-3" {
+		t.Fatalf("selection after repaint = %q, want root-3", got)
+	}
+}

@@ -265,6 +265,12 @@ type View struct {
 	worktreesEnabled bool
 	projectGroups    []projectGroup
 
+	// selectionAfterRemoval is a one-shot successor chosen before a removal
+	// invalidates the displayed rows (Rust #50505 selection_after_removal). It
+	// survives batched removals and duplicate removal notifications until the
+	// next rebuild consumes it.
+	selectionAfterRemoval string
+
 	// UseThemeColors enables deterministic per-thread identity colors on row
 	// and detail titles (Rust #44857). ThreadColor resolves a thread id to an
 	// accent color ("#rrggbb"), returning "" to fall back to the default style.
@@ -475,10 +481,23 @@ func (v *View) shortcutHint(action string, fallback string) (string, bool) {
 // selection across refreshes (Rust AgentsOverviewView::new).
 func New(rows []Row, selectedThreadID string, exitOnCancel bool) *View {
 	selected := 0
+	found := false
 	for i := range rows {
 		if strings.TrimSpace(rows[i].ThreadID) == strings.TrimSpace(selectedThreadID) {
 			selected = i
+			found = true
 			break
+		}
+	}
+	if !found {
+		// Rust #50505: a requested task that is no longer displayed falls back
+		// to the attached task before defaulting to the first row, so a removed
+		// selection cannot silently jump to the top of the list.
+		for i := range rows {
+			if rows[i].IsCurrent {
+				selected = i
+				break
+			}
 		}
 	}
 	view := &View{
@@ -589,6 +608,133 @@ func (v *View) stableSortByGroupKey(indices []int, key func(index int) string) {
 			j--
 		}
 		indices[j+1] = key
+	}
+}
+
+// SelectionAfterRemoval returns the next surviving task in displayed order
+// after the current selection, falling back to the previous surviving task, and
+// "" when every displayed task is being removed (Rust #50505
+// AgentsOverviewView::selection_after_removal). The scan respects the active
+// grouping, search filter and pinned section because it walks VisibleIndices.
+func (v *View) SelectionAfterRemoval(removed map[string]struct{}) string {
+	if v == nil {
+		return ""
+	}
+	return v.selectionAfterRemovalFrom(v.Selected, removed)
+}
+
+// selectionAfterRemovalFrom anchors the successor scan on a row index.
+func (v *View) selectionAfterRemovalFrom(anchor int, removed map[string]struct{}) string {
+	if v == nil {
+		return ""
+	}
+	visible := v.VisibleIndices()
+	position := -1
+	for i, index := range visible {
+		if index == anchor {
+			position = i
+			break
+		}
+	}
+	if position < 0 {
+		return ""
+	}
+	for _, index := range visible[position:] {
+		if id := strings.TrimSpace(v.Rows[index].ThreadID); !removedContains(removed, id) {
+			return id
+		}
+	}
+	for i := position - 1; i >= 0; i-- {
+		if id := strings.TrimSpace(v.Rows[visible[i]].ThreadID); !removedContains(removed, id) {
+			return id
+		}
+	}
+	return ""
+}
+
+// PrepareRemoval remembers the task to select once the rows are rebuilt without
+// `removed` (Rust #50505 prepare_agents_overview_removal). An already pending
+// successor is kept while it is still part of the removal, so batched removals
+// and duplicate removal notifications stay on one adjacent task.
+func (v *View) PrepareRemoval(removed map[string]struct{}) {
+	if v == nil || len(removed) == 0 {
+		return
+	}
+	anchorID := strings.TrimSpace(v.selectionAfterRemoval)
+	if anchorID == "" {
+		anchorID = v.SelectedThreadID()
+	}
+	if _, ok := removed[anchorID]; !ok {
+		return
+	}
+	anchor := -1
+	for i := range v.Rows {
+		if strings.TrimSpace(v.Rows[i].ThreadID) == anchorID {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 {
+		return
+	}
+	v.selectionAfterRemoval = v.selectionAfterRemovalFrom(anchor, removed)
+}
+
+// PendingSelectionAfterRemoval reports the one-shot successor remembered by
+// PrepareRemoval ("" when none is pending).
+func (v *View) PendingSelectionAfterRemoval() string {
+	if v == nil {
+		return ""
+	}
+	return strings.TrimSpace(v.selectionAfterRemoval)
+}
+
+// successorForRebuild resolves the adjacent task to keep selected when a
+// rebuild no longer displays `selected`. It covers removals the host cannot
+// observe in advance (server-side deletions), which Rust #50505 handles through
+// remove_agents_overview_thread before the rebuild.
+func (v *View) successorForRebuild(rows []Row, selected string) string {
+	if v == nil || selected == "" || containsThreadID(rows, selected) {
+		return ""
+	}
+	removed := map[string]struct{}{}
+	for i := range v.Rows {
+		id := strings.TrimSpace(v.Rows[i].ThreadID)
+		if id != "" && !containsThreadID(rows, id) {
+			removed[id] = struct{}{}
+		}
+	}
+	if len(removed) == 0 {
+		return ""
+	}
+	return v.SelectionAfterRemoval(removed)
+}
+
+// removedContains reports whether the trimmed thread id is part of a removal
+// set. The empty id never counts.
+func removedContains(removed map[string]struct{}, threadID string) bool {
+	if threadID == "" {
+		return false
+	}
+	_, ok := removed[threadID]
+	return ok
+}
+
+// selectedIndexForThreadID moves the selection onto a row index that displays
+// threadID, leaving the selection untouched when the task is not in Rows.
+func (v *View) selectedIndexForThreadID(threadID string) {
+	if v == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	for i := range v.Rows {
+		if strings.TrimSpace(v.Rows[i].ThreadID) == threadID {
+			v.Selected = i
+			return
+		}
 	}
 }
 
@@ -874,21 +1020,20 @@ func (v *View) HideSelected() Action {
 	if v.State.HiddenThreads == nil {
 		v.State.HiddenThreads = map[string]struct{}{}
 	}
-	hiddenIndex := v.Selected
+	removed := map[string]struct{}{threadID: {}}
+	// Rust #50505: pick the adjacent surviving task in displayed order (next,
+	// else previous) before the row can leave the list, so a later rebuild keeps
+	// the same task selected.
+	successor := v.SelectionAfterRemoval(removed)
 	v.State.HiddenThreads[threadID] = struct{}{}
-	visible := v.VisibleIndices()
-	if len(visible) == 0 {
+	v.selectionAfterRemoval = successor
+	if successor == "" {
+		// Nothing survives the hide: fall back to the first displayed row.
 		v.Selected = 0
-		return ActionHideThread
+	} else {
+		v.selectedIndexForThreadID(successor)
 	}
-	// Move to the next still-visible row after the hidden one, else the last.
-	v.Selected = visible[len(visible)-1]
-	for _, index := range visible {
-		if index > hiddenIndex {
-			v.Selected = index
-			break
-		}
-	}
+	v.fitSelection()
 	return ActionHideThread
 }
 
@@ -989,9 +1134,19 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	if v == nil {
 		return
 	}
+	pending := strings.TrimSpace(v.selectionAfterRemoval)
+	v.selectionAfterRemoval = ""
 	selected := strings.TrimSpace(selectedThreadID)
+	if pending != "" {
+		// Rust #50505: the successor chosen before the removal wins over the
+		// task the host would otherwise keep selected.
+		selected = pending
+	}
 	if selected == "" {
 		selected = v.SelectedThreadID()
+	}
+	if successor := v.successorForRebuild(rows, selected); successor != "" {
+		selected = successor
 	}
 	view := New(rows, selected, v.ExitOnCancel)
 	view.State = v.State
