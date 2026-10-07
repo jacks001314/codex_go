@@ -9,6 +9,7 @@
 package sandboxpath
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -92,6 +93,13 @@ func ProtectedSubpaths(root string) []string {
 
 // WritableRootsWithProtectedSubpaths builds the writable-root set for a list of
 // paths, mirroring the roots the sandbox mounts.
+//
+// Rust #47974 (`Preserve Git directory protections across writable roots`): a
+// `<root>/.git` pointer file can name a Git directory that lives inside another
+// writable root, so a broader grant would otherwise leave that metadata
+// writable even though the pointer itself is protected. Each resolved Git
+// directory is appended as a read-only carveout of whichever writable root
+// contains it.
 func WritableRootsWithProtectedSubpaths(paths []string) []WritableRoot {
 	seen := map[string]bool{}
 	var out []WritableRoot
@@ -107,7 +115,91 @@ func WritableRootsWithProtectedSubpaths(paths []string) []WritableRoot {
 			ProtectedMetadataNames: DefaultProtectedMetadataNames(),
 		})
 	}
+	addResolvedGitDirCarveouts(out)
 	return out
+}
+
+// addResolvedGitDirCarveouts appends the Git directory named by each writable
+// root's `.git` pointer file to the read-only carveouts of every writable root
+// that contains it (Rust #47974).
+func addResolvedGitDirCarveouts(roots []WritableRoot) {
+	for source := range roots {
+		target, ok := GitDirPointerTarget(filepath.Join(roots[source].Root, ".git"))
+		if !ok {
+			continue
+		}
+		// Follow symlink aliases so the carveout is anchored at the real path
+		// (Rust canonicalizes the resolved exclusion target).
+		resolved, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			continue
+		}
+		resolved = cleanAbsolute(resolved)
+		if resolved == "" || isExplicitWritableRoot(roots, resolved) {
+			continue
+		}
+		for other := range roots {
+			if resolved == roots[other].Root || !PathWithin(resolved, roots[other].Root) {
+				continue
+			}
+			if !containsSubpath(roots[other].ReadOnlySubpaths, resolved) {
+				roots[other].ReadOnlySubpaths = append(roots[other].ReadOnlySubpaths, resolved)
+			}
+		}
+	}
+}
+
+// GitDirPointerTarget mirrors Rust `resolve_gitdir_from_file`
+// (codex-rs/protocol/src/permissions.rs): when `dotGit` is a `gitdir: <path>`
+// pointer file, report the Git directory it names, resolving a relative target
+// against the pointer's directory. It reports false for a directory, a file
+// that is not a `gitdir:` pointer, an empty target, or a missing target.
+func GitDirPointerTarget(dotGit string) (string, bool) {
+	info, err := os.Stat(dotGit)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	contents, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", false
+	}
+	prefix, rest, ok := strings.Cut(strings.TrimSpace(string(contents)), ":")
+	if !ok || strings.TrimSpace(prefix) != "gitdir" {
+		return "", false
+	}
+	raw := strings.TrimSpace(rest)
+	if raw == "" {
+		return "", false
+	}
+	target := filepath.Clean(raw)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(dotGit), target)
+	}
+	if _, err := os.Stat(target); err != nil {
+		return "", false
+	}
+	return target, true
+}
+
+// isExplicitWritableRoot mirrors Rust `has_explicit_resolved_path_entry`: an
+// explicit write entry keeps winning over the derived Git directory carveout.
+func isExplicitWritableRoot(roots []WritableRoot, path string) bool {
+	for index := range roots {
+		if roots[index].Root == path {
+			return true
+		}
+	}
+	return false
+}
+
+// containsSubpath reports whether subpaths already contains path.
+func containsSubpath(subpaths []string, path string) bool {
+	for _, subpath := range subpaths {
+		if subpath == path {
+			return true
+		}
+	}
+	return false
 }
 
 // FilesystemPolicy is the resolved filesystem-policy view the pre-sandbox PATH

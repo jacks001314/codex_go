@@ -1,0 +1,114 @@
+//go:build linux
+
+package sandboxpath
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestWritableRootsProtectGitDirTargetOutsideAliasRoot mirrors the upstream
+// Rust regression added by #47974
+// (`writable_roots_protect_gitdir_target_outside_alias_root`,
+// codex-rs/protocol/src/permissions.rs): a `.git` pointer can name a Git
+// directory that lives inside another writable root, reached through a symlink
+// alias, and that directory must stay read-only even though its containing root
+// is writable.
+func TestWritableRootsProtectGitDirTargetOutsideAliasRoot(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(tempdir) error = %v", err)
+	}
+	workspace := filepath.Join(base, "workspace")
+	writable := filepath.Join(base, "writable")
+	aliases := filepath.Join(base, "readonly-aliases")
+	gitdir := filepath.Join(writable, "gitdir")
+	for _, dir := range []string{workspace, gitdir, aliases} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	// The alias lives outside both writable roots and resolves into `writable`.
+	alias := filepath.Join(aliases, "repo")
+	if err := os.Symlink(writable, alias); err != nil {
+		t.Fatalf("Symlink(%q, %q) error = %v", writable, alias, err)
+	}
+	// The `.git` pointer is relative to the workspace but names the aliased Git
+	// directory inside the other writable root.
+	if err := os.WriteFile(
+		filepath.Join(workspace, ".git"),
+		[]byte("gitdir: "+filepath.Join(alias, "gitdir")+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+
+	roots := WritableRootsWithProtectedSubpaths([]string{workspace, writable})
+	var root *WritableRoot
+	for index := range roots {
+		if roots[index].Root == writable {
+			root = &roots[index]
+		}
+	}
+	if root == nil {
+		t.Fatalf("writable root %q not found in %#v", writable, roots)
+	}
+	// Rust asserts `read_only_subpaths == vec![gitdir]`; Go's default carveouts
+	// also carry `<root>/.git`/`.agents`/`.gcode`/`.aws`, so pin the resolved
+	// Git directory itself instead of the whole slice.
+	if !containsSubpath(root.ReadOnlySubpaths, gitdir) {
+		t.Fatalf("read_only_subpaths = %#v, want it to contain the resolved gitdir %q", root.ReadOnlySubpaths, gitdir)
+	}
+	if root.IsPathWritable(filepath.Join(gitdir, "HEAD")) {
+		t.Fatalf("IsPathWritable(%q) = true, want false: resolved gitdir target stays read-only", filepath.Join(gitdir, "HEAD"))
+	}
+	// Ordinary files in the surrounding writable root stay writable.
+	if !root.IsPathWritable(filepath.Join(writable, "ordinary.txt")) {
+		t.Fatalf("IsPathWritable(%q) = false, want true", filepath.Join(writable, "ordinary.txt"))
+	}
+}
+
+// TestGitDirPointerTargetResolvesRelativePointersLikeRust pins the pointer
+// parsing rules of Rust `resolve_gitdir_from_file`: a `gitdir: <path>` pointer
+// resolves a relative target against the pointer directory, while directories,
+// non-pointer files, empty targets, and missing targets report false.
+func TestGitDirPointerTargetResolvesRelativePointersLikeRust(t *testing.T) {
+	base := t.TempDir()
+	dotGit := filepath.Join(base, ".git")
+	gitdir := filepath.Join(base, "real-gitdir")
+	if err := os.MkdirAll(gitdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", gitdir, err)
+	}
+	if err := os.WriteFile(dotGit, []byte("gitdir: real-gitdir\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	if got, ok := GitDirPointerTarget(dotGit); !ok || got != gitdir {
+		t.Fatalf("GitDirPointerTarget(relative) = %q, %v; want %q, true", got, ok, gitdir)
+	}
+
+	for name, contents := range map[string]string{
+		"empty-target":     "gitdir: \n",
+		"wrong-prefix":     "not-a-gitdir: real-gitdir\n",
+		"missing-target":   "gitdir: missing-gitdir\n",
+		"no-separator":     "gitdir real-gitdir\n",
+		"absolute-missing": "gitdir: " + filepath.Join(base, "nope") + "\n",
+	} {
+		path := filepath.Join(t.TempDir(), ".git")
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("%s: WriteFile error = %v", name, err)
+		}
+		if got, ok := GitDirPointerTarget(path); ok {
+			t.Fatalf("%s: GitDirPointerTarget = %q, %v; want false", name, got, ok)
+		}
+	}
+
+	// A real `.git` directory is not a pointer file.
+	dirGit := filepath.Join(t.TempDir(), ".git")
+	if err := os.MkdirAll(dirGit, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	if got, ok := GitDirPointerTarget(dirGit); ok {
+		t.Fatalf("GitDirPointerTarget(directory) = %q, %v; want false", got, ok)
+	}
+}
