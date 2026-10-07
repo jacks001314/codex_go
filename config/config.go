@@ -2500,12 +2500,19 @@ func activeProjectRoot(cwd string) string {
 }
 
 func activeProjectRootWithMarkers(cwd string, markers []string) string {
-	dirs := projectAncestorDirs(cwd)
-	for _, dir := range dirs {
-		if projectRootMarkerExistsWithMarkers(dir, markers) {
-			return dir
-		}
+	// Rust's `find_project_root` (config/src/loader/mod.rs:1490) is
+	// `discover_project_root(..).unwrap_or_else(|| cwd.clone())`: the marker
+	// walk preserves absence, and only this fallback reintroduces cwd. An
+	// unconfigured marker list means the default markers, matching the walk
+	// this function performed before the #49160 split.
+	discoverMarkers := markers
+	if len(discoverMarkers) == 0 {
+		discoverMarkers = DefaultProjectRootMarkers()
 	}
+	if root, found := DiscoverProjectRoot(cwd, discoverMarkers); found {
+		return root
+	}
+	dirs := projectAncestorDirs(cwd)
 	if len(dirs) > 0 {
 		return dirs[0]
 	}
@@ -2577,7 +2584,7 @@ func projectRootMarkerExists(dir string) bool {
 
 func projectRootMarkerExistsWithMarkers(dir string, markers []string) bool {
 	if len(markers) == 0 {
-		markers = []string{".git", ".hg", ".svn"}
+		markers = DefaultProjectRootMarkers()
 	}
 	for _, marker := range markers {
 		if marker == "" {
