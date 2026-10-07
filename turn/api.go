@@ -277,8 +277,14 @@ type TurnStartParams struct {
 	// is the first turn in the chain of work that led to it (Rust #51415). Both
 	// are optional client inputs on `turn/start` and are ignored when the
 	// request adds input to an already-active turn.
-	ParentTurnID         string `json:"parentTurnId,omitempty"`
-	RootTurnID           string `json:"rootTurnId,omitempty"`
+	ParentTurnID string `json:"parentTurnId,omitempty"`
+	RootTurnID   string `json:"rootTurnId,omitempty"`
+	// InitiatingAgentPath is the agent path that initiated this turn (Rust
+	// #51402 `TurnStartOptions.initiating_agent_path`): a turn started by a
+	// triggered inter-agent communication records the sender's path. It is
+	// harness-owned rather than a client input, so it is not serialized on the
+	// wire (matching Rust, which never sends it in the Responses metadata).
+	InitiatingAgentPath  string `json:"-"`
 	AdditionalInputItems []any  `json:"-"`
 	// Trace carries the W3C trace context of the request that started this turn
 	// (Rust TurnInputRequest::with_trace), so the model request continues the

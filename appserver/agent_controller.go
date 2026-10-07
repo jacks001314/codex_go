@@ -233,6 +233,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if prompt != "" || len(args.Items) > 0 {
 		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
 		if c.version == agent.VersionV2 {
+			// Rust #51402 `tasks/mod.rs`: a turn triggered by an inter-agent
+			// communication records that communication's author as its
+			// initiating agent path.
+			params.InitiatingAgentPath = c.scopePath
 			params.AdditionalInputItems = append(params.AdditionalInputItems, runtimeAgentCommunicationInputItem(c.scopePath, agentPath, prompt, true, args.Plaintext))
 			params.AdditionalInputItems = append(params.AdditionalInputItems, args.Items...)
 		} else {
@@ -724,7 +728,9 @@ func (c *runtimeAgentController) FollowupTask(ctx context.Context, args *agent.F
 		return c.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: threadID, TurnID: active.ID, InputItems: []any{item}})
 	}
 	queued := c.router.drainRuntimeAgentMessages(threadID)
-	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram, AdditionalInputItems: append(queued, item)}
+	// Rust #51402 `tasks/mod.rs`: the triggered inter-agent communication's
+	// author is this turn's initiating agent path.
+	params := turn.TurnStartParams{ThreadID: threadID, CWD: c.cwd, ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram, InitiatingAgentPath: c.scopePath, AdditionalInputItems: append(queued, item)}
 	_, err = c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params))
 	return err
 }

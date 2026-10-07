@@ -3813,6 +3813,9 @@ func turnAttributionForParams(params *turn.TurnStartParams, turnID string, rootT
 	if root := strings.TrimSpace(rootTurnID); root != "" {
 		attribution.RootTurnID = &root
 	}
+	if path := strings.TrimSpace(params.InitiatingAgentPath); path != "" {
+		attribution.InitiatingAgentPath = &path
+	}
 	return attribution
 }
 
