@@ -39,6 +39,10 @@ type TranscriptComponent struct {
 // newTranscriptComponent initializes the transcript sub-component.
 func newTranscriptComponent() TranscriptComponent {
 	vp := viewport.New(defaultWidth, defaultHeight-defaultComposerHeight-2)
+	// Rust #50209: wheel scrolling is owned by the model's configurable
+	// `tui.mouse_scroll_speed` path (see tea/mouse_scroll.go); this
+	// component's viewport is not fed mouse messages, so it stays on the
+	// viewport default.
 	vp.MouseWheelEnabled = true
 	vp.MouseWheelDelta = 3
 	return TranscriptComponent{

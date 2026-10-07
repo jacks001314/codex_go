@@ -492,6 +492,11 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	if result.AnimationsEnabled != nil {
 		m.animationsEnabled = *result.AnimationsEnabled
 	}
+	if result.MouseScrollSpeed != nil {
+		// Rust #50209: the reloaded `tui.mouse_scroll_speed` reaches the live
+		// transcript surfaces (main viewport and fullscreen pager).
+		m.setMouseScrollSpeed(*result.MouseScrollSpeed)
+	}
 	if result.StatusLineUseColors != nil {
 		m.statusLineUseColors = *result.StatusLineUseColors
 		if m.statusControls != nil {

@@ -305,7 +305,11 @@ type SettingsWriteResult struct {
 	NotificationCondition codextui.NotificationCondition
 	// RightClickPaste is the configured `tui.right_click_paste` value (#48118).
 	// Nil preserves the current value; the config default is `auto`.
-	RightClickPaste        *string
+	RightClickPaste *string
+	// MouseScrollSpeed is the configured `tui.mouse_scroll_speed` multiplier for
+	// transcript wheel scrolling (Rust #50209). Nil preserves the current value;
+	// the resolved default is one row per event.
+	MouseScrollSpeed       *float64
 	PermissionRequirements *chatwidget.PermissionRequirements
 	// ServiceTierRequirements carries the server's configRequirements/read
 	// response the settings load already performs, so the TUI can constrain its
@@ -1308,9 +1312,15 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript             viewport.Model
-	composer               textarea.Model
-	activityFollow         bool
+	transcript     viewport.Model
+	composer       textarea.Model
+	activityFollow bool
+	// mouseScroll is the live `tui.mouse_scroll_speed` accumulator for the main
+	// transcript viewport (Rust #50209 `TranscriptView::pending_mouse_scroll`).
+	mouseScroll codextui.MouseScrollAccumulator
+	// mouseScrollSpeed seeds transcript overlays created later; it always holds
+	// the resolved (default-or-configured) multiplier.
+	mouseScrollSpeed       float64
 	overlay                *chatwidget.TranscriptOverlay
 	slashPopup             slashCommandPopup
 	agentsOverview         *agentsoverview.View
@@ -1997,8 +2007,10 @@ func NewModel(state *codextui.State, options Options) *Model {
 	composer.SetWidth(defaultWidth)
 	composer.Focus()
 	transcript := viewport.New(defaultWidth, defaultHeight-defaultComposerHeight-2)
-	transcript.MouseWheelEnabled = true
-	transcript.MouseWheelDelta = 3
+	// Rust #50209: the wheel moves one row per event, scaled by the configurable
+	// `tui.mouse_scroll_speed` with fractional accumulation, so the viewport's
+	// own fixed three-row wheel handling stays off.
+	transcript.MouseWheelEnabled = false
 	clipboardWrite := options.OnClipboardWrite
 	if clipboardWrite == nil {
 		clipboardWrite = sysclipboard.WriteAll
@@ -2020,6 +2032,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		StatusBar:                       newStatusBarComponent(),
 		transcript:                      transcript,
 		activityFollow:                  true,
+		mouseScroll:                     codextui.NewMouseScrollAccumulator(nil),
+		mouseScrollSpeed:                codextui.MouseScrollSpeedDefault,
 		retryMessageIndex:               -1,
 		startupWarningsIndex:            -1,
 		skillLoadWarnings:               chatwidget.NewSkillLoadWarningState(),
@@ -3076,6 +3090,12 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case bubbletea.MouseMsg:
 		if m.overlay != nil {
 			return m, m.updateTranscriptOverlayMouse(msg)
+		}
+		// Rust #50209: a host that reports wheel motion scrolls the transcript
+		// through the configurable multiplier applied to one row per event.
+		if rows, wheel := m.transcriptWheelRows(msg); wheel {
+			m.scrollTranscriptRows(rows)
+			return m, nil
 		}
 		// #48118: an unmodified right-button press is the fullscreen fallback
 		// trigger when no overlay, modal or selection owns the input.
@@ -7875,6 +7895,7 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	m.ensureSize()
 	if m.overlay == nil {
 		m.overlay = chatwidget.NewTranscriptOverlay(m.width, m.height, m.renderTranscriptOverlayCached())
+		m.seedOverlayMouseScrollSpeed()
 		m.overlayTranscript = true
 	} else {
 		m.overlayTranscript = true
@@ -8247,6 +8268,7 @@ func (m *Model) applyDiffResult(msg DiffResultMsg) bubbletea.Cmd {
 	m.notice = "Diff"
 	m.ensureSize()
 	m.overlay = chatwidget.NewTranscriptOverlayWithTitle(m.width, m.height, text, "D I F F")
+	m.seedOverlayMouseScrollSpeed()
 	m.overlayTranscript = false
 	return m.openPagerTerminalMode()
 }

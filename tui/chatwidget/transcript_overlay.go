@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	bubbletea "github.com/charmbracelet/bubbletea"
+
+	codextui "codex_go/tui"
 )
 
 const (
@@ -41,6 +43,10 @@ type TranscriptOverlay struct {
 	highlightStart int
 	highlightEnd   int
 	hasHighlight   bool
+	// mouseScroll mirrors Rust #50209: the transcript pager applies
+	// `tui.mouse_scroll_speed` to each wheel event and keeps the fractional
+	// remainder for the next event.
+	mouseScroll codextui.MouseScrollAccumulator
 }
 
 func NewTranscriptOverlay(width int, height int, content string) *TranscriptOverlay {
@@ -52,7 +58,7 @@ func NewTranscriptOverlayWithTitle(width int, height int, content string, title 
 	if title == "" {
 		title = "T R A N S C R I P T"
 	}
-	overlay := &TranscriptOverlay{title: title}
+	overlay := &TranscriptOverlay{title: title, mouseScroll: codextui.NewMouseScrollAccumulator(nil)}
 	overlay.Resize(width, height)
 	overlay.SetContent(content)
 	overlay.viewport.GotoBottom()
@@ -80,8 +86,10 @@ func (o *TranscriptOverlay) Resize(width int, height int) {
 	offset := o.viewport.YOffset
 	if o.viewport.Width <= 0 {
 		o.viewport = viewport.New(width, bodyHeight)
-		o.viewport.MouseWheelEnabled = true
-		o.viewport.MouseWheelDelta = 3
+		// Rust #50209: the wheel is handled by the overlay itself so the
+		// configurable speed (and its fractional accumulation) applies; the
+		// viewport's fixed three-row wheel handling stays off.
+		o.viewport.MouseWheelEnabled = false
 	} else {
 		o.viewport.Width = width
 		o.viewport.Height = bodyHeight
@@ -256,9 +264,55 @@ func (o *TranscriptOverlay) ApplyPagerAction(action string) bool {
 	return true
 }
 
+// SetMouseScrollSpeed applies the resolved `tui.mouse_scroll_speed` (Rust #50209
+// threads it into `TranscriptOverlay::new` from the local settings).
+func (o *TranscriptOverlay) SetMouseScrollSpeed(speed float64) {
+	if o == nil {
+		return
+	}
+	o.mouseScroll.SetSpeed(speed)
+}
+
+// MouseScrollSpeed reports the live multiplier.
+func (o *TranscriptOverlay) MouseScrollSpeed() float64 {
+	if o == nil {
+		return codextui.MouseScrollSpeedDefault
+	}
+	return o.mouseScroll.Speed()
+}
+
+// wheelRows maps one wheel event to the whole rows the pager should move,
+// mirroring Rust `TranscriptView::handle_mouse` (#50209): up scrolls toward
+// earlier output (negative rows), down toward later output.
+func (o *TranscriptOverlay) wheelRows(msg bubbletea.MouseMsg) (int, bool) {
+	if o == nil || msg.Action != bubbletea.MouseActionPress {
+		return 0, false
+	}
+	switch msg.Button {
+	case bubbletea.MouseButtonWheelUp:
+		return o.mouseScroll.Rows(-1), true
+	case bubbletea.MouseButtonWheelDown:
+		return o.mouseScroll.Rows(1), true
+	default:
+		return 0, false
+	}
+}
+
 func (o *TranscriptOverlay) Update(message bubbletea.Msg) bubbletea.Cmd {
 	if o == nil {
 		return nil
+	}
+	if msg, ok := message.(bubbletea.MouseMsg); ok {
+		if rows, wheel := o.wheelRows(msg); wheel {
+			// Rust #50209 applies the accumulated rows to the transcript view;
+			// the pager's follow behavior is derived from the new offset.
+			if rows < 0 {
+				o.viewport.ScrollUp(-rows)
+			} else if rows > 0 {
+				o.viewport.ScrollDown(rows)
+			}
+			return nil
+		}
 	}
 	var cmd bubbletea.Cmd
 	o.viewport, cmd = o.viewport.Update(message)

@@ -35,6 +35,7 @@ func (m *Model) openSelectedSessionTranscript(item codextui.SessionSummary) bubb
 	}
 	m.ensureSize()
 	m.overlay = chatwidget.NewTranscriptOverlayWithTitle(m.width, m.height, "Loading transcript...", "T R A N S C R I P T")
+	m.seedOverlayMouseScrollSpeed()
 	m.overlayTranscript = false
 	m.sessionTranscriptThreadID = threadID
 	openCmd := m.openPagerTerminalMode()
