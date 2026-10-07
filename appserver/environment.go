@@ -15,6 +15,7 @@ import (
 	"time"
 
 	execserverclient "codex_go/execserver"
+	"codex_go/mcp"
 
 	"github.com/coder/websocket"
 )
@@ -201,6 +202,12 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 			Shell:         m.defaultShell,
 			CWD:           cloneString(m.defaultCWD),
 			HTTPClient:    m.httpClient,
+			// TODO(#51157 environments.toml): Rust carries each provider entry's
+			// `skills: ScopedSkillsConfig` from `environments.toml` through
+			// `EnvironmentProviderEntry` into the registered environment. Go's
+			// `execserver.NamedEnvironment` does not carry the field yet, so TOML
+			// requirements cannot be projected here; see the sync report.
+			RequiredSkills: nil,
 		}
 		switch environment.Transport.Kind {
 		case execserverclient.EnvironmentTransportStdio:
@@ -382,6 +389,11 @@ type EnvironmentRecord struct {
 	// Provisioning is non-nil for provisioned (deferred) Noise environments and
 	// nil for ordinary environments, which connect eagerly.
 	Provisioning *ProvisioningState
+	// RequiredSkills lists the skill catalog names this environment must supply
+	// before a turn's first model request (Rust #51157 `skills.required`). The
+	// requirements follow the registration, so they still apply when the
+	// environment's setup fails and stop applying once it is deselected.
+	RequiredSkills []string
 }
 
 type EnvironmentManager struct {
@@ -424,9 +436,51 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 		Shell:             m.defaultShell,
 		CWD:               cloneString(m.defaultCWD),
 		HTTPClient:        m.httpClient,
+		// Rust #51157: environment/add carries the same per-environment
+		// `skills.required` value that `environments.toml` sets statically.
+		RequiredSkills: requiredEnvironmentSkills(params.Skills),
 	}
 	m.records[record.EnvironmentID] = record
 	return &EnvironmentAddResponse{}, nil
+}
+
+// requiredEnvironmentSkills copies the required skill names of an
+// `environment/add` registration (Rust #51157: the request processor turns
+// `params.skills.required` into a `ScopedSkillsConfig`). Names are kept
+// verbatim, like Rust's `Vec<String>`, so an unmatched name still fails the
+// requirement check instead of being silently dropped.
+func requiredEnvironmentSkills(skills *EnvironmentSkillsParams) []string {
+	if skills == nil || len(skills.Required) == 0 {
+		return nil
+	}
+	return append([]string(nil), skills.Required...)
+}
+
+// RequiredSkillsForSelections projects a turn's captured executor selections
+// into the ordered per-environment requirement list Rust validates before
+// inference (Rust #51157, `TurnEnvironmentSnapshot::required_skills`): every
+// selected environment contributes its registered `skills.required` names,
+// including a pending or failed selection, and requirements stop applying once
+// the environment is no longer selected. A nil snapshot (threadless discovery)
+// requires nothing.
+func (m *EnvironmentManager) RequiredSkillsForSelections(selected *mcp.SelectedEnvironments) []mcp.EnvironmentSkillRequirements {
+	return mcp.RequiredEnvironmentSkills(selected, m.RequiredSkills)
+}
+
+// RequiredSkills returns the skill catalog names the environment must supply
+// before a turn's first model request (Rust `Environment::required_skills`,
+// #51157). An unknown or nil environment has no requirements.
+func (m *EnvironmentManager) RequiredSkills(environmentID string) []string {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, ok := m.records[strings.TrimSpace(environmentID)]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), record.RequiredSkills...)
 }
 
 func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) error {

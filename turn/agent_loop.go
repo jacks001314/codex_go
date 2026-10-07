@@ -175,7 +175,17 @@ type AgentLoopRequest struct {
 	// request so a long turn can refresh them between steps. An empty result
 	// means the instructions were cleared (Rust #44675).
 	InstructionsProvider func() string
+	// PreSamplingValidation, when set, runs before every sampling request of the
+	// turn; a non-nil error fails the turn before its model request (Rust #51157
+	// validates required environment skills there, as a fatal error). It mirrors
+	// Rust's `run_turn` placement: the step's world state is recorded first and
+	// the check runs immediately before inference.
+	PreSamplingValidation AgentPreSamplingValidation
 }
+
+// AgentPreSamplingValidation is the pre-sampling gate of a turn, invoked with
+// the sampling iteration before every model request (Rust #51157).
+type AgentPreSamplingValidation func(ctx context.Context, iteration int) error
 
 type AgentLoopResult struct {
 	Response          *model.AgentResponse
@@ -310,6 +320,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// Capture is disabled for this turn: direct records already in
 			// history must not reach inference (Rust #45185).
 			StripDirectCallMetadata(inputItems)
+		}
+		// Rust #51157: required environment skills are validated after the step's
+		// world state is recorded and before inference, so a missing skill fails
+		// the turn without a model request.
+		if request.PreSamplingValidation != nil {
+			if err := request.PreSamplingValidation(ctx, iteration); err != nil {
+				return nil, err
+			}
 		}
 		sampling := timing.BeginSampling(l.now())
 		// Rust #50964: before each sampling request the client compares the full

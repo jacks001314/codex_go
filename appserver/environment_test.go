@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"codex_go/execserver"
+	"codex_go/mcp"
 
 	"github.com/coder/websocket"
 )
@@ -465,4 +467,175 @@ func writeExecServerResponseForTest(ctx context.Context, conn *websocket.Conn, i
 		return err
 	}
 	return conn.Write(ctx, websocket.MessageText, data)
+}
+
+// TestEnvironmentAddStoresRequiredSkillsLikeRust mirrors Rust #51157: an
+// `environment/add` registration carries the same per-environment
+// `skills.required` list that `environments.toml` sets statically, and the
+// requirements follow the registration until it is replaced or removed.
+func TestEnvironmentAddStoresRequiredSkillsLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID: "required",
+		ExecServerURL: "ws://example.test/exec",
+		Skills:        &EnvironmentSkillsParams{Required: []string{"review", "lint"}},
+	}); err != nil {
+		t.Fatalf("Add(required) error = %v", err)
+	}
+	if got := manager.RequiredSkills("required"); !reflect.DeepEqual(got, []string{"review", "lint"}) {
+		t.Fatalf("RequiredSkills(required) = %#v, want [review lint]", got)
+	}
+	// The accessor copies, so a caller cannot mutate the registration.
+	got := manager.RequiredSkills("required")
+	got[0] = "mutated"
+	if again := manager.RequiredSkills("required"); again[0] != "review" {
+		t.Fatalf("RequiredSkills() after caller mutation = %#v", again)
+	}
+	// An environment with no skills and an unknown environment have no
+	// requirements.
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "plain", ExecServerURL: "ws://example.test/exec"}); err != nil {
+		t.Fatalf("Add(plain) error = %v", err)
+	}
+	if got := manager.RequiredSkills("plain"); len(got) != 0 {
+		t.Fatalf("RequiredSkills(plain) = %#v, want none", got)
+	}
+	if got := manager.RequiredSkills("missing"); len(got) != 0 {
+		t.Fatalf("RequiredSkills(missing) = %#v, want none", got)
+	}
+	// Re-registering the environment replaces its requirements (upsert), and
+	// removing it drops them.
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID: "required",
+		ExecServerURL: "ws://example.test/exec",
+		Skills:        &EnvironmentSkillsParams{Required: []string{"format"}},
+	}); err != nil {
+		t.Fatalf("Add(replacement) error = %v", err)
+	}
+	if got := manager.RequiredSkills("required"); !reflect.DeepEqual(got, []string{"format"}) {
+		t.Fatalf("RequiredSkills(required) after replacement = %#v, want [format]", got)
+	}
+	if !manager.Remove("required") {
+		t.Fatalf("Remove(required) = false, want true")
+	}
+	if got := manager.RequiredSkills("required"); len(got) != 0 {
+		t.Fatalf("RequiredSkills(required) after removal = %#v, want none", got)
+	}
+}
+
+// TestEnvironmentAddDecodesRequiredSkillsLikeRust pins the wire shape Rust's
+// `EnvironmentSkillsParams` uses for `environment/add` (Rust #51157): an
+// optional `skills` object whose `required` list carries the exact catalog
+// names, omitted when absent.
+func TestEnvironmentAddDecodesRequiredSkillsLikeRust(t *testing.T) {
+	var params EnvironmentAddParams
+	if err := json.Unmarshal([]byte(`{"environmentId":"required","execServerUrl":"ws://example.test/exec","skills":{"required":["review"]}}`), &params); err != nil {
+		t.Fatalf("Unmarshal(skills) error = %v", err)
+	}
+	if params.Skills == nil || !reflect.DeepEqual(params.Skills.Required, []string{"review"}) {
+		t.Fatalf("decoded skills = %#v, want [review]", params.Skills)
+	}
+	var absent EnvironmentAddParams
+	if err := json.Unmarshal([]byte(`{"environmentId":"plain","execServerUrl":"ws://example.test/exec"}`), &absent); err != nil {
+		t.Fatalf("Unmarshal(absent) error = %v", err)
+	}
+	if absent.Skills != nil {
+		t.Fatalf("decoded absent skills = %#v, want nil", absent.Skills)
+	}
+	var empty EnvironmentAddParams
+	if err := json.Unmarshal([]byte(`{"environmentId":"empty","execServerUrl":"ws://example.test/exec","skills":{}}`), &empty); err != nil {
+		t.Fatalf("Unmarshal(empty skills) error = %v", err)
+	}
+	if empty.Skills == nil || len(empty.Skills.Required) != 0 {
+		t.Fatalf("decoded empty skills = %#v, want an empty required list", empty.Skills)
+	}
+}
+
+// TestRequiredSkillsForSelectionsGatesInferenceLikeRust mirrors Rust #51157's
+// `required_environment_skill_gates_inference` end to end: the registration's
+// requirements reach only their own environment, a failed selection still
+// enforces them, and dropping the selection (or an unavailable extension) is
+// the only recovery besides supplying the skill.
+func TestRequiredSkillsForSelectionsGatesInferenceLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID: "required",
+		ExecServerURL: "ws://example.test/exec",
+		Skills:        &EnvironmentSkillsParams{Required: []string{"review"}},
+	}); err != nil {
+		t.Fatalf("Add(required) error = %v", err)
+	}
+	if _, err := manager.Add(&EnvironmentAddParams{EnvironmentID: "primary", ExecServerURL: "ws://example.test/exec"}); err != nil {
+		t.Fatalf("Add(primary) error = %v", err)
+	}
+
+	selections := mcp.NewSelectedEnvironments([]mcp.TurnEnvironmentSelection{
+		{EnvironmentID: "primary", State: mcp.EnvironmentSelectionReady},
+		{EnvironmentID: "required", State: mcp.EnvironmentSelectionFailed, Error: "configuration unavailable"},
+	})
+	requirements := manager.RequiredSkillsForSelections(selections)
+	if len(requirements) != 1 || requirements[0].EnvironmentID != "required" || len(requirements[0].SkillNames) != 1 || requirements[0].SkillNames[0] != "review" {
+		t.Fatalf("requirements = %#v, want the failed selection's review requirement", requirements)
+	}
+
+	const wantMessage = `Fatal error: Required skill "review" from environment "required" is unavailable`
+	// The skill is supplied by the other environment: still unavailable.
+	wrongEnvironment := mcp.RequiredSkillsCatalog{Available: true, Entries: []mcp.EnvironmentSkillCatalogEntry{
+		{Name: "review", EnvironmentID: "primary", Enabled: true},
+	}}
+	if err := mcp.ValidateRequiredEnvironmentSkills(requirements, wrongEnvironment); err == nil || err.Error() != wantMessage {
+		t.Fatalf("wrong-environment error = %v, want %q", err, wantMessage)
+	}
+	// A missing skill and a disabled skill fail the same way.
+	if err := mcp.ValidateRequiredEnvironmentSkills(requirements, mcp.RequiredSkillsCatalog{Available: true}); err == nil || err.Error() != wantMessage {
+		t.Fatalf("missing-skill error = %v, want %q", err, wantMessage)
+	}
+	disabled := mcp.RequiredSkillsCatalog{Available: true, Entries: []mcp.EnvironmentSkillCatalogEntry{
+		{Name: "review", EnvironmentID: "required", Enabled: false},
+	}}
+	if err := mcp.ValidateRequiredEnvironmentSkills(requirements, disabled); err == nil || err.Error() != wantMessage {
+		t.Fatalf("disabled-skill error = %v, want %q", err, wantMessage)
+	}
+	// The registration's own environment supplies the enabled skill.
+	available := mcp.RequiredSkillsCatalog{Available: true, Entries: []mcp.EnvironmentSkillCatalogEntry{
+		{Name: "review", EnvironmentID: "required", Enabled: true},
+	}}
+	if err := mcp.ValidateRequiredEnvironmentSkills(requirements, available); err != nil {
+		t.Fatalf("available-skill error = %v, want nil", err)
+	}
+	// Deselection: the requirement disappears, so inference proceeds without
+	// validating anything.
+	deselected := mcp.NewSelectedEnvironments([]mcp.TurnEnvironmentSelection{{EnvironmentID: "primary", State: mcp.EnvironmentSelectionReady}})
+	if got := manager.RequiredSkillsForSelections(deselected); len(got) != 0 {
+		t.Fatalf("deselected requirements = %#v, want none", got)
+	}
+	// No skills extension state and no requirements is still valid (Rust's
+	// early return), while a requirement without state is an unavailable
+	// extension rather than a missing skill.
+	if err := mcp.ValidateRequiredEnvironmentSkills(nil, mcp.RequiredSkillsCatalog{}); err != nil {
+		t.Fatalf("no-requirement error = %v, want nil", err)
+	}
+	if err := mcp.ValidateRequiredEnvironmentSkills(requirements, mcp.RequiredSkillsCatalog{}); !errors.Is(err, mcp.ErrRequiredSkillsExtensionUnavailable) {
+		t.Fatalf("unavailable-extension error = %v, want ErrRequiredSkillsExtensionUnavailable", err)
+	}
+}
+
+// TestRequiredSkillsForSelectionsWithoutSnapshotLikeRust mirrors Rust's
+// threadless discovery: a nil snapshot carries no requirements.
+func TestRequiredSkillsForSelectionsWithoutSnapshotLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "bash", Path: "/bin/bash"}, t.TempDir())
+	if _, err := manager.Add(&EnvironmentAddParams{
+		EnvironmentID: "required",
+		ExecServerURL: "ws://example.test/exec",
+		Skills:        &EnvironmentSkillsParams{Required: []string{"review"}},
+	}); err != nil {
+		t.Fatalf("Add(required) error = %v", err)
+	}
+	if got := manager.RequiredSkillsForSelections(nil); got != nil {
+		t.Fatalf("nil snapshot requirements = %#v, want nil", got)
+	}
+	// A nil manager (no environment services configured) is nil-safe here.
+	var nilManager *EnvironmentManager
+	if got := nilManager.RequiredSkillsForSelections(mcp.NewSelectedEnvironments([]mcp.TurnEnvironmentSelection{{EnvironmentID: "required"}})); len(got) != 0 {
+		t.Fatalf("nil manager requirements = %#v, want none", got)
+	}
 }
