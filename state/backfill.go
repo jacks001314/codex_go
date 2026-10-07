@@ -536,31 +536,21 @@ func userTextFromEvent(values map[string]any) string {
 }
 
 func (r *StateRuntime) upsertRolloutThread(ctx context.Context, metadata rolloutThreadMetadata) error {
-	var existingHistoryMode, existingTitle, existingFirstUserMessage string
-	var existingGitSHA, existingGitBranch, existingGitOriginURL sql.NullString
-	existing := false
-	err := r.stateDB.QueryRowContext(ctx, `
-SELECT history_mode, title, first_user_message, git_sha, git_branch, git_origin_url
-FROM threads WHERE id = ?`, metadata.id).Scan(
-		&existingHistoryMode, &existingTitle, &existingFirstUserMessage,
-		&existingGitSHA, &existingGitBranch, &existingGitOriginURL,
-	)
-	if err == nil {
-		existing = true
-	} else if err != sql.ErrNoRows {
-		return fmt.Errorf("read existing rollout thread %s: %w", metadata.id, err)
+	existing, exists, err := r.readRolloutThreadRow(ctx, metadata.id)
+	if err != nil {
+		return err
 	}
-	if existing {
-		existingTitleTrimmed := strings.TrimSpace(existingTitle)
+	if exists {
+		existingTitleTrimmed := strings.TrimSpace(existing.title.String)
 		incomingTitleTrimmed := strings.TrimSpace(metadata.title)
-		if existingTitleTrimmed != "" && strings.TrimSpace(existingFirstUserMessage) != existingTitleTrimmed &&
+		if existingTitleTrimmed != "" && strings.TrimSpace(existing.firstUserMessage.String) != existingTitleTrimmed &&
 			(incomingTitleTrimmed == "" || strings.TrimSpace(metadata.firstUserMessage) == incomingTitleTrimmed) {
-			metadata.title = existingTitle
+			metadata.title = existing.title.String
 		}
-		if metadata.historyMode == "paginated" && existingHistoryMode == "paginated" {
-			metadata.gitSHA = nullStringValue(existingGitSHA)
-			metadata.gitBranch = nullStringValue(existingGitBranch)
-			metadata.gitOriginURL = nullStringValue(existingGitOriginURL)
+		if metadata.historyMode == "paginated" && existing.historyMode.String == "paginated" {
+			metadata.gitSHA = nullStringValue(existing.gitSHA)
+			metadata.gitBranch = nullStringValue(existing.gitBranch)
+			metadata.gitOriginURL = nullStringValue(existing.gitOriginURL)
 		}
 	}
 	updatedMillis := r.allocateThreadTimestamp(&r.threadUpdatedAt, metadata.updatedAt.UnixMilli())
@@ -569,6 +559,15 @@ FROM threads WHERE id = ?`, metadata.id).Scan(
 	archivedAt := any(nil)
 	if metadata.archived {
 		archivedAt = metadata.updatedAt.Unix()
+	}
+	// Rust c0d26949be (#48983, `StateRuntime::touch_thread_updated_at`): an
+	// observation that only moves the thread timestamp must not rewrite unrelated
+	// metadata or its indexes. The rebuild is authoritative for every other
+	// column here, so the narrow write is taken only when the stored row already
+	// matches the rebuild outcome and the rollout path is unchanged. Missing rows,
+	// changed rollout paths and any metadata difference keep the full repair path.
+	if exists && rolloutThreadRowMatchesExceptTimestamps(existing, intendedRolloutThreadRow(metadata, existing, createdMillis, updatedMillis)) {
+		return r.touchThreadUpdatedAt(ctx, metadata.id, metadata.updatedAt.Unix(), updatedMillis)
 	}
 	_, err = r.stateDB.ExecContext(ctx, `
 INSERT INTO threads (
@@ -623,7 +622,7 @@ ON CONFLICT(id) DO UPDATE SET
 	if err != nil {
 		return fmt.Errorf("upsert rollout thread %s: %w", metadata.id, err)
 	}
-	if !existing || metadata.historyMode == "legacy" {
+	if !exists || metadata.historyMode == "legacy" {
 		if _, err := r.stateDB.ExecContext(ctx, `UPDATE threads SET memory_mode = ? WHERE id = ?`, metadata.memoryMode, metadata.id); err != nil {
 			return fmt.Errorf("restore rollout thread memory mode %s: %w", metadata.id, err)
 		}
@@ -634,7 +633,7 @@ ON CONFLICT(id) DO UPDATE SET
 	if metadata.historyMode == "paginated" {
 		name := strings.TrimSpace(metadata.title)
 		if name == "" {
-			name = strings.TrimSpace(existingTitle)
+			name = strings.TrimSpace(existing.title.String)
 		}
 		if name != "" {
 			if _, err := r.stateDB.ExecContext(ctx, `
@@ -765,4 +764,170 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// storedRolloutThreadRow is the stored counterpart of every column
+// upsertRolloutThread rebuilds. Reading the whole write set is what lets a
+// rebuild that moves only the thread timestamps take the narrow touch path
+// (Rust c0d26949be / #48983).
+type storedRolloutThreadRow struct {
+	rolloutPath, source, historyMode, threadSource  sql.NullString
+	agentNickname, agentRole, agentPath             sql.NullString
+	modelProvider, model, reasoningEffort, cwd      sql.NullString
+	cliVersion, title, name, preview, sandboxPolicy sql.NullString
+	approvalMode, memoryMode, firstUserMessage      sql.NullString
+	gitSHA, gitBranch, gitOriginURL                 sql.NullString
+	createdAt, updatedAt, recencyAt                 sql.NullInt64
+	createdAtMs, updatedAtMs, recencyAtMs           sql.NullInt64
+	tokensUsed, archived, archivedAt                sql.NullInt64
+}
+
+func (r *StateRuntime) readRolloutThreadRow(ctx context.Context, threadID string) (storedRolloutThreadRow, bool, error) {
+	var row storedRolloutThreadRow
+	err := r.stateDB.QueryRowContext(ctx, `
+SELECT rollout_path, source, history_mode, thread_source,
+       agent_nickname, agent_role, agent_path,
+       model_provider, model, reasoning_effort, cwd, cli_version,
+       title, name, preview, sandbox_policy, approval_mode, memory_mode,
+       first_user_message, git_sha, git_branch, git_origin_url,
+       created_at, created_at_ms, updated_at, updated_at_ms, recency_at, recency_at_ms,
+       tokens_used, archived, archived_at
+FROM threads WHERE id = ?`, threadID).Scan(
+		&row.rolloutPath, &row.source, &row.historyMode, &row.threadSource,
+		&row.agentNickname, &row.agentRole, &row.agentPath,
+		&row.modelProvider, &row.model, &row.reasoningEffort, &row.cwd, &row.cliVersion,
+		&row.title, &row.name, &row.preview, &row.sandboxPolicy, &row.approvalMode, &row.memoryMode,
+		&row.firstUserMessage, &row.gitSHA, &row.gitBranch, &row.gitOriginURL,
+		&row.createdAt, &row.createdAtMs, &row.updatedAt, &row.updatedAtMs, &row.recencyAt, &row.recencyAtMs,
+		&row.tokensUsed, &row.archived, &row.archivedAt,
+	)
+	if err == sql.ErrNoRows {
+		return storedRolloutThreadRow{}, false, nil
+	}
+	if err != nil {
+		return storedRolloutThreadRow{}, false, fmt.Errorf("read existing rollout thread %s: %w", threadID, err)
+	}
+	return row, true, nil
+}
+
+// intendedRolloutThreadRow projects the values the full upsert would leave in the
+// row for the given metadata, mirroring the ON CONFLICT SET list column by
+// column (including the COALESCE repairs and the follow-up name / memory-mode
+// updates). Columns the upsert leaves alone keep their stored value.
+func intendedRolloutThreadRow(metadata rolloutThreadMetadata, existing storedRolloutThreadRow, createdMillis int64, updatedMillis int64) storedRolloutThreadRow {
+	row := existing
+	row.rolloutPath = nullThreadText(metadata.path)
+	row.source = nullThreadText(metadata.source)
+	row.historyMode = nullThreadText(metadata.historyMode)
+	row.threadSource = nullThreadText(metadata.threadSource)
+	row.agentNickname = nullThreadText(metadata.agentNickname)
+	row.agentRole = nullThreadText(metadata.agentRole)
+	row.agentPath = nullThreadText(metadata.agentPath)
+	row.modelProvider = nullThreadText(metadata.modelProvider)
+	row.model = nullThreadText(metadata.model)
+	row.reasoningEffort = nullThreadText(metadata.reasoningEffort)
+	row.cwd = nullThreadText(metadata.cwd)
+	row.cliVersion = nullThreadText(metadata.cliVersion)
+	row.title = nullThreadText(metadata.title)
+	// preview = COALESCE(NULLIF(excluded.preview, ''), threads.preview)
+	if metadata.preview != "" {
+		row.preview = nullThreadText(metadata.preview)
+	}
+	row.sandboxPolicy = nullThreadText(metadata.sandboxPolicy)
+	row.approvalMode = nullThreadText(metadata.approvalMode)
+	row.memoryMode = nullThreadText(existing.memoryMode.String)
+	if metadata.historyMode == "legacy" {
+		row.memoryMode = nullThreadText(metadata.memoryMode)
+	}
+	row.firstUserMessage = nullThreadText(metadata.firstUserMessage)
+	row.tokensUsed = sql.NullInt64{Int64: metadata.tokensUsed, Valid: true}
+	row.createdAt = sql.NullInt64{Int64: metadata.createdAt.Unix(), Valid: true}
+	row.createdAtMs = sql.NullInt64{Int64: createdMillis, Valid: true}
+	row.updatedAt = sql.NullInt64{Int64: metadata.updatedAt.Unix(), Valid: true}
+	row.updatedAtMs = sql.NullInt64{Int64: updatedMillis, Valid: true}
+	row.archived = sql.NullInt64{Int64: boolToInt64(metadata.archived), Valid: true}
+	row.archivedAt = sql.NullInt64{}
+	if metadata.archived {
+		row.archivedAt = sql.NullInt64{Int64: metadata.updatedAt.Unix(), Valid: true}
+	}
+	// git_* = COALESCE(threads.git_*, excluded.git_*)
+	if !existing.gitSHA.Valid {
+		row.gitSHA = nullThreadText(metadata.gitSHA)
+	}
+	if !existing.gitBranch.Valid {
+		row.gitBranch = nullThreadText(metadata.gitBranch)
+	}
+	if !existing.gitOriginURL.Valid {
+		row.gitOriginURL = nullThreadText(metadata.gitOriginURL)
+	}
+	// The follow-up repair names a paginated thread only while its name is blank.
+	if metadata.historyMode == "paginated" && !rolloutThreadNamePresent(existing.name) {
+		name := strings.TrimSpace(metadata.title)
+		if name == "" {
+			name = strings.TrimSpace(existing.title.String)
+		}
+		if name != "" {
+			row.name = nullThreadText(name)
+		}
+	}
+	return row
+}
+
+// rolloutThreadRowMatchesExceptTimestamps reports whether the rebuilt row is
+// already stored, so the only columns that would move are the thread timestamps.
+func rolloutThreadRowMatchesExceptTimestamps(stored, intended storedRolloutThreadRow) bool {
+	return stored.rolloutPath == intended.rolloutPath &&
+		stored.source == intended.source &&
+		stored.historyMode == intended.historyMode &&
+		stored.threadSource == intended.threadSource &&
+		stored.agentNickname == intended.agentNickname &&
+		stored.agentRole == intended.agentRole &&
+		stored.agentPath == intended.agentPath &&
+		stored.modelProvider == intended.modelProvider &&
+		stored.model == intended.model &&
+		stored.reasoningEffort == intended.reasoningEffort &&
+		stored.cwd == intended.cwd &&
+		stored.cliVersion == intended.cliVersion &&
+		stored.title == intended.title &&
+		stored.name == intended.name &&
+		stored.preview == intended.preview &&
+		stored.sandboxPolicy == intended.sandboxPolicy &&
+		stored.approvalMode == intended.approvalMode &&
+		stored.memoryMode == intended.memoryMode &&
+		stored.firstUserMessage == intended.firstUserMessage &&
+		stored.gitSHA == intended.gitSHA &&
+		stored.gitBranch == intended.gitBranch &&
+		stored.gitOriginURL == intended.gitOriginURL &&
+		stored.createdAt == intended.createdAt &&
+		stored.createdAtMs == intended.createdAtMs &&
+		stored.tokensUsed == intended.tokensUsed &&
+		stored.archived == intended.archived &&
+		stored.archivedAt == intended.archivedAt
+}
+
+// touchThreadUpdatedAt moves only the stored thread timestamps. Rust keeps the
+// same narrow statement in `StateRuntime::touch_thread_updated_at` (#48983).
+func (r *StateRuntime) touchThreadUpdatedAt(ctx context.Context, threadID string, updatedAtUnix int64, updatedAtMillis int64) error {
+	if _, err := r.stateDB.ExecContext(ctx, `
+UPDATE threads
+SET updated_at = ?, updated_at_ms = ?
+WHERE id = ?`, updatedAtUnix, updatedAtMillis, threadID); err != nil {
+		return fmt.Errorf("touch rollout thread %s: %w", threadID, err)
+	}
+	return nil
+}
+
+func nullThreadText(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func rolloutThreadNamePresent(value sql.NullString) bool {
+	return value.Valid && strings.TrimSpace(value.String) != ""
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
