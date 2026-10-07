@@ -147,9 +147,9 @@ func SupportsStreamableHTTPOAuthLogin(ctx context.Context, serverURL string, cli
 	return discovery != nil, nil
 }
 
-func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64, client *http.Client) string {
+func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64, client *http.Client) (string, error) {
 	if timeoutSecs == nil || *timeoutSecs == 0 {
-		return buildMCPOAuthURL(config, scopes)
+		return buildMCPOAuthURL(config, scopes), nil
 	}
 	timeout := time.Duration(*timeoutSecs) * time.Second
 	if timeout > mcpOAuthLoginDiscoveryMaxTimeout {
@@ -178,12 +178,18 @@ func mcpOAuthLoginDiscoveryTimeout(timeoutSecs *uint64) time.Duration {
 	return timeout
 }
 
-func buildMCPOAuthURLWithDiscovery(ctx context.Context, config *ServerConfig, scopes []string, client *http.Client) string {
+func buildMCPOAuthURLWithDiscovery(ctx context.Context, config *ServerConfig, scopes []string, client *http.Client) (string, error) {
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
-	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" {
-		return buildMCPOAuthURL(config, scopes)
+	if mcpOAuthIssuerBindingRejected(err) {
+		// The authorization server answered with metadata that this client
+		// refuses to bind, so there is nothing safe to hand off to; Rust fails
+		// the login instead of guessing an endpoint.
+		return "", err
 	}
-	return buildMCPOAuthAuthorizeURL(discovery.AuthorizationEndpoint, config, scopes, discovery.Resource)
+	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" {
+		return buildMCPOAuthURL(config, scopes), nil
+	}
+	return buildMCPOAuthAuthorizeURL(discovery.AuthorizationEndpoint, config, scopes, discovery.Resource), nil
 }
 
 func buildMCPOAuthURL(config *ServerConfig, scopes []string) string {
@@ -601,6 +607,31 @@ var mcpOAuthIssuerBindingExceptions = []mcpOAuthIssuerBindingException{
 	},
 }
 
+// mcpOAuthIssuerBindingRejection marks a metadata document that parsed but was
+// rejected by validateMCPOAuthAuthorizationServerEndpoints (#39935). Rust
+// propagates that failure straight out of `perform_oauth_login`, so the
+// interactive login hand-off treats it as fatal instead of falling back to the
+// guessed `<server>/oauth/authorize` URL.
+type mcpOAuthIssuerBindingRejection struct{ err error }
+
+func (e *mcpOAuthIssuerBindingRejection) Error() string { return e.err.Error() }
+
+func (e *mcpOAuthIssuerBindingRejection) Unwrap() error { return e.err }
+
+// newMCPOAuthIssuerBindingRejection builds a rejection carrying Rust's exact
+// message.
+func newMCPOAuthIssuerBindingRejection(message string) error {
+	return &mcpOAuthIssuerBindingRejection{err: errors.New(message)}
+}
+
+// mcpOAuthIssuerBindingRejected reports whether err is a binding rejection, i.e.
+// a metadata document that was successfully fetched and decoded but refused by
+// the issuer/origin binding rules.
+func mcpOAuthIssuerBindingRejected(err error) bool {
+	var rejection *mcpOAuthIssuerBindingRejection
+	return errors.As(err, &rejection)
+}
+
 // validateMCPOAuthAuthorizationServerEndpoints ports the origin-binding half of
 // Rust's `validate_authorization_server_endpoints` (#39935): an authorization
 // endpoint must be web-scheme and, when the metadata advertises an issuer, must
@@ -625,33 +656,33 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
 
 	authorizationEndpoint, err := url.Parse(strings.TrimSpace(metadata.AuthorizationEndpoint))
 	if err != nil {
-		return errors.New("OAuth authorization endpoint must be a valid URL")
+		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint must be a valid URL")
 	}
 	if !mcpOAuthWebEndpoint(metadata.AuthorizationEndpoint) {
 		// Rust bails with the same message; Go's discovery already drops non-web
 		// authorization endpoints in fetchMCPOAuthAuthorizationServerMetadata
 		// (#47326), so this arm is a faithful mirror rather than a new gate.
-		return errors.New("OAuth authorization endpoint must use HTTP or HTTPS")
+		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint must use HTTP or HTTPS")
 	}
 
 	var issuer *url.URL
 	if rawIssuer := strings.TrimSpace(metadata.Issuer); rawIssuer != "" {
 		issuer, err = url.Parse(rawIssuer)
 		if err != nil {
-			return errors.New("OAuth authorization server issuer must be a valid URL")
+			return newMCPOAuthIssuerBindingRejection("OAuth authorization server issuer must be a valid URL")
 		}
 	}
 
 	if metadata.AuthorizationResponseIssParameterSupported {
 		if issuer == nil {
-			return errors.New("OAuth issuer-bound callbacks require an authorization server issuer")
+			return newMCPOAuthIssuerBindingRejection("OAuth issuer-bound callbacks require an authorization server issuer")
 		}
 		return nil
 	}
 
 	tokenEndpoint, err := url.Parse(strings.TrimSpace(metadata.TokenEndpoint))
 	if err != nil {
-		return errors.New("OAuth token endpoint must be a valid URL")
+		return newMCPOAuthIssuerBindingRejection("OAuth token endpoint must be a valid URL")
 	}
 
 	if issuer != nil {
@@ -662,14 +693,14 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
 			mcpOAuthIssuerBindingExceptionMatches(issuer.String(), authorizationOrigin, tokenOrigin) {
 			return nil
 		}
-		return errors.New("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
 	}
 
 	// Issuer-less metadata: Rust still requires the token endpoint to share the
 	// authorization endpoint's origin, so the browser hand-off and the token
 	// exchange cannot straddle two different authorization servers.
 	if !sameHTTPOrigin(authorizationEndpoint, tokenEndpoint) {
-		return errors.New("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+		return newMCPOAuthIssuerBindingRejection("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
 	}
 	return nil
 }

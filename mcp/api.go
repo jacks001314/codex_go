@@ -1834,7 +1834,11 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
 		}
-		if loginURL, ok := s.startOAuthLoginServer(name, &config, params, loginID); ok {
+		if loginURL, ok, loginErr := s.startOAuthLoginServer(name, &config, params, loginID); loginErr != nil {
+			// Rust surfaces a refused authorization server out of
+			// `perform_oauth_login`; never hide it behind a guessed URL.
+			return nil, loginErr
+		} else if ok {
 			url = loginURL
 		} else if registration == MCPServerOauthClientRegistrationDcr && strings.TrimSpace(config.OAuthClientID) == "" {
 			// Rust 6dc3ac8721: forced DCR must not silently fall back to a
@@ -1842,7 +1846,11 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 			return nil, invalidMCPRequest("MCP OAuth login requires dynamic client registration (clientRegistration=dcr), but the server does not advertise a registration endpoint")
 		} else {
 			client := s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
-			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
+			fallbackURL, fallbackErr := buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
+			if fallbackErr != nil {
+				return nil, fallbackErr
+			}
+			url = fallbackURL
 		}
 	}
 	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url, LoginID: &loginID}, nil
@@ -1886,28 +1894,31 @@ func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServer
 	return &MCPServerOauthCancelResponse{}, nil
 }
 
-func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool) {
+func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool, error) {
 	if s == nil || config == nil || params == nil || strings.TrimSpace(config.URL) == "" {
-		return "", false
+		return "", false, nil
 	}
 	registration, err := mcpServerOauthClientRegistration(params)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	store := s.oauthStoreForConfig(config)
 	if store == nil {
-		return "", false
+		return "", false, nil
 	}
 	callbackTimeout := mcpOAuthLoginTimeout(params.TimeoutSecs)
 	client := s.httpClientForServer(name, config).oauthHTTPClient(0)
 	ctx := context.Background()
 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
+	if mcpOAuthIssuerBindingRejected(err) {
+		return "", false, err
+	}
 	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" || strings.TrimSpace(discovery.TokenEndpoint) == "" {
-		return "", false
+		return "", false, nil
 	}
 	clientID := strings.TrimSpace(config.OAuthClientID)
 	if clientID == "" && strings.TrimSpace(discovery.RegistrationEndpoint) == "" {
-		return "", false
+		return "", false, nil
 	}
 	login, err := StartOAuthLoginServer(ctx, &OAuthLoginServerOptions{
 		ServerName:            config.OAuthCredentialName(name),
@@ -1930,14 +1941,14 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		CallbackMode:          discovery.CallbackMode,
 	})
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	threadID := ""
 	if params.ThreadID != nil {
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
 	s.trackOAuthLogin(name, threadID, loginID, login)
-	return login.AuthorizationURL, true
+	return login.AuthorizationURL, true, nil
 }
 
 func mcpOAuthLoginTimeout(timeoutSecs *uint64) time.Duration {

@@ -307,3 +307,70 @@ func newMCPOAuthResourceMetadataFixture(t *testing.T, authorizationServers []str
 	}))
 	return server
 }
+
+// A metadata document that was fetched and decoded but refused by the
+// authorization-server binding rules must fail the interactive login instead of
+// falling back to the guessed `<server>/oauth/authorize` URL. Rust propagates
+// `validate_authorization_server_endpoints` out of `perform_oauth_login`
+// (#39935), so hiding the rejection behind a fallback would diverge from it.
+func TestMCPServiceOauthLoginFailsForUnboundAuthorizationServerLikeRust(t *testing.T) {
+	newLoginService := func(t *testing.T, serverURL string) *MCPService {
+		t.Helper()
+		service := NewMCPService(&RuntimeConfig{
+			CodexHome: t.TempDir(),
+			Servers: map[string]ServerRegistration{
+				"docs": {Config: ServerConfig{URL: serverURL, OAuthClientID: "client-1", Enabled: true}},
+			},
+		})
+		t.Cleanup(func() { _ = service.Close() })
+		return service
+	}
+
+	unbound := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
+		"authorization_endpoint": "https://issuer.example/authorize",
+		"token_endpoint":         "https://tokens.example/token",
+	})
+	defer unbound.Close()
+	service := newLoginService(t, unbound.URL+"/mcp")
+	response, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}})
+	if err == nil || !strings.Contains(err.Error(), "OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks") {
+		t.Fatalf("OauthLogin() error = %v, want the unbound authorization server rejected", err)
+	}
+	if !mcpOAuthIssuerBindingRejected(err) {
+		t.Fatalf("OauthLogin() error = %v, want a binding rejection rather than a generic discovery failure", err)
+	}
+	if response != nil {
+		t.Fatalf("OauthLogin() = %#v, want no guessed fallback authorization URL", response)
+	}
+
+	// The same rejection must also surface on the legacy URL-building path that
+	// runs when the interactive login server cannot start at all (no credential
+	// store: the service has no CodexHome), instead of returning a guessed URL.
+	timeoutSecs := uint64(5)
+	stateless := NewMCPService(&RuntimeConfig{
+		Servers: map[string]ServerRegistration{
+			"docs": {Config: ServerConfig{URL: unbound.URL + "/mcp", OAuthClientID: "client-1", Enabled: true}},
+		},
+	})
+	t.Cleanup(func() { _ = stateless.Close() })
+	response, err = stateless.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}, TimeoutSecs: &timeoutSecs})
+	if err == nil || response != nil {
+		t.Fatalf("OauthLogin() = (%#v, %v), want the unbound authorization server rejected without a fallback URL", response, err)
+	}
+
+	// Positive control: metadata that satisfies the binding rules still starts
+	// the interactive login against the discovered endpoint.
+	bound := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
+		"authorization_endpoint": "https://issuer.example/authorize",
+		"token_endpoint":         "https://issuer.example/token",
+	})
+	defer bound.Close()
+	boundService := newLoginService(t, bound.URL+"/mcp")
+	login, err := boundService.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}})
+	if err != nil {
+		t.Fatalf("OauthLogin() error = %v, want the bound authorization server accepted", err)
+	}
+	if login == nil || !strings.Contains(login.AuthorizationURL, "https://issuer.example/authorize") {
+		t.Fatalf("login = %#v, want the discovered authorization endpoint used", login)
+	}
+}
