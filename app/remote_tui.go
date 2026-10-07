@@ -489,18 +489,22 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		FeedbackEnabled:               settings.FeedbackEnabled,
 		ModelPickerOptions:            interactiveModelPickerOptions(root),
 		ServiceTierCommands:           interactiveServiceTierCommands(state.Model),
-		Personality:                   settings.Personality,
-		Notifications:                 settings.Notifications,
-		NotificationMethod:            settings.NotificationMethod,
-		NotificationCondition:         settings.NotificationCondition,
-		PermissionRequirements:        settings.PermissionRequirements,
-		HideRateLimitModelNudge:       settings.HideRateLimitModelNudge,
-		TUITheme:                      settings.TUITheme,
-		StartupConfigWarnings:         remoteTUIStartupConfigWarnings(settings.TUITheme),
-		TUIPet:                        settings.TUIPet,
-		CodexHome:                     auth.DefaultCodexHome(),
-		PetEnv:                        environmentMapFromEnviron(os.Environ()),
-		OnPostNotification:            interactiveNotificationPoster(stdout),
+		// Rust #51253: the server requirements read at startup
+		// (interactiveRemoteLoadSettings -> configRequirements/read) constrain the
+		// model catalog's service tiers on the TUI's catalog path.
+		ServiceTierRequirements: settings.ServiceTierRequirements,
+		Personality:             settings.Personality,
+		Notifications:           settings.Notifications,
+		NotificationMethod:      settings.NotificationMethod,
+		NotificationCondition:   settings.NotificationCondition,
+		PermissionRequirements:  settings.PermissionRequirements,
+		HideRateLimitModelNudge: settings.HideRateLimitModelNudge,
+		TUITheme:                settings.TUITheme,
+		StartupConfigWarnings:   remoteTUIStartupConfigWarnings(settings.TUITheme),
+		TUIPet:                  settings.TUIPet,
+		CodexHome:               auth.DefaultCodexHome(),
+		PetEnv:                  environmentMapFromEnviron(os.Environ()),
+		OnPostNotification:      interactiveNotificationPoster(stdout),
 		OnSubmitRequest: func(request codextea.SubmitRequest) bubbletea.Cmd {
 			if state.ThreadName == "" && len(state.Messages) == 0 {
 				if title := interactiveAutoThreadTitle(request.Prompt); title != "" {
@@ -1055,6 +1059,11 @@ func interactiveRemoteReadSettings(ctx context.Context, client *remoteAppServerT
 	var requirements config.ConfigRequirementsReadResponse
 	if err := remoteSessionRequest(ctx, client, appserver.MethodConfigRequirementsRead, map[string]any{}, &requirements); err == nil {
 		result.PermissionRequirements = interactivePermissionRequirementsFromConfigRequirements(requirements.Requirements)
+		// Rust #51253: the same configRequirements/read response the settings load
+		// already performs also carries the server's speed policies, which the TUI
+		// constrains its model catalog's service tiers with
+		// (constrain_server_service_tiers at the TUI bootstrap).
+		result.ServiceTierRequirements = &requirements
 	}
 	return result, nil
 }

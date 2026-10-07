@@ -305,8 +305,12 @@ type SettingsWriteResult struct {
 	NotificationCondition codextui.NotificationCondition
 	// RightClickPaste is the configured `tui.right_click_paste` value (#48118).
 	// Nil preserves the current value; the config default is `auto`.
-	RightClickPaste         *string
-	PermissionRequirements  *chatwidget.PermissionRequirements
+	RightClickPaste        *string
+	PermissionRequirements *chatwidget.PermissionRequirements
+	// ServiceTierRequirements carries the server's configRequirements/read
+	// response the settings load already performs, so the TUI can constrain its
+	// model catalog's service tiers (Rust #51253). Nil leaves the catalog alone.
+	ServiceTierRequirements *config.ConfigRequirementsReadResponse
 	HideRateLimitModelNudge *bool
 	TUITheme                string
 	TUIPet                  string
@@ -918,17 +922,25 @@ type streamEnvelopeMsg struct {
 }
 
 type Options struct {
-	Width                int
-	Height               int
-	NoAltScreen          bool
-	Placeholder          string
-	ModelPickerOptions   []codextui.ModelPickerOption
-	ServiceTierCommands  []bottompane.ServiceTierCommand
-	SessionPickerItems   []codextui.SessionSummary
-	SessionPickerCWD     string
-	SessionPickerView    string
-	ShowSessionHeader    bool
-	SessionHeaderVersion string
+	Width               int
+	Height              int
+	NoAltScreen         bool
+	Placeholder         string
+	ModelPickerOptions  []codextui.ModelPickerOption
+	ServiceTierCommands []bottompane.ServiceTierCommand
+	// ServiceTierRequirements carries the server's configRequirements/read
+	// response so the model catalog's service tiers are constrained by the
+	// server's reported speed policies before the picker and the service-tier
+	// commands read them (Rust #51253
+	// service_tier_resolution::constrain_server_service_tiers, called by the TUI
+	// bootstrap in app_server_session.rs after model/list + configRequirements/read).
+	// Nil leaves the catalog untouched.
+	ServiceTierRequirements *config.ConfigRequirementsReadResponse
+	SessionPickerItems      []codextui.SessionSummary
+	SessionPickerCWD        string
+	SessionPickerView       string
+	ShowSessionHeader       bool
+	SessionHeaderVersion    string
 	// ShowTooltips mirrors Rust's `tui.show_tooltips` preference: when enabled
 	// the session header shows a startup tooltip resolved against the current
 	// keybindings. A nil value keeps tooltips off, so callers that do not opt in
@@ -1490,8 +1502,11 @@ type Model struct {
 	mentionPluginInventoryErr     string
 	modelPickerOpts               []codextui.ModelPickerOption
 	serviceTierCommands           []bottompane.ServiceTierCommand
-	sessionItems                  []codextui.SessionSummary
-	sessionCWD                    string
+	// serviceTierRequirements is the server's configRequirements/read snapshot
+	// the catalog constraining is driven from (Rust #51253).
+	serviceTierRequirements *config.ConfigRequirementsReadResponse
+	sessionItems            []codextui.SessionSummary
+	sessionCWD              string
 	// sessionWorkspaceRoots mirrors the active thread's server-authoritative
 	// runtime workspace roots (Rust #46494). Client config paths belong to the
 	// client host, so a Session-sourced fork must forward the roots the server
@@ -2029,8 +2044,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		statusStyle:                     lipgloss.NewStyle().Bold(true),
 		footerStyle:                     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
 		bottomStyle:                     lipgloss.NewStyle(),
-		modelPickerOpts:                 append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...),
-		serviceTierCommands:             serviceTierCommandsForPolicy(options.FeatureSettings, options.ServiceTierCommands),
+		modelPickerOpts:                 codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), options.ModelPickerOptions...), options.ServiceTierRequirements),
+		serviceTierCommands:             serviceTierCommandsForPolicy(options.FeatureSettings, constrainServiceTierCommandsByRequirements(options.ServiceTierRequirements, options.ServiceTierCommands)),
+		serviceTierRequirements:         options.ServiceTierRequirements,
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
 		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),

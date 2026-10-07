@@ -67,6 +67,40 @@ func UltrafastModeEnabled(featureSettings map[string]bool) bool {
 	return true
 }
 
+// ServiceTierPolicyFromRequirements mirrors the per-requirements `tier_enabled`
+// closure inside Rust's service_tier_resolution::constrain_server_service_tiers
+// (#51253). It returns the policy that decides whether a routing tier survives
+// the server's reported speed policies. ok=false means the response carries no
+// feature requirements, so callers must leave the catalog untouched (Rust's
+// early `let Some(features) = ... else { return }`).
+func ServiceTierPolicyFromRequirements(response *config.ConfigRequirementsReadResponse) (func(tier string) bool, bool) {
+	if response == nil || response.Requirements == nil || response.Requirements.FeatureRequirements == nil {
+		return nil, false
+	}
+	features := response.Requirements.FeatureRequirements
+	fastEnabled := true
+	if enabled, ok := features[FeatureKeyFastMode]; ok {
+		fastEnabled = enabled
+	}
+	ultrafastEnabled := true
+	if enabled, ok := features[FeatureKeyUltrafastMode]; ok {
+		ultrafastEnabled = enabled
+	}
+	// Older servers enforce Ultra Fast through their shared Fast mode gate.
+	independent := response.SupportsIndependentSpeedModes != nil && *response.SupportsIndependentSpeedModes
+	ultrafastEnabled = ultrafastEnabled && (independent || fastEnabled)
+	return func(tier string) bool {
+		switch strings.ToLower(strings.TrimSpace(tier)) {
+		case ServiceTierFlexRequestValue:
+			return true
+		case ServiceTierUltrafastRequestValue:
+			return ultrafastEnabled
+		default:
+			return fastEnabled
+		}
+	}, true
+}
+
 // ConstrainServerServiceTiers mirrors Rust
 // service_tier_resolution::constrain_server_service_tiers (#51253): drop the
 // catalog's service tiers (and clear a disabled default tier) that the server's
@@ -76,29 +110,9 @@ func UltrafastModeEnabled(featureSettings map[string]bool) bool {
 // Rust's early return. `supports_independent_speed_modes` absent (nil) keeps
 // Ultra Fast behind the shared Fast gate, which is how older servers enforce it.
 func ConstrainServerServiceTiers(models []model.ModelInfo, response *config.ConfigRequirementsReadResponse) []model.ModelInfo {
-	if response == nil || response.Requirements == nil || response.Requirements.FeatureRequirements == nil {
+	tierEnabled, ok := ServiceTierPolicyFromRequirements(response)
+	if !ok {
 		return models
-	}
-	requirements := response.Requirements.FeatureRequirements
-	fastEnabled := true
-	if enabled, ok := requirements[FeatureKeyFastMode]; ok {
-		fastEnabled = enabled
-	}
-	ultrafastEnabled := true
-	if enabled, ok := requirements[FeatureKeyUltrafastMode]; ok {
-		ultrafastEnabled = enabled
-	}
-	independent := response.SupportsIndependentSpeedModes != nil && *response.SupportsIndependentSpeedModes
-	ultrafastEnabled = ultrafastEnabled && (independent || fastEnabled)
-	tierEnabled := func(tier string) bool {
-		switch strings.ToLower(strings.TrimSpace(tier)) {
-		case ServiceTierFlexRequestValue:
-			return true
-		case ServiceTierUltrafastRequestValue:
-			return ultrafastEnabled
-		default:
-			return fastEnabled
-		}
 	}
 	constrained := make([]model.ModelInfo, len(models))
 	copy(constrained, models)
@@ -113,6 +127,37 @@ func ConstrainServerServiceTiers(models []model.ModelInfo, response *config.Conf
 		if constrained[index].DefaultServiceTier != "" && !tierEnabled(constrained[index].DefaultServiceTier) {
 			constrained[index].DefaultServiceTier = ""
 		}
+	}
+	return constrained
+}
+
+// ConstrainServerServiceTierOptions is the picker-catalog form of
+// constrain_server_service_tiers (#51253). The TUI's model picker options carry
+// the same tier ids as the server preset catalog, and both the picker and the
+// service-tier commands are derived from them, so constraining here is what
+// makes the server policies effective on the TUI's model-catalog path (Rust
+// app_server_session bootstrap calls constrain_server_service_tiers on the
+// presets it just built from model/list).
+//
+// A response without feature requirements leaves the options untouched.
+func ConstrainServerServiceTierOptions(options []ModelPickerOption, response *config.ConfigRequirementsReadResponse) []ModelPickerOption {
+	tierEnabled, ok := ServiceTierPolicyFromRequirements(response)
+	if !ok || len(options) == 0 {
+		return options
+	}
+	constrained := make([]ModelPickerOption, len(options))
+	copy(constrained, options)
+	for index := range constrained {
+		if constrained[index].ServiceTiers == nil {
+			continue
+		}
+		tiers := make([]string, 0, len(constrained[index].ServiceTiers))
+		for _, tier := range constrained[index].ServiceTiers {
+			if tierEnabled(tier) {
+				tiers = append(tiers, tier)
+			}
+		}
+		constrained[index].ServiceTiers = tiers
 	}
 	return constrained
 }

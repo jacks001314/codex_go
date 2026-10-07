@@ -3,6 +3,7 @@ package tea
 import (
 	"strings"
 
+	"codex_go/config"
 	codextui "codex_go/tui"
 	bottompane "codex_go/tui/bottom_pane"
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -68,7 +69,11 @@ func (m *Model) applyModelsResult(msg ModelsResultMsg) {
 	if msg.Err != nil || len(msg.Options) == 0 {
 		return
 	}
-	m.modelPickerOpts = append([]codextui.ModelPickerOption(nil), msg.Options...)
+	// Rust #51253 (app_server_session bootstrap): the catalog the server hands
+	// back is constrained by the server's requirements before the picker and the
+	// service-tier commands read it, so an older server's shared Fast gate (and
+	// a server that allows the independent Ultra Fast policy) both hold here.
+	m.modelPickerOpts = codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
 	m.refreshModelPicker()
 	m.refreshServiceTierCommands()
 }
@@ -88,10 +93,31 @@ func (m *Model) refreshServiceTierCommands() {
 	}
 	for _, option := range options {
 		if option.ID == m.State.Model {
-			m.serviceTierCommands = serviceTierCommandsForPolicy(m.featureSettings, bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers))
+			commands := bottompane.ServiceTierCommandsFromIDs(option.ServiceTiers)
+			commands = serviceTierCommandsForPolicy(m.featureSettings, commands)
+			m.serviceTierCommands = constrainServiceTierCommandsByRequirements(m.serviceTierRequirements, commands)
 			return
 		}
 	}
+}
+
+// constrainServiceTierCommandsByRequirements drops the service tiers the
+// server's reported requirements do not allow (Rust #51253
+// constrain_server_service_tiers). It is the command-list form of the catalog
+// constraining: the startup `ServiceTierCommands` option is not derived from the
+// picker catalog, so it is filtered with the same policy here.
+func constrainServiceTierCommandsByRequirements(requirements *config.ConfigRequirementsReadResponse, commands []bottompane.ServiceTierCommand) []bottompane.ServiceTierCommand {
+	tierEnabled, ok := codextui.ServiceTierPolicyFromRequirements(requirements)
+	if !ok {
+		return commands
+	}
+	filtered := make([]bottompane.ServiceTierCommand, 0, len(commands))
+	for _, command := range commands {
+		if tierEnabled(command.ID) {
+			filtered = append(filtered, command)
+		}
+	}
+	return filtered
 }
 
 // serviceTierCommandsForPolicy drops the service tiers the selected policies
@@ -331,5 +357,8 @@ func (m *Model) applyModelCatalogResult(msg ModelCatalogResultMsg) {
 	if msg.Err != nil || len(msg.Options) == 0 {
 		return
 	}
-	m.modelCatalogOpts = append([]codextui.ModelPickerOption(nil), msg.Options...)
+	// Rust #51253: the hidden-inclusive catalog is constrained the same way as
+	// the picker catalog (the Reserve model is picker-hidden but still resolves
+	// through this list).
+	m.modelCatalogOpts = codextui.ConstrainServerServiceTierOptions(append([]codextui.ModelPickerOption(nil), msg.Options...), m.serviceTierRequirements)
 }

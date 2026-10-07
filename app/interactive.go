@@ -1006,14 +1006,17 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		DisablePasteBurst:          settings.DisablePasteBurst,
 		ModelPickerOptions:         interactiveModelPickerOptions(root),
 		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
-		OnListModels:               interactiveOnListModels(root, hasChatGPTAccount),
-		Personality:                settings.Personality,
-		Notifications:              settings.Notifications,
-		NotificationMethod:         settings.NotificationMethod,
-		NotificationCondition:      settings.NotificationCondition,
-		PermissionRequirements:     settings.PermissionRequirements,
-		MCPServers:                 mcpStatuses,
-		StartupConfigWarnings:      interactiveStartupConfigWarnings(auth.DefaultCodexHome(), strings.TrimSpace(state.CWD), settings.TUITheme),
+		// Rust #51253: the server requirements the model catalog is constrained
+		// with, read by interactiveLoadSettings alongside the other preferences.
+		ServiceTierRequirements: settings.ServiceTierRequirements,
+		OnListModels:            interactiveOnListModels(root, hasChatGPTAccount),
+		Personality:             settings.Personality,
+		Notifications:           settings.Notifications,
+		NotificationMethod:      settings.NotificationMethod,
+		NotificationCondition:   settings.NotificationCondition,
+		PermissionRequirements:  settings.PermissionRequirements,
+		MCPServers:              mcpStatuses,
+		StartupConfigWarnings:   interactiveStartupConfigWarnings(auth.DefaultCodexHome(), strings.TrimSpace(state.CWD), settings.TUITheme),
 		OnReadMCPInventory: func(detail bool) ([]historycell.McpServerStatus, error) {
 			if mcpService == nil {
 				return nil, nil
@@ -1769,7 +1772,22 @@ func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResul
 	if err != nil {
 		return codextea.SettingsWriteResult{}, err
 	}
-	return interactiveSettingsFromConfig(loaded), nil
+	result := interactiveSettingsFromConfig(loaded)
+	// Rust #51253: the TUI bootstrap reads the server's configRequirements/read
+	// next to model/list and constrains the model catalog's service tiers with it
+	// (app_server_session bootstrap -> service_tier_resolution::
+	// constrain_server_service_tiers). The embedded app server answers that
+	// request from the same config service, so the settings load that already
+	// runs here carries the requirements instead of issuing a second request.
+	result.ServiceTierRequirements = interactiveServiceTierRequirements()
+	return result, nil
+}
+
+// interactiveServiceTierRequirements resolves the embedded app server's
+// configRequirements/read response (Rust app-server config_processor answers
+// `supportsIndependentSpeedModes: Some(true)` unconditionally, #51253).
+func interactiveServiceTierRequirements() *config.ConfigRequirementsReadResponse {
+	return config.NewConfigService(auth.DefaultCodexHome()).Requirements()
 }
 
 func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWriteResult {
