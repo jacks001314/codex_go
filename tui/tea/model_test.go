@@ -8973,3 +8973,32 @@ func TestModelCommandActivityRendersManualShellAndTurnBoundaryLikeRust(t *testin
 		t.Fatalf("turn completion must keep the rendered command:\n%s", view)
 	}
 }
+
+// TestNewModelCarriesServerConnectionToStatusCardLikeRust mirrors Rust #49145:
+// /status hides the reasoning summaries setting while a server connection owns
+// the model settings, and NewModel is where the app attaches that connection
+// kind (app/remote_tui.go sets LocalDaemonSession / RemoteAppServer).
+func TestNewModelCarriesServerConnectionToStatusCardLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		options    Options
+		wantRemote bool
+	}{
+		{"in-process session", Options{Width: 100, Height: 24}, false},
+		{"local background daemon", Options{Width: 100, Height: 24, LocalDaemonSession: true}, true},
+		{"remote app server", Options{Width: 100, Height: 24, RemoteAppServer: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := codextui.NewState(nil)
+			NewModel(state, tc.options)
+			if state.RemoteConnection != tc.wantRemote {
+				t.Fatalf("RemoteConnection = %v, want %v", state.RemoteConnection, tc.wantRemote)
+			}
+			card := state.RenderStatusCardWidth(100)
+			hasSummaries := strings.Contains(card, "summaries auto")
+			if hasSummaries == tc.wantRemote {
+				t.Fatalf("%s: summaries shown = %v, want %v:\n%s", tc.name, hasSummaries, !tc.wantRemote, card)
+			}
+		})
+	}
+}

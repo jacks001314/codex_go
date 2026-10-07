@@ -1990,6 +1990,11 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if state == nil {
 		state = codextui.NewState(nil)
 	}
+	// Rust #49145: the /status card drops the reasoning summaries setting while a
+	// server connection (remote server or local background daemon) owns the model
+	// settings; the app attaches that connection kind to the tea options
+	// (app/remote_tui.go sets LocalDaemonSession / RemoteAppServer).
+	state.RemoteConnection = options.LocalDaemonSession || options.RemoteAppServer
 	// Rust #51500: the pinned-section discovery and the pin/unpin request are the
 	// TUI's own flow, driven by one injected app-server request function. Hosts
 	// that implement either callback directly keep it.
