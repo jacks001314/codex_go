@@ -44,7 +44,7 @@ func TestRuntimePreviousTurnSettingsFollowRecordedTurnContextLikeRust(t *testing
 	if err != nil {
 		t.Fatalf("read started thread error: %v", err)
 	}
-	router.recordRuntimeTurnContext(threadID, "turn-1", &appTurnRunConfig{
+	router.recordRuntimeTurnContext(threadID, "turn-1", "turn-1", &appTurnRunConfig{
 		Model:              "gpt-previous",
 		ApprovalPolicy:     "on-request",
 		ReasoningEffort:    "high",

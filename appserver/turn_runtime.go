@@ -1615,7 +1615,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// so the next turn compares against this turn's model and compaction hash
 	// (Rust PreviousTurnSettings, #46324).
 	if record, recErr := r.threadRecord(session.ThreadID(threadID), true, false); recErr == nil && record != nil {
-		r.recordRuntimeTurnContext(threadID, turnID, runConfig, record)
+		r.recordRuntimeTurnContext(threadID, turnID, rootTurnID, runConfig, record)
 	}
 	r.updateActiveRuntimeTurnAnalytics(threadID, turnID, connectionID, runConfig)
 	// Rust #43110: record the trusted reasoning-effort update with this turn so

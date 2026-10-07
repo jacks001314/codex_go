@@ -18,7 +18,7 @@ import (
 // `PreviousTurnSettings` from the last record, which is what the previous-model
 // compaction decision compares against (#46324). Go previously wrote no such
 // record, so a thread had no recorded previous turn at all.
-func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string, runConfig *appTurnRunConfig, record *session.Record) {
+func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string, rootTurnID string, runConfig *appTurnRunConfig, record *session.Record) {
 	if r == nil || runConfig == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return
 	}
@@ -27,7 +27,11 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 		cwd = strings.TrimSpace(record.Metadata.CWD)
 	}
 	turnContext := rollout.TurnContextRecord{
-		TurnID:         strings.TrimSpace(turnID),
+		TurnID: strings.TrimSpace(turnID),
+		// Rust #51402: the context record keeps the turn's root lineage so a
+		// recovered turn reconstructs its attribution from the model-context
+		// record when the `turn_started` wire predates the attribution field.
+		RootTurnID:     strings.TrimSpace(rootTurnID),
 		CWD:            cwd,
 		ApprovalPolicy: strings.TrimSpace(runConfig.ApprovalPolicy),
 		SandboxPolicy:  nil,

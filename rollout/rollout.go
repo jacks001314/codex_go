@@ -763,7 +763,12 @@ func (r *Recorder) AppendTurnStartedWithAttribution(attribution *TurnAttribution
 const TurnContextSummaryPlaceholder = "none"
 
 type TurnContextRecord struct {
-	TurnID         string `json:"turn_id,omitempty"`
+	TurnID string `json:"turn_id,omitempty"`
+	// RootTurnID is the root turn that owns this turn's attribution, retained
+	// across recovery (Rust `TurnContextItem::root_turn_id`, Rust #51402
+	// `551bd409eb`). Rust's rollout reconstruction falls back to it when a
+	// `turn_started` record predates the persisted `turn_attribution`.
+	RootTurnID     string `json:"root_turn_id,omitempty"`
 	CWD            string `json:"cwd,omitempty"`
 	ApprovalPolicy string `json:"approval_policy,omitempty"`
 	SandboxPolicy  any    `json:"sandbox_policy,omitempty"`
