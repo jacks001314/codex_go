@@ -3740,17 +3740,12 @@ func formatTOMLInlineKey(value string) string {
 	return strconv.Quote(value)
 }
 
+// configVersion fingerprints the values of one configuration layer. It backs both the
+// layer versions reported by config/read and the optimistic-concurrency check on writes
+// (Rust ConfigLayerEntry::version, codex-rs/config/src/state.rs), and it is the
+// canonical TOML fingerprint of #49295: see VersionForTOML.
 func configVersion(values map[string]any) string {
-	data, err := json.Marshal(values)
-	if err != nil {
-		return "0"
-	}
-	var hash uint64 = 1469598103934665603
-	for _, b := range data {
-		hash ^= uint64(b)
-		hash *= 1099511628211
-	}
-	return fmt.Sprintf("%x", hash)
+	return VersionForTOML(values)
 }
 
 func cloneRequirements(requirements *ConfigRequirements) *ConfigRequirements {
