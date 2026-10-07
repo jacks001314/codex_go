@@ -17,3 +17,12 @@ func EnsureNonElevated() error {
 	}
 	return nil
 }
+
+// IsElevated reports whether the launcher's own token is elevated, mirroring
+// Rust app-server-daemon::is_elevated (#50803), which `remote-control` calls to
+// decide daemon eligibility. Off Windows the probe is always false, matching the
+// `#[cfg(windows)]` gate on the Rust call site, and the Go probe cannot fail
+// where Rust's token query returns a Result.
+func IsElevated() bool {
+	return currentProcessElevated()
+}

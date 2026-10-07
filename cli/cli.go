@@ -494,7 +494,12 @@ type ApplyOptions struct {
 }
 
 type RemoteControlOptions struct {
-	JSON       bool
+	JSON bool
+	// NoDaemon mirrors Rust RemoteControlCommand.no_daemon (#50803): run the
+	// embedded app-server in the foreground until Ctrl-C instead of the managed
+	// daemon. The top-level --no-daemon also sets it, matching Rust cli_main's
+	// `remote_control_cli.no_daemon |= interactive.no_daemon`.
+	NoDaemon   bool
 	Subcommand string
 }
 
@@ -3172,6 +3177,8 @@ func parseRemoteControl(args []string, remote *RemoteControlOptions) error {
 		switch arg {
 		case "--json":
 			remote.JSON = true
+		case "--no-daemon":
+			remote.NoDaemon = true
 		case "start", "stop", "pair":
 			if remote.Subcommand != "" {
 				return errors.New("remote-control accepts at most one subcommand")

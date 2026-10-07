@@ -140,7 +140,11 @@ func RunWithOptions(ctx context.Context, args []string, stdin io.Reader, stdout,
 	case cli.CommandMigrateRollouts:
 		return runMigrateRollouts(parsed.MigrateRollouts, parsed.Root, stdout, stderr)
 	case cli.CommandRemoteControl:
-		return runRemoteControl(ctx, parsed.RemoteControl, stdout)
+		// Rust cli_main merges the interactive CLI into the subcommand:
+		// `remote_control_cli.no_daemon |= interactive.no_daemon` (#50803).
+		remoteControl := parsed.RemoteControl
+		remoteControl.NoDaemon = remoteControl.NoDaemon || parsed.Root.Shared.NoDaemon
+		return runRemoteControl(ctx, remoteControl, &parsed.Root, stdout)
 	case cli.CommandAppServer:
 		return runAppServer(ctx, parsed.AppServer, &parsed.Root, stdout, stderr, stdin)
 	case cli.CommandApp:

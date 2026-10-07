@@ -27,7 +27,9 @@ func TestRemoteControlStartPlatformBoundary(t *testing.T) {
 // TestRemoteControlForegroundBindsControlSocketOnWindows pins the Windows
 // transport: the foreground command serves its own control socket through the
 // codexuds package instead of failing with an unsupported-transport error
-// (Rust serves the same socket through the codex-uds crate).
+// (Rust serves the same socket through the codex-uds crate). A plain
+// `remote-control` prefers the managed daemon since #50803, so the foreground
+// transport is selected with --no-daemon, exactly as Rust keeps it reachable.
 func TestRemoteControlForegroundBindsControlSocketOnWindows(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("foreground remote-control uses a Unix socket")
@@ -36,7 +38,7 @@ func TestRemoteControlForegroundBindsControlSocketOnWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var stdout bytes.Buffer
-	err := Run(ctx, []string{"remote-control"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
+	err := Run(ctx, []string{"remote-control", "--no-daemon"}, strings.NewReader(""), &stdout, &bytes.Buffer{})
 	if err != nil && strings.Contains(err.Error(), "unix socket transport is not supported") {
 		t.Fatalf("foreground remote control could not serve the control socket: %v", err)
 	}
