@@ -1918,7 +1918,10 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Rust #40437/#46552: a Multi-Agent V2 child can finish after the parent
 	// turn that spawned it, so its successful completion is recorded as an item
 	// on that parent turn.
-	r.emitRuntimeSubAgentCompletedActivity(threadID, turnID, params.ParentTurnID)
+	// Rust #51402 (agent/control/completion.rs:44-70): a turn started by another
+	// agent's triggered communication reports its completed activity to that
+	// initiating agent when it is not the child's direct parent.
+	r.emitRuntimeSubAgentCompletedActivity(threadID, turnID, params.ParentTurnID, params.InitiatingAgentPath)
 	// Rust's turn task timer records the end-to-end duration when the task ends.
 	r.emitTurnE2EDurationMetric(r.services.TurnMetrics, durationMS)
 	completedTurn := completedTurnNotificationTurn(turnID, rootTurnIDForTurn(params, turnID), TurnStatusCompleted, nil, &record.StartedAt, &completedAtUnix, &durationMS)
@@ -2492,8 +2495,11 @@ func lastAgentMessageFromThreadItems(items []ThreadItem) string {
 // `SubAgentActivityKind::Completed` emission (`agent/control/completion.rs`,
 // #40437 / #46552): a successful Multi-Agent V2 thread-spawn child records a
 // completed activity item on the parent turn that spawned it, even when that
-// turn has already finished.
-func (r *RuntimeRouter) emitRuntimeSubAgentCompletedActivity(childThreadID string, childTurnID string, parentTurnID string) {
+// turn has already finished. #51402 extends the routing: when the child turn
+// was started by another agent's triggered communication (its
+// `initiating_agent_path` differs from the child's direct parent path), the
+// item is recorded on the initiating agent's thread instead.
+func (r *RuntimeRouter) emitRuntimeSubAgentCompletedActivity(childThreadID string, childTurnID string, parentTurnID string, initiatingAgentPath string) {
 	if r == nil || !r.hasRuntimeThreadStore() {
 		return
 	}
@@ -2511,6 +2517,23 @@ func (r *RuntimeRouter) emitRuntimeSubAgentCompletedActivity(childThreadID strin
 	parentThreadID := strings.TrimSpace(string(record.ParentThreadID))
 	if agentPath == "" || parentThreadID == "" {
 		return
+	}
+	// Rust #51402 (agent/control/completion.rs:44-70): the child's direct
+	// parent path is derived from its own agent path; a path with no parent
+	// segment drops the notice. A triggered sender that is not the direct
+	// parent reroutes the activity to the initiating agent, and an initiator
+	// no live agent owns drops it rather than misrouting it to the parent
+	// (Rust `resolve_agent_reference(..).ok()` yields `None`).
+	parentPath, hasParentPath := parentAgentPathOf(agentPath)
+	if !hasParentPath {
+		return
+	}
+	if initiating := strings.TrimSpace(initiatingAgentPath); initiating != "" && initiating != parentPath {
+		resolved, found := r.agentThreadIDForPath(initiating)
+		if !found {
+			return
+		}
+		parentThreadID = resolved
 	}
 	item := session.Item{
 		ID:        "subagent-completed-" + childTurnID,
