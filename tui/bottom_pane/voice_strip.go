@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/mattn/go-runewidth"
+
+	codextui "codex_go/tui"
 )
 
 // VoiceStripPhase is the strip's connection state.
@@ -19,12 +21,11 @@ const (
 	VoiceStripActive     VoiceStripPhase = "active"
 )
 
-// voiceLoadingFrames is the braille spinner used while connecting.
-var voiceLoadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 const (
-	// voiceIdleGlyph marks an inactive or reduced-motion session.
-	voiceIdleGlyph = "◌"
+	// voiceIdleGlyph marks an inactive or reduced-motion session. It is the
+	// shared reduced-motion loading glyph (Rust #50112 moved the spinner frames
+	// and this fallback into `codex-rs/tui/src/motion.rs`).
+	voiceIdleGlyph = codextui.LoadingGlyphReducedMotion
 	// voiceActiveGlyph marks live, unmuted capture.
 	voiceActiveGlyph = "●"
 
@@ -68,20 +69,15 @@ func VoiceStripHeight(width int) int {
 	return 2
 }
 
-// VoiceLoadingGlyph returns the spinner frame for the elapsed time.
+// VoiceLoadingGlyph returns the spinner frame for the elapsed time. The frames
+// and their 100 ms cadence come from the shared motion helpers: Rust #50112
+// (codex-rs/tui/src/motion.rs::loading_glyph) moved the voice strip's private
+// spinner into `motion.rs`, and the strip now only supplies the phase.
 func VoiceLoadingGlyph(startedAt time.Time, animations bool, now time.Time) string {
-	if !animations {
-		return voiceIdleGlyph
-	}
 	if now.IsZero() {
 		now = time.Now()
 	}
-	elapsed := now.Sub(startedAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	frame := int(elapsed.Milliseconds() / 100)
-	return voiceLoadingFrames[frame%len(voiceLoadingFrames)]
+	return codextui.LoadingGlyph(startedAt, codextui.MotionModeFromAnimationsEnabled(animations), now)
 }
 
 // VoiceStripLines renders the strip for one width. Styling is applied by the

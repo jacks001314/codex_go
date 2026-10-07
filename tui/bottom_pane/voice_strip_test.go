@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	codextui "codex_go/tui"
 )
 
 func TestVoiceStripHeight(t *testing.T) {
@@ -25,15 +27,15 @@ func TestVoiceLoadingGlyphHonoursReducedMotion(t *testing.T) {
 	}
 	// The spinner advances every 100 ms and wraps.
 	first := VoiceLoadingGlyph(started, true, started)
-	if first != voiceLoadingFrames[0] {
+	if first != codextui.LoadingGlyphFrames[0] {
 		t.Fatalf("first frame = %q", first)
 	}
 	second := VoiceLoadingGlyph(started, true, started.Add(150*time.Millisecond))
-	if second != voiceLoadingFrames[1] {
+	if second != codextui.LoadingGlyphFrames[1] {
 		t.Fatalf("second frame = %q", second)
 	}
-	wrapped := VoiceLoadingGlyph(started, true, started.Add(time.Duration(len(voiceLoadingFrames))*100*time.Millisecond))
-	if wrapped != voiceLoadingFrames[0] {
+	wrapped := VoiceLoadingGlyph(started, true, started.Add(time.Duration(len(codextui.LoadingGlyphFrames))*100*time.Millisecond))
+	if wrapped != codextui.LoadingGlyphFrames[0] {
 		t.Fatalf("wrapped frame = %q", wrapped)
 	}
 	// A clock before the start does not panic.
@@ -192,5 +194,25 @@ func TestVoiceStripMeterWidthIsBounded(t *testing.T) {
 	}
 	if width := displayWidth(meter); width != 6 {
 		t.Fatalf("meter width = %d (%q)", width, meter)
+	}
+}
+
+// TestVoiceStripLoadingGlyphUsesSharedMotionFramesLikeRust pins Rust #50112
+// (codex-rs/tui/src/motion.rs::loading_glyph): the voice strip no longer owns a
+// private braille table, the frames and the reduced-motion fallback come from
+// the shared motion helpers, so editing that table changes the strip.
+func TestVoiceStripLoadingGlyphUsesSharedMotionFramesLikeRust(t *testing.T) {
+	started := time.Unix(0, 0)
+	for index, frame := range codextui.LoadingGlyphFrames {
+		at := started.Add(time.Duration(index) * codextui.LoadingGlyphFrameDuration)
+		if got := VoiceLoadingGlyph(started, true, at); got != frame {
+			t.Fatalf("frame %d = %q, want %q", index, got, frame)
+		}
+	}
+	if got := VoiceLoadingGlyph(started, false, started); got != codextui.LoadingGlyphReducedMotion {
+		t.Fatalf("reduced-motion glyph = %q, want %q", got, codextui.LoadingGlyphReducedMotion)
+	}
+	if voiceIdleGlyph != codextui.LoadingGlyphReducedMotion {
+		t.Fatalf("idle glyph = %q, want the shared reduced-motion glyph", voiceIdleGlyph)
 	}
 }
