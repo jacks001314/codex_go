@@ -669,6 +669,11 @@ type MCPService struct {
 	// with this runtime (Rust #40728).
 	permissionProfile        *sandbox.PermissionProfile
 	serverPermissionProfiles map[string]*sandbox.PermissionProfile
+	// selectedEnvironments is the ordered executor selection published with this
+	// runtime (Rust McpServerContributionContext::selected_environments, #51503).
+	// A nil value means no selection was captured, and a non-nil empty value
+	// means the thread explicitly selected no environments.
+	selectedEnvironments *SelectedEnvironments
 	// TrustedAccess, when set, attaches host-owned openai/entitlementContext
 	// metadata to eligible plugin MCP calls (Rust TrustedAccessContext,
 	// #40992/#41005).
@@ -707,6 +712,7 @@ type cachedMCPStdioClient struct {
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
 	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1}
 	if runtime != nil {
+		service.selectedEnvironments = runtime.SelectedEnvironments.Clone()
 		service.sharedHTTPClient = runtime.HTTPClient
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
@@ -853,6 +859,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	s.sharedHTTPClientKey = refreshed.sharedHTTPClientKey
 	s.permissionProfile = refreshed.permissionProfile
 	s.serverPermissionProfiles = refreshed.serverPermissionProfiles
+	s.selectedEnvironments = refreshed.selectedEnvironments
 	s.generation++
 	if s.resourceCache == nil {
 		s.resourceCache = NewMCPResourceCache(nil)
@@ -879,6 +886,20 @@ func preserveMCPServerInventory(next map[string]MCPServerStatus, previous map[st
 	current.Resources = append([]MCPResource(nil), old.Resources...)
 	current.ResourceTemplates = append([]MCPResourceTemplate(nil), old.ResourceTemplates...)
 	next[name] = current
+}
+
+// SelectedEnvironments returns the ordered executor selection captured for this
+// runtime, mirroring Rust's `McpServerContributionContext::selected_environments`
+// (#51503): priority order and pending or failed entries are preserved. A nil
+// result means no selection was captured (threadless discovery); a non-nil empty
+// result means the thread explicitly selected no environments.
+func (s *MCPService) SelectedEnvironments() *SelectedEnvironments {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.selectedEnvironments.Clone()
 }
 
 func (s *MCPService) Close() error {

@@ -3296,21 +3296,17 @@ func (r *RuntimeRouter) interruptHooksForCWD(cwd string, threadID string) []Hook
 	return out
 }
 
-// mcpEnvironmentAuthorityForTurn mirrors Rust's McpEnvironmentScope::Selected
-// (#39335/#46335): the captured turn selections decide MCP authority, including
-// selections whose owner configuration is still pending or has failed, and any
-// owner-supplied mcp_policy. A nil result means no selections were captured, so
-// attachment-scoped filtering does not apply.
-func mcpEnvironmentAuthorityForTurn(params *turn.TurnStartParams) *mcp.EnvironmentAuthority {
-	if params == nil || len(params.Environments) == 0 {
+// turnEnvironmentSelections captures the ordered executor selection snapshot for
+// a turn, mirroring Rust's captured `TurnEnvironmentSelection` list (#51503):
+// priority order and pending or failed entries are preserved. A nil result means
+// no selection was captured at all (Rust `None`, threadless discovery); a
+// non-nil empty snapshot means the thread explicitly selected no environments
+// (Rust `Some(&[])`).
+func turnEnvironmentSelections(params *turn.TurnStartParams) *mcp.SelectedEnvironments {
+	if params == nil || params.Environments == nil {
 		return nil
 	}
-	authority := &mcp.EnvironmentAuthority{
-		Scoped:      true,
-		Unlimited:   map[string]bool{},
-		Restricted:  map[string]*config.EnvironmentMCPPolicy{},
-		Unavailable: map[string]bool{},
-	}
+	selections := make([]mcp.TurnEnvironmentSelection, 0, len(params.Environments))
 	for _, selection := range params.Environments {
 		environmentID := selectionEnvironmentID(selection)
 		if environmentID == "" {
@@ -3318,24 +3314,56 @@ func mcpEnvironmentAuthorityForTurn(params *turn.TurnStartParams) *mcp.Environme
 		}
 		state, err := environmentConfigStateFromAnyMap(selection)
 		if err != nil {
-			// An unparseable owner selection cannot claim owner authority.
-			authority.Unavailable[environmentID] = true
+			// An unparseable owner selection cannot claim owner authority, but it
+			// stays in the snapshot as a failed selection so contributors still
+			// observe the selection and its position.
+			selections = append(selections, mcp.TurnEnvironmentSelection{
+				EnvironmentID: environmentID,
+				State:         mcp.EnvironmentSelectionFailed,
+				Error:         err.Error(),
+			})
 			continue
 		}
 		switch state.Kind {
-		case EnvironmentConfigPending, EnvironmentConfigFailed:
-			authority.Unavailable[environmentID] = true
+		case EnvironmentConfigPending:
+			selections = append(selections, mcp.TurnEnvironmentSelection{
+				EnvironmentID: environmentID,
+				State:         mcp.EnvironmentSelectionPending,
+			})
+		case EnvironmentConfigFailed:
+			selections = append(selections, mcp.TurnEnvironmentSelection{
+				EnvironmentID: environmentID,
+				State:         mcp.EnvironmentSelectionFailed,
+				Error:         state.Error,
+			})
 		case EnvironmentConfigReady:
-			if state.Config != nil && state.Config.McpPolicy != nil {
-				authority.Restricted[environmentID] = state.Config.McpPolicy
-				continue
+			selection := mcp.TurnEnvironmentSelection{
+				EnvironmentID: environmentID,
+				State:         mcp.EnvironmentSelectionReady,
 			}
-			authority.Unlimited[environmentID] = true
+			if state.Config != nil {
+				selection.McpPolicy = state.Config.McpPolicy
+			}
+			selections = append(selections, selection)
 		default:
-			authority.Unlimited[environmentID] = true
+			selections = append(selections, mcp.TurnEnvironmentSelection{
+				EnvironmentID: environmentID,
+				State:         mcp.EnvironmentSelectionReady,
+			})
 		}
 	}
-	return authority
+	return mcp.NewSelectedEnvironments(selections)
+}
+
+// mcpEnvironmentAuthorityForTurn mirrors Rust's McpEnvironmentScope::Selected
+// (#39335/#46335): the captured turn selections decide MCP authority, including
+// selections whose owner configuration is still pending or has failed, and any
+// owner-supplied mcp_policy. The authority is derived from the same ordered
+// snapshot handed to MCP contributors (#51503), so both read one capture. A nil
+// result means no selections were captured, so attachment-scoped filtering does
+// not apply.
+func mcpEnvironmentAuthorityForTurn(params *turn.TurnStartParams) *mcp.EnvironmentAuthority {
+	return turnEnvironmentSelections(params).Authority()
 }
 
 func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadRevertResponse, error) {
@@ -10398,15 +10426,22 @@ func (r *RuntimeRouter) configureMCPFromConfig() {
 }
 
 func (r *RuntimeRouter) runtimeMCPConfig(values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
-	return r.runtimeMCPConfigForThread("", values, codexHome, runtimeAuth, requirements)
+	// Threadless discovery carries no captured selection (Rust `None`).
+	return r.runtimeMCPConfigForThread(mcp.NewMCPServerContributionContext("", nil), values, codexHome, runtimeAuth, requirements)
 }
 
-// runtimeMCPConfigForThread builds the MCP runtime config for one thread. An
-// empty thread ID builds the process-wide config; otherwise servers contributed
-// by plugins the thread has disabled are excluded without changing shared
-// plugin state (Rust #44655).
-func (r *RuntimeRouter) runtimeMCPConfigForThread(threadID string, values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
+// runtimeMCPConfigForThread builds the MCP runtime config for one thread
+// projection. An empty contributor thread ID builds the process-wide config;
+// otherwise servers contributed by plugins the thread has disabled are excluded
+// without changing shared plugin state (Rust #44655). The contribution context
+// carries the ordered executor selection captured for this projection, which is
+// published on the returned config for MCP contributors (#51503).
+func (r *RuntimeRouter) runtimeMCPConfigForThread(contributionContext mcp.MCPServerContributionContext, values map[string]any, codexHome string, runtimeAuth *mcp.RuntimeAuth, requirements *config.ConfigRequirements) *mcp.RuntimeConfig {
+	threadID := contributionContext.ThreadID()
 	base := mcp.RuntimeConfigFromValuesWithAuthAndRequirements(values, codexHome, runtimeAuth, requirements)
+	if selections := contributionContext.SelectedEnvironments(); selections != nil {
+		base.SelectedEnvironments = selections
+	}
 	if rawFeatures, ok := values["features"].(map[string]any); ok {
 		if settings, _ := features.ResolveSettings(rawFeatures); features.Enabled(settings, "mcp_oauth_refresh_coordination") {
 			for name, registration := range base.Servers {
@@ -12623,9 +12658,14 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	// next turn) must refresh the published runtime. Capture it once so the
 	// refresh decision and the applied runtime config agree.
 	turnParams := r.activeTurnParams(threadID)
-	availableEnvironment := selectedEnvironmentIDs(turnParams)
+	// Rust #51503: capture the complete executor selection once, including
+	// pending and failed entries in priority order, and hand the same snapshot to
+	// MCP contributors and to the availability filter.
+	environmentSelections := turnEnvironmentSelections(turnParams)
+	availableEnvironment := environmentSelections.EnvironmentIDs()
 	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
-	environmentAuthority := mcpEnvironmentAuthorityForTurn(turnParams)
+	environmentAuthority := environmentSelections.Authority()
+	contributionContext := mcp.NewMCPServerContributionContext(threadID, environmentSelections)
 	runtimeConfig := func(cfg *config.Config) *mcp.RuntimeConfig {
 		values := map[string]any{}
 		if cfg != nil && cfg.Values != nil {
@@ -12633,7 +12673,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		}
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
-		config := r.runtimeMCPConfigForThread(threadID, values, codexHome, runtimeAuth, cfg.Requirements)
+		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), availableEnvironment...)

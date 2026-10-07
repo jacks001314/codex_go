@@ -272,6 +272,13 @@ type RuntimeConfig struct {
 	// availability (Rust McpEnvironmentScope::Selected, #39335/#46335). It takes
 	// precedence over AvailableEnvironment when set.
 	EnvironmentAuthority *EnvironmentAuthority
+	// SelectedEnvironments is the ordered executor selection captured for this
+	// projection, preserving priority order and pending or failed entries (Rust
+	// McpServerContributionContext::selected_environments, #51503). A nil value
+	// means no selection was captured (threadless discovery); a non-nil empty
+	// value means the thread explicitly selected no environments. Authority is
+	// derived from this same snapshot via SelectedEnvironments.Authority().
+	SelectedEnvironments *SelectedEnvironments
 	CodexHome            string
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
