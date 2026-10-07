@@ -166,3 +166,12 @@
 - 关键判定（sync406）：对 lite 模型上游始终用 `additional_tools` 声明工具（`tools` 字段仅非 lite），故 Go legacy = 每请求重建前缀，未引入 `tools` 字段形态。
 - 验证（合并后整体）：`go build ./...` 通过；改动文件 `gofmt -l` 空；`./appserver/ ./tui/... ./prompt/ ./utils/ ./exec/ ./mcp/ ./plugin/ ./model/ ./session/ ./rollout/ ./turn/` 的失败集合 = 既有基线（appserver 4、tui 1、tui/tea 1、model 2、mcp 1），**新增基线项 `TestOtelProviderReloadsAfterAccountChange`**（基线 worktree `15ae7564` 复现确认）。
 - 剩余项：①#51482 TUI 部分（tui 技能提及身份匹配）②#51500 app 层接线 ③#51510 app 层重载入口接线 ④静态 parity 层重钉（`appserver/schema/precomputed/*.zst`）⑤incremental tools 本体（窗口内工具 delta / base-instructions diff）。①②③已派 TUI 车道（分支 `synctui2`）。
+
+## 追加（当日第十三批：覆盖率审计 + sync407–sync409）
+
+- **审计**（新增 `update/coverage_audit_2026_10_07.md`）：静态 pin `5f3180c793` → head `18e28fe1b9` 的 498 个 PR 与 `update/*.md` 记录做差集，得 6 个未记录项；本轮全部处置（4 落地 / 2 个 Rust 测试专用 N/A），窗口覆盖率 498/498。
+- `sync407`（#51482 余下，并行车道 sync51482 的第二批）：隐式技能调用映射按路径身份（`implicitSkillIdentityKey`/`implicitSkillHostPath` 镜像 `to_abs_path()` 门）+ 技能 wire 路径字段改 `LegacyAppPathString` 别名；5 文件 / +226 −49，commit `5c7b4405`。
+- `sync408`（#50442）：`chatgptapi` 的 `ThreadUsage` / `ThreadUsageBreakdownGroup` 增加 `native_usage_usd_micros`（缺/null → nil、显式 0 → 0）；**故意不动** `auth.ThreadUsage`（app-server 协议 v2 上游未扩，避免漂移）；2 文件，commit `0269d580`。
+- `sync409`（#50446）：新增 `appserver/rollout_archive.go`（GNU tar + gzip、有界写入、非法/重名条目跳过、失败回退）+ `PrepareUpload` 分流并归档；4 文件，commit `a9284006`。差异：Go 无 sentry envelope/上传层，归档在准备阶段物化。
+- 队列：`sync51480` 接手 ⑤ incremental tools 本体 + 队列 A（#50462 delegated preview）/ 队列 B（#50454 rollout persistence metrics）；`sync51482` 接手 ④ 静态 parity 重钉；`synctui` 仍负责 #51482 TUI 段 + #51500/#51510 的 app 层接线。
+- 未派项（待车道空闲）：`plugin/` disabled-skill 路径身份、结构化 skill 提及的 cwd 相对解析（上游 #37177 遗留）。
