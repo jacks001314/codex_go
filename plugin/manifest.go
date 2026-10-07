@@ -115,7 +115,17 @@ func agentPluginSchemaStatus(data []byte) (AgentPluginSchemaStatus, error) {
 	return AgentPluginSchemaStatusForContents(data)
 }
 
+// loadPluginManifest parses a plugin manifest without a manifest cache. Callers
+// that own a plugin store go through PluginStore.LoadPluginManifest so repeated
+// discovery reuses an unchanged revision (Rust #49099).
 func loadPluginManifest(pluginRoot string) (*resolvedPluginManifest, error) {
+	return parsePluginManifestAtRoot(pluginRoot, disabledManifestCache())
+}
+
+// parsePluginManifestAtRoot rereads the manifest (and, for an agent plugin, the
+// Codex overlay) on every call, so manifest edits and overlay changes or removal
+// stay visible, and routes the parse through cache when one is provided.
+func parsePluginManifestAtRoot(pluginRoot string, cache *manifestCache) (*resolvedPluginManifest, error) {
 	path, err := findPluginManifestPath(pluginRoot)
 	if err != nil || path == "" {
 		return nil, err
@@ -124,8 +134,27 @@ func loadPluginManifest(pluginRoot string) (*resolvedPluginManifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	if filepath.Clean(path) == filepath.Clean(filepath.Join(pluginRoot, AgentPluginManifestRelativePath)) {
-		manifest, err := parseAgentPluginManifest(pluginRoot, data)
+	isAgentPlugin := filepath.Clean(path) == filepath.Clean(filepath.Join(pluginRoot, AgentPluginManifestRelativePath))
+	overlayPath := ""
+	var overlay []byte
+	if isAgentPlugin {
+		// Rust manifest_cache.rs reads the overlay for every agent plugin so the
+		// revision digest covers it; the parser keeps the com.openai extension's
+		// precedence over the overlay.
+		overlayPath = filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
+		if raw, readErr := os.ReadFile(overlayPath); readErr == nil {
+			overlay = raw
+		}
+	}
+	parse := func() (*resolvedPluginManifest, error) {
+		return parseResolvedPluginManifest(pluginRoot, path, data, overlayPath, overlay, isAgentPlugin)
+	}
+	return cache.parse(pluginRoot, path, data, overlayPath, overlay, parse)
+}
+
+func parseResolvedPluginManifest(pluginRoot string, path string, data []byte, overlayPath string, overlay []byte, isAgentPlugin bool) (*resolvedPluginManifest, error) {
+	if isAgentPlugin {
+		manifest, err := parseAgentPluginManifest(pluginRoot, data, overlayPath, overlay)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +170,10 @@ func loadPluginManifest(pluginRoot string) (*resolvedPluginManifest, error) {
 	return &resolvedPluginManifest{Path: path, Kind: pluginManifestLegacy, Manifest: manifest}, nil
 }
 
-func parseAgentPluginManifest(pluginRoot string, data []byte) (pluginManifestFile, error) {
+// parseAgentPluginManifest parses an Agent Plugins manifest. overlayPath and
+// overlay carry the plugin directory's `.codex-plugin/plugin.json`, which the
+// caller reads so the manifest cache can digest it (Rust #49099).
+func parseAgentPluginManifest(pluginRoot string, data []byte, overlayPath string, overlay []byte) (pluginManifestFile, error) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil {
 		return pluginManifestFile{}, err
@@ -198,15 +230,12 @@ func parseAgentPluginManifest(pluginRoot string, data []byte) (pluginManifestFil
 			extension = &parsed
 		}
 	}
-	if extension == nil {
-		overlayPath := filepath.Join(pluginRoot, ".codex-plugin", "plugin.json")
-		if overlayData, err := os.ReadFile(overlayPath); err == nil {
-			var parsed pluginManifestFile
-			if err := json.Unmarshal(overlayData, &parsed); err != nil {
-				return pluginManifestFile{}, err
-			}
-			extension = &parsed
+	if extension == nil && len(overlay) > 0 {
+		var parsed pluginManifestFile
+		if err := json.Unmarshal(overlay, &parsed); err != nil {
+			return pluginManifestFile{}, err
 		}
+		extension = &parsed
 	}
 	if extension != nil {
 		if extension.Interface != nil {

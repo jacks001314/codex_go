@@ -1396,6 +1396,11 @@ type PluginService struct {
 	targetCuratedMarketplace      TargetCuratedMarketplace
 	curatedSyncInFlight           bool
 	curatedSyncMetricsObserver    CuratedSyncMetricsObserver
+	// manifests reuses parsed manifest revisions across the service's
+	// marketplace materialization (Rust #49099). Go's discovery path carries no
+	// plugin store, so the service owns the cache; it is the same
+	// manifestCache the store owns, with the same revision rules.
+	manifests *manifestCache
 }
 
 func (s *PluginService) SetShareBackend(backend PluginShareBackend) {
@@ -1418,6 +1423,7 @@ func NewPluginService() *PluginService {
 		marketplacePluginMaterializer: &GitMarketplaceMaterializer{},
 		marketplaceRevision:           &GitMarketplaceRevisionResolver{},
 		targetCuratedMarketplace:      TargetCuratedOpenAI,
+		manifests:                     newManifestCache(),
 	}
 }
 
@@ -2708,6 +2714,22 @@ func (s *PluginService) HydrateRecommendedPluginMetadata(remotePluginID string) 
 	return nil, false, nil
 }
 
+// readPluginManifestForRootCached is readPluginManifestForRoot through the
+// service's shared manifest cache (Rust #49099). The store-owned path is
+// identical; the service has no plugin store in scope.
+func (s *PluginService) readPluginManifestForRootCached(pluginRoot string) *pluginManifestFile {
+	cache := disabledManifestCache()
+	if s != nil {
+		cache = s.manifests
+	}
+	resolved, err := parsePluginManifestAtRoot(pluginRoot, cache)
+	if err != nil || resolved == nil {
+		return nil
+	}
+	manifest := resolved.Manifest
+	return &manifest
+}
+
 func (s *PluginService) materializeMarketplacePluginDetail(detail *PluginDetail) (*PluginDetail, error) {
 	return s.materializeMarketplacePluginDetailWithOptions(detail, false)
 }
@@ -2768,7 +2790,7 @@ func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *Pl
 		return materialized
 	}
 	if !force {
-		if manifest := readPluginManifestForRoot(pluginRoot); manifest != nil {
+		if manifest := s.readPluginManifestForRootCached(pluginRoot); manifest != nil {
 			materialized := detailFromManifest(manifest)
 			return &materialized, nil
 		}
@@ -2781,7 +2803,7 @@ func (s *PluginService) materializeMarketplacePluginDetailWithOptions(detail *Pl
 	if err := materializer.MaterializeMarketplacePlugin(source, destination); err != nil {
 		return nil, err
 	}
-	manifest := readPluginManifestForRoot(pluginRoot)
+	manifest := s.readPluginManifestForRootCached(pluginRoot)
 	if manifest == nil {
 		return nil, fmt.Errorf("%w: materialized marketplace plugin %q has no supported plugin manifest", ErrInvalidPluginRequest, detail.Summary.ID)
 	}

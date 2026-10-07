@@ -91,6 +91,11 @@ type PluginStore struct {
 	codexHome string
 	root      string
 	dataRoot  string
+	// manifests reuses parsed manifest revisions across every workflow that
+	// loads plugins through this store (Rust #49099). It is a pointer so copies
+	// of one store share the cache, while independently created stores stay
+	// isolated; nil disables caching.
+	manifests *manifestCache
 }
 
 // NewPluginStore creates a PluginStore rooted at the given codex home directory.
@@ -105,7 +110,19 @@ func NewPluginStore(codexHome string) (*PluginStore, error) {
 		codexHome: codexHome,
 		root:      root,
 		dataRoot:  dataRoot,
+		manifests: newManifestCache(),
 	}, nil
+}
+
+// LoadPluginManifest parses the plugin's manifest, reusing the store's cached
+// parse when the manifest revision (contents and Codex overlay) is unchanged.
+// Files are reread on every call, so edits and overlay changes stay visible
+// (Rust #49099).
+func (s *PluginStore) LoadPluginManifest(pluginRoot string) (*resolvedPluginManifest, error) {
+	if s == nil {
+		return loadPluginManifest(pluginRoot)
+	}
+	return parsePluginManifestAtRoot(pluginRoot, s.manifests)
 }
 
 // Root returns the cache root directory.
