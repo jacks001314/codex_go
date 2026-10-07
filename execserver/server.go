@@ -88,11 +88,14 @@ const (
 	walkResponseItemOverhead      = 64
 	retainedOutputBytesPerProcess = 1024 * 1024
 	retainedWriteIDsPerProcess    = 4096
-	maxOpenFileReads              = 128
-	maxFileReadHandleIDBytes      = 32
-	fileReadChunkSize             = 1024 * 1024
-	fileWriteChunkSize            = 1024 * 1024
-	maxReadFileBytes              = 512 * 1024 * 1024
+	// Rust #49702 renamed the exec-server file-read terminology to file
+	// handles: the per-connection open-file bound is MAX_OPEN_FILES and the
+	// handle-id byte bound is MAX_FILE_HANDLE_ID_BYTES.
+	maxOpenFiles         = 128
+	maxFileHandleIDBytes = 32
+	fileReadChunkSize    = 1024 * 1024
+	fileWriteChunkSize   = 1024 * 1024
+	maxReadFileBytes     = 512 * 1024 * 1024
 )
 
 // fs/open modes (Rust #50177). Read is the default for legacy callers.
@@ -887,7 +890,7 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 	return &Server{
 		processes:          map[string]*processState{},
 		handles:            map[string]*fileHandleEntry{},
-		fileSlots:          make(chan struct{}, maxOpenFileReads),
+		fileSlots:          make(chan struct{}, maxOpenFiles),
 		httpClient:         httpClient,
 		sessions:           map[string]*serverSessionEntry{},
 		detachedSessionTTL: 30 * time.Second,
@@ -905,7 +908,7 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
 	server := &Server{
 		processes:  map[string]*processState{},
 		handles:    map[string]*fileHandleEntry{},
-		fileSlots:  make(chan struct{}, maxOpenFileReads),
+		fileSlots:  make(chan struct{}, maxOpenFiles),
 		httpClient: httpClient,
 	}
 	if parent != nil {
@@ -2416,7 +2419,7 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/open params are required")
 	}
-	if err := validateFileReadHandleID(params.HandleID); err != nil {
+	if err := validateFileHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
 	// Rust #50177: `replace` creates or truncates the file for positional
@@ -2457,7 +2460,7 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
 	// Reserve a slot before opening so in-flight opens, not just registered
 	// handles, count against the per-connection limit.
 	if !s.reserveFileSlot() {
-		return nil, requestError(-32600, fmt.Sprintf("at most %d file handles may be open per connection", maxOpenFileReads))
+		return nil, requestError(-32600, fmt.Sprintf("at most %d file handles may be open per connection", maxOpenFiles))
 	}
 	openFile := openRegularFileForRead
 	if mode == fsOpenModeReplace {
@@ -2502,7 +2505,7 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
 	if params == nil {
 		return nil, errors.New("fs/readBlock params are required")
 	}
-	if err := validateFileReadHandleID(params.HandleID); err != nil {
+	if err := validateFileHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
 	if params.Len < 1 || params.Len > fileReadChunkSize {
@@ -2550,7 +2553,7 @@ func (s *Server) writeBlock(params *FSWriteBlockParams) (*FSWriteBlockResponse, 
 	if params == nil {
 		return nil, errors.New("fs/writeBlock params are required")
 	}
-	if err := validateFileReadHandleID(params.HandleID); err != nil {
+	if err := validateFileHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
 	chunk, err := base64.StdEncoding.DecodeString(params.Chunk)
@@ -2591,7 +2594,7 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
 	if params == nil {
 		return nil, errors.New("fs/close params are required")
 	}
-	if err := validateFileReadHandleID(params.HandleID); err != nil {
+	if err := validateFileHandleID(params.HandleID); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -2621,9 +2624,9 @@ func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
 	_ = file.Close()
 }
 
-func validateFileReadHandleID(handleID string) error {
-	if len(handleID) > maxFileReadHandleIDBytes {
-		return requestError(-32600, fmt.Sprintf("file handle ID must not exceed %d bytes", maxFileReadHandleIDBytes))
+func validateFileHandleID(handleID string) error {
+	if len(handleID) > maxFileHandleIDBytes {
+		return requestError(-32600, fmt.Sprintf("file handle ID must not exceed %d bytes", maxFileHandleIDBytes))
 	}
 	return nil
 }

@@ -1303,7 +1303,7 @@ func TestFilesystemHandleAndReadLimitsMatchRust(t *testing.T) {
 	if err != nil || response.Chunk != base64.StdEncoding.EncodeToString([]byte("bcd")) || response.EOF {
 		t.Fatalf("readBlock() = %#v, %v", response, err)
 	}
-	if _, err := server.closeFile(&FSCloseParams{HandleID: strings.Repeat("x", maxFileReadHandleIDBytes+1)}); err == nil {
+	if _, err := server.closeFile(&FSCloseParams{HandleID: strings.Repeat("x", maxFileHandleIDBytes+1)}); err == nil {
 		t.Fatal("closeFile(long handle) error = nil")
 	}
 	_, _ = server.closeFile(&FSCloseParams{HandleID: ""})
@@ -1338,13 +1338,13 @@ func TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust(t *testing.T) {
 	}
 
 	// Fill the capacity; the limit applies to registered handles.
-	for i := 1; i < maxOpenFileReads; i++ {
+	for i := 1; i < maxOpenFiles; i++ {
 		if _, err := server.openFile(&FSOpenParams{HandleID: fmt.Sprintf("h-%d", i), Path: path}); err != nil {
 			t.Fatalf("openFile(h-%d) error = %v", i, err)
 		}
 	}
-	if len(server.fileSlots) != maxOpenFileReads {
-		t.Fatalf("slots in use = %d, want %d", len(server.fileSlots), maxOpenFileReads)
+	if len(server.fileSlots) != maxOpenFiles {
+		t.Fatalf("slots in use = %d, want %d", len(server.fileSlots), maxOpenFiles)
 	}
 	if _, err := server.openFile(&FSOpenParams{HandleID: "overflow", Path: path}); err == nil || !strings.Contains(err.Error(), "at most") {
 		t.Fatalf("overflow open error = %v", err)
@@ -1354,8 +1354,8 @@ func TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust(t *testing.T) {
 	if _, err := server.closeFile(&FSCloseParams{HandleID: "h-1"}); err != nil {
 		t.Fatalf("closeFile(h-1) error = %v", err)
 	}
-	if len(server.fileSlots) != maxOpenFileReads-1 {
-		t.Fatalf("slots in use after close = %d, want %d", len(server.fileSlots), maxOpenFileReads-1)
+	if len(server.fileSlots) != maxOpenFiles-1 {
+		t.Fatalf("slots in use after close = %d, want %d", len(server.fileSlots), maxOpenFiles-1)
 	}
 	if _, err := server.openFile(&FSOpenParams{HandleID: "reused", Path: path}); err != nil {
 		t.Fatalf("openFile(reused) error = %v", err)

@@ -383,7 +383,7 @@ func TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust(t *t
 	if err != nil {
 		t.Fatalf("FSReadFileStream() error = %v", err)
 	}
-	if len(stream.handleID) != maxFileReadHandleIDBytes {
+	if len(stream.handleID) != maxFileHandleIDBytes {
 		t.Fatalf("stream handle id length = %d", len(stream.handleID))
 	}
 	chunk, done, err := stream.Next(context.Background())
@@ -399,7 +399,7 @@ func TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust(t *t
 	if err := os.WriteFile(smallPath, []byte("ok"), 0o600); err != nil {
 		t.Fatalf("WriteFile(small) error = %v", err)
 	}
-	for i := 0; i < maxOpenFileReads+2; i++ {
+	for i := 0; i < maxOpenFiles+2; i++ {
 		stream, err := client.FSReadFileStream(context.Background(), &FSReadFileParams{Path: smallPath})
 		if err != nil {
 			t.Fatalf("FSReadFileStream(%d) error = %v", i, err)
