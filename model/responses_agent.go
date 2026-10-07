@@ -973,13 +973,25 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	modelInfo := r.modelInfoForRequest(modelID)
 	inputItems := responsesInputItemsForProviderWithStore(request, r.providerName(), r.imageStore())
-	if !modelInfo.UseResponsesLite {
+	instructions := responsesInstructions(request)
+	tools := normalizeResponseToolParameters(cloneAnySlice(request.Tools))
+	if modelInfo.UseResponsesLite {
+		// Rust #51480: a responses-lite window that already recorded its tool
+		// declarations replays the recorded items and omits the rebuilt
+		// `instructions` / `tools` fields, exactly like the HTTP runner, so the
+		// websocket transport never re-declares (or moves) the window's catalog.
+		if WindowHasToolDeclarations(inputItems) {
+			inputItems = responsesLiteDeclaredInputItems(inputItems)
+			instructions = ""
+			tools = nil
+		}
+	} else {
 		// Rust #44249: downgrade `original` image detail for models that do not
 		// support it before sending the request over the websocket transport.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
 	apiRequest := &responsesAgentRequest{
-		Model: modelID, Instructions: responsesInstructions(request), Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: normalizeResponseToolParameters(cloneAnySlice(request.Tools)), ToolChoice: "auto",
+		Model: modelID, Instructions: instructions, Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: tools, ToolChoice: "auto",
 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
 		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
 		AccessPrograms: AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),

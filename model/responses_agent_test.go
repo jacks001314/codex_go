@@ -4526,3 +4526,85 @@ func TestResponsesLiteBuildsDeclarationsForWindowWithoutThemLikeRust(t *testing.
 		t.Fatalf("responses lite should not include top-level tools: %#v", recordedBody["tools"])
 	}
 }
+
+// TestResponsesLiteWebSocketReusesRecordedDeclarationsLikeRust mirrors Rust
+// #51480's WebSocket startup-prewarm coverage: a responses-lite window that has
+// already recorded its tool declarations replays them from history over the
+// websocket transport and omits the rebuilt `instructions` / `tools` fields,
+// exactly like the HTTP runner.
+func TestResponsesLiteWebSocketReusesRecordedDeclarationsLikeRust(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		_, data, _ := conn.Read(request.Context())
+		_ = json.Unmarshal(data, &received)
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"ok"}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"ws-lite-1"}}`))
+	}))
+	defer server.Close()
+
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:           &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
+		SupportsWebsockets: true,
+		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+			Slug:             "gpt-lite",
+			InputModalities:  []string{"text", "image"},
+			UseResponsesLite: true,
+		}}}),
+	})
+
+	history := []any{
+		map[string]any{
+			"id":    "at_recorded",
+			"type":  "additional_tools",
+			"role":  "developer",
+			"tools": []any{map[string]any{"type": "function", "name": "echo"}},
+		},
+		map[string]any{
+			"id":   "msg_recorded",
+			"type": "message",
+			"role": "developer",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": "You are a helpful assistant."},
+			},
+		},
+		map[string]any{"type": "message", "role": "user", "content": "hello"},
+	}
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Model:        "gpt-lite",
+		Prompt:       "again",
+		Instructions: "You are a helpful assistant.",
+		InputItems:   history,
+		Tools:        []any{map[string]any{"type": "function", "name": "echo"}},
+	}); err != nil {
+		t.Fatalf("RunWebSocket error = %v", err)
+	}
+	if tools, ok := received["tools"]; ok && tools != nil {
+		t.Fatalf("responses lite websocket should not include top-level tools: %#v", tools)
+	}
+	if instructions, ok := received["instructions"].(string); ok && strings.TrimSpace(instructions) != "" {
+		t.Fatalf("responses lite websocket should keep declarations in the window: %#v", instructions)
+	}
+	inputs, ok := received["input"].([]any)
+	if !ok || len(inputs) == 0 {
+		t.Fatalf("input = %#v", received["input"])
+	}
+	first, _ := inputs[0].(map[string]any)
+	if first["type"] != "additional_tools" || first["id"] != "at_recorded" {
+		t.Fatalf("recorded declarations lost over websocket: %#v", inputs[0])
+	}
+	declarationCount := 0
+	for _, raw := range inputs {
+		if item, ok := raw.(map[string]any); ok && item["type"] == "additional_tools" {
+			declarationCount++
+		}
+	}
+	if declarationCount != 1 {
+		t.Fatalf("recorded declarations should appear exactly once, got %d", declarationCount)
+	}
+}

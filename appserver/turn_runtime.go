@@ -2132,9 +2132,14 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 		// skills, ...) so the compacted context continues with the same
 		// injected state. The compacted history ends with the last real user
 		// message, so the prefix is placed ahead of it.
+		// Rust #51480: a responses-lite window's recorded declaration prefix is
+		// rebuilt for the replacement window, so it is not carried into the
+		// compacted history; skip it when splitting the injected prefix off the
+		// conversation history.
 		prefix := runConfig.InputItems
-		if len(historyItems) <= len(prefix) {
-			prefix = append([]any(nil), prefix[len(historyItems):]...)
+		prefixOffset := len(historyItems) + len(runConfig.ResponsesLiteDeclarationItems)
+		if prefixOffset <= len(prefix) {
+			prefix = append([]any(nil), prefix[prefixOffset:]...)
 		} else {
 			prefix = nil
 		}
@@ -6788,14 +6793,19 @@ type appTurnRunConfig struct {
 	CollaborationMode          string
 	Personality                string
 	InputItems                 []any
-	HostedTools                []any
-	SessionItems               []session.Item
-	ExtraSessionItems          func() []session.Item
-	PostToolInputItems         turn.ToolPostExecutionInputItems
-	PreviousResponseID         string
-	ParallelToolCalls          bool
-	ReasoningEffort            string
-	ReasoningSummary           string
+	// ResponsesLiteDeclarationItems is the recorded (or freshly derived)
+	// responses-lite tool declaration prefix the turn prepended to InputItems
+	// for this context window (Rust #51480). It is empty for legacy windows and
+	// non-lite models.
+	ResponsesLiteDeclarationItems []any
+	HostedTools                   []any
+	SessionItems                  []session.Item
+	ExtraSessionItems             func() []session.Item
+	PostToolInputItems            turn.ToolPostExecutionInputItems
+	PreviousResponseID            string
+	ParallelToolCalls             bool
+	ReasoningEffort               string
+	ReasoningSummary              string
 	// ReasoningEffortOverrideEnabled is the combined client-level gate (Rust
 	// `ModelClient::reasoning_effort_override_enabled`): when false, saved
 	// configuration_update items are dropped from the request copy (#46530).
@@ -7082,6 +7092,14 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	overrideEffort, overrideAvailable := r.effortForConfigurationUpdate(threadID, cfg, params, modelInfo, modelProviderConfig.ProviderID)
 	overrideInputItems := r.reasoningEffortOverrideInputItems(threadID, reasoningEffortModel, overrideEffort, overrideAvailable, historyItems)
 	requestReasoningEffort := r.reasoningEffortForRequest(threadID, reasoningEffortModel, appReasoningEffortForTurn(cfg, params), reasoningEffortOverride, overrideEffort, overrideAvailable, requestEffortSampling)
+	// Rust #51480: a responses-lite context window records its tool declarations
+	// once and replays them unchanged. The recorded prefix is placed ahead of the
+	// conversation so a resumed window never moves the declarations it already
+	// sent, and the runner reuses the recorded items instead of rebuilding them.
+	declarationItems := r.responsesLiteWindowDeclarationItemsForTurn(threadID, historyItems, modelInfo.UseResponsesLite, features.Enabled(cfg.FeatureSettings(), "incremental_tools"), hostedTools, instructions)
+	if len(declarationItems) > 0 {
+		inputItems = append(append([]any(nil), declarationItems...), inputItems...)
+	}
 	return &appTurnRunConfig{
 		Model:                   modelProviderConfig.Model,
 		AutoReviewModelOverride: autoReviewModelOverride,
@@ -7111,6 +7129,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		CollaborationMode:              analyticsCollaborationMode(params),
 		Personality:                    analyticsOptionalModeString(personality),
 		InputItems:                     inputItems,
+		ResponsesLiteDeclarationItems:  declarationItems,
 		HostedTools:                    hostedTools,
 		SessionItems:                   sessionItems,
 		ExtraSessionItems:              extraSessionItemsSnapshot,
@@ -8028,6 +8047,52 @@ func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string
 	previousResponseID := firstNonEmpty(record.Metadata.LastResponseID, record.Metadata.PreviousResponseID)
 	items := session.InputItemsFromRecord(record, &session.HistoryBuildOptions{IncludeToolOutputs: true, CWD: strings.TrimSpace(record.Metadata.CWD)})
 	return items, previousResponseID
+}
+
+// responsesLiteWindowDeclarationItemsForTurn resolves the responses-lite tool
+// declaration prefix for the thread's current context window and freezes the
+// decision on the thread record, mirroring Rust #51480
+// (`Session::current_window_uses_incremental_tools` + `has_tool_declarations`).
+//
+// A context window records its `additional_tools` catalog and base-instruction
+// developer message once, at window start, and every later request of that
+// window replays the recorded items unchanged, so changing the incremental-tools
+// setting on resume never moves declarations inside a live window. A window
+// replacement - a compaction or a context reset advances the window number -
+// re-derives the declarations from the current settings. Legacy windows and
+// non-lite models return nil: they keep rebuilding their prefix for every
+// request, exactly the shape responses-lite used before #51480.
+func (r *RuntimeRouter) responsesLiteWindowDeclarationItemsForTurn(threadID string, historyItems []any, useResponsesLite bool, incrementalToolsEnabled bool, tools []any, instructions string) []any {
+	if r == nil || !useResponsesLite || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	extra := cloneAnyMap(record.Metadata.Extra)
+	windowNumber := r.windowNumberForThread(threadID)
+	mode, stored, changed := model.ResolveToolDeclarationWindow(extra, historyItems, windowNumber, useResponsesLite, incrementalToolsEnabled)
+	items := stored
+	if changed && mode == model.ToolDeclarationIncremental {
+		items = model.ResponsesLiteDeclarationItems(tools, instructions, threadID)
+	}
+	if !changed {
+		return items
+	}
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	extra[model.ToolDeclarationWindowNumberKey] = windowNumber
+	extra[model.ToolDeclarationModeKey] = string(mode)
+	extra[model.ToolDeclarationItemsKey] = items
+	record.Metadata.Extra = extra
+	if saveErr := r.runtimeSaveThreadRecord(record); saveErr != nil {
+		// Without the frozen decision a later request would re-derive the
+		// declarations mid-window; fall back to the legacy rebuild shape.
+		return nil
+	}
+	return items
 }
 
 func modelInputTextMessage(role string, text string) map[string]any {
