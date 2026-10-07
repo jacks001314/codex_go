@@ -2805,7 +2805,12 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	// number with the record and stamp it on the checkpoint below.
 	windowNumber := advanceRecordWindowNumber(record)
 	// Rust #51188: place the prefix ahead of the rebuilt history and record the
-	// new window's catalog baseline before the checkpoint is written.
+	// new window's catalog baseline before the checkpoint is written. Rust has a
+	// single compaction entry, so this legacy `ThreadRouter` path mirrors the
+	// runtime path (`compactThreadWithHistory`) even though RuntimeRouter
+	// intercepts `thread/compact/start` in production; the two must not drift.
+	// `TestRouterThreadCompactStartPlacesToolCatalogBeforeSummaryLikeRust` keeps
+	// this call honest (it is otherwise production-unreachable).
 	if err := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, windowNumber); err != nil {
 		return nil, err
 	}
