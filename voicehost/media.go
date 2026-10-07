@@ -180,10 +180,13 @@ func (t *voiceTrack) sendPayload(payload []byte, samples int, at time.Time) erro
 		// A frame older than the last one is dropped rather than reordered.
 		return nil
 	}
+	// Rust #48824: RTP counts audio samples, not callback wall-clock jitter.
+	// Round an elapsed gap down to whole packets so capture jitter and mute
+	// transitions cannot shift the receiver's 20 ms source grid.
+	var skipped time.Duration
 	if !t.end.IsZero() && at.After(t.end) {
-		gap := at.Sub(t.end)
-		steps := int(gap / voiceFrameDuration)
-		if steps > 0 {
+		skipped = at.Sub(t.end) / voiceFrameDuration * voiceFrameDuration
+		if steps := int(skipped / voiceFrameDuration); steps > 0 {
 			// Emit header-only packets so the receiver's clock stays aligned
 			// instead of seeing an invented burst of new audio.
 			for index := 0; index < steps; index++ {
@@ -198,8 +201,12 @@ func (t *voiceTrack) sendPayload(payload []byte, samples int, at time.Time) erro
 		return err
 	}
 	t.advance(samples)
-	if t.end.IsZero() || at.After(t.end) {
+	if t.end.IsZero() {
 		t.end = at.Add(voiceFrameDuration)
+	} else {
+		// Keep the track clock locked to the packet grid rather than
+		// re-anchoring it to the jittery callback time.
+		t.end = t.end.Add(skipped + voiceFrameDuration)
 	}
 	return nil
 }

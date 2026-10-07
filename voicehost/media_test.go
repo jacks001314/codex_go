@@ -352,3 +352,85 @@ func TestMediaSessionDropsStaleInboundWhenCodecMissing(t *testing.T) {
 		t.Fatal("a packet was queued without a decoder")
 	}
 }
+
+// countsSentFrames splits the sent frames into payload and header-only packets.
+func countsSentFrames(frames []sentFrame) (payloads, headerOnly int) {
+	for _, frame := range frames {
+		if len(frame.payload) == 0 {
+			headerOnly++
+		} else {
+			payloads++
+		}
+	}
+	return payloads, headerOnly
+}
+
+// Rust #48824: capture jitter must not move the RTP source grid. The callback
+// drifts by up to 1 ms per tick, and the track must still advance in whole
+// 20 ms packets instead of re-anchoring its clock to each callback.
+func TestVoiceTrackKeepsRTPTimestampsOnThePacketGrid(t *testing.T) {
+	sender := &fakeSender{}
+	track := newVoiceTrack(&fakeCodec{}, 1, sender)
+	start := time.Unix(1000, 0)
+	frame := make([]int16, voiceFrameSamples)
+	for tick := 0; tick < 500; tick++ {
+		at := start.Add(time.Duration(tick*20+tick%2) * time.Millisecond)
+		if err := track.send(frame, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if payloads, headerOnly := countsSentFrames(sender.frames); payloads != 500 || headerOnly != 0 {
+		t.Fatalf("sent %d packets (payload %d, header-only %d), want 500 payload packets and no gap packets",
+			len(sender.frames), payloads, headerOnly)
+	}
+	if track.timestamp != 500*voiceFrameSamples {
+		t.Fatalf("RTP timestamp = %d, want %d (500 whole 20 ms packets)", track.timestamp, 500*voiceFrameSamples)
+	}
+	if want := start.Add(10 * time.Second); !track.end.Equal(want) {
+		t.Fatalf("track end = %s, want %s (jitter must not accumulate)", track.end, want)
+	}
+	// The upstream test resumes 20.007 s later; the clock stays on the grid
+	// instead of re-anchoring to the callback time.
+	if err := track.send(frame, start.Add(30*time.Second+7*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if want := start.Add(30*time.Second + 20*time.Millisecond); !track.end.Equal(want) {
+		t.Fatalf("resumed track end = %s, want %s", track.end, want)
+	}
+}
+
+// Rust #48824: a mute transition resumes on the same grid. The upstream vector
+// jumps 580 ms after three 20 ms frames; the gap must quantize to whole packets
+// so the resumed timestamp stays a multiple of the 960-sample packet.
+func TestVoiceTrackMuteGapStaysOnThePacketGrid(t *testing.T) {
+	sender := &fakeSender{}
+	track := newVoiceTrack(&fakeCodec{}, 1, sender)
+	start := time.Unix(1000, 0)
+	frame := make([]int16, voiceFrameSamples)
+	for tick := 0; tick < 3; tick++ {
+		if err := track.send(frame, start.Add(time.Duration(tick)*voiceFrameDuration)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 580 ms of silence is exactly 29 20 ms packets.
+	at := start.Add(3*voiceFrameDuration + 580*time.Millisecond)
+	if err := track.sendSilence(at); err != nil {
+		t.Fatal(err)
+	}
+	payloads, headerOnly := countsSentFrames(sender.frames)
+	if payloads != 4 || headerOnly != 29 {
+		t.Fatalf("sent %d packets (payload %d, header-only %d), want 4 payload and 29 gap packets",
+			len(sender.frames), payloads, headerOnly)
+	}
+	resumed := sender.frames[len(sender.frames)-1].header.Timestamp
+	gap := resumed - sender.frames[0].header.Timestamp
+	if gap%voiceFrameSamples != 0 {
+		t.Fatalf("resumed RTP clock gap = %d, want a whole number of %d-sample packets", gap, voiceFrameSamples)
+	}
+	if want := uint32(32 * voiceFrameSamples); gap != want {
+		t.Fatalf("resumed RTP clock gap = %d, want %d (3 frames + 29 packets)", gap, want)
+	}
+	if want := start.Add(3*voiceFrameDuration + 580*time.Millisecond + voiceFrameDuration); !track.end.Equal(want) {
+		t.Fatalf("track end = %s, want %s", track.end, want)
+	}
+}
