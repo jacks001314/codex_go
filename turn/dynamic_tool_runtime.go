@@ -14,6 +14,12 @@ import (
 const dynamicToolServerRequestMethod = "item/tool/call"
 const remoteImageURLError = "remote image URLs are not supported; use an inline data URL instead"
 
+// dynamicToolCancelledMessage is the terminal error a dynamic tool reports when
+// its invocation is cancelled before a response arrives (Rust #51556:
+// "dynamic tool call was cancelled before receiving a response"). The call still
+// settles with a failed item instead of being dropped.
+const dynamicToolCancelledMessage = "dynamic tool call was cancelled before receiving a response"
+
 type DynamicToolCaller interface {
 	Request(ctx context.Context, method string, params any, target any) error
 }
@@ -112,8 +118,12 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 		// Rust DynamicToolHandler does not override
 		// `supports_parallel_tool_calls`, so dynamic tools keep the trait's
 		// serial default.
-		Parallel:             false,
-		NamespaceDescription: dynamicToolNamespaceDescription(namespace),
+		Parallel: false,
+		// Rust DynamicToolHandler overrides `finishes_on_cancellation` (#51556):
+		// the handler observes the invocation's cancellation token and publishes
+		// its own terminal item, so dispatch lets it finish.
+		FinishesOnCancellation: true,
+		NamespaceDescription:   dynamicToolNamespaceDescription(namespace),
 		Search: &tool.SearchInfo{
 			Source: &tool.SearchSourceInfo{
 				Name:        "Dynamic tools",
@@ -161,6 +171,12 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		return nil, tool.RespondToModel("dynamic tool request sink is not configured")
 	}
 	arguments := dynamicToolArguments(invocation.Payload.Arguments)
+	started := e.timeNow()
+	// Rust #51556: a call cancelled before the request is sent (including before
+	// dispatch admission) settles with a failed item instead of hanging.
+	if ctx != nil && ctx.Err() != nil {
+		return e.fallbackOutput(invocation, arguments, started, dynamicToolCancelledMessage), nil
+	}
 	params := &DynamicToolCallParams{
 		ThreadID:  e.threadID,
 		TurnID:    e.turnID,
@@ -169,10 +185,15 @@ func (e *dynamicToolExecutor) Execute(ctx context.Context, invocation *tool.Invo
 		Tool:      e.tool,
 		Arguments: arguments,
 	}
-	started := e.timeNow()
 	var response DynamicToolCallResponse
 	if err := e.caller.Request(ctx, dynamicToolServerRequestMethod, params, &response); err != nil {
-		return e.fallbackOutput(invocation, arguments, started, "dynamic tool request failed"), nil
+		// Rust #51556: a request aborted by cancellation is reported with the
+		// cancellation message so it is distinguishable from a generic failure.
+		message := "dynamic tool request failed"
+		if ctx != nil && ctx.Err() != nil {
+			message = dynamicToolCancelledMessage
+		}
+		return e.fallbackOutput(invocation, arguments, started, message), nil
 	}
 	var valid bool
 	response.ContentItems, valid = normalizeDynamicToolContentItems(response.ContentItems)

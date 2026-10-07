@@ -140,6 +140,10 @@ type ToolExecutionResult struct {
 	// handler_executed: true }) from a blocked call when deciding whether an
 	// exec attempt counts toward goal-blocking (#41454).
 	HandlerExecuted bool
+	// Aborted is true when the call was cancelled and its handler observes
+	// cancellation (Rust ToolCallOutcome::Aborted, #51556). The call still
+	// publishes a terminal item; it is neither a completed nor a failed attempt.
+	Aborted bool
 }
 
 type ToolPostExecutionInputItems func(ctx context.Context, invocation *tool.Invocation, output *tool.Output) []any
@@ -643,11 +647,22 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	// completed with a success=false output. A blocked pre-tool hook leaves
 	// handlerReached false (Rust ToolCallOutcome::Blocked).
 	handlerExecuted := false
+	aborted := false
 	if dispatchErr != nil {
 		if cause := context.Cause(toolCtx); cause != nil && !errors.Is(cause, context.Canceled) {
 			dispatchErr = cause
 		}
 		callErr := toolCallErrorForModel(dispatchErr)
+		// Rust #51556: a handler that observes its cancellation token
+		// (finishes_on_cancellation) must settle with a terminal item, so a
+		// cancellation that interrupts dispatch is reported as an aborted
+		// lifecycle outcome instead of a fatal error that would drop the call.
+		// Rust maps the cancellation through OrCancelToolExt to a
+		// respond-to-model "tool call cancelled".
+		if callErr.IsFatal() && d.router.FinishesOnCancellation(invocation.ToolName) && toolCtx.Err() != nil {
+			aborted = true
+			callErr = tool.RespondToModel("tool call cancelled")
+		}
 		if callErr.IsFatal() {
 			d.completeDirectCall(invocation, nil, nil)
 			return nil, dispatchErr
@@ -673,6 +688,12 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	}
 	if output == nil {
 		output = &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, CompletedAt: d.nowUTC()}
+	}
+	// Rust #51556: a finishes_on_cancellation handler whose call was cancelled
+	// reports an aborted outcome even when the handler returned its own terminal
+	// item (the outcome is aborted, not failed).
+	if !aborted && d.router.FinishesOnCancellation(invocation.ToolName) && toolCtx.Err() != nil {
+		aborted = true
 	}
 	// Rust checks the tool output's external-context marker right after a
 	// successful handler return, before any post-tool bookkeeping.
@@ -723,6 +744,7 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 		StartedAt:       startedAt,
 		FinishedAt:      finishedAt,
 		HandlerExecuted: handlerExecuted,
+		Aborted:         aborted,
 	}
 	d.completeDirectCall(invocation, result.Response, output.ToolResultMetadata)
 	if d.onToolCompleted != nil {

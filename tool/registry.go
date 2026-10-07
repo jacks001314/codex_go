@@ -98,6 +98,11 @@ type Spec struct {
 	Parallel             bool           `json:"parallel,omitempty"`
 	ReadOnlyHint         *bool          `json:"-"`
 	NamespaceDescription string         `json:"-"`
+	// FinishesOnCancellation mirrors Rust CoreToolRuntime::finishes_on_cancellation
+	// (#51556). When true the handler observes the invocation's cancellation and
+	// publishes its own terminal item, so dispatch must let it finish instead of
+	// aborting it (and reports an aborted lifecycle outcome).
+	FinishesOnCancellation bool `json:"-"`
 }
 
 type FreeformSpec struct {
@@ -774,6 +779,17 @@ func executeToolSafely(ctx context.Context, executor Executor, invocation *Invoc
 func (r *Router) SupportsParallel(name ToolName) bool {
 	spec, ok := r.registry.Spec(name)
 	return ok && spec.Parallel
+}
+
+// FinishesOnCancellation reports whether the tool's handler observes its
+// cancellation token and publishes a terminal item itself (Rust
+// CoreToolRuntime::finishes_on_cancellation, #51556).
+func (r *Router) FinishesOnCancellation(name ToolName) bool {
+	if r == nil || r.registry == nil {
+		return false
+	}
+	spec, ok := r.registry.Spec(name)
+	return ok && spec.FinishesOnCancellation
 }
 
 func (r *Router) HasReadinessWait(name ToolName) bool {
