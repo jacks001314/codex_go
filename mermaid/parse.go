@@ -9,47 +9,54 @@ import (
 // non-comment byte must be consumed (Rust `parse::parse`).
 func parseFlowchart(header string, body []string) (*graph, error) {
 	tokens := strings.Fields(header)
-	if len(tokens) != 2 || (tokens[0] != "flowchart" && tokens[0] != "graph") {
+	var dir direction
+	switch {
+	case len(tokens) == 1 && (tokens[0] == "flowchart" || tokens[0] == "graph"):
+		// `flowchart` and `graph` default to top-down layout.
+		dir = directionDown
+	case len(tokens) == 2 && (tokens[0] == "flowchart" || tokens[0] == "graph"):
+		parsed, err := parseDirection(tokens[1])
+		if err != nil {
+			return nil, err
+		}
+		dir = parsed
+	default:
 		return nil, ErrUnsupported
-	}
-	dir, err := parseDirection(tokens[1])
-	if err != nil {
-		return nil, err
 	}
 	g := &graph{direction: dir}
 	for _, statement := range body {
 		rest := statement
-		from, err := flowchartNode(&rest, g)
+		from, err := flowchartNodes(&rest, g)
 		if err != nil {
 			return nil, err
 		}
 		for strings.TrimLeftFunc(rest, unicode.IsSpace) != "" {
 			rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
-			if !strings.HasPrefix(rest, "-->") {
-				return nil, ErrUnsupported
-			}
-			rest = strings.TrimLeftFunc(rest[len("-->"):], unicode.IsSpace)
-			label := ""
-			if strings.HasPrefix(rest, "|") {
-				rawLabel, remaining, err := delimitedLabel(rest[1:], "|")
-				if err != nil {
-					return nil, err
-				}
-				parsed, err := flowchartLabel(rawLabel)
-				if err != nil {
-					return nil, err
-				}
-				label = parsed
-				rest = remaining
-			}
-			to, err := flowchartNode(&rest, g)
+			label, sourceTip, targetTip, dashed, err := flowchartEdge(&rest)
 			if err != nil {
 				return nil, err
 			}
-			if len(g.edges) == maxEdges {
+			to, err := flowchartNodes(&rest, g)
+			if err != nil {
+				return nil, err
+			}
+			// Check the Cartesian expansion before allocating edges, including
+			// repeated IDs.
+			if len(from)*len(to) > maxEdges-len(g.edges) {
 				return nil, ErrLimit
 			}
-			g.edges = append(g.edges, directedEdge(from, to, label))
+			for _, source := range from {
+				for _, target := range to {
+					g.edges = append(g.edges, edge{
+						from:      source,
+						to:        target,
+						label:     label,
+						sourceTip: sourceTip,
+						targetTip: targetTip,
+						dashed:    dashed,
+					})
+				}
+			}
 			from = to
 		}
 	}
@@ -57,6 +64,103 @@ func parseFlowchart(header string, body []string) (*graph, error) {
 		return nil, ErrUnsupported
 	}
 	return g, nil
+}
+
+// flowchartNodes expands an `&` group into every referenced node, capping the
+// group at maxEdges references (Rust `parse::nodes`).
+func flowchartNodes(rest *string, g *graph) ([]int, error) {
+	first, err := flowchartNode(rest, g)
+	if err != nil {
+		return nil, err
+	}
+	nodes := []int{first}
+	for {
+		trimmed := strings.TrimLeftFunc(*rest, unicode.IsSpace)
+		if !strings.HasPrefix(trimmed, "&") {
+			return nodes, nil
+		}
+		if len(nodes) == maxEdges {
+			return nil, ErrLimit
+		}
+		*rest = trimmed[len("&"):]
+		index, err := flowchartNode(rest, g)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, index)
+	}
+}
+
+// flowchartEdge consumes one edge operator, returning its end tips, dash style
+// and pipe label. Tokens are tried longest first, so `<-.->` never parses as a
+// shorter operator (Rust `parse`'s edge branch).
+func flowchartEdge(rest *string) (string, rune, rune, bool, error) {
+	for _, token := range []struct {
+		text           string
+		source, target rune
+		dashed         bool
+	}{
+		{"<-.->", '\u25c4', '\u25c4', true},
+		{"<-->", '\u25c4', '\u25c4', false},
+		{"-.->", '\u2500', '\u25c4', true},
+		{"-.-", '\u2500', '\u2500', true},
+		{"-->", '\u2500', '\u25c4', false},
+		{"---", '\u2500', '\u2500', false},
+	} {
+		if !strings.HasPrefix(*rest, token.text) {
+			continue
+		}
+		after := (*rest)[len(token.text):]
+		// Circle/cross tips are unsupported; without a space they are not node IDs.
+		if token.target == '\u2500' && (strings.HasPrefix(after, "o") || strings.HasPrefix(after, "x")) {
+			return "", 0, 0, false, ErrUnsupported
+		}
+		*rest = strings.TrimLeftFunc(after, unicode.IsSpace)
+		label := ""
+		if strings.HasPrefix(*rest, "|") {
+			rawLabel, remaining, err := delimitedLabel((*rest)[1:], "|")
+			if err != nil {
+				return "", 0, 0, false, err
+			}
+			parsed, err := flowchartLabel(rawLabel)
+			if err != nil {
+				return "", 0, 0, false, err
+			}
+			label = parsed
+			*rest = remaining
+		}
+		return label, token.source, token.target, token.dashed, nil
+	}
+	// Spaced labels keep endpoint markers out of the text. Stop at the first
+	// closing stem instead of swallowing an unsupported edge and its target.
+	stem := ""
+	dashed := false
+	switch {
+	case strings.HasPrefix(*rest, "--"):
+		stem = "--"
+	case strings.HasPrefix(*rest, "-."):
+		stem, dashed = ".-", true
+	default:
+		return "", 0, 0, false, ErrUnsupported
+	}
+	*rest = (*rest)[len("--"):]
+	index := strings.Index(*rest, stem)
+	if index < 0 {
+		return "", 0, 0, false, ErrUnsupported
+	}
+	text, remaining := (*rest)[:index], (*rest)[index+len(stem):]
+	if text == "" || text == strings.TrimLeftFunc(text, unicode.IsSpace) || text == strings.TrimRightFunc(text, unicode.IsSpace) {
+		return "", 0, 0, false, ErrUnsupported
+	}
+	if !strings.HasPrefix(remaining, ">") {
+		return "", 0, 0, false, ErrUnsupported
+	}
+	parsed, err := flowchartLabel(strings.TrimSpace(text))
+	if err != nil {
+		return "", 0, 0, false, err
+	}
+	*rest = remaining[len(">"):]
+	return parsed, '\u2500', '\u25c4', dashed, nil
 }
 
 var flowchartReservedIDs = map[string]bool{

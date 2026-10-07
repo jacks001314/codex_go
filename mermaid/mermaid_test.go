@@ -1,6 +1,7 @@
 package mermaid
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -67,8 +68,10 @@ func TestStadiumDeclarationsAndReferencesMatchRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's `quoted_flowchart_labels_match_unquoted_labels`.
-func TestQuotedFlowchartLabelsMatchUnquotedLabels(t *testing.T) {
+// Mirrors Rust's `equivalent_flowchart_forms_preserve_graph` (#48895 renamed
+// `quoted_flowchart_labels_match_unquoted_labels`): every equivalent spelling
+// produces the same graph.
+func TestEquivalentFlowchartFormsPreserveGraph(t *testing.T) {
 	quoted := []string{
 		`A["Review & confirm"] -->|"Yes & continue"| B{"Ready?"}`,
 		`B --> C(["Checkout"])`,
@@ -88,6 +91,71 @@ func TestQuotedFlowchartLabelsMatchUnquotedLabels(t *testing.T) {
 	}
 	if !graphsEqual(withQuotes, withoutQuotes) {
 		t.Fatalf("quoted graph = %#v, want %#v", withQuotes, withoutQuotes)
+	}
+	for _, testCase := range []struct {
+		infix string
+		pipe  string
+	}{
+		{"-- Yes -->", "-->|Yes|"},
+		{`-- "Yes & continue" -->`, `-->|"Yes & continue"|`},
+		{"-. retry .->", "-.->|retry|"},
+	} {
+		infix, err := parseFlowchart("flowchart", []string{"A " + testCase.infix + " B --> C"})
+		if err != nil {
+			t.Fatalf("parseFlowchart(infix %q) error = %v", testCase.infix, err)
+		}
+		pipe, err := parseFlowchart("graph TB", []string{"A " + testCase.pipe + " B --> C"})
+		if err != nil {
+			t.Fatalf("parseFlowchart(pipe %q) error = %v", testCase.pipe, err)
+		}
+		if !graphsEqual(infix, pipe) {
+			t.Fatalf("infix %q = %#v, want %#v", testCase.infix, infix, pipe)
+		}
+	}
+	grouped, err := parseFlowchart("graph", []string{"A[Input & config] & B -- send --> C & D -.-> E"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(grouped) error = %v", err)
+	}
+	expanded, err := parseFlowchart("flowchart TD", []string{
+		"A[Input & config]",
+		"B",
+		"C",
+		"D",
+		"E",
+		"A -->|send| C",
+		"A -->|send| D",
+		"B -->|send| C",
+		"B -->|send| D",
+		"C -.-> E",
+		"D -.-> E",
+	})
+	if err != nil {
+		t.Fatalf("parseFlowchart(expanded) error = %v", err)
+	}
+	if !graphsEqual(grouped, expanded) {
+		t.Fatalf("grouped graph = %#v, want %#v", grouped, expanded)
+	}
+	spaced, err := parseFlowchart("flowchart", []string{"A--- oB", "A-.- xB"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(spaced) error = %v", err)
+	}
+	declared, err := parseFlowchart("flowchart", []string{"A", "oB", "xB"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(declared) error = %v", err)
+	}
+	if !nodesEqual(spaced.nodes, declared.nodes) {
+		t.Fatalf("spaced nodes = %#v, want %#v", spaced.nodes, declared.nodes)
+	}
+	repeated, err := parseFlowchart("flowchart", []string{"A --> B & B"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(repeated) error = %v", err)
+	}
+	twice, err := parseFlowchart("flowchart TD", []string{"A --> B", "A --> B"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(twice) error = %v", err)
+	}
+	if !graphsEqual(repeated, twice) {
+		t.Fatalf("repeated graph = %#v, want %#v", repeated, twice)
 	}
 	for _, testCase := range []struct {
 		source string
@@ -120,6 +188,7 @@ func TestQuotedFlowchartLabelsRejectMalformedAndUnsafeText(t *testing.T) {
 		for _, source := range []string{
 			"flowchart TD; A[" + label + "]",
 			"flowchart TD; A -->|" + label + "| B",
+			"flowchart TD; A -- " + label + " --> B",
 		} {
 			if _, err := Render(source, 100); err != ErrUnsupported {
 				t.Fatalf("Render(%q) error = %v, want ErrUnsupported", source, err)
@@ -146,8 +215,20 @@ func TestFlowchartRejectsUnsupportedInput(t *testing.T) {
 		"flowchart TD; P --> Q; A -->|\"`Caption`\"| B",
 		"flowchart TD; subgraph X; A; end",
 		"flowchart TD; A --> B; garbage syntax",
-		"flowchart TD; A -.-> B",
-		"flowchart TD; A & B --> C",
+		"flowchart TD; A --> B &",
+		"flowchart TD; A && B",
+		"flowchart TD; A -- Yes B",
+		"flowchart TD; A -. retry --> B",
+		"flowchart TD; A ==> B",
+		"flowchart TD; A -- hello --- B --> C",
+		"flowchart TD; A -. hello .- B -.-> C",
+		"flowchart TD; A -- hello ----> B",
+		"flowchart TD; A -. hello ..-> B",
+		"flowchart TD; A -- hello o--> B",
+		"flowchart TD; A --oB --> C",
+		"flowchart TD; A -. hello -.-> B",
+		"flowchart TD; A---oB",
+		"flowchart TD; A-.-xB",
 		"flowchart TD; A[one]; A[two]",
 		"flowchart TD; A[<b>HTML</b>]",
 		"flowchart TD; A[&#27;]",
@@ -306,9 +387,16 @@ func TestSourceGraphAndWidthLimits(t *testing.T) {
 	for n := 0; n < 17; n++ {
 		manyNodes.WriteString("N" + strconv.Itoa(n) + ";")
 	}
+	const grouped = "A & B & C & D --> E & F & G & H & I & J"
+	if _, err := Render("graph; "+grouped, 200); err != nil {
+		t.Fatalf("Render(grouped graph) error = %v", err)
+	}
 	for _, source := range []string{
 		strings.Repeat(" ", 16*1024+1),
 		"graph TD; A[" + strings.Repeat("x", 41) + "]",
+		"graph; A -- " + strings.Repeat("x", 41) + " --> B",
+		"graph; A --> E; " + grouped,
+		"graph; " + strings.Repeat("A & ", 24) + "A --> B",
 		"graph TD; A[\"" + strings.Repeat("[]", 21) + "\"]",
 		"graph TD; A([" + strings.Repeat("x", 41) + "])",
 		"graph TD; " + manyNodes.String(),
@@ -461,6 +549,308 @@ func TestStateDescriptionLimit(t *testing.T) {
 			t.Fatalf("Render(state limit) error = %v, want ErrLimit", err)
 		}
 	}
+}
+
+// Mirrors Rust's `equivalent_flowchart_forms_preserve_graph` and
+// `source_graph_and_width_limits` additions in #48895: a direction-less header
+// defaults to top-down, every new edge spelling carries its own end tips and
+// dash style, and `&` groups expand into the Cartesian product of edges.
+func TestFlowchartExpandedSyntaxVectorsMatchRust(t *testing.T) {
+	withoutDirection, err := parseFlowchart("flowchart", []string{"A --> B"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(no direction) error = %v", err)
+	}
+	withDirection, err := parseFlowchart("flowchart TD", []string{"A --> B"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(flowchart TD) error = %v", err)
+	}
+	if !graphsEqual(withoutDirection, withDirection) {
+		t.Fatalf("direction-less graph = %#v, want %#v", withoutDirection, withDirection)
+	}
+
+	for _, testCase := range []struct {
+		operator             string
+		sourceTip, targetTip rune
+		dashed               bool
+	}{
+		{"-->", '\u2500', '\u25c4', false},
+		{"---", '\u2500', '\u2500', false},
+		{"-.->", '\u2500', '\u25c4', true},
+		{"-.-", '\u2500', '\u2500', true},
+		{"<-->", '\u25c4', '\u25c4', false},
+		{"<-.->", '\u25c4', '\u25c4', true},
+	} {
+		parsed, err := parseFlowchart("flowchart", []string{"A" + testCase.operator + "B"})
+		if err != nil {
+			t.Fatalf("parseFlowchart(A%sB) error = %v", testCase.operator, err)
+		}
+		want := &graph{direction: directionDown}
+		from, _ := want.node("A")
+		to, _ := want.node("B")
+		want.edges = append(want.edges, edge{
+			from:      from,
+			to:        to,
+			sourceTip: testCase.sourceTip,
+			targetTip: testCase.targetTip,
+			dashed:    testCase.dashed,
+		})
+		if !graphsEqual(parsed, want) {
+			t.Fatalf("parseFlowchart(A%sB) = %#v, want %#v", testCase.operator, parsed, want)
+		}
+	}
+
+	group, err := parseFlowchart("flowchart", []string{"A & B --> C & D"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(group) error = %v", err)
+	}
+	grouped := &graph{direction: directionDown}
+	a, _ := grouped.node("A")
+	b, _ := grouped.node("B")
+	c, _ := grouped.node("C")
+	d, _ := grouped.node("D")
+	for _, pair := range [][2]int{{a, c}, {a, d}, {b, c}, {b, d}} {
+		grouped.edges = append(grouped.edges, directedEdge(pair[0], pair[1], ""))
+	}
+	if !graphsEqual(group, grouped) {
+		t.Fatalf("parseFlowchart(A & B --> C & D) = %#v, want %#v", group, grouped)
+	}
+
+	chained, err := parseFlowchart("flowchart", []string{"A & B -- go --> C & D -. no .-> E"})
+	if err != nil {
+		t.Fatalf("parseFlowchart(chained) error = %v", err)
+	}
+	chainedWant := &graph{direction: directionDown}
+	ca, _ := chainedWant.node("A")
+	cb, _ := chainedWant.node("B")
+	cc, _ := chainedWant.node("C")
+	cd, _ := chainedWant.node("D")
+	ce, _ := chainedWant.node("E")
+	for _, pair := range [][2]int{{ca, cc}, {ca, cd}, {cb, cc}, {cb, cd}} {
+		chainedWant.edges = append(chainedWant.edges, directedEdge(pair[0], pair[1], "go"))
+	}
+	chainedWant.edges = append(chainedWant.edges, edge{from: cc, to: ce, label: "no", sourceTip: '\u2500', targetTip: '\u25c4', dashed: true})
+	chainedWant.edges = append(chainedWant.edges, edge{from: cd, to: ce, label: "no", sourceTip: '\u2500', targetTip: '\u25c4', dashed: true})
+	if !graphsEqual(chained, chainedWant) {
+		t.Fatalf("parseFlowchart(chained) = %#v, want %#v", chained, chainedWant)
+	}
+}
+
+// Mirrors Rust's `graph_relationship_endpoints` #48895 additions: the new
+// operators reach the renderer with their own end tips, labels and dash style.
+func TestFlowchartRelationshipEndpointsReachRenderer(t *testing.T) {
+	for _, testCase := range []struct {
+		operator             string
+		sourceTip, targetTip rune
+		dashed               bool
+	}{
+		{"---", '\u2500', '\u2500', false},
+		{"-.->", '\u2500', '\u25c4', true},
+		{"-.-", '\u2500', '\u2500', true},
+		{"<-->", '\u25c4', '\u25c4', false},
+		{"<-.->", '\u25c4', '\u25c4', true},
+	} {
+		output, err := Render("flowchart; A"+testCase.operator+"|uses|B", 100)
+		if err != nil {
+			t.Fatalf("Render(A%s) error = %v", testCase.operator, err)
+		}
+		var ports []string
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "\u251c") {
+				ports = append(ports, line)
+			}
+		}
+		if len(ports) < 2 {
+			t.Fatalf("A%s: ports = %q (output:\n%s)", testCase.operator, ports, output)
+		}
+		if !strings.Contains(ports[0], "\u251c"+string(testCase.sourceTip)) {
+			t.Fatalf("A%s: source port = %q, want %q", testCase.operator, ports[0], "\u251c"+string(testCase.sourceTip))
+		}
+		if !strings.Contains(ports[1], "\u251c"+string(testCase.targetTip)) {
+			t.Fatalf("A%s: target port = %q, want %q", testCase.operator, ports[1], "\u251c"+string(testCase.targetTip))
+		}
+		if !strings.Contains(ports[0], "uses") {
+			t.Fatalf("A%s: source port = %q, want label %q", testCase.operator, ports[0], "uses")
+		}
+		if strings.Contains(output, "\u2506") != testCase.dashed {
+			t.Fatalf("A%s: dashed = %v (output:\n%s)", testCase.operator, strings.Contains(output, "\u2506"), output)
+		}
+	}
+	for _, testCase := range []struct {
+		infix string
+		pipe  string
+	}{
+		{"A -- send --> B", "A -->|send| B"},
+		{"B -. no .-> C", "B -.->|no| C"},
+	} {
+		infix, err := Render("flowchart; "+testCase.infix, 100)
+		if err != nil {
+			t.Fatalf("Render(%q) error = %v", testCase.infix, err)
+		}
+		pipe, err := Render("flowchart; "+testCase.pipe, 100)
+		if err != nil {
+			t.Fatalf("Render(%q) error = %v", testCase.pipe, err)
+		}
+		if infix != pipe {
+			t.Fatalf("Render(%q) = %q, want %q", testCase.infix, infix, pipe)
+		}
+	}
+}
+
+// Mirrors Rust's `stadiums_with_other_shapes_in_every_direction` snapshot
+// #48895: the fixture below is the Rust snapshot recorded at
+// `codex-rs/mermaid/src/snapshots/codex_mermaid__tests__stadiums_with_other_shapes_in_every_direction.snap`
+// for commit 44fe510ce3, so every direction must render the new operators, the
+// `&` group expansion and the spaced infix labels exactly as Rust does.
+func TestStadiumsWithOtherShapesInEveryDirectionMatchesRust(t *testing.T) {
+	const source = "flowchart %s; A([\u8bf7\u6c42]) -- go --> B[Work] & C{Done?}; B -. no .-> C; C <--> A; B --- A; C -.- B; A <-.-> B"
+	const expected = `TD
+╭─────────╮
+│ 请求    │
+│         ├──go───┐
+│         ├──go───╪─┐
+│         ├◄──────╪─╪───┐
+│         ├───────╪─╪───╪─┐
+│         ├◄┄┄┄┄┄┄╪┄╪┄┄┄╪┄╪┄┄┄┐
+╰─────────╯       │ │   │ │   ┆
+                  │ │   │ │   ┆
+                  │ │   │ │   ┆
+┌─────────┐       │ │   │ │   ┆
+│ Work    │       │ │   │ │   ┆
+│         ├◄──────┘ │   │ │   ┆
+│         ├─┄no┄┄┄┄┄╪┄┐ │ │   ┆
+│         ├─────────╪─╪─╪─┘   ┆
+│         ├─┄┄┄┄┄┄┄┄╪┄╪┄╪┄┄┄┐ ┆
+│         ├◄┄┄┄┄┄┄┄┄╪┄╪┄╪┄┄┄╪┄┘
+└─────────┘         │ ┆ │   ┆
+                    │ ┆ │   ┆
+                    │ ┆ │   ┆
+┌─────────┐         │ ┆ │   ┆
+│ ◇ Done? │         │ ┆ │   ┆
+│         ├◄────────┘ ┆ │   ┆
+│         ├◄┄┄┄┄┄┄┄┄┄┄┘ │   ┆
+│         ├◄────────────┘   ┆
+│         ├─┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘
+└─────────┘
+
+BT
+┌─────────┐
+│ ◇ Done? │
+│         ├◄────────┐
+│         ├◄┄┄┄┄┄┄┄┄╪┄┐
+│         ├◄────────╪─╪─┐
+│         ├─┄┄┄┄┄┄┄┄╪┄╪┄╪┄┄┄┐
+└─────────┘         │ ┆ │   ┆
+                    │ ┆ │   ┆
+                    │ ┆ │   ┆
+┌─────────┐         │ ┆ │   ┆
+│ Work    │         │ ┆ │   ┆
+│         ├◄──────┐ │ ┆ │   ┆
+│         ├─┄no┄┄┄╪┄╪┄┘ │   ┆
+│         ├───────╪─╪───╪─┐ ┆
+│         ├─┄┄┄┄┄┄╪┄╪┄┄┄╪┄╪┄┘
+│         ├◄┄┄┄┄┄┄╪┄╪┄┄┄╪┄╪┄┄┄┐
+└─────────┘       │ │   │ │   ┆
+                  │ │   │ │   ┆
+                  │ │   │ │   ┆
+╭─────────╮       │ │   │ │   ┆
+│ 请求    │       │ │   │ │   ┆
+│         ├──go───┘ │   │ │   ┆
+│         ├──go─────┘   │ │   ┆
+│         ├◄────────────┘ │   ┆
+│         ├───────────────┘   ┆
+│         ├◄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘
+╰─────────╯
+
+LR
+╭────────────────────╮  ┌────────────────────┐  ┌────────────────┐
+│ 请求               │  │ Work               │  │ ◇ Done?        │
+╰┬───┬───┬───┬───┬───╯  └┬───┬───┬───┬───┬───┘  └┬───┬───┬───┬───┘
+ │   │   ▲   │   ▲       ▲   │   │   │   ▲       ▲   ▲   ▲   │
+ │go │go │   │   ┆       │   ┆no │   ┆   ┆       │   ┆   │   ┆
+ │   │   │   │   ┆       │   ┆   │   ┆   ┆       │   ┆   │   ┆
+ │   │   │   │   ┆       │   ┆   │   ┆   ┆       │   ┆   │   ┆
+ └───╪───╪───╪───╪───────┘   ┆   │   ┆   ┆       │   ┆   │   ┆
+     │   │   │   ┆           ┆   │   ┆   ┆       │   ┆   │   ┆
+     └───╪───╪───╪───────────╪───╪───╪───╪───────┘   ┆   │   ┆
+         │   │   ┆           ┆   │   ┆   ┆           ┆   │   ┆
+         │   │   ┆           └┄┄┄╪┄┄┄╪┄┄┄╪┄┄┄┄┄┄┄┄┄┄┄┘   │   ┆
+         │   │   ┆               │   ┆   ┆               │   ┆
+         └───╪───╪───────────────╪───╪───╪───────────────┘   ┆
+             │   ┆               │   ┆   ┆                   ┆
+             └───╪───────────────┘   ┆   ┆                   ┆
+                 ┆                   ┆   ┆                   ┆
+                 ┆                   └┄┄┄╪┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘
+                 ┆                       ┆
+                 └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘
+
+RL
+┌────────────────┐  ┌────────────────────┐  ╭────────────────────╮
+│ ◇ Done?        │  │ Work               │  │ 请求               │
+└┬───┬───┬───┬───┘  └┬───┬───┬───┬───┬───┘  ╰┬───┬───┬───┬───┬───╯
+ ▲   ▲   ▲   │       ▲   │   │   │   ▲       │   │   ▲   │   ▲
+ │   ┆   │   ┆       │   ┆no │   ┆   ┆       │go │go │   │   ┆
+ │   ┆   │   ┆       │   ┆   │   ┆   ┆       │   │   │   │   ┆
+ │   ┆   │   ┆       │   ┆   │   ┆   ┆       │   │   │   │   ┆
+ │   ┆   │   ┆       └───╪───╪───╪───╪───────┘   │   │   │   ┆
+ │   ┆   │   ┆           ┆   │   ┆   ┆           │   │   │   ┆
+ └───╪───╪───╪───────────╪───╪───╪───╪───────────┘   │   │   ┆
+     ┆   │   ┆           ┆   │   ┆   ┆               │   │   ┆
+     └┄┄┄╪┄┄┄╪┄┄┄┄┄┄┄┄┄┄┄┘   │   ┆   ┆               │   │   ┆
+         │   ┆               │   ┆   ┆               │   │   ┆
+         └───╪───────────────╪───╪───╪───────────────┘   │   ┆
+             ┆               │   ┆   ┆                   │   ┆
+             ┆               └───╪───╪───────────────────┘   ┆
+             ┆                   ┆   ┆                       ┆
+             └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘   ┆                       ┆
+                                     ┆                       ┆
+                                     └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘`
+	var cases []string
+	for _, direction := range []string{"TD", "BT", "LR", "RL"} {
+		rendered, err := Render(fmt.Sprintf(source, direction), 100)
+		if err != nil {
+			t.Fatalf("%s: Render error = %v", direction, err)
+		}
+		width := 0
+		for _, line := range strings.Split(rendered, "\n") {
+			if w := textWidth(line); w > width {
+				width = w
+			}
+		}
+		if got, err := Render(fmt.Sprintf(source, direction), width); err != nil || got != rendered {
+			t.Fatalf("%s: Render(width) = (%q, %v), want the same output", direction, got, err)
+		}
+		if _, err := Render(fmt.Sprintf(source, direction), width-1); err != ErrTooWide {
+			t.Fatalf("%s: Render(width-1) error = %v, want ErrTooWide", direction, err)
+		}
+		cases = append(cases, direction+"\n"+rendered)
+	}
+	got := strings.Join(cases, "\n\n")
+	if got == expected {
+		return
+	}
+	gotLines, wantLines := strings.Split(got, "\n"), strings.Split(expected, "\n")
+	if len(gotLines) != len(wantLines) {
+		t.Errorf("rendered line count = %d, want %d", len(gotLines), len(wantLines))
+	}
+	for i := 0; i < len(gotLines) && i < len(wantLines); i++ {
+		if gotLines[i] != wantLines[i] {
+			t.Fatalf("rendered line %d = %q, want %q", i, gotLines[i], wantLines[i])
+		}
+	}
+	t.Fatalf("rendered diagram does not match the Rust snapshot:\n%s", got)
+}
+
+func nodesEqual(a, b []node) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		x, y := a[i], b[i]
+		if x.id != y.id || x.label != y.label || x.shape != y.shape || x.declared != y.declared || strings.Join(x.members, "\u0000") != strings.Join(y.members, "\u0000") {
+			return false
+		}
+	}
+	return true
 }
 
 func graphsEqual(a, b *graph) bool {
