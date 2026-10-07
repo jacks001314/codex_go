@@ -268,6 +268,9 @@ func baseClientRequestMethods() []ProtocolMethod {
 
 func experimentalClientRequestMethods() []ProtocolMethod {
 	return []ProtocolMethod{
+		{Method: string(MethodBedrockCheckGovCloudRequirements), Experimental: true},
+		{Method: string(MethodBedrockDiscover), Experimental: true},
+		{Method: string(MethodBedrockSetup), Experimental: true},
 		{Method: string(MethodCollaborationModeList), Experimental: true},
 		{Method: string(MethodEnvironmentAdd), Experimental: true},
 		{Method: string(MethodEnvironmentInfo), Experimental: true},
@@ -501,6 +504,9 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(MethodAppList):                                {Params: "AppsListParams", Result: "AppsListResponse"},
 		string(MethodAppRead):                                {Params: "AppsReadParams", Result: "AppsReadResponse"},
 		string(MethodAppInstalled):                           {Params: "AppsInstalledParams", Result: "AppsInstalledResponse"},
+		string(MethodBedrockCheckGovCloudRequirements):       {Params: "BedrockCheckGovCloudRequirementsParams", Result: "BedrockCheckGovCloudRequirementsResponse"},
+		string(MethodBedrockDiscover):                        {Params: "BedrockDiscoverParams", Result: "BedrockDiscoverResponse"},
+		string(MethodBedrockSetup):                           {Params: "BedrockSetupParams", Result: "BedrockSetupResponse"},
 		string(MethodCancelLoginAccount):                     {Params: "CancelLoginAccountParams", Result: "CancelLoginAccountResponse"},
 		string(MethodCollaborationModeList):                  {Params: "CollaborationModeListParams", Result: "CollaborationModeListResponse"},
 		string(MethodCommandExec):                            {Params: "CommandExecParams", Result: "CommandExecResponse"},

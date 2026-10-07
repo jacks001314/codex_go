@@ -2570,7 +2570,10 @@ func isRemoteControlMethod(method Method) bool {
 
 func experimentalAPIMethod(method Method) bool {
 	switch method {
-	case MethodCollaborationModeList,
+	case MethodBedrockCheckGovCloudRequirements,
+		MethodBedrockDiscover,
+		MethodBedrockSetup,
+		MethodCollaborationModeList,
 		MethodEnvironmentAdd,
 		MethodEnvironmentInfo,
 		MethodEnvironmentStatus,
@@ -3025,6 +3028,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		return r.requireConfig().ImportHistories(), nil
 	case MethodLoginAccount:
 		return r.handleLoginAccount(request)
+	case MethodBedrockDiscover:
+		return r.handleBedrockDiscover(request)
+	case MethodBedrockSetup:
+		return r.handleBedrockSetup(request)
+	case MethodBedrockCheckGovCloudRequirements:
+		return r.handleBedrockCheckGovCloudRequirements(request)
 	case MethodCancelLoginAccount:
 		return r.handleCancelLoginAccount(request)
 	case MethodAccountSessionsAdd:
