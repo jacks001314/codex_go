@@ -84,13 +84,20 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if sandboxLevel == windowsSandboxLevelElevated {
 		level = windowsunified.WindowsSandboxLevelElevated
 	}
+	// Rust #49098: a remote controller cannot resolve a sandbox-compatible
+	// PowerShell on this host, so request preparation applies the existing
+	// fallback for the elevated/MXC Windows sandbox backends.
+	command := append([]string(nil), params.Argv...)
+	if len(command) > 0 {
+		command[0] = windowsSandboxPowerShellProgram(command[0], sandboxLevel)
+	}
 	session, err := windowsunified.SpawnWindowsSandboxLiveSessionForLevel(&windowsunified.WindowsSandboxSessionRequest{
 		Capture: windowssandbox.CaptureRequest{
 			PermissionProfileID:              "exec-server",
 			PermissionProfile:                profile,
 			WorkspaceRoots:                   workspaceRoots,
 			CodexHome:                        fsHelperCodexHome(),
-			Command:                          append([]string(nil), params.Argv...),
+			Command:                          command,
 			CWD:                              cwd,
 			Env:                              childEnv(params),
 			TTY:                              params.TTY,
