@@ -2201,4 +2201,22 @@ func TestFallbackCatalogCarriesModelsJSONFieldValues(t *testing.T) {
 	if review.ContextWindow != 272000 {
 		t.Fatalf("codex-auto-review context_window = %d, want 272000", review.ContextWindow)
 	}
+
+	// models.json @ b17c74cfd5 also declares the review model's tool mode,
+	// multi-agent version and lite responses shape. The hand-written fallback
+	// used to leave all three at their zero values, so the review model fell
+	// back to the global feature switch and an unshaped request instead of the
+	// Rust-declared code_mode_only / v1 / lite.
+	if review.ToolMode != ToolModeCodeModeOnly {
+		t.Fatalf("codex-auto-review tool_mode = %q, want %q (models.json @ b17c74cfd5)", review.ToolMode, ToolModeCodeModeOnly)
+	}
+	if got := ResolveToolMode(review.ToolMode, nil); got != ToolModeCodeModeOnly {
+		t.Fatalf("ResolveToolMode(codex-auto-review) = %q, want %q", got, ToolModeCodeModeOnly)
+	}
+	if review.MultiAgentVersion != "v1" {
+		t.Fatalf("codex-auto-review multi_agent_version = %q, want %q (models.json @ b17c74cfd5)", review.MultiAgentVersion, "v1")
+	}
+	if !review.UseResponsesLite {
+		t.Fatalf("codex-auto-review use_responses_lite = false, want true (models.json @ b17c74cfd5)")
+	}
 }
