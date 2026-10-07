@@ -23,6 +23,25 @@ func multiAgentResultDeliveryCounters(metrics *state.TaskMetrics) []*state.TaskM
 	return out
 }
 
+// waitForMultiAgentResultDeliveryCounters waits for the wanted number of
+// delivery counters. A completed child turn notifies its listeners before the
+// terminal result is handed to the parent, so the counter is only observable
+// once that delivery step has run.
+func waitForMultiAgentResultDeliveryCounters(t *testing.T, metrics *state.TaskMetrics, want int) []*state.TaskMetric {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		counters := multiAgentResultDeliveryCounters(metrics)
+		if len(counters) >= want {
+			return counters
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d result delivery counters, got %d", want, len(counters))
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // Rust #51331 (41acdad246, core/src/agent/control/completion.rs): handing a
 // terminal child result to its parent increments
 // `codex.multi_agent.result_delivery` with outcome=queued when the parent
@@ -72,7 +91,7 @@ func TestMultiAgentResultDeliveryRecordsOutcomeLikeRust(t *testing.T) {
 	childTurnID := start.Result.(*turn.TurnStartResponse).Turn.ID
 	waitForTurnCompletedStatus(t, sink, childTurnID, TurnStatusCompleted)
 
-	counters := multiAgentResultDeliveryCounters(metrics)
+	counters := waitForMultiAgentResultDeliveryCounters(t, metrics, 1)
 	if len(counters) != 1 {
 		t.Fatalf("result delivery counters = %d, want 1", len(counters))
 	}
@@ -89,7 +108,7 @@ func TestMultiAgentResultDeliveryRecordsOutcomeLikeRust(t *testing.T) {
 	router.deliverRuntimeAgentCompletion("child-thread", agent.AgentMessageStatus{
 		Kind: agent.AgentMessageStatusCompleted, Message: "child finished again",
 	})
-	counters = multiAgentResultDeliveryCounters(metrics)
+	counters = waitForMultiAgentResultDeliveryCounters(t, metrics, 2)
 	if len(counters) != 2 {
 		t.Fatalf("result delivery counters after the mailbox delivery = %d, want 2", len(counters))
 	}
@@ -104,7 +123,7 @@ func TestMultiAgentResultDeliveryRecordsOutcomeLikeRust(t *testing.T) {
 	// The failed arm mirrors Rust's delivery error; Go's enqueue rejects a nil
 	// mailbox, which is the only reachable failure shape.
 	router.recordMultiAgentResultDelivery(errors.New("delivery failed"))
-	counters = multiAgentResultDeliveryCounters(metrics)
+	counters = waitForMultiAgentResultDeliveryCounters(t, metrics, 3)
 	if len(counters) != 3 {
 		t.Fatalf("result delivery counters after a failure = %d, want 3", len(counters))
 	}
