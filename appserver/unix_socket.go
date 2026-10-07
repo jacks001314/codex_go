@@ -121,17 +121,32 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	// once after the server loop returns (Rust app-server/src/lib.rs:1037-1042
 	// keeps the snapshot at daemon scope).
 	recoverySink := daemonRecoverySinkForAccess(options.ShutdownAccess, codexHome)
-	serveErr := serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
-		var router *RuntimeRouter
+	newRouter := func() *RuntimeRouter {
 		if strings.TrimSpace(options.StoreRoot) != "" {
-			router = NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
+			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
 			router.SetRequestTransport("unix_socket")
-		} else {
-			router = NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
+			return router
 		}
+		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
+	}
+	// A managed daemon also consumes the previous generation's handoff before it
+	// serves and restores those threads in the background (Rust
+	// daemon_thread_recovery.rs:32). Its daemon-lifetime router shares the
+	// recovery sink, so the threads it restored are handed to the next generation.
+	recoveryRestore := startDaemonRecoveryRestoreForAccess(options.ShutdownAccess, codexHome, newRouter)
+	if recoveryRestore != nil && recoveryRestore.router != nil {
+		recoveryRestore.router.SetDaemonRecoverySink(recoverySink)
+	}
+	serveErr := serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
+		router := newRouter()
 		router.SetDaemonRecoverySink(recoverySink)
 		return router
 	}, options.ShutdownAccess, options.OnDaemonShutdown)
+	// Release the daemon-lifetime router before the snapshot is written so its
+	// restored threads contribute to the next generation.
+	if recoveryRestore != nil {
+		recoveryRestore.close()
+	}
 	if recoverySink != nil {
 		// Best-effort: a failed save must never block the shutdown.
 		if err := recoverySink.WriteSnapshot(); err != nil {
