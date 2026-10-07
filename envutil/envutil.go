@@ -25,6 +25,9 @@ var nonInheritableEnvVars = []string{
 	// Rust #39301: the Node REPL auth token must not reach model-reachable
 	// child processes.
 	"NODE_REPL_AUTH_TOKEN",
+	// Rust #50019 `9552906b2b`: the guardian decisions API key must not be
+	// forwarded into model-reachable child processes.
+	"CODEX_GUARDIAN_DECISIONS_API_KEY",
 	"OPENAI_FEDERATION_RULE_ID",
 	"OPENAI_IDENTITY_TOKEN_FILE",
 	"OPENAI_WORKLOAD_IDENTITY_CONTEXT",

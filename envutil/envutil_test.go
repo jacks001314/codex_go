@@ -20,6 +20,9 @@ func TestIsNonInheritableEnvVarCaseInsensitiveLikeRust(t *testing.T) {
 		"openai_identity_token_file",
 		"OPENAI_WORKLOAD_IDENTITY_CONTEXT",
 		"openai_workload_identity_context",
+		"CODEX_GUARDIAN_DECISIONS_API_KEY",
+		"codex_guardian_decisions_api_key",
+		"Codex_Guardian_Decisions_Api_Key",
 		CodexExecServerNoiseAuthTokenEnvVar,
 		"codex_exec_server_noise_auth_token",
 		"Codex_Exec_Server_Noise_Auth_Token",
@@ -98,9 +101,43 @@ func TestScrubCommandEnvRemovesNoiseAuthTokenAfterPolicyOverrides(t *testing.T) 
 	}
 }
 
+// TestNonInheritableEnvironmentIsRemovedAfterPolicyOverridesLikeRust mirrors
+// Rust #50019 `9552906b2b`
+// (codex-rs/protocol/src/shell_environment_tests.rs,
+// non_inheritable_environment_is_removed_after_policy_overrides): an inherited
+// guardian decisions key and an explicit shell-policy override (any casing) are
+// both removed, while unrelated variables are preserved.
+func TestNonInheritableEnvironmentIsRemovedAfterPolicyOverridesLikeRust(t *testing.T) {
+	scrubbed := ScrubSlice([]string{
+		"Safe=inherited",
+		"codex_guardian_decisions_api_key=synthetic-inherited-key",
+		"node_repl_auth_token=inherited-token",
+		"openai_federation_rule_id=rule-inherited",
+		"KEEP=value",
+		"SAFE=override",
+		"CODEX_GUARDIAN_DECISIONS_API_KEY=synthetic-override-key",
+		"Node_Repl_Auth_Token=configured-token",
+	})
+	for _, pair := range scrubbed {
+		if IsNonInheritableEnvVar(pair) {
+			t.Fatalf("non-inheritable variable leaked after policy overrides: %q", pair)
+		}
+	}
+	want := []string{"Safe=inherited", "KEEP=value", "SAFE=override"}
+	if len(scrubbed) != len(want) {
+		t.Fatalf("ScrubSlice() = %#v, want %#v", scrubbed, want)
+	}
+	for i := range want {
+		if scrubbed[i] != want[i] {
+			t.Fatalf("ScrubSlice()[%d] = %q, want %q", i, scrubbed[i], want[i])
+		}
+	}
+}
+
 func TestScrubCommandEnvInheritsFilteredEnvironment(t *testing.T) {
 	t.Setenv("OPENAI_FEDERATION_RULE_ID", "rule-1")
 	t.Setenv("OPENAI_IDENTITY_TOKEN_FILE", "token")
+	t.Setenv("Codex_Guardian_Decisions_Api_Key", "synthetic-inherited-key")
 	cmd := exec.Command("echo", "hi")
 	ScrubCommandEnv(cmd)
 	for _, pair := range cmd.Env {
