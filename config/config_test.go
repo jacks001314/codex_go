@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1462,6 +1463,128 @@ func TestLoadEffectiveStrictConfigAllowsTUI(t *testing.T) {
 	}
 	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
 		t.Fatalf("LoadEffectiveWithOptions strict tui returned error: %v", err)
+	}
+}
+
+// Mirrors Rust strict_config_rejects_unknown_tui_key (#50525, upstream
+// b65ab465ce): `[tui] bogus_key_xyz` must fail strict validation even though the
+// flattened notification settings keep it out of the generic ignored-field
+// check.
+func TestStrictConfigRejectsUnknownTuiKeyLikeRust(t *testing.T) {
+	err := validateKnownTopLevelConfigFields(map[string]any{
+		"tui": map[string]any{"bogus_key_xyz": int64(1)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown configuration field `tui.bogus_key_xyz`") {
+		t.Fatalf("strict tui error = %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("[tui]\nbogus_key_xyz = 1\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err == nil ||
+		!strings.Contains(err.Error(), "unknown configuration field `tui.bogus_key_xyz`") {
+		t.Fatalf("LoadEffectiveWithOptions strict tui error = %v", err)
+	}
+
+	// Rust validates config files and -c/--config overrides with the same TUI
+	// check; Go validates the merged effective values, so an override travels
+	// through this same call site.
+	overrideDir := t.TempDir()
+	if _, err := LoadEffectiveWithOptions(overrideDir, &EffectiveOptions{
+		StrictConfig: true,
+		RawOverrides: []string{"tui.bogus_key_xyz=1"},
+	}); err == nil || !strings.Contains(err.Error(), "unknown configuration field `tui.bogus_key_xyz`") {
+		t.Fatalf("LoadEffectiveWithOptions strict tui override error = %v", err)
+	}
+}
+
+// Mirrors Rust strict_config_accepts_tui_notification_settings: the flattened
+// notification settings keep loading under strict config.
+func TestStrictConfigAcceptsTuiNotificationSettingsLikeRust(t *testing.T) {
+	for _, body := range []string{
+		"[tui]\nnotifications = false\n",
+		"[tui]\nnotification_method = \"bel\"\n",
+		"[tui]\nnotification_condition = \"always\"\n",
+	} {
+		dir := t.TempDir()
+		if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true}); err != nil {
+			t.Fatalf("strict config %q returned error: %v", body, err)
+		}
+	}
+}
+
+// Mirrors the accepted-key set Rust derives from `Tui` (#50525): every key the
+// upstream round-trip accepts must stay loadable under strict config, and the
+// legacy `tui.whimsy` alias must keep being normalized instead of rejected.
+func TestStrictConfigAcceptsEveryKnownTuiKeyLikeRust(t *testing.T) {
+	keys := make([]string, 0, len(knownTuiConfigFields))
+	for key := range knownTuiConfigFields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	tui := map[string]any{}
+	for _, key := range keys {
+		tui[key] = true
+	}
+	if err := validateKnownTuiConfigFields(map[string]any{"tui": tui}); err != nil {
+		t.Fatalf("known tui keys rejected: %v", err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("[tui]\nwhimsy = false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	cfg, err := LoadEffectiveWithOptions(dir, &EffectiveOptions{StrictConfig: true})
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions strict tui alias returned error: %v", err)
+	}
+	effects, ok := cfg.Values["tui"].(map[string]any)["effects"].(map[string]any)
+	if !ok || effects["starfield"] != false {
+		t.Fatalf("tui.whimsy alias = %#v, want effects.starfield = false", cfg.Values["tui"])
+	}
+}
+
+// TestKnownTuiConfigFieldsCoverHostReadKeysLikeRust pins the `[tui]` keys the Go
+// host reads (file:line) against the strict validator's accepted set: #50525
+// must never turn a key the host legitimately reads into an unknown field. The
+// listed files are re-scanned so a moved or deleted read site fails this test
+// instead of silently rotting the table.
+func TestKnownTuiConfigFieldsCoverHostReadKeysLikeRust(t *testing.T) {
+	hostRead := map[string]string{
+		"notifications":          "app/interactive.go:2385",
+		"notification_method":    "app/interactive.go:2411",
+		"notification_condition": "app/interactive.go:2424",
+		"theme":                  "app/interactive.go:1833",
+		"pet":                    "app/interactive.go:1834",
+		"session_picker_view":    "app/interactive.go:1835",
+		"animations":             "app/interactive.go:1846",
+		"show_tooltips":          "app/interactive.go:1860",
+		"status_line_use_colors": "app/interactive.go:1873",
+		"question_esc_back":      "app/interactive.go:1886",
+		"auto_recap":             "app/interactive.go:1899",
+		"right_click_paste":      "app/interactive.go:1914",
+		"mouse_scroll_speed":     "app/interactive.go:1941",
+		"terminal_title":         "doctor/doctor.go:4105",
+		"keymap":                 "tui/keymap_config.go:568",
+		"effects":                "config/tui_effects.go:45",
+		"rendering":              "config/tui_rendering.go:33",
+	}
+	for key, where := range hostRead {
+		if _, ok := knownTuiConfigFields[key]; !ok {
+			t.Fatalf("host reads tui.%s (%s) but strict validation would reject it", key, where)
+		}
+		file, _, _ := strings.Cut(where, ":")
+		body, err := os.ReadFile(filepath.Join("..", filepath.FromSlash(file)))
+		if err != nil {
+			t.Fatalf("read %s for tui.%s: %v", file, key, err)
+		}
+		if !strings.Contains(string(body), `"`+key+`"`) {
+			t.Fatalf("read site %s no longer mentions tui.%s; update the host-read table", where, key)
+		}
 	}
 }
 

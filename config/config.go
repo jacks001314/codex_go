@@ -798,6 +798,70 @@ func KnownTopLevelConfigFields() []string {
 	return keys
 }
 
+// knownTuiConfigFields mirrors the top-level keys Rust's `Tui` accepts
+// (config/src/types.rs, `Tui` + the flattened `TuiNotificationSettings`).
+//
+// Rust #50525 (upstream b65ab465ce) rejects unknown `[tui]` keys by
+// round-tripping `Tui`, because the flattened notification settings hide them
+// from `serde_ignored`. Go has no `[tui]` deserializer, so the accepted set is
+// listed here; TestKnownTuiConfigFieldsCoverHostReadKeysLikeRust locks it
+// against the keys the host actually reads.
+var knownTuiConfigFields = map[string]struct{}{
+	// Flattened TuiNotificationSettings.
+	"notifications":                   {},
+	"notification_method":             {},
+	"notification_condition":          {},
+	"animations":                      {},
+	"screen_reader_detection_done":    {},
+	"effects":                         {},
+	"rendering":                       {},
+	"show_tooltips":                   {},
+	"show_server_version_notice":      {},
+	"auto_recap":                      {},
+	"disable_paste_burst":             {},
+	"vim_mode_default":                {},
+	"question_esc_back":               {},
+	"raw_output_mode":                 {},
+	"fullscreen_transcript":           {},
+	"mouse_scroll_speed":              {},
+	"copy_on_select":                  {},
+	"right_click_paste":               {},
+	"alternate_screen":                {},
+	"status_line":                     {},
+	"status_line_use_colors":          {},
+	"terminal_title":                  {},
+	"theme":                           {},
+	"pet":                             {},
+	"pet_anchor":                      {},
+	"session_picker_view":             {},
+	"agents_overview_grouping":        {},
+	"resume_cwd":                      {},
+	"keymap":                          {},
+	"model_availability_nux":          {},
+	"terminal_resize_reflow_max_rows": {},
+}
+
+// validateKnownTuiConfigFields mirrors Rust unknown_tui_toml_value_path
+// (config/src/strict_config.rs, #50525): only the root `[tui]` table is
+// checked, so `[profiles.<name>.tui]` stays outside this rule.
+func validateKnownTuiConfigFields(values map[string]any) error {
+	tui, ok := values["tui"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	keys := make([]string, 0, len(tui))
+	for key := range tui {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, ok := knownTuiConfigFields[key]; !ok {
+			return fmt.Errorf("unknown configuration field `tui.%s`", key)
+		}
+	}
+	return nil
+}
+
 func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if values == nil {
 		return nil
@@ -811,6 +875,11 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 		if _, ok := knownTopLevelConfigFields[key]; !ok {
 			return fmt.Errorf("unknown configuration field `%s`", key)
 		}
+	}
+	// Rust #50525 orders the strict checks as ignored fields, then `[tui]`, then
+	// feature keys (strict_config.rs).
+	if err := validateKnownTuiConfigFields(values); err != nil {
+		return err
 	}
 	if err := validateKnownFeatureFields(values["features"]); err != nil {
 		return err
