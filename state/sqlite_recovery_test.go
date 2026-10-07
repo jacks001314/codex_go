@@ -189,3 +189,33 @@ func quickCheckFinding(t *testing.T, db *sql.DB) string {
 // `Instant::now() + Duration::from_secs(5)`), decoupled from the 100 ms startup
 // budget under test.
 const testQuickCheckBudget = 5 * time.Second
+
+// Mirrors Rust `collect_runtime_db_backups` (upstream 3620b2caf8 / #49701): the
+// backups taken while opening a damaged database are collected, in order, so
+// the startup can report every preserved location.
+func TestRecoveryCollectorRecordsOpenerBackupsLikeRust(t *testing.T) {
+	ctx := context.Background()
+	config, err := NewSqliteConfig(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSqliteConfig: %v", err)
+	}
+	collector := &DBRecoveryCollector{}
+	config = config.WithRecoveryCollector(collector)
+	corruptValidationDB(t, config.StateDBPath())
+	db, err := config.OpenStateDB(ctx)
+	if err != nil {
+		t.Fatalf("OpenStateDB on corrupt state db: %v", err)
+	}
+	defer db.Close()
+	backups := collector.Take()
+	if len(backups) != 1 || backups[0].OriginalPath != config.StateDBPath() {
+		t.Fatalf("collected backups = %#v, want the state database", backups)
+	}
+	if _, statErr := os.Stat(backups[0].BackupPath); statErr != nil {
+		t.Fatalf("backup %s: %v", backups[0].BackupPath, statErr)
+	}
+	// Taking drains what was recorded; a healthy open records nothing.
+	if again := collector.Take(); len(again) != 0 {
+		t.Fatalf("second take = %#v, want empty", again)
+	}
+}

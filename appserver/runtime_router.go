@@ -228,12 +228,17 @@ type RuntimeRouterOptions struct {
 	logDBInstallation                   *state.LogDBInstallation
 	closeStateRuntimeOnRouterClose      bool
 	closeLogDBInstallationOnRouterClose bool
+	// StateDBRecoveryNotice is the startup warning for runtime databases that
+	// were backed up and rebuilt before the router existed, so it is collected
+	// during startup and emitted once with the initialize response (#49701).
+	StateDBRecoveryNotice *config.ConfigWarningNotification
 }
 
 type RuntimeRouter struct {
 	services              RuntimeServices
 	metrics               *state.TaskMetrics
 	config                *config.ConfigService
+	stateDBRecoveryNotice *config.ConfigWarningNotification
 	threads               *ThreadManager
 	servicesMu            sync.Mutex
 	mu                    sync.RWMutex
@@ -1384,6 +1389,10 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	// SQLite corruption telemetry and later metrics share one instance
 	// (Rust #49701 `codex.sqlite.corruption.count`).
 	router.metrics = runtimeMetrics
+	if options != nil {
+		// Emitted once during initialize (#49701).
+		router.stateDBRecoveryNotice = options.StateDBRecoveryNotice
+	}
 	router.codexHomeScanCancel = func() { atomic.StoreInt32(&codexHomeScanCanceled, 1) }
 	router.configureEnvironmentHTTPPolicy()
 	router.configureAnalyticsFromConfig(codexHome, options)
@@ -1415,6 +1424,39 @@ func (r *RuntimeRouter) taskMetrics() *state.TaskMetrics {
 	return r.metrics
 }
 
+// stateDatabaseRecoveryDetails is the upstream app-server guidance shown with
+// the rebuilt-database warning (Rust #49701
+// `SQLITE_RECOVERY_CONFIG_WARNING_DETAILS`).
+const stateDatabaseRecoveryDetails = "Damaged local databases were rebuilt. Saved conversations remain in rollout files and can restore the thread list and history. Some database-only metadata may be unavailable. The original database files were preserved at the backup locations below."
+
+// stateDatabaseRecoveryWarningSummary matches Rust
+// `SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY`.
+const stateDatabaseRecoveryWarningSummary = "Codex rebuilt its local database"
+
+// stateDBRecoveryNotice mirrors Rust `sqlite_recovery_notice`: one entry per
+// recovered database (deduplicated by backup folder), or nil when nothing was
+// rebuilt.
+func stateDBRecoveryNotice(backups []state.DBRecoveryBackup) *config.ConfigWarningNotification {
+	entries := make([]string, 0, len(backups))
+	seen := map[string]bool{}
+	for _, backup := range backups {
+		folder := filepath.Dir(backup.BackupPath)
+		if seen[folder] {
+			continue
+		}
+		seen[folder] = true
+		entries = append(entries, fmt.Sprintf("Database path: %s\nBackup folder: %s", backup.OriginalPath, folder))
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	details := stateDatabaseRecoveryDetails + "\n\n" + strings.Join(entries, "\n\n")
+	return &config.ConfigWarningNotification{
+		Summary: stateDatabaseRecoveryWarningSummary,
+		Details: &details,
+	}
+}
+
 func (r *RuntimeRouter) StartupError() error {
 	if r == nil {
 		return errors.New("app-server runtime router is not configured")
@@ -1433,9 +1475,14 @@ func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *
 	if options != nil && options.DBCorruptionMetrics != nil {
 		sqliteConfig = sqliteConfig.WithCorruptionMetrics(options.DBCorruptionMetrics)
 	}
-	runtime, err := initStateRuntimeWithFreshStartOnCorruption(ctx, sqliteConfig, "openai")
+	runtime, backups, err := initStateRuntimeWithFreshStartOnCorruption(ctx, sqliteConfig, "openai")
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to initialize sqlite state runtime under %s: %w", sqliteConfig.Home(), err)
+	}
+	if options != nil {
+		// Rust #49701: the startup warning lists every preserved backup location,
+		// so it is assembled here where the backups are known.
+		options.StateDBRecoveryNotice = stateDBRecoveryNotice(backups)
 	}
 	if err := state.WaitForRolloutBackfill(ctx, runtime, codexHome, state.RolloutBackfillOptions{}); err != nil {
 		_ = runtime.Close()
@@ -1444,12 +1491,24 @@ func resolveDefaultStateRuntime(ctx context.Context, codexHome string, options *
 	return runtime, true, nil
 }
 
-func initStateRuntimeWithFreshStartOnCorruption(ctx context.Context, sqliteConfig state.SqliteConfig, defaultProvider string) (*state.StateRuntime, error) {
+// initStateRuntimeWithFreshStartOnCorruption returns the runtime plus every
+// backup taken while recovering damaged databases, mirroring Rust
+// `collect_runtime_db_backups` (upstream 3620b2caf8 / #49701).
+func initStateRuntimeWithFreshStartOnCorruption(ctx context.Context, sqliteConfig state.SqliteConfig, defaultProvider string) (*state.StateRuntime, []state.DBRecoveryBackup, error) {
 	attempted := map[string]bool{}
+	// Damaged databases are rebuilt in two places: inside the pool opener (a
+	// confirmable corruption finding) and by this fresh-start fallback. Rust
+	// collects both through one task-local collector (upstream 3620b2caf8 /
+	// #49701 `collect_runtime_db_backups`), so the opener's backups are recorded
+	// here through the shared config.
+	collector := &state.DBRecoveryCollector{}
+	sqliteConfig = sqliteConfig.WithRecoveryCollector(collector)
+	var backups []state.DBRecoveryBackup
 	for {
 		runtime, err := state.InitStateRuntime(ctx, sqliteConfig, defaultProvider)
+		backups = append(backups, collector.Take()...)
 		if err == nil {
-			return runtime, nil
+			return runtime, backups, nil
 		}
 		databasePath, corrupt := state.RuntimeDBPathForCorruptionError(err)
 		if databasePath == "" {
@@ -1460,19 +1519,26 @@ func initStateRuntimeWithFreshStartOnCorruption(ctx context.Context, sqliteConfi
 			blockingHome = !info.IsDir()
 		}
 		if !corrupt && !blockingHome {
-			return nil, err
+			return nil, nil, err
 		}
 		if attempted[databasePath] {
-			return nil, fmt.Errorf("failed to initialize sqlite state runtime after moving damaged database file into a backup folder: %w", err)
+			return nil, nil, fmt.Errorf("failed to initialize sqlite state runtime after moving damaged database file into a backup folder: %w", err)
 		}
 		attempted[databasePath] = true
-		if _, backupErr := state.BackupDBFilesForFreshStart(&state.DBRecoveryStartupError{
+		slog.Warn("Codex local database appears damaged; moving it into a backup folder so the app server can rebuild it from saved data",
+			"database", databasePath)
+		recovered, backupErr := state.BackupDBFilesForFreshStart(&state.DBRecoveryStartupError{
 			DatabasePath: databasePath,
 			Detail:       err.Error(),
 			Source:       err,
-		}, time.Time{}); backupErr != nil {
-			return nil, fmt.Errorf("failed to move damaged sqlite state database files into a backup folder: %v; original error: %w", backupErr, err)
+		}, time.Time{})
+		if backupErr != nil {
+			return nil, nil, fmt.Errorf("failed to move damaged sqlite state database files into a backup folder: %v; original error: %w", backupErr, err)
 		}
+		for _, backup := range recovered {
+			slog.Warn("moved damaged Codex local database file", "database", backup.OriginalPath, "backup", backup.BackupPath)
+		}
+		backups = append(backups, recovered...)
 	}
 }
 
@@ -6503,6 +6569,12 @@ func (r *RuntimeRouter) configWarningsForInitialize() []config.ConfigWarningNoti
 		return nil
 	}
 	warnings := r.services.Config.Warnings()
+	// Rust #49701: a startup that rebuilt damaged runtime databases reports the
+	// preserved backup locations once, with the same warning surface as the
+	// configuration warnings.
+	if notice := r.stateDBRecoveryNotice; notice != nil {
+		warnings = append(warnings, *notice)
+	}
 	// Rust #44691: surface unrecognized settings from the startup layers
 	// (packaged defaults, user, and managed configuration).
 	if ignored := r.services.Config.IgnoredSettingsWarning(""); strings.TrimSpace(ignored) != "" {

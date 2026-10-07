@@ -50,11 +50,21 @@ type RuntimeDBPath struct {
 type SqliteConfig struct {
 	sqliteHome string
 	quickCheck *sqliteQuickCheckManager
+	// recoveryCollector receives the backups taken when a damaged database is
+	// rebuilt (Rust `collect_runtime_db_backups`, upstream 3620b2caf8 / #49701).
+	recoveryCollector *DBRecoveryCollector
 	// corruptionMetrics receives confirmed `PRAGMA quick_check(1)` findings.
 	// Rust threads a `telemetry_override` into `open_read_write_pool_with_spec`
 	// and calls `record_corruption` for both recovery branches (upstream
 	// 3620b2caf8 / #49701, `codex.sqlite.corruption.count`).
 	corruptionMetrics *TaskMetrics
+}
+
+// WithRecoveryCollector returns a copy that reports the backups taken while
+// recovering damaged runtime databases through the collector.
+func (c SqliteConfig) WithRecoveryCollector(collector *DBRecoveryCollector) SqliteConfig {
+	c.recoveryCollector = collector
+	return c
 }
 
 // WithCorruptionMetrics returns a copy whose confirmed corruption findings are

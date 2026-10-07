@@ -170,6 +170,7 @@ func (c SqliteConfig) openRuntimeDB(ctx context.Context, spec runtimeDBSpec) (*s
 				slog.Warn("preserved corrupt sqlite database before rebuilding",
 					"database", backup.OriginalPath, "backup", backup.BackupPath)
 			}
+			c.recoveryCollector.Record(backups...)
 			rebuilt, reopenErr := c.OpenReadWrite(ctx, path)
 			if reopenErr != nil {
 				return nil, &RuntimeDBInitError{Label: spec.label, Operation: "open", Path: path, Err: reopenErr}

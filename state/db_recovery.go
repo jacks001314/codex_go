@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	modernsqlite "modernc.org/sqlite"
@@ -32,6 +33,40 @@ type DBRecoveryStartupError struct {
 type DBRecoveryBackup struct {
 	OriginalPath string
 	BackupPath   string
+}
+
+// DBRecoveryCollector records the backups taken while opening runtime databases,
+// so a startup can report every preserved location. Rust gathers the same
+// information with a task-local collector around the whole runtime
+// initialization (upstream 3620b2caf8 / #49701 `collect_runtime_db_backups`):
+// it receives both the backups taken inside the pool opener and those taken by
+// the outer fresh-start fallback.
+type DBRecoveryCollector struct {
+	mu      sync.Mutex
+	pending []DBRecoveryBackup
+}
+
+// Record adds backups taken during a recovery.
+func (c *DBRecoveryCollector) Record(backups ...DBRecoveryBackup) {
+	if c == nil || len(backups) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.pending = append(c.pending, backups...)
+}
+
+// Take returns the backups recorded since the previous call, preserving the
+// order in which they were taken.
+func (c *DBRecoveryCollector) Take() []DBRecoveryBackup {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	taken := c.pending
+	c.pending = nil
+	return taken
 }
 
 func IsDBRecoveryLocked(detail string) bool {

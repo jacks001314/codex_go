@@ -1277,7 +1277,7 @@ func TestStateRuntimeStartupRecoversOnlyCorruptDatabase(t *testing.T) {
 		}
 	}
 
-	recovered, err := initStateRuntimeWithFreshStartOnCorruption(ctx, config, "openai")
+	recovered, backups, err := initStateRuntimeWithFreshStartOnCorruption(ctx, config, "openai")
 	if err != nil {
 		t.Fatalf("recovery error = %v", err)
 	}
@@ -1297,6 +1297,11 @@ func TestStateRuntimeStartupRecoversOnlyCorruptDatabase(t *testing.T) {
 	stateBackups, err := filepath.Glob(filepath.Join(config.Home(), "db-backups", "sqlite-*", state.StateSQLiteFilename+"*"))
 	if err != nil || len(stateBackups) != 0 {
 		t.Fatalf("state database must not be backed up with logs: %v, %v", stateBackups, err)
+	}
+	// Rust #49701: the backups taken while recovering are returned so the
+	// startup warning can list them.
+	if len(backups) != 1 || backups[0].OriginalPath != config.LogsDBPath() {
+		t.Fatalf("recovery backups = %#v, want the logs database", backups)
 	}
 }
 

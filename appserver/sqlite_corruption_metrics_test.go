@@ -14,7 +14,7 @@ import (
 // opened, and every later metric on that router reuses the same instance.
 func TestRuntimeRouterReusesStartupCorruptionMetricsLikeRust(t *testing.T) {
 	home := t.TempDir()
-	writeCorruptRuntimeStateDB(t, home)
+	writeCorruptStateDBFixture(t, home)
 
 	metrics := state.NewTaskMetrics()
 	prepared, owned, err := prepareSharedStateRuntime(context.Background(), home, &RuntimeRouterOptions{
@@ -48,7 +48,7 @@ func TestRuntimeRouterReusesStartupCorruptionMetricsLikeRust(t *testing.T) {
 // still recovers damaged databases.
 func TestRuntimeRouterRecoversWithoutMetricsLikeRust(t *testing.T) {
 	home := t.TempDir()
-	writeCorruptRuntimeStateDB(t, home)
+	writeCorruptStateDBFixture(t, home)
 
 	prepared, owned, err := prepareSharedStateRuntime(context.Background(), home, nil)
 	if err != nil {
@@ -68,10 +68,10 @@ func TestRuntimeRouterRecoversWithoutMetricsLikeRust(t *testing.T) {
 	}
 }
 
-// writeCorruptRuntimeStateDB builds the upstream corruption fixture: the
+// writeCorruptStateDBFixture builds the upstream corruption fixture: the
 // database opens (and migrates) while `PRAGMA quick_check(1)` reports
 // `NULL value in sample.value` (Rust #49701 validation_tests.rs).
-func writeCorruptRuntimeStateDB(t *testing.T, home string) {
+func writeCorruptStateDBFixture(t *testing.T, home string) {
 	t.Helper()
 	ctx := context.Background()
 	config, err := state.SqliteConfigForCodexHome(home)
@@ -94,6 +94,31 @@ func writeCorruptRuntimeStateDB(t *testing.T, home string) {
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
+// writeCorruptRuntimeDB applies the upstream corruption fixture to an existing
+// runtime database: it opens (and migrates) while `PRAGMA quick_check(1)`
+// reports `NULL value in sample.value` (Rust #49701 validation_tests.rs).
+func writeCorruptRuntimeDB(t *testing.T, path string) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := state.OpenSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer db.Close()
+	statements := []string{
+		"CREATE TABLE sample(value INTEGER)",
+		"INSERT INTO sample VALUES (NULL)",
+		"PRAGMA writable_schema=ON",
+		"UPDATE sqlite_schema SET sql='CREATE TABLE sample(value INTEGER NOT NULL)' WHERE name='sample'",
+		"PRAGMA writable_schema=OFF",
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s on %s: %v", statement, path, err)
 		}
 	}
 }
