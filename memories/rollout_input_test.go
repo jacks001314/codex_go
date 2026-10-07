@@ -113,3 +113,29 @@ func TestSerializeTieredRolloutForMemoryPairsUserInputReplies(t *testing.T) {
 		t.Fatalf("request_user_input call must be folded into the human row: %s", rendered)
 	}
 }
+
+// Rust #51260 (822e58cc3d666166c7446c5b1ea2e52f5d09594c,
+// rollout-trace/src/reducer/conversation/normalize.rs channel_from_phase): a
+// partial answer is Harmony final-channel text, so it is memory evidence from
+// the assistant final tier rather than the commentary tier. Mirrors the Rust
+// test partial_answer_normalizes_to_the_final_channel
+// (rollout-trace/src/reducer/conversation_tests.rs).
+func TestSerializeTieredRolloutKeepsPartialAnswersInFinalTierLikeRust(t *testing.T) {
+	home := t.TempDir()
+	path := writeTieredRolloutFixture(t, home, "partial-tier-thread", []map[string]any{
+		{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "human question one"}}},
+		{"type": "message", "role": "assistant", "phase": "partial_answer", "content": []any{map[string]any{"type": "output_text", "text": "partial answer text"}}},
+		{"type": "message", "role": "assistant", "phase": "commentary", "content": []any{map[string]any{"type": "output_text", "text": "commentary text"}}},
+	})
+
+	rendered, err := SerializeTieredRolloutForMemory(path, 10_000)
+	if err != nil {
+		t.Fatalf("SerializeTieredRolloutForMemory() error = %v", err)
+	}
+	if !strings.Contains(rendered, "[assistant final]") || !strings.Contains(rendered, "partial answer text") {
+		t.Fatalf("partial answer is not final-tier evidence:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "[assistant commentary]") || !strings.Contains(rendered, "commentary text") {
+		t.Fatalf("commentary is not commentary-tier evidence:\n%s", rendered)
+	}
+}

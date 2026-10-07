@@ -229,8 +229,14 @@ const (
 type MessagePhase string
 
 const (
-	MessagePhaseCommentary  MessagePhase = "commentary"
-	MessagePhaseFinalAnswer MessagePhase = "final_answer"
+	MessagePhaseCommentary MessagePhase = "commentary"
+	// MessagePhasePartialAnswer is stable answer text that may still be followed
+	// by more assistant output or tools. Rust #51241
+	// (8b6bb1c77de0be7395c5c0431ad695a70be829bf, protocol/src/models.rs
+	// MessagePhase::PartialAnswer): it is answer text rather than commentary, but
+	// it does not declare the turn's terminal answer.
+	MessagePhasePartialAnswer MessagePhase = "partial_answer"
+	MessagePhaseFinalAnswer   MessagePhase = "final_answer"
 )
 
 type RealtimeConversationVersion string

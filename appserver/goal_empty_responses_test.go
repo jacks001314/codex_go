@@ -134,3 +134,56 @@ func ptrThreadGoalStatus(status state.ThreadGoalStatus) *state.ThreadGoalStatus 
 	value := status
 	return &value
 }
+
+// Rust #51249 (989c01a41a5b594a347883e60c4e01aaa59aa10f,
+// ext/goal/src/accounting.rs GoalAccountingState::on_item_completed): only a
+// declared final answer (Some(FinalAnswer)) or an absent phase (None) may be
+// recorded as an empty final answer. An empty partial answer is still
+// in-progress output, so it must not consume the goal's empty-continuation
+// budget. Mirrors the Rust test empty_partial_answer_is_not_an_empty_final
+// (ext/goal/tests/accounting.rs).
+func TestGoalEmptyPartialAnswersDoNotCountAsEmptyFinalLikeRust(t *testing.T) {
+	router, stateRuntime, threadID := newGoalToolTestRouter(t)
+	ctx := context.Background()
+	goal, err := stateRuntime.InsertThreadGoal(ctx, threadID, "objective", state.ThreadGoalActive, nil)
+	if err != nil || goal == nil {
+		t.Fatalf("InsertThreadGoal() = %#v, %v", goal, err)
+	}
+
+	// Three consecutive automatic continuations whose only agent message is an
+	// empty partial answer must leave the goal active ...
+	for index := 0; index < goalEmptyResponseThreshold; index++ {
+		turnID := fmt.Sprintf("partial-%d", index)
+		startAutomaticGoalTurn(router, threadID, turnID, goal.GoalID)
+		router.recordGoalResultItems(threadID, turnID, &turn.TurnStartParams{ThreadID: threadID}, &turn.AgentLoopResult{
+			Response: &model.AgentResponse{Items: []model.AgentItem{{
+				Type: "message",
+				Data: map[string]any{"phase": string(MessagePhasePartialAnswer)},
+			}}},
+		})
+		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
+	}
+	updated, err := stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || updated == nil {
+		t.Fatalf("goal after empty partial answers = %#v, %v", updated, err)
+	}
+	if updated.Status != state.ThreadGoalActive {
+		t.Fatalf("goal status after empty partial answers = %q, want %q", updated.Status, state.ThreadGoalActive)
+	}
+
+	// ... while the same three turns carrying a terminal (phase-less) agent
+	// message still block it, so the gate is the phase and not the loop.
+	for index := 0; index < goalEmptyResponseThreshold; index++ {
+		turnID := fmt.Sprintf("final-%d", index)
+		startAutomaticGoalTurn(router, threadID, turnID, goal.GoalID)
+		router.recordGoalResultItems(threadID, turnID, &turn.TurnStartParams{ThreadID: threadID}, emptyGoalFinalResult())
+		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
+	}
+	updated, err = stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || updated == nil {
+		t.Fatalf("goal after empty final answers = %#v, %v", updated, err)
+	}
+	if updated.Status != state.ThreadGoalBlocked {
+		t.Fatalf("goal status after empty final answers = %q, want %q", updated.Status, state.ThreadGoalBlocked)
+	}
+}

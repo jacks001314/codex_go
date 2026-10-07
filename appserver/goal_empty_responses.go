@@ -49,7 +49,8 @@ func (r *RuntimeRouter) resetGoalEmptyResponses(threadID string) {
 // recordGoalResultItems updates the active goal's turn snapshot from the
 // finished turn's model result, mirroring Rust's per-item on_item_completed
 // accounting: user/reasoning/tool/other items mark activity, and a
-// non-commentary agent message with no text marks an empty final answer.
+// terminal (final-answer or phase-less) agent message with no text marks an
+// empty final answer (Rust #51249).
 func (r *RuntimeRouter) recordGoalResultItems(threadID, turnID string, params *turn.TurnStartParams, result *turn.AgentLoopResult) {
 	if r == nil || result == nil {
 		return
@@ -103,12 +104,25 @@ func goalItemActivity(snapshot *stateGoalTurnSnapshot, item *model.AgentItem) {
 		text := strings.TrimSpace(item.Text)
 		if text != "" || goalAgentMessageHasQuestions(item) {
 			snapshot.HasActivity = true
-		} else if !strings.EqualFold(goalAgentMessagePhase(item), string(MessagePhaseCommentary)) {
+		} else if goalMessagePhaseIsTerminalAnswer(goalAgentMessagePhase(item)) {
 			snapshot.EmptyFinal = true
 		}
 	default:
 		snapshot.HasActivity = true
 	}
+}
+
+// goalMessagePhaseIsTerminalAnswer mirrors Rust #51249
+// (989c01a41a5b594a347883e60c4e01aaa59aa10f, ext/goal/src/accounting.rs
+// GoalAccountingState::on_item_completed): only a declared final answer
+// (Some(MessagePhase::FinalAnswer)) or an absent phase (None) may be recorded
+// as an empty final answer. An empty commentary or partial answer is still
+// in-progress output and must not consume the goal's empty-continuation budget.
+// Go compares the provider-supplied phase case-insensitively, matching this
+// file's existing convention (it previously compared only against commentary).
+func goalMessagePhaseIsTerminalAnswer(phase string) bool {
+	trimmed := strings.TrimSpace(phase)
+	return trimmed == "" || strings.EqualFold(trimmed, string(MessagePhaseFinalAnswer))
 }
 
 type goalAgentItemKindValue uint8

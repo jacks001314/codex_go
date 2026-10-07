@@ -1805,3 +1805,173 @@ func TestStartParamsStringRedactsCredentialsLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Rust #51260 (822e58cc3d666166c7446c5b1ea2e52f5d09594c,
+// core/src/realtime_conversation.rs RealtimeStreamedItem::output_prefix): a
+// partial answer is not the turn's terminal answer, so the streamed handoff
+// carries no final-message prefix. Mirrors the Rust test
+// streamed_handoff_preserves_a_bounded_final_tail::partial_answer (expects no
+// final prefix).
+func TestManagerStreamsPartialAnswerWithoutFinalPrefixLikeRust(t *testing.T) {
+	manager := NewManager()
+	if _, _, err := manager.Start(&StartParams{ThreadID: "thread-partial-prefix", OutputModality: OutputText}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	manager.BeginCodexOutput("thread-partial-prefix", "partial", "partial_answer")
+	assertHandoffText(t, manager.StreamCodexOutput("thread-partial-prefix", "partial", "still working"), "thinking", "still working", false)
+
+	// Commentary keeps its existing non-terminal treatment.
+	manager.BeginCodexOutput("thread-partial-prefix", "commentary", "commentary")
+	assertHandoffText(t, manager.StreamCodexOutput("thread-partial-prefix", "commentary", "thinking out loud"), "thinking", "thinking out loud", false)
+
+	// A declared final answer still announces itself.
+	manager.BeginCodexOutput("thread-partial-prefix", "final", "final_answer")
+	assertHandoffText(t, manager.StreamCodexOutput("thread-partial-prefix", "final", "done"), "final", agentFinalMessagePrefix+"done", false)
+}
+
+// Rust #51260 (822e58cc3d666166c7446c5b1ea2e52f5d09594c,
+// core/src/realtime_conversation.rs send_codex_output): V1 handoffs treat a
+// partial answer as nonterminal, so it is appended without the final-message
+// prefix, while a final answer keeps the prefix.
+func TestV1HandoffOmitsFinalPrefixForPartialAnswersLikeRust(t *testing.T) {
+	const threadID = "thread-v1-partial"
+	outbound := make(chan map[string]any, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			return
+		}
+		for {
+			_, payload, err := conn.Read(request.Context())
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if json.Unmarshal(payload, &message) == nil {
+				outbound <- message
+			}
+		}
+	}))
+	defer server.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{WebsocketBaseURL: server.URL})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = manager.Shutdown(ctx)
+	})
+	version := VersionV1
+	if _, _, err := manager.Start(&StartParams{ThreadID: threadID, OutputModality: OutputAudio, Version: &version}); err != nil {
+		t.Fatalf("start V1 realtime: %v", err)
+	}
+
+	waitHandoffAppend := func(t *testing.T) map[string]any {
+		t.Helper()
+		for {
+			message := waitRealtimeOutbound(t, outbound)
+			if message["type"] == "conversation.handoff.append" {
+				return message
+			}
+		}
+	}
+
+	manager.CompleteCodexOutput(threadID, "partial", "partial_answer", "still working")
+	if got := waitHandoffAppend(t)["output_text"]; got != "still working" {
+		t.Fatalf("partial answer V1 output_text = %q, want %q", got, "still working")
+	}
+	manager.CompleteCodexOutput(threadID, "commentary", "commentary", "thinking out loud")
+	if got := waitHandoffAppend(t)["output_text"]; got != "thinking out loud" {
+		t.Fatalf("commentary V1 output_text = %q, want %q", got, "thinking out loud")
+	}
+	manager.CompleteCodexOutput(threadID, "final", "final_answer", "done")
+	if got, want := waitHandoffAppend(t)["output_text"], agentFinalMessagePrefix+"done"; got != want {
+		t.Fatalf("final answer V1 output_text = %q, want %q", got, want)
+	}
+}
+
+// Rust #51260 (822e58cc3d666166c7446c5b1ea2e52f5d09594c,
+// core/src/realtime_conversation.rs send_codex_output): an explicit partial
+// answer is answer text even when it starts with characters legacy BEM treats
+// as a private channel tag, so it bypasses prefix parsing and stays on the
+// speakable channel for both the streamed and the completed handoff paths.
+// Mirrors the Rust tests realtime_conversation_partial_answer_* .
+func TestV3PartialAnswersBypassBEMPrefixParsingLikeRust(t *testing.T) {
+	const threadID = "thread-v3-partial"
+	outbound := make(chan map[string]any, 8)
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(response, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer conn.CloseNow()
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			serverErrors <- fmt.Errorf("read session update: %w", err)
+			return
+		}
+		for _, payload := range []string{
+			`{"type":"session.started","session":{"id":"sess-v3-partial"}}`,
+			`{"type":"delegation.created","item":{"type":"delegation","target":"client","id":"delegation-partial","content":[{"type":"input_text","text":"delegate this"}]}}`,
+		} {
+			if err := conn.Write(request.Context(), websocket.MessageText, []byte(payload)); err != nil {
+				serverErrors <- fmt.Errorf("write setup event: %w", err)
+				return
+			}
+		}
+		for {
+			_, payload, err := conn.Read(request.Context())
+			if err != nil {
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				serverErrors <- fmt.Errorf("decode outbound message: %w", err)
+				return
+			}
+			outbound <- message
+		}
+	}))
+	defer server.Close()
+
+	manager := NewManager()
+	manager.SetTransportBackend(&TransportBackendConfig{WebsocketBaseURL: server.URL})
+	events := make(chan Event, 16)
+	manager.SetEventSink(func(_ string, event Event) { events <- event })
+	version := VersionV3
+	mode := HandoffModeBemTags
+	if _, _, err := manager.Start(&StartParams{
+		ThreadID:                 threadID,
+		OutputModality:           OutputAudio,
+		Version:                  &version,
+		CodexResponseHandoffMode: &mode,
+	}); err != nil {
+		t.Fatalf("start V3 realtime: %v", err)
+	}
+	waitRealtimeEvent(t, events, func(event Event) bool {
+		return event.Type == "handoff.requested" && event.HandoffID == "delegation-partial"
+	})
+
+	// Streamed: the fragment opens with a commentary tag, but the explicit
+	// partial phase is preserved instead of being re-parsed as commentary.
+	manager.BeginCodexOutput(threadID, "item-partial-stream", "partial_answer")
+	manager.StreamCodexOutput(threadID, "item-partial-stream", "[COM")
+	manager.StreamCodexOutput(threadID, "item-partial-stream", "MENTARY]working")
+	assertV3ContextAppend(t, waitRealtimeOutbound(t, outbound), "delegation-partial", "[COMMENTARY]working", "speakable")
+
+	// Completed: the exemption also applies on the non-streamed handoff path.
+	manager.BeginCodexOutput(threadID, "item-partial-done", "partial_answer")
+	manager.CompleteCodexOutput(threadID, "item-partial-done", "partial_answer", "[COMMENTARY]done")
+	assertV3ContextAppend(t, waitRealtimeOutbound(t, outbound), "delegation-partial", "[COMMENTARY]done", "speakable")
+
+	select {
+	case err := <-serverErrors:
+		t.Fatalf("V3 test server: %v", err)
+	default:
+	}
+}

@@ -358,7 +358,12 @@ func (s *realtimeTransportSession) sendCodexOutput(text, phase string) error {
 	if s == nil || text == "" || s.config.ClientManagedHandoffs {
 		return nil
 	}
-	if s.config.Version == VersionV3 && s.config.CodexResponseHandoffMode == HandoffModeBemTags {
+	// Rust #51260 (822e58cc3d, core/src/realtime_conversation.rs
+	// RealtimeConversationManager::send_codex_output): an explicit stable
+	// fragment is answer text even when it starts with characters that legacy
+	// BEM treats as a private channel tag, so a partial answer keeps its phase
+	// and skips channel-prefix parsing.
+	if s.config.Version == VersionV3 && s.config.CodexResponseHandoffMode == HandoffModeBemTags && !isPartialAnswerPhase(phase) {
 		phase = bemMessagePhase(text, s.config.CodexResponseHandoffChannelPrefixes)
 		if phase == "" {
 			phase = "final_answer"
@@ -383,7 +388,9 @@ func (s *realtimeTransportSession) sendCodexOutput(text, phase string) error {
 	if handoffID == "" {
 		switch s.config.Version {
 		case VersionV1:
-			if phase != "commentary" {
+			// Rust #51260 (822e58cc3d): V1 handoffs treat commentary and partial
+			// answers as nonterminal, so neither gets the final-message prefix.
+			if !messagePhaseIsNonterminal(phase) {
 				text = agentFinalMessagePrefix + text
 			}
 			return s.writeJSON(map[string]any{"type": "conversation.handoff.append", "handoff_id": "codex", "output_text": text})
@@ -401,7 +408,9 @@ func (s *realtimeTransportSession) sendCodexOutput(text, phase string) error {
 	s.stateMu.Unlock()
 	switch s.config.Version {
 	case VersionV1:
-		if phase != "commentary" {
+		// Rust #51260 (822e58cc3d): V1 handoffs treat commentary and partial
+		// answers as nonterminal, so neither gets the final-message prefix.
+		if !messagePhaseIsNonterminal(phase) {
 			text = agentFinalMessagePrefix + text
 		}
 		return s.writeJSON(map[string]any{"type": "conversation.handoff.append", "handoff_id": handoffID, "output_text": text})

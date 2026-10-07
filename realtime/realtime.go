@@ -989,6 +989,20 @@ func (p *bemChannelParser) finish() string {
 	return text
 }
 
+// messagePhaseIsNonterminal mirrors Rust #51241/#51260
+// (codex-rs/protocol/src/models.rs MessagePhase): commentary and partial
+// answers are interim output, so callers must not treat them as the turn's
+// terminal answer text.
+func messagePhaseIsNonterminal(phase string) bool {
+	return phase == "commentary" || phase == "partial_answer"
+}
+
+// isPartialAnswerPhase reports an explicit stable-answer fragment, which skips
+// legacy BEM channel-prefix parsing (Rust #51260).
+func isPartialAnswerPhase(phase string) bool {
+	return phase == "partial_answer"
+}
+
 func bemMessagePhase(text string, prefixes map[string][]string) string {
 	for _, candidate := range []struct {
 		channel       string
@@ -1051,7 +1065,17 @@ func (m *Manager) BeginCodexOutput(threadID string, itemID string, phase string)
 		Phase:     strings.TrimSpace(phase),
 		LastFlush: time.Now(),
 	}
-	if state.Config.Version == VersionV3 && state.Config.CodexResponseHandoffMode == HandoffModeBemTags {
+	// Rust #51260 (822e58cc3d, core/src/realtime_conversation.rs
+	// RealtimeConversationManager::send_codex_output): an explicit stable
+	// fragment is answer text even when it starts with characters that legacy
+	// BEM treats as a private channel tag, so a partial answer keeps its phase
+	// and skips channel-prefix parsing.
+	// Rust #51260 (822e58cc3d, core/src/realtime_conversation.rs
+	// RealtimeConversationManager::send_codex_output): an explicit stable
+	// fragment is answer text even when it starts with characters that legacy
+	// BEM treats as a private channel tag, so a partial answer keeps its phase
+	// and skips channel-prefix parsing.
+	if state.Config.Version == VersionV3 && state.Config.CodexResponseHandoffMode == HandoffModeBemTags && !isPartialAnswerPhase(stream.Phase) {
 		stream.Phase = ""
 		stream.BEM = newBEMChannelParser(state.Config.CodexResponseHandoffChannelPrefixes)
 	}
@@ -1106,7 +1130,11 @@ func (m *Manager) StreamCodexOutput(threadID string, itemID string, delta string
 		return nil
 	}
 	prefix := ""
-	if connection == nil && stream.Sent == 0 && stream.Phase != "commentary" {
+	// Rust #51260 (822e58cc3d, core/src/realtime_conversation.rs
+	// RealtimeStreamedItem::output_prefix): only a declared final answer (or an
+	// absent phase) carries the final-message prefix. Commentary and partial
+	// answers are still in-progress output, so they must not announce an answer.
+	if connection == nil && stream.Sent == 0 && !messagePhaseIsNonterminal(stream.Phase) {
 		prefix = agentFinalMessagePrefix
 	}
 	remaining := codexOutputByteLimit - stream.Sent - len(prefix)

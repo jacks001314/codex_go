@@ -143,3 +143,48 @@ func assertSearchCursor(t *testing.T, raw *string, threadID, searchTerm string, 
 		t.Fatalf("search cursor = %#v", cursor)
 	}
 }
+
+// Rust #51260 (822e58cc3d666166c7446c5b1ea2e52f5d09594c,
+// thread-store/src/local/thread_history/search.rs): thread occurrence search
+// keeps partial answers searchable alongside the final answer, while commentary
+// and other non-answer phases stay hidden. Mirrors the Rust test
+// search_occurrences_includes_partial_answers
+// (thread_history_materialization_tests).
+func TestThreadHistorySearchIncludesPartialAnswersLikeRust(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	runtime, err := InitStateRuntime(ctx, mustSQLiteConfig(t, home), "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	path := writePaginatedHistoryFixture(t, home, "thread-partial-search", nil, []historyFixtureTurn{{
+		ID: "turn-1",
+		Items: []historyFixtureItem{
+			{ID: "user-1", Type: "userMessage", Text: "context ## My request for Codex: unrelated"},
+			{ID: "commentary-1", Type: "agentMessage", Text: "Needle in commentary", Phase: "commentary"},
+			{ID: "partial-1", Type: "agentMessage", Text: "Needle while still working", Phase: "partial_answer"},
+			{ID: "final-1", Type: "agentMessage", Text: "Needle in the final answer", Phase: "final_answer"},
+		},
+	}})
+	if err := runtime.ReconcileRollout(ctx, path, false); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := runtime.SearchThreadHistoryOccurrences(ctx, ThreadHistorySearchOccurrencesParams{
+		ThreadID: "thread-partial-search", SearchTerm: "needle", PageSize: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, len(page.Items))
+	for _, item := range page.Items {
+		ids = append(ids, item.ItemID)
+	}
+	// Rollout order, commentary excluded: the partial answer precedes the final
+	// answer in the turn and both are searchable.
+	if len(ids) != 2 || ids[0] != "partial-1" || ids[1] != "final-1" {
+		t.Fatalf("search occurrence ids = %v, want [partial-1 final-1]", ids)
+	}
+}
