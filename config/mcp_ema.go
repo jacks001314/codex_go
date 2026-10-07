@@ -537,6 +537,19 @@ func XAAFeatureKey() string {
 	return featureflags.UseXAAKey
 }
 
+// MCPEnterpriseManagedAuthFingerprint returns a stable identity for the trusted
+// enterprise profile declared in `mcp_enterprise_managed_auth`, or "" when the
+// value declares no complete profile. Rust #49260 enables enterprise MCP
+// authorization only while the trusted profile is present and unchanged, so the
+// runtime compares this fingerprint instead of the raw configuration table.
+func MCPEnterpriseManagedAuthFingerprint(value any) string {
+	profile, err := parseMCPEnterpriseManagedAuth(value)
+	if err != nil || profile == nil {
+		return ""
+	}
+	return profile.IDP.Issuer + "\x1f" + profile.IDP.ClientID
+}
+
 // RetiredPluginEMAAuthRegistrations reports the plugin MCP servers whose host
 // configuration still declares the retired enterprise registration overlay
 // (`[plugins.<id>.mcp_servers.<server>.ema_auth]`), keyed by plugin id and then

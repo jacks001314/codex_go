@@ -335,20 +335,26 @@ type RuntimeRouter struct {
 	// with enterprise MCP disabled (Rust #49260 fail-closed reload).
 	mcpConfigMu             sync.Mutex
 	mcpAppliedRuntimeConfig *mcp.RuntimeConfig
-	loginRuntimeMu          sync.Mutex
-	loginRuntimeCancels     map[string]context.CancelFunc
-	approvalSessionsMu      sync.RWMutex
-	commandApprovals        map[string]struct{}
-	fileApprovals           map[string]struct{}
-	serverRequestGuardsMu   sync.Mutex
-	serverRequestGuards     map[string]*ThreadStatusActiveGuard
-	executedToolCallsMu     sync.Mutex
-	executedToolCalls       map[string]*turn.ExecutedToolCallRecorder
-	newContextWindowMu      sync.Mutex
-	newContextWindowReq     map[string]bool
-	contextWindowMu         sync.Mutex
-	contextWindowIDs        map[string]string
-	windowNumbers           map[string]uint64
+	// mcpEnterpriseAdmission records the enterprise (EMA) MCP authority the
+	// runtime last admitted, so a refresh can tell whether the current
+	// configuration still supplies the same trusted profile and registration
+	// (Rust #49260): enterprise authority is never granted to a registration the
+	// running sessions were not admitted with.
+	mcpEnterpriseAdmission mcpEnterpriseAdmission
+	loginRuntimeMu         sync.Mutex
+	loginRuntimeCancels    map[string]context.CancelFunc
+	approvalSessionsMu     sync.RWMutex
+	commandApprovals       map[string]struct{}
+	fileApprovals          map[string]struct{}
+	serverRequestGuardsMu  sync.Mutex
+	serverRequestGuards    map[string]*ThreadStatusActiveGuard
+	executedToolCallsMu    sync.Mutex
+	executedToolCalls      map[string]*turn.ExecutedToolCallRecorder
+	newContextWindowMu     sync.Mutex
+	newContextWindowReq    map[string]bool
+	contextWindowMu        sync.Mutex
+	contextWindowIDs       map[string]string
+	windowNumbers          map[string]uint64
 	// restoredWindows records the threads whose persisted window state was
 	// already loaded from their record (Rust restores the compacted item's
 	// window_number/window_ids when a thread resumes).
@@ -10605,9 +10611,11 @@ func (r *RuntimeRouter) configureMCPFromConfigChecked() error {
 	if current := r.services.Config.Requirements(); current != nil {
 		requirements = current.Requirements
 	}
+	featureSettings, _ := (&config.Config{Values: read.Config, Requirements: requirements}).FeatureSettingsWithLegacyUsages()
 	appliedRuntimeConfig := r.runtimeMCPConfig(read.Config, r.services.Config.CodexHome(), runtimeAuth, requirements)
+	appliedRuntimeConfig, enterpriseProfileFingerprint := r.admitEnterpriseMCPAuthority(read.Config, featureSettings, appliedRuntimeConfig)
 	r.requireMCP().ApplyRuntimeConfig(appliedRuntimeConfig)
-	r.rememberAppliedMCPRuntimeConfig(appliedRuntimeConfig)
+	r.rememberAppliedMCPRuntimeConfig(appliedRuntimeConfig, enterpriseProfileFingerprint)
 	if snapshot != nil {
 		httpClient := r.httpClientForConfig(&config.Config{Values: read.Config})
 		r.requireMCP().SetTrustedAccess(mcp.ServiceTrustedAccessFromSnapshot(snapshot, r.chatGPTBaseURL(), httpClient))
