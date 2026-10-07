@@ -189,7 +189,12 @@ func citationDestinationAndDisplay(path string, cwd string) (string, string, boo
 	dest = strings.ReplaceAll(dest, "?", "%3F")
 	dest += locationSuffix
 	display, ok := renderLocalLinkTarget(dest, cwd)
-	return dest, display, ok
+	if !ok || display == "" {
+		// Rust #50695: a citation's malformed local file URL still renders its
+		// destination; the citation has no author label to fall back to.
+		return dest, dest, dest != ""
+	}
+	return dest, display, true
 }
 
 // collectCitationLiteralRanges returns byte ranges where directives must stay

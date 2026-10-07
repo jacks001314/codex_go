@@ -245,16 +245,28 @@ func rewriteLinksWithInfo(source string, cwd string) (string, []localFileLink, [
 		dest := source[m[4]:m[5]]
 		label := source[m[2]:m[3]]
 		if isLocalPathLikeLink(dest) {
+			// Rust #50695: a local file link keeps its non-blank label next to the
+			// formatted destination as "label (target)" — the label text and its
+			// inline formatting are the author's, so they are re-emitted verbatim
+			// and re-parsed as markdown. An empty or whitespace-only label shows
+			// only the destination, and a destination whose local file URL cannot
+			// be parsed falls back to the original destination text.
 			display, ok := renderLocalLinkTarget(dest, cwd)
 			if !ok {
-				continue
+				display = dest
 			}
-			// Render the resolved target as a code span (Rust parity: local file
-			// links show the real path, not the markdown label).
+			showLabel := strings.TrimSpace(label) != ""
 			sb.WriteString(source[cursor:m[0]])
+			if showLabel {
+				sb.WriteString(label)
+				sb.WriteString(" (")
+			}
 			sb.WriteString("`")
 			sb.WriteString(display)
 			sb.WriteString("`")
+			if showLabel {
+				sb.WriteString(")")
+			}
 			cursor = m[1]
 			links = append(links, localFileLink{Display: display, Dest: dest})
 			continue
