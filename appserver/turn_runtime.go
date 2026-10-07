@@ -136,6 +136,13 @@ func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, tu
 		Phase:                     compact.PhasePostTurn,
 		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		// Rust #49097: Rust runs the post-turn compaction with
+		// `fallback_step_context = None` (core/src/session/turn.rs), and
+		// compact_remote_v2 returns the attempt error when no fallback step
+		// context is available, so a provider with remote compaction surfaces
+		// the failed attempt instead of summarizing locally (Rust's
+		// RemoteCompactionSupport::Unsupported keeps the local summary).
+		RemoteOnly: r.postTurnCompactionRemoteOnly(threadID),
 	})
 	return true, compactErr
 }
@@ -1865,6 +1872,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 						r.clearActiveRuntimeTurn(threadID, turnID)
 						r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, nil)
 						return
+					}
+					// Rust #49097 (core/src/session/turn.rs): a usage-limit failure
+					// during post-turn compaction notifies the turn lifecycle so the
+					// goal extension stops automatic continuation, while the
+					// completed turn and its answer are preserved.
+					if errorFields := turnAnalyticsErrorFieldsFromError(compactErr); codexErrorIsUsageLimited(errorFields.TurnError) {
+						r.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, errorFields.TurnError)
 					}
 					r.notify(NotificationWarning, &WarningNotification{
 						ThreadID: stringPtrIfNotEmpty(threadID),
@@ -6220,6 +6234,44 @@ func (r *RuntimeRouter) providerSupportsRemoteCompact(providerID string) bool {
 		return false
 	}
 	return info.SupportsRemoteCompaction()
+}
+
+// postTurnCompactionRemoteOnly reports whether the post-turn compaction must
+// run remotely. Rust's post-turn call passes `fallback_step_context = None`
+// (core/src/session/turn.rs) and compact_remote_v2 returns the attempt error
+// when no fallback step context is available, so a provider with remote
+// compaction surfaces the failed attempt instead of summarizing locally; Go
+// keeps the local summary only when no remote runner is wired for the thread
+// (Rust's RemoteCompactionSupport::Unsupported local path). Rust #49097 relies
+// on that failure reaching the post-turn handler.
+func (r *RuntimeRouter) postTurnCompactionRemoteOnly(threadID string) bool {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
+	if err != nil || record == nil {
+		return false
+	}
+	providerID := strings.TrimSpace(record.Metadata.ModelProvider)
+	if providerID == "" && record.Metadata.Extra != nil {
+		providerID = firstNonEmpty(
+			stringFromMap(record.Metadata.Extra, "model_provider"),
+			stringFromMap(record.Metadata.Extra, "modelProvider"),
+			stringFromMap(record.Metadata.Extra, "provider"),
+		)
+	}
+	if !r.providerSupportsRemoteCompact(providerID) {
+		return false
+	}
+	if r.services.CompactRunner != nil {
+		return true
+	}
+	agent := r.agentSnapshot()
+	if agent == nil {
+		return false
+	}
+	_, ok := agent.(*model.ResponsesAgentRunner)
+	return ok
 }
 
 func compactReasonFromStatus(status *compact.TokenStatus) compact.Reason {
