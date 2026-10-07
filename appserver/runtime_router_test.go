@@ -872,7 +872,12 @@ func TestThreadStartProjectInstructionsRespectAggregateByteBudget(t *testing.T) 
 	}
 }
 
-func TestRuntimeRouterMaterializesUnpromptedThreadRolloutOnFirstTurn(t *testing.T) {
+// Rust parity: #48828 allows archiving a thread before its first turn. Rust's
+// `thread_archive_without_turns` replaced `thread_archive_requires_materialized_rollout`:
+// archiving materializes the empty rollout without a user turn, emits the
+// archived notification, and the archived thread reads back with empty turn
+// history, `notLoaded` status and the archived rollout path.
+func TestRuntimeRouterArchivesUnpromptedThreadWithoutTurnsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	sink := NewNotificationBuffer()
 	agent := newRecordingRuntimeAgent("ok")
@@ -895,6 +900,9 @@ func TestRuntimeRouterMaterializesUnpromptedThreadRolloutOnFirstTurn(t *testing.
 	if _, err := os.Stat(*thread.Path); !os.IsNotExist(err) {
 		t.Fatalf("thread path should not exist before first turn, stat err = %v", err)
 	}
+	if _, err := rollout.FindThreadPath(store.Root(), thread.ID, false); err == nil {
+		t.Fatal("thread id should not be discoverable before rollout materialization")
+	}
 	read := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID}))
 	if read.Error != nil {
 		t.Fatalf("thread read error: %+v", read.Error)
@@ -904,33 +912,34 @@ func TestRuntimeRouterMaterializesUnpromptedThreadRolloutOnFirstTurn(t *testing.
 		t.Fatalf("read thread = %+v, want idle path %q", readThread, *thread.Path)
 	}
 
-	archiveBeforeMaterialized := router.Handle(requestWithParams(t, IntID(3), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
-	if archiveBeforeMaterialized.Error == nil || archiveBeforeMaterialized.Error.Code != -32600 || !strings.Contains(archiveBeforeMaterialized.Error.Message, "no rollout found for thread id "+thread.ID) {
-		t.Fatalf("archive before materialized error = %+v", archiveBeforeMaterialized.Error)
-	}
-
-	turnStart := router.Handle(requestWithParams(t, IntID(4), MethodTurnStart, turn.TurnStartParams{
-		ThreadID: thread.ID,
-		Prompt:   "materialize",
-	}))
-	if turnStart.Error != nil {
-		t.Fatalf("turn start error: %+v", turnStart.Error)
-	}
-	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
-	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
-	if _, err := os.Stat(*thread.Path); err != nil {
-		t.Fatalf("thread path should exist after first turn: %v", err)
-	}
-	found, err := rollout.FindThreadPath(store.Root(), thread.ID, false)
-	if err != nil {
-		t.Fatalf("FindThreadPath() error = %v", err)
-	}
-	if found != *thread.Path {
-		t.Fatalf("materialized path = %q, want %q", found, *thread.Path)
-	}
-	archive := router.Handle(requestWithParams(t, IntID(5), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
+	// Archiving materializes the empty rollout without creating a user turn.
+	archive := router.Handle(requestWithParams(t, IntID(3), MethodThreadArchive, ThreadArchiveParams{ThreadID: thread.ID}))
 	if archive.Error != nil {
-		t.Fatalf("archive after materialized error: %+v", archive.Error)
+		t.Fatalf("archive without turns error: %+v", archive.Error)
+	}
+	if !sinkHasMethod(sink, NotificationThreadArchived) {
+		t.Fatalf("thread/archive emitted no archived notification: %#v", sink.List())
+	}
+	archivedPath, err := rollout.FindThreadPath(store.Root(), thread.ID, true)
+	if err != nil {
+		t.Fatalf("archived rollout path error: %v", err)
+	}
+	if _, err := os.Stat(*thread.Path); !os.IsNotExist(err) {
+		t.Fatalf("archiving should move the rollout away, stat err = %v", err)
+	}
+	archivedRead := router.Handle(requestWithParams(t, IntID(4), MethodThreadRead, ThreadReadParams{ThreadID: thread.ID, IncludeTurns: true}))
+	if archivedRead.Error != nil {
+		t.Fatalf("thread read after archive error: %+v", archivedRead.Error)
+	}
+	archivedThread := archivedRead.Result.(*ThreadReadResponse).Thread
+	if len(archivedThread.Turns) != 0 {
+		t.Fatalf("archived thread turns = %+v, want an empty turn history", archivedThread.Turns)
+	}
+	if archivedThread.Status.Type != NotLoadedStatus().Type {
+		t.Fatalf("archived thread status = %+v, want notLoaded", archivedThread.Status)
+	}
+	if archivedThread.Path == nil || *archivedThread.Path != archivedPath {
+		t.Fatalf("archived thread path = %v, want %q", archivedThread.Path, archivedPath)
 	}
 }
 
