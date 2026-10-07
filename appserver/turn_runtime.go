@@ -6965,6 +6965,9 @@ type appTurnRunConfig struct {
 	UnifiedExecEnabled              bool
 	ExecutedToolCallMetadataEnabled bool
 	ImageResizeNoticeEnabled        bool
+	// MultiAgentVersion is the turn's resolved multi-agent version for turn
+	// analytics (Rust #51333, `turn_context.multi_agent_version`).
+	MultiAgentVersion string
 }
 
 type responsesMetadataLineage struct {
@@ -7286,6 +7289,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ApprovalPolicy:          string(approvalPolicy),
 		ApprovalsReviewer:       approvalsReviewer,
 		GuardianV2Enabled:       features.Enabled(cfg.FeatureSettings(), "guardianv2"),
+		MultiAgentVersion:       r.turnAnalyticsMultiAgentVersion(threadID, cfg),
 		SandboxPolicy:           analyticsSandboxPolicy(permissionProfile, cwd),
 		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
 		// The inventory is captured when the turn is admitted so a later plugin
@@ -7771,6 +7775,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		ApprovalPolicy:                       firstNonEmpty(runConfig.ApprovalPolicy, string(sandbox.ApprovalOnRequest)),
 		ApprovalsReviewer:                    firstNonEmpty(runConfig.ApprovalsReviewer, "user"),
 		GuardianV2Enabled:                    runConfig.GuardianV2Enabled,
+		MultiAgentVersion:                    runConfig.MultiAgentVersion,
 		SandboxNetworkAccess:                 runConfig.SandboxNetworkAccess,
 		ActivePluginIDsAtTurnStart:           runConfig.ActivePluginIDsAtTurnStart,
 		CollaborationMode:                    stringPtrIfNotEmpty(firstNonEmpty(runConfig.CollaborationMode, "default")),

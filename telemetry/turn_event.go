@@ -126,6 +126,9 @@ type CodexTurnEventParams struct {
 	DurationMS       *uint64 `json:"duration_ms"`
 	StartedAt        *uint64 `json:"started_at"`
 	CompletedAt      *uint64 `json:"completed_at"`
+	// MultiAgentVersion is the turn's resolved multi-agent version, serialized
+	// like Rust's protocol::MultiAgentVersion: disabled | v1 | v2 (Rust #51333).
+	MultiAgentVersion string `json:"multi_agent_version"`
 }
 
 type CodexTurnEventInput struct {
@@ -173,6 +176,9 @@ type CodexTurnEventInput struct {
 	DurationMS                           *uint64
 	StartedAt                            *uint64
 	CompletedAt                          *uint64
+	// MultiAgentVersion is the turn's resolved multi-agent version; empty means
+	// the multi-agent surface is disabled (Rust's MultiAgentVersion::Disabled).
+	MultiAgentVersion string
 }
 
 type CodexTurnToolCounts struct {
@@ -205,6 +211,16 @@ type CodexTurnTimingProfile struct {
 	SamplingRetryCount        uint32
 	// ToolsChangeCount mirrors Rust's `TurnProfile::tools_change_count` (#50964).
 	ToolsChangeCount uint32
+}
+
+// multiAgentVersionValue maps the resolved turn version onto the value the event
+// carries; a turn without the multi-agent surface reports Rust's Disabled arm
+// (Rust #51333).
+func multiAgentVersionValue(version string) string {
+	if value := strings.TrimSpace(version); value != "" {
+		return value
+	}
+	return MultiAgentVersionDisabled
 }
 
 func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
@@ -246,6 +262,7 @@ func NewCodexTurnEvent(input CodexTurnEventInput) CodexTurnEventRequest {
 			ApprovalPolicy:                       input.ApprovalPolicy,
 			ApprovalsReviewer:                    input.ApprovalsReviewer,
 			GuardianV2Enabled:                    input.GuardianV2Enabled,
+			MultiAgentVersion:                    multiAgentVersionValue(input.MultiAgentVersion),
 			SandboxNetworkAccess:                 input.SandboxNetworkAccess,
 			CollaborationMode:                    input.CollaborationMode,
 			Personality:                          input.Personality,

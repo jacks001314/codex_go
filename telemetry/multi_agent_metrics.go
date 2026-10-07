@@ -16,3 +16,12 @@ const (
 	MultiAgentWaitOutcomeSteered          = "steered"
 	MultiAgentWaitOutcomeTimedOut         = "timed_out"
 )
+
+// MultiAgentVersion values mirror Rust's protocol::MultiAgentVersion
+// (`#[serde(rename_all = "snake_case")]`), which the turn analytics event
+// serializes as `multi_agent_version` (Rust #51333).
+const (
+	MultiAgentVersionDisabled = "disabled"
+	MultiAgentVersionV1       = "v1"
+	MultiAgentVersionV2       = "v2"
+)
