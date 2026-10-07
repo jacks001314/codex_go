@@ -4952,7 +4952,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		}
 		m.applyItemStarted(event.Item, startedAtMS)
 	case "item.completed":
-		if event.Item != nil && strings.EqualFold(strings.TrimSpace(event.Item.Phase), "final_answer") &&
+		if event.Item != nil && strings.EqualFold(strings.TrimSpace(event.Item.Phase), messagePhaseFinalAnswer) &&
 			strings.TrimSpace(firstNonEmpty(event.Item.Text, event.Item.Message)) != "" {
 			// The item event carries no turn id; the boundary observation below
 			// pairs the flag with the turn that completes.
@@ -5068,6 +5068,15 @@ func (m *Model) applyItemStarted(item *protocol.ThreadItem, startedAtMS int64) {
 	}
 }
 
+// Assistant message phases the app server reports on a completed agent message
+// (Rust codex_protocol::models::MessagePhase, #51241). The live TUI keys its
+// per-phase handling off the wire id.
+const (
+	messagePhaseCommentary    = "commentary"
+	messagePhasePartialAnswer = "partial_answer"
+	messagePhaseFinalAnswer   = "final_answer"
+)
+
 func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 	if item == nil {
 		return nil
@@ -5128,7 +5137,23 @@ func (m *Model) applyItemCompleted(item *protocol.ThreadItem) bubbletea.Cmd {
 					}
 				}
 			}
-		} else if strings.EqualFold(strings.TrimSpace(item.Phase), "commentary") {
+		} else if strings.EqualFold(strings.TrimSpace(item.Phase), messagePhaseCommentary) {
+			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
+		} else if strings.EqualFold(strings.TrimSpace(item.Phase), messagePhasePartialAnswer) {
+			// Rust #51241 ("Add a partial answer message phase"): a partial
+			// answer is stable answer text that more output or tools may follow,
+			// so it is not the turn's terminal answer. Rust commits it with
+			// commentary (chatwidget/streaming.rs keeps the Working indicator
+			// for `Commentary | PartialAnswer`, thread-store/thread_history.rs
+			// keeps it out of the final-answer summary), and routes it to the
+			// speakable channel in realtime V3 BEM-tag mode. Go therefore closes
+			// the streamed answer identity at the item boundary — leaving the
+			// turn running, which is what keeps the Working indicator visible —
+			// and still delivers it to the speakable channel.
+			if speech, ok := m.VoiceConversation.TakeVoiceSpeech(item.ID, item.Text); ok {
+				m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
+				return m.deliverVoiceSpeech(item.ID, speech)
+			}
 			m.Transcript.completeAssistantCommentary(m.State, item.ID, item.Text, m.width)
 		} else {
 			if speech, ok := m.VoiceConversation.TakeVoiceSpeech(item.ID, item.Text); ok {
