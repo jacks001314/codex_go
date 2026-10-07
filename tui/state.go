@@ -260,6 +260,15 @@ func (s *State) RenderWelcome() string {
 	return builder.String()
 }
 
+// statusCardIndent mirrors Rust `FieldFormatter::INDENT` ("  ") for the status
+// card title and usage block (Rust #48754 status/format.rs).
+const statusCardIndent = "  "
+
+// statusCardMaxWidth keeps the Go card's existing upper bound; the former
+// 44-column lower bound is gone so narrow terminals wrap instead of truncating
+// (Rust #48754).
+const statusCardMaxWidth = 100
+
 // RenderStatusCard mirrors the information density of the Rust CLI's /status
 // panel while keeping RenderStatusLine compact for the footer.
 func (s *State) RenderStatusCard() string {
@@ -267,23 +276,29 @@ func (s *State) RenderStatusCard() string {
 }
 
 func (s *State) RenderStatusCardWidth(width int) string {
-	if width < 44 {
-		width = 44
+	if width < 1 {
+		return ""
 	}
-	if width > 100 {
-		width = 100
+	if width > statusCardMaxWidth {
+		width = statusCardMaxWidth
 	}
 	if s == nil {
 		s = NewState(nil)
 	}
-	availableInnerWidth := width - 4
+	availableWidth := width
+	// Rust #48754: keep a two-column title mark while there is room for it and
+	// fall back to the outer indent in tiny terminals.
+	indent := statusCardIndent
+	if availableWidth < DisplayWidth(statusCardIndent)+2 {
+		indent = ""
+	}
 	// Rust #43359: the status card shows the server-reported model provider id
 	// only once a thread is attached, and shows it verbatim (including the
 	// built-in providers).
 	provider := statusModelProvider(s.Provider, s.ThreadID)
 	reasoning := displayValue(s.EffectiveReasoningEffort(), "default")
 	model := displayValue(s.Model, "default") + " (reasoning " + reasoning + ", summaries auto)"
-	header := " >_ gcode"
+	header := ">_ gcode"
 	if version := strings.TrimSpace(s.CLIVersion); version != "" {
 		header += " (v" + version + ")"
 	}
@@ -376,26 +391,32 @@ func (s *State) RenderStatusCardWidth(width int) string {
 			labelWidth = candidate
 		}
 	}
-	valueOffset := 1 + labelWidth + 1 + 3
-	valueWidth := max(0, availableInnerWidth-valueOffset)
-	for index := range fields {
-		if fields[index].label == "Directory" && DisplayWidth(fields[index].value) > valueWidth {
-			fields[index].value = CenterTruncatePath(fields[index].value, valueWidth)
-		}
+	valueOffset := DisplayWidth(statusCardIndent) + labelWidth + 1 + 2
+	valueWidth := max(0, availableWidth-valueOffset)
+	// Rust #48754: the directory (and every other value) is never truncated;
+	// long values wrap with continuation lines aligned under the value column.
+	continuation := strings.Repeat(" ", valueOffset)
+	if valueWidth == 0 {
+		continuation = indent
 	}
 
-	rows := []string{header, ""}
+	type statusCardRow struct {
+		text         string
+		continuation string
+	}
+	rows := []statusCardRow{{text: indent + header, continuation: indent}, {}}
 	providerLower := strings.ToLower(strings.TrimSpace(s.Provider))
 	if providerLower == "" || strings.Contains(providerLower, "openai") || strings.Contains(providerLower, "codex") {
 		rows = append(rows,
-			AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/codex/settings/usage for up-to-date"),
-			"information on rate limits and credits", "",
+			statusCardRow{text: indent + AnnotateCompleteWebURLsInLine("Visit https://chatgpt.com/codex/settings/usage for up-to-date"), continuation: indent},
+			statusCardRow{text: indent + "information on rate limits and credits", continuation: indent},
+			statusCardRow{},
 		)
 	}
 	for _, item := range fields {
-		rows = append(rows, renderStatusField(item.label, item.value, labelWidth))
+		rows = append(rows, statusCardRow{text: renderStatusField(item.label, item.value, labelWidth), continuation: continuation})
 	}
-	rows = append(rows, "")
+	rows = append(rows, statusCardRow{})
 	for _, item := range usageFields {
 		value := item.value
 		if item.window {
@@ -407,35 +428,25 @@ func (s *State) RenderStatusCardWidth(width int) string {
 		line := renderStatusField(item.label, value, labelWidth)
 		if item.resets != "" {
 			reset := "(resets " + item.resets + ")"
-			if DisplayWidth(line)+1+DisplayWidth(reset) <= availableInnerWidth {
+			if DisplayWidth(line)+1+DisplayWidth(reset) <= availableWidth {
 				line += " " + reset
 			} else {
-				rows = append(rows, line)
+				rows = append(rows, statusCardRow{text: line, continuation: continuation})
 				line = strings.Repeat(" ", valueOffset) + reset
 			}
 		}
-		rows = append(rows, line)
+		rows = append(rows, statusCardRow{text: line, continuation: continuation})
 		if item.details != "" {
 			for _, detail := range wrapStatusText(item.details, max(1, valueWidth)) {
-				rows = append(rows, strings.Repeat(" ", valueOffset)+detail)
+				rows = append(rows, statusCardRow{text: strings.Repeat(" ", valueOffset) + detail, continuation: continuation})
 			}
 		}
 	}
 
-	contentWidth := 0
+	out := make([]string, 0, len(rows))
 	for _, row := range rows {
-		if candidate := DisplayWidth(row); candidate > contentWidth {
-			contentWidth = candidate
-		}
+		out = append(out, wrapStatusRowLines(row.text, availableWidth, row.continuation)...)
 	}
-	contentWidth = min(contentWidth, availableInnerWidth)
-	border := "╭" + strings.Repeat("─", contentWidth+2) + "╮"
-	out := []string{border}
-	for _, row := range rows {
-		row = truncateStatusRow(row, contentWidth)
-		out = append(out, "│ "+row+strings.Repeat(" ", contentWidth-DisplayWidth(row))+" │")
-	}
-	out = append(out, "╰"+strings.Repeat("─", contentWidth+2)+"╯")
 	return strings.Join(out, "\n")
 }
 
@@ -452,18 +463,145 @@ func (s *State) statusContextWindow() string {
 	return fmt.Sprintf("%d%% left (%s used / %s)", s.LastTokenUsage.PercentOfContextWindowRemaining(*s.ModelContextWindow), formatStatusTokensCompact(used), formatStatusTokensCompact(*s.ModelContextWindow))
 }
 
+// renderStatusField mirrors the live Rust FieldFormatter::line layout
+// (status/format.rs): a two-space indent, `label:`, then 2 + slack padding so
+// every value starts at the same column as the continuation indent.
 func renderStatusField(label string, value string, labelWidth int) string {
-	return " " + label + ":" + strings.Repeat(" ", 3+max(0, labelWidth-DisplayWidth(label))) + value
+	return statusCardIndent + label + ":" + strings.Repeat(" ", 2+max(0, labelWidth-DisplayWidth(label))) + value
 }
 
-func truncateStatusRow(value string, width int) string {
-	if DisplayWidth(value) <= width {
-		return value
+// statusRowVisibleWidth measures a status row in terminal columns, ignoring
+// OSC-8 hyperlink annotations so they do not consume card columns.
+func statusRowVisibleWidth(row string) int {
+	return DisplayWidth(StripOSC8(row))
+}
+
+// wrapStatusRowLines wraps one status row to availableWidth, aligning
+// continuation lines under the value column (Rust #48754 status/card.rs). Rows
+// that still overflow after the continuation indent (a wide grapheme cannot fit
+// underneath the value column) fall back to wrapping without it.
+func wrapStatusRowLines(row string, availableWidth int, continuation string) []string {
+	if availableWidth <= 0 {
+		return []string{""}
 	}
-	if width <= 1 {
-		return TruncateToWidth(value, width)
+	if statusRowVisibleWidth(row) <= availableWidth {
+		return []string{row}
 	}
-	return TruncateToWidth(value, width-1) + "…"
+	// An OSC-8 annotation cannot survive a line split, so a row that has to wrap
+	// is wrapped as plain text; the visible text stays complete.
+	plain := StripOSC8(row)
+	wrapped := wrapStatusRow(plain, availableWidth, StripOSC8(continuation))
+	for _, line := range wrapped {
+		if statusRowVisibleWidth(line) > availableWidth {
+			return wrapStatusRow(plain, availableWidth, "")
+		}
+	}
+	return wrapped
+}
+
+// wrapStatusRow greedily fills lines with the row's own words, splitting a word
+// that cannot fit at grapheme boundaries so no characters are dropped. The
+// separator whitespace at a wrap point is dropped, matching textwrap, so
+// trimming and concatenating the lines reproduces the original text.
+func wrapStatusRow(row string, availableWidth int, continuation string) []string {
+	lines := []string{}
+	indent := ""
+	current := ""
+	for _, token := range splitStatusRowTokens(row) {
+		space := token.space
+		if current == "" && indent != "" {
+			space = ""
+		}
+		if DisplayWidth(indent)+DisplayWidth(current+space+token.word) <= availableWidth {
+			current += space + token.word
+			continue
+		}
+		remaining := token.word
+		if current != "" {
+			// Fill the rest of this line with as much of the word as fits,
+			// matching textwrap's handling of over-long words.
+			room := availableWidth - DisplayWidth(indent) - DisplayWidth(current) - DisplayWidth(space)
+			if piece, rest := splitStatusTextPrefix(remaining, room); room > 0 && piece != "" && rest != "" {
+				lines = append(lines, indent+current+space+piece)
+				indent = continuation
+				current = ""
+				remaining = rest
+			} else {
+				lines = append(lines, indent+current)
+				indent = continuation
+				current = ""
+			}
+		}
+		for {
+			limit := availableWidth - DisplayWidth(indent)
+			if limit < 1 {
+				limit = availableWidth
+			}
+			if limit < 1 || DisplayWidth(remaining) <= limit {
+				break
+			}
+			piece, rest := splitStatusTextPrefix(remaining, limit)
+			if piece == "" || rest == "" {
+				break
+			}
+			lines = append(lines, indent+piece)
+			remaining = rest
+		}
+		current = remaining
+	}
+	if current != "" {
+		lines = append(lines, indent+current)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "")
+	}
+	return lines
+}
+
+type statusRowToken struct {
+	space string
+	word  string
+}
+
+// splitStatusRowTokens splits a row on ASCII spaces, keeping the whitespace that
+// precedes each word so the original spacing survives on unwrapped lines.
+func splitStatusRowTokens(row string) []statusRowToken {
+	out := []statusRowToken{}
+	space := ""
+	var word strings.Builder
+	flushWord := func() {
+		if word.Len() > 0 {
+			out = append(out, statusRowToken{space: space, word: word.String()})
+			word.Reset()
+			space = ""
+		}
+	}
+	for _, r := range row {
+		if r == ' ' {
+			flushWord()
+			space += " "
+			continue
+		}
+		word.WriteRune(r)
+	}
+	flushWord()
+	return out
+}
+
+// splitStatusTextPrefix splits text into a prefix no wider than limit and the
+// remainder, always making progress even when one grapheme is wider than limit.
+func splitStatusTextPrefix(text string, limit int) (string, string) {
+	if text == "" {
+		return "", ""
+	}
+	used := 0
+	for index, r := range text {
+		if index > 0 && used+DisplayWidth(string(r)) > limit {
+			return text[:index], text[index:]
+		}
+		used += DisplayWidth(string(r))
+	}
+	return text, ""
 }
 
 func statusModelProvider(provider string, threadID string) string {

@@ -185,10 +185,12 @@ func TestFieldFormatterMatchesRustSpacing(t *testing.T) {
 	if formatter.ValueOffset != 19 {
 		t.Fatalf("ValueOffset = %d, want 19", formatter.ValueOffset)
 	}
-	if got := formatter.Line("Model", "gpt-5"); got != " Model:            gpt-5" {
+	// Rust #48754: the two-space indent moved one column from the slack after
+	// `label:`, so the value offset is unchanged while the layout matches.
+	if got := formatter.Line("Model", "gpt-5"); got != "  Model:           gpt-5" {
 		t.Fatalf("model line = %q", got)
 	}
-	if got := formatter.Line("Context window", "42% left"); got != " Context window:   42% left" {
+	if got := formatter.Line("Context window", "42% left"); got != "  Context window:  42% left" {
 		t.Fatalf("context line = %q", got)
 	}
 	if got := formatter.Continuation("(resets 12:00)"); got != "                   (resets 12:00)" {

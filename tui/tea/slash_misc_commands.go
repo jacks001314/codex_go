@@ -29,7 +29,9 @@ func (m *Model) applyStatusCommand() bubbletea.Cmd {
 	snapshot.Messages = nil
 	snapshot.RateLimits = append([]codextui.RateLimitStatus(nil), m.State.RateLimits...)
 	snapshot.RateLimitsRefreshing = refreshing
-	cardWidth := max(44, m.width-2)
+	// Rust #48754: the status card is borderless and wraps, so the old
+	// 44-column floor is gone; keep the two-column gutter at every width.
+	cardWidth := max(1, m.width-2)
 	card := snapshot.RenderStatusCardWidth(cardWidth)
 	messageIndex := len(m.State.Messages)
 	history := statusHistoryText(card)

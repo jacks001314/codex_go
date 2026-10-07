@@ -89,3 +89,42 @@ func TestModelCopyReturnsToResponseAfterOtherCommandLikeRust(t *testing.T) {
 		t.Fatalf("copied = %q, want final answer", copied)
 	}
 }
+
+// TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust mirrors Rust
+// #48754: the whole-status copy keeps complete directory paths and session ids
+// even when the card wraps them across lines.
+func TestModelWholeStatusCopyKeepsFullPathsAtNarrowWidthsLikeRust(t *testing.T) {
+	const directory = "/workspace/projects/界界/ｶﾞﾞ/a-very-long-directory-name/codex"
+	const sessionID = "00000000-0000-0000-0000-000000000123"
+	state := codextui.NewState(nil)
+	state.CWD = directory
+	state.SetThreadID(sessionID)
+	var copied string
+	model := NewModel(state, Options{
+		Width: 24,
+		OnClipboardWrite: func(text string) error {
+			copied = text
+			return nil
+		},
+	})
+
+	typeText(t, model, "/status")
+	model.Update(key(bubbletea.KeyEnter))
+	typeText(t, model, "/copy")
+	model.Update(key(bubbletea.KeyEnter))
+	model.Update(key(bubbletea.KeyEnter))
+
+	if copied == "" {
+		t.Fatal("/copy did not copy the whole status")
+	}
+	joined := ""
+	for _, line := range strings.Split(copied, "\n") {
+		joined += strings.TrimSpace(line)
+	}
+	if !strings.Contains(joined, directory) {
+		t.Fatalf("copied status lost the directory:\n%s", copied)
+	}
+	if !strings.Contains(joined, sessionID) {
+		t.Fatalf("copied status lost the session id:\n%s", copied)
+	}
+}

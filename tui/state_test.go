@@ -62,9 +62,102 @@ func TestStateRenderStatusCardUsesRuntimeUsageAndLimits(t *testing.T) {
 		{Label: "Credits", Text: "38 credits", IsText: true, CapturedAt: capturedAt},
 	}
 	card := state.RenderStatusCardWidth(100)
-	for _, want := range []string{"╭", "45K total  (40K input + 5K output)", "80% left (50K used / 200K)", "5h limit:", "63% left", "(resets 03:14)", "Weekly limit:", "19% left", "Credits:", "38 credits"} {
+	for _, want := range []string{"45K total  (40K input + 5K output)", "80% left (50K used / 200K)", "5h limit:", "63% left", "(resets 03:14)", "Weekly limit:", "19% left", "Credits:", "38 credits"} {
 		if !strings.Contains(card, want) {
 			t.Fatalf("status card missing %q:\n%s", want, card)
+		}
+	}
+	// Rust #48754: the status summary is borderless.
+	if strings.ContainsAny(card, "\u256d\u256e\u2570\u256f\u2502") {
+		t.Fatalf("status card must not draw a border:\n%s", card)
+	}
+}
+
+// TestStateRenderStatusCardWrapsLongValuesLikeRust mirrors Rust #48754
+// (status/tests.rs `status_wraps_long_paths_and_session_ids_without_losing_text`):
+// long Unicode paths and session ids wrap instead of truncating, no row exceeds
+// the terminal width, and no text is lost at any width.
+func TestStateRenderStatusCardWrapsLongValuesLikeRust(t *testing.T) {
+	const directory = "/workspace/projects/界界/ｶﾞﾞ/a-very-long-directory-name/codex"
+	const sessionID = "00000000-0000-0000-0000-000000000123"
+	state := NewState(&Options{
+		Model:          "gpt-5.5",
+		CWD:            directory,
+		ApprovalPolicy: "on-request",
+		Sandbox:        "workspace-write",
+	})
+	state.SetThreadID(sessionID)
+	state.SetThreadName("A thread with a long descriptive name")
+	for _, width := range []int{7, 12, 17, 18, 24, 25, 40, 80} {
+		card := state.RenderStatusCardWidth(width)
+		var joined strings.Builder
+		for _, line := range strings.Split(card, "\n") {
+			if got := statusRowVisibleWidth(line); got > width {
+				t.Fatalf("row wider than %d at width %d: %q (%d)", width, width, line, got)
+			}
+			joined.WriteString(strings.TrimSpace(line))
+		}
+		if !strings.Contains(joined.String(), directory) {
+			t.Fatalf("status card lost the directory at width %d:\n%s", width, card)
+		}
+		if !strings.Contains(joined.String(), sessionID) {
+			t.Fatalf("status card lost the session id at width %d:\n%s", width, card)
+		}
+		if strings.ContainsAny(card, "\u256d\u256e\u2570\u256f\u2502") {
+			t.Fatalf("status card must not draw a border at width %d:\n%s", width, card)
+		}
+	}
+}
+
+// TestStateRenderStatusCardWideLayoutStable guards the Go-specific width policy
+// from Rust #48754: the 44-column floor is gone so narrow terminals wrap, while
+// the upper bound and the wide-terminal value column are unchanged.
+func TestStateRenderStatusCardWideLayoutStable(t *testing.T) {
+	state := NewState(&Options{
+		Model:           "gpt-5.1-codex-max",
+		ReasoningEffort: "high",
+		CWD:             "/workspace/tests",
+		ApprovalPolicy:  "on-request",
+		Sandbox:         "workspace-write",
+		CLIVersion:      "0.145.0",
+	})
+	state.SetThreadID("thread-1")
+	wide := state.RenderStatusCardWidth(100)
+	if state.RenderStatusCardWidth(101) != wide || state.RenderStatusCardWidth(200) != wide {
+		t.Fatalf("wide terminals must render the same card as width 100")
+	}
+	if state.RenderStatusCardWidth(43) == state.RenderStatusCardWidth(44) {
+		t.Fatalf("removing the 44-column floor must only affect widths below 44")
+	}
+	// The value column is where the bordered card put it: the old
+	// 1 + labelWidth + 1 + 3 equals the new 2 + labelWidth + 1 + 2.
+	labelWidth := 18 // "Collaboration mode"
+	valueOffset := DisplayWidth(statusCardIndent) + labelWidth + 1 + 2
+	if valueOffset != 1+labelWidth+1+3 {
+		t.Fatalf("value column moved to %d", valueOffset)
+	}
+	for _, entry := range []struct{ label, value string }{
+		{"Model", "gpt-5.1-codex-max (reasoning high, summaries auto)"},
+		{"Directory", "/workspace/tests"},
+		{"Permissions", "Workspace (Ask for approval)"},
+		{"Session", "thread-1"},
+	} {
+		prefix := statusCardIndent + entry.label + ":" + strings.Repeat(" ", 2+labelWidth-DisplayWidth(entry.label))
+		line := ""
+		for _, candidate := range strings.Split(wide, "\n") {
+			if strings.HasPrefix(candidate, prefix) {
+				line = candidate
+				break
+			}
+		}
+		if line == "" {
+			t.Fatalf("wide card missing %q:\n%s", entry.label, wide)
+		}
+		if DisplayWidth(prefix) != valueOffset {
+			t.Fatalf("%s value column = %d, want %d", entry.label, DisplayWidth(prefix), valueOffset)
+		}
+		if line != prefix+entry.value {
+			t.Fatalf("wide %s row wrapped: %q", entry.label, line)
 		}
 	}
 }

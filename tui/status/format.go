@@ -23,7 +23,9 @@ type FieldFormatter struct {
 	ValueIndent string
 }
 
-const FieldFormatterIndent = " "
+// FieldFormatterIndent mirrors Rust `FieldFormatter::INDENT` ("  ", Rust
+// #48754 status/format.rs).
+const FieldFormatterIndent = "  "
 
 func NewFieldFormatter(labels []string) FieldFormatter {
 	labelWidth := 0
@@ -32,7 +34,9 @@ func NewFieldFormatter(labels []string) FieldFormatter {
 			labelWidth = width
 		}
 	}
-	valueOffset := codextui.DisplayWidth(FieldFormatterIndent) + labelWidth + 1 + 3
+	// Rust #48754: one column moved from the slack after `label:` into the
+	// indent, so the total value offset is unchanged while the layout matches.
+	valueOffset := codextui.DisplayWidth(FieldFormatterIndent) + labelWidth + 1 + 2
 	return FieldFormatter{
 		Indent:      FieldFormatterIndent,
 		LabelWidth:  labelWidth,
@@ -58,7 +62,7 @@ func (f FieldFormatter) ValueWidth(availableInnerWidth int) int {
 
 func (f FieldFormatter) LabelPrefix(label string) string {
 	labelWidth := codextui.DisplayWidth(label)
-	padding := 3
+	padding := 2
 	if f.LabelWidth > labelWidth {
 		padding += f.LabelWidth - labelWidth
 	}
@@ -78,8 +82,4 @@ func PushLabel(labels *[]string, seen map[string]struct{}, label string) {
 
 func LineDisplayWidth(line string) int {
 	return codextui.DisplayWidth(line)
-}
-
-func TruncateLineToWidth(line string, maxWidth int) string {
-	return codextui.TruncateToWidth(line, maxWidth)
 }
