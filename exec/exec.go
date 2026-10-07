@@ -1580,8 +1580,11 @@ func authSnapshotUsesCodexBackendExec(snapshot *auth.AuthDotJSON) bool {
 }
 
 // systemBwrapWarning is injectable so the exec startup wiring can be pinned
-// without depending on the host's bubblewrap installation.
-var systemBwrapWarning = sandbox.SystemBwrapWarning
+// without depending on the host's bubblewrap installation. It takes the policy
+// working directory the launcher probe resolves writable roots against (Rust
+// #51211 passes the command's effective profile and `config.cwd`), so the
+// cwd-less `sandbox.SystemBwrapWarning` stays as the compatibility entry point.
+var systemBwrapWarning = sandbox.SystemBwrapWarningForCWD
 
 // warnSink is the part of the exec event stream the startup warning uses.
 type warnSink interface {
@@ -1602,7 +1605,7 @@ func emitStartupBwrapWarning(cfg *config.Config, req *Request, sink warnSink) {
 	if err != nil || resolution == nil {
 		return
 	}
-	if warning := systemBwrapWarning(resolution.Profile); warning != "" {
+	if warning := systemBwrapWarning(resolution.Profile, requestCWD(req)); warning != "" {
 		sink.Warning(warning)
 	}
 }
