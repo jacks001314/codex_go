@@ -365,9 +365,6 @@ func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 		{text: " ", style: spanPlain},
 		v.titleSpan(row.ThreadID, row.Title(), spanPlain),
 	}
-	if row.IsCurrent {
-		spans = append(spans, span{text: "  current", style: spanDim})
-	}
 	if projectGrouping {
 		spans = append(spans, span{text: "  " + row.Group.Label(), style: spanDim})
 	}
