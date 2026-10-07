@@ -139,6 +139,10 @@ func RawMCPToolDefinitionJSONBytes(tools []MCPToolInfo) int {
 // `mcp.binding_catalog` trace event plus the per-server half of the histogram
 // aggregation).
 type BindingCatalogTelemetry struct {
+	// ThreadID is the thread whose catalog listing materialized this catalog.
+	// The per-server trace event attaches to that thread's live span (Rust reads
+	// the same span from the ambient tracing context).
+	ThreadID                string
 	ProductSKU              string
 	ServerKind              string
 	PluginID                string
@@ -166,6 +170,16 @@ func SetBindingCatalogTelemetryObserver(sink BindingCatalogTelemetrySink) {
 	bindingCatalogTelemetry.Lock()
 	defer bindingCatalogTelemetry.Unlock()
 	bindingCatalogTelemetry.sink = sink
+}
+
+// BindingCatalogTelemetrySinkInstalled reports whether a host installed the
+// catalog telemetry sink. The host installs it when its trace pipeline is
+// enabled (Rust's `tracing::enabled!(target: "codex_otel.trace_safe")` gate), so
+// callers can assert the wiring and tests can pin it.
+func BindingCatalogTelemetrySinkInstalled() bool {
+	bindingCatalogTelemetry.Lock()
+	defer bindingCatalogTelemetry.Unlock()
+	return bindingCatalogTelemetry.sink != nil
 }
 
 func recordBindingCatalogTelemetry(events []BindingCatalogTelemetry) {
@@ -268,7 +282,7 @@ func (s *MCPService) bindingCatalogProductSKU() string {
 // `codex.mcp.binding_catalog.raw_definition_json_bytes` histogram sample.
 // Servers whose catalog this call did not touch carry no source and are
 // skipped, and nothing is measured when no telemetry output is configured.
-func (s *MCPService) recordBindingCatalogTelemetry(servers []MCPServerStatus) {
+func (s *MCPService) recordBindingCatalogTelemetry(servers []MCPServerStatus, threadID string) {
 	if !BindingCatalogTelemetryEnabled() {
 		return
 	}
@@ -285,6 +299,7 @@ func (s *MCPService) recordBindingCatalogTelemetry(servers []MCPServerStatus) {
 		}
 		serverName := status.effectiveName()
 		events = append(events, BindingCatalogTelemetry{
+			ThreadID:                threadID,
 			ServerName:              serverName,
 			ProductSKU:              productSKU,
 			ServerKind:              BindingCatalogServerKindFor(serverName, pluginID),

@@ -303,3 +303,38 @@ func TestListStatusRecordsBindingCatalogHistogramOnGlobalRecorderLikeRust(t *tes
 		t.Fatalf("sample tags = %#v", sample.tags)
 	}
 }
+
+// Rust #51215: the measurement carries the thread whose catalog listing
+// materialized it, so the host can attach the `mcp.binding_catalog` trace event
+// to that thread's span.
+func TestBindingCatalogTelemetryCarriesThreadIDLikeRust(t *testing.T) {
+	service := NewMCPService(&RuntimeConfig{Servers: map[string]ServerRegistration{
+		"github": {Config: ServerConfig{Command: "codex-go-missing-catalog-github", Enabled: true}},
+	}})
+	defer service.Close()
+
+	var batches [][]BindingCatalogTelemetry
+	SetBindingCatalogTelemetryObserver(func(events []BindingCatalogTelemetry) {
+		batches = append(batches, events)
+	})
+	defer SetBindingCatalogTelemetryObserver(nil)
+
+	threadID := "thread-catalog"
+	response, err := service.ListStatusChecked(&MCPListServerStatusParams{
+		ThreadID:             &threadID,
+		Detail:               &MCPServerStatusDetail{Mode: MCPServerStatusDetailToolsAndAuthOnly},
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: 0,
+	})
+	if err != nil || response == nil {
+		t.Fatalf("ListStatusChecked() response=%#v err=%v", response, err)
+	}
+	if len(batches) != 1 || len(batches[0]) == 0 {
+		t.Fatalf("telemetry batches = %#v", batches)
+	}
+	for _, event := range batches[0] {
+		if event.ThreadID != threadID {
+			t.Fatalf("telemetry ThreadID = %q, want %q (event=%#v)", event.ThreadID, threadID, event)
+		}
+	}
+}

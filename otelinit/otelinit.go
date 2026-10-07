@@ -84,6 +84,15 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	if !options.SkipGlobalMetricsInstall && provider != nil && provider.Metrics() != nil {
 		telemetry.InstallGlobalMetrics(provider.Metrics())
 	}
+	// Rust's MCP catalog telemetry reports its per-server trace event through the
+	// process-global tracing subscriber. Go installs the adapter at this same
+	// host boundary, so codex_go/mcp keeps measuring without importing the
+	// telemetry pipeline. A short-lived provider (SkipGlobalMetricsInstall) does
+	// not replace the process-global sink, matching how it leaves the global
+	// metrics client alone.
+	if !options.SkipGlobalMetricsInstall {
+		InstallBindingCatalogTelemetry(provider)
+	}
 	return provider, nil
 }
 

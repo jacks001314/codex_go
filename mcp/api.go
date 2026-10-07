@@ -1464,7 +1464,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		for len(pending) > 0 {
 			applyResult(<-resultCh)
 		}
-		s.recordBindingCatalogTelemetry(servers)
+		s.recordBindingCatalogTelemetry(servers, threadID)
 		return servers
 	}
 
@@ -1518,7 +1518,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		case <-timer.C:
 		}
 	}
-	s.recordBindingCatalogTelemetry(servers)
+	s.recordBindingCatalogTelemetry(servers, threadID)
 	return servers
 }
 

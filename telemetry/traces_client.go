@@ -315,6 +315,10 @@ func (t *Tracer) startSpan(parent *Span, name string, attributes map[string]stri
 		SpanID:     t.client.newID(8),
 		startedAt:  t.client.now().UTC(),
 		attributes: sortedMetricTags(attributes),
+		// A span stamped with ThreadIDAttribute is a thread's live session span
+		// (Rust's ambient span inside a session), so trace-safe records emitted
+		// from context-free paths can still resolve it.
+		threadID: strings.TrimSpace(attributes[ThreadIDAttribute]),
 		// A root span is recorded; a span that continues a remote trace
 		// inherits that trace's sampling decision instead (Rust's default
 		// parent-based sampler).
@@ -324,6 +328,7 @@ func (t *Tracer) startSpan(parent *Span, name string, attributes map[string]stri
 		span.TraceID = parent.TraceID
 		span.ParentSpanID = parent.SpanID
 	}
+	registerLiveThreadSpan(span)
 	return span
 }
 
@@ -346,8 +351,11 @@ type Span struct {
 	endedAt       time.Time
 	attributes    []MetricTagValue
 	events        []OTLPSpanEvent
-	mu            sync.Mutex
-	ended         bool
+	// threadID is the ThreadIDAttribute value the span was started with, empty
+	// for spans that do not belong to a thread session.
+	threadID string
+	mu       sync.Mutex
+	ended    bool
 }
 
 // StartTime reports when the span started.
@@ -398,6 +406,9 @@ func (s *Span) EndAt(endedAt time.Time) {
 		return
 	}
 	s.ended = true
+	// A finished span can no longer receive events, so it stops being its
+	// thread's live span (Rust's span guard leaves the span the same way).
+	releaseLiveThreadSpan(s)
 	if endedAt.IsZero() {
 		endedAt = s.client.now().UTC()
 	}
