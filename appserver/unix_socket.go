@@ -116,14 +116,29 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	if err != nil {
 		return err
 	}
-	return serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
+	// A managed daemon takes one recovery snapshot for the whole process: every
+	// connection's router contributes its loaded threads, and the file is written
+	// once after the server loop returns (Rust app-server/src/lib.rs:1037-1042
+	// keeps the snapshot at daemon scope).
+	recoverySink := daemonRecoverySinkForAccess(options.ShutdownAccess, codexHome)
+	serveErr := serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
+		var router *RuntimeRouter
 		if strings.TrimSpace(options.StoreRoot) != "" {
-			router := NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
+			router = NewDefaultRuntimeRouterWithOptions(session.NewStore(options.StoreRoot), codexHome, preparedRuntimeOptions)
 			router.SetRequestTransport("unix_socket")
-			return router
+		} else {
+			router = NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
 		}
-		return NewUnixSocketRouterWithOptions(codexHome, preparedRuntimeOptions)
+		router.SetDaemonRecoverySink(recoverySink)
+		return router
 	}, options.ShutdownAccess, options.OnDaemonShutdown)
+	if recoverySink != nil {
+		// Best-effort: a failed save must never block the shutdown.
+		if err := recoverySink.WriteSnapshot(); err != nil {
+			slog.Warn("failed to save daemon recovery snapshot", "error", err)
+		}
+	}
+	return serveErr
 }
 
 func ensureUnixSocketParent(socketPath string) error {

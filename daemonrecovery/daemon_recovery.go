@@ -48,11 +48,14 @@ type Snapshot struct {
 // protocol-typed fields stay raw so the on-disk shape round-trips exactly as
 // the Rust app-server writes it.
 type InterruptedTurn struct {
-	TurnID             string          `json:"turn_id"`
-	OutputSchema       json.RawMessage `json:"output_schema,omitempty"`
-	ServiceTier        *string         `json:"service_tier,omitempty"`
-	CyberAccessProgram json.RawMessage `json:"cyber_access_program,omitempty"`
-	LocalEnvironment   json.RawMessage `json:"local_environment,omitempty"`
+	TurnID string `json:"turn_id"`
+	// The four optional fields have no `omitempty`: Rust's InterruptedTurn has no
+	// skip_serializing_if, so an absent option serializes as `null` and the on-disk
+	// shape stays byte-identical across implementations.
+	OutputSchema       json.RawMessage `json:"output_schema"`
+	ServiceTier        *string         `json:"service_tier"`
+	CyberAccessProgram json.RawMessage `json:"cyber_access_program"`
+	LocalEnvironment   json.RawMessage `json:"local_environment"`
 }
 
 // ReadSnapshot reads path (Rust daemon_recovery::read_snapshot). A missing file
@@ -80,7 +83,7 @@ func ReadSnapshot(path string) (Snapshot, error) {
 		retained := make(map[string]InterruptedTurn, len(snapshot.Interrupted))
 		for id, turn := range snapshot.Interrupted {
 			if containsString(loaded, id) {
-				retained[id] = turn
+				retained[id] = normalizeInterruptedTurn(turn)
 			}
 		}
 		snapshot.Interrupted = retained
@@ -119,6 +122,23 @@ func WriteSnapshot(path string, snapshot Snapshot) error {
 		return err
 	}
 	return utils.WriteAtomically(path, string(contents))
+}
+
+// normalizeInterruptedTurn maps a stored JSON null back to an absent optional.
+// Rust models these fields as Option<T>, which deserializes null as None, so a
+// snapshot written by either implementation reads back the same way.
+func normalizeInterruptedTurn(turn InterruptedTurn) InterruptedTurn {
+	turn.OutputSchema = normalizeRawJSON(turn.OutputSchema)
+	turn.CyberAccessProgram = normalizeRawJSON(turn.CyberAccessProgram)
+	turn.LocalEnvironment = normalizeRawJSON(turn.LocalEnvironment)
+	return turn
+}
+
+func normalizeRawJSON(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 || string(value) == "null" {
+		return nil
+	}
+	return value
 }
 
 func readEntries(path string) ([]string, error) {

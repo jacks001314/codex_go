@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -172,4 +173,57 @@ func cutPrefix(value string, prefix string) (string, bool) {
 		return value, false
 	}
 	return value[len(prefix):], true
+}
+
+// TestWriteSnapshotKeepsAbsentOptionalsAsNullLikeRust pins the on-disk shape of
+// an interrupted turn whose optionals are absent: Rust's InterruptedTurn has no
+// skip_serializing_if, so it writes `null` rather than dropping the field
+// (app-server-transport/src/daemon_recovery.rs).
+func TestWriteSnapshotKeepsAbsentOptionalsAsNullLikeRust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	if err := WriteSnapshot(path, Snapshot{
+		Loaded:      []string{"thread-1"},
+		Interrupted: map[string]InterruptedTurn{"thread-1": {TurnID: "turn-1"}},
+	}); err != nil {
+		t.Fatalf("WriteSnapshot error = %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	var entries []string
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		t.Fatalf("entries are not a JSON array: %v (%s)", err, raw)
+	}
+	metadata := ""
+	for _, entry := range entries {
+		if rest, ok := cutPrefix(entry, interruptionPrefix); ok {
+			metadata = rest
+		}
+	}
+	if metadata == "" {
+		t.Fatalf("entries = %#v, want a metadata entry", entries)
+	}
+	for _, want := range []string{
+		`"turn_id":"turn-1"`,
+		`"output_schema":null`,
+		`"service_tier":null`,
+		`"cyber_access_program":null`,
+		`"local_environment":null`,
+	} {
+		if !strings.Contains(metadata, want) {
+			t.Fatalf("metadata entry = %s, want %s", metadata, want)
+		}
+	}
+
+	// The shape round-trips: absent optionals read back as absent, not as a
+	// literal null value.
+	read, err := ReadSnapshot(path)
+	if err != nil {
+		t.Fatalf("ReadSnapshot error = %v", err)
+	}
+	got := read.Interrupted["thread-1"]
+	if got.TurnID != "turn-1" || got.ServiceTier != nil || got.OutputSchema != nil || got.LocalEnvironment != nil {
+		t.Fatalf("interrupted turn = %#v", got)
+	}
 }

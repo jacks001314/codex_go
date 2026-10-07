@@ -483,6 +483,10 @@ type RuntimeRouter struct {
 	closeOnce              sync.Once
 	closeErr               error
 	codexHomeScanCancel    func()
+	// daemonRecoverySink is the daemon-scoped slot a managed daemon shares
+	// between the per-connection routers; nil for every other server, so an
+	// unmanaged app-server never contributes or writes a recovery snapshot.
+	daemonRecoverySink *DaemonRecoverySink
 }
 
 type unifiedExecAnalyticsContext struct {
@@ -2016,6 +2020,12 @@ func (r *RuntimeRouter) Close() error {
 }
 
 func (r *RuntimeRouter) close() error {
+	// A managed daemon's recovery snapshot must be taken while its turns are
+	// still live: BeginShutdown below cancels them, and the interrupted turns
+	// only exist before that (Rust app-server/src/lib.rs takes the snapshot on
+	// the shutdown path; request_processors/daemon_snapshot.rs reads the active
+	// turn).
+	r.contributeDaemonRecoverySnapshot()
 	r.closeShellSnapshots()
 	if r.codexHomeScanCancel != nil {
 		r.codexHomeScanCancel()
