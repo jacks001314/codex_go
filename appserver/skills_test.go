@@ -1595,3 +1595,72 @@ func TestPromptSkillMetadataAcceptsCanonicalAndDiscoveryPathsLikeRust(t *testing
 		t.Fatalf("mention via canonical path selected %d skills, want 1", len(selected))
 	}
 }
+
+// TestSkillPathIdentityMatchesWindowsSpellingsLikeRust mirrors Rust #51482's
+// `SkillConfigRuleSelector::Path(PathUri)` and the `HashSet<PathUri>`
+// disabled-path sets that consume it: equivalent Windows case and separator
+// spellings collapse to one key, the `file:` locator of the same document
+// agrees with its native spelling, and POSIX case plus literal `%`/`#`
+// characters stay significant.
+func TestSkillPathIdentityMatchesWindowsSpellingsLikeRust(t *testing.T) {
+	equal := []struct{ left, right string }{
+		{`C:\Skills\Demo\SKILL.md`, `c:\skills\demo\skill.md`},
+		{`C:\Skills\Demo\SKILL.md`, "C:/SKILLS/DEMO/skill.md"},
+		{`C:\Skills\Demo\SKILL.md`, "file:///c:/skills/demo/skill.md"},
+		{`\\SERVER\share\Demo\SKILL.md`, `\\SERVER\share\demo\skill.md`},
+	}
+	for _, tc := range equal {
+		if left, right := skillPathIdentityKey(tc.left), skillPathIdentityKey(tc.right); left == "" || left != right {
+			t.Fatalf("skillPathIdentityKey(%q) = %q, skillPathIdentityKey(%q) = %q; want one shared key", tc.left, left, tc.right, right)
+		}
+	}
+
+	distinct := []struct{ left, right string }{
+		{"/tmp/Demo/SKILL.md", "/tmp/demo/SKILL.md"},
+		{"/tmp/demo skill%23/SKILL.md", "/tmp/demo skill#/SKILL.md"},
+		{"file:///C:/Skills/Demo/SKILL.md", "file:///D:/Skills/Demo/SKILL.md"},
+		// The UNC host stays case-significant, matching Rust PathUri::eq.
+		{`\\SERVER\share\Demo\SKILL.md`, `\\server\share\Demo\SKILL.md`},
+	}
+	for _, tc := range distinct {
+		if left, right := skillPathIdentityKey(tc.left), skillPathIdentityKey(tc.right); left == right {
+			t.Fatalf("skillPathIdentityKey(%q) and %q share key %q; want distinct", tc.left, tc.right, left)
+		}
+	}
+	if got := skillPathIdentityKey("   "); got != "" {
+		t.Fatalf("skillPathIdentityKey(blank) = %q, want empty", got)
+	}
+}
+
+// TestApplyConfigDisablesSkillByPathIdentityLikeRust mirrors Rust #51482's
+// disabled-path set: a configured disabled path hides the skill whose document
+// path is an equivalent Windows spelling, and the same identity keeps
+// dedupeSkillsByPath from double-counting one document.
+func TestApplyConfigDisablesSkillByPathIdentityLikeRust(t *testing.T) {
+	entries := []SkillsListEntry{
+		{Name: "demo", Path: `C:\Skills\Demo\SKILL.md`, Scope: "user", Enabled: true},
+		{Name: "other", Path: "C:/Skills/Other/SKILL.md", Scope: "user", Enabled: true},
+	}
+	applied := applyConfig(entries, []ConfigEntry{{Path: "c:/skills/demo/skill.md", Enabled: false}})
+	if applied[0].Enabled {
+		t.Fatalf("applyConfig left %q enabled, want it disabled by the equivalent spelling", applied[0].Path)
+	}
+	if !applied[1].Enabled {
+		t.Fatalf("applyConfig disabled unrelated skill %q", applied[1].Path)
+	}
+
+	// Re-enabling through another equivalent spelling clears the disablement.
+	applied = applyConfig(applied, []ConfigEntry{{Path: `C:\SKILLS\DEMO\SKILL.MD`, Enabled: true}})
+	if !applied[0].Enabled {
+		t.Fatalf("applyConfig did not re-enable %q", applied[0].Path)
+	}
+
+	// Two spellings of one document dedupe to a single catalog entry.
+	deduped := dedupeSkillsByPath([]SkillsListEntry{
+		{Name: "demo", Path: `C:\Skills\Demo\SKILL.md`, Scope: "user"},
+		{Name: "demo", Path: "c:/skills/demo/skill.md", Scope: "repo"},
+	})
+	if len(deduped) != 1 {
+		t.Fatalf("dedupeSkillsByPath = %#v, want one entry for two spellings", deduped)
+	}
+}

@@ -89,3 +89,51 @@ func TestRuntimeRouterDisabledExecutorSkillPathsLikeRust(t *testing.T) {
 		t.Fatalf("other-environment disablement affected the local catalog: %#v", names)
 	}
 }
+
+// TestExecutorSkillPathEqualsMatchesWindowsIdentityLikeRust mirrors the path
+// identity rule from Rust #51482 (see
+// `collect_explicit_skill_mentions_rejects_disabled_windows_path_identity` and
+// `collect_explicit_skill_mentions_skips_when_linked_path_disabled`): a disabled
+// path spelling blocks its skill whenever the two resolve to the same path URI,
+// across Windows case and separator differences, while POSIX case and literal
+// percent/fragment characters stay significant.
+func TestExecutorSkillPathEqualsMatchesWindowsIdentityLikeRust(t *testing.T) {
+	equal := []struct{ left, right string }{
+		{`C:\Skills\Demo\SKILL.md`, `C:\Skills\Demo\SKILL.md`},
+		{`C:\Skills\Demo\SKILL.md`, `c:\skills\demo\skill.md`},
+		{`C:\Skills\Demo\SKILL.md`, "C:/SKILLS/DEMO/skill.md"},
+		{`C:\Skills\Demo\SKILL.md`, "file:///c:/skills/demo/skill.md"},
+	}
+	for _, tc := range equal {
+		if !executorSkillPathEquals(tc.left, tc.right) {
+			t.Fatalf("executorSkillPathEquals(%q, %q) = false, want true", tc.left, tc.right)
+		}
+	}
+
+	distinct := []struct{ left, right string }{
+		{"", "/tmp/demo/SKILL.md"},
+		{"/tmp/Demo/SKILL.md", "/tmp/demo/SKILL.md"},
+		{"file://SERVER/share/File.txt", "file://server/share/file.txt"},
+		{`/tmp/demo skill%23/SKILL.md`, `/tmp/demo skill#/SKILL.md`},
+		{"file:///C:/Skills/Demo/SKILL.md", "file:///D:/Skills/Demo/SKILL.md"},
+	}
+	for _, tc := range distinct {
+		if executorSkillPathEquals(tc.left, tc.right) {
+			t.Fatalf("executorSkillPathEquals(%q, %q) = true, want false", tc.left, tc.right)
+		}
+	}
+
+	// A host path and its `file:` locator are one identity too.
+	host := "/tmp/demo/SKILL.md"
+	if uri, err := utils.FromHostNativePath(host); err == nil {
+		if !executorSkillPathEquals(host, uri.String()) {
+			t.Fatalf("executorSkillPathEquals(%q, %q) = false, want true", host, uri.String())
+		}
+	} else {
+		t.Fatalf("FromHostNativePath(%q) error = %v", host, err)
+	}
+
+	if executorSkillPathURI("environment://local/skills/demo") != nil {
+		t.Fatal("environment locator must not resolve to a path URI")
+	}
+}

@@ -229,6 +229,68 @@ func bytesEqualFoldASCII(a, b []byte) bool {
 	return true
 }
 
+// IdentityKey returns the canonical identity string used for set membership and
+// map keys. It is exactly consistent with Equal: POSIX paths and opaque
+// fallbacks use the canonical URI string, while Windows paths use the host plus
+// the decoded, ASCII-folded identity bytes so equivalent case and separator
+// spellings collapse to one key. Mirrors Rust PathUri's Hash/PartialEq pair
+// (#51482).
+func (u *PathURI) IdentityKey() string {
+	if u == nil || u.url == nil {
+		return ""
+	}
+	path, ok := u.windowsIdentityPathBytes()
+	if !ok {
+		return "uri\x00" + u.String()
+	}
+	folded := make([]byte, len(path))
+	for i := range path {
+		folded[i] = toASCIILower(path[i])
+	}
+	return "windows\x00" + u.Host() + "\x00" + string(folded)
+}
+
+// InferredPathURI resolves the path URI a caller-supplied path text denotes,
+// mirroring Rust's
+// `PathUri::from_host_native_path(..).or_else(|| LegacyAppPathString::from_string(..).to_inferred_path_uri())`
+// chain (#51482): an explicit `file:` URI wins, then an absolute host path,
+// then an absolute foreign spelling such as Windows text observed on Linux or
+// macOS. ok is false when the text has no URI representation, in which case
+// callers fall back to their own (for example text) comparison.
+func InferredPathURI(value string) (*PathURI, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, false
+	}
+	if strings.Contains(value, "://") {
+		if uri, err := Parse(value); err == nil && uri != nil {
+			return uri, true
+		}
+	}
+	if uri, err := FromHostNativePath(value); err == nil && uri != nil {
+		return uri, true
+	}
+	if uri, err := Parse(value); err == nil && uri != nil {
+		return uri, true
+	}
+	legacy := NewLegacyAppPathString(value)
+	if uri, ok := legacy.ToInferredPathURI(); ok && uri != nil {
+		return uri, true
+	}
+	return nil, false
+}
+
+// PathIdentityKey returns the identity key for a caller-supplied path text, or
+// ok=false when the text has no URI representation. Callers that must keep
+// matching such text fall back to comparing the normalized text itself.
+func PathIdentityKey(value string) (string, bool) {
+	uri, ok := InferredPathURI(value)
+	if !ok {
+		return "", false
+	}
+	return uri.IdentityKey(), true
+}
+
 // Overlaps returns whether the lexical subtrees rooted at these URIs overlap.
 // The second return is false when either URI does not expose unambiguous
 // lexical components (opaque fallback or encoded native separators) so the

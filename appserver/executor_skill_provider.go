@@ -190,18 +190,12 @@ func executorSkillPathEquals(left string, right string) bool {
 
 // executorSkillPathURI resolves a configured or discovered SKILL.md path to the
 // same path-URI form. A value carrying a URI scheme is parsed as a locator; a
-// host-native path is converted from the host, so equivalent spellings compare
-// equal.
+// host-native path is converted from the host; an absolute foreign spelling
+// (for example Windows text observed by a host-side caller on Linux) is
+// converted through its inferred convention (Rust #51482). Equivalent
+// spellings therefore compare equal.
 func executorSkillPathURI(value string) *utils.PathURI {
-	if strings.Contains(value, "://") {
-		if uri, err := utils.Parse(value); err == nil && uri != nil {
-			return uri
-		}
-	}
-	if uri, err := utils.FromHostNativePath(value); err == nil && uri != nil {
-		return uri
-	}
-	if uri, err := utils.Parse(value); err == nil && uri != nil {
+	if uri, ok := utils.InferredPathURI(value); ok {
 		return uri
 	}
 	return nil

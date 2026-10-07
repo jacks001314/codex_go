@@ -19,6 +19,7 @@ import (
 	"codex_go/config"
 	"codex_go/install"
 	"codex_go/systemskills"
+	"codex_go/utils"
 
 	"gopkg.in/yaml.v3"
 )
@@ -946,7 +947,7 @@ func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEn
 	disabled := map[string]bool{}
 	for _, cfg := range config {
 		if strings.TrimSpace(cfg.Path) != "" {
-			path := normalizeSkillConfigPathAppserver(cfg.Path)
+			path := skillPathIdentityKey(cfg.Path)
 			if cfg.Enabled {
 				delete(disabled, path)
 			} else {
@@ -962,7 +963,7 @@ func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEn
 			if entry.Name != name {
 				continue
 			}
-			path := normalizeSkillConfigPathAppserver(entry.Path)
+			path := skillPathIdentityKey(entry.Path)
 			if cfg.Enabled {
 				delete(disabled, path)
 			} else {
@@ -978,7 +979,7 @@ func applyConfig(entries []SkillsListEntry, config []ConfigEntry) []SkillsListEn
 				applyEnabled(values[i].Skills)
 				continue
 			}
-			values[i].Enabled = !disabled[normalizeSkillConfigPathAppserver(values[i].Path)]
+			values[i].Enabled = !disabled[skillPathIdentityKey(values[i].Path)]
 		}
 	}
 	applyEnabled(out)
@@ -1333,7 +1334,7 @@ func dedupeSkillsByPath(entries []SkillsListEntry) []SkillsListEntry {
 	out := make([]SkillsListEntry, 0, len(entries))
 	seen := map[string]int{}
 	for _, entry := range entries {
-		key := normalizeSkillConfigPathAppserver(entry.Path)
+		key := skillPathIdentityKey(entry.Path)
 		if index, ok := seen[key]; ok {
 			out[index].ApplicableCWDs = mergeSkillCWDs(out[index].ApplicableCWDs, entry.ApplicableCWDs)
 			continue
@@ -1752,8 +1753,8 @@ func configEntrySameSelector(left *ConfigEntry, right *ConfigEntry) bool {
 			strings.TrimSpace(left.Path) == "" &&
 			strings.TrimSpace(right.Path) == ""
 	}
-	return normalizeSkillConfigPathAppserver(left.Path) != "" &&
-		normalizeSkillConfigPathAppserver(left.Path) == normalizeSkillConfigPathAppserver(right.Path)
+	leftKey := skillPathIdentityKey(left.Path)
+	return leftKey != "" && leftKey == skillPathIdentityKey(right.Path)
 }
 
 func cloneConfigEntries(entries []ConfigEntry) []ConfigEntry {
@@ -1781,6 +1782,46 @@ func normalizeSkillConfigPathAppserver(path string) string {
 		path = absolute
 	}
 	return filepath.Clean(path)
+}
+
+// skillPathIdentityKey returns the comparison key for a skill path.
+//
+// Rust #51482 carries PathUri through the disabled-path sets and compares skill
+// paths by parsed path identity, so equivalent Windows case and separator
+// spellings collapse to one key while POSIX case and literal `%`/`#` characters
+// stay significant. Configuration paths keep their host normalization first,
+// matching the upstream rule that configuration writes and filesystem probes
+// stay restricted to host-compatible paths.
+func skillPathIdentityKey(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	// A real host path still resolves through its symlinks first, matching the
+	// configuration layer's canonicalization.
+	if resolved, err := filepath.EvalSymlinks(trimmed); err == nil {
+		return skillPathIdentityOf(resolved)
+	}
+	// An absolute spelling the host cannot resolve keeps its own convention: a
+	// foreign Windows or UNC path observed on a POSIX host must not be resolved
+	// against the host working directory.
+	if _, ok := utils.InferredPathURI(trimmed); ok {
+		return skillPathIdentityOf(trimmed)
+	}
+	return skillPathIdentityOf(normalizeSkillConfigPathAppserver(trimmed))
+}
+
+// skillPathIdentityOf returns the parsed path identity of a resolved skill
+// path, falling back to the text itself when the path has no URI
+// representation.
+func skillPathIdentityOf(path string) string {
+	if path == "" {
+		return ""
+	}
+	if key, ok := utils.PathIdentityKey(path); ok {
+		return key
+	}
+	return "text\x00" + path
 }
 
 func cloneAnyMapAppserver(values map[string]any) map[string]any {

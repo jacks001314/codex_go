@@ -417,3 +417,68 @@ func TestCollectExplicitSkillMentions(t *testing.T) {
 		t.Fatalf("CollectExplicitSkillMentions(remote URI with spaces) = %#v, want none", selected)
 	}
 }
+
+// TestCollectExplicitSkillMentionsMatchesWindowsPathIdentityLikeRust mirrors
+// Rust #51482 `collect_explicit_skill_mentions_matches_windows_path_identity`:
+// a linked mention resolves the same skill across Windows case and separator
+// spellings, including the discovery path the catalog exposes as its locator.
+func TestCollectExplicitSkillMentionsMatchesWindowsPathIdentityLikeRust(t *testing.T) {
+	skill := InstructionsSkillMetadata{
+		Name:        "demo-skill",
+		Path:        "file:///C:/Skills/Demo/SKILL.md",
+		LocatorPath: "file:///C:/Project/.agents/skills/Demo/SKILL.md",
+	}
+	for _, path := range []string{
+		`c:\skills\demo\skill.md`,
+		"C:/SKILLS/DEMO/skill.md",
+		"skill://c:/project/.agents/skills/demo/skill.md",
+	} {
+		selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+			Inputs: []SkillMentionInput{{Type: "text", Text: "use [$demo-skill](" + path + ")"}},
+			Skills: []InstructionsSkillMetadata{skill},
+		})
+		if len(selected) != 1 || selected[0].Name != "demo-skill" {
+			t.Fatalf("CollectExplicitSkillMentions(%q) = %#v, want the demo skill", path, selected)
+		}
+	}
+}
+
+// TestCollectExplicitSkillMentionsKeepsNativePathCharactersLikeRust mirrors
+// Rust #51482 `collect_explicit_skill_mentions_preserves_native_uri_characters`:
+// literal spaces, percent escapes, and fragments in native filenames stay
+// distinct instead of being folded together.
+func TestCollectExplicitSkillMentionsKeepsNativePathCharactersLikeRust(t *testing.T) {
+	percent := InstructionsSkillMetadata{Name: "demo-skill", Path: "/tmp/demo skill%23/SKILL.md"}
+	fragment := InstructionsSkillMetadata{Name: "demo-skill", Path: "/tmp/demo skill#/SKILL.md"}
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{path: "/tmp/demo skill%23/SKILL.md", want: percent.Path},
+		{path: "/tmp/demo skill#/SKILL.md", want: fragment.Path},
+	} {
+		selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+			Inputs: []SkillMentionInput{{Type: "text", Text: "[$demo-skill](" + tc.path + ")"}},
+			Skills: []InstructionsSkillMetadata{percent, fragment},
+		})
+		if len(selected) != 1 || selected[0].Path != tc.want {
+			t.Fatalf("CollectExplicitSkillMentions(%q) = %#v, want path %q", tc.path, selected, tc.want)
+		}
+	}
+}
+
+// TestCollectExplicitSkillMentionsKeepsPosixCaseSensitivityLikeRust pins the
+// other half of the identity rule: POSIX paths stay case-sensitive, so a
+// differently cased linked mention does not select the skill.
+func TestCollectExplicitSkillMentionsKeepsPosixCaseSensitivityLikeRust(t *testing.T) {
+	skill := InstructionsSkillMetadata{Name: "demo-skill", Path: "/tmp/Demo/SKILL.md"}
+	for _, path := range []string{"/tmp/demo/SKILL.md", "/tmp/DEMO/skill.md"} {
+		selected := CollectExplicitSkillMentions(&ExplicitSkillMentionOptions{
+			Inputs: []SkillMentionInput{{Type: "text", Text: "[$demo-skill](" + path + ")"}},
+			Skills: []InstructionsSkillMetadata{skill},
+		})
+		if len(selected) != 0 {
+			t.Fatalf("CollectExplicitSkillMentions(%q) = %#v, want none", path, selected)
+		}
+	}
+}

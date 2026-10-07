@@ -430,3 +430,131 @@ func TestOpaquePathConventionInferenceLikeRust(t *testing.T) {
 		t.Fatalf("opaque POSIX convention = %q %v", convention, ok)
 	}
 }
+
+// TestPathURIIdentityKeyLikeRust mirrors the identity use Rust #51482 makes of
+// PathUri as HashSet keys: equivalent Windows case and separator spellings must
+// collapse to one key, the host stays significant, POSIX paths stay
+// case-sensitive, and literal percent/fragment characters stay distinct.
+func TestPathURIIdentityKeyLikeRust(t *testing.T) {
+	key := func(raw string) string {
+		t.Helper()
+		uri, ok := InferredPathURI(raw)
+		if !ok {
+			t.Fatalf("InferredPathURI(%q) = %v, %v; want a URI", raw, uri, ok)
+		}
+		return uri.IdentityKey()
+	}
+
+	// Windows case and separator spellings share one identity key.
+	backslash := mustInferredPathURI(t, `C:\Skills\Demo\SKILL.md`)
+	for _, raw := range []string{
+		"C:/SKILLS/DEMO/skill.md",
+		"file:///c:/skills/demo/skill.md",
+	} {
+		if got, want := key(raw), backslash.IdentityKey(); got != want {
+			t.Fatalf("IdentityKey(%q) = %q, want %q", raw, got, want)
+		}
+	}
+
+	// The host remains significant for UNC share identities.
+	hostedA := key("file://SERVER/share/File.txt")
+	hostedB := key("file://server/share/file.txt")
+	if hostedA == hostedB {
+		t.Fatalf("host case must stay significant: %q vs %q", hostedA, hostedB)
+	}
+
+	// POSIX paths stay case-sensitive.
+	if a, b := key("file:///Workspace/Src/lib.rs"), key("file:///workspace/src/lib.rs"); a == b {
+		t.Fatalf("POSIX identity must stay case-sensitive: %q vs %q", a, b)
+	}
+
+	// Windows and POSIX spellings never share an identity by accident.
+	if a, b := key("file:///C:/Skills/Demo/SKILL.md"), key("file:///C:/skills/demo/SKILL.md"); a != b {
+		t.Fatalf("Windows identity keys should be equal: %q vs %q", a, b)
+	}
+
+	// IdentityKey must agree with Equal for every pair above.
+	uris := []string{
+		"C:/SKILLS/DEMO/skill.md",
+		"file:///c:/skills/demo/skill.md",
+		"file:///C:/Skills/Demo/SKILL.md",
+		"file:///Workspace/Src/lib.rs",
+		"file:///workspace/src/lib.rs",
+	}
+	for _, left := range uris {
+		for _, right := range uris {
+			leftURI, _ := InferredPathURI(left)
+			rightURI, _ := InferredPathURI(right)
+			sameKey := leftURI.IdentityKey() == rightURI.IdentityKey()
+			if sameKey != leftURI.Equal(rightURI) {
+				t.Fatalf("IdentityKey disagrees with Equal for %q vs %q", left, right)
+			}
+		}
+	}
+}
+
+// TestPathURIIdentityKeyPreservesLiteralCharactersLikeRust covers Rust #51482's
+// "preserve literal spaces, `%`, and `#` in native filenames" rule: a literal
+// percent escape and a literal fragment character stay distinct identities.
+func TestPathURIIdentityKeyPreservesLiteralCharactersLikeRust(t *testing.T) {
+	percent := mustInferredPathURI(t, `/tmp/demo skill%23/SKILL.md`)
+	fragment := mustInferredPathURI(t, `/tmp/demo skill#/SKILL.md`)
+	if percent.IdentityKey() == fragment.IdentityKey() {
+		t.Fatalf("literal %%23 and # filenames must stay distinct: %q", percent.IdentityKey())
+	}
+	if percent.Equal(fragment) {
+		t.Fatalf("%s must not equal %s", percent, fragment)
+	}
+}
+
+// TestInferredPathURILikeRust mirrors Rust #51482's
+// `PathUri::from_host_native_path(..).or_else(|| LegacyAppPathString::from_string(..).to_inferred_path_uri())`
+// chain: a `file:` URI wins, then a host path, then an absolute foreign
+// spelling; text with no URI representation reports false so callers keep their
+// own comparison.
+func TestInferredPathURILikeRust(t *testing.T) {
+	for _, value := range []string{
+		"file:///tmp/demo/SKILL.md",
+		"/tmp/demo/SKILL.md",
+		`C:\Project\.agents\skills\Demo\SKILL.md`,
+		"C:/Project/.agents/skills/Demo/SKILL.md",
+	} {
+		if uri, ok := InferredPathURI(value); !ok || uri == nil {
+			t.Fatalf("InferredPathURI(%q) = %v, %v; want a URI", value, uri, ok)
+		}
+	}
+	for _, value := range []string{"", "   ", "environment://local/skills/demo", "relative/SKILL.md"} {
+		if uri, ok := InferredPathURI(value); ok {
+			t.Fatalf("InferredPathURI(%q) = %v; want no URI", value, uri)
+		}
+	}
+
+	// A foreign Windows spelling and the equivalent `file:` locator share one
+	// identity, which is what makes disabled-path and mention matching work.
+	foreign, ok := PathIdentityKey(`C:\Project\.agents\skills\Demo\SKILL.md`)
+	if !ok {
+		t.Fatal("PathIdentityKey(foreign Windows path) = false")
+	}
+	locator, ok := PathIdentityKey("file:///c:/project/.agents/skills/demo/skill.md")
+	if !ok {
+		t.Fatal("PathIdentityKey(file locator) = false")
+	}
+	if foreign != locator {
+		t.Fatalf("foreign identity %q != locator identity %q", foreign, locator)
+	}
+	if _, ok := PathIdentityKey("environment://local/skills/demo"); ok {
+		t.Fatal("environment locator must not produce a path identity")
+	}
+}
+
+// mustInferredPathURI converts a native spelling into its inferred path URI,
+// failing the test when the convention cannot be resolved.
+func mustInferredPathURI(t *testing.T, native string) *PathURI {
+	t.Helper()
+	legacy := NewLegacyAppPathString(native)
+	uri, ok := legacy.ToInferredPathURI()
+	if !ok || uri == nil {
+		t.Fatalf("ToInferredPathURI(%q) = %v, %v; want a URI", native, uri, ok)
+	}
+	return uri
+}

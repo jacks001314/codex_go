@@ -449,7 +449,7 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 			continue
 		}
 		blockedPlainNames[input.Name] = true
-		path := normalizeMentionSkillPath(input.Path)
+		path := skillPathIdentity(input.Path)
 		if path == "" || seenPaths[path] {
 			continue
 		}
@@ -508,10 +508,14 @@ func CollectExplicitSkillMentions(options *ExplicitSkillMentionOptions) []Instru
 	return selected
 }
 
+// skillMentionPaths returns the path identities that identify one skill.
+// Rust #51482 matches links and loaded skills by parsed path identity, so the
+// SKILL.md document path and the locator the app-server exposes are both
+// reduced to their identity key.
 func skillMentionPaths(skill InstructionsSkillMetadata) []string {
 	values := []string{
-		normalizeMentionSkillPath(skill.Path),
-		normalizeMentionSkillPath(skill.LocatorPath),
+		skillPathIdentity(skill.Path),
+		skillPathIdentity(skill.LocatorPath),
 	}
 	out := make([]string, 0, len(values))
 	seen := map[string]bool{}
@@ -526,13 +530,12 @@ func skillMentionPaths(skill InstructionsSkillMetadata) []string {
 	return out
 }
 
-func skillMatchesMentionPath(skill InstructionsSkillMetadata, path string) bool {
-	path = normalizeMentionSkillPath(path)
-	if path == "" {
+func skillMatchesMentionPath(skill InstructionsSkillMetadata, identity string) bool {
+	if identity == "" {
 		return false
 	}
 	for _, candidate := range skillMentionPaths(skill) {
-		if candidate == path {
+		if candidate == identity {
 			return true
 		}
 	}
@@ -725,8 +728,8 @@ func extractToolMentions(text string) *toolMentions {
 			name, path, end, ok := parseLinkedToolMention(text, bytes, index)
 			if ok {
 				if !isCommonEnvVarMention(name) && !isNonSkillResourcePath(path) {
-					if normalized := normalizeMentionSkillPath(path); normalized != "" {
-						mentions.skillPaths[normalized] = true
+					if identity := skillPathIdentity(path); identity != "" {
+						mentions.skillPaths[identity] = true
 					}
 				}
 				index = end
@@ -814,6 +817,27 @@ func isNonSkillResourcePath(path string) bool {
 func normalizeMentionSkillPath(path string) string {
 	path = strings.TrimPrefix(path, "skill://")
 	return path
+}
+
+// skillPathIdentity returns the identity used to compare skill paths.
+//
+// Rust #51482: linked skill mentions, loaded skill metadata, and disabled-path
+// sets are compared by parsed path identity, so equivalent Windows spellings
+// (case and separator differences) match while literal spaces, `%`, and `#` in
+// native filenames stay distinct. An explicit `file:` URI wins, then a host
+// absolute path, then an absolute foreign spelling (for example Windows text
+// observed on Linux). Text with no URI representation — such as the
+// `environment://…` locators the executor catalog exposes — keeps its
+// normalized text as its identity so those spellings still match exactly.
+func skillPathIdentity(path string) string {
+	path = normalizeMentionSkillPath(path)
+	if path == "" {
+		return ""
+	}
+	if identity, ok := utils.PathIdentityKey(path); ok {
+		return identity
+	}
+	return "text\x00" + path
 }
 
 func isASCIIWhitespace(b byte) bool {
