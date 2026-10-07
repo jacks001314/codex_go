@@ -1,0 +1,274 @@
+diff --git a/app/app_test.go b/app/app_test.go
+index 6f93037e..39108b35 100644
+--- a/app/app_test.go
++++ b/app/app_test.go
+@@ -857,7 +857,7 @@ func TestInteractiveWithoutPromptRunsLineSession(t *testing.T) {
+ 	}
+ 	output := stdout.String()
+ 	if !strings.Contains(output, "gcode") ||
+-		!strings.Contains(output, "Model: gpt-5.6-sol") ||
++		!strings.Contains(output, "Model: gpt-6.1-sol") ||
+ 		!strings.Contains(output, "Directory:") ||
+ 		!strings.Contains(output, "first turn") ||
+ 		!strings.Contains(output, "second turn") {
+@@ -966,7 +966,7 @@ func TestInteractiveUIStateUsesEffectiveConfigModelAndDirectory(t *testing.T) {
+ func TestInteractiveUIStateUsesSelectedModelDefaultReasoningEffort(t *testing.T) {
+ 	t.Setenv("CODEX_HOME", t.TempDir())
+ 	state := interactiveUIState(&cli.RootOptions{})
+-	if state.Model != "gpt-5.6-sol" || state.ReasoningEffort != "low" {
++	if state.Model != "gpt-6.1-sol" || state.ReasoningEffort != "low" {
+ 		t.Fatalf("default state = model %q reasoning %q", state.Model, state.ReasoningEffort)
+ 	}
+ }
+diff --git a/model/catalog.go b/model/catalog.go
+index e62fd769..e0b235d0 100644
+--- a/model/catalog.go
++++ b/model/catalog.go
+@@ -910,20 +910,68 @@ func fallbackBundledModelsResponse() ModelsResponse {
+ 	return ModelsResponse{
+ 		Models: []ModelInfo{
+ 			{
+-				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Latest frontier agentic coding model.",
++				Slug: "gpt-6.1-sol", DisplayName: "GPT-6.1-Sol", Description: "Latest workhorse model for coding and everyday work.",
+ 				Visibility: VisibilityList, SupportedInAPI: true, Priority: 1, BaseInstructions: BaseInstructions,
+ 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
+ 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+ 				ServiceTiers:             []string{"priority"},
+ 				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
+ 				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
++				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
++				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
++				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
++			},
++			{
++				Slug: "gpt-6-astra", DisplayName: "GPT-6-Astra", Description: "Frontier intelligence for the most demanding work.",
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
++				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
++				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
++				ServiceTiers:             []string{"priority"},
++				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
++				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
++				UseResponsesLite: true, DefaultReasoningSummary: "none", SupportsReasoningEffortUpdates: true,
++				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
++				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
++			},
++			{
++				Slug: "gpt-6-sol", DisplayName: "GPT-6-Sol", Description: "Previous generation workhorse model.",
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
++				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
++				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
++				ServiceTiers:             []string{"priority"},
++				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
++				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
++				UseResponsesLite: true, DefaultReasoningSummary: "none",
++				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
++				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
++			},
++			{
++				Slug: "gpt-6-luna", DisplayName: "GPT-6-Luna", Description: "Fast and affordable model for easier tasks.",
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 4, BaseInstructions: BaseInstructions,
++				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
++				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
++				ServiceTiers:             []string{"priority"},
++				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
++				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
++				UseResponsesLite: true, DefaultReasoningSummary: "none",
++				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
++				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
++			},
++			{
++				Slug: "gpt-5.6-sol", DisplayName: "GPT-5.6-Sol", Description: "Latest frontier agentic coding model.",
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 5, BaseInstructions: BaseInstructions,
++				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "low",
++				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
++				ServiceTiers:             []string{"priority"},
++				SupportVerbosity:         true, DefaultVerbosity: "low", WebSearchToolType: "text_and_image",
++				TruncationPolicy: TruncationPolicy{Mode: TruncationModeTokens, Limit: 10000}, SupportsImageDetailOriginal: true,
+ 				UseResponsesLite: true, DefaultReasoningSummary: "none",
+ 				ContextWindow: 272000, MaxContextWindow: 872000, EffectiveContextWindowPercent: 95,
+ 				InputModalities: []string{"text", "image"}, SupportsParallelToolCalls: true,
+ 			},
+ 			{
+ 				Slug: "gpt-5.6-terra", DisplayName: "GPT-5.6-Terra", Description: "Balanced agentic coding model for everyday work.",
+-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 2, BaseInstructions: BaseInstructions,
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 8, BaseInstructions: BaseInstructions,
+ 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v2", DefaultReasoningLevel: "medium",
+ 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max", "ultra"},
+ 				ServiceTiers:             []string{"priority"},
+@@ -935,7 +983,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
+ 			},
+ 			{
+ 				Slug: "gpt-5.6-luna", DisplayName: "GPT-5.6-Luna", Description: "Fast and affordable agentic coding model.",
+-				Visibility: VisibilityList, SupportedInAPI: true, Priority: 3, BaseInstructions: BaseInstructions,
++				Visibility: VisibilityList, SupportedInAPI: true, Priority: 9, BaseInstructions: BaseInstructions,
+ 				ToolMode: ToolModeCodeModeOnly, MultiAgentVersion: "v1", DefaultReasoningLevel: "medium",
+ 				SupportedReasoningLevels: []string{"low", "medium", "high", "xhigh", "max"},
+ 				ServiceTiers:             []string{"priority"},
+@@ -951,7 +999,7 @@ func fallbackBundledModelsResponse() ModelsResponse {
+ 				Description:                    "Frontier model for complex coding, research, and real-world work.",
+ 				Visibility:                     VisibilityList,
+ 				SupportedInAPI:                 true,
+-				Priority:                       7,
++				Priority:                       13,
+ 				ServiceTiers:                   []string{"priority"},
+ 				BaseInstructions:               BaseInstructions,
+ 				IncludeSkillsUsageInstructions: true,
+diff --git a/model/catalog_test.go b/model/catalog_test.go
+index 0a3ca025..54b22c24 100644
+--- a/model/catalog_test.go
++++ b/model/catalog_test.go
+@@ -156,15 +156,93 @@ func TestBuildAvailableModelsPreservesReasoningFields(t *testing.T) {
+ 
+ func TestFallbackBundledModelsMatchCurrentRustDefault(t *testing.T) {
+ 	manager := NewStaticModelsManager(fallbackBundledModelsResponse())
+-	if got := manager.GetDefaultModel("", true, RefreshOffline); got != "gpt-5.6-sol" {
++	if got := manager.GetDefaultModel("", true, RefreshOffline); got != "gpt-6.1-sol" {
+ 		t.Fatalf("default model = %q", got)
+ 	}
+-	info := manager.GetModelInfo("gpt-5.6-sol", nil)
++	info := manager.GetModelInfo("gpt-6.1-sol", nil)
+ 	if info.DefaultReasoningLevel != "low" || info.ContextWindow != 272000 || info.ToolMode != ToolModeCodeModeOnly || !info.UseResponsesLite {
+ 		t.Fatalf("default model info = %#v", info)
+ 	}
+ }
+ 
++// TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust pins the GPT-6 family
++// Rust ships in models-manager/models.json (@b17c74cfd5) as the Go fallback
++// bundled catalog's leading entries: four slugs, multi-agent V2, the bundled
++// long-context windows, and the global priority order that makes gpt-6.1-sol
++// the offline default (Rust sorts by priority and marks the first
++// picker-visible preset as default).
++func TestFallbackBundledCatalogCarriesGPT6FamilyLikeRust(t *testing.T) {
++	manager := NewStaticModelsManager(fallbackBundledModelsResponse())
++
++	wantPriority := map[string]int{
++		"gpt-6.1-sol":   1,
++		"gpt-6-astra":   2,
++		"gpt-6-sol":     3,
++		"gpt-6-luna":    4,
++		"gpt-5.6-sol":   5,
++		"gpt-5.6-terra": 8,
++		"gpt-5.6-luna":  9,
++	}
++	for slug, priority := range wantPriority {
++		info := manager.GetModelInfo(slug, nil)
++		if info.Slug != slug {
++			t.Fatalf("GetModelInfo(%q).Slug = %q", slug, info.Slug)
++		}
++		if info.Priority != priority {
++			t.Fatalf("%s Priority = %d, want %d", slug, info.Priority, priority)
++		}
++	}
++
++	// Every GPT-6 entry is picker-visible, multi-agent V2, code-mode only, and
++	// keeps the bundled long-context window.
++	for _, slug := range []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
++		info := manager.GetModelInfo(slug, nil)
++		if info.Visibility != VisibilityList || !info.SupportedInAPI {
++			t.Fatalf("%s visibility/api = %q/%v, want list/true", slug, info.Visibility, info.SupportedInAPI)
++		}
++		if info.MultiAgentVersion != "v2" {
++			t.Fatalf("%s MultiAgentVersion = %q, want v2", slug, info.MultiAgentVersion)
++		}
++		if info.ToolMode != ToolModeCodeModeOnly {
++			t.Fatalf("%s ToolMode = %q, want %q", slug, info.ToolMode, ToolModeCodeModeOnly)
++		}
++		if info.ContextWindow != 272000 || info.MaxContextWindow != 872000 {
++			t.Fatalf("%s context = %d/%d, want 272000/872000", slug, info.ContextWindow, info.MaxContextWindow)
++		}
++		if !info.UseResponsesLite {
++			t.Fatalf("%s UseResponsesLite = false, want true", slug)
++		}
++	}
++
++	// The GPT-6 family leads the picker list in priority order and gpt-6.1-sol
++	// is the offline default.
++	presets := manager.ListModels(RefreshOffline)
++	var leading []string
++	for _, preset := range presets {
++		if modelVisibleInPicker(preset.Visibility) {
++			leading = append(leading, preset.Model)
++		}
++	}
++	wantLeading := []string{
++		"gpt-6.1-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
++		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
++	}
++	if len(leading) < len(wantLeading) {
++		t.Fatalf("picker models = %#v, want at least %#v", leading, wantLeading)
++	}
++	for i, want := range wantLeading {
++		if leading[i] != want {
++			t.Fatalf("picker order[%d] = %q, want %q (all %#v)", i, leading[i], want, leading)
++		}
++	}
++	if len(presets) == 0 || !presets[0].IsDefault || presets[0].Model != "gpt-6.1-sol" {
++		t.Fatalf("default preset = %#v, want gpt-6.1-sol", presets)
++	}
++	if got := manager.GetDefaultModel("", true, RefreshOffline); got != "gpt-6.1-sol" {
++		t.Fatalf("GetDefaultModel = %q, want gpt-6.1-sol", got)
++	}
++}
++
+ func TestFallbackBundledCatalogDropsGPT54LikeRust(t *testing.T) {
+ 	// Rust #47932 (694d8d45bd): gpt-5.4 is removed from the bundled catalog.
+ 	// The GPT-5.4 Mini entry stays because its migration target (GPT-6 Luna)
+@@ -1374,15 +1452,15 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
+ 	}
+ 	// Rust #49345 (8ffd91e42a) stopped forcing multi-agent V1 in the Bedrock
+ 	// normalizer, so every entry keeps the `multi_agent_version` its bundled
+-	// OpenAI model declares. Go's fallback bundled catalog carries only the
+-	// GPT-5.6 family (the GPT-6.* slugs and GPT-5.5 are absent from it), so
+-	// those entries resolve to the unset value while GPT-5.6 Sol/Terra stay V2
+-	// and GPT-5.6 Luna stays V1 — the same preservation rule Rust applies.
++	// OpenAI model declares. Go's fallback bundled catalog carries the GPT-6
++	// and GPT-5.6 families (GPT-5.5 and the daybreak slugs are still absent
++	// from it), so GPT-6.* and GPT-5.6 Sol/Terra stay V2 while GPT-5.6 Luna
++	// stays V1 — the same preservation rule Rust applies.
+ 	wantVersion := map[string]string{
+-		AmazonBedrockGPT61SolModelID:   "",
+-		AmazonBedrockGPT6AstraModelID:  "",
+-		AmazonBedrockGPT6SolModelID:    "",
+-		AmazonBedrockGPT6LunaModelID:   "",
++		AmazonBedrockGPT61SolModelID:   "v2",
++		AmazonBedrockGPT6AstraModelID:  "v2",
++		AmazonBedrockGPT6SolModelID:    "v2",
++		AmazonBedrockGPT6LunaModelID:   "v2",
+ 		AmazonBedrockGPT56SolModelID:   "v2",
+ 		AmazonBedrockGPT56TerraModelID: "v2",
+ 		AmazonBedrockGPT56LunaModelID:  "v1",
+@@ -1461,9 +1539,9 @@ func TestBedrockModelPreservesUltraReasoningLikeRust(t *testing.T) {
+ }
+ 
+ // Rust #49345 (8ffd91e42a): the bundled Bedrock catalog keeps the Ultra
+-// reasoning level on every entry whose bundled model declares it (GPT-5.6
+-// Sol/Terra in Go's fallback catalog) instead of stripping it as the
+-// pre-#49345 normalizer did.
++// reasoning level on every entry whose bundled model declares it (GPT-6
++// 6.1-Sol/Astra/Sol and GPT-5.6 Sol/Terra in Go's fallback catalog) instead of
++// stripping it as the pre-#49345 normalizer did.
+ func TestBedrockCatalogKeepsUltraReasoningLikeRust(t *testing.T) {
+ 	catalog := AmazonBedrockModelCatalog()
+ 	for _, model := range catalog.Models {
+@@ -1473,7 +1551,9 @@ func TestBedrockCatalogKeepsUltraReasoningLikeRust(t *testing.T) {
+ 				hasUltra = true
+ 			}
+ 		}
+-		want := model.Slug == AmazonBedrockGPT56SolModelID || model.Slug == AmazonBedrockGPT56TerraModelID
++		want := model.Slug == AmazonBedrockGPT61SolModelID || model.Slug == AmazonBedrockGPT6AstraModelID ||
++			model.Slug == AmazonBedrockGPT6SolModelID ||
++			model.Slug == AmazonBedrockGPT56SolModelID || model.Slug == AmazonBedrockGPT56TerraModelID
+ 		if hasUltra != want {
+ 			t.Fatalf("%s ultra = %v, want %v (levels %#v)", model.Slug, hasUltra, want, model.SupportedReasoningLevels)
+ 		}
+@@ -1977,7 +2057,9 @@ func TestAmazonBedrockRuntimeCatalogDisablesWebSearchLikeRust(t *testing.T) {
+ 		// matching Rust's pinned runtime table.
+ 		wantVersion := ""
+ 		switch base {
+-		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID:
++		case AmazonBedrockGPT61SolModelID, AmazonBedrockGPT6AstraModelID,
++			AmazonBedrockGPT6SolModelID, AmazonBedrockGPT6LunaModelID,
++			AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID:
+ 			wantVersion = "v2"
+ 		case AmazonBedrockGPT56LunaModelID:
+ 			wantVersion = "v1"

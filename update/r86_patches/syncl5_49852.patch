@@ -1,0 +1,103 @@
+diff --git a/appserver/rollout_archive.go b/appserver/rollout_archive.go
+index 12e324d0..4c5c840c 100644
+--- a/appserver/rollout_archive.go
++++ b/appserver/rollout_archive.go
+@@ -17,6 +17,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"log/slog"
+ 	"os"
+ 	"path"
+ 	"path/filepath"
+@@ -60,15 +61,24 @@ func FeedbackAttachmentPathFilename(attachment FeedbackAttachmentPath) string {
+ // FeedbackReadAttachmentPath mirrors Rust `FeedbackAttachmentPath::read_attachment`:
+ // ok is false for a missing, non-regular or oversized source (the Rust reader
+ // logs and skips those), while a genuine read failure is returned as an error.
++//
++// Rust #49852: every skip is logged so operators can tell why an attachment was
++// dropped; the messages and fields mirror the Rust tracing events.
+ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int64) (FeedbackAttachment, bool, error) {
+ 	info, err := os.Stat(attachment.Path)
+ 	if err != nil {
+ 		if os.IsNotExist(err) {
++			slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
+ 			return FeedbackAttachment{}, false, nil
+ 		}
+ 		return FeedbackAttachment{}, false, fmt.Errorf("stat feedback attachment: %w", err)
+ 	}
+-	if !info.Mode().IsRegular() || info.Size() > maxBytes {
++	if !info.Mode().IsRegular() {
++		slog.Error("feedback attachment skipped: not a regular file")
++		return FeedbackAttachment{}, false, nil
++	}
++	if info.Size() > maxBytes {
++		slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
+ 		return FeedbackAttachment{}, false, nil
+ 	}
+ 	buffer, err := os.ReadFile(attachment.Path)
+@@ -76,6 +86,7 @@ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int6
+ 		return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
+ 	}
+ 	if int64(len(buffer)) > maxBytes {
++		slog.Error("feedback attachment skipped: decoded size limit exceeded", "bytes_read", len(buffer), "max_bytes", maxBytes)
+ 		return FeedbackAttachment{}, false, nil
+ 	}
+ 	return FeedbackAttachment{
+diff --git a/appserver/rollout_archive_logging_test.go b/appserver/rollout_archive_logging_test.go
+new file mode 100644
+index 00000000..5fe33652
+--- /dev/null
++++ b/appserver/rollout_archive_logging_test.go
+@@ -0,0 +1,51 @@
++package appserver
++
++import (
++	"bytes"
++	"log/slog"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++// TestFeedbackReadAttachmentPathLogsSkipDiagnosticsLikeRust covers Rust #49852:
++// the reader logs why a path-backed attachment was skipped (missing rollout,
++// non-regular file, size limit).
++func TestFeedbackReadAttachmentPathLogsSkipDiagnosticsLikeRust(t *testing.T) {
++	dir := t.TempDir()
++	var logs bytes.Buffer
++	previous := slog.Default()
++	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
++	defer slog.SetDefault(previous)
++
++	// Missing source.
++	if _, ok, err := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: filepath.Join(dir, "missing.jsonl")}, 1024); err != nil || ok {
++		t.Fatalf("missing path: ok=%v err=%v", ok, err)
++	}
++	if !strings.Contains(logs.String(), "feedback attachment skipped: rollout is missing or not a regular file") {
++		t.Fatalf("missing path logs = %q", logs.String())
++	}
++
++	// Directory (non-regular file).
++	logs.Reset()
++	if _, ok, err := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: dir}, 1024); err != nil || ok {
++		t.Fatalf("directory: ok=%v err=%v", ok, err)
++	}
++	if !strings.Contains(logs.String(), "feedback attachment skipped: not a regular file") {
++		t.Fatalf("directory logs = %q", logs.String())
++	}
++
++	// Oversized source.
++	logs.Reset()
++	oversized := filepath.Join(dir, "oversized.jsonl")
++	if err := os.WriteFile(oversized, bytes.Repeat([]byte("x"), 64), 0o600); err != nil {
++		t.Fatalf("write oversized: %v", err)
++	}
++	if _, ok, err := FeedbackReadAttachmentPath(FeedbackAttachmentPath{Path: oversized}, 8); err != nil || ok {
++		t.Fatalf("oversized: ok=%v err=%v", ok, err)
++	}
++	if !strings.Contains(logs.String(), "feedback attachment skipped: size limit exceeded") {
++		t.Fatalf("oversized logs = %q", logs.String())
++	}
++}

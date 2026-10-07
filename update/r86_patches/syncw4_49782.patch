@@ -1,0 +1,242 @@
+diff --git a/tool/shell_snapshot_builder.go b/tool/shell_snapshot_builder.go
+index 53b85bdb..29bc65b2 100644
+--- a/tool/shell_snapshot_builder.go
++++ b/tool/shell_snapshot_builder.go
+@@ -460,7 +460,9 @@ func RunSandboxedSnapshotCommand(
+ 	var stdout, stderr strings.Builder
+ 	process.Stdout = &stdout
+ 	process.Stderr = &stderr
+-	if err := process.Run(); err != nil {
++	// The capture runs with its process group owned, so a failed capture
++	// takes the helpers its startup files spawned down with it (#49782).
++	if err := runSnapshotCaptureProcess(process); err != nil {
+ 		var exitErr *exec.ExitError
+ 		if !errors.As(err, &exitErr) {
+ 			return nil, err
+@@ -481,7 +483,9 @@ func runSnapshotCommandDirect(ctx context.Context, command []string, cwd string,
+ 	var stdout, stderr strings.Builder
+ 	process.Stdout = &stdout
+ 	process.Stderr = &stderr
+-	if err := process.Run(); err != nil {
++	// The capture runs with its process group owned, so a failed capture
++	// takes the helpers its startup files spawned down with it (#49782).
++	if err := runSnapshotCaptureProcess(process); err != nil {
+ 		var exitErr *exec.ExitError
+ 		if !errors.As(err, &exitErr) {
+ 			return nil, err
+diff --git a/tool/shell_snapshot_process.go b/tool/shell_snapshot_process.go
+new file mode 100644
+index 00000000..a58c7f29
+--- /dev/null
++++ b/tool/shell_snapshot_process.go
+@@ -0,0 +1,33 @@
++package tool
++
++// Owning a capture's process group until its output and exit status are
++// validated.
++//
++// Rust parity: codex-rs/exec-server/src/shell_snapshot_process.rs (#49782). A
++// failed shell snapshot capture used to leave the processes the user's shell
++// startup files had launched running after the capture ended, so each capture
++// now leads its own process group and that group is killed when the capture
++// fails, times out, or is cancelled. A successful capture keeps its startup
++// helpers, because the state it captured may still depend on them (Rust's
++// SnapshotCapture::preserve_helpers releases the group guard).
++
++import osexec "os/exec"
++
++// snapshotCaptureGroupKiller takes a failed capture's process group down. The
++// production value is the platform's group cleanup; it stays a variable so the
++// cleanup the runner performs is observable on a host without process groups.
++var snapshotCaptureGroupKiller = killSnapshotCaptureProcessGroup
++
++// runSnapshotCaptureProcess runs one capture command with its process group
++// owned for the length of the run and reports a failure to that group's
++// cleanup, so no startup child outlives the capture.
++func runSnapshotCaptureProcess(process *osexec.Cmd) error {
++	ownSnapshotCaptureProcessGroup(process)
++	err := process.Run()
++	if err != nil {
++		// Only a failed capture cleans up: a successful capture keeps the
++		// helpers its startup files left behind.
++		_ = snapshotCaptureGroupKiller(process)
++	}
++	return err
++}
+diff --git a/tool/shell_snapshot_process_other.go b/tool/shell_snapshot_process_other.go
+new file mode 100644
+index 00000000..c5461bb7
+--- /dev/null
++++ b/tool/shell_snapshot_process_other.go
+@@ -0,0 +1,18 @@
++//go:build !unix
++
++package tool
++
++import osexec "os/exec"
++
++// ownSnapshotCaptureProcessGroup keeps the platform's default ownership. The
++// upstream cleanup is Unix-only (#49782: `#[cfg(unix)]`), so a host without
++// process groups keeps exec's own cancellation of the capture process.
++func ownSnapshotCaptureProcessGroup(process *osexec.Cmd) {
++	_ = process
++}
++
++// killSnapshotCaptureProcessGroup has no process group to signal here.
++func killSnapshotCaptureProcessGroup(process *osexec.Cmd) error {
++	_ = process
++	return nil
++}
+diff --git a/tool/shell_snapshot_process_test.go b/tool/shell_snapshot_process_test.go
+new file mode 100644
+index 00000000..7536d269
+--- /dev/null
++++ b/tool/shell_snapshot_process_test.go
+@@ -0,0 +1,59 @@
++package tool
++
++import (
++	"fmt"
++	osexec "os/exec"
++	"runtime"
++	"testing"
++)
++
++// snapshotCaptureExitCommand builds a capture that finishes immediately with
++// the given exit code, standing in for a shell startup profile that fails.
++func snapshotCaptureExitCommand(code int) *osexec.Cmd {
++	if runtime.GOOS == "windows" {
++		return osexec.Command("cmd", "/c", fmt.Sprintf("exit %d", code))
++	}
++	return osexec.Command("sh", "-c", fmt.Sprintf("exit %d", code))
++}
++
++// Mirrors Rust #49782 (exec-server/tests/exec_process.rs
++// `shell_snapshot_v2_capture_failure_falls_back_and_retries`): a capture that
++// fails takes the process group its startup files spawned down with it.
++func TestSnapshotCaptureCleansUpFailedCaptureProcessGroupLikeRust(t *testing.T) {
++	cleanups := 0
++	previous := snapshotCaptureGroupKiller
++	t.Cleanup(func() { snapshotCaptureGroupKiller = previous })
++	snapshotCaptureGroupKiller = func(*osexec.Cmd) error {
++		cleanups++
++		return nil
++	}
++
++	process := snapshotCaptureExitCommand(7)
++	if err := runSnapshotCaptureProcess(process); err == nil {
++		t.Fatal("capture of a failing profile reported success")
++	}
++	if cleanups == 0 {
++		t.Fatal("failed capture left its process group running")
++	}
++}
++
++// Mirrors Rust #49782 (exec-server/tests/exec_process/shell_snapshot.rs
++// `shell_snapshot_preserves_successful_startup_output_and_services`): a
++// successful capture keeps the helpers its startup files left running.
++func TestSnapshotCapturePreservesSuccessfulStartupHelpersLikeRust(t *testing.T) {
++	cleanups := 0
++	previous := snapshotCaptureGroupKiller
++	t.Cleanup(func() { snapshotCaptureGroupKiller = previous })
++	snapshotCaptureGroupKiller = func(*osexec.Cmd) error {
++		cleanups++
++		return nil
++	}
++
++	process := snapshotCaptureExitCommand(0)
++	if err := runSnapshotCaptureProcess(process); err != nil {
++		t.Fatalf("capture error = %v", err)
++	}
++	if cleanups != 0 {
++		t.Fatalf("successful capture cleaned up its helpers %d times", cleanups)
++	}
++}
+diff --git a/tool/shell_snapshot_process_unix.go b/tool/shell_snapshot_process_unix.go
+new file mode 100644
+index 00000000..5a3c6381
+--- /dev/null
++++ b/tool/shell_snapshot_process_unix.go
+@@ -0,0 +1,54 @@
++//go:build unix
++
++package tool
++
++import (
++	"errors"
++	"os"
++	osexec "os/exec"
++	"syscall"
++)
++
++// ownSnapshotCaptureProcessGroup gives the capture its own process group and
++// routes cancellation to the group kill (Rust's Command::process_group(0) plus
++// the cleanup SnapshotCapture arms while the leader stays unreaped). Os/exec's
++// own cancellation kills only the capture process, which is how the startup
++// files' children survived a failed capture.
++func ownSnapshotCaptureProcessGroup(process *osexec.Cmd) {
++	if process == nil {
++		return
++	}
++	attr := process.SysProcAttr
++	if attr == nil {
++		attr = &syscall.SysProcAttr{}
++	}
++	attr.Setpgid = true
++	process.SysProcAttr = attr
++	process.Cancel = func() error {
++		return killSnapshotCaptureProcessGroup(process)
++	}
++}
++
++// killSnapshotCaptureProcessGroup signals every process the capture started.
++// The capture leads its group, so its PID is the group id; a group without
++// members left reports ESRCH and needs no cleanup.
++func killSnapshotCaptureProcessGroup(process *osexec.Cmd) error {
++	if process == nil || process.Process == nil {
++		return nil
++	}
++	pid := process.Process.Pid
++	if pid <= 0 {
++		return nil
++	}
++	err := syscall.Kill(-pid, syscall.SIGKILL)
++	if err == nil || errors.Is(err, syscall.ESRCH) {
++		return nil
++	}
++	// The capture did not lead a group: fall back to the leader, and report an
++	// already finished process as finished so a cancellation keeps its error.
++	killErr := process.Process.Kill()
++	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
++		return err
++	}
++	return nil
++}
+diff --git a/tool/shell_snapshot_process_unix_test.go b/tool/shell_snapshot_process_unix_test.go
+new file mode 100644
+index 00000000..5e331ec8
+--- /dev/null
++++ b/tool/shell_snapshot_process_unix_test.go
+@@ -0,0 +1,22 @@
++//go:build unix
++
++package tool
++
++import (
++	osexec "os/exec"
++	"testing"
++)
++
++// Mirrors Rust #49782 (exec-server/src/shell_snapshot_process.rs): the capture
++// leads its own process group and its cancellation reaches that group, so a
++// timeout or cancellation takes the startup children down with it.
++func TestSnapshotCaptureOwnsItsProcessGroupLikeRust(t *testing.T) {
++	process := osexec.Command("sh", "-c", "exit 0")
++	ownSnapshotCaptureProcessGroup(process)
++	if process.SysProcAttr == nil || !process.SysProcAttr.Setpgid {
++		t.Fatalf("capture SysProcAttr = %#v, want a new process group", process.SysProcAttr)
++	}
++	if process.Cancel == nil {
++		t.Fatal("capture cancellation does not reach the process group")
++	}
++}

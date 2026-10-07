@@ -1,0 +1,215 @@
+diff --git a/app/app_test.go b/app/app_test.go
+index 83b2ebb5..b2273e33 100644
+--- a/app/app_test.go
++++ b/app/app_test.go
+@@ -6207,3 +6207,43 @@ func TestInteractiveRemoteCloseSideSkipsInterruptForOtherThread(t *testing.T) {
+ 	default:
+ 	}
+ }
++
++// TestLocalThreadStartStagesDaybreakDefaultLikeRust covers Rust #49861's
++// thread/start staging (app_server_session.rs:873/1830): a new persistent
++// thread carries `params.daybreak_enabled = config.daybreak_enabled`, and a
++// configuration without the key leaves the parameter unset.
++func TestLocalThreadStartStagesDaybreakDefaultLikeRust(t *testing.T) {
++	home := t.TempDir()
++	t.Setenv("CODEX_HOME", home)
++	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\n"), 0o600); err != nil {
++		t.Fatalf("write config: %v", err)
++	}
++	params := interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
++	if params.DaybreakEnabled == nil || !*params.DaybreakEnabled {
++		t.Fatalf("thread/start daybreakEnabled = %v, want true", params.DaybreakEnabled)
++	}
++
++	empty := t.TempDir()
++	t.Setenv("CODEX_HOME", empty)
++	if err := os.WriteFile(config.ConfigPath(empty), []byte("model = \"gpt-5\"\n"), 0o600); err != nil {
++		t.Fatalf("write config: %v", err)
++	}
++	params = interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
++	if params.DaybreakEnabled != nil {
++		t.Fatalf("thread/start daybreakEnabled = %v, want unset", params.DaybreakEnabled)
++	}
++}
++
++// TestSettingsCarryDaybreakDefaultLikeRust checks the settings record the TUI
++// bootstrap reads before the first thread exists.
++func TestSettingsCarryDaybreakDefaultLikeRust(t *testing.T) {
++	home := t.TempDir()
++	t.Setenv("CODEX_HOME", home)
++	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\n"), 0o600); err != nil {
++		t.Fatalf("write config: %v", err)
++	}
++	settings := interactiveTUISettings(&cli.RootOptions{})
++	if !settings.DaybreakDefault {
++		t.Fatal("settings DaybreakDefault = false, want true")
++	}
++}
+diff --git a/app/interactive.go b/app/interactive.go
+index f099d1c8..5b8a9b4d 100644
+--- a/app/interactive.go
++++ b/app/interactive.go
+@@ -1147,12 +1147,15 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
+ 		OnApproveAutoReviewDenial:  interactiveApproveAutoReviewDenialHandler(),
+ 		OnStartWindowsSandboxSetup: interactiveWindowsSandboxSetupHandler(root),
+ 		FeatureSettings:            settings.FeatureSettings,
+-		UseMemories:                settings.UseMemories,
+-		GenerateMemories:           settings.GenerateMemories,
+-		FeedbackEnabled:            settings.FeedbackEnabled,
+-		DisablePasteBurst:          settings.DisablePasteBurst,
+-		ModelPickerOptions:         interactiveModelPickerOptions(root),
+-		ServiceTierCommands:        interactiveServiceTierCommands(state.Model),
++		// Rust #49861: a fresh session starts from the configured Daybreak
++		// preference before any thread/resume reports the stored one.
++		DaybreakDefault:     settings.DaybreakDefault,
++		UseMemories:         settings.UseMemories,
++		GenerateMemories:    settings.GenerateMemories,
++		FeedbackEnabled:     settings.FeedbackEnabled,
++		DisablePasteBurst:   settings.DisablePasteBurst,
++		ModelPickerOptions:  interactiveModelPickerOptions(root),
++		ServiceTierCommands: interactiveServiceTierCommands(state.Model),
+ 		// Rust #51253: the server requirements the model catalog is constrained
+ 		// with, read by interactiveLoadSettings alongside the other preferences.
+ 		ServiceTierRequirements: settings.ServiceTierRequirements,
+@@ -1327,6 +1330,14 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
+ 			root != nil && strings.TrimSpace(root.Shared.Model) != "",
+ 			false)
+ 	}
++	// Rust #49861 (app_server_session.rs:873/1830): a new thread stages the
++	// configured Daybreak preference as its initial value
++	// (`params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true)`).
++	// The bootstrap thread is persistent, so the ephemeral guard is vacuous.
++	if interactiveTUISettings(root).DaybreakDefault {
++		enabled := true
++		threadStart.DaybreakEnabled = &enabled
++	}
+ 	return threadStart
+ }
+ 
+@@ -2010,7 +2021,11 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
+ 	// activate (markdown_render::preferences::init).
+ 	markdown.InitRenderingFromConfig(config.TuiRenderingFromValues(values))
+ 	return codextea.SettingsWriteResult{
+-		FeatureSettings:         featureSettings,
++		FeatureSettings: featureSettings,
++		// Rust #49861/#49856: the configured default for a *new* thread
++		// (Config::daybreak_enabled). The TUI's bootstrap thread is persistent,
++		// so Rust's `!config.ephemeral` guard always holds here.
++		DaybreakDefault:         loaded.DaybreakEnabled(),
+ 		UseMemories:             interactiveMemoryBoolFromConfig(values, "use_memories"),
+ 		GenerateMemories:        interactiveMemoryBoolFromConfig(values, "generate_memories"),
+ 		FeedbackEnabled:         interactiveFeedbackEnabledFromConfig(values),
+diff --git a/tui/tea/daybreak_default_test.go b/tui/tea/daybreak_default_test.go
+new file mode 100644
+index 00000000..b1504cbd
+--- /dev/null
++++ b/tui/tea/daybreak_default_test.go
+@@ -0,0 +1,48 @@
++package tea
++
++import (
++	"testing"
++
++	codextui "codex_go/tui"
++	bottompane "codex_go/tui/bottom_pane"
++)
++
++// TestNewThreadDaybreakDefaultLikeRust covers Rust #49861's new-thread path:
++// a fresh session starts from the configured Daybreak preference
++// (`params.daybreak_enabled = config.daybreak_enabled && !ephemeral`) while the
++// live value stays gated by the cli_daybreak feature.
++func TestNewThreadDaybreakDefaultLikeRust(t *testing.T) {
++	cases := []struct {
++		name     string
++		features map[string]bool
++		def      bool
++		want     bool
++	}{
++		{name: "configured default with feature on", features: map[string]bool{"cli_daybreak": true}, def: true, want: true},
++		{name: "configured default with feature off", features: map[string]bool{"cli_daybreak": false}, def: true, want: false},
++		{name: "no configured default", features: map[string]bool{"cli_daybreak": true}, def: false, want: false},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			model := NewModel(codextui.NewState(nil), Options{
++				Width:           120,
++				Height:          40,
++				FeatureSettings: tc.features,
++				DaybreakDefault: tc.def,
++			})
++			if model.daybreakEnabled != tc.want {
++				t.Fatalf("daybreakEnabled = %v, want %v", model.daybreakEnabled, tc.want)
++			}
++			model.ensureStatusControls()
++			model.syncStatusControlsRuntime()
++			value, ok := model.statusControls.StatusLineValueForItem(bottompane.StatusLineDaybreak)
++			want := "Daybreak off"
++			if tc.want {
++				want = "Daybreak on"
++			}
++			if !ok || value != want {
++				t.Fatalf("status line daybreak = %q ok=%v, want %q", value, ok, want)
++			}
++		})
++	}
++}
+diff --git a/tui/tea/model.go b/tui/tea/model.go
+index e8c018f7..3b394b8b 100644
+--- a/tui/tea/model.go
++++ b/tui/tea/model.go
+@@ -25,6 +25,7 @@ import (
+ 	"codex_go/auth"
+ 	"codex_go/config"
+ 	"codex_go/eventmap"
++	"codex_go/features"
+ 	"codex_go/filesearch"
+ 	"codex_go/plugin"
+ 	"codex_go/protocol"
+@@ -282,6 +283,11 @@ type SettingsWriteResult struct {
+ 	GenerateMemories  *bool
+ 	FeedbackEnabled   *bool
+ 	DisablePasteBurst bool
++	// DaybreakDefault is the configured Daybreak preference for a *new* thread
++	// (`daybreak`, Rust Config::daybreak_enabled, #49861/#49856). The TUI's
++	// bootstrap thread is persistent, so Rust's `!config.ephemeral` guard
++	// always holds here.
++	DaybreakDefault bool
+ 	// AnimationsEnabled is the effective `tui.animations` value after the host
+ 	// motion preference is applied (Rust #44666). Nil preserves the current
+ 	// value.
+@@ -1223,14 +1229,18 @@ type Options struct {
+ 	// StartupConfigWarnings carries the requirement-driven config warnings known
+ 	// at startup so they coalesce into the startup warnings entry (Rust
+ 	// config.startup_warnings -> ConfigWarning notifications).
+-	StartupConfigWarnings   []string
+-	InitialMessages         <-chan bubbletea.Msg
+-	InitialHistoryCells     []historycell.HistoryCell
+-	FeatureSettings         map[string]bool
+-	UseMemories             *bool
+-	GenerateMemories        *bool
+-	FeedbackEnabled         *bool
+-	DisablePasteBurst       bool
++	StartupConfigWarnings []string
++	InitialMessages       <-chan bubbletea.Msg
++	InitialHistoryCells   []historycell.HistoryCell
++	FeatureSettings       map[string]bool
++	UseMemories           *bool
++	GenerateMemories      *bool
++	FeedbackEnabled       *bool
++	DisablePasteBurst     bool
++	// DaybreakDefault seeds a new thread's Daybreak preference (Rust
++	// `params.daybreak_enabled = config.daybreak_enabled && !ephemeral`,
++	// #49861). The live value is still gated by the cli_daybreak feature.
++	DaybreakDefault         bool
+ 	Personality             chatwidget.Personality
+ 	HideRateLimitModelNudge *bool
+ 	TUITheme                string
+@@ -2071,6 +2081,7 @@ func NewModel(state *codextui.State, options Options) *Model {
+ 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
+ 		initialMessages:                 options.InitialMessages,
+ 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
++		daybreakEnabled:                 features.Enabled(options.FeatureSettings, "cli_daybreak") && options.DaybreakDefault,
+ 		disablePasteBurst:               options.DisablePasteBurst,
+ 		personality:                     initialPersonality(state, options.Personality),
+ 		tuiTheme:                        strings.TrimSpace(options.TUITheme),

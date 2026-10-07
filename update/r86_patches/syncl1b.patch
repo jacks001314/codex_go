@@ -1,0 +1,500 @@
+diff --git a/appserver/message_board.go b/appserver/message_board.go
+index f9f70c6c..a110a072 100644
+--- a/appserver/message_board.go
++++ b/appserver/message_board.go
+@@ -324,8 +324,10 @@ func (h *messageBoardHost) CurrentTime(ctx context.Context, caller string) (time
+ }
+ 
+ // Notify pushes metadata and a bounded preview to a recipient that is running a
+-// turn right now. An idle, finalized or unloaded recipient is skipped; nothing
+-// is queued for a later turn.
++// turn right now and still accepts mailbox delivery (Rust #48982,
++// ext/agent-message-board/src/host.rs): an idle, unloaded or already-finalized
++// recipient is skipped without queueing anything. An accepted notification must
++// not start a new turn or reopen a finalized answer.
+ func (h *messageBoardHost) Notify(ctx context.Context, recipient string, post agentboard.PostPreview) (agentboard.NotificationDelivery, error) {
+ 	if h == nil || h.router == nil {
+ 		return agentboard.NotificationSkippedInactive, nil
+@@ -352,9 +354,15 @@ func (h *messageBoardHost) Notify(ctx context.Context, recipient string, post ag
+ 	}
+ 	notice := agentboard.NewAgentMessageBoardNotification(post)
+ 	item := runtimeAgentCommunicationInputItem(string(post.Author), string(recipientPath), notice.Body(), false, true)
+-	if err := h.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
++	// Rust #48982 (`LocalBoardHost::notify` ->
++	// InputQueue::deliver_mailbox_communication_to_current_turn): the
++	// notification is stored only while the running turn still accepts mailbox
++	// delivery. A turn that already emitted its final answer is skipped instead
++	// of being handed mail that would reopen the answer.
++	accepted, err := h.router.requireSteerMailbox().EnqueueIfAcceptingDelivery(&turn.SteerEnqueueParams{
+ 		ThreadID: recipient, TurnID: active.ID, InputItems: []any{item},
+-	}); err != nil {
++	})
++	if err != nil || !accepted {
+ 		return agentboard.NotificationSkippedInactive, nil
+ 	}
+ 	return agentboard.NotificationAccepted, nil
+diff --git a/appserver/message_board_notification_delivery_test.go b/appserver/message_board_notification_delivery_test.go
+new file mode 100644
+index 00000000..1b8a7289
+--- /dev/null
++++ b/appserver/message_board_notification_delivery_test.go
+@@ -0,0 +1,209 @@
++package appserver
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"codex_go/agent"
++	"codex_go/agentboard"
++	"codex_go/model"
++	"codex_go/session"
++	"codex_go/tool"
++	"codex_go/turn"
++)
++
++// Rust parity: #48982
++// (core/tests/suite/scenarios_agent_message_board.rs::board_notifications_do_not_reopen_a_final_answer).
++// A message-board notification must not make a recipient sample again after its
++// final answer: mail that arrives while the turn still accepts delivery is kept
++// for a later turn, and mail that arrives once delivery closed is skipped.
++
++const notificationDeliveryMarker = "Late update."
++
++func notificationDeliveryStore(t *testing.T, home string) *session.Store {
++	t.Helper()
++	store := session.NewStore(filepath.Join(home, "sessions"))
++	for _, record := range []*session.Record{
++		{ID: session.ThreadID("root-thread"), SessionID: "root-thread", CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(1, 0).UTC(), Metadata: session.Metadata{CWD: home, AgentPath: "/root"}},
++		{ID: session.ThreadID("child-thread"), SessionID: "root-thread", ParentThreadID: session.ThreadID("root-thread"), CreatedAt: time.Unix(2, 0).UTC(), UpdatedAt: time.Unix(2, 0).UTC(), Metadata: session.Metadata{CWD: home, AgentPath: "/root/worker", AgentDepth: 1}},
++	} {
++		if err := store.Save(record); err != nil {
++			t.Fatalf("save record %s: %v", record.ID, err)
++		}
++	}
++	return store
++}
++
++func notificationDeliveryPost() agentboard.PostPreview {
++	return agentboard.PostPreview{
++		PostMetadata: agentboard.PostMetadata{
++			MessageID: "11111111-1111-4111-8111-111111111111", ChannelName: "design",
++			Author: agent.AgentPath("/root/worker"), ThreadID: "child-thread",
++		},
++		TextPreview: notificationDeliveryMarker,
++	}
++}
++
++func notificationDeliveryLanded(request model.AgentRequest) bool {
++	raw, err := json.Marshal(request.InputItems)
++	if err != nil {
++		return false
++	}
++	return strings.Contains(string(raw), notificationDeliveryMarker)
++}
++
++// notificationBeforeFinalAgent posts to the recipient's board through the
++// production host while its first sampling request is in flight, then answers
++// with a final answer: the notification arrives while the turn still accepts
++// mailbox delivery.
++type notificationBeforeFinalAgent struct {
++	mu         sync.Mutex
++	host       *messageBoardHost
++	requests   []model.AgentRequest
++	deliveries []agentboard.NotificationDelivery
++	deliverErr error
++}
++
++func (a *notificationBeforeFinalAgent) Run(ctx context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
++	a.mu.Lock()
++	a.requests = append(a.requests, *request)
++	call := len(a.requests)
++	a.mu.Unlock()
++	if call == 1 && a.host != nil {
++		delivery, err := a.host.Notify(ctx, "root-thread", notificationDeliveryPost())
++		a.mu.Lock()
++		a.deliveries = append(a.deliveries, delivery)
++		a.deliverErr = err
++		a.mu.Unlock()
++	}
++	return &model.AgentResponse{
++		ResponseID: fmt.Sprintf("resp-%d", call),
++		Message:    "Finished.",
++		Items: []model.AgentItem{{
++			ID: fmt.Sprintf("final-%d", call), Type: "agent_message", Text: "Finished.",
++			Data: map[string]any{"phase": "final_answer"},
++		}},
++	}, nil
++}
++
++func TestMessageBoardNotificationBeforeFinalDoesNotReopenAnswerLikeRust(t *testing.T) {
++	home := t.TempDir()
++	runner := &notificationBeforeFinalAgent{}
++	router := NewRuntimeRouter(RuntimeServices{
++		ThreadRouter: NewRouter(notificationDeliveryStore(t, home)),
++		Turns:        turn.NewTurnService(),
++		Agent:        runner,
++		ThreadStatus: NewThreadStatusManager(),
++	})
++	sink := NewNotificationBuffer()
++	router.SetNotificationSink(sink)
++	defer router.Close()
++	runner.host = &messageBoardHost{router: router, tree: "root-thread", caller: "child-thread"}
++
++	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: "root-thread", Prompt: "Create the channel."}))
++	if turnStart.Error != nil {
++		t.Fatalf("turn/start error: %+v", turnStart.Error)
++	}
++	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
++
++	runner.mu.Lock()
++	count := len(runner.requests)
++	deliveries := append([]agentboard.NotificationDelivery(nil), runner.deliveries...)
++	deliverErr := runner.deliverErr
++	runner.mu.Unlock()
++	if deliverErr != nil {
++		t.Fatalf("Notify error = %v", deliverErr)
++	}
++	if len(deliveries) != 1 || deliveries[0] != agentboard.NotificationAccepted {
++		t.Fatalf("deliveries = %v, want [accepted] while the turn accepts delivery", deliveries)
++	}
++	if count != 1 {
++		t.Fatalf("recipient sampled %d times, want 1 (notification reopened the final answer)", count)
++	}
++}
++
++// notificationAfterFinalAgent answers with a final answer plus a tool call, so
++// the turn keeps running (dispatching the rest of the response) after the phase
++// switched to the next turn. The tool posts through the production host at that
++// moment: delivery is closed, so the notification must be skipped.
++type notificationAfterFinalAgent struct {
++	mu       sync.Mutex
++	host     *messageBoardHost
++	requests []model.AgentRequest
++}
++
++func (a *notificationAfterFinalAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
++	a.mu.Lock()
++	a.requests = append(a.requests, *request)
++	call := len(a.requests)
++	a.mu.Unlock()
++	if call == 1 {
++		return &model.AgentResponse{
++			ResponseID: "resp-final-with-call",
++			Items: []model.AgentItem{
++				{ID: "final-1", Type: "agent_message", Text: "Finished.", Data: map[string]any{"phase": "final_answer"}},
++				{ID: "call-1", Type: "function_call", Name: "runtime_notify", CallID: "call-1", Arguments: "{}"},
++			},
++		}, nil
++	}
++	return &model.AgentResponse{
++		ResponseID: fmt.Sprintf("resp-%d", call),
++		Message:    "done",
++		Items:      []model.AgentItem{{ID: fmt.Sprintf("final-%d", call), Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"}}},
++	}, nil
++}
++
++func TestMessageBoardNotificationAfterFinalIsSkippedLikeRust(t *testing.T) {
++	home := t.TempDir()
++	runner := &notificationAfterFinalAgent{}
++	mailbox := turn.NewSteerMailbox()
++	var deliveries []agentboard.NotificationDelivery
++	var deliverErr error
++	registry := tool.NewRegistry()
++	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("runtime_notify")}, func(ctx context.Context, _ *tool.Invocation) (*tool.Output, error) {
++		delivery, err := runner.host.Notify(ctx, "root-thread", notificationDeliveryPost())
++		deliveries = append(deliveries, delivery)
++		deliverErr = err
++		return &tool.Output{Success: true, Body: "posted"}, nil
++	})); err != nil {
++		t.Fatalf("register runtime_notify: %v", err)
++	}
++	router := NewRuntimeRouter(RuntimeServices{
++		ThreadRouter: NewRouter(notificationDeliveryStore(t, home)),
++		Turns:        turn.NewTurnService(),
++		Agent:        runner,
++		ThreadStatus: NewThreadStatusManager(),
++		SteerMailbox: mailbox,
++		TurnRuntime:  turn.NewRuntime(&turn.RuntimeOptions{Agent: runner, Router: tool.NewRouter(registry), SteerMailbox: mailbox}),
++	})
++	sink := NewNotificationBuffer()
++	router.SetNotificationSink(sink)
++	defer router.Close()
++	runner.host = &messageBoardHost{router: router, tree: "root-thread", caller: "child-thread"}
++
++	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{ThreadID: "root-thread", Prompt: "Create the channel."}))
++	if turnStart.Error != nil {
++		t.Fatalf("turn/start error: %+v", turnStart.Error)
++	}
++	waitForTurnCompletedStatus(t, sink, turnStart.Result.(*turn.TurnStartResponse).Turn.ID, TurnStatusCompleted)
++
++	runner.mu.Lock()
++	count := len(runner.requests)
++	markerInFollowUp := count > 1 && notificationDeliveryLanded(runner.requests[1])
++	runner.mu.Unlock()
++	if deliverErr != nil {
++		t.Fatalf("Notify error = %v", deliverErr)
++	}
++	if markerInFollowUp {
++		t.Fatalf("the closed-delivery notification was queued and reached the next sampling request (deliveries = %v)", deliveries)
++	}
++	if len(deliveries) != 1 || deliveries[0] != agentboard.NotificationSkippedInactive {
++		t.Fatalf("deliveries = %v, want [skipped] once the turn's answer was finalized", deliveries)
++	}
++}
+diff --git a/turn/agent_loop.go b/turn/agent_loop.go
+index 4d2f6e31..36f1bda5 100644
+--- a/turn/agent_loop.go
++++ b/turn/agent_loop.go
+@@ -588,17 +588,26 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
+ 			}
+ 		}
+ 		if len(toolItems) == 0 {
+-			if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
+-				result.InputItems = append(result.InputItems, steer.InputItems...)
+-				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+-				if len(steer.ClientMetadata) > 0 {
+-					clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
++			// Rust InputQueue::get_pending_input only drains the turn's pending
++			// input while the turn still accepts mailbox delivery (#48982): once
++			// the response carried the turn's final answer the phase is NextTurn,
++			// so queued child mail stays for a later turn instead of reopening the
++			// finalized answer with one more sampling request. A steered user
++			// message reopens the phase (SteerMailbox::Enqueue), so explicit
++			// same-turn work still continues the turn here.
++			if l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) {
++				if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
++					result.InputItems = append(result.InputItems, steer.InputItems...)
++					result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
++					if len(steer.ClientMetadata) > 0 {
++						clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
++					}
++					if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
++						request.OnSteerCommitted(count)
++					}
++					endSamplingRequestSpan()
++					continue
+ 				}
+-				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
+-					request.OnSteerCommitted(count)
+-				}
+-				endSamplingRequestSpan()
+-				continue
+ 			}
+ 		}
+ 		if len(toolItems) == 0 {
+diff --git a/turn/steer_mailbox.go b/turn/steer_mailbox.go
+index aaf25126..62ba8632 100644
+--- a/turn/steer_mailbox.go
++++ b/turn/steer_mailbox.go
+@@ -58,6 +58,51 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
+ 	key := steerMailboxKey(params.ThreadID, params.TurnID)
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
++	m.storeLocked(key, items, metadata)
++	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state:
++	// explicit same-turn input (a steered user message) reopens the current turn
++	// for mailbox delivery after terminal output closed it.
++	if steerItemsHaveUserInput(items) {
++		m.setMailboxDeliveryPhaseLocked(key, state.MailboxCurrentTurn)
++	}
++	return nil
++}
++
++// EnqueueIfAcceptingDelivery mirrors Rust
++// InputQueue::deliver_mailbox_communication_to_current_turn (#48982): the input
++// is stored only while the turn still accepts mailbox delivery. The phase check
++// and the store run under the same lock, so a notification that races the turn's
++// final answer cannot be queued after delivery closed. It reports whether the
++// input was stored; a closed turn keeps the mail out of the queue instead of
++// reopening a finalized answer with one more sampling request.
++//
++// Only inter-agent mail uses this path. Explicit same-turn work (a steered user
++// message) goes through Enqueue, which reopens the current turn
++// (Rust TurnInputQueue::extend_pending_input_and_accept_mailbox_delivery_for_turn_state).
++func (m *SteerMailbox) EnqueueIfAcceptingDelivery(params *SteerEnqueueParams) (bool, error) {
++	if m == nil {
++		return false, fmt.Errorf("%w: steer mailbox is nil", ErrInvalidTurnRequest)
++	}
++	if params == nil || strings.TrimSpace(params.ThreadID) == "" || strings.TrimSpace(params.TurnID) == "" {
++		return false, fmt.Errorf("%w: threadId and turnId are required", ErrInvalidTurnRequest)
++	}
++	items := compactInputItems(params.InputItems)
++	metadata := compactStringMap(params.ClientMetadata)
++	if len(items) == 0 && len(metadata) == 0 {
++		return false, nil
++	}
++	key := steerMailboxKey(params.ThreadID, params.TurnID)
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	if !m.acceptsMailboxDeliveryLocked(key) {
++		return false, nil
++	}
++	m.storeLocked(key, items, metadata)
++	return true, nil
++}
++
++// storeLocked appends the input under an already held lock and wakes watchers.
++func (m *SteerMailbox) storeLocked(key string, items []any, metadata map[string]string) {
+ 	if m.items == nil {
+ 		m.items = map[string][]any{}
+ 	}
+@@ -70,17 +115,10 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
+ 		}
+ 		m.metadata[key] = metadata
+ 	}
+-	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state:
+-	// explicit same-turn input (a steered user message) reopens the current turn
+-	// for mailbox delivery after terminal output closed it.
+-	if steerItemsHaveUserInput(items) {
+-		m.setMailboxDeliveryPhaseLocked(key, state.MailboxCurrentTurn)
+-	}
+ 	if m.changed != nil {
+ 		close(m.changed)
+ 	}
+ 	m.changed = make(chan struct{})
+-	return nil
+ }
+ 
+ // WatchUserInput mirrors Rust InputQueue::watch_user_input (#48135): it
+@@ -263,7 +301,13 @@ func (m *SteerMailbox) AcceptsMailboxDeliveryForCurrentTurn(threadID string, tur
+ 	}
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
+-	return m.phases[steerMailboxKey(threadID, turnID)] != state.MailboxNextTurn
++	return m.acceptsMailboxDeliveryLocked(steerMailboxKey(threadID, turnID))
++}
++
++// acceptsMailboxDeliveryLocked is AcceptsMailboxDeliveryForCurrentTurn for
++// callers that already hold the mailbox lock.
++func (m *SteerMailbox) acceptsMailboxDeliveryLocked(key string) bool {
++	return m.phases[key] != state.MailboxNextTurn
+ }
+ 
+ func (m *SteerMailbox) DrainWithMetadata(params *SteerDrainParams) *SteerDrainResult {
+diff --git a/turn/steer_mailbox_delivery_phase_test.go b/turn/steer_mailbox_delivery_phase_test.go
+new file mode 100644
+index 00000000..bdcbe195
+--- /dev/null
++++ b/turn/steer_mailbox_delivery_phase_test.go
+@@ -0,0 +1,114 @@
++package turn
++
++import (
++	"context"
++	"fmt"
++	"testing"
++
++	"codex_go/model"
++	"codex_go/state"
++)
++
++// Rust #48982: a mailbox communication is only accepted while the running turn
++// still accepts mailbox delivery
++// (InputQueue::deliver_mailbox_communication_to_current_turn). A turn that
++// already emitted its final answer (phase NextTurn) must not queue the
++// notification.
++func TestSteerMailboxGatesDeliveryOnPhaseLikeRust(t *testing.T) {
++	mailbox := NewSteerMailbox()
++	accepted, err := mailbox.EnqueueIfAcceptingDelivery(&SteerEnqueueParams{
++		ThreadID: "t", TurnID: "turn", InputItems: []any{mailboxMailInputItem("/root/worker", "hi")},
++	})
++	if err != nil || !accepted {
++		t.Fatalf("EnqueueIfAcceptingDelivery(current turn) = %v, %v; want true, nil", accepted, err)
++	}
++	if !mailbox.HasPendingMailboxItems("t", "turn") {
++		t.Fatal("an accepted notification was not queued")
++	}
++
++	mailbox.SetMailboxDeliveryPhase("t", "closed", state.MailboxNextTurn)
++	accepted, err = mailbox.EnqueueIfAcceptingDelivery(&SteerEnqueueParams{
++		ThreadID: "t", TurnID: "closed", InputItems: []any{mailboxMailInputItem("/root/worker", "late")},
++	})
++	if err != nil || accepted {
++		t.Fatalf("EnqueueIfAcceptingDelivery(closed turn) = %v, %v; want false, nil", accepted, err)
++	}
++	if mailbox.HasPendingMailboxItems("t", "closed") || mailbox.HasPending("t", "closed") {
++		t.Fatal("a closed turn queued the notification")
++	}
++
++	// Explicit same-turn work still reopens the turn for mailbox delivery, so a
++	// steered user message continues the turn exactly as before.
++	if err := mailbox.Enqueue(&SteerEnqueueParams{ThreadID: "t", TurnID: "closed", InputItems: []any{queuedUserMessage("steer")}}); err != nil {
++		t.Fatalf("enqueue steer: %v", err)
++	}
++	if !mailbox.AcceptsMailboxDeliveryForCurrentTurn("t", "closed") {
++		t.Fatal("a steered user message must reopen the current turn")
++	}
++}
++
++// finalAnswerWithMailAgent delivers inter-agent mail while its sampling request
++// is in flight and then answers the request with the given item.
++type finalAnswerWithMailAgent struct {
++	item                  model.AgentItem
++	deliverDuringResponse func(threadID string, turnID string)
++	requests              []model.AgentRequest
++}
++
++func (a *finalAnswerWithMailAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
++	a.requests = append(a.requests, *request)
++	if len(a.requests) == 1 && a.deliverDuringResponse != nil {
++		a.deliverDuringResponse(request.ThreadID, request.TurnID)
++	}
++	return &model.AgentResponse{
++		ResponseID: fmt.Sprintf("resp-%d", len(a.requests)),
++		Message:    a.item.Text,
++		Items:      []model.AgentItem{a.item},
++	}, nil
++}
++
++// Rust #48982 (session/turn.rs::get_pending_input gated on
++// accepts_mailbox_delivery_for_current_turn): mail queued while the turn was
++// still accepting delivery must not reopen the final answer with one more
++// sampling request; it stays in the queue for a later turn.
++func TestAgentLoopFinalAnswerDoesNotReopenForQueuedMailLikeRust(t *testing.T) {
++	mailbox := NewSteerMailbox()
++	agent := &finalAnswerWithMailAgent{
++		item:                  model.AgentItem{ID: "final", Type: "agent_message", Text: "Answered.", Data: map[string]any{"phase": "final_answer"}},
++		deliverDuringResponse: mailDuringResponse(t, mailbox),
++	}
++	loop, _ := newMailboxPreemptionHarness(t, agent, mailbox, false)
++	result, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "answer", Model: "gpt-test", ThreadID: "thread-1", TurnID: "turn-1"})
++	if err != nil {
++		t.Fatalf("Run() error = %v", err)
++	}
++	if len(agent.requests) != 1 {
++		t.Fatalf("sampling requests = %d, want 1 (a queued notification reopened the finalized answer)", len(agent.requests))
++	}
++	if result == nil || result.Response == nil || result.Response.Message != "Answered." {
++		t.Fatalf("result = %#v", result)
++	}
++	if !mailbox.HasPendingMailboxItems("thread-1", "turn-1") {
++		t.Fatal("the deferred notification was dropped instead of staying queued")
++	}
++}
++
++// Control: a non-final response keeps the current-turn phase, so the same mail
++// still reaches a follow-up sampling request.
++func TestAgentLoopCommentaryStillDrainsQueuedMailLikeRust(t *testing.T) {
++	mailbox := NewSteerMailbox()
++	agent := &finalAnswerWithMailAgent{
++		item:                  model.AgentItem{ID: "commentary", Type: "agent_message", Text: "Working on it.", Data: map[string]any{"phase": "commentary"}},
++		deliverDuringResponse: mailDuringResponse(t, mailbox),
++	}
++	loop, _ := newMailboxPreemptionHarness(t, agent, mailbox, false)
++	if _, err := loop.Run(context.Background(), &AgentLoopRequest{Prompt: "answer", Model: "gpt-test", ThreadID: "thread-1", TurnID: "turn-1"}); err != nil {
++		t.Fatalf("Run() error = %v", err)
++	}
++	if len(agent.requests) != 2 {
++		t.Fatalf("sampling requests = %d, want 2", len(agent.requests))
++	}
++	if !itemsCarryAgentMail(agent.requests[1].InputItems) {
++		t.Fatalf("queued mail missing from the follow-up request: %v", itemTypes(agent.requests[1].InputItems))
++	}
++}

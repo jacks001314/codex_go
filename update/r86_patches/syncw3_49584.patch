@@ -1,0 +1,111 @@
+diff --git a/appserver/guardian_skills_context_test.go b/appserver/guardian_skills_context_test.go
+new file mode 100644
+index 00000000..cb6d0c98
+--- /dev/null
++++ b/appserver/guardian_skills_context_test.go
+@@ -0,0 +1,88 @@
++package appserver
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"codex_go/turn"
++)
++
++// Rust #49584 (core/src/session/turn_context.rs): Guardian does not consume
++// skills (guardian::is_basic_session_source), so a Guardian turn context is
++// built from an empty host skills snapshot and must not carry the host skill
++// catalog. A plain turn keeps the catalog.
++//
++// Go's carrier is instructionsWithSkillsContextForTurn
++// (appserver/turn_runtime.go:9154), the single host-skill catalog builder that
++// appTurnConfig reaches (appserver/turn_runtime.go:7245). The Guardian flag
++// arrives through client-supplied TurnStartParams: Originator or
++// ResponsesAPIMetadata["x-openai-subagent"] (turn/api.go:237, unvalidated), and
++// thread/start originators are copied onto app turns
++// (runtime_router.go:7308-7309 + applyThreadStartOriginator:4861-4884), so a
++// Guardian-flagged app turn is reachable through the client originator and must
++// be skill-free.
++func TestGuardianTurnSkipsHostSkillCatalog(t *testing.T) {
++	root := t.TempDir()
++	skillDir := filepath.Join(root, "build-stuff")
++	if err := os.MkdirAll(skillDir, 0o755); err != nil {
++		t.Fatalf("MkdirAll(skill) error = %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(skillDir, SkillFilename), []byte("---\nname: build-stuff\ndescription: Build code quickly\n---\n"), 0o600); err != nil {
++		t.Fatalf("WriteFile(skill) error = %v", err)
++	}
++	router := NewRuntimeRouter(RuntimeServices{Skills: NewSkillsService([]string{root})})
++
++	cases := []struct {
++		name        string
++		params      *turn.TurnStartParams
++		wantCatalog bool
++	}{
++		{
++			name:        "plain turn keeps the host catalog",
++			params:      &turn.TurnStartParams{Prompt: "use skills"},
++			wantCatalog: true,
++		},
++		{
++			name:        "guardian responses metadata turn skips the host catalog",
++			params:      &turn.TurnStartParams{ResponsesAPIMetadata: map[string]string{"x-openai-subagent": "guardian"}},
++			wantCatalog: false,
++		},
++		{
++			name:        "guardian originator turn skips the host catalog",
++			params:      &turn.TurnStartParams{Originator: "guardian"},
++			wantCatalog: false,
++		},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			instructions, inputItems, _, err := router.instructionsWithSkillsContextForTurn(
++				context.Background(), "thread-guardian-skills", "turn-guardian-skills", nil, tc.params, "base instructions",
++			)
++			if err != nil {
++				t.Fatalf("instructionsWithSkillsContextForTurn() error = %v", err)
++			}
++			hasCatalog := strings.Contains(instructions, "build-stuff")
++			if hasCatalog != tc.wantCatalog {
++				t.Fatalf("host skill catalog present = %v, want %v\n%s", hasCatalog, tc.wantCatalog, instructions)
++			}
++			if tc.wantCatalog {
++				if !strings.Contains(instructions, "## Skills") {
++					t.Fatalf("plain turn instructions missing the skills section:\n%s", instructions)
++				}
++				return
++			}
++			if strings.Contains(instructions, "## Skills") {
++				t.Fatalf("guardian turn instructions carried the skills section:\n%s", instructions)
++			}
++			if got := strings.TrimSpace(instructions); got != "base instructions" {
++				t.Fatalf("guardian turn instructions = %q, want the untouched base instructions", got)
++			}
++			if len(inputItems) != 0 {
++				t.Fatalf("guardian turn skill input items = %#v, want none", inputItems)
++			}
++		})
++	}
++}
+diff --git a/appserver/turn_runtime.go b/appserver/turn_runtime.go
+index dff020e5..ef9f1b6c 100644
+--- a/appserver/turn_runtime.go
++++ b/appserver/turn_runtime.go
+@@ -9155,6 +9155,12 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
+ 	if r == nil || r.services.Skills == nil {
+ 		return strings.TrimSpace(instructions), nil, nil, nil
+ 	}
++	// Rust #49584 (core/src/session/turn_context.rs): Guardian does not consume
++	// skills (guardian::is_basic_session_source), so a Guardian turn builds no
++	// host skill catalog and contributes no skill input items.
++	if guardianTurnStart(params) {
++		return strings.TrimSpace(instructions), nil, nil, nil
++	}
+ 	listParams := &SkillsListParams{}
+ 	if params != nil {
+ 		sessionConfig := &config.Config{Values: map[string]any{}}

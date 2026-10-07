@@ -1,0 +1,150 @@
+diff --git a/sandbox/windowssandbox/console_mode_windows_test.go b/sandbox/windowssandbox/console_mode_windows_test.go
+new file mode 100644
+index 00000000..8a178769
+--- /dev/null
++++ b/sandbox/windowssandbox/console_mode_windows_test.go
+@@ -0,0 +1,83 @@
++//go:build windows
++
++package windowssandbox
++
++import (
++	"os"
++	"regexp"
++	"strconv"
++	"testing"
++
++	"golang.org/x/sys/windows"
++)
++
++// Rust parity: codex-rs/windows-sandbox-rs/src/process.rs `console_flags`
++// (#49308). CREATE_NO_WINDOW is requested only for a pipe-backed child in
++// NoWindow mode; a child without explicit stdio keeps the parent console.
++func TestSandboxConsoleFlagsLikeRust(t *testing.T) {
++	cases := []struct {
++		hasStdio bool
++		mode     ConsoleMode
++		want     uint32
++	}{
++		{true, ConsoleModeNoWindow, uint32(windows.CREATE_NO_WINDOW)},
++		{true, ConsoleModeInherit, 0},
++		{false, ConsoleModeNoWindow, 0},
++		{false, ConsoleModeInherit, 0},
++	}
++	for _, tc := range cases {
++		if got := SandboxConsoleFlags(tc.hasStdio, tc.mode); got != tc.want {
++			t.Fatalf("SandboxConsoleFlags(%v, %v) = %#x, want %#x", tc.hasStdio, tc.mode, got, tc.want)
++		}
++	}
++}
++
++// The piped legacy sandbox launch (Rust #49308) must ask Windows for a child
++// with no console of its own. The flags handed to CreateProcessAsUserW are
++// observed through the package's own failure log.
++func TestPipedLegacySandboxSpawnRequestsNoConsoleWindow(t *testing.T) {
++	dir := t.TempDir()
++	var inR, inW, outR, outW windows.Handle
++	if err := windows.CreatePipe(&inR, &inW, nil, 0); err != nil {
++		t.Fatalf("CreatePipe stdin: %v", err)
++	}
++	defer windows.CloseHandle(inR)
++	defer windows.CloseHandle(inW)
++	if err := windows.CreatePipe(&outR, &outW, nil, 0); err != nil {
++		t.Fatalf("CreatePipe stdout: %v", err)
++	}
++	defer windows.CloseHandle(outR)
++	defer windows.CloseHandle(outW)
++
++	// Deliberately invalid token handle: the launch fails after the creation
++	// flags have been selected, and the failure is logged with those flags.
++	if _, err := CreateProcessAsUserWithToken(ProcessSpawnRequest{
++		Token:       uintptr(1),
++		Command:     []string{"cmd.exe", "/c", "exit 0"},
++		CWD:         dir,
++		Env:         map[string]string{},
++		LogsBaseDir: dir,
++		Stdio:       &ProcessStdio{Stdin: uintptr(inR), Stdout: uintptr(outW), Stderr: uintptr(outW)},
++	}); err == nil {
++		t.Fatal("an invalid token unexpectedly produced a process")
++	}
++
++	data, err := os.ReadFile(CurrentLogFilePathForBaseDir(dir))
++	if err != nil {
++		t.Fatalf("read failure log: %v", err)
++	}
++	match := regexp.MustCompile(`creation_flags=(\d+)`).FindStringSubmatch(string(data))
++	if match == nil {
++		t.Fatalf("failure log records no creation_flags: %s", data)
++	}
++	flags, err := strconv.ParseUint(match[1], 10, 32)
++	if err != nil {
++		t.Fatalf("parse creation_flags: %v", err)
++	}
++	if flags&uint64(windows.CREATE_NO_WINDOW) == 0 {
++		t.Fatalf("creation_flags = %#x, want CREATE_NO_WINDOW for a piped legacy sandbox child", flags)
++	}
++	if flags&uint64(windows.EXTENDED_STARTUPINFO_PRESENT) == 0 {
++		t.Fatalf("creation_flags = %#x, want EXTENDED_STARTUPINFO_PRESENT", flags)
++	}
++}
+diff --git a/sandbox/windowssandbox/process_windows.go b/sandbox/windowssandbox/process_windows.go
+index ff483e1e..93c6ffdb 100644
+--- a/sandbox/windowssandbox/process_windows.go
++++ b/sandbox/windowssandbox/process_windows.go
+@@ -13,6 +13,29 @@ import (
+ 
+ const waitTimeoutCode uint32 = 0x00000102
+ 
++// ConsoleMode controls console creation for a pipe-backed sandbox child.
++// Rust parity: codex-rs/windows-sandbox-rs/src/process.rs (ConsoleMode).
++type ConsoleMode int
++
++const (
++	// ConsoleModeInherit lets the child keep the parent's console.
++	ConsoleModeInherit ConsoleMode = iota
++	// ConsoleModeNoWindow asks Windows for a child that has no console of its
++	// own (Rust #49308: piped legacy sandbox processes run console-less).
++	ConsoleModeNoWindow
++)
++
++// SandboxConsoleFlags mirrors Rust's `console_flags` table: CREATE_NO_WINDOW is
++// requested only for a pipe-backed child in NoWindow mode, so a caller without
++// explicit stdio keeps the parent console. Rust #49308 flipped the piped legacy
++// sandbox capture and the non-TTY unified-exec backend to NoWindow.
++func SandboxConsoleFlags(hasStdio bool, mode ConsoleMode) uint32 {
++	if hasStdio && mode == ConsoleModeNoWindow {
++		return uint32(windows.CREATE_NO_WINDOW)
++	}
++	return 0
++}
++
+ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, error) {
+ 	if req.Token == 0 || len(req.Command) == 0 {
+ 		return nil, ErrInvalidRequest
+@@ -39,9 +62,10 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
+ 			return nil, err
+ 		}
+ 		defer attrs.Close()
+-		// Rust #48483: the sandbox child is a piped helper, so it must never
+-		// allocate a console window of its own.
+-		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_NO_WINDOW)
++		// Rust #48483/#49308: the sandbox child is a piped helper, so it must
++		// never allocate a console window of its own.
++		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT) |
++			SandboxConsoleFlags(true, ConsoleModeNoWindow)
+ 		err = windows.CreateProcessAsUser(
+ 			windows.Token(req.Token),
+ 			nil,
+@@ -69,8 +93,10 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
+ 		_ = desktop.Close()
+ 		return nil, err
+ 	}
+-	// Rust #48483: the sandbox child is a piped helper, so it must never allocate
+-	// a console window of its own.
++	// Rust #48483: the sandbox child must never allocate a console window of its
++	// own. Go keeps CREATE_NO_WINDOW here as well, while upstream's
++	// `console_flags` table yields 0 for a child without explicit stdio: a
++	// console-less parent would otherwise hand this child a brand-new console.
+ 	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW)
+ 	err = windows.CreateProcessAsUser(
+ 		windows.Token(req.Token),

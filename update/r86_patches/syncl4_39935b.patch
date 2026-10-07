@@ -1,0 +1,231 @@
+diff --git a/mcp/http_client_test.go b/mcp/http_client_test.go
+index 35329056..0dc3ce2f 100644
+--- a/mcp/http_client_test.go
++++ b/mcp/http_client_test.go
+@@ -1177,7 +1177,7 @@ func TestHTTPMCPRefreshesExpiredOAuthToken(t *testing.T) {
+ 		switch {
+ 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case r.Method == http.MethodPost && r.URL.Path == "/token":
+@@ -1343,7 +1343,7 @@ func TestHTTPMCPRefreshesOAuthTokenAfterUnauthorizedResponse(t *testing.T) {
+ 		switch {
+ 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case r.Method == http.MethodPost && r.URL.Path == "/token":
+@@ -1433,7 +1433,7 @@ func TestHTTPMCPDeletesStoredOAuthTokenWhenRefreshIsPermanentFailure(t *testing.
+ 		switch {
+ 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case r.Method == http.MethodPost && r.URL.Path == "/token":
+@@ -1490,7 +1490,7 @@ func TestMCPStatusRecomputesOAuthStatusAfterRefreshDeletesToken(t *testing.T) {
+ 		switch {
+ 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case r.Method == http.MethodPost && r.URL.Path == "/token":
+@@ -1809,7 +1809,7 @@ func TestHTTPMCPRefreshesOAuthTokenForSSEClientResponse(t *testing.T) {
+ 		switch {
+ 		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case r.Method == http.MethodPost && r.URL.Path == "/token":
+diff --git a/mcp/oauth_discovery.go b/mcp/oauth_discovery.go
+index bd3315be..a7021d94 100644
+--- a/mcp/oauth_discovery.go
++++ b/mcp/oauth_discovery.go
+@@ -614,14 +614,10 @@ var mcpOAuthIssuerBindingExceptions = []mcpOAuthIssuerBindingException{
+ // metadata's `authorization_servers` list (see DiscoverStreamableHTTPOAuth), so
+ // the same check applies to every candidate the loop resolves.
+ //
+-// DELIBERATE GO DIFFERENCE (flagged for the lane leader): Rust additionally
+-// requires, when the metadata carries **no** issuer at all, that the token
+-// endpoint share the authorization endpoint's origin. Go's discovery has always
+-// accepted issuer-less metadata whose token endpoint sits on another origin
+-// (the existing discovery/login fixtures model exactly that shape), so porting
+-// that arm would newly reject a large set of existing Go fixtures and test the
+-// token endpoint rather than the issuer binding this PR is about. It is
+-// therefore not ported here and remains an open item for a separate change.
++// When the metadata carries no issuer at all, the token endpoint must still
++// share the authorization endpoint's origin: Rust enforces the same fallback in
++// `validate_authorization_server_endpoints` (#39935), so an issuer-less
++// authorization server cannot silently hand tokens to a foreign origin.
+ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationServerMetadata) error {
+ 	if metadata == nil {
+ 		return nil
+@@ -669,9 +665,12 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
+ 		return errors.New("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+ 	}
+ 
+-	// Issuer-less metadata: see the DELIBERATE GO DIFFERENCE note above. The
+-	// token endpoint is still parsed above so a malformed token endpoint is
+-	// rejected exactly like Rust does.
++	// Issuer-less metadata: Rust still requires the token endpoint to share the
++	// authorization endpoint's origin, so the browser hand-off and the token
++	// exchange cannot straddle two different authorization servers.
++	if !sameHTTPOrigin(authorizationEndpoint, tokenEndpoint) {
++		return errors.New("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
++	}
+ 	return nil
+ }
+ 
+diff --git a/mcp/oauth_issuer_binding_test.go b/mcp/oauth_issuer_binding_test.go
+index 53427bd5..0f514e54 100644
+--- a/mcp/oauth_issuer_binding_test.go
++++ b/mcp/oauth_issuer_binding_test.go
+@@ -205,24 +205,36 @@ func TestMCPOAuthDiscoveryIssuerBoundCallbacksRequireIssuer(t *testing.T) {
+ 	}
+ }
+ 
+-// Issuer-less metadata keeps the pre-existing Go behaviour. Rust additionally
+-// requires the token endpoint to share the authorization endpoint's origin in
+-// that case; that arm is deliberately not ported (see the note on
+-// validateMCPOAuthAuthorizationServerEndpoints) and this test pins the current
+-// contract so the difference stays visible.
+-func TestMCPOAuthDiscoveryKeepsIssuerLessMetadataAccepted(t *testing.T) {
+-	server := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
++// Issuer-less metadata must still bind the token endpoint to the authorization
++// endpoint's origin, matching Rust's fallback arm in
++// `validate_authorization_server_endpoints` (#39935). Without it an
++// issuer-less authorization server could point the authorization hand-off at
++// one origin and the code exchange at another.
++func TestMCPOAuthDiscoveryBindsIssuerLessTokenEndpointLikeRust(t *testing.T) {
++	sameOrigin := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
+ 		"authorization_endpoint": "https://issuer.example/authorize",
+-		"token_endpoint":         "http://127.0.0.1:1/token",
++		"token_endpoint":         "https://issuer.example/token",
+ 	})
+-	defer server.Close()
+-
+-	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
++	defer sameOrigin.Close()
++	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), sameOrigin.URL+"/mcp", sameOrigin.Client())
+ 	if err != nil {
+-		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want issuer-less metadata still accepted", err)
++		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want issuer-less same-origin metadata accepted", err)
++	}
++	if discovery == nil || discovery.AuthorizationEndpoint != "https://issuer.example/authorize" {
++		t.Fatalf("discovery = %#v, want the issuer-less same-origin endpoint accepted", discovery)
++	}
++
++	crossOrigin := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
++		"authorization_endpoint": "https://issuer.example/authorize",
++		"token_endpoint":         "https://tokens.example/token",
++	})
++	defer crossOrigin.Close()
++	discovery, err = DiscoverStreamableHTTPOAuth(context.Background(), crossOrigin.URL+"/mcp", crossOrigin.Client())
++	if err == nil || !strings.Contains(err.Error(), "OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks") {
++		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v, want the cross-origin token endpoint rejected", err)
+ 	}
+-	if discovery == nil {
+-		t.Fatal("DiscoverStreamableHTTPOAuth() returned nil discovery")
++	if discovery != nil {
++		t.Fatalf("discovery = %#v, want the cross-origin token endpoint rejected", discovery)
+ 	}
+ }
+ 
+diff --git a/mcp/oauth_login_id_test.go b/mcp/oauth_login_id_test.go
+index e2682021..489fee19 100644
+--- a/mcp/oauth_login_id_test.go
++++ b/mcp/oauth_login_id_test.go
+@@ -21,7 +21,7 @@ func oauthLoginIDIssuer(t *testing.T) *httptest.Server {
+ 		switch r.URL.Path {
+ 		case "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case "/token":
+diff --git a/mcp/oauth_test.go b/mcp/oauth_test.go
+index 853fbaeb..82a2f973 100644
+--- a/mcp/oauth_test.go
++++ b/mcp/oauth_test.go
+@@ -383,14 +383,18 @@ func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T)
+ 	for _, testCase := range []struct {
+ 		name     string
+ 		endpoint string
+-		ok       bool
++		// tokenEndpoint shares the accepted endpoint's origin so the
++		// issuer-less token/authorization origin binding (#39935) is satisfied,
++		// leaving the scheme gate as the only thing under test.
++		tokenEndpoint string
++		ok            bool
+ 	}{
+-		{name: "https", endpoint: "https://example.com/authorize", ok: true},
+-		{name: "http", endpoint: "http://example.com/authorize", ok: true},
+-		{name: "file", endpoint: "file:///etc/authorize"},
+-		{name: "custom scheme", endpoint: "custom://example.com/authorize"},
+-		{name: "malformed", endpoint: "://not a url"},
+-		{name: "scheme relative", endpoint: "/authorize"},
++		{name: "https", endpoint: "https://example.com/authorize", tokenEndpoint: "https://example.com/token", ok: true},
++		{name: "http", endpoint: "http://example.com/authorize", tokenEndpoint: "http://example.com/token", ok: true},
++		{name: "file", endpoint: "file:///etc/authorize", tokenEndpoint: "https://example.com/token"},
++		{name: "custom scheme", endpoint: "custom://example.com/authorize", tokenEndpoint: "https://example.com/token"},
++		{name: "malformed", endpoint: "://not a url", tokenEndpoint: "https://example.com/token"},
++		{name: "scheme relative", endpoint: "/authorize", tokenEndpoint: "https://example.com/token"},
+ 	} {
+ 		t.Run(testCase.name, func(t *testing.T) {
+ 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+@@ -400,7 +404,7 @@ func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T)
+ 				}
+ 				writeJSON(t, w, map[string]any{
+ 					"authorization_endpoint": testCase.endpoint,
+-					"token_endpoint":         "https://example.com/token",
++					"token_endpoint":         testCase.tokenEndpoint,
+ 				})
+ 			}))
+ 			defer server.Close()
+@@ -972,7 +976,7 @@ func TestMCPServiceOauthLoginStartsCallbackServer(t *testing.T) {
+ 		switch r.URL.Path {
+ 		case "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		case "/token":
+@@ -1053,7 +1057,7 @@ func TestMCPServiceOauthLoginUsesDynamicClientRegistration(t *testing.T) {
+ 		switch r.URL.Path {
+ 		case "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 				"registration_endpoint":  "http://" + r.Host + "/register",
+ 			})
+@@ -1146,7 +1150,7 @@ func TestMCPServiceOauthLoginUsesFinalRuntimeHTTPClientLikeRust(t *testing.T) {
+ 		switch r.URL.Path {
+ 		case "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "https://" + runtimeHost + "/authorize",
+ 				"token_endpoint":         "https://" + runtimeHost + "/token",
+ 				"registration_endpoint":  "https://" + runtimeHost + "/register",
+ 			})
+@@ -1268,7 +1272,7 @@ func TestMCPServiceOauthCancelCompletesActiveLogin(t *testing.T) {
+ 		switch r.URL.Path {
+ 		case "/.well-known/oauth-authorization-server/mcp":
+ 			writeJSON(t, w, map[string]any{
+-				"authorization_endpoint": "https://issuer.example.test/authorize",
++				"authorization_endpoint": "http://" + r.Host + "/authorize",
+ 				"token_endpoint":         "http://" + r.Host + "/token",
+ 			})
+ 		default:

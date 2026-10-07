@@ -1,0 +1,504 @@
+diff --git a/appserver/agent_runtime.go b/appserver/agent_runtime.go
+index f412babb..be64d6e9 100644
+--- a/appserver/agent_runtime.go
++++ b/appserver/agent_runtime.go
+@@ -655,6 +655,12 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
+ 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
+ 	contentItemKindsEnabled := features.Enabled(cfg.FeatureSettings(), "content_item_kinds")
+ 	agent.ContentItemKindsEnabled = &contentItemKindsEnabled
++	// Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the OpenAI provider
++	// plus `api_key_cyber_access_programs`, with no model-discovery conjunct.
++	agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
++		cfg.FeatureSettings(),
++		firstNonEmpty(runConfig.ProviderID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
++	)
+ 	agent.Residency = managedResidencyForConfig(cfg)
+ 	agent.AWS = provider.AWS
+ 	// Rust's SessionTelemetry records codex.api_request from the client's request
+diff --git a/exec/exec.go b/exec/exec.go
+index bab03d8f..33663cca 100644
+--- a/exec/exec.go
++++ b/exec/exec.go
+@@ -1736,6 +1736,13 @@ func (r *Runner) agentForRun(cfg *config.Config, resolvedAuth *auth.ResolvedAuth
+ 		agent.AuthIssuer = cfg.ChatGPTBaseURL()
+ 		agent.AgentIdentity = agentIdentityOptionsForExec(cfg)
+ 		agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
++		// Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the OpenAI
++		// provider plus `api_key_cyber_access_programs`, with no model-discovery
++		// conjunct.
++		agent.ApiKeyCyberAccessPrograms = model.ApiKeyCyberAccessProgramsFromConfig(
++			cfg.FeatureSettings(),
++			firstNonEmpty(providerID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID),
++		)
+ 		// Rust sets the process-wide enforce_residency from config; the exec
+ 		// path mirrors it on every model request.
+ 		agent.Residency = managedResidencyForConfig(cfg)
+diff --git a/model/access_programs.go b/model/access_programs.go
+index deccac57..f468888e 100644
+--- a/model/access_programs.go
++++ b/model/access_programs.go
+@@ -4,6 +4,8 @@ import (
+ 	"strings"
+ 
+ 	"codex_go/auth"
++	"codex_go/codexapi"
++	"codex_go/features"
+ )
+ 
+ // AccessPrograms mirrors Rust `codex_api::AccessPrograms` (#44893): the explicit
+@@ -13,25 +15,90 @@ type AccessPrograms struct {
+ 	Cyber string `json:"cyber"`
+ }
+ 
++// ApiKeyCyberAccessPrograms mirrors Rust
++// `core::cyber_access_program::ApiKeyCyberAccessPrograms`: the config-derived
++// policy for an explicit program on an API-key session.
++//
++// Rust resolves it in `from_config` from the turn's provider id plus the
++// `api_key_cyber_access_programs` feature. Rust #49714 decoupled it from
++// `api_key_model_discovery`, so model discovery no longer takes part. The zero
++// value keeps the pre-#49714 Go behavior (drop the program, never fail) for a
++// runner that was never handed a resolved policy.
++type ApiKeyCyberAccessPrograms int
++
++const (
++	// ApiKeyCyberAccessProgramsUnsupportedProvider is the policy for every
++	// provider other than the OpenAI provider: the program is dropped.
++	ApiKeyCyberAccessProgramsUnsupportedProvider ApiKeyCyberAccessPrograms = iota
++	// ApiKeyCyberAccessProgramsDisabled is the policy while the
++	// `api_key_cyber_access_programs` feature is off: an API-key session that
++	// selected a program fails its turn with an invalid-request error.
++	ApiKeyCyberAccessProgramsDisabled
++	// ApiKeyCyberAccessProgramsEnabled forwards an explicitly selected program
++	// from an API-key session.
++	ApiKeyCyberAccessProgramsEnabled
++)
++
++// ApiKeyCyberAccessProgramsFromConfig mirrors Rust
++// `ApiKeyCyberAccessPrograms::from_config` (#49714): only the OpenAI provider id
++// and the `api_key_cyber_access_programs` feature decide the policy, so enabling
++// the forwarding feature is enough on its own.
++func ApiKeyCyberAccessProgramsFromConfig(featureSettings map[string]bool, providerID string) ApiKeyCyberAccessPrograms {
++	if strings.TrimSpace(providerID) != OpenAIProviderID {
++		return ApiKeyCyberAccessProgramsUnsupportedProvider
++	}
++	if features.Enabled(featureSettings, "api_key_cyber_access_programs") {
++		return ApiKeyCyberAccessProgramsEnabled
++	}
++	return ApiKeyCyberAccessProgramsDisabled
++}
++
+ // AccessProgramsForAuth mirrors Rust `core::cyber_access_program::for_auth`: an
+-// explicit per-turn program reaches the request only for an authenticated human
+-// ChatGPT account, and no program preserves the backend's automatic behavior.
++// explicit per-turn program reaches the request for an authenticated human
++// ChatGPT account (Rust narrows the program to the OpenAI provider first, in
++// `for_provider`), and an API-key session forwards it only while `policy`
++// allows. Bedrock, Agent Identity and missing credentials never send it.
+ //
+-// Rust's gate is `CodexAuth::is_chatgpt_auth`, i.e.
++// Rust's ChatGPT gate is `CodexAuth::is_chatgpt_auth`, i.e.
+ // `AuthMode::has_chatgpt_account` (`chatgpt`, `chatgptAuthTokens`,
+-// `personalAccessToken`). An Agent Identity credential uses the Codex backend
+-// but is not a ChatGPT account, so it does not qualify, and neither do API-key
+-// or Bedrock credential modes.
+-func AccessProgramsForAuth(program string, snapshot *auth.AuthDotJSON) *AccessPrograms {
+-	switch CyberAccessProgram(strings.TrimSpace(program)) {
++// `personalAccessToken`); its API-key gate is `CodexAuth::is_api_key_auth`, i.e.
++// exactly `AuthMode::ApiKey`.
++func AccessProgramsForAuth(program string, snapshot *auth.AuthDotJSON, policy ApiKeyCyberAccessPrograms) (*AccessPrograms, error) {
++	trimmed := strings.TrimSpace(program)
++	switch CyberAccessProgram(trimmed) {
+ 	case CyberAccessProgramStandard, CyberAccessProgramDaybreakBlue, CyberAccessProgramDaybreakRed:
+ 	default:
+-		return nil
++		return nil, nil
+ 	}
+-	if !authHasChatGPTAccountForProgram(snapshot) {
+-		return nil
++	if snapshot == nil {
++		return nil, nil
++	}
++	if authHasChatGPTAccountForProgram(snapshot) {
++		return &AccessPrograms{Cyber: trimmed}, nil
+ 	}
+-	return &AccessPrograms{Cyber: strings.TrimSpace(program)}
++	if !authIsAPIKeyForProgram(snapshot) {
++		return nil, nil
++	}
++	switch policy {
++	case ApiKeyCyberAccessProgramsUnsupportedProvider:
++		return nil, nil
++	case ApiKeyCyberAccessProgramsDisabled:
++		// Rust `for_auth` fails an API-key turn that selected a program while
++		// forwarding is off, with this exact message.
++		return nil, &codexapi.APIError{
++			Kind:    codexapi.ErrorInvalidRequest,
++			Message: "Cyber access programs are disabled for this API-key session.",
++		}
++	default:
++		return &AccessPrograms{Cyber: trimmed}, nil
++	}
++}
++
++// authIsAPIKeyForProgram reports whether the credential is an OpenAI API key
++// (Rust `CodexAuth::is_api_key_auth` = `AuthMode::ApiKey`; Bedrock and Agent
++// Identity credentials have their own modes and do not qualify).
++func authIsAPIKeyForProgram(snapshot *auth.AuthDotJSON) bool {
++	return snapshot != nil && snapshot.Mode() == "api-key"
+ }
+ 
+ // authHasChatGPTAccountForProgram reports whether the auth snapshot is an
+diff --git a/model/cyber_access_program_wire_test.go b/model/cyber_access_program_wire_test.go
+index dc33ed58..e6a0c6c6 100644
+--- a/model/cyber_access_program_wire_test.go
++++ b/model/cyber_access_program_wire_test.go
+@@ -3,35 +3,68 @@ package model
+ import (
+ 	"context"
+ 	"encoding/json"
++	"errors"
+ 	"net/http"
+ 	"net/http/httptest"
+ 	"testing"
+ 
+ 	"codex_go/auth"
++	"codex_go/codexapi"
+ )
+ 
+-// Mirrors Rust `core::cyber_access_program::for_auth` (#44893): the explicit
+-// per-turn program reaches the request only for an authenticated human ChatGPT
+-// account, so API-key, Agent Identity and Bedrock credentials never send it.
++// cyberAccessProgramsDisabledMessage is Rust's `CodexErr::InvalidRequest`
++// message for an API-key session that selected a program while forwarding is off.
++const cyberAccessProgramsDisabledMessage = "Cyber access programs are disabled for this API-key session."
++
++// Mirrors Rust `core::cyber_access_program::for_auth` (#44893, #49714): the
++// explicit per-turn program reaches the request for an authenticated human
++// ChatGPT account, and for an API-key session only while the resolved policy
++// allows it. Agent Identity and Bedrock credentials never send it.
+ func TestAccessProgramsForAuthGatesOnChatGPTAccountsLikeRust(t *testing.T) {
+ 	for _, testCase := range []struct {
+ 		name     string
+ 		program  string
+ 		snapshot *auth.AuthDotJSON
++		policy   ApiKeyCyberAccessPrograms
+ 		want     string
++		wantErr  bool
+ 	}{
+-		{name: "chatgpt", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"}, want: "daybreak_blue"},
+-		{name: "chatgpt tokens", program: "standard", snapshot: &auth.AuthDotJSON{AuthMode: "chatgptAuthTokens"}, want: "standard"},
+-		{name: "personal access token", program: "daybreak_red", snapshot: &auth.AuthDotJSON{AuthMode: "personalAccessToken"}, want: "daybreak_red"},
+-		{name: "api key", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}},
+-		{name: "agent identity", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "agent-identity", AgentIdentity: map[string]any{"id": "a"}}},
+-		{name: "bedrock", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "bedrock-api-key", BedrockAPIKey: map[string]any{"api_key": "b"}}},
+-		{name: "no auth", program: "daybreak_blue"},
++		{name: "chatgpt", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"}, policy: ApiKeyCyberAccessProgramsUnsupportedProvider, want: "daybreak_blue"},
++		{name: "chatgpt tokens", program: "standard", snapshot: &auth.AuthDotJSON{AuthMode: "chatgptAuthTokens"}, policy: ApiKeyCyberAccessProgramsDisabled, want: "standard"},
++		{name: "personal access token", program: "daybreak_red", snapshot: &auth.AuthDotJSON{AuthMode: "personalAccessToken"}, policy: ApiKeyCyberAccessProgramsDisabled, want: "daybreak_red"},
++		// Rust #49714: the forwarding feature alone admits an API-key program.
++		{name: "api key forwarding enabled", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, policy: ApiKeyCyberAccessProgramsEnabled, want: "daybreak_blue"},
++		{name: "api key forwarding disabled", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, policy: ApiKeyCyberAccessProgramsDisabled, wantErr: true},
++		{name: "api key unsupported provider", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, policy: ApiKeyCyberAccessProgramsUnsupportedProvider},
++		{name: "api key without program", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, policy: ApiKeyCyberAccessProgramsDisabled},
++		{name: "api key unknown program", program: "future_program", snapshot: &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, policy: ApiKeyCyberAccessProgramsDisabled},
++		{name: "agent identity", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "agent-identity", AgentIdentity: map[string]any{"id": "a"}}, policy: ApiKeyCyberAccessProgramsEnabled},
++		{name: "bedrock", program: "daybreak_blue", snapshot: &auth.AuthDotJSON{AuthMode: "bedrock-api-key", BedrockAPIKey: map[string]any{"api_key": "b"}}, policy: ApiKeyCyberAccessProgramsEnabled},
++		{name: "no auth", program: "daybreak_blue", policy: ApiKeyCyberAccessProgramsEnabled},
+ 		{name: "no program", snapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"}},
+ 		{name: "unknown program", program: "future_program", snapshot: &auth.AuthDotJSON{AuthMode: "chatgpt"}},
+ 	} {
+ 		t.Run(testCase.name, func(t *testing.T) {
+-			got := AccessProgramsForAuth(testCase.program, testCase.snapshot)
++			got, err := AccessProgramsForAuth(testCase.program, testCase.snapshot, testCase.policy)
++			if testCase.wantErr {
++				if err == nil {
++					t.Fatalf("AccessProgramsForAuth() error = nil, want the API-key invalid-request error")
++				}
++				if err.Error() != cyberAccessProgramsDisabledMessage {
++					t.Fatalf("AccessProgramsForAuth() error = %q, want %q", err.Error(), cyberAccessProgramsDisabledMessage)
++				}
++				var apiErr *codexapi.APIError
++				if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidRequest {
++					t.Fatalf("AccessProgramsForAuth() error = %#v, want codexapi.ErrorInvalidRequest", err)
++				}
++				if got != nil {
++					t.Fatalf("AccessProgramsForAuth() = %#v, want nil programs", got)
++				}
++				return
++			}
++			if err != nil {
++				t.Fatalf("AccessProgramsForAuth() error = %v", err)
++			}
+ 			if testCase.want == "" {
+ 				if got != nil {
+ 					t.Fatalf("AccessProgramsForAuth() = %#v, want nil", got)
+@@ -45,6 +78,38 @@ func TestAccessProgramsForAuthGatesOnChatGPTAccountsLikeRust(t *testing.T) {
+ 	}
+ }
+ 
++// Mirrors Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the policy is
++// the OpenAI provider id plus `api_key_cyber_access_programs` alone, so
++// `api_key_model_discovery` never changes the answer.
++func TestApiKeyCyberAccessProgramsFromConfigLikeRust(t *testing.T) {
++	for _, discovery := range []bool{false, true} {
++		for _, forwarding := range []bool{false, true} {
++			settings := map[string]bool{
++				"api_key_model_discovery":       discovery,
++				"api_key_cyber_access_programs": forwarding,
++			}
++			want := ApiKeyCyberAccessProgramsDisabled
++			if forwarding {
++				want = ApiKeyCyberAccessProgramsEnabled
++			}
++			if got := ApiKeyCyberAccessProgramsFromConfig(settings, OpenAIProviderID); got != want {
++				t.Fatalf("ApiKeyCyberAccessProgramsFromConfig(model discovery %v, forwarding %v) = %v, want %v", discovery, forwarding, got, want)
++			}
++			if got := ApiKeyCyberAccessProgramsFromConfig(settings, "bedrock"); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
++				t.Fatalf("ApiKeyCyberAccessProgramsFromConfig(bedrock) = %v, want UnsupportedProvider", got)
++			}
++		}
++	}
++	// The feature defaults to off, so an absent entry is the disabled policy.
++	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{}, OpenAIProviderID); got != ApiKeyCyberAccessProgramsDisabled {
++		t.Fatalf("default policy = %v, want Disabled", got)
++	}
++	// A blank provider id is not the OpenAI provider id.
++	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{"api_key_cyber_access_programs": true}, "  "); got != ApiKeyCyberAccessProgramsUnsupportedProvider {
++		t.Fatalf("blank provider policy = %v, want UnsupportedProvider", got)
++	}
++}
++
+ func TestAccessProgramsWireShapeLikeRust(t *testing.T) {
+ 	encoded, err := json.Marshal(AccessPrograms{Cyber: "daybreak_red"})
+ 	if err != nil {
+@@ -55,62 +120,120 @@ func TestAccessProgramsWireShapeLikeRust(t *testing.T) {
+ 	}
+ }
+ 
+-// The request body carries `access_programs` only for a ChatGPT-authorized
+-// turn that selected one, and never for a request whose account cannot use it.
++// The request body carries `access_programs` only for a turn whose credential
++// and policy authorize it.
+ func TestResponsesAgentRunnerSendsAccessProgramsOnlyForChatGPTAuth(t *testing.T) {
+-	var recordedBodies []map[string]any
+-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		var body map[string]any
+-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+-			t.Fatalf("Decode request body error = %v", err)
+-		}
+-		recordedBodies = append(recordedBodies, body)
+-		_, _ = w.Write([]byte(`{"id":"resp-next","model":"gpt-test","output_text":"ok"}`))
+-	}))
+-	defer server.Close()
+-
+-	run := func(t *testing.T, snapshot *auth.AuthDotJSON, program string) map[string]any {
+-		t.Helper()
+-		runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+-			Provider:     &APIProvider{BaseURL: server.URL + "/v1"},
+-			AuthSnapshot: snapshot,
+-			ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+-				Slug: "gpt-test",
+-			}}}),
+-		})
+-		if _, err := runner.Run(context.Background(), &AgentRequest{
+-			Prompt:             "hello",
+-			Model:              "gpt-test",
+-			CyberAccessProgram: program,
+-		}); err != nil {
+-			t.Fatalf("Run error = %v", err)
+-		}
+-		body := recordedBodies[len(recordedBodies)-1]
+-		return body
+-	}
++	recordedBodies := newAccessProgramRecorder(t)
+ 
+-	body := run(t, &auth.AuthDotJSON{AuthMode: "chatgpt"}, "daybreak_blue")
++	body := recordedBodies.run(t, &auth.AuthDotJSON{AuthMode: "chatgpt"}, "daybreak_blue", ApiKeyCyberAccessProgramsUnsupportedProvider)
+ 	programs, ok := body["access_programs"].(map[string]any)
+ 	if !ok || programs["cyber"] != "daybreak_blue" {
+ 		t.Fatalf("chatgpt body access_programs = %#v", body["access_programs"])
+ 	}
+ 
+ 	// No selection preserves the backend's automatic behavior.
+-	body = run(t, &auth.AuthDotJSON{AuthMode: "chatgpt"}, "")
++	body = recordedBodies.run(t, &auth.AuthDotJSON{AuthMode: "chatgpt"}, "", ApiKeyCyberAccessProgramsUnsupportedProvider)
+ 	if _, present := body["access_programs"]; present {
+ 		t.Fatalf("an unselected program was sent: %#v", body["access_programs"])
+ 	}
+ 
+-	// An API-key account cannot authorize a program, so the field is dropped.
+-	body = run(t, &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, "daybreak_blue")
++	// An unconfigured runner keeps the pre-#49714 behavior: the program is
++	// dropped for an API-key account instead of failing the turn.
++	body = recordedBodies.run(t, &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, "daybreak_blue", ApiKeyCyberAccessProgramsUnsupportedProvider)
+ 	if _, present := body["access_programs"]; present {
+ 		t.Fatalf("API-key request carried access_programs: %#v", body["access_programs"])
+ 	}
+ 
+ 	// An Agent Identity credential uses the Codex backend but is not a ChatGPT
+ 	// account (Rust `AuthMode::has_chatgpt_account`).
+-	body = run(t, &auth.AuthDotJSON{AuthMode: "agent-identity", AgentIdentity: map[string]any{"id": "a"}}, "daybreak_blue")
++	body = recordedBodies.run(t, &auth.AuthDotJSON{AuthMode: "agent-identity", AgentIdentity: map[string]any{"id": "a"}}, "daybreak_blue", ApiKeyCyberAccessProgramsEnabled)
+ 	if _, present := body["access_programs"]; present {
+ 		t.Fatalf("agent-identity request carried access_programs: %#v", body["access_programs"])
+ 	}
+ }
++
++// Rust #49714: `features.api_key_cyber_access_programs` is enough on its own, so
++// an API-key session reaches the wire with the selected program even while
++// `features.api_key_model_discovery` is off.
++func TestResponsesAgentRunnerForwardsAPIKeyAccessProgramsWhenForwardingEnabledLikeRust(t *testing.T) {
++	recordedBodies := newAccessProgramRecorder(t)
++	body := recordedBodies.run(t, &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, "daybreak_blue", ApiKeyCyberAccessProgramsEnabled)
++	programs, ok := body["access_programs"].(map[string]any)
++	if !ok || programs["cyber"] != "daybreak_blue" {
++		t.Fatalf("API-key body access_programs = %#v", body["access_programs"])
++	}
++}
++
++// Rust `for_auth` fails the turn with `CodexErr::InvalidRequest` when an API-key
++// session selects a program while forwarding is disabled.
++func TestResponsesAgentRunnerRejectsAPIKeyAccessProgramsWhenForwardingDisabledLikeRust(t *testing.T) {
++	recorder := newAccessProgramRecorder(t)
++	runner := recorder.runner(&auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}, ApiKeyCyberAccessProgramsDisabled)
++	_, err := runner.Run(context.Background(), &AgentRequest{
++		Prompt:             "hello",
++		Model:              "gpt-test",
++		CyberAccessProgram: "daybreak_blue",
++	})
++	if err == nil {
++		t.Fatalf("Run() error = nil, want the API-key invalid-request error")
++	}
++	if err.Error() != cyberAccessProgramsDisabledMessage {
++		t.Fatalf("Run() error = %q, want %q", err.Error(), cyberAccessProgramsDisabledMessage)
++	}
++	var apiErr *codexapi.APIError
++	if !errors.As(err, &apiErr) || apiErr.Kind != codexapi.ErrorInvalidRequest {
++		t.Fatalf("Run() error = %#v, want codexapi.ErrorInvalidRequest", err)
++	}
++	if len(recorder.bodies) != 0 {
++		t.Fatalf("a rejected program still issued %d request(s)", len(recorder.bodies))
++	}
++}
++
++// accessProgramRecorder records the request bodies a runner sends to a stub
++// provider so a test can assert on the exact wire payload.
++type accessProgramRecorder struct {
++	t       *testing.T
++	baseURL string
++	bodies  []map[string]any
++}
++
++func newAccessProgramRecorder(t *testing.T) *accessProgramRecorder {
++	t.Helper()
++	recorder := &accessProgramRecorder{t: t}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body map[string]any
++		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
++			t.Fatalf("Decode request body error = %v", err)
++		}
++		recorder.bodies = append(recorder.bodies, body)
++		_, _ = w.Write([]byte(`{"id":"resp-next","model":"gpt-test","output_text":"ok"}`))
++	}))
++	t.Cleanup(server.Close)
++	recorder.baseURL = server.URL + "/v1"
++	return recorder
++}
++
++func (r *accessProgramRecorder) runner(snapshot *auth.AuthDotJSON, policy ApiKeyCyberAccessPrograms) *ResponsesAgentRunner {
++	r.t.Helper()
++	return NewResponsesAgentRunner(&ResponsesAgentOptions{
++		Provider:                  &APIProvider{BaseURL: r.baseURL},
++		AuthSnapshot:              snapshot,
++		ApiKeyCyberAccessPrograms: policy,
++		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
++			Slug: "gpt-test",
++		}}}),
++	})
++}
++
++func (r *accessProgramRecorder) run(t *testing.T, snapshot *auth.AuthDotJSON, program string, policy ApiKeyCyberAccessPrograms) map[string]any {
++	t.Helper()
++	runner := r.runner(snapshot, policy)
++	if _, err := runner.Run(context.Background(), &AgentRequest{
++		Prompt:             "hello",
++		Model:              "gpt-test",
++		CyberAccessProgram: program,
++	}); err != nil {
++		t.Fatalf("Run error = %v", err)
++	}
++	return r.bodies[len(r.bodies)-1]
++}
+diff --git a/model/responses_agent.go b/model/responses_agent.go
+index 276ac2d4..5c84c20e 100644
+--- a/model/responses_agent.go
++++ b/model/responses_agent.go
+@@ -134,6 +134,12 @@ type ResponsesAgentOptions struct {
+ 	// ImageStore is the attachment store image preparation uploads prepared
+ 	// images to (Rust `Session::image_store`, #51517). nil keeps images inline.
+ 	ImageStore attachmentstore.Store
++	// ApiKeyCyberAccessPrograms is the resolved Rust
++	// `ApiKeyCyberAccessPrograms` policy for this runner
++	// (ApiKeyCyberAccessProgramsFromConfig). The zero value drops an API-key
++	// session's explicit program, matching the feature's default-off behavior
++	// without failing the turn.
++	ApiKeyCyberAccessPrograms ApiKeyCyberAccessPrograms
+ }
+ 
+ type ResponsesAgentRunner struct {
+@@ -193,6 +199,9 @@ type ResponsesAgentRunner struct {
+ 	// mirroring Rust's `passthrough_image_store()` default; a host with a
+ 	// durable backend installs its own store (Rust #51517).
+ 	ImageStore attachmentstore.Store
++	// ApiKeyCyberAccessPrograms carries the resolved API-key cyber-access
++	// program policy handed in through ResponsesAgentOptions.
++	ApiKeyCyberAccessPrograms ApiKeyCyberAccessPrograms
+ 	// inferenceTools retains the last model-visible tool list per conversation so
+ 	// each sampling request can count a catalog change on the turn profile
+ 	// (Rust #50964 `ModelClientState::last_inference_tools`). The pointer is
+@@ -600,6 +609,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
+ 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
+ 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
+ 		Metrics:                    options.Metrics,
++		ApiKeyCyberAccessPrograms:  options.ApiKeyCyberAccessPrograms,
+ 		ImageStore:                 attachmentstore.StoreOrDefault(options.ImageStore),
+ 		providerAuthFetchedAt:      providerAuthFetchedAt,
+ 		turnState:                  &responsesTurnStateCache{},
+@@ -1000,11 +1010,15 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
+ 		// support it before sending the request over the websocket transport.
+ 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
+ 	}
++	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
++	if err != nil {
++		return nil, err
++	}
+ 	apiRequest := &responsesAgentRequest{
+ 		Model: modelID, Instructions: instructions, Input: r.filterToolResultMetadataForDestination(r.gateContentItemKinds(inputItems)), Tools: tools, ToolChoice: "auto",
+ 		Stream: true, Store: request.Store, ParallelToolCalls: request.ParallelToolCalls && !modelInfo.UseResponsesLite,
+ 		ServiceTier: r.serviceTierForRequest(&modelInfo, request.ServiceTier), PromptCacheKey: strings.TrimSpace(request.PromptCacheKey),
+-		AccessPrograms: AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
++		AccessPrograms: accessPrograms,
+ 		ClientMetadata: cloneStringMap(request.ClientMetadata), Text: responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
+ 	}
+ 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
+@@ -1514,6 +1528,10 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
+ 	inputItems = r.filterToolResultMetadataForDestination(inputItems)
+ 	// Only Responses WebSocket v2 supports previous_response_id. This HTTP/SSE
+ 	// runner carries conversation context by sending full history in input.
++	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
++	if err != nil {
++		return nil, err
++	}
+ 	apiRequest := &responsesAgentRequest{
+ 		Model:                modelID,
+ 		Instructions:         instructions,
+@@ -1525,7 +1543,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
+ 		ParallelToolCalls:    parallelToolCalls,
+ 		ServiceTier:          r.serviceTierForRequest(&modelInfo, request.ServiceTier),
+ 		PromptCacheKey:       strings.TrimSpace(request.PromptCacheKey),
+-		AccessPrograms:       AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot),
++		AccessPrograms:       accessPrograms,
+ 		ClientMetadata:       cloneStringMap(request.ClientMetadata),
+ 		Text:                 responsesTextParamForRequest(request.OutputSchema, request.ModelVerbosity, &modelInfo),
+ 		UseResponsesLite:     modelInfo.UseResponsesLite,

@@ -1,0 +1,197 @@
+diff --git a/appserver/post_turn_compact_usage_limit_test.go b/appserver/post_turn_compact_usage_limit_test.go
+new file mode 100644
+index 00000000..5e502a25
+--- /dev/null
++++ b/appserver/post_turn_compact_usage_limit_test.go
+@@ -0,0 +1,114 @@
++package appserver
++
++import (
++	"context"
++	"net/http"
++	"strings"
++	"testing"
++	"time"
++
++	"codex_go/codexapi"
++	"codex_go/compact"
++	"codex_go/model"
++	"codex_go/session"
++	"codex_go/state"
++	"codex_go/turn"
++)
++
++// usageLimitedCompactRunner fails every remote compaction attempt with the
++// provider's usage-limit error (Rust `CodexErrorInfo::UsageLimitExceeded`).
++type usageLimitedCompactRunner struct{ calls int }
++
++func (r *usageLimitedCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
++	r.calls++
++	return nil, &codexapi.APIError{
++		Kind:    codexapi.ErrorQuotaExceeded,
++		Status:  http.StatusTooManyRequests,
++		Message: "usage limit reached",
++	}
++}
++
++// Mirrors Rust #49097 (codex-rs/core/src/session/turn.rs): a usage-limit
++// failure during post-turn compaction notifies the turn lifecycle so the
++// active goal stops as usage-limited, while the completed turn - and its final
++// answer - is preserved instead of being failed.
++func TestRuntimeRouterPostTurnCompactUsageLimitStopsGoalLikeRust(t *testing.T) {
++	home := t.TempDir()
++	ctx := context.Background()
++	stateCfg, err := state.NewSqliteConfig(home)
++	if err != nil {
++		t.Fatal(err)
++	}
++	stateRuntime, err := state.InitStateRuntime(ctx, stateCfg, "openai")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer stateRuntime.Close()
++	store := session.NewStore(home)
++	threadRouter := NewRouter(store)
++	threadRouter.SetStateRuntime(stateRuntime)
++	runner := &usageLimitedCompactRunner{}
++	router := NewRuntimeRouter(RuntimeServices{
++		ThreadRouter:  threadRouter,
++		StateRuntime:  stateRuntime,
++		Turns:         turn.NewTurnService(),
++		Agent:         &postTurnCompactRuntimeAgent{usage: model.AgentUsage{InputTokens: 5000, OutputTokens: 100}},
++		ThreadStatus:  NewThreadStatusManager(),
++		CompactRunner: runner,
++	})
++	sink := NewNotificationBuffer()
++	router.SetNotificationSink(sink)
++
++	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: home, Prompt: "seed"}))
++	if threadStart.Error != nil {
++		t.Fatalf("thread start error: %+v", threadStart.Error)
++	}
++	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
++	base := time.Now().UTC()
++	budget := int64(1_000_000)
++	if err := stateRuntime.ReplaceThreadGoalSnapshot(ctx, &state.ThreadGoal{
++		ThreadID: threadID, GoalID: "post-turn-usage-limit-goal",
++		Objective: "stop on post-turn compaction usage limit",
++		Status:    state.ThreadGoalActive, TokenBudget: &budget, CreatedAt: base, UpdatedAt: base,
++	}); err != nil {
++		t.Fatal(err)
++	}
++
++	turnStart := router.Handle(requestWithParams(t, IntID(2), MethodTurnStart, turn.TurnStartParams{
++		ThreadID: threadID,
++		Prompt:   "finish the turn",
++		Config: map[string]any{
++			"model_post_turn_compact_threshold_percent": 50,
++			"model_context_window":                      10000,
++		},
++	}))
++	if turnStart.Error != nil {
++		t.Fatalf("turn start error: %+v", turnStart.Error)
++	}
++	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
++	// #49097 keeps the completed turn: the final answer still completes.
++	waitForTurnCompletedStatus(t, sink, turnID, TurnStatusCompleted)
++	if runner.calls == 0 {
++		t.Fatal("post-turn compaction never reached the remote runner")
++	}
++	warned := false
++	for _, notification := range sink.List() {
++		if notification.Method != NotificationWarning {
++			continue
++		}
++		if warning, ok := notification.Params.(*WarningNotification); ok &&
++			strings.HasPrefix(warning.Message, "Post-turn context compaction failed:") {
++			warned = true
++		}
++	}
++	if !warned {
++		t.Fatalf("post-turn compaction failure did not warn after the completed turn: %#v", sink.List())
++	}
++	goal, err := stateRuntime.GetThreadGoal(ctx, threadID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if goal == nil || goal.Status != state.ThreadGoalUsageLimited {
++		t.Fatalf("goal after post-turn compaction usage limit = %#v, want %s", goal, state.ThreadGoalUsageLimited)
++	}
++}
+diff --git a/appserver/turn_runtime.go b/appserver/turn_runtime.go
+index 18d9cb8a..c2c66d1b 100644
+--- a/appserver/turn_runtime.go
++++ b/appserver/turn_runtime.go
+@@ -135,6 +135,13 @@ func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, tu
+ 		Phase:                     compact.PhasePostTurn,
+ 		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+ 		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
++		// Rust #49097: Rust runs the post-turn compaction with
++		// `fallback_step_context = None` (core/src/session/turn.rs), and
++		// compact_remote_v2 returns the attempt error when no fallback step
++		// context is available, so a provider with remote compaction surfaces
++		// the failed attempt instead of summarizing locally (Rust's
++		// RemoteCompactionSupport::Unsupported keeps the local summary).
++		RemoteOnly: r.postTurnCompactionRemoteOnly(threadID),
+ 	})
+ 	return true, compactErr
+ }
+@@ -1864,6 +1871,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
+ 						r.finishTurnWithErrorAnalytics(threadID, turnID, startedAtMS, compactErr, nil)
+ 						return
+ 					}
++					// Rust #49097 (core/src/session/turn.rs): a usage-limit failure
++					// during post-turn compaction notifies the turn lifecycle so the
++					// goal extension stops automatic continuation, while the
++					// completed turn and its answer are preserved.
++					if errorFields := turnAnalyticsErrorFieldsFromError(compactErr); codexErrorIsUsageLimited(errorFields.TurnError) {
++						r.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, errorFields.TurnError)
++					}
+ 					r.notify(NotificationWarning, &WarningNotification{
+ 						ThreadID: stringPtrIfNotEmpty(threadID),
+ 						Message:  "Post-turn context compaction failed: " + compactErr.Error(),
+@@ -6220,6 +6234,44 @@ func (r *RuntimeRouter) providerSupportsRemoteCompact(providerID string) bool {
+ 	return info.SupportsRemoteCompaction()
+ }
+ 
++// postTurnCompactionRemoteOnly reports whether the post-turn compaction must
++// run remotely. Rust's post-turn call passes `fallback_step_context = None`
++// (core/src/session/turn.rs) and compact_remote_v2 returns the attempt error
++// when no fallback step context is available, so a provider with remote
++// compaction surfaces the failed attempt instead of summarizing locally; Go
++// keeps the local summary only when no remote runner is wired for the thread
++// (Rust's RemoteCompactionSupport::Unsupported local path). Rust #49097 relies
++// on that failure reaching the post-turn handler.
++func (r *RuntimeRouter) postTurnCompactionRemoteOnly(threadID string) bool {
++	if r == nil || strings.TrimSpace(threadID) == "" {
++		return false
++	}
++	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
++	if err != nil || record == nil {
++		return false
++	}
++	providerID := strings.TrimSpace(record.Metadata.ModelProvider)
++	if providerID == "" && record.Metadata.Extra != nil {
++		providerID = firstNonEmpty(
++			stringFromMap(record.Metadata.Extra, "model_provider"),
++			stringFromMap(record.Metadata.Extra, "modelProvider"),
++			stringFromMap(record.Metadata.Extra, "provider"),
++		)
++	}
++	if !r.providerSupportsRemoteCompact(providerID) {
++		return false
++	}
++	if r.services.CompactRunner != nil {
++		return true
++	}
++	agent := r.agentSnapshot()
++	if agent == nil {
++		return false
++	}
++	_, ok := agent.(*model.ResponsesAgentRunner)
++	return ok
++}
++
+ func compactReasonFromStatus(status *compact.TokenStatus) compact.Reason {
+ 	if status != nil && status.Reason != "" {
+ 		return status.Reason

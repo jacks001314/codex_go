@@ -1,0 +1,1530 @@
+diff --git a/config/cloud_config.go b/config/cloud_config.go
+index 1b1bd641..5f167cfa 100644
+--- a/config/cloud_config.go
++++ b/config/cloud_config.go
+@@ -3,6 +3,7 @@ package config
+ import (
+ 	"errors"
+ 	"fmt"
++	"math"
+ 	"path/filepath"
+ 	"sort"
+ 	"strings"
+@@ -153,11 +154,238 @@ func (e *CloudConfigLoadError) Error() string {
+ 	return e.Message
+ }
+ 
++// CloudConfigBundlePolicyPhase is the admission phase of the delivered
++// enterprise policy (Rust #49269 `CloudConfigBundlePolicyPhase`).
++type CloudConfigBundlePolicyPhase int
++
++const (
++	// CloudConfigBundlePolicyUninitialized is a policy that has neither observed
++	// nor published a delivered bundle yet.
++	CloudConfigBundlePolicyUninitialized CloudConfigBundlePolicyPhase = iota
++	// CloudConfigBundlePolicySuspended holds new enterprise MCP admission while
++	// the observed bundle is validated and staged for publication.
++	CloudConfigBundlePolicySuspended
++	// CloudConfigBundlePolicyActive published the observed bundle and may
++	// authorize new enterprise MCP requests.
++	CloudConfigBundlePolicyActive
++	// CloudConfigBundlePolicyRetired may not authorize anything anymore, e.g.
++	// after its loader was replaced or cleared.
++	CloudConfigBundlePolicyRetired
++)
++
++// CloudConfigBundleBindingStatus reports whether the policy revision a
++// configuration was built from is still the delivered one.
++type CloudConfigBundleBindingStatus int
++
++const (
++	// CloudConfigBundleBindingSuspended means no active policy backs the
++	// binding, so enterprise MCP admission must stay off.
++	CloudConfigBundleBindingSuspended CloudConfigBundleBindingStatus = iota
++	// CloudConfigBundleBindingCurrent means the bound revision is the active one.
++	CloudConfigBundleBindingCurrent
++	// CloudConfigBundleBindingStale means a newer revision was delivered.
++	CloudConfigBundleBindingStale
++)
++
++// CloudConfigBundlePolicy tracks which delivered bundle may authorize new
++// enterprise MCP requests (Rust #49269 `CloudConfigBundlePolicy`). Observing a
++// changed remote bundle suspends the previous revision before that bundle is
++// validated or cached; only the snapshot publishing the matching revision
++// re-activates admission, and a superseded or retired revision may no longer
++// commit staged persistence.
++type CloudConfigBundlePolicy struct {
++	mu       sync.Mutex
++	revision uint64
++	bundle   *CloudConfigBundle
++	phase    CloudConfigBundlePolicyPhase
++	changed  chan struct{}
++}
++
++// NewCloudConfigBundlePolicy returns an uninitialized policy.
++func NewCloudConfigBundlePolicy() *CloudConfigBundlePolicy {
++	return &CloudConfigBundlePolicy{changed: make(chan struct{})}
++}
++
++// CloudConfigBundlePolicyRevision is an observed remote policy revision that is
++// permitted to commit staged persistence.
++type CloudConfigBundlePolicyRevision struct {
++	revision uint64
++	policy   *CloudConfigBundlePolicy
++}
++
++// CommitIfCurrent runs commit only while the observed revision is still current.
++// Prepare the expensive work first: the revision check blocks newer
++// observations and retirement for the duration of the commit, which is why the
++// commit callback must not call back into the policy.
++func (r *CloudConfigBundlePolicyRevision) CommitIfCurrent(commit func() error) error {
++	if r == nil || r.policy == nil || commit == nil {
++		return nil
++	}
++	r.policy.mu.Lock()
++	defer r.policy.mu.Unlock()
++	if r.policy.revision == r.revision &&
++		(r.policy.phase == CloudConfigBundlePolicySuspended || r.policy.phase == CloudConfigBundlePolicyActive) {
++		return commit()
++	}
++	return nil
++}
++
++// CloudConfigBundleBinding is the policy revision that resolved one set of
++// enterprise MCP inputs. It stays live: a binding read after a newer revision
++// was delivered reports Stale instead of Current.
++type CloudConfigBundleBinding struct {
++	revision *uint64
++	policy   *CloudConfigBundlePolicy
++}
++
++// Status reports the current standing of the bound revision.
++func (b *CloudConfigBundleBinding) Status() CloudConfigBundleBindingStatus {
++	if b == nil || b.policy == nil {
++		return CloudConfigBundleBindingSuspended
++	}
++	b.policy.mu.Lock()
++	defer b.policy.mu.Unlock()
++	if b.policy.phase != CloudConfigBundlePolicyActive || b.revision == nil {
++		return CloudConfigBundleBindingSuspended
++	}
++	if b.policy.revision == *b.revision {
++		return CloudConfigBundleBindingCurrent
++	}
++	return CloudConfigBundleBindingStale
++}
++
++// CloudConfigBundleSnapshot pairs a loaded bundle with the policy revision
++// binding it was resolved from.
++type CloudConfigBundleSnapshot struct {
++	Bundle  *CloudConfigBundle
++	Err     error
++	Binding *CloudConfigBundleBinding
++}
++
++// ObserveRemoteBundle suspends enterprise MCP admission before a changed
++// delivered bundle is validated or cached, and returns the revision allowed to
++// commit staged persistence. It returns nil when the policy is retired (nothing
++// may be admitted or published) or when the revision counter overflowed.
++func (p *CloudConfigBundlePolicy) ObserveRemoteBundle(bundle *CloudConfigBundle) *CloudConfigBundlePolicyRevision {
++	if p == nil {
++		return nil
++	}
++	observed := bundle
++	if bundle.IsEmpty() {
++		observed = nil
++	}
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	if p.phase == CloudConfigBundlePolicyRetired {
++		return nil
++	}
++	if p.phase != CloudConfigBundlePolicyUninitialized && cloudConfigBundlesEqual(p.bundle, observed) {
++		return &CloudConfigBundlePolicyRevision{revision: p.revision, policy: p}
++	}
++	if p.phase != CloudConfigBundlePolicyUninitialized {
++		if p.revision == math.MaxUint64 {
++			p.phase = CloudConfigBundlePolicyRetired
++			p.notifyLocked()
++			return nil
++		}
++		p.revision++
++	}
++	p.bundle = cloneCloudConfigBundle(observed)
++	p.phase = CloudConfigBundlePolicySuspended
++	p.notifyLocked()
++	return &CloudConfigBundlePolicyRevision{revision: p.revision, policy: p}
++}
++
++// PublishSnapshot pairs a load result with its policy revision before the
++// snapshot becomes visible. Only the snapshot that matches the observed bundle
++// activates the policy; anything else (a superseded result, a load failure)
++// leaves admission suspended.
++func (p *CloudConfigBundlePolicy) PublishSnapshot(snapshot *CloudConfigBundleSnapshot) {
++	if p == nil || snapshot == nil || snapshot.Err != nil {
++		return
++	}
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	current := p.phase != CloudConfigBundlePolicyRetired &&
++		(p.phase == CloudConfigBundlePolicyUninitialized || cloudConfigBundlesEqual(p.bundle, snapshot.Bundle))
++	binding := &CloudConfigBundleBinding{policy: p}
++	if current {
++		revision := p.revision
++		binding.revision = &revision
++	}
++	snapshot.Binding = binding
++	if current && p.phase != CloudConfigBundlePolicyActive {
++		p.bundle = cloneCloudConfigBundle(snapshot.Bundle)
++		p.phase = CloudConfigBundlePolicyActive
++		p.notifyLocked()
++	}
++}
++
++// Retire stops new enterprise MCP admission from this policy owner without
++// changing generic loader behavior.
++func (p *CloudConfigBundlePolicy) Retire() {
++	if p == nil {
++		return
++	}
++	p.mu.Lock()
++	defer p.mu.Unlock()
++	p.phase = CloudConfigBundlePolicyRetired
++	p.notifyLocked()
++}
++
++// notifyLocked wakes every observer waiting for a phase or revision change.
++// The caller holds p.mu.
++func (p *CloudConfigBundlePolicy) notifyLocked() {
++	if p.changed == nil {
++		p.changed = make(chan struct{})
++		return
++	}
++	close(p.changed)
++	p.changed = make(chan struct{})
++}
++
++func cloudConfigBundlesEqual(a, b *CloudConfigBundle) bool {
++	if a == nil || b == nil {
++		return a == nil && b == nil
++	}
++	return cloudConfigFragmentsEqual(a.ConfigTOML.EnterpriseManaged, b.ConfigTOML.EnterpriseManaged) &&
++		cloudConfigFragmentsEqual(a.RequirementsTOML.EnterpriseManaged, b.RequirementsTOML.EnterpriseManaged)
++}
++
++func cloudConfigFragmentsEqual(a, b []CloudConfigFragment) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	for index := range a {
++		if a[index] != b[index] {
++			return false
++		}
++	}
++	return true
++}
++
++func cloneCloudConfigBundle(bundle *CloudConfigBundle) *CloudConfigBundle {
++	if bundle == nil {
++		return nil
++	}
++	cloned := *bundle
++	cloned.ConfigTOML.EnterpriseManaged = append([]CloudConfigFragment(nil), bundle.ConfigTOML.EnterpriseManaged...)
++	cloned.RequirementsTOML.EnterpriseManaged = append([]CloudConfigFragment(nil), bundle.RequirementsTOML.EnterpriseManaged...)
++	return &cloned
++}
++
+ type CloudConfigLoader struct {
+ 	mu     sync.Mutex
+ 	load   func() (*CloudConfigBundle, error)
+ 	bundle *CloudConfigBundle
+ 	err    error
++	// snapshot, when set, returns the published enterprise policy snapshot
++	// instead of fetching through load (Rust #49269
++	// CloudConfigBundleLoader::snapshot_getter).
++	snapshot func() CloudConfigBundleSnapshot
++	// emaPolicy is the enterprise policy owner whose revisions this loader
++	// publishes (Rust #49269 CloudConfigBundleLoader::ema_policy).
++	emaPolicy *CloudConfigBundlePolicy
+ }
+ 
+ func NewCloudConfigLoader(load func() (*CloudConfigBundle, error)) *CloudConfigLoader {
+@@ -190,6 +418,47 @@ func (l *CloudConfigLoader) Get() (*CloudConfigBundle, error) {
+ 	return nil, err
+ }
+ 
++// GetSnapshot returns the bundle together with the policy revision binding it
++// was resolved from (Rust #49269 CloudConfigBundleLoader::get_snapshot). A
++// loader without an attached policy snapshot getter falls back to Get and
++// reports no binding.
++func (l *CloudConfigLoader) GetSnapshot() CloudConfigBundleSnapshot {
++	if l == nil {
++		return CloudConfigBundleSnapshot{}
++	}
++	if l.snapshot != nil {
++		return l.snapshot()
++	}
++	bundle, err := l.Get()
++	return CloudConfigBundleSnapshot{Bundle: bundle, Err: err}
++}
++
++// WithEMAPolicySnapshots attaches the enterprise policy owner and the snapshot
++// getter that publishes its revisions (Rust #49269
++// `CloudConfigBundleLoader::with_ema_policy_snapshots`).
++func (l *CloudConfigLoader) WithEMAPolicySnapshots(policy *CloudConfigBundlePolicy, getter func() CloudConfigBundleSnapshot) *CloudConfigLoader {
++	if l == nil {
++		return l
++	}
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	l.emaPolicy = policy
++	l.snapshot = getter
++	return l
++}
++
++// RetireEMAPolicy stops new enterprise MCP admission from this loader's policy
++// owner without changing generic loader behavior.
++func (l *CloudConfigLoader) RetireEMAPolicy() {
++	if l == nil {
++		return
++	}
++	l.mu.Lock()
++	policy := l.emaPolicy
++	l.mu.Unlock()
++	policy.Retire()
++}
++
+ func ParseCloudConfigSimpleTOML(input string) (map[string]any, error) {
+ 	root := map[string]any{}
+ 	var section []string
+diff --git a/config/cloud_config_policy_test.go b/config/cloud_config_policy_test.go
+new file mode 100644
+index 00000000..f910222d
+--- /dev/null
++++ b/config/cloud_config_policy_test.go
+@@ -0,0 +1,366 @@
++package config
++
++// Rust parity: codex-rs/config/src/cloud_config_bundle.rs and
++// codex-rs/cloud-config/src/cache.rs (#49269).
++//
++// The delivered enterprise policy carries a revision binding through config
++// loading, and the cloud bundle cache is staged in a temporary file that is
++// published atomically only while the observed policy revision is still current.
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func policyTestBundle(id string) CloudConfigBundle {
++	return CloudConfigBundle{ConfigTOML: CloudConfigTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{
++		ID: id, Name: id, Contents: `model = "gpt-5"`,
++	}}}}
++}
++
++func stagedCacheFiles(t *testing.T, home string) []string {
++	t.Helper()
++	entries, err := os.ReadDir(home)
++	if err != nil {
++		t.Fatalf("ReadDir(%s) error = %v", home, err)
++	}
++	var files []string
++	for _, entry := range entries {
++		if strings.HasPrefix(entry.Name(), cloudConfigBundleCacheFilename+".tmp-") {
++			files = append(files, entry.Name())
++		}
++	}
++	return files
++}
++
++func TestCloudConfigBundlePolicySuspendsSupersededRevisionsLikeRust(t *testing.T) {
++	policy := NewCloudConfigBundlePolicy()
++	first := policyTestBundle("first")
++	revision := policy.ObserveRemoteBundle(&first)
++	if revision == nil {
++		t.Fatal("first observation returned no revision")
++	}
++	firstSnapshot := CloudConfigBundleSnapshot{Bundle: &first}
++	policy.PublishSnapshot(&firstSnapshot)
++	if firstSnapshot.Binding == nil {
++		t.Fatal("published snapshot carries no binding")
++	}
++	if got := firstSnapshot.Binding.Status(); got != CloudConfigBundleBindingCurrent {
++		t.Fatalf("binding status = %v, want current after publication", got)
++	}
++
++	// Re-observing the same delivered bundle keeps the active revision current.
++	if policy.ObserveRemoteBundle(&first) == nil {
++		t.Fatal("equal observation returned no revision")
++	}
++	if got := firstSnapshot.Binding.Status(); got != CloudConfigBundleBindingCurrent {
++		t.Fatalf("binding status = %v, want current after an equal observation", got)
++	}
++
++	committed := 0
++	if err := revision.CommitIfCurrent(func() error { committed++; return nil }); err != nil {
++		t.Fatalf("CommitIfCurrent(current) error = %v", err)
++	}
++	if committed != 1 {
++		t.Fatalf("current revision commits = %d, want 1", committed)
++	}
++
++	// A changed delivered bundle suspends the previous revision before it is
++	// validated or cached.
++	second := policyTestBundle("second")
++	newer := policy.ObserveRemoteBundle(&second)
++	if newer == nil {
++		t.Fatal("changed observation returned no revision")
++	}
++	if got := firstSnapshot.Binding.Status(); got != CloudConfigBundleBindingSuspended {
++		t.Fatalf("binding status = %v, want suspended while the newer bundle is validated", got)
++	}
++	if err := revision.CommitIfCurrent(func() error { committed++; return nil }); err != nil {
++		t.Fatalf("CommitIfCurrent(superseded) error = %v", err)
++	}
++	if committed != 1 {
++		t.Fatalf("superseded revision commits = %d, want 1 (superseded commits must be dropped)", committed)
++	}
++	if err := newer.CommitIfCurrent(func() error { committed++; return nil }); err != nil {
++		t.Fatalf("CommitIfCurrent(newer) error = %v", err)
++	}
++	if committed != 2 {
++		t.Fatalf("newer revision commits = %d, want 2", committed)
++	}
++
++	// A load result that no longer matches the observed bundle leaves admission
++	// suspended instead of reporting a current revision.
++	supersededSnapshot := CloudConfigBundleSnapshot{Bundle: &first}
++	policy.PublishSnapshot(&supersededSnapshot)
++	if supersededSnapshot.Binding == nil {
++		t.Fatal("superseded snapshot carries no binding")
++	}
++	if got := supersededSnapshot.Binding.Status(); got != CloudConfigBundleBindingSuspended {
++		t.Fatalf("binding status = %v, want suspended for a superseded load result", got)
++	}
++	secondSnapshot := CloudConfigBundleSnapshot{Bundle: &second}
++	policy.PublishSnapshot(&secondSnapshot)
++	if got := secondSnapshot.Binding.Status(); got != CloudConfigBundleBindingCurrent {
++		t.Fatalf("binding status = %v, want current for the delivered bundle", got)
++	}
++	if got := firstSnapshot.Binding.Status(); got != CloudConfigBundleBindingStale {
++		t.Fatalf("binding status = %v, want stale once a newer revision is active", got)
++	}
++	if got := firstSnapshot.Binding.Status(); got != CloudConfigBundleBindingStale {
++		t.Fatalf("binding status = %v, want stale for the superseded revision", got)
++	}
++}
++
++func TestCloudConfigBundlePolicyRetireStopsAdmissionAndCommitsLikeRust(t *testing.T) {
++	policy := NewCloudConfigBundlePolicy()
++	first := policyTestBundle("first")
++	revision := policy.ObserveRemoteBundle(&first)
++	if revision == nil {
++		t.Fatal("observation returned no revision")
++	}
++	policy.Retire()
++	second := policyTestBundle("second")
++	if got := policy.ObserveRemoteBundle(&second); got != nil {
++		t.Fatal("retired policy observed a new revision")
++	}
++	committed := false
++	if err := revision.CommitIfCurrent(func() error { committed = true; return nil }); err != nil {
++		t.Fatalf("CommitIfCurrent(retired) error = %v", err)
++	}
++	if committed {
++		t.Fatal("retired policy committed staged persistence")
++	}
++	snapshot := CloudConfigBundleSnapshot{Bundle: &first}
++	policy.PublishSnapshot(&snapshot)
++	if snapshot.Binding == nil || snapshot.Binding.Status() != CloudConfigBundleBindingSuspended {
++		t.Fatalf("retired policy published an active binding: %#v", snapshot.Binding)
++	}
++}
++
++func TestStagedCloudConfigBundleCachePublishesAtomicallyLikeRust(t *testing.T) {
++	home := t.TempDir()
++	opts := CloudConfigFetchOptions{CodexHome: home, ChatGPTUserID: "user-1", AccountID: "account-1"}
++	policy := NewCloudConfigBundlePolicy()
++	first := policyTestBundle("first")
++	revision := policy.ObserveRemoteBundle(&first)
++
++	staged, err := prepareCloudConfigBundleCache(opts, first)
++	if err != nil {
++		t.Fatalf("prepareCloudConfigBundleCache() error = %v", err)
++	}
++	destination := filepath.Join(home, cloudConfigBundleCacheFilename)
++	if _, err := os.Stat(destination); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("staged cache exposed the destination before publication: stat error = %v", err)
++	}
++	if files := stagedCacheFiles(t, home); len(files) != 1 {
++		t.Fatalf("staged temporary files = %v, want exactly one", files)
++	}
++	if err := staged.PublishIfCurrent(revision); err != nil {
++		t.Fatalf("PublishIfCurrent() error = %v", err)
++	}
++	if files := stagedCacheFiles(t, home); len(files) != 0 {
++		t.Fatalf("temporary files left after publication = %v", files)
++	}
++	info, err := os.Stat(destination)
++	if err != nil {
++		t.Fatalf("Stat(destination) error = %v", err)
++	}
++	if perm := info.Mode().Perm(); perm != 0o600 {
++		t.Fatalf("published cache permissions = %o, want 600", perm)
++	}
++	if loaded := loadCloudConfigBundleCache(opts); loaded == nil || !cloudConfigBundlesEqual(loaded, &first) {
++		t.Fatalf("published cache did not verify: %#v", loaded)
++	}
++	before, err := os.ReadFile(destination)
++	if err != nil {
++		t.Fatalf("ReadFile(destination) error = %v", err)
++	}
++
++	// A second staged payload must not touch the published one until it is
++	// published itself.
++	second := policyTestBundle("second")
++	restaged, err := prepareCloudConfigBundleCache(opts, second)
++	if err != nil {
++		t.Fatalf("prepareCloudConfigBundleCache(second) error = %v", err)
++	}
++	during, err := os.ReadFile(destination)
++	if err != nil {
++		t.Fatalf("ReadFile(destination) error = %v", err)
++	}
++	if !bytes.Equal(before, during) {
++		t.Fatal("staging a new payload modified the published cache")
++	}
++	if err := restaged.PublishIfCurrent(revision); err != nil {
++		t.Fatalf("PublishIfCurrent(second) error = %v", err)
++	}
++	if loaded := loadCloudConfigBundleCache(opts); loaded == nil || !cloudConfigBundlesEqual(loaded, &second) {
++		t.Fatalf("republished cache did not verify: %#v", loaded)
++	}
++}
++
++func TestStagedCloudConfigBundleCacheSuppressesSupersededAndRetiredWritesLikeRust(t *testing.T) {
++	home := t.TempDir()
++	opts := CloudConfigFetchOptions{CodexHome: home, ChatGPTUserID: "user-1", AccountID: "account-1"}
++	destination := filepath.Join(home, cloudConfigBundleCacheFilename)
++	policy := NewCloudConfigBundlePolicy()
++	first := policyTestBundle("first")
++	revision := policy.ObserveRemoteBundle(&first)
++	initial, err := prepareCloudConfigBundleCache(opts, first)
++	if err != nil {
++		t.Fatalf("prepareCloudConfigBundleCache() error = %v", err)
++	}
++	if err := initial.PublishIfCurrent(revision); err != nil {
++		t.Fatalf("PublishIfCurrent() error = %v", err)
++	}
++	before, err := os.ReadFile(destination)
++	if err != nil {
++		t.Fatalf("ReadFile(destination) error = %v", err)
++	}
++
++	// A concurrent refresh delivered a newer bundle, so the older staged write
++	// must be dropped instead of overwriting the newer publication.
++	second := policyTestBundle("second")
++	if policy.ObserveRemoteBundle(&second) == nil {
++		t.Fatal("changed observation returned no revision")
++	}
++	superseded, err := prepareCloudConfigBundleCache(opts, second)
++	if err != nil {
++		t.Fatalf("prepareCloudConfigBundleCache(superseded) error = %v", err)
++	}
++	if err := superseded.PublishIfCurrent(revision); err != nil {
++		t.Fatalf("PublishIfCurrent(superseded) error = %v", err)
++	}
++	after, err := os.ReadFile(destination)
++	if err != nil {
++		t.Fatalf("ReadFile(destination) error = %v", err)
++	}
++	if !bytes.Equal(before, after) {
++		t.Fatal("a superseded revision overwrote the published cache")
++	}
++	if files := stagedCacheFiles(t, home); len(files) != 0 {
++		t.Fatalf("superseded write left temporary files = %v", files)
++	}
++
++	// A retired policy may not publish at all.
++	retired := NewCloudConfigBundlePolicy()
++	retired.ObserveRemoteBundle(&first)
++	retired.Retire()
++	staged, err := prepareCloudConfigBundleCache(opts, second)
++	if err != nil {
++		t.Fatalf("prepareCloudConfigBundleCache(retired) error = %v", err)
++	}
++	if err := staged.PublishIfCurrent(nil); err != nil {
++		t.Fatalf("PublishIfCurrent(retired) error = %v", err)
++	}
++	after, err = os.ReadFile(destination)
++	if err != nil {
++		t.Fatalf("ReadFile(destination) error = %v", err)
++	}
++	if !bytes.Equal(before, after) {
++		t.Fatal("a retired policy published a cache write")
++	}
++	if files := stagedCacheFiles(t, home); len(files) != 0 {
++		t.Fatalf("retired write left temporary files = %v", files)
++	}
++}
++
++func TestLoadCloudConfigBundlePublishesStagedCacheLikeRust(t *testing.T) {
++	home := t.TempDir()
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_ = json.NewEncoder(w).Encode(policyTestBundle("fetched"))
++	}))
++	defer server.Close()
++	policy := NewCloudConfigBundlePolicy()
++	opts := CloudConfigFetchOptions{
++		CodexHome:     home,
++		BaseURL:       server.URL + "/backend-api",
++		ChatGPTUserID: "user-1",
++		AccountID:     "account-1",
++		HTTPClient:    server.Client(),
++		Policy:        policy,
++	}
++	bundle, err := LoadCloudConfigBundle(t.Context(), opts)
++	if err != nil {
++		t.Fatalf("LoadCloudConfigBundle() error = %v", err)
++	}
++	if bundle == nil {
++		t.Fatal("LoadCloudConfigBundle() returned no bundle")
++	}
++	if files := stagedCacheFiles(t, home); len(files) != 0 {
++		t.Fatalf("fetch left temporary cache files = %v", files)
++	}
++	if loaded := loadCloudConfigBundleCache(opts); loaded == nil || !cloudConfigBundlesEqual(loaded, bundle) {
++		t.Fatalf("fetched bundle was not published to the cache: %#v", loaded)
++	}
++
++	// A retired policy suppresses the cache write entirely.
++	retiredHome := t.TempDir()
++	retiredPolicy := NewCloudConfigBundlePolicy()
++	retiredPolicy.Retire()
++	retiredOpts := opts
++	retiredOpts.CodexHome = retiredHome
++	retiredOpts.Policy = retiredPolicy
++	if _, err := LoadCloudConfigBundle(t.Context(), retiredOpts); err != nil {
++		t.Fatalf("LoadCloudConfigBundle(retired) error = %v", err)
++	}
++	if _, err := os.Stat(filepath.Join(retiredHome, cloudConfigBundleCacheFilename)); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("retired policy wrote a cache entry: stat error = %v", err)
++	}
++}
++
++func TestLoadWithOptionsCarriesCloudConfigBindingLikeRust(t *testing.T) {
++	home := t.TempDir()
++	policy := NewCloudConfigBundlePolicy()
++	first := policyTestBundle("first")
++	loader := NewCloudConfigLoader(func() (*CloudConfigBundle, error) { return &first, nil })
++	loader.WithEMAPolicySnapshots(policy, func() CloudConfigBundleSnapshot {
++		snapshot := CloudConfigBundleSnapshot{Bundle: &first}
++		policy.PublishSnapshot(&snapshot)
++		return snapshot
++	})
++	cfg, err := LoadWithOptions(home, &LoadOptions{
++		IncludeManagedConfig: true,
++		ManagedConfigPath:    filepath.Join(home, "managed_config.toml"),
++		IgnoreProjectConfig:  true,
++		CloudConfigBundle:    loader,
++	})
++	if err != nil {
++		t.Fatalf("LoadWithOptions() error = %v", err)
++	}
++	binding := cfg.CloudConfigBinding()
++	if binding == nil {
++		t.Fatal("loaded configuration carries no cloud config binding")
++	}
++	if got := binding.Status(); got != CloudConfigBundleBindingCurrent {
++		t.Fatalf("binding status = %v, want current", got)
++	}
++	// The binding stays live: a newer delivered bundle suspends the
++	// configuration's policy instead of leaving it silently current.
++	second := policyTestBundle("second")
++	if policy.ObserveRemoteBundle(&second) == nil {
++		t.Fatal("changed observation returned no revision")
++	}
++	if got := cfg.CloudConfigBinding().Status(); got != CloudConfigBundleBindingSuspended {
++		t.Fatalf("binding status = %v, want suspended after a newer bundle", got)
++	}
++	if got := binding.Status(); got != CloudConfigBundleBindingSuspended {
++		t.Fatalf("binding status = %v, want suspended for the superseded revision", got)
++	}
++	newerSnapshot := CloudConfigBundleSnapshot{Bundle: &second}
++	policy.PublishSnapshot(&newerSnapshot)
++	if got := cfg.CloudConfigBinding().Status(); got != CloudConfigBundleBindingStale {
++		t.Fatalf("binding status = %v, want stale once a newer revision is active", got)
++	}
++	// Retiring the loader's policy suspends admission for that configuration.
++	loader.RetireEMAPolicy()
++	if got := cfg.CloudConfigBinding().Status(); got != CloudConfigBundleBindingSuspended {
++		t.Fatalf("binding status = %v, want suspended after retirement", got)
++	}
++}
+diff --git a/config/cloud_config_storage.go b/config/cloud_config_storage.go
+index 6e6ff809..478613de 100644
+--- a/config/cloud_config_storage.go
++++ b/config/cloud_config_storage.go
+@@ -77,6 +77,13 @@ type CloudConfigFetchOptions struct {
+ 	NetworkPolicy *network.NetworkPolicy
+ 	Headers       http.Header
+ 	Authorize     func(context.Context, *http.Request) error
++	// Policy, when set, is the enterprise policy owner this fetch observes.
++	// Observing a changed bundle suspends the previous revision before the
++	// bundle is validated or cached, and the cache write is published only
++	// while that observation is still current (Rust #49269
++	// CloudConfigBundleService::policy). A nil policy uses a one-shot policy
++	// that keeps every write on the staged atomic path.
++	Policy *CloudConfigBundlePolicy
+ }
+ 
+ // cloudConfigFallbackAttemptTimeout bounds the primary bootstrap GET, including
+@@ -172,10 +179,27 @@ func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOpti
+ 		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, fmt.Sprintf("invalid cloud config bundle: %v", err))
+ 	}
+ 	normalizeCloudConfigBundle(&bundle)
++	// Rust #49269: observing the delivered bundle suspends the previous policy
++	// revision before the bundle is validated or cached. A standalone fetch has
++	// no owning service, so it uses a one-shot policy: the observation always
++	// stays current while every write still goes through the staged, atomic
++	// publication path.
++	policy := opts.Policy
++	if policy == nil {
++		policy = NewCloudConfigBundlePolicy()
++	}
++	revision := policy.ObserveRemoteBundle(&bundle)
+ 	if err := validateCloudConfigBundle(bundle, opts.CodexHome); err != nil {
+ 		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, err.Error())
+ 	}
+-	_ = saveCloudConfigBundleCache(opts, bundle)
++	// Stage the cache payload and publish it only while the observation is
++	// still current. A retired policy has no revision, so nothing is published
++	// (Rust #49269 CloudConfigBundleService::apply_bundle).
++	if revision != nil {
++		if staged, err := prepareCloudConfigBundleCache(opts, bundle); err == nil {
++			_ = staged.PublishIfCurrent(revision)
++		}
++	}
+ 	return &bundle, false, nil
+ }
+ 
+@@ -250,7 +274,23 @@ func loadCloudConfigBundleCache(opts CloudConfigFetchOptions) *CloudConfigBundle
+ 	return &bundle
+ }
+ 
+-func saveCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfigBundle) error {
++// stagedCloudConfigBundleCache is a cache payload written to a temporary file
++// next to its destination but not yet visible there (Rust #49269
++// StagedCloudConfigBundleCache). The temporary file lives in the destination
++// directory so publication is a same-filesystem atomic rename.
++type stagedCloudConfigBundleCache struct {
++	temporaryPath string
++	destination   string
++}
++
++// prepareCloudConfigBundleCache signs the bundle and stages the cache payload
++// in a temporary file. It never touches the destination: a reader of the cache
++// path either sees the previously published payload or, after
++// PublishIfCurrent, the complete new one.
++func prepareCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfigBundle) (*stagedCloudConfigBundleCache, error) {
++	if strings.TrimSpace(opts.CodexHome) == "" {
++		return nil, errors.New("cloud config bundle cache requires a codex home")
++	}
+ 	normalizeCloudConfigBundle(&bundle)
+ 	now := time.Now().UTC()
+ 	userID := stringPtr(strings.TrimSpace(opts.ChatGPTUserID))
+@@ -265,17 +305,74 @@ func saveCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfig
+ 	}
+ 	payloadBytes, err := marshalCloudConfigCachePayload(payload)
+ 	if err != nil {
+-		return err
++		return nil, err
+ 	}
+ 	cache := cloudConfigBundleCacheFile{SignedPayload: payload, Signature: signCloudConfigCachePayload(payloadBytes)}
+ 	data, err := json.MarshalIndent(cache, "", "  ")
+ 	if err != nil {
+-		return err
++		return nil, err
+ 	}
+ 	if err := os.MkdirAll(opts.CodexHome, 0o700); err != nil {
++		return nil, err
++	}
++	destination := filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename)
++	temporary, err := os.CreateTemp(opts.CodexHome, cloudConfigBundleCacheFilename+".tmp-")
++	if err != nil {
++		return nil, err
++	}
++	staged := &stagedCloudConfigBundleCache{temporaryPath: temporary.Name(), destination: destination}
++	if _, err := temporary.Write(append(data, '\n')); err != nil {
++		_ = temporary.Close()
++		staged.Discard()
++		return nil, err
++	}
++	// os.CreateTemp already creates the file with 0600; keep the published
++	// cache private to the user even if the process umask is permissive.
++	if err := temporary.Chmod(0o600); err != nil {
++		_ = temporary.Close()
++		staged.Discard()
++		return nil, err
++	}
++	if err := temporary.Close(); err != nil {
++		staged.Discard()
++		return nil, err
++	}
++	return staged, nil
++}
++
++// PublishIfCurrent atomically publishes the staged payload over the destination
++// only while revision is still current. A superseded or retired revision leaves
++// the destination untouched and drops the staged file, so an older refresh can
++// never overwrite a newer one (Rust #49269
++// StagedCloudConfigBundleCache::publish_if_current).
++func (s *stagedCloudConfigBundleCache) PublishIfCurrent(revision *CloudConfigBundlePolicyRevision) error {
++	if s == nil {
++		return nil
++	}
++	published := false
++	err := revision.CommitIfCurrent(func() error {
++		if err := os.Rename(s.temporaryPath, s.destination); err != nil {
++			return err
++		}
++		published = true
++		return nil
++	})
++	if err != nil || !published {
++		s.Discard()
++	}
++	if err != nil {
+ 		return err
+ 	}
+-	return os.WriteFile(filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename), append(data, '\n'), 0o600)
++	return nil
++}
++
++// Discard drops the staged file without touching the destination.
++func (s *stagedCloudConfigBundleCache) Discard() {
++	if s == nil || s.temporaryPath == "" {
++		return
++	}
++	_ = os.Remove(s.temporaryPath)
++	s.temporaryPath = ""
+ }
+ 
+ func normalizeCloudConfigBundle(bundle *CloudConfigBundle) {
+diff --git a/config/config.go b/config/config.go
+index 2d99d8e8..214c930c 100644
+--- a/config/config.go
++++ b/config/config.go
+@@ -39,6 +39,11 @@ type Config struct {
+ 	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was
+ 	// skipped leaves it false.
+ 	isProjectless bool
++	// cloudConfigBinding is the runtime-only enterprise MCP authority this
++	// configuration was loaded from (Rust #49269
++	// ConfigLayerStack::cloud_config_binding). It does not change the
++	// configuration contents and is never serialized.
++	cloudConfigBinding *CloudConfigBundleBinding
+ }
+ 
+ type ForcedLoginMethod string
+@@ -344,18 +349,24 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	var cloudConfigBinding *CloudConfigBundleBinding
+ 	if opts != nil && opts.IncludeManagedConfig && opts.CloudConfigBundle != nil {
+-		bundle, err := opts.CloudConfigBundle.Get()
+-		if err != nil {
+-			return nil, err
+-		}
+-		if bundle != nil && !bundle.IsEmpty() {
++		// Rust #49269: the loader returns the bundle together with the policy
++		// revision binding it was resolved from, and the binding travels with
++		// the loaded configuration so a later reload can tell whether the
++		// enterprise policy it was built from is still current.
++		snapshot := opts.CloudConfigBundle.GetSnapshot()
++		if snapshot.Err != nil {
++			return nil, snapshot.Err
++		}
++		if bundle := snapshot.Bundle; bundle != nil && !bundle.IsEmpty() {
+ 			cloudRequirements, err := applyCloudConfigBundle(values, requirements, *bundle, codexHome)
+ 			if err != nil {
+ 				return nil, err
+ 			}
+ 			requirements = cloudRequirements
+ 		}
++		cloudConfigBinding = snapshot.Binding
+ 	}
+ 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
+ 	applyManagedAuthBackendOverride(values, requirements)
+@@ -364,7 +375,12 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
+ 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
+ 		return nil, err
+ 	}
+-	return &Config{Values: values, Requirements: requirements, isProjectless: isProjectless}, nil
++	return &Config{
++		Values:             values,
++		Requirements:       requirements,
++		isProjectless:      isProjectless,
++		cloudConfigBinding: cloudConfigBinding,
++	}, nil
+ }
+ 
+ // IsProjectless reports whether configuration discovery found no project-root
+@@ -375,6 +391,18 @@ func (c *Config) IsProjectless() bool {
+ 	return c != nil && c.isProjectless
+ }
+ 
++// CloudConfigBinding reports the enterprise policy revision binding this
++// configuration was resolved from, or nil when it was loaded without a cloud
++// bundle loader. Callers use it to reject refreshes derived from a superseded
++// or suspended policy (Rust #49269
++// ConfigLayerStack::cloud_config_binding).
++func (c *Config) CloudConfigBinding() *CloudConfigBundleBinding {
++	if c == nil {
++		return nil
++	}
++	return c.cloudConfigBinding
++}
++
+ // applyManagedExactOverrides mirrors Rust ConfigRequirementsToml::apply_to_config
+ // / core apply_to_config for the remaining exact managed requirements: the
+ // required sqlite_home, log_dir, model_catalog_json, check_for_update_on_startup,
+diff --git a/model/responses_agent.go b/model/responses_agent.go
+index 7cf4a46b..276ac2d4 100644
+--- a/model/responses_agent.go
++++ b/model/responses_agent.go
+@@ -14,6 +14,7 @@ import (
+ 	"net/url"
+ 	"os/exec"
+ 	"path/filepath"
++	"sort"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -292,22 +293,25 @@ func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *
+ }
+ 
+ type responsesAgentRequest struct {
++	// Rust #49675: keep the routing fields first. encoding/json serializes
++	// struct fields in declaration order, and gateways may inspect a request
++	// body incrementally before buffering a potentially multi-megabyte input.
+ 	Model                string                  `json:"model"`
++	Stream               bool                    `json:"stream"`
++	ServiceTier          string                  `json:"service_tier,omitempty"`
+ 	Instructions         string                  `json:"instructions,omitempty"`
+ 	Input                []any                   `json:"input"`
+ 	Tools                []any                   `json:"tools,omitempty"`
+ 	ToolChoice           string                  `json:"tool_choice,omitempty"`
+-	Stream               bool                    `json:"stream"`
+-	Store                bool                    `json:"store"`
+ 	ParallelToolCalls    bool                    `json:"parallel_tool_calls"`
+ 	Reasoning            *responsesReasoning     `json:"reasoning,omitempty"`
++	Store                bool                    `json:"store"`
+ 	StreamOptions        *responsesStreamOptions `json:"stream_options,omitempty"`
+ 	Include              []string                `json:"include,omitempty"`
+-	ServiceTier          string                  `json:"service_tier,omitempty"`
+ 	PromptCacheKey       string                  `json:"prompt_cache_key,omitempty"`
+-	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
+-	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
+ 	Text                 *responsesTextParam     `json:"text,omitempty"`
++	ClientMetadata       map[string]string       `json:"client_metadata,omitempty"`
++	AccessPrograms       *AccessPrograms         `json:"access_programs,omitempty"`
+ 	UseResponsesLite     bool                    `json:"-"`
+ 	IncludeTimingMetrics bool                    `json:"-"`
+ 	BetaFeaturesHeader   string                  `json:"-"`
+@@ -839,7 +843,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
+ 		payload["access_programs"] = apiRequest.AccessPrograms
+ 	}
+ 	requestStartedAt := time.Now()
+-	writeErr := conn.Write(connectCtx, websocket.MessageText, mustJSONBytes(payload))
++	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
+ 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+ 	// The prewarm dials a fresh connection (it returns early when one exists).
+ 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), false)
+@@ -1070,7 +1074,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
+ 	}
+ 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
+ 	requestStartedAt := time.Now()
+-	writeErr := conn.Write(ctx, websocket.MessageText, mustJSONBytes(payload))
++	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
+ 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
+ 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)
+ 	if writeErr != nil {
+@@ -1322,6 +1326,80 @@ func mustJSONBytes(value any) []byte {
+ 	return data
+ }
+ 
++// responsesRequestWireOrder is the field order Rust gives Responses request
++// bodies (codex-api's ResponsesApiRequest and ResponseCreateWsRequest, #49675):
++// the routing fields come before the potentially multi-megabyte input so a
++// gateway can route a request from a partially read body. The websocket
++// builders hand their payload over as a map, which encoding/json would
++// otherwise emit in lexical key order.
++var responsesRequestWireOrder = []string{
++	"type",
++	"model",
++	"stream",
++	"service_tier",
++	"previous_response_id",
++	"instructions",
++	"input",
++	"tools",
++	"tool_choice",
++	"parallel_tool_calls",
++	"reasoning",
++	"store",
++	"stream_options",
++	"include",
++	"prompt_cache_key",
++	"text",
++	"generate",
++	"client_metadata",
++	"access_programs",
++}
++
++// marshalResponsesMessage encodes a Responses request payload with
++// responsesRequestWireOrder's fields first and any remaining fields in the
++// lexical order encoding/json uses for maps (Rust #49675). Values - including
++// explicit nils - are encoded exactly as mustJSONBytes would encode them, so
++// the routing-first order is the only visible change on the wire.
++func marshalResponsesMessage(entries map[string]any) []byte {
++	if len(entries) == 0 {
++		return []byte("{}")
++	}
++	keys := make([]string, 0, len(entries))
++	seen := make(map[string]struct{}, len(entries))
++	for _, key := range responsesRequestWireOrder {
++		if _, ok := entries[key]; !ok {
++			continue
++		}
++		keys = append(keys, key)
++		seen[key] = struct{}{}
++	}
++	remaining := make([]string, 0, len(entries)-len(keys))
++	for key := range entries {
++		if _, ok := seen[key]; !ok {
++			remaining = append(remaining, key)
++		}
++	}
++	sort.Strings(remaining)
++	keys = append(keys, remaining...)
++
++	buffer := bytes.NewBuffer(make([]byte, 0, 256))
++	buffer.WriteByte('{')
++	for index, key := range keys {
++		if index > 0 {
++			buffer.WriteByte(',')
++		}
++		encodedKey := mustJSONBytes(key)
++		encodedValue := mustJSONBytes(entries[key])
++		if encodedKey == nil || encodedValue == nil {
++			return nil
++		}
++		buffer.Write(encodedKey)
++		buffer.WriteByte(':')
++		buffer.Write(encodedValue)
++	}
++	buffer.WriteByte('}')
++	return buffer.Bytes()
++}
++
+ func NewResponsesAgentRunnerFromRuntimeProvider(providerID string, runtimeProvider RuntimeProvider, httpClient HTTPDoer) (*ResponsesAgentRunner, error) {
+ 	return NewResponsesAgentRunnerFromRuntimeProviderWithAuth(providerID, runtimeProvider, httpClient, "", nil)
+ }
+diff --git a/model/responses_agent_test.go b/model/responses_agent_test.go
+index ac581af0..536b8181 100644
+--- a/model/responses_agent_test.go
++++ b/model/responses_agent_test.go
+@@ -4608,3 +4608,208 @@ func TestResponsesLiteWebSocketReusesRecordedDeclarationsLikeRust(t *testing.T)
+ 		t.Fatalf("recorded declarations should appear exactly once, got %d", declarationCount)
+ 	}
+ }
++
++// responsesBodyPrefix returns the first limit bytes of a serialized request body
++// for failure messages.
++func responsesBodyPrefix(body string, limit int) string {
++	if len(body) <= limit {
++		return body
++	}
++	return body[:limit] + "..."
++}
++
++// assertResponsesRoutingFieldsPrecedeInput checks the Rust #49675 contract: a
++// gateway must be able to route a Responses request from a partially read body,
++// so the routing fields appear before the potentially multi-megabyte input.
++func assertResponsesRoutingFieldsPrecedeInput(t *testing.T, body string, fields ...string) {
++	t.Helper()
++	inputPosition := strings.Index(body, `"input"`)
++	if inputPosition < 0 {
++		t.Fatalf("request body has no input field: %q", responsesBodyPrefix(body, 200))
++	}
++	for _, field := range fields {
++		position := strings.Index(body, `"`+field+`"`)
++		if position < 0 {
++			t.Fatalf("request body has no %q field: %q", field, responsesBodyPrefix(body, 200))
++		}
++		if position > inputPosition {
++			t.Fatalf("%q at byte %d must precede input at byte %d: %q", field, position, inputPosition, responsesBodyPrefix(body, 200))
++		}
++	}
++}
++
++// TestResponsesAgentRunnerWebSocketSendsRoutingFieldsBeforeInputLikeRust mirrors
++// Rust #49675's websocket coverage: the response.create message serializes
++// `model`, `stream` and `service_tier` ahead of the input. The Go payload is
++// assembled as a map, which encoding/json would otherwise emit in lexical key
++// order (putting `model` fourth, after `input`).
++func TestResponsesAgentRunnerWebSocketSendsRoutingFieldsBeforeInputLikeRust(t *testing.T) {
++	for _, useLite := range []bool{false, true} {
++		t.Run(fmt.Sprintf("lite=%t", useLite), func(t *testing.T) {
++			var received []byte
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
++				conn, err := websocket.Accept(w, request, nil)
++				if err != nil {
++					t.Errorf("Accept() error = %v", err)
++					return
++				}
++				defer conn.Close(websocket.StatusNormalClosure, "done")
++				conn.SetReadLimit(8 << 20)
++				_, data, err := conn.Read(request.Context())
++				if err != nil {
++					t.Errorf("Read() error = %v", err)
++					return
++				}
++				received = data
++				_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"ws-routing-1","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]}}`))
++			}))
++			defer server.Close()
++
++			slug := "gpt-test"
++			if useLite {
++				slug = "gpt-test-lite"
++			}
++			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
++				Provider:           &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
++				SupportsWebsockets: true,
++				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
++					Slug:             slug,
++					InputModalities:  []string{"text", "image"},
++					ServiceTiers:     []string{"priority"},
++					UseResponsesLite: useLite,
++				}}}),
++			})
++			largeInput := strings.Repeat("x", 2*1024*1024)
++			if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
++				Model:       slug,
++				Prompt:      largeInput,
++				ServiceTier: "priority",
++			}); err != nil {
++				t.Fatalf("RunWebSocket error = %v", err)
++			}
++			if len(received) == 0 {
++				t.Fatal("no websocket request message recorded")
++			}
++			body := string(received)
++			if !strings.HasPrefix(body, `{"type":"response.create","model":"`+slug+`","stream":true,"service_tier":"priority"`) {
++				t.Fatalf("websocket routing prefix = %q", responsesBodyPrefix(body, 200))
++			}
++			assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream", "service_tier")
++			if len(received) <= 2*1024*1024 {
++				t.Fatalf("websocket message = %d bytes, want the large input to be present", len(received))
++			}
++			var parsed map[string]any
++			if err := json.Unmarshal(received, &parsed); err != nil {
++				t.Fatalf("Unmarshal() error = %v", err)
++			}
++			if parsed["type"] != "response.create" || parsed["model"] != slug || parsed["stream"] != true || parsed["service_tier"] != "priority" {
++				t.Fatalf("websocket payload = %#v", map[string]any{
++					"type": parsed["type"], "model": parsed["model"], "stream": parsed["stream"], "service_tier": parsed["service_tier"],
++				})
++			}
++		})
++	}
++}
++
++// TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeLargeInputLikeRust mirrors
++// Rust #49675's HTTP coverage: the /responses body serializes `model`, `stream`
++// and `service_tier` ahead of a 2 MiB input, for both the standard and the
++// responses-lite request shapes, and keeps the field values and the omission of
++// an unset service_tier.
++func TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeLargeInputLikeRust(t *testing.T) {
++	for _, useLite := range []bool{false, true} {
++		t.Run(fmt.Sprintf("lite=%t", useLite), func(t *testing.T) {
++			var recorded []byte
++			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				body, err := io.ReadAll(r.Body)
++				if err != nil {
++					t.Errorf("ReadAll() error = %v", err)
++					return
++				}
++				recorded = body
++				w.Header().Set("Content-Type", "application/json")
++				_, _ = w.Write([]byte(`{"id":"resp-routing","model":"gpt-test","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
++			}))
++			defer server.Close()
++
++			slug := "gpt-test"
++			if useLite {
++				slug = "gpt-test-lite"
++			}
++			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
++				Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
++				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
++					Slug:             slug,
++					InputModalities:  []string{"text", "image"},
++					ServiceTiers:     []string{"priority"},
++					UseResponsesLite: useLite,
++				}}}),
++			})
++			largeInput := strings.Repeat("x", 2*1024*1024)
++			if _, err := runner.Run(context.Background(), &AgentRequest{
++				Model:       slug,
++				Prompt:      largeInput,
++				ServiceTier: "priority",
++			}); err != nil {
++				t.Fatalf("Run error = %v", err)
++			}
++			if len(recorded) == 0 {
++				t.Fatal("no HTTP request body recorded")
++			}
++			body := string(recorded)
++			if !strings.HasPrefix(body, `{"model":"`+slug+`","stream":false,"service_tier":"priority"`) {
++				t.Fatalf("HTTP routing prefix = %q", responsesBodyPrefix(body, 200))
++			}
++			assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream", "service_tier")
++			if len(recorded) <= 2*1024*1024 {
++				t.Fatalf("HTTP body = %d bytes, want the large input to be present", len(recorded))
++			}
++			var parsed map[string]any
++			if err := json.Unmarshal(recorded, &parsed); err != nil {
++				t.Fatalf("Unmarshal() error = %v", err)
++			}
++			if parsed["model"] != slug || parsed["stream"] != false || parsed["service_tier"] != "priority" {
++				t.Fatalf("HTTP payload = %#v", map[string]any{"model": parsed["model"], "stream": parsed["stream"], "service_tier": parsed["service_tier"]})
++			}
++		})
++	}
++}
++
++// TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeOmittedServiceTierLikeRust
++// covers Rust #49675's "Preserve ... omission of unset service_tier" half: an
++// unset tier stays absent from the body while the routing fields still precede
++// the input.
++func TestResponsesAgentRunnerHTTPSendsRoutingFieldsBeforeOmittedServiceTierLikeRust(t *testing.T) {
++	var recorded []byte
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		body, err := io.ReadAll(r.Body)
++		if err != nil {
++			t.Errorf("ReadAll() error = %v", err)
++			return
++		}
++		recorded = body
++		w.Header().Set("Content-Type", "application/json")
++		_, _ = w.Write([]byte(`{"id":"resp-routing","model":"gpt-test","output":[{"id":"msg-routing","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
++	}))
++	defer server.Close()
++
++	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
++		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
++		ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
++			Slug:         "gpt-test",
++			ServiceTiers: []string{"priority"},
++		}}}),
++	})
++	largeInput := strings.Repeat("x", 2*1024*1024)
++	if _, err := runner.Run(context.Background(), &AgentRequest{Model: "gpt-test", Prompt: largeInput}); err != nil {
++		t.Fatalf("Run error = %v", err)
++	}
++	body := string(recorded)
++	if !strings.HasPrefix(body, `{"model":"gpt-test","stream":false`) {
++		t.Fatalf("HTTP routing prefix = %q", responsesBodyPrefix(body, 200))
++	}
++	if strings.Contains(body, "service_tier") {
++		t.Fatalf("unset service_tier should be omitted: %q", responsesBodyPrefix(body, 200))
++	}
++	assertResponsesRoutingFieldsPrecedeInput(t, body, "model", "stream")
++}
+diff --git a/prompt/skills_render.go b/prompt/skills_render.go
+index 8d37c453..244f968f 100644
+--- a/prompt/skills_render.go
++++ b/prompt/skills_render.go
+@@ -211,6 +211,13 @@ func RenderExtensionAvailableSkillsWithOptions(skills []InstructionsSkillMetadat
+ // extension surface, while host entries can still use path aliases under pressure.
+ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, executorSkills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) (*AvailableSkills, *AvailableSkills) {
+ 	hostLines := orderedSkillRenderLines(hostSkills)
++	// Rust #49127 (ext/skills/src/render_dedup.rs): the executor alias plan is
++	// built from the full visible executor inventory before duplicates are
++	// removed, so deduplication never renumbers the aliases of the packages
++	// that remain (PreparedSkillCatalog::new builds alias_plan first, and
++	// prefer_cloud_skills filters entries afterwards).
++	fullExecutorLines := extensionSkillRenderLines(executorSkills)
++	executorSkills = deduplicateCloudAndExecutorSkillsLikeRust(executorSkills)
+ 	executorLines := extensionSkillRenderLines(executorSkills)
+ 	budget := normalizedSkillMetadataBudget(options.Budget)
+ 	if len(hostLines) == 0 || len(executorLines) == 0 {
+@@ -231,7 +238,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
+ 	}
+ 	// Rust ce22ea9712: executor locators are compacted with provider-specific
+ 	// `e` aliases alongside host `r` aliases under metadata pressure.
+-	if plan, ok := buildExtensionAliasPlan(executorLines, budget); ok && plan.tableCost < budget.Limit {
++	if plan, ok := buildExtensionAliasPlan(fullExecutorLines, budget); ok && plan.tableCost < budget.Limit {
+ 		adjustedBudget := budget
+ 		adjustedBudget.Limit -= plan.tableCost
+ 		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
+@@ -256,6 +263,86 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
+ 		}
+ }
+ 
++// deduplicateCloudAndExecutorSkillsLikeRust implements Rust #49127
++// (ext/skills/src/render_dedup.rs, PreparedSkillCatalog::prefer_cloud_skills):
++// a model-visible cloud skill wins over an executor listing that shares the
++// same `plugin:skill` name, and the executor duplicate is dropped before the
++// metadata budget is allocated so it stops consuming catalog space. Executor
++// packages stay reachable through `skills.list`/`skills.read`, and every
++// executor listing is retained when the cloud catalog is disabled (no cloud
++// entries).
++//
++// Go renders the host-supplied cloud catalog inside the same executor list the
++// callers hand to RenderCombinedAvailableSkills (the catalog still carries the
++// retired Rust "orchestrator" labels, Rust f3037cafd3/#47074), so the cloud and
++// executor halves are separated by locator kind here.
++func deduplicateCloudAndExecutorSkillsLikeRust(skills []InstructionsSkillMetadata) []InstructionsSkillMetadata {
++	cloudNames := cloudSkillNamesLikeRust(skills)
++	if len(cloudNames) == 0 {
++		return skills
++	}
++	out := make([]InstructionsSkillMetadata, 0, len(skills))
++	for _, skill := range skills {
++		if isExecutorSkillMetadata(skill) {
++			if _, shadowed := cloudNames[skill.Name]; shadowed {
++				continue
++			}
++		}
++		out = append(out, skill)
++	}
++	return out
++}
++
++// cloudSkillNamesLikeRust collects the names the cloud catalog contributes to
++// the dedup, mirroring Rust render_dedup.rs: only model-visible cloud entries
++// whose name is scoped `plugin:skill` (split at the first ':' into two
++// non-empty parts) count as duplicates.
++func cloudSkillNamesLikeRust(skills []InstructionsSkillMetadata) map[string]struct{} {
++	names := make(map[string]struct{})
++	for _, skill := range skills {
++		if !isCloudSkillMetadata(skill) || !skill.AllowsImplicitInvocation() {
++			continue
++		}
++		if !isPluginScopedSkillName(skill.Name) {
++			continue
++		}
++		names[skill.Name] = struct{}{}
++	}
++	return names
++}
++
++// isPluginScopedSkillName mirrors Rust render_dedup.rs: a name is plugin-scoped
++// when `split_once(':')` yields two non-empty parts.
++func isPluginScopedSkillName(name string) bool {
++	plugin, skill, ok := strings.Cut(name, ":")
++	return ok && plugin != "" && skill != ""
++}
++
++// isCloudSkillMetadata reports whether skill belongs to the host-supplied cloud
++// catalog. Go still carries the retired Rust "orchestrator" labels for that
++// provider (Rust #47074 replaced the built-in orchestrator provider with the
++// cloud provider), so both spellings are accepted.
++func isCloudSkillMetadata(skill InstructionsSkillMetadata) bool {
++	switch strings.ToLower(strings.TrimSpace(skill.LocatorKind)) {
++	case "orchestrator package", "cloud package":
++		return true
++	}
++	switch strings.ToLower(strings.TrimSpace(skill.AuthorityKind)) {
++	case "orchestrator", "cloud":
++		return true
++	}
++	return false
++}
++
++// isExecutorSkillMetadata reports whether skill is an executor package listing,
++// the catalog Rust deduplicates against the cloud catalog.
++func isExecutorSkillMetadata(skill InstructionsSkillMetadata) bool {
++	if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "executor package") {
++		return true
++	}
++	return strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), "executor")
++}
++
+ func extensionSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLine {
+ 	lines := make([]skillRenderLine, 0, len(skills))
+ 	for _, skill := range skills {
+diff --git a/prompt/skills_render_test.go b/prompt/skills_render_test.go
+index 58f55cf9..8d92137c 100644
+--- a/prompt/skills_render_test.go
++++ b/prompt/skills_render_test.go
+@@ -509,3 +509,156 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t
+ 		t.Fatalf("extension catalog still renders full SKILL.md locators: %#v", available.SkillLines)
+ 	}
+ }
++
++// Rust #49127 (ext/skills/src/render_dedup.rs PreparedSkillCatalog::prefer_cloud_skills;
++// ext/skills/tests/skills_extension/presentation_dedup_tests.rs
++// cloud_preference_preserves_aliases_reads_and_executor_fallback): a
++// model-visible cloud skill wins over an executor listing that shares its
++// `plugin:skill` name, so the duplicate stops consuming metadata budget, while
++// unique executor skills and the executor catalog with cloud disabled stay.
++func TestRenderCombinedAvailableSkillsPreferCloudSkillsLikeRust(t *testing.T) {
++	cloud := []InstructionsSkillMetadata{
++		{Name: "demo:s0", Description: "Cloud skill instructions.", Path: "skill://cloud/s0/SKILL.md", LocatorKind: "orchestrator package", AuthorityKind: "orchestrator", PackageID: "skill://cloud/s0", ResourceID: "skill://cloud/s0/SKILL.md"},
++	}
++	executor := []InstructionsSkillMetadata{
++		{Name: "demo:s0", Description: "Executor duplicate.", Path: "skill://executor/demo/s0/SKILL.md", LocatorKind: "executor package", AuthorityKind: "executor", PackageID: "skill://executor/demo"},
++		{Name: "other:s0", Description: "Executor unique.", Path: "skill://executor/other/s0/SKILL.md", LocatorKind: "executor package", AuthorityKind: "executor", PackageID: "skill://executor/other"},
++	}
++	host := []InstructionsSkillMetadata{
++		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
++	}
++	options := AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 4000}}
++	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
++	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, options)
++	if executorAvailable == nil {
++		t.Fatalf("combined executor render = nil")
++	}
++	body := executorAvailable.Body
++	if got := strings.Count(body, "- demo:s0:"); got != 1 {
++		t.Fatalf("occurrences of `- demo:s0:` = %d, want 1 (cloud listing preferred):\n%s", got, body)
++	}
++	if !strings.Contains(body, "(orchestrator package: skill://cloud/s0)") {
++		t.Fatalf("retained demo:s0 is not the cloud listing:\n%s", body)
++	}
++	if strings.Contains(body, "(executor package: skill://executor/demo)") {
++		t.Fatalf("shadowed executor listing still rendered:\n%s", body)
++	}
++	if !strings.Contains(body, "- other:s0:") {
++		t.Fatalf("unique executor listing was dropped:\n%s", body)
++	}
++	// Cloud skills disabled (no cloud entries) keep every executor listing.
++	_, executorOnly := RenderCombinedAvailableSkills(host, executor, options)
++	if executorOnly == nil || strings.Count(executorOnly.Body, "- demo:s0:") != 1 || !strings.Contains(executorOnly.Body, "(executor package: skill://executor/demo)") {
++		t.Fatalf("executor fallback render = %#v", executorOnly)
++	}
++}
++
++// Rust #49127 (ext/skills/src/render_dedup.rs; core/tests/suite/scenarios_skill_catalog_dedup.rs
++// cloud_preference_preserves_executor_aliases_and_description_budget): the
++// executor alias plan is built from the full visible executor inventory before
++// cloud deduplication, so filtering a duplicate package does not renumber the
++// aliases of the packages that remain.
++func TestRenderCombinedAvailableSkillsPreservesExecutorAliasesAfterCloudDedupLikeRust(t *testing.T) {
++	rootDemo := "skill://executor-a/" + strings.Repeat("a", 180)
++	rootOther := "skill://executor-b/" + strings.Repeat("b", 180)
++	description := strings.Repeat("Skill guidance. ", 60) + "UNIQUE_DESCRIPTION_END"
++	var executor []InstructionsSkillMetadata
++	for _, entry := range []struct{ plugin, root string }{{"demo", rootDemo}, {"other", rootOther}} {
++		for index := 0; index < 3; index++ {
++			pkg := fmt.Sprintf("%s/s%d", entry.root, index)
++			executor = append(executor, InstructionsSkillMetadata{
++				Name:          fmt.Sprintf("%s:s%d", entry.plugin, index),
++				Description:   description,
++				Path:          pkg,
++				LocatorKind:   "executor package",
++				AuthorityKind: "executor",
++				PackageID:     pkg,
++				Root:          entry.root,
++			})
++		}
++	}
++	var cloud []InstructionsSkillMetadata
++	for index := 0; index < 3; index++ {
++		pkg := fmt.Sprintf("skill://cloud/s%d", index)
++		cloud = append(cloud, InstructionsSkillMetadata{
++			Name:          fmt.Sprintf("demo:s%d", index),
++			Description:   "Cloud skill instructions.",
++			Path:          pkg + "/SKILL.md",
++			LocatorKind:   "orchestrator package",
++			AuthorityKind: "orchestrator",
++			PackageID:     pkg,
++		})
++	}
++	host := []InstructionsSkillMetadata{
++		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
++	}
++	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
++	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, AvailableSkillsRenderOptions{
++		Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 700},
++	})
++	if executorAvailable == nil {
++		t.Fatalf("combined executor render = nil")
++	}
++	body := executorAvailable.Body
++	if got := strings.Count(body, "- demo:s"); got != 3 {
++		t.Fatalf("occurrences of `- demo:s` = %d, want 3 cloud listings:\n%s", got, body)
++	}
++	if strings.Contains(body, "(executor package: e0/") {
++		t.Fatalf("deduplicated executor package still holds the e0 alias:\n%s", body)
++	}
++	if !strings.Contains(body, "(executor package: e1/s0)") {
++		t.Fatalf("remaining executor package lost its stable e1 alias:\n%s", body)
++	}
++}
++
++// Rust #49127 (core/tests/suite/scenarios_skill_catalog_dedup.rs
++// cloud_preference_preserves_executor_aliases_and_description_budget): the
++// duplicate executor listings used to consume the metadata budget, truncating
++// the descriptions of the unique executor skills. After cloud deduplication the
++// unique executor skills keep their full descriptions.
++func TestRenderCombinedAvailableSkillsKeepsUniqueDescriptionsAfterCloudDedupLikeRust(t *testing.T) {
++	description := strings.Repeat("Skill guidance. ", 60) + "UNIQUE_DESCRIPTION_END"
++	var cloud []InstructionsSkillMetadata
++	for index := 0; index < 3; index++ {
++		pkg := fmt.Sprintf("skill://cloud/s%d", index)
++		cloud = append(cloud, InstructionsSkillMetadata{
++			Name:          fmt.Sprintf("demo:s%d", index),
++			Description:   "Cloud skill instructions.",
++			Path:          pkg + "/SKILL.md",
++			LocatorKind:   "orchestrator package",
++			AuthorityKind: "orchestrator",
++			PackageID:     pkg,
++		})
++	}
++	var executor []InstructionsSkillMetadata
++	for _, plugin := range []string{"demo", "other"} {
++		for index := 0; index < 3; index++ {
++			pkg := fmt.Sprintf("skill://executor/%s/s%d", plugin, index)
++			executor = append(executor, InstructionsSkillMetadata{
++				Name:          fmt.Sprintf("%s:s%d", plugin, index),
++				Description:   description,
++				Path:          pkg,
++				LocatorKind:   "executor package",
++				AuthorityKind: "executor",
++				PackageID:     pkg,
++			})
++		}
++	}
++	host := []InstructionsSkillMetadata{
++		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
++	}
++	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
++	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, AvailableSkillsRenderOptions{
++		Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 3500},
++	})
++	if executorAvailable == nil {
++		t.Fatalf("combined executor render = nil")
++	}
++	body := executorAvailable.Body
++	if got := strings.Count(body, "- demo:s"); got != 3 {
++		t.Fatalf("occurrences of `- demo:s` = %d, want 3 cloud listings only:\n%s", got, body)
++	}
++	if got := strings.Count(body, "UNIQUE_DESCRIPTION_END"); got != 3 {
++		t.Fatalf("unique executor descriptions retained = %d, want 3 after dedup:\n%s", got, body)
++	}
++}

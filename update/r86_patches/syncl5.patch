@@ -1,0 +1,163 @@
+diff --git a/execserver/client_test.go b/execserver/client_test.go
+index e8afc4e4..8fd20440 100644
+--- a/execserver/client_test.go
++++ b/execserver/client_test.go
+@@ -383,7 +383,7 @@ func TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust(t *t
+ 	if err != nil {
+ 		t.Fatalf("FSReadFileStream() error = %v", err)
+ 	}
+-	if len(stream.handleID) != maxFileReadHandleIDBytes {
++	if len(stream.handleID) != maxFileHandleIDBytes {
+ 		t.Fatalf("stream handle id length = %d", len(stream.handleID))
+ 	}
+ 	chunk, done, err := stream.Next(context.Background())
+@@ -399,7 +399,7 @@ func TestClientFileReadStreamClosesExactBoundaryAndReleasesCapacityLikeRust(t *t
+ 	if err := os.WriteFile(smallPath, []byte("ok"), 0o600); err != nil {
+ 		t.Fatalf("WriteFile(small) error = %v", err)
+ 	}
+-	for i := 0; i < maxOpenFileReads+2; i++ {
++	for i := 0; i < maxOpenFiles+2; i++ {
+ 		stream, err := client.FSReadFileStream(context.Background(), &FSReadFileParams{Path: smallPath})
+ 		if err != nil {
+ 			t.Fatalf("FSReadFileStream(%d) error = %v", i, err)
+diff --git a/execserver/server.go b/execserver/server.go
+index 9f7f76dd..ec0df892 100644
+--- a/execserver/server.go
++++ b/execserver/server.go
+@@ -88,11 +88,14 @@ const (
+ 	walkResponseItemOverhead      = 64
+ 	retainedOutputBytesPerProcess = 1024 * 1024
+ 	retainedWriteIDsPerProcess    = 4096
+-	maxOpenFileReads              = 128
+-	maxFileReadHandleIDBytes      = 32
+-	fileReadChunkSize             = 1024 * 1024
+-	fileWriteChunkSize            = 1024 * 1024
+-	maxReadFileBytes              = 512 * 1024 * 1024
++	// Rust #49702 renamed the exec-server file-read terminology to file
++	// handles: the per-connection open-file bound is MAX_OPEN_FILES and the
++	// handle-id byte bound is MAX_FILE_HANDLE_ID_BYTES.
++	maxOpenFiles         = 128
++	maxFileHandleIDBytes = 32
++	fileReadChunkSize    = 1024 * 1024
++	fileWriteChunkSize   = 1024 * 1024
++	maxReadFileBytes     = 512 * 1024 * 1024
+ )
+ 
+ // fs/open modes (Rust #50177). Read is the default for legacy callers.
+@@ -887,7 +890,7 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
+ 	return &Server{
+ 		processes:          map[string]*processState{},
+ 		handles:            map[string]*fileHandleEntry{},
+-		fileSlots:          make(chan struct{}, maxOpenFileReads),
++		fileSlots:          make(chan struct{}, maxOpenFiles),
+ 		httpClient:         httpClient,
+ 		sessions:           map[string]*serverSessionEntry{},
+ 		detachedSessionTTL: 30 * time.Second,
+@@ -905,7 +908,7 @@ func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server)
+ 	server := &Server{
+ 		processes:  map[string]*processState{},
+ 		handles:    map[string]*fileHandleEntry{},
+-		fileSlots:  make(chan struct{}, maxOpenFileReads),
++		fileSlots:  make(chan struct{}, maxOpenFiles),
+ 		httpClient: httpClient,
+ 	}
+ 	if parent != nil {
+@@ -2416,7 +2419,7 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
+ 	if params == nil {
+ 		return nil, errors.New("fs/open params are required")
+ 	}
+-	if err := validateFileReadHandleID(params.HandleID); err != nil {
++	if err := validateFileHandleID(params.HandleID); err != nil {
+ 		return nil, err
+ 	}
+ 	// Rust #50177: `replace` creates or truncates the file for positional
+@@ -2457,7 +2460,7 @@ func (s *Server) openFile(params *FSOpenParams) (*FSOpenResponse, error) {
+ 	// Reserve a slot before opening so in-flight opens, not just registered
+ 	// handles, count against the per-connection limit.
+ 	if !s.reserveFileSlot() {
+-		return nil, requestError(-32600, fmt.Sprintf("at most %d file handles may be open per connection", maxOpenFileReads))
++		return nil, requestError(-32600, fmt.Sprintf("at most %d file handles may be open per connection", maxOpenFiles))
+ 	}
+ 	openFile := openRegularFileForRead
+ 	if mode == fsOpenModeReplace {
+@@ -2502,7 +2505,7 @@ func (s *Server) readBlock(params *FSReadBlockParams) (*FSReadBlockResponse, err
+ 	if params == nil {
+ 		return nil, errors.New("fs/readBlock params are required")
+ 	}
+-	if err := validateFileReadHandleID(params.HandleID); err != nil {
++	if err := validateFileHandleID(params.HandleID); err != nil {
+ 		return nil, err
+ 	}
+ 	if params.Len < 1 || params.Len > fileReadChunkSize {
+@@ -2550,7 +2553,7 @@ func (s *Server) writeBlock(params *FSWriteBlockParams) (*FSWriteBlockResponse,
+ 	if params == nil {
+ 		return nil, errors.New("fs/writeBlock params are required")
+ 	}
+-	if err := validateFileReadHandleID(params.HandleID); err != nil {
++	if err := validateFileHandleID(params.HandleID); err != nil {
+ 		return nil, err
+ 	}
+ 	chunk, err := base64.StdEncoding.DecodeString(params.Chunk)
+@@ -2591,7 +2594,7 @@ func (s *Server) closeFile(params *FSCloseParams) (*FSCloseResponse, error) {
+ 	if params == nil {
+ 		return nil, errors.New("fs/close params are required")
+ 	}
+-	if err := validateFileReadHandleID(params.HandleID); err != nil {
++	if err := validateFileHandleID(params.HandleID); err != nil {
+ 		return nil, err
+ 	}
+ 	s.mu.Lock()
+@@ -2621,9 +2624,9 @@ func (s *Server) closeHandleAfterReadError(handleID string, file *os.File) {
+ 	_ = file.Close()
+ }
+ 
+-func validateFileReadHandleID(handleID string) error {
+-	if len(handleID) > maxFileReadHandleIDBytes {
+-		return requestError(-32600, fmt.Sprintf("file handle ID must not exceed %d bytes", maxFileReadHandleIDBytes))
++func validateFileHandleID(handleID string) error {
++	if len(handleID) > maxFileHandleIDBytes {
++		return requestError(-32600, fmt.Sprintf("file handle ID must not exceed %d bytes", maxFileHandleIDBytes))
+ 	}
+ 	return nil
+ }
+diff --git a/execserver/server_test.go b/execserver/server_test.go
+index 980d07ad..f96f889a 100644
+--- a/execserver/server_test.go
++++ b/execserver/server_test.go
+@@ -1303,7 +1303,7 @@ func TestFilesystemHandleAndReadLimitsMatchRust(t *testing.T) {
+ 	if err != nil || response.Chunk != base64.StdEncoding.EncodeToString([]byte("bcd")) || response.EOF {
+ 		t.Fatalf("readBlock() = %#v, %v", response, err)
+ 	}
+-	if _, err := server.closeFile(&FSCloseParams{HandleID: strings.Repeat("x", maxFileReadHandleIDBytes+1)}); err == nil {
++	if _, err := server.closeFile(&FSCloseParams{HandleID: strings.Repeat("x", maxFileHandleIDBytes+1)}); err == nil {
+ 		t.Fatal("closeFile(long handle) error = nil")
+ 	}
+ 	_, _ = server.closeFile(&FSCloseParams{HandleID: ""})
+@@ -1338,13 +1338,13 @@ func TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust(t *testing.T) {
+ 	}
+ 
+ 	// Fill the capacity; the limit applies to registered handles.
+-	for i := 1; i < maxOpenFileReads; i++ {
++	for i := 1; i < maxOpenFiles; i++ {
+ 		if _, err := server.openFile(&FSOpenParams{HandleID: fmt.Sprintf("h-%d", i), Path: path}); err != nil {
+ 			t.Fatalf("openFile(h-%d) error = %v", i, err)
+ 		}
+ 	}
+-	if len(server.fileSlots) != maxOpenFileReads {
+-		t.Fatalf("slots in use = %d, want %d", len(server.fileSlots), maxOpenFileReads)
++	if len(server.fileSlots) != maxOpenFiles {
++		t.Fatalf("slots in use = %d, want %d", len(server.fileSlots), maxOpenFiles)
+ 	}
+ 	if _, err := server.openFile(&FSOpenParams{HandleID: "overflow", Path: path}); err == nil || !strings.Contains(err.Error(), "at most") {
+ 		t.Fatalf("overflow open error = %v", err)
+@@ -1354,8 +1354,8 @@ func TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust(t *testing.T) {
+ 	if _, err := server.closeFile(&FSCloseParams{HandleID: "h-1"}); err != nil {
+ 		t.Fatalf("closeFile(h-1) error = %v", err)
+ 	}
+-	if len(server.fileSlots) != maxOpenFileReads-1 {
+-		t.Fatalf("slots in use after close = %d, want %d", len(server.fileSlots), maxOpenFileReads-1)
++	if len(server.fileSlots) != maxOpenFiles-1 {
++		t.Fatalf("slots in use after close = %d, want %d", len(server.fileSlots), maxOpenFiles-1)
+ 	}
+ 	if _, err := server.openFile(&FSOpenParams{HandleID: "reused", Path: path}); err != nil {
+ 		t.Fatalf("openFile(reused) error = %v", err)

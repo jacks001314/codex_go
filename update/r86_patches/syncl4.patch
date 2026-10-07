@@ -1,0 +1,36 @@
+diff --git a/parity/rust_snapshot_test.go b/parity/rust_snapshot_test.go
+index ef4a1444..5882c344 100644
+--- a/parity/rust_snapshot_test.go
++++ b/parity/rust_snapshot_test.go
+@@ -292,17 +292,26 @@ type rustCriticalFileHash struct {
+ 
+ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
+ 	return []rustCriticalFileHash{
+-		// Re-pinned to upstream 18e28fe1b9 (#51556): every hash below is
+-		// recomputed from the current Rust tree so the critical-file drift check
+-		// tracks the protocol, exec, client and suite surfaces the Go port
+-		// mirrors after the 498-commit gap from the 5f3180c793 pin.
++		// Re-anchored to upstream head 5b0b253035 (round-86 snapshot): all nine
++		// hashes below were recomputed from `git -C <rust> cat-file blob
++		// 5b0b253035:codex-rs/<path>`, so the pins are blob (LF) digests of the
++		// upstream head rather than of a working tree that may be CRLF-converted
++		// by core.autocrlf on Windows.
++		// Previously re-pinned to upstream 18e28fe1b9 (#51556): every hash below
++		// was recomputed from the then-current Rust tree so the critical-file
++		// drift check tracks the protocol, exec, client and suite surfaces the
++		// Go port mirrors after the 498-commit gap from the 5f3180c793 pin.
+ 		// Re-pinned to upstream e75b36efde (#48100): the
+ 		// agent-message-board-client workspace member.
+ 		{Path: "Cargo.toml", SHA256: "26a713b6714637e008a30b0bf17fb03f1111c09f3d944857e2c4c1b050a20779"},
+ 		{Path: "cli/src/lib.rs", SHA256: "cf24032f801314033b2ff21e6c5a85ad8c2898012e9fba279f3a5c91439c1ab6"},
+ 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
+ 		// runs through embedded Codex startup.
+-		{Path: "exec/src/lib.rs", SHA256: "51b62cef4893c6d07b51753fc2716fc05985cdc9de6673f2fa2d974779454d4b"},
++		// Re-anchored to head 5b0b253035 via 1fbe15c962 (#51595): the two
++		// ThreadListParams literals in resolve_resume_thread_id gained
++		// `excluded_thread_ids: None` (mechanical consequence of the
++		// thread/list exclusion field; Go side already landed as sync551).
++		{Path: "exec/src/lib.rs", SHA256: "8f53a22a562e913f652f971c9955b987c1966e7facc0940aa1aab4d5ab5c4ab9"},
+ 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
+ 		// now carry the structured results array.
+ 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},

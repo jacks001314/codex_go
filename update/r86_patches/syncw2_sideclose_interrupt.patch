@@ -1,0 +1,256 @@
+diff --git a/app/app_test.go b/app/app_test.go
+index cfdf1127..83b2ebb5 100644
+--- a/app/app_test.go
++++ b/app/app_test.go
+@@ -6058,3 +6058,152 @@ func remoteTUITestHandleConfigRequest(ctx context.Context, conn *websocket.Conn,
+ 		return false
+ 	}
+ }
++
++// Rust #50454 sibling: `App::discard_side_thread` interrupts the side thread's
++// running turn before it unsubscribes, so a closed side conversation stops
++// executing on the app-server instead of being left running.
++func TestInteractiveRemoteCloseSideInterruptsRunningSideTurnLikeRust(t *testing.T) {
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	requests := make(chan remoteTUITestRequest, 8)
++	serverErrs := make(chan error, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := websocket.Accept(w, r, nil)
++		if err != nil {
++			remoteTUITestSendErr(serverErrs, err)
++			return
++		}
++		defer conn.Close(websocket.StatusNormalClosure, "")
++		for {
++			req, err := remoteTUITestReadRequest(ctx, conn)
++			if err != nil {
++				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
++					return
++				}
++				remoteTUITestSendErr(serverErrs, err)
++				return
++			}
++			requests <- req
++			switch req.Method {
++			case string(appserver.MethodInitialize):
++				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
++			case string(appserver.MethodTurnInterrupt):
++				var params turn.TurnInterruptParams
++				if err := json.Unmarshal(req.Params, &params); err != nil {
++					remoteTUITestSendErr(serverErrs, err)
++					return
++				}
++				if params.ThreadID != "thread-side" || params.TurnID != "turn-side-1" {
++					remoteTUITestSendErr(serverErrs, fmt.Errorf("turn/interrupt params = %#v", params))
++					return
++				}
++				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
++			case string(appserver.MethodThreadUnsubscribe):
++				var params appserver.ThreadUnsubscribeParams
++				if err := json.Unmarshal(req.Params, &params); err != nil {
++					remoteTUITestSendErr(serverErrs, err)
++					return
++				}
++				if params.ThreadID != "thread-side" {
++					remoteTUITestSendErr(serverErrs, fmt.Errorf("unsubscribe params = %#v", params))
++					return
++				}
++				remoteTUITestWrite(ctx, conn, map[string]any{
++					"jsonrpc": "2.0",
++					"id":      req.ID,
++					"result":  map[string]any{"status": string(appserver.ThreadUnsubscribeStatusUnsubscribed)},
++				})
++				return
++			default:
++				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
++				return
++			}
++		}
++	}))
++	defer server.Close()
++
++	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
++	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
++	interrupts.setActive("thread-side", "turn-side-1")
++	if _, err := interactiveRemoteCloseSide(ctx, endpoint, codextea.SideCloseParams{ParentThreadID: "thread-parent", SideThreadID: "thread-side"}, interrupts); err != nil {
++		t.Fatalf("interactiveRemoteCloseSide error = %v", err)
++	}
++	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
++		t.Fatalf("first request = %q", got.Method)
++	}
++	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodTurnInterrupt) {
++		t.Fatalf("second request = %q, want %s before %s", got.Method, appserver.MethodTurnInterrupt, appserver.MethodThreadUnsubscribe)
++	}
++	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadUnsubscribe) {
++		t.Fatalf("third request = %q", got.Method)
++	}
++	select {
++	case err := <-serverErrs:
++		t.Fatalf("server error: %v", err)
++	default:
++	}
++}
++
++// The interrupt is scoped to the side thread: a turn tracked for another thread
++// must not be interrupted while the side conversation is unsubscribed.
++func TestInteractiveRemoteCloseSideSkipsInterruptForOtherThread(t *testing.T) {
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	requests := make(chan remoteTUITestRequest, 8)
++	serverErrs := make(chan error, 1)
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		conn, err := websocket.Accept(w, r, nil)
++		if err != nil {
++			remoteTUITestSendErr(serverErrs, err)
++			return
++		}
++		defer conn.Close(websocket.StatusNormalClosure, "")
++		for {
++			req, err := remoteTUITestReadRequest(ctx, conn)
++			if err != nil {
++				if websocket.CloseStatus(err) == websocket.StatusNormalClosure || websocket.CloseStatus(err) == websocket.StatusGoingAway || errors.Is(err, context.Canceled) {
++					return
++				}
++				remoteTUITestSendErr(serverErrs, err)
++				return
++			}
++			requests <- req
++			switch req.Method {
++			case string(appserver.MethodInitialize):
++				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
++			case string(appserver.MethodTurnInterrupt):
++				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected turn/interrupt for a side thread that is not the tracked active turn"))
++				return
++			case string(appserver.MethodThreadUnsubscribe):
++				remoteTUITestWrite(ctx, conn, map[string]any{
++					"jsonrpc": "2.0",
++					"id":      req.ID,
++					"result":  map[string]any{"status": string(appserver.ThreadUnsubscribeStatusUnsubscribed)},
++				})
++				return
++			default:
++				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
++				return
++			}
++		}
++	}))
++	defer server.Close()
++
++	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
++	interrupts := newRemoteTUIInterruptController(ctx, endpoint)
++	interrupts.setActive("thread-other", "turn-other-1")
++	if _, err := interactiveRemoteCloseSide(ctx, endpoint, codextea.SideCloseParams{ParentThreadID: "thread-parent", SideThreadID: "thread-side"}, interrupts); err != nil {
++		t.Fatalf("interactiveRemoteCloseSide error = %v", err)
++	}
++	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodInitialize) {
++		t.Fatalf("first request = %q", got.Method)
++	}
++	if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(appserver.MethodThreadUnsubscribe) {
++		t.Fatalf("second request = %q, want %s", got.Method, appserver.MethodThreadUnsubscribe)
++	}
++	select {
++	case err := <-serverErrs:
++		t.Fatalf("server error: %v", err)
++	default:
++	}
++}
+diff --git a/app/remote_tui.go b/app/remote_tui.go
+index dfb24681..61f54bd0 100644
+--- a/app/remote_tui.go
++++ b/app/remote_tui.go
+@@ -7,6 +7,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"log/slog"
+ 	"net"
+ 	"net/http"
+ 	"os"
+@@ -144,6 +145,25 @@ func (c *remoteTUIInterruptController) clearActive(threadID string, turnID strin
+ 	c.mu.Unlock()
+ }
+ 
++// activeTurn reports the controller's tracked active turn when it belongs to
++// threadID. Rust's `App::active_turn_id_for_thread` performs the same lookup
++// before it interrupts a side thread.
++func (c *remoteTUIInterruptController) activeTurn(threadID string) (string, string) {
++	if c == nil {
++		return "", ""
++	}
++	threadID = strings.TrimSpace(threadID)
++	if threadID == "" {
++		return "", ""
++	}
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.threadID != threadID {
++		return "", ""
++	}
++	return c.threadID, c.turnID
++}
++
+ func (c *remoteTUIInterruptController) interruptCommand() bubbletea.Cmd {
+ 	return func() bubbletea.Msg {
+ 		if err := c.interrupt(); err != nil {
+@@ -693,7 +713,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
+ 			return interactiveRemoteStartSide(ctx, root, endpoint, state, params, taskToolsHost)
+ 		},
+ 		OnCloseSide: func(params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
+-			return interactiveRemoteCloseSide(ctx, endpoint, params)
++			return interactiveRemoteCloseSide(ctx, endpoint, params, interrupts)
+ 		},
+ 		HasChatGPTAccount: hasChatGPTAccount,
+ 	}
+@@ -1235,7 +1255,7 @@ func interactiveRemoteStartSide(ctx context.Context, root *cli.RootOptions, endp
+ 	}, nil
+ }
+ 
+-func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, params codextea.SideCloseParams) (codextea.SideCloseResponse, error) {
++func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, params codextea.SideCloseParams, interrupts ...*remoteTUIInterruptController) (codextea.SideCloseResponse, error) {
+ 	reqCtx, cancel := remoteTUIAccountRequestContext(ctx)
+ 	defer cancel()
+ 	sideThreadID := strings.TrimSpace(params.SideThreadID)
+@@ -1247,6 +1267,17 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
+ 		return codextea.SideCloseResponse{}, err
+ 	}
+ 	defer client.close()
++	// Rust `App::discard_side_thread` interrupts the side thread's running turn
++	// through `AppServerSession::turn_interrupt` before it unsubscribes; a side
++	// thread that is only unsubscribed keeps its turn running on the server, since
++	// the app-server unloads an abandoned thread only once it is inactive. The
++	// interrupt is best effort, like `discard_side_thread_in_background`.
++	if active := activeRemoteTUISideTurn(interrupts, sideThreadID); active != nil {
++		var interruptResponse turn.TurnInterruptResponse
++		if err := remoteSessionRequest(reqCtx, client, appserver.MethodTurnInterrupt, *active, &interruptResponse); err != nil {
++			slog.Warn("failed to interrupt side conversation", "side_thread_id", sideThreadID, "error", err)
++		}
++	}
+ 	var response appserver.ThreadUnsubscribeResponse
+ 	unsubscribeParams := appserver.ThreadUnsubscribeParams{ThreadID: sideThreadID}
+ 	if err := remoteSessionRequest(reqCtx, client, appserver.MethodThreadUnsubscribe, unsubscribeParams, &response); err != nil {
+@@ -1255,6 +1286,24 @@ func interactiveRemoteCloseSide(ctx context.Context, endpoint *appserverdaemon.R
+ 	return codextea.SideCloseResponse{}, nil
+ }
+ 
++// activeRemoteTUISideTurn returns the turn/interrupt params for the side thread's
++// in-flight turn when the TUI is currently tracking one, mirroring Rust's
++// `App::active_turn_id_for_thread` lookup. It returns nil when no controller is
++// wired or the tracked turn belongs to another thread.
++func activeRemoteTUISideTurn(interrupts []*remoteTUIInterruptController, sideThreadID string) *turn.TurnInterruptParams {
++	for _, controller := range interrupts {
++		if controller == nil {
++			continue
++		}
++		threadID, turnID := controller.activeTurn(sideThreadID)
++		if threadID == "" || turnID == "" {
++			continue
++		}
++		return &turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID}
++	}
++	return nil
++}
++
+ // remoteTUIStartupConfigWarnings reports the TUI-side startup warnings for the
+ // remote app. Rust validates the final config's `tui.theme` when it applies the
+ // syntax-highlight override and pushes the notice into the same startup

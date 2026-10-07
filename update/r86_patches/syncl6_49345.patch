@@ -1,0 +1,217 @@
+diff --git a/model/catalog.go b/model/catalog.go
+index 62b5b372..e62fd769 100644
+--- a/model/catalog.go
++++ b/model/catalog.go
+@@ -1148,15 +1148,16 @@ func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndp
+ }
+ 
+ // normalizeBedrockCatalog mirrors Rust #50472's normalize_bedrock_catalog: a
+-// caller-supplied (custom) catalog owns its speed-tier, service-tier and
+-// default-tier definitions, so only the wire compatibility fields are
+-// normalized here — Amazon Bedrock rejects the multimodal search content
+-// types and does not support multi-agent V2 response items.
++// caller-supplied (custom) catalog owns its speed-tier, service-tier,
++// default-tier and multi-agent definitions, so only the wire compatibility
++// fields are normalized here (Amazon Bedrock rejects the multimodal search
++// content types). Rust #49345 (8ffd91e42a) stopped forcing multi-agent V1 in
++// this normalizer: the catalog's own `multi_agent_version` is preserved so a
++// model that declares V2 (or Disabled, or nothing) keeps it.
+ func normalizeBedrockCatalog(catalog ModelsResponse) ModelsResponse {
+ 	for i := range catalog.Models {
+ 		model := &catalog.Models[i]
+ 		model.WebSearchToolType = "text"
+-		model.MultiAgentVersion = "v1"
+ 	}
+ 	return catalog
+ }
+@@ -1177,7 +1178,8 @@ func bedrockModel(bundled ModelsResponse, openAISlug string, bedrockSlug string,
+ 	// Rust #39102: the GPT-5.6/Astra Bedrock variants allow context-window
+ 	// overrides up to 872,000 tokens.
+ 	model.MaxContextWindow = 872000
+-	model.SupportedReasoningLevels = withoutReasoningLevel(model.SupportedReasoningLevels, "ultra")
++	// Rust #49345 (8ffd91e42a) stopped stripping the Ultra reasoning level
++	// here, so the Astra advanced-reasoning picker offers Ultra on Bedrock.
+ 	return model
+ }
+ 
+@@ -1217,20 +1219,6 @@ func bundledModelBySlug(bundled ModelsResponse, slug string) ModelInfo {
+ 	}
+ }
+ 
+-func withoutReasoningLevel(levels []string, level string) []string {
+-	if len(levels) == 0 {
+-		return levels
+-	}
+-	out := make([]string, 0, len(levels))
+-	for _, candidate := range levels {
+-		if strings.EqualFold(strings.TrimSpace(candidate), level) {
+-			continue
+-		}
+-		out = append(out, candidate)
+-	}
+-	return out
+-}
+-
+ func WithDefaultOnlyServiceTier(catalog ModelsResponse) ModelsResponse {
+ 	models := cloneModelInfos(catalog.Models)
+ 	for i := range models {
+diff --git a/model/catalog_test.go b/model/catalog_test.go
+index 4f186d54..0a3ca025 100644
+--- a/model/catalog_test.go
++++ b/model/catalog_test.go
+@@ -1372,9 +1372,110 @@ func TestAmazonBedrockModelCatalog(t *testing.T) {
+ 	if !models[0].IsDefault {
+ 		t.Fatal("first Bedrock model should be default")
+ 	}
++	// Rust #49345 (8ffd91e42a) stopped forcing multi-agent V1 in the Bedrock
++	// normalizer, so every entry keeps the `multi_agent_version` its bundled
++	// OpenAI model declares. Go's fallback bundled catalog carries only the
++	// GPT-5.6 family (the GPT-6.* slugs and GPT-5.5 are absent from it), so
++	// those entries resolve to the unset value while GPT-5.6 Sol/Terra stay V2
++	// and GPT-5.6 Luna stays V1 — the same preservation rule Rust applies.
++	wantVersion := map[string]string{
++		AmazonBedrockGPT61SolModelID:   "",
++		AmazonBedrockGPT6AstraModelID:  "",
++		AmazonBedrockGPT6SolModelID:    "",
++		AmazonBedrockGPT6LunaModelID:   "",
++		AmazonBedrockGPT56SolModelID:   "v2",
++		AmazonBedrockGPT56TerraModelID: "v2",
++		AmazonBedrockGPT56LunaModelID:  "v1",
++		AmazonBedrockGPT55ModelID:      "",
++	}
+ 	for _, model := range models {
+-		if model.MultiAgentVersion != "v1" {
+-			t.Fatalf("Bedrock model %s multi_agent_version = %q, want v1", model.Model, model.MultiAgentVersion)
++		want, ok := wantVersion[model.Model]
++		if !ok {
++			t.Fatalf("unexpected Bedrock model %s", model.Model)
++		}
++		if model.MultiAgentVersion != want {
++			t.Fatalf("Bedrock model %s multi_agent_version = %q, want %q", model.Model, model.MultiAgentVersion, want)
++		}
++	}
++}
++
++// Mirrors Rust #49345 (8ffd91e42a)
++// `configured_bedrock_catalogs_normalize_unsupported_model_capabilities` in
++// codex-rs/model-provider/src/amazon_bedrock/catalog.rs: a configured catalog
++// keeps its own `multi_agent_version` (V2 / V1 / Disabled / unset) while the
++// normalizer only rewrites the wire-compatibility `web_search_tool_type`.
++func TestNormalizeBedrockCatalogPreservesConfiguredMultiAgentVersionLikeRust(t *testing.T) {
++	versions := []string{"v2", "v1", "disabled", ""}
++	models := make([]ModelInfo, 0, len(versions))
++	for _, version := range versions {
++		models = append(models, ModelInfo{
++			Slug:                     "configured-" + version,
++			WebSearchToolType:        "text_and_image",
++			MultiAgentVersion:        version,
++			ServiceTiers:             []string{"priority"},
++			DefaultServiceTier:       "priority",
++			AdditionalSpeedTiers:     []string{"fast"},
++			SupportedReasoningLevels: []string{"low", "ultra"},
++		})
++	}
++	normalized := normalizeBedrockCatalog(ModelsResponse{Models: models})
++	if len(normalized.Models) != len(models) {
++		t.Fatalf("models len = %d, want %d", len(normalized.Models), len(models))
++	}
++	for i, model := range normalized.Models {
++		if model.MultiAgentVersion != versions[i] {
++			t.Fatalf("model[%d] multi_agent_version = %q, want %q", i, model.MultiAgentVersion, versions[i])
++		}
++		if model.WebSearchToolType != "text" {
++			t.Fatalf("model[%d] WebSearchToolType = %q, want text", i, model.WebSearchToolType)
++		}
++		// A configured catalog owns its own speed/service/default tier definitions.
++		if len(model.ServiceTiers) != 1 || model.ServiceTiers[0] != "priority" || model.DefaultServiceTier != "priority" {
++			t.Fatalf("model[%d] tiers = %#v/%q", i, model.ServiceTiers, model.DefaultServiceTier)
++		}
++		if len(model.AdditionalSpeedTiers) != 1 || model.AdditionalSpeedTiers[0] != "fast" {
++			t.Fatalf("model[%d] AdditionalSpeedTiers = %#v", i, model.AdditionalSpeedTiers)
++		}
++	}
++}
++
++// Mirrors Rust #49345 (8ffd91e42a) `bedrock_model`: the Bedrock builder keeps
++// the Ultra reasoning level its bundled OpenAI model declares instead of
++// stripping it, so the Astra advanced-reasoning picker offers Ultra.
++func TestBedrockModelPreservesUltraReasoningLikeRust(t *testing.T) {
++	bundled := ModelsResponse{Models: []ModelInfo{{
++		Slug:                     "gpt-6-astra",
++		Visibility:               VisibilityList,
++		SupportedReasoningLevels: []string{"low", "medium", "ultra"},
++	}}}
++	model := bedrockModel(bundled, "gpt-6-astra", "openai.gpt-6-astra", "GPT-6-Astra", 1)
++	want := []string{"low", "medium", "ultra"}
++	if len(model.SupportedReasoningLevels) != len(want) {
++		t.Fatalf("SupportedReasoningLevels = %#v, want %#v", model.SupportedReasoningLevels, want)
++	}
++	for i := range want {
++		if model.SupportedReasoningLevels[i] != want[i] {
++			t.Fatalf("SupportedReasoningLevels = %#v, want %#v", model.SupportedReasoningLevels, want)
++		}
++	}
++}
++
++// Rust #49345 (8ffd91e42a): the bundled Bedrock catalog keeps the Ultra
++// reasoning level on every entry whose bundled model declares it (GPT-5.6
++// Sol/Terra in Go's fallback catalog) instead of stripping it as the
++// pre-#49345 normalizer did.
++func TestBedrockCatalogKeepsUltraReasoningLikeRust(t *testing.T) {
++	catalog := AmazonBedrockModelCatalog()
++	for _, model := range catalog.Models {
++		hasUltra := false
++		for _, level := range model.SupportedReasoningLevels {
++			if level == "ultra" {
++				hasUltra = true
++			}
++		}
++		want := model.Slug == AmazonBedrockGPT56SolModelID || model.Slug == AmazonBedrockGPT56TerraModelID
++		if hasUltra != want {
++			t.Fatalf("%s ultra = %v, want %v (levels %#v)", model.Slug, hasUltra, want, model.SupportedReasoningLevels)
+ 		}
+ 	}
+ }
+@@ -1849,12 +1950,14 @@ func TestAmazonBedrockRuntimeModelCatalogLikeRust(t *testing.T) {
+ // `runtime_catalog_disables_web_search_without_overriding_review_models` in
+ // codex-rs/model-provider/src/amazon_bedrock/runtime_catalog_tests.rs: every
+ // Runtime variant clears `supports_search_tool` (the Runtime endpoint cannot
+-// host web search) and leaves `auto_review_model_override` unset. The Rust test
+-// also pins `multi_agent_version`; Go's shared Bedrock normalizer still forces
+-// multi-agent v1 for every Bedrock entry (Rust #39804 / f3cd299428, reverted
+-// upstream by #49345 / 8ffd91e42a), so that field is deliberately not asserted
+-// here.
++// host web search), leaves `auto_review_model_override` unset, and — since
++// Rust #49345 (8ffd91e42a) — keeps the `multi_agent_version` of its base model
++// instead of forcing multi-agent V1 (the pre-#49345 normalizer did the latter).
+ func TestAmazonBedrockRuntimeCatalogDisablesWebSearchLikeRust(t *testing.T) {
++	baseVersions := map[string]string{}
++	for _, model := range AmazonBedrockModelCatalog().Models {
++		baseVersions[model.Slug] = model.MultiAgentVersion
++	}
+ 	catalog := AmazonBedrockRuntimeModelCatalog()
+ 	if len(catalog.Models) == 0 {
+ 		t.Fatal("runtime catalog is empty")
+@@ -1866,6 +1969,22 @@ func TestAmazonBedrockRuntimeCatalogDisablesWebSearchLikeRust(t *testing.T) {
+ 		if model.AutoReviewModelOverride != "" {
+ 			t.Fatalf("%s AutoReviewModelOverride = %q, want empty", model.Slug, model.AutoReviewModelOverride)
+ 		}
++		base := strings.TrimPrefix(strings.TrimPrefix(model.Slug, bedrockRuntimeGlobalSlugPrefix), bedrockRuntimeUSSlugPrefix)
++		if want := baseVersions[base]; model.MultiAgentVersion != want {
++			t.Fatalf("%s MultiAgentVersion = %q, want %q (preserved from %s)", model.Slug, model.MultiAgentVersion, want, base)
++		}
++		// Concrete expectations for the models Go's bundled catalog carries,
++		// matching Rust's pinned runtime table.
++		wantVersion := ""
++		switch base {
++		case AmazonBedrockGPT56SolModelID, AmazonBedrockGPT56TerraModelID:
++			wantVersion = "v2"
++		case AmazonBedrockGPT56LunaModelID:
++			wantVersion = "v1"
++		}
++		if model.MultiAgentVersion != wantVersion {
++			t.Fatalf("%s MultiAgentVersion = %q, want %q", model.Slug, model.MultiAgentVersion, wantVersion)
++		}
+ 	}
+ }
+ 

@@ -1,0 +1,191 @@
+diff --git a/app/agents_dashboard.go b/app/agents_dashboard.go
+index 3e928579..9a770f1b 100644
+--- a/app/agents_dashboard.go
++++ b/app/agents_dashboard.go
+@@ -84,6 +84,9 @@ func agentsOverviewRowsFromThreads(threads []*appserver.Thread, currentThreadID
+ 		if thread.Model != nil {
+ 			row.Model = strings.TrimSpace(*thread.Model)
+ 		}
++		if thread.ReasoningEffort != nil {
++			row.ReasoningEffort = strings.TrimSpace(string(*thread.ReasoningEffort))
++		}
+ 		if thread.Name != nil {
+ 			row.Name = strings.TrimSpace(*thread.Name)
+ 		}
+diff --git a/app/agents_dashboard_test.go b/app/agents_dashboard_test.go
+index 44afc45b..66e35445 100644
+--- a/app/agents_dashboard_test.go
++++ b/app/agents_dashboard_test.go
+@@ -20,8 +20,10 @@ func dashboardThreadRows() []*appserver.Thread {
+ 	branch := "main"
+ 	parent := "root-1"
+ 	name := "alpha"
++	model := "gpt-5.4"
++	effort := appserver.ReasoningEffort("high")
+ 	return []*appserver.Thread{
+-		{ID: "root-1", Name: &name, Preview: "fix parser", CWD: "/work/a", Status: active, GitInfo: &appserver.GitInfo{Branch: &branch}},
++		{ID: "root-1", Name: &name, Preview: "fix parser", CWD: "/work/a", Status: active, Model: &model, ReasoningEffort: &effort, GitInfo: &appserver.GitInfo{Branch: &branch}},
+ 		{ID: "root-2", Preview: "idle task", CWD: "/work/b", Status: idle},
+ 		{ID: "root-3", Preview: "needs approval", CWD: "/work/c", Status: waiting},
+ 		{ID: "sub-1", ParentThreadID: &parent, Preview: "subagent", CWD: "/work/a", Status: active},
+@@ -48,6 +50,10 @@ func TestAgentsOverviewRowsFromThreadsLikeRust(t *testing.T) {
+ 	if root1.Name != "alpha" || root1.GitBranch != "main" || root1.CWD != "/work/a" {
+ 		t.Fatalf("root-1 fields = %#v", root1)
+ 	}
++	// Rust #50727: the row carries the thread's model and reasoning effort.
++	if root1.Model != "gpt-5.4" || root1.ReasoningEffort != "high" {
++		t.Fatalf("root-1 model/reasoning = %#v", root1)
++	}
+ 	if byID["root-2"].Group != agentsoverview.GroupReady || byID["root-2"].StatusActive {
+ 		t.Fatalf("root-2 row = %#v", byID["root-2"])
+ 	}
+diff --git a/tui/agents_overview/overview.go b/tui/agents_overview/overview.go
+index 4cf1a27d..f08dd022 100644
+--- a/tui/agents_overview/overview.go
++++ b/tui/agents_overview/overview.go
+@@ -111,6 +111,15 @@ func ModelName(model string) string {
+ 	return "Unknown"
+ }
+ 
++// ReasoningEffortName renders a task's reasoning effort, using "Unknown" when
++// the task has none (Rust #50727).
++func ReasoningEffortName(effort string) string {
++	if value := strings.TrimSpace(effort); value != "" {
++		return value
++	}
++	return "Unknown"
++}
++
+ func (g Group) Label() string {
+ 	switch g {
+ 	case GroupNeedsYou:
+@@ -147,8 +156,11 @@ type Row struct {
+ 	CWD      string
+ 	// Model is the task's model; an empty value groups as "Unknown"
+ 	// (Rust #44957).
+-	Model     string
+-	GitBranch string
++	Model string
++	// ReasoningEffort is the task's resolved reasoning effort; an empty value
++	// renders as "Unknown" (Rust #50727).
++	ReasoningEffort string
++	GitBranch       string
+ 	// LastMessage is the latest agent message in the task's most recent turn,
+ 	// previewed for the details pane (Rust agents_overview_details
+ 	// last_message via thread/turns/list).
+diff --git a/tui/agents_overview/overview_test.go b/tui/agents_overview/overview_test.go
+index f65d8eca..a0627277 100644
+--- a/tui/agents_overview/overview_test.go
++++ b/tui/agents_overview/overview_test.go
+@@ -119,6 +119,52 @@ func TestModelGroupingLikeRust(t *testing.T) {
+ 	}
+ }
+ 
++// TestTaskDetailsShowModelAndReasoningLikeRust covers #50727: the model and
++// reasoning effort render at the top of the task details, use "Unknown" when
++// unavailable, and long values are ellipsis-truncated to one line.
++func TestTaskDetailsShowModelAndReasoningLikeRust(t *testing.T) {
++	longModel := strings.Repeat("provider/", 12)
++	longReasoning := strings.Repeat("deliberate", 12)
++	rows := []Row{
++		{ThreadID: "t-1", Name: "alpha", CWD: "/work/a", Model: "gpt-5.4", ReasoningEffort: "high", Group: GroupWorking},
++		{ThreadID: "t-2", Name: "beta", CWD: "/work/b", Group: GroupReady},
++		{ThreadID: "t-3", Name: "gamma", CWD: "/work/c", Model: longModel, ReasoningEffort: longReasoning, Group: GroupReady},
++	}
++
++	details := strings.Join(New(rows, "t-1", false).Render(140, 40), "\n")
++	modelIndex := strings.Index(details, "Model: gpt-5.4")
++	reasoningIndex := strings.Index(details, "Reasoning: high")
++	projectIndex := strings.Index(details, "Project")
++	if modelIndex < 0 || reasoningIndex < 0 || projectIndex < 0 {
++		t.Fatalf("details missing model/reasoning/project:\n%s", details)
++	}
++	if !(modelIndex < reasoningIndex && reasoningIndex < projectIndex) {
++		t.Fatalf("details order model=%d reasoning=%d project=%d, want model then reasoning then project", modelIndex, reasoningIndex, projectIndex)
++	}
++
++	missing := strings.Join(New([]Row{{ThreadID: "t-9", Name: "n", CWD: "/work/z"}}, "", false).Render(140, 40), "\n")
++	if !strings.Contains(missing, "Model: Unknown") || !strings.Contains(missing, "Reasoning: Unknown") {
++		t.Fatalf("missing values should render as Unknown:\n%s", missing)
++	}
++
++	modelLine := ""
++	reasoningLine := ""
++	for _, line := range New(rows, "t-3", false).Render(140, 40) {
++		switch {
++		case strings.HasPrefix(line, "Model: "):
++			modelLine = line
++		case strings.HasPrefix(line, "Reasoning: "):
++			reasoningLine = line
++		}
++	}
++	if !strings.HasSuffix(modelLine, "\u2026") || !strings.Contains(modelLine, "provider/") {
++		t.Fatalf("long model line = %q, want ellipsis truncation", modelLine)
++	}
++	if !strings.HasSuffix(reasoningLine, "\u2026") || !strings.Contains(reasoningLine, "deliberate") {
++		t.Fatalf("long reasoning line = %q, want ellipsis truncation", reasoningLine)
++	}
++}
++
+ func TestGroupForStatusLikeRust(t *testing.T) {
+ 	cases := []struct {
+ 		status           string
+diff --git a/tui/agents_overview/render.go b/tui/agents_overview/render.go
+index 38a32d36..e6e2b2ed 100644
+--- a/tui/agents_overview/render.go
++++ b/tui/agents_overview/render.go
+@@ -388,14 +388,20 @@ func (v *View) renderDetails(width, height int, styled bool) []string {
+ 		{text: row.Group.Label(), style: spanPlain},
+ 	})
+ 	lines = append(lines, nil)
+-	lines = append(lines, []span{{text: "Project", style: spanDim}})
+-	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
+-	// Rust #44957: task details show the task's model.
+-	lines = append(lines, []span{
++	// Rust #50727: the model and reasoning effort sit at the top of the task
++	// details, and long values are ellipsis-truncated to keep one line.
++	lines = append(lines, truncateSpansWithEllipsis([]span{
+ 		{text: "Model: ", style: spanDim},
+ 		{text: ModelName(row.Model), style: spanPlain},
+-	})
+-	// Rust #44970: token totals and estimated usage render after the model.
++	}, width))
++	lines = append(lines, truncateSpansWithEllipsis([]span{
++		{text: "Reasoning: ", style: spanDim},
++		{text: ReasoningEffortName(row.ReasoningEffort), style: spanPlain},
++	}, width))
++	lines = append(lines, nil)
++	lines = append(lines, []span{{text: "Project", style: spanDim}})
++	lines = append(lines, []span{{text: row.CWD, style: spanPlain}})
++	// Rust #44970: token totals and estimated usage render after the project.
+ 	usage := v.usageLinesFor(row.ThreadID)
+ 	for _, rendered := range usage {
+ 		lines = append(lines, []span{{text: rendered, style: spanDim}})
+diff --git a/tui/agents_overview/style.go b/tui/agents_overview/style.go
+index 89f751a6..1d321633 100644
+--- a/tui/agents_overview/style.go
++++ b/tui/agents_overview/style.go
+@@ -200,6 +200,23 @@ func truncateSpans(spans []span, maxWidth int) []span {
+ 	return out
+ }
+ 
++// truncateSpansWithEllipsis clips a line to maxWidth and appends an ellipsis
++// when text was dropped, keeping the last span's style (Rust
++// line_truncation::truncate_line_with_ellipsis_if_overflow).
++func truncateSpansWithEllipsis(spans []span, maxWidth int) []span {
++	if maxWidth <= 0 {
++		return nil
++	}
++	if spansWidth(spans) <= maxWidth {
++		return spans
++	}
++	ellipsis := span{text: "\u2026", style: spanPlain}
++	if len(spans) > 0 {
++		ellipsis.style = spans[len(spans)-1].style
++	}
++	return append(truncateSpans(spans, maxWidth-1), ellipsis)
++}
++
+ // renderLine renders a single line with the given inset prefix.
+ func renderLine(prefix string, spans []span, maxWidth int, styled bool) string {
+ 	available := maxWidth - runewidth.StringWidth(prefix)

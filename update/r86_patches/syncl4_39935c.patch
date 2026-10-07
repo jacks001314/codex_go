@@ -1,0 +1,286 @@
+diff --git a/mcp/api.go b/mcp/api.go
+index 70d8ef7b..09c3e7ab 100644
+--- a/mcp/api.go
++++ b/mcp/api.go
+@@ -1834,7 +1834,11 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
+ 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
+ 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
+ 		}
+-		if loginURL, ok := s.startOAuthLoginServer(name, &config, params, loginID); ok {
++		if loginURL, ok, loginErr := s.startOAuthLoginServer(name, &config, params, loginID); loginErr != nil {
++			// Rust surfaces a refused authorization server out of
++			// `perform_oauth_login`; never hide it behind a guessed URL.
++			return nil, loginErr
++		} else if ok {
+ 			url = loginURL
+ 		} else if registration == MCPServerOauthClientRegistrationDcr && strings.TrimSpace(config.OAuthClientID) == "" {
+ 			// Rust 6dc3ac8721: forced DCR must not silently fall back to a
+@@ -1842,7 +1846,11 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
+ 			return nil, invalidMCPRequest("MCP OAuth login requires dynamic client registration (clientRegistration=dcr), but the server does not advertise a registration endpoint")
+ 		} else {
+ 			client := s.httpClientForServer(name, &config).oauthHTTPClient(mcpOAuthLoginDiscoveryTimeout(params.TimeoutSecs))
+-			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
++			fallbackURL, fallbackErr := buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
++			if fallbackErr != nil {
++				return nil, fallbackErr
++			}
++			url = fallbackURL
+ 		}
+ 	}
+ 	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url, LoginID: &loginID}, nil
+@@ -1886,28 +1894,31 @@ func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServer
+ 	return &MCPServerOauthCancelResponse{}, nil
+ }
+ 
+-func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool) {
++func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool, error) {
+ 	if s == nil || config == nil || params == nil || strings.TrimSpace(config.URL) == "" {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	registration, err := mcpServerOauthClientRegistration(params)
+ 	if err != nil {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	store := s.oauthStoreForConfig(config)
+ 	if store == nil {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	callbackTimeout := mcpOAuthLoginTimeout(params.TimeoutSecs)
+ 	client := s.httpClientForServer(name, config).oauthHTTPClient(0)
+ 	ctx := context.Background()
+ 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
++	if mcpOAuthIssuerBindingRejected(err) {
++		return "", false, err
++	}
+ 	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" || strings.TrimSpace(discovery.TokenEndpoint) == "" {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	clientID := strings.TrimSpace(config.OAuthClientID)
+ 	if clientID == "" && strings.TrimSpace(discovery.RegistrationEndpoint) == "" {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	login, err := StartOAuthLoginServer(ctx, &OAuthLoginServerOptions{
+ 		ServerName:            config.OAuthCredentialName(name),
+@@ -1930,14 +1941,14 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
+ 		CallbackMode:          discovery.CallbackMode,
+ 	})
+ 	if err != nil {
+-		return "", false
++		return "", false, nil
+ 	}
+ 	threadID := ""
+ 	if params.ThreadID != nil {
+ 		threadID = strings.TrimSpace(*params.ThreadID)
+ 	}
+ 	s.trackOAuthLogin(name, threadID, loginID, login)
+-	return login.AuthorizationURL, true
++	return login.AuthorizationURL, true, nil
+ }
+ 
+ func mcpOAuthLoginTimeout(timeoutSecs *uint64) time.Duration {
+diff --git a/mcp/oauth_discovery.go b/mcp/oauth_discovery.go
+index a7021d94..b6b19537 100644
+--- a/mcp/oauth_discovery.go
++++ b/mcp/oauth_discovery.go
+@@ -147,9 +147,9 @@ func SupportsStreamableHTTPOAuthLogin(ctx context.Context, serverURL string, cli
+ 	return discovery != nil, nil
+ }
+ 
+-func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64, client *http.Client) string {
++func buildMCPOAuthURLForLogin(config *ServerConfig, scopes []string, timeoutSecs *uint64, client *http.Client) (string, error) {
+ 	if timeoutSecs == nil || *timeoutSecs == 0 {
+-		return buildMCPOAuthURL(config, scopes)
++		return buildMCPOAuthURL(config, scopes), nil
+ 	}
+ 	timeout := time.Duration(*timeoutSecs) * time.Second
+ 	if timeout > mcpOAuthLoginDiscoveryMaxTimeout {
+@@ -178,12 +178,18 @@ func mcpOAuthLoginDiscoveryTimeout(timeoutSecs *uint64) time.Duration {
+ 	return timeout
+ }
+ 
+-func buildMCPOAuthURLWithDiscovery(ctx context.Context, config *ServerConfig, scopes []string, client *http.Client) string {
++func buildMCPOAuthURLWithDiscovery(ctx context.Context, config *ServerConfig, scopes []string, client *http.Client) (string, error) {
+ 	discovery, err := DiscoverStreamableHTTPOAuth(ctx, config.URL, client)
++	if mcpOAuthIssuerBindingRejected(err) {
++		// The authorization server answered with metadata that this client
++		// refuses to bind, so there is nothing safe to hand off to; Rust fails
++		// the login instead of guessing an endpoint.
++		return "", err
++	}
+ 	if err != nil || discovery == nil || strings.TrimSpace(discovery.AuthorizationEndpoint) == "" {
+-		return buildMCPOAuthURL(config, scopes)
++		return buildMCPOAuthURL(config, scopes), nil
+ 	}
+-	return buildMCPOAuthAuthorizeURL(discovery.AuthorizationEndpoint, config, scopes, discovery.Resource)
++	return buildMCPOAuthAuthorizeURL(discovery.AuthorizationEndpoint, config, scopes, discovery.Resource), nil
+ }
+ 
+ func buildMCPOAuthURL(config *ServerConfig, scopes []string) string {
+@@ -601,6 +607,31 @@ var mcpOAuthIssuerBindingExceptions = []mcpOAuthIssuerBindingException{
+ 	},
+ }
+ 
++// mcpOAuthIssuerBindingRejection marks a metadata document that parsed but was
++// rejected by validateMCPOAuthAuthorizationServerEndpoints (#39935). Rust
++// propagates that failure straight out of `perform_oauth_login`, so the
++// interactive login hand-off treats it as fatal instead of falling back to the
++// guessed `<server>/oauth/authorize` URL.
++type mcpOAuthIssuerBindingRejection struct{ err error }
++
++func (e *mcpOAuthIssuerBindingRejection) Error() string { return e.err.Error() }
++
++func (e *mcpOAuthIssuerBindingRejection) Unwrap() error { return e.err }
++
++// newMCPOAuthIssuerBindingRejection builds a rejection carrying Rust's exact
++// message.
++func newMCPOAuthIssuerBindingRejection(message string) error {
++	return &mcpOAuthIssuerBindingRejection{err: errors.New(message)}
++}
++
++// mcpOAuthIssuerBindingRejected reports whether err is a binding rejection, i.e.
++// a metadata document that was successfully fetched and decoded but refused by
++// the issuer/origin binding rules.
++func mcpOAuthIssuerBindingRejected(err error) bool {
++	var rejection *mcpOAuthIssuerBindingRejection
++	return errors.As(err, &rejection)
++}
++
+ // validateMCPOAuthAuthorizationServerEndpoints ports the origin-binding half of
+ // Rust's `validate_authorization_server_endpoints` (#39935): an authorization
+ // endpoint must be web-scheme and, when the metadata advertises an issuer, must
+@@ -625,33 +656,33 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
+ 
+ 	authorizationEndpoint, err := url.Parse(strings.TrimSpace(metadata.AuthorizationEndpoint))
+ 	if err != nil {
+-		return errors.New("OAuth authorization endpoint must be a valid URL")
++		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint must be a valid URL")
+ 	}
+ 	if !mcpOAuthWebEndpoint(metadata.AuthorizationEndpoint) {
+ 		// Rust bails with the same message; Go's discovery already drops non-web
+ 		// authorization endpoints in fetchMCPOAuthAuthorizationServerMetadata
+ 		// (#47326), so this arm is a faithful mirror rather than a new gate.
+-		return errors.New("OAuth authorization endpoint must use HTTP or HTTPS")
++		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint must use HTTP or HTTPS")
+ 	}
+ 
+ 	var issuer *url.URL
+ 	if rawIssuer := strings.TrimSpace(metadata.Issuer); rawIssuer != "" {
+ 		issuer, err = url.Parse(rawIssuer)
+ 		if err != nil {
+-			return errors.New("OAuth authorization server issuer must be a valid URL")
++			return newMCPOAuthIssuerBindingRejection("OAuth authorization server issuer must be a valid URL")
+ 		}
+ 	}
+ 
+ 	if metadata.AuthorizationResponseIssParameterSupported {
+ 		if issuer == nil {
+-			return errors.New("OAuth issuer-bound callbacks require an authorization server issuer")
++			return newMCPOAuthIssuerBindingRejection("OAuth issuer-bound callbacks require an authorization server issuer")
+ 		}
+ 		return nil
+ 	}
+ 
+ 	tokenEndpoint, err := url.Parse(strings.TrimSpace(metadata.TokenEndpoint))
+ 	if err != nil {
+-		return errors.New("OAuth token endpoint must be a valid URL")
++		return newMCPOAuthIssuerBindingRejection("OAuth token endpoint must be a valid URL")
+ 	}
+ 
+ 	if issuer != nil {
+@@ -662,14 +693,14 @@ func validateMCPOAuthAuthorizationServerEndpoints(metadata *oauthAuthorizationSe
+ 			mcpOAuthIssuerBindingExceptionMatches(issuer.String(), authorizationOrigin, tokenOrigin) {
+ 			return nil
+ 		}
+-		return errors.New("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
++		return newMCPOAuthIssuerBindingRejection("OAuth authorization endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+ 	}
+ 
+ 	// Issuer-less metadata: Rust still requires the token endpoint to share the
+ 	// authorization endpoint's origin, so the browser hand-off and the token
+ 	// exchange cannot straddle two different authorization servers.
+ 	if !sameHTTPOrigin(authorizationEndpoint, tokenEndpoint) {
+-		return errors.New("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
++		return newMCPOAuthIssuerBindingRejection("OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks")
+ 	}
+ 	return nil
+ }
+diff --git a/mcp/oauth_issuer_binding_test.go b/mcp/oauth_issuer_binding_test.go
+index 0f514e54..c1402ea2 100644
+--- a/mcp/oauth_issuer_binding_test.go
++++ b/mcp/oauth_issuer_binding_test.go
+@@ -307,3 +307,70 @@ func newMCPOAuthResourceMetadataFixture(t *testing.T, authorizationServers []str
+ 	}))
+ 	return server
+ }
++
++// A metadata document that was fetched and decoded but refused by the
++// authorization-server binding rules must fail the interactive login instead of
++// falling back to the guessed `<server>/oauth/authorize` URL. Rust propagates
++// `validate_authorization_server_endpoints` out of `perform_oauth_login`
++// (#39935), so hiding the rejection behind a fallback would diverge from it.
++func TestMCPServiceOauthLoginFailsForUnboundAuthorizationServerLikeRust(t *testing.T) {
++	newLoginService := func(t *testing.T, serverURL string) *MCPService {
++		t.Helper()
++		service := NewMCPService(&RuntimeConfig{
++			CodexHome: t.TempDir(),
++			Servers: map[string]ServerRegistration{
++				"docs": {Config: ServerConfig{URL: serverURL, OAuthClientID: "client-1", Enabled: true}},
++			},
++		})
++		t.Cleanup(func() { _ = service.Close() })
++		return service
++	}
++
++	unbound := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
++		"authorization_endpoint": "https://issuer.example/authorize",
++		"token_endpoint":         "https://tokens.example/token",
++	})
++	defer unbound.Close()
++	service := newLoginService(t, unbound.URL+"/mcp")
++	response, err := service.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}})
++	if err == nil || !strings.Contains(err.Error(), "OAuth token endpoint origin does not match the authorization server origin without issuer-bound callbacks") {
++		t.Fatalf("OauthLogin() error = %v, want the unbound authorization server rejected", err)
++	}
++	if !mcpOAuthIssuerBindingRejected(err) {
++		t.Fatalf("OauthLogin() error = %v, want a binding rejection rather than a generic discovery failure", err)
++	}
++	if response != nil {
++		t.Fatalf("OauthLogin() = %#v, want no guessed fallback authorization URL", response)
++	}
++
++	// The same rejection must also surface on the legacy URL-building path that
++	// runs when the interactive login server cannot start at all (no credential
++	// store: the service has no CodexHome), instead of returning a guessed URL.
++	timeoutSecs := uint64(5)
++	stateless := NewMCPService(&RuntimeConfig{
++		Servers: map[string]ServerRegistration{
++			"docs": {Config: ServerConfig{URL: unbound.URL + "/mcp", OAuthClientID: "client-1", Enabled: true}},
++		},
++	})
++	t.Cleanup(func() { _ = stateless.Close() })
++	response, err = stateless.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}, TimeoutSecs: &timeoutSecs})
++	if err == nil || response != nil {
++		t.Fatalf("OauthLogin() = (%#v, %v), want the unbound authorization server rejected without a fallback URL", response, err)
++	}
++
++	// Positive control: metadata that satisfies the binding rules still starts
++	// the interactive login against the discovered endpoint.
++	bound := newMCPOAuthAuthorizationServerFixture(t, map[string]any{
++		"authorization_endpoint": "https://issuer.example/authorize",
++		"token_endpoint":         "https://issuer.example/token",
++	})
++	defer bound.Close()
++	boundService := newLoginService(t, bound.URL+"/mcp")
++	login, err := boundService.OauthLogin(&MCPServerOauthLoginParams{Name: "docs", Scopes: []string{"read"}})
++	if err != nil {
++		t.Fatalf("OauthLogin() error = %v, want the bound authorization server accepted", err)
++	}
++	if login == nil || !strings.Contains(login.AuthorizationURL, "https://issuer.example/authorize") {
++		t.Fatalf("login = %#v, want the discovered authorization endpoint used", login)
++	}
++}

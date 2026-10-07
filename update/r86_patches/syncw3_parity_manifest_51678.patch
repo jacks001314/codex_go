@@ -1,0 +1,13 @@
+diff --git a/parity/rust_unified_exec_sandbox_manifest_test.go b/parity/rust_unified_exec_sandbox_manifest_test.go
+index 8156f556..dcaa6abd 100644
+--- a/parity/rust_unified_exec_sandbox_manifest_test.go
++++ b/parity/rust_unified_exec_sandbox_manifest_test.go
+@@ -138,7 +138,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
+ 			},
+ 		},
+ 		{
+-			Path:     "core/tests/suite/windows_sandbox.rs",
++			Path:     "core/tests/windows_sandbox.rs",
+ 			Owner:    "sandbox, execpolicy",
+ 			Focus:    "Windows restricted-token and elevated sandbox deny-read enforcement",
+ 			Platform: "Windows only",
