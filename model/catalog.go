@@ -1028,7 +1028,7 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 	// (for the GPT-5 generation) the context windows. GPT-5.6/Astra keep the
 	// bundled long-context metadata.
 	bundled := BundledModelsResponse()
-	return normalizeBedrockCatalog(ModelsResponse{
+	return normalizeBundledBedrockCatalog(ModelsResponse{
 		Models: []ModelInfo{
 			// Rust #49339 (a6e9eaa9bd): GPT-6.1 Sol leads the Bedrock Mantle
 			// catalog and is the default (priority 0); Rust #47347 (df30941072)
@@ -1045,15 +1045,38 @@ func AmazonBedrockModelCatalog() ModelsResponse {
 	})
 }
 
-// normalizeBedrockCatalog mirrors Rust normalize_bedrock_catalog: Amazon
-// Bedrock only supports the implicit "default" tier, rejects the multimodal
-// search content types, and does not support multi-agent V2 response items.
-func normalizeBedrockCatalog(catalog ModelsResponse) ModelsResponse {
+// bedrockUltrafastServiceTierID is the service tier Rust #50472 advertises for
+// the Bedrock GPT-6 Astra entry.
+const bedrockUltrafastServiceTierID = "ultrafast"
+
+// normalizeBundledBedrockCatalog mirrors Rust #50472's
+// normalize_bundled_bedrock_catalog for the bundled catalog: the bundled
+// defaults must not inherit OpenAI-only speed/service tiers or opt into a
+// premium default, except that the GPT-6 Astra entry advertises the
+// `ultrafast` tier. Rust also advertises it for the Runtime endpoint's
+// `global.openai.gpt-6-astra` / `us.openai.gpt-6-astra` variants; Go has no
+// Bedrock Runtime catalog, so only the Mantle arm is reachable here.
+func normalizeBundledBedrockCatalog(catalog ModelsResponse) ModelsResponse {
 	for i := range catalog.Models {
 		model := &catalog.Models[i]
 		model.AdditionalSpeedTiers = nil
 		model.ServiceTiers = nil
 		model.DefaultServiceTier = ""
+		if model.Slug == AmazonBedrockGPT6AstraModelID {
+			model.ServiceTiers = []string{bedrockUltrafastServiceTierID}
+		}
+	}
+	return normalizeBedrockCatalog(catalog)
+}
+
+// normalizeBedrockCatalog mirrors Rust #50472's normalize_bedrock_catalog: a
+// caller-supplied (custom) catalog owns its speed-tier, service-tier and
+// default-tier definitions, so only the wire compatibility fields are
+// normalized here — Amazon Bedrock rejects the multimodal search content
+// types and does not support multi-agent V2 response items.
+func normalizeBedrockCatalog(catalog ModelsResponse) ModelsResponse {
+	for i := range catalog.Models {
+		model := &catalog.Models[i]
 		model.WebSearchToolType = "text"
 		model.MultiAgentVersion = "v1"
 	}

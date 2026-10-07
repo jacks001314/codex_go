@@ -3157,13 +3157,13 @@ func (r *ResponsesAgentRunner) providerName() string {
 	return r.Provider.Name
 }
 
-// serviceTierForRequest mirrors Rust ModelClient (#46230): Bedrock only
-// supports the implicit default tier, even when a custom catalog advertises
-// another one.
+// serviceTierForRequest mirrors Rust ModelClient #46230/#50472: a tier is sent
+// only when the model advertises it. Amazon Bedrock no longer drops every
+// tier — the GPT-6 Astra entry advertises `ultrafast` — but it still requires
+// the tier to be advertised, including flex, which the generic OpenAI resolver
+// permits without catalog support. ServiceTierForRequest already enforces that
+// membership, so the Bedrock-specific filter is subsumed here.
 func (r *ResponsesAgentRunner) serviceTierForRequest(modelInfo *ModelInfo, serviceTier string) string {
-	if r.providerIsAmazonBedrock() {
-		return ""
-	}
 	return ServiceTierForRequest(modelInfo, serviceTier)
 }
 

@@ -1717,3 +1717,33 @@ func TestAmazonBedrockModelCatalogLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Mirrors Rust #50472 (604061ce51)
+// `bedrock_models_preserve_source_metadata_with_supported_capabilities` and
+// `bedrock_models_do_not_enable_priority_or_explicit_default_tiers` in
+// codex-rs/model-provider/src/amazon_bedrock/catalog.rs: the bundled Bedrock
+// Mantle catalog clears every inherited speed/service tier and the default
+// tier, except that the GPT-6 Astra entry advertises `ultrafast`.
+func TestBedrockCatalogAdvertisesUltrafastForAstraLikeRust(t *testing.T) {
+	catalog := AmazonBedrockModelCatalog()
+	for _, model := range catalog.Models {
+		if model.DefaultServiceTier != "" {
+			t.Fatalf("%s DefaultServiceTier = %q, want empty", model.Slug, model.DefaultServiceTier)
+		}
+		if len(model.AdditionalSpeedTiers) != 0 {
+			t.Fatalf("%s AdditionalSpeedTiers = %#v, want none", model.Slug, model.AdditionalSpeedTiers)
+		}
+		want := []string(nil)
+		if model.Slug == AmazonBedrockGPT6AstraModelID {
+			want = []string{"ultrafast"}
+		}
+		if len(model.ServiceTiers) != len(want) {
+			t.Fatalf("%s ServiceTiers = %#v, want %#v", model.Slug, model.ServiceTiers, want)
+		}
+		for i := range want {
+			if model.ServiceTiers[i] != want[i] {
+				t.Fatalf("%s ServiceTiers = %#v, want %#v", model.Slug, model.ServiceTiers, want)
+			}
+		}
+	}
+}

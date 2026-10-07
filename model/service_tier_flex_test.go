@@ -42,16 +42,24 @@ func TestServiceTierForConfiguredRequestLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust #46230: Bedrock only supports the implicit default tier, even
-// when a custom catalog advertises one, so the request omits `service_tier`.
-func TestResponsesAgentRunnerOmitsServiceTierForBedrockLikeRust(t *testing.T) {
+// Mirrors Rust #50472 (604061ce51) ModelClient::service_tier_for_request: Amazon
+// Bedrock no longer omits every service tier. It sends a tier only when the
+// model advertises it — including flex, which the generic OpenAI resolver
+// permits without catalog support — so an advertised tier reaches the wire and
+// an unadvertised one is dropped.
+func TestResponsesAgentRunnerServiceTierForBedrockLikeRust(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		providerName string
+		serviceTiers []string
+		requested    string
 		wantTier     any
 	}{
-		{name: "openai keeps flex", providerName: OpenAIProviderName, wantTier: "flex"},
-		{name: "bedrock omits the tier", providerName: AmazonBedrockProviderName, wantTier: nil},
+		{name: "openai keeps flex", providerName: OpenAIProviderName, serviceTiers: []string{"priority", "flex"}, requested: "flex", wantTier: "flex"},
+		{name: "bedrock sends an advertised flex", providerName: AmazonBedrockProviderName, serviceTiers: []string{"priority", "flex"}, requested: "flex", wantTier: "flex"},
+		{name: "bedrock sends an advertised tier", providerName: AmazonBedrockProviderName, serviceTiers: []string{"priority", "ultrafast"}, requested: "ultrafast", wantTier: "ultrafast"},
+		{name: "bedrock drops an unadvertised tier", providerName: AmazonBedrockProviderName, serviceTiers: []string{"priority"}, requested: "ultrafast", wantTier: nil},
+		{name: "bedrock drops an unadvertised flex", providerName: AmazonBedrockProviderName, serviceTiers: []string{"priority"}, requested: "flex", wantTier: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var recordedBody map[string]any
@@ -75,13 +83,13 @@ func TestResponsesAgentRunnerOmitsServiceTierForBedrockLikeRust(t *testing.T) {
 				Auth:     &authHeaders,
 				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
 					Slug:         "gpt-flex",
-					ServiceTiers: []string{"priority", "flex"},
+					ServiceTiers: tc.serviceTiers,
 				}}}),
 			})
 			if _, err := runner.Run(context.Background(), &AgentRequest{
 				Model:       "gpt-flex",
 				Prompt:      "hello",
-				ServiceTier: "flex",
+				ServiceTier: tc.requested,
 			}); err != nil {
 				t.Fatalf("Run error = %v", err)
 			}
