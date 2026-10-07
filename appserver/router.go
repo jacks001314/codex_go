@@ -11,6 +11,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -672,7 +673,7 @@ func collaborationModeFromRaw(raw json.RawMessage) *CollaborationMode {
 	return &mode
 }
 
-func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string, replacement []session.Item, now time.Time) error {
+func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string, replacement []session.Item, windowNumber *uint64, now time.Time) error {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -694,7 +695,44 @@ func (r *Router) appendThreadCompacted(threadID session.ThreadID, message string
 		}
 		items = append(items, *item)
 	}
-	return recorder.AppendCompacted(message, items, now)
+	// Rust #51402: the checkpoint carries the window it starts
+	// (`CompactedItem::window_number`) plus the resume metadata, so a cold resume
+	// restores the newest regular turn's provenance from the checkpoint instead
+	// of falling back to the model-context root. The read side only accepts a
+	// checkpoint that names a window
+	// (`rollout/turn_attribution_reconstruction.go::selectAttributionCheckpoint`,
+	// mirroring Rust `select_input_compaction`), so the window number is part of
+	// the contract rather than decoration.
+	//
+	// The Router-level path starts no turn of its own, so `last_started_turn_id`
+	// stays absent; the reader falls back to the saved attribution's own turn id
+	// and Rust's standalone compaction turn has no Go counterpart here.
+	resume := checkpointResumeMetadata(recorder.Path(), "")
+	return recorder.AppendCompactedWithResumeMetadata(message, items, nil, resume, windowNumber, now)
+}
+
+// advanceRecordWindowNumber advances the conversation-window number persisted on
+// a thread record and returns the new value. Installing compacted history starts
+// a new window (Rust `Session::advance_auto_compact_window`), so the
+// Router-level compaction path advances the number exactly like the runtime path
+// keeps its in-memory counter in step (`RuntimeRouter.advanceWindowNumber`). A
+// thread that never recorded a window starts at 1, matching a runtime compaction
+// of a fresh thread.
+func advanceRecordWindowNumber(record *session.Record) uint64 {
+	if record == nil {
+		return 0
+	}
+	extra := ensureRecordExtra(record.Metadata.Extra)
+	record.Metadata.Extra = extra
+	current := uint64(0)
+	if raw, ok := extra["auto_compact_window_number"]; ok && raw != nil {
+		if parsed, err := strconv.ParseUint(strings.TrimSpace(fmt.Sprint(raw)), 10, 64); err == nil {
+			current = parsed
+		}
+	}
+	next := current + 1
+	extra["auto_compact_window_number"] = next
+	return next
 }
 
 func (r *Router) threadRolloutPath(record *session.Record) string {
@@ -2758,10 +2796,13 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	}
 	record.Metadata.Extra["compacted_at"] = now.Format(time.RFC3339Nano)
 	record.Metadata.Extra["compaction_summary"] = compacted.Summary
+	// The compaction starts a new conversation window; persist the advanced
+	// number with the record and stamp it on the checkpoint below.
+	windowNumber := advanceRecordWindowNumber(record)
 	if err := r.saveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	_ = r.appendThreadCompacted(record.ID, compacted.Summary, record.Items, now)
+	_ = r.appendThreadCompacted(record.ID, compacted.Summary, record.Items, &windowNumber, now)
 	return &ThreadCompactStartResponse{}, nil
 }
 

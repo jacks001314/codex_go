@@ -136,7 +136,7 @@ func TestRuntimeRouterRetainedContextSurvivesCompactionLikeRust(t *testing.T) {
 	if err := store.Save(record); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
-	if err := router.appendRuntimeCompacted(string(threadID), "summary", record.Items, now.Add(time.Second)); err != nil {
+	if err := router.appendRuntimeCompacted(string(threadID), "compact-turn", "summary", record.Items, now.Add(time.Second)); err != nil {
 		t.Fatalf("appendRuntimeCompacted() error = %v", err)
 	}
 	lines, _, err := rollout.Load(filepath.Join(home, rollout.SessionsSubdir, now.Format("2006"), now.Format("01"), now.Format("02"), filepath.Base(recorder.Path())))

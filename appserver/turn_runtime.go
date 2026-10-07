@@ -3982,7 +3982,7 @@ func (r *RuntimeRouter) clearRuntimeSeedRolloutMarker(record *session.Record) {
 	_ = r.runtimeSaveThreadRecord(record)
 }
 
-func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, message string, replacement []session.Item, now time.Time) error {
+func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, turnID string, message string, replacement []session.Item, now time.Time) error {
 	items := make([]rollout.Item, 0, len(replacement))
 	for i := range replacement {
 		item := rollout.ItemFromSessionItem(&replacement[i])
@@ -3995,9 +3995,49 @@ func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, message string, 
 	// resumed thread can still show its original instructions even though the
 	// model's history was compacted.
 	retained := r.retainedContextForThread(threadID)
+	// Rust stamps the window the compaction starts on the checkpoint
+	// (`CompactedItem::window_number`); the window already advanced above, so
+	// this is the new window, not the replaced one.
+	windowNumber := uint64PtrAppserver(r.windowNumberForThread(threadID))
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
-		return recorder.AppendCompactedWithContext(message, items, retained, now)
+		resume := checkpointResumeMetadata(recorder.Path(), turnID)
+		return recorder.AppendCompactedWithResumeMetadata(message, items, retained, resume, windowNumber, now)
 	})
+}
+
+// checkpointResumeMetadata builds the Rust #51402 resume metadata a compaction
+// checkpoint carries: the turn identity the checkpoint was written under plus
+// the attribution of the thread's newest surviving regular turn.
+//
+// Rust keeps that attribution in session state (`SessionState::turn_attribution`)
+// and restores it on a cold resume through the checkpoint, because recovery only
+// replays the suffix after the newest compaction - the `turn_started` records
+// that preceded it are not scanned. Go has no session-state field for it, so it
+// derives the same value with the very reconstruction a resume uses
+// (`rollout.ReconstructTurnAttribution`), which keeps the checkpoint and the
+// reader in agreement. An unknown attribution stays absent rather than becoming
+// an empty object.
+func checkpointResumeMetadata(rolloutPath string, turnID string) *rollout.CompactionResumeMetadata {
+	resume := &rollout.CompactionResumeMetadata{}
+	if id := strings.TrimSpace(turnID); id != "" {
+		resume.LastStartedTurnID = &id
+	}
+	resume.TurnAttribution = checkpointTurnAttribution(rolloutPath)
+	return resume
+}
+
+// checkpointTurnAttribution reconstructs the provenance of the newest surviving
+// regular turn from the thread's rollout, or nil when the rollout carries none.
+func checkpointTurnAttribution(rolloutPath string) *rollout.TurnAttribution {
+	rolloutPath = strings.TrimSpace(rolloutPath)
+	if rolloutPath == "" {
+		return nil
+	}
+	lines, _, err := rollout.Load(rolloutPath)
+	if err != nil || len(lines) == 0 {
+		return nil
+	}
+	return rollout.ReconstructTurnAttribution(lines)
 }
 
 func (r *RuntimeRouter) codexHomeForRollout() string {
@@ -5802,7 +5842,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, nil, err
 	}
-	_ = r.appendRuntimeCompacted(request.ThreadID, compacted.Summary, record.Items, now)
+	_ = r.appendRuntimeCompacted(request.ThreadID, request.TurnID, compacted.Summary, record.Items, now)
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
 	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
 	// Rust c2bcb9a26b: restart Guardian review sessions after parent history
@@ -5896,7 +5936,7 @@ func (r *RuntimeRouter) resetContextWindow(threadID string, turnID string) error
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
 	}
-	_ = r.appendRuntimeCompacted(threadID, "A new context window will start without summarizing conversation history.", record.Items, now)
+	_ = r.appendRuntimeCompacted(threadID, turnID, "A new context window will start without summarizing conversation history.", record.Items, now)
 	r.notifyContextCompactionItemCompleted(threadID, turnID, compactionItem)
 	return nil
 }

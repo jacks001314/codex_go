@@ -963,6 +963,26 @@ func (r *Recorder) AppendTurnAborted(turnID string, reason string, completedAt t
 	})
 }
 
+// CompactionResumeMetadata is the resume metadata Rust #51402
+// (`551bd409eb`) persists on a compaction checkpoint
+// (`codex_history::CompactionResumeMetadata`): the turn identity that admits
+// continuations after a cold resume plus the attribution of the newest regular
+// turn, retained independently of continuation eligibility. The reader
+// (`turn_attribution_reconstruction.go::selectAttributionCheckpoint`) decodes
+// exactly these snake_case wire names, so the writer must not invent a
+// different shape. Rust also persists `multi_agent_version` and
+// `previous_turn_settings`; Go keeps neither on the compaction path, and both
+// are optional on the wire.
+type CompactionResumeMetadata struct {
+	// LastStartedTurnID is the turn identity the checkpoint was written under.
+	// Rust clears it when standalone settings changes invalidate a pending
+	// continuation; the saved attribution still identifies the turn.
+	LastStartedTurnID *string `json:"last_started_turn_id,omitempty"`
+	// TurnAttribution is the provenance of the newest regular turn, independent
+	// of continuation eligibility. Rust #51402 (`state.turn_attribution`).
+	TurnAttribution *TurnAttribution `json:"turn_attribution,omitempty"`
+}
+
 func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.Time) error {
 	return r.AppendCompactedWithContext(message, replacement, nil, now)
 }
@@ -971,6 +991,18 @@ func (r *Recorder) AppendCompacted(message string, replacement []Item, now time.
 // snapshot (Rust CompactedItem::retained_context): the host-owned evidence a
 // resumed thread must keep even though the model's history was compacted.
 func (r *Recorder) AppendCompactedWithContext(message string, replacement []Item, retained *retainedctx.RetainedContext, now time.Time) error {
+	return r.AppendCompactedWithResumeMetadata(message, replacement, retained, nil, nil, now)
+}
+
+// AppendCompactedWithResumeMetadata also persists the checkpoint's window
+// number and its Rust #51402 resume metadata. Rust stamps both on the compacted
+// item (`CompactedItem::window_number` / `resume_metadata`) so a cold resume
+// restores the window the compaction started and the provenance of the newest
+// regular turn instead of falling back to the model-context root. The reader
+// only accepts a checkpoint that names a window
+// (`selectAttributionCheckpoint`), so the window number is part of the contract,
+// not decoration.
+func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -1006,11 +1038,15 @@ func (r *Recorder) AppendCompactedWithContext(message string, replacement []Item
 		ReplacementHistory         []json.RawMessage            `json:"replacement_history,omitempty"`
 		ReplacementHistoryMetadata []json.RawMessage            `json:"replacement_history_metadata,omitempty"`
 		RetainedContext            *retainedctx.RetainedContext `json:"retained_context,omitempty"`
+		WindowNumber               *uint64                      `json:"window_number,omitempty"`
+		ResumeMetadata             *CompactionResumeMetadata    `json:"resume_metadata,omitempty"`
 	}{
 		Message:                    strings.TrimSpace(message),
 		ReplacementHistory:         history,
 		ReplacementHistoryMetadata: historyMetadata,
 		RetainedContext:            retained,
+		WindowNumber:               windowNumber,
+		ResumeMetadata:             resume,
 	}
 	payload, err := json.Marshal(payloadValues)
 	if err != nil {
