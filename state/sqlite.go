@@ -40,6 +40,10 @@ const (
 type RuntimeDBPath struct {
 	Label string
 	Path  string
+	// BackgroundReclamation reports whether the background incremental-vacuum
+	// worker owns this database (Rust `RuntimeDbPath::background_reclamation`,
+	// upstream 33a0f766a6 / #49069). Only the logs database opts in.
+	BackgroundReclamation bool
 }
 
 // SqliteConfig is the single resolved home used by every Codex runtime DB.
@@ -139,13 +143,17 @@ func (c SqliteConfig) ThreadHistoryDBPath() string {
 }
 
 func (c SqliteConfig) RuntimeDBPaths() []RuntimeDBPath {
-	return []RuntimeDBPath{
-		{Label: "state DB", Path: c.StateDBPath()},
-		{Label: "log DB", Path: c.LogsDBPath()},
-		{Label: "goals DB", Path: c.GoalsDBPath()},
-		{Label: "memories DB", Path: c.MemoriesDBPath()},
-		{Label: "thread history DB", Path: c.ThreadHistoryDBPath()},
+	paths := make([]RuntimeDBPath, 0, len(runtimeDBSpecs)+1)
+	for _, spec := range runtimeDBSpecs {
+		paths = append(paths, RuntimeDBPath{
+			Label:                 spec.label,
+			Path:                  spec.path(c),
+			BackgroundReclamation: spec.backgroundReclamation,
+		})
 	}
+	// Thread history is opened lazily and never opts into reclamation.
+	paths = append(paths, RuntimeDBPath{Label: "thread history DB", Path: c.ThreadHistoryDBPath()})
+	return paths
 }
 
 func OpenSQLite(ctx context.Context, dataSourceName string) (*sql.DB, error) {

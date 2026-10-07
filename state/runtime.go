@@ -19,6 +19,10 @@ type runtimeDBSpec struct {
 	// recovery decides what a confirmed quick-check corruption finding may do
 	// (Rust `RecoveryMode`, upstream 3620b2caf8 / #49701).
 	recovery dbRecoveryMode
+	// backgroundReclamation opts the database into the background
+	// incremental-vacuum worker (Rust `RuntimeDbSpec::background_reclamation`,
+	// upstream 33a0f766a6 / #49069).
+	backgroundReclamation bool
 }
 
 // dbRecoveryMode mirrors Rust `RecoveryMode`.
@@ -46,7 +50,11 @@ func (r *StateRuntime) SetMetrics(metrics *TaskMetrics) {
 
 var runtimeDBSpecs = []runtimeDBSpec{
 	{kind: RuntimeDBState, label: "state DB", path: SqliteConfig.StateDBPath},
-	{kind: RuntimeDBLogs, label: "log DB", path: SqliteConfig.LogsDBPath},
+	// Log transactions write before reading, so they already hold the writer
+	// lock and an intervening reclamation commit cannot turn their deferred
+	// read-to-write upgrade into SQLITE_BUSY_SNAPSHOT (upstream 33a0f766a6 /
+	// #49069). Every other runtime database keeps reclamation disabled.
+	{kind: RuntimeDBLogs, label: "log DB", path: SqliteConfig.LogsDBPath, backgroundReclamation: true},
 	{kind: RuntimeDBGoals, label: "goals DB", path: SqliteConfig.GoalsDBPath},
 	{kind: RuntimeDBMemories, label: "memories DB", path: SqliteConfig.MemoriesDBPath},
 }
@@ -94,8 +102,12 @@ type StateRuntime struct {
 	logsMaintenanceMu   sync.Mutex
 	logsMaintenanceDone chan struct{}
 	logsMaintenanceWG   sync.WaitGroup
-	threadUpdatedAt     atomic.Int64
-	threadRecencyAt     atomic.Int64
+	// reclamation owns the background incremental-vacuum worker for the
+	// databases that opted in (Rust #49069, upstream 33a0f766a6). It is nil when
+	// no database opted in.
+	reclamation     *sqliteReclamationWorker
+	threadUpdatedAt atomic.Int64
+	threadRecencyAt atomic.Int64
 }
 
 func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultProvider string) (*StateRuntime, error) {
@@ -125,6 +137,9 @@ func InitStateRuntime(ctx context.Context, sqliteConfig SqliteConfig, defaultPro
 		memoriesDB:      dbs[RuntimeDBMemories],
 		ownsDBs:         true,
 	}
+	// Rust spawns the reclamation worker as the runtime is constructed and
+	// stops it in `StateRuntime::close` (upstream 33a0f766a6 / #49069).
+	runtime.reclamation = spawnSqliteReclamationWorker(sqliteConfig)
 	if err := runtime.ensureBackfillState(ctx); err != nil {
 		_ = runtime.Close()
 		return nil, err
@@ -242,6 +257,10 @@ func (r *StateRuntime) Close() error {
 	r.threadHistoryDB = nil
 	r.closed = true
 	r.threadHistoryMu.Unlock()
+	// Stop the reclamation worker first: it holds a dedicated SQLite connection
+	// while a pass is in flight (Rust `StateRuntime::close` closes reclamation
+	// before the pools, upstream 33a0f766a6 / #49069).
+	r.reclamation.close()
 	// Stop the background log maintenance and let an in-flight sweep finish
 	// before the pools are closed.
 	//
