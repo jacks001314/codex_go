@@ -131,6 +131,11 @@ func startClientWebSocketKeepalive(conn *websocket.Conn) context.CancelFunc {
 var (
 	clientRecoveryTimeout = 25 * time.Second
 	clientRecoveryRetry   = 100 * time.Millisecond
+	// environmentInfoTimeout bounds the live metadata probe and covers sending
+	// as well as waiting: Rust #49407 notes a stuck transport can fill the
+	// outbound queue, so bounding only the response wait is not enough. It is a
+	// variable so tests can shorten the probe.
+	environmentInfoTimeout = 30 * time.Second
 )
 
 type DialClientOptions struct {
@@ -904,12 +909,53 @@ func (c *Client) Terminate(ctx context.Context, params *TerminateParams) (*Termi
 	return &response, nil
 }
 
+// EnvironmentInfo reports the executor metadata at initialization.
+//
+// Rust #49407: the live metadata RPC is bounded by a fixed timeout that covers
+// sending and waiting. An expired probe retires only the connection it probed
+// and requests session recovery without retrying the failed request, so a
+// caller waiting on a stuck transport learns the probe timed out instead of
+// blocking forever.
 func (c *Client) EnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) {
-	var response EnvironmentInfo
-	if err := c.call(ctx, MethodEnvironmentInfo, map[string]any{}, &response); err != nil {
-		return nil, err
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return &response, nil
+	probeCtx, cancel := context.WithTimeout(ctx, environmentInfoTimeout)
+	defer cancel()
+	var response EnvironmentInfo
+	err := c.call(probeCtx, MethodEnvironmentInfo, map[string]any{}, &response)
+	if err == nil {
+		return &response, nil
+	}
+	if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+		// The probe's own deadline expired, so the connection is unusable even
+		// though it never reported a transport error. Retire that connection
+		// and let recovery resume the session.
+		timeoutErr := c.environmentInfoTimeoutError()
+		c.retireProbedConnection(timeoutErr)
+		return nil, timeoutErr
+	}
+	return nil, err
+}
+
+func (c *Client) environmentInfoTimeoutError() error {
+	return fmt.Errorf("exec-server client %s timed out after %s", MethodEnvironmentInfo, environmentInfoTimeout)
+}
+
+// retireProbedConnection closes the connection the probe ran on and requests
+// recovery. failTransport ignores a connection that is no longer current, which
+// matches Rust retiring only the connection it probed.
+func (c *Client) retireProbedConnection(err error) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = c.failTransport(conn, err)
 }
 
 func (c *Client) EnvironmentStatus(ctx context.Context) (*EnvironmentStatus, error) {
