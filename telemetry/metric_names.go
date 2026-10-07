@@ -83,6 +83,10 @@ const (
 	// by the outcome the wait observed (Rust #51332,
 	// core/src/tools/handlers/multi_agents_v2/wait.rs).
 	MultiAgentWaitDurationMetric = "codex.multi_agent.wait.duration_ms"
+	// MultiAgentResultDeliveryMetric counts terminal sub-agent results handed to
+	// their parent thread, tagged by the delivery outcome (Rust #51331,
+	// core/src/agent/control/completion.rs).
+	MultiAgentResultDeliveryMetric = "codex.multi_agent.result_delivery"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local

@@ -2573,9 +2573,12 @@ func (r *RuntimeRouter) deliverRuntimeAgentCompletion(threadID string, status ag
 		}
 		parentID := string(record.ParentThreadID)
 		if active := r.activeRuntimeTurnSnapshot(parentID); active != nil {
-			_ = r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: parentID, TurnID: active.ID, InputItems: []any{input}})
+			// Rust's send_inter_agent_communication reports the queue outcome, which
+			// completion.rs counts as queued | failed (Rust #51331).
+			r.recordMultiAgentResultDelivery(r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: parentID, TurnID: active.ID, InputItems: []any{input}}))
 		} else {
 			r.enqueueRuntimeAgentMessage(parentID, input)
+			r.recordMultiAgentResultDelivery(nil)
 		}
 	}
 	r.notifyRuntimeAgentActivity(rootID, "Wait completed.")
