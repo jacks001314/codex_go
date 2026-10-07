@@ -41,10 +41,14 @@ func (r *RuntimeRouter) recordSkillCatalogRender(surface string, report *promptc
 	if omittedCount > 0 {
 		truncated = 1
 	}
-	sink.Histogram(telemetry.ThreadSkillsEnabledTotalMetric, totalCount, tags)
-	sink.Histogram(telemetry.ThreadSkillsKeptTotalMetric, includedCount, tags)
-	sink.Histogram(telemetry.ThreadSkillsTruncatedMetric, truncated, tags)
-	sink.Histogram(telemetry.ThreadSkillsDescriptionTruncatedCharsMetric, truncatedChars, tags)
+	// Rust #48819 records these with explicit boundaries: integer counts over
+	// 0..512, a 0/1 truncation flag, and logarithmic removed-description
+	// characters, so each family keeps its zero bucket and an overflow bucket
+	// above its range (Rust render_observability.rs `histogram_with_boundaries`).
+	sink.HistogramWithBounds(telemetry.ThreadSkillsEnabledTotalMetric, totalCount, telemetry.ThreadSkillsCountMetricBoundaries, tags)
+	sink.HistogramWithBounds(telemetry.ThreadSkillsKeptTotalMetric, includedCount, telemetry.ThreadSkillsCountMetricBoundaries, tags)
+	sink.HistogramWithBounds(telemetry.ThreadSkillsTruncatedMetric, truncated, telemetry.ThreadSkillsTruncatedBoundaries, tags)
+	sink.HistogramWithBounds(telemetry.ThreadSkillsDescriptionTruncatedCharsMetric, truncatedChars, telemetry.ThreadSkillsDescriptionTruncatedCharsBoundaries, tags)
 }
 
 // skillRenderReportOf returns the render report when the catalog rendered.

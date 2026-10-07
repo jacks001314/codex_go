@@ -20,6 +20,7 @@ type recordedSkillShadowMetric struct {
 	kind, name string
 	value      int
 	duration   time.Duration
+	boundaries []float64
 	tags       map[string]string
 }
 type recordingSkillShadowMetrics struct {
@@ -28,22 +29,25 @@ type recordingSkillShadowMetrics struct {
 }
 
 func (m *recordingSkillShadowMetrics) Counter(name string, inc int, tags map[string]string) {
-	m.record("counter", name, inc, 0, tags)
+	m.record("counter", name, inc, 0, nil, tags)
 }
 func (m *recordingSkillShadowMetrics) Histogram(name string, value int, tags map[string]string) {
-	m.record("histogram", name, value, 0, tags)
+	m.record("histogram", name, value, 0, nil, tags)
+}
+func (m *recordingSkillShadowMetrics) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	m.record("histogram", name, value, 0, boundaries, tags)
 }
 func (m *recordingSkillShadowMetrics) RecordDuration(name string, duration time.Duration, tags map[string]string) {
-	m.record("duration", name, 0, duration, tags)
+	m.record("duration", name, 0, duration, nil, tags)
 }
-func (m *recordingSkillShadowMetrics) record(kind, name string, value int, duration time.Duration, tags map[string]string) {
+func (m *recordingSkillShadowMetrics) record(kind, name string, value int, duration time.Duration, boundaries []float64, tags map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	copied := map[string]string{}
 	for key, item := range tags {
 		copied[key] = item
 	}
-	m.records = append(m.records, recordedSkillShadowMetric{kind, name, value, duration, copied})
+	m.records = append(m.records, recordedSkillShadowMetric{kind, name, value, duration, append([]float64(nil), boundaries...), copied})
 }
 func (m *recordingSkillShadowMetrics) Records() []recordedSkillShadowMetric {
 	m.mu.Lock()

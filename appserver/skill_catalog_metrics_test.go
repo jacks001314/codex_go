@@ -46,6 +46,27 @@ func TestRecordSkillCatalogRenderLikeRust(t *testing.T) {
 			t.Fatalf("%s record = %#v, want %d", name, record, want)
 		}
 	}
+	// Rust #48819: each family records explicit boundaries instead of the
+	// client-wide defaults.
+	for name, want := range map[string][]float64{
+		telemetry.ThreadSkillsEnabledTotalMetric:              telemetry.ThreadSkillsCountMetricBoundaries,
+		telemetry.ThreadSkillsKeptTotalMetric:                 telemetry.ThreadSkillsCountMetricBoundaries,
+		telemetry.ThreadSkillsTruncatedMetric:                 telemetry.ThreadSkillsTruncatedBoundaries,
+		telemetry.ThreadSkillsDescriptionTruncatedCharsMetric: telemetry.ThreadSkillsDescriptionTruncatedCharsBoundaries,
+	} {
+		record := byName[name+"/"+skillCatalogSurfaceTurnInput]
+		if record == nil || len(record.Boundaries) == 0 {
+			t.Fatalf("%s boundaries = %#v, want explicit %d boundaries", name, record, len(want))
+		}
+		if len(record.Boundaries) != len(want) {
+			t.Fatalf("%s boundaries length = %d, want %d", name, len(record.Boundaries), len(want))
+		}
+		for index := range want {
+			if record.Boundaries[index] != want[index] {
+				t.Fatalf("%s boundary[%d] = %v, want %v", name, index, record.Boundaries[index], want[index])
+			}
+		}
+	}
 	for name, want := range map[string]int{
 		telemetry.ThreadSkillsEnabledTotalMetric:              0,
 		telemetry.ThreadSkillsKeptTotalMetric:                 0,

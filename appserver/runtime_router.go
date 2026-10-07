@@ -188,6 +188,9 @@ func (r *RuntimeRouter) configureEnvironmentHTTPPolicy() {
 type SkillShadowMetricSink interface {
 	Counter(name string, inc int, tags map[string]string)
 	Histogram(name string, value int, tags map[string]string)
+	// HistogramWithBounds records a histogram observation with explicit bucket
+	// boundaries (Rust ExtensionMetrics::histogram_with_boundaries).
+	HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string)
 	RecordDuration(name string, duration time.Duration, tags map[string]string)
 }
 
