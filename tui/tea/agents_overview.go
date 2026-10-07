@@ -114,6 +114,19 @@ type agentsOverviewDaemonMsg struct {
 // applyAgentsCommand mirrors Rust open_agents_overview: the embedded branch
 // shows the "Shared agents unavailable" selection view, otherwise the
 // dashboard opens and refreshes loaded root sessions.
+// persistAgentsOverviewGroupingCmd saves the live Command Center grouping to
+// `tui.agents_overview_grouping` (Rust #50786
+// App::persist_agents_overview_grouping).
+func (m *Model) persistAgentsOverviewGroupingCmd() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil {
+		return nil
+	}
+	return m.writeSettings(settingsWriteKindAgentsOverviewGrouping, []SettingsEdit{{
+		KeyPath: "tui.agents_overview_grouping",
+		Value:   m.agentsOverview.State.Grouping.ConfigValue(),
+	}})
+}
+
 func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -123,6 +136,9 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	// Rust #50786: a reopened Command Center restores the grouping remembered for
+	// this session (App::agents_overview holds the state across opens).
+	m.agentsOverview.State.Grouping = m.agentsOverviewGrouping
 	m.agentsOverview.SetWorktreesEnabled(m.agentsOverviewWorktreesEnabled())
 	m.wireAgentsOverviewThemeColors(m.agentsOverview)
 	// Rust #44424: hidden tasks stay hidden across dashboard close/reopen.
@@ -422,6 +438,10 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.keyMatches("agents", "toggle_grouping", keySpec) {
 		m.agentsOverview.ToggleGrouping()
+		// Rust #50786: the selected grouping is remembered across launches. The
+		// live choice stays active even if the write below fails.
+		m.agentsOverviewGrouping = m.agentsOverview.State.Grouping
+		return m.persistAgentsOverviewGroupingCmd()
 	}
 	if m.keyMatches("agents", "toggle_pin", keySpec) {
 		// Rust #51500: `p` pins or unpins the selected task. The view reports

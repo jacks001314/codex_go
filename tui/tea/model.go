@@ -325,8 +325,12 @@ type SettingsWriteResult struct {
 	TUITheme                string
 	TUIPet                  string
 	SessionPickerView       string
-	PluginUserMarketplaces  map[string]bool
-	PluginGitMarketplaces   map[string]bool
+	// AgentsOverviewGrouping carries the configured
+	// `tui.agents_overview_grouping` value (Rust #50786). Empty keeps the current
+	// Command Center grouping.
+	AgentsOverviewGrouping string
+	PluginUserMarketplaces map[string]bool
+	PluginGitMarketplaces  map[string]bool
 	// Rendering carries the resolved `tui.rendering` preferences so a settings
 	// change refreshes the Markdown renderers (Rust
 	// `markdown_render::preferences::init(local_settings.tui.rendering)`). Nil
@@ -939,8 +943,11 @@ type Options struct {
 	SessionPickerItems      []codextui.SessionSummary
 	SessionPickerCWD        string
 	SessionPickerView       string
-	ShowSessionHeader       bool
-	SessionHeaderVersion    string
+	// AgentsOverviewGrouping seeds the Command Center grouping from the
+	// configured `tui.agents_overview_grouping` value (Rust #50786).
+	AgentsOverviewGrouping string
+	ShowSessionHeader      bool
+	SessionHeaderVersion   string
 	// ShowTooltips mirrors Rust's `tui.show_tooltips` preference: when enabled
 	// the session header shows a startup tooltip resolved against the current
 	// keybindings. A nil value keeps tooltips off, so callers that do not opt in
@@ -1344,6 +1351,9 @@ type Model struct {
 	agentsOverviewRefresh  int
 	agentsOverviewPending  bool
 	agentsOverviewInflight bool
+	// agentsOverviewGrouping is the live Command Center grouping kept across
+	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
+	agentsOverviewGrouping agentsoverview.Grouping
 	agentsOverviewDrafts   map[string]string
 	// agentsOverviewAttachments holds the pending image attachments for the
 	// dashboard's new-task prompt (Rust #44027).
@@ -2073,6 +2083,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
 		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),
+		agentsOverviewGrouping:          agentsoverview.ParseGroupingConfig(options.AgentsOverviewGrouping),
 		backgroundProcesses:             cloneUnifiedExecProcessDetails(options.BackgroundProcesses),
 		mcpServers:                      cloneMcpServerStatuses(options.MCPServers),
 		onReadMCPInventory:              options.OnReadMCPInventory,

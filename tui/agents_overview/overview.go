@@ -102,6 +102,33 @@ func (g Grouping) Label() string {
 	}
 }
 
+// ConfigValue is the kebab-case value persisted as
+// `tui.agents_overview_grouping` (Rust #50786 AgentsOverviewGrouping::as_str).
+func (g Grouping) ConfigValue() string {
+	switch g {
+	case GroupingStatus:
+		return "status"
+	case GroupingModel:
+		return "model"
+	default:
+		return "project"
+	}
+}
+
+// ParseGroupingConfig resolves a stored `tui.agents_overview_grouping` value.
+// Missing, empty, or unrecognized values fall back to the project default
+// (Rust #50786 `#[serde(default)] AgentsOverviewGrouping::Project`).
+func ParseGroupingConfig(value string) Grouping {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "status":
+		return GroupingStatus
+	case "model":
+		return GroupingModel
+	default:
+		return GroupingProject
+	}
+}
+
 // ModelName is the group label for a row's model; missing or empty names group
 // as "Unknown" (Rust agents_overview_grouping::model_name).
 func ModelName(model string) string {

@@ -7,18 +7,20 @@ import (
 
 	"codex_go/features"
 	codextui "codex_go/tui"
+	agentsoverview "codex_go/tui/agents_overview"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 	"codex_go/tui/markdown"
 )
 
 const (
-	settingsWriteKindExperimental        = "experimental"
-	settingsWriteKindRateLimitModelNudge = "rate_limit_model_nudge"
-	settingsWriteKindTheme               = "theme"
-	settingsWriteKindPet                 = "pet"
-	settingsWriteKindServiceTier         = "service_tier"
-	settingsWriteKindApprovalsReviewer   = "approvals_reviewer"
+	settingsWriteKindExperimental           = "experimental"
+	settingsWriteKindRateLimitModelNudge    = "rate_limit_model_nudge"
+	settingsWriteKindTheme                  = "theme"
+	settingsWriteKindPet                    = "pet"
+	settingsWriteKindServiceTier            = "service_tier"
+	settingsWriteKindApprovalsReviewer      = "approvals_reviewer"
+	settingsWriteKindAgentsOverviewGrouping = "agents_overview_grouping"
 )
 
 // initialPersonality carries the configured personality into the model's
@@ -359,6 +361,13 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			m.refreshTranscript()
 			return
 		}
+		if msg.Kind == settingsWriteKindAgentsOverviewGrouping {
+			// Rust #50786: report the save failure inside Command Center while the
+			// selected grouping stays active.
+			m.agentsOverviewNotice = "Failed to save Command Center grouping: " + msg.Err.Error()
+			m.refreshTranscript()
+			return
+		}
 		if msg.Kind == settingsWriteKindApprovalsReviewer {
 			// Rust #46036: report the persistence failure as an error message,
 			// keeping the backend's actionable cause (config file location and
@@ -435,6 +444,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			}
 		case settingsWriteKindServiceTier:
 			m.notice = "Service tier set to " + strings.TrimSpace(m.State.ServiceTier)
+		case settingsWriteKindAgentsOverviewGrouping:
+			// Rust #50786 saves the grouping silently; Command Center reports only
+			// its own notice.
 		default:
 			m.notice = "Settings saved to " + strings.TrimSpace(msg.Result.FilePath) + "."
 		}
@@ -554,6 +566,14 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	}
 	if strings.TrimSpace(result.SessionPickerView) != "" {
 		m.sessionPickerDensity = normalizeSessionPickerDensityTea(result.SessionPickerView)
+	}
+	if strings.TrimSpace(result.AgentsOverviewGrouping) != "" {
+		// Rust #50786: a reloaded `tui.agents_overview_grouping` restores the
+		// remembered Command Center grouping, live dashboard included.
+		m.agentsOverviewGrouping = agentsoverview.ParseGroupingConfig(result.AgentsOverviewGrouping)
+		if m.agentsOverview != nil {
+			m.agentsOverview.State.Grouping = m.agentsOverviewGrouping
+		}
 	}
 }
 
