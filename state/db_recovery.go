@@ -13,9 +13,20 @@ import (
 
 const dbRecoveryBackupDirName = "db-backups"
 
+// DBRecoveryStartupError is the Go counterpart of the Rust TUI startup boundary
+// type `codex_tui::LocalStateDbStartupError`
+// (codex-rs/tui/src/startup_error.rs).
+//
+// Rust #49710: the type preserves the underlying error chain in `#[source]` and
+// classifies corruption from that chain (SQLite result codes) instead of from the
+// rendered `detail` text. Go mirrors that with Source + IsCorruption.
 type DBRecoveryStartupError struct {
 	DatabasePath string
 	Detail       string
+	// Source preserves the underlying error chain so corruption can be
+	// classified by SQLite result code (see IsCorruption). It may be nil for
+	// callers that only have the rendered Detail text.
+	Source error
 }
 
 type DBRecoveryBackup struct {
@@ -49,8 +60,32 @@ func IsSQLiteCorruptionError(err error) bool {
 	if !errors.As(err, &sqliteErr) {
 		return false
 	}
+	// Rust #49710 replaced error-message matching with SQLite result-code
+	// classification; only the primary result code counts (DatabaseCorrupt=11,
+	// NotADatabase=26).
 	code := sqliteErr.Code() & 0xff
-	return code == 11 || code == 26 || IsDBRecoveryCorruption(sqliteErr.Error())
+	return code == 11 || code == 26
+}
+
+// IsCorruption reports whether the startup failure was caused by SQLite
+// corruption, classified from the preserved error chain's SQLite result code.
+//
+// Mirrors Rust `LocalStateDbStartupError::is_corruption` (#49710), which calls
+// `codex_state::is_sqlite_corruption_error(&self.source)`; that accepts the
+// DatabaseCorrupt (11) and NotADatabase (26) result codes.
+//
+// Deliberate Go difference: Rust's `LocalStateDbStartupError::new` always takes a
+// source and derives `detail` from it, so Rust never classifies by text. Go keeps
+// `Detail` as an independent public field, so when Source is nil we fall back to
+// the legacy text classifier to keep Source-less call sites working.
+func (e *DBRecoveryStartupError) IsCorruption() bool {
+	if e == nil {
+		return false
+	}
+	if IsSQLiteCorruptionError(e.Source) {
+		return true
+	}
+	return e.Source == nil && IsDBRecoveryCorruption(e.Detail)
 }
 
 func RuntimeDBPathForCorruptionError(err error) (string, bool) {
@@ -68,7 +103,7 @@ func (e *DBRecoveryStartupError) AutoBackupRecoverable() bool {
 	if e == nil {
 		return false
 	}
-	if IsDBRecoveryCorruption(e.Detail) {
+	if e.IsCorruption() {
 		return true
 	}
 	parent := filepath.Dir(e.DatabasePath)

@@ -1441,6 +1441,7 @@ func initStateRuntimeWithFreshStartOnCorruption(ctx context.Context, sqliteConfi
 		if _, backupErr := state.BackupDBFilesForFreshStart(&state.DBRecoveryStartupError{
 			DatabasePath: databasePath,
 			Detail:       err.Error(),
+			Source:       err,
 		}, time.Time{}); backupErr != nil {
 			return nil, fmt.Errorf("failed to move damaged sqlite state database files into a backup folder: %v; original error: %w", backupErr, err)
 		}

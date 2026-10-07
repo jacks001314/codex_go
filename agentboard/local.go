@@ -237,7 +237,7 @@ func DeleteLocalBoards(ctx context.Context, sqlite state.SqliteConfig, roots []s
 		// A corrupt database cannot be repaired in place: back it up and
 		// recreate it so thread deletion still succeeds.
 		closeLocalBoardPool(path)
-		if _, backupErr := state.BackupDBFilesForFreshStart(&state.DBRecoveryStartupError{DatabasePath: path, Detail: err.Error()}, time.Now()); backupErr != nil {
+		if _, backupErr := state.BackupDBFilesForFreshStart(&state.DBRecoveryStartupError{DatabasePath: path, Detail: err.Error(), Source: err}, time.Now()); backupErr != nil {
 			return backupErr
 		}
 		db, err = sqlite.OpenReadWrite(ctx, path)
