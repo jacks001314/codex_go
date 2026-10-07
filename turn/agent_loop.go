@@ -435,6 +435,17 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// Rust #48141: new user input preempts the unfinished sampling
 			// request so the queued input reaches the model without waiting.
 			Preempt: stepPreempt.Done(),
+			// Rust #49119: a sampling block records its recovery guidance into
+			// the conversation before the retry is issued. The model layer
+			// appends the item to the retried request; recording it here keeps
+			// the turn's input items (and therefore the persisted history and
+			// the next iteration's request) in step.
+			OnConversationItem: func(item any) {
+				if item == nil {
+					return
+				}
+				result.InputItems = append(result.InputItems, item)
+			},
 		})
 		sampling.CloseAt(l.now())
 		if err != nil {

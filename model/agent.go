@@ -75,6 +75,13 @@ type AgentRequest struct {
 	StreamHandler                ResponsesStreamHandler
 	DisableHostedImageGeneration bool
 	PermissionProfile            *sandbox.PermissionProfile
+	// OnConversationItem, when non-nil, receives conversation items that a
+	// sampling request records in live history while it is running. Rust #49119
+	// records the content-filter guidance with `sess.record_conversation_items`
+	// before the retry is issued, so the retried request carries it; Go's retry
+	// loop owns the request body, so the item is appended to the attempt input
+	// here and handed to the caller for recording.
+	OnConversationItem func(item any)
 	// Preempt, when non-nil, carries the sampling request's preemption signal
 	// (Rust #48141's `StepContext::preempt`): closing it interrupts request
 	// setup, the response stream and the retry backoff so the queued user input

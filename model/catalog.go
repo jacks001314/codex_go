@@ -116,9 +116,14 @@ type ModelMessages struct {
 	// PersistentInstructions is the catalog's fixed persistent-mode developer
 	// guidance (Rust ModelMessages::persistent_instructions); missing or null
 	// uses the bundled default and an explicit empty string disables it.
-	PersistentInstructions *string               `json:"persistent_instructions,omitempty"`
-	Permissions            *PermissionMessages   `json:"permissions,omitempty"`
-	ConfirmationPolicies   *ConfirmationPolicies `json:"confirmation_policies,omitempty"`
+	PersistentInstructions *string `json:"persistent_instructions,omitempty"`
+	// ContentFilterGuidance is the catalog's developer guidance appended after a
+	// response is blocked by the content filter (Rust #49119
+	// ModelMessages::content_filter_guidance). Missing, null, blank, or values
+	// over 512 UTF-8 bytes use the bundled guidance.
+	ContentFilterGuidance *string               `json:"content_filter_guidance,omitempty"`
+	Permissions           *PermissionMessages   `json:"permissions,omitempty"`
+	ConfirmationPolicies  *ConfirmationPolicies `json:"confirmation_policies,omitempty"`
 	// GuardianV2 carries the catalog's Guardian v2 model defaults (Rust
 	// ModelMessages::guardian_v2). Go consumes max_tool_call_lag; the remaining
 	// classifier fields belong to Rust's async scorer, which Go does not have.
@@ -299,6 +304,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 		AutoReview             *AutoReviewMessages        `json:"auto_review"`
 		Approvals              *ApprovalMessages          `json:"approvals"`
 		PersistentInstructions *string                    `json:"persistent_instructions"`
+		ContentFilterGuidance  *string                    `json:"content_filter_guidance"`
 		Permissions            *PermissionMessages        `json:"permissions"`
 		ConfirmationPolicies   *ConfirmationPolicies      `json:"confirmation_policies"`
 		GuardianV2             *GuardianV2ModelConfig     `json:"guardian_v2"`
@@ -314,6 +320,7 @@ func (m *ModelMessages) UnmarshalJSON(data []byte) error {
 	m.AutoReview = raw.AutoReview
 	m.Approvals = raw.Approvals
 	m.PersistentInstructions = raw.PersistentInstructions
+	m.ContentFilterGuidance = raw.ContentFilterGuidance
 	m.Permissions = raw.Permissions
 	m.ConfirmationPolicies = raw.ConfirmationPolicies
 	m.GuardianV2 = raw.GuardianV2

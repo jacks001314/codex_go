@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"codex_go/codexapi"
+	contextfrag "codex_go/context"
 )
 
 // Rust 5a0d0929e2: connection failures during sampling are retried with
@@ -260,6 +261,20 @@ func (r *ResponsesAgentRunner) runStreaming(ctx context.Context, request *AgentR
 		}
 		retryable := isRetryableResponsesStreamError(err)
 		responsesDiagnostic("sampling.failed", map[string]any{"thread_id": request.ThreadID, "turn_id": request.TurnID, "stream_attempt": attempt + 1, "error": err.Error(), "error_kind": responsesDiagnosticErrorKind(err), "retryable": retryable, "retry_budget_remaining": attempt < maxRetries})
+		if isContentFilterStreamError(err) {
+			// Rust #49119: every sampling block appends the resolved developer
+			// guidance to the conversation before the retry decision, so the next
+			// request carries it (and the guidance survives an exhausted budget).
+			// Rust rebuilds the retried prompt from session history; Go's retry
+			// loop owns the request body, so the item joins the attempt input
+			// here and is handed to the caller for live-history recording.
+			if item := r.contentFilterGuidanceInputItem(request); item != nil {
+				apiRequest.Input = append(append([]any(nil), apiRequest.Input...), item)
+				if request.OnConversationItem != nil {
+					request.OnConversationItem(item)
+				}
+			}
+		}
 		if attempt >= maxRetries || !retryable {
 			return nil, err
 		}
@@ -1253,7 +1268,27 @@ func (a *responsesStreamAccumulator) apply(sse *responsesSSEEvent, handler Respo
 	return false, nil
 }
 
+// contentFilterStreamError is the typed content-filter block Rust models as
+// `CodexErrorDetails::ContentFilter` (Rust #49119, upstream 8bd5a136ff). It
+// keeps the stream retry budget and the public copy Rust renders for that
+// detail; the response stream maps `reason: content_filter` onto it so the
+// retry loop can append recovery guidance.
+type contentFilterStreamError struct{}
+
+func (contentFilterStreamError) Error() string {
+	return "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+}
+
+// isContentFilterStreamError reports whether err is the content-filter block.
+func isContentFilterStreamError(err error) bool {
+	var contentFilter contentFilterStreamError
+	return errors.As(err, &contentFilter)
+}
+
 func responseIncompleteError(data []byte) error {
+	if responseIncompleteReason(data) == "content_filter" {
+		return contentFilterStreamError{}
+	}
 	return fmt.Errorf("Incomplete response returned, reason: %s", responseIncompleteReason(data))
 }
 
@@ -1274,6 +1309,42 @@ func responseIncompleteReason(data []byte) string {
 		}
 	}
 	return reason
+}
+
+// contentFilterGuidanceInputItem resolves the content-filter recovery guidance
+// for the request's model and renders it as the developer message Rust records
+// after each block (Rust #49119). The catalog override follows
+// context.ResolveContentFilterGuidance; the content_item_kinds annotation obeys
+// the same feature gate as every other request item.
+func (r *ResponsesAgentRunner) contentFilterGuidanceInputItem(request *AgentRequest) any {
+	var catalog *string
+	if request != nil {
+		if info := r.modelInfoForRequest(request.Model); info.ModelMessages != nil {
+			catalog = info.ModelMessages.ContentFilterGuidance
+		}
+	}
+	rendered := contextfrag.Render(contextfrag.NewContentFilterGuidance(contextfrag.ResolveContentFilterGuidance(catalog)))
+	if rendered == nil {
+		return nil
+	}
+	item := map[string]any{
+		"type": "message",
+		"role": rendered.Role,
+		"content": []map[string]any{{
+			"type": "input_text",
+			"text": rendered.Content,
+		}},
+	}
+	if kind := strings.TrimSpace(rendered.ContentKind); kind != "" {
+		item[internalChatMessageMetadataPassthroughField] = map[string]any{
+			"content_item_kinds": []string{kind},
+		}
+	}
+	gated := r.gateContentItemKinds([]any{item})
+	if len(gated) != 1 {
+		return nil
+	}
+	return gated[0]
 }
 
 func responsesBoolPointer(value bool) *bool { return &value }
