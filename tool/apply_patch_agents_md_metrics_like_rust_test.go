@@ -6,12 +6,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"codex_go/applypatch"
 	"codex_go/execserver"
 	"codex_go/metrics"
 )
@@ -306,4 +308,120 @@ func (p agentsMdEnvironmentProvider) FileSystemFor(environmentID string) (Enviro
 		return p.fileSystem, true
 	}
 	return nil, false
+}
+
+// Rust #51652 compares the lowercased basename against exactly `agents.md` /
+// `agents.override.md`, so a near-miss filename stays uncounted while a
+// differently-cased `AGENTS.MD` is counted.
+func TestApplyPatchAgentsMdBasenameNeighborsLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})
+
+	recorder := &agentsMdMetricsRecorder{}
+	recorder.install(t)
+
+	patch := "*** Begin Patch\n" +
+		"*** Add File: AGENTS.md.bak\n" +
+		"+backup\n" +
+		"*** Add File: xAGENTS.md\n" +
+		"+prefixed\n" +
+		"*** Add File: docs/AGENTS.MD\n" +
+		"+case folded\n" +
+		"*** End Patch"
+	output, err := executor.Execute(context.Background(), agentsMdInvocation("agents-md-neighbors", patch))
+	if err != nil {
+		t.Fatalf("Execute error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("Execute output = %+v, want success", output)
+	}
+	if got := strings.Join(recorder.agentsMdFilenames(t), ","); got != "agents.md" {
+		t.Fatalf("codex.agents_md.edit filenames = %q, want only %q", got, "agents.md")
+	}
+}
+
+// Rust #51652 rewrites a Windows-native path's `\` to `/` before taking the
+// basename (path-uri/src/lib.rs:514-517), so a committed native-separator or
+// absolute Windows path still counts. On a POSIX host both Rust and Go only
+// split on `/`, so the backslash form stays unmatched (same as Rust's Posix
+// convention).
+func TestApplyPatchAgentsMdEditMetricWindowsNativePathLikeRust(t *testing.T) {
+	t.Run("native separator", func(t *testing.T) {
+		dir := t.TempDir()
+		executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})
+
+		recorder := &agentsMdMetricsRecorder{}
+		recorder.install(t)
+
+		patch := "*** Begin Patch\n" +
+			"*** Add File: sub\\AGENTS.md\n" +
+			"+nested native\n" +
+			"*** End Patch"
+		output, err := executor.Execute(context.Background(), agentsMdInvocation("agents-md-backslash", patch))
+		if err != nil {
+			t.Fatalf("Execute error = %v", err)
+		}
+		if output == nil || !output.Success {
+			t.Fatalf("Execute output = %+v, want success", output)
+		}
+		want := "agents.md"
+		if runtime.GOOS != "windows" {
+			want = ""
+		}
+		if got := strings.Join(recorder.agentsMdFilenames(t), ","); got != want {
+			t.Fatalf("codex.agents_md.edit filenames = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("absolute path", func(t *testing.T) {
+		dir := t.TempDir()
+		executor := NewApplyPatchExecutor(&ApplyPatchExecutorOptions{CWD: dir})
+
+		recorder := &agentsMdMetricsRecorder{}
+		recorder.install(t)
+
+		// filepath.Join yields the host's native separators (backslashes on
+		// Windows), so this exercises the absolute native path form.
+		absolute := filepath.Join(dir, "AGENTS.md")
+		patch := "*** Begin Patch\n" +
+			"*** Add File: " + absolute + "\n" +
+			"+absolute\n" +
+			"*** End Patch"
+		output, err := executor.Execute(context.Background(), agentsMdInvocation("agents-md-absolute", patch))
+		if err != nil {
+			t.Fatalf("Execute error = %v", err)
+		}
+		if output == nil || !output.Success {
+			t.Fatalf("Execute output = %+v, want success", output)
+		}
+		if got := strings.Join(recorder.agentsMdFilenames(t), ","); got != "agents.md" {
+			t.Fatalf("codex.agents_md.edit filenames = %q, want %q", got, "agents.md")
+		}
+		if _, err := os.Stat(absolute); err != nil {
+			t.Fatalf("absolute-path patch did not land: %v", err)
+		}
+	})
+}
+
+// Rust carries a move destination only on `AppliedPatchFileChange::Update`, so a
+// stray MovePath on another kind never contributes a second path. Go's parser
+// and applier never set MovePath off an update, so this is type-level parity.
+func TestRecordAgentsMdEditMetricsMovePathOnlyForUpdatesLikeRust(t *testing.T) {
+	recorder := &agentsMdMetricsRecorder{}
+	recorder.install(t)
+
+	recordAgentsMdEditMetrics(&applypatch.ApplyResult{Changes: []applypatch.AppliedChange{
+		{Kind: applypatch.ChangeDelete, Path: "old.txt", MovePath: "AGENTS.md"},
+		{Kind: applypatch.ChangeAdd, Path: "new.txt", MovePath: "AGENTS.md"},
+	}})
+	if got := strings.Join(recorder.agentsMdFilenames(t), ","); got != "" {
+		t.Fatalf("non-update move paths counted %q, want none", got)
+	}
+
+	recordAgentsMdEditMetrics(&applypatch.ApplyResult{Changes: []applypatch.AppliedChange{
+		{Kind: applypatch.ChangeUpdate, Path: "old.txt", MovePath: "AGENTS.md"},
+	}})
+	if got := strings.Join(recorder.agentsMdFilenames(t), ","); got != "agents.md" {
+		t.Fatalf("update move path filenames = %q, want %q", got, "agents.md")
+	}
 }

@@ -1,7 +1,7 @@
 package tool
 
 import (
-	"path"
+	"path/filepath"
 	"strings"
 
 	"codex_go/applypatch"
@@ -29,13 +29,20 @@ func recordAgentsMdEditMetrics(result *applypatch.ApplyResult) {
 	}
 	for _, change := range result.Changes {
 		paths := []string{change.Path}
-		if change.MovePath != "" && change.MovePath != change.Path {
+		// Rust carries a move destination only on an update
+		// (`AppliedPatchFileChange::Update { move_path }`), so a stray MovePath on
+		// another kind never contributes a second path.
+		if change.Kind == applypatch.ChangeUpdate && change.MovePath != "" && change.MovePath != change.Path {
 			paths = append(paths, change.MovePath)
 		}
 		for _, changedPath := range paths {
-			// Rust's `PathUri::basename` returns the last `/`-separated path
-			// segment, so `path.Base` (not `filepath.Base`) mirrors it.
-			filename := strings.ToLower(path.Base(changedPath))
+			// Rust's `PathUri::basename` splits the normalized path on `/`, and its
+			// Windows convention rewrites `\` to `/` first
+			// (path-uri/src/lib.rs:514-517), so a native Windows path still yields
+			// `AGENTS.md`. `filepath.Base` matches both conventions: on Windows it
+			// splits on `\` and `/`, on POSIX only on `/` (identical to Rust's
+			// Posix convention).
+			filename := strings.ToLower(filepath.Base(changedPath))
 			if filename == "agents.md" || filename == "agents.override.md" {
 				metrics.Counter(agentsMdEditMetricName, 1, map[string]string{"filename": filename})
 			}
