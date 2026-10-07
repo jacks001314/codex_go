@@ -3,6 +3,8 @@ package execserver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +32,10 @@ const (
 	defaultRemoteCloseTimeout = time.Second
 	registryRecoveryInitialMS = 500
 	registryRecoveryMax       = 5 * time.Second
+	// Rust #51502 remote/reconnect_backoff.rs STABLE_CONNECTION_DURATION:
+	// the exponential reconnect backoff is retained across short-lived
+	// connections and reset only after a connection has been stable this long.
+	remoteStableConnectionDuration = 120 * time.Second
 )
 
 type RemoteEnvironmentConfig struct {
@@ -75,6 +81,61 @@ type registryError struct {
 	Message *string `json:"message"`
 }
 
+// remoteReconnectBackoff retains exponential backoff across short-lived
+// connections (Rust #51502 remote/reconnect_backoff.rs::ReconnectBackoff).
+// Only a connection that stayed up for at least remoteStableConnectionDuration
+// resets the delay; flapping connections keep backing off.
+type remoteReconnectBackoff struct {
+	initial time.Duration
+	max     time.Duration
+	delay   time.Duration
+}
+
+func newRemoteReconnectBackoff(initial, max time.Duration) *remoteReconnectBackoff {
+	if initial <= 0 {
+		initial = defaultRemoteBackoff
+	}
+	if max <= 0 {
+		max = defaultRemoteMaxBackoff
+	}
+	return &remoteReconnectBackoff{initial: initial, max: max, delay: initial}
+}
+
+// connectionClosed keeps the current delay unless the connection was stable.
+func (b *remoteReconnectBackoff) connectionClosed(connectedFor time.Duration) {
+	if connectedFor >= remoteStableConnectionDuration {
+		b.delay = b.initial
+	}
+}
+
+// nextDelay returns a jittered delay inside the current window
+// ([delay/2, delay]) and doubles the window for the next attempt, capped at the
+// configured maximum. It mirrors Rust's reconnect_delay + next_delay.
+func (b *remoteReconnectBackoff) nextDelay(randomSample uint64) time.Duration {
+	upperMillis := b.delay.Milliseconds()
+	if upperMillis <= 0 {
+		upperMillis = 1
+	}
+	lowerMillis := upperMillis / 2
+	delay := time.Duration(lowerMillis+int64(randomSample%uint64(upperMillis-lowerMillis+1))) * time.Millisecond
+	next := b.delay * 2
+	if next > b.max {
+		next = b.max
+	}
+	b.delay = next
+	return delay
+}
+
+// remoteBackoffSample mirrors Rust's per-attempt random sample
+// (uuid::Uuid::new_v4().as_u64_pair().1).
+func remoteBackoffSample() uint64 {
+	var buf [8]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return uint64(time.Now().UnixNano())
+	}
+	return binary.LittleEndian.Uint64(buf[:])
+}
+
 func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -117,7 +178,7 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
 	defer server.shutdownSessions()
-	backoff := cfg.Backoff
+	backoff := newRemoteReconnectBackoff(cfg.Backoff, cfg.MaxBackoff)
 	registration, err := registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
 	if err != nil {
 		return err
@@ -131,9 +192,13 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 		}
 		connectionAttempt++
 		requestID := newRendezvousRequestID()
-		conn, response, err := cfg.Dial(ctx, registration.URL, rendezvousDialOptions(requestID))
+		// Rust #51502: bound every rendezvous attempt with the shared connect
+		// timeout so a stalled WebSocket upgrade cannot prevent reconnects.
+		dialCtx, cancelDial := context.WithTimeout(ctx, defaultRemoteDialTimeout)
+		conn, response, err := cfg.Dial(dialCtx, registration.URL, rendezvousDialOptions(requestID))
+		cancelDial()
 		if err == nil {
-			backoff = cfg.Backoff
+			connectedAt := time.Now()
 			slog.Info("Noise executor connected to rendezvous",
 				"noise_event", "rendezvous_connection",
 				"noise_outcome", "ok",
@@ -141,6 +206,8 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 				"connection_attempt", connectionAttempt,
 			)
 			serveErr := server.serveNoiseRelayConnection(ctx, conn, cfg, registration, identity)
+			// Rust #51502: a short-lived connection must not reset the backoff.
+			backoff.connectionClosed(time.Since(connectedAt))
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -177,12 +244,8 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 				return err
 			}
 		}
-		if err := sleepContext(ctx, backoff); err != nil {
+		if err := sleepContext(ctx, backoff.nextDelay(remoteBackoffSample())); err != nil {
 			return nil
-		}
-		backoff *= 2
-		if backoff > cfg.MaxBackoff {
-			backoff = cfg.MaxBackoff
 		}
 	}
 }

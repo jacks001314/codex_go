@@ -263,6 +263,12 @@ func (s *Server) serveNoiseRelayConnection(
 	}
 }
 
+// remoteRelayWriteTimeout bounds a single relayed data write. Rust #51502
+// (relay_writer.rs, WEBSOCKET_PONG_TIMEOUT = 60s) gives each write a fixed
+// budget independent of the pong deadline, so a peer that stops reading cannot
+// pin the relay writer forever.
+const remoteRelayWriteTimeout = 60 * time.Second
+
 func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-chan []byte, done chan<- error) {
 	ticker := time.NewTicker(remoteRelayKeepaliveInterval)
 	defer ticker.Stop()
@@ -272,7 +278,16 @@ func runRemoteRelayWriter(ctx context.Context, conn *websocket.Conn, outgoing <-
 			done <- nil
 			return
 		case payload := <-outgoing:
-			if err := conn.Write(ctx, websocket.MessageBinary, payload); err != nil {
+			// The write budget is independent of pong deadlines: a pong may clear
+			// its own deadline, never the in-flight write.
+			writeCtx, cancelWrite := context.WithTimeout(ctx, remoteRelayWriteTimeout)
+			err := conn.Write(writeCtx, websocket.MessageBinary, payload)
+			cancelWrite()
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					done <- errors.New("Noise multiplexed environment websocket write timed out")
+					return
+				}
 				done <- fmt.Errorf("Noise multiplexed environment websocket write failed: %w", err)
 				return
 			}
