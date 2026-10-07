@@ -295,6 +295,87 @@ func TestAmazonBedrockProviderModelsManagerUsesRuntimeCatalogLikeRust(t *testing
 	}
 }
 
+// Mirrors Rust #47657 (amazon_bedrock/mod.rs `default_model_catalog`) and the
+// `static_gov_model_catalog` shape trimmed to two entries by #47932: a
+// GovCloud Mantle front door publishes only the GPT-5.6 Terra and Luna
+// entries, with Terra as the default, while every other Mantle base URL and
+// the Runtime endpoint keep their own catalogs.
+func TestAmazonBedrockGovCloudMantleCatalogLikeRust(t *testing.T) {
+	hostCases := []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1", true},
+		{"https://bedrock-mantle.us-gov-east-1.api.aws/openai/v1", true},
+		{"https://BEDROCK-MANTLE.US-GOV-WEST-1.API.AWS/openai/v1", true},
+		{"https://bedrock-mantle.us-gov-west-1.api.aws:443/openai/v1", true},
+		{"", false},
+		{"https://bedrock-mantle.us-west-2.api.aws/openai/v1", false},
+		{"https://bedrock-mantle.us-gov-west-1.amazonaws.com/openai/v1", false},
+		{"https://bedrock-runtime.us-gov-west-1.amazonaws.com/openai/v1", false},
+		{"bedrock-mantle.us-gov-west-1.api.aws/openai/v1", false},
+	}
+	for _, testCase := range hostCases {
+		if got := isAmazonBedrockGovCloudMantleEndpoint(testCase.baseURL); got != testCase.want {
+			t.Fatalf("isAmazonBedrockGovCloudMantleEndpoint(%q) = %t, want %t", testCase.baseURL, got, testCase.want)
+		}
+	}
+
+	govCatalog := AmazonBedrockGovCloudModelCatalog()
+	wantSlugs := []string{AmazonBedrockGPT56TerraModelID, AmazonBedrockGPT56LunaModelID}
+	if len(govCatalog.Models) != len(wantSlugs) {
+		t.Fatalf("govcloud catalog has %d models, want %d", len(govCatalog.Models), len(wantSlugs))
+	}
+	for index, slug := range wantSlugs {
+		if govCatalog.Models[index].Slug != slug {
+			t.Fatalf("govcloud catalog[%d] = %q, want %q", index, govCatalog.Models[index].Slug, slug)
+		}
+	}
+
+	govInfo := CreateAmazonBedrockProvider(nil)
+	govInfo.BaseURL = "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
+	govManager := CreateRuntimeProvider(govInfo, nil).ModelsManager(nil)
+	govSlugs := make([]string, 0, len(wantSlugs))
+	for _, model := range govManager.RawModelCatalog(RefreshOffline).Models {
+		govSlugs = append(govSlugs, model.Slug)
+	}
+	if strings.Join(govSlugs, ",") != strings.Join(wantSlugs, ",") {
+		t.Fatalf("govcloud manager slugs = %v, want %v", govSlugs, wantSlugs)
+	}
+	// Terra (priority 5) leads the restricted catalog, so it is the default.
+	if got := govManager.GetDefaultModel("", true, RefreshOffline); got != AmazonBedrockGPT56TerraModelID {
+		t.Fatalf("govcloud default model = %q, want %q", got, AmazonBedrockGPT56TerraModelID)
+	}
+	// A supported GPT-6 slug no longer resolves on the restricted endpoint.
+	if got := govManager.GetDefaultModel(AmazonBedrockGPT61SolModelID, true, RefreshOffline); got == AmazonBedrockGPT61SolModelID {
+		t.Fatalf("govcloud kept %q, want the restricted catalog", got)
+	}
+
+	// A non-GovCloud Mantle endpoint keeps the full shared catalog.
+	plainInfo := CreateAmazonBedrockProvider(nil)
+	plainInfo.BaseURL = "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
+	plain := CreateRuntimeProvider(plainInfo, nil).ModelsManager(nil)
+	if got, want := len(plain.RawModelCatalog(RefreshOffline).Models), len(AmazonBedrockModelCatalog().Models); got != want {
+		t.Fatalf("mantle catalog has %d models, want %d", got, want)
+	}
+	// So does a GovCloud host that is not a Mantle front door.
+	otherInfo := CreateAmazonBedrockProvider(nil)
+	otherInfo.BaseURL = "https://bedrock-mantle.us-gov-west-1.amazonaws.com/openai/v1"
+	other := CreateRuntimeProvider(otherInfo, nil).ModelsManager(nil)
+	if got, want := len(other.RawModelCatalog(RefreshOffline).Models), len(AmazonBedrockModelCatalog().Models); got != want {
+		t.Fatalf("non-mantle govcloud catalog has %d models, want %d", got, want)
+	}
+
+	// The Runtime endpoint is unaffected even when its base URL looks GovCloud.
+	runtimeInfo := CreateAmazonBedrockRuntimeProvider(nil)
+	runtimeInfo.BaseURL = "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
+	runtimeManager := CreateRuntimeProvider(runtimeInfo, nil).ModelsManager(nil)
+	wantRuntime := bedrockRuntimeGlobalSlugPrefix + AmazonBedrockGPT61SolModelID
+	if got := runtimeManager.GetDefaultModel("", true, RefreshOffline); got != wantRuntime {
+		t.Fatalf("runtime default model = %q, want %q", got, wantRuntime)
+	}
+}
+
 // Mirrors Rust #38470 (d5e256ceb2)
 // `preferred_background_models_match_bedrock_endpoint` in
 // codex-rs/model-provider/src/amazon_bedrock/mod.rs: the Mantle endpoint

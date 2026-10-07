@@ -531,7 +531,32 @@ func (p *AmazonBedrockProvider) ModelsManager(configCatalog *ModelsResponse) Mod
 	if p.info.IsAmazonBedrockRuntime() {
 		return NewStaticModelsManager(AmazonBedrockRuntimeModelCatalog())
 	}
+	// Rust #47657: only a GovCloud Mantle front door is restricted to the
+	// GPT-5.6 Terra/Luna catalog; every other Mantle endpoint keeps the full
+	// shared catalog.
+	if isAmazonBedrockGovCloudMantleEndpoint(p.info.BaseURL) {
+		return NewStaticModelsManager(AmazonBedrockGovCloudModelCatalog())
+	}
 	return NewStaticModelsManager(AmazonBedrockModelCatalog())
+}
+
+// isAmazonBedrockGovCloudMantleEndpoint mirrors the GovCloud host test inside
+// Rust's AmazonBedrockModelProvider::default_model_catalog
+// (codex-rs/model-provider/src/amazon_bedrock/mod.rs, #47657): the restricted
+// catalog applies only when the provider's base URL parses and its host starts
+// with `bedrock-mantle.us-gov-` and ends with `.api.aws`. The host is compared
+// lowercased, matching `url::Url::host_str`.
+func isAmazonBedrockGovCloudMantleEndpoint(baseURL string) bool {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return strings.HasPrefix(host, "bedrock-mantle.us-gov-") && strings.HasSuffix(host, ".api.aws")
 }
 
 func stringFromAny(values map[string]any, key string) string {

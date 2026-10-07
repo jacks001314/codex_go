@@ -1157,6 +1157,24 @@ func AmazonBedrockCatalogForProviderID(providerID string) ModelsResponse {
 	return AmazonBedrockModelCatalog()
 }
 
+// AmazonBedrockGovCloudModelCatalog mirrors Rust's `static_gov_model_catalog`
+// (codex-rs/model-provider/src/amazon_bedrock/catalog.rs, #47657, later
+// trimmed to two entries by #47932): a GovCloud Mantle front door publishes
+// only the GPT-5.6 Terra and Luna entries, so Terra (priority 5) stays that
+// endpoint's default. The retained entries keep the shared catalog's order and
+// Mantle normalization.
+func AmazonBedrockGovCloudModelCatalog() ModelsResponse {
+	catalog := AmazonBedrockModelCatalog()
+	models := make([]ModelInfo, 0, 2)
+	for _, model := range catalog.Models {
+		if model.Slug == AmazonBedrockGPT56TerraModelID || model.Slug == AmazonBedrockGPT56LunaModelID {
+			models = append(models, model)
+		}
+	}
+	catalog.Models = models
+	return catalog
+}
+
 // bedrockRuntimeRoutingVariants mirrors Rust ROUTING_VARIANTS
 // (amazon_bedrock/runtime_catalog.rs, #38470) in order: the `global.` variants
 // come first and carry the routing label appended to each display name.
