@@ -610,10 +610,10 @@ type BuildPromptOptions struct {
 // so the evidence stays a reusable history prefix across approval requests
 // (#46279). Rust's registry order places the root conversation, then the
 // retained user instructions, then the trusted user answers, then the
-// transcript, the node-repl evidence and the parent-turn permission context, and
-// finally the planned action with its tool descriptions; the sections Go does not
-// model (previous reviews, trusted tool/skills) come from the review's inherited
-// context instead.
+// transcript, the retained assistant context (#51627), the node-repl evidence
+// and the parent-turn permission context, and finally the planned action with
+// its tool descriptions; the sections Go does not model (previous reviews,
+// trusted tool/skills) come from the review's inherited context instead.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
 	if err := action.Validate(); err != nil {
 		return "", err
@@ -636,8 +636,12 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
 		writeGuardianPromptSection(&builder, strings.Join(items, ""))
 	}
-	if items := RetainedUserInstructionsSectionItems(options.RetainedContext); len(items) > 0 {
-		writeGuardianPromptSection(&builder, strings.Join(items, ""))
+	// Retained snapshot sections are split (#51627): the instruction prefix
+	// precedes the transcript so growing assistant evidence cannot invalidate
+	// it, and the assistant context follows the transcript.
+	retainedSections := RenderRetainedInstructionSections(options.RetainedContext)
+	if len(retainedSections.Instructions) > 0 {
+		writeGuardianPromptSection(&builder, strings.Join(retainedSections.Instructions, ""))
 	}
 	// Rust feeds the review's selected-answer evidence into the composer as
 	// `trusted_user_answers` (guardian/prompt.rs's `user_input_snapshot`), which
@@ -657,6 +661,9 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 			section.WriteByte('\n')
 		}
 		writeGuardianPromptSection(&builder, section.String())
+	}
+	if len(retainedSections.AssistantContext) > 0 {
+		writeGuardianPromptSection(&builder, strings.Join(retainedSections.AssistantContext, ""))
 	}
 	if options.NodeReplEvidence != nil {
 		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
