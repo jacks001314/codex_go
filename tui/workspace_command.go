@@ -10,8 +10,18 @@ import (
 // Rust parity: codex-rs/tui/src/workspace_command.rs.
 
 const (
-	DefaultWorkspaceCommandTimeout        = 5 * time.Second
-	DefaultWorkspaceCommandOutputBytesCap = 64 * 1024
+	DefaultWorkspaceCommandTimeout = 5 * time.Second
+
+	// DefaultWorkspaceCommandOutputBytesCap mirrors the host's default
+	// `command/exec` output cap (appserver/command_exec.go
+	// `defaultCommandExecOutputBytesCap` = 1 MiB).
+	//
+	// Rust #50477: the TUI no longer keeps its own 64 KiB cap; bounded commands
+	// let the execution boundary decide the default and only `/diff`-style
+	// callers opt out with disable_output_cap. Go has no app-server workspace
+	// runner (see LocalWorkspaceCommandRunner), so the in-process runner applies
+	// the same host default here instead of forwarding `output_bytes_cap: None`.
+	DefaultWorkspaceCommandOutputBytesCap = 1024 * 1024
 )
 
 type WorkspaceCommandRunner interface {
@@ -22,19 +32,19 @@ type WorkspaceCommand struct {
 	Name string
 	CWD  string
 
-	Argv             []string
-	Env              map[string]*string
+	Argv []string
+	Env  map[string]*string
+	// Timeout bounds the wall clock; output bounds are owned by the executor
+	// (see DefaultWorkspaceCommandOutputBytesCap) unless DisableOutputCap is set.
 	Timeout          time.Duration
-	OutputBytesCap   int
 	DisableOutputCap bool
 }
 
 func NewWorkspaceCommand(argv ...string) WorkspaceCommand {
 	command := WorkspaceCommand{
-		Argv:           cleanWorkspaceArgv(argv),
-		Env:            map[string]*string{},
-		Timeout:        DefaultWorkspaceCommandTimeout,
-		OutputBytesCap: DefaultWorkspaceCommandOutputBytesCap,
+		Argv:    cleanWorkspaceArgv(argv),
+		Env:     map[string]*string{},
+		Timeout: DefaultWorkspaceCommandTimeout,
 	}
 	if len(command.Argv) > 0 {
 		command.Name = command.Argv[0]
@@ -63,13 +73,6 @@ func (c WorkspaceCommand) WithoutEnv(key string) WorkspaceCommand {
 func (c WorkspaceCommand) WithTimeout(timeout time.Duration) WorkspaceCommand {
 	if timeout > 0 {
 		c.Timeout = timeout
-	}
-	return c
-}
-
-func (c WorkspaceCommand) WithOutputBytesCap(cap int) WorkspaceCommand {
-	if cap > 0 {
-		c.OutputBytesCap = cap
 	}
 	return c
 }

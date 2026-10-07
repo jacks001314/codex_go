@@ -46,12 +46,15 @@ func TestWorkspaceHeadlineFromResponseMatchesRust(t *testing.T) {
 }
 
 func TestWorkspaceCommandBuilderMatchesRustDefaults(t *testing.T) {
+	// Rust #50477: WorkspaceCommand no longer carries a TUI-owned output cap
+	// (`get_git_diff.rs::assert_command_metadata` dropped the
+	// `output_bytes_cap == 64 * 1024` assertion); only the uncapped opt-out
+	// remains part of the command shape.
 	command := NewWorkspaceCommand(" git ", "status").
 		WithCWD(`D:\repo`).
 		WithEnv(" GIT_OPTIONAL_LOCKS ", " 0 ").
 		WithoutEnv("PAGER").
 		WithTimeout(2500 * time.Millisecond).
-		WithOutputBytesCap(4096).
 		WithDisabledOutputCap()
 
 	if err := command.Validate(); err != nil {
@@ -60,7 +63,7 @@ func TestWorkspaceCommandBuilderMatchesRustDefaults(t *testing.T) {
 	if command.Name != "git" || command.CWD != `D:\repo` {
 		t.Fatalf("command identity = %#v", command)
 	}
-	if command.TimeoutMillis() != 2500 || command.OutputBytesCap != 4096 || !command.DisableOutputCap {
+	if command.TimeoutMillis() != 2500 || !command.DisableOutputCap {
 		t.Fatalf("command limits = %#v", command)
 	}
 	if len(command.Argv) != 2 || command.Argv[0] != "git" || command.Argv[1] != "status" {
@@ -148,5 +151,47 @@ func TestWindowsSandboxLevelFromConfigMatchesRust(t *testing.T) {
 	parsed, ok := ParseWindowsSandboxModeConfig("default")
 	if !ok || parsed == nil || *parsed != WindowsSandboxModeConfigUnelevated {
 		t.Fatalf("parsed default = %#v ok=%v", parsed, ok)
+	}
+}
+
+// Rust #50477 (upstream 6c15cc4aaf): "Use the app-server default output cap for
+// TUI workspace commands".
+//
+// Rust parity counterpart: `get_git_diff.rs::assert_command_metadata`, which
+// lost the `assert_eq!(command.output_bytes_cap, 64 * 1024)` expectation and is
+// exercised by `get_git_diff_disables_helpers_for_tracked_and_untracked_diffs`.
+// `WorkspaceCommand` no longer owns an output cap: bounded commands use the
+// execution boundary's default and only `/diff`-style callers opt out.
+func TestWorkspaceCommandUsesHostDefaultOutputCapLikeRust(t *testing.T) {
+	probe := NewWorkspaceCommand("git", "config", "--get", "core.fsmonitor")
+	if probe.DisableOutputCap {
+		t.Fatalf("metadata probe must stay bounded: %#v", probe)
+	}
+
+	// The removed TUI cap was 64 KiB: a probe payload past that size must no
+	// longer be truncated by the TUI.
+	overOldCap := strings.Repeat("x", 70*1024)
+	if got := commandOutputString([]byte(overOldCap), probe); got != overOldCap {
+		t.Fatalf("bounded output truncated below the host default: len=%d", len(got))
+	}
+
+	// Bounded commands stop at the host `command/exec` default instead.
+	if DefaultWorkspaceCommandOutputBytesCap != 1024*1024 {
+		t.Fatalf("host default drifted from appserver defaultCommandExecOutputBytesCap: %d", DefaultWorkspaceCommandOutputBytesCap)
+	}
+	overHostDefault := strings.Repeat("y", DefaultWorkspaceCommandOutputBytesCap+128)
+	if got := commandOutputString([]byte(overHostDefault), probe); len(got) != DefaultWorkspaceCommandOutputBytesCap {
+		t.Fatalf("host default cap = %d, want %d", len(got), DefaultWorkspaceCommandOutputBytesCap)
+	}
+
+	// `/diff` keeps the uncapped opt-out (Rust `disable_output_cap` preserved).
+	diff := NewWorkspaceCommand("git", "diff").WithDisabledOutputCap()
+	uncapped := strings.Repeat("z", DefaultWorkspaceCommandOutputBytesCap+128)
+	if got := commandOutputString([]byte(uncapped), diff); got != uncapped {
+		t.Fatalf("uncapped command truncated: len=%d", len(got))
+	}
+	built := BuildGitDiffCommand("/workspace", GitFsmonitorBuiltIn, nil, GitTrackedDiffArgs()...)
+	if !built.DisableOutputCap {
+		t.Fatalf("git diff must keep disable_output_cap: %#v", built)
 	}
 }

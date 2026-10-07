@@ -415,9 +415,15 @@ func exitCodeFromError(err error) int {
 	return -1
 }
 
+// commandOutputString applies the executor's output bound.
+//
+// Rust #50477: the TUI stopped carrying its own 64 KiB cap, so bounded commands
+// fall back to the host's `command/exec` default (the app-server still caps a
+// `command/exec` whose `output_bytes_cap` is `None`). Only callers that own a
+// full user-visible payload opt out through DisableOutputCap.
 func commandOutputString(data []byte, command WorkspaceCommand) string {
-	if command.DisableOutputCap || command.OutputBytesCap <= 0 || len(data) <= command.OutputBytesCap {
+	if command.DisableOutputCap || len(data) <= DefaultWorkspaceCommandOutputBytesCap {
 		return string(data)
 	}
-	return string(data[:command.OutputBytesCap])
+	return string(data[:DefaultWorkspaceCommandOutputBytesCap])
 }
