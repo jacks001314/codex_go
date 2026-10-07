@@ -324,8 +324,10 @@ func (h *messageBoardHost) CurrentTime(ctx context.Context, caller string) (time
 }
 
 // Notify pushes metadata and a bounded preview to a recipient that is running a
-// turn right now. An idle, finalized or unloaded recipient is skipped; nothing
-// is queued for a later turn.
+// turn right now and still accepts mailbox delivery (Rust #48982,
+// ext/agent-message-board/src/host.rs): an idle, unloaded or already-finalized
+// recipient is skipped without queueing anything. An accepted notification must
+// not start a new turn or reopen a finalized answer.
 func (h *messageBoardHost) Notify(ctx context.Context, recipient string, post agentboard.PostPreview) (agentboard.NotificationDelivery, error) {
 	if h == nil || h.router == nil {
 		return agentboard.NotificationSkippedInactive, nil
@@ -352,9 +354,15 @@ func (h *messageBoardHost) Notify(ctx context.Context, recipient string, post ag
 	}
 	notice := agentboard.NewAgentMessageBoardNotification(post)
 	item := runtimeAgentCommunicationInputItem(string(post.Author), string(recipientPath), notice.Body(), false, true)
-	if err := h.router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
+	// Rust #48982 (`LocalBoardHost::notify` ->
+	// InputQueue::deliver_mailbox_communication_to_current_turn): the
+	// notification is stored only while the running turn still accepts mailbox
+	// delivery. A turn that already emitted its final answer is skipped instead
+	// of being handed mail that would reopen the answer.
+	accepted, err := h.router.requireSteerMailbox().EnqueueIfAcceptingDelivery(&turn.SteerEnqueueParams{
 		ThreadID: recipient, TurnID: active.ID, InputItems: []any{item},
-	}); err != nil {
+	})
+	if err != nil || !accepted {
 		return agentboard.NotificationSkippedInactive, nil
 	}
 	return agentboard.NotificationAccepted, nil

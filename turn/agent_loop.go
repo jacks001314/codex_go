@@ -588,17 +588,26 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 		}
 		if len(toolItems) == 0 {
-			if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
-				result.InputItems = append(result.InputItems, steer.InputItems...)
-				result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
-				if len(steer.ClientMetadata) > 0 {
-					clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
+			// Rust InputQueue::get_pending_input only drains the turn's pending
+			// input while the turn still accepts mailbox delivery (#48982): once
+			// the response carried the turn's final answer the phase is NextTurn,
+			// so queued child mail stays for a later turn instead of reopening the
+			// finalized answer with one more sampling request. A steered user
+			// message reopens the phase (SteerMailbox::Enqueue), so explicit
+			// same-turn work still continues the turn here.
+			if l.steerMailbox.AcceptsMailboxDeliveryForCurrentTurn(request.ThreadID, request.TurnID) {
+				if steer := drainSteer(l.steerMailbox, request); steer != nil && (len(steer.InputItems) > 0 || len(steer.ClientMetadata) > 0) {
+					result.InputItems = append(result.InputItems, steer.InputItems...)
+					result.SteerInputItems = append(result.SteerInputItems, steer.InputItems...)
+					if len(steer.ClientMetadata) > 0 {
+						clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
+					}
+					if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
+						request.OnSteerCommitted(count)
+					}
+					endSamplingRequestSpan()
+					continue
 				}
-				if count := userMessageInputItemCount(steer.InputItems); count > 0 && request.OnSteerCommitted != nil {
-					request.OnSteerCommitted(count)
-				}
-				endSamplingRequestSpan()
-				continue
 			}
 		}
 		if len(toolItems) == 0 {

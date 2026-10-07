@@ -58,6 +58,51 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
 	key := steerMailboxKey(params.ThreadID, params.TurnID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.storeLocked(key, items, metadata)
+	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state:
+	// explicit same-turn input (a steered user message) reopens the current turn
+	// for mailbox delivery after terminal output closed it.
+	if steerItemsHaveUserInput(items) {
+		m.setMailboxDeliveryPhaseLocked(key, state.MailboxCurrentTurn)
+	}
+	return nil
+}
+
+// EnqueueIfAcceptingDelivery mirrors Rust
+// InputQueue::deliver_mailbox_communication_to_current_turn (#48982): the input
+// is stored only while the turn still accepts mailbox delivery. The phase check
+// and the store run under the same lock, so a notification that races the turn's
+// final answer cannot be queued after delivery closed. It reports whether the
+// input was stored; a closed turn keeps the mail out of the queue instead of
+// reopening a finalized answer with one more sampling request.
+//
+// Only inter-agent mail uses this path. Explicit same-turn work (a steered user
+// message) goes through Enqueue, which reopens the current turn
+// (Rust TurnInputQueue::extend_pending_input_and_accept_mailbox_delivery_for_turn_state).
+func (m *SteerMailbox) EnqueueIfAcceptingDelivery(params *SteerEnqueueParams) (bool, error) {
+	if m == nil {
+		return false, fmt.Errorf("%w: steer mailbox is nil", ErrInvalidTurnRequest)
+	}
+	if params == nil || strings.TrimSpace(params.ThreadID) == "" || strings.TrimSpace(params.TurnID) == "" {
+		return false, fmt.Errorf("%w: threadId and turnId are required", ErrInvalidTurnRequest)
+	}
+	items := compactInputItems(params.InputItems)
+	metadata := compactStringMap(params.ClientMetadata)
+	if len(items) == 0 && len(metadata) == 0 {
+		return false, nil
+	}
+	key := steerMailboxKey(params.ThreadID, params.TurnID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.acceptsMailboxDeliveryLocked(key) {
+		return false, nil
+	}
+	m.storeLocked(key, items, metadata)
+	return true, nil
+}
+
+// storeLocked appends the input under an already held lock and wakes watchers.
+func (m *SteerMailbox) storeLocked(key string, items []any, metadata map[string]string) {
 	if m.items == nil {
 		m.items = map[string][]any{}
 	}
@@ -70,17 +115,10 @@ func (m *SteerMailbox) Enqueue(params *SteerEnqueueParams) error {
 		}
 		m.metadata[key] = metadata
 	}
-	// Rust input_queue.rs::extend_pending_input_and_accept_mailbox_delivery_for_turn_state:
-	// explicit same-turn input (a steered user message) reopens the current turn
-	// for mailbox delivery after terminal output closed it.
-	if steerItemsHaveUserInput(items) {
-		m.setMailboxDeliveryPhaseLocked(key, state.MailboxCurrentTurn)
-	}
 	if m.changed != nil {
 		close(m.changed)
 	}
 	m.changed = make(chan struct{})
-	return nil
 }
 
 // WatchUserInput mirrors Rust InputQueue::watch_user_input (#48135): it
@@ -263,7 +301,13 @@ func (m *SteerMailbox) AcceptsMailboxDeliveryForCurrentTurn(threadID string, tur
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.phases[steerMailboxKey(threadID, turnID)] != state.MailboxNextTurn
+	return m.acceptsMailboxDeliveryLocked(steerMailboxKey(threadID, turnID))
+}
+
+// acceptsMailboxDeliveryLocked is AcceptsMailboxDeliveryForCurrentTurn for
+// callers that already hold the mailbox lock.
+func (m *SteerMailbox) acceptsMailboxDeliveryLocked(key string) bool {
+	return m.phases[key] != state.MailboxNextTurn
 }
 
 func (m *SteerMailbox) DrainWithMetadata(params *SteerDrainParams) *SteerDrainResult {
