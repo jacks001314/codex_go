@@ -516,7 +516,11 @@ func (r *Recorder) AppendItemCompleted(item json.RawMessage, turnID string, star
 	}
 	// Mirror Rust's persisted ItemCompleted representation (rollout/src/policy.rs)
 	// so oversized fields are capped before they reach the durable rollout.
+	originalItem := item
 	item = applyPersistedItemTruncation(item)
+	// Rust #50454: measure the persisted size reduction of this item across the
+	// persistence projection.
+	recordRolloutPersistenceItemSizes(r.threadID, originalItem, item)
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return errors.New("completed item turn id is required")
