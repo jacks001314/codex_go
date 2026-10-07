@@ -37,6 +37,14 @@ func TestRustCriticalFileHashesSnapshot(t *testing.T) {
 	}
 }
 
+// TestPrecomputedAppServerExportsMatchRustTarget byte-compares the vendored
+// app-server protocol exports against the Rust tree.
+//
+// Re-pinned to upstream head 18e28fe1b9 (#51556): the two `.zst` artifacts in
+// appserver/schema/precomputed/ now come from the Rust tree at the current
+// head instead of the 5f3180c793 (2026-09-26) pin. The stable artifact was
+// last regenerated at 28cd3e2501 (#51492) and the experimental artifact at
+// c9870d0157 (#51482).
 func TestPrecomputedAppServerExportsMatchRustTarget(t *testing.T) {
 	rustRoot := rustSnapshotRoot(t)
 	for _, name := range []string{
@@ -125,6 +133,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"agent-identity",
 		"agent-roles",
 		"backend-client",
+		"cloud-client",
 		"bwrap",
 		"build-info",
 		"ansi-escape",
@@ -230,6 +239,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"v8-poc",
 		"websocket-auth",
 		"websocket-client",
+		"windows-sandbox-rs/tests/support",
 		"windows-sandbox-service",
 		"worktree",
 		"workload-identity",
@@ -243,6 +253,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"utils/image",
 		"utils/json-to-toml",
 		"utils/home-dir",
+		"utils/process",
 		"utils/pty",
 		"utils/readiness",
 		"utils/redacted-string",
@@ -281,17 +292,21 @@ type rustCriticalFileHash struct {
 
 func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 	return []rustCriticalFileHash{
+		// Re-pinned to upstream 18e28fe1b9 (#51556): every hash below is
+		// recomputed from the current Rust tree so the critical-file drift check
+		// tracks the protocol, exec, client and suite surfaces the Go port
+		// mirrors after the 498-commit gap from the 5f3180c793 pin.
 		// Re-pinned to upstream e75b36efde (#48100): the
 		// agent-message-board-client workspace member.
-		{Path: "Cargo.toml", SHA256: "bafbeba3f6752808c1cac2902813ec767f4615d2913d092021d29d86a540f8f0"},
-		{Path: "cli/src/lib.rs", SHA256: "9471ba0b4b388dfb339408fd54d78e3237573a8ce1e7bb83551f4ea1f35c0d7d"},
+		{Path: "Cargo.toml", SHA256: "26a713b6714637e008a30b0bf17fb03f1111c09f3d944857e2c4c1b050a20779"},
+		{Path: "cli/src/lib.rs", SHA256: "cf24032f801314033b2ff21e6c5a85ad8c2898012e9fba279f3a5c91439c1ab6"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
-		{Path: "exec/src/lib.rs", SHA256: "d37a7839dcf7e5b74a9dff32ee9030dd09a3ac290b105b8ae39ad15d449611cd"},
+		{Path: "exec/src/lib.rs", SHA256: "51b62cef4893c6d07b51753fc2716fc05985cdc9de6673f2fa2d974779454d4b"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
-		{Path: "exec/src/exec_events.rs", SHA256: "2e9eb984f0de88bc3fbe7ea0d1017e39e93df108a7a3f9ffd9c66aa54e94a316"},
-		{Path: "prompts/templates/review/rubric.md", SHA256: "56e3d0a5a4df3d670dc18b3b26f0525188fd4d81260a8676905a2573aa6d6dee"},
+		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
+		{Path: "prompts/templates/review/rubric.md", SHA256: "ec60e7f36a1d1c2679ce095c0205ecc56f7dd8fb57707a13ef362072390f219f"},
 		// Re-pinned to upstream 8ae55c863d (#47745/#47758/#47957): the startup
 		// prewarm, tool-observation and message-budget client changes.
 		// Re-pinned to upstream c7e80f873f (#48141): preempting model responses
@@ -300,20 +315,20 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// `include_internal_metadata` provider grant for tool metadata.
 		// Re-pinned to upstream 12de0e395d (#48508): the interrupt seam that
 		// preserves WebSocket continuations when steering a turn.
-		{Path: "core/src/client.rs", SHA256: "c2f3e2031a621e0e593b493634ee56099f7a9e89d71747d0a869a30e2aaebfd4"},
+		{Path: "core/src/client.rs", SHA256: "6ca16eb5fb185192738d321c22eacf74664e0ae2c107176c1c8a7f23fde33089"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "d1aef98633f16cff20e2ef9836292a7bf1a4656d960e9ab1f29625596eefe168"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "e25ebb90bf79be79def79ebf2dd704057577fa9806710fbea0ee240a909d0dc1"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "6311cdf058b50df02f9e7d22278775caed30b26cea351c5545133caf746291a1"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "8a9ec914063f50d62f16e71b7648943948314e4b169ec83d0a23e53d811ac0dc"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module
 		// list.
-		{Path: "core/tests/suite/mod.rs", SHA256: "c045457c7477057874bee427856f01d2a0eb5b5b2247515baff94e4203e662b7"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "62853612f780dde84b877b3263e50a384a9e753dc03854773c4daaf5e9119e80"},
 	}
 }
 

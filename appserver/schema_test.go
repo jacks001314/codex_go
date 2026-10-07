@@ -142,14 +142,14 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// export carries.
 		// Re-vendored from upstream de9e78e3e7 (#48151): `thread/items/list`'s
 		// cursor accepts an exclusive item anchor.
-		// Re-vendored from upstream 5f3180c793 (#48224): the internal
-		// `RolloutLine` schema now carries the previous turn's
-		// `cyber_access_program` alongside `model` and `comp_hash`, the
-		// model/program pair compaction must preserve. That field belongs to the
-		// unported turn-level access-program lane recorded in
-		// update/plan_2026_09_26.md.
-		{"stable", stablePrecomputedExports, "8691e8ec516b44dcd86e495290a88e10c4447321e25baab4001304410aa05bc4"},
-		{"experimental", experimentalPrecomputedExports, "3792a6caa3a106c9810a3ec6ada207268b95bb146d40d29cb5d3c12b5088de6e"},
+		// Re-vendored from upstream head 18e28fe1b9: the vendored app-server
+		// protocol export pair now mirrors the Rust tree at the current pin.
+		// The stable export last changed at 28cd3e2501 (#51492, persisted turn
+		// context fields) and the experimental export at c9870d0157 (#51482,
+		// PathUri skill identity), which are the newest writers to the two
+		// precomputed artifacts between the 5f3180c793 pin and 18e28fe1b9.
+		{"stable", stablePrecomputedExports, "ed720775cdc264c7c5a930d582c56a27f5f8b18408187f783f93b9713ed40d48"},
+		{"experimental", experimentalPrecomputedExports, "41d34da4227eadccf971272b9a02dfc6679e23a9992cce1d265ac01a20ab38e3"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
