@@ -35,8 +35,14 @@ type MultiSelectPicker struct {
 	FilteredIndices []int
 	OrderingEnabled bool
 	Preview         string
-	ConfirmedIDs    []string
-	MaxRows         int
+	// PreviewEmpty replaces the empty preview when nothing is enabled (Rust
+	// #49836 MultiSelectPickerBuilder::on_preview).
+	PreviewEmpty string
+	// RequireSelection blocks confirmation while no item is enabled, without
+	// restricting cancellation (Rust #49836 require_selection).
+	RequireSelection bool
+	ConfirmedIDs     []string
+	MaxRows          int
 }
 
 func NewMultiSelectPicker(title string, subtitle string, items []MultiSelectItem) *MultiSelectPicker {
@@ -190,6 +196,10 @@ func (p *MultiSelectPicker) Confirm() []string {
 	if p == nil {
 		return nil
 	}
+	// Rust #49836: a required selection cannot confirm while every item is off.
+	if p.RequireSelection && !p.anyEnabled() {
+		return nil
+	}
 	p.Complete = true
 	p.Cancelled = false
 	p.ConfirmedIDs = p.SelectedIDs()
@@ -222,10 +232,25 @@ func (p *MultiSelectPicker) UpdatePreview() {
 	}
 	ids := p.SelectedIDs()
 	if len(ids) == 0 {
-		p.Preview = ""
+		// Rust #49836: the caller may replace the empty preview with an
+		// instruction such as "Select at least one input channel.".
+		p.Preview = p.PreviewEmpty
 		return
 	}
 	p.Preview = "Selected: " + strings.Join(ids, ", ")
+}
+
+// anyEnabled reports whether at least one item is switched on.
+func (p *MultiSelectPicker) anyEnabled() bool {
+	if p == nil {
+		return false
+	}
+	for _, item := range p.Items {
+		if multiSelectEnabled(item) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *MultiSelectPicker) HandleKey(key string) {

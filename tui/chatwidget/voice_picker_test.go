@@ -7,11 +7,17 @@ func TestVoicePickerViewMarksCurrentVoice(t *testing.T) {
 	if view.ViewID != VoicePickerViewID {
 		t.Fatalf("view id = %q", view.ViewID)
 	}
-	if len(view.Items) != 3 {
+	// Rust #49437 ChatWidget::open_realtime_voices pushes a trailing Back row so
+	// the catalog returns to the "Voice settings" root.
+	if len(view.Items) != 4 {
 		t.Fatalf("items = %#v", view.Items)
 	}
+	back := view.Items[len(view.Items)-1]
+	if back.ID != VoiceSettingsBackOptionID || back.Name != "Back" || !back.DismissOnSelect {
+		t.Fatalf("back row = %#v", back)
+	}
 	current := 0
-	for _, item := range view.Items {
+	for _, item := range view.Items[:len(view.Items)-1] {
 		if item.IsCurrent {
 			current++
 			if item.Name != "cove" {
@@ -35,11 +41,14 @@ func TestVoicePickerViewMarksCurrentVoice(t *testing.T) {
 
 func TestVoicePickerViewHandlesAnEmptyCatalog(t *testing.T) {
 	view := NewVoicePickerView("cove", nil)
-	if len(view.Items) != 1 || !view.Items[0].Disabled {
+	if len(view.Items) != 2 || !view.Items[0].Disabled {
 		t.Fatalf("items = %#v", view.Items)
 	}
+	if view.Items[1].ID != VoiceSettingsBackOptionID {
+		t.Fatalf("empty catalog lost its Back row: %#v", view.Items)
+	}
 	view = NewVoicePickerView("cove", []string{"  ", ""})
-	if len(view.Items) != 1 || !view.Items[0].Disabled {
+	if len(view.Items) != 2 || !view.Items[0].Disabled {
 		t.Fatalf("blank voices produced %#v", view.Items)
 	}
 }

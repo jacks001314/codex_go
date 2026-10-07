@@ -43,6 +43,9 @@ type SelectionItem struct {
 	// RequireExplicitConfirmation makes the item arm on the first activation
 	// and act only on a second one (Rust #44744).
 	RequireExplicitConfirmation bool
+	// ChildLabel indents the row beneath its parent and labels it with a letter
+	// instead of a number (Rust #49836 ListSelectionView child_label).
+	ChildLabel string
 }
 
 type SelectionView struct {

@@ -31,6 +31,14 @@ func NewVoicePickerView(current string, voices []string) SelectionView {
 	if len(items) == 0 {
 		items = append(items, SelectionItem{Name: "No voices are available", Disabled: true})
 	}
+	// Rust #49437 ChatWidget::open_realtime_voices: the voice catalog is now a
+	// submenu of "Voice settings", so its last row and its cancel both return to
+	// the parent menu instead of closing the hierarchy.
+	items = append(items, SelectionItem{
+		ID:              VoiceSettingsBackOptionID,
+		Name:            "Back",
+		DismissOnSelect: true,
+	})
 	return SelectionView{
 		ViewID: VoicePickerViewID,
 		// Copy matches the Rust realtime settings snapshot.

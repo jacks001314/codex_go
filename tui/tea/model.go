@@ -583,7 +583,20 @@ type VoiceAnswerResultMsg struct {
 type VoiceSettingsMsg struct {
 	Voices  []string
 	Current string
-	Err     error
+	// Audio carries the machine-local device preferences (Rust #49437
+	// LocalSettings::audio: audio.microphone/speaker/microphone_channel).
+	Audio chatwidget.VoiceAudioPreferences
+	Err   error
+}
+
+// VoiceAudioStagedMsg stages the machine-local audio preferences without
+// opening the settings tree, the Go counterpart of the audio half of Rust
+// `LocalSettings::from(&config)` / `reloaded(&config)` (#49437): the runtime
+// resolves audio.microphone / audio.speaker / audio.microphone_channel out of
+// the machine's configuration at launch and after a reload, and the TUI keeps
+// the staged value so the next voice conversation starts with it.
+type VoiceAudioStagedMsg struct {
+	Audio chatwidget.VoiceAudioPreferences
 }
 
 // VoiceSavedMsg reports a persisted voice preference.
@@ -1026,6 +1039,15 @@ type Options struct {
 	OnVoiceSettings func() bubbletea.Cmd
 	// OnVoiceSaveVoice persists a voice preference.
 	OnVoiceSaveVoice func(voice string) bubbletea.Cmd
+	// OnVoiceListDevices enumerates the local audio devices for one direction
+	// through the voice helper (Rust #49437 App::list_realtime_devices).
+	OnVoiceListDevices func(kind voicehost.AudioDeviceKind) bubbletea.Cmd
+	// OnVoiceSaveDevice persists audio.microphone / audio.speaker on the TUI's
+	// machine (Rust #49437 App::persist_realtime_device).
+	OnVoiceSaveDevice func(kind voicehost.AudioDeviceKind, name *string) bubbletea.Cmd
+	// OnVoiceSaveInputChannel persists audio.microphone_channel (Rust #49836
+	// App::persist_realtime_input_channel).
+	OnVoiceSaveInputChannel func(channel *chatwidget.MicrophoneChannels) bubbletea.Cmd
 	// OnVoiceAppendSpeech speaks a delegated answer into the realtime session.
 	OnVoiceAppendSpeech func(itemID string, text string) bubbletea.Cmd
 	// OnClipboardWriteRich, when set, receives the rendered HTML fragment plus
@@ -1239,10 +1261,26 @@ type Model struct {
 	onVoiceSettings func() bubbletea.Cmd
 	// onVoiceSaveVoice persists a voice preference.
 	onVoiceSaveVoice func(voice string) bubbletea.Cmd
+	// onVoiceListDevices enumerates the local audio devices for one direction.
+	onVoiceListDevices func(kind voicehost.AudioDeviceKind) bubbletea.Cmd
+	// onVoiceSaveDevice persists audio.microphone / audio.speaker.
+	onVoiceSaveDevice func(kind voicehost.AudioDeviceKind, name *string) bubbletea.Cmd
+	// onVoiceSaveInputChannel persists audio.microphone_channel.
+	onVoiceSaveInputChannel func(channel *chatwidget.MicrophoneChannels) bubbletea.Cmd
 	// onVoiceAppendSpeech speaks a delegated answer into the conversation.
 	onVoiceAppendSpeech func(itemID string, text string) bubbletea.Cmd
 	// voicePreference is the voice the user last selected.
 	voicePreference string
+	// voiceChoices is the server voice catalog behind the "Choose a voice" row
+	// (Rust #49437).
+	voiceChoices []string
+	// voiceAudio is the machine-local device preference set shown by the voice
+	// settings hierarchy (Rust #49437 LocalSettings::audio).
+	voiceAudio chatwidget.VoiceAudioPreferences
+	// voiceDeviceKind and voiceDevices hold the helper listing behind the open
+	// device picker (Rust #49437 RealtimeDevicesListed).
+	voiceDeviceKind voicehost.AudioDeviceKind
+	voiceDevices    []voicehost.AudioDevice
 	// renderedVoiceTranscripts tracks captions already written to the
 	// transcript, so a re-render cannot duplicate them.
 	renderedVoiceTranscripts map[chatwidget.VoiceTranscriptRecord]bool
@@ -2126,6 +2164,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onVoicePeaks:                    options.OnVoicePeaks,
 		onVoiceSettings:                 options.OnVoiceSettings,
 		onVoiceSaveVoice:                options.OnVoiceSaveVoice,
+		onVoiceListDevices:              options.OnVoiceListDevices,
+		onVoiceSaveDevice:               options.OnVoiceSaveDevice,
+		onVoiceSaveInputChannel:         options.OnVoiceSaveInputChannel,
 		onVoiceAppendSpeech:             options.OnVoiceAppendSpeech,
 		onReadHooks:                     options.OnReadHooks,
 		onWriteHookConfig:               options.OnWriteHookConfig,
@@ -2507,12 +2548,24 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case VoiceSettingsMsg:
 		m.applyVoiceSettings(msg)
 		return m, nil
+	case VoiceAudioStagedMsg:
+		m.voiceAudio = msg.Audio
+		return m, nil
 	case VoiceHelperAttachedMsg:
 		if m.VoiceConversation.Running() && msg.AttemptID == m.VoiceConversation.AttemptID {
 			m.realtimeHelperAttached = true
 			m.voiceStripStartedAt = m.currentTime()
 		}
 		return m, m.refreshStatusControlsCmd()
+	case VoiceDevicesMsg:
+		m.applyVoiceDevices(msg)
+		return m, nil
+	case VoiceDeviceSavedMsg:
+		m.applyVoiceDeviceSaved(msg)
+		return m, nil
+	case VoiceInputChannelSavedMsg:
+		m.applyVoiceInputChannelSaved(msg)
+		return m, nil
 	case VoiceSavedMsg:
 		m.applyVoiceSaved(msg)
 		return m, nil
@@ -7390,7 +7443,9 @@ func (m *Model) requestVoiceSettings() bubbletea.Cmd {
 	return m.onVoiceSettings()
 }
 
-// applyVoiceSettings opens the picker once the voices are known.
+// applyVoiceSettings opens the voice settings hierarchy once the voices and the
+// machine-local audio preferences are known (Rust #49437: /voice ->
+// AppEvent::OpenRealtimeSettings -> ChatWidget::open_realtime_settings).
 func (m *Model) applyVoiceSettings(msg VoiceSettingsMsg) {
 	if m == nil {
 		return
@@ -7400,12 +7455,32 @@ func (m *Model) applyVoiceSettings(msg VoiceSettingsMsg) {
 		return
 	}
 	m.voicePreference = strings.TrimSpace(msg.Current)
-	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewVoicePickerView(msg.Current, msg.Voices))
+	m.voiceChoices = append([]string(nil), msg.Voices...)
+	m.voiceAudio = msg.Audio
+	m.openVoiceSettingsView()
 }
 
-// applyVoicePickerOption persists the selected voice.
+// VoiceAudioPreferences returns the machine-local audio selection this launch
+// staged (Rust #49437 ChatWidget::local_settings.audio). The runtime forwards it
+// to the helper when a voice conversation starts; the TUI never opens audio on
+// its own.
+func (m *Model) VoiceAudioPreferences() chatwidget.VoiceAudioPreferences {
+	if m == nil {
+		return chatwidget.VoiceAudioPreferences{}
+	}
+	return m.voiceAudio
+}
+
+// applyVoicePickerOption persists the selected voice, or returns to the "Voice
+// settings" root when the picker's Back row is chosen (Rust #49437
+// ChatWidget::open_realtime_voices back_item / on_cancel).
 func (m *Model) applyVoicePickerOption(optionID string) bubbletea.Cmd {
 	if m == nil {
+		return nil
+	}
+	if optionID == chatwidget.VoiceSettingsBackOptionID {
+		m.notice = ""
+		m.openVoiceSettingsView()
 		return nil
 	}
 	voice, ok := chatwidget.VoiceFromPickerOption(optionID)

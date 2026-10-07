@@ -63,7 +63,13 @@ func selectionItemRow(index int, item SelectionItem, width int) string {
 	if name == "" {
 		name = strings.TrimSpace(item.ID)
 	}
-	row := intString(index+1) + ". " + name
+	var row string
+	if label := strings.TrimSpace(item.ChildLabel); label != "" {
+		// Rust #49836: letter-labeled children indent under their parent row.
+		row = "  " + label + ". " + name
+	} else {
+		row = intString(index+1) + ". " + name
+	}
 	if desc := strings.TrimSpace(item.Description); desc != "" {
 		row += " - " + desc
 	}

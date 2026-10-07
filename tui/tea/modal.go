@@ -11,14 +11,18 @@ import (
 	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 	"codex_go/utils"
+	"codex_go/voicehost"
 )
 
 type ModalKind string
 
 const (
-	ModalKindApproval        ModalKind = "approval"
-	ModalKindElicitation     ModalKind = "elicitation"
-	ModalKindPicker          ModalKind = "picker"
+	ModalKindApproval    ModalKind = "approval"
+	ModalKindElicitation ModalKind = "elicitation"
+	ModalKindPicker      ModalKind = "picker"
+	// ModalKindVoiceChannels hosts the microphone channel multi-select
+	// (Rust #49836).
+	ModalKindVoiceChannels   ModalKind = "voice_channels"
 	ModalKindUserInput       ModalKind = "user_input"
 	ModalKindUsage           ModalKind = "usage"
 	ModalKindStatusLine      ModalKind = "status_line"
@@ -179,6 +183,10 @@ type modalState struct {
 	hooksBrowser           *hooksBrowserModalState
 	pluginBrowser          *pluginBrowserModalState
 	worktreeBrowser        *worktreeBrowserState
+	// voiceChannels hosts the microphone channel multi-select and the device it
+	// belongs to (Rust #49836 open_realtime_input_channels).
+	voiceChannels      *bottompane.MultiSelectPicker
+	voiceChannelDevice voicehost.AudioDevice
 }
 
 func DefaultApprovalOptions() []ModalOption {
@@ -266,6 +274,9 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	if m.modal.manageSkills != nil {
 		return m.updateManageSkillsModal(message)
+	}
+	if m.modal.voiceChannels != nil {
+		return m.updateVoiceChannelsModal(message)
 	}
 	if m.modal.externalAgentMigration != nil {
 		return m.updateExternalAgentMigrationModal(message)
@@ -871,10 +882,41 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoicePickerViewID {
 		m.modal = nil
 		if cancelled {
-			m.notice = "Voice unchanged"
+			// Rust #49437: the voice catalog is a submenu of "Voice settings",
+			// so esc returns to its parent instead of closing the hierarchy.
+			m.notice = ""
+			m.openVoiceSettingsView()
 			return nil
 		}
 		return m.applyVoicePickerOption(response.OptionID)
+	}
+	// Rust #49437/#49836: the voice settings hierarchy navigates between its
+	// own views, so cancel returns to the parent menu instead of closing.
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoiceSettingsViewID {
+		m.modal = nil
+		if cancelled {
+			return nil
+		}
+		m.notice = ""
+		return m.applyVoiceSettingsOption(response.OptionID)
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoiceSoundDevicesViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = ""
+			m.openVoiceSettingsView()
+			return nil
+		}
+		return m.applyVoiceSoundDevicesOption(response.OptionID)
+	}
+	if modal.kind == ModalKindGeneric && modal.id == chatwidget.VoiceDevicePickerViewID {
+		m.modal = nil
+		if cancelled {
+			m.notice = ""
+			m.openVoiceSoundDevicesView()
+			return nil
+		}
+		return m.applyVoiceDevicePickerOption(response.OptionID)
 	}
 	if modal.kind == ModalKindGeneric && modal.id == chatwidget.SafetyBufferingPromptViewID {
 		m.modal = nil
@@ -1355,6 +1397,9 @@ func (m *Model) renderModal() string {
 	}
 	if m.modal.manageSkills != nil {
 		return m.renderManageSkillsModal()
+	}
+	if m.modal.voiceChannels != nil {
+		return m.renderVoiceChannelsModal()
 	}
 	if m.modal.externalAgentMigration != nil {
 		return m.renderExternalAgentMigrationModal()
