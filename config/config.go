@@ -670,27 +670,28 @@ func validateBrowserComputerUseConfigValues(values map[string]any) error {
 	return nil
 }
 
+// knownTopLevelConfigFields includes `daybreak`, grounded from Rust #49856
+// (ConfigToml::daybreak -> Config::daybreak_enabled =
+// cfg.daybreak.unwrap_or(false)); Rust #51207 gates the CLI Daybreak controls
+// behind the cli_daybreak feature.
 var knownTopLevelConfigFields = map[string]struct{}{
-	"analytics":                       {},
-	"agents":                          {},
-	"allow_login_shell":               {},
-	"allow_symlinked_codex_home":      {},
-	"background_terminal_max_timeout": {},
-	"apps":                            {},
-	"apps_mcp_product_sku":            {},
-	"approval_policy":                 {},
-	"approvals_reviewer":              {},
-	"auto_review":                     {},
-	"browser_use":                     {},
-	"chatgpt_base_url":                {},
-	"check_for_update_on_startup":     {},
-	"cli_auth_credentials_store":      {},
-	"cloud":                           {},
-	"compact_prompt":                  {},
-	"computer_use":                    {},
-	// Rust #49856: ConfigToml::daybreak becomes Config::daybreak_enabled
-	// (cfg.daybreak.unwrap_or(false)); Rust #51207 gates the CLI Daybreak
-	// controls behind the cli_daybreak feature.
+	"analytics":                         {},
+	"agents":                            {},
+	"allow_login_shell":                 {},
+	"allow_symlinked_codex_home":        {},
+	"background_terminal_max_timeout":   {},
+	"apps":                              {},
+	"apps_mcp_product_sku":              {},
+	"approval_policy":                   {},
+	"approvals_reviewer":                {},
+	"auto_review":                       {},
+	"browser_use":                       {},
+	"chatgpt_base_url":                  {},
+	"check_for_update_on_startup":       {},
+	"cli_auth_credentials_store":        {},
+	"cloud":                             {},
+	"compact_prompt":                    {},
+	"computer_use":                      {},
 	"daybreak":                          {},
 	"default_permissions":               {},
 	"desktop":                           {},

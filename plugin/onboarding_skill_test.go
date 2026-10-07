@@ -1,4 +1,4 @@
-﻿package plugin
+package plugin
 
 import (
 	"encoding/json"
@@ -129,5 +129,61 @@ func TestPluginReadExposesDeclaredOnboardingSkillLikeRust(t *testing.T) {
 	onboarding, ok := payload["onboardingSkill"].(map[string]any)
 	if !ok || onboarding["name"] != "setup" {
 		t.Fatalf("serialized onboardingSkill = %#v", payload["onboardingSkill"])
+	}
+}
+
+// TestOnboardingSkillForDetailMatchesWindowsPathIdentityLikeRust mirrors Rust
+// #51482 (c9870d0157): the onboarding-skill lookup compares PathUri identity
+// rather than raw text, so equivalent Windows spellings (case and separators)
+// match. Rust tests: plugin_read_selects_local_onboarding_skill and
+// load_plugins_resolves_disabled_skill_names_against_loaded_plugin_skills.
+func TestOnboardingSkillForDetailMatchesWindowsPathIdentityLikeRust(t *testing.T) {
+	declared := `C:\skills\setup\SKILL.md`
+	skillPath := `C:/SKILLS/SETUP/SKILL.md`
+	other := `C:/skills/other/SKILL.md`
+	detail := PluginDetail{
+		Summary:             PluginSummary{Enabled: true},
+		Skills:              []PluginSkill{{Name: "demo:setup", Path: &skillPath, Enabled: true}, {Name: "demo:other", Path: &other, Enabled: true}},
+		onboardingSkillPath: declared,
+	}
+	if got := onboardingSkillForDetail(detail); got == nil || got.Name != "demo:setup" {
+		t.Fatalf("windows identity match = %#v", got)
+	}
+
+	unmatched := detail
+	unmatched.onboardingSkillPath = `C:\skills\missing\SKILL.md`
+	if got := onboardingSkillForDetail(unmatched); got != nil {
+		t.Fatalf("unmatched windows path returned %#v", got)
+	}
+}
+
+// TestPluginSkillPathMatchesLikeRust mirrors Rust #51482's PathUri identity
+// rules: Windows spellings fold case and separators, and a genuinely different
+// path never matches. Spellings without a URI representation (relative text)
+// fall back to the cleaned-text compare so pre-#51482 behavior is preserved.
+func TestPluginSkillPathMatchesLikeRust(t *testing.T) {
+	upper := `C:/SKILLS/SETUP/skill.md`
+	lower := `C:\\skills\\setup\\SKILL.md`
+	upperKey, okUpper := pluginSkillPathIdentity(upper)
+	lowerKey, okLower := pluginSkillPathIdentity(lower)
+	if !okUpper || !okLower {
+		t.Fatalf("identity keys missing: %v %v", okUpper, okLower)
+	}
+	if upperKey != lowerKey {
+		t.Fatalf("case/separator folding failed: %q vs %q", upperKey, lowerKey)
+	}
+	if pluginSkillPathMatches(filepath.Clean(lower), lowerKey, okLower, upper) != true {
+		t.Fatal("equivalent Windows spellings must match")
+	}
+	if pluginSkillPathMatches(filepath.Clean(lower), lowerKey, okLower, `C:/skills/other/SKILL.md`) {
+		t.Fatal("a different path must not match")
+	}
+
+	// Relative text has no URI representation, so the fallback compares cleaned
+	// text (the pre-#51482 behavior for non-absolute inputs).
+	relative := filepath.Join("skills", "setup", "SKILL.md")
+	relativeKey, relativeOK := pluginSkillPathIdentity(relative)
+	if pluginSkillPathMatches(filepath.Clean(relative), relativeKey, relativeOK, "./"+filepath.ToSlash(relative)) != true {
+		t.Fatal("relative spellings must still match through the text fallback")
 	}
 }

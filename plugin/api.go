@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"codex_go/utils"
 )
 
 var ErrInvalidPluginRequest = errors.New("invalid plugin request")
@@ -302,16 +304,48 @@ func onboardingSkillForDetail(detail PluginDetail) *PluginSkill {
 	if path == "" {
 		return nil
 	}
+	onboardingKey, onboardingHasKey := pluginSkillPathIdentity(path)
+	onboardingText := filepath.Clean(path)
 	for i := range detail.Skills {
 		skill := detail.Skills[i]
 		if !skill.Enabled || skill.Path == nil {
 			continue
 		}
-		if filepath.Clean(*skill.Path) == filepath.Clean(path) {
+		if pluginSkillPathMatches(onboardingText, onboardingKey, onboardingHasKey, *skill.Path) {
 			return clonePluginSkillPtr(&skill)
 		}
 	}
 	return nil
+}
+
+// pluginSkillPathIdentity returns the PathUri identity key for a plugin skill
+// path, mirroring Rust #51482 (c9870d0157) where skill identity and disabled
+// path matching carry `PathUri`: equivalent Windows spellings (case and
+// separator differences) match while literal spaces, `%` and `#` in native
+// filenames are preserved. ok is false for text with no URI representation.
+func pluginSkillPathIdentity(path string) (string, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", false
+	}
+	return utils.PathIdentityKey(trimmed)
+}
+
+// pluginSkillPathMatches reports whether candidate denotes the onboarding path,
+// mirroring Rust's app-server lookup
+// (`skill.path.as_ref().and_then(LegacyAppPathString::to_inferred_path_uri) ==
+// Some(&PathUri::from_abs_path(path))`, #51482). Identity keys decide when both
+// spellings resolve to a path URI; otherwise the cleaned texts are compared so
+// non-absolute inputs keep the pre-#51482 behavior.
+func pluginSkillPathMatches(wantText, wantKey string, wantHasKey bool, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+	if candidateKey, ok := pluginSkillPathIdentity(candidate); ok && wantHasKey {
+		return candidateKey == wantKey
+	}
+	return filepath.Clean(candidate) == wantText
 }
 
 func pluginInterfacePromptValues(raw json.RawMessage) ([]string, bool) {
