@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -60,15 +61,24 @@ func FeedbackAttachmentPathFilename(attachment FeedbackAttachmentPath) string {
 // FeedbackReadAttachmentPath mirrors Rust `FeedbackAttachmentPath::read_attachment`:
 // ok is false for a missing, non-regular or oversized source (the Rust reader
 // logs and skips those), while a genuine read failure is returned as an error.
+//
+// Rust #49852: every skip is logged so operators can tell why an attachment was
+// dropped; the messages and fields mirror the Rust tracing events.
 func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int64) (FeedbackAttachment, bool, error) {
 	info, err := os.Stat(attachment.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
 			return FeedbackAttachment{}, false, nil
 		}
 		return FeedbackAttachment{}, false, fmt.Errorf("stat feedback attachment: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() > maxBytes {
+	if !info.Mode().IsRegular() {
+		slog.Error("feedback attachment skipped: not a regular file")
+		return FeedbackAttachment{}, false, nil
+	}
+	if info.Size() > maxBytes {
+		slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
 		return FeedbackAttachment{}, false, nil
 	}
 	buffer, err := os.ReadFile(attachment.Path)
@@ -76,6 +86,7 @@ func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int6
 		return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
 	}
 	if int64(len(buffer)) > maxBytes {
+		slog.Error("feedback attachment skipped: decoded size limit exceeded", "bytes_read", len(buffer), "max_bytes", maxBytes)
 		return FeedbackAttachment{}, false, nil
 	}
 	return FeedbackAttachment{
