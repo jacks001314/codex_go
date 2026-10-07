@@ -3,7 +3,21 @@ package mcp
 import (
 	"context"
 	"strings"
+
+	"github.com/google/uuid"
 )
+
+// NewMCPOAuthLoginID mirrors the app-server's `Uuid::now_v7().to_string()`
+// (Rust #49276, `request_processors/mcp_processor.rs`): it identifies one
+// explicit MCP OAuth login attempt across the login response and the completion
+// notification. Like `ThreadId::new`, a fresh attempt receives a UUIDv7; the
+// random fallback only applies when the v7 generator fails.
+func NewMCPOAuthLoginID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
+	}
+	return uuid.NewString()
+}
 
 type MCPOAuthLoginCompletion struct {
 	Name     string

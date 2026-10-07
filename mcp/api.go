@@ -1798,6 +1798,10 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 	if err != nil {
 		return nil, err
 	}
+	// Rust #49276: the login attempt id is minted by the app-server when the
+	// login starts, returned in this response and echoed in the completion
+	// notification, so a client can match the two.
+	loginID := NewMCPOAuthLoginID()
 	url := "http://localhost/oauth/" + name
 	if config, ok := s.serverConfig(name); ok && strings.TrimSpace(config.URL) != "" {
 		if config.EffectiveAuth() == ServerAuthEMAAuth {
@@ -1808,7 +1812,7 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 		if config.EffectiveAuth() == ServerAuthChatGPT && !config.IsLocalEnvironment() {
 			return nil, invalidMCPRequest("OAuth login is not supported for executor-owned ChatGPT MCP servers")
 		}
-		if loginURL, ok := s.startOAuthLoginServer(name, &config, params); ok {
+		if loginURL, ok := s.startOAuthLoginServer(name, &config, params, loginID); ok {
 			url = loginURL
 		} else if registration == MCPServerOauthClientRegistrationDcr && strings.TrimSpace(config.OAuthClientID) == "" {
 			// Rust 6dc3ac8721: forced DCR must not silently fall back to a
@@ -1819,7 +1823,7 @@ func (s *MCPService) OauthLogin(params *MCPServerOauthLoginParams) (*MCPServerOa
 			url = buildMCPOAuthURLForLogin(&config, params.Scopes, params.TimeoutSecs, client)
 		}
 	}
-	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url}, nil
+	return &MCPServerOauthLoginResponse{AuthorizationURL: url, URL: url, LoginID: &loginID}, nil
 }
 
 func mcpServerOauthClientRegistration(params *MCPServerOauthLoginParams) (MCPServerOauthClientRegistration, error) {
@@ -1860,7 +1864,7 @@ func (s *MCPService) OauthCancel(params *MCPServerOauthCancelParams) (*MCPServer
 	return &MCPServerOauthCancelResponse{}, nil
 }
 
-func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams) (string, bool) {
+func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, params *MCPServerOauthLoginParams, loginID string) (string, bool) {
 	if s == nil || config == nil || params == nil || strings.TrimSpace(config.URL) == "" {
 		return "", false
 	}
@@ -1910,7 +1914,7 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 	if params.ThreadID != nil {
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
-	s.trackOAuthLogin(name, threadID, login)
+	s.trackOAuthLogin(name, threadID, loginID, login)
 	return login.AuthorizationURL, true
 }
 
@@ -1938,7 +1942,7 @@ func (s *MCPService) oauthStoreForConfig(config *ServerConfig) *OAuthStore {
 	return nil
 }
 
-func (s *MCPService) trackOAuthLogin(name string, threadID string, login *OAuthLoginServer) {
+func (s *MCPService) trackOAuthLogin(name string, threadID string, loginID string, login *OAuthLoginServer) {
 	if s == nil || login == nil {
 		return
 	}
@@ -1966,11 +1970,11 @@ func (s *MCPService) trackOAuthLogin(name string, threadID string, login *OAuthL
 		}
 		s.mu.Unlock()
 		s.clearHTTPClients()
-		s.notifyOAuthLoginCompleted(name, threadID, result)
+		s.notifyOAuthLoginCompleted(name, threadID, loginID, result)
 	}()
 }
 
-func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, result *OAuthLoginServerResult) {
+func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, loginID string, result *OAuthLoginServerResult) {
 	handler := s.oauthLoginCompletionHandler()
 	if handler == nil {
 		return
@@ -1978,7 +1982,10 @@ func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, res
 	completion := &MCPOAuthLoginCompletion{
 		Name:     name,
 		ThreadID: threadID,
-		Success:  result != nil && result.Error == nil,
+		// Rust #49276: the completion carries the id minted when the login
+		// started, so it matches OauthLogin's response for the same attempt.
+		LoginID: loginID,
+		Success: result != nil && result.Error == nil,
 	}
 	if result != nil && result.Error != nil {
 		completion.Error = result.Error.Error()
