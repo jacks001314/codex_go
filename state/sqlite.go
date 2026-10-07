@@ -160,8 +160,9 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*sql.DB, error) {
 	return db, nil
 }
 
-// OpenReadWrite opens a Rust-compatible writable SQLite pool. PRAGMAs are
-// encoded in the DSN so modernc applies them to every pooled connection.
+// OpenReadWrite opens a Rust-compatible writable SQLite pool. Connection-scoped
+// PRAGMAs stay in the DSN so modernc applies them to every pooled connection;
+// the database-scoped ones are initialized once by the opener.
 func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, error) {
 	dsn, err := sqliteFileDSN(path, false)
 	if err != nil {
@@ -171,9 +172,56 @@ func (c SqliteConfig) OpenReadWrite(ctx context.Context, path string) (*sql.DB, 
 	if err != nil {
 		return nil, err
 	}
+	// Rust initializes the writable pool with `after_connect`, so the opener owns
+	// the first initialization error instead of a pooled retry hiding it (#49102,
+	// upstream c2d2f422e6). Go opens the settings once and returns that error
+	// unchanged, then closes the pool so a later startup can succeed.
+	if err := initializeDatabaseSettings(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	db.SetMaxOpenConns(SQLiteMaxOpenConnections)
 	db.SetMaxIdleConns(SQLiteMaxOpenConnections)
 	return db, nil
+}
+
+// initializeDatabaseSettings applies the database-scoped PRAGMAs the Rust opener
+// sets in `after_connect` (#49102): existing vacuum modes are preserved and only
+// an empty database is initialized with incremental auto-vacuum, because the
+// setter takes the writer lock even when the mode is unchanged.
+func initializeDatabaseSettings(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return fmt.Errorf("sqlite database is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	var mode int64
+	if err := conn.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return err
+	}
+	if mode == 0 {
+		var empty int64
+		if err := conn.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)`).Scan(&empty); err != nil {
+			return err
+		}
+		if empty == 1 {
+			if _, err := conn.ExecContext(ctx, `PRAGMA auto_vacuum = INCREMENTAL`); err != nil {
+				return err
+			}
+		}
+	}
+	// WAL is a database-scoped setting too, so the conversion runs once; a held
+	// writer surfaces as a lock error from the opener (Rust #49102).
+	if _, err := conn.ExecContext(ctx, `PRAGMA journal_mode = WAL`); err != nil {
+		return err
+	}
+	return nil
 }
 
 // OpenReadOnly opens an existing database without creating or modifying it.
@@ -209,10 +257,12 @@ func sqliteFileDSN(path string, readOnly bool) (string, error) {
 	if readOnly {
 		query.Set("mode", "ro")
 	} else {
+		// Connection-scoped PRAGMAs only: `journal_mode` and `auto_vacuum` are
+		// database-scoped and are initialized by initializeDatabaseSettings so an
+		// existing database keeps its vacuum mode without taking the writer lock
+		// (#49102).
 		query.Add("_pragma", "busy_timeout(5000)")
-		query.Add("_pragma", "journal_mode(WAL)")
 		query.Add("_pragma", "synchronous(NORMAL)")
-		query.Add("_pragma", "auto_vacuum(INCREMENTAL)")
 		query.Add("_pragma", "foreign_keys(ON)")
 	}
 	u.RawQuery = query.Encode()
