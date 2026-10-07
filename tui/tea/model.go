@@ -8325,8 +8325,70 @@ func (m *Model) applyStopCommand() bubbletea.Cmd {
 	return nil
 }
 
+// transcriptNavigationKeymapContexts lists the keymap contexts that can be
+// active while the main (non-overlay) transcript handles input. Mirrors the
+// Rust transcript-navigation gate (app/owned_transcript.rs, PR #50389), which
+// consults every active context except the pager; overlay screens own their own
+// dispatch and are therefore excluded here just as the pager is excluded there.
+// The Vim contexts only become active when Vim composer mode is enabled.
+var transcriptNavigationKeymapContexts = map[string]bool{
+	"global":   true,
+	"chat":     true,
+	"composer": true,
+	"editor":   true,
+}
+
+var transcriptNavigationKeymapVimContexts = map[string]bool{
+	"vim_normal":      true,
+	"vim_operator":    true,
+	"vim_text_object": true,
+}
+
+// configuredBindingTakesNavKey reports whether an explicitly configured keymap
+// binding on an active main-surface action claims keySpec, in which case the
+// transcript must hand the key back to the app instead of scrolling.
+//
+// This mirrors Rust #50389: an explicitly configured shortcut for an active
+// action (including the composer -> global submit/queue fallback) takes
+// precedence over transcript navigation, so `composer.submit = page-up` (or
+// `global.submit = page-up`) submits the draft. Default bindings never take a
+// navigation key, which keeps plain PageUp/PageDown scrolling.
+func (m *Model) configuredBindingTakesNavKey(keySpec string) bool {
+	if m == nil || keySpec == "" {
+		return false
+	}
+	for _, descriptor := range codextui.KeymapActions(codextui.KeymapActionFilter{FastModeEnabled: true}) {
+		if !transcriptNavigationKeymapContexts[descriptor.Context] &&
+			!(m.vimMode && transcriptNavigationKeymapVimContexts[descriptor.Context]) {
+			continue
+		}
+		switch descriptor.Action {
+		case "find_transcript", "focus_activity":
+			continue
+		}
+		if _, _, custom := codextui.ResolvedKeymapBindings(m.keymapConfig, descriptor.Context, descriptor.Action); !custom {
+			continue
+		}
+		if m.keyMatches(descriptor.Context, descriptor.Action, keySpec) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	if m == nil {
+		return false
+	}
+	switch msg.Type {
+	case bubbletea.KeyPgUp, bubbletea.KeyPgDown, bubbletea.KeyHome, bubbletea.KeyCtrlHome, bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
+	default:
+		return false
+	}
+	// Rust #50389: a configured shortcut for an active action wins over
+	// transcript navigation, so the key falls through to normal dispatch
+	// (submit / queue / interrupt / editor) instead of scrolling.
+	if m.configuredBindingTakesNavKey(keySpecFromKeyMsg(msg)) {
 		return false
 	}
 	switch msg.Type {
@@ -8338,8 +8400,6 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 		m.transcript.GotoTop()
 	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
 		m.transcript.GotoBottom()
-	default:
-		return false
 	}
 	m.activityFollow = m.transcript.AtBottom()
 	return true
