@@ -2085,3 +2085,62 @@ func TestAmazonBedrockCatalogForProviderIDLikeRust(t *testing.T) {
 		t.Fatalf("runtime catalog = %#v", runtimeCatalog.Models)
 	}
 }
+
+// TestBundledFallbackCarriesCatalogJSONBooleans pins the two
+// #[serde(default = "default_true")] booleans
+// (codex-rs/protocol/src/openai_models.rs:438/441) of the hand-written
+// fallback catalog against the bundled catalog JSON
+// (codex-rs/models-manager/models.json @ b17c74cfd5) read through the ordinary
+// catalog parse path: the value of a field must not depend on which of the two
+// sources produced the entry. The fallback literals bypass
+// ModelInfo.UnmarshalJSON, where those defaults live (catalog.go:712/714), so
+// before the fix supports_reasoning_summary_parameter read false on the
+// fallback path and true on the models.json path for the same slug.
+func TestBundledFallbackCarriesCatalogJSONBooleans(t *testing.T) {
+	// Verbatim from codex-rs/models-manager/models.json @ b17c74cfd5, restricted
+	// to the entries the Go fallback catalog mirrors.
+	const catalogJSON = `{"models":[
+		{"slug":"gpt-6.1-sol","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
+		{"slug":"gpt-6-astra","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
+		{"slug":"gpt-6-sol","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
+		{"slug":"gpt-6-luna","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false},
+		{"slug":"gpt-5.6-sol","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":true},
+		{"slug":"gpt-5.6-terra","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":true},
+		{"slug":"gpt-5.6-luna","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":true},
+		{"slug":"gpt-5.5","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":true},
+		{"slug":"codex-auto-review","supports_reasoning_summary_parameter":true,"include_apps_usage_instructions":false}
+	]}`
+	var fromCatalogJSON ModelsResponse
+	if err := json.Unmarshal([]byte(catalogJSON), &fromCatalogJSON); err != nil {
+		t.Fatalf("unmarshal models.json subset: %v", err)
+	}
+	bySlug := make(map[string]ModelInfo, len(fromCatalogJSON.Models))
+	for _, model := range fromCatalogJSON.Models {
+		bySlug[model.Slug] = model
+	}
+	// Slugs the catalog JSON no longer carries resolve through Rust's
+	// model_info_from_slug descriptor instead.
+	goOnly := map[string]bool{"gpt-5.2": true, "gpt-5.4-mini": true}
+
+	fallback := fallbackBundledModelsResponse()
+	if len(fallback.Models) == 0 {
+		t.Fatal("fallback catalog is empty")
+	}
+	for _, model := range fallback.Models {
+		source, ok := bySlug[model.Slug]
+		if !ok {
+			if !goOnly[model.Slug] {
+				t.Fatalf("fallback slug %q has no models.json counterpart", model.Slug)
+			}
+			source = ModelInfoFromSlug(model.Slug)
+		}
+		if model.SupportsReasoningSummaries != source.SupportsReasoningSummaries {
+			t.Fatalf("%s: supports_reasoning_summary_parameter = %v on the fallback path, %v on the models.json path",
+				model.Slug, model.SupportsReasoningSummaries, source.SupportsReasoningSummaries)
+		}
+		if model.IncludeAppsUsageInstructions != source.IncludeAppsUsageInstructions {
+			t.Fatalf("%s: include_apps_usage_instructions = %v on the fallback path, %v on the models.json path",
+				model.Slug, model.IncludeAppsUsageInstructions, source.IncludeAppsUsageInstructions)
+		}
+	}
+}

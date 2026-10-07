@@ -907,7 +907,7 @@ func ModelsCatalogFromConfigValues(values map[string]any) *ModelsResponse {
 }
 
 func fallbackBundledModelsResponse() ModelsResponse {
-	return ModelsResponse{
+	response := ModelsResponse{
 		Models: []ModelInfo{
 			{
 				Slug: "gpt-6.1-sol", DisplayName: "GPT-6.1-Sol", Description: "Latest workhorse model for coding and everyday work.",
@@ -1055,6 +1055,37 @@ func fallbackBundledModelsResponse() ModelsResponse {
 				SupportsParallelToolCalls:     true,
 			},
 		},
+	}
+	// The fallback catalog below is the offline mirror of the bundled
+	// models-manager/models.json catalog (Rust include_str!s that file into the
+	// bundled models and parses it via serde), but the literals below bypass
+	// ModelInfo.UnmarshalJSON, where Rust's two
+	// `#[serde(default = "default_true")]` booleans are reproduced
+	// (catalog.go:712/714). Stamp the catalog's values on so the same field
+	// cannot read false here and true on the models.json path.
+	applyBundledCatalogBooleans(&response)
+	return response
+}
+
+// applyBundledCatalogBooleans fills the two serde-default-true booleans
+// (codex-rs/protocol/src/openai_models.rs:438/441) of the hand-written fallback
+// catalog with the values codex-rs/models-manager/models.json @ b17c74cfd5
+// carries: supports_reasoning_summary_parameter is true for every bundled
+// entry, while include_apps_usage_instructions is on only for the 5.6 family
+// and gpt-5.5. Slugs that catalog no longer lists (the legacy gpt-5.2 /
+// gpt-5.4-mini fallbacks) keep Rust's model_info_from_slug descriptor, i.e.
+// reasoning summaries on and no apps guidance (openai_models.rs:1072-1075).
+func applyBundledCatalogBooleans(response *ModelsResponse) {
+	appsUsageInstructions := map[string]bool{
+		"gpt-5.6-sol":   true,
+		"gpt-5.6-terra": true,
+		"gpt-5.6-luna":  true,
+		"gpt-5.5":       true,
+	}
+	for i := range response.Models {
+		model := &response.Models[i]
+		model.SupportsReasoningSummaries = true
+		model.IncludeAppsUsageInstructions = appsUsageInstructions[model.Slug]
 	}
 }
 
