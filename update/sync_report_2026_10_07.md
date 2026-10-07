@@ -48,3 +48,10 @@
 ## 环境说明
 
 - `git push` 走 `https://github.com/jacks001314/codex_go.git` 无可用凭证（无 credential helper / token），本轮改用 SSH 推送：`git push git@github.com:jacks001314/codex_go.git main:main`（本机 `~/.ssh/id_ed25519` 对 `jacks001314` 已认证）。后续自动化需配置 pushurl 或提供 token。
+
+## 追加（当日续跑）
+
+- 上游 head 复核：`git pull` → `Already up to date`（`e95abcdf49`），无新区间。
+- 交付镜像补同步：核验最近 30 个提交的 59 个改动文件，发现 `execserver/connection_diagnostics.go`、`connection_diagnostics_test.go`（`sync387`）此前未同步，已补齐；本轮共补同步 10 个文件，59/59 与本地 HEAD 一致。
+- 新增 `sync393`：exec-server 不再上报未实现的 `environmentConfig/read` 能力位（`execserver/server.go` + `server_test.go` + 新增不变式测试 `TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust`）；#51525 主体（执行器本地配置读取子系统）仍受原始 TOML 分层栈 / 类型化 `RequirementSource` 缺失阻塞，证据见 `update/plan_2026_10_07.md` 第二十七轮。
+
