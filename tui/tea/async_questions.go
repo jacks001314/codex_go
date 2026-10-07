@@ -653,8 +653,8 @@ func displayKeyBinding(binding string) string {
 		label.WriteString("shift+")
 	}
 	if hasAlt {
-		label.WriteString(codextui.AltKeyLabel())
-		label.WriteString("+")
+		// Rust #49136: the option glyph attaches without a `+`.
+		label.WriteString(codextui.ModifierLabelPrefix(codextui.AltKeyLabel()))
 	}
 	label.WriteString(key)
 	return label.String()

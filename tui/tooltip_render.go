@@ -164,8 +164,8 @@ func keybindingKeyLabel(part string) string {
 		label string
 	}{{"ctrl", "ctrl"}, {"shift", "shift"}, {"alt", AltKeyLabel()}} {
 		if modifiers[modifier.name] {
-			label.WriteString(modifier.label)
-			label.WriteString("+")
+			// Rust #49136: glyph modifier labels attach without a `+`.
+			label.WriteString(ModifierLabelPrefix(modifier.label))
 		}
 	}
 	label.WriteString(keybindingKeyNameLabel(key))

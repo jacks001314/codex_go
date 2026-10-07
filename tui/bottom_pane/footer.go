@@ -84,8 +84,8 @@ func DefaultFooterKeyHints() FooterKeyHints {
 		EditPrevious:    "esc",
 		ShowTranscript:  "ctrl+t",
 		HistorySearch:   "ctrl+r",
-		ReasoningDown:   tui.AltKeyLabel() + "+,",
-		ReasoningUp:     tui.AltKeyLabel() + "+.",
+		ReasoningDown:   tui.ModifierLabelPrefix(tui.AltKeyLabel()) + ",",
+		ReasoningUp:     tui.ModifierLabelPrefix(tui.AltKeyLabel()) + ".",
 	}
 }
 

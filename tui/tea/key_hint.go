@@ -60,8 +60,8 @@ func (b KeyBinding) Label() string {
 		label.WriteString("shift+")
 	}
 	if b.Alt {
-		label.WriteString(AltKeyLabel())
-		label.WriteString("+")
+		// Rust #49136: the option glyph attaches without a `+`.
+		label.WriteString(tui.ModifierLabelPrefix(AltKeyLabel()))
 	}
 	key := keyTypeLabel(b.Type)
 	if b.Type == bubbletea.KeyRunes {

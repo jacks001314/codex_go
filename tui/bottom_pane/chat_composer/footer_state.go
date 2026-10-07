@@ -70,8 +70,8 @@ func NewFooterState() FooterState {
 		QueueKey:           "tab",
 		ToggleShortcutsKey: "?",
 		HistorySearchKey:   "ctrl+r",
-		ReasoningDownKey:   tui.AltKeyLabel() + "+,",
-		ReasoningUpKey:     tui.AltKeyLabel() + "+.",
+		ReasoningDownKey:   tui.ModifierLabelPrefix(tui.AltKeyLabel()) + ",",
+		ReasoningUpKey:     tui.ModifierLabelPrefix(tui.AltKeyLabel()) + ".",
 	}
 }
 
