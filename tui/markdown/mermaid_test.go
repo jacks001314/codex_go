@@ -48,6 +48,7 @@ func TestMermaidFencesUseNativeRendererForEveryFamily(t *testing.T) {
 	for _, source := range []string{
 		"%% heading\nflowchart TD; A --> B",
 		"graph LR; A --> B",
+		"flowchart; A -- send --> B & C; B <-.-> C",
 		"sequenceDiagram; A->>B: request; B-->>A: response",
 		"stateDiagram-v2; [*] --> Active; Active --> [*]",
 		"stateDiagram; [*] --> Active; Active --> [*]",
