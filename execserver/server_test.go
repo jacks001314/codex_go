@@ -160,8 +160,11 @@ func TestStdioInitializeAndEnvironmentInfo(t *testing.T) {
 	if !strings.Contains(output, `"sessionId"`) || !strings.Contains(output, `"shell"`) {
 		t.Fatalf("stdout = %q", output)
 	}
-	if !strings.Contains(output, `"environmentConfigRead":true`) {
-		t.Fatalf("local environment info should advertise environmentConfigRead: %q", output)
+	// Rust 646f7c0a91 defines the bit as "this executor supports
+	// environmentConfig/read"; Go's stub does not implement the method, so it
+	// must report false (see TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust).
+	if !strings.Contains(output, `"environmentConfigRead":false`) {
+		t.Fatalf("local environment info should not advertise an unimplemented environmentConfig/read: %q", output)
 	}
 }
 
@@ -170,8 +173,8 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 	if info == nil {
 		t.Fatal("localEnvironmentInfo() = nil")
 	}
-	if !info.Capabilities.EnvironmentConfigRead {
-		t.Fatalf("EnvironmentConfigRead = false, want true (Rust 646f7c0a91)")
+	if info.Capabilities.EnvironmentConfigRead {
+		t.Fatalf("EnvironmentConfigRead = true, want false: Go does not implement environmentConfig/read (Rust 646f7c0a91)")
 	}
 	if !info.Capabilities.SandboxedFileStreaming {
 		t.Fatalf("SandboxedFileStreaming = false, want true (Rust #38356)")
@@ -2166,4 +2169,35 @@ func waitForExecServerListenURL(t *testing.T, urlCh <-chan string) string {
 		t.Fatal("exec-server listen URL was not written")
 	}
 	return ""
+}
+
+// TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust freezes the
+// invariant that `environment/info` advertises only the requests the stub can
+// actually serve. Rust 646f7c0a91 defines `environmentConfigRead` as "whether
+// this executor supports the `environmentConfig/read` request", and Rust's local
+// environment sets the bit because its handler is registered
+// (exec-server/src/server/registry.rs); Go's dispatch table has no such method,
+// so the request must report unknown-method (-32601) and the capability must
+// stay false. Rust's client-side `discover_http_mcp_servers` skips the read when
+// the bit is clear (exec-server/src/environment_config.rs), which is the only
+// reason claiming true would be observable as a hard failure.
+func TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust(t *testing.T) {
+	if localEnvironmentInfo().Capabilities.EnvironmentConfigRead {
+		t.Fatal("environmentConfigRead = true although environmentConfig/read is not implemented")
+	}
+	input := `{"id":1,"method":"initialize","params":{"clientName":"test"}}` + "\n" +
+		`{"method":"initialized","params":{}}` + "\n" +
+		`{"id":2,"method":"environment/info","params":{}}` + "\n" +
+		`{"id":3,"method":"environmentConfig/read","params":{"cwd":"file:///tmp","configPaths":[["mcp_servers"]],"requirementsPaths":[["mcp_servers"]]}}` + "\n"
+	var stdout bytes.Buffer
+	if err := NewServer().Serve(context.Background(), strings.NewReader(input), &stdout); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	output := stdout.String()
+	if strings.Contains(output, `"environmentConfigRead":true`) {
+		t.Fatalf("environment/info advertises an unimplemented environmentConfig/read: %q", output)
+	}
+	if !strings.Contains(output, `"code":-32601`) || !strings.Contains(output, "does not implement `environmentConfig/read` yet") {
+		t.Fatalf("environmentConfig/read should report an unknown method: %q", output)
+	}
 }

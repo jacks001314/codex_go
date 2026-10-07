@@ -3372,8 +3372,18 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,
 			CapabilityDiscoverySandbox: true,
-			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
-			EnvironmentConfigRead:  true,
+			// Rust 646f7c0a91 defines `environmentConfigRead` as "whether this
+			// executor supports the `environmentConfig/read` request". Rust's
+			// local environment advertises true because the handler exists
+			// (exec-server/src/server/registry.rs -> environment_config_read);
+			// Go's stub has no such handler, so the request falls through to
+			// the unknown-method branch (-32601). A peer that trusts the bit
+			// would issue a request Go cannot answer (Rust's
+			// `discover_http_mcp_servers` only skips the read when the bit is
+			// false: exec-server/src/environment_config.rs), so the honest
+			// value stays false until the executor-local config read is ported.
+			// Frozen by TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust.
+			EnvironmentConfigRead:  false,
 			SandboxedFileStreaming: true,
 			// Rust #50177: the executor supports replacement opens and
 			// positional `fs/writeBlock`.
