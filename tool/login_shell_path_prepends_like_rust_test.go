@@ -18,6 +18,7 @@ import (
 
 	"codex_go/execpolicy"
 	"codex_go/execserver"
+	"codex_go/sandbox"
 	"codex_go/utils"
 
 	"github.com/coder/websocket"
@@ -351,5 +352,141 @@ func TestBuildShellRequestCarriesLoginShellPackagePathLikeRust(t *testing.T) {
 	}
 	if defaulted.LoginShellPackagePath {
 		t.Fatal("ShellRequest.LoginShellPackagePath = true without the feature option")
+	}
+}
+
+// TestLocalShellLaunchRestoresExecutorPathDirsLikeRust drives the local launch
+// path (ShellExecutor -> ShellRequest.Command -> local runner) and pins Rust
+// #49467's local half: the same feature gate, login-mode check and explicit-PATH
+// check rewrite the launch, and the restore actually puts the executor's
+// directories on PATH for the model's script.
+func TestLocalShellLaunchRestoresExecutorPathDirsLikeRust(t *testing.T) {
+	first := filepath.Join(t.TempDir(), "codex-path")
+	second := filepath.Join(t.TempDir(), "extra-tools")
+	for _, dir := range []string{first, second} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	firstURI, err := utils.FromHostNativePath(first)
+	if err != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", first, err)
+	}
+	secondURI, err := utils.FromHostNativePath(second)
+	if err != nil {
+		t.Fatalf("FromHostNativePath(%q) error = %v", second, err)
+	}
+	dirs := []string{firstURI.String(), secondURI.String()}
+	previous := localLaunchPrependPathDirs
+	defer func() { localLaunchPrependPathDirs = previous }()
+	localLaunchPrependPathDirs = func() []string { return dirs }
+
+	// End to end through the real local runner: the model's script sees the
+	// executor's directories at the front of PATH.
+	if runtime.GOOS != "windows" {
+		if _, err := exec.LookPath("sh"); err == nil {
+			t.Run("end to end through the local runner", func(t *testing.T) {
+				localLaunchPrependPathDirs = func() []string { return dirs }
+				executor := NewShellExecutor(&ShellExecutorOptions{
+					Runner: NewLocalShellRunner(),
+					Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+					Validation: ShellValidationOptions{
+						ApprovalPolicy:        sandbox.ApprovalOnRequest,
+						AllowLoginShell:       true,
+						CWD:                   t.TempDir(),
+						DefaultTimeoutMS:      5000,
+						LoginShellPackagePath: true,
+					},
+				})
+				arguments, err := json.Marshal(map[string]any{"cmd": `printf '%s' "$PATH"`})
+				if err != nil {
+					t.Fatalf("Marshal(arguments) error = %v", err)
+				}
+				output, err := executor.Execute(context.Background(), &Invocation{
+					CallID:   "call-local-login-path",
+					ToolName: PlainName(DefaultExecCommandToolName),
+					Payload:  Payload{Kind: PayloadFunction, Arguments: string(arguments)},
+				})
+				if err != nil {
+					t.Fatalf("Execute() error = %v", err)
+				}
+				parts := strings.Split(output.Data["hook_response"].(string), ":")
+				if len(parts) < 2 || parts[0] != first || parts[1] != second {
+					t.Fatalf("PATH = %q, want %q before %q", output.Data["hook_response"], first, second)
+				}
+			})
+		}
+	}
+
+	cases := []struct {
+		name          string
+		feature       bool
+		loginFalse    bool
+		noDirs        bool
+		envPolicy     map[string]any
+		wantRewritten bool
+	}{
+		{name: "restores executor directories", feature: true, wantRewritten: true},
+		{name: "feature disabled"},
+		{name: "explicit PATH override", feature: true, envPolicy: map[string]any{"set": map[string]any{"PATH": "/user/configured/bin"}}},
+		{name: "non-login shell", feature: true, loginFalse: true},
+		{name: "executor reports no directories", feature: true, noDirs: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.noDirs {
+				localLaunchPrependPathDirs = func() []string { return nil }
+			} else {
+				localLaunchPrependPathDirs = func() []string { return dirs }
+			}
+			runner := &fakeShellRunner{result: &ShellResult{}}
+			executor := NewShellExecutor(&ShellExecutorOptions{
+				Runner: runner,
+				Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+				Validation: ShellValidationOptions{
+					ApprovalPolicy:        sandbox.ApprovalOnRequest,
+					AllowLoginShell:       true,
+					CWD:                   t.TempDir(),
+					DefaultTimeoutMS:      5000,
+					LoginShellPackagePath: testCase.feature,
+				},
+				ShellEnvironmentPolicy: testCase.envPolicy,
+			})
+			arguments := `{"cmd":"echo hi"}`
+			if testCase.loginFalse {
+				arguments = `{"cmd":"echo hi","login":false}`
+			}
+			if _, err := executor.Execute(context.Background(), &Invocation{
+				CallID:   "call-local-login-path",
+				ToolName: PlainName(DefaultExecCommandToolName),
+				Payload:  Payload{Kind: PayloadFunction, Arguments: arguments},
+			}); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if runner.request == nil {
+				t.Fatal("the shell runner did not see the launch request")
+			}
+			command := runner.request.Command
+			if !testCase.wantRewritten {
+				want := []string{"/bin/sh", "-lc", "echo hi"}
+				if testCase.loginFalse {
+					want = []string{"/bin/sh", "-c", "echo hi"}
+				}
+				if !reflect.DeepEqual(command, want) {
+					t.Fatalf("launch command = %#v, want the requested command %#v", command, want)
+				}
+				return
+			}
+			if len(command) != 3 || command[0] != "/bin/sh" || command[1] != "-lc" {
+				t.Fatalf("launch command = %#v, want the login shell with the rewritten script", command)
+			}
+			if !strings.HasSuffix(command[2], "; echo hi") || strings.Count(command[2], "\n") != 0 {
+				t.Fatalf("script = %q, want the requested command last on one line", command[2])
+			}
+			if !strings.Contains(command[2], "export PATH="+first+`${PATH:+:"$PATH"}`) ||
+				!strings.Contains(command[2], "export PATH="+second+`${PATH:+:"$PATH"}`) {
+				t.Fatalf("script = %q, want both executor directories restored", command[2])
+			}
+		})
 	}
 }

@@ -772,6 +772,20 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	if runtimePathPrependsSupported && !remoteEnvironment {
 		req.RuntimePathPrepends = RuntimePathEntriesForLaunch(zshForkShellPath)
 	}
+	// Rust #49467: login startup can reset PATH, so a POSIX login shell restores
+	// the directories the local executor reports before running the model's
+	// script. Remote launches do the same in execRemote with their own executor's
+	// report; this runs before the snapshot replay so the restore and the script
+	// share one shell.
+	if !remoteEnvironment && req.LoginShellPackagePath && !unifiedExecExplicitPathOverride(req) {
+		if shell, useLoginShell := loginShellFromArgv(req.Command); shell.IsPosixLogin(useLoginShell) {
+			if dirs := localLaunchPrependPathDirs(); len(dirs) > 0 {
+				if derived, ok := shell.DeriveExecArgsWithPathPrepends(req.HookCommand, dirs, useLoginShell); ok {
+					req.Command = derived
+				}
+			}
+		}
+	}
 	if e.snapshotProvider != nil {
 		// Rust replays the session's shell snapshot in front of the model's
 		// script so the user's aliases, functions and options still apply. The

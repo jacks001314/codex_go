@@ -3538,6 +3538,15 @@ func localEnvironmentInfo() *EnvironmentInfo {
 	}
 }
 
+// LocalPrependPathDirs reports the directories this process's local executor
+// advertises for PATH, in priority order (EnvironmentInfo.prependPathDirs,
+// Rust #49360). A launch running against the local environment restores them
+// inside a POSIX login shell (Rust #49467 `Environment::info()` for the local
+// environment, `EnvironmentInfo::local()`).
+func LocalPrependPathDirs() []string {
+	return localEnvironmentInfo().PrependPathDirs
+}
+
 // installContextForEnvironmentInfo returns the install context the local
 // executor reports its packaged directories from. It is a variable so tests
 // can substitute a layout with a packaged `codex-path` directory.

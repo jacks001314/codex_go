@@ -615,6 +615,12 @@ func loginShellFromArgv(argv []string) (*Shell, bool) {
 	return &Shell{Type: shellType, Path: argv[0]}, argv[1] == "-lc"
 }
 
+// localLaunchPrependPathDirs reports the directories the local executor wants
+// prepended to PATH. The local launch runs in this process, so the executor's
+// report is the in-process one (Rust #49467 uses `Environment::info()` for the
+// local environment). It is a variable so tests can substitute the report.
+var localLaunchPrependPathDirs = execserver.LocalPrependPathDirs
+
 // unifiedExecExplicitPathOverride reports whether the launch's shell environment
 // policy sets PATH itself; Rust keeps that value instead of restoring the
 // executor's directories (#49467).
