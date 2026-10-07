@@ -13,6 +13,29 @@ import (
 
 const waitTimeoutCode uint32 = 0x00000102
 
+// ConsoleMode controls console creation for a pipe-backed sandbox child.
+// Rust parity: codex-rs/windows-sandbox-rs/src/process.rs (ConsoleMode).
+type ConsoleMode int
+
+const (
+	// ConsoleModeInherit lets the child keep the parent's console.
+	ConsoleModeInherit ConsoleMode = iota
+	// ConsoleModeNoWindow asks Windows for a child that has no console of its
+	// own (Rust #49308: piped legacy sandbox processes run console-less).
+	ConsoleModeNoWindow
+)
+
+// SandboxConsoleFlags mirrors Rust's `console_flags` table: CREATE_NO_WINDOW is
+// requested only for a pipe-backed child in NoWindow mode, so a caller without
+// explicit stdio keeps the parent console. Rust #49308 flipped the piped legacy
+// sandbox capture and the non-TTY unified-exec backend to NoWindow.
+func SandboxConsoleFlags(hasStdio bool, mode ConsoleMode) uint32 {
+	if hasStdio && mode == ConsoleModeNoWindow {
+		return uint32(windows.CREATE_NO_WINDOW)
+	}
+	return 0
+}
+
 func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, error) {
 	if req.Token == 0 || len(req.Command) == 0 {
 		return nil, ErrInvalidRequest
@@ -39,9 +62,10 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
 			return nil, err
 		}
 		defer attrs.Close()
-		// Rust #48483: the sandbox child is a piped helper, so it must never
-		// allocate a console window of its own.
-		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_NO_WINDOW)
+		// Rust #48483/#49308: the sandbox child is a piped helper, so it must
+		// never allocate a console window of its own.
+		creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT|windows.EXTENDED_STARTUPINFO_PRESENT) |
+			SandboxConsoleFlags(true, ConsoleModeNoWindow)
 		err = windows.CreateProcessAsUser(
 			windows.Token(req.Token),
 			nil,
@@ -69,8 +93,10 @@ func CreateProcessAsUserWithToken(req ProcessSpawnRequest) (*CreatedProcess, err
 		_ = desktop.Close()
 		return nil, err
 	}
-	// Rust #48483: the sandbox child is a piped helper, so it must never allocate
-	// a console window of its own.
+	// Rust #48483: the sandbox child must never allocate a console window of its
+	// own. Go keeps CREATE_NO_WINDOW here as well, while upstream's
+	// `console_flags` table yields 0 for a child without explicit stdio: a
+	// console-less parent would otherwise hand this child a brand-new console.
 	creationFlags := uint32(windows.CREATE_UNICODE_ENVIRONMENT | windows.CREATE_NO_WINDOW)
 	err = windows.CreateProcessAsUser(
 		windows.Token(req.Token),
