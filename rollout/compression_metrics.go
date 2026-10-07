@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
+
 	"codex_go/metrics"
 )
 
@@ -166,6 +168,89 @@ func rolloutCompressionErrorKind(err error) string {
 		return "interrupted"
 	default:
 		return "other"
+	}
+}
+
+// rolloutReadFailureReason mirrors Rust's bounded `reason` label (upstream
+// #47565). Rust's `ReadFailureSource` distinguishes `reader_busy` and
+// `task_join`, but both are tokio-only: Go's rollout reader is synchronous
+// (`rollout/line_reader.go`), so there is no busy slot to contend for and no
+// blocking task to join. Go therefore has **no counterpart for those two
+// reasons** and never emits them; every failure is classified from the stream
+// error itself:
+//
+//   - a real OS errno (Rust's `error.raw_os_error().is_some()`) -> "os_error"
+//   - a zstd decoder error on a `.zst` reader -> the zstd_* families that
+//     github.com/klauspost/compress actually reports (see
+//     rolloutReadZstdReason)
+//   - anything else -> "stream_error", Rust's fallback arm
+func rolloutReadFailureReason(format string, err error) string {
+	if err == nil {
+		return rolloutReadReasonStreamError
+	}
+	if rolloutReadErrorHasOSErrno(err) {
+		return rolloutReadReasonOSError
+	}
+	if format == rolloutReadFormatZstd {
+		if reason := rolloutReadZstdReason(err); reason != "" {
+			return reason
+		}
+	}
+	return rolloutReadReasonStreamError
+}
+
+// rolloutReadErrorHasOSErrno mirrors Rust's `error.raw_os_error().is_some()`:
+// Go wraps a failed syscall in `*os.PathError`/`*os.SyscallError` around a
+// `syscall.Errno`, so `errors.As` is the equivalent probe.
+func rolloutReadErrorHasOSErrno(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno != 0
+	}
+	return false
+}
+
+// rolloutReadZstdReason maps the zstd failure families that
+// github.com/klauspost/compress/zstd @ v1.18.6 (the version pinned in go.mod)
+// actually reports for a corrupt or truncated `.jsonl.zst` stream. Rust's own
+// zstd crate returns different messages, so this table is derived from the Go
+// decoder's **error identities**, never from Rust's strings:
+//
+//   - zstd.ErrMagicMismatch / ErrWindowSizeTooSmall / ErrReservedBlockType
+//     -> "zstd_invalid_frame" (the frame header cannot be understood)
+//   - zstd.ErrBlockTooSmall / ErrUnexpectedBlockSize / ErrCompressedSizeTooBig
+//     -> "zstd_corrupt_block"
+//   - zstd.ErrCRCMismatch -> "zstd_checksum"
+//   - zstd.ErrDecoderSizeExceeded / ErrWindowSizeExceeded / ErrFrameSizeExceeded
+//     / ErrFrameSizeMismatch -> "zstd_resource_limit"
+//   - zstd.ErrUnknownDictionary -> "zstd_dictionary"
+//
+// Rust's `zstd_unsupported_frame` has **no Go counterpart**: this decoder has
+// no "unsupported frame" error, so it is never emitted. A stream that simply
+// ends early surfaces `io.ErrUnexpectedEOF` from the decoder and falls through
+// to "stream_error" (Rust's own fallback arm), matching Rust's message table
+// which also has no entry for an unexpected end of stream.
+func rolloutReadZstdReason(err error) string {
+	switch {
+	case errors.Is(err, zstd.ErrMagicMismatch),
+		errors.Is(err, zstd.ErrWindowSizeTooSmall),
+		errors.Is(err, zstd.ErrReservedBlockType):
+		return rolloutReadReasonZstdInvalidFrame
+	case errors.Is(err, zstd.ErrBlockTooSmall),
+		errors.Is(err, zstd.ErrUnexpectedBlockSize),
+		errors.Is(err, zstd.ErrCompressedSizeTooBig):
+		return rolloutReadReasonZstdCorruptBlock
+	case errors.Is(err, zstd.ErrCRCMismatch):
+		return rolloutReadReasonZstdChecksum
+	case errors.Is(err, zstd.ErrDecoderSizeExceeded),
+		errors.Is(err, zstd.ErrWindowSizeExceeded),
+		errors.Is(err, zstd.ErrFrameSizeExceeded),
+		errors.Is(err, zstd.ErrFrameSizeMismatch):
+		return rolloutReadReasonZstdResourceLimit
+	case errors.Is(err, zstd.ErrUnknownDictionary):
+		return rolloutReadReasonZstdDictionary
+	default:
+		return ""
 	}
 }
 
