@@ -509,3 +509,156 @@ func TestRenderExtensionAvailableSkillsPreservesEntriesBeforeOmittingLikeRust(t 
 		t.Fatalf("extension catalog still renders full SKILL.md locators: %#v", available.SkillLines)
 	}
 }
+
+// Rust #49127 (ext/skills/src/render_dedup.rs PreparedSkillCatalog::prefer_cloud_skills;
+// ext/skills/tests/skills_extension/presentation_dedup_tests.rs
+// cloud_preference_preserves_aliases_reads_and_executor_fallback): a
+// model-visible cloud skill wins over an executor listing that shares its
+// `plugin:skill` name, so the duplicate stops consuming metadata budget, while
+// unique executor skills and the executor catalog with cloud disabled stay.
+func TestRenderCombinedAvailableSkillsPreferCloudSkillsLikeRust(t *testing.T) {
+	cloud := []InstructionsSkillMetadata{
+		{Name: "demo:s0", Description: "Cloud skill instructions.", Path: "skill://cloud/s0/SKILL.md", LocatorKind: "orchestrator package", AuthorityKind: "orchestrator", PackageID: "skill://cloud/s0", ResourceID: "skill://cloud/s0/SKILL.md"},
+	}
+	executor := []InstructionsSkillMetadata{
+		{Name: "demo:s0", Description: "Executor duplicate.", Path: "skill://executor/demo/s0/SKILL.md", LocatorKind: "executor package", AuthorityKind: "executor", PackageID: "skill://executor/demo"},
+		{Name: "other:s0", Description: "Executor unique.", Path: "skill://executor/other/s0/SKILL.md", LocatorKind: "executor package", AuthorityKind: "executor", PackageID: "skill://executor/other"},
+	}
+	host := []InstructionsSkillMetadata{
+		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
+	}
+	options := AvailableSkillsRenderOptions{Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 4000}}
+	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
+	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, options)
+	if executorAvailable == nil {
+		t.Fatalf("combined executor render = nil")
+	}
+	body := executorAvailable.Body
+	if got := strings.Count(body, "- demo:s0:"); got != 1 {
+		t.Fatalf("occurrences of `- demo:s0:` = %d, want 1 (cloud listing preferred):\n%s", got, body)
+	}
+	if !strings.Contains(body, "(orchestrator package: skill://cloud/s0)") {
+		t.Fatalf("retained demo:s0 is not the cloud listing:\n%s", body)
+	}
+	if strings.Contains(body, "(executor package: skill://executor/demo)") {
+		t.Fatalf("shadowed executor listing still rendered:\n%s", body)
+	}
+	if !strings.Contains(body, "- other:s0:") {
+		t.Fatalf("unique executor listing was dropped:\n%s", body)
+	}
+	// Cloud skills disabled (no cloud entries) keep every executor listing.
+	_, executorOnly := RenderCombinedAvailableSkills(host, executor, options)
+	if executorOnly == nil || strings.Count(executorOnly.Body, "- demo:s0:") != 1 || !strings.Contains(executorOnly.Body, "(executor package: skill://executor/demo)") {
+		t.Fatalf("executor fallback render = %#v", executorOnly)
+	}
+}
+
+// Rust #49127 (ext/skills/src/render_dedup.rs; core/tests/suite/scenarios_skill_catalog_dedup.rs
+// cloud_preference_preserves_executor_aliases_and_description_budget): the
+// executor alias plan is built from the full visible executor inventory before
+// cloud deduplication, so filtering a duplicate package does not renumber the
+// aliases of the packages that remain.
+func TestRenderCombinedAvailableSkillsPreservesExecutorAliasesAfterCloudDedupLikeRust(t *testing.T) {
+	rootDemo := "skill://executor-a/" + strings.Repeat("a", 180)
+	rootOther := "skill://executor-b/" + strings.Repeat("b", 180)
+	description := strings.Repeat("Skill guidance. ", 60) + "UNIQUE_DESCRIPTION_END"
+	var executor []InstructionsSkillMetadata
+	for _, entry := range []struct{ plugin, root string }{{"demo", rootDemo}, {"other", rootOther}} {
+		for index := 0; index < 3; index++ {
+			pkg := fmt.Sprintf("%s/s%d", entry.root, index)
+			executor = append(executor, InstructionsSkillMetadata{
+				Name:          fmt.Sprintf("%s:s%d", entry.plugin, index),
+				Description:   description,
+				Path:          pkg,
+				LocatorKind:   "executor package",
+				AuthorityKind: "executor",
+				PackageID:     pkg,
+				Root:          entry.root,
+			})
+		}
+	}
+	var cloud []InstructionsSkillMetadata
+	for index := 0; index < 3; index++ {
+		pkg := fmt.Sprintf("skill://cloud/s%d", index)
+		cloud = append(cloud, InstructionsSkillMetadata{
+			Name:          fmt.Sprintf("demo:s%d", index),
+			Description:   "Cloud skill instructions.",
+			Path:          pkg + "/SKILL.md",
+			LocatorKind:   "orchestrator package",
+			AuthorityKind: "orchestrator",
+			PackageID:     pkg,
+		})
+	}
+	host := []InstructionsSkillMetadata{
+		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
+	}
+	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
+	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, AvailableSkillsRenderOptions{
+		Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 700},
+	})
+	if executorAvailable == nil {
+		t.Fatalf("combined executor render = nil")
+	}
+	body := executorAvailable.Body
+	if got := strings.Count(body, "- demo:s"); got != 3 {
+		t.Fatalf("occurrences of `- demo:s` = %d, want 3 cloud listings:\n%s", got, body)
+	}
+	if strings.Contains(body, "(executor package: e0/") {
+		t.Fatalf("deduplicated executor package still holds the e0 alias:\n%s", body)
+	}
+	if !strings.Contains(body, "(executor package: e1/s0)") {
+		t.Fatalf("remaining executor package lost its stable e1 alias:\n%s", body)
+	}
+}
+
+// Rust #49127 (core/tests/suite/scenarios_skill_catalog_dedup.rs
+// cloud_preference_preserves_executor_aliases_and_description_budget): the
+// duplicate executor listings used to consume the metadata budget, truncating
+// the descriptions of the unique executor skills. After cloud deduplication the
+// unique executor skills keep their full descriptions.
+func TestRenderCombinedAvailableSkillsKeepsUniqueDescriptionsAfterCloudDedupLikeRust(t *testing.T) {
+	description := strings.Repeat("Skill guidance. ", 60) + "UNIQUE_DESCRIPTION_END"
+	var cloud []InstructionsSkillMetadata
+	for index := 0; index < 3; index++ {
+		pkg := fmt.Sprintf("skill://cloud/s%d", index)
+		cloud = append(cloud, InstructionsSkillMetadata{
+			Name:          fmt.Sprintf("demo:s%d", index),
+			Description:   "Cloud skill instructions.",
+			Path:          pkg + "/SKILL.md",
+			LocatorKind:   "orchestrator package",
+			AuthorityKind: "orchestrator",
+			PackageID:     pkg,
+		})
+	}
+	var executor []InstructionsSkillMetadata
+	for _, plugin := range []string{"demo", "other"} {
+		for index := 0; index < 3; index++ {
+			pkg := fmt.Sprintf("skill://executor/%s/s%d", plugin, index)
+			executor = append(executor, InstructionsSkillMetadata{
+				Name:          fmt.Sprintf("%s:s%d", plugin, index),
+				Description:   description,
+				Path:          pkg,
+				LocatorKind:   "executor package",
+				AuthorityKind: "executor",
+				PackageID:     pkg,
+			})
+		}
+	}
+	host := []InstructionsSkillMetadata{
+		{Name: "host-one", Scope: "repo", Description: "Host skill", Path: "/tmp/skills/host-one/SKILL.md", Root: "/tmp/skills"},
+	}
+	merged := append(append([]InstructionsSkillMetadata(nil), cloud...), executor...)
+	_, executorAvailable := RenderCombinedAvailableSkills(host, merged, AvailableSkillsRenderOptions{
+		Budget: SkillMetadataBudget{Kind: SkillMetadataBudgetCharacters, Limit: 3500},
+	})
+	if executorAvailable == nil {
+		t.Fatalf("combined executor render = nil")
+	}
+	body := executorAvailable.Body
+	if got := strings.Count(body, "- demo:s"); got != 3 {
+		t.Fatalf("occurrences of `- demo:s` = %d, want 3 cloud listings only:\n%s", got, body)
+	}
+	if got := strings.Count(body, "UNIQUE_DESCRIPTION_END"); got != 3 {
+		t.Fatalf("unique executor descriptions retained = %d, want 3 after dedup:\n%s", got, body)
+	}
+}

@@ -211,6 +211,13 @@ func RenderExtensionAvailableSkillsWithOptions(skills []InstructionsSkillMetadat
 // extension surface, while host entries can still use path aliases under pressure.
 func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, executorSkills []InstructionsSkillMetadata, options AvailableSkillsRenderOptions) (*AvailableSkills, *AvailableSkills) {
 	hostLines := orderedSkillRenderLines(hostSkills)
+	// Rust #49127 (ext/skills/src/render_dedup.rs): the executor alias plan is
+	// built from the full visible executor inventory before duplicates are
+	// removed, so deduplication never renumbers the aliases of the packages
+	// that remain (PreparedSkillCatalog::new builds alias_plan first, and
+	// prefer_cloud_skills filters entries afterwards).
+	fullExecutorLines := extensionSkillRenderLines(executorSkills)
+	executorSkills = deduplicateCloudAndExecutorSkillsLikeRust(executorSkills)
 	executorLines := extensionSkillRenderLines(executorSkills)
 	budget := normalizedSkillMetadataBudget(options.Budget)
 	if len(hostLines) == 0 || len(executorLines) == 0 {
@@ -231,7 +238,7 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 	}
 	// Rust ce22ea9712: executor locators are compacted with provider-specific
 	// `e` aliases alongside host `r` aliases under metadata pressure.
-	if plan, ok := buildExtensionAliasPlan(executorLines, budget); ok && plan.tableCost < budget.Limit {
+	if plan, ok := buildExtensionAliasPlan(fullExecutorLines, budget); ok && plan.tableCost < budget.Limit {
 		adjustedBudget := budget
 		adjustedBudget.Limit -= plan.tableCost
 		aliased := renderCombinedSkillLines(applySkillAliases(hostLines, nil), applySkillAliases(executorLines, plan), adjustedBudget, nil)
@@ -254,6 +261,86 @@ func RenderCombinedAvailableSkills(hostSkills []InstructionsSkillMetadata, execu
 			Report:         selected.executorReport,
 			WarningMessage: executorWarning,
 		}
+}
+
+// deduplicateCloudAndExecutorSkillsLikeRust implements Rust #49127
+// (ext/skills/src/render_dedup.rs, PreparedSkillCatalog::prefer_cloud_skills):
+// a model-visible cloud skill wins over an executor listing that shares the
+// same `plugin:skill` name, and the executor duplicate is dropped before the
+// metadata budget is allocated so it stops consuming catalog space. Executor
+// packages stay reachable through `skills.list`/`skills.read`, and every
+// executor listing is retained when the cloud catalog is disabled (no cloud
+// entries).
+//
+// Go renders the host-supplied cloud catalog inside the same executor list the
+// callers hand to RenderCombinedAvailableSkills (the catalog still carries the
+// retired Rust "orchestrator" labels, Rust f3037cafd3/#47074), so the cloud and
+// executor halves are separated by locator kind here.
+func deduplicateCloudAndExecutorSkillsLikeRust(skills []InstructionsSkillMetadata) []InstructionsSkillMetadata {
+	cloudNames := cloudSkillNamesLikeRust(skills)
+	if len(cloudNames) == 0 {
+		return skills
+	}
+	out := make([]InstructionsSkillMetadata, 0, len(skills))
+	for _, skill := range skills {
+		if isExecutorSkillMetadata(skill) {
+			if _, shadowed := cloudNames[skill.Name]; shadowed {
+				continue
+			}
+		}
+		out = append(out, skill)
+	}
+	return out
+}
+
+// cloudSkillNamesLikeRust collects the names the cloud catalog contributes to
+// the dedup, mirroring Rust render_dedup.rs: only model-visible cloud entries
+// whose name is scoped `plugin:skill` (split at the first ':' into two
+// non-empty parts) count as duplicates.
+func cloudSkillNamesLikeRust(skills []InstructionsSkillMetadata) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, skill := range skills {
+		if !isCloudSkillMetadata(skill) || !skill.AllowsImplicitInvocation() {
+			continue
+		}
+		if !isPluginScopedSkillName(skill.Name) {
+			continue
+		}
+		names[skill.Name] = struct{}{}
+	}
+	return names
+}
+
+// isPluginScopedSkillName mirrors Rust render_dedup.rs: a name is plugin-scoped
+// when `split_once(':')` yields two non-empty parts.
+func isPluginScopedSkillName(name string) bool {
+	plugin, skill, ok := strings.Cut(name, ":")
+	return ok && plugin != "" && skill != ""
+}
+
+// isCloudSkillMetadata reports whether skill belongs to the host-supplied cloud
+// catalog. Go still carries the retired Rust "orchestrator" labels for that
+// provider (Rust #47074 replaced the built-in orchestrator provider with the
+// cloud provider), so both spellings are accepted.
+func isCloudSkillMetadata(skill InstructionsSkillMetadata) bool {
+	switch strings.ToLower(strings.TrimSpace(skill.LocatorKind)) {
+	case "orchestrator package", "cloud package":
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(skill.AuthorityKind)) {
+	case "orchestrator", "cloud":
+		return true
+	}
+	return false
+}
+
+// isExecutorSkillMetadata reports whether skill is an executor package listing,
+// the catalog Rust deduplicates against the cloud catalog.
+func isExecutorSkillMetadata(skill InstructionsSkillMetadata) bool {
+	if strings.EqualFold(strings.TrimSpace(skill.LocatorKind), "executor package") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(skill.AuthorityKind), "executor")
 }
 
 func extensionSkillRenderLines(skills []InstructionsSkillMetadata) []skillRenderLine {
