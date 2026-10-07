@@ -1741,6 +1741,17 @@ func (r *RuntimeRouter) unregisterRequestSpan(request *Request) {
 	delete(r.requestSpans, requestSpanKey{connectionID: request.normalizedConnectionID(), requestID: request.ID.String()})
 }
 
+// openRequestSpan returns the request's in-flight span, or nil when the request
+// carries none (tracing off, or a caller that bypassed Handle).
+func (r *RuntimeRouter) openRequestSpan(request *Request) *telemetry.Span {
+	if r == nil || request == nil {
+		return nil
+	}
+	r.requestSpansMu.Lock()
+	defer r.requestSpansMu.Unlock()
+	return r.requestSpans[requestSpanKey{connectionID: request.normalizedConnectionID(), requestID: request.ID.String()}]
+}
+
 // requestSpanTrace reports the W3C trace context of the request's span
 // (Rust's RequestContext::request_trace), or nil when the request was not
 // traced.
@@ -10552,7 +10563,42 @@ func (r *RuntimeRouter) handleMCPServerStatusList(request *Request) (*mcp.MCPLis
 			return nil, err
 		}
 	}
+	// Rust #51215 (codex-mcp connection_manager/catalog_telemetry.rs) records the
+	// per-server catalog event on the ambient span of the RPC, which the
+	// app-server opens per request; the Go catalog path is context-free and
+	// resolves trace-safe records from the thread's innermost live span
+	// (telemetry.LiveThreadSpan), so the listing opens a thread-stamped child of
+	// the request span for the duration of the call.
+	defer r.mcpCatalogTelemetrySpan(request, stringPtrValue(params.ThreadID))()
 	return r.mcpServiceForThread(stringPtrValue(params.ThreadID), nil).ListStatusChecked(&params)
+}
+
+// mcpCatalogTelemetrySpan opens the thread-stamped span that a thread-scoped MCP
+// catalog listing emits its `mcp.binding_catalog` events on: the request's own
+// span carries no thread id, so the catalog telemetry would find no live span
+// and drop the events. It returns the span's end function, which is always safe
+// to call; tracing off or a listing without a thread id yields a no-op.
+func (r *RuntimeRouter) mcpCatalogTelemetrySpan(request *Request, threadID string) func() {
+	if r == nil {
+		return func() {}
+	}
+	threadID = strings.TrimSpace(threadID)
+	tracer := r.requestTracer()
+	if tracer == nil || threadID == "" {
+		return func() {}
+	}
+	method := ""
+	if request != nil {
+		method = string(request.Method)
+	}
+	span := tracer.StartSpanWithParent(r.openRequestSpan(request), method, map[string]string{
+		telemetry.ThreadIDAttribute: threadID,
+		"rpc.method":                method,
+	})
+	if span == nil {
+		return func() {}
+	}
+	return span.End
 }
 
 func (r *RuntimeRouter) handleMCPServerResourceRead(request *Request) (*mcp.MCPResourceReadResponse, error) {
