@@ -151,3 +151,18 @@
   - 差异（详见计划第四十轮）：Rust 的 async trait → Go 同步接口；serde 未移植（无消费者，只移植脱敏 Debug）；无 Guardian 集成套件对应物（用两层等价断言覆盖）；默认 store 与上游一致（内联），差别在接口契约与 `exec --ephemeral`／ephemeral 线程两条真实路径的接通。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet` 仅既有锁拷贝告警（行号下移）；`./attachmentstore/ ./eventmap/ ./turn/ ./exec/` 全通过；`./model/` 仅 2 项既有基线失败；`./appserver/` 仅 3 项既有基线失败。
 - 剩余 4 项：**#51480 余下 → #51482 → TUI(#51510 → #51500)**（3 路并行下属 Agent 承担）。
+
+## 追加（当日第十二批：sync403–sync406，三路并行车道合并）
+
+三个并行下属 Agent 的分支由队长按序合并并统一重编号（`780310d2` → `7d8386c9` → `311bf4cf` → `35b2c89b`），唯一冲突在 `model/responses_agent.go`（已按并存语义解决）。
+
+| 编号 | 上游 | 主题 | 落地 |
+|---|---|---|---|
+| `sync403` | #51482 | 技能身份/路径匹配改用 PathUri | `utils.PathIdentityKey`/`InferredPathURI`（逐字对照 Rust `PathUri` 的 `Hash`/`PartialEq`）、`prompt/instructions.go` 提及身份键、`appserver/{executor_skill_provider,skills}.go` 身份比较；8 文件 / +457 −26 |
+| `sync404` | #51510 | 配置重载失败保留实时 TUI 设置 | `tui/tea/local_settings.go`（`SettingsReloadOutcome`/`ShouldStageReloadedLocalSettings`/`ReloadedLocalSettings`）+ `applySettingsWriteResult` 守卫；3 文件 / +235 |
+| `sync405` | #51500 | Agent 命令中心共享任务置顶 | `tui/agents_overview/pin.go` + `overview.go` 置顶分组/排序/过滤、`agents.toggle_pin` 默认 `p`、tea 两个回调；11 文件 / +847 −23 |
+| `sync406` | #51480 余下 | 工具声明跨窗口保留 | `model/tool_declarations.go`（三态决策 + 窗口冻结/复用/迁移）、`appserver/turn_runtime.go` 把冻结声明落 `Record.Metadata.Extra` 并前插、WS 路径对齐 HTTP；6 文件 |
+
+- 关键判定（sync406）：对 lite 模型上游始终用 `additional_tools` 声明工具（`tools` 字段仅非 lite），故 Go legacy = 每请求重建前缀，未引入 `tools` 字段形态。
+- 验证（合并后整体）：`go build ./...` 通过；改动文件 `gofmt -l` 空；`./appserver/ ./tui/... ./prompt/ ./utils/ ./exec/ ./mcp/ ./plugin/ ./model/ ./session/ ./rollout/ ./turn/` 的失败集合 = 既有基线（appserver 4、tui 1、tui/tea 1、model 2、mcp 1），**新增基线项 `TestOtelProviderReloadsAfterAccountChange`**（基线 worktree `15ae7564` 复现确认）。
+- 剩余项：①#51482 TUI 部分（tui 技能提及身份匹配）②#51500 app 层接线 ③#51510 app 层重载入口接线 ④静态 parity 层重钉（`appserver/schema/precomputed/*.zst`）⑤incremental tools 本体（窗口内工具 delta / base-instructions diff）。①②③已派 TUI 车道（分支 `synctui2`）。
