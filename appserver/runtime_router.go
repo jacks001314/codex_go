@@ -13562,6 +13562,10 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// Rust #48135: the instant-interrupt feature is what opts a sampling
 		// request into watching queued user input for code-mode yielding.
 		InstantInterrupt: turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "instant_interrupt"),
+		// Rust #49262/#51249: the defer-mailbox-preemption feature is what keeps a
+		// sampling response's remaining tool calls when inter-agent mail is queued
+		// at a commentary or partial-answer boundary.
+		DeferMailboxPreemption: turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "defer_mailbox_preemption"),
 	}), nil
 }
 

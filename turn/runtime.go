@@ -112,6 +112,14 @@ func (r *Runtime) StandaloneWebSearchRegistered() bool {
 	return ok
 }
 
+// DeferMailboxPreemptionEnabled reports whether the assembled runtime defers
+// mailbox preemption (Rust `features.defer_mailbox_preemption`, #49262/#51249).
+// The app-server assembly path asserts its feature gate with it, mirroring
+// StandaloneWebSearchRegistered above.
+func (r *Runtime) DeferMailboxPreemptionEnabled() bool {
+	return r != nil && r.deferMailboxPreemption
+}
+
 // PrepareToolMode resolves code-mode availability and consumes the per-thread
 // warning before a turn starts. Run calls it as a fallback for non-app-server
 // callers that do not preflight the turn.

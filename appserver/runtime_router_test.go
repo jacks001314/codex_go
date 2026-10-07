@@ -28553,3 +28553,56 @@ func TestTurnAnalyticsUsageLimitWindowMatchesRust(t *testing.T) {
 		})
 	}
 }
+
+// TestRuntimeRouterAssemblesDeferMailboxPreemptionFromFeatureSettingsLikeRust
+// pins the app-server assembly half of Rust #49262 (`Preempt for mailbox mail`)
+// and #51249 (`defer_mailbox_preemption`): Rust reads
+// `Session::features().enabled(Feature::DeferMailboxPreemption)` inside the
+// sampling loop, so the app-server turn path must thread
+// `features.defer_mailbox_preemption` into `turn.RuntimeOptions`, exactly as
+// `exec/exec.go` already does for the CLI path.
+//
+// The behavioural half (a queued mail response keeps its tool calls when the
+// feature is on) lives in turn's
+// TestAgentLoopDefersMailboxPreemptionWhenEnabledLikeRust; this test covers the
+// wiring that was missing, i.e. the flag actually reaching the assembled
+// runtime from a turn/start config override.
+func TestRuntimeRouterAssemblesDeferMailboxPreemptionFromFeatureSettingsLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		config map[string]any
+		want   bool
+	}{
+		{name: "feature enabled", config: map[string]any{"features.defer_mailbox_preemption": true}, want: true},
+		{name: "feature explicitly disabled", config: map[string]any{"features.defer_mailbox_preemption": false}, want: false},
+		{name: "under-development default is off", config: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := session.NewStore(t.TempDir())
+			router := NewRuntimeRouter(RuntimeServices{
+				ThreadRouter: NewRouter(store),
+				ThreadExtras: NewThreadExtraService(),
+				Turns:        turn.NewTurnService(),
+				Agent:        newRecordingRuntimeAgent("Done"),
+				ThreadStatus: NewThreadStatusManager(),
+			})
+			threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{Model: "gpt-5.3-codex"}))
+			if threadStart.Error != nil {
+				t.Fatalf("thread start error: %+v", threadStart.Error)
+			}
+			threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
+			assembled, err := router.buildTurnRuntimeContext(context.Background(), &turn.TurnStartParams{
+				ThreadID: threadID,
+				CWD:      t.TempDir(),
+				Config:   tc.config,
+			}, "turn-defer-mailbox")
+			if err != nil {
+				t.Fatalf("buildTurnRuntimeContext error = %v", err)
+			}
+			if got := assembled.DeferMailboxPreemptionEnabled(); got != tc.want {
+				t.Fatalf("DeferMailboxPreemptionEnabled() = %t, want %t (config=%v)", got, tc.want, tc.config)
+			}
+		})
+	}
+}
