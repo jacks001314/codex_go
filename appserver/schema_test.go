@@ -142,14 +142,13 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// export carries.
 		// Re-vendored from upstream de9e78e3e7 (#48151): `thread/items/list`'s
 		// cursor accepts an exclusive item anchor.
-		// Re-vendored from upstream head 18e28fe1b9: the vendored app-server
-		// protocol export pair now mirrors the Rust tree at the current pin.
-		// The stable export last changed at 28cd3e2501 (#51492, persisted turn
-		// context fields) and the experimental export at c9870d0157 (#51482,
-		// PathUri skill identity), which are the newest writers to the two
-		// precomputed artifacts between the 5f3180c793 pin and 18e28fe1b9.
-		{"stable", stablePrecomputedExports, "ed720775cdc264c7c5a930d582c56a27f5f8b18408187f783f93b9713ed40d48"},
-		{"experimental", experimentalPrecomputedExports, "41d34da4227eadccf971272b9a02dfc6679e23a9992cce1d265ac01a20ab38e3"},
+		// Re-vendored from upstream head a6baf8867c (#51611): the vendored
+		// app-server protocol export pair now mirrors the Rust tree at the
+		// current pin. The experimental export last changed at 1fbe15c962
+		// (#51595, thread/list excluded thread ids) and the stable export at
+		// a6baf8867c (#51611, EventMsg::ElicitationAbandoned).
+		{"stable", stablePrecomputedExports, "c3cd796c1b4f33251e51a58d9c21e47ab082ffa372f486383131259d632fc90c"},
+		{"experimental", experimentalPrecomputedExports, "29598811d930f6b0903e94ba1313bafeedaaca79d828445266e9e3b65f354f5d"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

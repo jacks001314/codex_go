@@ -40,11 +40,11 @@ func TestRustCriticalFileHashesSnapshot(t *testing.T) {
 // TestPrecomputedAppServerExportsMatchRustTarget byte-compares the vendored
 // app-server protocol exports against the Rust tree.
 //
-// Re-pinned to upstream head 18e28fe1b9 (#51556): the two `.zst` artifacts in
+// Re-pinned to upstream head a6baf8867c (#51611): the two `.zst` artifacts in
 // appserver/schema/precomputed/ now come from the Rust tree at the current
-// head instead of the 5f3180c793 (2026-09-26) pin. The stable artifact was
-// last regenerated at 28cd3e2501 (#51492) and the experimental artifact at
-// c9870d0157 (#51482).
+// head instead of the 18e28fe1b9 (#51556) pin. The experimental artifact was
+// last regenerated at 1fbe15c962 (#51595) and the stable artifact at
+// a6baf8867c (#51611, EventMsg::ElicitationAbandoned).
 func TestPrecomputedAppServerExportsMatchRustTarget(t *testing.T) {
 	rustRoot := rustSnapshotRoot(t)
 	for _, name := range []string{
