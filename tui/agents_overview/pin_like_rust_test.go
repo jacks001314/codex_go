@@ -91,9 +91,11 @@ func TestPinnedTasksKeepSharedSectionOrderLikeRust(t *testing.T) {
 	}
 }
 
-// TestPinnedTasksRespectSearchAndStatusFiltersLikeRust covers Rust #51500's
-// requirement that search and status filters still apply to pinned tasks.
-func TestPinnedTasksRespectSearchAndStatusFiltersLikeRust(t *testing.T) {
+// TestPinnedTasksRespectSearchFiltersLikeRust covers Rust #51500's requirement
+// that the visible_indices filters still apply to pinned tasks. Rust filters by
+// search and by the selected status group (TASK_FILTERS); the Go dashboard has
+// no status filter, so this covers the search and hide filters it does have.
+func TestPinnedTasksRespectSearchFiltersLikeRust(t *testing.T) {
 	view := New(pinRows(), "", false)
 	view.SetPinnedThreads([]string{"task-c", "task-a"})
 	view.State.Search = "beta"

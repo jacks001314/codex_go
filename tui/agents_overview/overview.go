@@ -542,8 +542,11 @@ func (v *View) VisibleIndices() []int {
 		if search != "" && !strings.Contains(searchable, search) {
 			continue
 		}
-		// Rust #51500: pinned tasks render first in their own group; the search
-		// and status filters still apply to them.
+		// Rust #51500: pinned tasks render first in their own group and the
+		// dashboard's filters still apply to them. Rust also applies its status
+		// filter (TASK_FILTERS) here; the Go dashboard has no status filter
+		// (`grep -rn "TASK_FILTERS|status_filter" tui/` is empty), so the Go
+		// counterpart of that half is the search and hide filters above.
 		if v.IsPinned(v.Rows[i].ThreadID) {
 			pinned = append(pinned, i)
 			continue

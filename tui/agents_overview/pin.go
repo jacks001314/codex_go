@@ -5,7 +5,9 @@ import "strings"
 // Shared task pinning for the agent command center (Rust #51500, "Add shared
 // task pinning to the agent command center"). Pinned tasks render first in
 // their own "Pinned" group, keep the shared section order, and stay subject to
-// the dashboard's search and status filters. The host owns the shared thread
+// the dashboard's filters — Rust's search and status filters, of which the Go
+// dashboard implements search and hide (the status filter, TASK_FILTERS, has no
+// Go counterpart). The host owns the shared thread
 // section (Go: appserver/session's PinnedThreadSectionID, reached through
 // thread/list + thread/section/move); the core view only owns the pin order and
 // the shortcut semantics.

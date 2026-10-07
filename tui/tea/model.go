@@ -958,8 +958,21 @@ type Options struct {
 	OnAgentsOverviewRename      AgentsOverviewRenameFunc
 	OnAgentsOverviewArchive     AgentsOverviewArchiveFunc
 	OnAgentsOverviewDelete      AgentsOverviewDeleteFunc
-	OnStartAgentsDaemon         AgentsDaemonStartFunc
-	OnClipboardWrite            func(text string) error
+	// OnAgentsOverviewPinnedThreads lists the shared pinned-section tasks and
+	// reports whether the server supports shared thread sections (Rust #51500).
+	// Nil disables pinning in the dashboard, as does supported=false.
+	OnAgentsOverviewPinnedThreads AgentsOverviewPinnedThreadsFunc
+	// OnAgentsOverviewTogglePin pins or unpins one task in the shared section
+	// (Rust #51500 thread/section/move).
+	OnAgentsOverviewTogglePin AgentsOverviewTogglePinFunc
+	// OnAgentsOverviewPinRequest is the app-server transport for shared task
+	// pinning (Rust #51500): "thread/list" for the pinned section and
+	// "thread/section/move" to pin or unpin a task. When set, the TUI derives
+	// OnAgentsOverviewPinnedThreads and OnAgentsOverviewTogglePin from it, so the
+	// host only adapts its client.
+	OnAgentsOverviewPinRequest AgentsOverviewPinRequestFunc
+	OnStartAgentsDaemon        AgentsDaemonStartFunc
+	OnClipboardWrite           func(text string) error
 	// OnExportTranscript renders the active conversation as Markdown for
 	// /export (Rust transcript_export.rs). A nil hook leaves /export
 	// unavailable for this runtime.
@@ -1594,20 +1607,22 @@ type Model struct {
 	// permissionProfilesExplicit records the server's explicit-profile mode from
 	// the last discovery, and permissionProfilesDiscovered whether one has run
 	// (Rust #43340 PermissionDiscovery).
-	permissionProfilesExplicit   bool
-	permissionProfilesDiscovered bool
-	permissionProfilesErr        string
-	pendingServerProfile         string
-	agentsOverviewEmbedded       bool
-	onAgentsOverviewRefresh      AgentsOverviewRefreshFunc
-	onAgentsOverviewUsage        AgentsOverviewUsageReaderFunc
-	onAgentsOverviewNewSession   AgentsOverviewNewSessionFunc
-	onAgentsOverviewNewWorktree  AgentsOverviewNewWorktreeFunc
-	onAgentsOverviewStop         AgentsOverviewStopFunc
-	onAgentsOverviewRename       AgentsOverviewRenameFunc
-	onAgentsOverviewArchive      AgentsOverviewArchiveFunc
-	onAgentsOverviewDelete       AgentsOverviewDeleteFunc
-	agentsOverviewLifecycle      *agentsOverviewLifecycleRequest
+	permissionProfilesExplicit    bool
+	permissionProfilesDiscovered  bool
+	permissionProfilesErr         string
+	pendingServerProfile          string
+	agentsOverviewEmbedded        bool
+	onAgentsOverviewRefresh       AgentsOverviewRefreshFunc
+	onAgentsOverviewUsage         AgentsOverviewUsageReaderFunc
+	onAgentsOverviewNewSession    AgentsOverviewNewSessionFunc
+	onAgentsOverviewNewWorktree   AgentsOverviewNewWorktreeFunc
+	onAgentsOverviewStop          AgentsOverviewStopFunc
+	onAgentsOverviewRename        AgentsOverviewRenameFunc
+	onAgentsOverviewArchive       AgentsOverviewArchiveFunc
+	onAgentsOverviewDelete        AgentsOverviewDeleteFunc
+	onAgentsOverviewPinnedThreads AgentsOverviewPinnedThreadsFunc
+	onAgentsOverviewTogglePin     AgentsOverviewTogglePinFunc
+	agentsOverviewLifecycle       *agentsOverviewLifecycleRequest
 	// agentsOverviewBlankSessions retains the live snapshot of a session started
 	// from the command center until its first turn materializes a rollout
 	// (Rust #45255 agents_overview.blank_sessions).
@@ -1921,6 +1936,19 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if state == nil {
 		state = codextui.NewState(nil)
 	}
+	// Rust #51500: the pinned-section discovery and the pin/unpin request are the
+	// TUI's own flow, driven by one injected app-server request function. Hosts
+	// that implement either callback directly keep it.
+	pinnedThreads := options.OnAgentsOverviewPinnedThreads
+	togglePin := options.OnAgentsOverviewTogglePin
+	if options.OnAgentsOverviewPinRequest != nil {
+		if pinnedThreads == nil {
+			pinnedThreads = PinnedThreadsReader(options.OnAgentsOverviewPinRequest)
+		}
+		if togglePin == nil {
+			togglePin = PinToggler(options.OnAgentsOverviewPinRequest)
+		}
+	}
 	composer := textarea.New()
 	composer.Prompt = "> "
 	composer.Placeholder = firstNonEmpty(options.Placeholder, "Ask gcode")
@@ -2018,6 +2046,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onAgentsOverviewRename:          options.OnAgentsOverviewRename,
 		onAgentsOverviewArchive:         options.OnAgentsOverviewArchive,
 		onAgentsOverviewDelete:          options.OnAgentsOverviewDelete,
+		onAgentsOverviewPinnedThreads:   pinnedThreads,
+		onAgentsOverviewTogglePin:       togglePin,
 		onStartAgentsDaemon:             options.OnStartAgentsDaemon,
 		agentsOverviewDrafts:            map[string]string{},
 		onExternalEditor:                options.OnExternalEditor,
@@ -2661,6 +2691,8 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return m, m.applyAgentsOverviewNewSession(msg)
 	case agentsOverviewNewWorktreeMsg:
 		return m, m.applyAgentsOverviewNewWorktree(msg)
+	case agentsOverviewPinMsg:
+		return m, m.applyAgentsOverviewPin(msg)
 	case agentsOverviewStopMsg:
 		if msg.err != nil {
 			m.agentsOverviewNotice = "Failed to stop background task: " + strings.TrimSpace(msg.err.Error())
