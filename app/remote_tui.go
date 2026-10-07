@@ -4785,6 +4785,10 @@ func remoteConfigValues(root *cli.RootOptions, shared cli.SharedOptions) (map[st
 	// overrides are already above; a selected profile is the second launch
 	// origin, so its reasoning-summary choices travel with the request too.
 	config.ApplyOverrides(values, launchReasoningOverrides(root))
+	// Rust #49799: only a winning launch search choice may replace the
+	// destination server's default or a saved thread's search setting; a losing
+	// legacy `[features] web_search*` flag is dropped from the request.
+	applyWebSearchLaunchOverride(root, webSearchParamsRemote, values)
 	if len(values) == 0 {
 		return nil, nil
 	}

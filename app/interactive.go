@@ -3773,6 +3773,10 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 	// `-c` overrides) are forwarded. exec re-resolves config per turn, so the
 	// launch overrides are applied to every interactive turn.
 	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveLaunchReasoningOverrides(root)...)
+	// Rust #49799: the same launch-origin gate decides the embedded thread's
+	// search override, so an implicit client setting cannot replace the embedded
+	// runner's default (`--search` and a launch-origin legacy flag are forwarded).
+	turnRoot.ConfigOverrides = append(append([]string(nil), turnRoot.ConfigOverrides...), interactiveLaunchWebSearchOverrides(root)...)
 	additionalInstructions := ""
 	var additionalInputItems []any
 	if _, ok := runner.(*codexexec.Runner); ok {
