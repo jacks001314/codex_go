@@ -71,3 +71,13 @@
   - 结构性差异（详见计划第二十九轮）：Go 的 `Manager.Start` 本身同步且失败经 error 通知回报，故不新增独立 attach op；陈旧 fanout 清理 Go 早已按连接身份判定。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./realtime/ ./appserver/ ./app/` 无输出；`go test ./realtime/... ./eventmap/... ./parity/... -count=1` 通过；`go test ./appserver/ -count=1` 仅既有基线失败（OAuth、plugin repo、file-change apply 三项 + 两项既有 flaky）。
 - 推送：`249ec903..c9d0c31c`（`git ls-remote` 确认 `origin/main = c9d0c31c`）。
+
+## 追加（当日第五批：sync396）
+
+- `sync396`（上游 #51493 "Bind capability roots to environment selections"）：能力根按环境选择绑定并保留原始顺序。
+  - 新增 `appserver/environment_capability_roots.go`：`EnvironmentCapabilityRoots`（索引 + 根的模型）、`CapabilityRootsForEnvironment`、`CollectEnvironmentCapabilityRoots`（按原始索引恢复顺序，保证 executor skill 别名 `e0/e1…` 稳定）、`restrictCapabilityRootsToSelections`。
+  - `appserver/runtime_router.go`：`selectedCapabilityRootsForThread` 把线程保留的根限制到当前选择的环境（活动 turn 优先、回落持久化选择）；`inspectSelectedCapabilityRootsForThread` 改用它，能力发现只在当前 turn 捕获的环境内生效；取消选择隐藏其根但保留，重选即恢复。
+  - 测试：`appserver/environment_capability_roots_test.go`（拆/合并顺序稳定、环境顺序无关、取消/重选、端到端 store 视图 3/1/3 根）。
+  - 结构性差异（详见计划第三十轮）：Go 无法表达"显式空选择集"（空即未设置）；`has_same_workspace` 在 Go 无落点（Go 对 FromThread 选择直接取线程配置，不做跨选择匹配）；绑定时机为读取时派生而非构造时快照，语义等价。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./appserver/` 无输出；`go test ./appserver/... ./prompt/... ./parity/... ./turn/... -count=1` 仅既有基线失败（OAuth、plugin repo、file-change apply 三项 + 一项既有 flaky）。
+- 推送：`2e4c58bb..79a13c57`。
