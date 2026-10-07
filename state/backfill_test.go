@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -264,4 +265,142 @@ func TestUpsertRolloutThreadPreservesNameOnPaginatedPromotionLikeRust(t *testing
 	if name != "Explicit" {
 		t.Fatalf("existing thread name overwritten = %q, want Explicit", name)
 	}
+}
+
+// Rust c0d26949be (#48983, `codex-rs/thread-store/src/local/timestamp_metadata_tests.rs`):
+// a rebuild that only advances the thread timestamp writes the timestamp columns
+// alone, while a metadata difference and a missing row keep the full repair path.
+func TestRolloutRebuildTimestampOnlyTouchesTimestampsLikeRust(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	runtime := newBackfillTestRuntimeAt(t, home)
+	threadID := "0199aaaa-2222-7000-8000-000000000d01"
+	now := time.Date(2026, 10, 7, 11, 0, 0, 0, time.UTC)
+	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
+		CodexHome: home, ThreadID: threadID, Source: "cli", ThreadSource: "user",
+		CWD: "/timestamp-workspace", ModelProvider: "openai", HistoryMode: "paginated",
+		MemoryMode: "enabled", CLIVersion: "9.9.9", Now: now,
+		Git: map[string]string{"sha": "cafebabe", "branch": "main", "origin_url": "https://example.invalid/timestamps"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userPayload, _ := json.Marshal(map[string]any{"type": "user_message", "message": "timestamp request"})
+	if err := recorder.AppendLine(rollout.Line{Type: "event_msg", Timestamp: now.Add(time.Second).Format(time.RFC3339Nano), Payload: userPayload}); err != nil {
+		t.Fatal(err)
+	}
+	tokenPayload, _ := json.Marshal(map[string]any{"type": "token_count", "info": map[string]any{"total_token_usage": map[string]any{"total_tokens": 7}}})
+	if err := recorder.AppendLine(rollout.Line{Type: "event_msg", Timestamp: now.Add(2 * time.Second).Format(time.RFC3339Nano), Payload: tokenPayload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := recorder.Path()
+	if err := runtime.ReconcileRollout(ctx, path, false); err != nil {
+		t.Fatalf("initial ReconcileRollout() error = %v", err)
+	}
+	before := readTimestampProbeRow(t, runtime, threadID)
+	if before.tokensUsed != 7 {
+		t.Fatalf("fixture tokens_used = %d, want 7", before.tokensUsed)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE timestamp_writes(kind TEXT)`,
+		`CREATE TRIGGER count_timestamp AFTER UPDATE OF updated_at_ms ON threads BEGIN INSERT INTO timestamp_writes VALUES ('timestamp'); END`,
+		`CREATE TRIGGER count_full_row AFTER UPDATE OF title ON threads BEGIN INSERT INTO timestamp_writes VALUES ('full'); END`,
+	} {
+		if _, err := runtime.StateDB().ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("install write counter: %v", err)
+		}
+	}
+
+	// Timestamp-only observation: only the rollout mtime moved.
+	future := now.Add(3 * time.Hour)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ReconcileRollout(ctx, path, false); err != nil {
+		t.Fatalf("timestamp-only ReconcileRollout() error = %v", err)
+	}
+	timestamps, fullRows := readTimestampProbeWrites(t, runtime)
+	if timestamps != 1 || fullRows != 0 {
+		t.Fatalf("timestamp-only rebuild writes = timestamp:%d full:%d, want timestamp:1 full:0", timestamps, fullRows)
+	}
+	after := readTimestampProbeRow(t, runtime, threadID)
+	if after != before {
+		t.Fatalf("timestamp-only rebuild changed metadata: %+v, want %+v", after, before)
+	}
+
+	// Any metadata difference keeps the full repair path.
+	metadata, err := extractRolloutThreadMetadata(path, false, "default-provider")
+	if err != nil {
+		t.Fatalf("extractRolloutThreadMetadata() error = %v", err)
+	}
+	metadata.tokensUsed = 99
+	if err := runtime.upsertRolloutThread(ctx, metadata); err != nil {
+		t.Fatalf("upsertRolloutThread() error = %v", err)
+	}
+	if _, fullRows = readTimestampProbeWrites(t, runtime); fullRows != 1 {
+		t.Fatalf("metadata rebuild full-row writes = %d, want 1", fullRows)
+	}
+	if changed := readTimestampProbeRow(t, runtime, threadID); changed.tokensUsed != 99 {
+		t.Fatalf("tokens_used after metadata change = %d, want 99", changed.tokensUsed)
+	}
+
+	// Missing rows still need the full repair path.
+	if _, err := runtime.StateDB().ExecContext(ctx, `DELETE FROM threads WHERE id = ?`, threadID); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ReconcileRollout(ctx, path, false); err != nil {
+		t.Fatalf("missing-row ReconcileRollout() error = %v", err)
+	}
+	repaired := readTimestampProbeRow(t, runtime, threadID)
+	if repaired.tokensUsed != 7 || repaired.rolloutPath != filepath.Clean(path) || repaired.gitSHA != "cafebabe" || repaired.cwd != "/timestamp-workspace" {
+		t.Fatalf("repaired row = %+v", repaired)
+	}
+}
+
+type timestampProbeRow struct {
+	title, model, cwd, preview, firstUserMessage string
+	gitSHA, gitBranch, rolloutPath               string
+	tokensUsed                                   int64
+}
+
+func readTimestampProbeRow(t *testing.T, runtime *StateRuntime, threadID string) timestampProbeRow {
+	t.Helper()
+	var row timestampProbeRow
+	var title, model, cwd, preview, firstUserMessage, gitSHA, gitBranch, rolloutPath sql.NullString
+	var tokensUsed sql.NullInt64
+	if err := runtime.StateDB().QueryRowContext(context.Background(),
+		`SELECT title, model, cwd, preview, first_user_message, git_sha, git_branch, tokens_used, rollout_path FROM threads WHERE id = ?`,
+		threadID).Scan(&title, &model, &cwd, &preview, &firstUserMessage, &gitSHA, &gitBranch, &tokensUsed, &rolloutPath); err != nil {
+		t.Fatalf("read stored thread row: %v", err)
+	}
+	row.title, row.model, row.cwd, row.preview = title.String, model.String, cwd.String, preview.String
+	row.firstUserMessage, row.gitSHA, row.gitBranch = firstUserMessage.String, gitSHA.String, gitBranch.String
+	row.tokensUsed, row.rolloutPath = tokensUsed.Int64, rolloutPath.String
+	return row
+}
+
+func readTimestampProbeWrites(t *testing.T, runtime *StateRuntime) (timestamps int, fullRows int) {
+	t.Helper()
+	rows, err := runtime.StateDB().QueryContext(context.Background(), `SELECT kind, COUNT(*) FROM timestamp_writes GROUP BY kind`)
+	if err != nil {
+		t.Fatalf("read write counters: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kind string
+		var count int
+		if err := rows.Scan(&kind, &count); err != nil {
+			t.Fatalf("scan write counters: %v", err)
+		}
+		switch kind {
+		case "timestamp":
+			timestamps = count
+		case "full":
+			fullRows = count
+		}
+	}
+	return timestamps, fullRows
 }
