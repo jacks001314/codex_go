@@ -363,7 +363,9 @@ func applyPersistentClockDefaults(cfg *config.Config, params *turn.TurnStartPara
 	if cfg == nil || turnStartReviewRuntime(params) {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(appReasoningEffortForTurn(cfg, params)), "persistent") {
+	// Rust #48611 centralizes enablement in Features::persistent_mode_enabled, so
+	// the clock defaults and the persistent instructions share one decision.
+	if features.PersistentModeEnabled(appReasoningEffortForTurn(cfg, params)) {
 		// Explicit feature config or a managed requirement wins over the default.
 		if currentTimeReminderExplicitlyConfigured(cfg) {
 			return false
@@ -434,17 +436,16 @@ func decideClockToolEnablement(cfg *config.Config, params *turn.TurnStartParams,
 }
 
 // persistentModeInstructionsFragment builds the persistent-mode developer
-// guidance fragment when the turn uses persistent reasoning effort and is not a
-// Guardian session (Rust #41050). The approval-request channel is tailored to
-// send_user_message_async availability.
+// guidance fragment when the turn is not a Guardian session (Rust #41050).
+// Enablement comes from the centralized features.PersistentModeEnabled check
+// (Rust #48611), which rendering no longer re-derives from the reasoning effort.
+// The approval-request channel is tailored to send_user_message_async
+// availability.
 func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, params *turn.TurnStartParams, modelInfo *model.ModelInfo, threadID string) *contextfrag.SimpleFragment {
 	if cfg == nil || params == nil || r == nil || guardianTurnStart(params) {
 		return nil
 	}
-	effort := appReasoningEffortForTurn(cfg, params)
-	if !strings.EqualFold(strings.TrimSpace(effort), "persistent") {
-		return nil
-	}
+	enabled := features.PersistentModeEnabled(appReasoningEffortForTurn(cfg, params))
 	asyncAvailable := false
 	if modelInfo != nil {
 		for _, supported := range modelInfo.ExperimentalSupportedTools {
@@ -462,7 +463,7 @@ func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, p
 	if modelInfo != nil && modelInfo.ModelMessages != nil {
 		catalogInstructions = modelInfo.ModelMessages.PersistentInstructions
 	}
-	return contextfrag.PersistentModeInstructions(effort, catalogInstructions, asyncAvailable, false)
+	return contextfrag.PersistentModeInstructions(enabled, catalogInstructions, asyncAvailable, false)
 }
 
 func activeTurnDiffKey(threadID string, turnID string) string {
