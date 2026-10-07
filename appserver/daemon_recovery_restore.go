@@ -110,9 +110,10 @@ func (r *daemonRecoveryRestore) close() {
 
 // restoreDaemonThreads mirrors Rust `MessageProcessor::restore_daemon_threads`
 // (app-server/src/message_processor.rs:778): resume every saved thread with
-// `exclude_turns: true`. The loop is sequential, which replaces Rust's
-// turn-admission permit as the bound, and a single thread's failure only warns
-// and continues.
+// `exclude_turns: true`, then hand each saved interrupted turn to
+// `continue_daemon_turn` so unfinished work resumes without a client. The loop
+// is sequential, which replaces Rust's turn-admission permit as the bound, and a
+// single thread's failure only warns and continues.
 func (r *RuntimeRouter) restoreDaemonThreads(snapshot daemonrecovery.Snapshot) {
 	if r == nil {
 		return
@@ -124,6 +125,14 @@ func (r *RuntimeRouter) restoreDaemonThreads(snapshot daemonrecovery.Snapshot) {
 		}
 		if _, err := r.resumeDaemonThread(threadID); err != nil {
 			slog.Warn("failed to restore saved daemon thread", "thread_id", threadID, "error", err)
+			continue
+		}
+		// Rust passes the saved interrupted turn into the resume
+		// (ThreadResumeTarget::DaemonRecovery(snapshot.interrupted.remove(&thread_id)),
+		// message_processor.rs:778) and continues it once the thread is loaded
+		// (thread_processor.rs:3690/:3696, :4015/:4016).
+		if saved, ok := snapshot.Interrupted[threadID]; ok {
+			r.continueDaemonTurn(threadID, saved)
 		}
 	}
 }
@@ -131,7 +140,7 @@ func (r *RuntimeRouter) restoreDaemonThreads(snapshot daemonrecovery.Snapshot) {
 // resumeDaemonThread is one iteration of the restore loop: the same internal
 // resume path as the RPC, with `exclude_turns` so the restored thread is loaded
 // without re-materializing its turns (the interrupted turn continues in Phase C,
-// Rust request_processors/thread_processor.rs:3690/4015).
+// Rust request_processors/thread_processor.rs:3690/:3696, :4015/:4016).
 func (r *RuntimeRouter) resumeDaemonThread(threadID string) (*ThreadResumeResponse, error) {
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {

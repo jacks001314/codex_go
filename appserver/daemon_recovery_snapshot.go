@@ -195,12 +195,12 @@ func (r *RuntimeRouter) daemonRecoveryLocalEnvironment(params *turn.TurnStartPar
 	if err != nil || state.Kind != EnvironmentConfigFromThread {
 		return daemonRecoveryThreadEnvironment{}, false
 	}
-	roots := make([]string, 0, len(params.RuntimeWorkspaceRoots))
-	for _, root := range params.RuntimeWorkspaceRoots {
-		if trimmed := strings.TrimSpace(root); trimmed != "" {
-			roots = append(roots, trimmed)
-		}
-	}
+	// Rust stores `ThreadEnvironment::from(&TurnEnvironmentSelection)` and reads
+	// its `workspace_roots` from the selection; Go's environment selections never
+	// carry workspace roots (they are only read), so both this snapshot and the
+	// Phase C continuation gate use the thread's canonical runtime workspace
+	// roots, which is the same value the turn runtime resolves the profile from.
+	roots := threadRecordRuntimeWorkspaceRoots(record, params.CWD, params.RuntimeWorkspaceRoots)
 	return daemonRecoveryThreadEnvironment{
 		EnvironmentID: execserver.LocalEnvironmentID,
 		CWD: strings.TrimSpace(firstNonEmpty(
