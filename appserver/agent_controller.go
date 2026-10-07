@@ -165,9 +165,13 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if args.DeveloperInstructions != nil {
 		developerInstructions = *args.DeveloperInstructions
 	}
+	// Rust #49075 `TurnEnvironmentSnapshot::inheritable_selections`: the child
+	// keeps the spawning step's ready and still-starting attachments and drops a
+	// failed one instead of inheriting it verbatim.
+	inheritedEnvironments := inheritableEnvironmentSelections(c.environments)
 	extra := map[string]any{}
-	if len(c.environments) > 0 {
-		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(c.environments)
+	if len(inheritedEnvironments) > 0 {
+		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(inheritedEnvironments)
 	}
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
@@ -239,7 +243,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
-		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(c.environments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
+		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
 		if c.version == agent.VersionV2 {
 			// Rust #51402 `tasks/mod.rs`: a turn triggered by an inter-agent
 			// communication records that communication's author as its
