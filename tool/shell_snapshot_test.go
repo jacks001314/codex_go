@@ -207,6 +207,9 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 	workspaceWrite := sandbox.WorkspaceWritePermissionProfile()
 	var launched *ShellRequest
 	var requested *SnapshotProviderRequest
+	// Rust #51347: the executor reports its replay decision back through the
+	// provider's observation hook once `wrapped != command` is known.
+	var observed []bool
 	executor := NewShellExecutor(&ShellExecutorOptions{
 		Runner: pluginMetricsShellRunner{onRun: func(req *ShellRequest) { launched = req }},
 		Shell:  &Shell{Type: ShellBash, Path: "/bin/bash"},
@@ -217,11 +220,15 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 			DefaultTimeoutMS:    5000,
 			PermissionProfile:   &workspaceWrite,
 			PermissionProfileID: "resolved",
+			ShellMode:           UnifiedExecShellModeDirect,
 		},
-		SnapshotProvider: func(_ context.Context, request SnapshotProviderRequest) string {
+		SnapshotProvider: func(_ context.Context, request SnapshotProviderRequest) SnapshotProviderResult {
 			captured := request
 			requested = &captured
-			return snapshotPath
+			return SnapshotProviderResult{
+				Path:                  snapshotPath,
+				ObserveCommandOutcome: func(used bool) { observed = append(observed, used) },
+			}
 		},
 	})
 	if _, err := executor.Execute(context.Background(), &Invocation{
@@ -239,8 +246,11 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 	}
 	if requested.ShellType != ShellBash || requested.ShellPath != "/bin/bash" ||
 		requested.CWD != launched.CWD || !requested.AllowLoginShell || requested.Remote ||
-		requested.PermissionProfileID != "resolved" {
+		requested.PermissionProfileID != "resolved" || requested.ShellMode != UnifiedExecShellModeDirect {
 		t.Fatalf("provider request = %#v", requested)
+	}
+	if len(observed) != 1 || !observed[0] {
+		t.Fatalf("observation = %#v, want a single `used` decision", observed)
 	}
 	if len(launched.Command) != 3 || launched.Command[0] != "/bin/bash" || launched.Command[1] != "-c" {
 		t.Fatalf("launch command = %#v, want the snapshot wrapper", launched.Command)
@@ -253,6 +263,7 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 	// A provider without a snapshot (feature disabled, a shell that overrides the
 	// session's, or a remote environment) leaves the launch untouched.
 	var untouched *ShellRequest
+	var untouchedObserved []bool
 	plain := NewShellExecutor(&ShellExecutorOptions{
 		Runner: pluginMetricsShellRunner{onRun: func(req *ShellRequest) { untouched = req }},
 		Shell:  &Shell{Type: ShellBash, Path: "/bin/bash"},
@@ -262,8 +273,11 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 			CWD:               t.TempDir(),
 			DefaultTimeoutMS:  5000,
 			PermissionProfile: &workspaceWrite,
+			ShellMode:         UnifiedExecShellModeDirect,
 		},
-		SnapshotProvider: func(context.Context, SnapshotProviderRequest) string { return "" },
+		SnapshotProvider: func(context.Context, SnapshotProviderRequest) SnapshotProviderResult {
+			return SnapshotProviderResult{ObserveCommandOutcome: func(used bool) { untouchedObserved = append(untouchedObserved, used) }}
+		},
 	})
 	if _, err := plain.Execute(context.Background(), &Invocation{
 		CallID:   "call-no-snapshot",
@@ -274,6 +288,9 @@ func TestShellExecutorReplaysTheSessionSnapshotLikeRust(t *testing.T) {
 	}
 	if untouched == nil || len(untouched.Command) != 3 || untouched.Command[2] != "echo hi" {
 		t.Fatalf("launch command = %#v, want the original command", untouched)
+	}
+	if len(untouchedObserved) != 1 || untouchedObserved[0] {
+		t.Fatalf("observation = %#v, want a single `fallback` decision", untouchedObserved)
 	}
 }
 

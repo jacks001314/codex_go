@@ -13,6 +13,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -57,7 +58,7 @@ func (r *RuntimeRouter) shellSnapshotPruneLookup() shell.SnapshotPruneLookup {
 // executor asks, or nil when the session has no snapshot. The feature gate is
 // Rust's `Feature::ShellSnapshot`; the session's builder is created on first use
 // and closed when the thread unloads.
-func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *config.Config) func(context.Context, tool.SnapshotProviderRequest) string {
+func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *config.Config) func(context.Context, tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 	if r == nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "shell_snapshot") {
 		return nil
 	}
@@ -67,36 +68,84 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 		return nil
 	}
 	threadCWD := r.shellSnapshotThreadCWD(threadID)
+	protected := shellSnapshotProtected(cfg)
 	// Rust starts the session's snapshot capture as soon as the turn environments
 	// resolve, so the first command does not wait for it. Protected captures (an
 	// active credential broker) stay lazy and sandboxed.
-	if !shellSnapshotProtected(cfg) {
+	if !protected {
 		r.prewarmShellSnapshot(builder, threadID, threadCWD, cfg)
 	}
-	return func(ctx context.Context, request tool.SnapshotProviderRequest) string {
+	return func(ctx context.Context, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 		if !shellSnapshotLaunchEligible(request) {
-			return ""
+			return tool.SnapshotProviderResult{}
 		}
 		// Rust only replays the session's snapshot for the session's own
-		// directory; another directory has no captured state to restore.
-		if threadCWD != "" && !sameDirectory(request.CWD, threadCWD) {
-			return ""
+		// directory; another directory has no captured state to restore. A
+		// protected (brokered) session is exempt, exactly like Rust's
+		// `req.cwd != selection.cwd && !brokered` gate.
+		if threadCWD != "" && !sameDirectory(request.CWD, threadCWD) && !protected {
+			return tool.SnapshotProviderResult{}
 		}
-		started := time.Now()
 		// Every launch in the session's directory replays the one session
 		// snapshot, captured with a login shell and without a sandbox (Rust's
 		// start_shell_snapshot_task plus the non-broker branch of
 		// TurnEnvironment::shell_snapshot, which ignores the launch's sandbox).
-		snapshot, reason := builder.Snapshot(ctx, tool.SnapshotCaptureRequest{
+		captureRequest := tool.SnapshotCaptureRequest{
 			ShellType:         request.ShellType,
 			ShellPath:         request.ShellPath,
 			CWD:               request.CWD,
 			AllowLoginShell:   true,
 			EnvironmentPolicy: request.EnvironmentPolicy,
-		})
-		r.recordShellSnapshot(time.Since(started), reason)
-		return snapshot.Path()
+		}
+		// The availability state is read before the capture, like Rust's peek.
+		state := r.shellSnapshotCommandState(request, protected, builder, captureRequest)
+		started := time.Now()
+		snapshot, reason := builder.Snapshot(ctx, captureRequest)
+		wait := time.Since(started)
+		r.recordShellSnapshot(wait, reason)
+		path := snapshot.Path()
+		if state == "" {
+			return tool.SnapshotProviderResult{Path: path}
+		}
+		if path == "" && reason != "" {
+			// Rust tags a snapshot that cannot be made available `unavailable`.
+			// Go's prewarm cache only ever holds successful captures, so a
+			// capture/validation failure is the state a launch observes there.
+			state = "unavailable"
+		}
+		return tool.SnapshotProviderResult{
+			Path: path,
+			ObserveCommandOutcome: func(used bool) {
+				r.recordShellSnapshotCommand(wait, state, used)
+			},
+		}
 	}
+}
+
+// shellSnapshotCommandState returns the availability state Rust #51347 tags an
+// eligible launch's command observation with, or "" when the launch is outside
+// the metric denominator. It mirrors SnapshotMetrics::start
+// (core/src/tools/runtimes/unified_exec/snapshot_metrics.rs): unix, a local
+// environment, the ShellSnapshot feature (the provider exists only then), a
+// Direct shell mode and a POSIX login shell. Rust's per-launch snapshot source
+// exclusion (`req.shell_snapshot.is_some()`) has no Go counterpart, and Go keys
+// its prewarm cache by the capture request, so Rust's "cached under another
+// policy" state is reported after a failed capture instead.
+func (r *RuntimeRouter) shellSnapshotCommandState(request tool.SnapshotProviderRequest, protected bool, builder *tool.SnapshotBuilder, captureRequest tool.SnapshotCaptureRequest) string {
+	if runtime.GOOS == "windows" || request.Remote || request.ShellMode != tool.UnifiedExecShellModeDirect {
+		return ""
+	}
+	if !request.AllowLoginShell || !shellSnapshotShellSupported(request.ShellType) {
+		return ""
+	}
+	if protected {
+		// Protected snapshots use a separate lazy capture, not the prewarm task.
+		return "protected"
+	}
+	if builder.PrewarmedSnapshot(captureRequest) {
+		return "prewarm_ready"
+	}
+	return "prewarm_pending"
 }
 
 // shellSnapshotPrewarmTimeout bounds a prewarm capture, matching the capture
@@ -184,6 +233,28 @@ func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.
 		tags["failure_reason"] = string(reason)
 	}
 	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
+}
+
+// recordShellSnapshotCommand emits one command-level snapshot observation
+// (Rust #51347): a count and a wait duration for an eligible command
+// preparation, tagged with the capture version, the snapshot availability state
+// and whether the replay wrapper was selected (`used`) or normal shell startup
+// was used (`fallback`). Unlike recordShellSnapshot, which measures capture
+// attempts, this measures what a command did with the session's snapshot.
+func (r *RuntimeRouter) recordShellSnapshotCommand(wait time.Duration, state string, used bool) {
+	if r == nil || r.services.TurnMetrics == nil {
+		return
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	outcome := "fallback"
+	if used {
+		outcome = "used"
+	}
+	tags := map[string]string{"version": "v1", "state": state, "outcome": outcome}
+	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCommandMetric, 1, tags)
+	r.services.TurnMetrics.RecordDuration(telemetry.ShellSnapshotCommandWaitMetric, wait, tags)
 }
 
 // shellSnapshotLaunchEligible mirrors the launch shape Rust's turn environment

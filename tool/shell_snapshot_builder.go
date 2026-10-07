@@ -100,6 +100,24 @@ type SnapshotProviderRequest struct {
 	PermissionProfileID string
 	EnvironmentID       string
 	Remote              bool
+	// ShellMode is the launch's unified-exec shell mode. Rust #51347 keeps only
+	// `Direct` launches inside the command-level snapshot metric denominator
+	// (core/src/tools/runtimes/unified_exec/snapshot_metrics.rs), so the provider
+	// reads it to decide whether to observe; it never changes replay.
+	ShellMode UnifiedExecShellMode
+}
+
+// SnapshotProviderResult is one launch's snapshot answer: the path the launch
+// replays (empty when the session has no snapshot for it) plus the command-level
+// observation hook (Rust #51347 `SnapshotMetrics`).
+type SnapshotProviderResult struct {
+	// Path is the snapshot to replay in front of the launch's command, or "".
+	Path string
+	// ObserveCommandOutcome, when non-nil, is called exactly once after the
+	// launch decides whether it replayed the snapshot. used is Rust's
+	// `snapshot_used = wrapped != command`: true when the command was rewritten
+	// to replay the snapshot, false when normal shell startup was used.
+	ObserveCommandOutcome func(used bool)
 }
 
 // snapshotExplicitOverrides returns the policy-driven environment overrides that
@@ -187,6 +205,29 @@ func (b *SnapshotBuilder) Snapshot(ctx context.Context, request SnapshotCaptureR
 	}
 	b.snapshots[key] = created
 	return created, ""
+}
+
+// PrewarmedSnapshot reports whether a snapshot captured under this request's
+// environment policy is already cached and on disk, i.e. whether the session's
+// background prewarm has produced it (Rust core's `shell_snapshot.peek()` being
+// `Some(Some(Ok))` with a matching policy). It never captures, so the
+// command-level observation can tag `prewarm_ready` instead of `prewarm_pending`.
+func (b *SnapshotBuilder) PrewarmedSnapshot(request SnapshotCaptureRequest) bool {
+	if b == nil {
+		return false
+	}
+	key := snapshotCaptureKey(request)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	existing := b.snapshots[key]
+	if existing == nil {
+		return false
+	}
+	if _, err := os.Stat(existing.path); err != nil {
+		delete(b.snapshots, key)
+		return false
+	}
+	return true
 }
 
 // Close removes every snapshot this session captured.

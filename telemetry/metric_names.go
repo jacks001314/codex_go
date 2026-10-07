@@ -67,7 +67,16 @@ const (
 	ShellSnapshotDurationMetric = "codex.shell_snapshot.duration_ms"
 	// ShellSnapshotCountMetric counts shell-snapshot capture attempts, tagged by
 	// version, success and the failure reason when one failed.
-	ShellSnapshotCountMetric                    = "codex.shell_snapshot"
+	ShellSnapshotCountMetric = "codex.shell_snapshot"
+	// ShellSnapshotCommandMetric counts one eligible command preparation that
+	// considered the session's shell snapshot (Rust #51347
+	// core/src/tools/runtimes/unified_exec/snapshot_metrics.rs), tagged by
+	// version, the snapshot availability state and whether the replay wrapper
+	// was selected (`used`) or normal shell startup was used (`fallback`).
+	ShellSnapshotCommandMetric = "codex.shell_snapshot.command"
+	// ShellSnapshotCommandWaitMetric measures how long that preparation waited
+	// for the snapshot before the command started, with the same tags.
+	ShellSnapshotCommandWaitMetric              = "codex.shell_snapshot.wait_ms"
 	StartupPrewarmAgeAtFirstTurnMetric          = "codex.startup_prewarm.age_at_first_turn_ms"
 	ThreadStartedMetric                         = "codex.thread.started"
 	ThreadSkillsEnabledTotalMetric              = "codex.thread.skills.enabled_total"

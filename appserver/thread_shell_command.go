@@ -8,6 +8,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -63,15 +64,21 @@ func (r *RuntimeRouter) threadShellCommandLaunch(ctx context.Context, run *threa
 		tool.ApplyPackagePathPrepends(env, prepends)
 	}
 	if provider := r.shellSnapshotProviderForTurn(run.ThreadID, cfg); provider != nil {
-		snapshotPath := provider(ctx, tool.SnapshotProviderRequest{
+		snapshot := provider(ctx, tool.SnapshotProviderRequest{
 			ShellType:         sessionShell.Type,
 			ShellPath:         sessionShell.Path,
 			CWD:               run.CWD,
 			AllowLoginShell:   true,
 			EnvironmentPolicy: r.shellSnapshotEnvironmentPolicyTable(cfg),
 		})
-		if snapshotPath != "" {
-			argv = tool.MaybeWrapShellLCWithSnapshot(argv, sessionShell, snapshotPath, explicitOverrides, env, prepends.Entries())
+		used := false
+		if snapshot.Path != "" {
+			wrapped := tool.MaybeWrapShellLCWithSnapshot(argv, sessionShell, snapshot.Path, explicitOverrides, env, prepends.Entries())
+			used = !slices.Equal(wrapped, argv)
+			argv = wrapped
+		}
+		if snapshot.ObserveCommandOutcome != nil {
+			snapshot.ObserveCommandOutcome(used)
 		}
 	}
 	return argv, envSliceFromMap(env)

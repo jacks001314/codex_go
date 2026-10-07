@@ -101,7 +101,7 @@ func TestShellSnapshotProviderCapturesAndReleasesLikeRust(t *testing.T) {
 		AllowLoginShell:     true,
 		PermissionProfileID: "resolved",
 	}
-	path := provider(context.Background(), request)
+	path := provider(context.Background(), request).Path
 	if path == "" {
 		t.Fatal("the session's own directory did not get a snapshot")
 	}
@@ -116,14 +116,14 @@ func TestShellSnapshotProviderCapturesAndReleasesLikeRust(t *testing.T) {
 		!strings.Contains(string(content), `declare -x FOO="bar"`) {
 		t.Fatalf("snapshot content = %q", content)
 	}
-	if reused := provider(context.Background(), request); reused != path {
+	if reused := provider(context.Background(), request).Path; reused != path {
 		t.Fatalf("second launch reused %q, want %q", reused, path)
 	}
 
 	// Another directory has no captured state, so the launch is left alone.
 	other := request
 	other.CWD = t.TempDir()
-	if got := provider(context.Background(), other); got != "" {
+	if got := provider(context.Background(), other).Path; got != "" {
 		t.Fatalf("a launch outside the session directory got snapshot %q", got)
 	}
 
@@ -174,7 +174,7 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 		t.Run(testCase.name, func(t *testing.T) {
 			request := base
 			testCase.mutate(&request)
-			if got := enabled(context.Background(), request); got != "" {
+			if got := enabled(context.Background(), request).Path; got != "" {
 				t.Fatalf("snapshot = %q, want none for the %s gap", got, testCase.wantGap)
 			}
 		})
@@ -298,7 +298,7 @@ func TestShellSnapshotPrewarmsAndReusesLikeRust(t *testing.T) {
 		ShellPath:       "/bin/bash",
 		CWD:             cwd,
 		AllowLoginShell: true,
-	})
+	}).Path
 	if path == "" {
 		t.Fatal("the launch found no snapshot")
 	}
@@ -339,7 +339,7 @@ func TestShellSnapshotSkipsPrewarmWithTheCredentialBrokerLikeRust(t *testing.T) 
 		ShellPath:       "/bin/bash",
 		CWD:             cwd,
 		AllowLoginShell: true,
-	}); path == "" {
+	}).Path; path == "" {
 		t.Fatal("the launch found no snapshot")
 	}
 	if captures := runner.count(); captures != 1 {
@@ -383,7 +383,7 @@ func TestShellSnapshotPruneLookupReadsTheRolloutLikeRust(t *testing.T) {
 }
 
 // stubShellSnapshotFeature turns the feature back on for the thread's config.
-func stubShellSnapshotFeature(t *testing.T, router *RuntimeRouter, threadID string) func(context.Context, tool.SnapshotProviderRequest) string {
+func stubShellSnapshotFeature(t *testing.T, router *RuntimeRouter, threadID string) func(context.Context, tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 	t.Helper()
 	home := router.codexHomeForRollout()
 	if err := os.WriteFile(config.ConfigPath(home), []byte("sandbox_mode = \"workspace-write\"\n[features]\nshell_snapshot = true\n"), 0o600); err != nil {
@@ -429,7 +429,7 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 		CWD:             cwd,
 		AllowLoginShell: true,
 	}
-	if provider(context.Background(), request) == "" {
+	if provider(context.Background(), request).Path == "" {
 		t.Fatal("no snapshot for the session's directory")
 	}
 	durations := snapshotMetricRecords(metrics, telemetry.ShellSnapshotDurationMetric)
@@ -467,7 +467,7 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 	if failing == nil {
 		t.Fatal("no snapshot provider for the failing thread")
 	}
-	if path := failing(context.Background(), request); path != "" {
+	if path := failing(context.Background(), request).Path; path != "" {
 		t.Fatalf("failing capture produced %q", path)
 	}
 	counts = snapshotMetricRecords(metrics, telemetry.ShellSnapshotCountMetric)

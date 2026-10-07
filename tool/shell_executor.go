@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -88,8 +89,9 @@ type ShellExecutorOptions struct {
 	PluginMetricsResolver func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
 	// SnapshotProvider supplies the session's shell-snapshot path for a launch,
 	// or "" when the session has none (Rust's turn-environment
-	// `shell_snapshot`, which the launch replays before the model's script).
-	SnapshotProvider func(ctx context.Context, request SnapshotProviderRequest) string
+	// `shell_snapshot`, which the launch replays before the model's script). Its
+	// result also carries the Rust #51347 command-level observation hook.
+	SnapshotProvider func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
 	// PluginMeasurementTracker publishes a validated plugin measurement batch.
 	PluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	// ModelContext reports the resolved model and reasoning effort that invoked a
@@ -132,7 +134,7 @@ type ShellExecutor struct {
 	environmentIDOverride    *bool
 	managedNetworkResolver   ManagedNetworkResolver
 	pluginMetricsResolver    func(command []string, cwd string) *plugin.ResolvedPluginMetricsOperation
-	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) string
+	snapshotProvider         func(ctx context.Context, request SnapshotProviderRequest) SnapshotProviderResult
 	pluginMeasurementTracker func(context.Context, plugin.PluginMeasurementBatch)
 	modelContext             func() (modelSlug string, reasoningEffort string)
 	oneShot                  bool
@@ -773,7 +775,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		// Rust replays the session's shell snapshot in front of the model's
 		// script so the user's aliases, functions and options still apply. The
 		// wrapper re-checks the launch shape and leaves brokered launches alone.
-		snapshotPath := e.snapshotProvider(ctx, SnapshotProviderRequest{
+		snapshot := e.snapshotProvider(ctx, SnapshotProviderRequest{
 			ShellType:           sessionShell.Type,
 			ShellPath:           sessionShell.Path,
 			CWD:                 req.CWD,
@@ -783,9 +785,21 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			PermissionProfileID: validation.PermissionProfileID,
 			EnvironmentID:       req.UnifiedExecEnvironmentID,
 			Remote:              remoteEnvironment,
+			ShellMode:           validation.ShellMode,
 		})
-		if snapshotPath != "" {
-			req.Command = MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshotPath, snapshotExplicitOverrides(req), req.Env, req.RuntimePathPrepends)
+		snapshotUsed := false
+		if snapshot.Path != "" {
+			wrapped := MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshot.Path, snapshotExplicitOverrides(req), req.Env, req.RuntimePathPrepends)
+			// Rust #51347: `snapshot_used = wrapped != command` decides the
+			// command-level observation's outcome; it reports that the replay was
+			// selected, not that restoration or the command itself succeeded.
+			snapshotUsed = !slices.Equal(wrapped, req.Command)
+			req.Command = wrapped
+		}
+		// Emit after the decision so `used` is final, exactly like Rust
+		// recording at the end of `UnifiedExecRuntime::prepare`.
+		if snapshot.ObserveCommandOutcome != nil {
+			snapshot.ObserveCommandOutcome(snapshotUsed)
 		}
 	}
 	// Rust #45505 brackets every exec_command call with a
