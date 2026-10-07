@@ -3098,7 +3098,14 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		}
 		// Rust #50209: a host that reports wheel motion scrolls the transcript
 		// through the configurable multiplier applied to one row per event.
+		// Rust #48805 (codex-rs/tui/src/app/owned_transcript.rs
+		// ::handle_owned_transcript_event) keeps a modal's input ownership but
+		// still lets the wheel move the visible transcript, while a completion
+		// popup keeps refusing every gesture - the wheel included.
 		if rows, wheel := m.transcriptWheelRows(msg); wheel {
+			if m.slashPopup.Active || m.skillPopup.Active || m.mentionPopup != nil {
+				return m, nil
+			}
 			m.scrollTranscriptRows(rows)
 			return m, nil
 		}
