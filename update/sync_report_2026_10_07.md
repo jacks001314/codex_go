@@ -125,3 +125,15 @@
   - 差异（详见计划第三十五轮）：Go 无 world state / 无历史化声明，"既有窗口无声明 → 退回 legacy 形态"需要先补声明历史化子系统，本轮明确记录；fork 过滤天然保留声明（语义等价）；Go 无 guardian 输入预算 / prompt 调试对齐点。
 - 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go test ./model/ -run <新测试>` 3/3 PASS；`./session/ ./context/ ./rollout/ ./turn/ ./exec/` 全通过；`./model/` 仅 2 项既有环境失败、`./appserver/` 仅 3 项既有基线失败（均 `git stash` 复现确认）。
 - 剩余 6 项：继续按序推进（#51480 余下 → #51503 → #51482 → #51517 → TUI）。
+
+## 追加（当日第十批：sync401）
+
+- `sync401`（上游 #51503 "Expose selected environments to MCP contributors"）：向 MCP 贡献者暴露已选执行器（有序 + pending/failed）。
+  - `mcp/selected_environments.go`（新增）：`EnvironmentSelectionState`、`TurnEnvironmentSelection`、有序快照 `SelectedEnvironments`（含 `EnvironmentIDs`/`Authority` 派生）、`MCPServerContributionContext`（对照上游同名 context）。
+  - `mcp/config.go`：`RuntimeConfig.SelectedEnvironments`（nil=上游 `None`，非 nil 空=上游 `Some(&[])`）。
+  - `mcp/api.go`：`MCPService` 保存/透出该快照（`SelectedEnvironments()`，`ApplyRuntimeConfig` 同步）。
+  - `appserver/runtime_router.go`：`turnEnvironmentSelections`（一次遍历产出有序带状态快照，无法解析记 failed）；`mcpEnvironmentAuthorityForTurn` 改为由该快照派生；`managedMCPServiceForThread` 由快照派生 `AvailableEnvironment` 并把快照/上下文传入 `runtimeMCPConfigForThread`。
+  - 测试：`mcp/selected_environments_test.go` 4 个 + `appserver/mcp_environment_policy_test.go` 追加 3 个。
+  - 差异（详见计划第三十九轮）：Go 无 extension-api 贡献者回调，暴露面 = 投影出的 runtime config / `MCPService`；`plugin` 不引入 `mcp` 依赖；权威派生改为由同一快照产出。
+- 验证：`go build ./...` 通过；改动文件 `gofmt -l` 为空；`go vet ./mcp/ ./appserver/` 无输出；`./mcp/` 4/4 新测试 PASS（仅 1 项既有 stdio drain 环境失败，已 stash 复现）；`./appserver/` 3/3 新测试 PASS 且仅 3 项既有基线失败；`./plugin/ ./turn/ ./exec/` 全通过。
+- 剩余 5 项：继续按序推进（#51480 余下 → #51482 → #51517 → TUI）。
