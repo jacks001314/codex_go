@@ -77,6 +77,13 @@ type CloudConfigFetchOptions struct {
 	NetworkPolicy *network.NetworkPolicy
 	Headers       http.Header
 	Authorize     func(context.Context, *http.Request) error
+	// Policy, when set, is the enterprise policy owner this fetch observes.
+	// Observing a changed bundle suspends the previous revision before the
+	// bundle is validated or cached, and the cache write is published only
+	// while that observation is still current (Rust #49269
+	// CloudConfigBundleService::policy). A nil policy uses a one-shot policy
+	// that keeps every write on the staged atomic path.
+	Policy *CloudConfigBundlePolicy
 }
 
 // cloudConfigFallbackAttemptTimeout bounds the primary bootstrap GET, including
@@ -172,10 +179,27 @@ func loadCloudConfigBundleAttempt(ctx context.Context, opts CloudConfigFetchOpti
 		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, fmt.Sprintf("invalid cloud config bundle: %v", err))
 	}
 	normalizeCloudConfigBundle(&bundle)
+	// Rust #49269: observing the delivered bundle suspends the previous policy
+	// revision before the bundle is validated or cached. A standalone fetch has
+	// no owning service, so it uses a one-shot policy: the observation always
+	// stays current while every write still goes through the staged, atomic
+	// publication path.
+	policy := opts.Policy
+	if policy == nil {
+		policy = NewCloudConfigBundlePolicy()
+	}
+	revision := policy.ObserveRemoteBundle(&bundle)
 	if err := validateCloudConfigBundle(bundle, opts.CodexHome); err != nil {
 		return nil, false, NewCloudConfigLoadError(CloudConfigLoadInvalidBundle, nil, err.Error())
 	}
-	_ = saveCloudConfigBundleCache(opts, bundle)
+	// Stage the cache payload and publish it only while the observation is
+	// still current. A retired policy has no revision, so nothing is published
+	// (Rust #49269 CloudConfigBundleService::apply_bundle).
+	if revision != nil {
+		if staged, err := prepareCloudConfigBundleCache(opts, bundle); err == nil {
+			_ = staged.PublishIfCurrent(revision)
+		}
+	}
 	return &bundle, false, nil
 }
 
@@ -250,7 +274,23 @@ func loadCloudConfigBundleCache(opts CloudConfigFetchOptions) *CloudConfigBundle
 	return &bundle
 }
 
-func saveCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfigBundle) error {
+// stagedCloudConfigBundleCache is a cache payload written to a temporary file
+// next to its destination but not yet visible there (Rust #49269
+// StagedCloudConfigBundleCache). The temporary file lives in the destination
+// directory so publication is a same-filesystem atomic rename.
+type stagedCloudConfigBundleCache struct {
+	temporaryPath string
+	destination   string
+}
+
+// prepareCloudConfigBundleCache signs the bundle and stages the cache payload
+// in a temporary file. It never touches the destination: a reader of the cache
+// path either sees the previously published payload or, after
+// PublishIfCurrent, the complete new one.
+func prepareCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfigBundle) (*stagedCloudConfigBundleCache, error) {
+	if strings.TrimSpace(opts.CodexHome) == "" {
+		return nil, errors.New("cloud config bundle cache requires a codex home")
+	}
 	normalizeCloudConfigBundle(&bundle)
 	now := time.Now().UTC()
 	userID := stringPtr(strings.TrimSpace(opts.ChatGPTUserID))
@@ -265,17 +305,74 @@ func saveCloudConfigBundleCache(opts CloudConfigFetchOptions, bundle CloudConfig
 	}
 	payloadBytes, err := marshalCloudConfigCachePayload(payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cache := cloudConfigBundleCacheFile{SignedPayload: payload, Signature: signCloudConfigCachePayload(payloadBytes)}
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.MkdirAll(opts.CodexHome, 0o700); err != nil {
+		return nil, err
+	}
+	destination := filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename)
+	temporary, err := os.CreateTemp(opts.CodexHome, cloudConfigBundleCacheFilename+".tmp-")
+	if err != nil {
+		return nil, err
+	}
+	staged := &stagedCloudConfigBundleCache{temporaryPath: temporary.Name(), destination: destination}
+	if _, err := temporary.Write(append(data, '\n')); err != nil {
+		_ = temporary.Close()
+		staged.Discard()
+		return nil, err
+	}
+	// os.CreateTemp already creates the file with 0600; keep the published
+	// cache private to the user even if the process umask is permissive.
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		staged.Discard()
+		return nil, err
+	}
+	if err := temporary.Close(); err != nil {
+		staged.Discard()
+		return nil, err
+	}
+	return staged, nil
+}
+
+// PublishIfCurrent atomically publishes the staged payload over the destination
+// only while revision is still current. A superseded or retired revision leaves
+// the destination untouched and drops the staged file, so an older refresh can
+// never overwrite a newer one (Rust #49269
+// StagedCloudConfigBundleCache::publish_if_current).
+func (s *stagedCloudConfigBundleCache) PublishIfCurrent(revision *CloudConfigBundlePolicyRevision) error {
+	if s == nil {
+		return nil
+	}
+	published := false
+	err := revision.CommitIfCurrent(func() error {
+		if err := os.Rename(s.temporaryPath, s.destination); err != nil {
+			return err
+		}
+		published = true
+		return nil
+	})
+	if err != nil || !published {
+		s.Discard()
+	}
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(opts.CodexHome, cloudConfigBundleCacheFilename), append(data, '\n'), 0o600)
+	return nil
+}
+
+// Discard drops the staged file without touching the destination.
+func (s *stagedCloudConfigBundleCache) Discard() {
+	if s == nil || s.temporaryPath == "" {
+		return
+	}
+	_ = os.Remove(s.temporaryPath)
+	s.temporaryPath = ""
 }
 
 func normalizeCloudConfigBundle(bundle *CloudConfigBundle) {

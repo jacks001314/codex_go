@@ -39,6 +39,11 @@ type Config struct {
 	// (Rust #46328 ConfigLayerStack::is_projectless). Discovery that was
 	// skipped leaves it false.
 	isProjectless bool
+	// cloudConfigBinding is the runtime-only enterprise MCP authority this
+	// configuration was loaded from (Rust #49269
+	// ConfigLayerStack::cloud_config_binding). It does not change the
+	// configuration contents and is never serialized.
+	cloudConfigBinding *CloudConfigBundleBinding
 }
 
 type ForcedLoginMethod string
@@ -344,18 +349,24 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	var cloudConfigBinding *CloudConfigBundleBinding
 	if opts != nil && opts.IncludeManagedConfig && opts.CloudConfigBundle != nil {
-		bundle, err := opts.CloudConfigBundle.Get()
-		if err != nil {
-			return nil, err
+		// Rust #49269: the loader returns the bundle together with the policy
+		// revision binding it was resolved from, and the binding travels with
+		// the loaded configuration so a later reload can tell whether the
+		// enterprise policy it was built from is still current.
+		snapshot := opts.CloudConfigBundle.GetSnapshot()
+		if snapshot.Err != nil {
+			return nil, snapshot.Err
 		}
-		if bundle != nil && !bundle.IsEmpty() {
+		if bundle := snapshot.Bundle; bundle != nil && !bundle.IsEmpty() {
 			cloudRequirements, err := applyCloudConfigBundle(values, requirements, *bundle, codexHome)
 			if err != nil {
 				return nil, err
 			}
 			requirements = cloudRequirements
 		}
+		cloudConfigBinding = snapshot.Binding
 	}
 	applyManagedApprovalsReviewerGuardianV2Override(values, requirements)
 	applyManagedAuthBackendOverride(values, requirements)
@@ -364,7 +375,12 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 	if err := applyManagedConstrainedOverrides(values, requirements); err != nil {
 		return nil, err
 	}
-	return &Config{Values: values, Requirements: requirements, isProjectless: isProjectless}, nil
+	return &Config{
+		Values:             values,
+		Requirements:       requirements,
+		isProjectless:      isProjectless,
+		cloudConfigBinding: cloudConfigBinding,
+	}, nil
 }
 
 // IsProjectless reports whether configuration discovery found no project-root
@@ -373,6 +389,18 @@ func LoadWithOptions(codexHome string, opts *LoadOptions) (*Config, error) {
 // skipped, so callers can rely on it only for a discovery that actually ran.
 func (c *Config) IsProjectless() bool {
 	return c != nil && c.isProjectless
+}
+
+// CloudConfigBinding reports the enterprise policy revision binding this
+// configuration was resolved from, or nil when it was loaded without a cloud
+// bundle loader. Callers use it to reject refreshes derived from a superseded
+// or suspended policy (Rust #49269
+// ConfigLayerStack::cloud_config_binding).
+func (c *Config) CloudConfigBinding() *CloudConfigBundleBinding {
+	if c == nil {
+		return nil
+	}
+	return c.cloudConfigBinding
 }
 
 // applyManagedExactOverrides mirrors Rust ConfigRequirementsToml::apply_to_config

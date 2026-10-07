@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -153,11 +154,238 @@ func (e *CloudConfigLoadError) Error() string {
 	return e.Message
 }
 
+// CloudConfigBundlePolicyPhase is the admission phase of the delivered
+// enterprise policy (Rust #49269 `CloudConfigBundlePolicyPhase`).
+type CloudConfigBundlePolicyPhase int
+
+const (
+	// CloudConfigBundlePolicyUninitialized is a policy that has neither observed
+	// nor published a delivered bundle yet.
+	CloudConfigBundlePolicyUninitialized CloudConfigBundlePolicyPhase = iota
+	// CloudConfigBundlePolicySuspended holds new enterprise MCP admission while
+	// the observed bundle is validated and staged for publication.
+	CloudConfigBundlePolicySuspended
+	// CloudConfigBundlePolicyActive published the observed bundle and may
+	// authorize new enterprise MCP requests.
+	CloudConfigBundlePolicyActive
+	// CloudConfigBundlePolicyRetired may not authorize anything anymore, e.g.
+	// after its loader was replaced or cleared.
+	CloudConfigBundlePolicyRetired
+)
+
+// CloudConfigBundleBindingStatus reports whether the policy revision a
+// configuration was built from is still the delivered one.
+type CloudConfigBundleBindingStatus int
+
+const (
+	// CloudConfigBundleBindingSuspended means no active policy backs the
+	// binding, so enterprise MCP admission must stay off.
+	CloudConfigBundleBindingSuspended CloudConfigBundleBindingStatus = iota
+	// CloudConfigBundleBindingCurrent means the bound revision is the active one.
+	CloudConfigBundleBindingCurrent
+	// CloudConfigBundleBindingStale means a newer revision was delivered.
+	CloudConfigBundleBindingStale
+)
+
+// CloudConfigBundlePolicy tracks which delivered bundle may authorize new
+// enterprise MCP requests (Rust #49269 `CloudConfigBundlePolicy`). Observing a
+// changed remote bundle suspends the previous revision before that bundle is
+// validated or cached; only the snapshot publishing the matching revision
+// re-activates admission, and a superseded or retired revision may no longer
+// commit staged persistence.
+type CloudConfigBundlePolicy struct {
+	mu       sync.Mutex
+	revision uint64
+	bundle   *CloudConfigBundle
+	phase    CloudConfigBundlePolicyPhase
+	changed  chan struct{}
+}
+
+// NewCloudConfigBundlePolicy returns an uninitialized policy.
+func NewCloudConfigBundlePolicy() *CloudConfigBundlePolicy {
+	return &CloudConfigBundlePolicy{changed: make(chan struct{})}
+}
+
+// CloudConfigBundlePolicyRevision is an observed remote policy revision that is
+// permitted to commit staged persistence.
+type CloudConfigBundlePolicyRevision struct {
+	revision uint64
+	policy   *CloudConfigBundlePolicy
+}
+
+// CommitIfCurrent runs commit only while the observed revision is still current.
+// Prepare the expensive work first: the revision check blocks newer
+// observations and retirement for the duration of the commit, which is why the
+// commit callback must not call back into the policy.
+func (r *CloudConfigBundlePolicyRevision) CommitIfCurrent(commit func() error) error {
+	if r == nil || r.policy == nil || commit == nil {
+		return nil
+	}
+	r.policy.mu.Lock()
+	defer r.policy.mu.Unlock()
+	if r.policy.revision == r.revision &&
+		(r.policy.phase == CloudConfigBundlePolicySuspended || r.policy.phase == CloudConfigBundlePolicyActive) {
+		return commit()
+	}
+	return nil
+}
+
+// CloudConfigBundleBinding is the policy revision that resolved one set of
+// enterprise MCP inputs. It stays live: a binding read after a newer revision
+// was delivered reports Stale instead of Current.
+type CloudConfigBundleBinding struct {
+	revision *uint64
+	policy   *CloudConfigBundlePolicy
+}
+
+// Status reports the current standing of the bound revision.
+func (b *CloudConfigBundleBinding) Status() CloudConfigBundleBindingStatus {
+	if b == nil || b.policy == nil {
+		return CloudConfigBundleBindingSuspended
+	}
+	b.policy.mu.Lock()
+	defer b.policy.mu.Unlock()
+	if b.policy.phase != CloudConfigBundlePolicyActive || b.revision == nil {
+		return CloudConfigBundleBindingSuspended
+	}
+	if b.policy.revision == *b.revision {
+		return CloudConfigBundleBindingCurrent
+	}
+	return CloudConfigBundleBindingStale
+}
+
+// CloudConfigBundleSnapshot pairs a loaded bundle with the policy revision
+// binding it was resolved from.
+type CloudConfigBundleSnapshot struct {
+	Bundle  *CloudConfigBundle
+	Err     error
+	Binding *CloudConfigBundleBinding
+}
+
+// ObserveRemoteBundle suspends enterprise MCP admission before a changed
+// delivered bundle is validated or cached, and returns the revision allowed to
+// commit staged persistence. It returns nil when the policy is retired (nothing
+// may be admitted or published) or when the revision counter overflowed.
+func (p *CloudConfigBundlePolicy) ObserveRemoteBundle(bundle *CloudConfigBundle) *CloudConfigBundlePolicyRevision {
+	if p == nil {
+		return nil
+	}
+	observed := bundle
+	if bundle.IsEmpty() {
+		observed = nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.phase == CloudConfigBundlePolicyRetired {
+		return nil
+	}
+	if p.phase != CloudConfigBundlePolicyUninitialized && cloudConfigBundlesEqual(p.bundle, observed) {
+		return &CloudConfigBundlePolicyRevision{revision: p.revision, policy: p}
+	}
+	if p.phase != CloudConfigBundlePolicyUninitialized {
+		if p.revision == math.MaxUint64 {
+			p.phase = CloudConfigBundlePolicyRetired
+			p.notifyLocked()
+			return nil
+		}
+		p.revision++
+	}
+	p.bundle = cloneCloudConfigBundle(observed)
+	p.phase = CloudConfigBundlePolicySuspended
+	p.notifyLocked()
+	return &CloudConfigBundlePolicyRevision{revision: p.revision, policy: p}
+}
+
+// PublishSnapshot pairs a load result with its policy revision before the
+// snapshot becomes visible. Only the snapshot that matches the observed bundle
+// activates the policy; anything else (a superseded result, a load failure)
+// leaves admission suspended.
+func (p *CloudConfigBundlePolicy) PublishSnapshot(snapshot *CloudConfigBundleSnapshot) {
+	if p == nil || snapshot == nil || snapshot.Err != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	current := p.phase != CloudConfigBundlePolicyRetired &&
+		(p.phase == CloudConfigBundlePolicyUninitialized || cloudConfigBundlesEqual(p.bundle, snapshot.Bundle))
+	binding := &CloudConfigBundleBinding{policy: p}
+	if current {
+		revision := p.revision
+		binding.revision = &revision
+	}
+	snapshot.Binding = binding
+	if current && p.phase != CloudConfigBundlePolicyActive {
+		p.bundle = cloneCloudConfigBundle(snapshot.Bundle)
+		p.phase = CloudConfigBundlePolicyActive
+		p.notifyLocked()
+	}
+}
+
+// Retire stops new enterprise MCP admission from this policy owner without
+// changing generic loader behavior.
+func (p *CloudConfigBundlePolicy) Retire() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.phase = CloudConfigBundlePolicyRetired
+	p.notifyLocked()
+}
+
+// notifyLocked wakes every observer waiting for a phase or revision change.
+// The caller holds p.mu.
+func (p *CloudConfigBundlePolicy) notifyLocked() {
+	if p.changed == nil {
+		p.changed = make(chan struct{})
+		return
+	}
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+
+func cloudConfigBundlesEqual(a, b *CloudConfigBundle) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return cloudConfigFragmentsEqual(a.ConfigTOML.EnterpriseManaged, b.ConfigTOML.EnterpriseManaged) &&
+		cloudConfigFragmentsEqual(a.RequirementsTOML.EnterpriseManaged, b.RequirementsTOML.EnterpriseManaged)
+}
+
+func cloudConfigFragmentsEqual(a, b []CloudConfigFragment) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for index := range a {
+		if a[index] != b[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneCloudConfigBundle(bundle *CloudConfigBundle) *CloudConfigBundle {
+	if bundle == nil {
+		return nil
+	}
+	cloned := *bundle
+	cloned.ConfigTOML.EnterpriseManaged = append([]CloudConfigFragment(nil), bundle.ConfigTOML.EnterpriseManaged...)
+	cloned.RequirementsTOML.EnterpriseManaged = append([]CloudConfigFragment(nil), bundle.RequirementsTOML.EnterpriseManaged...)
+	return &cloned
+}
+
 type CloudConfigLoader struct {
 	mu     sync.Mutex
 	load   func() (*CloudConfigBundle, error)
 	bundle *CloudConfigBundle
 	err    error
+	// snapshot, when set, returns the published enterprise policy snapshot
+	// instead of fetching through load (Rust #49269
+	// CloudConfigBundleLoader::snapshot_getter).
+	snapshot func() CloudConfigBundleSnapshot
+	// emaPolicy is the enterprise policy owner whose revisions this loader
+	// publishes (Rust #49269 CloudConfigBundleLoader::ema_policy).
+	emaPolicy *CloudConfigBundlePolicy
 }
 
 func NewCloudConfigLoader(load func() (*CloudConfigBundle, error)) *CloudConfigLoader {
@@ -188,6 +416,47 @@ func (l *CloudConfigLoader) Get() (*CloudConfigBundle, error) {
 	}
 	l.err = err
 	return nil, err
+}
+
+// GetSnapshot returns the bundle together with the policy revision binding it
+// was resolved from (Rust #49269 CloudConfigBundleLoader::get_snapshot). A
+// loader without an attached policy snapshot getter falls back to Get and
+// reports no binding.
+func (l *CloudConfigLoader) GetSnapshot() CloudConfigBundleSnapshot {
+	if l == nil {
+		return CloudConfigBundleSnapshot{}
+	}
+	if l.snapshot != nil {
+		return l.snapshot()
+	}
+	bundle, err := l.Get()
+	return CloudConfigBundleSnapshot{Bundle: bundle, Err: err}
+}
+
+// WithEMAPolicySnapshots attaches the enterprise policy owner and the snapshot
+// getter that publishes its revisions (Rust #49269
+// `CloudConfigBundleLoader::with_ema_policy_snapshots`).
+func (l *CloudConfigLoader) WithEMAPolicySnapshots(policy *CloudConfigBundlePolicy, getter func() CloudConfigBundleSnapshot) *CloudConfigLoader {
+	if l == nil {
+		return l
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.emaPolicy = policy
+	l.snapshot = getter
+	return l
+}
+
+// RetireEMAPolicy stops new enterprise MCP admission from this loader's policy
+// owner without changing generic loader behavior.
+func (l *CloudConfigLoader) RetireEMAPolicy() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	policy := l.emaPolicy
+	l.mu.Unlock()
+	policy.Retire()
 }
 
 func ParseCloudConfigSimpleTOML(input string) (map[string]any, error) {
