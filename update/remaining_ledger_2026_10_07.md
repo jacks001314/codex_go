@@ -1207,3 +1207,10 @@ git log --format='%h %s' c30b56ca..main | grep -oE '\(#[0-9]+' | tr -d '(#' | so
 | ~~`#49100`~~ | `bfdb157178` | 2 文件 +154/−6（core-plugins manager 复用 HTTP 连接池） | 已派 **`syncnext3`**（`agent-390a7b103148b523e72a2e61`，#49099 已并入 sync550，写集不再冲突） |
 
 **派单优先级建议**：`#49082` → `#48983` → `#48772` → `#48819`（按「落点确定度 × 影响面」排序；`#49100` 随 `#49099` 之后）。
+
+## 队长订正（第 85 轮续 5）
+
+- **#49069 全闭环、无残留**：`parity2` 车道最后留下的阶段 C（`961ccc54`）与 main 的 sync545 **`03d4c28c` patch-id 完全相同**（两侧同为 `6d5c0a70c29eca1fcb72598a4edafcc68c201e0d`），`git diff --stat 961ccc54 03d4c28c` 为空 ⇒ 内容已逐字节在 main，**无待并入项**。（`parity2` / `agent-f98cad967c001d4db7877a1f` 已回收，其「请派下一批」的请求随之作废。）
+- **#50525 已在 main**：`42fbf7f3` sync533，`config/config.go:801/809/858` 的 `knownTuiConfigFields` 为准。
+- **#49262 三段齐全**：`46d9a9eb`(mailbox_preemption) + `195943ab`(sync553) + `5aedba53`(sync555，车道 `555c0f57` 的纯增量 111 行)。
+- **appserver 基线以当前 main 为准**：`4fcf61c6` 实测恰 3 项 FAIL（见 runbook R5）；`bb2dedd1` 上的 4–5 项属历史，勿再引用。
