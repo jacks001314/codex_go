@@ -42,24 +42,23 @@
 `applypatch` 1 · `mcp` 1 · `tui` 1（`TestSelectStartupTooltipMatchesRustPlanBranches`）· `tui/tea` 1（`TestModelAppCommandUsesRustHistoryMessages`）·
 并发 flake（隔离单跑全绿）：`TestRuntimeRouterThreadShellCommandEmitsUserShellNotifications`、`TestStdioServerGoalSetResponsePrecedesGoalNotification`、`TestStartProcessHonorsArg0`。
 
-## R6 当前团队（2026-10-07 第 85 轮续 6；派生宽度上限 10）
+## R6 当前团队（2026-10-07 第 85 轮续 7；派生宽度上限 10）
 
-main = `ba436d17`（已 push）。在跑 **10 条**（写集互不相交为主，例外已加「先请示」约束）：
+main = `f2175d07`（已 push）。在跑 **8 条**（写集互不相交为主，例外已加「先请示」约束）：
 
 | 车道 | agent_id | 任务 | 写范围 |
 |---|---|---|---|
-| syncnext1 | `agent-a2d20906ec02e1b34d069804` | §15 批次：#49082 → #48983 → #48772 → #48819 | turn/ appserver/ state/ telemetry/ |
-| syncnext2 | `agent-db2f5031b7ee1675b2d57c3e` | #49119 rollout 落盘半片（优先）→ #49099 穿透（**开工前请示**，因 plugin/ 与 syncnext3 撞） | exec/ plugin/ |
-| syncnext3 | `agent-390a7b103148b523e72a2e61` | #49100 远程插件请求复用 HTTP 连接池 | plugin/ |
-| syncnext4 | `agent-62b358bf8556f8cbd689edaf` | #49160 a 落地 + b/c2 判定 | config/ tui/onboarding/ tui/app/ app/ |
+| syncnext4 | `agent-62b358bf8556f8cbd689edaf` | #49160 part a 已交付（= `2eb25440`）；续做 **b/c2 判定** | config/ tui/onboarding/ tui/app/ app/ |
 | syncnext5 | `agent-1fe48c6b2b6e6cf3cb811aaf` | #38470 Bedrock Runtime 专属目录（`global.`/`us.` 变体）+ preferred-model 漂移 | model/ |
-| syncnext6 | `agent-e814cc84efadcb79efed7ff5` | #51350 shell snapshot replay 限额 → #49798 exec-server env info 共享（先判据） | execserver/ |
 | syncnext7 | `agent-69e1c7ae355e6cb869a7cd6d` | #50803 managed daemon 用于 remote-control 启动 → #49360（先侦察后定） | appserverdaemon/ cli/ exec/ |
-| syncnext8 | `agent-4c91ea8c9a8cff351cf55e01` | #51458 验证提示 URL 可点击 → #50788 空草稿 Vim Normal 下开 slash 命令（改 tui/app 需请示） | tui/bottom_pane/ tui/tea/ |
-| syncnext9 | `agent-c660727b1ec1ff85fe211ffe` | #50804 review 生命周期顺序 → #51063 delegate 先前取消（先侦察） | turn/ session/ |
-| syncnext10 | `agent-afd8aab1f8cdbbfeff0448b3` | #51396 迟到低风险分数完成挂起 review → #51400 晚分数不得放行早挂起 review（一对，须同做） | Guardian 面 |
+| syncnext9 | `agent-c660727b1ec1ff85fe211ffe` | #50804 review 生命周期顺序 → #51063 delegate 先前取消 | turn/ session/ |
+| syncnext11 | `agent-0499220c268f1de9da3cea7f` | #51117 压缩替换历史装完整上下文 | context/（turn/ 需请示） |
+| syncnext12 | `agent-ac538099e50d4129bfabd665` | #51355 agent spawn 失败的有界诊断（先侦察） | tool/ appserver/ telemetry/ |
+| syncnext13 | `agent-055c9e303eb75b35dbc30ac0` | #51378 WS 连接池并发预热（先侦察；同语义才碰 remotecontrol/） | codexapi/ |
+| syncnext14 | `agent-414b7d5374d217880cff0748` | #50808 精简 TUI 快照并合并行为测试 | parity/ tui/（仅测试） |
 
-- 已回收：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`。
+- 已回收（累计）：`sync51480`、`syncmcpcfg`、`synctui`、`verify51482`、`sync51482`、`syncparity2`、`syncnew1`、`syncnew2`、`syncnew3`、`syncnext1`、`syncnext2`、`syncnext3`、`syncnext6`、`syncnext8`、`syncnext10`。
 - 待补：新 verifier（在飞数量降到 ≤3 时创建）。
-- **附加规则（第 85 轮续 5）**：车道可能在回报后**继续 amend 已交付 commit**；并入前必须比对最终 SHA 的 delta（`git diff <旧SHA> <新SHA>`）。
-- **附加规则（第 85 轮续 6）**：写集相邻的车道**开工前先请示**（`plugin/`：syncnext2↔syncnext3；`tui/app/`：syncnext8↔syncnext4；`appserver/` 线程元数据路径：syncnext9/syncnext10↔syncnext1）。
+- **附加规则（续 5）**：车道可能在回报后**继续 amend 已交付 commit**；并入前必须比对最终 SHA 的 delta。
+- **附加规则（续 6）**：写集相邻的车道**开工前先请示**。
+- **附加规则（续 7）**：**反向对照必须打在真正的被测接线上**（sync559 实例：改 `readPluginManifestForRootCached` 不变红，真接点在 `List` 的 `loadMarketplacePlugins(..., s.manifests)`）。若反向对照「撤销后仍绿」，说明改错了位置，须重新定位后再报。
