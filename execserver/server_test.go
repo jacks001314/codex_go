@@ -161,8 +161,8 @@ func TestStdioInitializeAndEnvironmentInfo(t *testing.T) {
 		t.Fatalf("stdout = %q", output)
 	}
 	// Rust 646f7c0a91 defines the bit as "this executor supports
-	// environmentConfig/read"; Go's stub does not implement the method, so it
-	// must report false (see TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust).
+	// environmentConfig/read"; a bare stub registers no reader, so it must
+	// report false (see TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust).
 	if !strings.Contains(output, `"environmentConfigRead":false`) {
 		t.Fatalf("local environment info should not advertise an unimplemented environmentConfig/read: %q", output)
 	}
@@ -173,8 +173,10 @@ func TestLocalEnvironmentInfoReportsTemporaryDirectoriesAndCapability(t *testing
 	if info == nil {
 		t.Fatal("localEnvironmentInfo() = nil")
 	}
-	if info.Capabilities.EnvironmentConfigRead {
-		t.Fatalf("EnvironmentConfigRead = true, want false: Go does not implement environmentConfig/read (Rust 646f7c0a91)")
+	// The canonical local executor supports environmentConfig/read (Rust
+	// 646f7c0a91); a Server narrows the bit to whether a reader is registered.
+	if !info.Capabilities.EnvironmentConfigRead {
+		t.Fatalf("EnvironmentConfigRead = false, want true for the canonical local executor")
 	}
 	if !info.Capabilities.SandboxedFileStreaming {
 		t.Fatalf("SandboxedFileStreaming = false, want true (Rust #38356)")
@@ -2172,32 +2174,59 @@ func waitForExecServerListenURL(t *testing.T, urlCh <-chan string) string {
 }
 
 // TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust freezes the
-// invariant that `environment/info` advertises only the requests the stub can
+// invariant that `environment/info` advertises only the requests the server can
 // actually serve. Rust 646f7c0a91 defines `environmentConfigRead` as "whether
-// this executor supports the `environmentConfig/read` request", and Rust's local
+// this executor supports the `environmentConfig/read` request" and Rust's local
 // environment sets the bit because its handler is registered
-// (exec-server/src/server/registry.rs); Go's dispatch table has no such method,
-// so the request must report unknown-method (-32601) and the capability must
-// stay false. Rust's client-side `discover_http_mcp_servers` skips the read when
-// the bit is clear (exec-server/src/environment_config.rs), which is the only
-// reason claiming true would be observable as a hard failure.
+// (exec-server/src/server/registry.rs); Go's server follows the same rule, so a
+// stub without a reader reports false and answers `environmentConfig/read` with
+// an unavailable error, while the exec-server command installs
+// execserver/hostconfig and advertises true.
 func TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust(t *testing.T) {
-	if localEnvironmentInfo().Capabilities.EnvironmentConfigRead {
-		t.Fatal("environmentConfigRead = true although environmentConfig/read is not implemented")
-	}
-	input := `{"id":1,"method":"initialize","params":{"clientName":"test"}}` + "\n" +
+	readRequest := `{"id":3,"method":"environmentConfig/read","params":{"cwd":"file:///tmp","configPaths":[["mcp_servers"]],"requirementsPaths":[["mcp_servers"]]}}` + "\n"
+	prefix := `{"id":1,"method":"initialize","params":{"clientName":"test"}}` + "\n" +
 		`{"method":"initialized","params":{}}` + "\n" +
-		`{"id":2,"method":"environment/info","params":{}}` + "\n" +
-		`{"id":3,"method":"environmentConfig/read","params":{"cwd":"file:///tmp","configPaths":[["mcp_servers"]],"requirementsPaths":[["mcp_servers"]]}}` + "\n"
+		`{"id":2,"method":"environment/info","params":{}}` + "\n"
+
+	// A bare stub has no reader: false, and the request is reported as
+	// unavailable rather than silently answered.
+	var stubStdout bytes.Buffer
+	if err := NewServer().Serve(context.Background(), strings.NewReader(prefix+readRequest), &stubStdout); err != nil {
+		t.Fatalf("Serve() error = %v", err)
+	}
+	stubOutput := stubStdout.String()
+	if strings.Contains(stubOutput, `"environmentConfigRead":true`) {
+		t.Fatalf("bare stub advertises environmentConfigRead: %q", stubOutput)
+	}
+	if !strings.Contains(stubOutput, `"code":-32603`) || !strings.Contains(stubOutput, "executor-local config read is not available") {
+		t.Fatalf("bare stub should report the read as unavailable: %q", stubOutput)
+	}
+
+	// With a reader installed the bit flips and the request is dispatched.
+	server := NewServer()
+	server.SetEnvironmentConfigReader(stubEnvironmentConfigReader{})
 	var stdout bytes.Buffer
-	if err := NewServer().Serve(context.Background(), strings.NewReader(input), &stdout); err != nil {
+	if err := server.Serve(context.Background(), strings.NewReader(prefix+readRequest), &stdout); err != nil {
 		t.Fatalf("Serve() error = %v", err)
 	}
 	output := stdout.String()
-	if strings.Contains(output, `"environmentConfigRead":true`) {
-		t.Fatalf("environment/info advertises an unimplemented environmentConfig/read: %q", output)
+	if !strings.Contains(output, `"environmentConfigRead":true`) {
+		t.Fatalf("environment/info should advertise environmentConfigRead with a reader: %q", output)
 	}
-	if !strings.Contains(output, `"code":-32601`) || !strings.Contains(output, "does not implement `environmentConfig/read` yet") {
-		t.Fatalf("environmentConfig/read should report an unknown method: %q", output)
+	if !strings.Contains(output, `"source":"stub-layer"`) {
+		t.Fatalf("environmentConfig/read should return the reader result: %q", output)
 	}
+}
+
+type stubEnvironmentConfigReader struct{}
+
+func (stubEnvironmentConfigReader) ReadEnvironmentConfig(params *EnvironmentConfigReadParams, preferMXC *bool) (*EnvironmentConfigReadResponse, error) {
+	codexHome := "file:///tmp"
+	return &EnvironmentConfigReadResponse{
+		CodexHomeDir: codexHome,
+		Config: EnvironmentConfigLayerStack{
+			Layers: []EnvironmentConfigLayer{{Source: "stub-layer", BaseDir: codexHome, TOML: "[mcp_servers]\n"}},
+		},
+		Requirements: EnvironmentConfigLayerStack{},
+	}, nil
 }

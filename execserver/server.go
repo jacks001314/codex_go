@@ -35,6 +35,7 @@ const (
 	MethodInitialized             = "initialized"
 	MethodEnvironmentInfo         = "environment/info"
 	MethodEnvironmentStatus       = "environment/status"
+	MethodEnvironmentConfigRead   = "environmentConfig/read"
 	MethodProcessStart            = "process/start"
 	MethodProcessRead             = "process/read"
 	MethodProcessWrite            = "process/write"
@@ -205,6 +206,42 @@ type Server struct {
 	registryMu         sync.Mutex
 	sessions           map[string]*serverSessionEntry
 	detachedSessionTTL time.Duration
+
+	// preferMXC mirrors Rust ExecServerRuntimeOptions::prefer_mxc: only the
+	// sandbox preference from startup `features.prefer_mxc` flags, never other
+	// startup configuration or secrets. It is surfaced to
+	// `environmentConfig/read` as a session-flags layer.
+	preferMXC *bool
+	// environmentConfigReader implements `environmentConfig/read`
+	// (execserver/environment_config_read.go). It is nil on a bare stub, which
+	// is why the advertised capability follows this field.
+	environmentConfigReader EnvironmentConfigReader
+}
+
+// SetPreferMXC records the startup CLI sandbox preference
+// (`-c features.prefer_mxc=<bool>`), mirroring Rust
+// exec_server_command.rs: only this value is retained from startup overrides.
+func (s *Server) SetPreferMXC(value *bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if value == nil {
+		s.preferMXC = nil
+		return
+	}
+	retained := *value
+	s.preferMXC = &retained
+}
+
+func (s *Server) preferMXCValue() *bool {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.preferMXC
 }
 
 type fileHandleEntry struct {
@@ -825,12 +862,38 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 }
 
 func newSessionServer(httpClient *http.Client) *Server {
-	return &Server{
+	return newSessionServerWithRuntimeOptions(httpClient, nil)
+}
+
+// newSessionServerWithRuntimeOptions carries the startup runtime options that
+// survive a session handoff (Rust keeps runtime paths on the exec-server
+// handler, not on the session).
+func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server) *Server {
+	server := &Server{
 		processes:  map[string]*processState{},
 		handles:    map[string]*fileHandleEntry{},
 		fileSlots:  make(chan struct{}, maxOpenFileReads),
 		httpClient: httpClient,
 	}
+	if parent != nil {
+		server.SetPreferMXC(parent.preferMXCValue())
+		server.SetEnvironmentConfigReader(parent.environmentConfigReaderForRead())
+	}
+	return server
+}
+
+// localEnvironmentInfoForConnection reports the local environment with the
+// capabilities this server can actually serve, so a bare stub never advertises
+// `environmentConfigRead` without a reader.
+func (s *Server) localEnvironmentInfoForConnection(ctx context.Context) *EnvironmentInfo {
+	info := localEnvironmentInfo()
+	if info == nil {
+		return nil
+	}
+	if server := s.serverForConnection(ctx); server != nil {
+		info.Capabilities.EnvironmentConfigRead = server.environmentConfigReadSupported()
+	}
+	return info
 }
 
 func (s *Server) serverForConnection(ctx context.Context) *Server {
@@ -887,7 +950,7 @@ func (s *Server) attachSession(ctx context.Context, resumeSessionID *string) (*s
 	sessionID := uuid.NewString()
 	entry := &serverSessionEntry{
 		id:           sessionID,
-		server:       newSessionServer(s.httpClient),
+		server:       newSessionServerWithRuntimeOptions(s.httpClient, s),
 		connectionID: connectionID,
 	}
 	s.sessions[sessionID] = entry
@@ -1285,15 +1348,22 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		if entry == nil {
-			return InitializeResponse{SessionID: uuid.NewString(), EnvironmentInfo: localEnvironmentInfo()}, nil
+			return InitializeResponse{SessionID: uuid.NewString(), EnvironmentInfo: s.localEnvironmentInfoForConnection(ctx)}, nil
 		}
-		return InitializeResponse{SessionID: entry.id, EnvironmentInfo: localEnvironmentInfo()}, nil
+		return InitializeResponse{SessionID: entry.id, EnvironmentInfo: s.localEnvironmentInfoForConnection(ctx)}, nil
 	case MethodEnvironmentInfo:
 		logEnvironmentTrace(ctx, MethodEnvironmentInfo)
-		return localEnvironmentInfo(), nil
+		return s.localEnvironmentInfoForConnection(ctx), nil
 	case MethodEnvironmentStatus:
 		logEnvironmentTrace(ctx, MethodEnvironmentStatus)
 		return EnvironmentStatus{Status: EnvironmentStatusReady}, nil
+	case MethodEnvironmentConfigRead:
+		var params EnvironmentConfigReadParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		response, err := s.serverForConnection(ctx).environmentConfigRead(&params)
+		return response, environmentConfigReadFailure(err)
 	case MethodCapabilityRootsDiscover:
 		var params CapabilityRootsDiscoverParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -1474,6 +1544,8 @@ func execServerMethodFamily(method string) string {
 		return "environment info"
 	case MethodEnvironmentStatus:
 		return "environment status"
+	case MethodEnvironmentConfigRead:
+		return "environment config"
 	case MethodCapabilityRootsDiscover:
 		return "capability discovery"
 	case MethodProcessStart, MethodProcessRead, MethodProcessWrite, MethodProcessTerminate, MethodProcessSignal:
@@ -3372,18 +3444,12 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,
 			CapabilityDiscoverySandbox: true,
-			// Rust 646f7c0a91 defines `environmentConfigRead` as "whether this
-			// executor supports the `environmentConfig/read` request". Rust's
-			// local environment advertises true because the handler exists
-			// (exec-server/src/server/registry.rs -> environment_config_read);
-			// Go's stub has no such handler, so the request falls through to
-			// the unknown-method branch (-32601). A peer that trusts the bit
-			// would issue a request Go cannot answer (Rust's
-			// `discover_http_mcp_servers` only skips the read when the bit is
-			// false: exec-server/src/environment_config.rs), so the honest
-			// value stays false until the executor-local config read is ported.
-			// Frozen by TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust.
-			EnvironmentConfigRead:  false,
+			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
+			// Go now implements the request (execserver/environment_config_read.go,
+			// mirroring exec-server/src/server/registry.rs -> environment_config_read),
+			// so the bit is honest again. Frozen by
+			// TestEnvironmentConfigReadCapabilityMatchesDispatchLikeRust.
+			EnvironmentConfigRead:  true,
 			SandboxedFileStreaming: true,
 			// Rust #50177: the executor supports replacement opens and
 			// positional `fs/writeBlock`.

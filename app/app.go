@@ -29,6 +29,7 @@ import (
 	codexexec "codex_go/exec"
 	"codex_go/execpolicy"
 	"codex_go/execserver"
+	"codex_go/execserver/hostconfig"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/model"
@@ -747,8 +748,14 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 		strictConfig = strictConfig || root.StrictConfig
 		rootConfigOverrides = append(rootConfigOverrides, root.ConfigOverrides...)
 	}
+	// Rust exec_server_command.rs retains exactly one startup value for
+	// executor-local config reads: an explicit `features.prefer_mxc`. Parse
+	// failures are ignored because config loading below owns error handling
+	// (non-strict stdio can proceed without config).
+	preferMXC := execServerPreferMXCFromOverrides(rootConfigOverrides)
+	environmentConfigReader := execserver.EnvironmentConfigReader(hostconfig.NewReader())
 	if strings.TrimSpace(opts.Remote) != "" {
-		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig, stdin)
+		return runExecServerRemote(ctx, opts, rootConfigOverrides, strictConfig, preferMXC, environmentConfigReader, stdin)
 	}
 	if forward := strings.TrimSpace(opts.Forward); forward != "" && forward != "forward" {
 		// Rust #39249: register an existing WebSocket exec-server as a
@@ -785,6 +792,8 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	}
 	httpClient := policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0))
 	server := execserver.NewServerWithHTTPClient(httpClient)
+	server.SetPreferMXC(preferMXC)
+	server.SetEnvironmentConfigReader(environmentConfigReader)
 	// Rust #47601: listener authentication gates WebSocket upgrades; the flag
 	// combination was already validated against stdio/--remote/forward.
 	if opts.WebSocketAuthOptions.Configured() {
@@ -797,7 +806,7 @@ func runExecServer(ctx context.Context, opts *cli.ExecServerOptions, root *cli.R
 	return server.ServeTransport(ctx, listenURL, stdin, stdout)
 }
 
-func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool, stdin io.Reader) error {
+func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootConfigOverrides []string, strictConfig bool, preferMXC *bool, environmentConfigReader execserver.EnvironmentConfigReader, stdin io.Reader) error {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.Remote), "/")
 	if baseURL == "" {
 		return errors.New("environment registry base URL is required")
@@ -822,11 +831,13 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		headers := http.Header{}
 		headers.Set("Authorization", "Bearer "+accessToken)
 		return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
-			BaseURL:       baseURL,
-			EnvironmentID: environmentID,
-			Name:          strings.TrimSpace(opts.Name),
-			AuthHeaders:   headers,
-			HTTPClient:    policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+			BaseURL:                 baseURL,
+			EnvironmentID:           environmentID,
+			Name:                    strings.TrimSpace(opts.Name),
+			AuthHeaders:             headers,
+			HTTPClient:              policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+			PreferMXC:               preferMXC,
+			EnvironmentConfigReader: environmentConfigReader,
 		})
 	}
 	storeOptions := authStoreOptionsFromLoadedConfig(loadedConfig)
@@ -865,12 +876,14 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		}
 	}
 	return runExecServerRemoteWithParentLifetime(ctx, stdin, opts.ExitOnStdinClose, execserver.RemoteEnvironmentConfig{
-		BaseURL:            baseURL,
-		EnvironmentID:      environmentID,
-		Name:               strings.TrimSpace(opts.Name),
-		AuthHeaders:        headers,
-		ResolveAuthHeaders: resolveHeaders,
-		HTTPClient:         policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		BaseURL:                 baseURL,
+		EnvironmentID:           environmentID,
+		Name:                    strings.TrimSpace(opts.Name),
+		AuthHeaders:             headers,
+		ResolveAuthHeaders:      resolveHeaders,
+		HTTPClient:              policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		PreferMXC:               preferMXC,
+		EnvironmentConfigReader: environmentConfigReader,
 	})
 }
 
@@ -881,6 +894,31 @@ func runExecServerRemoteWithParentLifetime(ctx context.Context, stdin io.Reader,
 	runCtx, cancel := execServerRemoteParentContext(ctx, stdin)
 	defer cancel()
 	return execserver.RunRemoteEnvironment(runCtx, cfg)
+}
+
+// execServerPreferMXCFromOverrides extracts the explicit CLI sandbox preference
+// from `-c features.prefer_mxc=<bool>` startup overrides, mirroring Rust
+// exec_server_command.rs. Unparsable overrides or a non-boolean value yield nil
+// so the executor reports no startup preference instead of guessing.
+func execServerPreferMXCFromOverrides(rawOverrides []string) *bool {
+	if len(rawOverrides) == 0 {
+		return nil
+	}
+	overrides, err := config.ParseOverrides(rawOverrides)
+	if err != nil {
+		return nil
+	}
+	layer := config.BuildCLIOverridesLayer(overrides)
+	features, ok := layer["features"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	value, ok := features["prefer_mxc"].(bool)
+	if !ok {
+		return nil
+	}
+	retained := value
+	return &retained
 }
 
 func execServerRemoteParentContext(ctx context.Context, stdin io.Reader) (context.Context, context.CancelFunc) {

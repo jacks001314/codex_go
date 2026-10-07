@@ -52,6 +52,12 @@ type RemoteEnvironmentConfig struct {
 	Dial               func(context.Context, string, *websocket.DialOptions) (*websocket.Conn, *http.Response, error)
 	Backoff            time.Duration
 	MaxBackoff         time.Duration
+	// PreferMXC mirrors Rust ExecServerRuntimeOptions::prefer_mxc: only the
+	// sandbox preference from startup `features.prefer_mxc` flags.
+	PreferMXC *bool
+	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
+	// session; nil advertises the capability as false.
+	EnvironmentConfigReader EnvironmentConfigReader
 }
 
 type RemotePublicKey struct {
@@ -177,6 +183,8 @@ func RunRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig) erro
 	defer identity.Destroy()
 
 	server := NewServerWithHTTPClient(cfg.HTTPClient)
+	server.SetPreferMXC(cfg.PreferMXC)
+	server.SetEnvironmentConfigReader(cfg.EnvironmentConfigReader)
 	defer server.shutdownSessions()
 	backoff := newRemoteReconnectBackoff(cfg.Backoff, cfg.MaxBackoff)
 	registration, err := registerRemoteEnvironmentWithRetry(ctx, cfg, identity.PublicKey())
