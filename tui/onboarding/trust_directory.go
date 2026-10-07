@@ -17,6 +17,10 @@ type TrustCancelAction string
 const (
 	TrustCancelQuit           TrustCancelAction = "quit"
 	TrustCancelAgentsOverview TrustCancelAction = "agents_overview"
+	// TrustCancelCurrentTask keeps the session on the current directory when the
+	// offer to change directories is dismissed (Rust #49160
+	// TrustCancelAction::CurrentTask).
+	TrustCancelCurrentTask TrustCancelAction = "current_task"
 )
 
 type TrustDirectoryPrompt struct {
@@ -84,6 +88,12 @@ func (p *TrustDirectoryPrompt) Quit() {
 	p.ShouldQuit = true
 }
 
+// Escape mirrors Rust #49160's Esc handling for the trust prompt: the widget
+// stops without a trust decision, so "/cd" can keep the current directory.
+func (p *TrustDirectoryPrompt) Escape() {
+	p.Quit()
+}
+
 func (p TrustDirectoryPrompt) StepState() StepState {
 	if p.Selection != "" || p.ShouldQuit {
 		return StepComplete
@@ -108,9 +118,14 @@ func (p TrustDirectoryPrompt) RenderLines() []string {
 	}
 	cancelLabel := "Quit"
 	cancelHint := "Press Enter to continue; esc to quit"
-	if p.Cancel == TrustCancelAgentsOverview {
+	switch p.Cancel {
+	case TrustCancelAgentsOverview:
 		cancelLabel = "Back to Agent Command Center"
 		cancelHint = "Press Enter to continue; esc to go back"
+	case TrustCancelCurrentTask:
+		// Rust #49160: "/cd" offers keeping the current directory instead.
+		cancelLabel = "Keep current directory"
+		cancelHint = "Press Enter to continue; esc to cancel"
 	}
 	lines = append(lines,
 		disclosure,

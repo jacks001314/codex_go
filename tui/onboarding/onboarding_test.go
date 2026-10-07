@@ -139,3 +139,31 @@ func TestAuthOptionsAndStepState(t *testing.T) {
 		t.Fatalf("pick mode state = %s", AuthStepState(SignInPickMode))
 	}
 }
+
+// TestTrustDirectoryChangeConsentCanKeepCurrentDirectory mirrors Rust #49160's
+// `directory_change_consent_can_keep_current_directory`: a "/cd" consent prompt
+// offers keeping the current directory, and Esc stops without a decision.
+func TestTrustDirectoryChangeConsentCanKeepCurrentDirectory(t *testing.T) {
+	prompt := NewTrustDirectoryPrompt("/workspace/project/sub", "/workspace/project")
+	prompt.Cancel = TrustCancelCurrentTask
+	lines := strings.Join(prompt.RenderLines(), "\n")
+	for _, want := range []string{
+		"> Trust and continue",
+		"  Keep current directory",
+		"Press Enter to continue; esc to cancel",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("directory-change prompt missing %q:\n%s", want, lines)
+		}
+	}
+	if strings.Contains(lines, "esc to quit") || strings.Contains(lines, "  Quit") {
+		t.Fatalf("directory-change prompt kept the startup wording:\n%s", lines)
+	}
+	prompt.Escape()
+	if !prompt.ShouldQuit {
+		t.Fatalf("Esc must stop the directory-change prompt: %#v", prompt)
+	}
+	if prompt.StepState() != StepComplete {
+		t.Fatalf("escaped prompt state = %s", prompt.StepState())
+	}
+}
