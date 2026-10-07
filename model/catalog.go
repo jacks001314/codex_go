@@ -1148,15 +1148,16 @@ func normalizeBundledBedrockCatalog(catalog ModelsResponse, endpoint bedrockEndp
 }
 
 // normalizeBedrockCatalog mirrors Rust #50472's normalize_bedrock_catalog: a
-// caller-supplied (custom) catalog owns its speed-tier, service-tier and
-// default-tier definitions, so only the wire compatibility fields are
-// normalized here — Amazon Bedrock rejects the multimodal search content
-// types and does not support multi-agent V2 response items.
+// caller-supplied (custom) catalog owns its speed-tier, service-tier,
+// default-tier and multi-agent definitions, so only the wire compatibility
+// fields are normalized here (Amazon Bedrock rejects the multimodal search
+// content types). Rust #49345 (8ffd91e42a) stopped forcing multi-agent V1 in
+// this normalizer: the catalog's own `multi_agent_version` is preserved so a
+// model that declares V2 (or Disabled, or nothing) keeps it.
 func normalizeBedrockCatalog(catalog ModelsResponse) ModelsResponse {
 	for i := range catalog.Models {
 		model := &catalog.Models[i]
 		model.WebSearchToolType = "text"
-		model.MultiAgentVersion = "v1"
 	}
 	return catalog
 }
@@ -1177,7 +1178,8 @@ func bedrockModel(bundled ModelsResponse, openAISlug string, bedrockSlug string,
 	// Rust #39102: the GPT-5.6/Astra Bedrock variants allow context-window
 	// overrides up to 872,000 tokens.
 	model.MaxContextWindow = 872000
-	model.SupportedReasoningLevels = withoutReasoningLevel(model.SupportedReasoningLevels, "ultra")
+	// Rust #49345 (8ffd91e42a) stopped stripping the Ultra reasoning level
+	// here, so the Astra advanced-reasoning picker offers Ultra on Bedrock.
 	return model
 }
 
@@ -1215,20 +1217,6 @@ func bundledModelBySlug(bundled ModelsResponse, slug string) ModelInfo {
 		EffectiveContextWindowPercent: 95,
 		InputModalities:               []string{"text"},
 	}
-}
-
-func withoutReasoningLevel(levels []string, level string) []string {
-	if len(levels) == 0 {
-		return levels
-	}
-	out := make([]string, 0, len(levels))
-	for _, candidate := range levels {
-		if strings.EqualFold(strings.TrimSpace(candidate), level) {
-			continue
-		}
-		out = append(out, candidate)
-	}
-	return out
 }
 
 func WithDefaultOnlyServiceTier(catalog ModelsResponse) ModelsResponse {
