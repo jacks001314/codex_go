@@ -597,7 +597,11 @@ func (r *RuntimeRouter) handleRealtimeEvent(threadID string, event realtime.Even
 		r.recordRealtimeTranscriptTail(threadID, event)
 		return
 	}
-	transcriptDelta := formatRealtimeTranscript(event.ActiveTranscript)
+	// Both sides of the handoff agree on the same bounded active transcript:
+	// the realtime transport already applied the budget, and the appserver
+	// re-applies it so an unbounded producer cannot exceed it (#54257).
+	activeTranscript := realtime.TrimRealtimeTranscript(event.ActiveTranscript)
+	transcriptDelta := formatRealtimeTranscript(activeTranscript)
 	delegation := wrapRealtimeDelegation(event.InputTranscript, transcriptDelta)
 	if delegation == "" {
 		return
@@ -630,7 +634,9 @@ func (r *RuntimeRouter) recordRealtimeTranscriptTail(threadID string, event real
 	if !r.hasRuntimeThreadStore() {
 		return
 	}
-	text := realtimeTranscriptTailText(event.ActiveTranscript)
+	// Rust `take_transcript_tail` bounds the active transcript before draining
+	// it (methods.rs:792-797); the same bound applies to the recorded tail.
+	text := realtimeTranscriptTailText(realtime.TrimRealtimeTranscript(event.ActiveTranscript))
 	if text == "" {
 		return
 	}

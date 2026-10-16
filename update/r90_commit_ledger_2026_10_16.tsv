@@ -16,3 +16,27 @@ c333d755d44d4eb764cffd2bd862d86d790e91e6	51890	Add the missing `mxc-sdk` UTF-8 r
 391bf191c2ef21071d59e9b0a08480efdbad2c17	51849	Fix package smoke tests for Cargo and Bazel debug symbols	build	not_applicable	N/A (verified): Fix package smoke tests for Cargo and Bazel debug symbols (#51849) — 证据 E5 见 update/r90_na_evidence_2026_10_16.md
 6ea82c59c63f410bbab057cb64e2a7ba85b6a078	51847	Preserve Cargo package names in Bazel Rust builds	build	not_applicable	N/A (verified): Preserve Cargo package names in Bazel Rust builds (#51847) — 证据 E1,E5 见 update/r90_na_evidence_2026_10_16.md
 9fcb1f5ed49c938b6fa5a9b4c8f897f3ddfd734c	54419	Support line breaks in Mermaid flowchart node labels	impl	complete	Implemented: mermaid/parse.go+draw.go 的 <br>/<br/>/<br /> 换行、逐行 40 格上限、边标签整体校验（对齐 Rust 9fcb1f5ed4）；leader 独立复跑 go test ./mermaid/ ok + RC (撤 parse.go 修复 ⇒ TestFlowchartLineBreakLabelsMatchRust/TestStadiumsWithOtherShapesInEveryDirectionMatchesRust FAIL 原文) + 宽度探针 uniseg.StringWidth("\n")=0；commit 661abcbe；详见 update/r90_verify_log_2026_10_16.md
+4eb4a65407	54590	Create threads capture sender user context	impl	complete	commit e7a74f58；Go appserver/retained_context.go:629-641 白名单 4 对 (ns,name)；RC 撤 hunk ⇒ FAIL；V 车道独立 validated
+bc9cad3473	53451	Incomplete responses are terminal	impl	complete	commit e7a74f58；appserver/previous_model_compact.go + model/responses_stream.go:516-521；RC×3 FAIL 原文；未覆盖：record_incomplete_response_usage 无 Go 载体
+922510f4d7	54351	Turn-scoped item paging uses the turn index	impl	complete	commit e7a74f58；state/thread_history_query.go:215 INDEXED BY；V 车道 90 格×四路 mismatches=0
+7ae8319917	54369	Retry SQLite busy errors instead of failing	impl	complete	commit 9de2a14a；state/sqlite_busy_retry.go；RC 撤延迟 ⇒ 恰 5 条 FAIL 原文；V 车道 7/7 PASS
+1ef30bcbe7	54389	Separate read/write SQLite pools	impl	complete	commit 9de2a14a；state/sqlite.go:37,67,84,149,156,175,269,368,431；TestOpenReadWritePool 4 PASS
+9c84e89ce0	54417	Skip runtime DB reclamation on NFS homes	impl	complete	commit 9de2a14a；state/nfs_linux.go(0x6969)+nfs_other.go+reclamation.go:102,332,336；Windows 侧 verified，Linux 真机未覆盖（需 Linux 节点）
+2dae757b87	51734	Guardian reads persisted sender context	impl	complete	commit 642b4ff4；appserver/retained_context.go:692-752 + state/guardian_sender_messages.go:45-79；保留上下文测试 4 例 PASS
+6506579001	27198	Route Codex Apps MCP through /ps/mcp	impl	complete	commit aad8b67e；mcp/config.go:1028-1050；RC ⇒ 4 条 FAIL 原文；grep wham/apps = 0 命中
+938ddfb66c	54069	Windows env allowlist for MCP stdio	impl	complete	commit aad8b67e；Go 唯一 stdio 载体 mcp/stdio_env.go:138-152 已 aligned（探针 mcp/stdio_env_test.go:130-165 PASS + RC FAIL 原文）；executor 侧 remote stdio 在 Go 无载体 = N-A
+a45b8ccb01	54505	Stream file writes to the executor	impl	complete	commit 9c6025c2；execserver/client.go:1338-1458 + tool/environment_filesystem.go:167-222；RC×4 FAIL 原文；未验证：128 句柄容量压测
+9d3ae38e13	54060	Scan and restore archived rollouts like Rust	impl	complete	commit 2eae50f6；rollout/rollout.go:2333,2436,2488 + appserver/router.go:2410；RC-A/B/C 三条 FAIL 原文
+4ae6016a93	54079	Retire a rejected MCP OAuth refresh token	impl	complete	commit c01a9949；mcp/oauth.go:304-374 + mcp/http_client.go:1334-1368,1401-1409,1457-1466；队长独立 RC ⇒ 恰 2 条 FAIL 原文；近似项：跨进程聚合锁、keyring 真实凭据未验证
+98fd26206d	54433	Neutral exec exit labels in the TUI	impl	complete	commit 3bc38757；tui/exec_cell/render.go:172-190,212-232；车道 RC ⇒ FAIL 原文；队长复跑 tui/exec_cell ok
+f10ec115b7	54097	Daybreak notice mirror layer	impl	complete	commit 3bc38757；tui/chatwidget/session_flow.go:40-70,105-125,163-170,197-205；运行期发射点缺（tui/tea 无 session.configured 处理）= 未覆盖
+764a70fc11	54047	Replayed turn keeps its elapsed time	impl	complete	commit 3bc38757；tui/tea/model.go:4629-4646,4994-4998 + session_picker.go:427-433；队长独立 RC ⇒ replayed_turn_elapsed_time_like_rust_test.go:54 FAIL 原文；app 侧接线未做（tui/** 之外）
+6b991972c5	54445	Sandbox policy for PowerShell sources	impl	not_applicable	N/A + 正向证据：Go 无该子系统，8 个上游标识符 git grep 全 0 命中（证据见 update/r90b_2026_10_16.md §5）
+80b88a700e	54076	Classify execpolicy PowerShell provenance	impl	not_applicable	N/A + 正向证据：Go 无 execpolicy PowerShell 来源分类，8 个上游标识符全 0 命中（证据见 update/r90b_2026_10_16.md §6）
+e790ce2717	54475	Coalesce concurrent metadata requests	impl	not_applicable	N/A + 正向证据：metadata_requests 全 0 命中；Go 等价载体本为同步互斥量且元数据 I/O 在锁外（execserver/client.go:42-43,1531-1557,1584-1591）
+237b7d4323	53728	Remote cwd override in the session picker	impl	not_applicable	N/A + 正向证据：Go 无 remote_cwd_override（git grep 仅 2 处注释）；picker 与 resume 共用同一 cwd 源，过滤每次现算，无丢失路径
+72ad8747e9	53725	Three-state web link display	impl	not_applicable	N/A + 正向证据：weblinkdisplay 全 0 命中；Go 恒为 label-only（tui/markdown/render.go:334,344 + terminal_hyperlinks.go:71 OSC-8）
+cec8c6fb87	54044	Prepend earlier transcript history	impl	not_applicable	N/A + 正向证据：Go 无 transcript 分页/prepend 载体（historypagination 仅命中 app/dynamic_tools*.go 能力探测）
+c313eb75fd	54365	Skip duplicated transcript items	impl	not_applicable	N/A + 正向证据：探针实测「不同 item 同文本」在 Go 只 1 条（te/transcript.go:338 mergeAssistantFinalToMessages）；差异注记见 update/r90tui_2026_10_16.md §④④
+5fff6378d6	54278	Retain new images in the guardian reviewer	impl	blocked_precondition	drift：Go guardian 无 admitted-history/图像引用载体（retain_new_images 0 命中）；只改 reviewedSequence 会丢证据文本，语义不等价 ⇒ 待 #54398/#54420 或其载体落地
+2a6ecbb93c	54257	Trim realtime transcript by frame recency	impl	blocked_precondition	drift：Go wire 层不解析帧时间戳（realtime/realtime.go:1877-1880 TranscriptEntry 仅 Role/Text），累积器无 8 KiB 预算 ⇒ 帧新近度淘汰无载体（上游实为 app-server 端点侧改动）

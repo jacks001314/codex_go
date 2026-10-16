@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 )
@@ -669,6 +670,7 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 		s.outputAudioItemID = ""
 		s.outputAudioEndMS = 0
 		s.transcript = appendRealtimeHandoffInput(s.transcript, event.InputTranscript)
+		s.trimActiveTranscriptLocked()
 		event.ActiveTranscript = append([]TranscriptEntry(nil), s.transcript[s.lastHandoffEntryCount:]...)
 		s.lastHandoffEntryCount = len(s.transcript)
 		s.newInputEntry = true
@@ -684,6 +686,11 @@ func (s *realtimeTransportSession) updateTranscript(event Event) (Event, string,
 		s.outputAudioItemID = ""
 		s.outputAudioEndMS = 0
 	}
+	// Rust runs the active-transcript budget after every transcript update and
+	// falls back to FIFO eviction when the event carries no frame timestamp
+	// (methods.rs:777-788). Go never has a frame timestamp, so this is always
+	// that fallback.
+	s.trimActiveTranscriptLocked()
 	return event, steerHandoffID, sendDeferredResponse, audioTruncate
 }
 
@@ -763,6 +770,108 @@ func appendRealtimeHandoffInput(entries []TranscriptEntry, input string) []Trans
 	return append(entries, TranscriptEntry{Role: "user", Text: input})
 }
 
+// maxActiveRealtimeTranscriptBytes mirrors Rust's MAX_ACTIVE_TRANSCRIPT_BYTES
+// (upstream #54257,
+// codex-api/src/endpoint/realtime_websocket/methods.rs:64).
+const maxActiveRealtimeTranscriptBytes = 8 * 1024
+
+// truncatedRealtimeTranscriptPrefix mirrors Rust's TRUNCATED_TRANSCRIPT_PREFIX
+// (methods.rs:65), the marker kept in front of a tail-truncated utterance.
+const truncatedRealtimeTranscriptPrefix = "\u2026"
+
+// realtimeTranscriptEntryBytes mirrors Rust's `transcript_entry_bytes`
+// (methods.rs:873-875): the rendered "role: text" line plus its separator.
+func realtimeTranscriptEntryBytes(entry TranscriptEntry) int {
+	return len(entry.Role) + len(entry.Text) + 3
+}
+
+// TrimRealtimeTranscript applies Rust's active-transcript budget to entries
+// that came from a realtime transport (#54257,
+// `truncate_active_transcript`, methods.rs:800-839).
+//
+// Rust evicts by raw frame recency and only falls back to FIFO removal when
+// timing is unavailable (methods.rs:803-814). The Go wire layer never parses
+// frame timestamps, so every utterance has no timing and this is always that
+// legacy FIFO path: whole utterances are dropped from the head until the
+// transcript fits, and a single utterance that still exceeds the budget keeps
+// its tail behind the marker. The frame-recency half of the upstream change is
+// not represented here because Go has no frame-timestamp carrier.
+func TrimRealtimeTranscript(entries []TranscriptEntry) []TranscriptEntry {
+	trimmed := append([]TranscriptEntry(nil), entries...)
+	trimmed, _ = trimRealtimeTranscriptEntries(trimmed)
+	return trimmed
+}
+
+// trimRealtimeTranscriptEntries trims in place and reports how many leading
+// utterances were evicted so callers can keep their own cursors aligned.
+func trimRealtimeTranscriptEntries(entries []TranscriptEntry) ([]TranscriptEntry, int) {
+	total := 0
+	for _, entry := range entries {
+		total += realtimeTranscriptEntryBytes(entry)
+	}
+	dropped := 0
+	for total > maxActiveRealtimeTranscriptBytes && len(entries) > 1 {
+		// "preserving the legacy FIFO policy without timing" (methods.rs:804).
+		total -= realtimeTranscriptEntryBytes(entries[0])
+		entries = entries[1:]
+		dropped++
+	}
+	if len(entries) > 0 {
+		truncateRealtimeTranscriptEntry(&entries[0], maxActiveRealtimeTranscriptBytes)
+	}
+	return entries, dropped
+}
+
+// truncateRealtimeTranscriptEntry mirrors Rust's `truncate_transcript_entry`
+// (methods.rs:841-865): keep the newest byte tail inside the budget, move the
+// cut forward to a UTF-8 boundary, and keep exactly one marker in front of it.
+func truncateRealtimeTranscriptEntry(entry *TranscriptEntry, maxBytes int) {
+	if entry == nil {
+		return
+	}
+	maxTextBytes := maxBytes - (len(entry.Role) + 3)
+	if maxTextBytes < 0 {
+		maxTextBytes = 0
+	}
+	if len(entry.Text) <= maxTextBytes {
+		return
+	}
+	inner := maxTextBytes - len(truncatedRealtimeTranscriptPrefix)
+	if inner < 0 {
+		inner = 0
+	}
+	start := len(entry.Text) - inner
+	if start < 0 {
+		start = 0
+	}
+	if start > len(entry.Text) {
+		start = len(entry.Text)
+	}
+	for start < len(entry.Text) && !utf8.RuneStart(entry.Text[start]) {
+		start++
+	}
+	entry.Text = truncatedRealtimeTranscriptPrefix + entry.Text[start:]
+}
+
+// trimActiveTranscriptLocked applies the budget to the accumulator, mirroring
+// Rust's `truncate_active_transcript` call for events without a frame
+// (methods.rs:786-788), and keeps the handoff cursor on the same conversation
+// position when leading utterances are evicted.
+func (s *realtimeTransportSession) trimActiveTranscriptLocked() {
+	if s == nil {
+		return
+	}
+	trimmed, dropped := trimRealtimeTranscriptEntries(s.transcript)
+	s.transcript = trimmed
+	if dropped == 0 {
+		return
+	}
+	s.lastHandoffEntryCount -= dropped
+	if s.lastHandoffEntryCount < 0 {
+		s.lastHandoffEntryCount = 0
+	}
+}
+
 func (s *realtimeTransportSession) takeTranscriptTail() []TranscriptEntry {
 	if s == nil || !s.config.FlushTranscriptTailOnEnd {
 		return nil
@@ -773,6 +882,9 @@ func (s *realtimeTransportSession) takeTranscriptTail() []TranscriptEntry {
 		return nil
 	}
 	s.tailFlushed = true
+	// Rust bounds the active transcript before draining the tail
+	// (methods.rs:792-797).
+	s.trimActiveTranscriptLocked()
 	tail := append([]TranscriptEntry(nil), s.transcript[s.lastHandoffEntryCount:]...)
 	s.lastHandoffEntryCount = len(s.transcript)
 	return tail
