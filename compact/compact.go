@@ -11,6 +11,9 @@ import (
 	"unicode"
 
 	"codex_go/audioutil"
+	"codex_go/eventmap"
+	"codex_go/retainedctx"
+	"codex_go/utils"
 )
 
 const (
@@ -1151,14 +1154,30 @@ func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item 
 			remaining -= tokens
 			continue
 		}
-		// Rebuild only the text fallback; never retain discarded media.
+		// Rebuild the message from its original text parts so every retained
+		// slice keeps its positional classification and the head/tail
+		// truncation is applied to the parts together; discarded media is never
+		// carried over (Rust #53831 `build_compacted_history_with_limit`).
 		fallback := item
-		fallback.Text = truncateTextToTokens(ItemText(&item), remaining)
-		fallback.Content = nil
 		fallback.Raw = nil
-		if _, annotated := item.Data["content_item_kinds"]; annotated {
-			fallback.Data = cloneItemData(item.Data)
-			fallback.Data["content_item_kinds"] = []string{"user.text"}
+		parts, kinds := compactedUserTextParts(item)
+		if len(parts) == 0 {
+			// Safety net for an item that carries text without content parts (a
+			// rollout item flattened by an earlier edit): Rust's message always
+			// carries content, so only Go needs this shape.
+			parts = []ContentPart{{Type: "input_text", Text: ItemText(&item)}}
+			kinds = []string{unknownContentKind}
+		}
+		parts, kinds = truncateUserTextParts(parts, kinds, remaining)
+		fallback.Content = parts
+		fallback.Text = strings.Join(partTexts(parts), "\n")
+		fallback.Data = cloneItemData(item.Data)
+		if fallback.Data == nil {
+			fallback.Data = map[string]any{}
+		}
+		fallback.Data["content_item_kinds"] = kinds
+		if tokens > remaining {
+			markRetainedSourcesIncomplete(&fallback)
 		}
 		selected = append(selected, fallback)
 		break
@@ -1167,6 +1186,188 @@ func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item 
 		selected[left], selected[right] = selected[right], selected[left]
 	}
 	return selected
+}
+
+// unknownContentKind is the classification a retained slice or a generated
+// truncation notice carries when no producer annotated it (Rust's
+// `ContentItemKind("unknown")`).
+const unknownContentKind = "unknown"
+
+// compactedUserTextParts rebuilds a user message from its original text parts,
+// keeping each part's positional classification and dropping media, so a
+// shortened message stops flattening several producers into one part (Rust
+// #53831 `build_compacted_history_with_limit`).
+func compactedUserTextParts(item Item) ([]ContentPart, []string) {
+	kinds := contentItemKinds(item.Data)
+	parts := make([]ContentPart, 0, len(item.Content))
+	partKinds := make([]string, 0, len(item.Content))
+	for _, index := range eventmap.UserInputPartIndices(eventmapContentItems(item.Content)) {
+		part := item.Content[index]
+		if !contentPartIsText(part) {
+			continue
+		}
+		parts = append(parts, ContentPart{Type: part.Type, Text: part.Text})
+		partKinds = append(partKinds, kindAt(kinds, index))
+	}
+	return parts, partKinds
+}
+
+// truncateUserTextParts applies the planned head/tail truncation to the retained
+// text parts together: slices keep the classification of the part they came from
+// and the generated notice becomes its own part (Rust
+// `codex_context_fragments::truncate_annotated_text`).
+func truncateUserTextParts(parts []ContentPart, kinds []string, maxTokens int) ([]ContentPart, []string) {
+	combined := ""
+	for _, part := range parts {
+		combined += part.Text
+	}
+	truncation := utils.PlanTokenTruncation(combined, maxTokens)
+	if truncation == nil {
+		return parts, kinds
+	}
+	truncatedParts := make([]ContentPart, 0, len(parts)+2)
+	truncatedKinds := make([]string, 0, len(parts)+2)
+	noticePending := true
+	offset := 0
+	for index, part := range parts {
+		length := len(part.Text)
+		start := offset
+		offset += length
+		if offset <= truncation.RemovedStart || start >= truncation.RemovedEnd {
+			truncatedParts = append(truncatedParts, part)
+			truncatedKinds = append(truncatedKinds, kinds[index])
+			continue
+		}
+		prefixEnd := truncation.RemovedStart - start
+		if prefixEnd < 0 {
+			prefixEnd = 0
+		}
+		suffixStart := truncation.RemovedEnd - start
+		if suffixStart > length {
+			suffixStart = length
+		}
+		if suffixStart < 0 {
+			suffixStart = 0
+		}
+		if prefixEnd > 0 {
+			truncatedParts = append(truncatedParts, ContentPart{Type: part.Type, Text: part.Text[:prefixEnd]})
+			truncatedKinds = append(truncatedKinds, kinds[index])
+		}
+		if noticePending {
+			truncatedParts = append(truncatedParts, ContentPart{Type: "input_text", Text: truncation.Marker})
+			truncatedKinds = append(truncatedKinds, unknownContentKind)
+			noticePending = false
+		}
+		if suffixStart < length {
+			truncatedParts = append(truncatedParts, ContentPart{Type: part.Type, Text: part.Text[suffixStart:]})
+			truncatedKinds = append(truncatedKinds, kinds[index])
+		}
+	}
+	return truncatedParts, truncatedKinds
+}
+
+// markRetainedSourcesIncomplete mirrors Rust's
+// `CodexHarnessMetadata::mark_retained_sources_incomplete` call in
+// `build_compacted_history_with_limit`: a shortened message no longer proves
+// delivery of a complete original.
+func markRetainedSourcesIncomplete(item *Item) {
+	if item == nil || item.Data == nil {
+		return
+	}
+	raw, ok := item.Data["harness_metadata"]
+	if !ok {
+		return
+	}
+	var metadata retainedctx.HarnessMetadata
+	switch value := raw.(type) {
+	case json.RawMessage:
+		if json.Unmarshal(value, &metadata) != nil {
+			return
+		}
+	case string:
+		if strings.TrimSpace(value) == "" || json.Unmarshal([]byte(value), &metadata) != nil {
+			return
+		}
+	case map[string]any:
+		encoded, err := json.Marshal(value)
+		if err != nil || json.Unmarshal(encoded, &metadata) != nil {
+			return
+		}
+	default:
+		return
+	}
+	metadata.MarkRetainedSourcesIncomplete()
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return
+	}
+	item.Data["harness_metadata"] = json.RawMessage(encoded)
+}
+
+// contentItemKinds returns the positional classifications an item was annotated
+// with (Rust's `internal_chat_message_metadata_passthrough.content_item_kinds`).
+func contentItemKinds(data map[string]any) []string {
+	if data == nil {
+		return nil
+	}
+	switch value := data["content_item_kinds"].(type) {
+	case []string:
+		return value
+	case []any:
+		kinds := make([]string, 0, len(value))
+		for _, entry := range value {
+			if text, ok := entry.(string); ok {
+				kinds = append(kinds, text)
+			}
+		}
+		return kinds
+	}
+	return nil
+}
+
+// kindAt returns the classification recorded for a content index, defaulting to
+// unknown the way Rust does for a missing historical entry.
+func kindAt(kinds []string, index int) string {
+	if index >= 0 && index < len(kinds) && strings.TrimSpace(kinds[index]) != "" {
+		return kinds[index]
+	}
+	return unknownContentKind
+}
+
+// contentPartIsText reports whether one content part carries text, which is what
+// a retained message keeps when it drops media.
+func contentPartIsText(part ContentPart) bool {
+	switch strings.ToLower(strings.TrimSpace(part.Type)) {
+	case "", "text", "input_text", "output_text":
+		return part.ImageURL == "" && part.AudioURL == "" && part.FileID == ""
+	}
+	return false
+}
+
+// eventmapContentItems adapts compact content parts to the shared event-mapping
+// view so the media wrapper labels are skipped exactly as Rust does.
+func eventmapContentItems(parts []ContentPart) []eventmap.ContentItem {
+	items := make([]eventmap.ContentItem, len(parts))
+	for index := range parts {
+		items[index] = eventmap.ContentItem{
+			Kind:     eventmap.ContentKind(strings.ToLower(strings.TrimSpace(parts[index].Type))),
+			Text:     parts[index].Text,
+			ImageURL: parts[index].ImageURL,
+		}
+	}
+	return items
+}
+
+// partTexts flattens retained parts for the text view of the message, matching
+// ItemText's rule of joining the non-empty parts with newlines.
+func partTexts(parts []ContentPart) []string {
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part.Text) != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	return texts
 }
 
 // contentPartsAreText reports whether every content part is text, which is what

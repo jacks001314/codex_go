@@ -15,6 +15,11 @@ const (
 	ContentInputText  ContentKind = "input_text"
 	ContentOutputText ContentKind = "output_text"
 	ContentInputImage ContentKind = "input_image"
+	// ContentInputAudio classifies an audio content item (Rust
+	// `ContentItem::InputAudio`). Go's content items carry no audio URL field
+	// yet, so nothing in the pipeline produces this kind today; the audio
+	// wrapper labels below still mirror Rust's `user_input_parts` filter.
+	ContentInputAudio ContentKind = "input_audio"
 )
 
 type ContentItem struct {
@@ -408,12 +413,10 @@ func parseUserMessage(item *ResponseItem) (*TurnItem, bool) {
 		return nil, false
 	}
 	content := make([]UserInput, 0, len(item.Content))
-	for i, contentItem := range item.Content {
+	for _, index := range UserInputPartIndices(item.Content) {
+		contentItem := item.Content[index]
 		switch contentItem.Kind {
 		case ContentInputText:
-			if isImageLabelText(item.Content, i) {
-				continue
-			}
 			content = append(content, UserInput{Kind: UserInputText, Text: contentItem.Text})
 		case ContentInputImage:
 			content = append(content, UserInput{Kind: UserInputImage, ImageURL: contentItem.ImageURL, Detail: contentItem.Detail})
@@ -459,7 +462,27 @@ func isContextualDevFragment(item *ContentItem) bool {
 	return false
 }
 
-func isImageLabelText(items []ContentItem, index int) bool {
+// UserInputPartIndices returns the indices of the message's user-input parts,
+// skipping the media wrapper labels that are not user text. It mirrors Rust's
+// `user_input_parts` (core/src/event_mapping.rs:100), which yields the original
+// indices so a history edit can carry the right content classifications.
+func UserInputPartIndices(message []ContentItem) []int {
+	indices := make([]int, 0, len(message))
+	for index := range message {
+		if message[index].Kind == ContentInputText && isMediaLabelText(message, index) {
+			continue
+		}
+		indices = append(indices, index)
+	}
+	return indices
+}
+
+// isMediaLabelText reports whether the text at index is the wrapper label of the
+// media item beside it: an image label wraps an `input_image` and an audio label
+// wraps an `input_audio` (Rust's `is_image_*_tag_text` / `is_audio_*_tag_text`
+// pairs, `protocol/src/models.rs`: `<image>`/`</image>`, `<audio>`/`</audio>`
+// and the `<image name=` / `<audio name=` local variants).
+func isMediaLabelText(items []ContentItem, index int) bool {
 	text := strings.TrimSpace(items[index].Text)
 	open := strings.HasPrefix(text, "<image") || strings.HasPrefix(text, "<local_image")
 	close := text == "</image>" || text == "</local_image>"
@@ -467,6 +490,14 @@ func isImageLabelText(items []ContentItem, index int) bool {
 		return true
 	}
 	if close && index > 0 && items[index-1].Kind == ContentInputImage {
+		return true
+	}
+	audioOpen := strings.HasPrefix(text, "<audio") || strings.HasPrefix(text, "<local_audio")
+	audioClose := text == "</audio>" || text == "</local_audio>"
+	if audioOpen && index+1 < len(items) && items[index+1].Kind == ContentInputAudio {
+		return true
+	}
+	if audioClose && index > 0 && items[index-1].Kind == ContentInputAudio {
 		return true
 	}
 	return false

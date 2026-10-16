@@ -184,8 +184,42 @@ func TruncateFunctionOutputItemsWithPolicy(items []FunctionCallOutputContentItem
 	return out
 }
 
+// TextTruncation is the head/tail edit a token truncation performs: the byte
+// range it removes and the marker that replaces it (Rust
+// `codex_utils_string::truncate::TextTruncation`).
+type TextTruncation struct {
+	RemovedStart int
+	RemovedEnd   int
+	Marker       string
+}
+
+// PlanTokenTruncation plans the head/tail token truncation without applying it,
+// so callers that keep content in parts can apply the same edit to each part and
+// preserve the sources of the retained slices (Rust
+// `codex_utils_string::truncate::plan_token_truncation`). The marker is outside
+// the retained-text budget, exactly as in TruncateMiddleWithTokenBudget.
+func PlanTokenTruncation(s string, maxTokens int) *TextTruncation {
+	maxBytes := ApproxBytesForTokens(maxTokens)
+	if len(s) <= maxBytes {
+		return nil
+	}
+	leftBudget, rightBudget := splitBudget(maxBytes)
+	return &TextTruncation{
+		RemovedStart: floorCharBoundary(s, leftBudget),
+		RemovedEnd:   ceilCharBoundary(s, len(s)-rightBudget),
+		Marker:       formatTruncationMarker(true, ApproxTokensFromByteCount(len(s)-maxBytes)),
+	}
+}
+
+// TruncateMiddleChars retains at most maxBytes from a string's ends and adds a
+// character-count marker outside that budget (Rust `truncate_middle_chars`).
 func TruncateMiddleChars(s string, maxBytes int) string {
-	return truncateWithByteEstimate(s, maxBytes, false)
+	if len(s) <= maxBytes {
+		return s
+	}
+	leftBudget, rightBudget := splitBudget(maxBytes)
+	removedChars, left, right := SplitString(s, leftBudget, rightBudget)
+	return left + formatTruncationMarker(false, uint64(removedChars)) + right
 }
 
 // TruncateMiddleWithMarker retains a UTF-8-safe prefix and suffix around marker
@@ -206,17 +240,12 @@ func TruncateMiddleWithMarker(s string, maxBytes int, marker string) string {
 }
 
 func TruncateMiddleWithTokenBudget(s string, maxTokens int) (string, *uint64) {
-	if s == "" {
-		return "", nil
-	}
-	if maxTokens > 0 && len(s) <= ApproxBytesForTokens(maxTokens) {
+	truncation := PlanTokenTruncation(s, maxTokens)
+	if truncation == nil {
 		return s, nil
 	}
-	truncated := truncateWithByteEstimate(s, ApproxBytesForTokens(maxTokens), true)
+	truncated := s[:truncation.RemovedStart] + truncation.Marker + s[truncation.RemovedEnd:]
 	totalTokens := uint64(ApproxTokenCount(s))
-	if truncated == s {
-		return truncated, nil
-	}
 	return truncated, &totalTokens
 }
 
@@ -247,38 +276,6 @@ func ApproxTokensFromByteCountInt64(bytes int64) int64 {
 		return 0
 	}
 	return tokens
-}
-
-func truncateWithByteEstimate(s string, maxBytes int, useTokens bool) string {
-	if s == "" {
-		return ""
-	}
-	if maxBytes <= 0 {
-		// Token markers count bytes only, so the character count is deferred to the
-		// paths that need it (Rust #49712).
-		totalChars := 0
-		if !useTokens {
-			totalChars = utf8.RuneCountInString(s)
-		}
-		return formatTruncationMarker(useTokens, removedUnits(useTokens, len(s), totalChars))
-	}
-	if len(s) <= maxBytes {
-		return s
-	}
-	leftBudget, rightBudget := splitBudget(maxBytes)
-	var removedChars int
-	var left, right string
-	if useTokens {
-		// Token markers depend only on byte counts, so select the retained prefix and
-		// suffix from UTF-8 boundaries instead of scanning the discarded middle.
-		removedChars = 0
-		left = s[:floorCharBoundary(s, leftBudget)]
-		right = s[ceilCharBoundary(s, len(s)-rightBudget):]
-	} else {
-		removedChars, left, right = SplitString(s, leftBudget, rightBudget)
-	}
-	marker := formatTruncationMarker(useTokens, removedUnits(useTokens, len(s)-maxBytes, removedChars))
-	return left + marker + right
 }
 
 // floorCharBoundary returns the largest index at or below index that starts a
@@ -365,16 +362,6 @@ func formatTruncationMarker(useTokens bool, removedCount uint64) string {
 		return fmt.Sprintf("\u2026%d tokens truncated\u2026", removedCount)
 	}
 	return fmt.Sprintf("\u2026%d chars truncated\u2026", removedCount)
-}
-
-func removedUnits(useTokens bool, removedBytes int, removedChars int) uint64 {
-	if useTokens {
-		return ApproxTokensFromByteCount(removedBytes)
-	}
-	if removedChars <= 0 {
-		return 0
-	}
-	return uint64(removedChars)
 }
 
 func countLines(content string) int {

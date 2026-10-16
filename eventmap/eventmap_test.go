@@ -247,3 +247,33 @@ func TestContextualDeveloperPrefixesLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Rust `user_input_parts` (core/src/event_mapping.rs:100): the media wrapper
+// labels are not user text, so they are skipped while every other part keeps its
+// original index. Image and audio labels are handled the same way.
+func TestUserInputPartIndicesSkipMediaLabelsLikeRust(t *testing.T) {
+	message := []ContentItem{
+		{Kind: ContentInputText, Text: "<image name=\"one\" path=\"/tmp/one.png\">"},
+		{Kind: ContentInputImage, ImageURL: "data:image/png;base64,AAAA"},
+		{Kind: ContentInputText, Text: "</image>"},
+		{Kind: ContentInputText, Text: "look"},
+		{Kind: ContentInputText, Text: "<audio>"},
+		{Kind: ContentInputAudio},
+		{Kind: ContentInputText, Text: "</audio>"},
+	}
+	got := UserInputPartIndices(message)
+	want := []int{1, 3, 5}
+	if len(got) != len(want) {
+		t.Fatalf("indices = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("indices = %#v, want %#v", got, want)
+		}
+	}
+
+	// A label that is not beside its media is ordinary user text.
+	if got := UserInputPartIndices([]ContentItem{{Kind: ContentInputText, Text: "<audio>"}, {Kind: ContentInputText, Text: "x"}}); len(got) != 2 {
+		t.Fatalf("indices = %#v, want both parts", got)
+	}
+}

@@ -144,3 +144,34 @@ func TestTruncateMiddleTokensKeepsPartialCharactersOutOfBothEnds(t *testing.T) {
 		}
 	}
 }
+
+// Rust `plan_token_truncation` (codex-rs/utils/string/src/truncate.rs:17) plans
+// the head/tail edit without applying it: no plan when the text already fits, and
+// otherwise the removed byte range plus the marker the truncation would use.
+func TestPlanTokenTruncationMirrorsRustLikeRust(t *testing.T) {
+	if plan := PlanTokenTruncation("short", 16); plan != nil {
+		t.Fatalf("plan = %#v, want none inside the budget", plan)
+	}
+	text := strings.Repeat("word ", 200)
+	plan := PlanTokenTruncation(text, 16)
+	if plan == nil {
+		t.Fatal("no plan for over-budget text")
+	}
+	if plan.RemovedStart != 32 || plan.RemovedEnd != 968 {
+		t.Fatalf("removed = %d..%d, want 32..968", plan.RemovedStart, plan.RemovedEnd)
+	}
+	if plan.Marker != "\u2026234 tokens truncated\u2026" {
+		t.Fatalf("marker = %q", plan.Marker)
+	}
+	// The applied string truncation is the plan's edit, and the byte variant keeps
+	// its character-count marker.
+	if got, want := text[:plan.RemovedStart]+plan.Marker+text[plan.RemovedEnd:], TruncateText(text, TokensPolicy(16)); got != want {
+		t.Fatalf("plan = %q, truncate_text = %q", got, want)
+	}
+	if got, want := TruncateMiddleChars(text, 64), text[:32]+"\u2026936 chars truncated\u2026"+text[968:]; got != want {
+		t.Fatalf("TruncateMiddleChars = %q, want %q", got, want)
+	}
+	if truncated, total := TruncateMiddleWithTokenBudget(text, 16); truncated != text[:32]+plan.Marker+text[968:] || total == nil || *total != 250 {
+		t.Fatalf("TruncateMiddleWithTokenBudget = %q / %v", truncated, total)
+	}
+}

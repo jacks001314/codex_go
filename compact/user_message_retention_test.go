@@ -2,8 +2,11 @@ package compact
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	"codex_go/utils"
 )
 
 // Rust #48115: a text-only multipart user message that fits the shared budget is
@@ -40,8 +43,9 @@ func TestLocalCompactionKeepsTextOnlyMultipartMessagesLikeRust(t *testing.T) {
 	}
 }
 
-// A message carrying media is materialized as its flattened text: the retained
-// message never keeps discarded media.
+// A message carrying media keeps only its text parts: the retained message never
+// keeps discarded media, and the text it does keep stays an ordinary content part
+// (Rust #53831 rebuilds the message from the original parts).
 func TestLocalCompactionOmitsRetainedMediaLikeRust(t *testing.T) {
 	message := Item{
 		ID:   "u1",
@@ -61,8 +65,16 @@ func TestLocalCompactionOmitsRetainedMediaLikeRust(t *testing.T) {
 		t.Fatalf("retained = %#v", retained)
 	}
 	got := retained[0]
-	if len(got.Content) != 0 || len(got.Raw) != 0 {
-		t.Fatalf("media survived compaction: content=%#v raw=%q", got.Content, got.Raw)
+	if len(got.Content) != 1 || got.Content[0].Text != "look at this" {
+		t.Fatalf("retained parts = %#v, want the text part only", got.Content)
+	}
+	for _, part := range got.Content {
+		if part.ImageURL != "" || part.AudioURL != "" || part.FileID != "" {
+			t.Fatalf("media survived compaction: %#v", part)
+		}
+	}
+	if len(got.Raw) != 0 {
+		t.Fatalf("raw item survived compaction: %q", got.Raw)
 	}
 	if got.Text != "look at this" {
 		t.Fatalf("text = %q", got.Text)
@@ -98,10 +110,21 @@ func TestLocalCompactionSharesTheUserMessageBudgetLikeRust(t *testing.T) {
 	if len(tight) != 1 {
 		t.Fatalf("retained = %d messages, want the newest one only", len(tight))
 	}
-	if tight[0].ID != "u3" || EstimateTextTokens(tight[0].Text) > 1000 {
+	if tight[0].ID != "u3" {
 		t.Fatalf("truncated message = %#v", tight[0])
 	}
-	if !strings.HasPrefix(long, tight[0].Text) || len(tight[0].Text) == len(long) {
+	// Rust truncates the middle: the head and the tail of the budget survive and a
+	// generated notice replaces the rest (truncate_middle_with_token_budget), so
+	// the retained text is no longer a prefix of the original.
+	retainedBytes := utils.ApproxBytesForTokens(1000)
+	if !strings.HasPrefix(tight[0].Text, long[:retainedBytes/2]) ||
+		!strings.HasSuffix(tight[0].Text, long[len(long)-retainedBytes/2:]) {
+		t.Fatalf("text was not head/tail truncated: %q", tight[0].Text)
+	}
+	if !strings.Contains(tight[0].Text, "tokens truncated") {
+		t.Fatalf("truncation notice missing: %q", tight[0].Text)
+	}
+	if len(tight[0].Text) >= len(long) {
 		t.Fatalf("text was not truncated: %d of %d bytes", len(tight[0].Text), len(long))
 	}
 
@@ -109,7 +132,51 @@ func TestLocalCompactionSharesTheUserMessageBudgetLikeRust(t *testing.T) {
 	huge := retainedUserMessagesForLocalCompaction([]Item{
 		{ID: "u1", Type: "message", Role: "user", Kind: "user_message", Text: long},
 	}, 10)
-	if len(huge) != 1 || EstimateTextTokens(huge[0].Text) > 10 || len(huge[0].Text) >= len(long) {
+	// Rust counts the generated notice outside the retained-text budget, so the
+	// text view is the budget plus the notice.
+	if len(huge) != 1 || len(huge[0].Text) >= len(long) || !strings.Contains(huge[0].Text, "tokens truncated") {
 		t.Fatalf("retained = %#v", huge)
+	}
+}
+
+// Rust #53831 `build_token_limited_compacted_history_truncates_overlong_user_messages`:
+// an over-budget user message keeps the head of its first text part, a generated
+// truncation notice, and the tail of its last text part - every retained slice
+// keeps the classification recorded for its source index, and a missing or short
+// classification list defaults to unknown.
+func TestLocalCompactionTruncatesOverlongUserMessagesLikeRust(t *testing.T) {
+	big := strings.Repeat("word ", 200)
+	for _, partCount := range []int{1, 2} {
+		item := Item{ID: "u1", Type: "message", Role: "user", Kind: "user_message"}
+		kinds := make([]string, 0, partCount)
+		for index := 0; index < partCount; index++ {
+			item.Content = append(item.Content, ContentPart{Type: "input_text", Text: big})
+			kinds = append(kinds, "user.text")
+		}
+		item.Data = map[string]any{"content_item_kinds": kinds}
+
+		retained := retainedUserMessagesForLocalCompaction([]Item{item}, 16)
+		if len(retained) != 1 {
+			t.Fatalf("parts=%d retained = %#v", partCount, retained)
+		}
+		got := retained[0]
+		wantMarker := fmt.Sprintf("\u2026%d tokens truncated\u2026", 250*partCount-16)
+		if len(got.Content) != 3 ||
+			got.Content[0].Text != big[:32] ||
+			got.Content[1].Text != wantMarker ||
+			got.Content[2].Text != big[len(big)-32:] {
+			t.Fatalf("parts=%d content = %#v", partCount, got.Content)
+		}
+		gotKinds, _ := got.Data["content_item_kinds"].([]string)
+		if len(gotKinds) != 3 || gotKinds[0] != "user.text" || gotKinds[1] != "unknown" || gotKinds[2] != "user.text" {
+			t.Fatalf("parts=%d kinds = %#v", partCount, gotKinds)
+		}
+
+		item.Data = map[string]any{}
+		unannotated := retainedUserMessagesForLocalCompaction([]Item{item}, 16)[0]
+		missingKinds, _ := unannotated.Data["content_item_kinds"].([]string)
+		if len(missingKinds) != 3 || missingKinds[0] != "unknown" || missingKinds[1] != "unknown" || missingKinds[2] != "unknown" {
+			t.Fatalf("parts=%d missing kinds = %#v", partCount, missingKinds)
+		}
 	}
 }
