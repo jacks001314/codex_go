@@ -947,6 +947,94 @@ func TestRustExperimentalClientSurfaceIsGatedLikeRust(t *testing.T) {
 	}
 }
 
+// TestRustStableClientSurfaceIsNotGatedAsExperimental is the reverse direction
+// of TestRustExperimentalClientSurfaceIsGatedLikeRust: Go must never be
+// stricter than upstream. A client request that Rust declares without
+// #[experimental(...)] lands in the stable ClientRequest.json fixture, so it
+// must be neither rejected by experimentalAPIMethod nor flagged Experimental
+// by BuildProtocolSchema(true, false).
+func TestRustStableClientSurfaceIsNotGatedAsExperimental(t *testing.T) {
+	schemaRoot := rustAppServerProtocolSchemaRoot(t)
+	data, err := os.ReadFile(filepath.Join(schemaRoot, "ClientRequest.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(ClientRequest.json) error = %v", err)
+	}
+	var schema rustProtocolUnionSchema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatalf("Unmarshal(ClientRequest.json) error = %v", err)
+	}
+	// Registered Go-only deviations (see goOnlyExperimentalAliases): they cannot be
+	// derived from the Rust source, so the guard re-derives the upstream
+	// #[experimental] set from common.rs and checks the registration still holds.
+	rustExperimental := map[string]bool{}
+	rustRoot := rustAppServerProtocolRustRoot(t)
+	for _, method := range rustExperimentalClientMethodsFromCommon(t, filepath.Join(rustRoot, "app-server-protocol", "src", "protocol", "common.rs")) {
+		rustExperimental[method] = true
+	}
+	goOnlyAliases := map[string]bool{}
+	for _, alias := range goOnlyExperimentalAliases {
+		goOnlyAliases[string(alias)] = true
+		upstream := camelCaseMethodToSnake(string(alias))
+		if !rustExperimental[upstream] {
+			t.Fatalf("registered deviation %s claims upstream %s carries #[experimental], but the Rust source does not mark it", alias, upstream)
+		}
+		if !experimentalAPIMethod(alias) {
+			t.Fatalf("registered Go-only alias %s must stay gated like its upstream experimental method", alias)
+		}
+	}
+	experimental := map[string]bool{}
+	for _, method := range BuildProtocolSchema(true, false).ClientRequests {
+		if method.Experimental {
+			experimental[method.Method] = true
+		}
+	}
+	var overGated []string
+	var overFlagged []string
+	for _, variant := range schema.OneOf {
+		if len(variant.Properties.Method.Enum) == 0 {
+			continue
+		}
+		method := variant.Properties.Method.Enum[0]
+		if goOnlyAliases[method] {
+			continue
+		}
+		if experimentalAPIMethod(Method(method)) {
+			overGated = append(overGated, method)
+		}
+		if experimental[method] {
+			overFlagged = append(overFlagged, method)
+		}
+	}
+	sort.Strings(overGated)
+	sort.Strings(overFlagged)
+	if len(overGated) > 0 || len(overFlagged) > 0 {
+		t.Fatalf("Go gates Rust-stable client requests as experimental: runtime=%q schema=%q", overGated, overFlagged)
+	}
+}
+
+// camelCaseMethodToSnake converts a Go-only camelCase client request spelling
+// (thread/incrementElicitation) into the upstream snake_case literal
+// (thread/increment_elicitation) so the guard can re-derive its Rust attribute.
+func camelCaseMethodToSnake(method string) string {
+	slash := strings.Index(method, "/")
+	if slash < 0 {
+		return method
+	}
+	prefix, tail := method[:slash+1], method[slash+1:]
+	var b strings.Builder
+	for i, r := range tail {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r - 'A' + 'a')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return prefix + b.String()
+}
+
 type rustProtocolUnionSchema struct {
 	OneOf []rustProtocolVariant `json:"oneOf"`
 }

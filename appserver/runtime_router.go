@@ -2709,6 +2709,25 @@ func isRemoteControlMethod(method Method) bool {
 	}
 }
 
+// goOnlyExperimentalAliases registers the only client request spellings that
+// exist in the Go port but not in upstream Rust, so they cannot be derived from
+// the Rust source the way every other entry of experimentalAPIMethod is. Each
+// entry is an explicit, reviewed deviation rather than an unexplained extra: the
+// upstream method it aliases is itself marked #[experimental("...")], so rejecting
+// the alias keeps Go observably identical to upstream.
+//
+//	go alias                     upstream method                Rust attribute
+//	thread/decrementElicitation  thread/decrement_elicitation   common.rs:595
+//	thread/incrementElicitation  thread/increment_elicitation   common.rs:585
+//
+// TestRustStableClientSurfaceIsNotGatedAsExperimental re-derives the upstream
+// #[experimental] set from the Rust source, so an entry that stops being
+// justified (or a gate added for a Rust-stable method) fails the build.
+var goOnlyExperimentalAliases = []Method{
+	MethodThreadDecrementElicitationLegacy,
+	MethodThreadIncrementElicitationLegacy,
+}
+
 func experimentalAPIMethod(method Method) bool {
 	switch method {
 	case MethodBedrockCheckGovCloudRequirements,
@@ -2768,10 +2787,10 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadBackgroundTerminalsList,
 		MethodThreadBackgroundTerminalsTerminate,
 		MethodThreadDecrementElicitation,
+		// Registered Go-only deviations, see goOnlyExperimentalAliases.
 		MethodThreadDecrementElicitationLegacy,
 		MethodThreadIncrementElicitation,
 		MethodThreadIncrementElicitationLegacy,
-		MethodThreadItemsList,
 		MethodThreadMemoryModeSet,
 		MethodMemoryStatus,
 		MethodThreadRealtimeAppendAudio,
@@ -2782,7 +2801,6 @@ func experimentalAPIMethod(method Method) bool {
 		MethodThreadRealtimeStop,
 		MethodThreadSearch,
 		MethodThreadSettingsUpdate,
-		MethodThreadTurnsList,
 		MethodUserVerificationStatus,
 		MethodUserVerificationEnroll,
 		MethodUserVerificationDelete,

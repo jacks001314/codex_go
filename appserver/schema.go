@@ -300,7 +300,6 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadBackgroundTerminalsTerminate), Experimental: true},
 		{Method: string(MethodThreadDecrementElicitation), Experimental: true},
 		{Method: string(MethodThreadIncrementElicitation), Experimental: true},
-		{Method: string(MethodThreadItemsList), Experimental: true},
 		{Method: string(MethodThreadItemsRead), Experimental: true},
 		{Method: string(MethodThreadReadStateUpdate), Experimental: true},
 		{Method: string(MethodThreadTimelineList), Experimental: true},
@@ -312,7 +311,6 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadRealtimeListVoices), Experimental: true},
 		{Method: string(MethodThreadRealtimeStart), Experimental: true},
 		{Method: string(MethodThreadRealtimeStop), Experimental: true},
-		{Method: string(MethodThreadRevert), Experimental: true},
 		{Method: string(MethodThreadQueueAdd), Experimental: true},
 		{Method: string(MethodThreadQueueList), Experimental: true},
 		{Method: string(MethodThreadQueueUpdate), Experimental: true},
@@ -323,7 +321,6 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodThreadSearchOccurrences), Experimental: true},
 		{Method: string(MethodThreadSettingsUpdate), Experimental: true},
 		{Method: string(MethodMemoryStatus), Experimental: true},
-		{Method: string(MethodThreadTurnsList), Experimental: true},
 		{Method: string(MethodTurnSettingsUpdate), Experimental: true},
 		{Method: string(MethodUserVerificationStatus), Experimental: true},
 		{Method: string(MethodUserVerificationEnroll), Experimental: true},
@@ -347,6 +344,9 @@ func internalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodAccountSessionsList)},
 		{Method: string(MethodAccountSessionsLogout)},
 		{Method: string(MethodAccountSessionsSwitch)},
+		// Go-only historic camelCase aliases; the upstream snake_case methods are
+		// #[experimental] (app-server-protocol/src/protocol/common.rs:585,595), so marking
+		// the alias experimental keeps Go observable behaviour identical to upstream.
 		{Method: string(MethodThreadDecrementElicitationLegacy), Experimental: true},
 		{Method: string(MethodThreadIncrementElicitationLegacy), Experimental: true},
 		{Method: string(MethodThreadSetName)},
