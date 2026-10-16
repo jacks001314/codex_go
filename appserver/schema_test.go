@@ -277,6 +277,17 @@ func TestRustProtocolMethodSurfaceIsCoveredByGoSchemas(t *testing.T) {
 		covered[method.Method] = true
 	}
 
+	// Two Go surfaces are TypeScript-only additions: the legacy camelCase
+	// client requests and the raw-response notifications. They still count as Go
+	// coverage, because every method literal declared in the Rust protocol
+	// definition macros has a Go surface somewhere.
+	for _, method := range typeScriptLegacyClientRequestMethods() {
+		covered[method.Method] = true
+	}
+	for _, method := range typeScriptOnlyNotificationMethods() {
+		covered[method.Method] = true
+	}
+
 	var missing []string
 	for _, method := range rustMethods {
 		if !covered[method] {
@@ -825,13 +836,25 @@ func rustAppServerProtocolRustRoot(t *testing.T) string {
 	return ""
 }
 
+// rustMethodsFromCommon extracts every method literal declared in the Rust
+// protocol definition macros of app-server-protocol's common.rs. Variants look
+// like:
+//
+//	#[experimental("project/list")]
+//	ProjectList => "project/list" {
+//
+// A `Foo => "some/method"` line has no other meaning in that file: at the
+// pinned revision every such literal lives inside one of the four
+// `*_definitions! { ... }` macro blocks (270 literals in the file, 0 of them
+// outside those blocks), so matching that shape anywhere in the file is exact
+// and stays fail-closed.
 func rustMethodsFromCommon(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
-	re := regexp.MustCompile(`Method[A-Za-z0-9_]+\s+Method\s+=\s+"([^"]+)"`)
+	re := regexp.MustCompile(`(?m)^[ \t]*(?:#\[experimental\("[^"]+"\)\][ \t]*)?[A-Za-z0-9_]+[ \t]*=>[ \t]*"([^"]+)"`)
 	matches := re.FindAllStringSubmatch(string(data), -1)
 	values := make([]string, 0, len(matches))
 	for _, match := range matches {
@@ -839,8 +862,11 @@ func rustMethodsFromCommon(t *testing.T, path string) []string {
 			values = append(values, match[1])
 		}
 	}
+	if len(values) == 0 {
+		t.Fatalf("parsed no Rust protocol methods from %s", path)
+	}
 	sort.Strings(values)
-	return values
+	return dedupeSortedStrings(values)
 }
 
 type rustProtocolUnionSchema struct {

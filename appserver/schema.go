@@ -330,6 +330,14 @@ func experimentalClientRequestMethods() []ProtocolMethod {
 		{Method: string(MethodUserVerificationDelete), Experimental: true},
 		{Method: string(MethodUserVerificationVerify), Experimental: true},
 		{Method: string(MethodUserVerificationCancel), Experimental: true},
+		{Method: string(MethodServerDiagnostics), Experimental: true},
+		{Method: string(MethodProjectList), Experimental: true},
+		{Method: string(MethodProjectRead), Experimental: true},
+		{Method: string(MethodProjectCreate), Experimental: true},
+		{Method: string(MethodProjectImport), Experimental: true},
+		{Method: string(MethodProjectUpdate), Experimental: true},
+		{Method: string(MethodProjectMove), Experimental: true},
+		{Method: string(MethodProjectDelete), Experimental: true},
 	}
 }
 
@@ -775,6 +783,14 @@ func protocolMethodSignatures() map[string]protocolMethodSignature {
 		string(NotificationWindowsWorldWritableWarning):         {Params: "WindowsWorldWritableWarningNotification"},
 		"externalAgentConfig/import/completed":                  {Params: "ExternalAgentConfigImportCompletedNotification"},
 		"externalAgentConfig/import/progress":                   {Params: "ExternalAgentConfigImportProgressNotification"},
+		string(MethodServerDiagnostics):                         {Params: "ServerDiagnosticsParams", Result: "ServerDiagnosticsResponse"},
+		string(MethodProjectList):                               {Params: "ProjectListParams", Result: "ProjectListResponse"},
+		string(MethodProjectRead):                               {Params: "ProjectReadParams", Result: "ProjectReadResponse"},
+		string(MethodProjectCreate):                             {Params: "ProjectCreateParams", Result: "ProjectCreateResponse"},
+		string(MethodProjectImport):                             {Params: "ProjectImportParams", Result: "ProjectImportResponse"},
+		string(MethodProjectUpdate):                             {Params: "ProjectUpdateParams", Result: "ProjectUpdateResponse"},
+		string(MethodProjectMove):                               {Params: "ProjectMoveParams", Result: "ProjectMoveResponse"},
+		string(MethodProjectDelete):                             {Params: "ProjectDeleteParams", Result: "ProjectDeleteResponse"},
 	}
 }
 
