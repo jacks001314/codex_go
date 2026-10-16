@@ -2407,8 +2407,12 @@ func (r *Router) archiveThreadRollout(threadID session.ThreadID, archived bool) 
 		}
 		return true, err == nil
 	}
+	// Mirrors Rust `unarchive_thread` (#54060): the requested rollout and every
+	// other archived rollout owned by the thread (compressed originals and
+	// reverted replacements included) are restored, and only the requested
+	// rollout's restored path is reported.
 	var restoredPath string
-	restoredPath, err = rollout.Unarchive(path, codexHome)
+	restoredPath, err = rollout.RestoreThreadRollouts(codexHome, string(threadID), path)
 	if err == nil && r.state != nil {
 		_ = r.state.MarkThreadUnarchived(context.Background(), string(threadID), restoredPath)
 	}

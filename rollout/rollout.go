@@ -2230,8 +2230,11 @@ func ThreadIDFromPath(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("rollout path is required")
 	}
-	if threadID, ok := ThreadIDFromFilename(filepath.Base(path)); ok {
-		return threadID, nil
+	// Mirrors Rust's rollout_file_name.rs: the stable thread id is the segment
+	// before the first '_', so a reverted rollout filename still resolves to the
+	// owning thread without reading the file (Rust #54060).
+	if parsed, ok := ParseRolloutFileName(filepath.Base(path)); ok {
+		return parsed.ThreadID, nil
 	}
 	lines, _, err := Load(path)
 	if err != nil {
@@ -2328,6 +2331,7 @@ func Delete(path string) error {
 }
 
 func FindThreadPath(codexHome string, threadID string, archived bool) (string, error) {
+	threadID = strings.TrimSpace(threadID)
 	root := filepath.Join(codexHome, SessionsSubdir)
 	if archived {
 		root = filepath.Join(codexHome, ArchivedSessionsSubdir)
@@ -2336,23 +2340,201 @@ func FindThreadPath(codexHome string, threadID string, archived bool) (string, e
 	if err != nil {
 		return "", err
 	}
-	var unparsed []string
+	// Mirrors Rust `visit_rollout_filenames` + `find_thread_path_by_id_from_filenames`
+	// (codex-rs/rollout/src/list.rs): the canonical filename decides the candidate
+	// set, so unrelated history is never opened (Rust #54060). The newest candidate
+	// wins, with the rollout id as a deterministic tie-breaker for files that share
+	// a timestamp.
+	var fallback string
+	var newest *RolloutFileName
+	newestPath := ""
 	for _, path := range paths {
-		if id, ok := ThreadIDFromFilename(filepath.Base(path)); ok {
-			if id == threadID {
-				return path, nil
+		parsed, ok := ParseRolloutFileName(filepath.Base(path))
+		if !ok {
+			// Rust answers a filename-only query (`file_search::run`) here instead of
+			// reading rollout metadata; keep the deterministic substring form.
+			if fallback == "" && threadID != "" && strings.Contains(filepath.Base(path), threadID) {
+				fallback = path
 			}
 			continue
 		}
-		unparsed = append(unparsed, path)
-	}
-	for _, path := range unparsed {
-		item, ok := BuildThreadItem(path, archived)
-		if ok && item.ThreadID == threadID {
-			return path, nil
+		if parsed.ThreadID != threadID {
+			continue
+		}
+		if existing, ok := ExistingRolloutPath(PlainRolloutPath(path)); ok {
+			// Rust's `RolloutFile::from_path` hides a compressed rollout whose plain
+			// sibling exists.
+			path = existing
+		}
+		if newest == nil || parsed.Timestamp.After(newest.Timestamp) ||
+			(parsed.Timestamp.Equal(newest.Timestamp) && parsed.RolloutID > newest.RolloutID) {
+			parsedCopy := parsed
+			newest = &parsedCopy
+			newestPath = path
 		}
 	}
+	if newest != nil {
+		return newestPath, nil
+	}
+	if fallback != "" {
+		return fallback, nil
+	}
 	return "", fmt.Errorf("rollout thread not found: %s", threadID)
+}
+
+// RolloutFileName is the parsed canonical basename of a rollout file. Ordinary
+// rollouts encode one id that is both the thread id and the immutable rollout id;
+// reverted rollouts append "_<rollout id>" after the stable thread id. Mirrors
+// Rust codex-rollout's `RolloutFileName` (rollout_file_name.rs).
+type RolloutFileName struct {
+	Timestamp time.Time
+	ThreadID  string
+	RolloutID string
+}
+
+// ParseRolloutFileName parses `rollout-<timestamp>-<threadID>[_<rolloutID>].jsonl[.zst]`.
+//
+// It mirrors Rust `RolloutFileName::parse` (rollout_file_name.rs, Rust #54060):
+// callers decide whether a file is a scan candidate from this value alone, so
+// unrelated rollouts never cost a metadata read.
+func ParseRolloutFileName(name string) (RolloutFileName, bool) {
+	base := filepath.Base(strings.TrimSpace(name))
+	base = strings.TrimSuffix(base, ".zst")
+	if !strings.HasPrefix(base, "rollout-") || !strings.HasSuffix(base, ".jsonl") {
+		return RolloutFileName{}, false
+	}
+	core := strings.TrimSuffix(strings.TrimPrefix(base, "rollout-"), ".jsonl")
+	if len(core) <= len(rolloutTimestampLayout) || core[len(rolloutTimestampLayout)] != '-' {
+		return RolloutFileName{}, false
+	}
+	stamp, err := time.Parse(rolloutTimestampLayout, core[:len(rolloutTimestampLayout)])
+	if err != nil {
+		return RolloutFileName{}, false
+	}
+	threadID := core[len(rolloutTimestampLayout)+1:]
+	rolloutID := threadID
+	if index := strings.Index(threadID, "_"); index >= 0 {
+		threadID, rolloutID = threadID[:index], threadID[index+1:]
+	}
+	if strings.TrimSpace(threadID) == "" || strings.TrimSpace(rolloutID) == "" {
+		return RolloutFileName{}, false
+	}
+	return RolloutFileName{
+		Timestamp: stamp.UTC(),
+		ThreadID:  threadID,
+		RolloutID: rolloutID,
+	}, true
+}
+
+// OwnedArchivedThreadRollouts mirrors Rust's
+// `RolloutReferenceIndex::scan_archived_threads` combined with
+// `owned_rollout_paths_from_index` (Rust #54060): discovery is restricted to
+// archived files whose canonical filenames belong to the requested threads, and
+// session metadata still decides ownership among those candidates. Compressed
+// originals and reverted replacements are included; unrelated archived history is
+// never opened.
+func OwnedArchivedThreadRollouts(codexHome string, threadIDs []string) ([]string, error) {
+	wanted := make(map[string]struct{}, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if trimmed := strings.TrimSpace(threadID); trimmed != "" {
+			wanted[trimmed] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	paths, err := collectRolloutPaths(filepath.Join(codexHome, ArchivedSessionsSubdir))
+	if err != nil {
+		return nil, err
+	}
+	// Sort first so identical rollout ids resolve deterministically; the Rust index
+	// keys rollouts by immutable rollout id and keeps the first entry.
+	sort.Strings(paths)
+	owned := []string{}
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		parsed, ok := ParseRolloutFileName(filepath.Base(path))
+		if !ok {
+			continue
+		}
+		if _, ok := wanted[parsed.ThreadID]; !ok {
+			continue
+		}
+		if existing, ok := ExistingRolloutPath(PlainRolloutPath(path)); ok {
+			path = existing
+		}
+		if _, ok := seen[parsed.RolloutID]; ok {
+			continue
+		}
+		meta, err := FirstSessionMeta(path)
+		if err != nil {
+			continue
+		}
+		if _, ok := wanted[meta.ID]; !ok {
+			continue
+		}
+		seen[parsed.RolloutID] = struct{}{}
+		owned = append(owned, path)
+	}
+	sort.Strings(owned)
+	return owned, nil
+}
+
+// RestoreThreadRollouts mirrors Rust's `unarchive_thread`
+// (thread-store/src/local/unarchive_thread.rs, Rust #54060): every archived
+// rollout owned by threadID is moved back to the dated sessions layout, and the
+// requested rollout is the one whose restored path is reported. Moves are rolled
+// back when one of them fails.
+func RestoreThreadRollouts(codexHome string, threadID string, selectedArchivedPath string) (string, error) {
+	owned, err := OwnedArchivedThreadRollouts(codexHome, []string{threadID})
+	if err != nil {
+		return "", err
+	}
+	if !contains(owned, selectedArchivedPath) {
+		owned = append(owned, selectedArchivedPath)
+	}
+	restored := ""
+	moved := make([][2]string, 0, len(owned))
+	seen := make(map[string]struct{}, len(owned))
+	for _, path := range owned {
+		source := filepath.Clean(path)
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		if !rolloutPathIsArchived(codexHome, source) {
+			continue
+		}
+		target, err := Unarchive(source, codexHome)
+		if err != nil {
+			for i := len(moved) - 1; i >= 0; i-- {
+				_ = os.Rename(moved[i][1], moved[i][0])
+			}
+			return "", err
+		}
+		moved = append(moved, [2]string{source, target})
+		if filepath.Clean(selectedArchivedPath) == source {
+			restored = target
+		}
+	}
+	if restored == "" {
+		return "", fmt.Errorf("failed to unarchive selected rollout for thread %s", threadID)
+	}
+	return restored, nil
+}
+
+// rolloutPathIsArchived mirrors Rust `rollout_path_is_archived`: a path is
+// archived when any component is the archived sessions subdirectory.
+func rolloutPathIsArchived(codexHome string, path string) bool {
+	if strings.HasPrefix(path, filepath.Join(codexHome, ArchivedSessionsSubdir)) {
+		return true
+	}
+	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
+		if component == ArchivedSessionsSubdir {
+			return true
+		}
+	}
+	return false
 }
 
 func moveRollout(path string, targetDir string) (string, error) {
