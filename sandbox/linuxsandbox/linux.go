@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -474,6 +475,74 @@ func (p *linuxFilesystemPolicy) hasFullDiskReadAccess() bool {
 	return hasRootRead
 }
 
+// linuxPlatformDefaultReadRoots mirrors Rust `LINUX_PLATFORM_DEFAULT_READ_ROOTS`
+// (`bwrap.rs:53-62`): the read-only roots a restricted policy opts into with a
+// `minimal` read entry, instead of reading `/`.
+var linuxPlatformDefaultReadRoots = []string{
+	"/bin",
+	"/sbin",
+	"/usr",
+	"/etc",
+	"/lib",
+	"/lib64",
+	"/nix/store",
+	"/run/current-system/sw",
+}
+
+// includePlatformDefaults mirrors Rust `include_platform_defaults`
+// (`permissions.rs:962-974`): only a restricted-read policy that lists the
+// `minimal` read entry picks up the platform default read roots.
+func (p *linuxFilesystemPolicy) includePlatformDefaults() bool {
+	if p == nil || p.Kind != "restricted" || p.hasFullDiskReadAccess() {
+		return false
+	}
+	for _, entry := range p.Entries {
+		if entry.Special.Kind == "minimal" && entry.canRead() {
+			return true
+		}
+	}
+	return false
+}
+
+// readableRoots returns the roots a restricted-read policy may read, mirroring
+// Rust `get_readable_roots_with_cwd` (`permissions.rs:1455-1478`) plus the
+// platform-default and procfs augmentation `create_filesystem_args`
+// (`bwrap.rs:522-556`) applies before layering the scoped mounts. A policy with
+// unrestricted reads has no roots to layer: the caller binds `/` instead.
+func (p *linuxFilesystemPolicy) readableRoots(cwd string) []string {
+	if p == nil || p.hasFullDiskReadAccess() {
+		return nil
+	}
+	seen := map[string]bool{}
+	roots := []string{}
+	add := func(path string) {
+		path = cleanLinuxPath(path, cwd)
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		roots = append(roots, path)
+	}
+	for _, entry := range p.Entries {
+		if !entry.canRead() {
+			continue
+		}
+		for _, path := range entry.resolvedPaths(cwd) {
+			add(path)
+		}
+	}
+	if p.includePlatformDefaults() {
+		for _, path := range linuxPlatformDefaultReadRoots {
+			add(path)
+		}
+		// Rust also reuses the caller's procfs here, but only when the pid
+		// namespace is inherited; this CLI always unshares pid and mounts a
+		// fresh procfs after the filesystem arguments instead.
+	}
+	sort.Strings(roots)
+	return roots
+}
+
 func (p *linuxFilesystemPolicy) hasFullDiskWriteAccess() bool {
 	if p == nil || p.Kind == "unrestricted" || p.Kind == "external" {
 		return true
@@ -923,7 +992,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if fs == nil || fs.hasFullDiskWriteAccess() {
 		args = append(args, "--bind", "/", "/")
 		args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
-	} else {
+	} else if readRoots := fs.readableRoots(cmd.SandboxPolicyCWD); fs.hasFullDiskReadAccess() || containsPath(readRoots, "/") {
 		args = append(args, "--ro-bind", "/", "/")
 		// Rust create_filesystem_args mounts the minimal device tree right after
 		// the read-only root bind (`bwrap.rs:511-516`): the root bind is nodev,
@@ -931,38 +1000,56 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		// unusable inside the sandbox (the managed-proxy bridge opens
 		// `/dev/null` for a child's stdin, `linux.go` spawnProxyLocalBridge).
 		args = append(args, "--dev", "/dev")
-		for _, root := range fs.writableRoots(cmd.SandboxPolicyCWD) {
-			if root == "/" {
-				// Rebinding `/` shadows that device tree, so Rust recreates it
-				// together with shared memory (`bwrap.rs:650-657`).
-				args = append(args, "--bind", "/", "/")
-				args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
+	} else {
+		// `bwrap.rs:517-570`: a restricted-read policy that never reads `/`
+		// starts from an empty root and layers only its approved read roots, so
+		// the sandbox sees strictly less than the host root bind would expose.
+		args = append(args, "--tmpfs", "/", "--dev", "/dev")
+		// The empty root hides every mount made before it, including the
+		// caller's `--proc /proc`, so re-issue that mount here; upstream mounts
+		// the fresh procfs after the filesystem arguments (`bwrap.rs:377-381`).
+		if !cmd.NoProc {
+			args = append(args, "--proc", "/proc")
+		}
+		for _, root := range readRoots {
+			if _, err := os.Stat(root); err != nil {
+				// Rust skips readable roots that do not exist on the host.
 				continue
 			}
-			if _, err := os.Stat(root); err == nil {
-				args = append(args, "--bind", root, root)
-			}
+			args = append(args, "--ro-bind", root, root)
 		}
-		// Rust re-applies read-only protections only for subpaths a writable
-		// root would otherwise expose (`append_read_only_subpath_args`,
-		// `bwrap.rs:1243-1257`): the read baseline is already read-only, and an
-		// extra `--ro-bind / /` re-mounts the host root over the device tree and
-		// over the writable roots bound above. Ordinary read entries that no
-		// writable root covers keep the baseline protection.
-		writableRoots := fs.writableRoots(cmd.SandboxPolicyCWD)
-		fullWriteRoot := false
-		for _, root := range writableRoots {
-			if root == "/" {
-				fullWriteRoot = true
-				break
-			}
+	}
+	for _, root := range fs.writableRoots(cmd.SandboxPolicyCWD) {
+		if root == "/" {
+			// Rebinding `/` shadows that device tree, so Rust recreates it
+			// together with shared memory (`bwrap.rs:650-657`).
+			args = append(args, "--bind", "/", "/")
+			args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
+			continue
 		}
-		for _, path := range fs.protectedReadOnlySubpaths(cmd.SandboxPolicyCWD) {
-			if !fullWriteRoot && !linuxSandboxPathWithin(writableRoots, path) {
-				continue
-			}
-			args = append(args, "--ro-bind", path, path)
+		if _, err := os.Stat(root); err == nil {
+			args = append(args, "--bind", root, root)
 		}
+	}
+	// Rust re-applies read-only protections only for subpaths a writable
+	// root would otherwise expose (`append_read_only_subpath_args`,
+	// `bwrap.rs:1243-1257`): the read baseline is already read-only, and an
+	// extra `--ro-bind / /` re-mounts the host root over the device tree and
+	// over the writable roots bound above. Ordinary read entries that no
+	// writable root covers keep the baseline protection.
+	writableRoots := fs.writableRoots(cmd.SandboxPolicyCWD)
+	fullWriteRoot := false
+	for _, root := range writableRoots {
+		if root == "/" {
+			fullWriteRoot = true
+			break
+		}
+	}
+	for _, path := range fs.protectedReadOnlySubpaths(cmd.SandboxPolicyCWD) {
+		if !fullWriteRoot && !linuxSandboxPathWithin(writableRoots, path) {
+			continue
+		}
+		args = append(args, "--ro-bind", path, path)
 	}
 	if fs != nil {
 		unreadableRoots, err := fs.unreadableRoots(cmd.SandboxPolicyCWD)

@@ -685,6 +685,11 @@ func linuxSyscallProbes() map[string]func() error {
 // linuxSandboxE2EProxyProbeEnv enables the managed-proxy round trip probe.
 const linuxSandboxE2EProxyProbeEnv = "CODEX_GO_LINUX_SANDBOX_PROXY_PROBE"
 
+// linuxSandboxE2EVisibilityProbeEnv enables the scoped-read-roots visibility
+// probe: the empty-root layout must expose the approved read roots and the fresh
+// procfs, while paths outside them stay invisible.
+const linuxSandboxE2EVisibilityProbeEnv = "CODEX_GO_LINUX_SANDBOX_VISIBILITY_PROBE"
+
 // linuxSandboxE2EProxyPing / linuxSandboxE2EProxyPong are the fixed payloads
 // the round trip exchanges with the loopback endpoint the host bridge forwards
 // to.
@@ -777,6 +782,15 @@ func errnoOfProbeError(err error) syscall.Errno {
 	return syscall.Errno(0xfffe)
 }
 
+// linuxSandboxStatErrno reports the errno a path lookup fails with inside the
+// sandbox (0 when the path is visible there).
+func linuxSandboxStatErrno(path string) syscall.Errno {
+	if _, err := os.Stat(path); err != nil {
+		return errnoOfProbeError(err)
+	}
+	return 0
+}
+
 // TestParseLinuxSandboxManagedNetwork pins the `--managed-network` payload
 // handling: absent means "no context" (unchanged behaviour), present is decoded
 // with the Rust camelCase spelling, and malformed JSON fails closed with the
@@ -845,6 +859,11 @@ func TestLinuxSandboxE2EProbeProcess(t *testing.T) {
 	fmt.Printf("%svsock_device_open=%d\n", linuxSeccompProbePrefix, linuxSandboxVSockDeviceOpenErrno())
 	if os.Getenv(linuxSandboxE2EProxyProbeEnv) != "" {
 		fmt.Printf("%sproxy_roundtrip=%d\n", linuxSeccompProbePrefix, linuxSandboxProxyRoundtripErrno())
+	}
+	if os.Getenv(linuxSandboxE2EVisibilityProbeEnv) != "" {
+		fmt.Printf("%sscope_usr=%d\n", linuxSeccompProbePrefix, linuxSandboxStatErrno("/usr"))
+		fmt.Printf("%sscope_proc=%d\n", linuxSeccompProbePrefix, linuxSandboxStatErrno("/proc/self/status"))
+		fmt.Printf("%sscope_home=%d\n", linuxSeccompProbePrefix, linuxSandboxStatErrno("/home"))
 	}
 	linuxRunSyscallProbes()
 }
@@ -1183,5 +1202,154 @@ func TestLinuxBwrapRootRebindRestoresDeviceTreeLikeRust(t *testing.T) {
 	}
 	if count := linuxSandboxArgvWindowCount(argv, []string{"--dev", "/dev"}); count != 2 {
 		t.Fatalf("expected the device tree before and after the / rebind, got %d:\n%#v", count, argv)
+	}
+}
+
+// TestLinuxBwrapScopedReadRootsUseTmpfsRootLikeRust pins the third upstream read
+// baseline (`bwrap.rs:517-570`): a restricted-read policy that never reads `/`
+// starts from an empty root and layers only its approved read roots, so the
+// sandbox sees strictly less than a host root bind would expose.
+func TestLinuxBwrapScopedReadRootsUseTmpfsRootLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	profileJSON := fmt.Sprintf(
+		`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"path","path":"/usr"},"access":"read"},{"path":{"type":"path","path":%q},"access":"write"}]},"network":"enabled"}`,
+		cwd,
+	)
+	argv := linuxSandboxCaptureBwrapArgv(t, t.TempDir(), profileJSON, cwd)
+	tmpfsIndex := linuxSandboxArgvWindowIndex(argv, []string{"--tmpfs", "/", "--dev", "/dev"})
+	if tmpfsIndex < 0 {
+		t.Fatalf("a restricted-read policy that never reads `/` must start from an empty root:\n%#v", argv)
+	}
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--ro-bind", "/", "/"}); count != 0 {
+		t.Fatalf("the host root must stay unbound, got %d root binds:\n%#v", count, argv)
+	}
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--ro-bind", "/usr", "/usr"}); index < tmpfsIndex {
+		t.Fatalf("the approved read root must be layered on the empty root:\n%#v", argv)
+	}
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--bind", cwd, cwd}); index < 0 {
+		t.Fatalf("the writable root must still be bound:\n%#v", argv)
+	}
+	// The empty root hides every mount made before it, so the fresh procfs has to
+	// be re-mounted directly after it; upstream mounts `--proc` after the
+	// filesystem arguments.
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--tmpfs", "/", "--dev", "/dev", "--proc", "/proc"}); index < 0 {
+		t.Fatalf("the fresh procfs must be mounted under the empty root:\n%#v", argv)
+	}
+	// Writable roots join the readable bootstrap list and are rebound read-write
+	// afterwards, exactly like Rust mirrors them (`bwrap.rs:527-532`).
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--ro-bind", cwd, cwd}); count != 1 {
+		t.Fatalf("the writable root must be bootstrapped read-only exactly once, got %d:\n%#v", count, argv)
+	}
+}
+
+// TestLinuxBwrapPlatformDefaultReadRootsUseTmpfsRootLikeRust pins the `minimal`
+// read entry (`Rust restricted_read_only_with_platform_defaults_includes_usr_when_present`):
+// the platform defaults join the scoped read roots instead of the host root.
+func TestLinuxBwrapPlatformDefaultReadRootsUseTmpfsRootLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	profileJSON := fmt.Sprintf(
+		`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"minimal"}},"access":"read"},{"path":{"type":"path","path":%q},"access":"write"}]},"network":"enabled"}`,
+		cwd,
+	)
+	argv := linuxSandboxCaptureBwrapArgv(t, t.TempDir(), profileJSON, cwd)
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--tmpfs", "/", "--dev", "/dev"}); index < 0 {
+		t.Fatalf("a `minimal` read policy must start from an empty root:\n%#v", argv)
+	}
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--ro-bind", "/", "/"}); count != 0 {
+		t.Fatalf("the host root must stay unbound, got %d root binds:\n%#v", count, argv)
+	}
+	for _, root := range []string{"/bin", "/sbin", "/usr", "/etc", "/lib", "/lib64", "/nix/store", "/run/current-system/sw"} {
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		if index := linuxSandboxArgvWindowIndex(argv, []string{"--ro-bind", root, root}); index < 0 {
+			t.Fatalf("the platform default read root %s must be bound read-only:\n%#v", root, argv)
+		}
+	}
+}
+
+// TestLinuxBwrapScopedReadRootsEndToEndLikeRust runs the empty-root layout inside
+// real bubblewrap: the approved read roots (the platform defaults plus the
+// directories this test binary needs) and the writable root stay visible, a
+// fresh procfs is mounted, and an unapproved path such as /home is not visible
+// at all. The probe asserts `sandbox_pid=1`, so the observations come from inside
+// the sandbox rather than from the bare host.
+func TestLinuxBwrapScopedReadRootsEndToEndLikeRust(t *testing.T) {
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		t.Skip("bubblewrap is not installed on this host")
+	}
+	if _, err := os.Stat("/usr"); err != nil {
+		t.Skipf("this host has no /usr (%v), so the platform default read roots prove nothing", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test binary: %v", err)
+	}
+	cwd := t.TempDir()
+	helperDir := t.TempDir()
+	if err := os.Symlink(exe, filepath.Join(helperDir, LinuxSandboxArg0)); err != nil {
+		t.Fatalf("link the helper onto PATH: %v", err)
+	}
+	readEntries := ""
+	for _, root := range []string{filepath.Dir(exe), helperDir} {
+		readEntries += fmt.Sprintf(`{"path":{"type":"path","path":%q},"access":"read"},`, root)
+	}
+	profileJSON := fmt.Sprintf(
+		`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"minimal"}},"access":"read"},%s{"path":{"type":"path","path":%q},"access":"write"}]},"network":"enabled"}`,
+		readEntries,
+		cwd,
+	)
+	profile, err := parseLinuxPermissionProfile(profileJSON)
+	if err != nil {
+		t.Fatalf("parse scoped read roots profile: %v", err)
+	}
+	if profile.Filesystem.hasFullDiskReadAccess() || profile.Filesystem.hasFullDiskWriteAccess() {
+		t.Fatalf("the scoped profile must stay read and write restricted")
+	}
+	args, err := CreateCommandArgsWithSandboxExeAndManagedNetwork(
+		exe,
+		[]string{exe, "-test.run=^TestLinuxSandboxE2EProbeProcess$"},
+		cwd,
+		profileJSON,
+		cwd,
+		false,
+		false,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("build sandbox argv: %v", err)
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = append(linuxSandboxE2EChildEnv(false, "", helperDir), linuxSandboxE2EVisibilityProbeEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sandboxed probe failed: %v\n%s", err, out)
+	}
+	t.Logf("scoped-read-roots probe output inside bwrap:\n%s", out)
+	if !strings.Contains(string(out), linuxSeccompProbePrefix+"sandbox_pid=1") {
+		t.Fatalf("the probe did not observe itself as PID 1, so it did not run inside the bubblewrap sandbox:\n%s", out)
+	}
+	probes := parseLinuxProbeOutput(t, "scoped-read-roots", out)
+	assertLinuxProbeErrnos(t, probes, map[string]syscall.Errno{
+		"vsock_socket":     syscall.EPERM,
+		"vsock_socketpair": syscall.EPERM,
+		"unix_socket":      0,
+		"unix_socketpair":  0,
+		"inet_socket":      0,
+		"io_uring_setup":   syscall.EPERM,
+	})
+	if code := probes["scope_usr"]; code != 0 {
+		t.Fatalf("the approved read root /usr must be visible inside the empty root, got errno %d:\n%s", code, out)
+	}
+	if code := probes["scope_proc"]; code != 0 {
+		t.Fatalf("the fresh procfs must be mounted under the empty root, got errno %d:\n%s", code, out)
+	}
+	if code := probes["scope_home"]; code == 0 {
+		t.Fatalf("an unapproved path must stay invisible inside the empty root:\n%s", out)
+	} else {
+		t.Logf("scoped-read-roots: /home inside the sandbox = errno %d", code)
+	}
+	if code := probes["vsock_device_open"]; code == 0 {
+		t.Fatalf("open(/dev/vsock) succeeded inside the sandbox; want a denial:\n%s", out)
 	}
 }
