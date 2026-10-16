@@ -4646,8 +4646,12 @@ func TestModelVisibleSlashCommandsProduceUserVisibleResult(t *testing.T) {
 			if !changed {
 				t.Fatalf("/%s produced no visible result", frame.Name)
 			}
-			if strings.Contains(afterView, "Unknown command") {
-				t.Fatalf("/%s rendered unknown command:\n%s", frame.Name, afterView)
+			// The fallback branch in applyCommand is the only place that writes this
+			// message, so assert on the notice: the rendered view also carries `/diff`
+			// output, and a working tree whose diff mentions the phrase made the
+			// view-wide check self-falsify.
+			if strings.Contains(model.notice, "Unknown command") {
+				t.Fatalf("/%s dispatched to the unknown-command fallback:\n%s", frame.Name, afterView)
 			}
 		})
 	}
@@ -6625,7 +6629,7 @@ func TestModelStatusControlsSetupHistoryAndInvalidItem(t *testing.T) {
 	model.Update(key(bubbletea.KeyEsc))
 
 	_ = model.applyTerminalTitleCommand("does-not-exist")
-	if !strings.Contains(model.View(), "Unknown terminal title item: does-not-exist") {
+	if !strings.Contains(model.View(), "Unknown terminal-title item 'does-not-exist'. Use /title to see available items.") {
 		t.Fatalf("invalid title item notice missing:\n%s", model.View())
 	}
 }

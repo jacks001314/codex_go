@@ -403,7 +403,12 @@ func CommandSupportsInlineArgs(command codextui.Command) bool {
 		codextui.CommandSide,
 		codextui.CommandResume,
 		codextui.CommandFork,
-		codextui.CommandCd:
+		codextui.CommandCd,
+		// Rust #54387: the status-surface commands take inline items, so
+		// `/title app-name` and `/statusline current-dir` dispatch locally
+		// (codex-rs/tui/src/slash_command.rs:181-182).
+		codextui.CommandTitle,
+		codextui.CommandStatusline:
 		return true
 	default:
 		return false

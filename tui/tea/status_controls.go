@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,77 @@ func terminalTitleWriterOrDefault(writer TerminalTitleWriterFunc) TerminalTitleW
 	}
 }
 
+// statusSurfaceItemArgs mirrors Rust #54387 (codex-rs/tui/src/chatwidget/
+// status_surface_commands.rs) tokenizing for the two status-surface commands:
+// positional items, the `--clear` switch, and -- for `/statusline` only -- the
+// `colors` boolean setting Rust passes as `boolean_settings`.
+type statusSurfaceItemArgs struct {
+	items     []string
+	clear     bool
+	useColors *bool
+}
+
+// scanStatusSurfaceItemArgs splits a status-surface argument string the way
+// Rust's shared `slash_command_args::parse` does: `--name=value` is rejected for
+// the value-less switches, an unknown `--name` is an error, and
+// `--colors`/`--no-colors` are accepted only when the command declares the
+// boolean setting.
+func scanStatusSurfaceItemArgs(args string, allowColors bool) (statusSurfaceItemArgs, string) {
+	var parsed statusSurfaceItemArgs
+	for _, token := range strings.Fields(args) {
+		if token == "--" {
+			continue
+		}
+		if !strings.HasPrefix(token, "--") {
+			parsed.items = append(parsed.items, token)
+			continue
+		}
+		name := token
+		hasValue := false
+		if index := strings.IndexByte(token, '='); index >= 0 {
+			name = token[:index]
+			hasValue = true
+		}
+		switch name {
+		case "--clear":
+			if hasValue {
+				return parsed, fmt.Sprintf("Command setting `%s` does not take a value.", name)
+			}
+			parsed.clear = true
+		case "--colors", "--no-colors":
+			if !allowColors {
+				return parsed, fmt.Sprintf("Unknown command setting `%s`.", name)
+			}
+			if hasValue {
+				return parsed, fmt.Sprintf("Command setting `%s` does not take a value.", name)
+			}
+			value := name == "--colors"
+			if parsed.useColors != nil && *parsed.useColors != value {
+				return parsed, "Specify only one of --colors or --no-colors."
+			}
+			parsed.useColors = &value
+		default:
+			return parsed, fmt.Sprintf("Unknown command setting `%s`.", name)
+		}
+	}
+	return parsed, ""
+}
+
+// statusSurfaceUnknownItemNotice mirrors Rust #54387's
+// "Unknown <surface> item '<token>'. Use <command> to see available items."
+func statusSurfaceUnknownItemNotice(surface string, command string, token string) string {
+	return fmt.Sprintf("Unknown %s item '%s'. Use %s to see available items.", surface, token, command)
+}
+
+// applyStatusLineThemeColors mirrors Rust #54387's `colors` boolean setting: a
+// colour-only update keeps the selected items and only flips the preference.
+func (m *Model) applyStatusLineThemeColors(useColors bool) {
+	m.statusLineUseColors = useColors
+	if m.statusControls != nil {
+		m.statusControls.StatusLineUseThemeColors = useColors
+	}
+}
+
 func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 	if m == nil {
 		return nil
@@ -48,24 +120,58 @@ func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 		m.ensureStatusControls()
 		items, invalid := parseStatusLineItemsArg(strings.Join(chatwidget.DefaultStatusLineItems, " "))
 		if len(invalid) > 0 {
-			m.notice = "Unknown status line item: " + strings.Join(invalid, ", ")
+			m.notice = statusSurfaceUnknownItemNotice("status-line", "/statusline", invalid[0])
 			m.refreshTranscript()
 			return nil
 		}
-		result := m.statusControls.SetupStatusLine(items, true)
+		result := m.statusControls.SetupStatusLine(items, m.statusLineUseColors)
 		m.statusLineConfiguredByUser = true
 		m.notice = "Status line reset to default: " + firstNonEmpty(result.StatusLineText, m.renderStatusHeader())
 		m.refreshTranscript()
 		return nil
 	}
-	items, invalid := parseStatusLineItemsArg(args)
+	parsed, argErr := scanStatusSurfaceItemArgs(args, true)
+	if argErr != "" {
+		m.notice = argErr
+		m.refreshTranscript()
+		return nil
+	}
+	// Go compatibility: the bare off/none/disable forms clear the items exactly
+	// like Rust's `--clear` switch.
+	if isStatusSetupOffArg(args) {
+		parsed.clear = true
+		parsed.items = nil
+	}
+	if parsed.clear && len(parsed.items) > 0 {
+		m.notice = "Cannot combine --clear with status-line items."
+		m.refreshTranscript()
+		return nil
+	}
+	if parsed.useColors != nil {
+		m.applyStatusLineThemeColors(*parsed.useColors)
+	}
+	if parsed.clear {
+		m.ensureStatusControls()
+		result := m.statusControls.SetupStatusLine([]bottompane.StatusLineItem{}, m.statusLineUseColors)
+		m.statusLineConfiguredByUser = true
+		m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
+		m.refreshTranscript()
+		return nil
+	}
+	if len(parsed.items) == 0 {
+		// Rust #54387: `--colors`/`--no-colors` without items preserves the
+		// current selection and only updates the colour preference.
+		m.refreshTranscript()
+		return nil
+	}
+	items, invalid := parseStatusLineItemsArgTokens(parsed.items)
 	if len(invalid) > 0 {
-		m.notice = "Unknown status line item: " + strings.Join(invalid, ", ")
+		m.notice = statusSurfaceUnknownItemNotice("status-line", "/statusline", invalid[0])
 		m.refreshTranscript()
 		return nil
 	}
 	m.ensureStatusControls()
-	result := m.statusControls.SetupStatusLine(items, true)
+	result := m.statusControls.SetupStatusLine(items, m.statusLineUseColors)
 	m.statusLineConfiguredByUser = true
 	m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
 	m.refreshTranscript()
@@ -89,11 +195,32 @@ func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return m.applyTerminalTitleResult(result)
 	}
-	items, invalid := parseTerminalTitleItemsArg(args)
-	if len(invalid) > 0 {
-		m.notice = "Unknown terminal title item: " + strings.Join(invalid, ", ")
+	// Rust #54387 passes switches=["--clear"] for `/title` and no boolean
+	// settings, so `--colors` is an unknown setting here.
+	parsed, argErr := scanStatusSurfaceItemArgs(args, false)
+	if argErr != "" {
+		m.notice = argErr
 		m.refreshTranscript()
 		return nil
+	}
+	if isStatusSetupOffArg(args) {
+		parsed.clear = true
+		parsed.items = nil
+	}
+	if parsed.clear && len(parsed.items) > 0 {
+		m.notice = "Cannot combine --clear with terminal-title items."
+		m.refreshTranscript()
+		return nil
+	}
+	items := []chatwidget.TerminalTitleItem{}
+	if !parsed.clear {
+		var invalid []string
+		items, invalid = parseTerminalTitleItemsArgTokens(parsed.items)
+		if len(invalid) > 0 {
+			m.notice = statusSurfaceUnknownItemNotice("terminal-title", "/title", invalid[0])
+			m.refreshTranscript()
+			return nil
+		}
 	}
 	m.ensureStatusControls()
 	result := m.statusControls.SetupTerminalTitle(items)
@@ -329,6 +456,34 @@ func statusItemArgParts(args string) []string {
 	return strings.FieldsFunc(args, func(r rune) bool {
 		return r == ',' || r == ';' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
 	})
+}
+
+func parseStatusLineItemsArgTokens(tokens []string) ([]bottompane.StatusLineItem, []string) {
+	items := make([]bottompane.StatusLineItem, 0, len(tokens))
+	var invalid []string
+	for _, token := range tokens {
+		item, ok := chatwidget.ParseStatusLineItem(token)
+		if !ok {
+			invalid = append(invalid, token)
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, invalid
+}
+
+func parseTerminalTitleItemsArgTokens(tokens []string) ([]chatwidget.TerminalTitleItem, []string) {
+	items := make([]chatwidget.TerminalTitleItem, 0, len(tokens))
+	var invalid []string
+	for _, token := range tokens {
+		item, ok := chatwidget.ParseTerminalTitleItem(token)
+		if !ok {
+			invalid = append(invalid, token)
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, invalid
 }
 
 func isStatusSetupDefaultArg(args string) bool {

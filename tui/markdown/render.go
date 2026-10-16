@@ -101,6 +101,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	colorLevel := codextui.DetectStdoutColorLevel()
+	style = applyThemeMarkupColors(style, themeID)
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
@@ -114,7 +115,8 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if err != nil {
 		return "", err
 	}
-	out = colorOrderedListMarkers(out)
+	out = colorOrderedListMarkers(out, orderedListMarkerSGRForTheme(themeID))
+	out = colorUnorderedListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width)
 	out = restoreMathPlaceholders(out, mathPlaceholders)
@@ -134,6 +136,37 @@ const blockQuoteIndentToken = "\u2502 "
 // optional blockquote indent tokens, then any further indentation and the
 // ordinal marker itself ("1. ", "    2. ").
 var orderedListMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*)([ \t]*\d+\. )`)
+
+// unorderedListMarkerRE matches the start of a rendered unordered list item:
+// the optional blockquote indent tokens, then any further indentation and the
+// bullet marker itself.
+// unorderedListMarkerToken is the bullet glamour paints in front of unordered
+// list items (the ASCIIStyleConfig item prefix).
+const unorderedListMarkerToken = "\u2022 "
+
+var unorderedListMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*)([ \t]*` + unorderedListMarkerToken + `)`)
+
+// orderedListMarkerSGRForTheme mirrors Rust #54217's ordered_list_marker
+// (`Style::new().light_blue().patch(foreground(markup.list.numbered.markdown))`):
+// the theme's list foreground wins when it styles the scope, and the LightBlue
+// palette colour remains the fallback.
+func orderedListMarkerSGRForTheme(themeID string) string {
+	if sgr := codextui.ThemeScopeForegroundSGR(themeID, "markup.list.numbered.markdown"); sgr != "" {
+		return sgr
+	}
+	return orderedListMarkerSGR
+}
+
+// unorderedListMarkerSGRForTheme mirrors Rust #54217's unordered_list_marker:
+// the marker borrows the theme's list foreground and keeps the renderer default
+// (no repaint) when the theme styles neither scope.
+func unorderedListMarkerSGRForTheme(themeID string) string {
+	return codextui.ThemeScopeForegroundSGR(
+		themeID,
+		"markup.list.unnumbered.markdown",
+		"markup.list.bullet.markdown",
+	)
+}
 
 // orderedListMarkerSGR is the terminal-palette colour the Rust TUI paints the
 // ordered-list marker with (Rust #48800: MarkdownStyles::ordered_list_marker is
@@ -155,8 +188,30 @@ const (
 // therefore repainted after rendering. Rendered code blocks and tables are still
 // the internal markers at this point in the pipeline, so their bodies are skipped
 // and never repainted.
-func colorOrderedListMarkers(rendered string) string {
+func colorOrderedListMarkers(rendered string, markerSGR string) string {
 	if !strings.ContainsAny(rendered, "0123456789") {
+		return rendered
+	}
+	return repaintListMarkers(rendered, orderedListMarkerRE, markerSGR)
+}
+
+// colorUnorderedListMarkers repaints the bullet of every rendered unordered list
+// item with the theme's list foreground, leaving the item text in the default
+// colour (Rust #54217 unordered_list_marker). It is a no-op when the theme styles
+// no unordered-list scope, because the marker then keeps its own default style.
+func colorUnorderedListMarkers(rendered string, markerSGR string) string {
+	if markerSGR == "" {
+		return rendered
+	}
+	return repaintListMarkers(rendered, unorderedListMarkerRE, markerSGR)
+}
+
+// repaintListMarkers wraps the leading marker matched by marker on every rendered
+// list line and restores the default foreground afterwards. Rendered code blocks
+// and tables are still the internal markers at this point in the pipeline, so
+// their bodies are skipped and never repainted.
+func repaintListMarkers(rendered string, marker *regexp.Regexp, markerSGR string) string {
+	if markerSGR == "" {
 		return rendered
 	}
 	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
@@ -173,15 +228,53 @@ func colorOrderedListMarkers(rendered string) string {
 			}
 			continue
 		}
-		if !orderedListMarkerRE.MatchString(line) {
+		if !marker.MatchString(line) {
 			continue
 		}
-		lines[index] = orderedListMarkerRE.ReplaceAllString(
+		lines[index] = marker.ReplaceAllString(
 			line,
-			"$1"+orderedListMarkerSGR+"$2"+orderedListMarkerResetSGR,
+			"$1"+markerSGR+"$2"+orderedListMarkerResetSGR,
 		)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// applyThemeMarkupColors applies the active syntax theme's markup-scope
+// foregrounds to Markdown prose (Rust #54217 MarkdownStyles::for_theme):
+// headings, emphasis, strong, links and blockquotes borrow the theme foreground
+// while keeping their existing modifiers. A scope the theme does not style keeps
+// the previous fallback (no change), matching Rust's `unwrap_or_default`.
+func applyThemeMarkupColors(style ansi.StyleConfig, themeID string) ansi.StyleConfig {
+	foreground := func(scopes ...string) *string {
+		if value := codextui.ThemeScopeForegroundValue(themeID, scopes...); value != "" {
+			return styleString(value)
+		}
+		return nil
+	}
+	patch := func(target *ansi.StyleBlock, scopes ...string) {
+		if color := foreground(scopes...); color != nil {
+			target.StylePrimitive.Color = color
+		}
+	}
+	patch(&style.H1, "markup.heading.1.markdown", "markup.heading.markdown")
+	patch(&style.H2, "markup.heading.2.markdown", "markup.heading.markdown")
+	patch(&style.H3, "markup.heading.3.markdown", "markup.heading.markdown")
+	patch(&style.H4, "markup.heading.4.markdown", "markup.heading.markdown")
+	patch(&style.H5, "markup.heading.5.markdown", "markup.heading.markdown")
+	patch(&style.H6, "markup.heading.6.markdown", "markup.heading.markdown")
+	if color := foreground("markup.italic.markdown"); color != nil {
+		style.Emph.Color = color
+	}
+	if color := foreground("markup.bold.markdown"); color != nil {
+		style.Strong.Color = color
+	}
+	if color := foreground("markup.underline.link.markdown"); color != nil {
+		style.Link.Color = color
+	}
+	if color := foreground("markup.quote.markdown"); color != nil {
+		style.BlockQuote.Color = color
+	}
+	return style
 }
 
 var bareURLPattern = regexp.MustCompile(`https?://[^\s"'<>]+`)

@@ -87,7 +87,11 @@ func (i SlashCommandItem) SupportsInlineArgs() bool {
 		codextui.CommandUsage,
 		codextui.CommandPets,
 		codextui.CommandSide,
-		codextui.CommandResume:
+		codextui.CommandResume,
+		// Rust #54387: the status-surface commands take inline items
+		// (codex-rs/tui/src/slash_command.rs:181-182).
+		codextui.CommandTitle,
+		codextui.CommandStatusline:
 		return true
 	default:
 		return false

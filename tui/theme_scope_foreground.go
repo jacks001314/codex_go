@@ -36,6 +36,25 @@ func ThemeScopeForegroundSGR(themeID string, scopes ...string) string {
 	return ""
 }
 
+// ThemeScopeForegroundValue renders the theme's foreground colour for the first
+// matching scope in the value form glamour resolves ("#rrggbb" for a truecolor
+// theme, a decimal palette index otherwise). It returns "" when the theme styles
+// none of the scopes, so the caller keeps its own fallback (Rust
+// `foreground_style_for_scopes_with_theme` returning None).
+func ThemeScopeForegroundValue(themeID string, scopes ...string) string {
+	colour, ok := themeScopeForeground(themeID, scopes...)
+	if !ok {
+		return ""
+	}
+	if colour.RGB != nil {
+		return fmt.Sprintf("#%02x%02x%02x", colour.RGB.R, colour.RGB.G, colour.RGB.B)
+	}
+	if colour.Index != nil {
+		return strconv.Itoa(int(*colour.Index))
+	}
+	return ""
+}
+
 // themeScopeForeground resolves a theme's foreground colour for the first scope
 // it styles. A custom `.tmTheme` wins over the bundled asset, and a chroma-mapped
 // theme falls back to the resolved style's own token colour (skipping a token
