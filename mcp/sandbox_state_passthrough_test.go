@@ -5,13 +5,19 @@ import (
 	"testing"
 )
 
+// workspaceWriteProfileJSON is an opaque policy document with the shape the
+// sandbox CLI consumes through --sandbox-state-json. The MCP layer must forward
+// it verbatim, so the tests assert on the encoded object rather than on a
+// profile label.
+const workspaceWriteProfileJSON = `{"type":"managed","file_system":{"type":"unrestricted","future_policy_field":true},"network":"enabled"}`
+
 func TestAugmentToolCallMetaWithSandboxState(t *testing.T) {
 	service := NewMCPService(nil)
 
 	params := &MCPToolCallParams{
 		ThreadID:                 "thread-1",
 		SupportsSandboxStateMeta: true,
-		PermissionProfile:        "workspace_write",
+		PermissionProfile:        workspaceWriteProfileJSON,
 		SandboxCWD:               "/home/user/project",
 		CodexLinuxSandboxExe:     "/usr/bin/codex-linux-sandbox",
 		UseLegacyLandlock:        false,
@@ -38,8 +44,13 @@ func TestAugmentToolCallMetaWithSandboxState(t *testing.T) {
 		t.Fatal("expected sandbox state to be map")
 	}
 
-	if stateMap["permissionProfile"] != "workspace_write" {
-		t.Errorf("permission profile = %v", stateMap["permissionProfile"])
+	profile, ok := stateMap["permissionProfile"].(map[string]any)
+	if !ok || profile["type"] != "managed" {
+		t.Errorf("permission profile = %#v", stateMap["permissionProfile"])
+	}
+	fileSystem, ok := profile["file_system"].(map[string]any)
+	if !ok || fileSystem["future_policy_field"] != true {
+		t.Errorf("unknown policy fields must survive the handoff: %#v", profile["file_system"])
 	}
 	if stateMap["sandboxCwd"] != "/home/user/project" {
 		t.Errorf("sandbox cwd = %v", stateMap["sandboxCwd"])
@@ -58,7 +69,7 @@ func TestAugmentToolCallMetaSkipsWhenCapabilityNotSupported(t *testing.T) {
 	params := &MCPToolCallParams{
 		ThreadID:                 "thread-1",
 		SupportsSandboxStateMeta: false,
-		PermissionProfile:        "workspace_write",
+		PermissionProfile:        workspaceWriteProfileJSON,
 		SandboxCWD:               "/home/user/project",
 	}
 
@@ -84,7 +95,7 @@ func TestAugmentToolCallMetaSkipsWhenCWDEmpty(t *testing.T) {
 	params := &MCPToolCallParams{
 		ThreadID:                 "thread-1",
 		SupportsSandboxStateMeta: true,
-		PermissionProfile:        "workspace_write",
+		PermissionProfile:        workspaceWriteProfileJSON,
 		SandboxCWD:               "",
 	}
 
@@ -111,7 +122,7 @@ func TestAugmentToolCallMetaPreservesExistingMeta(t *testing.T) {
 		ThreadID:                 "thread-1",
 		Meta:                     existingMeta,
 		SupportsSandboxStateMeta: true,
-		PermissionProfile:        "workspace_write",
+		PermissionProfile:        workspaceWriteProfileJSON,
 		SandboxCWD:               "/home/user/project",
 	}
 
@@ -141,7 +152,7 @@ func TestAugmentToolCallMetaSandboxStateJSONShape(t *testing.T) {
 	params := &MCPToolCallParams{
 		ThreadID:                 "thread-1",
 		SupportsSandboxStateMeta: true,
-		PermissionProfile:        "workspace_write",
+		PermissionProfile:        workspaceWriteProfileJSON,
 		SandboxCWD:               "/home/user/project",
 		CodexLinuxSandboxExe:     "/usr/bin/codex-linux-sandbox",
 		UseLegacyLandlock:        true,
@@ -160,8 +171,9 @@ func TestAugmentToolCallMetaSandboxStateJSONShape(t *testing.T) {
 	}
 
 	sandboxState := decoded[mcpSandboxStateMetaCapability].(map[string]any)
-	if sandboxState["permissionProfile"] != "workspace_write" {
-		t.Errorf("permission profile after round trip = %v", sandboxState["permissionProfile"])
+	profile := sandboxState["permissionProfile"].(map[string]any)
+	if profile["type"] != "managed" {
+		t.Errorf("permission profile after round trip = %v", profile["type"])
 	}
 	if sandboxState["sandboxCwd"] != "/home/user/project" {
 		t.Errorf("sandbox cwd after round trip = %v", sandboxState["sandboxCwd"])

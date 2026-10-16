@@ -1507,6 +1507,12 @@ func checkSandboxStateMetaCapability(result *json.RawMessage) bool {
 	if initResult.Capabilities.Experimental == nil {
 		return false
 	}
+	// Rust #53709: the experimental `codex/sandbox-state` capability is accepted
+	// alongside the deprecated `codex/sandbox-state-meta` alias, and both receive
+	// identical policy values.
+	if _, ok := initResult.Capabilities.Experimental[mcpSandboxStateCapability]; ok {
+		return true
+	}
 	_, ok := initResult.Capabilities.Experimental[mcpSandboxStateMetaCapability]
 	return ok
 }

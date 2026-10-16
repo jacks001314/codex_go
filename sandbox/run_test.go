@@ -358,7 +358,8 @@ func TestBuildCommandRunPlanAllowsNetworkForProxy(t *testing.T) {
 
 func TestBuildCommandRunPlanSandboxStateLegacyLandlockOverridesRequest(t *testing.T) {
 	plan, err := BuildCommandRunPlan(&CommandRunRequest{
-		SandboxStateJSON:  fmt.Sprintf(`{"permission_profile":{"type":"disabled"},"sandbox_cwd":%q}`, t.TempDir()),
+		// camelCase is the authoritative wire spelling (Rust codex_mcp::SandboxState).
+		SandboxStateJSON:  fmt.Sprintf(`{"permissionProfile":{"type":"disabled"},"sandboxCwd":%q}`, t.TempDir()),
 		UseLegacyLandlock: true,
 		Command:           []string{"go", "version"},
 	})
@@ -460,7 +461,8 @@ func permissionProfilePathEntryCount(t *testing.T, raw string, path string) int 
 
 func TestBuildCommandRunPlanRejectsDisabledSandboxStateNetworkOverride(t *testing.T) {
 	_, err := BuildCommandRunPlan(&CommandRunRequest{
-		SandboxStateJSON:      fmt.Sprintf(`{"permission_profile":{"type":"disabled"},"sandbox_cwd":%q}`, t.TempDir()),
+		// camelCase is the authoritative wire spelling (Rust codex_mcp::SandboxState).
+		SandboxStateJSON:      fmt.Sprintf(`{"permissionProfile":{"type":"disabled"},"sandboxCwd":%q}`, t.TempDir()),
 		SandboxDisableNetwork: true,
 		Command:               []string{"go", "version"},
 	})

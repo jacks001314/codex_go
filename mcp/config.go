@@ -287,6 +287,25 @@ type RuntimeConfig struct {
 	// trusted, HTTP Codex Apps registration (Rust #44318/#44571).
 	HostOwnedAppsProtocolMode MCPProtocolMode
 	HTTPClient                HTTPDoer
+	// CodexSelfExe is the host-supplied re-exec binary. It is advertised to local
+	// stdio servers as the sandbox launcher only after a capability probe
+	// (Rust McpConfig::codex_self_exe, #52182). An empty value uses this
+	// process's own executable, mirroring Rust's `std::env::current_exe()`.
+	CodexSelfExe string
+	// CodexLinuxSandboxExe and UseLegacyLandlock are forwarded in the sandbox
+	// state (Rust McpConfig fields of the same names).
+	CodexLinuxSandboxExe string
+	UseLegacyLandlock    bool
+	// EnvironmentCWDs maps an environment id to its captured working directory
+	// (Rust McpConfig::environment_cwds). The sandbox state reports the entry for
+	// the server's environment; the default (local) environment falls back to
+	// the server's configured cwd.
+	EnvironmentCWDs map[string]string
+	// EnvironmentUseMXC maps an environment id to its effective Windows sandbox
+	// backend (Rust McpConfig::environment_use_mxc, #49781). A missing entry
+	// reports false, so one environment's MXC preference never leaks into
+	// another.
+	EnvironmentUseMXC map[string]bool
 	// PermissionProfile is the thread execution authority published with this
 	// MCP runtime (Rust McpConfig.permission_profile).
 	PermissionProfile *sandbox.PermissionProfile
@@ -1077,6 +1096,19 @@ func cloneStringMap(values map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+// cloneBoolMap copies an environment-indexed boolean map. A nil input stays nil
+// so an absent environment selection is distinguishable from an explicit false.
+func cloneBoolMap(values map[string]bool) map[string]bool {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]bool, len(values))
 	for key, value := range values {
 		out[key] = value
 	}

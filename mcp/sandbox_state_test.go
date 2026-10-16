@@ -1,6 +1,9 @@
 package mcp
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestSandboxStateEnvNil(t *testing.T) {
 	env := BuildSandboxStateEnv(nil)
@@ -12,13 +15,13 @@ func TestSandboxStateEnvNil(t *testing.T) {
 func TestSandboxStateEnvBuildsCorrectEnv(t *testing.T) {
 	legacyLandlock := true
 	state := &SandboxState{
-		PermissionProfile:    "workspace_write",
+		PermissionProfile:    json.RawMessage(`{"type":"managed"}`),
 		CodexLinuxSandboxExe: "/usr/bin/codex-sandbox",
 		SandboxCWD:           "/home/user/project",
 		UseLegacyLandlock:    &legacyLandlock,
 	}
 	env := BuildSandboxStateEnv(state)
-	if env["CODEX_PERMISSION_PROFILE"] != "workspace_write" {
+	if env["CODEX_PERMISSION_PROFILE"] != `{"type":"managed"}` {
 		t.Fatalf("permission profile = %q", env["CODEX_PERMISSION_PROFILE"])
 	}
 	if env["CODEX_LINUX_SANDBOX_EXE"] != "/usr/bin/codex-sandbox" {
@@ -34,7 +37,7 @@ func TestSandboxStateEnvBuildsCorrectEnv(t *testing.T) {
 
 func TestSandboxStateEnvOmitEmpty(t *testing.T) {
 	state := &SandboxState{
-		PermissionProfile: "read_only",
+		PermissionProfile: json.RawMessage(`{"type":"read_only"}`),
 	}
 	env := BuildSandboxStateEnv(state)
 	if len(env) != 1 {
@@ -45,21 +48,21 @@ func TestSandboxStateEnvOmitEmpty(t *testing.T) {
 func TestMergeSandboxEnvPreservesBaseValues(t *testing.T) {
 	base := map[string]string{"PATH": "/usr/bin", "HOME": "/home/user"}
 	state := &SandboxState{
-		PermissionProfile: "workspace_write",
+		PermissionProfile: json.RawMessage(`{"type":"managed"}`),
 		SandboxCWD:        "/home/user/project",
 	}
 	merged := MergeSandboxEnv(base, state)
 	if merged["PATH"] != "/usr/bin" || merged["HOME"] != "/home/user" {
 		t.Fatalf("base env lost: %#v", merged)
 	}
-	if merged["CODEX_PERMISSION_PROFILE"] != "workspace_write" {
+	if merged["CODEX_PERMISSION_PROFILE"] != `{"type":"managed"}` {
 		t.Fatalf("sandbox env missing: %#v", merged)
 	}
 }
 
 func TestMergeSandboxEnvDoesNotOverrideExisting(t *testing.T) {
 	base := map[string]string{"CODEX_PERMISSION_PROFILE": "existing_profile"}
-	state := &SandboxState{PermissionProfile: "new_profile"}
+	state := &SandboxState{PermissionProfile: json.RawMessage(`{"type":"managed"}`)}
 	merged := MergeSandboxEnv(base, state)
 	if merged["CODEX_PERMISSION_PROFILE"] != "existing_profile" {
 		t.Fatalf("sandbox env should not override existing: got %q", merged["CODEX_PERMISSION_PROFILE"])

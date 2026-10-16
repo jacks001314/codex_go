@@ -52,42 +52,94 @@ type CommandRunPlan struct {
 	UnsupportedReason       string
 }
 
+// SandboxState is the opaque sandbox policy an MCP host forwards from tool-call
+// `_meta` into `codex sandbox --sandbox-state-json` (Rust
+// codex_mcp::SandboxState, #53709/#52182).
+//
+// Rust's authoritative serialization is camelCase. camelCase is therefore the
+// primary wire spelling here; the historical snake_case spelling of this
+// repository is kept as a compatibility alias so a payload written by an older
+// Go build keeps parsing. Both spellings describe the same fields, and unknown
+// fields are preserved so a consumer can forward the policy unchanged.
 type SandboxState struct {
-	PermissionProfile    *PermissionProfile `json:"permission_profile"`
-	CodexLinuxSandboxExe string             `json:"codex_linux_sandbox_exe"`
-	SandboxCWD           string             `json:"sandbox_cwd"`
-	UseLegacyLandlock    bool               `json:"use_legacy_landlock"`
-	HasUseLegacyLandlock bool               `json:"-"`
-	PermissionProfileRaw json.RawMessage    `json:"-"`
+	PermissionProfile    *PermissionProfile `json:"permissionProfile"`
+	CodexLinuxSandboxExe string             `json:"codexLinuxSandboxExe"`
+	SandboxCWD           string             `json:"sandboxCwd"`
+	UseLegacyLandlock    bool               `json:"useLegacyLandlock"`
+	// UseMXC carries the parent's effective Windows sandbox backend (Rust
+	// #49781's `use_mxc`): true selects the native MXC sandbox.
+	UseMXC               bool            `json:"useMxc"`
+	HasUseLegacyLandlock bool            `json:"-"`
+	HasUseMXC            bool            `json:"-"`
+	PermissionProfileRaw json.RawMessage `json:"-"`
 }
 
 func (s *SandboxState) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		PermissionProfile    json.RawMessage `json:"permission_profile"`
-		CodexLinuxSandboxExe string          `json:"codex_linux_sandbox_exe"`
-		SandboxCWD           string          `json:"sandbox_cwd"`
-		UseLegacyLandlock    *bool           `json:"use_legacy_landlock"`
+		PermissionProfile          json.RawMessage `json:"permissionProfile"`
+		LegacyPermissionProfile    json.RawMessage `json:"permission_profile"`
+		CodexLinuxSandboxExe       *string         `json:"codexLinuxSandboxExe"`
+		LegacyCodexLinuxSandboxExe *string         `json:"codex_linux_sandbox_exe"`
+		SandboxCWD                 *string         `json:"sandboxCwd"`
+		LegacySandboxCWD           *string         `json:"sandbox_cwd"`
+		UseLegacyLandlock          *bool           `json:"useLegacyLandlock"`
+		LegacyUseLegacyLandlock    *bool           `json:"use_legacy_landlock"`
+		UseMXC                     *bool           `json:"useMxc"`
+		LegacyUseMXC               *bool           `json:"use_mxc"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
-	*s = SandboxState{
-		CodexLinuxSandboxExe: raw.CodexLinuxSandboxExe,
-		SandboxCWD:           raw.SandboxCWD,
-		PermissionProfileRaw: raw.PermissionProfile,
+	profileRaw := raw.PermissionProfile
+	if !hasSandboxStateJSONValue(profileRaw) {
+		profileRaw = raw.LegacyPermissionProfile
 	}
-	if len(raw.PermissionProfile) > 0 && string(raw.PermissionProfile) != "null" {
-		profile, err := parsePermissionProfileJSON(raw.PermissionProfile)
+	if !hasSandboxStateJSONValue(profileRaw) {
+		profileRaw = nil
+	}
+	*s = SandboxState{
+		CodexLinuxSandboxExe: firstSandboxStateString(raw.CodexLinuxSandboxExe, raw.LegacyCodexLinuxSandboxExe),
+		SandboxCWD:           firstSandboxStateString(raw.SandboxCWD, raw.LegacySandboxCWD),
+		PermissionProfileRaw: profileRaw,
+	}
+	if profileRaw != nil {
+		profile, err := parsePermissionProfileJSON(profileRaw)
 		if err != nil {
 			return err
 		}
 		s.PermissionProfile = profile
 	}
-	if raw.UseLegacyLandlock != nil {
-		s.UseLegacyLandlock = *raw.UseLegacyLandlock
+	if value := firstSandboxStateBool(raw.UseLegacyLandlock, raw.LegacyUseLegacyLandlock); value != nil {
+		s.UseLegacyLandlock = *value
 		s.HasUseLegacyLandlock = true
 	}
+	if value := firstSandboxStateBool(raw.UseMXC, raw.LegacyUseMXC); value != nil {
+		s.UseMXC = *value
+		s.HasUseMXC = true
+	}
 	return nil
+}
+
+func hasSandboxStateJSONValue(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+func firstSandboxStateString(primary *string, legacy *string) string {
+	if primary != nil {
+		return *primary
+	}
+	if legacy != nil {
+		return *legacy
+	}
+	return ""
+}
+
+func firstSandboxStateBool(primary *bool, legacy *bool) *bool {
+	if primary != nil {
+		return primary
+	}
+	return legacy
 }
 
 func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
@@ -220,7 +272,16 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		plan.Command = wrapped
 		plan.SandboxType = SandboxTypeMacosSeatbelt
 	} else if runtime.GOOS == "windows" && plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
-		plan.SandboxType = SandboxTypeWindowsRestrictedToken
+		// Rust cli/src/debug_sandbox.rs (#52182): a parent can select MXC through
+		// a CLI override that never reaches the child's disk config. The
+		// forwarded `useMxc` preserves that backend instead of weakening
+		// enforcement; an explicit MXC launch fails closed when the native
+		// implementation is unavailable.
+		if sandboxState != nil && sandboxState.UseMXC {
+			plan.SandboxType = SandboxTypeWindowsMxc
+		} else {
+			plan.SandboxType = SandboxTypeWindowsRestrictedToken
+		}
 	}
 	return plan, nil
 }

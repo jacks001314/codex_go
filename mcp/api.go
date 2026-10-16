@@ -19,7 +19,6 @@ import (
 var ErrInvalidMCPRequest = errors.New("invalid mcp request")
 
 const mcpToolThreadIDMetaKey = "threadId"
-const mcpSandboxStateMetaCapability = "codex/sandbox-state-meta"
 
 type invalidMCPRequestError struct {
 	message string
@@ -560,12 +559,26 @@ type MCPToolCallParams struct {
 	WindowID     string `json:"-"`
 	OriginItemID string `json:"-"`
 
-	PermissionProfile        string `json:"-"`
-	SandboxCWD               string `json:"-"`
-	CodexLinuxSandboxExe     string `json:"-"`
-	UseLegacyLandlock        bool   `json:"-"`
-	ServerEnvironmentID      string `json:"-"`
-	SupportsSandboxStateMeta bool   `json:"-"`
+	// PermissionProfile is the opaque permission-profile document forwarded to
+	// `codex sandbox --sandbox-state-json` (Rust SandboxState::permission_profile).
+	// It is JSON text, not a profile label, so consumers can preserve unknown
+	// fields instead of rebuilding the policy (#53709).
+	PermissionProfile    string `json:"-"`
+	SandboxCWD           string `json:"-"`
+	CodexLinuxSandboxExe string `json:"-"`
+	UseLegacyLandlock    bool   `json:"-"`
+	// UseMXC carries the environment's effective Windows sandbox backend
+	// (Rust #49781's `use_mxc`).
+	UseMXC bool `json:"-"`
+	// SandboxLauncherExecutable is the verified local CLI advertised under the
+	// reserved launcher key (Rust #52182). Empty omits the launcher envelope and
+	// never authorizes a PATH lookup.
+	SandboxLauncherExecutable string `json:"-"`
+	ServerEnvironmentID       string `json:"-"`
+	// SupportsSandboxStateMeta reports the negotiated sandbox-state capability:
+	// the server advertised `codex/sandbox-state` or its deprecated `-meta`
+	// alias (#53709).
+	SupportsSandboxStateMeta bool `json:"-"`
 }
 
 func (p MCPToolCallParams) MarshalJSON() ([]byte, error) {
@@ -689,6 +702,16 @@ type MCPService struct {
 	// with this runtime (Rust #40728).
 	permissionProfile        *sandbox.PermissionProfile
 	serverPermissionProfiles map[string]*sandbox.PermissionProfile
+	// codexSelfExe is the host-supplied re-exec binary advertised as a sandbox
+	// launcher after a capability probe (Rust McpConfig::codex_self_exe).
+	codexSelfExe string
+	// codexLinuxSandboxExe, useLegacyLandlock, environmentCWDs and
+	// environmentUseMXC mirror the McpConfig fields of the same names that the
+	// sandbox-state metadata reports (#49781/#52182).
+	codexLinuxSandboxExe string
+	useLegacyLandlock    bool
+	environmentCWDs      map[string]string
+	environmentUseMXC    map[string]bool
 	// selectedEnvironments is the ordered executor selection published with this
 	// runtime (Rust McpServerContributionContext::selected_environments, #51503).
 	// A nil value means no selection was captured, and a non-nil empty value
@@ -743,6 +766,19 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		}
 		service.selectedEnvironments = runtime.SelectedEnvironments.Clone()
 		service.sharedHTTPClient = runtime.HTTPClient
+		service.codexSelfExe = strings.TrimSpace(runtime.CodexSelfExe)
+		if service.codexSelfExe == "" {
+			// Rust's arg0 layer sets `config.codex_self_exe` from
+			// `std::env::current_exe()`; the MCP runtime inherits the same host
+			// binary unless a caller supplies a dispatch-path override.
+			if exe, err := os.Executable(); err == nil {
+				service.codexSelfExe = strings.TrimSpace(exe)
+			}
+		}
+		service.codexLinuxSandboxExe = strings.TrimSpace(runtime.CodexLinuxSandboxExe)
+		service.useLegacyLandlock = runtime.UseLegacyLandlock
+		service.environmentCWDs = cloneStringMap(runtime.EnvironmentCWDs)
+		service.environmentUseMXC = cloneBoolMap(runtime.EnvironmentUseMXC)
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
@@ -2147,24 +2183,132 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	if err := s.requiredServerAvailable(server); err != nil {
 		return nil, err
 	}
-	meta := s.augmentToolCallMeta(params)
-	roots := s.rootsForThread(params.ThreadID)
+	// The sandbox-state contract is negotiated per connection: the server
+	// advertises `codex/sandbox-state` (or its deprecated `-meta` alias) on
+	// initialize/server-discover, and the connection records it (Rust #53709's
+	// rmcp_client capability gate). Resolve the transport first so the same
+	// negotiated connection also answers the capability question, then hand the
+	// call its sandbox policy and launcher metadata.
+	var httpTarget *httpClient
+	var stdioTarget *stdioClient
+	serverEnvironmentID := ""
 	if config, ok := s.serverConfig(server); ok {
+		serverEnvironmentID = config.EffectiveEnvironmentID()
 		if strings.TrimSpace(config.URL) != "" {
 			if err := ValidateServerAuth(server, &config); err != nil {
 				return nil, err
 			}
-			return callMCPHTTPToolWithClient(s.httpClientForServer(server, &config), server, params.ThreadID, params.TurnID, params.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, params.Arguments, meta)
+			httpTarget = s.httpClientForServer(server, &config)
+		} else if strings.TrimSpace(config.Command) != "" {
+			stdioTarget = s.stdioClientForServer(server, &config)
 		}
-		if strings.TrimSpace(config.Command) != "" {
-			return callMCPStdioToolWithClient(s.stdioClientForServer(server, &config), server, params.ThreadID, params.TurnID, params.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, params.Arguments, meta)
-		}
+	}
+	effective, meta := s.prepareToolCallSandboxState(server, serverEnvironmentID, stdioTarget != nil, params, httpTarget.sandboxStateMetaNegotiated(), stdioTarget.sandboxStateMetaNegotiated())
+	roots := s.rootsForThread(effective.ThreadID)
+	if httpTarget != nil {
+		return callMCPHTTPToolWithClient(httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, effective.Arguments, meta)
+	}
+	if stdioTarget != nil {
+		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, effective.Arguments, meta)
 	}
 	encoded, err := json.Marshal(params.Arguments)
 	if err != nil {
 		return nil, err
 	}
 	return &MCPToolCallResponse{Content: []MCPToolCallContent{{Type: "text", Text: string(encoded)}}}, nil
+}
+
+// prepareToolCallSandboxState is the production sequence every tools/call runs:
+// complete the sandbox policy/launcher fields from the runtime for the
+// connection's negotiated capability, then build the request `_meta`.
+func (s *MCPService) prepareToolCallSandboxState(server string, environmentID string, localStdio bool, params *MCPToolCallParams, httpNegotiated bool, stdioNegotiated bool) (*MCPToolCallParams, any) {
+	effective := s.sandboxStateToolCallParams(server, environmentID, localStdio, params, httpNegotiated, stdioNegotiated)
+	return effective, s.augmentToolCallMeta(effective)
+}
+
+// sandboxStateToolCallParams returns the call parameters with the sandbox
+// policy and launcher metadata the server's negotiated capability entitles it
+// to. Rust mcp_tool_call.rs resolves all of this from the prepared call's
+// runtime config; callers that already set a field keep their value.
+func (s *MCPService) sandboxStateToolCallParams(server string, environmentID string, localStdio bool, params *MCPToolCallParams, httpNegotiated bool, stdioNegotiated bool) *MCPToolCallParams {
+	clone := *params
+	clone.SupportsSandboxStateMeta = params.SupportsSandboxStateMeta || httpNegotiated || stdioNegotiated
+	if !clone.SupportsSandboxStateMeta {
+		return &clone
+	}
+	if clone.ServerEnvironmentID == "" {
+		clone.ServerEnvironmentID = environmentID
+	}
+	if clone.PermissionProfile == "" {
+		if profile := s.permissionProfileJSONForServer(server); profile != "" {
+			clone.PermissionProfile = profile
+		}
+	}
+	if clone.SandboxCWD == "" {
+		clone.SandboxCWD = s.sandboxCWDForServer(server, clone.ServerEnvironmentID)
+	}
+	if clone.CodexLinuxSandboxExe == "" {
+		clone.CodexLinuxSandboxExe = s.codexLinuxSandboxExe
+	}
+	if !clone.UseLegacyLandlock {
+		clone.UseLegacyLandlock = s.useLegacyLandlock
+	}
+	if !clone.UseMXC {
+		clone.UseMXC = s.environmentUseMXC[clone.ServerEnvironmentID]
+	}
+	if clone.SandboxLauncherExecutable == "" {
+		clone.SandboxLauncherExecutable = sandboxLauncherExecutable(s.codexSelfExe, clone.ServerEnvironmentID, localStdio)
+	}
+	return &clone
+}
+
+// permissionProfileJSONForServer serializes the authority published for the
+// server (falling back to the thread authority) as the opaque policy document
+// the sandbox CLI parses.
+func (s *MCPService) permissionProfileJSONForServer(server string) string {
+	if s == nil {
+		return ""
+	}
+	profile, ok := s.PermissionProfileForServer(server)
+	if !ok || profile == nil {
+		profile = s.PermissionProfile()
+	}
+	if profile == nil {
+		return ""
+	}
+	encoded, err := sandbox.RuntimePermissionProfileJSON(*profile)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(encoded)
+}
+
+// sandboxCWDForServer resolves the sandbox cwd for the server's environment.
+// Rust prefers the captured environment handle's cwd and falls back to the turn
+// cwd for the default (local) environment; Go's runtime config exposes the
+// per-server cwd as the local carrier.
+func (s *MCPService) sandboxCWDForServer(server string, environmentID string) string {
+	if s == nil {
+		return ""
+	}
+	if cwd := strings.TrimSpace(s.environmentCWDs[environmentID]); cwd != "" {
+		return cwd
+	}
+	config, ok := s.serverConfig(server)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(config.CWD)
+}
+
+// sandboxStateMetaNegotiated reports whether this connection's initialize or
+// server-discover response advertised a sandbox-state capability.
+func (c *httpClient) sandboxStateMetaNegotiated() bool {
+	return c != nil && c.supportsSandboxStateMetaCapability
+}
+
+func (c *stdioClient) sandboxStateMetaNegotiated() bool {
+	return c != nil && c.supportsSandboxStateMetaCapability
 }
 
 func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
@@ -2186,6 +2330,8 @@ func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
 	if !params.SupportsSandboxStateMeta {
 		return s.attachTrustedAccess(meta, params)
 	}
+	// Rust mcp_tool_call.rs resolves the sandbox cwd for the server's
+	// environment and returns the metadata untouched when it is unknown.
 	if strings.TrimSpace(params.SandboxCWD) == "" {
 		return meta
 	}
@@ -2195,32 +2341,13 @@ func (s *MCPService) augmentToolCallMeta(params *MCPToolCallParams) any {
 		useLegacyLandlock = &val
 	}
 	sandboxState := &SandboxState{
-		PermissionProfile:    params.PermissionProfile,
+		PermissionProfile:    json.RawMessage(strings.TrimSpace(params.PermissionProfile)),
 		SandboxCWD:           params.SandboxCWD,
 		CodexLinuxSandboxExe: params.CodexLinuxSandboxExe,
 		UseLegacyLandlock:    useLegacyLandlock,
+		UseMXC:               params.UseMXC,
 	}
-	stateValue, err := json.Marshal(sandboxState)
-	if err != nil {
-		return meta
-	}
-	var stateMap map[string]any
-	if err := json.Unmarshal(stateValue, &stateMap); err != nil {
-		return meta
-	}
-	if meta == nil {
-		return map[string]any{mcpSandboxStateMetaCapability: stateMap}
-	}
-	metaMap, ok := meta.(map[string]any)
-	if !ok {
-		return meta
-	}
-	out := cloneAnyMap(metaMap)
-	if out == nil {
-		out = map[string]any{}
-	}
-	out[mcpSandboxStateMetaCapability] = stateMap
-	return s.attachTrustedAccess(out, params)
+	return s.attachTrustedAccess(augmentSandboxMetadata(meta, sandboxState, params.SandboxLauncherExecutable), params)
 }
 
 // attachTrustedAccess attaches the host-owned openai/entitlementContext
