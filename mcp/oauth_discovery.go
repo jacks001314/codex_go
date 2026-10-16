@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -19,15 +20,28 @@ const (
 	mcpOAuthProtectedResourceWellKnownPath   = "/.well-known/oauth-protected-resource"
 	mcpOAuthMetadataMaxBytes                 = 1 << 20
 	mcpOAuthLoginDiscoveryMaxTimeout         = 5 * time.Second
+	// mcpOAuthOfflineAccessScope is the one authorization-server scope the
+	// initial selection honors (#54653): it is added to the discovered scopes
+	// when the authorization server advertises it.
+	mcpOAuthOfflineAccessScope = "offline_access"
 )
 
 type StreamableHTTPOAuthDiscovery struct {
 	AuthorizationEndpoint string
 	TokenEndpoint         string
 	RegistrationEndpoint  string
-	ScopesSupported       []string
-	Resource              string
-	AuthorizationServer   string
+	// ScopesSupported carries the discovered resource scopes: the initial
+	// `WWW-Authenticate` challenge's scopes, or the protected-resource
+	// metadata's `scopes_supported` list as the fallback, plus `offline_access`
+	// when the authorization server supports it (Rust #54653).
+	ScopesSupported []string
+	// AuthorizationServerScopesSupported is the authorization server's general
+	// `scopes_supported` list. It is never used as the discovered resource
+	// scopes, because it can advertise scopes unrelated to the MCP resource;
+	// only `offline_access` is honored from it.
+	AuthorizationServerScopesSupported []string
+	Resource                           string
+	AuthorizationServer                string
 	// Issuer is the authorization server issuer discovered for the MCP
 	// server (Rust #39615): refresh tokens are bound to this issuer.
 	Issuer                            string
@@ -52,6 +66,7 @@ type oauthAuthorizationServerMetadata struct {
 type oauthProtectedResourceMetadata struct {
 	Resource             string   `json:"resource"`
 	AuthorizationServers []string `json:"authorization_servers"`
+	ScopesSupported      []string `json:"scopes_supported"`
 }
 
 func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *http.Client) (*StreamableHTTPOAuthDiscovery, error) {
@@ -69,10 +84,29 @@ func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *
 	if _, err := parseMCPHTTPURL(raw); err != nil {
 		return nil, err
 	}
+	challenge := &mcpOAuthChallengeProbe{ctx: ctx, client: client, serverURL: raw}
 	if discovery, found, err := discoverMCPOAuthAuthorizationServer(ctx, client, raw); found || err != nil {
+		if discovery != nil {
+			// Rust #54653 selects the discovered scopes from the initial
+			// challenge, falling back to the protected-resource metadata, so this
+			// shortcut resolves that metadata as well. Both lookups are best
+			// effort here: the authorization server was already resolved from its
+			// own metadata, so an unreachable resource only leaves the selection
+			// without resource scopes instead of failing the discovery.
+			metadataURL, challengeScopes, _ := challenge.resolve()
+			discovery.ScopesSupported = mcpOAuthInitialScopes(
+				challengeScopes,
+				mcpOAuthProtectedResourceScopes(ctx, client, raw, metadataURL),
+				discovery.AuthorizationServerScopesSupported,
+			)
+		}
 		return discovery, err
 	}
-	resourceMetadata, err := discoverMCPOAuthProtectedResource(ctx, client, raw)
+	challengeMetadataURL, challengeScopes, err := challenge.resolve()
+	if err != nil {
+		return nil, err
+	}
+	resourceMetadata, err := discoverMCPOAuthProtectedResource(ctx, client, raw, challengeMetadataURL)
 	if err != nil {
 		return nil, err
 	}
@@ -93,9 +127,59 @@ func DiscoverStreamableHTTPOAuth(ctx context.Context, serverURL string, client *
 		if discovery.Resource == "" {
 			discovery.Resource = raw
 		}
+		discovery.ScopesSupported = mcpOAuthInitialScopes(challengeScopes, resourceMetadata.ScopesSupported, discovery.AuthorizationServerScopesSupported)
 		return discovery, nil
 	}
 	return nil, nil
+}
+
+// mcpOAuthChallengeProbe resolves the MCP resource URL's initial
+// `WWW-Authenticate` challenge once, so the authorization-server shortcut and
+// the protected-resource path share a single request.
+type mcpOAuthChallengeProbe struct {
+	ctx       context.Context
+	client    *http.Client
+	serverURL string
+
+	once        sync.Once
+	metadataURL string
+	scopes      []string
+	err         error
+}
+
+func (p *mcpOAuthChallengeProbe) resolve() (string, []string, error) {
+	if p == nil {
+		return "", nil, nil
+	}
+	p.once.Do(func() {
+		p.metadataURL, p.scopes, p.err = mcpOAuthProbeChallenge(p.ctx, p.client, p.serverURL)
+	})
+	return p.metadataURL, p.scopes, p.err
+}
+
+// mcpOAuthInitialScopes mirrors the initial scope selection of rmcp's
+// AuthorizationManager (#54653): the initial challenge's scopes win, the
+// protected-resource metadata's `scopes_supported` list is the fallback, and
+// `offline_access` is added when the authorization server supports it. The
+// authorization server's general scope list never becomes a resource scope.
+func mcpOAuthInitialScopes(challengeScopes []string, resourceScopes []string, authorizationServerScopes []string) []string {
+	scopes := normalizeMCPOAuthScopes(challengeScopes)
+	if len(scopes) == 0 {
+		scopes = normalizeMCPOAuthScopes(resourceScopes)
+	}
+	if containsMCPOAuthScope(authorizationServerScopes, mcpOAuthOfflineAccessScope) {
+		scopes = append(scopes, mcpOAuthOfflineAccessScope)
+	}
+	return normalizeMCPOAuthScopes(scopes)
+}
+
+func containsMCPOAuthScope(scopes []string, scope string) bool {
+	for _, candidate := range scopes {
+		if strings.TrimSpace(candidate) == scope {
+			return true
+		}
+	}
+	return false
 }
 
 func mcpOAuthDiscoveryHTTPClient(client *http.Client) *http.Client {
@@ -377,11 +461,8 @@ func mcpOAuthNoRedirectClient(client *http.Client) *http.Client {
 	return &clone
 }
 
-func discoverMCPOAuthProtectedResource(ctx context.Context, client *http.Client, serverURL string) (*oauthProtectedResourceMetadata, error) {
-	if metadataURL, err := mcpOAuthProtectedResourceMetadataURLFromChallenge(ctx, client, serverURL); metadataURL != "" || err != nil {
-		if err != nil {
-			return nil, err
-		}
+func discoverMCPOAuthProtectedResource(ctx context.Context, client *http.Client, serverURL string, challengeMetadataURL string) (*oauthProtectedResourceMetadata, error) {
+	if metadataURL := strings.TrimSpace(challengeMetadataURL); metadataURL != "" {
 		metadata, ok, err := fetchMCPOAuthProtectedResourceMetadata(ctx, client, metadataURL)
 		if err != nil || !ok {
 			return nil, err
@@ -404,6 +485,18 @@ func discoverMCPOAuthProtectedResource(ctx context.Context, client *http.Client,
 		}
 	}
 	return nil, lastErr
+}
+
+// mcpOAuthProtectedResourceScopes resolves the protected-resource metadata's
+// `scopes_supported` list for the scope selection, tolerating a failed lookup:
+// only the fallback list is needed, so an unreachable resource metadata
+// document leaves the selection without resource scopes (Rust #54653).
+func mcpOAuthProtectedResourceScopes(ctx context.Context, client *http.Client, serverURL string, challengeMetadataURL string) []string {
+	metadata, err := discoverMCPOAuthProtectedResource(ctx, client, serverURL, challengeMetadataURL)
+	if err != nil || metadata == nil {
+		return nil
+	}
+	return metadata.ScopesSupported
 }
 
 func mcpOAuthAuthorizationServerMetadataURLs(raw string) ([]string, error) {
@@ -454,26 +547,35 @@ func mcpOAuthProtectedResourceMetadataURLs(raw string) ([]string, error) {
 	return uniqueNonEmptyStrings(candidates), nil
 }
 
-func mcpOAuthProtectedResourceMetadataURLFromChallenge(ctx context.Context, client *http.Client, serverURL string) (string, error) {
+// mcpOAuthProbeChallenge performs the initial request to the MCP resource URL
+// and reports the challenge's `resource_metadata` URL and `scope` list (RFC
+// 9728 / RFC 6749 space-delimited scopes). A response without a challenge
+// yields empty values.
+func mcpOAuthProbeChallenge(ctx context.Context, client *http.Client, serverURL string) (string, []string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSpace(serverURL), nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer response.Body.Close()
 	if response.Body != nil {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1024))
 	}
+	metadataURL := ""
+	var scopes []string
 	for _, challenge := range response.Header.Values("WWW-Authenticate") {
-		if metadataURL := authChallengeParam(challenge, "resource_metadata"); metadataURL != "" {
-			return metadataURL, nil
+		if metadataURL == "" {
+			metadataURL = authChallengeParam(challenge, "resource_metadata")
+		}
+		if len(scopes) == 0 {
+			scopes = normalizeMCPOAuthScopes(strings.Fields(authChallengeParam(challenge, "scope")))
 		}
 	}
-	return "", nil
+	return metadataURL, scopes, nil
 }
 
 func fetchMCPOAuthAuthorizationServerMetadata(ctx context.Context, client *http.Client, metadataURL string) (*oauthAuthorizationServerMetadata, bool, error) {
@@ -568,15 +670,18 @@ func discoveryFromMCPOAuthAuthorizationMetadata(serverURL string, metadata *oaut
 		callbackMode = MCPOAuthCallbackSpecific
 	}
 	return &StreamableHTTPOAuthDiscovery{
-		AuthorizationEndpoint:             strings.TrimSpace(metadata.AuthorizationEndpoint),
-		TokenEndpoint:                     strings.TrimSpace(metadata.TokenEndpoint),
-		RegistrationEndpoint:              strings.TrimSpace(metadata.RegistrationEndpoint),
-		ScopesSupported:                   normalizeMCPOAuthScopes(metadata.ScopesSupported),
-		AuthorizationServer:               authorizationServer,
-		Issuer:                            authorizationServer,
-		ClientIDMetadataDocumentSupported: metadata.ClientIDMetadataDocumentSupported,
-		PublicClientTokenAuthSupported:    metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
-		CallbackMode:                      callbackMode,
+		AuthorizationEndpoint: strings.TrimSpace(metadata.AuthorizationEndpoint),
+		TokenEndpoint:         strings.TrimSpace(metadata.TokenEndpoint),
+		RegistrationEndpoint:  strings.TrimSpace(metadata.RegistrationEndpoint),
+		// Rust #54653 stops using the authorization server's general scope list
+		// as the discovered resource scopes; it is carried separately and only
+		// `offline_access` is honored from it.
+		AuthorizationServerScopesSupported: normalizeMCPOAuthScopes(metadata.ScopesSupported),
+		AuthorizationServer:                authorizationServer,
+		Issuer:                             authorizationServer,
+		ClientIDMetadataDocumentSupported:  metadata.ClientIDMetadataDocumentSupported,
+		PublicClientTokenAuthSupported:     metadataHasPublicClientTokenAuth(metadata.TokenEndpointAuthMethodsSupported),
+		CallbackMode:                       callbackMode,
 	}
 }
 

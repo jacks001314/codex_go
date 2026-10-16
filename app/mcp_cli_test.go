@@ -435,7 +435,18 @@ func TestMCPAddStartsOAuthWhenSupported(t *testing.T) {
 			writeMCPCLIJSON(t, w, map[string]any{
 				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
-				"scopes_supported":       []string{"read", "write"},
+				// Rust #54653: this list is not a resource scope source anymore.
+				"scopes_supported": []string{"profile"},
+			})
+		case "/mcp":
+			// The challenge's scopes win over the resource metadata's list.
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+`/resource-metadata", scope="read"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/resource-metadata":
+			writeMCPCLIJSON(t, w, map[string]any{
+				"resource":              "http://" + r.Host + "/mcp",
+				"authorization_servers": []string{"http://" + r.Host + "/mcp"},
+				"scopes_supported":      []string{"read", "write"},
 			})
 		case "/token":
 			if err := r.ParseForm(); err != nil {
@@ -478,7 +489,9 @@ func TestMCPAddStartsOAuthWhenSupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse browser URL error = %v", err)
 	}
-	if parsed.Query().Get("client_id") != "client-1" || parsed.Query().Get("scope") != "read write" {
+	// The challenge scope "read" wins over the resource metadata's "read write",
+	// and the authorization server's own "profile" scope is never requested.
+	if parsed.Query().Get("client_id") != "client-1" || parsed.Query().Get("scope") != "read" {
 		t.Fatalf("browser URL query = %#v", parsed.Query())
 	}
 	if tokenForm.Get("client_id") != "client-1" || tokenForm.Get("code") != "code-add" {
@@ -781,7 +794,18 @@ func TestMCPLoginDiscoversScopesWhenUnconfigured(t *testing.T) {
 			writeMCPCLIJSON(t, w, map[string]any{
 				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
-				"scopes_supported":       []string{"read", "write"},
+				"scopes_supported":       []string{"profile"},
+			})
+		case "/mcp":
+			// Without a challenge scope the resource metadata's list is the
+			// discovered fallback (Rust #54653).
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+`/resource-metadata"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/resource-metadata":
+			writeMCPCLIJSON(t, w, map[string]any{
+				"resource":              "http://" + r.Host + "/mcp",
+				"authorization_servers": []string{"http://" + r.Host + "/mcp"},
+				"scopes_supported":      []string{"read", "write"},
 			})
 		case "/token":
 			if err := r.ParseForm(); err != nil {
@@ -840,7 +864,16 @@ func TestMCPAddRetriesDiscoveredScopesWithoutScopes(t *testing.T) {
 			writeMCPCLIJSON(t, w, map[string]any{
 				"authorization_endpoint": "http://" + r.Host + "/authorize",
 				"token_endpoint":         "http://" + r.Host + "/token",
-				"scopes_supported":       []string{"read"},
+				"scopes_supported":       []string{"profile"},
+			})
+		case "/mcp":
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+`/resource-metadata"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/resource-metadata":
+			writeMCPCLIJSON(t, w, map[string]any{
+				"resource":              "http://" + r.Host + "/mcp",
+				"authorization_servers": []string{"http://" + r.Host + "/mcp"},
+				"scopes_supported":      []string{"read"},
 			})
 		case "/token":
 			writeMCPCLIJSON(t, w, map[string]any{

@@ -176,6 +176,11 @@ func TestMCPHTTPToolCallRequiresAuthenticationWhenRefreshFails(t *testing.T) {
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/token":
 			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+		case r.Method == http.MethodGet:
+			// Discovery probes the resource URL for its initial
+			// `WWW-Authenticate` challenge before any tool call (#54653); that
+			// probe is metadata, not an unauthenticated tool call.
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		default:
 			toolRequests++
 			http.Error(w, "unauthorized", http.StatusUnauthorized)

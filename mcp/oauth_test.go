@@ -345,7 +345,63 @@ func TestOAuthStoreAuthStatusVariants(t *testing.T) {
 	}
 }
 
-func TestDiscoverStreamableHTTPOAuthReturnsNormalizedScopes(t *testing.T) {
+// TestMCPOAuthInitialScopesLikeRust pins the initial scope selection Rust
+// #54653 adopts from rmcp: the challenge's scopes win, the protected-resource
+// metadata's list is the fallback, only `offline_access` is taken from the
+// authorization server's general scope list, and the result is normalized.
+func TestMCPOAuthInitialScopesLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name                string
+		challengeScopes     []string
+		resourceScopes      []string
+		authorizationServer []string
+		want                []string
+	}{
+		{
+			name:                "challenge scope precedence",
+			challengeScopes:     []string{"read"},
+			resourceScopes:      []string{"read", "write"},
+			authorizationServer: []string{"offline_access"},
+			want:                []string{"read", "offline_access"},
+		},
+		{
+			name:                "resource metadata fallback normalizes",
+			resourceScopes:      []string{"read", " write ", "read", "", "   "},
+			authorizationServer: []string{"unrelated:admin", "offline_access"},
+			want:                []string{"read", "write", "offline_access"},
+		},
+		{
+			name:                "authorization server scopes are excluded",
+			resourceScopes:      nil,
+			authorizationServer: []string{"profile", "email"},
+			want:                nil,
+		},
+		{
+			name:                "offline access is the only honored server scope",
+			authorizationServer: []string{"offline_access"},
+			want:                []string{"offline_access"},
+		},
+		{
+			name:                "offline access is not duplicated",
+			challengeScopes:     []string{"offline_access"},
+			authorizationServer: []string{"offline_access"},
+			want:                []string{"offline_access"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := mcpOAuthInitialScopes(testCase.challengeScopes, testCase.resourceScopes, testCase.authorizationServer)
+			if !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("mcpOAuthInitialScopes() = %#v, want %#v", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestDiscoverStreamableHTTPOAuthDoesNotUseAuthorizationServerScopesLikeRust
+// mirrors Rust #54653's renamed auth_status test: an authorization server's
+// general `scopes_supported` list can advertise scopes unrelated to the MCP
+// resource, so it never becomes the discovered resource scopes.
+func TestDiscoverStreamableHTTPOAuthDoesNotUseAuthorizationServerScopesLikeRust(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {
 			http.NotFound(w, r)
@@ -367,8 +423,11 @@ func TestDiscoverStreamableHTTPOAuthReturnsNormalizedScopes(t *testing.T) {
 	if discovery == nil {
 		t.Fatalf("DiscoverStreamableHTTPOAuth() returned nil discovery")
 	}
-	if got := strings.Join(discovery.ScopesSupported, ","); got != "profile,email" {
-		t.Fatalf("ScopesSupported = %q, want profile,email", got)
+	if discovery.ScopesSupported != nil {
+		t.Fatalf("ScopesSupported = %#v, want nil (the authorization server list is not a resource scope)", discovery.ScopesSupported)
+	}
+	if got := strings.Join(discovery.AuthorizationServerScopesSupported, ","); got != "profile,email" {
+		t.Fatalf("AuthorizationServerScopesSupported = %q, want the normalized profile,email", got)
 	}
 	if discovery.RegistrationEndpoint != "https://example.com/register" {
 		t.Fatalf("RegistrationEndpoint = %q", discovery.RegistrationEndpoint)
@@ -426,7 +485,12 @@ func TestOAuthDiscoveryRejectsNonWebAuthorizationEndpointsLikeRust(t *testing.T)
 	}
 }
 
-func TestDiscoverStreamableHTTPOAuthFollowsProtectedResourceMetadata(t *testing.T) {
+// TestDiscoverStreamableHTTPOAuthPrefersChallengeScopesLikeRust mirrors Rust
+// #54653's auth_status test: the initial challenge's scopes win, the
+// protected-resource metadata's `scopes_supported` list is the fallback, both
+// are normalized, and only `offline_access` is taken from the authorization
+// server's general scope list.
+func TestDiscoverStreamableHTTPOAuthPrefersChallengeScopesLikeRust(t *testing.T) {
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {
 			http.NotFound(w, r)
@@ -435,7 +499,69 @@ func TestDiscoverStreamableHTTPOAuthFollowsProtectedResourceMetadata(t *testing.
 		writeJSON(t, w, map[string]any{
 			"authorization_endpoint": "https://example.com/authorize",
 			"token_endpoint":         "https://example.com/token",
-			"scopes_supported":       []string{"read", " write ", "read"},
+			"scopes_supported":       []string{"unrelated:admin", "offline_access"},
+		})
+	}))
+	defer authServer.Close()
+
+	for _, testCase := range []struct {
+		name           string
+		challengeScope string
+		want           string
+	}{
+		{name: "resource metadata fallback", want: "read,write,offline_access"},
+		{name: "challenge scope precedence", challengeScope: `, scope="read"`, want: "read,offline_access"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var resourceServer *httptest.Server
+			resourceServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/mcp":
+					w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+resourceServer.URL+`/oauth-resource"`+testCase.challengeScope)
+					w.WriteHeader(http.StatusUnauthorized)
+				case "/oauth-resource":
+					writeJSON(t, w, map[string]any{
+						"resource":              resourceServer.URL + "/mcp",
+						"authorization_servers": []string{authServer.URL + "/mcp"},
+						"scopes_supported":      []string{"read", " write ", "read", "", "   "},
+					})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer resourceServer.Close()
+
+			discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), resourceServer.URL+"/mcp", resourceServer.Client())
+			if err != nil {
+				t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v", err)
+			}
+			if discovery == nil {
+				t.Fatalf("DiscoverStreamableHTTPOAuth() returned nil discovery")
+			}
+			if got := strings.Join(discovery.ScopesSupported, ","); got != testCase.want {
+				t.Fatalf("ScopesSupported = %q, want %q", got, testCase.want)
+			}
+			if discovery.Resource != resourceServer.URL+"/mcp" {
+				t.Fatalf("Resource = %q, want %q", discovery.Resource, resourceServer.URL+"/mcp")
+			}
+		})
+	}
+}
+
+// TestDiscoverStreamableHTTPOAuthIgnoresEmptyScopes pins the normalization
+// boundary of the new selection (#54653): empty and whitespace-only scopes are
+// dropped, and an authorization server list that carries no scope the selection
+// honors leaves the discovered scopes empty.
+func TestDiscoverStreamableHTTPOAuthIgnoresEmptyScopes(t *testing.T) {
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(t, w, map[string]any{
+			"authorization_endpoint": "https://example.com/authorize",
+			"token_endpoint":         "https://example.com/token",
+			"scopes_supported":       []string{"profile", "", "   "},
 		})
 	}))
 	defer authServer.Close()
@@ -450,6 +576,7 @@ func TestDiscoverStreamableHTTPOAuthFollowsProtectedResourceMetadata(t *testing.
 			writeJSON(t, w, map[string]any{
 				"resource":              resourceServer.URL + "/mcp",
 				"authorization_servers": []string{authServer.URL + "/mcp"},
+				"scopes_supported":      []string{"", "   "},
 			})
 		default:
 			http.NotFound(w, r)
@@ -458,35 +585,6 @@ func TestDiscoverStreamableHTTPOAuthFollowsProtectedResourceMetadata(t *testing.
 	defer resourceServer.Close()
 
 	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), resourceServer.URL+"/mcp", resourceServer.Client())
-	if err != nil {
-		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v", err)
-	}
-	if discovery == nil {
-		t.Fatalf("DiscoverStreamableHTTPOAuth() returned nil discovery")
-	}
-	if got := strings.Join(discovery.ScopesSupported, ","); got != "read,write" {
-		t.Fatalf("ScopesSupported = %q, want read,write", got)
-	}
-	if discovery.Resource != resourceServer.URL+"/mcp" {
-		t.Fatalf("Resource = %q, want %q", discovery.Resource, resourceServer.URL+"/mcp")
-	}
-}
-
-func TestDiscoverStreamableHTTPOAuthIgnoresEmptyScopes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/.well-known/oauth-authorization-server/mcp" {
-			http.NotFound(w, r)
-			return
-		}
-		writeJSON(t, w, map[string]any{
-			"authorization_endpoint": "https://example.com/authorize",
-			"token_endpoint":         "https://example.com/token",
-			"scopes_supported":       []string{"", "   "},
-		})
-	}))
-	defer server.Close()
-
-	discovery, err := DiscoverStreamableHTTPOAuth(context.Background(), server.URL+"/mcp", server.Client())
 	if err != nil {
 		t.Fatalf("DiscoverStreamableHTTPOAuth() error = %v", err)
 	}
