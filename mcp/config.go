@@ -1036,7 +1036,7 @@ func codexAppsMCPURL(baseURL string) string {
 	if baseURL == "" {
 		// Rust substitutes its default one layer up, before the helper runs
 		// (`codex_apps_mcp_server_config` receives an already-defaulted
-		// `mcp_config.chatgpt_base_url`, core/src/config/mod.rs:4574-4576), so an
+		// `mcp_config.chatgpt_base_url`, core/src/config/mod.rs:4578-4580), so an
 		// empty base yields the same effective URL here.
 		baseURL = strings.TrimRight(managedconfig.DefaultChatGPTBaseURL, "/")
 	}
