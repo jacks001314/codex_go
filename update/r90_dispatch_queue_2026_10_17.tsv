@@ -1,14 +1,13 @@
 pr	sha	subject	lane_face	files	note
 54589	144779cd24	Preserve evidence message structure in Guardian Decisions requests (#54589)	guardian	4	
-54519	6ae8b8aa7c	Upgrade V8 to 152.2.0 and backport Array.sort safety guards (#54519)	other:third_party	22	
 54434	16e578dd1d	Add rotating stdin credentials for remote exec-server (#54434)	docs/cli	8	
 54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	
 54424	aff92080f2	Add remote plugin metadata to plugin configuration (#54424)	other:core-plugins	6	
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
 54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	
 54388	f847a4bd3c	Add quick dial presets for terminal title and status line layouts (#54388)	TUI	4	
-54381	111362a6a0	Add a keyboard shortcut menu for presets (#54381)	TUI	36	
-54380	dcd9e95459	Add `/presets` for reusable prompts and slash commands (#54380)	TUI	30	
+54381	111362a6a0	Add a keyboard shortcut menu for presets (#54381)	TUI	36	TR-1/TR-3 implementable: shortcut_hud - distinct from the existing FooterModeShortcutOverlay (shortcut_overlay.rs); name the Go file shortcut_hud.go
+54380	dcd9e95459	Add `/presets` for reusable prompts and slash commands (#54380)	TUI	30	TR-1/TR-3 implementable: quick dials; the presets slot is already reserved in tui/bottom_pane/slash_commands.go:351-356 and must leave rustSlashCommandsWithoutFrame when it lands
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54363	3df96b085c	Filter uninspectable network roots from implicit MXC read grants (#54363)	other:mxc-sandbox	5	
 54346	0003732489	Add scoped executor credential auth for remote exec-server (#54346)	exec	3	
@@ -23,10 +22,8 @@ pr	sha	subject	lane_face	files	note
 54135	4ca84a1069	Allow large file writes over direct exec-server WebSockets (#54135)	exec	3	
 54119	d292f72124	Allow stdin review under active grants with sandbox prompts disabled (#5411	A-core	3	
 54114	dec54912f9	Report terminal completion states and blocking reasons (#54114)	TUI	20	
-54113	e1e2257e29	Embed generated app-server schema bundles in Bazel builds (#54113)	other:bazel	2	
 54099	1ffa95ee8a	Wait for readiness in the SIGTERM cancellation test (#54099)	exec	1	
 54098	0c5720ea0f	Keep environment tools stable across readiness changes (#54098)	A-core	15	
-54096	bc13ff239c	Add Bazel targets for on-demand schemas and Python SDK generation (#54096)	other:bazel	9	
 54094	12fd621f62	Preserve specific MCP failure codes in metrics and spans (#54094)	B-mcp/sandbox	9	
 54081	01ff831ce9	Centralize vertical navigation in TUI list views (#54081)	TUI	7	
 54080	57b5e89be8	Extract TUI user-turn submission into a dedicated module (#54080)	TUI	3	
@@ -36,7 +33,7 @@ pr	sha	subject	lane_face	files	note
 54057	1f7fe9b0af	Distinguish unsupported evidence in Decisions comparison metrics (#54057)	guardian	5	
 54050	9671d20fc8	Scope TUI skill refreshes and workspace commands to explicit directories (#	TUI	9	
 54048	534c70863c	Defer folder trust checks until starting a task from agents overview (#5404	TUI	6	
-54033	c0cfbfbb98	Extend memory extension resource retention to 14 days (#54033)	other:memories	3	
+54033	c0cfbfbb98	Extend memory extension resource retention to 14 days (#54033)	other:memories	3	TR-2 implementable: memories/extensions.go:11 retention 7 -> 14 with the fixture dates shifted 7 days like the upstream test
 54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	
 54027	81aee8c86b	Preserve Windows startup variables and MXC child environment defaults (#540	other:mxc-sandbox	6	
 54008	76ed3b484d	Fix session lookup and resume after rollout compression (#54008)	pin-protocol	3	
@@ -44,12 +41,10 @@ pr	sha	subject	lane_face	files	note
 53997	c6327eba6a	Filter rollout filenames before checking compressed siblings (#53997)	other:rollout	3	
 53990	0b73618146	Keep host MCP and plugin configuration local with remote environments (#539	A-core	9	
 53987	835cd7552d	Skip service backoff for stale Guardian authorization retries (#53987)	guardian	2	
-53963	0d58012ec2	Test memory extraction budgets with excluded items and ciphertext (#53963)	other:memories	1	
+53963	0d58012ec2	Test memory extraction budgets with excluded items and ciphertext (#53963)	other:memories	1	TR-2 implementable: strip encrypted_content in memories/pipeline.go sanitizeMemoryResponseItem (Rust memories/write/src/rollout_input.rs:327,333); dispatch together with #52742
 53940	5670b1c18e	Bound rollout input for memory extraction (#53940)	other:memories	4	
 53932	400f2356d6	Preserve conversation history when compaction fails (#53932)	A-core	2	
 53908	95273b84fb	Keep the agent dashboard browsable during task removal (#53908)	TUI	6	
-53897	97771b1d78	Isolate daemon package tests to reduce disk contention (#53897)	docs/cli	6	
-53895	4906ddf5b8	Resume unloaded subagent threads when selected in the TUI (#53895)	TUI	4	
 53879	7eed30ad1b	Preserve running turn recovery across thread settings updates (#53879)	A-core	7	
 53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	
 53859	c22a06c180	Record bucketed terminal sizes in TUI telemetry (#53859)	TUI	16	
@@ -74,12 +69,11 @@ pr	sha	subject	lane_face	files	note
 53751	e762c05bd6	Apply feature overrides when restarting the app-server daemon (#53751)	other:app-server-daemon	8	
 53747	5d4922595a	Prefer remote Visualize installs over the bundled plugin (#53747)	other:core-plugins	2	
 53745	c12cdc924b	Remove `modelSlug` from the latest-model resolver output (#53745)	other:skills	1	
-53736	cf0ed4c600	Acquire and cache opt-in executor capability inventories via V2 (#53736)	other:ext	39	
+53736	cf0ed4c600	Acquire and cache opt-in executor capability inventories via V2 (#53736)	other:ext	39	blocked_precondition (TR-1/TR-3): needs #53723 (703d253ed6) first; Go only has the V1 stack (execserver/capability_discovery*.go, server.go:62,64,443, client.go:1062)
 53733	4d82d36ccf	Default Guardian v2 async classification to conversation mode (#53733)	guardian	8	
 53732	efa159f7aa	Reuse compiled search patterns across compressed rollouts (#53732)	other:rollout	2	
-53723	703d253ed6	Wire V2 capability discovery through exec-server RPC (#53723)	exec	22	
+53723	703d253ed6	Wire V2 capability discovery through exec-server RPC (#53723)	exec	22	TR-3 implementable: exec-server V2 capability inventory (protocol types + cache); it is the precondition that unblocks #53736
 53717	6cc7d9cc5c	Enable Cyber access programs for API-key sessions by default (#53717)	TUI	11	
-53709	7d0b91d5d6	Separate MCP sandbox policy from launcher metadata (#53709)	B-mcp/sandbox	13	
 53706	cb7091b180	Preserve URLs and email addresses during external agent migration (#53706)	other:external-agent-migration	8	
 53701	6fbfc352ca	Enable CLI Daybreak by default and enforce background-turn eligibility (#53	TUI	6	
 53699	f6aca7dc46	Cancel Guardian V2 classifications that exceed the tool-call lag window (#5	guardian	10	
@@ -120,7 +114,7 @@ pr	sha	subject	lane_face	files	note
 53331	7e9c061ceb	Finish remote exec cleanup when output streams remain open (#53331)	A-core	3	
 53224	a9b0815167	Support Windows clipboard text paste shortcuts in the TUI (#53224)	TUI	18	
 53201	9f3d25588b	Keep agents navigation available after a thread is archived (#53201)	TUI	5	
-53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	
+53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	TR-1/TR-3 implementable: daemon menu restart action over the existing appserverdaemon backend; verifyManagedDaemon has 0 Go hits
 53156	72f999edc7	Simplify the custom terminal drawing API (#53156)	TUI	1	
 53155	95db2cd5d5	Keep remote app-server events deliverable during shutdown (#53155)	pin-protocol	2	
 53153	8553558345	Show subagent navigation shortcuts in TUI help (#53153)	TUI	14	
@@ -129,8 +123,7 @@ pr	sha	subject	lane_face	files	note
 53148	97c1f62898	Fix startup draft recovery for pending Vim Replace keys (#53148)	TUI	6	
 53109	a07c8ebd57	Handle broken pipes gracefully in plugin list output (#53109)	docs/cli	3	
 53049	8c0f701167	Add connection-bound reply handles for app-server requests (#53049)	pin-protocol	6	
-52990	cc7ba33601	Add a searchable `/config` preferences panel to the TUI (#52990)	TUI	95	
-52972	de8fab6d7a	Upgrade `rmcp` to `3.5.1` and harden lifecycle tests (#52972)	pin-protocol	26	
+52990	cc7ba33601	Add a searchable `/config` preferences panel to the TUI (#52990)	TUI	95	TR-1/TR-3 implementable: a new config_panel subsystem (95 files incl. 15 goldens) plus config_panel/activation_key_guard; #53753 extends it afterwards
 52968	34f33e4ada	Keep startup modals protected when terminal input draining times out (#5296	TUI	6	
 52967	7a8a9456e9	Reuse and prewarm the WSL clipboard text reader (#52967)	TUI	6	
 52964	ecebd679c3	Defer owned transcript redraws during raw paste bursts (#52964)	TUI	4	
@@ -142,7 +135,7 @@ pr	sha	subject	lane_face	files	note
 52778	c3d3b142d1	Make pinned transcript prompts clickable (#52778)	TUI	4	
 52756	322bbf4d84	Classify voice session failures and record terminal outcomes (#52756)	TUI	18	
 52748	1652992148	Make code-mode `exit()` stop the entire cell (#52748)	other:code-mode-runtime	7	
-52742	5ef96ab278	Add opt-in output token replay for OpenAI requests (#52742)	A-core	119	
+52742	5ef96ab278	Add opt-in output token replay for OpenAI requests (#52742)	A-core	119	TR-1 implementable: dead flag + missing provider double gate; Go model/responses_agent.go:1065,1594 hardcode the include list - dispatch together with #53963
 52736	e4490eff65	Allow model catalogs to override incremental tool notices (#52736)	A-core	11	
 52725	4bad6d78e9	Report terminal program status with OSC 7501 (#52725)	TUI	11	
 52724	7efd184c24	Add observers for initial exec-server connection attempts (#52724)	exec	7	
@@ -150,9 +143,7 @@ pr	sha	subject	lane_face	files	note
 52721	07757f448f	Explain session creation failures during server shutdown (#52721)	TUI	12	
 52707	4aa94dce27	Migrate the Windows MXC sandbox to split MXC crates (#52707)	other:mxc-sandbox	11	
 52702	4bc83aa5f7	Retry bootstrap GETs through the system proxy after request failures (#5270	other:backend-client	2	
-52700	0c22ce8f2e	Update the exec-server stable compatibility baseline to Codex 0.162.1 (#527	other:MODULE.bazel	2	
 52696	2f761ae821	Fix marketplace path matching for Windows junctions (#52696)	other:core-plugins	4	
-52689	10da569252	Forward per-turn Cyber access programs to Guardian (#52689)	guardian	15	
 52686	45311351c2	Add opt-in retention for turn tool outputs (#52686)	pin-protocol	12	
 52685	c261727370	Preserve code mode cancellation during output serialization (#52685)	other:code-mode-runtime	5	
 52682	52950c5924	Validate Windows sandbox accounts before password repair (#52682)	other:windows-sandbox-service	3	
@@ -170,7 +161,6 @@ pr	sha	subject	lane_face	files	note
 52629	7f2f4fd46e	Consolidate local message board storage helpers (#52629)	other:ext	4	
 52621	47b80571f0	Add template setup for local agent message boards (#52621)	other:ext	8	
 52610	c63929af50	Align Linux sandbox names and docs with bubblewrap and seccomp (#52610)	B-mcp/sandbox	7	
-52608	64335d1afd	Upgrade `hyper` to 1.11.1 and test connection closure (#52608)	other:MODULE.bazel.lock	3	
 52568	36ae1561b9	Expose message board permissions and structured denials (#52568)	other:ext	14	
 52557	5fe4fc8f7c	Forward clipboard copies to the terminal in Herdr sessions (#52557)	TUI	2	
 52381	5b3c1522f8	Preserve per-session routing for gRPC code mode (#52381)	other:code-mode	9	
@@ -184,8 +174,8 @@ pr	sha	subject	lane_face	files	note
 52278	2c3156adf4	Honor custom OTLP metrics exporters when analytics is disabled (#52278)	config	9	
 52277	14ff9c3a43	Preserve UTF-8 byte semantics in network domain matching (#52277)	other:network-proxy	3	
 52274	6ac8b1b50b	Add structured tracing for Guardian reviews and background scoring (#52274)	guardian	7	
-52273	a3f3b44cd8	Add configurable persistent leader shortcuts to the TUI (#52273)	TUI	42	
-52270	39f4277087	Enable text selection in the fullscreen TUI footer (#52270)	TUI	25	
+52273	a3f3b44cd8	Add configurable persistent leader shortcuts to the TUI (#52273)	TUI	42	TR-1/TR-3 implementable: tui keymap leader/chord state machine; chain head of #52273 -> #54380 -> #54381
+52270	39f4277087	Enable text selection in the fullscreen TUI footer (#52270)	TUI	25	TR-1/TR-3 implementable: rendered/footer selection routing; must precede #52990 (13 shared Rust files)
 52268	515c291d87	Preserve large arguments in executed tool call metadata (#52268)	A-core	10	
 52256	3b6ab3471a	Normalize formatting in docs, web assets, and sample scripts (#52256)	other:login	23	
 52245	c9e0fffbbc	Enable parallel execution for read-only tools (#52245)	other:ext	13	
@@ -203,10 +193,9 @@ pr	sha	subject	lane_face	files	note
 52193	f90a578f76	Enforce managed MXC requirements on Windows (#52193)	pin-protocol	12	
 52184	5fe2152b60	Preserve side conversations across thread navigation (#52184)	TUI	8	
 52183	d650bd7c05	Add optional descriptions to agent message board channels (#52183)	other:ext	11	
-52182	78a19f5ab5	Expose a verified sandbox launcher to local MCP servers (#52182)	B-mcp/sandbox	14	
 52176	6f6e80bcdd	Show AWS GovCloud guidance at startup and remember acknowledgment (#52176)	TUI	10	
 52164	8c818cbed4	Make environment context date and timezone configurable (#52164)	config	11	
-52160	cd85a26cae	Remove the patched zsh shell execution backend (#52160)	A-core	105	
+52160	cd85a26cae	Remove the patched zsh shell execution backend (#52160)	A-core	105	TR-1 implementable: zsh-fork retired in features/features.go:60 but residuals remain in tool/shell.go:322,520-524,580 / tool/shell_executor.go:769-770 / tool/runtime_paths.go:117-120 / cli/dispatch.go:52 / cmd/codex/main.go:37; the upstream startup warning text is absent
 52119	9b738582b1	Expose originating tool call metadata in command environments (#52119)	exec	18	
 52081	2fdf047c96	Fix idle cleanup for disconnected multi-agent v2 children (#52081)	pin-protocol	13	
 52065	be2e129ecd	Require assessment text in the Guardian parser (#52065)	guardian	5	
@@ -224,10 +213,7 @@ pr	sha	subject	lane_face	files	note
 51884	ec8251c545	Add experimental prediction forks that inherit parent context (#51884)	pin-protocol	14	
 51872	f73a478c87	Keep global app-server config independent of the launch directory (#51872)	pin-protocol	9	
 51868	fbe97c7929	Record tool registration metrics for each sampling request (#51868)	A-core	5	
-51866	eef4719927	Preserve line breaks and links in multiline async questions (#51866)	TUI	3	
 51865	746103b592	Use readable plugin mentions without suppressing same-name skills (#51865)	TUI	6	
-51850	02d78ab053	Add Bazel release staging archives (#51850)	other:bazel	13	
-51848	745d865521	Align Bazel release builds with Cargo and fix platform compatibility (#5184	other:patches	14	
 51843	cba716c0f1	Run sandbox integrity checks before commands and filesystem operations (#51	A-core	15	
 51841	b5c37c35fd	Add a macOS Seatbelt backend for sandbox integrity (#51841)	exec	3	
 51840	d9960e12bb	Add a bubblewrap backend for sandbox integrity checks (#51840)	exec	14	
