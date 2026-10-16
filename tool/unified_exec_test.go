@@ -627,6 +627,7 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 		legacy    bool
 		replay    bool
 		denied    bool
+		finalPoll bool
 		wantReads int
 		wantBytes int
 	}
@@ -635,9 +636,24 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 		{name: "direct-denied", denied: true},
 		{name: "legacy-exit", legacy: true, denied: true, wantReads: 1},
 		{name: "replay-gap", replay: true, wantReads: 1, wantBytes: 600},
+		// Rust 6e5f665feb (#53339) `PushedExecScenario::OutputOpenAtFinalPoll`:
+		// the initial exec_command yields a live session, then a later
+		// `write_stdin` poll observes the exit and must return the delayed
+		// output plus the exit code, emit the command completion event and
+		// remove the background session. Rust also asserts
+		// `process_read_requests == 0`; Go additionally reconciles a quiet
+		// event stream with one `process/read` per second
+		// (unified_exec.go:1518-1532), which is the single read this scenario
+		// records: the fixture answers it with the live state, never an exit.
+		{name: "output-open-at-final-poll", finalPoll: true, wantReads: 1, wantBytes: len("pushed remote output\n")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			readCount := make(chan int, 1)
+			// The executor only pushes the exit and its delayed output after the
+			// initial exec_command yielded, so the final poll is the call that
+			// observes the exit (Rust `output_ready` is notified from the initial
+			// call's FunctionCallOutput, :1227-1235).
+			stageOneYielded := make(chan struct{})
 			var eventMu sync.Mutex
 			var observedEvents []UnifiedExecEvent
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -707,7 +723,30 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 				if !writeJSON(map[string]any{"id": start["id"], "result": map[string]any{"processId": processID}}) {
 					return
 				}
-				if !test.replay {
+				if test.finalPoll {
+					<-stageOneYielded
+					if !sendOutput(1, []byte("pushed ")) {
+						return
+					}
+					if !writeJSON(map[string]any{"method": execserver.MethodProcessExited, "params": map[string]any{
+						"processId": processID, "seq": 2, "exitCode": 0, "sandboxDenied": false,
+					}}) {
+						return
+					}
+					// Model foreground output delayed in transit beyond the local
+					// post-exit grace (Rust sleeps 250ms before this chunk).
+					time.Sleep(250 * time.Millisecond)
+					if !sendOutput(3, []byte("remote output\n")) {
+						return
+					}
+					// Go recognises the remote exit from `process/closed`, whereas
+					// Rust finishes the poll from the `process/exited` notification
+					// plus POST_EXIT_CLOSE_WAIT_CAP (process_manager.rs:1626-1633);
+					// the chunk ordering above is identical either way.
+					if !writeJSON(map[string]any{"method": execserver.MethodProcessClosed, "params": map[string]any{"processId": processID, "seq": 4}}) {
+						return
+					}
+				} else if !test.replay {
 					if test.name == "complete" && !sendOutput(1, []byte("complete")) {
 						return
 					}
@@ -748,8 +787,22 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 						closed = false
 						exitCode = 0
 					}
+					exited := true
+					if test.finalPoll {
+						// Rust asserts `process_read_requests == 0` here; Go instead
+						// reconciles a quiet event stream with one `process/read` age
+						// second (unified_exec.go:1518-1532), which Rust never does.
+						// Answer it with the live state and a zero cursor, so the exit
+						// this scenario asserts can only come from the pushed events
+						// and no in-flight chunk is skipped.
+						chunks = []map[string]any{}
+						nextSeq = 0
+						closed = false
+						exitCode = 0
+						exited = false
+					}
 					if !writeJSON(map[string]any{"id": request["id"], "result": map[string]any{
-						"chunks": chunks, "nextSeq": nextSeq, "exited": true, "exitCode": exitCode,
+						"chunks": chunks, "nextSeq": nextSeq, "exited": exited, "exitCode": exitCode,
 						"closed": closed, "failure": nil, "sandboxDenied": test.denied,
 					}}) {
 						return
@@ -762,10 +815,22 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 			defer server.Close()
 			manager := NewUnifiedExecManagerWithOptions(2, unifiedExecMinEmptyPollYieldMS)
 			defer manager.Close()
+			initialYield := uint64(2_000)
+			if test.finalPoll {
+				// Rust's initial exec_command asks for `yield_time_ms: 1_000`
+				// (unified_exec_process_events.rs:859) and keeps the executor's
+				// output stream open past that deadline. The fixture asks for the
+				// smallest initial yield, which Go raises to the Windows floor
+				// (unified_exec.go:1414-1417, matching Rust's documented
+				// "Effective range on Windows is 10000-30000 ms"), so the stage-one
+				// window outlasts pollRemote's one-second reconcile and exactly one
+				// compatibility read happens before the exit is pushed.
+				initialYield = unifiedExecMinYieldMS
+			}
 			result, err := manager.Exec(context.Background(), &ShellRequest{
 				Command:               []string{"ignored"},
 				CWD:                   t.TempDir(),
-				YieldTimeMS:           2_000,
+				YieldTimeMS:           initialYield,
 				UnifiedExecRemoteURL:  "ws" + strings.TrimPrefix(server.URL, "http"),
 				EnforceManagedNetwork: true,
 				ManagedNetwork: &network.ProxyManagedNetworkSandboxContext{
@@ -780,6 +845,43 @@ func TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust(t *testi
 			}, "pushed-call")
 			if err != nil {
 				t.Fatalf("Exec() error = %v", err)
+			}
+			close(stageOneYielded)
+			sessionOf := func(res *ShellResult) int {
+				if res == nil || res.ProcessID == nil {
+					return -1
+				}
+				return *res.ProcessID
+			}
+			if test.finalPoll {
+				// Rust asserts the initial output reports the live session
+				// ("Process running with session ID 1000").
+				if result.HasExitCode || result.ProcessID == nil || result.Stdout != "" {
+					t.Fatalf("initial exec_command = exit=%v session=%d stdout=%q, want a live session with no output",
+						result.HasExitCode, sessionOf(result), result.Stdout)
+				}
+				sessionID := *result.ProcessID
+				polled, pollErr := manager.WriteStdin(context.Background(), &WriteStdinArgs{
+					SessionID:   sessionID,
+					YieldTimeMS: 1_000,
+					CallID:      "poll-remote-process-events",
+				}, nil)
+				if pollErr != nil {
+					t.Fatalf("final poll error = %v", pollErr)
+				}
+				if !polled.HasExitCode || polled.ExitCode != 0 || polled.ProcessID != nil || polled.Stdout != "pushed remote output\n" {
+					t.Fatalf("final poll = exit=%v code=%d session=%d stdout=%q, want exit code 0 and the delayed output of the open stream",
+						polled.HasExitCode, polled.ExitCode, sessionOf(polled), polled.Stdout)
+				}
+				// Rust asserts `!terminate_background_terminal(1000)`: the final
+				// poll removed the background session.
+				if manager.TerminateProcess("", sessionID) {
+					t.Fatalf("background session %d survived the final poll", sessionID)
+				}
+				if infos := manager.ListProcesses(""); len(infos) != 0 {
+					t.Fatalf("background processes = %#v, want none", infos)
+				}
+				result = polled
 			}
 			if !result.HasExitCode || result.ProcessID != nil || len(result.Stdout) != test.wantBytes {
 				t.Fatalf("result = %#v", result)

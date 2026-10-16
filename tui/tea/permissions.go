@@ -6,6 +6,7 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	"codex_go/features"
 	chatwidget "codex_go/tui/chatwidget"
 	historycell "codex_go/tui/history_cell"
 )
@@ -83,6 +84,122 @@ const permissionsRetryOptionID = "permissions-retry"
 // (loading view plus bounded discovery) is used once the picker knows the server
 // uses explicit profiles, has already listed them, or the thread has an active
 // named profile; otherwise the local built-in presets open immediately.
+// permissionMenuConfig builds the picker configuration the popup and an inline
+// `/permissions` request both resolve against (Rust ChatWidget::
+// open_permission_profiles_popup plus the Feature::GuardianApproval gate of
+// try_select_permission_profile).
+func (m *Model) permissionMenuConfig(explicit bool) chatwidget.PermissionMenuConfig {
+	config := chatwidget.PermissionMenuConfig{
+		IncludeReadOnly:        true,
+		HideFullAccessWarning:  m.hideFullAccessWarning,
+		CurrentApprovalPolicy:  currentPermissionApprovalPolicy(m),
+		CurrentReviewer:        currentApprovalsReviewer(m),
+		CurrentProfileID:       strings.TrimSpace(m.State.Sandbox),
+		Requirements:           m.permissionRequirements,
+		WindowsDegradedSandbox: false,
+		// Rust #54383 gates the approve-for-me row and the automatic reviewer
+		// on Feature::GuardianApproval (chatwidget/permissions_menu.rs:61-68).
+		GuardianApprovalEnabled: guardianApprovalEnabled(m),
+	}
+	if explicit {
+		// Rust #43340: the connected server owns named profiles, so the picker
+		// lists its discovery result instead of local presets only.
+		config.ExplicitPermissionProfileMode = true
+		config.CustomProfiles = append([]chatwidget.CustomPermissionProfile(nil), m.permissionProfiles...)
+	}
+	return config
+}
+
+// guardianApprovalEnabled reports whether the guardian-approval feature is on
+// (Rust Feature::GuardianApproval).
+func guardianApprovalEnabled(m *Model) bool {
+	if m == nil {
+		return false
+	}
+	return features.Enabled(m.featureSettings, experimentalFeatureGuardianApprovalKey)
+}
+
+// applyPermissionsCommand handles `/permissions` (Rust #54383: SlashCommand::Permissions
+// supports inline arguments): no arguments open the picker, arguments select a
+// profile inline through the same validation the picker applies.
+func (m *Model) applyPermissionsCommand(args string) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	value := strings.TrimSpace(args)
+	if value == "" {
+		return m.openPermissionsMenu()
+	}
+	return m.selectPermissionProfileInline(value)
+}
+
+// selectPermissionProfileInline validates an inline `/permissions` request and
+// applies it the way the picker would (Rust select_permission_profile,
+// apply_pending_permission_profile and try_select_permission_profile): the
+// connected server's catalog is discovered first when the request needs it, the
+// full-access row still opens its confirmation, and a rejected request only
+// reports the Rust reason.
+func (m *Model) selectPermissionProfileInline(args string) bubbletea.Cmd {
+	if m == nil || m.State == nil {
+		return nil
+	}
+	if m.onListPermissionProfiles != nil && !m.permissionProfilesDiscovered && !m.permissionProfilesLoading {
+		// Rust InlinePermissionProfileSelection::Discovering: remember the
+		// request while the catalog loads, then apply it
+		// (permission_discovery.rs:70-77).
+		m.pendingPermissionProfileArgs = args
+		m.permissionProfilesLoading = true
+		m.showPermissionsLoadingView()
+		return m.fetchPermissionProfilesCmd()
+	}
+	m.pendingPermissionProfileArgs = ""
+	parsed, failure := parsePermissionProfileArgs(args)
+	item := chatwidget.PermissionMenuItem{}
+	if failure == "" {
+		item, failure = m.resolveInlinePermissionProfile(parsed)
+	}
+	if failure != "" {
+		m.closePermissionsModal()
+		m.notice = failure
+		m.refreshTranscript()
+		return nil
+	}
+	m.closePermissionsModal()
+	if item.RequiresConfirmation {
+		// Rust #54385 keeps the full-access confirmation for every reviewer.
+		pending := item
+		m.pendingPermissionItem = &pending
+		m.openFullAccessConfirmation()
+		return nil
+	}
+	return m.applyPermissionSelection(item)
+}
+
+// resolveInlinePermissionProfile maps the parsed request onto the picker row
+// Rust's try_select_permission_profile would have produced.
+func (m *Model) resolveInlinePermissionProfile(parsed permissionProfileArgs) (chatwidget.PermissionMenuItem, string) {
+	var requestedApprovalPolicy *chatwidget.ApprovalPolicy
+	if parsed.hasApprovalPolicy {
+		value := chatwidget.ApprovalPolicy(parsed.approvalPolicy)
+		requestedApprovalPolicy = &value
+	}
+	var requestedReviewer *chatwidget.ApprovalsReviewer
+	if parsed.hasReviewer {
+		value := parsed.reviewer
+		requestedReviewer = &value
+	}
+	return chatwidget.InlinePermissionProfileSelection(m.permissionMenuConfig(true), parsed.profileID, requestedApprovalPolicy, requestedReviewer)
+}
+
+// closePermissionsModal dismisses the permissions loading view or picker when it
+// is the active modal (Rust AppEvent::SettingsSelectionClosed).
+func (m *Model) closePermissionsModal() {
+	if m == nil || m.modal == nil || m.modal.kind != ModalKindPermissions {
+		return
+	}
+	m.modal = nil
+}
+
 func (m *Model) openPermissionsMenu() bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -111,22 +228,7 @@ func (m *Model) showPermissionsMenu(explicit bool) {
 	if m == nil || m.State == nil {
 		return
 	}
-	config := chatwidget.PermissionMenuConfig{
-		IncludeReadOnly:        true,
-		HideFullAccessWarning:  m.hideFullAccessWarning,
-		CurrentApprovalPolicy:  currentPermissionApprovalPolicy(m),
-		CurrentReviewer:        currentApprovalsReviewer(m),
-		CurrentProfileID:       strings.TrimSpace(m.State.Sandbox),
-		Requirements:           m.permissionRequirements,
-		WindowsDegradedSandbox: false,
-	}
-	if explicit {
-		// Rust #43340: the connected server owns named profiles, so the picker
-		// lists its discovery result instead of local presets only.
-		config.ExplicitPermissionProfileMode = true
-		config.CustomProfiles = append([]chatwidget.CustomPermissionProfile(nil), m.permissionProfiles...)
-	}
-	view := chatwidget.NewPermissionsPopupView(config)
+	view := chatwidget.NewPermissionsPopupView(m.permissionMenuConfig(explicit))
 	m.permissionItems = append([]chatwidget.PermissionMenuItem(nil), view.Items...)
 	m.pendingPermissionItem = nil
 	m.openModal(ModalRequestMsg{
@@ -173,9 +275,9 @@ func (m *Model) fetchPermissionProfilesCmd() bubbletea.Cmd {
 // Rust selects for it: the retry view on failure, the legacy preset popup when
 // the server reports no explicit profiles, and the named-profile popup
 // otherwise (Rust on_permission_profiles_loaded).
-func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) {
+func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	m.permissionProfilesLoading = false
 	if msg.err != nil {
@@ -183,16 +285,23 @@ func (m *Model) applyPermissionProfilesLoaded(msg permissionProfilesLoadedMsg) {
 		// (Rust open_permissions_popup's gate is unchanged by a failure).
 		m.permissionProfilesErr = strings.TrimSpace(msg.err.Error())
 		m.openPermissionDiscoveryRetryView(m.permissionProfilesErr)
-		return
+		return nil
 	}
 	m.permissionProfilesDiscovered = true
 	m.permissionProfilesErr = ""
 	m.permissionProfilesExplicit = msg.explicitProfileMode
 	m.permissionProfiles = append([]chatwidget.CustomPermissionProfile(nil), msg.profiles...)
+	if args := m.pendingPermissionProfileArgs; args != "" {
+		// Rust apply_pending_permission_profile: an inline `/permissions`
+		// request that had to wait for the catalog is applied now.
+		m.pendingPermissionProfileArgs = ""
+		return m.selectPermissionProfileInline(args)
+	}
 	if m.modal == nil || m.modal.kind != ModalKindPermissions {
-		return
+		return nil
 	}
 	m.showPermissionsMenu(msg.explicitProfileMode)
+	return nil
 }
 
 // openPermissionDiscoveryRetryView shows Rust's failed-discovery view: the raw
@@ -247,7 +356,12 @@ func (m *Model) applyPermissionsModalOption(optionID string) bubbletea.Cmd {
 		return nil
 	}
 	if optionID == permissionsRetryOptionID {
-		// Rust #43340: Retry on the failed-discovery view re-runs the flow.
+		// Rust #43340: Retry on the failed-discovery view re-runs the flow; an
+		// inline request is retried with its own arguments (Rust
+		// AppEvent::ResolvePermissionProfile).
+		if m.pendingPermissionProfileArgs != "" {
+			return m.selectPermissionProfileInline(m.pendingPermissionProfileArgs)
+		}
 		return m.openPermissionsMenu()
 	}
 	if strings.HasPrefix(optionID, fullAccessConfirmationPrefix) {

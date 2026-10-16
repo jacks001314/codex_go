@@ -388,6 +388,12 @@ func DecideQueuedSlashPrompt(queued QueuedUserMessage, flags bottompane.BuiltinC
 func CommandSupportsInlineArgs(command codextui.Command) bool {
 	switch command {
 	case codextui.CommandReview,
+		// Rust #54378: `/model <args>` dispatches locally
+		// (codex-rs/tui/src/slash_command.rs:176).
+		codextui.CommandModel,
+		// Rust #54383: `/permissions <args>` dispatches locally
+		// (codex-rs/tui/src/slash_command.rs:177).
+		codextui.CommandPermissions,
 		codextui.CommandRename,
 		codextui.CommandNew,
 		codextui.CommandClear,

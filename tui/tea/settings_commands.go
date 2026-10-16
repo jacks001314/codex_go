@@ -514,6 +514,9 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		if m.statusControls != nil {
 			m.statusControls.StatusLineUseThemeColors = m.statusLineUseColors
 		}
+		// Rust #54387 (chatwidget/config_panel.rs:103): a saved preference
+		// supersedes the session-only colour override.
+		m.statusSurfaceOverrides.clearStatusLineUseColors()
 	}
 	if result.QuestionEscBack != nil {
 		m.questionEscBack = *result.QuestionEscBack

@@ -75,6 +75,10 @@ func (i SlashCommandItem) SupportsInlineArgs() bool {
 	}
 	switch i.Command {
 	case codextui.CommandReview,
+		// Rust #54378 adds Model to slash_command.rs supports_inline_args.
+		codextui.CommandModel,
+		// Rust #54383 adds Permissions to slash_command.rs supports_inline_args.
+		codextui.CommandPermissions,
 		codextui.CommandRename,
 		codextui.CommandNew,
 		codextui.CommandClear,

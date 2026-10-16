@@ -83,6 +83,11 @@ func TestRustSlashInlineArgContractIsExhaustive(t *testing.T) {
 		codextui.CommandResume:     true,
 		codextui.CommandTitle:      true,
 		codextui.CommandStatusline: true,
+
+		// Rust #54378 adds Model and #54383 adds Permissions to
+		// slash_command.rs supports_inline_args.
+		codextui.CommandModel:       true,
+		codextui.CommandPermissions: true,
 	}
 	flags := BuiltinCommandFlags{
 		CollaborationModesEnabled:   true,

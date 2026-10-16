@@ -1659,10 +1659,36 @@ func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.Sessio
 		Status:                 remoteTUIStatusFromThread(thread),
 		TokenUsage:             remoteThreadTokenUsageFromThread(thread),
 		WorkingStatusHeader:    remoteTUIThreadActiveReasoningHeading(thread),
+		WorkingTurnStartedAtMS: remoteTUIThreadInProgressTurnStartedAtMS(thread),
 		WorkingReasoningTurnID: remoteTUIThreadActiveReasoningTurnID(thread),
 		WorkingReasoningItemID: remoteTUIThreadActiveReasoningItemID(thread),
 		CompletedTurns:         remoteTUICompletedTurnCount(thread),
 	}
+}
+
+// remoteTUIThreadInProgressTurnStartedAtMS returns the wall clock (Unix
+// milliseconds) at which the thread's in-progress turn started. Rust #54047
+// seeds the replay timer from that timestamp
+// (tui/src/chatwidget/replay.rs:146-149 -> ChatWidget::on_replayed_task_started),
+// so a resumed thread shows the time its in-progress turn has already spent
+// instead of restarting the Working row at zero. It returns nil when no turn is
+// in progress or the snapshot carries no timestamp, which keeps the TUI's
+// local-clock fallback. A later in-progress turn wins, matching Rust's forward
+// scan over the replayed turns.
+func remoteTUIThreadInProgressTurnStartedAtMS(thread *appserver.Thread) *int64 {
+	if thread == nil {
+		return nil
+	}
+	var found *int64
+	for index := range thread.Turns {
+		turn := thread.Turns[index]
+		if turn.Status != appserver.TurnStatusInProgress || turn.StartedAt == nil {
+			continue
+		}
+		startedAt := *turn.StartedAt
+		found = &startedAt
+	}
+	return found
 }
 
 // remoteTUICompletedTurnCount counts a thread's completed turns for the
@@ -4080,8 +4106,18 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			return err
 		}
 		c.sendSideParentStatusChange(payload.ThreadID, codextea.SideParentStatusChangeClear, "")
+		// Rust #54047 (tui/src/chatwidget/protocol.rs:95-113): a replayed
+		// turn/started restores the turn's elapsed time from `started_at`, while a
+		// live turn/started starts the timer now. The events of a thread the client
+		// is not showing are replayed when it becomes active, so only that branch
+		// carries the timestamp.
+		replayedEvent := protocol.TurnStartedWithID(payload.Turn.ID)
+		if payload.Turn.StartedAt != nil {
+			startedAt := *payload.Turn.StartedAt
+			replayedEvent.StartedAtMS = &startedAt
+		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
-			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: protocol.TurnStartedWithID(payload.Turn.ID)})
+			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: replayedEvent})
 			return nil
 		}
 		c.noteNotificationThreadID(payload.ThreadID)

@@ -1879,14 +1879,18 @@ type Model struct {
 	sideStartPending                  bool
 	statusControls                    *chatwidget.StatusControlsState
 	statusLineConfiguredByUser        bool
+	statusSurfaceOverrides            statusSurfaceOverrides
 	lastTerminalTitleSequence         string
 	rateLimitSnapshots                map[string]chatwidget.RateLimitSnapshot
 	approvalsReviewer                 chatwidget.ApprovalsReviewer
 	permissionRequirements            chatwidget.PermissionRequirements
 	permissionItems                   []chatwidget.PermissionMenuItem
 	pendingPermissionItem             *chatwidget.PermissionMenuItem
-	hideFullAccessWarning             bool
-	experimentalItems                 []chatwidget.ExperimentalFeatureOption
+	// pendingPermissionProfileArgs is the inline `/permissions` request waiting
+	// for the server catalog (Rust InlinePermissionProfileSelection::Discovering).
+	pendingPermissionProfileArgs string
+	hideFullAccessWarning        bool
+	experimentalItems            []chatwidget.ExperimentalFeatureOption
 	// experimentalFeaturesStatus is the popup's discovery status line and
 	// experimentalFeaturesGeneration guards stale catalog reads (Rust
 	// ExperimentalFeaturesView discovery_status/catalog_rx).
@@ -2641,8 +2645,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	case asyncQuestionCountdownMsg:
 		return m, m.asyncQuestionCountdownCmd()
 	case permissionProfilesLoadedMsg:
-		m.applyPermissionProfilesLoaded(msg)
-		return m, nil
+		return m, m.applyPermissionProfilesLoaded(msg)
 	case terminalSizePollMsg:
 		m.applyTerminalSizePoll()
 		return m, m.sizeMonitorTickCmd()
@@ -7364,7 +7367,9 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandEditor:
 		return m.openExternalEditor()
 	case codextui.CommandPermissions:
-		return m.openPermissionsMenu()
+		// Rust #54383: `/permissions [profile-id] [--approval-policy=…]
+		// [--reviewer=…]` selects a profile inline.
+		return m.applyPermissionsCommand(invocation.Args)
 	case codextui.CommandApproval:
 		m.applyApprovalSetting(invocation.Args)
 	case codextui.CommandSandbox:
@@ -7843,10 +7848,9 @@ func (m *Model) refreshVoiceTranscript() {
 func (m *Model) applyModelSetting(args string) bubbletea.Cmd {
 	value := strings.TrimSpace(args)
 	if value != "" {
-		m.State.Model = value
-		m.refreshServiceTierCommands()
-		m.notice = strings.TrimSpace(m.State.RenderSetting("Model", m.State.Model))
-		return nil
+		// Rust #54378: `/model [model] --reasoning <level> --speed <tier>`
+		// validates the request and applies it to this session only.
+		return m.applyModelCommandArgs(value)
 	}
 	return m.openModelPicker()
 }

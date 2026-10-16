@@ -14,8 +14,14 @@ const (
 type ApprovalPolicy string
 
 const (
-	ApprovalOnRequest ApprovalPolicy = "on-request"
-	ApprovalNever     ApprovalPolicy = "never"
+	// ApprovalUnlessTrusted and ApprovalGranular are the remaining
+	// AskForApproval values (app-server-protocol/src/protocol/v2/shared.rs:206-221).
+	// The picker only offers the first two, but `/permissions --approval-policy` accepts
+	// all four.
+	ApprovalUnlessTrusted ApprovalPolicy = "untrusted"
+	ApprovalOnRequest     ApprovalPolicy = "on-request"
+	ApprovalGranular      ApprovalPolicy = "granular"
+	ApprovalNever         ApprovalPolicy = "never"
 )
 
 type ApprovalsReviewer string
@@ -280,12 +286,14 @@ func builtinPermissionModeSelectionItem(config PermissionMenuConfig, preset Appr
 	approvalCopy := approval
 	reviewerCopy := reviewer
 	return PermissionMenuItem{
-		ID:                   preset.ID + ":" + string(reviewer),
-		Name:                 label,
-		Description:          description,
-		Current:              PermissionPresetMatchesCurrent(config, profileID, approval, reviewer),
-		DismissOnSelect:      true,
-		RequiresConfirmation: reviewer == ApprovalsReviewerUser && preset.ID == "full-access",
+		ID:              preset.ID + ":" + string(reviewer),
+		Name:            label,
+		Description:     description,
+		Current:         PermissionPresetMatchesCurrent(config, profileID, approval, reviewer),
+		DismissOnSelect: true,
+		// Rust #54385 (upstream 36803b180a) keeps the full-access confirmation
+		// for every reviewer (chatwidget/permission_popups.rs:340).
+		RequiresConfirmation: preset.ID == "full-access",
 		DisabledReason:       permissionRequirementsDisabledReason(config.Requirements, profileID, approval, reviewer),
 		ApprovalPolicy:       &approvalCopy,
 		Reviewer:             &reviewerCopy,
@@ -293,6 +301,168 @@ func builtinPermissionModeSelectionItem(config PermissionMenuConfig, preset Appr
 	}
 }
 
+// Rust #54383 / #54385: `/permissions` selects a permission profile inline
+// instead of only opening the picker, so the same request can name the profile,
+// an approval policy, and a reviewer (codex-rs/tui/src/chatwidget/
+// permission_discovery.rs:43-77).
+const (
+	// InlinePermissionProfileAskForApprovalAlias and
+	// InlinePermissionProfileApproveForMeAlias are the shorthands Rust maps onto
+	// the workspace profile (chatwidget/permissions_menu.rs:71-74).
+	InlinePermissionProfileAskForApprovalAlias = ":ask-for-approval"
+	InlinePermissionProfileApproveForMeAlias   = ":approve-for-me"
+	// InlinePermissionProfileAutoPresetID is the built-in preset the aliases and
+	// the workspace profile select (permissions_menu.rs:85-87).
+	inlinePermissionProfileAutoPresetID = "auto"
+	// inlinePermissionProfileFullAccessPresetID requires confirmation for every
+	// reviewer (#54385).
+	inlinePermissionProfileFullAccessPresetID = "full-access"
+	// inlineApproveForMeUnavailableMessage is the shared copy of both guardian
+	// gates (permissions_menu.rs:62-66, :96-102).
+	inlineApproveForMeUnavailableMessage = "Approve for me is unavailable. Run `/permissions` to see available profiles."
+	// inlineDisabledByRequirementsReason mirrors PermissionDiscovery::disabled_reason's
+	// reason string (permission_discovery.rs:76); the caller wraps it as
+	// "Permission profile `<id>` is unavailable: Disabled by requirements."
+	inlineDisabledByRequirementsReason = "Disabled by requirements"
+)
+
+// inlinePermissionProfile is the discovery view of one profile
+// (PermissionDiscovery::profiles).
+type inlinePermissionProfile struct {
+	id          string
+	description string
+	allowed     bool
+}
+
+// InlinePermissionProfileSelection resolves a `/permissions` argument string's
+// profile request into the popup row the picker would have produced, mirroring
+// ChatWidget::try_select_permission_profile (codex-rs/tui/src/chatwidget/
+// permissions_menu.rs:53-146):
+//
+//   - `:approve-for-me` requires the guardian-approval feature and selects the
+//     automatic reviewer, while `:ask-for-approval` and `:approve-for-me` both
+//     resolve to the workspace profile;
+//   - an explicitly requested `--approval-policy` / `--reviewer` wins over the
+//     built-in preset's own values;
+//   - automatic review is rejected again after the overrides are applied when
+//     the feature is unavailable;
+//   - a profile the server does not offer, or one its requirements disable,
+//     is rejected before anything changes.
+//
+// The returned string is the Rust error message, empty on success.
+func InlinePermissionProfileSelection(config PermissionMenuConfig, profileID string, requestedApprovalPolicy *ApprovalPolicy, requestedReviewer *ApprovalsReviewer) (PermissionMenuItem, string) {
+	reviewer := ApprovalsReviewerUser
+	if profileID == InlinePermissionProfileApproveForMeAlias {
+		if !config.GuardianApprovalEnabled {
+			return PermissionMenuItem{}, inlineApproveForMeUnavailableMessage
+		}
+		reviewer = ApprovalsReviewerAutoReview
+	}
+	switch profileID {
+	case InlinePermissionProfileAskForApprovalAlias, InlinePermissionProfileApproveForMeAlias:
+		profileID = WorkspaceProfile
+	}
+	profile, preset, ok := inlinePermissionProfileCatalogEntry(config, profileID)
+	if !ok {
+		return PermissionMenuItem{}, "Unknown permission profile `" + profileID + "`. Run `/permissions` to see available profiles."
+	}
+	approvalPolicy := requestedApprovalPolicy
+	if approvalPolicy == nil && preset != nil {
+		value := preset.Approval
+		approvalPolicy = &value
+	}
+	approvalsReviewer := requestedReviewer
+	if approvalsReviewer == nil && preset != nil {
+		value := reviewer
+		approvalsReviewer = &value
+	}
+	if approvalsReviewer != nil && *approvalsReviewer == ApprovalsReviewerAutoReview && !config.GuardianApprovalEnabled {
+		return PermissionMenuItem{}, inlineApproveForMeUnavailableMessage
+	}
+	if reason := inlinePermissionDisabledReason(config, profile, approvalPolicy, approvalsReviewer); reason != "" {
+		return PermissionMenuItem{}, "Permission profile `" + profileID + "` is unavailable: " + reason + "."
+	}
+	item := PermissionMenuItem{
+		ID:              profile.id,
+		Name:            profile.id,
+		Description:     profile.description,
+		DismissOnSelect: true,
+		ApprovalPolicy:  approvalPolicy,
+		Reviewer:        approvalsReviewer,
+		ProfileID:       profile.id,
+	}
+	if preset == nil {
+		return item, ""
+	}
+	item.ID = preset.ID + ":" + string(reviewer)
+	item.Name = preset.Label
+	switch {
+	case preset.ID == inlinePermissionProfileAutoPresetID && approvalsReviewer != nil && *approvalsReviewer == ApprovalsReviewerAutoReview:
+		item.Name = ApproveForMeLabel
+	case preset.ID == inlinePermissionProfileAutoPresetID:
+		item.Name = AskForApprovalLabel
+	}
+	item.Description = inlinePermissionPresetDescription(*preset)
+	item.RequiresConfirmation = preset.ID == inlinePermissionProfileFullAccessPresetID
+	if approvalPolicy != nil && approvalsReviewer != nil {
+		item.Current = PermissionPresetMatchesCurrent(config, profile.id, *approvalPolicy, *approvalsReviewer)
+	}
+	return item, ""
+}
+
+// inlinePermissionProfileCatalogEntry finds the profile in the discovery catalog
+// (built-in presets followed by the server's custom profiles) together with the
+// built-in preset that owns the profile, if any
+// (PermissionDiscovery::local + permissions_menu.rs:75-87).
+func inlinePermissionProfileCatalogEntry(config PermissionMenuConfig, profileID string) (inlinePermissionProfile, *ApprovalPreset, bool) {
+	for _, preset := range BuiltinApprovalPresets() {
+		if preset.ProfileID != profileID {
+			continue
+		}
+		value := preset
+		return inlinePermissionProfile{
+			id:          preset.ProfileID,
+			description: inlinePermissionPresetDescription(preset),
+			allowed:     true,
+		}, &value, true
+	}
+	for _, profile := range config.CustomProfiles {
+		if profile.ID != profileID {
+			continue
+		}
+		return inlinePermissionProfile{
+			id:          profile.ID,
+			description: firstNonEmptyPermission(profile.Description, "Configured permission profile."),
+			allowed:     profile.Allowed,
+		}, nil, true
+	}
+	return inlinePermissionProfile{}, nil, false
+}
+
+// inlinePermissionPresetDescription mirrors the preset copy the picker shows.
+func inlinePermissionPresetDescription(preset ApprovalPreset) string {
+	return strings.ReplaceAll(preset.Description, " (Identical to Agent mode)", "")
+}
+
+// inlinePermissionDisabledReason mirrors PermissionDiscovery::disabled_reason
+// (permission_discovery.rs:55-79): only the values the request actually carries
+// are checked against the requirements.
+func inlinePermissionDisabledReason(config PermissionMenuConfig, profile inlinePermissionProfile, approvalPolicy *ApprovalPolicy, reviewer *ApprovalsReviewer) string {
+	if !profile.allowed {
+		return inlineDisabledByRequirementsReason
+	}
+	requirements := config.Requirements
+	if len(requirements.AllowedProfiles) > 0 && !permissionProfileAllowed(requirements.AllowedProfiles, profile.id) {
+		return inlineDisabledByRequirementsReason
+	}
+	if approvalPolicy != nil && len(requirements.AllowedApprovalPolicies) > 0 && !approvalPolicyAllowed(requirements.AllowedApprovalPolicies, *approvalPolicy) {
+		return inlineDisabledByRequirementsReason
+	}
+	if reviewer != nil && len(requirements.AllowedReviewers) > 0 && !reviewerAllowed(requirements.AllowedReviewers, *reviewer) {
+		return inlineDisabledByRequirementsReason
+	}
+	return ""
+}
 func PermissionPresetMatchesCurrent(config PermissionMenuConfig, profileID string, approval ApprovalPolicy, reviewer ApprovalsReviewer) bool {
 	return normalizePermissionProfileID(config.CurrentProfileID) == normalizePermissionProfileID(profileID) &&
 		config.CurrentApprovalPolicy == approval &&

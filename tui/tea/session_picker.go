@@ -445,6 +445,11 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	if m.statusControls != nil {
 		m.statusControls.SetActiveAgentLabel("", false)
 	}
+	// Rust #54387 (chatwidget/input_restore.rs:601,621): the thread's restored
+	// input state carries the session-only status-surface overrides, so an
+	// in-process restore re-applies what the user selected with /title and
+	// /statusline instead of falling back to the saved layout.
+	m.restoreStatusSurfaceOverrides(threadID)
 	m.refreshTranscript()
 	m.transcript.GotoBottom()
 }

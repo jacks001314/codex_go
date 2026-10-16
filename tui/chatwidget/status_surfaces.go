@@ -182,6 +182,8 @@ func ParseStatusLineItem(id string) (bottompane.StatusLineItem, bool) {
 		return bottompane.StatusLineCurrentDir, true
 	case "project-name", "project", "project-root":
 		return bottompane.StatusLineProjectRoot, true
+	case "hostname":
+		return bottompane.StatusLineHostname, true
 	case "git-branch":
 		return bottompane.StatusLineGitBranch, true
 	case "pull-request-number":
@@ -243,6 +245,8 @@ func StatusLineItemID(item bottompane.StatusLineItem) string {
 		return "current-dir"
 	case bottompane.StatusLineProjectRoot:
 		return "project-name"
+	case bottompane.StatusLineHostname:
+		return "hostname"
 	case bottompane.StatusLineGitBranch:
 		return "git-branch"
 	case bottompane.StatusLinePullRequestNumber:

@@ -4389,7 +4389,11 @@ func TestModelSlashCommands(t *testing.T) {
 	state.SetThreadID("thread-before-clear")
 	state.SetStatus("running")
 	state.AddMessage(codextui.RoleUser, "old")
-	model := NewModel(state, Options{})
+	model := NewModel(state, Options{ModelPickerOptions: []codextui.ModelPickerOption{{
+		ID:           "gpt-5",
+		Label:        "gpt-5",
+		ShowInPicker: true,
+	}}})
 
 	model.applyModelSetting("gpt-5")
 	if state.Model != "gpt-5" {
@@ -4398,7 +4402,8 @@ func TestModelSlashCommands(t *testing.T) {
 	if len(model.SubmittedPrompts()) != 0 {
 		t.Fatalf("slash command should not submit a prompt")
 	}
-	if !strings.Contains(model.View(), "Model: gpt-5") {
+	// Rust #54378: an inline selection reports the session-only confirmation.
+	if !strings.Contains(model.View(), "Model changed to gpt-5 default for this session only") {
 		t.Fatalf("View() missing model notice:\n%s", model.View())
 	}
 
@@ -4761,6 +4766,9 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 		}
 	}
 
+	// Rust #54378: `/model <args>` is an inline command now, so it never reaches
+	// the model as a prompt; with no thread yet it reports that the session is
+	// still starting (chatwidget/model_command.rs:139-141).
 	state := codextui.NewState(nil)
 	var requests []SubmitRequest
 	model := NewModel(state, Options{OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
@@ -4769,8 +4777,11 @@ func TestModelSlashInlineArgumentDispatchMatchesRust(t *testing.T) {
 	}})
 	typeText(t, model, "/model gpt-new")
 	model.Update(key(bubbletea.KeyEnter))
-	if state.Model != "" || len(requests) != 1 || requests[0].Prompt != "/model gpt-new" {
-		t.Fatalf("unsupported /model args should submit as a prompt: model=%q requests=%#v", state.Model, requests)
+	if len(requests) != 0 || state.Model != "" {
+		t.Fatalf("inline /model args should dispatch locally: model=%q requests=%#v", state.Model, requests)
+	}
+	if want := "Session is still starting; try /model again in a moment."; model.notice != want {
+		t.Fatalf("notice = %q, want %q", model.notice, want)
 	}
 
 	state = codextui.NewState(nil)
@@ -5295,8 +5306,18 @@ func TestModelPermissionsMenuAppliesRuntimeState(t *testing.T) {
 
 	typeText(t, model, "/permissions")
 	model.Update(key(bubbletea.KeyEnter))
-	model.Update(key(bubbletea.KeyDown))
-	model.Update(key(bubbletea.KeyDown))
+	// guardian_approval is default-on, so the picker lists the approve-for-me
+	// row as well; select Full Access by label instead of by position.
+	fullAccessIndex := -1
+	for index, option := range model.modal.options {
+		if option.Label == "Full Access" {
+			fullAccessIndex = index
+		}
+	}
+	if fullAccessIndex < 0 {
+		t.Fatalf("full access option not found: %#v", model.modal.options)
+	}
+	model.modal.selected = fullAccessIndex
 	model.Update(key(bubbletea.KeyEnter))
 	if view := model.View(); !strings.Contains(view, "Enable full access?") || !strings.Contains(view, "Yes, continue anyway") || !strings.Contains(view, "Cancel") {
 		t.Fatalf("full access confirmation missing:\n%s", view)
