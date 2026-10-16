@@ -336,3 +336,7 @@ bd5564fec4	51768	impl	C	b6	5	Expand OpenAI Docs migration guidance to the GPT-6 
 2dae757b87	51734	impl	C	b1	8	Load persisted sender context for Guardian reviews (#51734)
 0e1520605f	51710	test-only	V		1	Fix a discovery race in the external auth refresh test (#51710)
 0a2a64e942	51704	impl	A	b14	8	Honor tool-description-first ordering in Code Mode (#51704)
+4491caf1ad	54639	impl	B	b15	2	Stream rollout records during thread history materialization (#54639)
+34420d4264	54637	impl	B	b15	2	Preserve disconnect reasons in Noise handshake errors (#54637)
+b5115cdd66	54623	impl	V	b15	9	Resolve stable releases dynamically for exec-server compatibility tests (#54623)
+2bf2bdf82c	54619	impl	A	b15	31	Bind plugin hook approval to plugin contents (#54619)
