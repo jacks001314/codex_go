@@ -105,3 +105,20 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 - **同一份代码，appserver 包红数不同**：主工作区 9 红（既有 6 + pin 漂移 3）；车道 worktree 6 红（3 条被 SKIP）。
 - 车道里要让它们真跑，必须设 env：`CODEX_RUST_ROOT`（需含 `Cargo.toml`）、`CODEX_RUST_APP_SERVER_SUITE_V2`（需含 `mod.rs`）、`CODEX_RUST_APP_SERVER_PROTOCOL_TYPESCRIPT`；报数前必须用 `-v` 证明是 `=== RUN` 而非 `--- SKIP`。
 - 结论口径：**基线数字必须带上下文**（主工作区 / 车道台 / 是否设 env），否则会得出错误的「无新增失败」。
+### R5-quater · 门禁口径（2026-10-17 第 90 轮，leader 实测；与 R5-bis / R5-ter 冲突时以本节为准）
+
+1. **appserver 整包的唯一有效判定口径 = 主工作区 + 显式全 5 env + CWD=包目录 + 清 TERM**：
+   - `GOCACHE=D:\qax\reagent\dev\.gocache-d`
+   - `CODEX_RUST_ROOT=C:\rw\codex-rs`
+   - `CODEX_RUST_APP_SERVER_PROTOCOL_SCHEMA=C:\rw\codex-rs\app-server-protocol\schema\json`
+   - `CODEX_RUST_APP_SERVER_PROTOCOL_TYPESCRIPT=C:\rw\codex-rs\app-server-protocol\schema\typescript`
+   - `CODEX_RUST_APP_SERVER_SUITE_V2=C:\rw\codex-rs\app-server\tests\suite\v2`  ← 是 `app-server\tests\suite\v2`，**不是** `app-server-protocol\tests\...`（写错会静默 SKIP 掉 suite v2 那批）
+   - 命令：`go test . -count=1 -p 1`（CWD = `…\codex_go\appserver`）
+   - 实测：`ok 121.3s / 131.7s / 175.4s`，**0 红**（含 P-b9 + A-b8 + B-b8 + C-b8 + TUI 全部并入之后）。
+2. **SKIP 会被读成绿（本轮最大教训）**：依赖 Rust 源码/schema 的守卫找不到目标时走 `t.Skip`，整包照样打印 `ok`。P-b9 的 `TestRustStableClientSurfaceIsNotGatedAsExperimental` 在未设全 env 的车道台上正是 SKIP —— 台上"ok 161s"根本没跑它，差点让一个真缺口被判为已修。
+   ⇒ **任何"守卫已绿"的声明必须附 `-v` 的 `=== RUN` + `--- PASS` 原文，以及 RUN/PASS/FAIL/SKIP 计数**；只有 `-v` 能区分 RUN 与 SKIP。
+3. `./app/` 基线补一条：`TestFeaturesEnableUnderDevelopmentWarnsLikeRust`（`app_test.go:690`）**断言过时** —— `features/features.go:60` 已是 `StageRemoved`，Rust 同 pin `features/src/lib.rs` 也是 `Stage::Removed` ⇒ Go 行为正确、断言旧，属待改断言，不是产品缺陷。
+4. `TestNoDaemonRejectionsLikeRust`（`./app/`）与 `TestMCPStdioLaunchedServerHasNoConsoleWindow`（`./mcp/`）在 `TERM` 未清时会红；清 `TERM` 后各自 PASS（隔离 ×3 复核）⇒ **判红前先 `Remove-Item Env:TERM`**。
+5. 已实测的**抖动红**（同代码不同次结果不同，不得计入"新增失败"）：`TestRuntimeRouterTurnEventReportsMultiAgentVersionLikeRust/persisted_v2_thread`、`TestRuntimeRouterTurnCompletionEmitsPerModelTokenUsage`、`TestRuntimeRouterCommandExecutionEmitsAnalyticsLikeRust`、`TestRuntimeAgentControllerV2SpawnCarriesInternalInputLikeRust`（`testing.go TempDir RemoveAll cleanup: The directory is not empty`，Windows 清理竞态）。判 flake 的门槛 = 隔离复跑 ×3 全 PASS。
+6. 既有基线红（主工作区，与车道改动无关）：`./tool/` 2 条（`TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust`、`TestLocalShellLaunchRestoresExecutorPathDirsLikeRust`）、`./model/` 1 条（`TestApiKeyCyberAccessProgramsFromConfigLikeRust` —— 断言与 `features/features.go:326` 的 `StageStable / DefaultEnabled: true` 自相矛盾）、`./tui/tea/` 1 条（`TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge`）、`./app/` 2 条（见第 3、4 点）。
+7. `go vet ./...` 白名单 3 条（长期既有，勿"修"）：`sandbox/linuxsandbox/bwrap_test.go:182`、`model/responses_agent.go:1500`、`exec/agent_controller.go:909`。
