@@ -993,7 +993,10 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 // guardianTranscriptExcludedItem reports whether a session item is kept out of
 // the Guardian review transcript. Reasoning, context-compaction and
 // compaction-trigger items carry no guardrail evidence (Rust's TranscriptHistory
-// drops every non-message item), so they never reach the reviewer.
+// drops every non-message item), so they never reach the reviewer. A copied
+// manual approval is model context rather than the child's own trusted approval
+// evidence (Rust guardian-context/src/transcript.rs::is_inherited_manual_approval,
+// #52535), so it is dropped as well.
 func guardianTranscriptExcludedItem(item *session.Item) bool {
 	if item == nil {
 		return false
@@ -1002,7 +1005,59 @@ func guardianTranscriptExcludedItem(item *session.Item) bool {
 	case "reasoning", "context_compaction", "compaction_trigger":
 		return true
 	}
+	return guardianTranscriptIsInheritedManualApproval(item)
+}
+
+// sessionItemIsManualApprovalMessage mirrors the role/marker half of Rust's
+// guardian-context/src/transcript.rs::is_inherited_manual_approval (#52535): an
+// explicit manual action approval is written as a developer message whose text
+// begins with the shared manual-approval marker.
+func sessionItemIsManualApprovalMessage(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.TrimSpace(item.Type) {
+	case "message", "user_message", "userMessage":
+	default:
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
+		return false
+	}
+	if sessionItemManualApprovalText(item.Text) {
+		return true
+	}
+	for _, part := range item.Content {
+		if sessionItemManualApprovalText(part.Text) {
+			return true
+		}
+	}
 	return false
+}
+
+// sessionItemManualApprovalText mirrors Rust's `text.starts_with(marker)` test.
+// The stored text is verbatim, so the marker is compared as-is; the trimmed form
+// keeps parity with the transcript's own text normalization.
+func sessionItemManualApprovalText(text string) bool {
+	if text == "" {
+		return false
+	}
+	return strings.HasPrefix(text, state.DeniedActionApprovalPrefix) ||
+		strings.HasPrefix(strings.TrimSpace(text), state.DeniedActionApprovalPrefix)
+}
+
+// guardianTranscriptIsInheritedManualApproval mirrors Rust
+// guardian-context/src/transcript.rs::is_inherited_manual_approval (#52535): a
+// manual approval copied from the parent carries inherited provenance and must
+// not be recaptured as the child's own authorization evidence. Rust filters it
+// before dropping envelope provenance, including when replaying review
+// checkpoints; a Go session item keeps that provenance in its harness metadata.
+func guardianTranscriptIsInheritedManualApproval(item *session.Item) bool {
+	if !sessionItemIsManualApprovalMessage(item) {
+		return false
+	}
+	metadata := harnessMetadataFromSessionItem(item)
+	return metadata != nil && metadata.InheritedUserMessage
 }
 
 // guardianTranscriptIsCompactionSummary reports whether a session item is a

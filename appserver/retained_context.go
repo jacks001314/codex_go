@@ -961,7 +961,15 @@ func markInheritedUserMessages(items []session.Item) {
 	for index := range items {
 		item := &items[index]
 		userMessage := sessionItemIsUserMessage(item)
-		if !userMessage && !sessionItemIsAssistantMessage(item) {
+		// Rust's enabled fork-prefix mode marks every copied item, and
+		// guardian-context/src/transcript.rs::is_inherited_manual_approval
+		// (#52535) needs the provenance on an inherited developer manual
+		// approval so a copied approval is not recaptured as the child's own
+		// trusted evidence. Only the approval message is marked here: the marker
+		// also removes an item from the child's retained Guardian context, and
+		// inherited developer commentary is not approval evidence.
+		inheritedManualApproval := sessionItemIsManualApprovalMessage(item)
+		if !userMessage && !sessionItemIsAssistantMessage(item) && !inheritedManualApproval {
 			continue
 		}
 		metadata := harnessMetadataFromSessionItem(item)
