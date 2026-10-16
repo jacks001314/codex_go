@@ -11,13 +11,13 @@ func TestRustSlashCommandOrderBaseline20260728(t *testing.T) {
 	// Upstream SlashCommand enum order (codex-rs/tui/src/slash_command.rs:12-89),
 	// re-anchored to head 4eb4a65407 (round-90). The four names without a Go
 	// carrier yet are inert and recorded in rustSlashCommandsWithoutFrame;
-	// "agent" still holds the upstream Agents slot (section T5 D-1).
+	// D-1 closed: the Agents slot now carries the upstream "agents" spelling.
 	want := []string{
 		"model", "presets", "daybreak", "ide", "permissions", "keymap", "vim",
 		"setup-default-sandbox", "experimental", "approve", "memories", "skills",
 		"import", "hooks", "review", "rename", "new", "archive", "delete", "resume",
 		"fork", "worktree", "app", "init", "compact", "config", "recap", "plan",
-		"voice", "goal", "agent", "side", "btw", "copy", "export", "raw", "tui",
+		"voice", "goal", "agents", "side", "btw", "copy", "export", "raw", "tui",
 		"diff", "mention", "status", "daemon", "warnings", "cd", "pwd", "usage",
 		"debug-config", "title", "statusline", "theme", "pets", "mcp", "apps",
 		"plugins", "logout", "quit", "exit", "feedback", "rollout", "ps", "stop",
@@ -208,6 +208,9 @@ func TestRustSlashPopupInventoryFollowsRustOrder(t *testing.T) {
 		"copy":      "copy the last response or part of it",
 		"mcp":       "list MCP tools; use /mcp verbose or /mcp login <name>",
 		"subagents": "switch between this session's subagents",
+		// D-1: the Agents slot uses the upstream name and description
+		// (slash_command.rs:47/:144), not the legacy "agent" frame.
+		"agents": "open the agent command center",
 	}
 	for _, item := range BuiltinsForInput(flags) {
 		want, tracked := descriptions[item.Name]

@@ -7819,10 +7819,15 @@ func TestModelAgentCommandLoadsPickerAndSwitchesThread(t *testing.T) {
 		},
 	})
 
-	typeText(t, model, "/agent")
+	// D-1: "subagents" is the upstream name for the picker (slash_command.rs:82-83
+	// MultiAgents serialized as "subagents"). "/agent" survives only as a Go
+	// compatibility alias in tui/state.go:1074, and the popup completes that
+	// prefix to the upstream "agents" frame, so the canonical spelling is used
+	// here.
+	typeText(t, model, "/subagents")
 	_, cmd := model.Update(key(bubbletea.KeyEnter))
 	if cmd == nil {
-		t.Fatal("/agent did not request agent list")
+		t.Fatal("/subagents did not request agent list")
 	}
 	model.Update(cmd())
 	if readCurrent != "thread-main" {

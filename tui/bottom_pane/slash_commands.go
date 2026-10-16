@@ -340,14 +340,11 @@ func fuzzyCommandMatch(command string, query string) bool {
 // any name that has no Go frame, so an entry whose carrier is still missing is
 // inert; those names are recorded in rustSlashCommandsWithoutFrame below.
 //
-// Drift kept on purpose (update/r90tui_2026_10_16.md section T5 D-1): upstream
-// canonicalizes this slot as "agents" (SlashCommand::Agents, description "open
-// the agent command center") and Go routes /agents to codextui.CommandAgents in
-// tui/state.go:1076, but the Go popup still ships the legacy "agent" frame (no
-// upstream counterpart: SlashCommand has no "agent" spelling) and has no
-// "agents" frame at all. The legacy name stays at the upstream position so the
-// remaining ordering is aligned; renaming it moves the popup and dispatch
-// surface, so it is reported for the leader instead of changed here.
+// The Agents slot carries the upstream name (slash_command.rs:47 SlashCommand::Agents,
+// serialized as "agents" by the strum kebab-case rule at :11, description at :144)
+// and dispatches to codextui.CommandAgents (the agent command center), matching
+// Go's /agents routing in tui/state.go:1076. The previous "agent" spelling was a
+// Go-only legacy frame with no upstream counterpart (D-1, closed here).
 var rustSlashCommandOrder = []string{
 	"model",
 	"presets",
@@ -379,7 +376,7 @@ var rustSlashCommandOrder = []string{
 	"plan",
 	"voice",
 	"goal",
-	"agent",
+	"agents",
 	"side",
 	"btw",
 	"copy",
@@ -452,7 +449,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"compact":               "summarize conversation to prevent hitting the context limit",
 	"plan":                  "switch to Plan mode",
 	"goal":                  "set or view the goal for a long-running task",
-	"agent":                 "switch the active agent thread",
+	"agents":                "open the agent command center",
 	"side":                  "start a side conversation in an ephemeral fork",
 	"btw":                   "start a side conversation in an ephemeral fork",
 	"copy":                  "copy the last response or part of it",

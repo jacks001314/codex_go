@@ -39,7 +39,7 @@ func TestPendingThreadApprovalsRowsMatchRustShape(t *testing.T) {
 		"  ! Approval needed in Robie [explorer]",
 		"  ! Approval needed in Inspector",
 		"    ...",
-		"    /agent to switch threads",
+		"    /subagents to switch threads",
 	} {
 		if !bottomPaneContainsRow(rows, want) {
 			t.Fatalf("rows missing %q:\n%s", want, rendered)
@@ -69,7 +69,7 @@ func TestPendingThreadApprovalsWrapAndApprovalCompatibility(t *testing.T) {
 		"  ! Approval",
 		"    needed in",
 		"    thread-2",
-		"    /agent to switch threads",
+		"    /subagents to switch threads",
 	} {
 		if !bottomPaneContainsRow(rows, want) {
 			t.Fatalf("wrapped rows missing %q:\n%s", want, rendered)

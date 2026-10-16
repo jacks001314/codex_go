@@ -72,7 +72,7 @@ func (p *PendingThreadApprovals) Rows(width int) []string {
 	if len(p.threads) > 3 {
 		rows = append(rows, "    ...")
 	}
-	rows = append(rows, "    /agent to switch threads")
+	rows = append(rows, "    /subagents to switch threads")
 	return rows
 }
 

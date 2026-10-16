@@ -274,6 +274,9 @@ func TestParseCommand(t *testing.T) {
 		{input: "/plan investigate", command: CommandPlan, args: "investigate", ok: true},
 		{input: "/btw quick question", command: CommandSide, args: "quick question", ok: true},
 		{input: "/subagents", command: CommandAgent, ok: true},
+		// D-1: "/agent" stays a Go compatibility alias for the picker; upstream
+		// only knows "subagents" (slash_command.rs:82-83).
+		{input: "/agent", command: CommandAgent, ok: true},
 		{input: "/agents", command: CommandAgents, ok: true},
 		{input: "/multi-agents", command: CommandUnknown, ok: true},
 		{input: "/ide", command: CommandIde, ok: true},
@@ -333,6 +336,8 @@ func TestSlashCommandFrameDescriptionsMatchRust(t *testing.T) {
 		"app":         "continue this session in Codex Desktop",
 		"import":      "import setup, this project, and recent chats from Claude Code",
 		"rollout":     "print the rollout file path",
+		// D-1: the Agents slot (slash_command.rs:144), added with the frame rename.
+		"agents": "open the agent command center",
 	}
 	for name, description := range want {
 		frame, ok := frames[name]
