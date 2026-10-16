@@ -6,8 +6,8 @@ pr	sha	subject	lane_face	files	note
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
 54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	
 54388	f847a4bd3c	Add quick dial presets for terminal title and status line layouts (#54388)	TUI	4	
-54381	111362a6a0	Add a keyboard shortcut menu for presets (#54381)	TUI	36	TR-1/TR-3 implementable: shortcut_hud - distinct from the existing FooterModeShortcutOverlay (shortcut_overlay.rs); name the Go file shortcut_hud.go
-54380	dcd9e95459	Add `/presets` for reusable prompts and slash commands (#54380)	TUI	30	TR-1/TR-3 implementable: quick dials; the presets slot is already reserved in tui/bottom_pane/slash_commands.go:351-356 and must leave rustSlashCommandsWithoutFrame when it lands
+54381	111362a6a0	Add a keyboard shortcut menu for presets (#54381)	TUI	36	chain step 3 - must follow #54380 (shortcut HUD reads quick dials); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
+54380	dcd9e95459	Add `/presets` for reusable prompts and slash commands (#54380)	TUI	30	chain step 2 - must follow #52273 (17 shared Rust files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54363	3df96b085c	Filter uninspectable network roots from implicit MXC read grants (#54363)	other:mxc-sandbox	5	
 54346	0003732489	Add scoped executor credential auth for remote exec-server (#54346)	exec	3	
@@ -25,12 +25,12 @@ pr	sha	subject	lane_face	files	note
 54099	1ffa95ee8a	Wait for readiness in the SIGTERM cancellation test (#54099)	exec	1	
 54098	0c5720ea0f	Keep environment tools stable across readiness changes (#54098)	A-core	15	
 54094	12fd621f62	Preserve specific MCP failure codes in metrics and spans (#54094)	B-mcp/sandbox	9	
-54081	01ff831ce9	Centralize vertical navigation in TUI list views (#54081)	TUI	7	
+54081	01ff831ce9	Centralize vertical navigation in TUI list views (#54081)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 54070	ae11049397	Expose gateway authentication as a reusable OAuth session API (#54070)	other:login	9	
 54059	b7ba02f880	Support store-owned preparation when resuming threads (#54059)	A-core	11	
 54058	9e7b2a577f	Forward turn metadata to image generation and edit requests (#54058)	A-core	6	
 54057	1f7fe9b0af	Distinguish unsupported evidence in Decisions comparison metrics (#54057)	guardian	5	
-54050	9671d20fc8	Scope TUI skill refreshes and workspace commands to explicit directories (#	TUI	9	
+54050	9671d20fc8	Scope TUI skill refreshes and workspace commands to explicit directories (#	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 54048	534c70863c	Defer folder trust checks until starting a task from agents overview (#5404	TUI	6	
 54033	c0cfbfbb98	Extend memory extension resource retention to 14 days (#54033)	other:memories	3	TR-2 implementable: memories/extensions.go:11 retention 7 -> 14 with the fixture dates shifted 7 days like the upstream test
 54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	
@@ -43,7 +43,7 @@ pr	sha	subject	lane_face	files	note
 53963	0d58012ec2	Test memory extraction budgets with excluded items and ciphertext (#53963)	other:memories	1	TR-2 implementable: strip encrypted_content in memories/pipeline.go sanitizeMemoryResponseItem (Rust memories/write/src/rollout_input.rs:327,333); dispatch together with #52742
 53940	5670b1c18e	Bound rollout input for memory extraction (#53940)	other:memories	4	
 53932	400f2356d6	Preserve conversation history when compaction fails (#53932)	A-core	2	
-53908	95273b84fb	Keep the agent dashboard browsable during task removal (#53908)	TUI	6	
+53908	95273b84fb	Keep the agent dashboard browsable during task removal (#53908)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53879	7eed30ad1b	Preserve running turn recovery across thread settings updates (#53879)	A-core	7	
 53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	
 53859	c22a06c180	Record bucketed terminal sizes in TUI telemetry (#53859)	TUI	16	
@@ -53,7 +53,7 @@ pr	sha	subject	lane_face	files	note
 53816	c3733756a9	Reject Guardian review threads during interactive CLI resume (#53816)	TUI	3	
 53811	eb1d7065f8	Support daemon installation from Windows WinGet packages (#53811)	other:app-server-daemon	3	
 53805	ca2b076fff	Add safe diagnostics to workspace routing configuration errors (#53805)	pin-protocol	3	
-53804	923f276f57	Keep the Agent command center visible during archive and delete (#53804)	TUI	7	
+53804	923f276f57	Keep the Agent command center visible during archive and delete (#53804)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53800	9e03960cf8	Wire background compaction into the turn lifecycle (#53800)	A-core	11	
 53797	2b2d792305	Refresh Guardian reviews when review context changes (#53797)	guardian	2	
 53795	8af93416dd	Use the bundled model catalog in the MCP startup invalidation test (#53795)	A-core	1	
@@ -77,9 +77,9 @@ pr	sha	subject	lane_face	files	note
 53701	6fbfc352ca	Enable CLI Daybreak by default and enforce background-turn eligibility (#53	TUI	6	
 53699	f6aca7dc46	Cancel Guardian V2 classifications that exceed the tool-call lag window (#5	guardian	10	
 53698	ffc1402633	Interrupt and drain canceled classifier responses before socket reuse (#536	guardian	12	
-53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	
+53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	
-53689	c03bbff483	Constrain API-key model access programs to server support (#53689)	TUI	9	
+53689	c03bbff483	Constrain API-key model access programs to server support (#53689)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	
 53672	4c1cd8bbcc	Keep discovered Apps tools available during startup recovery (#53672)	B-mcp/sandbox	7	
 53670	816fa702ec	Account for token usage from incomplete responses (#53670)	A-core	12	
@@ -96,12 +96,12 @@ pr	sha	subject	lane_face	files	note
 53595	669449b02c	Add async compaction feature configuration (#53595)	config	7	
 53556	f82e365922	Deduplicate TUI modifier handling and terminal color caching (#53556)	TUI	3	
 53506	12cca49c81	Reject duplicate Host headers in the network proxy (#53506)	other:network-proxy	2	
-53496	92caad7828	Preserve pending Effects toggles across save refreshes (#53496)	TUI	9	
-53453	0c329ad2c9	Prefer the Windows clipboard and bound copy attempts on WSL (#53453)	TUI	4	
+53496	92caad7828	Preserve pending Effects toggles across save refreshes (#53496)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+53453	0c329ad2c9	Prefer the Windows clipboard and bound copy attempts on WSL (#53453)	TUI	4	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53444	c308e127e0	Suppress repeated turn diffs in `codex exec` human output (#53444)	exec	5	
 53438	7c1b64c5df	Stop identifying Apple Terminal from `TERM_SESSION_ID` (#53438)	other:terminal-detection	2	
-53436	6f47fcb0be	Route TUI request replies to their originating connection and thread (#5343	TUI	19	
-53429	b3c3bad976	Apply configuration toggles live and improve settings navigation (#53429)	TUI	39	
+53436	6f47fcb0be	Route TUI request replies to their originating connection and thread (#5343	TUI	19	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+53429	b3c3bad976	Apply configuration toggles live and improve settings navigation (#53429)	TUI	39	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53426	f605162354	Preserve Windows runtime registration failure diagnostics (#53426)	other:windows-sandbox-service	3	
 53419	bf4ca52b61	Restore saved thread permissions during configuration loading (#53419)	A-core	10	
 53412	16845bb8e8	Isolate arg0 helper directories by operating system (#53412)	config	3	
@@ -111,32 +111,32 @@ pr	sha	subject	lane_face	files	note
 53369	6c372fbef4	Allow turns when the agent message board is unavailable (#53369)	A-core	2	
 53358	ddb33e34b2	Remove selected protocol, apply-patch, MCP, and TUI tests (#53358)	pin-protocol	6	
 53331	7e9c061ceb	Finish remote exec cleanup when output streams remain open (#53331)	A-core	3	
-53224	a9b0815167	Support Windows clipboard text paste shortcuts in the TUI (#53224)	TUI	18	
-53201	9f3d25588b	Keep agents navigation available after a thread is archived (#53201)	TUI	5	
-53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	TR-1/TR-3 implementable: daemon menu restart action over the existing appserverdaemon backend; verifyManagedDaemon has 0 Go hits
+53224	a9b0815167	Support Windows clipboard text paste shortcuts in the TUI (#53224)	TUI	18	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+53201	9f3d25588b	Keep agents navigation available after a thread is archived (#53201)	TUI	5	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	chain step 6 - after #52990 (10 shared files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 53156	72f999edc7	Simplify the custom terminal drawing API (#53156)	TUI	1	
 53155	95db2cd5d5	Keep remote app-server events deliverable during shutdown (#53155)	pin-protocol	2	
-53153	8553558345	Show subagent navigation shortcuts in TUI help (#53153)	TUI	14	
-53152	41fd60f561	Allow selecting and copying TUI turn tips (#53152)	TUI	6	
+53153	8553558345	Show subagent navigation shortcuts in TUI help (#53153)	TUI	14	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+53152	41fd60f561	Allow selecting and copying TUI turn tips (#53152)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53150	7c9bfb910e	Restore thread-owned permissions on cold resume (#53150)	A-core	8	
-53148	97c1f62898	Fix startup draft recovery for pending Vim Replace keys (#53148)	TUI	6	
+53148	97c1f62898	Fix startup draft recovery for pending Vim Replace keys (#53148)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53109	a07c8ebd57	Handle broken pipes gracefully in plugin list output (#53109)	docs/cli	3	
 53049	8c0f701167	Add connection-bound reply handles for app-server requests (#53049)	pin-protocol	6	
-52990	cc7ba33601	Add a searchable `/config` preferences panel to the TUI (#52990)	TUI	95	TR-1/TR-3 implementable: a new config_panel subsystem (95 files incl. 15 goldens) plus config_panel/activation_key_guard; #53753 extends it afterwards
-52968	34f33e4ada	Keep startup modals protected when terminal input draining times out (#5296	TUI	6	
-52967	7a8a9456e9	Reuse and prewarm the WSL clipboard text reader (#52967)	TUI	6	
-52964	ecebd679c3	Defer owned transcript redraws during raw paste bursts (#52964)	TUI	4	
-52959	47bcb3a3f9	Reduce stack usage in async TUI tests (#52959)	TUI	7	
+52990	cc7ba33601	Add a searchable `/config` preferences panel to the TUI (#52990)	TUI	95	chain step 5 - the config_panel hub, last of the five; upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
+52968	34f33e4ada	Keep startup modals protected when terminal input draining times out (#5296	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+52967	7a8a9456e9	Reuse and prewarm the WSL clipboard text reader (#52967)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+52964	ecebd679c3	Defer owned transcript redraws during raw paste bursts (#52964)	TUI	4	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+52959	47bcb3a3f9	Reduce stack usage in async TUI tests (#52959)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52952	b871a1b9f6	Verify reset notification during code-mode host recovery (#52952)	A-core	1	
-52946	1badea29ab	Keep agent command center rows stable across progress updates (#52946)	TUI	5	
+52946	1badea29ab	Keep agent command center rows stable across progress updates (#52946)	TUI	5	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52937	6c0c6759d0	Retain client-marked tool outputs across compaction (#52937)	A-core	12	
 52825	806d9732c9	Report exec runtime resets before accepting further requests (#52825)	other:code-mode-host	4	
-52778	c3d3b142d1	Make pinned transcript prompts clickable (#52778)	TUI	4	
+52778	c3d3b142d1	Make pinned transcript prompts clickable (#52778)	TUI	4	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52756	322bbf4d84	Classify voice session failures and record terminal outcomes (#52756)	TUI	18	
 52748	1652992148	Make code-mode `exit()` stop the entire cell (#52748)	other:code-mode-runtime	7	
 52742	5ef96ab278	Add opt-in output token replay for OpenAI requests (#52742)	A-core	119	TR-1 implementable: dead flag + missing provider double gate; Go model/responses_agent.go:1065,1594 hardcode the include list - dispatch together with #53963
 52736	e4490eff65	Allow model catalogs to override incremental tool notices (#52736)	A-core	11	
-52725	4bad6d78e9	Report terminal program status with OSC 7501 (#52725)	TUI	11	
+52725	4bad6d78e9	Report terminal program status with OSC 7501 (#52725)	TUI	11	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52724	7efd184c24	Add observers for initial exec-server connection attempts (#52724)	exec	7	
 52723	2dc0791c7d	Add opt-in gRPC over stdio for the code-mode host (#52723)	other:code-mode-host	17	
 52721	07757f448f	Explain session creation failures during server shutdown (#52721)	TUI	12	
@@ -161,7 +161,7 @@ pr	sha	subject	lane_face	files	note
 52621	47b80571f0	Add template setup for local agent message boards (#52621)	other:ext	8	
 52610	c63929af50	Align Linux sandbox names and docs with bubblewrap and seccomp (#52610)	B-mcp/sandbox	7	
 52568	36ae1561b9	Expose message board permissions and structured denials (#52568)	other:ext	14	
-52557	5fe4fc8f7c	Forward clipboard copies to the terminal in Herdr sessions (#52557)	TUI	2	blocked_precondition (lead ruling): the Herdr flag half cannot land alone - the non-SSH path would need Rust's eager forwarding (clipboard_copy.rs:234-236 .then(terminal_copy)), which changes existing tmux behaviour and needs a real terminal/tmux target to verify. A flag-only change would be a dead key. Keep blocked until a scope decision + a tmux-capable target exist.
+52557	5fe4fc8f7c	Forward clipboard copies to the terminal in Herdr sessions (#52557)	TUI	2	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52381	5b3c1522f8	Preserve per-session routing for gRPC code mode (#52381)	other:code-mode	9	
 52363	03b761dca9	Expand realtime v3 voice support (#52363)	pin-protocol	13	
 52337	b6e8a2e207	Add durable thread read state with revision-checked updates (#52337)	A-core	6	
@@ -173,24 +173,24 @@ pr	sha	subject	lane_face	files	note
 52278	2c3156adf4	Honor custom OTLP metrics exporters when analytics is disabled (#52278)	config	9	
 52277	14ff9c3a43	Preserve UTF-8 byte semantics in network domain matching (#52277)	other:network-proxy	3	
 52274	6ac8b1b50b	Add structured tracing for Guardian reviews and background scoring (#52274)	guardian	7	
-52273	a3f3b44cd8	Add configurable persistent leader shortcuts to the TUI (#52273)	TUI	42	TR-1/TR-3 implementable: tui keymap leader/chord state machine; chain head of #52273 -> #54380 -> #54381
-52270	39f4277087	Enable text selection in the fullscreen TUI footer (#52270)	TUI	25	TR-1/TR-3 implementable: rendered/footer selection routing; must precede #52990 (13 shared Rust files)
+52273	a3f3b44cd8	Add configurable persistent leader shortcuts to the TUI (#52273)	TUI	42	chain step 1 (dispatched as T8); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
+52270	39f4277087	Enable text selection in the fullscreen TUI footer (#52270)	TUI	25	chain step 4 - before #52990 (13 shared files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 52268	515c291d87	Preserve large arguments in executed tool call metadata (#52268)	A-core	10	
 52256	3b6ab3471a	Normalize formatting in docs, web assets, and sample scripts (#52256)	other:login	23	
 52245	c9e0fffbbc	Enable parallel execution for read-only tools (#52245)	other:ext	13	
 52241	845345b1dd	Preserve subagent capabilities independently of forked history (#52241)	A-core	13	
 52235	137f25f643	Recover gRPC code-mode sessions after missing-session errors (#52235)	other:code-mode	7	
 52234	54685110a7	Support request IDs in exec-server WebSocket handshakes (#52234)	pin-protocol	8	
-52228	5505a80f38	Honor API-key feature gates in TUI Daybreak selection (#52228)	TUI	10	
-52226	96d238d0b9	Include foreground activity in iTerm2 session status (#52226)	TUI	7	
+52228	5505a80f38	Honor API-key feature gates in TUI Daybreak selection (#52228)	TUI	10	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+52226	96d238d0b9	Include foreground activity in iTerm2 session status (#52226)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52225	bfe0fb9bb9	Fix config rebuild call in the Windows MXC preference test (#52225)	config	1	
 52223	d570b3632b	Enforce application network policy for daemon updates (#52223)	docs/cli	1	
 52220	89d68bc8d2	Add configurable default plugin activation policy (#52220)	other:core-plugins	49	
 52215	79773e8826	Enforce application network policy in standalone MCP commands (#52215)	docs/cli	3	
-52203	ade12342e2	Expose Codex lifecycle status in iTerm2 sessions (#52203)	TUI	11	
-52200	c079352d83	Allow plugin toggles while searching and preserve filters on refresh (#5220	TUI	12	
+52203	ade12342e2	Expose Codex lifecycle status in iTerm2 sessions (#52203)	TUI	11	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
+52200	c079352d83	Allow plugin toggles while searching and preserve filters on refresh (#5220	TUI	12	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52193	f90a578f76	Enforce managed MXC requirements on Windows (#52193)	pin-protocol	12	
-52184	5fe2152b60	Preserve side conversations across thread navigation (#52184)	TUI	8	
+52184	5fe2152b60	Preserve side conversations across thread navigation (#52184)	TUI	8	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52183	d650bd7c05	Add optional descriptions to agent message board channels (#52183)	other:ext	11	
 52176	6f6e80bcdd	Show AWS GovCloud guidance at startup and remember acknowledgment (#52176)	TUI	10	
 52164	8c818cbed4	Make environment context date and timezone configurable (#52164)	config	11	
@@ -212,7 +212,7 @@ pr	sha	subject	lane_face	files	note
 51884	ec8251c545	Add experimental prediction forks that inherit parent context (#51884)	pin-protocol	14	
 51872	f73a478c87	Keep global app-server config independent of the launch directory (#51872)	pin-protocol	9	
 51868	fbe97c7929	Record tool registration metrics for each sampling request (#51868)	A-core	5	
-51865	746103b592	Use readable plugin mentions without suppressing same-name skills (#51865)	TUI	6	
+51865	746103b592	Use readable plugin mentions without suppressing same-name skills (#51865)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 51843	cba716c0f1	Run sandbox integrity checks before commands and filesystem operations (#51	A-core	15	
 51841	b5c37c35fd	Add a macOS Seatbelt backend for sandbox integrity (#51841)	exec	3	
 51840	d9960e12bb	Add a bubblewrap backend for sandbox integrity checks (#51840)	exec	14	
