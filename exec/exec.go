@@ -371,7 +371,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ApprovalPolicy:                 approvalPolicy,
 		ExecPermissionApprovalsEnabled: features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
 		RequestPermissionsToolEnabled:  features.Enabled(cfg.FeatureSettings(), "request_permissions_tool"),
-	}, r.now())
+	}, r.now(), cfg.IncludeEnvironmentContextTime())
 	historyInputItems := resumeInputItems(resumeContext)
 	if resumeContext != nil {
 		// Rust #43795: a resumed session re-establishes the selected effort.
@@ -2162,17 +2162,23 @@ func requestCWD(req *Request) string {
 	return "."
 }
 
+// execStartupInputItems ports Rust's exec startup input items: the developer
+// permissions instructions (codex_prompts::PermissionsInstructions) followed by
+// the user environment context block. includeEnvironmentContextTime forwards the
+// include_environment_context_time switch (#52164) to the environment context
+// writer; see execEnvironmentContext.
 func execStartupInputItems(
 	req *Request,
 	permissions *config.SandboxPermissionProfileResolution,
 	promptOptions sandbox.PermissionPromptProfileOptions,
 	now time.Time,
+	includeEnvironmentContextTime bool,
 ) []any {
 	items := make([]any, 0, 2)
 	if item := developerMessageInputItem(execPermissionsInstructions(req, permissions, promptOptions)); item != nil {
 		items = append(items, item)
 	}
-	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now)); item != nil {
+	if item := model.UserMessageInputItem(execEnvironmentContext(req, permissions, now, includeEnvironmentContextTime)); item != nil {
 		items = append(items, item)
 	}
 	return items
@@ -2209,22 +2215,35 @@ func execPermissionsInstructions(
 	return sandbox.RenderPermissionInstructions(body)
 }
 
-func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time) string {
+// execEnvironmentContext renders the startup <environment_context> user block.
+// The <current_date>/<timezone> pair is gated by include_environment_context_time
+// (#52164, upstream 8c818cbed4). Rust has one environment-context constructor
+// shared by every surface, codex exec included:
+// core/src/context/world_state/environment.rs:43-75 builds it (:64-67 filters the
+// timezone) and :261-306 body() emits the flat single-environment <cwd>/<shell>
+// shape mirrored here, while core/src/session/world_state.rs:281-292 passes no
+// date when the flag is off. push_optional_element (environment.rs:357-368)
+// writes nothing for a None value, so with the flag off both elements disappear
+// entirely instead of rendering as empty elements. An unset flag is true
+// (core/src/config/mod.rs:4161).
+func execEnvironmentContext(req *Request, permissions *config.SandboxPermissionProfileResolution, now time.Time, includeEnvironmentContextTime bool) string {
 	cwd := absoluteRequestCWD(req)
 	shell := defaultEnvironmentShellName()
 	if now.IsZero() {
 		now = time.Now()
 	}
-	timezone := now.Location().String()
-	if timezone == "" {
-		timezone = time.Local.String()
-	}
 	var b strings.Builder
 	b.WriteString("<environment_context>\n")
 	fmt.Fprintf(&b, "  <cwd>%s</cwd>\n", xmlEscape(cwd))
 	fmt.Fprintf(&b, "  <shell>%s</shell>\n", xmlEscape(shell))
-	fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", xmlEscape(now.Format("2006-01-02")))
-	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", xmlEscape(timezone))
+	if includeEnvironmentContextTime {
+		timezone := now.Location().String()
+		if timezone == "" {
+			timezone = time.Local.String()
+		}
+		fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", xmlEscape(now.Format("2006-01-02")))
+		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", xmlEscape(timezone))
+	}
 	fmt.Fprintf(&b, "  <filesystem><workspace_roots><root>%s</root></workspace_roots>%s</filesystem>\n", xmlEscape(cwd), execPermissionProfileXML(permissions))
 	b.WriteString("</environment_context>")
 	return b.String()

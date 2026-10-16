@@ -1191,6 +1191,7 @@ func TestRunAddsStartupEnvironmentContextInputItems(t *testing.T) {
 		!agentRequestInputItemsContainText(agent.request, "<environment_context>") ||
 		!agentRequestInputItemsContainText(agent.request, "<cwd>"+filepath.Clean(project)+"</cwd>") ||
 		!agentRequestInputItemsContainText(agent.request, "<current_date>2026-07-09</current_date>") ||
+		!agentRequestInputItemsContainText(agent.request, "<timezone>Asia/Hong_Kong</timezone>") ||
 		!agentRequestInputItemsContainText(agent.request, `<permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile>`) {
 		t.Fatalf("startup input items = %#v", agent.request.InputItems)
 	}
@@ -7148,5 +7149,153 @@ func TestValidateExecWorktreeRequest(t *testing.T) {
 				t.Fatal("validateExecWorktreeRequest() error = nil")
 			}
 		})
+	}
+}
+
+// execEnvironmentContextSwitchClock is the fixed instant the environment
+// context switch cases render, matching TestRunAddsStartupEnvironmentContextInputItems.
+var execEnvironmentContextSwitchClock = time.Date(2026, 7, 9, 10, 0, 0, 0, time.FixedZone("Asia/Hong_Kong", 8*60*60))
+
+// execStartupEnvironmentContextText runs the real exec runner once against a
+// codex home whose config.toml carries include_environment_context_time (an
+// empty value leaves the key absent, i.e. the unset default) and returns the
+// rendered <environment_context> user block. The caller fixes cwd so two runs
+// are comparable byte for byte.
+func execStartupEnvironmentContextText(t *testing.T, cwd string, includeTime string) string {
+	t.Helper()
+	home := t.TempDir()
+	if includeTime != "" {
+		body := "include_environment_context_time = " + includeTime + "\n"
+		if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+			t.Fatalf("WriteFile config.toml: %v", err)
+		}
+	}
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	agent := &recordingAgent{message: "done"}
+	runner := NewRunner(home)
+	runner.Agent = agent
+	runner.Now = func() time.Time { return execEnvironmentContextSwitchClock }
+	var stdout, stderr bytes.Buffer
+	if _, err := runner.Run(Request{
+		Exec: cli.ExecOptions{
+			Prompt: "hello",
+			Shared: cli.SharedOptions{
+				CWD:                                  cwd,
+				DangerouslyBypassApprovalsAndSandbox: true,
+			},
+			Ephemeral: true,
+		},
+	}, strings.NewReader(""), &stdout, &stderr); err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	text := environmentContextTextFromAgentRequest(agent.request)
+	if text == "" {
+		t.Fatalf("no <environment_context> input item in %#v", agent.request.InputItems)
+	}
+	return text
+}
+
+// environmentContextTextFromAgentRequest returns the startup environment
+// context block from the model request, verbatim.
+func environmentContextTextFromAgentRequest(request *model.AgentRequest) string {
+	if request == nil {
+		return ""
+	}
+	for _, raw := range request.InputItems {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := item["content"].([]map[string]any)
+		if !ok {
+			continue
+		}
+		for i := range content {
+			text := fmt.Sprint(content[i]["text"])
+			if strings.HasPrefix(text, "<environment_context>") {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+// withoutEnvironmentDateAndTimezoneLines drops the two gated lines so the
+// remaining template can be compared byte for byte.
+func withoutEnvironmentDateAndTimezoneLines(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.Contains(line, "<current_date>") || strings.Contains(line, "<timezone>") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// TestExecEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust covers
+// #52164 on the exec face. exec/exec.go is the second production writer of the
+// environment context, and Rust gates the date and timezone on the same switch
+// for every surface: the date arrives as None (core/src/session/world_state.rs:281)
+// and the timezone is filtered out (core/src/context/world_state/environment.rs:67)
+// when include_environment_context_time is off, and push_optional_element then
+// writes nothing at all. Three arms: enabled, disabled, and unset (default true).
+func TestExecEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	enabled := execStartupEnvironmentContextText(t, cwd, "true")
+	disabled := execStartupEnvironmentContextText(t, cwd, "false")
+	unset := execStartupEnvironmentContextText(t, cwd, "")
+
+	// Flag on: both gated elements render with the fixed clock.
+	if !strings.Contains(enabled, "<current_date>2026-07-09</current_date>") {
+		t.Fatalf("enabled environment context = %q, want the fixed current_date", enabled)
+	}
+	if !strings.Contains(enabled, "<timezone>Asia/Hong_Kong</timezone>") {
+		t.Fatalf("enabled environment context = %q, want the fixed timezone", enabled)
+	}
+
+	// Flag off: both elements vanish instead of rendering empty, and nothing
+	// else in the template moves.
+	if strings.Contains(disabled, "<current_date>") || strings.Contains(disabled, "<timezone>") {
+		t.Fatalf("disabled environment context = %q, want no <current_date>/<timezone>", disabled)
+	}
+	if want := withoutEnvironmentDateAndTimezoneLines(enabled); disabled != want {
+		t.Fatalf("disabled environment context =\n%q\nwant the enabled template minus the two gated lines =\n%q", disabled, want)
+	}
+	for _, want := range []string{
+		"<cwd>" + filepath.Clean(cwd) + "</cwd>",
+		"<shell>" + defaultEnvironmentShellName() + "</shell>",
+		"<filesystem><workspace_roots><root>" + filepath.Clean(cwd) + "</root></workspace_roots>",
+		"</environment_context>",
+	} {
+		if !strings.Contains(disabled, want) {
+			t.Fatalf("disabled environment context = %q, want it to keep %q", disabled, want)
+		}
+	}
+
+	// Unset defaults to true (core/src/config/mod.rs:4161).
+	if unset != enabled {
+		t.Fatalf("unset include_environment_context_time =\n%q\nwant the enabled rendering =\n%q", unset, enabled)
+	}
+}
+
+// TestExecEnvironmentContextDefaultTemplateUnchangedLikeRust pins the default
+// rendering byte for byte so the gate cannot silently reshape anything else.
+func TestExecEnvironmentContextDefaultTemplateUnchangedLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	got := execStartupEnvironmentContextText(t, cwd, "")
+	clean := filepath.Clean(cwd)
+	want := "<environment_context>\n" +
+		"  <cwd>" + clean + "</cwd>\n" +
+		"  <shell>" + defaultEnvironmentShellName() + "</shell>\n" +
+		"  <current_date>2026-07-09</current_date>\n" +
+		"  <timezone>Asia/Hong_Kong</timezone>\n" +
+		"  <filesystem><workspace_roots><root>" + clean + "</root></workspace_roots><permission_profile type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n" +
+		"</environment_context>"
+	if got != want {
+		t.Fatalf("default environment context =\n%q\nwant\n%q", got, want)
 	}
 }

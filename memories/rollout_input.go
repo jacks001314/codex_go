@@ -69,7 +69,9 @@ type rolloutInputRow struct {
 // with provenance tiers and a token budget, selecting newest rows first in each
 // tier but emitting them in source order.
 func SerializeTieredRolloutForMemory(path string, tokenLimit int) (string, error) {
-	lines, _, err := rollout.Load(path)
+	// Rust #53940: extraction reads the newest evidence inside the byte budget
+	// (rollout_input.rs:35-87) instead of loading the whole rollout.
+	lines, err := readRecentRolloutItems(path)
 	if err != nil {
 		return "", err
 	}

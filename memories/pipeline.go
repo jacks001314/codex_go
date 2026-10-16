@@ -13,7 +13,6 @@ import (
 
 	"codex_go/config"
 	"codex_go/model"
-	"codex_go/rollout"
 	"codex_go/safety"
 	"codex_go/state"
 	"codex_go/utils"
@@ -548,7 +547,9 @@ func DecodeStageOneOutputForVersion(value string, version config.MemoryVersion) 
 }
 
 func SerializeFilteredRolloutForMemory(path string) (string, error) {
-	lines, _, err := rollout.Load(path)
+	// Rust #53940: extraction reads the newest evidence inside the byte budget
+	// (rollout_input.rs:35-87) instead of loading the whole rollout.
+	lines, err := readRecentRolloutItems(path)
 	if err != nil {
 		return "", err
 	}
