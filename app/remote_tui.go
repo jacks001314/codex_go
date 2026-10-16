@@ -1667,7 +1667,9 @@ func remoteTUIResumeResponseFromThread(thread *appserver.Thread) codextea.Sessio
 }
 
 // remoteTUIThreadInProgressTurnStartedAtMS returns the wall clock (Unix
-// milliseconds) at which the thread's in-progress turn started. Rust #54047
+// milliseconds) at which the thread's in-progress turn started. The turn snapshot
+// carries that start in Unix seconds, so this converts exactly once: input
+// seconds, output milliseconds. Rust #54047
 // seeds the replay timer from that timestamp
 // (tui/src/chatwidget/replay.rs:146-149 -> ChatWidget::on_replayed_task_started),
 // so a resumed thread shows the time its in-progress turn has already spent
@@ -1685,8 +1687,13 @@ func remoteTUIThreadInProgressTurnStartedAtMS(thread *appserver.Thread) *int64 {
 		if turn.Status != appserver.TurnStatusInProgress || turn.StartedAt == nil {
 			continue
 		}
-		startedAt := *turn.StartedAt
-		found = &startedAt
+		// Input is Unix seconds (appserver/runtime_router.go:13660,
+		// appserver/protocol.go:863); the response field and tui/tea's consumer are Unix
+		// milliseconds (tui/tea/model.go:200-203, :4644). Rust never converts - it keeps
+		// seconds and only formats elapsed time (chatwidget/turn_runtime.rs:119-126,
+		// chatwidget/protocol.rs:105-109) - so the bridge does: input seconds, output ms.
+		startedAtMS := *turn.StartedAt * int64(time.Second/time.Millisecond)
+		found = &startedAtMS
 	}
 	return found
 }
@@ -4113,8 +4120,15 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 		// carries the timestamp.
 		replayedEvent := protocol.TurnStartedWithID(payload.Turn.ID)
 		if payload.Turn.StartedAt != nil {
-			startedAt := *payload.Turn.StartedAt
-			replayedEvent.StartedAtMS = &startedAt
+			// The notification's Turn.StartedAt is Unix *seconds* (appserver.Turn.StartedAt,
+			// filled from time.UnixMilli(...).Unix() in appserver/runtime_router.go:13660 and
+			// serialised as appserver/protocol.go:863), while protocol.ThreadEvent.StartedAtMS is
+			// Unix *milliseconds* (protocol/exec_events.go:24-27) and tui/tea consumes it with
+			// time.UnixMilli (tui/tea/model.go:4644). Rust keeps seconds on the wire and only
+			// derives elapsed time (chatwidget/turn_runtime.rs:119-126,
+			// chatwidget/protocol.rs:105-109), so the bridge converts here.
+			startedAtMS := *payload.Turn.StartedAt * int64(time.Second/time.Millisecond)
+			replayedEvent.StartedAtMS = &startedAtMS
 		}
 		if !c.notificationThreadIsActive(payload.ThreadID) {
 			c.send(codextea.ThreadScopedEventMsg{ThreadID: payload.ThreadID, Event: replayedEvent})
