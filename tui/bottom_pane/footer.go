@@ -236,6 +236,15 @@ func FooterShortcutOverlayLines(props FooterProps) []string {
 		props.KeyHints.ReasoningDown + " reasoning down",
 		props.KeyHints.ReasoningUp + " reasoning up",
 	}
+	// Rust #53153 (bottom_pane/shortcut_overlay.rs:80-88) adds the
+	// "Subagents (empty prompt)" row to the shortcut overlay's Session group,
+	// keyed by previous_agent_shortcut()/next_agent_shortcut() - the fixed
+	// alt(Left)/alt(Right) bindings. Go's overlay is a flat list, so the row
+	// keeps Rust's action text and composes the key from the same alt modifier
+	// label and the arrow glyphs key_hint's display_label renders.
+	agentNavigationKeys := tui.ModifierLabelPrefix(tui.AltKeyLabel()) + "\u2190 / " +
+		tui.ModifierLabelPrefix(tui.AltKeyLabel()) + "\u2192"
+	lines = append(lines, agentNavigationKeys+" Subagents (empty prompt)")
 	if props.CollaborationModesEnabled {
 		lines = append(lines, tui.ModifierLabelPrefix(tui.ShiftKeyLabel())+"tab to change mode")
 	}

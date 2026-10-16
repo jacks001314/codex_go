@@ -2,7 +2,7 @@ pr	sha	subject	lane_face	files	note
 54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	TR-5 blocked_precondition on #54309: __CODEX_SHELL_SNAPSHOT_CONFIGURED_/supportsCredentialSnapshot/restoreFallback/credential_snapshot = 0 hits.
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
 54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	
-54388	f847a4bd3c	Add quick dial presets for terminal title and status line layouts (#54388)	TUI	4	
+54388	f847a4bd3c	Add quick dial presets for terminal title and status line layouts (#54388)	TUI	4	| TR-9 @7786dc34: sha10 f847a4bd3c, judged implementable (R2). quick_dials / QuickDials / terminalTitlePreset / statusLinePreset are all 0 hits, hence same family as #54379 and the blocked #54380 chain.
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54363	3df96b085c	Filter uninspectable network roots from implicit MXC read grants (#54363)	other:mxc-sandbox	5	
 54315	86ee40c380	Keep TUI Markdown colors readable against their backgrounds (#54315)	TUI	20	
@@ -29,8 +29,6 @@ pr	sha	subject	lane_face	files	note
 54033	c0cfbfbb98	Extend memory extension resource retention to 14 days (#54033)	other:memories	3	TR-2 implementable: memories/extensions.go:11 retention 7 -> 14 with the fixture dates shifted 7 days like the upstream test
 54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	
 54027	81aee8c86b	Preserve Windows startup variables and MXC child environment defaults (#540	other:mxc-sandbox	6	
-54008	76ed3b484d	Fix session lookup and resume after rollout compression (#54008)	pin-protocol	3	| LEAD RECON 2026-10-17: half of this looks already landed in Go - rollout/line_reader.go:17-18 explicitly mirrors Rust's open_rollout_line_reader retry budget and :87 retries a not-found resolution during a representation transition (test: TestOpenRolloutLineReaderRetriesRepresentationTransitionLikeRust, rollout/line_reader_test.go:83), and the resume/read paths probe with rollout.ExistingRolloutPath BEFORE opening a reader (appserver/router.go:601, :623, :642, :767 and appserver/feedback.go:266 - the comments name the same retry budget). The second half - tui lookup_latest_session_target_with_app_server accepting a compressed .jsonl.zst alternative - has no symbol-level counterpart I could find (no latestSessionTarget/sessionTargetFrom* in tui/*.go). Do not treat this row as a plain gap: get the symbol-level verdict first. Dispatched to the triage lane (TR-8). | TR-8 VERDICT 2026-10-17 (landed-gap, confirmed): the retry half and the probe half are landed (rollout/line_reader.go:20-23 + :89-108 with max-not-found-retries 3, and appserver/router.go:602/624/643/768 + feedback.go:268 all probe with rollout.ExistingRolloutPath). The REAL gap is one line: appserver/router.go:1845 does a bare os.Stat(trimmed) when resuming through params.Path, so a rollout whose only remaining representation is .jsonl.zst fails there. The Go equivalent of the tui half already exists under another name (tui/session_source.go:249-250 uses ExistingRolloutPath). Minimal fix: resolve through ExistingRolloutPath first, keep the is-a-directory branch, pass the resolved path down. No existing test covers it because every resume-by-Path fixture writes a plain .jsonl.
-53997	c6327eba6a	Filter rollout filenames before checking compressed siblings (#53997)	other:rollout	3	
 53990	0b73618146	Keep host MCP and plugin configuration local with remote environments (#539	A-core	9	
 53987	835cd7552d	Skip service backoff for stale Guardian authorization retries (#53987)	guardian	2	
 53963	0d58012ec2	Test memory extraction budgets with excluded items and ciphertext (#53963)	other:memories	1	TR-2 implementable: strip encrypted_content in memories/pipeline.go sanitizeMemoryResponseItem (Rust memories/write/src/rollout_input.rs:327,333); dispatch together with #52742
@@ -44,7 +42,6 @@ pr	sha	subject	lane_face	files	note
 53845	2f05c0a71f	Fix daemon updater socket binding and bootstrap readiness on Unix (#53845)	other:app-server-transport	6	
 53827	0960e379a5	Prune unused app-server daemon releases safely (#53827)	other:app-server-daemon	11	
 53816	c3733756a9	Reject Guardian review threads during interactive CLI resume (#53816)	TUI	3	
-53811	eb1d7065f8	Support daemon installation from Windows WinGet packages (#53811)	other:app-server-daemon	3	
 53805	ca2b076fff	Add safe diagnostics to workspace routing configuration errors (#53805)	pin-protocol	3	
 53804	923f276f57	Keep the Agent command center visible during archive and delete (#53804)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53800	9e03960cf8	Wire background compaction into the turn lifecycle (#53800)	A-core	11	TR-5 blocked_precondition on #53620 -> #53614 -> #53606: background compaction is not wired into the turn lifecycle in Go.
@@ -101,7 +98,6 @@ pr	sha	subject	lane_face	files	note
 53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	chain step 6 - after #52990 (10 shared files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 53156	72f999edc7	Simplify the custom terminal drawing API (#53156)	TUI	1	
 53155	95db2cd5d5	Keep remote app-server events deliverable during shutdown (#53155)	pin-protocol	2	
-53153	8553558345	Show subagent navigation shortcuts in TUI help (#53153)	TUI	14	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53152	41fd60f561	Allow selecting and copying TUI turn tips (#53152)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53150	7c9bfb910e	Restore thread-owned permissions on cold resume (#53150)	A-core	8	
 53148	97c1f62898	Fix startup draft recovery for pending Vim Replace keys (#53148)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
@@ -121,7 +117,7 @@ pr	sha	subject	lane_face	files	note
 52723	2dc0791c7d	Add opt-in gRPC over stdio for the code-mode host (#52723)	other:code-mode-host	17	
 52721	07757f448f	Explain session creation failures during server shutdown (#52721)	TUI	12	
 52707	4aa94dce27	Migrate the Windows MXC sandbox to split MXC crates (#52707)	other:mxc-sandbox	11	
-52702	4bc83aa5f7	Retry bootstrap GETs through the system proxy after request failures (#5270	other:backend-client	2	
+52702	4bc83aa5f7	Retry bootstrap GETs through the system proxy after request failures (#5270	other:backend-client	2	| TR-9 @7786dc34: anchor upgraded weak->strong, judged implementable (R2). Carrier config/cloud_config_storage.go:109-131; the gap is :206-218 cloudConfigRetryableTransportError, which only has the net.Error and DeadlineExceeded arms and lacks Rust's new is_request() arm. Before dispatch run the RC-52702-A probe: does the Go net.Error arm already cover 'connected, then closed before response headers'? If it does, reclassify as already_landed.
 52696	2f761ae821	Fix marketplace path matching for Windows junctions (#52696)	other:core-plugins	4	
 52686	45311351c2	Add opt-in retention for turn tool outputs (#52686)	pin-protocol	12	
 52685	c261727370	Preserve code mode cancellation during output serialization (#52685)	other:code-mode-runtime	5	

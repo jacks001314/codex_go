@@ -1841,18 +1841,24 @@ func (r *Router) readThreadRecordFromRolloutPath(path string, includeArchived bo
 	if trimmed == "" {
 		return nil, fmt.Errorf("%w: rollout path is required", ErrInvalidRequest)
 	}
-	info, err := os.Stat(trimmed)
-	if err != nil {
-		return nil, err
+	// Rust resolves the requested path to whichever representation currently exists
+	// (`thread-store/src/local/read_thread.rs::resolve_requested_rollout_path`, #54008),
+	// so the logical `.jsonl` path a client obtained from thread/list keeps working
+	// after startup compression replaced the file with its `.zst` sibling.
+	resolved, ok := rollout.ExistingRolloutPath(trimmed)
+	if !ok {
+		// Rust inspects the requested metadata before resolving, so a directory keeps
+		// reporting the directory error instead of a resolution miss.
+		if info, statErr := os.Stat(trimmed); statErr == nil && info.IsDir() {
+			return nil, fmt.Errorf("%w: path is a directory: %s", ErrInvalidRequest, trimmed)
+		}
+		return nil, fmt.Errorf("%w: failed to resolve rollout path `%s`: file does not exist", ErrInvalidRequest, trimmed)
 	}
-	if info.IsDir() {
-		return nil, fmt.Errorf("%w: path is a directory: %s", ErrInvalidRequest, trimmed)
-	}
-	archived := rolloutPathArchived(trimmed)
+	archived := rolloutPathArchived(resolved)
 	if archived && !includeArchived {
 		return nil, fmt.Errorf("%w: %s", session.ErrThreadArchived, trimmed)
 	}
-	record, err := rollout.RecordFromPathResolved(codexHomeFromSessionStore(r.store), trimmed, archived)
+	record, err := rollout.RecordFromPathResolved(codexHomeFromSessionStore(r.store), resolved, archived)
 	if err != nil {
 		return nil, err
 	}
