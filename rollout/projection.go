@@ -40,14 +40,25 @@ func ReadProjectionSteps(path string, startOffset uint64, expectedOrdinal uint64
 // decoded. A validation failure has the same deferred semantics as an unknown
 // rollout record.
 func ReadProjectionStepsValidated(path string, startOffset uint64, expectedOrdinal uint64, validate func(*Line) error) ([]ProjectionStep, uint64, error) {
-	data, _, err := readProjectionSuffix(path, startOffset)
+	return ReadProjectionStepsCancellable(path, startOffset, expectedOrdinal, validate, nil)
+}
+
+// ReadProjectionStepsCancellable mirrors Rust #53947: the caller's cancellation
+// predicate is threaded through the rollout read the same way
+// `open_rollout_seekable_reader(path, is_cancelled)` and
+// `read_projection_steps_sync(..., || stop.is_closed())` do. It is consulted
+// before the file is opened, during decompression and the bounded read, and
+// between history records, and it reports `ErrRolloutReadCancelled` instead of
+// a short or empty result.
+func ReadProjectionStepsCancellable(path string, startOffset uint64, expectedOrdinal uint64, validate func(*Line) error, isCancelled func() bool) ([]ProjectionStep, uint64, error) {
+	data, _, err := readProjectionSuffix(path, startOffset, isCancelled)
 	if err != nil {
 		return nil, startOffset, err
 	}
-	return readProjectionStepsData(data, startOffset, expectedOrdinal, validate)
+	return readProjectionStepsData(data, startOffset, expectedOrdinal, validate, isCancelled)
 }
 
-func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal uint64, validate func(*Line) error) ([]ProjectionStep, uint64, error) {
+func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal uint64, validate func(*Line) error, isCancelled func() bool) ([]ProjectionStep, uint64, error) {
 	completeByteCount := bytes.LastIndexByte(data, '\n') + 1
 	if completeByteCount == 0 {
 		return nil, startOffset, nil
@@ -58,6 +69,11 @@ func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal ui
 	nextOffset := startOffset
 	lineStart := startOffset
 	for _, physicalLine := range bytes.SplitAfter(data[:completeByteCount], []byte{'\n'}) {
+		// Rust #53947 checks cancellation between history records, so a cancelled
+		// caller stops projecting instead of scanning the rest of the rollout.
+		if err := checkRolloutReadCancelled(isCancelled); err != nil {
+			return nil, startOffset, err
+		}
 		if len(physicalLine) == 0 {
 			continue
 		}
@@ -139,7 +155,12 @@ func readProjectionStepsData(data []byte, startOffset uint64, expectedOrdinal ui
 	return steps, nextOffset, nil
 }
 
-func readProjectionSuffix(path string, startOffset uint64) ([]byte, uint64, error) {
+func readProjectionSuffix(path string, startOffset uint64, isCancelled func() bool) ([]byte, uint64, error) {
+	// Rust #53947 checks the predicate before opening the rollout, so a
+	// cancelled caller cannot fall through to `os.ErrNotExist` or an empty read.
+	if err := checkRolloutReadCancelled(isCancelled); err != nil {
+		return nil, startOffset, err
+	}
 	existing, found := ExistingRolloutPath(path)
 	if !found {
 		if startOffset == 0 {
@@ -152,12 +173,15 @@ func readProjectionSuffix(path string, startOffset uint64) ([]byte, uint64, erro
 		return nil, startOffset, err
 	}
 	defer file.Close()
+	// Both the compressed input and the decoded output are cancellable, like
+	// Rust's `CancellableReader` around the decoder and the temp file.
+	reader := &cancellableRolloutReader{inner: file, isCancelled: isCancelled}
 	if strings.HasSuffix(strings.ToLower(existing), ".zst") {
-		decoder, decodeErr := zstd.NewReader(file)
+		decoder, decodeErr := zstd.NewReader(reader)
 		if decodeErr != nil {
 			return nil, startOffset, decodeErr
 		}
-		decompressed, readErr := io.ReadAll(decoder)
+		decompressed, readErr := io.ReadAll(&cancellableRolloutReader{inner: decoder, isCancelled: isCancelled})
 		decoder.Close()
 		if readErr != nil {
 			return nil, startOffset, readErr
@@ -179,7 +203,7 @@ func readProjectionSuffix(path string, startOffset uint64) ([]byte, uint64, erro
 	if _, err := file.Seek(int64(startOffset), io.SeekStart); err != nil {
 		return nil, startOffset, err
 	}
-	data, err := io.ReadAll(io.LimitReader(file, int64(fileEnd-startOffset)))
+	data, err := io.ReadAll(io.LimitReader(reader, int64(fileEnd-startOffset)))
 	return data, fileEnd, err
 }
 

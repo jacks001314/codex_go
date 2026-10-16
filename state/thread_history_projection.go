@@ -111,14 +111,33 @@ func MaterializeThreadHistory(ctx context.Context, db *sql.DB, threadID string, 
 		_, err := projectThreadHistoryLine(line)
 		return err
 	}
-	steps, nextOffset, err := rollout.ReadProjectionStepsValidated(rolloutPath, startOffset, expectedOrdinal, validate)
+	steps, nextOffset, err := readThreadHistoryProjectionSteps(ctx, rolloutPath, startOffset, expectedOrdinal, validate)
 	if err != nil {
+		// Rust #53947: a cancelled caller stops the rollout read and reports it
+		// as an error, so a partial read is never committed as a checkpoint.
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, rollout.ErrRolloutReadCancelled) {
+			return fmt.Errorf("read thread history projection: %w", ctxErr)
+		}
 		return fmt.Errorf("read thread history projection: %w", err)
 	}
 	if len(steps) == 0 && startOffset == nextOffset {
 		return nil
 	}
 	return applyThreadHistoryProjection(ctx, db, threadID, startOffset, nextOffset, initialOrdinal, subagentHistoryStartOrdinal, steps)
+}
+
+// readThreadHistoryProjectionSteps mirrors Rust #53947's
+// `read_projection_steps` (`read_projection_steps_sync(..., || stop.is_closed())`
+// in thread-store/src/local/thread_history_materialization.rs): the read
+// observes the lifetime of the calling task, so a cancelled turn stops
+// projecting instead of finishing the read and advancing the checkpoint. The
+// predicate is passed into the rollout reader, whose checks are the
+// cancellation points (before opening, during decompression, and between
+// history records).
+func readThreadHistoryProjectionSteps(ctx context.Context, rolloutPath string, startOffset uint64, expectedOrdinal uint64, validate func(*rollout.Line) error) ([]rollout.ProjectionStep, uint64, error) {
+	return rollout.ReadProjectionStepsCancellable(rolloutPath, startOffset, expectedOrdinal, validate, func() bool {
+		return ctx.Err() != nil
+	})
 }
 
 func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, threadID string, startOffset uint64, nextOffset uint64, initialOrdinal uint64, subagentHistoryStartOrdinal *uint64, steps []rollout.ProjectionStep) (err error) {

@@ -89,7 +89,7 @@ func readProjectionPrefixLines(path string, endByteOffset uint64, endOrdinalExcl
 	if endByteOffset == 0 && endOrdinalExclusive == 0 {
 		return nil, nil
 	}
-	data, fileEnd, err := readProjectionSuffix(path, 0)
+	data, fileEnd, err := readProjectionSuffix(path, 0, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func readProjectionPrefixLines(path string, endByteOffset uint64, endOrdinalExcl
 	if len(prefix) == 0 || prefix[len(prefix)-1] != '\n' {
 		return nil, errors.New("history byte boundary is not a complete JSONL record")
 	}
-	steps, nextOffset, err := readProjectionStepsData(prefix, 0, 0, nil)
+	steps, nextOffset, err := readProjectionStepsData(prefix, 0, 0, nil, nil)
 	if err != nil {
 		return nil, err
 	}
