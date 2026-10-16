@@ -301,6 +301,74 @@ func (s *OAuthStore) saveWithLockHeld(tokens *OAuthTokenSet) error {
 	return s.writeFallbackFile(file)
 }
 
+// retireRefreshTokenWithLockHeld removes only the refresh token of the
+// credential the caller observed, while the caller retains the matching
+// credential lock. Mirrors Rust's `retire_refresh_token_if_matches` (#54079,
+// oauth/resolved_store.rs:201-300): the access token and the credential record
+// stay, so a still-valid access token keeps working, and a credential a
+// concurrent login replaced is left untouched because the stored snapshot no
+// longer matches.
+//
+// Direct-keyring credentials can be shared across Codex homes, where the
+// credential lock does not reach; as in Rust (oauth/credential_store.rs:345-356)
+// those are retired only for the current runtime, leaving the durable entry for
+// a real login to replace.
+func (s *OAuthStore) retireRefreshTokenWithLockHeld(serverName string, serverURL string, expected *OAuthTokenSet) (bool, error) {
+	if s == nil || expected == nil {
+		return false, nil
+	}
+	if err := s.keyringUnavailable(); err != nil {
+		return false, err
+	}
+	current, err := s.Load(serverName, serverURL)
+	if err != nil {
+		return false, err
+	}
+	if !sameStoredMCPOAuthCredential(current, expected) {
+		return false, nil
+	}
+	if s.effectiveMode() != OAuthCredentialsStoreFile {
+		return true, nil
+	}
+	retired := *expected
+	retired.RefreshToken = ""
+	if err := s.saveWithLockHeld(&retired); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// sameStoredMCPOAuthCredential reports whether two stored credentials are the
+// same snapshot. Rust compares the whole credential after clearing only
+// `expires_in` (`normalized_oauth_credentials`, oauth.rs:338-344), so every
+// field except the absolute expiry identifies the credential here too.
+func sameStoredMCPOAuthCredential(current *OAuthTokenSet, expected *OAuthTokenSet) bool {
+	if current == nil || expected == nil {
+		return false
+	}
+	return current.ServerName == expected.ServerName &&
+		current.ServerURL == expected.ServerURL &&
+		current.ClientID == expected.ClientID &&
+		current.ClientSecret == expected.ClientSecret &&
+		strings.TrimSpace(current.Issuer) == strings.TrimSpace(expected.Issuer) &&
+		current.AccessToken == expected.AccessToken &&
+		current.RefreshToken == expected.RefreshToken &&
+		current.IDToken == expected.IDToken &&
+		sameMCPOAuthScopes(current.Scopes, expected.Scopes)
+}
+
+func sameMCPOAuthScopes(current []string, expected []string) bool {
+	if len(current) != len(expected) {
+		return false
+	}
+	for index := range current {
+		if current[index] != expected[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *OAuthStore) Delete(serverName string, serverURL string) (bool, error) {
 	if s == nil {
 		return false, errors.New("MCP OAuth store is nil")

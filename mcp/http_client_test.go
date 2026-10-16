@@ -1427,7 +1427,12 @@ func TestHTTPMCPRefreshesOAuthTokenAfterUnauthorizedResponse(t *testing.T) {
 	}
 }
 
-func TestHTTPMCPDeletesStoredOAuthTokenWhenRefreshIsPermanentFailure(t *testing.T) {
+// TestHTTPMCPRetiresStoredRefreshTokenWhenRefreshIsPermanentFailure mirrors
+// Rust #54079 (`on_refresh_token_rejected`, oauth/credential_store.rs:303-382):
+// a definitively rejected refresh token is retired, while the access token and
+// the credential record stay so a later attempt reauthenticates instead of
+// replaying the rejected token.
+func TestHTTPMCPRetiresStoredRefreshTokenWhenRefreshIsPermanentFailure(t *testing.T) {
 	var sawRefresh bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1480,8 +1485,77 @@ func TestHTTPMCPDeletesStoredOAuthTokenWhenRefreshIsPermanentFailure(t *testing.
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded != nil {
-		t.Fatalf("stored token = %#v, want deleted after invalid_grant", loaded)
+	if loaded == nil {
+		t.Fatal("stored credential was deleted, want the record kept with its refresh token retired")
+	}
+	if loaded.AccessToken != "oauth-old" {
+		t.Fatalf("access token = %q, want the stored value preserved", loaded.AccessToken)
+	}
+	if strings.TrimSpace(loaded.RefreshToken) != "" {
+		t.Fatalf("refresh token = %q, want it retired", loaded.RefreshToken)
+	}
+}
+
+// TestHTTPMCPRetiredRefreshTokenIsNotReplayedLikeRust covers Rust #54079's
+// runtime-only guard (oauth/credential_store.rs:156-160 compares the loaded
+// credential against `rejected_credentials`): once a refresh token was
+// definitively rejected, this runtime must not send it again even when
+// persisting the retirement failed.
+func TestHTTPMCPRetiredRefreshTokenIsNotReplayedLikeRust(t *testing.T) {
+	var sawRefresh bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/mcp":
+			writeJSON(t, w, map[string]any{
+				"authorization_endpoint": "http://" + r.Host + "/authorize",
+				"token_endpoint":         "http://" + r.Host + "/token",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/token":
+			sawRefresh = true
+			writeJSON(t, w, map[string]any{
+				"access_token": "oauth-new",
+				"token_type":   "Bearer",
+				"expires_in":   3600,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	configURL := server.URL + "/mcp"
+	expired := time.Now().Add(-time.Hour).UnixMilli()
+	if err := NewOAuthStore(home).Save(&OAuthTokenSet{
+		ServerName:      "docs",
+		ServerURL:       configURL,
+		ClientID:        "client-1",
+		AccessToken:     "oauth-old",
+		RefreshToken:    "refresh-rejected",
+		ExpiresAtMillis: &expired,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	config := &ServerConfig{
+		URL:             configURL,
+		OAuthClientID:   "client-1",
+		OAuthServerName: "docs",
+		CodexHome:       home,
+		Enabled:         true,
+	}
+	// The persisted retirement may have failed; the runtime still refuses the
+	// rejected token.
+	markMCPOAuthRefreshTokenRetired(
+		mcpRetiredOAuthRefreshTokenKey(home, config.OAuthCredentialName("docs"), configURL),
+		"refresh-rejected",
+	)
+	client := newMCPHTTPClient(config)
+	if token, attempted := client.authorizationBearerToken(true); token != "" || !attempted {
+		t.Fatalf("authorizationBearerToken(true) = (%q, %v), want an empty reauthentication result", token, attempted)
+	}
+	if sawRefresh {
+		t.Fatal("a retired refresh token reached the provider")
 	}
 }
 

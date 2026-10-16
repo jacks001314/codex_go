@@ -1331,6 +1331,43 @@ func (c *httpClient) authorizationBearerToken(forceRefresh bool) (string, bool) 
 	return refreshed.AccessTokenForRequest(time.Now()), true
 }
 
+// mcpRetiredOAuthRefreshTokens remembers the refresh tokens this runtime
+// retired after a definitive rejection. Rust #54079 keeps the rejection alive
+// for the connection even when persisting the retirement fails
+// (oauth/credential_store.rs:341 rejected_credentials), so a credential whose
+// retirement could not be written is still not replayed.
+var mcpRetiredOAuthRefreshTokens sync.Map
+
+// mcpRetiredOAuthRefreshTokenKey scopes a retirement to one credential: a
+// refresh token is only meaningful for the Codex home, server and URL that
+// stored it.
+func mcpRetiredOAuthRefreshTokenKey(codexHome string, serverName string, serverURL string) string {
+	return strings.TrimSpace(codexHome) + "\x00" + strings.TrimSpace(serverName) + "\x00" + strings.TrimSpace(serverURL)
+}
+
+// markMCPOAuthRefreshTokenRetired records a definitively rejected refresh token
+// for this runtime.
+func markMCPOAuthRefreshTokenRetired(key string, refreshToken string) {
+	key = strings.TrimSpace(key)
+	refreshToken = strings.TrimSpace(refreshToken)
+	if key == "" || refreshToken == "" {
+		return
+	}
+	mcpRetiredOAuthRefreshTokens.Store(key+"\x00"+refreshToken, struct{}{})
+}
+
+// mcpOAuthRefreshTokenRetired reports whether this runtime already retired the
+// refresh token of that credential.
+func mcpOAuthRefreshTokenRetired(key string, refreshToken string) bool {
+	key = strings.TrimSpace(key)
+	refreshToken = strings.TrimSpace(refreshToken)
+	if key == "" || refreshToken == "" {
+		return false
+	}
+	_, ok := mcpRetiredOAuthRefreshTokens.Load(key + "\x00" + refreshToken)
+	return ok
+}
+
 func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverName string, codexHome string, force bool) (*OAuthTokenSet, error) {
 	if c == nil || c.config == nil || tokens == nil {
 		return nil, errors.New("HTTP MCP OAuth refresh requires client and tokens")
@@ -1363,6 +1400,13 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 			return nil, errors.New("MCP OAuth reauthentication required: stored refresh credential issuer changed")
 		}
 		return latest, nil
+	}
+	// Rust #54079 (oauth/credential_store.rs:156-160): a refresh token this
+	// runtime already retired after a definitive rejection must not be
+	// replayed, even when persisting the retirement failed.
+	retireKey := mcpRetiredOAuthRefreshTokenKey(codexHome, serverName, c.config.URL)
+	if mcpOAuthRefreshTokenRetired(retireKey, latest.RefreshToken) {
+		return nil, errors.New("MCP OAuth reauthentication required: stored refresh token was rejected")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mcpOAuthLoginDiscoveryMaxTimeout)
 	defer cancel()
@@ -1413,7 +1457,14 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 			}
 		}
 		if isPermanentMCPOAuthRefreshError(err) {
-			_, _ = store.deleteWithLockHeld(serverName, c.config.URL)
+			// Rust #54079: retire the rejected refresh token instead of deleting
+			// the credential. The access token and the record stay, a concurrent
+			// replacement login is preserved because the retirement only applies
+			// while the stored credential still matches this refresh's snapshot,
+			// and the runtime remembers the rejection when it cannot be written
+			// (oauth/credential_store.rs:303-382).
+			_, _ = store.retireRefreshTokenWithLockHeld(serverName, c.config.URL, latest)
+			markMCPOAuthRefreshTokenRetired(retireKey, latest.RefreshToken)
 		}
 		return nil, err
 	}
