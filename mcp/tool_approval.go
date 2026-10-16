@@ -61,6 +61,31 @@ const (
 // (Rust notify_mcp_tool_call_skip with "user cancelled MCP tool call").
 const MCPToolApprovalDeniedMessage = "user cancelled MCP tool call"
 
+// MCPApprovalCancellationReasonKey is the MCP approval metadata key that
+// records where a cancellation originated, before user actions and runtime
+// failures are flattened into the same elicitation action (Rust #54679
+// CANCELLATION_REASON_KEY). Absence means unknown.
+const MCPApprovalCancellationReasonKey = "codex_approval_cancellation_reason"
+
+// MCPApprovalCancellationReason is Go's port of Rust's
+// McpApprovalCancellationReason. A client that omits the reason keeps the
+// pre-existing cancellation behavior.
+type MCPApprovalCancellationReason string
+
+const (
+	MCPApprovalCancellationUser           MCPApprovalCancellationReason = "user"
+	MCPApprovalCancellationInterrupted    MCPApprovalCancellationReason = "interrupted"
+	MCPApprovalCancellationNonInteractive MCPApprovalCancellationReason = "non_interactive"
+)
+
+// MCPToolApprovalCancelledBeforeApprovalMessage is Rust's message for a call
+// whose approval request was interrupted before anyone answered it (#54679).
+const MCPToolApprovalCancelledBeforeApprovalMessage = "MCP tool call cancelled before approval"
+
+// MCPToolApprovalNonInteractiveMessage is Rust's message for a call cancelled
+// because interactive approval is unavailable in exec mode (#54679).
+const MCPToolApprovalNonInteractiveMessage = "MCP tool call cancelled: interactive approval is unavailable in exec mode"
+
 // MCPToolApprovalRejectedMessage is the model-visible text when the user
 // explicitly rejects an MCP tool call (Rust
 // parse_mcp_tool_approval_elicitation_response's decline path).
@@ -85,6 +110,71 @@ const MCPElicitationHandoffMessage = "MCP server elicitations can only be reques
 type MCPToolApprovalOutcome struct {
 	Decision MCPToolApprovalDecision
 	Message  string
+	// CancellationReason is the provenance of an aborted approval (#54679). It
+	// only applies to an abort (MCPToolApprovalDeny); an empty reason keeps the
+	// pre-existing cancellation message.
+	CancellationReason MCPApprovalCancellationReason
+}
+
+// ParseMCPApprovalCancellationReason reads the reason a client recorded on an
+// approval response (#54679). An absent or unknown value means the client sent
+// no provenance, which preserves the pre-existing cancellation message.
+func ParseMCPApprovalCancellationReason(meta any) (MCPApprovalCancellationReason, bool) {
+	values, ok := meta.(map[string]any)
+	if !ok || values == nil {
+		return "", false
+	}
+	raw, ok := values[MCPApprovalCancellationReasonKey]
+	if !ok {
+		return "", false
+	}
+	text, _ := raw.(string)
+	switch MCPApprovalCancellationReason(strings.TrimSpace(text)) {
+	case MCPApprovalCancellationUser:
+		return MCPApprovalCancellationUser, true
+	case MCPApprovalCancellationInterrupted:
+		return MCPApprovalCancellationInterrupted, true
+	case MCPApprovalCancellationNonInteractive:
+		return MCPApprovalCancellationNonInteractive, true
+	default:
+		return "", false
+	}
+}
+
+// MCPToolApprovalCancellationMessage ports Rust's abort-path message choice
+// (#54679): a user action or missing provenance keeps "user cancelled MCP tool
+// call", an interruption reports the pre-approval cancellation, and a
+// non-interactive runtime reports why interactive approval was unavailable.
+func MCPToolApprovalCancellationMessage(reason MCPApprovalCancellationReason) string {
+	switch reason {
+	case MCPApprovalCancellationInterrupted:
+		return MCPToolApprovalCancelledBeforeApprovalMessage
+	case MCPApprovalCancellationNonInteractive:
+		return MCPToolApprovalNonInteractiveMessage
+	default:
+		return MCPToolApprovalDeniedMessage
+	}
+}
+
+// MCPToolApprovalResponseCancels reports whether a user-input answer selected
+// the cancel option (#54679), which is what makes a cancellation a user action.
+func MCPToolApprovalResponseCancels(response *tool.UserInputResponse, questionID string) bool {
+	if response == nil {
+		return false
+	}
+	questionID = strings.TrimSpace(questionID)
+	if questionID == "" {
+		return false
+	}
+	if strings.TrimSpace(response.Answers[questionID]) == MCPToolApprovalCancel {
+		return true
+	}
+	for _, answer := range response.StructuredAnswers[questionID] {
+		if strings.TrimSpace(answer) == MCPToolApprovalCancel {
+			return true
+		}
+	}
+	return false
 }
 
 // MCPToolApprovalKey identifies a remembered approval. Rust keys on the server,
@@ -571,6 +661,10 @@ func (e *ToolExecutor) approveToolCallIfNeeded(ctx context.Context, callID strin
 		body := MCPToolApprovalDeniedMessage
 		if decision == MCPToolApprovalReject {
 			body = MCPToolApprovalRejectedMessage
+		} else if outcome.CancellationReason != "" {
+			// Rust #54679: an aborted approval reports where the cancellation
+			// came from instead of claiming a user action for every abort.
+			body = MCPToolApprovalCancellationMessage(outcome.CancellationReason)
 		}
 		// Rust's ReviewDecision::denied carries the handler's own message, which
 		// a non-root agent's handoff guidance relies on (#46066).

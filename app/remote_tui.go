@@ -3541,7 +3541,7 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	}
 	select {
 	case response := <-responses:
-		return remoteMCPElicitationResponse(response), nil
+		return remoteMCPElicitationResponse(response, mcpElicitationToolApproval(params.Meta)), nil
 	case <-entry.abandoned:
 		return nil, ErrInteractiveElicitationAbandoned
 	case <-ctx.Done():
@@ -3872,9 +3872,13 @@ func remoteMCPSchema(params *appserver.MCPElicitationRequestParams) any {
 	return params.Schema
 }
 
-func remoteMCPElicitationResponse(response codextea.ModalResponse) *appserver.MCPElicitationRequestResponse {
+func remoteMCPElicitationResponse(response codextea.ModalResponse, toolApproval bool) *appserver.MCPElicitationRequestResponse {
 	if response.Cancelled || response.Elicitation == nil {
-		return &appserver.MCPElicitationRequestResponse{Action: appserver.MCPElicitationActionCancel}
+		cancelled := &appserver.MCPElicitationRequestResponse{Action: appserver.MCPElicitationActionCancel}
+		if toolApproval {
+			cancelled.Meta = mcpUserCancellationMeta()
+		}
+		return cancelled
 	}
 	result := &appserver.MCPElicitationRequestResponse{
 		Action:  remoteMCPAction(response.Elicitation.Action),
@@ -3882,6 +3886,8 @@ func remoteMCPElicitationResponse(response codextea.ModalResponse) *appserver.MC
 	}
 	if persist := strings.TrimSpace(response.Elicitation.Persist); persist != "" {
 		result.Meta = map[string]any{"persist": persist}
+	} else if toolApproval && result.Action == appserver.MCPElicitationActionCancel {
+		result.Meta = mcpUserCancellationMeta()
 	}
 	return result
 }

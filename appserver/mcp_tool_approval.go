@@ -174,24 +174,42 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 		"",
 	)
 	var decision mcp.MCPToolApprovalDecision
+	cancellationReason := mcp.MCPApprovalCancellationReason("")
 	if h.elicitationEnabled {
-		elicitationDecision, err := h.approveViaElicitation(ctx, request, questionID, question)
+		elicitationDecision, elicitationReason, err := h.approveViaElicitation(ctx, request, questionID, question)
 		if err != nil {
-			// A failed elicitation aborts the call, matching Rust.
-			return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
+			// A failed elicitation aborts the call, matching Rust. Rust #54679: a
+			// request that never produced a client answer is an interruption, not
+			// a user action.
+			reason := elicitationReason
+			if reason == "" {
+				reason = mcp.MCPApprovalCancellationInterrupted
+			}
+			return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny, CancellationReason: reason}, nil
 		}
 		decision = elicitationDecision
+		cancellationReason = elicitationReason
 	} else {
 		response, err := h.responder(ctx, &tool.RequestUserInputArgs{Questions: []tool.UserInputQuestion{question}})
 		if err != nil {
-			// Rust's request_user_input failure aborts the call.
-			return mcp.MCPToolApprovalOutcome{Decision: mcp.MCPToolApprovalDeny}, nil
+			// Rust's request_user_input failure aborts the call, and #54679
+			// reports that as an interruption.
+			return mcp.MCPToolApprovalOutcome{
+				Decision:           mcp.MCPToolApprovalDeny,
+				CancellationReason: mcp.MCPApprovalCancellationInterrupted,
+			}, nil
 		}
 		decision = mcp.ParseMCPToolApprovalResponse(response, questionID)
+		cancellationReason = mcpToolApprovalUserInputCancellationReason(response, questionID)
 	}
 	decision = mcp.NormalizeMCPToolApprovalDecision(decision, request.ApprovalMode)
+	// Rust #54679 keeps a cancellation reason only on an abort: an approval's
+	// provenance is meaningless, and a rejection has its own message.
+	if decision != mcp.MCPToolApprovalDeny {
+		cancellationReason = ""
+	}
 	if request.SessionKey == nil {
-		return mcp.MCPToolApprovalOutcome{Decision: decision}, nil
+		return mcp.MCPToolApprovalOutcome{Decision: decision, CancellationReason: cancellationReason}, nil
 	}
 	switch decision {
 	case mcp.MCPToolApprovalApproveForSession:
@@ -204,7 +222,20 @@ func (h *appserverMCPToolApprovalHandler) approveMCPToolCall(ctx context.Context
 			h.router.rememberMCPToolApproval(h.threadID, *request.SessionKey)
 		}
 	}
-	return mcp.MCPToolApprovalOutcome{Decision: decision}, nil
+	return mcp.MCPToolApprovalOutcome{Decision: decision, CancellationReason: cancellationReason}, nil
+}
+
+// mcpToolApprovalUserInputCancellationReason ports Rust #54679's provenance for
+// the request_user_input prompt path: choosing the cancel option is a user
+// action, while a missing response is an interruption.
+func mcpToolApprovalUserInputCancellationReason(response *tool.UserInputResponse, questionID string) mcp.MCPApprovalCancellationReason {
+	if response == nil {
+		return mcp.MCPApprovalCancellationInterrupted
+	}
+	if mcp.MCPToolApprovalResponseCancels(response, questionID) {
+		return mcp.MCPApprovalCancellationUser
+	}
+	return ""
 }
 
 // MCP tool approval elicitation values and labels (Rust codex_protocol's
@@ -331,9 +362,9 @@ func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	request *mcp.MCPToolApprovalRequest,
 	questionID string,
 	question tool.UserInputQuestion,
-) (mcp.MCPToolApprovalDecision, error) {
+) (mcp.MCPToolApprovalDecision, mcp.MCPApprovalCancellationReason, error) {
 	if h == nil || h.router == nil {
-		return mcp.MCPToolApprovalDeny, nil
+		return mcp.MCPToolApprovalDeny, mcp.MCPApprovalCancellationInterrupted, nil
 	}
 	values := []any{mcpToolApprovalAcceptValue}
 	labels := []any{mcpToolApprovalAcceptLabel}
@@ -394,14 +425,23 @@ func (h *appserverMCPToolApprovalHandler) approveViaElicitation(
 	}
 	var response MCPElicitationRequestResponse
 	if err := h.router.requireServerRequests().Request(ctx, ServerRequestMCPElicitation, appserverMCPElicitationParams(elicitation), &response); err != nil {
-		return mcp.MCPToolApprovalDeny, err
+		return mcp.MCPToolApprovalDeny, "", err
 	}
-	return mcp.ParseMCPToolApprovalElicitationResponse(
+	decision := mcp.ParseMCPToolApprovalElicitationResponse(
 		string(response.Action),
 		response.Meta,
 		response.Content,
 		questionID,
-	), nil
+	)
+	// Rust #54679: a received cancel takes its provenance from the client's
+	// metadata; an absent reason keeps the pre-existing cancellation message.
+	reason := mcp.MCPApprovalCancellationReason("")
+	if response.Action == MCPElicitationActionCancel {
+		if parsed, ok := mcp.ParseMCPApprovalCancellationReason(response.Meta); ok {
+			reason = parsed
+		}
+	}
+	return decision, reason, nil
 }
 
 // persistApproval reuses the elicitation-path persistence so the amendment lands

@@ -630,7 +630,7 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		}
 		select {
 		case response := <-responses:
-			return b.elicitationResponse(response), nil
+			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta)), nil
 		case <-entry.abandoned:
 			return nil, ErrInteractiveElicitationAbandoned
 		case <-ctx.Done():
@@ -763,9 +763,17 @@ func (b *interactiveElicitationBroker) close() {
 	}
 }
 
-func (b *interactiveElicitationBroker) elicitationResponse(response codextea.ModalResponse) *mcp.MCPElicitationResponse {
+// elicitationResponse converts a TUI modal answer into the MCP elicitation
+// response. For a custom MCP tool call approval an explicit user cancellation
+// records the user as the cancellation source (Rust #54679), while a decline
+// keeps no provenance.
+func (b *interactiveElicitationBroker) elicitationResponse(response codextea.ModalResponse, toolApproval bool) *mcp.MCPElicitationResponse {
 	if response.Cancelled || response.Elicitation == nil {
-		return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}
+		cancelled := &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}
+		if toolApproval {
+			cancelled.Meta = mcpUserCancellationMeta()
+		}
+		return cancelled
 	}
 	result := &mcp.MCPElicitationResponse{
 		Action:  mcpElicitationAction(response.Elicitation.Action),
@@ -773,8 +781,30 @@ func (b *interactiveElicitationBroker) elicitationResponse(response codextea.Mod
 	}
 	if strings.TrimSpace(response.Elicitation.Persist) != "" {
 		result.Meta = map[string]any{"persist": strings.TrimSpace(response.Elicitation.Persist)}
+	} else if toolApproval && result.Action == mcp.MCPElicitationActionCancel {
+		result.Meta = mcpUserCancellationMeta()
 	}
 	return result
+}
+
+// mcpElicitationToolApproval reports whether an elicitation is a custom MCP
+// tool call approval (Rust's `is_tool_approval`), whose explicit cancellation is
+// attributed to the user (#54679).
+func mcpElicitationToolApproval(meta any) bool {
+	values, ok := meta.(map[string]any)
+	if !ok || values == nil {
+		return false
+	}
+	kind, _ := values["codex_approval_kind"].(string)
+	return strings.TrimSpace(kind) == "mcp_tool_call"
+}
+
+// mcpUserCancellationMeta is the metadata an explicit user cancellation of a
+// tool-call approval carries (#54679).
+func mcpUserCancellationMeta() map[string]any {
+	return map[string]any{
+		mcp.MCPApprovalCancellationReasonKey: string(mcp.MCPApprovalCancellationUser),
+	}
 }
 
 func mcpElicitationAction(action string) mcp.MCPElicitationAction {

@@ -140,7 +140,17 @@ func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Conte
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			action = mcp.MCPElicitationActionCancel
 		}
-		return &mcp.MCPElicitationResponse{Action: action}, nil
+		cancelled := &mcp.MCPElicitationResponse{Action: action}
+		if action == mcp.MCPElicitationActionCancel && mcpElicitationApprovalKind(request) == "mcp_tool_call" {
+			// Rust #54679: the synthesized cancel of an interrupted tool-call
+			// approval records the interruption, so the abort reports a
+			// cancellation before approval instead of a user action. A successful
+			// client reply keeps its own provenance, including an absent reason.
+			cancelled.Meta = map[string]any{
+				mcp.MCPApprovalCancellationReasonKey: string(mcp.MCPApprovalCancellationInterrupted),
+			}
+		}
+		return cancelled, nil
 	}
 	// Rust 2230d64464 (#38108): "Allow and don't ask me again" persists the
 	// MCP tool approval as a policy amendment (approval_mode: approve) on the
