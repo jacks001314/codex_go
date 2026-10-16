@@ -147,8 +147,15 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// current pin. The experimental export last changed at 1fbe15c962
 		// (#51595, thread/list excluded thread ids) and the stable export at
 		// a6baf8867c (#51611, EventMsg::ElicitationAbandoned).
-		{"stable", stablePrecomputedExports, "c3cd796c1b4f33251e51a58d9c21e47ab082ffa372f486383131259d632fc90c"},
-		{"experimental", experimentalPrecomputedExports, "29598811d930f6b0903e94ba1313bafeedaaca79d828445266e9e3b65f354f5d"},
+		// Re-vendored from upstream head 4eb4a65407 (round-90 pin advance): both
+		// exports were re-copied byte-for-byte from
+		// app-server-protocol/schema/precomputed/ in the pinned checkout (C:\rw\codex-rs`).
+		// Within the 338-commit #54590 delta the pair last changed at 592964c0cb
+		// (#54420, local image inputs on completed image-generation items; the
+		// preceding change was aabf13307a / #54398). Both SHA-256 values below were
+		// recomputed from the re-vendored bytes and equal the Rust tree's artifacts.
+		{"stable", stablePrecomputedExports, "eaa1a12d1f025917e7ecde27c50b4020ff19017ba220ac1c5b5184c03b925db0"},
+		{"experimental", experimentalPrecomputedExports, "1b76e20f419ff08e2abbad142a8372e232276fb4edb14e6aac52be380db70b8b"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
