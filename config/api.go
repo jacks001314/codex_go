@@ -2560,7 +2560,10 @@ func (s *ConfigService) readLayersForCWD(cwd string, profile string) ([]Layer, e
 			mergeConfigMaps(trustedBrokerValues, cloneMap(values))
 		}
 	}
-	brokerState := CredentialBrokerProjectStateForValues(trustedBrokerValues)
+	// #52302: the broker state also honours the managed credential-masking
+	// requirement, so the project sanitizer protects shell settings exactly
+	// like the loader does (Rust config/src/loader/mod.rs:995-1031).
+	brokerState := CredentialBrokerProjectStateForValuesWithRequirements(trustedBrokerValues, s.requirements)
 	trustedProviderEnvKeys := CredentialBrokerProviderEnvKeys(trustedBrokerValues)
 	if ProjectConfigEnabled(userValues, cwd) {
 		for _, dotCodexFolder := range ProjectDotCodexFolders(cwd) {

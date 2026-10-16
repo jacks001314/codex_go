@@ -75,6 +75,16 @@ type ProxyCredentialHostBinding struct {
 	Suffixes   []string
 }
 
+// CredentialBrokerEnabledForSettings mirrors Rust
+// `NetworkProxySpec::credential_broker_enabled`
+// (core/src/config/network_proxy_spec.rs:96-98): brokerage requires the
+// proxy itself to be enabled as well as the broker flag, so a disabled proxy
+// builds an inert broker even when managed constraints or the configuration
+// retained `credential_broker = true` (network_proxy_spec.rs:381-390).
+func CredentialBrokerEnabledForSettings(settings ProxySettings) bool {
+	return settings.Enabled && settings.CredentialBroker
+}
+
 func NewProxyCredentialBroker(enabled bool) *ProxyCredentialBroker {
 	return NewProxyCredentialBrokerWithProviders(enabled, nil)
 }

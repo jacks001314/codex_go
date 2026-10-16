@@ -246,3 +246,71 @@ func TestLoadWithOptionsSanitizesProjectProviderBindingsLikeRust(t *testing.T) {
 		t.Fatalf("project rebound provider bindings: %#v", overrides)
 	}
 }
+
+// #52302: the trusted `features.credential_masking` flag enables brokerage on
+// its own, and the managed requirement is consulted first (Rust
+// config/src/loader/mod.rs:995-1031 apply_credential_broker_requirements).
+func TestCredentialBrokerProjectStateHonorsCredentialMaskingLikeRust(t *testing.T) {
+	masking := map[string]any{"features": map[string]any{"credential_masking": true}}
+	if got := CredentialBrokerProjectStateForValues(masking); got != CredentialBrokerProjectEnabled {
+		t.Fatalf("masking-only state = %q, want enabled", got)
+	}
+	if got := CredentialBrokerProjectStateForValuesWithRequirements(nil, &ConfigRequirements{
+		FeatureRequirements: map[string]bool{"credential_masking": true},
+	}); got != CredentialBrokerProjectEnabled {
+		t.Fatalf("managed masking requirement = %q, want enabled", got)
+	}
+	// The managed requirement is authoritative over the trusted flag.
+	if got := CredentialBrokerProjectStateForValuesWithRequirements(masking, &ConfigRequirements{
+		FeatureRequirements: map[string]bool{"credential_masking": false},
+	}); got != CredentialBrokerProjectUnconfigured {
+		t.Fatalf("managed masking=false = %q, want unconfigured", got)
+	}
+	// Managed network constraints still veto the masked broker.
+	disabled := false
+	if got := CredentialBrokerProjectStateForValuesWithRequirements(masking, &ConfigRequirements{
+		Network: &NetworkRequirements{Enabled: &disabled},
+	}); got != CredentialBrokerProjectDisabled {
+		t.Fatalf("disabled managed network = %q, want disabled", got)
+	}
+	// An explicit managed network_proxy=false removes the implicit enablement.
+	broker := map[string]any{"features": map[string]any{"network_proxy": map[string]any{
+		"credential_broker": true,
+		"enabled":           true,
+	}}}
+	if got := CredentialBrokerProjectStateForValuesWithRequirements(broker, &ConfigRequirements{
+		FeatureRequirements: map[string]bool{"network_proxy": false},
+	}); got != CredentialBrokerProjectDisabled {
+		t.Fatalf("managed network_proxy=false = %q, want disabled", got)
+	}
+}
+
+// #52302: masking is not a project-local switch, so a repository cannot turn
+// it on or off (Rust config/src/loader/mod.rs:1191-1202 lists it with the
+// system-proxy keys).
+func TestSanitizeProjectConfigStripsCredentialMaskingLikeRust(t *testing.T) {
+	values := map[string]any{"features": map[string]any{"credential_masking": true}}
+	ignored := sanitizeProjectConfigValues(values, CredentialBrokerProjectUnconfigured, nil)
+	if !reflect.DeepEqual(ignored, []string{"features.credential_masking"}) {
+		t.Fatalf("ignored = %#v", ignored)
+	}
+	if _, ok := values["features"]; ok {
+		t.Fatalf("credential_masking survived sanitize: %#v", values)
+	}
+}
+
+// #52302: enabling masking grants a project the same credential-broker
+// protections as an explicit broker (Rust config/src/loader/mod.rs:1012-1035
+// reuses the derived state for the project sanitizer).
+func TestCredentialMaskingProtectsProjectShellSettingsLikeRust(t *testing.T) {
+	trusted := map[string]any{"features": map[string]any{"credential_masking": true}}
+	state := CredentialBrokerProjectStateForValues(trusted)
+	if state != CredentialBrokerProjectEnabled {
+		t.Fatalf("state = %q, want enabled", state)
+	}
+	project := map[string]any{"features": map[string]any{"shell_snapshot": false}}
+	ignored := sanitizeProjectConfigValues(project, state, nil)
+	if !reflect.DeepEqual(ignored, []string{"features.shell_snapshot"}) {
+		t.Fatalf("ignored = %#v", ignored)
+	}
+}

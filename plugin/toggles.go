@@ -20,6 +20,11 @@ type PluginToggle struct {
 //
 // Only entries with boolean "enabled" values are returned.
 // Later writes for the same plugin override earlier ones.
+//
+// The reserved `plugins._default` table is the activation default added by
+// #52220, not a plugin: it never yields a toggle here, and the default it
+// declares is applied where effective enablement is resolved (see
+// activation_policy.go / PluginsConfigToml.AllowsPlugin).
 func CollectPluginEnabledCandidates(configEdits []ConfigEdit) []PluginToggle {
 	// Collect raw toggles indexed by plugin ID
 	raw := map[string]bool{}
@@ -71,6 +76,9 @@ func parsePluginToggleEdits(key string, value any) map[string]bool {
 	case len(parts) == 3 && parts[2] == "enabled":
 		// plugins.<plugin_id>.enabled
 		pluginID := parts[1]
+		if isPluginDefaultConfigKey(pluginID) {
+			return nil
+		}
 		enabled, ok := toBool(value)
 		if !ok {
 			return nil
@@ -80,6 +88,9 @@ func parsePluginToggleEdits(key string, value any) map[string]bool {
 	case len(parts) == 2:
 		// plugins.<plugin_id> — a table containing "enabled"
 		pluginID := parts[1]
+		if isPluginDefaultConfigKey(pluginID) {
+			return nil
+		}
 		if m, ok := value.(map[string]any); ok {
 			if en, ok := toBool(m["enabled"]); ok {
 				return map[string]bool{normalizePluginToggleID(pluginID, m): en}
@@ -92,6 +103,9 @@ func parsePluginToggleEdits(key string, value any) map[string]bool {
 		if m, ok := value.(map[string]any); ok {
 			result := map[string]bool{}
 			for k, v := range m {
+				if isPluginDefaultConfigKey(k) {
+					continue
+				}
 				if sub, ok := v.(map[string]any); ok {
 					if en, ok := toBool(sub["enabled"]); ok {
 						result[normalizePluginToggleID(k, sub)] = en
@@ -103,6 +117,17 @@ func parsePluginToggleEdits(key string, value any) map[string]bool {
 	}
 
 	return nil
+}
+
+// isPluginDefaultConfigKey reports whether a `plugins` child key is the
+// reserved activation-default table rather than a plugin id. `_default`
+// carries the activation policy (#52220), so it must never surface as a
+// PluginId: Rust keeps it out of the per-plugin iteration
+// (core-plugins/src/marketplace_policy.rs:238-243) while ParsePluginId
+// rejects it, which would drop the setting silently instead of reporting
+// it as an activation default.
+func isPluginDefaultConfigKey(key string) bool {
+	return strings.TrimSpace(key) == PluginsDefaultConfigKey
 }
 
 func toBool(value any) (bool, bool) {

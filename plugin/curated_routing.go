@@ -165,9 +165,10 @@ func (s *PluginService) enabledPluginDetailsSnapshot() []PluginDetail {
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
 	manifests := s.manifests
+	policy := s.activationPolicy
 	s.mu.Unlock()
 	discovered, _ := loadMarketplacePlugins(marketplaces, manifests)
-	details := routePluginDetails(mergePluginDetails(stored, discovered), target)
+	details := routePluginDetails(mergePluginDetails(stored, discovered, policy), target)
 	out := make([]PluginDetail, 0, len(details))
 	for _, detail := range details {
 		if detail.Summary.Installed && detail.Summary.Enabled {

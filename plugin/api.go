@@ -1379,6 +1379,7 @@ type PluginService struct {
 	mu                            sync.Mutex
 	marketplaces                  map[string]Marketplace
 	plugins                       map[string]PluginDetail
+	activationPolicy              PluginsConfigToml
 	shares                        map[string]PluginShareContext
 	now                           func() time.Time
 	marketplaceInstallRoot        string
@@ -1984,9 +1985,10 @@ func (s *PluginService) List(params *PluginListParams) *PluginListResponse {
 	}
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
+	policy := s.activationPolicy
 	s.mu.Unlock()
 	loadedDetails, loadErrors := loadMarketplacePlugins(marketplaces, s.manifests)
-	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
+	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target)
 	plugins := make([]PluginSummary, 0, len(details))
 	for _, detail := range details {
 		if !params.IncludeInstalled && detail.Summary.Installed {
@@ -2127,9 +2129,10 @@ func (s *PluginService) DiscoverableInstallCandidatesContext(ctx context.Context
 	}
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
+	policy := s.activationPolicy
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
-	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target)
+	details := routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target)
 	details = s.materializeInstalledDiscoverableDetailsBestEffort(details)
 	if endpointCandidates, ok := s.suggestedDiscoverableCandidates(ctx, details); ok {
 		return endpointCandidates
@@ -2340,9 +2343,10 @@ func (s *PluginService) Read(params *PluginReadParams) (*PluginReadResponse, err
 	}
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
+	policy := s.activationPolicy
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
-	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
+	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target) {
 		if response := readPluginDetailResponse(detail, params); response != nil {
 			materialized, err := s.materializeMarketplacePluginDetail(&response.Plugin)
 			if err != nil {
@@ -2386,9 +2390,10 @@ func (s *PluginService) readInstalledPluginSkill(params *PluginSkillReadParams) 
 	}
 	marketplaces := s.marketplaceListLocked()
 	target := s.targetCuratedMarketplace
+	policy := s.activationPolicy
 	s.mu.Unlock()
 	loadedDetails, _ := loadMarketplacePlugins(marketplaces, s.manifests)
-	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails), target) {
+	for _, detail := range routePluginDetails(mergePluginDetails(storedDetails, loadedDetails, policy), target) {
 		if !pluginDetailMatchesSkillRead(&detail, params) {
 			continue
 		}
@@ -3190,7 +3195,11 @@ func marketplaceEntries(marketplaces []Marketplace, plugins []PluginSummary) []P
 	return entries
 }
 
-func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail) []PluginDetail {
+// mergePluginDetails folds the configured (stored) details over the ones
+// discovered from marketplaces. The activation policy is applied to the
+// result because a discovered-only detail has no configured entry to carry
+// `plugins._default` (Rust core-plugins/src/loader.rs:184-187).
+func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail, policy PluginsConfigToml) []PluginDetail {
 	byID := map[string]PluginDetail{}
 	for _, detail := range discovered {
 		if detail.Summary.ID == "" {
@@ -3212,6 +3221,7 @@ func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail) []Plu
 	for _, detail := range byID {
 		out = append(out, detail)
 	}
+	applyPluginActivationPolicy(out, policy)
 	sort.SliceStable(out, func(i int, j int) bool {
 		return out[i].Summary.ID < out[j].Summary.ID
 	})

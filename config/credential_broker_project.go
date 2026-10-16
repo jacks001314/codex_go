@@ -27,7 +27,45 @@ const (
 // trusted configuration: only an explicit
 // `features.network_proxy.credential_broker = true` configures the broker, which
 // is enabled when the network proxy is enabled and disabled otherwise.
+//
+// It is the managed-requirement-free form of
+// CredentialBrokerProjectStateForValuesWithRequirements.
 func CredentialBrokerProjectStateForValues(values map[string]any) CredentialBrokerProjectState {
+	return CredentialBrokerProjectStateForValuesWithRequirements(values, nil)
+}
+
+// CredentialBrokerProjectStateForValuesWithRequirements mirrors Rust
+// `apply_credential_broker_requirements` (config/src/loader/mod.rs:995-1031):
+// the trusted-configuration state is combined with the managed
+// `credential_masking` requirement, which consults
+// `feature_requirements.credential_masking` first and falls back to the trusted
+// configuration's `features.credential_masking`, defaulting to false (#52302).
+func CredentialBrokerProjectStateForValuesWithRequirements(values map[string]any, requirements *ConfigRequirements) CredentialBrokerProjectState {
+	trusted := credentialBrokerTrustedState(values)
+	masking := credentialMaskingEnabled(values, requirements)
+	if !masking && trusted == CredentialBrokerProjectUnconfigured {
+		return CredentialBrokerProjectUnconfigured
+	}
+	// Credential masking turns brokerage on by itself; otherwise the managed
+	// `network_proxy` requirement decides, falling back to the trusted state.
+	enabled := masking
+	if !enabled {
+		if required, ok := requirementFeature(requirements, "network_proxy"); ok {
+			enabled = required
+		} else {
+			enabled = trusted == CredentialBrokerProjectEnabled
+		}
+	}
+	if enabled && credentialBrokerNetworkRequirementsAllow(requirements) {
+		return CredentialBrokerProjectEnabled
+	}
+	return CredentialBrokerProjectDisabled
+}
+
+// credentialBrokerTrustedState is the trusted-configuration view: only an
+// explicit `features.network_proxy.credential_broker = true` configures the
+// broker, and it is enabled only when the network proxy is enabled.
+func credentialBrokerTrustedState(values map[string]any) CredentialBrokerProjectState {
 	networkProxy, ok := nestedConfigTable(values, "features", "network_proxy")
 	if !ok {
 		return CredentialBrokerProjectUnconfigured
@@ -39,6 +77,43 @@ func CredentialBrokerProjectStateForValues(values map[string]any) CredentialBrok
 		return CredentialBrokerProjectEnabled
 	}
 	return CredentialBrokerProjectDisabled
+}
+
+// credentialMaskingEnabled mirrors Rust's `credential_masking_enabled`
+// expression (config/src/loader/mod.rs:1000-1011): the managed requirement wins,
+// the trusted `features.credential_masking` flag is the fallback, and both
+// default to false.
+func credentialMaskingEnabled(values map[string]any, requirements *ConfigRequirements) bool {
+	if masking, ok := requirementFeature(requirements, "credential_masking"); ok {
+		return masking
+	}
+	features, ok := nestedConfigTable(values, "features")
+	if !ok {
+		return false
+	}
+	enabled, ok := features["credential_masking"].(bool)
+	return ok && enabled
+}
+
+// requirementFeature reads a managed `feature_requirements` entry, reporting
+// whether the requirement is declared at all (Rust
+// `requirements.feature_requirements.entries.get(key)`).
+func requirementFeature(requirements *ConfigRequirements, key string) (bool, bool) {
+	if requirements == nil {
+		return false, false
+	}
+	value, ok := requirements.FeatureRequirements[key]
+	return value, ok
+}
+
+// credentialBrokerNetworkRequirementsAllow mirrors the managed network
+// constraint check `requirements.network.enabled != Some(false)`
+// (config/src/loader/mod.rs:1024-1030).
+func credentialBrokerNetworkRequirementsAllow(requirements *ConfigRequirements) bool {
+	if requirements == nil || requirements.Network == nil || requirements.Network.Enabled == nil {
+		return true
+	}
+	return *requirements.Network.Enabled
 }
 
 // CredentialBrokerProviderEnvKeys returns the environment keys the trusted

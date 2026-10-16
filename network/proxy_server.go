@@ -292,12 +292,19 @@ func buildProxyRuntimePolicy(settings ProxySettings) (*proxyRuntimePolicy, error
 	if err != nil {
 		return nil, fmt.Errorf("compile network.denied_domains: %w", err)
 	}
+	// A disabled proxy must not activate brokerage even when the settings
+	// still carry credential_broker = true (Rust
+	// core/src/config/network_proxy_spec.rs:381-390).
 	return &proxyRuntimePolicy{
 		settings:     settings,
 		allowMatcher: allowMatcher,
 		denyMatcher:  denyMatcher,
 		mitmHooks:    hooks,
-		broker:       NewProxyCredentialBrokerWithOpenAIHost(settings.CredentialBroker, ConfiguredCredentialProviders(settings.CredentialProviders), settings.CredentialBrokerOpenAIHost),
+		broker: NewProxyCredentialBrokerWithOpenAIHost(
+			CredentialBrokerEnabledForSettings(settings),
+			ConfiguredCredentialProviders(settings.CredentialProviders),
+			settings.CredentialBrokerOpenAIHost,
+		),
 	}, nil
 }
 

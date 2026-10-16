@@ -46,8 +46,13 @@ func (s *PluginService) ReloadConfig() error {
 	}
 	marketplaces := configuredMarketplacesFromConfig(values, installRoot, now)
 	plugins := configuredPluginsFromConfig(values, manifests)
+	// #52220: the activation policy comes from the same config values, so
+	// details discovered from a marketplace but absent from the configured
+	// table obey `plugins._default` exactly like configured ones.
+	policy := PluginsConfigTomlFromValues(values)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.activationPolicy = policy
 	for _, marketplace := range marketplaces {
 		if _, ok := s.marketplaces[marketplace.Name]; !ok {
 			s.marketplaces[marketplace.Name] = marketplace
@@ -189,6 +194,12 @@ func removeInstalledPluginConfig(configPath string, pluginID string) error {
 	if !ok {
 		return nil
 	}
+	if isPluginDefaultConfigKey(pluginID) {
+		// #52220: the activation default is not an installation, so a
+		// removal request must never drop it (Rust
+		// core-plugins/src/marketplace_policy.rs:238-243 retains it).
+		return nil
+	}
 	delete(plugins, pluginID)
 	if len(plugins) == 0 {
 		delete(values, "plugins")
@@ -211,6 +222,9 @@ func removeInstalledPluginConfigsForMarketplace(configPath string, marketplaceNa
 		return nil
 	}
 	for id, raw := range plugins {
+		if isPluginDefaultConfigKey(id) {
+			continue
+		}
 		entry, ok := raw.(map[string]any)
 		if !ok {
 			continue
@@ -342,8 +356,16 @@ func configuredPluginsFromConfig(values map[string]any, cache *manifestCache) []
 	if !ok {
 		return nil
 	}
+	// #52220: `plugins._default` carries the activation default for
+	// installed plugins and is not itself a plugin id (Rust
+	// config/src/types.rs:1059-1072). The loop below must not turn it into
+	// a detail named `_default`.
+	policy := PluginsConfigTomlFromValues(values)
 	out := make([]PluginDetail, 0, len(table))
 	for id, raw := range table {
+		if isPluginDefaultConfigKey(id) {
+			continue
+		}
 		entry, ok := raw.(map[string]any)
 		if !ok || !boolConfigValue(entry["installed"], true) {
 			continue
@@ -366,7 +388,11 @@ func configuredPluginsFromConfig(values map[string]any, cache *manifestCache) []
 		detail := marketplacePluginDetailFromManifest(name, marketplaceName, "", marketplacePath, pluginRoot, plugin, manifest)
 		detail.Summary.ID = id
 		detail.Summary.Installed = true
-		detail.Summary.Enabled = boolConfigValue(entry["enabled"], true)
+		// Rust core-plugins/src/loader.rs:184-187 combines source enablement
+		// with the policy as `enabled.unwrap_or(true) && allows_plugin(id)`,
+		// so configuration can narrow an installation but never activate one
+		// disabled at its source.
+		detail.Summary.Enabled = boolConfigValue(entry["enabled"], true) && policy.AllowsPlugin(id)
 		if detail.MarketplaceName == "" {
 			detail.MarketplaceName = marketplaceName
 		}

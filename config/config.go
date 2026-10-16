@@ -2882,7 +2882,10 @@ func sanitizeProjectConfigValues(values map[string]any, broker CredentialBrokerP
 		}
 		// Rust sanitize_project_config: project configuration cannot change the
 		// system-proxy switches.
-		for _, key := range []string{"respect_system_proxy", "system_proxy_fallback"} {
+		// Rust sanitize_project_config (config/src/loader/mod.rs:1191-1202)
+		// also strips `credential_masking`: a project must not be able to turn
+		// credential masking on or off (#52302).
+		for _, key := range []string{"respect_system_proxy", "system_proxy_fallback", "credential_masking"} {
 			if _, ok := features[key]; ok {
 				delete(features, key)
 				ignored = append(ignored, "features."+key)
