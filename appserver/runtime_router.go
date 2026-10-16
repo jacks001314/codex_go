@@ -2726,6 +2726,32 @@ func experimentalAPIMethod(method Method) bool {
 		MethodMCPServerEventStreamStart,
 		MethodMCPServerEventStreamStop,
 		MethodMockExperimentalMethod,
+		// Rust marks these client requests #[experimental("...")] in
+		// app-server-protocol/src/protocol/common.rs (the same attribute that
+		// builds EXPERIMENTAL_CLIENT_METHODS), so a connection that did not
+		// enable experimentalApi must be rejected. The Go schema marks the same
+		// methods experimental in experimentalClientRequestMethods(); this list
+		// is the runtime half of that gate.
+		MethodPluginSearch,
+		MethodProjectCreate,
+		MethodProjectDelete,
+		MethodProjectImport,
+		MethodProjectList,
+		MethodProjectMove,
+		MethodProjectRead,
+		MethodProjectUpdate,
+		MethodThreadItemsRead,
+		MethodThreadPredictionRequest,
+		MethodThreadQueueAdd,
+		MethodThreadQueueDelete,
+		MethodThreadQueueList,
+		MethodThreadQueueReorder,
+		MethodThreadQueueStart,
+		MethodThreadQueueUpdate,
+		MethodThreadReadStateUpdate,
+		MethodThreadSearchOccurrences,
+		MethodThreadTimelineList,
+		MethodTurnSettingsUpdate,
 		MethodProcessKill,
 		MethodProcessResizePty,
 		MethodProcessSpawn,

@@ -200,10 +200,14 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 	}
 	knownMissing := map[string]bool{}
 
+	var missingMethods []string
 	for _, method := range methods {
 		if !goMethods[method] && !knownMissing[method] {
-			t.Logf("Go appserver protocol gap: missing Rust method %q", method)
+			missingMethods = append(missingMethods, method)
 		}
+	}
+	if len(missingMethods) > 0 {
+		t.Fatalf("Go appserver protocol gap: Rust methods without a Go constant: %q", missingMethods)
 	}
 	for method := range knownMissing {
 		if !containsString(methods, method) {
@@ -218,48 +222,20 @@ func TestRustProtocolMethodSurfaceAgainstGoConstants(t *testing.T) {
 func TestRustProtocolNotificationSurfaceAgainstGoConstants(t *testing.T) {
 	root := rustAppserverRustRoot(t)
 	notifications := rustProtocolNotificationsFromRust(t, filepath.Join(root, "app-server-protocol", "src", "protocol", "common.rs"))
-	goNotifications := map[string]bool{
-		string(NotificationThreadStarted):                   true,
-		string(NotificationThreadStatusChanged):             true,
-		string(NotificationThreadArchived):                  true,
-		string(NotificationThreadDeleted):                   true,
-		string(NotificationThreadUnarchived):                true,
-		string(NotificationThreadClosed):                    true,
-		string(NotificationSkillsChanged):                   true,
-		string(NotificationThreadNameUpdated):               true,
-		string(NotificationThreadAttachmentUpdated):         true,
-		string(NotificationThreadGoalUpdated):               true,
-		string(NotificationThreadGoalCleared):               true,
-		string(NotificationThreadSettingsUpdated):           true,
-		string(NotificationThreadTokenUsageUpdated):         true,
-		string(NotificationRawResponseCompleted):            true,
-		string(NotificationTurnStarted):                     true,
-		string(NotificationTurnCompleted):                   true,
-		string(NotificationThreadRealtimeStarted):           true,
-		string(NotificationThreadRealtimeItemAdded):         true,
-		string(NotificationThreadRealtimeTranscriptDelta):   true,
-		string(NotificationThreadRealtimeTranscriptDone):    true,
-		string(NotificationThreadRealtimeOutputAudioDelta):  true,
-		string(NotificationThreadRealtimeSDP):               true,
-		string(NotificationThreadRealtimeError):             true,
-		string(NotificationThreadRealtimeClosed):            true,
-		string(NotificationError):                           true,
-		string(NotificationAccountLoginCompleted):           true,
-		string(NotificationAccountUpdated):                  true,
-		string(NotificationAccountRateLimitsUpdated):        true,
-		string(NotificationAppListUpdated):                  true,
-		string(NotificationModelRerouted):                   true,
-		string(NotificationModelVerification):               true,
-		string(NotificationWarning):                         true,
-		string(NotificationDeprecationNotice):               true,
-		string(NotificationConfigWarning):                   true,
-		string(NotificationFuzzyFileSearchSessionUpdated):   true,
-		string(NotificationFuzzyFileSearchSessionCompleted): true,
-	}
+	// The Go side is derived from the constants declared in protocol.go rather
+	// than from a hand-maintained map: the previous map listed 36 of the 87
+	// `NotificationMethod` constants, so it reported phantom gaps and hid real
+	// ones. `Name NotificationMethod = "value"` occurs only in that constant
+	// block, so the parse is exact.
+	goNotifications := goNotificationConstantsFromSource(t, ".")
+	var missingNotifications []string
 	for _, notification := range notifications {
 		if !goNotifications[notification] {
-			t.Logf("Go appserver protocol gap: missing Rust notification %q", notification)
+			missingNotifications = append(missingNotifications, notification)
 		}
+	}
+	if len(missingNotifications) > 0 {
+		t.Fatalf("Go appserver protocol gap: Rust notifications without a Go constant: %q", missingNotifications)
 	}
 }
 
@@ -273,7 +249,46 @@ func rustProtocolMethodsFromRust(t *testing.T, path string) []string {
 	}
 	data = data[start:end]
 	re := regexp.MustCompile(`(?:Method[A-Za-z0-9_]+\s+Method\s+=\s+|[A-Za-z0-9_]+\s*=>\s*)"([^"]+)"`)
-	return dedupeSortedStrings(extractMatches(data, re))
+	methods := dedupeSortedStrings(extractMatches(data, re))
+	if len(methods) == 0 {
+		t.Fatalf("parsed 0 client request methods from %s; the Rust macro shape changed and this guard would silently pass", path)
+	}
+	return methods
+}
+
+// goNotificationConstantsFromSource extracts the method literal of every
+// `NotificationX NotificationMethod = "value"` constant declared in the Go
+// app-server protocol package. The constants are spread over several files
+// (protocol.go, notifications.go, projects.go, remote_control_protocol.go),
+// so the package source is scanned. Deriving the set keeps the Rust
+// notification guard fail-closed without a hand-maintained map that drifts
+// behind the constants, and a parse that finds nothing fails loudly instead of
+// passing vacuously.
+func goNotificationConstantsFromSource(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", dir, err)
+	}
+	re := regexp.MustCompile(`[A-Za-z0-9_]+\s+NotificationMethod\s*=\s*"([^"]+)"`)
+	out := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		for _, match := range re.FindAllStringSubmatch(string(data), -1) {
+			out[match[1]] = true
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("parsed 0 NotificationMethod constants from %s; this guard would silently pass", dir)
+	}
+	return out
 }
 
 func containsString(values []string, want string) bool {
@@ -288,8 +303,21 @@ func containsString(values []string, want string) bool {
 func rustProtocolNotificationsFromRust(t *testing.T, path string) []string {
 	t.Helper()
 	data := readRustProtocolSource(t, path)
-	re := regexp.MustCompile(`Notification[A-Za-z0-9_]+\s+NotificationMethod\s+=\s+"([^"]+)"`)
-	return dedupeSortedStrings(extractMatches(data, re))
+	start := strings.Index(data, "server_notification_definitions! {")
+	end := strings.Index(data, "client_notification_definitions! {")
+	if start < 0 || end <= start {
+		t.Fatalf("could not locate Rust server notification definitions in %s", path)
+	}
+	data = data[start:end]
+	// The macro body is `Variant => "method/name" (v2::Type),`. The previous
+	// `Notification... NotificationMethod = "..."` shape never occurs in
+	// common.rs, so this guard parsed 0 notifications and stayed vacuous.
+	re := regexp.MustCompile(`[A-Za-z0-9_]+\s*=>\s*"([^"]+)"`)
+	notifications := dedupeSortedStrings(extractMatches(data, re))
+	if len(notifications) == 0 {
+		t.Fatalf("parsed 0 server notifications from %s; the Rust macro shape changed and this guard would silently pass", path)
+	}
+	return notifications
 }
 
 func readRustProtocolSource(t *testing.T, path string) string {

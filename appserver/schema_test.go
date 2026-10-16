@@ -869,6 +869,84 @@ func rustMethodsFromCommon(t *testing.T, path string) []string {
 	return dedupeSortedStrings(values)
 }
 
+// rustExperimentalClientMethodsFromCommon extracts the method literal of every
+// client request variant annotated with `#[experimental("...")]` in the Rust
+// protocol definition macro. Doc comments may sit between the attribute and the
+// variant, so the attribute is remembered until the next variant line.
+func rustExperimentalClientMethodsFromCommon(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	source := string(data)
+	start := strings.Index(source, "client_request_definitions! {")
+	end := strings.Index(source, "server_request_definitions! {")
+	if start < 0 || end <= start {
+		t.Fatalf("could not locate Rust client request definitions in %s", path)
+	}
+	pending := ""
+	var values []string
+	for _, line := range strings.Split(source[start:end], "\n") {
+		trimmed := strings.TrimSpace(line)
+		if match := experimentalAttribute.FindStringSubmatch(trimmed); match != nil {
+			pending = match[1]
+			continue
+		}
+		variant := clientRequestVariantLiteral.FindStringSubmatch(trimmed)
+		if variant == nil {
+			continue
+		}
+		if pending != "" {
+			values = append(values, variant[1])
+		}
+		pending = ""
+	}
+	if len(values) == 0 {
+		t.Fatalf("parsed 0 Rust experimental client requests from %s; this guard would silently pass", path)
+	}
+	sort.Strings(values)
+	return dedupeSortedStrings(values)
+}
+
+var experimentalAttribute = regexp.MustCompile(`^#\[experimental\("([^"]+)"\)\]$`)
+
+var clientRequestVariantLiteral = regexp.MustCompile(`^[A-Za-z0-9_]+\s*=>\s*"([^"]+)"`)
+
+// TestRustExperimentalClientSurfaceIsGatedLikeRust pins the runtime half of the
+// experimental gate. Rust marks these client requests `#[experimental("...")]`
+// (app-server-protocol/src/protocol/common.rs) and message_processor.rs rejects
+// them unless the connection enabled the experimentalApi capability. The Go
+// runtime gate had drifted behind both its own schema (experimental client
+// requests) and the Rust source, so a client without the capability could still
+// call the seven project/* RPCs and thirteen more experimental requests. The
+// assertion is two-way: capability absent => rejected, enabled => allowed.
+func TestRustExperimentalClientSurfaceIsGatedLikeRust(t *testing.T) {
+	root := rustAppServerProtocolRustRoot(t)
+	methods := rustExperimentalClientMethodsFromCommon(t, filepath.Join(root, "app-server-protocol", "src", "protocol", "common.rs"))
+	router := NewRuntimeRouter(RuntimeServices{})
+	router.rememberConnectionExperimentalAPI("gate-off", nil)
+	router.rememberConnectionExperimentalAPI("gate-on", &InitializeCapabilities{ExperimentalAPI: true})
+	var missing []string
+	for _, method := range methods {
+		if !experimentalAPIMethod(Method(method)) {
+			missing = append(missing, method)
+			continue
+		}
+		wantReason := method + " requires experimentalApi capability"
+		err := router.rejectExperimentalAPIDisabled(&Request{Method: Method(method), ConnectionID: "gate-off"})
+		if err == nil || err.Error() != wantReason {
+			t.Errorf("rejectExperimentalAPIDisabled(%s) without experimentalApi = %v, want %q", method, err, wantReason)
+		}
+		if err := router.rejectExperimentalAPIDisabled(&Request{Method: Method(method), ConnectionID: "gate-on"}); err != nil {
+			t.Errorf("rejectExperimentalAPIDisabled(%s) with experimentalApi = %v, want nil", method, err)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("Rust experimental client requests missing from experimentalAPIMethod: %q", missing)
+	}
+}
+
 type rustProtocolUnionSchema struct {
 	OneOf []rustProtocolVariant `json:"oneOf"`
 }
