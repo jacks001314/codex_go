@@ -7,7 +7,8 @@ import (
 )
 
 // Mirrors Rust config/src/types_tests.rs
-// (plugin_activation_inherits_defaults_without_explicit_enablement, #52220):
+// (plugin_activation_inherits_defaults_without_explicit_enablement, #52220 and
+// #54424):
 // without `_default` every plugin keeps legacy source and account enablement;
 // otherwise an explicit setting overrides the configured default and every
 // other plugin inherits it, including plugins absent from the table.
@@ -20,16 +21,25 @@ func TestPluginsConfigTomlAllowsPluginLikeRust(t *testing.T) {
 		"approval@market",
 		"enabled@market",
 		"disabled@market",
+		"remote@market",
 	}
 	newPolicy := func(deflt *PluginsDefaultConfig) PluginsConfigToml {
 		return PluginsConfigToml{
 			Default: deflt,
-			Plugins: map[string]*bool{
-				"empty@market":    nil,
-				"mcp@market":      nil,
-				"approval@market": nil,
-				"enabled@market":  explicit(true),
-				"disabled@market": explicit(false),
+			Plugins: map[string]PluginConfig{
+				"empty@market":    {},
+				"mcp@market":      {},
+				"approval@market": {},
+				"enabled@market":  {Enabled: explicit(true)},
+				"disabled@market": {Enabled: explicit(false)},
+				// #54424: the remote-plugin metadata is stored verbatim and is
+				// not an `enabled` override, so `remote@market` inherits the
+				// default exactly like an entry that omits `enabled`.
+				"remote@market": {
+					RemotePluginID: stringPtrIfNotEmpty("remote-plugin-123"),
+					ReleaseID:      stringPtrIfNotEmpty("plugin-release-123"),
+					AutoProvision:  explicit(true),
+				},
 			},
 		}
 	}
@@ -38,9 +48,9 @@ func TestPluginsConfigTomlAllowsPluginLikeRust(t *testing.T) {
 		deflt *PluginsDefaultConfig
 		want  []bool
 	}{
-		{"omitted default", nil, []bool{true, true, true, true, true, true}},
-		{"default disabled", &PluginsDefaultConfig{Enabled: false}, []bool{false, false, false, false, true, false}},
-		{"default enabled", &PluginsDefaultConfig{Enabled: true}, []bool{true, true, true, true, true, false}},
+		{"omitted default", nil, []bool{true, true, true, true, true, true, true}},
+		{"default disabled", &PluginsDefaultConfig{Enabled: false}, []bool{false, false, false, false, true, false, false}},
+		{"default enabled", &PluginsDefaultConfig{Enabled: true}, []bool{true, true, true, true, true, false, true}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := newPolicy(test.deflt)

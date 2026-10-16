@@ -21,6 +21,9 @@ type execHumanRenderer struct {
 	// showRawAgentReasoning selects raw reasoning content over the summary
 	// (Rust show_raw_agent_reasoning).
 	showRawAgentReasoning bool
+	// lastTurnDiff mirrors Rust's `last_turn_diff`: the most recently reported
+	// accumulated turn diff, so repeated notifications print only once.
+	lastTurnDiff string
 }
 
 func newExecHumanRenderer(stderr io.Writer, colorFlag string) *execHumanRenderer {
@@ -99,11 +102,30 @@ func (h *execHumanRenderer) HandleEvent(event protocol.ThreadEvent) {
 		if event.Item != nil {
 			h.renderItemCompleted(*event.Item)
 		}
+	case "turn.started":
+		// Rust's TurnStarted arm clears the remembered diff so a new turn
+		// re-renders even when it reproduces the previous turn's diff
+		// (event_processor_with_human_output.rs:374-377).
+		h.lastTurnDiff = ""
 	case "error":
 		if event.Error != nil && event.Error.Message != "" {
 			fmt.Fprintln(h.stderr, execHumanErrorLine(h.withAnsi, event.Error.Message))
 		}
 	}
+}
+
+// HandleTurnDiff mirrors Rust's ServerNotification::TurnDiffUpdated arm in
+// EventProcessorWithHumanOutput (exec/src/event_processor_with_human_output.rs:345-353):
+// a changed, non-blank diff is printed, and blank updates are still remembered
+// so a restored diff renders again.
+func (h *execHumanRenderer) HandleTurnDiff(diff string) {
+	if h == nil || h.stderr == nil {
+		return
+	}
+	if diff != h.lastTurnDiff && strings.TrimSpace(diff) != "" {
+		fmt.Fprintln(h.stderr, diff)
+	}
+	h.lastTurnDiff = diff
 }
 
 func (h *execHumanRenderer) renderItemStarted(item protocol.ThreadItem) {

@@ -93,7 +93,9 @@ func TestClipboardCopyWithSSHTmuxFallbackMatchesRust(t *testing.T) {
 	}
 }
 
-func TestClipboardCopyWithLocalUsesNativeFirst(t *testing.T) {
+// Rust #53453 local_wsl_uses_windows_and_skips_osc52_on_success: in a WSL session the
+// Windows clipboard must be reached without contacting the native (WSLg) backend first.
+func TestClipboardCopyWithLocalWSLPrefersWindowsClipboardLikeRust(t *testing.T) {
 	calls := clipboardCopyCalls{}
 	lease, err := CopyToClipboardWith(
 		"hello",
@@ -103,10 +105,53 @@ func TestClipboardCopyWithLocalUsesNativeFirst(t *testing.T) {
 		calls.nativeOK,
 		calls.wslOK,
 	)
+	if err != nil || lease != nil {
+		t.Fatalf("wsl copy = lease %#v err %v", lease, err)
+	}
+	if calls.wsl != 1 || calls.native != 0 || calls.osc != 0 || calls.tmux != 0 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+// Rust #53453: off WSL the native clipboard is still attempted first and its lease
+// is preserved.
+func TestClipboardCopyWithLocalUsesNativeFirstLikeRust(t *testing.T) {
+	calls := clipboardCopyCalls{}
+	lease, err := CopyToClipboardWith(
+		"hello",
+		ClipboardEnvironment{},
+		calls.tmuxOK,
+		calls.oscOK,
+		calls.nativeOK,
+		calls.wslOK,
+	)
 	if err != nil || lease == nil {
 		t.Fatalf("local native = lease %#v err %v", lease, err)
 	}
-	if calls.native != 1 || calls.osc != 0 || calls.wsl != 0 {
+	if calls.native != 1 || calls.wsl != 0 || calls.osc != 0 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+// Rust #53453: on WSL a failing Windows write falls through to the native backend,
+// and a native lease suppresses terminal forwarding.
+func TestClipboardCopyWithLocalWSLFallsBackToNativeLeaseLikeRust(t *testing.T) {
+	calls := clipboardCopyCalls{}
+	lease, err := CopyToClipboardWith(
+		"hello",
+		ClipboardEnvironment{WSLSession: true},
+		calls.tmuxOK,
+		calls.oscOK,
+		calls.nativeOK,
+		func(string) error {
+			calls.wsl++
+			return ClipboardError("powershell unavailable")
+		},
+	)
+	if err != nil || lease == nil {
+		t.Fatalf("wsl fallback native = lease %#v err %v", lease, err)
+	}
+	if calls.wsl != 1 || calls.native != 1 || calls.osc != 0 || calls.tmux != 0 {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
@@ -130,7 +175,7 @@ func TestClipboardCopyWithLocalFallbacksMatchRust(t *testing.T) {
 			return ClipboardError("powershell unavailable")
 		},
 	)
-	if err == nil || err.Error() != "native clipboard: native unavailable; WSL fallback: powershell unavailable; OSC 52 fallback: osc blocked" {
+	if err == nil || err.Error() != "Windows clipboard: powershell unavailable; native clipboard: native unavailable; terminal clipboard: osc blocked" {
 		t.Fatalf("local fallback err = %v", err)
 	}
 	if calls.native != 1 || calls.wsl != 1 || calls.osc != 1 {

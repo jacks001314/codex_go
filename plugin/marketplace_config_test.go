@@ -99,34 +99,55 @@ func TestConfiguredPluginsFromConfigNeverWidensSourceEnablementLikeRust(t *testi
 	}
 }
 
-// #52220: a detail discovered from a marketplace has no configured entry to
-// carry the policy, so mergePluginDetails applies `plugins._default` to it
-// (Rust core-plugins/src/loader.rs:184-187).
+// #52220 / #54424 through the real loader path. The discovered details come from
+// `marketplacePluginDetailFromManifest`, the constructor `loadMarketplacePlugins`
+// itself calls, so they carry the real shape: `Enabled` unset and `Installed`
+// false. `mergePluginDetails` can therefore only ever clear the flag, never set
+// it, which is why the Rust loader applies the policy to `configured_plugins`
+// alone (core-plugins/src/loader.rs:184-187).
 func TestMergePluginDetailsAppliesActivationPolicyToDiscoveredPluginsLikeRust(t *testing.T) {
-	enabled := true
+	explicitEnabled := true
 	policy := PluginsConfigToml{
 		Default: &PluginsDefaultConfig{Enabled: false},
-		Plugins: map[string]*bool{"explicit@acme": &enabled},
+		Plugins: map[string]PluginConfig{"explicit@acme": {Enabled: &explicitEnabled}},
 	}
+	pluginRoot := t.TempDir()
 	discovered := []PluginDetail{
-		{Summary: PluginSummary{ID: "tool@acme", Enabled: true}},
-		{Summary: PluginSummary{ID: "explicit@acme", Enabled: true}},
+		marketplacePluginDetailFromManifest("tool", "acme", "", "", pluginRoot, marketplaceManifestPlugin{Name: "tool"}, nil),
+		marketplacePluginDetailFromManifest("explicit", "acme", "", "", pluginRoot, marketplaceManifestPlugin{Name: "explicit"}, nil),
 	}
+	for _, detail := range discovered {
+		if detail.Summary.Enabled || detail.Summary.Installed {
+			t.Fatalf("the real loader must leave a discovered plugin inactive and uninstalled: %#v", detail.Summary)
+		}
+	}
+
 	merged := mergePluginDetails(nil, discovered, policy)
 	if len(merged) != 2 {
 		t.Fatalf("merged = %#v", merged)
 	}
 	for _, detail := range merged {
-		switch detail.Summary.ID {
-		case "tool@acme":
-			if detail.Summary.Enabled {
-				t.Fatal("a discovered plugin must inherit the disabled default")
-			}
-		case "explicit@acme":
-			if !detail.Summary.Enabled {
-				t.Fatal("an explicit enablement must survive the merge")
-			}
+		if detail.Summary.Enabled {
+			t.Fatalf("mergePluginDetails must not activate a discovered plugin: %#v", detail.Summary)
 		}
+	}
+
+	// Only the configured side carries activation, and there the merge keeps the
+	// value `configuredPluginsFromConfig` resolved: an entry the disabled default
+	// narrows stays inactive, and an explicit `enabled = true` survives.
+	stored := []PluginDetail{
+		{Summary: PluginSummary{ID: "tool@acme", Installed: true, Enabled: true}},
+		{Summary: PluginSummary{ID: "explicit@acme", Installed: true, Enabled: true}},
+	}
+	got := map[string]bool{}
+	for _, detail := range mergePluginDetails(stored, discovered, policy) {
+		got[detail.Summary.ID] = detail.Summary.Enabled
+	}
+	if got["tool@acme"] {
+		t.Fatalf("a disabled default must narrow an installed plugin: %#v", got)
+	}
+	if !got["explicit@acme"] {
+		t.Fatalf("an explicit enablement must survive the merge: %#v", got)
 	}
 }
 

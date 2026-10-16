@@ -3196,9 +3196,18 @@ func marketplaceEntries(marketplaces []Marketplace, plugins []PluginSummary) []P
 }
 
 // mergePluginDetails folds the configured (stored) details over the ones
-// discovered from marketplaces. The activation policy is applied to the
-// result because a discovered-only detail has no configured entry to carry
-// `plugins._default` (Rust core-plugins/src/loader.rs:184-187).
+// discovered from marketplaces, then narrows the result with the activation
+// policy (`plugins._default`), mirroring Rust's
+// `enabled.unwrap_or(true) && plugin_policy.allows_plugin(plugin_id)`
+// (core-plugins/src/loader.rs:184-187).
+//
+// The pass only ever clears `Enabled`. For a detail that exists only in a
+// marketplace manifest it is therefore a no-op: marketplacePluginDetailFromManifest
+// leaves `Enabled` unset and `Installed` false, and addPluginLocked is the only
+// place that normalizes `!Enabled && !Installed` to true for stored details.
+// Upstream applies the policy to `configured_plugins` alone, so keeping this
+// pass is a pure narrowing guard: it cannot activate anything, and it still
+// narrows a stored detail when the configured table no longer covers it.
 func mergePluginDetails(primary []PluginDetail, discovered []PluginDetail, policy PluginsConfigToml) []PluginDetail {
 	byID := map[string]PluginDetail{}
 	for _, detail := range discovered {

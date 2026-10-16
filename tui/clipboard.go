@@ -40,7 +40,10 @@ func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
 	}
 	order := []ClipboardBackend{ClipboardNative}
 	if environment.WSLSession {
-		order = append(order, ClipboardWSL)
+		// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): prefer the Windows
+		// clipboard on WSL. Contacting WSLg for native setup can block forever, so the
+		// Windows backend is attempted before the native one.
+		order = []ClipboardBackend{ClipboardWSL, ClipboardNative}
 	}
 	if environment.TmuxSession {
 		return append(order, ClipboardTmux, ClipboardOSC52)
@@ -93,33 +96,39 @@ func CopyToClipboardWith(
 		return nil, ClipboardError("OSC 52 clipboard copy failed over SSH: " + err.Error())
 	}
 
-	lease, nativeErr := nativeCopy(text)
+	// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): on WSL, attempt the
+	// Windows clipboard before the native one. Native (WSLg) setup can block forever, so
+	// it is only used as the Windows backend's fallback.
+	var lease *ClipboardLease
+	var nativeErr error
+	if environment.WSLSession {
+		if wslErr := wslCopy(text); wslErr != nil {
+			fallbackLease, fallbackErr := nativeCopy(text)
+			if fallbackErr == nil {
+				lease = fallbackLease
+			} else {
+				nativeErr = ClipboardError(fmt.Sprintf("Windows clipboard: %v; native clipboard: %v", wslErr, fallbackErr))
+			}
+		}
+	} else {
+		nativeLease, err := nativeCopy(text)
+		if err == nil {
+			lease = nativeLease
+		} else {
+			nativeErr = ClipboardError("native clipboard: " + err.Error())
+		}
+	}
 	if nativeErr == nil {
 		return lease, nil
 	}
-	if environment.WSLSession {
-		wslErr := wslCopy(text)
-		if wslErr == nil {
-			return nil, nil
-		}
-		terminalErr := terminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
-		if terminalErr == nil {
-			return nil, nil
-		}
-		if environment.TmuxSession {
-			return nil, ClipboardError(fmt.Sprintf("native clipboard: %v; WSL fallback: %v; terminal fallback: %v", nativeErr, wslErr, terminalErr))
-		}
-		return nil, ClipboardError(fmt.Sprintf("native clipboard: %v; WSL fallback: %v; OSC 52 fallback: %v", nativeErr, wslErr, terminalErr))
-	}
 
+	// Copy natively first: an X11 SelectionClear from a terminal write can otherwise
+	// race with arboard reusing its ownership window (clipboard_copy.rs:230-236).
 	terminalErr := terminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
 	if terminalErr == nil {
 		return nil, nil
 	}
-	if environment.TmuxSession {
-		return nil, ClipboardError(fmt.Sprintf("native clipboard: %v; terminal fallback: %v", nativeErr, terminalErr))
-	}
-	return nil, ClipboardError(fmt.Sprintf("native clipboard: %v; OSC 52 fallback: %v", nativeErr, terminalErr))
+	return nil, ClipboardError(fmt.Sprintf("%v; terminal clipboard: %v", nativeErr, terminalErr))
 }
 
 func TerminalClipboardCopyWith(text string, tmuxSession bool, tmuxCopy ClipboardCopyFunc, osc52Copy ClipboardCopyFunc) error {

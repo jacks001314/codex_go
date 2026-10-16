@@ -9,7 +9,9 @@
 package agentsoverview
 
 import (
+	"math"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -304,6 +306,13 @@ type View struct {
 	worktreesEnabled bool
 	projectGroups    []projectGroup
 
+	// rowOrder retains each row's status group and rank from the last listing so a
+	// refresh keeps a task's relative order while it stays in the same status
+	// group (Rust #52946 AgentsOverviewViewState::row_order). Tasks that are new or
+	// that changed group have no retained rank and sort after the rows already in
+	// their destination group.
+	rowOrder map[string]rowOrderEntry
+
 	// selectionAfterRemoval is a one-shot successor chosen before a removal
 	// invalidates the displayed rows (Rust #50505 selection_after_removal). It
 	// survives batched removals and duplicate removal notifications until the
@@ -580,6 +589,76 @@ func (v *View) Counts() (needsYou, working, ready int) {
 	return needsYou, working, ready
 }
 
+// rowOrderEntry is one row's retained status-group position (Rust #52946
+// AgentsOverviewViewState::row_order).
+type rowOrderEntry struct {
+	group Group
+	rank  int
+}
+
+// retainRowOrder mirrors Rust #52946 AgentsOverviewView::new: existing rows keep
+// their relative order while they stay in the same status group, while new
+// arrivals and tasks that changed group sort after the rows already in their
+// destination group. Removed tasks are forgotten, so a rediscovered task
+// behaves like a new arrival. The caller supplies recency-ordered rows.
+func (v *View) retainRowOrder(rows []Row) {
+	if v == nil {
+		return
+	}
+	previous := v.rowOrder
+	if previous == nil {
+		previous = map[string]rowOrderEntry{}
+	}
+	rankOf := func(index int) int {
+		entry, ok := previous[strings.TrimSpace(rows[index].ThreadID)]
+		if !ok || entry.group != rows[index].Group {
+			return math.MaxInt
+		}
+		return entry.rank
+	}
+	indices := make([]int, len(rows))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(a int, b int) bool {
+		left, right := indices[a], indices[b]
+		if rows[left].Group != rows[right].Group {
+			return rows[left].Group < rows[right].Group
+		}
+		return rankOf(left) < rankOf(right)
+	})
+	order := make(map[string]rowOrderEntry, len(indices))
+	for rank, index := range indices {
+		threadID := strings.TrimSpace(rows[index].ThreadID)
+		if threadID == "" {
+			continue
+		}
+		order[threadID] = rowOrderEntry{group: rows[index].Group, rank: rank}
+	}
+	v.rowOrder = order
+}
+
+// sortByRetainedStatusRank orders visible indices by status group and then by
+// the rank retained for the row's group (Rust #52946). Rows with no retained
+// rank keep the host's recency order and follow the retained rows of their
+// group, which is what Rust's stable `(group, rank)` sort produces.
+func (v *View) sortByRetainedStatusRank(indices []int) {
+	rankOf := func(index int) int {
+		entry, ok := v.rowOrder[strings.TrimSpace(v.Rows[index].ThreadID)]
+		if !ok || entry.group != v.Rows[index].Group {
+			return math.MaxInt
+		}
+		return entry.rank
+	}
+	sort.SliceStable(indices, func(a int, b int) bool {
+		left, right := indices[a], indices[b]
+		if v.Rows[left].Group != v.Rows[right].Group {
+			return v.Rows[left].Group < v.Rows[right].Group
+		}
+		return rankOf(left) < rankOf(right)
+	})
+}
+
 // VisibleIndices returns row indices passing the search and hide filters,
 // pinned tasks first, then sorted by project (cwd) or status group depending on
 // the grouping preference. It mirrors Rust AgentsOverviewView::visible_indices
@@ -620,7 +699,9 @@ func (v *View) VisibleIndices() []int {
 			return ModelName(v.Rows[index].Model)
 		})
 	case GroupingStatus:
-		// Status grouping keeps the host's recency order.
+		// Rust #52946: rows keep their retained status-group order, so a progress
+		// refresh cannot reorder rows inside a status group.
+		v.sortByRetainedStatusRank(visible)
 	default:
 		// Project grouping: sort by the project-group key (linked checkouts of
 		// one repository share a key, Rust #43279) while preserving host
@@ -1187,6 +1268,7 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	if successor := v.successorForRebuild(rows, selected); successor != "" {
 		selected = successor
 	}
+	previousOrder := v.rowOrder
 	view := New(rows, selected, v.ExitOnCancel)
 	view.State = v.State
 	view.worktreesEnabled = v.worktreesEnabled
@@ -1195,6 +1277,9 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	// pin request.
 	view.pinRanks = v.pinRanks
 	view.pinPending = v.pinPending
+	view.rowOrder = previousOrder
+	// Rust #52946: record the retained order for the next refresh.
+	view.retainRowOrder(view.Rows)
 	view.recomputeProjectGroups()
 	view.pruneUsageLines()
 	// Hidden roots stay hidden across refreshes; if the restored selection

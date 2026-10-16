@@ -982,6 +982,59 @@ func TestRustStableClientSurfaceIsNotGatedAsExperimental(t *testing.T) {
 			t.Fatalf("registered Go-only alias %s must stay gated like its upstream experimental method", alias)
 		}
 	}
+	// The registry loop above cannot notice a registration that is deleted: it
+	// iterates the very list a deletion empties, and the camelCase spelling never
+	// appears in the Rust fixture the over-gated loop below walks. Derive the Go-only
+	// set from the client-request inventory the schema and the signature table
+	// already maintain: a spelling upstream does not have, whose snake_case form
+	// upstream marks #[experimental], is exactly a Go-only alias of an experimental
+	// method, so it must be registered *and* gated at runtime.
+	registered := map[string]bool{}
+	for alias := range goOnlyAliases {
+		registered[alias] = true
+	}
+	rustLiterals := map[string]bool{}
+	for method := range rustExperimental {
+		rustLiterals[method] = true
+	}
+	for _, variant := range schema.OneOf {
+		if len(variant.Properties.Method.Enum) > 0 {
+			rustLiterals[variant.Properties.Method.Enum[0]] = true
+		}
+	}
+	inventory := map[string]bool{}
+	for method := range protocolMethodSignatures() {
+		inventory[method] = true
+	}
+	for _, method := range BuildProtocolSchema(true, true).ClientRequests {
+		inventory[method.Method] = true
+	}
+	derived := 0
+	var unregistered []string
+	var ungated []string
+	for method := range inventory {
+		if rustLiterals[method] {
+			continue
+		}
+		if !rustExperimental[camelCaseMethodToSnake(method)] {
+			continue
+		}
+		derived++
+		if !registered[method] {
+			unregistered = append(unregistered, method)
+		}
+		if !experimentalAPIMethod(Method(method)) {
+			ungated = append(ungated, method)
+		}
+	}
+	if derived == 0 {
+		t.Fatalf("derived 0 Go-only client request spellings; this guard would silently pass")
+	}
+	sort.Strings(unregistered)
+	sort.Strings(ungated)
+	if len(unregistered) > 0 || len(ungated) > 0 {
+		t.Fatalf("Go-only experimental client requests must stay registered and gated: unregistered=%q ungated=%q", unregistered, ungated)
+	}
 	experimental := map[string]bool{}
 	for _, method := range BuildProtocolSchema(true, false).ClientRequests {
 		if method.Experimental {
@@ -996,6 +1049,11 @@ func TestRustStableClientSurfaceIsNotGatedAsExperimental(t *testing.T) {
 		}
 		method := variant.Properties.Method.Enum[0]
 		if goOnlyAliases[method] {
+			// A Go-only spelling never appears in the Rust fixture, so this branch is
+			// defensive: if upstream ever exposes one it must still be gated.
+			if !experimentalAPIMethod(Method(method)) {
+				t.Errorf("Go-only alias %s must stay gated like its upstream experimental method", method)
+			}
 			continue
 		}
 		if experimentalAPIMethod(Method(method)) {

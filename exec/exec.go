@@ -1065,12 +1065,13 @@ type execEventSink struct {
 	events          []protocol.ThreadEvent
 	encoder         *json.Encoder
 	human           *execHumanRenderer
+	turnDiff        *execTurnDiffState
 	internalHandler func(protocol.ThreadEvent)
 	err             error
 }
 
 func newExecEventSink(stdout io.Writer, encodeJSON bool) *execEventSink {
-	sink := &execEventSink{}
+	sink := &execEventSink{turnDiff: newExecTurnDiffState()}
 	if encodeJSON && stdout != nil {
 		sink.encoder = json.NewEncoder(stdout)
 		sink.encoder.SetEscapeHTML(false)
@@ -1118,6 +1119,37 @@ func (s *execEventSink) EmitInternal(event protocol.ThreadEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.internalHandler(event)
+}
+
+// EmitTurnDiff hands the accumulated turn diff to the human renderer.
+// Rust's exec JSON event model has no turn-diff event
+// (codex-rs/exec/src/exec_events.rs), so -- like Rust's JSONL processor
+// (event_processor_with_jsonl_output.rs:567) -- the diff never reaches the JSON
+// encoder or the recorded event list; only the human output renders it.
+func (s *execEventSink) EmitTurnDiff(diff string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.human != nil {
+		s.human.HandleTurnDiff(diff)
+	}
+}
+
+// emitTurnDiffForExecution feeds one tool execution to the turn diff tracker and
+// renders the accumulated diff when the producer reports an update, mirroring
+// Rust's core ToolEmitter::ApplyPatch -> EventMsg::TurnDiff -> TurnDiffUpdated
+// chain for the exec driver.
+func (s *execEventSink) emitTurnDiffForExecution(execution *turn.ToolExecutionResult) {
+	if s == nil || s.turnDiff == nil {
+		return
+	}
+	diff, ok := s.turnDiff.trackExecution(execution)
+	if !ok {
+		return
+	}
+	s.EmitTurnDiff(diff)
 }
 
 func (s *execEventSink) Events() []protocol.ThreadEvent {
@@ -2353,6 +2385,7 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 					return err
 				}
 			}
+			sink.emitTurnDiffForExecution(&toolExecutions[i])
 		}
 		executionIndex += len(toolExecutions)
 		if len(response.Items) == 0 && strings.TrimSpace(response.Message) != "" {
@@ -2377,6 +2410,7 @@ func emitFinalEventsFromAgentResult(sink *execEventSink, result *turn.AgentLoopR
 				return err
 			}
 		}
+		sink.emitTurnDiffForExecution(&result.ToolExecutions[executionIndex])
 		executionIndex++
 	}
 	if event, ok := todoLists.completionEvent(); ok {

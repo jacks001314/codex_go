@@ -1321,8 +1321,21 @@ func isContentFilterStreamError(err error) bool {
 // immediately, and is terminal: it neither spends the stream retry budget nor
 // lets compaction fall back to the selected model. Only the content-filter
 // reason keeps its own retryable type (Rust #49119).
+//
+// Rust #53670 (`protocol/src/error.rs::ResponseIncompleteError`, filled in
+// `codex-api/src/sse/responses.rs::process_responses_event`) also carries the
+// response id and the usage the server reported on the terminal event, so a
+// caller can account for a response that stopped before the model finished.
+// Both are read off the event's `response` object, and a usage that is missing
+// or malformed is ignored instead of estimated.
 type ResponseIncompleteError struct {
 	Reason string
+	// ResponseID is the id of the response that stopped early, empty when the
+	// terminal event carried none (Rust's `response_id: Option<String>`).
+	ResponseID string
+	// Usage is the usage the server reported on the terminal event, nil when it
+	// was absent, null or malformed (Rust's `token_usage: Option<TokenUsage>`).
+	Usage *AgentUsage
 }
 
 func (e ResponseIncompleteError) Error() string {
@@ -1342,8 +1355,171 @@ func responseIncompleteError(data []byte) error {
 	if reason := responseIncompleteReason(data); reason == "content_filter" {
 		return contentFilterStreamError{}
 	} else {
-		return ResponseIncompleteError{Reason: reason}
+		return ResponseIncompleteError{
+			Reason:     reason,
+			ResponseID: responseIDFromEventData(data),
+			Usage:      responseIncompleteUsage(data),
+		}
 	}
+}
+
+// responseIncompleteUsage mirrors Rust #53670's
+// `serde_json::from_value::<ResponseCompletedUsage>(usage.clone()).ok()`: the
+// usage reported on a terminal incomplete event is kept only when the event
+// carries a `response.usage` object that decodes like the completed response's
+// usage. Missing, null, malformed or wrongly typed usage yields nil - Rust
+// ignores it rather than estimating one from the partial response.
+func responseIncompleteUsage(data []byte) *AgentUsage {
+	var payload struct {
+		Response struct {
+			Usage json.RawMessage `json:"usage"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+	return responseCompletedUsageFromJSON(payload.Response.Usage)
+}
+
+// responseCompletedUsageFromJSON decodes a `response.usage` object the way
+// Rust's `ResponseCompletedUsage` derive does: `input_tokens`, `output_tokens`
+// and `total_tokens` are required integers; the two details objects are
+// optional (a JSON null is absent, like Rust's `Option`), but when present
+// they must satisfy their own derive; `codex_rollout_budget_units` is an
+// optional JSON number. A missing required member, a member of the wrong JSON
+// type or a non-object all fail the decode, so the caller keeps nil. Reported
+// values are copied verbatim - no member is estimated or defaulted.
+func responseCompletedUsageFromJSON(raw json.RawMessage) *AgentUsage {
+	object, present, ok := jsonOptionalObject(raw)
+	if !ok || !present {
+		return nil
+	}
+	inputTokens, ok := jsonRequiredInt(object["input_tokens"])
+	if !ok {
+		return nil
+	}
+	outputTokens, ok := jsonRequiredInt(object["output_tokens"])
+	if !ok {
+		return nil
+	}
+	totalTokens, ok := jsonRequiredInt(object["total_tokens"])
+	if !ok {
+		return nil
+	}
+	usage := &AgentUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  totalTokens,
+	}
+	if details, present, ok := jsonOptionalObject(object["input_tokens_details"]); !ok {
+		return nil
+	} else if present {
+		// Rust `ResponseCompletedInputTokensDetails`: `cached_tokens` is
+		// required and `cache_write_tokens` defaults to zero.
+		cachedTokens, ok := jsonRequiredInt(details["cached_tokens"])
+		if !ok {
+			return nil
+		}
+		usage.CachedInputTokens = cachedTokens
+		if cacheWriteTokens, present, ok := jsonOptionalInt(details["cache_write_tokens"]); !ok {
+			return nil
+		} else if present {
+			usage.CacheWriteInputTokens = cacheWriteTokens
+		}
+	}
+	if details, present, ok := jsonOptionalObject(object["output_tokens_details"]); !ok {
+		return nil
+	} else if present {
+		reasoningTokens, ok := jsonRequiredInt(details["reasoning_tokens"])
+		if !ok {
+			return nil
+		}
+		usage.ReasoningOutputTokens = reasoningTokens
+	}
+	if units, present, ok := jsonOptionalNumber(object["codex_rollout_budget_units"]); !ok {
+		return nil
+	} else if present {
+		usage.CodexRolloutBudgetUnits = units
+	}
+	return usage
+}
+
+// jsonOptionalObject decodes an optional JSON object member: an absent or null
+// member reports not present (Rust's `Option`), a member that is not an object
+// fails the decode.
+func jsonOptionalObject(raw json.RawMessage) (map[string]json.RawMessage, bool, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, jsonNullLiteral) {
+		return nil, false, true
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &object); err != nil || object == nil {
+		return nil, false, false
+	}
+	return object, true, true
+}
+
+// jsonRequiredInt decodes a required JSON integer member, failing on a missing,
+// null, non-integral or non-numeric member the way Rust's `i64` derive does.
+func jsonRequiredInt(raw json.RawMessage) (int64, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if !jsonNumberLiteral(trimmed) {
+		return 0, false
+	}
+	var value int64
+	if err := json.Unmarshal(trimmed, &value); err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// jsonOptionalInt decodes an optional JSON integer member whose Rust field
+// carries `#[serde(default)]`: an absent member reports not present, while a
+// present member must still be an integer (Rust rejects a JSON null for it).
+func jsonOptionalInt(raw json.RawMessage) (int64, bool, bool) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return 0, false, true
+	}
+	value, ok := jsonRequiredInt(raw)
+	if !ok {
+		return 0, false, false
+	}
+	return value, true, true
+}
+
+// jsonOptionalNumber decodes an optional JSON number member as Rust's
+// `Option<serde_json::Number>`: an absent or null member reports not present,
+// anything that is not a JSON number fails.
+func jsonOptionalNumber(raw json.RawMessage) (json.Number, bool, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, jsonNullLiteral) {
+		return "", false, true
+	}
+	if !jsonNumberLiteral(trimmed) {
+		return "", false, false
+	}
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err != nil {
+		return "", false, false
+	}
+	return number, true, true
+}
+
+// jsonNullLiteral is the JSON null a decoded member can hold.
+var jsonNullLiteral = []byte("null")
+
+// jsonNumberLiteral reports whether raw opens a JSON number literal. Go's
+// decoder accepts a quoted number for a `json.Number` target where Rust's
+// `serde_json` rejects it, and decodes a JSON null into an integer target
+// without an error, so the literal is checked before every numeric decode.
+func jsonNumberLiteral(trimmed []byte) bool {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, jsonNullLiteral) {
+		return false
+	}
+	if trimmed[0] == '-' {
+		return true
+	}
+	return trimmed[0] >= '0' && trimmed[0] <= '9'
 }
 
 // responseIncompleteReason reports the response's incomplete reason, defaulting

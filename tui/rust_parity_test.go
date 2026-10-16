@@ -228,7 +228,8 @@ func TestClipboardParity(t *testing.T) {
 	if got := ClipboardCopyOrder(ClipboardEnvironment{SSHSession: true, TmuxSession: true}); !reflect.DeepEqual(got, []ClipboardBackend{ClipboardTmux, ClipboardOSC52}) {
 		t.Fatalf("remote tmux order = %#v", got)
 	}
-	if got := ClipboardCopyOrder(ClipboardEnvironment{WSLSession: true}); !reflect.DeepEqual(got, []ClipboardBackend{ClipboardNative, ClipboardWSL, ClipboardOSC52}) {
+	// Rust #53453: on WSL the Windows clipboard is attempted before the native one.
+	if got := ClipboardCopyOrder(ClipboardEnvironment{WSLSession: true}); !reflect.DeepEqual(got, []ClipboardBackend{ClipboardWSL, ClipboardNative, ClipboardOSC52}) {
 		t.Fatalf("local WSL order = %#v", got)
 	}
 
