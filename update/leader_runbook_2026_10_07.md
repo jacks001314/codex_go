@@ -152,7 +152,8 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 
 6. **账目时点（`f6bf18a2` 之后）**：账本 `update/r90_commit_ledger_2026_10_16.tsv` = **127 行**（表头 + 126 数据；`landed` 44）；底表 `update/r90_dispatch_queue_2026_10_17.tsv` = **218 行**（表头 + 217 数据）；两表 sha 交集 = **0**。本轮新入账 `#52937`/`#51828`/`#52273`（三条均已从底表删除）；`#53932` 记 `blocked_precondition`（`compaction_output` 在 `compact/**` 0 命中）；`#53723` 标 in-flight。
 
-7. **推送通道仍不可达**：`github.com:443` 连续 3 次 `Connection was reset` / `Failed to connect to github.com port 443`。本地 main = `f6bf18a2`，`origin/main` 仍 `fe19d8c5`。**未推送 ≠ 未落地**，但交付必须明写未推送。
+7. **推送通道：间歇性不可达，已在 turn#27 自行恢复**。turn#26 内 `github.com:443` 连续 5 次失败（`Connection was reset` / `Failed to connect ... port 443`，含 `git ls-remote`），turn#27 第 6 次**成功**：`fe19d8c5..b77357dc  main -> main`，`git rev-list --count origin/main..main` = **0**。
+   ⇒ 规则：**推送失败不要改写交付结论**（本地提交即已落地），但也不要假定"永远推不上"；每轮用一次 `git push` 探活即可，不做 sleep 重试；恢复后**必须回头修正**档案里"未推送"的陈述（本条即如此修正）。
 ### R5-septies · 第 90 轮 turn#27 修订（2026-10-17，leader 实测 + B-b10 / V-b10 回执）
 
 1. **夹带检查的基数必须取「真父」**：`git rev-list --parents -1 <sha>`（不要用更早的祖先）。
