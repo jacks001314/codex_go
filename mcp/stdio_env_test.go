@@ -3,6 +3,7 @@ package mcp
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -125,4 +126,40 @@ func mcpIsDefaultEnvVar(name string) bool {
 		}
 	}
 	return false
+}
+
+// TestCreateEnvForMCPServerKeepsWindowsCoreOverridesLikeRust mirrors the Windows
+// half of Rust #54069 (rmcp-client::stdio_server_launcher::remote_env_policy,
+// stdio_server_launcher.rs:679-712): SYSTEMDRIVE and LOCALAPPDATA belong to the
+// Windows allowlist that survives even when only the allowlisted variables are
+// inherited, and an explicit override must replace an inherited variable whose
+// name differs only by case instead of leaving both names in the child
+// environment (Rust's Windows-aware `set` merge).
+func TestCreateEnvForMCPServerKeepsWindowsCoreOverridesLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-only environment semantics")
+	}
+	for _, name := range []string{"SYSTEMDRIVE", "LOCALAPPDATA"} {
+		if !mcpIsDefaultEnvVar(name) {
+			t.Fatalf("%s missing from the Windows core allowlist", name)
+		}
+	}
+	t.Setenv("LOCALAPPDATA", `C:\Users\test\AppData\Local`)
+	env, err := createEnvForMCPServer(map[string]string{"LocalAppData": `D:\McpProfile`}, nil)
+	if err != nil {
+		t.Fatalf("createEnvForMCPServer() error = %v", err)
+	}
+	matches := 0
+	for name, value := range env {
+		if !strings.EqualFold(name, "LOCALAPPDATA") {
+			continue
+		}
+		matches++
+		if value != `D:\McpProfile` {
+			t.Fatalf("%s = %q, want the explicit override", name, value)
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("LOCALAPPDATA appears under %d case variants: %#v", matches, env)
+	}
 }

@@ -1025,22 +1025,28 @@ func CodexAppsServerConfig(baseURL string, productSKU string, runtimeAuth *Runti
 	return config
 }
 
+// codexAppsMCPURL mirrors Rust's `codex_apps_mcp_url_for_base_url`
+// (codex-mcp/src/mcp/mod.rs:609-628 at pin 4eb4a65407, #27198): the base URL
+// loses its trailing slashes, a ChatGPT host without a backend path gains
+// `/backend-api`, and the endpoint is plugin-service's `/ps/mcp` — appended
+// directly when the base already carries `/backend-api` or `/api/codex`, and
+// after `/api/codex` otherwise; the retired Apps path it replaced is gone.
 func codexAppsMCPURL(baseURL string) string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
-		baseURL = "https://chatgpt.com/backend-api"
+		// Rust substitutes its default one layer up, before the helper runs
+		// (`codex_apps_mcp_server_config` receives an already-defaulted
+		// `mcp_config.chatgpt_base_url`, core/src/config/mod.rs:4574-4576), so an
+		// empty base yields the same effective URL here.
+		baseURL = strings.TrimRight(managedconfig.DefaultChatGPTBaseURL, "/")
 	}
 	if (strings.HasPrefix(baseURL, "https://chatgpt.com") || strings.HasPrefix(baseURL, "https://chat.openai.com")) && !strings.Contains(baseURL, "/backend-api") {
 		baseURL += "/backend-api"
 	}
-	switch {
-	case strings.Contains(baseURL, "/backend-api"):
-		return baseURL + "/wham/apps"
-	case strings.Contains(baseURL, "/api/codex"):
-		return baseURL + "/apps"
-	default:
-		return baseURL + "/api/codex/apps"
+	if !strings.Contains(baseURL, "/backend-api") && !strings.Contains(baseURL, "/api/codex") {
+		baseURL += "/api/codex"
 	}
+	return baseURL + "/ps/mcp"
 }
 
 func cloneRuntimeAuth(runtimeAuth *RuntimeAuth) *RuntimeAuth {

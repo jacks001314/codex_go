@@ -311,7 +311,7 @@ func TestManagerRuntimeConfigAppliesBuiltInsAndOverlays(t *testing.T) {
 		t.Fatalf("extension registration = %#v", runtime.Servers["extension"])
 	}
 	apps := runtime.Servers[CodexAppsServerName].Config
-	if apps.URL != "https://chatgpt.test/api/codex/apps" || apps.Command != "" || apps.HTTPHeaders["Authorization"] != "Bearer test" {
+	if apps.URL != "https://chatgpt.test/api/codex/ps/mcp" || apps.Command != "" || apps.HTTPHeaders["Authorization"] != "Bearer test" {
 		t.Fatalf("codex apps server = %#v", apps)
 	}
 }
@@ -468,7 +468,7 @@ func TestRuntimeConfigFromValuesMaterializesAuthenticatedCodexAppsLikeRust(t *te
 	if !ok {
 		t.Fatal("authenticated codex apps server missing")
 	}
-	if apps.Config.Command != "" || apps.Config.URL != "https://chatgpt.com/backend-api/wham/apps" {
+	if apps.Config.Command != "" || apps.Config.URL != "https://chatgpt.com/backend-api/ps/mcp" {
 		t.Fatalf("codex apps transport = %#v", apps.Config)
 	}
 	if apps.Config.HTTPHeaders["Authorization"] != "Bearer chatgpt-token" || apps.Config.HTTPHeaders["ChatGPT-Account-ID"] != "account-1" || apps.Config.HTTPHeaders["X-OpenAI-Product-Sku"] != "team" {
@@ -476,10 +476,38 @@ func TestRuntimeConfigFromValuesMaterializesAuthenticatedCodexAppsLikeRust(t *te
 	}
 }
 
+// Mirrors Rust's `codex_apps_mcp_url_for_base_url_uses_plugin_service_paths`
+// (codex-mcp/src/mcp/mod_tests.rs:431-452) and the base shapes the helper
+// handles: plugin-service serves the Apps MCP endpoint under `/ps/mcp`.
+func TestCodexAppsMCPURLMatchesRustPluginServicePaths(t *testing.T) {
+	for _, testCase := range []struct{ base, want string }{
+		// Rust's own vectors.
+		{"https://chatgpt.com/backend-api", "https://chatgpt.com/backend-api/ps/mcp"},
+		{"https://chat.openai.com", "https://chat.openai.com/backend-api/ps/mcp"},
+		{"https://gov.chatgpt.com/backend-api/", "https://gov.chatgpt.com/backend-api/ps/mcp"},
+		{"http://localhost:8080/api/codex", "http://localhost:8080/api/codex/ps/mcp"},
+		{"http://localhost:8080", "http://localhost:8080/api/codex/ps/mcp"},
+		// A ChatGPT host without a backend path gains `/backend-api` first.
+		{"https://chatgpt.com", "https://chatgpt.com/backend-api/ps/mcp"},
+		{"https://x/api/codex", "https://x/api/codex/ps/mcp"},
+		{"https://x", "https://x/api/codex/ps/mcp"},
+		// An empty base falls back to the configured default, which Rust
+		// substitutes before calling the helper.
+		{"", "https://chatgpt.com/backend-api/ps/mcp"},
+		{"   ", "https://chatgpt.com/backend-api/ps/mcp"},
+	} {
+		got := codexAppsMCPURL(testCase.base)
+		t.Logf("codexAppsMCPURL(%q) = %q", testCase.base, got)
+		if got != testCase.want {
+			t.Fatalf("codexAppsMCPURL(%q) = %q, want %q", testCase.base, got, testCase.want)
+		}
+	}
+}
+
 func TestCodexAppsServerConfigUsesConnectorsTokenOverrideLikeRust(t *testing.T) {
 	t.Setenv(codexConnectorsTokenEnvVar, "override-token")
 	config := CodexAppsServerConfig("https://chat.openai.com/", "", &RuntimeAuth{UsesCodexBackend: true, ApplyHTTPRequest: func(*http.Request, []byte) error { return nil }})
-	if config.URL != "https://chat.openai.com/backend-api/wham/apps" || config.BearerTokenEnvVar != codexConnectorsTokenEnvVar || config.ApplyHTTPRequest != nil {
+	if config.URL != "https://chat.openai.com/backend-api/ps/mcp" || config.BearerTokenEnvVar != codexConnectorsTokenEnvVar || config.ApplyHTTPRequest != nil {
 		t.Fatalf("codex apps override config = %#v", config)
 	}
 }
