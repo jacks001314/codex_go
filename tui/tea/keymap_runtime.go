@@ -19,6 +19,9 @@ const (
 	keymapCaptureReplaceAll keymapCaptureIntent = "replace_all"
 	keymapCaptureAdd        keymapCaptureIntent = "add_alternate"
 	keymapCaptureReplaceOne keymapCaptureIntent = "replace_one"
+	// keymapCaptureLeader captures the completion key of a leader <key> spec
+	// (Rust #52273, keymap_setup/capture.rs:97-98,161-162).
+	keymapCaptureLeader keymapCaptureIntent = "leader_chord"
 )
 
 type keymapCaptureState struct {
@@ -75,7 +78,7 @@ func (m *Model) openKeymapPicker(selectedContext string, selectedAction string) 
 			Context:     descriptor.Context,
 			Action:      descriptor.Action,
 			Description: descriptor.Description,
-			Bindings:    bindings,
+			Bindings:    codextui.KeymapDisplayBindings(m.keymapConfig, bindings),
 		})
 	}
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewKeymapPickerView(chatwidget.KeymapPickerConfig{
@@ -101,12 +104,15 @@ func (m *Model) openKeymapActionMenu(context string, action string) {
 	m.keymapSelectedAction = action
 	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, context, action)
 	custom := m.keymapConfig.HasCustomBinding(context, action)
+	leaderPrefixes, leaderErr := codextui.LeaderKeybindings(m.keymapConfig)
 	m.openSelectionViewModal(ModalKindGeneric, chatwidget.NewKeymapActionMenuView(chatwidget.KeymapActionItem{
 		Context:          context,
 		Action:           action,
 		Description:      descriptor.Description,
 		Bindings:         bindings,
 		HasCustomBinding: &custom,
+		LeaderAvailable:  leaderErr == nil && len(leaderPrefixes) > 0,
+		IsLeaderAction:   action == "leader",
 	}))
 }
 
@@ -151,6 +157,10 @@ func (m *Model) applyKeymapModalOption(viewID string, optionID string) bubbletea
 			m.openKeymapCapture(context, action, keymapCaptureAdd, "")
 		case "replace_one":
 			m.openKeymapReplaceBindingMenu(context, action)
+		case "leader_set":
+			m.openKeymapCapture(context, action, keymapCaptureLeader, "")
+		case "leader_config":
+			m.openKeymapActionMenu("global", "leader")
 		case "unset":
 			return m.applyKeymapUnset(context, action)
 		case "back":
@@ -208,6 +218,11 @@ func (m *Model) updateKeymapCapture(message bubbletea.KeyMsg) bubbletea.Cmd {
 	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, capture.Context, capture.Action)
 	nextBindings := []string{key}
 	switch capture.Intent {
+	case keymapCaptureLeader:
+		// The captured key is the completion of a shared leader shortcut, so the
+		// stored spec becomes leader <key> (Rust #52273, capture.rs:161-162).
+		key = "leader " + key
+		nextBindings = []string{key}
 	case keymapCaptureAdd:
 		for _, binding := range bindings {
 			if binding == key {
@@ -270,13 +285,17 @@ func (m *Model) renderKeymapCapture() string {
 	bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, capture.Context, capture.Action)
 	current := "unbound"
 	if len(bindings) > 0 {
-		current = strings.Join(bindings, ", ")
+		current = strings.Join(codextui.KeymapDisplayBindings(m.keymapConfig, bindings), ", ")
+	}
+	prompt := "Press the new key now. Esc cancels."
+	if capture.Intent == keymapCaptureLeader {
+		prompt = "Press the key that follows the configured leader. Esc cancels."
 	}
 	lines := []string{
 		"Remap Shortcut",
 		fmt.Sprintf("Action: %s  %s.%s", descriptor.Label, capture.Context, capture.Action),
 		"Current: " + current,
-		"Press the new key now. Esc cancels.",
+		prompt,
 	}
 	if capture.ErrorMessage != "" {
 		lines = append(lines, "", "Error: "+capture.ErrorMessage)

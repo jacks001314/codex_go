@@ -202,7 +202,7 @@ func TestModelVoiceStripShowsMuteHint(t *testing.T) {
 	model.VoiceConversation.MarkVoiceBackendStarted()
 	model.VoiceConversation.MarkVoiceWebRTCConnected()
 	lines := model.voiceStripLines(80)
-	if !strings.Contains(lines[0], "ctrl-x") {
+	if !strings.Contains(lines[0], "f9") {
 		t.Fatalf("mute hint missing from %q", lines[0])
 	}
 }
@@ -253,7 +253,7 @@ func TestModelVoiceMuteShortcutTogglesRunningSession(t *testing.T) {
 	model.VoiceConversation.MarkVoiceBackendStarted()
 	model.VoiceConversation.MarkVoiceWebRTCConnected()
 
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(bubbletea.KeyF9))
 	if !model.VoiceConversation.MicrophoneMuted {
 		t.Fatal("the shortcut did not mute the microphone")
 	}
@@ -264,7 +264,7 @@ func TestModelVoiceMuteShortcutTogglesRunningSession(t *testing.T) {
 		t.Fatalf("notice = %q", model.notice)
 	}
 
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(bubbletea.KeyF9))
 	if model.VoiceConversation.MicrophoneMuted {
 		t.Fatal("the shortcut did not unmute the microphone")
 	}
@@ -280,7 +280,7 @@ func TestModelVoiceMuteShortcutIgnoresInactiveSession(t *testing.T) {
 		applied++
 		return nil
 	}
-	model.Update(key(bubbletea.KeyCtrlX))
+	model.Update(key(bubbletea.KeyF9))
 	if applied != 0 {
 		t.Fatalf("an inactive session applied %d microphone states", applied)
 	}

@@ -182,6 +182,11 @@ func (c *KeymapConfig) Validate() error {
 			}
 		}
 	}
+	// Rust #52273: an unusable leader prefix is a configuration error rather
+	// than a silent fallback (tui/src/keymap/leader.rs:24-66).
+	if _, err := LeaderKeybindings(c); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -212,9 +217,16 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "global" && action == "open_agents" && config.altACustomBindingExists() {
 			return nil, "default", false
 		}
-		// Rust: the default ctrl-x binding for voice mute is disabled when the
-		// main surface already uses ctrl-x, preserving existing shortcuts.
-		if context == "chat" && action == "toggle_voice_mute" && config.ctrlXMainSurfaceBindingExists() {
+		// Rust #52273: voice mute moved from ctrl-x to f9 because ctrl-x is now
+		// the default leader prefix; the f9 default yields to a main-surface f9
+		// binding so it never shadows a shortcut the user already relies on
+		// (tui/src/keymap.rs:674-681 voice_mute_default_is_shadowed, default at :1693).
+		if context == "chat" && action == "toggle_voice_mute" && config.mainSurfaceBindingExists("f9") {
+			return nil, "default", false
+		}
+		// Rust #52273 (keymap/leader.rs:13-22): the default ctrl-x leader prefix
+		// yields to an existing ctrl-x alias anywhere in the keymap.
+		if context == "global" && action == "leader" && config.contextAliasConfigured(defaultLeaderBinding) {
 			return nil, "default", false
 		}
 		// Rust #46071: the default F8 binding for the voice-conversation toggle is
@@ -279,14 +291,6 @@ func (c *KeymapConfig) altACustomBindingExists() bool {
 	return false
 }
 
-// ctrlXMainSurfaceBindingExists reports whether a main-surface action already
-// binds ctrl-x, which shadows the default voice-mute shortcut. Only the
-// contexts that can consume main-surface input are considered, matching the
-// Rust resolver.
-func (c *KeymapConfig) ctrlXMainSurfaceBindingExists() bool {
-	return c.mainSurfaceBindingExists("ctrl-x")
-}
-
 // mainSurfaceBindingExists reports whether any configured main-surface action
 // already binds the key. New defaults yield to an existing binding so they never
 // shadow a shortcut the user already relies on (Rust #46071).
@@ -296,6 +300,26 @@ func (c *KeymapConfig) mainSurfaceBindingExists(key string) bool {
 	}
 	for _, context := range []string{"global", "chat", "composer", "editor", "vim_normal", "vim_operator", "vim_text_object"} {
 		for _, bindings := range c.bindings[context] {
+			for _, binding := range bindings {
+				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == key {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// contextAliasConfigured reports whether any context in the keymap already binds
+// the key. Rust scans the whole serialized keymap for this predicate
+// (`configured_context_alias_is_used`, tui/src/keymap.rs:2591-2594), which is
+// how the default leader prefix yields to an existing ctrl-x shortcut.
+func (c *KeymapConfig) contextAliasConfigured(key string) bool {
+	if c == nil || c.bindings == nil {
+		return false
+	}
+	for _, actions := range c.bindings {
+		for _, bindings := range actions {
 			for _, binding := range bindings {
 				if normalized, err := NormalizeKeybindingSpec(binding); err == nil && normalized == key {
 					return true
@@ -335,11 +359,63 @@ func KeymapActionHasBinding(config *KeymapConfig, context string, action string,
 		if candidate == normalized {
 			return true
 		}
+		// A `leader <key>` spec is active through the resolved prefix, so it
+		// also matches the concrete `ctrl-x <key>` spelling (Rust #52273,
+		// config/src/tui_keymap.rs:589-609).
+		if completion, ok := LeaderSpecCompletion(candidate); ok {
+			if prefixes, err := LeaderKeybindings(config); err == nil {
+				for _, prefix := range prefixes {
+					if prefix+" "+completion == normalized {
+						return true
+					}
+				}
+			}
+		}
 	}
 	return false
 }
 
+// NormalizeKeybindingSpec normalizes one user-entered key spec
+// (Rust config/src/tui_keymap.rs:578-609). Rust supports the two-stroke chord
+// form (`ctrl-x ctrl-t`) and, since #52273, the symbolic `leader <key>` form, so
+// both parse here; the leader rules can then reject a multi-stroke prefix with
+// the upstream message.
 func NormalizeKeybindingSpec(raw string) (string, error) {
+	original := raw
+	strokes := strings.Fields(strings.ToLower(strings.TrimSpace(raw)))
+	if len(strokes) == 0 {
+		return normalizeKeybindingStroke(raw)
+	}
+	if len(strokes) > maxKeyChordStrokes {
+		return "", fmt.Errorf("invalid keybinding `%s`: key chords may contain at most %d strokes (for example `ctrl-x ctrl-s`).", original, maxKeyChordStrokes)
+	}
+	if strokes[0] == "leader" {
+		if len(strokes) != 2 {
+			return "", fmt.Errorf("invalid keybinding `%s`: `leader` must be followed by one key (for example `leader c`).", original)
+		}
+		completion, err := normalizeKeybindingStroke(strokes[1])
+		if err != nil {
+			return "", err
+		}
+		return "leader " + completion, nil
+	}
+	normalized := make([]string, 0, len(strokes))
+	for _, stroke := range strokes {
+		value, err := normalizeKeybindingStroke(stroke)
+		if err != nil {
+			return "", err
+		}
+		normalized = append(normalized, value)
+	}
+	return strings.Join(normalized, " "), nil
+}
+
+// maxKeyChordStrokes is Rust MAX_KEY_CHORD_STROKES
+// (config/src/tui_keymap.rs:33).
+const maxKeyChordStrokes = 2
+
+// normalizeKeybindingStroke normalizes a single stroke of a binding spec.
+func normalizeKeybindingStroke(raw string) (string, error) {
 	original := raw
 	lower := strings.ToLower(strings.TrimSpace(raw))
 	if lower == "" {
@@ -485,7 +561,7 @@ func RenderKeymapAction(context string, action string, config *KeymapConfig) str
 	bindings, source, custom := ResolvedKeymapBindings(config, context, action)
 	summary := "unbound"
 	if len(bindings) > 0 {
-		summary = strings.Join(bindings, ", ")
+		summary = strings.Join(KeymapDisplayBindings(config, bindings), ", ")
 	}
 	customLabel := "default"
 	if custom {
@@ -495,7 +571,7 @@ func RenderKeymapAction(context string, action string, config *KeymapConfig) str
 }
 
 func ParseKeybindingList(raw string) ([]string, error) {
-	parts := splitKeybindingList(raw)
+	parts := groupLeaderSpecParts(splitKeybindingList(raw))
 	out := make([]string, 0, len(parts))
 	seen := map[string]bool{}
 	for _, part := range parts {
@@ -692,6 +768,22 @@ func normalizeKeyName(key string, original string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unknown key `%s` in keybinding `%s`", key, original)
+}
+
+// groupLeaderSpecParts keeps a `leader <key>` pair together when the CLI form
+// (`/keymap set chat.interrupt_turn leader c`) is used. `leader` is not a key
+// name, so the pair is unambiguous (Rust #52273, config/src/tui_keymap.rs:589-609).
+func groupLeaderSpecParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	for i := 0; i < len(parts); i++ {
+		if strings.EqualFold(parts[i], "leader") && i+1 < len(parts) {
+			out = append(out, parts[i]+" "+parts[i+1])
+			i++
+			continue
+		}
+		out = append(out, parts[i])
+	}
+	return out
 }
 
 func splitKeybindingList(raw string) []string {

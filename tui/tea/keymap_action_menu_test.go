@@ -14,10 +14,14 @@ import (
 // terminal widths below are the row widths plus four.
 func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
 	custom := false
+	// #52273: the default ctrl-x leader is active, so the menu shows an enabled
+	// `Use leader...` row and no `Configure leader...` row
+	// (keymap_setup.rs:252-278).
 	view := chatwidget.NewKeymapActionMenuView(chatwidget.KeymapActionItem{
 		Action:           "open_transcript",
 		Bindings:         []string{"ctrl-t"},
 		HasCustomBinding: &custom,
+		LeaderAvailable:  true,
 	})
 	for _, rowWidth := range []int{48, 96} {
 		terminalWidth := rowWidth + 4
@@ -29,14 +33,14 @@ func TestModelKeymapActionMenuResponsiveWidthsMatchRust(t *testing.T) {
 				t.Fatalf("width %d line %q is %d columns", terminalWidth, line, got)
 			}
 		}
-		if !strings.Contains(rendered, "\u2013  Remove custom binding (disabled)") || strings.Contains(rendered, "3. Remove custom binding") {
+		if !strings.Contains(rendered, "\u2013  Remove custom binding (disabled)") || strings.Contains(rendered, ". Remove custom binding") {
 			t.Fatalf("row width %d disabled gutter mismatch:\n%s", rowWidth, rendered)
 		}
 		if rowWidth == 48 {
 			if strings.Contains(rendered, "Capture a replacement key") {
 				t.Fatalf("row width 48 should hide the narrow description column:\n%s", rendered)
 			}
-			if !strings.Contains(rendered, "\u203a 1. Replace binding") || !strings.Contains(rendered, "  3. Back to shortcuts") {
+			if !strings.Contains(rendered, "\u203a 1. Replace binding") || !strings.Contains(rendered, "  4. Back to shortcuts") {
 				t.Fatalf("row width 48 option rows mismatch:\n%s", rendered)
 			}
 			continue

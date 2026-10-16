@@ -39,7 +39,13 @@ func (r *RuntimeRouter) emitFileChangeAnalyticsEvent(ctx context.Context, connec
 	startedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "startedAtMs", "started_at_ms"))
 	completedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "completedAtMs", "completed_at_ms"))
 	if completedAtMS == 0 && item.CreatedAt > 0 {
-		completedAtMS = uint64(item.CreatedAt)
+		// ThreadItem.CreatedAt is unix seconds on the app-server item path (unixOrZero
+		// via BuildThreadItem), while every millisecond-side producer also stamps the
+		// timing metadata into the item data, so this fallback is only reached with a
+		// seconds-based value. Rust never derives the field from the item: it uses the
+		// completion notification's completed_at_ms (analytics/src/reducer.rs:2079-2093),
+		// which the Go notification path publishes as UnixMilli (turn_runtime.go:1836).
+		completedAtMS = uint64(item.CreatedAt) * 1000
 	}
 	durationMS := uint64PtrFromNonNegativeInt64(int64(completedAtMS) - int64(startedAtMS))
 	counts := fileChangeAnalyticsCounts(threadItemFileChanges(item))

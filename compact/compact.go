@@ -12,6 +12,7 @@ import (
 
 	"codex_go/audioutil"
 	"codex_go/eventmap"
+	"codex_go/features"
 	"codex_go/retainedctx"
 	"codex_go/utils"
 )
@@ -67,6 +68,15 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 	// CompactionUserMessageBudget mirrors Rust's COMPACT_USER_MESSAGE_MAX_TOKENS:
 	// the shared budget for the user messages a local compaction keeps.
 	CompactionUserMessageBudget = 20_000
+)
+
+// RetainClientToolOutputsKey and RetainClientDeveloperMessagesKey are the
+// registered feature keys the compaction pipeline resolves through
+// features.Enabled, mirroring Rust `Feature::RetainClientToolOutputs` and
+// `Feature::RetainClientDeveloperMessages` (codex-rs/features/src/lib.rs).
+const (
+	RetainClientToolOutputsKey       = "retain_client_tool_outputs"
+	RetainClientDeveloperMessagesKey = "retain_client_developer_messages"
 )
 
 var ErrInvalidCompaction = errors.New("invalid compaction")
@@ -355,6 +365,15 @@ type RemoteOptions struct {
 	InjectBeforeLastUser          bool
 	FallbackToLocal               bool
 	RetainClientDeveloperMessages bool
+	// RetainClientToolOutputs honors `retain_client_tool_outputs`, the registered
+	// feature that preserves explicitly client-authored, named tool outputs
+	// without a matching call across compaction (#52937). FeatureSettings, when
+	// set, resolves the flag from the registry instead of this field.
+	RetainClientToolOutputs bool
+	// FeatureSettings is the turn's resolved feature enablement (Rust `Features`).
+	// The compaction pipeline reads `retain_client_tool_outputs` and
+	// `retain_client_developer_messages` from it.
+	FeatureSettings map[string]bool
 }
 
 func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptions) (*Result, error) {
@@ -382,7 +401,11 @@ func CompactRemotely(ctx context.Context, request *Request, options *RemoteOptio
 				requestHistoryForCompaction(request),
 				options.InitialContext,
 				options.InjectBeforeLastUser,
-				options.RetainClientDeveloperMessages,
+				resolveRetentionPolicy(
+					options.FeatureSettings,
+					options.RetainClientDeveloperMessages,
+					options.RetainClientToolOutputs,
+				),
 			)
 			if result.CompletedAt.IsZero() {
 				result.CompletedAt = time.Now().UTC()
@@ -426,12 +449,13 @@ func ShouldKeepCompactedHistoryItem(item Item) bool {
 	}
 }
 
-func FilterCompactedHistory(items []Item, retainClientDeveloperMessages ...bool) []Item {
-	retainClientDevelopers := len(retainClientDeveloperMessages) > 0 && retainClientDeveloperMessages[0]
+func FilterCompactedHistory(items []Item, retention ...bool) []Item {
+	policy := retentionPolicyFromFlags(retention)
 	filtered := make([]Item, 0, len(items))
 	for _, item := range items {
 		if ShouldKeepCompactedHistoryItem(item) ||
-			(retainClientDevelopers && IsClientAuthoredDeveloperMessage(item)) {
+			(policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item)) ||
+			(policy.clientToolOutputs && IsRetainedToolOutput(item)) {
 			filtered = append(filtered, item)
 		}
 	}
@@ -445,6 +469,12 @@ func InsertInitialContextBeforeLastUserOrSummary(history []Item, initialContext 
 	insertAt := len(history)
 	for i := len(history) - 1; i >= 0; i-- {
 		item := history[i]
+		// Rust compact.rs:657-663 (#52937): a retained standalone output forms the
+		// same insertion boundary as the last real user or agent message.
+		if IsRetainedToolOutput(item) {
+			insertAt = i
+			break
+		}
 		if isStructuredAgentMessage(&item) && !isAgentCompletionMessage(&item) {
 			insertAt = i
 			break
@@ -477,9 +507,9 @@ func ProcessRemoteHistory(remote []Item, initialContext []Item, injectBeforeLast
 	return filtered
 }
 
-func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool, retainClientDeveloperMessages bool) []Item {
-	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget, retainClientDeveloperMessages)
-	filtered := FilterCompactedHistory(remote, retainClientDeveloperMessages)
+func processRemoteHistoryWithRetained(remote []Item, original []Item, initialContext []Item, injectBeforeLastUser bool, policy retentionPolicy) []Item {
+	retained := retainedMessagesForRemoteCompaction(original, RemoteRetainedMessageTokenBudget, policy)
+	filtered := FilterCompactedHistory(remote, policy.clientDeveloperMessages, policy.clientToolOutputs)
 	history := append([]Item(nil), retained...)
 	for _, item := range filtered {
 		if compactHistoryContainsItem(history, item) {
@@ -493,14 +523,19 @@ func processRemoteHistoryWithRetained(remote []Item, original []Item, initialCon
 	return cloneItems(history)
 }
 
-func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, retainClientDeveloperMessages bool) []Item {
+func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy retentionPolicy) []Item {
 	if maxTokens <= 0 {
 		return nil
 	}
 	candidates := make([]Item, 0, len(items))
 	for _, item := range items {
 		keep := (item.Type == "message" || item.Type == "user_message") && item.Role == "user" && ShouldKeepCompactedHistoryItem(item)
-		if retainClientDeveloperMessages && IsClientAuthoredDeveloperMessage(item) {
+		if policy.clientDeveloperMessages && IsClientAuthoredDeveloperMessage(item) {
+			keep = true
+		}
+		// Rust session/mod.rs:4666-4678 (#52937): retained standalone outputs share
+		// the same retention budget as the retained client messages.
+		if policy.clientToolOutputs && IsRetainedToolOutput(item) {
 			keep = true
 		}
 		if isStructuredAgentMessage(&item) {
@@ -521,6 +556,13 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, retainClie
 			retainedReversed = append(retainedReversed, item)
 			remaining -= cost
 			continue
+		}
+		// Rust compact_remote_v2.rs:641-649 (#52937): a retained output is kept
+		// whole or dropped, and the scan stops so newer-first ordering is
+		// preserved. Only retained output candidates reach this point because the
+		// filter above gates on the feature.
+		if IsRetainedToolOutput(item) {
+			break
 		}
 		if isStructuredAgentMessage(&item) {
 			continue
@@ -547,9 +589,24 @@ func IsClientAuthoredDeveloperMessage(item Item) bool {
 	if !strings.EqualFold(strings.TrimSpace(item.Role), "developer") {
 		return false
 	}
+	return IsClientAuthoredItem(item)
+}
+
+// IsClientAuthoredItem reports whether the item carries the harness-metadata
+// `client_authored` annotation, without regard to its role.
+func IsClientAuthoredItem(item Item) bool {
+	metadata := itemHarnessMetadata(item)
+	if metadata == nil {
+		return false
+	}
+	authored, _ := metadata["client_authored"].(bool)
+	return authored
+}
+
+func itemHarnessMetadata(item Item) map[string]any {
 	raw, ok := item.Data["harness_metadata"]
 	if !ok {
-		return false
+		return nil
 	}
 	var metadata map[string]any
 	switch value := raw.(type) {
@@ -562,11 +619,73 @@ func IsClientAuthoredDeveloperMessage(item Item) bool {
 	case map[string]any:
 		metadata = value
 	}
-	if metadata == nil {
+	return metadata
+}
+
+// IsRetainedToolOutput mirrors Rust
+// `compact_retained_tool_outputs::is_retained_tool_output` (#52937,
+// core/src/compact_retained_tool_outputs.rs:7-20): an explicitly client-authored,
+// named `function_call_output` with no matching call. Such an output carries
+// instructions of its own instead of being a tool result of this session, so it
+// must survive compaction. `custom_tool_call_output` and unnamed outputs are
+// excluded, like the Rust pattern
+// `ResponseItem::FunctionCallOutput { call_id: None, name: Some(_), .. }`.
+func IsRetainedToolOutput(item Item) bool {
+	if !IsClientAuthoredItem(item) {
 		return false
 	}
-	authored, _ := metadata["client_authored"].(bool)
-	return authored
+	if !strings.EqualFold(strings.TrimSpace(item.Type), "function_call_output") {
+		return false
+	}
+	return toolOutputCallID(item) == "" && strings.TrimSpace(item.Name) != ""
+}
+
+// toolOutputCallID reports the item's call id, treating an absent value (Rust
+// `call_id: None`) as empty whether it is carried by the field or the payload.
+func toolOutputCallID(item Item) string {
+	if id := strings.TrimSpace(item.CallID); id != "" {
+		return id
+	}
+	if value, ok := item.Data["call_id"].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+// retentionPolicy is the resolved retention state threaded through the
+// compaction pipeline. Rust threads `&Features` through
+// `build_v2_compacted_history` and reads both flags there
+// (core/src/compact_remote_v2.rs:529-578).
+type retentionPolicy struct {
+	clientDeveloperMessages bool
+	clientToolOutputs       bool
+}
+
+// retentionPolicyFromFlags maps the positional `...bool` retention arguments of
+// the exported helpers onto a policy: element 0 retains client-authored developer
+// messages, element 1 retains client-authored standalone tool outputs.
+func retentionPolicyFromFlags(flags []bool) retentionPolicy {
+	var policy retentionPolicy
+	if len(flags) > 0 {
+		policy.clientDeveloperMessages = flags[0]
+	}
+	if len(flags) > 1 {
+		policy.clientToolOutputs = flags[1]
+	}
+	return policy
+}
+
+// resolveRetentionPolicy resolves the retention flags of one compaction run.
+// FeatureSettings, when non-nil, is the turn's resolved feature enablement (Rust
+// `Features`), so the registered keys are read here; the explicit fields stay as
+// an override and compatibility path.
+func resolveRetentionPolicy(settings map[string]bool, retainClientDeveloperMessages bool, retainClientToolOutputs bool) retentionPolicy {
+	return retentionPolicy{
+		clientDeveloperMessages: retainClientDeveloperMessages ||
+			features.Enabled(settings, RetainClientDeveloperMessagesKey),
+		clientToolOutputs: retainClientToolOutputs ||
+			features.Enabled(settings, RetainClientToolOutputsKey),
+	}
 }
 
 func EstimateItemTokens(item *Item) int {

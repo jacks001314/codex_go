@@ -29,6 +29,12 @@ type KeymapActionItem struct {
 	Description      string
 	Bindings         []string
 	HasCustomBinding *bool
+	// LeaderAvailable reports whether a leader prefix is active, which decides
+	// whether the Use-leader shortcut is offered (Rust #52273, keymap_setup.rs:252-266).
+	LeaderAvailable bool
+	// IsLeaderAction marks the 1global.leader row, which never offers the
+	// leader-chord entries itself.
+	IsLeaderAction bool
 }
 
 type KeymapPickerConfig struct {
@@ -48,6 +54,38 @@ type KeymapApplyUpdateResult struct {
 	ChatEditQueuedBinding     string
 	BottomPaneBindingsUpdated bool
 	RequestRedraw             bool
+}
+
+// leaderActionMenuItems mirrors the leader entries Rust adds to every action
+// menu except `global.leader` (keymap_setup.rs:252-278): one entry to capture a
+// key that follows the configured leader, and — when no leader is active — one
+// entry that navigates to the leader action so it can be configured first.
+func leaderActionMenuItems(item KeymapActionItem) []SelectionItem {
+	if item.IsLeaderAction {
+		return nil
+	}
+	disabledReason := ""
+	if !item.LeaderAvailable {
+		disabledReason = "The leader is unbound"
+	}
+	items := []SelectionItem{{
+		ID:                   "leader_set",
+		Name:                 "Use leader...",
+		Description:          "Capture the key that follows the configured leader.",
+		Disabled:             !item.LeaderAvailable,
+		DisabledReason:       disabledReason,
+		DisabledGutterMarker: "–",
+		Action:               KeymapActionSetBinding,
+		DismissOnSelect:      true,
+	}}
+	if !item.LeaderAvailable {
+		items = append(items, SelectionItem{
+			ID:          "leader_config",
+			Name:        "Configure leader...",
+			Description: "Set a leader before assigning this shortcut.",
+		})
+	}
+	return items
 }
 
 func NewKeymapPickerView(config KeymapPickerConfig) SelectionView {
@@ -119,6 +157,7 @@ func NewKeymapActionMenuView(item KeymapActionItem) SelectionView {
 			SelectionItem{ID: "add", Name: "Add alternate binding", Description: "Keep `" + currentBinding + "` and add another key.", Action: KeymapActionAddBinding, DismissOnSelect: true},
 		)
 	}
+	items = append(items, leaderActionMenuItems(item)...)
 	removeReason := ""
 	if !hasCustomBinding {
 		removeReason = "No custom root override to remove."

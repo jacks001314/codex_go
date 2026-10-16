@@ -8,18 +8,21 @@ import (
 
 func TestVoiceMuteDefaultBinding(t *testing.T) {
 	bindings, source, custom := ResolvedKeymapBindings(nil, "chat", "toggle_voice_mute")
-	if !reflect.DeepEqual(bindings, []string{"ctrl-x"}) {
+	if !reflect.DeepEqual(bindings, []string{"f9"}) {
 		t.Fatalf("default bindings = %#v", bindings)
 	}
 	if source != "default" || custom {
 		t.Fatalf("source = %q custom = %v", source, custom)
 	}
-	if !KeymapActionHasBinding(nil, "chat", "toggle_voice_mute", "ctrl-x") {
-		t.Fatal("ctrl-x does not resolve to the voice mute action")
+	if !KeymapActionHasBinding(nil, "chat", "toggle_voice_mute", "f9") {
+		t.Fatal("f9 does not resolve to the voice mute action")
 	}
 }
 
-func TestVoiceMuteDefaultYieldsToMainSurfaceCtrlX(t *testing.T) {
+// Rust #52273: ctrl-x became the default leader prefix, so the voice mute
+// default moved from ctrl-x to f9 and yields to a main-surface f9 binding
+// (tui/src/keymap.rs:674-681; f9 default at :1693).
+func TestVoiceMuteDefaultYieldsToMainSurfaceF9(t *testing.T) {
 	// A user binding on a main-surface context shadows the new default.
 	actions := map[string]string{
 		"global":          "copy",
@@ -33,26 +36,26 @@ func TestVoiceMuteDefaultYieldsToMainSurfaceCtrlX(t *testing.T) {
 	for context, action := range actions {
 		t.Run(context, func(t *testing.T) {
 			config := NewKeymapConfig()
-			if err := config.Set(context, action, []string{"ctrl-x"}); err != nil {
+			if err := config.Set(context, action, []string{"f9"}); err != nil {
 				t.Fatal(err)
 			}
 			bindings, _, _ := ResolvedKeymapBindings(config, "chat", "toggle_voice_mute")
 			if len(bindings) != 0 {
-				t.Fatalf("ctrl-x on %s did not shadow the default: %#v", context, bindings)
+				t.Fatalf("f9 on %s did not shadow the default: %#v", context, bindings)
 			}
 		})
 	}
 }
 
 func TestVoiceMuteDefaultSurvivesUnrelatedContextBindings(t *testing.T) {
-	// The agents surface consumes its own keys, so its ctrl-x does not shadow
-	// the main-surface voice mute shortcut.
+	// The agents surface consumes its own keys, so its f9 does not shadow the
+	// main-surface voice mute shortcut.
 	config := NewKeymapConfig()
-	if err := config.Set("agents", "stop", []string{"ctrl-x"}); err != nil {
+	if err := config.Set("agents", "stop", []string{"f9"}); err != nil {
 		t.Fatal(err)
 	}
 	bindings, _, _ := ResolvedKeymapBindings(config, "chat", "toggle_voice_mute")
-	if !reflect.DeepEqual(bindings, []string{"ctrl-x"}) {
+	if !reflect.DeepEqual(bindings, []string{"f9"}) {
 		t.Fatalf("bindings = %#v", bindings)
 	}
 }

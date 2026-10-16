@@ -514,14 +514,37 @@ func populateCoreImageGeneration(core map[string]any, item *session.Item, values
 	core["result"] = firstNonEmptyString(anyString(values, "result"), item.Text)
 	copyOptional(core, "transparent_background", firstAny(values, "transparentBackground", "transparent_background"))
 	copyOptional(core, "saved_path", firstAny(values, "savedPath", "saved_path"))
+	// Rust #54398 `GeneratedImageRef::File`: a completed generation keeps its
+	// durable attachment reference instead of the inline result, and #54420
+	// keeps the observed local `input_images` (`Vec<ImageGenerationInputImage>`).
+	// Both must survive the paginated rollout, resume, and the legacy migration
+	// that re-encodes every item through this translation.
+	if fileID := firstNonEmptyString(anyString(values, "fileId", "file_id")); fileID != "" {
+		core["file_id"] = fileID
+	}
+	if images := firstAny(values, "inputImages", "input_images"); !isNilLike(images) {
+		core["input_images"] = images
+	}
 }
 
 func populatePublicImageGeneration(out, core map[string]any) {
 	out["status"] = anyString(core, "status")
 	out["revisedPrompt"] = nullableAny(core, "revised_prompt", "revisedPrompt")
-	out["result"] = anyString(core, "result")
+	// Rust's `GeneratedImageRef` is an untagged enum declared with `File`
+	// first, so a record that carries both an (empty) `result` and a `fileId`
+	// stays file-backed on the public surface (Rust #54398).
+	if fileID := firstNonEmptyString(anyString(core, "file_id", "fileId")); fileID != "" {
+		out["fileId"] = fileID
+	} else {
+		out["result"] = anyString(core, "result")
+	}
 	out["transparentBackground"] = nullableAny(core, "transparent_background", "transparentBackground")
 	copyOptional(out, "savedPath", firstAny(core, "saved_path", "savedPath"))
+	// Rust skips an empty `input_images` on both the extension item and the
+	// public surface (`#[serde(skip_serializing_if = "Vec::is_empty")]`, #54420).
+	if images := camelObjectSlice(firstAny(core, "input_images", "inputImages")); len(images) > 0 {
+		out["inputImages"] = images
+	}
 }
 
 func populateCoreFileChange(core map[string]any, item *session.Item, values map[string]any) {

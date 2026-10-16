@@ -354,3 +354,26 @@ func clonePermissionEntry(entry FileSystemSandboxEntry) FileSystemSandboxEntry {
 	}
 	return clone
 }
+
+// ResolveFileSystemEntryPath resolves a concrete entry path against cwd,
+// mirroring the per-entry path resolution Rust performs before it collects
+// writable roots (FileSystemSandboxPolicy::resolved_entries_with_cwd). Glob
+// entries carry no single path and resolve to "".
+//
+// It is exported for package sandbox/integrity, which rebuilds upstream's
+// writable-root view from a restricted entry list.
+func ResolveFileSystemEntryPath(path FileSystemPath, cwd string) string {
+	return resolvePermissionPath(path, cwd)
+}
+
+// ResolveFileSystemEntryAccess returns the effective access the entry list
+// grants to target, using the specificity-then-precedence resolution the runtime
+// applies to a restricted policy (Rust
+// LocalFileSystemPolicyMatcher::resolve_access). Glob entries are matched with
+// the shared doublestar matcher, and "" means no entry covers target.
+//
+// It is exported for package sandbox/integrity, which mirrors the policy
+// resolution upstream's writable-root collection and deny-read matcher both use.
+func ResolveFileSystemEntryAccess(entries []FileSystemSandboxEntry, target, cwd string) FileSystemAccessMode {
+	return resolveRequestedPermissionAccess(entries, target, cwd)
+}

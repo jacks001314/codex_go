@@ -32,9 +32,10 @@ var keymapActionCatalog = []KeymapAction{
 	keymapGatedAction("global", "Global", "toggle_fast_mode", "Turn Fast mode on or off.", nil, keymapFeatureFastMode),
 	keymapAction("global", "Global", "toggle_raw_output", "Toggle raw scrollback mode.", []string{"alt-r"}),
 	keymapAction("global", "Global", "toggle_side_conversation", "Switch between a side conversation and its parent.", []string{"ctrl-/"}),
+	keymapAction("global", "Global", "leader", "Set the prefix used by shared leader shortcuts.", []string{"ctrl-x"}),
 	keymapAction("chat", "Chat", "interrupt_turn", "Interrupt the active turn.", []string{"esc"}),
 	keymapAction("chat", "Chat", "toggle_voice", "Start or stop a voice conversation.", []string{"f8"}),
-	keymapAction("chat", "Chat", "toggle_voice_mute", "Toggle the microphone in an active voice conversation.", []string{"ctrl-x"}),
+	keymapAction("chat", "Chat", "toggle_voice_mute", "Toggle the microphone in an active voice conversation.", []string{"f9"}),
 	keymapAction("chat", "Chat", "decrease_reasoning_effort", "Decrease reasoning effort.", []string{"alt-,", "shift-down"}),
 	keymapAction("chat", "Chat", "increase_reasoning_effort", "Increase reasoning effort.", []string{"alt-.", "shift-up"}),
 	keymapAction("chat", "Chat", "previous_permission_mode", "Switch to the previous available permission mode.", nil),
@@ -206,7 +207,7 @@ func RenderKeymapCatalogWithConfig(filter KeymapActionFilter, config *KeymapConf
 		resolved, source, custom := ResolvedKeymapBindings(config, action.Context, action.Action)
 		bindings := "unbound"
 		if len(resolved) > 0 {
-			bindings = strings.Join(resolved, ", ")
+			bindings = strings.Join(KeymapDisplayBindings(config, resolved), ", ")
 		}
 		sourceLabel := "default"
 		if custom {
