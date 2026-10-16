@@ -256,3 +256,11 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 3. **git 用法（作用域化，别全局乱改）**：Windows `git config http.https://github.com/.proxy http://127.0.0.1:7897`，或单次 `git -c http.proxy=http://127.0.0.1:7897 fetch origin main`；Linux `git -c http.proxy=http://127.0.0.1:10808 fetch origin main`（仅在该节点直连失败时用——该节点直连通常可用）。
 4. **Go 模块**：`HTTP_PROXY`/`HTTPS_PROXY=http://<本机代理>` 后再跑 `go build`/`go mod download`（Windows 侧实测：GOOS=linux 交叉编译整树 exit 0）。
 5. **纪律**：代理是**手段不是默认**——直连可用时不要强行走代理（避免把代理故障变成新的假红）；报告里必须写明"经代理/直连"；用完 env 必须清（见 R5-quindecies §4）。
+
+## R5-septdecies · 传输层 pending 提醒会滞后于「已回包」（用户不可见，属编排纪律，2026-10-17）
+
+1. `type=response` 一旦被传输层受理（返回 `status: sent`），该单即视为**已闭合** —— 即使随后仍收到 `[A2A Pending Message Reminder]`。
+2. **禁止为已闭合的单重发 response**：传输层会永久拒绝（`FailedPrecondition desc = A2A request already has a response from this agent`）；重发只会刷屏，不改变状态。首次观测案例：S-1 更新单 `msg-1792191546272153500-2213`（回包 `msg-1792192000556904600-2282`）与 S-3 `msg-1792191798175601000-2252`（回包 `msg-1792192196207318100-2354`）。
+3. 车道遇到该提醒：**忽略**，并在下一次正式回包里附一句「该单已闭合（原 response msg_id = …）」；**不要为它单独开一趟回包**。
+4. 队长侧以**收到的 response 记录**为准。判定「未回包」必须同时满足：无 response 记录 且 无独立证据表明对方未处理；提醒侧滞留只算记账不同步，不构成「未回包」证据。
+5. 该记账不同步还表现为**迟到投递**（旧时点的电台/回包在本轮才到达）：收到迟到消息时，先看它报的 tip 与当前 tip 的差距，按「历史事实」处理，不要当成新指令，也不要据此重跑已完成的门禁。
