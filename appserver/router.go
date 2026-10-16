@@ -252,6 +252,26 @@ func writerOwnershipError(err error) error {
 	return err
 }
 
+// threadStoreMutationError mirrors Rust's `thread_store_mutation_error`
+// (#54664): a conflict or invalid-request detail reaches the client as an
+// invalid request, while every other store category keeps the operation
+// context and stays an internal failure. The categories added by #54664 are
+// deliberately in that second group: ErrRetryable and ErrOutcomeUnknown carry
+// information for the operation owner only, neither one triggers a retry here,
+// and an unknown write outcome must never be reported as a client mistake.
+func threadStoreMutationError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, session.ErrConflict):
+		return jsonRPCInvalidRequest(strings.TrimPrefix(err.Error(), session.ErrConflict.Error()+": "))
+	case errors.Is(err, session.ErrInvalidThreadID):
+		return jsonRPCInvalidRequest(strings.TrimPrefix(err.Error(), session.ErrInvalidThreadID.Error()+": "))
+	}
+	return fmt.Errorf("failed to %s session: %w", operation, err)
+}
+
 func (r *Router) SetClock(clock func() time.Time) {
 	if clock == nil {
 		r.now = time.Now
@@ -2345,13 +2365,13 @@ func (r *Router) handleThreadArchive(request *Request) (*ThreadArchiveResponse, 
 	if rootRecord, readErr := r.readThreadRecord(session.ThreadID(params.ThreadID), true, false); readErr == nil && unmaterializedThread(rootRecord) {
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", params.ThreadID))
 	} else if readErr != nil && !errors.Is(readErr, session.ErrThreadNotFound) {
-		return nil, readErr
+		return nil, threadStoreMutationError("archive", readErr)
 	}
 	archivedThreadIDs := make([]session.ThreadID, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
 		storeArchived := false
 		if err := r.store.Archive(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
-			return nil, err
+			return nil, threadStoreMutationError("archive", err)
 		} else if err == nil {
 			storeArchived = true
 		}
@@ -2381,11 +2401,11 @@ func (r *Router) handleThreadUnarchive(request *Request) (*ThreadUnarchiveRespon
 	record, err := r.store.Unarchive(session.ThreadID(params.ThreadID))
 	if err != nil {
 		if !errors.Is(err, session.ErrThreadNotFound) {
-			return nil, err
+			return nil, threadStoreMutationError("unarchive", err)
 		}
 		archivedRecord, readErr := r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, false)
 		if readErr != nil || !archivedRecord.Archived {
-			return nil, err
+			return nil, threadStoreMutationError("unarchive", err)
 		}
 		r.archiveThreadRollout(archivedRecord.ID, false)
 		if restoredRecord, restoreErr := r.readThreadRecordFromRollout(archivedRecord.ID, false, false); restoreErr == nil {
@@ -2654,7 +2674,7 @@ func (r *Router) materializeNamedPaginatedThread(threadID session.ThreadID) erro
 		if errors.Is(err, session.ErrThreadNotFound) {
 			return nil
 		}
-		return err
+		return threadStoreMutationError("archive", err)
 	}
 	if record == nil || threadRecordEphemeral(record) {
 		// Rust persists through the in-memory store for an ephemeral thread,
@@ -3022,7 +3042,7 @@ func (r *Router) materializeThreadForArchive(threadID session.ThreadID) error {
 	}
 	if err := r.createThreadRollout(record, now); err != nil {
 		// Rust maps a failed `persist_thread` to the archive mutation error.
-		return jsonRPCInvalidRequest(fmt.Sprintf("failed to archive session: %v", err))
+		return threadStoreMutationError("archive", err)
 	}
 	return nil
 }

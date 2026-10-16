@@ -639,6 +639,13 @@ func agentShutdownErrorKind(err error) string {
 		return "thread_store_section_missing"
 	case errors.Is(err, session.ErrConflict):
 		return "thread_store_conflict"
+	// Rust #54664 classifies the two storage categories added there as their own
+	// payload-free kinds, so shutdown diagnostics can tell a retryable failure
+	// apart from a write whose outcome is unknown.
+	case errors.Is(err, session.ErrRetryable):
+		return "thread_store_retryable"
+	case errors.Is(err, session.ErrOutcomeUnknown):
+		return "thread_store_outcome_unknown"
 	case errors.Is(err, context.Canceled):
 		return "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):

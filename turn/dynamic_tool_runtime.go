@@ -115,10 +115,11 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 		Description: function.Description,
 		InputSchema: inputSchema,
 		Exposure:    exposure,
-		// Rust DynamicToolHandler does not override
-		// `supports_parallel_tool_calls`, so dynamic tools keep the trait's
-		// serial default.
-		Parallel: false,
+		// Rust DynamicToolHandler overrides `supports_parallel_tool_calls` with
+		// true (#54654): dynamic tool calls stay independent while waiting for
+		// client responses, so one pending call does not block another from
+		// reaching the client (code mode can issue them with `Promise.all`).
+		Parallel: true,
 		// Rust DynamicToolHandler overrides `finishes_on_cancellation` (#51556):
 		// the handler observes the invocation's cancellation token and publishes
 		// its own terminal item, so dispatch lets it finish.

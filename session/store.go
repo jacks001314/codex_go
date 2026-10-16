@@ -36,6 +36,21 @@ var (
 	ErrThreadArchived       = errors.New("thread archived")
 	ErrThreadSectionMissing = errors.New("thread section not found")
 	ErrConflict             = errors.New("thread store conflict")
+	// ErrRetryable marks a transient store failure for which retrying the
+	// operation is safe (Rust ThreadStoreError::Retryable, #54664). For a write,
+	// the implementation must know the failed attempt did not commit; otherwise
+	// the failure is ErrOutcomeUnknown. The category carries information only:
+	// the operation owner decides whether and how to recover, and no error
+	// automatically triggers a retry. ErrConflict alone does not imply
+	// retryability.
+	ErrRetryable = errors.New("thread store retryable error")
+	// ErrOutcomeUnknown marks a write that failed to report a definitive outcome
+	// and may already have committed (Rust ThreadStoreError::OutcomeUnknown,
+	// #54664). The operation owner must reconcile the stored state or replay
+	// idempotently before retrying; it must not be treated as an ordinary
+	// retryable failure. An unclassified (internal) failure carries no such
+	// information and must not be read as either category.
+	ErrOutcomeUnknown = errors.New("thread store write outcome unknown")
 )
 
 const (

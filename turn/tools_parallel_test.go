@@ -69,9 +69,10 @@ func TestMCPToolParallelOptInFollowsServerConfigLikeRust(t *testing.T) {
 // TestBuiltinToolParallelFlagsLikeRust pins the per-tool parallel-safety flags
 // against Rust's `ToolHandler::supports_parallel_tool_calls` overrides (the
 // trait default is false): exec_command/write_stdin/test_sync/view_image/
-// tool_search/MCP-resource tools opt in, everything else - including dynamic
-// tools, the skills extension, plugin-install tools, plan, request_user_input
-// and the multi-agent tools - stays serial.
+// tool_search/MCP-resource tools opt in, while the skills extension,
+// plugin-install tools, plan, request_user_input and the multi-agent tools stay
+// serial. Dynamic tools opt in themselves (#54654); see
+// dynamic_tools_parallel_test.go.
 func TestBuiltinToolParallelFlagsLikeRust(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.PluginInstallCandidates = []plugin.DiscoverableInfo{{ID: "parity", Name: "Parity"}}
