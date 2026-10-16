@@ -43,10 +43,18 @@ func (m *Model) insertComposerPaste(pasted string) {
 // Rust normalizes CRLF pairs and bare CRs to LF before classifying a paste, so
 // the same normalization gates both the "is this multiline?" test and the
 // continuation itself. Pastes that are not blockquotes are inserted unchanged.
+//
+// Rust #52418: one trailing newline is dropped from nonempty content before the
+// quote prefixes are added, otherwise the paste ends with an empty quoted line
+// before the next Markdown block. Interior blank lines, an all-blank paste, and
+// the two unquoted newlines appended by insertComposerPaste are all preserved.
 func composerBlockquotePaste(currentLine string, pasted string, bangShellCommand bool) (string, bool) {
 	normalized := bottompane.NormalizePastedText(pasted)
 	if bangShellCommand || !strings.HasPrefix(currentLine, "> ") || !strings.Contains(normalized, "\n") {
 		return pasted, false
+	}
+	if trimmed := strings.TrimSuffix(normalized, "\n"); trimmed != "" {
+		normalized = trimmed
 	}
 	return strings.ReplaceAll(normalized, "\n", "\n> "), true
 }

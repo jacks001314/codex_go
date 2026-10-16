@@ -49,10 +49,46 @@ func statusLineAccentTokenTypes(accent bottompane.StatusLineAccent) []chroma.Tok
 	}
 }
 
-// statusLineAccentSGR returns the softened theme foreground SGR for an accent,
-// or "" when the theme contributes no color (callers then use the fallback
-// palette).
+// statusLineAccentSGR returns the foreground SGR for an accent on the terminal
+// this process is rendering against.
 func statusLineAccentSGR(themeID string, accent bottompane.StatusLineAccent) string {
+	return statusLineAccentSGRForLevel(themeID, accent, codextui.DetectStdoutColorLevel())
+}
+
+// statusLineDefaultForegroundSGR restores the terminal default foreground,
+// which is how Rust's Color::Reset reaches the terminal.
+const statusLineDefaultForegroundSGR = "\x1b[39m"
+
+// statusLineAccentSGRForLevel projects an accent's theme color onto the
+// terminal color depth (Rust #53440 status_line_style.rs):
+//
+//   - truecolor and 256-color terminals keep the softened RGB foreground (Rust
+//     keeps a Color::Rgb foreground at both depths);
+//   - 16-color terminals cannot display that RGB, so the item keeps its ANSI
+//     fallback accent instead of losing its accent color;
+//   - a terminal that reports no color support drops the foreground to the
+//     terminal default (Rust's readable_color_on resolves an RGB foreground to
+//     Color::Reset when the palette is unknown);
+//   - an accent the theme has no color for keeps returning "" so the renderer
+//     uses the ANSI fallback palette, exactly as before.
+func statusLineAccentSGRForLevel(themeID string, accent bottompane.StatusLineAccent, level codextui.StdoutColorLevel) string {
+	themeColor := statusLineThemeAccentSGR(themeID, accent)
+	switch {
+	case themeColor == "":
+		return ""
+	case level == codextui.ColorANSI16:
+		return bottompane.StatusLineFallbackSGR(accent)
+	case level == codextui.ColorUnknown:
+		return statusLineDefaultForegroundSGR
+	default:
+		return themeColor
+	}
+}
+
+// statusLineThemeAccentSGR returns the softened theme foreground SGR for an
+// accent, or "" when the theme contributes no color (callers then use the
+// fallback palette).
+func statusLineThemeAccentSGR(themeID string, accent bottompane.StatusLineAccent) string {
 	style := styles.Get(codextui.ChromaThemeForCodexTheme(themeID))
 	if style == nil {
 		return ""

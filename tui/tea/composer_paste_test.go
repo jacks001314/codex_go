@@ -23,7 +23,10 @@ func TestComposerBlockquotePasteContinuesCurrentLinePrefixLikeRust(t *testing.T)
 		want   string
 	}{
 		{"> ", "first\nsecond", "> first\n> second\n\n"},
-		{"intro\n> ", "α\r\n\r\nβ\r", "intro\n> α\n> \n> β\n> \n\n"},
+		// Rust #52418: a single trailing newline no longer adds an empty quoted
+		// line (the CRLF/CR row below keeps its interior blank line quoted).
+		{"> ", "first\n", "> first\n\n"},
+		{"intro\n> ", "α\r\n\r\nβ\r", "intro\n> α\n> \n> β\n\n"},
 		{"> existing ", "first\nsecond", "> existing first\n> second\n\n"},
 		{"text > ", "first\nsecond", "text > first\nsecond"},
 		{">", "first\nsecond", ">first\nsecond"},
