@@ -198,6 +198,7 @@ const (
 
 	NotificationThreadStarted                     NotificationMethod = "thread/started"
 	NotificationThreadStatusChanged               NotificationMethod = "thread/status/changed"
+	NotificationThreadReadStateChanged            NotificationMethod = "thread/readState/changed"
 	NotificationThreadArchived                    NotificationMethod = "thread/archived"
 	NotificationThreadDeleted                     NotificationMethod = "thread/deleted"
 	NotificationThreadUnarchived                  NotificationMethod = "thread/unarchived"
@@ -3174,6 +3175,27 @@ type ThreadStartedNotification struct {
 type ThreadStatusChangedNotification struct {
 	ThreadID string       `json:"threadId"`
 	Status   ThreadStatus `json:"status"`
+}
+
+// ThreadUnreadPosition mirrors Rust `v2::thread::ThreadUnreadPosition` (tagged by
+// `type`: `threadStart`, or `turn` carrying a `turnId`).
+type ThreadUnreadPosition struct {
+	Type   string `json:"type"`
+	TurnID string `json:"turnId,omitempty"`
+}
+
+// ThreadReadState mirrors Rust `v2::thread::ThreadReadState`.
+type ThreadReadState struct {
+	FirstUnread *ThreadUnreadPosition `json:"firstUnread"`
+	Revision    string                `json:"revision"`
+}
+
+// ThreadReadStateChangedNotification mirrors Rust
+// `v2::thread::ThreadReadStateChangedNotification`, the experimental
+// "thread/readState/changed" notification (#52384, #52395).
+type ThreadReadStateChangedNotification struct {
+	ThreadID  string          `json:"threadId"`
+	ReadState ThreadReadState `json:"readState"`
 }
 
 type ThreadIDNotification struct {
