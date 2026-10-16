@@ -393,62 +393,57 @@ func DecideQueuedSlashPrompt(queued QueuedUserMessage, flags bottompane.BuiltinC
 func CommandSupportsInlineArgs(command codextui.Command) bool {
 	return command.SupportsInlineArgs()
 }
+
+// CommandAvailableInSideConversation reports whether `/command` stays available
+// inside an active side conversation. The list lives on codextui.Command
+// (tui/slash_command_availability.go), mirroring Rust
+// SlashCommand::available_in_side_conversation (slash_command.rs:203-219).
 func CommandAvailableInSideConversation(command codextui.Command) bool {
-	switch command {
-	case codextui.CommandCopy,
-		codextui.CommandExport,
-		codextui.CommandRaw,
-		codextui.CommandDiff,
-		codextui.CommandMention,
-		codextui.CommandStatus,
-		codextui.CommandWarnings,
-		codextui.CommandUsage,
-		codextui.CommandIde:
-		return true
-	default:
-		return false
-	}
+	return command.AvailableInSideConversation()
 }
 
+// CommandAvailableDuringTask reports whether `/command` may run while a task is
+// in progress. The list lives on codextui.Command
+// (tui/slash_command_availability.go), mirroring Rust where every caller reads
+// SlashCommand::available_during_task (codex-rs/tui/src/slash_command.rs:249-313).
 func CommandAvailableDuringTask(command codextui.Command) bool {
-	switch command {
-	case codextui.CommandNew,
-		// Rust #50764: /archive stays available during a running turn so the
-		// user can archive the current session without waiting for the turn.
-		codextui.CommandDelete,
-		codextui.CommandFork,
-		codextui.CommandWorktree,
-		codextui.CommandInit,
-		codextui.CommandCompact,
-		codextui.CommandRecap,
-		codextui.CommandExport,
-		codextui.CommandKeymap,
-		codextui.CommandVim,
-		codextui.CommandElevateSandbox,
-		codextui.CommandExperimental,
-		codextui.CommandMemories,
-		codextui.CommandImport,
-		codextui.CommandReview,
-		codextui.CommandPlan,
-		codextui.CommandClear,
-		codextui.CommandLogout,
-		codextui.CommandMemoryDrop,
-		codextui.CommandMemoryUpdate,
-		codextui.CommandTheme,
-		codextui.CommandPets:
-		return false
-	default:
-		return true
-	}
+	return command.AvailableDuringTask()
 }
 
+// QueuedCommandDrainFacts carries the runtime predicates that Rust reads off
+// `&self` while deciding whether a queued slash command may drain the queue. They
+// back the two non-static arms of ChatWidget::queued_command_drain_result
+// (codex-rs/tui/src/chatwidget/slash_dispatch.rs:1322-1332): /cd stops the drain
+// only when a bound thread can still change its working directory, and /worktree
+// stops it only when a managed worktree is available.
+type QueuedCommandDrainFacts struct {
+	// ThreadID mirrors ChatWidget::thread_id: empty means no thread is bound yet.
+	ThreadID string
+	// CanChangeWorkingDirectory mirrors ChatWidget::can_change_working_directory.
+	CanChangeWorkingDirectory bool
+	// ManagedWorktreeAvailable mirrors ChatWidget::managed_worktree_available.
+	ManagedWorktreeAvailable bool
+}
+
+// QueuedCommandDrainResult mirrors ChatWidget::queued_command_drain_result
+// (codex-rs/tui/src/chatwidget/slash_dispatch.rs:1293-1373) with the runtime
+// facts left unset, i.e. Rust's `_ => Continue` arm for /cd (:1324) and the
+// unavailable branch for /worktree (:1330).
 func QueuedCommandDrainResult(command codextui.Command, pendingOrRunning bool, modalActive bool) QueueDrain {
+	return QueuedCommandDrainResultWithFacts(command, pendingOrRunning, modalActive, QueuedCommandDrainFacts{})
+}
+
+// QueuedCommandDrainResultWithFacts is QueuedCommandDrainResult with the runtime
+// facts that upstream reads off `self`.
+func QueuedCommandDrainResultWithFacts(command codextui.Command, pendingOrRunning bool, modalActive bool, facts QueuedCommandDrainFacts) QueueDrain {
 	if pendingOrRunning || modalActive {
 		return QueueDrainStop
 	}
 	switch command {
 	case codextui.CommandIde,
 		codextui.CommandStatus,
+		codextui.CommandDaemon,
+		codextui.CommandPwd,
 		codextui.CommandUsage,
 		codextui.CommandDebugConfig,
 		codextui.CommandPs,
@@ -462,16 +457,29 @@ func QueuedCommandDrainResult(command codextui.Command, pendingOrRunning bool, m
 		codextui.CommandCopy,
 		codextui.CommandRaw,
 		codextui.CommandVim,
+		// SlashCommand::Daybreak (slash_dispatch.rs:1315) is Continue upstream but
+		// has no Go carrier yet (round-90 立项 candidate), so it cannot appear here.
 		codextui.CommandDiff,
 		codextui.CommandApp,
 		codextui.CommandRename,
+		codextui.CommandVoice,
+		codextui.CommandRecap,
 		codextui.CommandTestApproval:
+		return QueueDrainContinue
+	case codextui.CommandCd:
+		if facts.ThreadID != "" && facts.CanChangeWorkingDirectory {
+			return QueueDrainStop
+		}
+		return QueueDrainContinue
+	case codextui.CommandWorktree:
+		if facts.ManagedWorktreeAvailable {
+			return QueueDrainStop
+		}
 		return QueueDrainContinue
 	default:
 		return QueueDrainStop
 	}
 }
-
 func SlashCommandArgsElements(rest string, restOffset int, textElements []turn.TextElement) []turn.TextElement {
 	if rest == "" || len(textElements) == 0 {
 		return nil

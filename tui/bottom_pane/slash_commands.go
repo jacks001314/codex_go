@@ -83,39 +83,18 @@ func (i SlashCommandItem) AvailableInSideConversation() bool {
 	if i.Kind == SlashCommandItemServiceTier {
 		return false
 	}
-	return sideConversationCommandAllowed(i.Command)
+	return i.Command.AvailableInSideConversation()
 }
 
+// AvailableDuringTask reports whether the command can run while a task is in
+// progress. The list lives on codextui.Command (tui/slash_command_availability.go),
+// mirroring Rust where every caller reads SlashCommand::available_during_task
+// (codex-rs/tui/src/slash_command.rs:249-313).
 func (i SlashCommandItem) AvailableDuringTask() bool {
 	if i.Kind == SlashCommandItemServiceTier {
 		return true
 	}
-	switch i.Command {
-	case codextui.CommandNew,
-		// Rust #50764: /archive stays available during a running turn so the
-		// user can archive the current session without waiting for the turn.
-		codextui.CommandDelete,
-		codextui.CommandFork,
-		codextui.CommandInit,
-		codextui.CommandCompact,
-		codextui.CommandKeymap,
-		codextui.CommandVim,
-		codextui.CommandElevateSandbox,
-		codextui.CommandExperimental,
-		codextui.CommandMemories,
-		codextui.CommandImport,
-		codextui.CommandReview,
-		codextui.CommandPlan,
-		codextui.CommandClear,
-		codextui.CommandLogout,
-		codextui.CommandMemoryDrop,
-		codextui.CommandMemoryUpdate,
-		codextui.CommandTheme,
-		codextui.CommandPets:
-		return false
-	default:
-		return true
-	}
+	return i.Command.AvailableDuringTask()
 }
 
 type BuiltinCommandFlags struct {
@@ -295,7 +274,7 @@ func builtinFrameAvailable(frame codextui.SlashCommandFrame, flags BuiltinComman
 			return false
 		}
 	}
-	if flags.SideConversationActive && !sideConversationCommandAllowed(frame.Command) {
+	if flags.SideConversationActive && !frame.Command.AvailableInSideConversation() {
 		return false
 	}
 	return true
@@ -352,22 +331,6 @@ func fuzzyCommandMatch(command string, query string) bool {
 		}
 	}
 	return cursor == len(query)
-}
-
-func sideConversationCommandAllowed(command codextui.Command) bool {
-	switch command {
-	case codextui.CommandIde,
-		codextui.CommandCopy,
-		codextui.CommandRaw,
-		codextui.CommandDiff,
-		codextui.CommandMention,
-		codextui.CommandStatus,
-		codextui.CommandWarnings,
-		codextui.CommandUsage:
-		return true
-	default:
-		return false
-	}
 }
 
 // rustSlashCommandOrder is the upstream popup presentation order: the order of the
