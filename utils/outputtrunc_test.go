@@ -175,3 +175,26 @@ func TestPlanTokenTruncationMirrorsRustLikeRust(t *testing.T) {
 		t.Fatalf("TruncateMiddleWithTokenBudget = %q / %v", truncated, total)
 	}
 }
+
+// Rust `truncate_middle_with_token_budget` (codex-rs/utils/string/src/truncate.rs:80-84)
+// reports no truncation when the assembled text equals its input: the planned
+// edit replaced exactly the bytes the notice re-inserts, so the second return
+// value stays nil at that fixed point.
+func TestTruncateMiddleWithTokenBudgetReportsTheFixedPointLikeRust(t *testing.T) {
+	// max_tokens = 4 -> 16 bytes split 8/8; the 24-byte notice spans exactly the
+	// removed range of this 40-byte input, so re-inserting it reproduces the input.
+	text := "aaaaaaaa" + "\u20266 tokens truncated\u2026" + "bbbbbbbb"
+	truncated, total := TruncateMiddleWithTokenBudget(text, 4)
+	if truncated != text {
+		t.Fatalf("truncated = %q, want the input unchanged", truncated)
+	}
+	if total != nil {
+		t.Fatalf("total = %d, want nil at the fixed point", *total)
+	}
+	// One byte more does remove text, so the original token count is reported.
+	over := text + "c"
+	truncated, total = TruncateMiddleWithTokenBudget(over, 4)
+	if truncated == over || total == nil || *total != uint64(ApproxTokenCount(over)) {
+		t.Fatalf("over-budget = %q / %v, want a truncation with the original count", truncated, total)
+	}
+}

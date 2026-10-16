@@ -483,24 +483,58 @@ func UserInputPartIndices(message []ContentItem) []int {
 // pairs, `protocol/src/models.rs`: `<image>`/`</image>`, `<audio>`/`</audio>`
 // and the `<image name=` / `<audio name=` local variants).
 func isMediaLabelText(items []ContentItem, index int) bool {
-	text := strings.TrimSpace(items[index].Text)
-	open := strings.HasPrefix(text, "<image") || strings.HasPrefix(text, "<local_image")
-	close := text == "</image>" || text == "</local_image>"
-	if open && index+1 < len(items) && items[index+1].Kind == ContentInputImage {
+	// Rust matches the raw text: the label predicates are exact equality or the
+	// local `<x name=` prefix, and no surrounding whitespace is stripped
+	// (core/src/event_mapping.rs:106-121).
+	text := items[index].Text
+	if isImageOpenLabelText(text) && index+1 < len(items) && items[index+1].Kind == ContentInputImage {
 		return true
 	}
-	if close && index > 0 && items[index-1].Kind == ContentInputImage {
+	if isImageCloseLabelText(text) && index > 0 && items[index-1].Kind == ContentInputImage {
 		return true
 	}
-	audioOpen := strings.HasPrefix(text, "<audio") || strings.HasPrefix(text, "<local_audio")
-	audioClose := text == "</audio>" || text == "</local_audio>"
-	if audioOpen && index+1 < len(items) && items[index+1].Kind == ContentInputAudio {
+	if isAudioOpenLabelText(text) && index+1 < len(items) && items[index+1].Kind == ContentInputAudio {
 		return true
 	}
-	if audioClose && index > 0 && items[index-1].Kind == ContentInputAudio {
+	if isAudioCloseLabelText(text) && index > 0 && items[index-1].Kind == ContentInputAudio {
 		return true
 	}
 	return false
+}
+
+// isImageOpenLabelText mirrors Rust's `is_image_open_tag_text` (== "<image>") and
+// `is_local_image_open_tag_text` (`<image name=` prefix, `>` suffix) in
+// protocol/src/models.rs:1823-1838.
+func isImageOpenLabelText(text string) bool {
+	return text == "<image>" || isLocalOpenTagText(text, "<image name=")
+}
+
+// isImageCloseLabelText mirrors Rust's `is_image_close_tag_text`
+// (protocol/src/models.rs:1836-1838).
+func isImageCloseLabelText(text string) bool {
+	return text == "</image>"
+}
+
+// isAudioOpenLabelText mirrors Rust's `is_audio_open_tag_text` (== "<audio>") and
+// `is_local_audio_open_tag_text` (`<audio name=` prefix, `>` suffix) in
+// protocol/src/models.rs:1858-1869.
+func isAudioOpenLabelText(text string) bool {
+	return text == "<audio>" || isLocalOpenTagText(text, "<audio name=")
+}
+
+// isAudioCloseLabelText mirrors Rust's `is_audio_close_tag_text`
+// (protocol/src/models.rs:1871-1873).
+func isAudioCloseLabelText(text string) bool {
+	return text == "</audio>"
+}
+
+// isLocalOpenTagText mirrors `is_local_image_open_tag_text` /
+// `is_local_audio_open_tag_text`: the local variant carries its label and path
+// after the `<x name=` prefix and ends in `>` (protocol/src/models.rs:1823-1826,
+// 1858-1861).
+func isLocalOpenTagText(text string, prefix string) bool {
+	rest, ok := strings.CutPrefix(text, prefix)
+	return ok && strings.HasSuffix(rest, ">")
 }
 
 func webSearchAction(action string) string {

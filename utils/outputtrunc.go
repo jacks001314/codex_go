@@ -245,6 +245,13 @@ func TruncateMiddleWithTokenBudget(s string, maxTokens int) (string, *uint64) {
 		return s, nil
 	}
 	truncated := s[:truncation.RemovedStart] + truncation.Marker + s[truncation.RemovedEnd:]
+	if truncated == s {
+		// Rust `truncate_middle_with_token_budget`
+		// (codex-rs/utils/string/src/truncate.rs:80-84) reports no truncation when the
+		// assembled text equals its input: the planned edit replaced exactly the bytes
+		// the notice re-inserts.
+		return truncated, nil
+	}
 	totalTokens := uint64(ApproxTokenCount(s))
 	return truncated, &totalTokens
 }

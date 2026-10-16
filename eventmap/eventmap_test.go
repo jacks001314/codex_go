@@ -277,3 +277,97 @@ func TestUserInputPartIndicesSkipMediaLabelsLikeRust(t *testing.T) {
 		t.Fatalf("indices = %#v, want both parts", got)
 	}
 }
+
+// rustUserInputPartIndices transcribes Rust's `user_input_parts`
+// (core/src/event_mapping.rs:100-126) with the media label predicates from
+// protocol/src/models.rs:1823-1873, including that Rust matches the raw text and
+// never trims it. It is the oracle the Go implementation is compared against.
+func rustUserInputPartIndices(message []ContentItem) []int {
+	localOpen := func(text string, prefix string) bool {
+		rest, ok := strings.CutPrefix(text, prefix)
+		return ok && strings.HasSuffix(rest, ">")
+	}
+	indices := make([]int, 0, len(message))
+	for index := range message {
+		item := message[index]
+		if item.Kind != ContentInputText {
+			indices = append(indices, index)
+			continue
+		}
+		isImageLabel := ((localOpen(item.Text, "<image name=") || item.Text == "<image>") &&
+			index+1 < len(message) && message[index+1].Kind == ContentInputImage) ||
+			(index > 0 && item.Text == "</image>" && message[index-1].Kind == ContentInputImage)
+		isAudioLabel := ((localOpen(item.Text, "<audio name=") || item.Text == "<audio>") &&
+			index+1 < len(message) && message[index+1].Kind == ContentInputAudio) ||
+			(index > 0 && item.Text == "</audio>" && message[index-1].Kind == ContentInputAudio)
+		if !isImageLabel && !isAudioLabel {
+			indices = append(indices, index)
+		}
+	}
+	return indices
+}
+
+// Mirrors Rust's `user_input_parts` (core/src/event_mapping.rs:100) for the
+// media label accept sets: only the exact `<image>` / `<audio>` / closing tags
+// and the `<image name=` / `<audio name=` local variants (prefix plus a `>`
+// suffix) are label text, and the raw text is matched without trimming
+// (protocol/src/models.rs:1823-1873). Every case where the earlier Go
+// `HasPrefix` accept set was wider than Rust must now agree with the oracle.
+func TestUserInputPartIndicesMatchRustMediaLabels(t *testing.T) {
+	image := ContentItem{Kind: ContentInputImage, ImageURL: "data:image/png;base64,AAAA"}
+	audio := ContentItem{Kind: ContentInputAudio}
+	text := func(value string) ContentItem { return ContentItem{Kind: ContentInputText, Text: value} }
+	for _, tc := range []struct {
+		name    string
+		message []ContentItem
+		want    []int
+	}{
+		{"local image open + image", []ContentItem{text(`<image name=[Image #1] path="/tmp/a.png">`), image}, []int{1}},
+		{"bare image open + image", []ContentItem{text("<image>"), image}, []int{1}},
+		{"image + close", []ContentItem{image, text("</image>")}, []int{0}},
+		{"audio open + audio", []ContentItem{text("<audio>"), audio}, []int{1}},
+		{"local audio open + audio", []ContentItem{text(`<audio name=[Audio #1] path="/tmp/a.wav">`), audio}, []int{1}},
+		{"audio + close", []ContentItem{audio, text("</audio>")}, []int{0}},
+		{"image prefixed tag", []ContentItem{text("<imagefoo>"), image}, []int{0, 1}},
+		{"unprefixed local image tag", []ContentItem{text("<local_image>"), image}, []int{0, 1}},
+		{"leading space image tag", []ContentItem{text(" <image>"), image}, []int{0, 1}},
+		{"audio prefixed tag", []ContentItem{text("<audiofoo>"), audio}, []int{0, 1}},
+		{"unprefixed local audio tag", []ContentItem{text("<local_audio>"), audio}, []int{0, 1}},
+		{"unprefixed local image close", []ContentItem{image, text("</local_image>")}, []int{0, 1}},
+		{"unprefixed local audio close", []ContentItem{audio, text("</local_audio>")}, []int{0, 1}},
+		{"image label without suffix", []ContentItem{text(`<image name=[Image #1] path="/tmp/a.png"`), image}, []int{0, 1}},
+		{"audio label without suffix", []ContentItem{text(`<audio name=[Audio #1] path="/tmp/a.wav"`), audio}, []int{0, 1}},
+		{"empty label + image", []ContentItem{text(""), image}, []int{0, 1}},
+		{"duplicate label before image", []ContentItem{text("<image>"), text("<image>"), image}, []int{0, 2}},
+		{"image label without media", []ContentItem{text("<image>"), text("x")}, []int{0, 1}},
+		{"paired image and audio labels", []ContentItem{
+			text(`<image name=[Image #1] path="/tmp/a.png">`), image, text("</image>"),
+			text(`<audio name=[Audio #1] path="/tmp/a.wav">`), audio, text("</audio>"),
+			text("keep me"),
+		}, []int{1, 4, 6}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rustUserInputPartIndices(tc.message); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("oracle = %#v, want %#v", got, tc.want)
+			}
+			if got := UserInputPartIndices(tc.message); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("UserInputPartIndices = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+
+	// The six tag spellings Rust itself produces stay equivalent.
+	for _, tc := range []struct {
+		label string
+		media ContentItem
+	}{
+		{`<image name=[Image #1] path="/tmp/a.png">`, image},
+		{"<image>", image},
+		{`<audio name=[Audio #1] path="/tmp/a.wav">`, audio},
+		{"<audio>", audio},
+	} {
+		if got := UserInputPartIndices([]ContentItem{text(tc.label), tc.media}); !reflect.DeepEqual(got, []int{1}) {
+			t.Fatalf("label %q = %#v, want [1]", tc.label, got)
+		}
+	}
+}

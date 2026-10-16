@@ -1126,8 +1126,9 @@ func lastUserMessages(history []Item, count int) []Item {
 //
 // A text-only message that fits keeps its exact content parts and annotations, so
 // a multipart prompt survives compaction unchanged. A message that does not fit,
-// or that carries media, is materialized as its flattened text - media is never
-// carried into the replacement history - and ends the selection, so older
+// or that carries media, is rebuilt from its text parts - media is never carried
+// into the replacement history, and a message whose parts were all media keeps an
+// empty text part instead of its wrapper labels - and ends the selection, so older
 // messages are dropped rather than truncated.
 func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item {
 	if maxTokens <= 0 {
@@ -1162,10 +1163,16 @@ func retainedUserMessagesForLocalCompaction(items []Item, maxTokens int) []Item 
 		fallback.Raw = nil
 		parts, kinds := compactedUserTextParts(item)
 		if len(parts) == 0 {
-			// Safety net for an item that carries text without content parts (a
-			// rollout item flattened by an earlier edit): Rust's message always
-			// carries content, so only Go needs this shape.
-			parts = []ContentPart{{Type: "input_text", Text: ItemText(&item)}}
+			// Rust pushes an empty-text part with an unknown classification when no
+			// text part survives (`compact.rs:779-787`), so a message that carried only
+			// media keeps no wrapper label as user text. Only the legacy flattened
+			// shape - text with no content parts, produced by an earlier rollout edit -
+			// still falls back to the flat item text.
+			text := ""
+			if len(item.Content) == 0 {
+				text = ItemText(&item)
+			}
+			parts = []ContentPart{{Type: "input_text", Text: text}}
 			kinds = []string{unknownContentKind}
 		}
 		parts, kinds = truncateUserTextParts(parts, kinds, remaining)

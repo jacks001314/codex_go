@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"codex_go/retainedctx"
 	"codex_go/utils"
 )
 
@@ -128,14 +129,30 @@ func TestLocalCompactionSharesTheUserMessageBudgetLikeRust(t *testing.T) {
 		t.Fatalf("text was not truncated: %d of %d bytes", len(tight[0].Text), len(long))
 	}
 
-	// A message larger than the whole budget keeps only the text that fits.
+	// A message larger than the whole budget keeps only the text that fits, and the
+	// retained slice is exact: a 10-token budget is 40 bytes split 20/20, and the
+	// notice charges the 15_960 removed bytes as 3_990 approximate tokens. Rust
+	// counts the generated notice outside the retained-text budget, so the upper
+	// bound is the budget plus the notice (truncate.rs:69-85).
 	huge := retainedUserMessagesForLocalCompaction([]Item{
 		{ID: "u1", Type: "message", Role: "user", Kind: "user_message", Text: long},
 	}, 10)
-	// Rust counts the generated notice outside the retained-text budget, so the
-	// text view is the budget plus the notice.
-	if len(huge) != 1 || len(huge[0].Text) >= len(long) || !strings.Contains(huge[0].Text, "tokens truncated") {
-		t.Fatalf("retained = %#v", huge)
+	wantHead, wantNotice := long[:20], "\u20263990 tokens truncated\u2026"
+	wantTail := long[len(long)-20:]
+	if len(huge) != 1 || len(huge[0].Content) != 3 ||
+		huge[0].Content[0].Text != wantHead || huge[0].Content[1].Text != wantNotice || huge[0].Content[2].Text != wantTail {
+		t.Fatalf("content = %#v, want %q / %q / %q", huge, wantHead, wantNotice, wantTail)
+	}
+	for _, part := range huge[0].Content {
+		if part.Type != "input_text" || part.ImageURL != "" || part.AudioURL != "" || part.FileID != "" {
+			t.Fatalf("part = %#v, want a plain text part", part)
+		}
+	}
+	// The text view joins the retained parts with newlines, so its bound is the
+	// budget plus the notice plus the two separators.
+	wantText := wantHead + "\n" + wantNotice + "\n" + wantTail
+	if huge[0].Text != wantText {
+		t.Fatalf("text = %q, want %q", huge[0].Text, wantText)
 	}
 }
 
@@ -178,5 +195,134 @@ func TestLocalCompactionTruncatesOverlongUserMessagesLikeRust(t *testing.T) {
 		if len(missingKinds) != 3 || missingKinds[0] != "unknown" || missingKinds[1] != "unknown" || missingKinds[2] != "unknown" {
 			t.Fatalf("parts=%d missing kinds = %#v", partCount, missingKinds)
 		}
+	}
+}
+
+// Rust `compact.rs:757-788`: a retained message is rebuilt from its surviving
+// text parts, and a message whose parts were all media keeps an empty text part
+// with an unknown classification instead of its wrapper labels. Only the legacy
+// flattened shape - text and no content parts - still contributes `ItemText`.
+func TestLocalCompactionKeepsMediaOnlyMessagesTextEmptyLikeRust(t *testing.T) {
+	imageTriple := []ContentPart{
+		{Type: "input_text", Text: `<image name=[Image #1] path="C:\shots\a.png">`},
+		{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"},
+		{Type: "input_text", Text: "</image>"},
+	}
+	audioTriple := []ContentPart{
+		{Type: "input_text", Text: `<audio name=[Audio #1] path="C:\clips\a.wav">`},
+		{Type: "input_audio", AudioURL: "data:audio/wav;base64,AAAA"},
+		{Type: "input_text", Text: "</audio>"},
+	}
+	mixed := append(append([]ContentPart{}, imageTriple...), audioTriple...)
+	for _, tc := range []struct {
+		name    string
+		content []ContentPart
+	}{
+		{name: "image only", content: imageTriple},
+		{name: "audio only", content: audioTriple},
+		{name: "image and audio", content: mixed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := Item{
+				ID: "u1", Type: "message", Role: "user", Kind: "user_message",
+				// The flattened text view of the same item: a media-only message
+				// must not fall back to it as user text.
+				Text:    `<image name=[Image #1] path="C:\shots\a.png">` + "\n" + "</image>",
+				Content: tc.content,
+			}
+			retained := retainedUserMessagesForLocalCompaction([]Item{message}, CompactionUserMessageBudget)
+			if len(retained) != 1 {
+				t.Fatalf("retained = %#v", retained)
+			}
+			got := retained[0]
+			if got.Text != "" {
+				t.Fatalf("text = %q, want empty for a media-only message", got.Text)
+			}
+			if len(got.Content) != 1 || got.Content[0].Type != "input_text" || got.Content[0].Text != "" {
+				t.Fatalf("content = %#v, want a single empty text part", got.Content)
+			}
+			if kinds, _ := got.Data["content_item_kinds"].([]string); len(kinds) != 1 || kinds[0] != "unknown" {
+				t.Fatalf("kinds = %#v, want [unknown]", got.Data["content_item_kinds"])
+			}
+		})
+	}
+
+	// The legacy flattened rollout item - text and no content parts - is the one
+	// shape that still contributes ItemText.
+	flattened := retainedUserMessagesForLocalCompaction([]Item{{
+		ID: "u1", Type: "message", Role: "user", Kind: "user_message", Text: "flat text",
+	}}, CompactionUserMessageBudget)[0]
+	if flattened.Text != "flat text" {
+		t.Fatalf("text = %q, want the flat item text", flattened.Text)
+	}
+}
+
+// Rust `compact.rs:790-794` marks the retained sources of a message the budget
+// shortened (`CodexHarnessMetadata::mark_retained_sources_incomplete`): the
+// shortened message no longer proves delivery of a complete original.
+func TestLocalCompactionMarksRetainedSourcesIncompleteLikeRust(t *testing.T) {
+	completeMetadata := func() json.RawMessage {
+		raw, err := json.Marshal(retainedctx.HarnessMetadata{
+			GuardianSourceOrderGuidance: true,
+			RetainedSource: &retainedctx.RetainedSource{
+				ID:       retainedctx.RetainedSourceID{MessageID: "m1", TurnID: "t1", Role: retainedctx.RetainedSourceRoleUser},
+				Revision: "r1",
+				Complete: true,
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal harness metadata: %v", err)
+		}
+		return raw
+	}
+	readMetadata := func(item Item) retainedctx.HarnessMetadata {
+		raw, ok := item.Data["harness_metadata"].(json.RawMessage)
+		if !ok {
+			t.Fatalf("harness_metadata = %#v, want raw JSON", item.Data["harness_metadata"])
+		}
+		var metadata retainedctx.HarnessMetadata
+		if err := json.Unmarshal(raw, &metadata); err != nil {
+			t.Fatalf("unmarshal harness metadata: %v", err)
+		}
+		return metadata
+	}
+
+	// A message the budget shortened loses the delivery proof.
+	overBudget := strings.Repeat("x", 4_000)
+	shortened := retainedUserMessagesForLocalCompaction([]Item{{
+		ID: "u1", Type: "message", Role: "user", Kind: "user_message", Text: overBudget,
+		Data: map[string]any{"harness_metadata": completeMetadata()},
+	}}, 16)[0]
+	marked := readMetadata(shortened)
+	if marked.RetainedSource == nil || marked.RetainedSource.Complete {
+		t.Fatalf("retained source = %#v, want the proof dropped", marked.RetainedSource)
+	}
+	if marked.GuardianSourceOrderGuidance {
+		t.Fatalf("order guidance = true, want false after a shortening")
+	}
+
+	// Media that fits the budget is not a shortening, so the proof survives.
+	fits := retainedUserMessagesForLocalCompaction([]Item{{
+		ID: "u2", Type: "message", Role: "user", Kind: "user_message", Text: "look at this",
+		Content: []ContentPart{
+			{Type: "input_text", Text: "look at this"},
+			{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"},
+		},
+		Data: map[string]any{"harness_metadata": completeMetadata()},
+	}}, CompactionUserMessageBudget)[0]
+	intact := readMetadata(fits)
+	if intact.RetainedSource == nil || !intact.RetainedSource.Complete || !intact.GuardianSourceOrderGuidance {
+		t.Fatalf("retained source = %#v / guidance = %v, want the untouched proof", intact.RetainedSource, intact.GuardianSourceOrderGuidance)
+	}
+
+	// An item without harness metadata is kept silently and mints no key.
+	bare := retainedUserMessagesForLocalCompaction([]Item{{
+		ID: "u3", Type: "message", Role: "user", Kind: "user_message", Text: overBudget,
+	}}, 16)[0]
+	if _, ok := bare.Data["harness_metadata"]; ok {
+		t.Fatalf("harness_metadata = %#v, want no key", bare.Data["harness_metadata"])
+	}
+	if bare.Text == "" {
+		t.Fatalf("text = %q, want the shortened text", bare.Text)
 	}
 }
