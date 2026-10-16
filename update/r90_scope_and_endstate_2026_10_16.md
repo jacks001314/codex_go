@@ -94,3 +94,37 @@ Three rounds of questions are unanswered. To close the objective I need exactly 
 
 Without one of these, the objective as literally written cannot be reported complete, and it should not
 be reported complete on the strength of "we landed 5 more syncs this round".
+## 7. E2 baseline frozen (leader re-run, `-count=3`)
+
+Ran on `main @ a7cc0f90` with `CODEX_RUST_ROOT=C:\rw\codex-rs`:
+
+```
+go test ./appserver/ -count=3 -run '<the 6 pre-existing reds + the 3 flake suspects>'
+=> FAIL codex_go/appserver 4.834s
+```
+
+| test | x1 | x2 | x3 | verdict |
+| --- | --- | --- | --- | --- |
+| `TestExecutorSkillPathEqualsMatchesWindowsIdentityLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestMultiAgentWaitDurationRecordsOutcomeLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestRequiredSkillsPreSamplingValidationReleasesSatisfiedTurnsLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestShellSnapshotCommandMetricsLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestShellSnapshotCommandMetricsReportProtectedAndUnavailableLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestShellSnapshotCommandMetricsSkipNonDirectLaunchesLikeRust` | FAIL | FAIL | FAIL | deterministic red |
+| `TestOtelProviderReloadsAfterAccountChange` | PASS | PASS | PASS | load flake only |
+| `TestRuntimeAgentControllerV2RegistersCanonicalPathAndImplementsTools` | PASS | PASS | PASS | load flake only |
+| `TestRuntimeRouterCodeModeExecEndToEndEmitsOneNestedCommandLifecycleAndOneFinalMessage` | PASS | PASS | PASS | **closed** (was the pin-introduced red) |
+
+So the frozen R5-bis red list for `./appserver/` is exactly those six names - separated from the three
+load flakes that only surface in full-suite runs. Other packages as of this tip: `./turn` 0, `./tool` 2,
+`./state` 1, `./tui/tea` 1, `./parity ./features ./config ./cli ./mcp ./rollout ./metrics ./realtime
+./mermaid ./network` all ok.
+
+## 8. Inbox hygiene note
+
+The A2A inbox carries 22 stale messages from earlier rounds (sampled two: a lane B batch-2 report
+targeting `main @ 9de2a14a` and a lane pin parity report targeting `main @ 2e12a0ab`, both long
+superseded by the current `main @ a7cc0f90` and already reflected in the ledger). They are being drained
+oldest-first, which costs more context than they carry, so draining is deliberately slow. Live lane
+deliveries are detected from the lane worktrees (uncommitted file sets + evidence docs) rather than by
+draining the queue.
