@@ -84,6 +84,11 @@ jobs:
         shell: bash
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Rust #54641 keeps verbose npm logs so a failed publish can be
+          # diagnosed from the retained artifact.
+          NPM_CONFIG_LOGLEVEL: verbose
+          NPM_CONFIG_LOGS_DIR: ${{ runner.temp }}/npm-publish-logs
+          NPM_CONFIG_LOGS_MAX: "100"
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
@@ -100,6 +105,15 @@ jobs:
           fi
           echo "Publishing @jacks001314/codex-go@$VERSION with tag '$tag'"
           node npm/scripts/publish-packages.mjs --directory "dist/v$VERSION/npm" --tag "$tag"
+
+      - name: Retain npm debug logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-publish-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-publish-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   release:
     needs: build
