@@ -3,6 +3,9 @@ package turn
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/attachmentstore"
 	"codex_go/codexapi"
 	"codex_go/eventmap"
 	"codex_go/model"
@@ -33,10 +37,17 @@ const (
 )
 
 type ImageGenerationOptions struct {
-	SessionID  string
-	CodexHome  string
-	Provider   model.APIProvider
-	Auth       model.AuthHeaders
+	SessionID string
+	CodexHome string
+	Provider  model.APIProvider
+	Auth      model.AuthHeaders
+	// AttachmentStore receives generated images (Rust #54398: the image
+	// extension uploads through the session's image store). A nil store means
+	// the inline store, which keeps the generated image inline.
+	AttachmentStore attachmentstore.Store
+	// Ephemeral mirrors `call.ephemeral` in Rust #54398: uploads from ephemeral
+	// turns keep their persistence intent, so a durable backend can skip them.
+	Ephemeral  bool
 	HTTPClient model.HTTPDoer
 	InputItems []any
 }
@@ -115,7 +126,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if args.Prompt == "" {
 		return imageGenerationErrorOutput(invocation, args.Prompt, "prompt must not be empty"), nil
 	}
-	request, err := h.requestForArgs(ctx, &args)
+	request, inputImages, err := h.requestForArgs(ctx, &args)
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
@@ -157,6 +168,17 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 		"revised_prompt":   args.Prompt,
 		"image_url":        imageGenerationOutputPrefix + result,
 	}
+	if fileID := generatedImageFileRef(h.options, h.sessionID(), result); fileID != "" {
+		// Rust #54398: a durable attachment reference replaces the inline copy
+		// on the item. Go keeps `result` as well because the in-process readers
+		// (`recentImageURLs`, rollout persistence) still consume it, and Rust's
+		// reader prefers `fileId` when a record carries both fields
+		// (ext/items/src/image_generation.rs `GeneratedImageRef`: the `File`
+		// variant is declared first for exactly that reason). The app-server
+		// wire form emits `fileId` and drops `result`.
+		data["fileId"] = fileID
+		data["file_id"] = fileID
+	}
 	if transparentBackground != nil {
 		data["transparentBackground"] = *transparentBackground
 		data["transparent_background"] = *transparentBackground
@@ -167,6 +189,12 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	}
 	if hint != "" {
 		data["output_hint"] = hint
+	}
+	if len(inputImages) > 0 {
+		// Rust #54420: the field is absent when no local input was read, so older
+		// records and generations without references serialize exactly as before.
+		data["inputImages"] = inputImages
+		data["input_images"] = inputImages
 	}
 	return &tool.Output{
 		CallID:      invocation.CallID,
@@ -179,13 +207,46 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	}, nil
 }
 
-func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *imageGenerationArgs) (*imageGenerationRequest, error) {
+// generatedImageFileRef mirrors the write side of Rust #54398
+// (ext/image-generation/src/tool.rs): decode the generated base64 image, upload
+// the decoded bytes through the attachment store tagged `usage=image_gen`, and
+// return the durable file id when the store answers with a file reference. A
+// decode failure, an upload failure, or an inline-only store yields "", and the
+// caller keeps the inline result, so no generation is ever lost.
+func generatedImageFileRef(options ImageGenerationOptions, threadID string, result string) string {
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(result))
+	if err != nil {
+		return ""
+	}
+	uploaded, err := attachmentstore.StoreOrDefault(options.AttachmentStore).Upload(attachmentstore.UploadRequest{
+		ThreadID:  strings.TrimSpace(threadID),
+		Ephemeral: options.Ephemeral,
+		Tags:      attachmentstore.ImageGenerationUploadTags(),
+		Data:      decoded,
+	})
+	if err != nil || !uploaded.IsFile() {
+		return ""
+	}
+	return uploaded.FileID
+}
+
+// imageGenerationInputImage mirrors Rust's ImageGenerationInputImage (#54420):
+// one local image file successfully read for this exact image-generation request.
+type imageGenerationInputImage struct {
+	Path string `json:"path"`
+	// SHA256 is the lowercase hex SHA-256 of the file bytes read before image
+	// normalization (Rust: "Lowercase SHA-256 of the file bytes read before
+	// image normalization").
+	SHA256 string `json:"sha256"`
+}
+
+func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *imageGenerationArgs) (*imageGenerationRequest, []imageGenerationInputImage, error) {
 	if args == nil {
-		return nil, fmt.Errorf("image generation arguments are required")
+		return nil, nil, fmt.Errorf("image generation arguments are required")
 	}
 	paths := nonEmptyImagePaths(args.ReferencedImagePaths)
 	if len(paths) > imageGenerationMaxEditImages {
-		return nil, fmt.Errorf("`referenced_image_paths` must contain at most %d paths", imageGenerationMaxEditImages)
+		return nil, nil, fmt.Errorf("`referenced_image_paths` must contain at most %d paths", imageGenerationMaxEditImages)
 	}
 	// Rust #47484: the boolean argument replaces the previous `auto` background,
 	// so generation and editing always send an explicit background.
@@ -205,20 +266,25 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 				Quality:    &quality,
 				Size:       &size,
 			},
-		}, nil
+		}, nil, nil
 	}
 	var images []codexapi.ImageURL
+	var inputImages []imageGenerationInputImage
 	switch {
 	case len(paths) > 0 && args.NumLastImagesToInclude != nil:
-		return nil, fmt.Errorf("provide only one of `referenced_image_paths` or `num_last_images_to_include`")
+		return nil, nil, fmt.Errorf("provide only one of `referenced_image_paths` or `num_last_images_to_include`")
 	case len(paths) > 0:
 		images = make([]codexapi.ImageURL, 0, len(paths))
+		inputImages = make([]imageGenerationInputImage, 0, len(paths))
 		for _, path := range paths {
-			imageURL, err := imageURLForLocalPath(path)
+			imageURL, identity, err := imageURLForLocalPath(path)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			images = append(images, codexapi.ImageURL{ImageURL: imageURL})
+			// Rust #54420: a completed generation records the local inputs that
+			// produced it, identified by the bytes read before normalization.
+			inputImages = append(inputImages, imageGenerationInputImage{Path: path, SHA256: identity})
 		}
 	default:
 		count := 0
@@ -226,11 +292,11 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 			count = *args.NumLastImagesToInclude
 		}
 		if count < 1 || count > imageGenerationMaxEditImages {
-			return nil, fmt.Errorf("`num_last_images_to_include` must be between 1 and %d", imageGenerationMaxEditImages)
+			return nil, nil, fmt.Errorf("`num_last_images_to_include` must be between 1 and %d", imageGenerationMaxEditImages)
 		}
 		recent, err := recentImageURLs(h.options.InputItems, count)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		images = recent
 	}
@@ -247,7 +313,7 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 			Quality:    &quality,
 			Size:       &size,
 		},
-	}, nil
+	}, inputImages, nil
 }
 
 func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, error) {
@@ -416,17 +482,19 @@ func imageGenerationErrorOutput(invocation *tool.Invocation, prompt string, mess
 	}
 }
 
-func imageURLForLocalPath(path string) (string, error) {
+// imageURLForLocalPath inlines a local image and reports the lowercase SHA-256 of
+// the bytes read, which is the identity Rust #54420 records before normalization.
+func imageURLForLocalPath(path string) (string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return "", fmt.Errorf("referenced image path must not be empty")
+		return "", "", fmt.Errorf("referenced image path must not be empty")
 	}
 	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("referenced image path must be absolute: %s", path)
+		return "", "", fmt.Errorf("referenced image path must be absolute: %s", path)
 	}
 	bytes, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("unable to read referenced image at `%s`: %w", path, err)
+		return "", "", fmt.Errorf("unable to read referenced image at `%s`: %w", path, err)
 	}
 	mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
 	if idx := strings.IndexByte(mimeType, ';'); idx >= 0 {
@@ -438,7 +506,8 @@ func imageURLForLocalPath(path string) (string, error) {
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
-	return utils.DataURLFromBytes(mimeType, bytes), nil
+	sum := sha256.Sum256(bytes)
+	return utils.DataURLFromBytes(mimeType, bytes), hex.EncodeToString(sum[:]), nil
 }
 
 // recentImageEntry is one image in a recent-images window: an inline URL, or a

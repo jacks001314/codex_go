@@ -17,7 +17,7 @@ func TestAttachmentDebugOutputRedactsBytesLikeRust(t *testing.T) {
 	}
 	result := InlineUploadResult([]byte("secret"))
 
-	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), data: "<redacted>" }`; got != want {
+	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), tags: {}, data: "<redacted>" }`; got != want {
 		t.Fatalf("UploadRequest debug = %s, want %s", got, want)
 	}
 	if got, want := result.Debug(), `Inline { bytes: "<redacted>" }`; got != want {
@@ -94,10 +94,32 @@ func TestInlineStoreCannotResolveFileReferencesLikeRust(t *testing.T) {
 // intent next to the thread id.
 func TestEphemeralIntentTravelsOnUploadRequestLikeRust(t *testing.T) {
 	request := UploadRequest{ThreadID: "thread-1", Ephemeral: true, Data: []byte("image")}
-	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: true, file_name: None, data: "<redacted>" }`; got != want {
+	if got, want := request.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: true, file_name: None, tags: {}, data: "<redacted>" }`; got != want {
 		t.Fatalf("ephemeral debug = %s, want %s", got, want)
 	}
 	if got, want := FileUploadResult("file_1").Debug(), `File { file_id: "file_1" }`; got != want {
 		t.Fatalf("file result debug = %s, want %s", got, want)
+	}
+}
+
+// TestUploadRequestCarriesPolicyTagsLikeRust ports the Rust #54398 field
+// `UploadRequest::tags` (`codex-rs/attachment-store/src/lib.rs`), including the
+// `tags: {}` / `tags: {"usage": "image_gen"}` renderings the manual `Debug` impl
+// produces in `attachment_debug_output_redacts_bytes`.
+func TestUploadRequestCarriesPolicyTagsLikeRust(t *testing.T) {
+	empty := UploadRequest{ThreadID: "thread-1", Data: []byte("secret")}
+	if got, want := empty.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: None, tags: {}, data: "<redacted>" }`; got != want {
+		t.Fatalf("empty tags debug = %s, want %s", got, want)
+	}
+	tagged := UploadRequest{ThreadID: "thread-1", Tags: ImageGenerationUploadTags(), Data: []byte("secret")}
+	if got, want := tagged.Debug(), `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: None, tags: {"usage": "image_gen"}, data: "<redacted>" }`; got != want {
+		t.Fatalf("generated-image tags debug = %s, want %s", got, want)
+	}
+	if got := ImageGenerationUploadTags()[TagUsageKey]; got != TagUsageImageGen {
+		t.Fatalf("usage tag = %q, want %q", got, TagUsageImageGen)
+	}
+	resolve := ResolveRequest{FileID: "file_1", Tags: ImageGenerationUploadTags()}
+	if len(resolve.Tags) != 1 || resolve.Tags["usage"] != "image_gen" {
+		t.Fatalf("resolve tags = %#v", resolve.Tags)
 	}
 }

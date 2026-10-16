@@ -597,6 +597,12 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 			return state.DecisionDenied, message, nil
 		}
 	}
+	var (
+		admittedLedger      *codexctx.GuardianAdmittedImages
+		admittedImages      []codexctx.GuardianImageRef
+		reviewedEvidence    uint64
+		hasReviewedEvidence bool
+	)
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
 		// Rust ComposedContext::retain_new_images (#54278): a reviewer that already
 		// admitted an image must not be shown it again. The host-prepared reference
@@ -615,13 +621,12 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		for _, item := range nodeReplEvidence.MultimodalInputItemsFiltered(keepImage) {
 			inputItems = append(inputItems, item)
 		}
-		// This request delivers the retained images, which is what admits them.
-		ledger.Admit(newImages...)
+		admittedLedger = ledger
+		admittedImages = newImages
 	}
 	if nodeReplEvidence != nil {
-		// The snapshot above is already part of this request (prompt or input
-		// items), so the next review reads only evidence admitted after it.
-		r.noteGuardianReviewedEvidence(threadID, nodeReplEvidence.Sequence())
+		reviewedEvidence = nodeReplEvidence.Sequence()
+		hasReviewedEvidence = true
 	}
 	plan := r.planForTurn(threadID, turnID)
 	// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own
@@ -659,6 +664,20 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		// Rust records the reviewed-transcript cursor once a review ran in the
 		// guardian session.
 		runner.markPriorReview()
+	}
+	if err == nil {
+		// Delivery accounting (Rust guardian-context/src/images.rs:29: "Only
+		// admitted history proves delivery; images kept here are not committed
+		// yet"). The retained images and the transcript snapshot count as
+		// delivered only once the reviewer request actually reached the session:
+		// a failed, timed-out or cancelled review leaves them retained, so the
+		// next review still injects that evidence (Independent probe V-b5).
+		if admittedLedger != nil {
+			admittedLedger.Admit(admittedImages...)
+		}
+		if hasReviewedEvidence {
+			r.noteGuardianReviewedEvidence(threadID, reviewedEvidence)
+		}
 	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.DeadlineExceeded) {

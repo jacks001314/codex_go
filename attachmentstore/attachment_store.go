@@ -20,6 +20,7 @@ package attachmentstore
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -70,6 +71,21 @@ func KindOf(err error) (ErrorKind, bool) {
 	return "", false
 }
 
+// Generated-image upload tags (Rust #54398, `ext/image-generation/src/tool.rs`):
+// the attachment store sees `usage=image_gen` on generated images so backends can
+// apply image-generation policy, while image preparation keeps an empty tag map.
+const (
+	// TagUsageKey is the tag key carrying the caller's usage label.
+	TagUsageKey = "usage"
+	// TagUsageImageGen marks an upload as a generated image.
+	TagUsageImageGen = "image_gen"
+)
+
+// ImageGenerationUploadTags builds the tag set for a generated-image upload.
+func ImageGenerationUploadTags() map[string]string {
+	return map[string]string{TagUsageKey: TagUsageImageGen}
+}
+
 // UploadRequest is the attachment data supplied to Store.Upload, mirroring Rust
 // `UploadRequest`.
 type UploadRequest struct {
@@ -81,6 +97,10 @@ type UploadRequest struct {
 	Ephemeral bool
 	// FileName is the optional name associated with the attachment.
 	FileName *string
+	// Tags are caller-supplied labels storage backends use for policy
+	// decisions (Rust #54398 adds `UploadRequest::tags`). Generated-image
+	// uploads carry `usage=image_gen`; image preparation passes an empty map.
+	Tags map[string]string
 	// Data is the attachment bytes to persist.
 	Data []byte
 }
@@ -91,13 +111,14 @@ func (r UploadRequest) String() string { return r.Debug() }
 
 // Debug mirrors Rust's manual `Debug` impl for `UploadRequest`, which redacts
 // the attachment bytes. The field order matches Rust exactly:
-// `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), data: "<redacted>" }`.
+// `UploadRequest { thread_id: "thread-1", ephemeral: false, file_name: Some("image.png"), tags: {}, data: "<redacted>" }`.
 func (r UploadRequest) Debug() string {
 	return fmt.Sprintf(
-		"UploadRequest { thread_id: %s, ephemeral: %t, file_name: %s, data: %s }",
+		"UploadRequest { thread_id: %s, ephemeral: %t, file_name: %s, tags: %s, data: %s }",
 		rustDebugString(r.ThreadID),
 		r.Ephemeral,
 		rustDebugOptionString(r.FileName),
+		rustDebugTags(r.Tags),
 		`"<redacted>"`,
 	)
 }
@@ -151,6 +172,9 @@ func (r UploadResult) GoString() string { return r.Debug() }
 type ResolveRequest struct {
 	// FileID is the identifier assigned by the attachment store.
 	FileID string
+	// Tags are caller-supplied labels storage backends use for policy
+	// decisions (Rust #54398 adds `ResolveRequest::tags`).
+	Tags map[string]string
 	// DownloadURLTTL, when non-nil, is the minimum remaining lifetime required
 	// for the returned file URL. When nil, implementations must omit the file
 	// URL and may return cached metadata.
@@ -301,6 +325,25 @@ func StoreOrDefault(store Store) Store {
 // rustDebugString renders a Go string the way Rust's `Debug` impl for `str`
 // does, so ported assertions can compare against Rust's expected output
 // verbatim.
+// rustDebugTags renders a tag map the way Rust's derived `HashMap` `Debug` impl
+// does: `{}` when empty, otherwise `{"key": "value", ...}`. Rust's iteration
+// order is unspecified, so Go sorts the keys to keep the rendering stable.
+func rustDebugTags(tags map[string]string) string {
+	if len(tags) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", rustDebugString(key), rustDebugString(tags[key])))
+	}
+	return "{" + strings.Join(parts, ", ") + "}"
+}
+
 func rustDebugString(value string) string {
 	var builder strings.Builder
 	builder.WriteByte('"')

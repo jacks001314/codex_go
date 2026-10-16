@@ -371,7 +371,10 @@ func PrepareImagePrepImageWithStoreResult(store attachmentstore.Store, origin Im
 	uploaded, uploadErr := attachmentstore.StoreOrDefault(store).Upload(attachmentstore.UploadRequest{
 		ThreadID:  origin.ThreadID,
 		Ephemeral: origin.Ephemeral,
-		Data:      prepared.EncodedBytes,
+		// Rust #54398 (core/src/image_preparation.rs): model-facing image
+		// preparation keeps an empty tag map; only generated images are tagged.
+		Tags: map[string]string{},
+		Data: prepared.EncodedBytes,
 	})
 	if uploadErr != nil {
 		// Rust keeps the prepared image inline when the store fails.

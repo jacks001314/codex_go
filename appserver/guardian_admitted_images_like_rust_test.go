@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -138,4 +139,84 @@ func textInputItems(items []any) string {
 		}
 	}
 	return builder.String()
+}
+
+// TestGuardianReviewRetainsUncommittedEvidenceAfterFailedReviewLikeRust covers
+// the delivery accounting half of Rust #54278, which the independent probe
+// V-b5 (mc-r90-verify) showed Go got wrong: Go admitted the images and advanced
+// the reviewed-evidence cursor *before* the reviewer request went out, so a
+// failed first review lost that evidence for the thread forever.
+//
+// Rust `guardian-context/src/images.rs:29` states the rule ("Only admitted
+// history proves delivery; images kept here are not committed yet") and
+// `retain_new_images(history, ...)` runs against the committed reviewer session
+// history, so a request that never reached the session keeps its images and
+// transcript snapshot retained for the next review.
+func TestGuardianReviewRetainsUncommittedEvidenceAfterFailedReviewLikeRust(t *testing.T) {
+	evidence := &codexctx.NodeReplReviewEvidence{}
+	evidence.RecordMultimodal("js", "cell-1", "call-1", []string{"first evidence"}, []string{"data:image/png;base64,AAAA"})
+	failFirst := true
+	requests := &[]*model.AgentRequest{}
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+			*requests = append(*requests, request)
+			if failFirst {
+				failFirst = false
+				return nil, errors.New("guardian agent unavailable")
+			}
+			return &model.AgentResponse{Message: `{"riskLevel":"low","userAuthorization":"high","outcome":"allow","rationale":"ok"}`}, nil
+		}),
+		store: state.NewReviewStore(),
+		nodeReplEvidence: func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment {
+			return evidence.SnapshotSince(reviewedSequence)
+		},
+	}
+	action := state.Action{Type: "command", Command: "ls", CWD: "/repo"}
+
+	// Review #1 fails before the request reaches the reviewer session, so nothing
+	// was delivered.
+	decision, _, err := reviewer.Review(context.Background(), "thread-uncommitted", "turn-0", "call-0", action)
+	if err != nil {
+		t.Fatalf("Review() #1 error = %v", err)
+	}
+	if decision != state.DecisionDenied {
+		t.Fatalf("failed review decision = %v, want the fail-closed denial", decision)
+	}
+
+	// Review #2 succeeds. The first review never committed evidence, so the image
+	// and its text are delivered now instead of being lost.
+	decision, _, err = reviewer.Review(context.Background(), "thread-uncommitted", "turn-1", "call-1", action)
+	if err != nil {
+		t.Fatalf("Review() #2 error = %v", err)
+	}
+	if decision != state.DecisionApproved {
+		t.Fatalf("Review() #2 decision = %v, want approved", decision)
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("review requests = %d, want 2", len(*requests))
+	}
+	if got := imageInputItems((*requests)[0].InputItems); len(got) != 1 {
+		t.Fatalf("first review image items = %#v, want the retained image", got)
+	}
+	if got := imageInputItems((*requests)[1].InputItems); len(got) != 1 {
+		t.Fatalf("failed review admitted the image: second review image items = %#v, want the retained image again", got)
+	}
+	if got := textInputItems((*requests)[1].InputItems); !strings.Contains(got, "first evidence") {
+		t.Fatalf("failed review advanced the evidence cursor: second review input = %q, want the undelivered evidence", got)
+	}
+
+	// Only now, after a delivered request, is the evidence committed: a third
+	// review must not replay it.
+	if _, _, err := reviewer.Review(context.Background(), "thread-uncommitted", "turn-2", "call-2", action); err != nil {
+		t.Fatalf("Review() #3 error = %v", err)
+	}
+	if len(*requests) != 3 {
+		t.Fatalf("review requests = %d, want 3", len(*requests))
+	}
+	if got := imageInputItems((*requests)[2].InputItems); len(got) != 0 {
+		t.Fatalf("third review re-injected the delivered image: %#v", got)
+	}
+	if got := textInputItems((*requests)[2].InputItems); strings.Contains(got, "first evidence") {
+		t.Fatalf("third review replayed delivered evidence: %q", got)
+	}
 }

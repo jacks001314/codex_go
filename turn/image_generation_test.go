@@ -2,8 +2,10 @@ package turn
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,7 +303,7 @@ func TestImageGenerationBackgroundArgumentMatchesRust(t *testing.T) {
 		{name: "edit transparent", args: imageGenerationArgs{Prompt: "draw", NumLastImagesToInclude: &oneImage, TransparentBackground: true}, want: codexapi.ImageBackgroundTransparent, wantEdit: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			request, err := handler.requestForArgs(context.Background(), &tc.args)
+			request, _, err := handler.requestForArgs(context.Background(), &tc.args)
 			if tc.expectErr {
 				if err == nil {
 					t.Fatal("requestForArgs() error = nil, want an error")
@@ -396,7 +398,7 @@ func TestImageGenerationEditRejectsFileBackedRecentWindow(t *testing.T) {
 		},
 	})
 	count := 2
-	_, err := handler.requestForArgs(context.Background(), &imageGenerationArgs{
+	_, _, err := handler.requestForArgs(context.Background(), &imageGenerationArgs{
 		Prompt:                 "add a frame",
 		NumLastImagesToInclude: &count,
 	})
@@ -430,5 +432,84 @@ func TestImageGenerationDescriptionMatchesRustBlob(t *testing.T) {
 		"- Always use this tool for image editing unless the user explicitly requests otherwise. Do not use the `python` tool for image editing unless specifically instructed.\n"
 	if imageGenerationDescription != want {
 		t.Fatalf("imageGenerationDescription differs from Rust imagegen_description.md:\n--- go ---\n%s\n--- want ---\n%s", imageGenerationDescription, want)
+	}
+}
+
+// Mirrors Rust #54420 (ext/image-generation/src/tool.rs PreparedImageRequest):
+// a completed generation records the local input images it read, in argument
+// order, identified by the lowercase SHA-256 of the file bytes read before image
+// normalization. The field is absent when no local input was read, and changed
+// contents at the same path produce a different identity.
+func TestImageGenerationRecordsInputImageIdentityLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.png")
+	second := filepath.Join(dir, "second.png")
+	firstBytes := []byte("\x89PNG\r\n\x1a\nfirst-reference")
+	secondBytes := []byte("\x89PNG\r\n\x1a\nsecond-reference")
+	if err := os.WriteFile(first, firstBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(first) error = %v", err)
+	}
+	if err := os.WriteFile(second, secondBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(second) error = %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(codexapi.ImageResponse{Data: []codexapi.ImageData{{B64JSON: base64.StdEncoding.EncodeToString([]byte("edited"))}}})
+	}))
+	defer server.Close()
+	handler := NewImageGenerationHandler(&ImageGenerationOptions{
+		Provider:   model.APIProvider{BaseURL: server.URL + "/v1"},
+		HTTPClient: server.Client(),
+	})
+	output, err := handler.Execute(context.Background(), &tool.Invocation{
+		CallID:   "call-input-images",
+		ToolName: tool.NamespacedName(ImageGenerationNamespace, ImageGenerationToolName),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"prompt":"add a frame","referenced_image_paths":["` + filepath.ToSlash(first) + `","` + filepath.ToSlash(second) + `"]}`,
+		},
+		Context: map[string]any{"turnId": "turn-input-images"},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || !output.Success {
+		t.Fatalf("output = %#v", output)
+	}
+	inputImages, ok := output.Data["inputImages"].([]imageGenerationInputImage)
+	if !ok || len(inputImages) != 2 {
+		t.Fatalf("inputImages = %#v", output.Data["inputImages"])
+	}
+	// The recorded path is exactly what the request read, so it keeps the
+	// slash-normalized form the arguments used.
+	if inputImages[0].Path != filepath.ToSlash(first) || inputImages[1].Path != filepath.ToSlash(second) {
+		t.Fatalf("input images = %#v, want the argument order", inputImages)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256(firstBytes)); inputImages[0].SHA256 != want {
+		t.Fatalf("first sha256 = %q, want %q", inputImages[0].SHA256, want)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256(secondBytes)); inputImages[1].SHA256 != want {
+		t.Fatalf("second sha256 = %q, want %q", inputImages[1].SHA256, want)
+	}
+	if _, ok := output.Data["input_images"]; !ok {
+		t.Fatalf("snake-case alias missing: %#v", output.Data)
+	}
+	// Changed contents at the same path are a different identity.
+	if err := os.WriteFile(first, []byte("different bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile(first) error = %v", err)
+	}
+	_, changed, err := handler.requestForArgs(context.Background(), &imageGenerationArgs{Prompt: "add a frame", ReferencedImagePaths: []string{first}})
+	if err != nil {
+		t.Fatalf("requestForArgs() error = %v", err)
+	}
+	if want := fmt.Sprintf("%x", sha256.Sum256([]byte("different bytes"))); len(changed) != 1 || changed[0].SHA256 != want {
+		t.Fatalf("changed identity = %#v, want %q", changed, want)
+	}
+	// A generation without referenced images records no local input.
+	_, none, err := handler.requestForArgs(context.Background(), &imageGenerationArgs{Prompt: "draw"})
+	if err != nil {
+		t.Fatalf("requestForArgs() error = %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("generation input images = %#v, want none", none)
 	}
 }

@@ -1257,6 +1257,37 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			DurationMS: threadItemInt64FromData(i.Data, "durationMs", "duration_ms"),
 		})
 	case "imageGeneration":
+		status := firstNonEmpty(threadItemStringFromData(i.Data, "status"), i.Status)
+		revisedPrompt := threadItemStringPtrFromData(i.Data, "revisedPrompt", "revised_prompt")
+		transparentBackground := threadItemBoolPtrFromData(i.Data, "transparentBackground", "transparent_background")
+		savedPath := threadItemStringPtrFromData(i.Data, "savedPath", "saved_path")
+		inputImages := threadItemInputImagesFromData(i.Data)
+		// Rust #54398 (ext/items/src/image_generation.rs `GeneratedImageRef`): an
+		// image-generation item carries either the durable attachment reference
+		// (`fileId`) or the inline base64 `result`. The `File` variant is declared
+		// first so records written during the migration, which contain both
+		// fields, keep the file reference; Go applies the same preference here.
+		if fileID := threadItemStringFromData(i.Data, "fileId", "file_id"); fileID != "" {
+			return json.Marshal(struct {
+				Type                  string  `json:"type"`
+				ID                    string  `json:"id"`
+				Status                string  `json:"status"`
+				RevisedPrompt         *string `json:"revisedPrompt"`
+				FileID                string  `json:"fileId"`
+				TransparentBackground *bool   `json:"transparentBackground"`
+				SavedPath             *string `json:"savedPath,omitempty"`
+				InputImages           []any   `json:"inputImages,omitempty"`
+			}{
+				Type:                  "imageGeneration",
+				ID:                    i.ID,
+				Status:                status,
+				RevisedPrompt:         revisedPrompt,
+				FileID:                fileID,
+				TransparentBackground: transparentBackground,
+				SavedPath:             savedPath,
+				InputImages:           inputImages,
+			})
+		}
 		return json.Marshal(struct {
 			Type                  string  `json:"type"`
 			ID                    string  `json:"id"`
@@ -1265,14 +1296,16 @@ func (i *ThreadItem) MarshalJSON() ([]byte, error) {
 			Result                string  `json:"result"`
 			TransparentBackground *bool   `json:"transparentBackground"`
 			SavedPath             *string `json:"savedPath,omitempty"`
+			InputImages           []any   `json:"inputImages,omitempty"`
 		}{
 			Type:                  "imageGeneration",
 			ID:                    i.ID,
-			Status:                firstNonEmpty(threadItemStringFromData(i.Data, "status"), i.Status),
-			RevisedPrompt:         threadItemStringPtrFromData(i.Data, "revisedPrompt", "revised_prompt"),
+			Status:                status,
+			RevisedPrompt:         revisedPrompt,
 			Result:                firstNonEmpty(threadItemStringFromData(i.Data, "result"), i.Text),
-			TransparentBackground: threadItemBoolPtrFromData(i.Data, "transparentBackground", "transparent_background"),
-			SavedPath:             threadItemStringPtrFromData(i.Data, "savedPath", "saved_path"),
+			TransparentBackground: transparentBackground,
+			SavedPath:             savedPath,
+			InputImages:           inputImages,
 		})
 	case "enteredReviewMode":
 		return json.Marshal(struct {
@@ -4140,6 +4173,34 @@ func threadItemUserInputContentFromData(data map[string]any) []map[string]any {
 		}
 	}
 	return nil
+}
+
+// threadItemInputImagesFromData reads the optional local-input metadata a
+// completed image-generation item records (Rust #54420 `inputImages`). The field
+// is absent on items written before the change and on generations that read no
+// local image, in which case the wire form omits it entirely.
+func threadItemInputImagesFromData(data map[string]any) []any {
+	value := threadItemAnyFromData(data, "inputImages", "input_images")
+	if value == nil {
+		return nil
+	}
+	if list, ok := value.([]any); ok {
+		if len(list) == 0 {
+			return nil
+		}
+		return list
+	}
+	// In-process callers hold the handler's typed slice, so re-encode it: the
+	// wire form is the same camelCase array either way.
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var list []any
+	if err := json.Unmarshal(encoded, &list); err != nil || len(list) == 0 {
+		return nil
+	}
+	return list
 }
 
 func threadItemAnyFromData(data map[string]any, keys ...string) any {
