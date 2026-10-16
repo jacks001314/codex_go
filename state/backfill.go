@@ -107,7 +107,7 @@ func (r *StateRuntime) TryClaimBackfill(ctx context.Context, leaseSeconds int64)
 	}
 	now := time.Now().Unix()
 	cutoff := now - max(leaseSeconds, 0)
-	result, err := r.stateDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.stateDB, `
 UPDATE backfill_state
 SET status = ?, updated_at = ?
 WHERE id = 1
@@ -143,7 +143,7 @@ func (r *StateRuntime) MarkBackfillComplete(ctx context.Context, watermark *stri
 		return err
 	}
 	now := time.Now().Unix()
-	_, err := r.stateDB.ExecContext(ctx, `
+	_, err := ExecWrite(ctx, r.stateDB, `
 UPDATE backfill_state
 SET status = ?, last_watermark = COALESCE(?, last_watermark),
     last_success_at = ?, updated_at = ?
@@ -164,7 +164,7 @@ func (r *StateRuntime) updateBackfillStatus(ctx context.Context, query string, a
 	if err := r.ensureBackfillState(ctx); err != nil {
 		return err
 	}
-	if _, err := r.stateDB.ExecContext(ctx, query, args...); err != nil {
+	if _, err := ExecWrite(ctx, r.stateDB, query, args...); err != nil {
 		return fmt.Errorf("update rollout backfill: %w", err)
 	}
 	return nil
@@ -569,7 +569,7 @@ func (r *StateRuntime) upsertRolloutThread(ctx context.Context, metadata rollout
 	if exists && rolloutThreadRowMatchesExceptTimestamps(existing, intendedRolloutThreadRow(metadata, existing, createdMillis, updatedMillis)) {
 		return r.touchThreadUpdatedAt(ctx, metadata.id, metadata.updatedAt.Unix(), updatedMillis)
 	}
-	_, err = r.stateDB.ExecContext(ctx, `
+	_, err = ExecWrite(ctx, r.stateDB, `
 INSERT INTO threads (
     id, rollout_path, created_at, updated_at, recency_at,
     created_at_ms, updated_at_ms, recency_at_ms,
@@ -623,7 +623,7 @@ ON CONFLICT(id) DO UPDATE SET
 		return fmt.Errorf("upsert rollout thread %s: %w", metadata.id, err)
 	}
 	if !exists || metadata.historyMode == "legacy" {
-		if _, err := r.stateDB.ExecContext(ctx, `UPDATE threads SET memory_mode = ? WHERE id = ?`, metadata.memoryMode, metadata.id); err != nil {
+		if _, err := ExecWrite(ctx, r.stateDB, `UPDATE threads SET memory_mode = ? WHERE id = ?`, metadata.memoryMode, metadata.id); err != nil {
 			return fmt.Errorf("restore rollout thread memory mode %s: %w", metadata.id, err)
 		}
 	}
@@ -636,7 +636,7 @@ ON CONFLICT(id) DO UPDATE SET
 			name = strings.TrimSpace(existing.title.String)
 		}
 		if name != "" {
-			if _, err := r.stateDB.ExecContext(ctx, `
+			if _, err := ExecWrite(ctx, r.stateDB, `
 UPDATE threads SET name = ? WHERE id = ? AND (name IS NULL OR trim(name) = '')`, name, metadata.id); err != nil {
 				return fmt.Errorf("promote rollout thread name %s: %w", metadata.id, err)
 			}
@@ -908,7 +908,7 @@ func rolloutThreadRowMatchesExceptTimestamps(stored, intended storedRolloutThrea
 // touchThreadUpdatedAt moves only the stored thread timestamps. Rust keeps the
 // same narrow statement in `StateRuntime::touch_thread_updated_at` (#48983).
 func (r *StateRuntime) touchThreadUpdatedAt(ctx context.Context, threadID string, updatedAtUnix int64, updatedAtMillis int64) error {
-	if _, err := r.stateDB.ExecContext(ctx, `
+	if _, err := ExecWrite(ctx, r.stateDB, `
 UPDATE threads
 SET updated_at = ?, updated_at_ms = ?
 WHERE id = ?`, updatedAtUnix, updatedAtMillis, threadID); err != nil {

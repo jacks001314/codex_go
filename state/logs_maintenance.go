@@ -96,7 +96,7 @@ func pruneLogsByAgeAndSize(ctx context.Context, db *sql.DB, now int64, budgetByt
 	}
 	retentionSeconds := logRetentionSeconds
 	for {
-		if _, err := db.ExecContext(ctx, `DELETE FROM logs WHERE ts < ?`, now-retentionSeconds); err != nil {
+		if _, err := ExecWrite(ctx, db, `DELETE FROM logs WHERE ts < ?`, now-retentionSeconds); err != nil {
 			return fmt.Errorf("delete expired logs: %w", err)
 		}
 		var occupiedBytes int64

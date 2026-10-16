@@ -69,7 +69,7 @@ func AdvanceRolloutMigrationState(ctx context.Context, db *sql.DB, migrationID s
 		createdAt = lastCheckedThread.ThreadCreatedAt
 		threadID = lastCheckedThread.ThreadID
 	}
-	_, err := db.ExecContext(ctx, `
+	_, err := ExecWrite(ctx, db, `
 INSERT INTO rollout_migration_state (
     migration_id,
     last_checked_thread_created_at,
@@ -104,7 +104,7 @@ func RemoveRolloutMigrationSkip(ctx context.Context, db *sql.DB, migrationID str
 	if db == nil {
 		return errors.New("state database is nil")
 	}
-	if _, err := db.ExecContext(ctx, `
+	if _, err := ExecWrite(ctx, db, `
 DELETE FROM rollout_migration_skipped_rollouts
 WHERE migration_id = ? AND rollout_path = ?`, migrationID, rolloutPath); err != nil {
 		return fmt.Errorf("remove rollout migration skip: %w", err)
@@ -146,7 +146,7 @@ func RecordRolloutMigrationSkip(ctx context.Context, db *sql.DB, migrationID str
 		return errors.New("state database is nil")
 	}
 	now := time.Now().Unix()
-	_, err := db.ExecContext(ctx, `
+	_, err := ExecWrite(ctx, db, `
 INSERT INTO rollout_migration_skipped_rollouts (
     migration_id,
     rollout_path,

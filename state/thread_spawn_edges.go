@@ -18,7 +18,7 @@ func (r *StateRuntime) UpsertThreadSpawnEdge(ctx context.Context, parentThreadID
 	if err != nil {
 		return err
 	}
-	_, err = r.stateDB.ExecContext(nonNilContext(ctx), `
+	_, err = ExecWrite(nonNilContext(ctx), r.stateDB, `
 INSERT INTO thread_spawn_edges (parent_thread_id, child_thread_id, status)
 VALUES (?, ?, ?)
 ON CONFLICT(child_thread_id) DO UPDATE SET
@@ -43,7 +43,7 @@ func (r *StateRuntime) SetThreadSpawnEdgeStatus(ctx context.Context, childThread
 	if status == "" {
 		return errors.New("thread spawn edge status is required")
 	}
-	if _, err := r.stateDB.ExecContext(nonNilContext(ctx), `UPDATE thread_spawn_edges SET status = ? WHERE child_thread_id = ?`, status, childThreadID); err != nil {
+	if _, err := ExecWrite(nonNilContext(ctx), r.stateDB, `UPDATE thread_spawn_edges SET status = ? WHERE child_thread_id = ?`, status, childThreadID); err != nil {
 		return fmt.Errorf("set thread spawn edge status for %s: %w", childThreadID, err)
 	}
 	return nil

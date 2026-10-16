@@ -319,7 +319,7 @@ func (r *StateRuntime) ensureBackfillState(ctx context.Context) error {
 	if err != sql.ErrNoRows {
 		return fmt.Errorf("read backfill state: %w", err)
 	}
-	_, err = r.stateDB.ExecContext(ctx, `
+	_, err = ExecWrite(ctx, r.stateDB, `
 INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
 VALUES (1, 'pending', NULL, NULL, ?)
 ON CONFLICT(id) DO NOTHING`, time.Now().Unix())

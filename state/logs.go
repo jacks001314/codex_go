@@ -219,7 +219,7 @@ func (r *StateRuntime) DeleteLogsBefore(ctx context.Context, cutoffTS int64) (in
 	if err := r.requireLogsDB(); err != nil {
 		return 0, err
 	}
-	result, err := r.logsDB.ExecContext(nonNilContext(ctx), `DELETE FROM logs WHERE ts < ?`, cutoffTS)
+	result, err := ExecWrite(nonNilContext(ctx), r.logsDB, `DELETE FROM logs WHERE ts < ?`, cutoffTS)
 	if err != nil {
 		return 0, fmt.Errorf("delete logs before %d: %w", cutoffTS, err)
 	}

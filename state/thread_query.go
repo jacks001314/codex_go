@@ -38,7 +38,7 @@ func (r *StateRuntime) SetThreadPreviewIfEmpty(ctx context.Context, threadID, pr
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	result, err := r.stateDB.ExecContext(ctx, `UPDATE threads SET preview = ? WHERE id = ? AND preview = ''`, preview, strings.TrimSpace(threadID))
+	result, err := ExecWrite(ctx, r.stateDB, `UPDATE threads SET preview = ? WHERE id = ? AND preview = ''`, preview, strings.TrimSpace(threadID))
 	if err != nil {
 		return false, fmt.Errorf("set empty thread preview: %w", err)
 	}

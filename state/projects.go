@@ -92,7 +92,7 @@ func (r *StateRuntime) SetThreadProject(ctx context.Context, threadID string, pr
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return nil, false, err
 	}
@@ -304,7 +304,7 @@ func (r *StateRuntime) CreateProject(ctx context.Context, name string, roots []P
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func (r *StateRuntime) UpdateProject(ctx context.Context, id string, name *strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -457,7 +457,7 @@ func (r *StateRuntime) MoveProject(ctx context.Context, projectID string, before
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +538,7 @@ func (r *StateRuntime) DeleteProject(ctx context.Context, id string) (active []s
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -618,7 +618,7 @@ func scanProjectRowWithOptionalRoot(scanner rowScanner, rootPath **string) (Proj
 	}, nil
 }
 
-func (r *StateRuntime) getProjectInTx(ctx context.Context, tx *sql.Tx, id string) (*Project, error) {
+func (r *StateRuntime) getProjectInTx(ctx context.Context, tx sqliteWriteTx, id string) (*Project, error) {
 	row := tx.QueryRowContext(ctx,
 		`SELECT id, name, metadata, position, created_at_ms, updated_at_ms,
 		        (SELECT MAX(recency_at_ms) FROM threads WHERE project_id = projects.id AND archived = 0) AS recency_at_ms
@@ -678,7 +678,7 @@ func (r *StateRuntime) projectRootsByID(ctx context.Context, projectIDs []string
 	return out, nil
 }
 
-func replaceProjectRoots(ctx context.Context, tx *sql.Tx, projectID string, roots []ProjectRoot) error {
+func replaceProjectRoots(ctx context.Context, tx sqliteWriteTx, projectID string, roots []ProjectRoot) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM project_roots WHERE project_id = ?`, projectID); err != nil {
 		return err
 	}
@@ -692,7 +692,7 @@ func replaceProjectRoots(ctx context.Context, tx *sql.Tx, projectID string, root
 	return nil
 }
 
-func projectThreadIDs(ctx context.Context, tx *sql.Tx, projectID string, archived bool) ([]string, error) {
+func projectThreadIDs(ctx context.Context, tx sqliteWriteTx, projectID string, archived bool) ([]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id FROM threads WHERE project_id = ? AND archived = ? ORDER BY id ASC`, projectID, archived)
 	if err != nil {

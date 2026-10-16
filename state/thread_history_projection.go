@@ -130,14 +130,13 @@ func applyThreadHistoryProjection(ctx context.Context, db *sql.DB, threadID stri
 			return errors.New("thread history projection step exceeds SQLite integer range")
 		}
 	}
-	conn, err := db.Conn(ctx)
+	// Writer admission retries a busy slot before any read snapshot is taken
+	// (Rust #54369 `7ae8319917`).
+	conn, err := BeginImmediate(ctx, db)
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("begin thread history projection: %w", err)
 	}
+	defer conn.Close()
 	defer func() {
 		if err != nil {
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)

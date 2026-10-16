@@ -94,12 +94,14 @@ type reclamationState struct {
 	stalledPasses uint32
 }
 
-// reclamationAdmission mirrors the admission check in Rust `reclaim_pages`:
-// a pass only reclaims when incremental auto-vacuum is enabled and at least
-// 64 MiB and 25% of the database are free pages. Returned as a predicate so the
-// decision stays testable without a database.
-func reclamationAdmission(autoVacuum, pageSize, pages, free int64) bool {
-	return autoVacuum == 2 && free*pageSize >= reclamationMinFreeBytes && free >= pages/4
+// reclamationAdmission mirrors the admission check in Rust `reclaim_pages`: the
+// worker's checkpoint and contention rules apply only to WAL databases (Rust
+// #54389 `1ef30bcb`), and a pass only reclaims when incremental auto-vacuum is
+// enabled and at least 64 MiB and 25% of the database are free pages. Returned
+// as a predicate so the decision stays testable without a database.
+func reclamationAdmission(journal string, autoVacuum, pageSize, pages, free int64) bool {
+	return strings.EqualFold(strings.TrimSpace(journal), sqliteJournalModeWAL) &&
+		autoVacuum == 2 && free*pageSize >= reclamationMinFreeBytes && free >= pages/4
 }
 
 // sqliteReclamationWorker mirrors Rust `SqliteReclamationWorker`: one goroutine
@@ -121,6 +123,10 @@ type sqliteReclamationWorker struct {
 
 	// metrics receives one sample per pass (Rust `record_reclamation`).
 	metrics *TaskMetrics
+
+	// config is the resolved configuration the worker passes to every pass, so a
+	// home on NFS can be skipped (Rust #54417 `9c84e89c`).
+	config SqliteConfig
 }
 
 // newSqliteReclamationWorker mirrors Rust `SqliteReclamationWorker::spawn`'s
@@ -136,6 +142,7 @@ func newSqliteReclamationWorker(config SqliteConfig) *sqliteReclamationWorker {
 		home:     config.Home(),
 		targets:  targets,
 		metrics:  config.reclamationMetrics,
+		config:   config,
 	}
 }
 
@@ -239,7 +246,10 @@ func (w *sqliteReclamationWorker) probeFn() func(context.Context, reclamationTar
 	if w.probe != nil {
 		return w.probe
 	}
-	return reclaimRuntimeDB
+	config := w.config
+	return func(ctx context.Context, target reclamationTarget, options reclamationOptions, shutdown <-chan struct{}) reclamationResult {
+		return reclaimRuntimeDB(config, ctx, target, options, shutdown)
+	}
 }
 
 // stopped reports whether shutdown was requested; Rust checks the shutdown
@@ -319,7 +329,17 @@ func tryReclamationOwnership(home string) (*flock.Flock, error) {
 // open the dedicated maintenance connection, run one pass and close it. Because
 // the connection is dedicated and closed here, an interrupted transaction can
 // never leak into foreground work.
-func reclaimRuntimeDB(ctx context.Context, target reclamationTarget, options reclamationOptions, shutdown <-chan struct{}) reclamationResult {
+func reclaimRuntimeDB(config SqliteConfig, ctx context.Context, target reclamationTarget, options reclamationOptions, shutdown <-chan struct{}) reclamationResult {
+	// Autovacuum and cleanup create a lot of load and contention on NFS, so a
+	// pass is skipped before a maintenance connection is opened (Rust #54417
+	// `9c84e89c`).
+	nfs, err := config.IsNFS()
+	if err != nil {
+		return reclamationResult{err: err}
+	}
+	if nfs {
+		return reclamationResult{pass: reclamationPass{outcome: reclamationOutcomeIdle}}
+	}
 	if _, err := os.Stat(target.path); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			// Rust never creates the database from the maintenance connection.
@@ -400,14 +420,16 @@ func reclaimPages(ctx context.Context, conn *sql.Conn, options reclamationOption
 	// outcome it observed.
 	outcome := reclamationOutcomeContended
 	err := func() error {
+		var journal string
 		var autoVacuum, pageSize, pages, free int64
-		if err := conn.QueryRowContext(statementCtx, `SELECT auto_vacuum, page_size, page_count, freelist_count `+
-			`FROM pragma_auto_vacuum(), pragma_page_size(), pragma_page_count(), pragma_freelist_count()`).
-			Scan(&autoVacuum, &pageSize, &pages, &free); err != nil {
+		if err := conn.QueryRowContext(statementCtx, `SELECT journal_mode, auto_vacuum, page_size, page_count, freelist_count `+
+			`FROM pragma_journal_mode(), pragma_auto_vacuum(), pragma_page_size(), pragma_page_count(), pragma_freelist_count()`).
+			Scan(&journal, &autoVacuum, &pageSize, &pages, &free); err != nil {
 			return err
 		}
+		// This worker's checkpoint and contention rules apply only to WAL mode.
 		// Require incremental auto-vacuum and at least 64 MiB and 25% free space.
-		if !reclamationAdmission(autoVacuum, pageSize, pages, free) {
+		if !reclamationAdmission(journal, autoVacuum, pageSize, pages, free) {
 			outcome = reclamationOutcomeIdle
 			return nil
 		}

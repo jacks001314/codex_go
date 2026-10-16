@@ -78,3 +78,19 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 - 车道回报强制字段：`git status --porcelain` 原文 + `git diff --stat` + 每条落点 `file:line` + 门禁实跑输出 + **RC 原文**。
 - 配套变化：`git patch-id` 判等不再适用于车道交付（无 commit）；改为「队长提交后 `git diff <lane-wt>` 为空」等价校验。
 - 车道分支/ worktree 仅作隔离用途；回收前不再需要 `git log main..<branch>` 孤儿普查（车道不产生 commit）。
+## R5-bis 基线失败清单修订（2026-10-16 · 第 90 轮实测，leader 复跑）
+
+本节点（16 vCPU / 15.7GB）实测，判"新增失败"以本表为准（R5 原表已过时）：
+
+| 包 | 基线失败数 | 具体用例 | 触发条件 |
+| --- | --- | --- | --- |
+| appserver | 6 | ExecutorSkillPathEqualsMatchesWindowsIdentityLikeRust / MultiAgentWaitDurationRecordsOutcomeLikeRust / RequiredSkillsPreSamplingValidationReleasesSatisfiedTurnsLikeRust / ShellSnapshotCommandMetricsLikeRust / …ReportProtectedAndUnavailableLikeRust / …SkipNonDirectLaunchesLikeRust | 恒触发 |
+| appserver | +3（pin 漂移，非代码缺陷） | RustAppServerV2SuiteManifestCoversRustModules / BuildProtocolSchemaMatchesRustStableFixtures / BuildTypeScriptProtocolSchemaMatchesRustFixtures | **仅当 CWD 能解析到 `D:\qax\reagent\dev\git\codex\codex-rs`**（即主工作区 `codex_go\appserver` 这类两级上溯路径）；Rust 镜像已推进到 `4eb4a65407` 而 Go pin 仍是 `95ec468619` ⇒ 期望值漂移。在 `codex_go_wt\*` 判定台里这三条会 SKIP（fixture 找不到）⇒ **跨目录比较结论时要先对齐 CWD 语义** |
+| state | 1 | TestOpenRuntimeDBValidatesBeforeMigrateLikeRust（`sqlite_validation_test.go:288: validation attempts after reopen = 1, want 2`） | 恒触发（R5 原表未收录 state） |
+| parity | 13 | 见 `update/r90_verify_log_2026_10_16.md` / pin 车道报告 | 需设 `CODEX_RUST_ROOT`；单测台若解析不到 Rust 树会全 Skip（假通过） |
+
+补充环境事实：
+
+1. 跑 parity 必须显式 `$env:CODEX_RUST_ROOT`，否则会回落到陈旧检出（本机回落到镜像主工作树，其 rev 决定期望值）。
+2. `CODEX_RUST_APP_SERVER_SUITE_V2` / `CODEX_RUST_APP_SERVER_PROTOCOL_SCHEMA` 未设时，`appserver` 的 fixture 测试按 CWD 上溯候选路径找 `..\..\git\codex\codex-rs\…` ⇒ 判定台目录层级会改变结果（在 `D:\qax\reagent\dev\codex_go_wt\*` 下跳过，在 `D:\qax\reagent\dev\<bench>` 下命中）。
+3. 本机 `core.autocrlf=true`：新 worktree 全树 CRLF，`gofmt -l .` 会输出全部 .go（换行符产物）；门禁只对"本次改动文件"跑 gofmt。

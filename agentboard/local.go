@@ -249,14 +249,13 @@ func DeleteLocalBoards(ctx context.Context, sqlite state.SqliteConfig, roots []s
 	if _, err := db.ExecContext(ctx, agentMessageBoardSchema); err != nil {
 		return err
 	}
-	conn, err := db.Conn(ctx)
+	// Rust #54369 (`7ae8319917`) admits the writer through
+	// `SqlitePoolWriteExt::begin_immediate`, which retries a busy slot.
+	conn, err := state.BeginImmediate(ctx, db)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return err
-	}
 	committed := false
 	defer func() {
 		if !committed {
@@ -291,12 +290,8 @@ type localBoardWrite struct {
 }
 
 func (b *LocalAgentMessageBoard) beginWrite(ctx context.Context) (*localBoardWrite, error) {
-	conn, err := b.db.Conn(ctx)
+	conn, err := state.BeginImmediate(ctx, b.db)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		_ = conn.Close()
 		return nil, err
 	}
 	var deleted bool

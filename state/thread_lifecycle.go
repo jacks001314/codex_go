@@ -63,7 +63,7 @@ func (r *StateRuntime) ReadRepairRolloutPath(ctx context.Context, threadID, roll
 	if threadID == "" || sourcePath == "." || sourcePath == "" || canonicalPath == "." || canonicalPath == "" {
 		return errors.New("thread id and rollout path are required")
 	}
-	result, err := r.stateDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.stateDB, `
 UPDATE threads
 SET rollout_path = ?,
     archived = ?,
@@ -107,7 +107,7 @@ func (r *StateRuntime) updateThreadArchiveState(ctx context.Context, threadID, r
 		updatedAt = info.ModTime().UTC()
 	}
 	updatedMillis := r.allocateThreadTimestamp(&r.threadUpdatedAt, updatedAt.UnixMilli())
-	_, err := r.stateDB.ExecContext(ctx, `
+	_, err := ExecWrite(ctx, r.stateDB, `
 UPDATE threads
 SET rollout_path = ?, archived = ?, archived_at = ?, updated_at = ?, updated_at_ms = ?
 WHERE id = ?`, rolloutPath, archived, archivedAt, updatedAt.Unix(), updatedMillis, threadID)
@@ -143,14 +143,13 @@ func deleteThreadHistoryRows(ctx context.Context, db *sql.DB, threadID string) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	conn, err := db.Conn(ctx)
+	// Writer admission retries a busy slot before any read snapshot is taken
+	// (Rust #54369 `7ae8319917`).
+	conn, err := BeginImmediate(ctx, db)
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return fmt.Errorf("begin thread history delete: %w", err)
 	}
+	defer conn.Close()
 	defer func() {
 		if err != nil {
 			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
@@ -178,20 +177,20 @@ func (r *StateRuntime) DeleteThreadsStrict(ctx context.Context, threadIDs []stri
 	}
 	ids := compactThreadIDs(threadIDs)
 	for _, threadID := range ids {
-		if _, err := r.logsDB.ExecContext(ctx, `DELETE FROM logs WHERE thread_id = ?`, threadID); err != nil {
+		if _, err := ExecWrite(ctx, r.logsDB, `DELETE FROM logs WHERE thread_id = ?`, threadID); err != nil {
 			return 0, fmt.Errorf("delete logs for thread %s: %w", threadID, err)
 		}
 		if err := r.DeleteVersionedThreadMemory(ctx, threadID); err != nil {
 			return 0, err
 		}
-		if _, err := r.goalsDB.ExecContext(ctx, `DELETE FROM thread_goals WHERE thread_id = ?`, threadID); err != nil {
+		if _, err := ExecWrite(ctx, r.goalsDB, `DELETE FROM thread_goals WHERE thread_id = ?`, threadID); err != nil {
 			return 0, fmt.Errorf("delete goal for thread %s: %w", threadID, err)
 		}
 	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	tx, err := r.stateDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.stateDB)
 	if err != nil {
 		return 0, fmt.Errorf("begin thread state delete: %w", err)
 	}
@@ -225,7 +224,7 @@ func (r *StateRuntime) DeleteThreadsStrict(ctx context.Context, threadIDs []stri
 }
 
 func (r *StateRuntime) deleteThreadMemory(ctx context.Context, threadID string) error {
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return fmt.Errorf("begin memory delete for thread %s: %w", threadID, err)
 	}

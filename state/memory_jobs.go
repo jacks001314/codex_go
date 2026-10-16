@@ -141,7 +141,7 @@ func (r *StateRuntime) MarkStage1JobSucceeded(ctx context.Context, threadID stri
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return false, err
 	}
@@ -193,7 +193,7 @@ func (r *StateRuntime) MarkStage1JobSucceededNoOutput(ctx context.Context, threa
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return false, err
 	}
@@ -242,7 +242,7 @@ func (r *StateRuntime) MarkStage1JobFailed(ctx context.Context, threadID string,
 		ctx = context.Background()
 	}
 	now := time.Now().UTC().Unix()
-	result, err := r.memoriesDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.memoriesDB, `
 UPDATE jobs SET status = 'error', finished_at = ?, lease_until = NULL,
     retry_at = ?, retry_remaining = retry_remaining - 1, last_error = ?
 WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?`,
@@ -262,7 +262,7 @@ func (r *StateRuntime) EnqueueGlobalConsolidation(ctx context.Context, inputWate
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return enqueueGlobalConsolidation(ctx, r.memoriesDB, inputWatermark)
+	return enqueueGlobalConsolidationStandalone(ctx, r.memoriesDB, inputWatermark)
 }
 
 func (r *StateRuntime) TryClaimGlobalPhase2Job(ctx context.Context, workerID string, leaseSeconds int64) (Phase2JobClaimResult, error) {
@@ -374,7 +374,7 @@ func (r *StateRuntime) HeartbeatGlobalPhase2Job(ctx context.Context, ownershipTo
 		ctx = context.Background()
 	}
 	leaseUntil := time.Now().UTC().Unix() + max(leaseSeconds, 0)
-	result, err := r.memoriesDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.memoriesDB, `
 UPDATE jobs SET lease_until = ?
 WHERE kind = ? AND job_key = ? AND status = 'running' AND ownership_token = ?`,
 		leaseUntil, MemoryJobKindConsolidateGlobal, MemoryConsolidationJobKey, ownershipToken)
@@ -392,7 +392,7 @@ func (r *StateRuntime) MarkGlobalPhase2JobSucceeded(ctx context.Context, ownersh
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return false, err
 	}
@@ -456,7 +456,7 @@ UPDATE jobs SET status = 'error', finished_at = ?, lease_until = NULL,
 WHERE kind = ? AND job_key = ? AND status = 'running'
   AND (ownership_token = ? OR ownership_token IS NULL)`
 	}
-	result, err := r.memoriesDB.ExecContext(ctx, query,
+	result, err := ExecWrite(ctx, r.memoriesDB, query,
 		now, now+max(retryDelaySeconds, 0), failureReason,
 		MemoryJobKindConsolidateGlobal, MemoryConsolidationJobKey, ownershipToken)
 	if err != nil {
@@ -470,8 +470,7 @@ type memoryExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func enqueueGlobalConsolidation(ctx context.Context, executor memoryExecer, inputWatermark int64) error {
-	_, err := executor.ExecContext(ctx, `
+const enqueueGlobalConsolidationSQL = `
 INSERT INTO jobs (
     kind, job_key, status, worker_id, ownership_token, started_at, finished_at,
     lease_until, retry_at, retry_remaining, last_error, input_watermark, last_success_watermark
@@ -484,21 +483,29 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
         WHEN excluded.input_watermark > COALESCE(jobs.input_watermark, 0)
             THEN excluded.input_watermark
         ELSE COALESCE(jobs.input_watermark, 0) + 1
-    END`, MemoryJobKindConsolidateGlobal, MemoryConsolidationJobKey,
+    END`
+
+func enqueueGlobalConsolidation(ctx context.Context, executor memoryExecer, inputWatermark int64) error {
+	_, err := executor.ExecContext(ctx, enqueueGlobalConsolidationSQL, MemoryJobKindConsolidateGlobal, MemoryConsolidationJobKey,
 		memoryDefaultRetryRemaining, inputWatermark)
 	return err
 }
 
+// enqueueGlobalConsolidationStandalone retries the enqueue when it owns its own
+// connection instead of running inside a caller's transaction: Rust #54369
+// (`7ae8319917`) wraps `enqueue_global_consolidation_with_executor` in
+// `retry_on_busy`.
+func enqueueGlobalConsolidationStandalone(ctx context.Context, db *sql.DB, inputWatermark int64) error {
+	_, err := ExecWrite(ctx, db, enqueueGlobalConsolidationSQL, MemoryJobKindConsolidateGlobal, MemoryConsolidationJobKey,
+		memoryDefaultRetryRemaining, inputWatermark)
+	return err
+}
+
+// beginMemoryImmediate reserves the writer slot before any read snapshot. Rust
+// #54369 `7ae8319917` retries admission through
+// `SqlitePoolWriteExt::begin_immediate`.
 func beginMemoryImmediate(ctx context.Context, db *sql.DB) (*sql.Conn, error) {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
-		_ = conn.Close()
-		return nil, err
-	}
-	return conn, nil
+	return BeginImmediate(ctx, db)
 }
 
 func commitMemoryImmediate(ctx context.Context, conn *sql.Conn) error {

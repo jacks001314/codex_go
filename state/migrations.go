@@ -399,7 +399,7 @@ func repairLegacyRecencyMigrationVersion(ctx context.Context, conn *sql.Conn, mi
 	if recency == nil {
 		return nil
 	}
-	_, err = conn.ExecContext(ctx, `
+	_, err = ExecWrite(ctx, conn, `
 UPDATE _sqlx_migrations
 SET version = ?, description = ?
 WHERE version = 38

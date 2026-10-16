@@ -100,7 +100,7 @@ func (r *StateRuntime) ReplaceThreadGoalSnapshot(ctx context.Context, goal *Thre
 		return errors.New("thread goal snapshot is nil")
 	}
 	ctx = nonNilContext(ctx)
-	tx, err := r.goalsDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.goalsDB)
 	if err != nil {
 		return fmt.Errorf("begin thread goal snapshot replacement: %w", err)
 	}
@@ -153,7 +153,7 @@ func (r *StateRuntime) ClearThreadGoalContinuationDeferral(ctx context.Context, 
 		return err
 	}
 	ctx = nonNilContext(ctx)
-	if _, err := r.goalsDB.ExecContext(ctx, `DELETE FROM thread_goal_continuation_deferrals WHERE thread_id = ?`, strings.TrimSpace(threadID)); err != nil {
+	if _, err := ExecWrite(ctx, r.goalsDB, `DELETE FROM thread_goal_continuation_deferrals WHERE thread_id = ?`, strings.TrimSpace(threadID)); err != nil {
 		return fmt.Errorf("clear thread goal continuation deferral: %w", err)
 	}
 	return nil
@@ -166,7 +166,8 @@ func (r *StateRuntime) ReplaceThreadGoal(ctx context.Context, threadID, objectiv
 	ctx = nonNilContext(ctx)
 	nowMS := time.Now().UTC().UnixMilli()
 	status = threadGoalStatusAfterBudgetLimit(status, 0, tokenBudget)
-	row := r.goalsDB.QueryRowContext(ctx, `
+	var goal *ThreadGoal
+	err := QueryWriteRow(ctx, r.goalsDB, `
 INSERT INTO thread_goals (`+threadGoalColumns+`)
 VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
@@ -179,8 +180,8 @@ ON CONFLICT(thread_id) DO UPDATE SET
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms
 RETURNING `+threadGoalColumns,
-		strings.TrimSpace(threadID), uuid.NewString(), objective, string(status), nullableInt64(tokenBudget), nowMS, nowMS)
-	goal, err := scanThreadGoal(row)
+		[]any{strings.TrimSpace(threadID), uuid.NewString(), objective, string(status), nullableInt64(tokenBudget), nowMS, nowMS},
+		scanThreadGoalWrite(&goal))
 	if err != nil {
 		return nil, fmt.Errorf("replace thread goal: %w", err)
 	}
@@ -194,7 +195,8 @@ func (r *StateRuntime) InsertThreadGoal(ctx context.Context, threadID, objective
 	ctx = nonNilContext(ctx)
 	nowMS := time.Now().UTC().UnixMilli()
 	status = threadGoalStatusAfterBudgetLimit(status, 0, tokenBudget)
-	row := r.goalsDB.QueryRowContext(ctx, `
+	var goal *ThreadGoal
+	err := QueryWriteRow(ctx, r.goalsDB, `
 INSERT INTO thread_goals (`+threadGoalColumns+`)
 VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)
 ON CONFLICT(thread_id) DO UPDATE SET
@@ -208,8 +210,8 @@ ON CONFLICT(thread_id) DO UPDATE SET
     updated_at_ms = excluded.updated_at_ms
 WHERE thread_goals.status = 'complete'
 RETURNING `+threadGoalColumns,
-		strings.TrimSpace(threadID), uuid.NewString(), objective, string(status), nullableInt64(tokenBudget), nowMS, nowMS)
-	goal, err := scanThreadGoal(row)
+		[]any{strings.TrimSpace(threadID), uuid.NewString(), objective, string(status), nullableInt64(tokenBudget), nowMS, nowMS},
+		scanThreadGoalWrite(&goal))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -279,7 +281,7 @@ WHERE thread_id = ? AND (? IS NULL OR goal_id = ?)`
 		args = []any{*update.Objective}
 	}
 	args = append(args, argsSuffix...)
-	result, err := r.goalsDB.ExecContext(ctx, query, args...)
+	result, err := ExecWrite(ctx, r.goalsDB, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("update thread goal: %w", err)
 	}
@@ -306,7 +308,7 @@ func (r *StateRuntime) updateActiveThreadGoalStatus(ctx context.Context, threadI
 		return nil, err
 	}
 	ctx = nonNilContext(ctx)
-	result, err := r.goalsDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.goalsDB, `
 UPDATE thread_goals
 SET status = ?, updated_at_ms = ?
 WHERE thread_id = ?
@@ -330,8 +332,9 @@ func (r *StateRuntime) DeleteThreadGoal(ctx context.Context, threadID string) (*
 		return nil, err
 	}
 	ctx = nonNilContext(ctx)
-	row := r.goalsDB.QueryRowContext(ctx, `DELETE FROM thread_goals WHERE thread_id = ? RETURNING `+threadGoalColumns, strings.TrimSpace(threadID))
-	goal, err := scanThreadGoal(row)
+	var goal *ThreadGoal
+	err := QueryWriteRow(ctx, r.goalsDB, `DELETE FROM thread_goals WHERE thread_id = ? RETURNING `+threadGoalColumns,
+		[]any{strings.TrimSpace(threadID)}, scanThreadGoalWrite(&goal))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -386,7 +389,8 @@ WHERE thread_id = ? AND ` + statusFilter
 		args = append(args, *expectedGoalID)
 	}
 	query += ` RETURNING ` + threadGoalColumns
-	goal, err := scanThreadGoal(r.goalsDB.QueryRowContext(ctx, query, args...))
+	var goal *ThreadGoal
+	err := QueryWriteRow(ctx, r.goalsDB, query, args, scanThreadGoalWrite(&goal))
 	if errors.Is(err, sql.ErrNoRows) {
 		current, getErr := r.GetThreadGoal(ctx, threadID)
 		return &GoalAccountingOutcome{Goal: current}, getErr

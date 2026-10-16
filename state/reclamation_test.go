@@ -21,30 +21,34 @@ import (
 // without a multi-gigabyte database.
 
 // TestReclamationAdmissionMirrorsRust covers the admission check in Rust
-// `reclaim_pages`: incremental auto-vacuum plus at least 64 MiB and 25% free
-// pages.
+// `reclaim_pages`: the worker only runs on a WAL database (#54389 `1ef30bcb`),
+// with incremental auto-vacuum plus at least 64 MiB and 25% free pages.
 func TestReclamationAdmissionMirrorsRust(t *testing.T) {
 	const pageSize = int64(4096)
 	// 16384 free pages of 4 KiB are exactly 64 MiB on a 64 MiB database.
-	if !reclamationAdmission(2, pageSize, 65536, 16384) {
+	if !reclamationAdmission("wal", 2, pageSize, 65536, 16384) {
 		t.Fatalf("incremental auto-vacuum above both thresholds must be admitted")
 	}
 	cases := []struct {
 		name                              string
+		journal                           string
 		autoVacuum, pageSize, pages, free int64
 		want                              bool
 	}{
-		{name: "nothing to reclaim", autoVacuum: 2, pageSize: pageSize, pages: 4096, free: 0, want: false},
-		{name: "full auto-vacuum", autoVacuum: 1, pageSize: pageSize, pages: 65536, free: 16384, want: false},
-		{name: "auto-vacuum off", autoVacuum: 0, pageSize: pageSize, pages: 65536, free: 16384, want: false},
-		{name: "below 64 MiB free", autoVacuum: 2, pageSize: pageSize, pages: 20000, free: 6000, want: false},
-		{name: "below a quarter free", autoVacuum: 2, pageSize: pageSize, pages: 262144, free: 20000, want: false},
+		{name: "nothing to reclaim", journal: "wal", autoVacuum: 2, pageSize: pageSize, pages: 4096, free: 0, want: false},
+		{name: "full auto-vacuum", journal: "wal", autoVacuum: 1, pageSize: pageSize, pages: 65536, free: 16384, want: false},
+		{name: "auto-vacuum off", journal: "wal", autoVacuum: 0, pageSize: pageSize, pages: 65536, free: 16384, want: false},
+		{name: "below 64 MiB free", journal: "wal", autoVacuum: 2, pageSize: pageSize, pages: 20000, free: 6000, want: false},
+		{name: "below a quarter free", journal: "wal", autoVacuum: 2, pageSize: pageSize, pages: 262144, free: 20000, want: false},
+		// A preserved DELETE journal keeps its own checkpointing rules, so the
+		// worker must not reclaim even when every space threshold is met.
+		{name: "rollback journal", journal: "delete", autoVacuum: 2, pageSize: pageSize, pages: 65536, free: 16384, want: false},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			if got := reclamationAdmission(test.autoVacuum, test.pageSize, test.pages, test.free); got != test.want {
-				t.Fatalf("reclamationAdmission(%d, %d, %d, %d) = %v, want %v",
-					test.autoVacuum, test.pageSize, test.pages, test.free, got, test.want)
+			if got := reclamationAdmission(test.journal, test.autoVacuum, test.pageSize, test.pages, test.free); got != test.want {
+				t.Fatalf("reclamationAdmission(%q, %d, %d, %d, %d) = %v, want %v",
+					test.journal, test.autoVacuum, test.pageSize, test.pages, test.free, got, test.want)
 			}
 		})
 	}
@@ -741,7 +745,7 @@ func TestReclamationResumesAfterInterruptedVacuumLikeRust(t *testing.T) {
 	}
 	bytesBeforeRetry := int64(len(mustReadFile(t, config.LogsDBPath())))
 	freeBeforeRetry := reclamationQueryInt(t, db, `PRAGMA freelist_count`)
-	resumed := reclaimRuntimeDB(ctx, reclamationTarget{label: "log DB", path: config.LogsDBPath()}, reclamationOptions{
+	resumed := reclaimRuntimeDB(config, ctx, reclamationTarget{label: "log DB", path: config.LogsDBPath()}, reclamationOptions{
 		budget:     reclamationBudget{deadline: time.Now().Add(30 * time.Second), pages: reclamationBatchPages},
 		batchPages: reclamationBatchPages,
 	}, nil)

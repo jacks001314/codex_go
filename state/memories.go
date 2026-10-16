@@ -96,7 +96,7 @@ func (r *StateRuntime) ClearMemoryData(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return fmt.Errorf("begin memory reset: %w", err)
 	}
@@ -124,7 +124,7 @@ func (r *StateRuntime) RecordStage1OutputUsage(ctx context.Context, threadIDs []
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := r.memoriesDB.BeginTx(ctx, nil)
+	tx, err := BeginImmediateTx(ctx, r.memoriesDB)
 	if err != nil {
 		return 0, err
 	}
@@ -256,7 +256,7 @@ func (r *StateRuntime) PruneStage1OutputsForRetention(ctx context.Context, maxUn
 		ctx = context.Background()
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(max(maxUnusedDays, 0)) * 24 * time.Hour).Unix()
-	result, err := r.memoriesDB.ExecContext(ctx, `
+	result, err := ExecWrite(ctx, r.memoriesDB, `
 DELETE FROM stage1_outputs
 WHERE thread_id IN (
     SELECT thread_id FROM stage1_outputs
@@ -353,7 +353,7 @@ func (r *StateRuntime) MarkThreadMemoryModePolluted(ctx context.Context, threadI
 	if err != nil && err != sql.ErrNoRows {
 		return false, err
 	}
-	result, err := r.stateDB.ExecContext(ctx, `UPDATE threads SET memory_mode = 'polluted' WHERE id = ? AND memory_mode != 'polluted'`, threadID)
+	result, err := ExecWrite(ctx, r.stateDB, `UPDATE threads SET memory_mode = 'polluted' WHERE id = ? AND memory_mode != 'polluted'`, threadID)
 	if err != nil {
 		return false, err
 	}
