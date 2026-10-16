@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"codex_go/agent"
 	"codex_go/state"
@@ -30,11 +31,25 @@ func TestMultiAgentWaitDurationRecordsOutcomeLikeRust(t *testing.T) {
 	controller := &runtimeAgentController{router: router, rootID: "thread-1"}
 
 	// Mailbox activity: the wait wakes because an agent activity was delivered.
-	router.notifyRuntimeAgentActivity("thread-1", "child finished")
-	activity, err := controller.WaitForActivity(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("WaitForActivity(mailbox): %v", err)
+	// The activity is delivered only after the wait has started, so the recorded
+	// duration is real elapsed wait time: delivering first would let the mailbox
+	// branch return within the host clock resolution and record 0ms.
+	type waitResult struct {
+		activity *agent.WaitForActivityResult
+		err      error
 	}
+	mailboxResults := make(chan waitResult, 1)
+	go func() {
+		activity, err := controller.WaitForActivity(context.Background(), nil)
+		mailboxResults <- waitResult{activity: activity, err: err}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	router.notifyRuntimeAgentActivity("thread-1", "child finished")
+	mailbox := <-mailboxResults
+	if mailbox.err != nil {
+		t.Fatalf("WaitForActivity(mailbox): %v", mailbox.err)
+	}
+	activity := mailbox.activity
 	if activity == nil || activity.TimedOut || activity.Message != "child finished" {
 		t.Fatalf("mailbox activity = %#v, want the notified message", activity)
 	}

@@ -124,7 +124,7 @@ func TestExecutorSkillPathEqualsMatchesWindowsIdentityLikeRust(t *testing.T) {
 	}
 
 	// A host path and its `file:` locator are one identity too.
-	host := "/tmp/demo/SKILL.md"
+	host := filepath.Join(os.TempDir(), "demo", "SKILL.md")
 	if uri, err := utils.FromHostNativePath(host); err == nil {
 		if !executorSkillPathEquals(host, uri.String()) {
 			t.Fatalf("executorSkillPathEquals(%q, %q) = false, want true", host, uri.String())

@@ -193,7 +193,7 @@ func TestRequiredSkillsPreSamplingValidationReleasesSatisfiedTurnsLikeRust(t *te
 	}); err != nil {
 		t.Fatalf("Add(supplied) error = %v", err)
 	}
-	threadID := startRequiredSkillsThread(t, router, "supplied", "file://"+capabilityRoot)
+	threadID := startRequiredSkillsThread(t, router, "supplied", "file:///"+filepath.ToSlash(capabilityRoot))
 
 	hook := router.requiredSkillsPreSamplingValidation(requiredSkillsTurnParams(threadID, "supplied"), threadID, "turn-1")
 	if hook == nil {
