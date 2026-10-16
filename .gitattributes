@@ -1,1 +1,2 @@
 state/migrations/**/*.sql text eol=lf
+tui/chatwidget/prompt_for_plan_mode.md text eol=lf

@@ -63,11 +63,15 @@ func TestRustConfigSchemaSurfaceAgainstGo(t *testing.T) {
 	// surface (ConfigToml::daybreak, #49856), taking the Rust count from 101 to
 	// 102. Go now recognizes `daybreak` too (config.KnownTopLevelConfigFields),
 	// so it is no longer a Rust-only key: the Go count moves from 108 to 109.
-	if len(rustKeys) != 102 {
-		t.Fatalf("Rust config.schema.json top-level property count = %d, want 102 (pinned baseline)", len(rustKeys))
+	// Re-anchored to head 4eb4a65407 (round-90 pin advance):
+	// include_environment_context_time joins the Rust schema (count 102 -> 103);
+	// Go now recognizes it too (config.KnownTopLevelConfigFields + the
+	// IncludeEnvironmentContextTime accessor), so the Go count moves to 110.
+	if len(rustKeys) != 103 {
+		t.Fatalf("Rust config.schema.json top-level property count = %d, want 103 (pinned baseline)", len(rustKeys))
 	}
-	if len(goKeys) != 109 {
-		t.Fatalf("Go recognized top-level config key count = %d, want 109 (pinned baseline)", len(goKeys))
+	if len(goKeys) != 110 {
+		t.Fatalf("Go recognized top-level config key count = %d, want 110 (pinned baseline)", len(goKeys))
 	}
 
 	rustSet := stringSet(rustKeys)

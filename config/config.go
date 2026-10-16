@@ -96,6 +96,16 @@ func (c *Config) IncludeEnvironmentContext() bool {
 	}
 	return value
 }
+func (c *Config) IncludeEnvironmentContextTime() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	value, ok := c.Values["include_environment_context_time"].(bool)
+	if !ok {
+		return true
+	}
+	return value
+}
 
 // ShowRawAgentReasoning reports whether raw chain-of-thought reasoning deltas
 // should be surfaced, mirroring Rust show_raw_agent_reasoning (default false).
@@ -747,6 +757,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"include_apps_instructions":                  {},
 	"include_collaboration_mode_instructions":    {},
 	"include_environment_context":                {},
+	"include_environment_context_time":           {},
 	"include_permissions_instructions":           {},
 	"instructions":                               {},
 	"js_repl_node_module_dirs":                   {},

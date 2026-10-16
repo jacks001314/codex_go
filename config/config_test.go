@@ -400,7 +400,14 @@ func TestIncludeEnvironmentContextDefaultsTrueAndHonorsFalseLikeRust(t *testing.
 		t.Fatal("include_environment_context=false was ignored")
 	}
 }
-
+func TestIncludeEnvironmentContextTimeDefaultsTrueAndHonorsFalseLikeRust(t *testing.T) {
+	if !(*Config)(nil).IncludeEnvironmentContextTime() || !(&Config{Values: map[string]any{}}).IncludeEnvironmentContextTime() {
+		t.Fatal("environment context time should be enabled by default (Rust unwrap_or(true))")
+	}
+	if (&Config{Values: map[string]any{"include_environment_context_time": false}}).IncludeEnvironmentContextTime() {
+		t.Fatal("include_environment_context_time=false was ignored")
+	}
+}
 func TestLoadConfigAcceptsUTF8BOM(t *testing.T) {
 	home := t.TempDir()
 	body := append([]byte{0xEF, 0xBB, 0xBF}, []byte("model = \"gpt-bom\"\n")...)

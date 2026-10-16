@@ -54,6 +54,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Tests: []string{
 				"exec_command_clamps_model_requested_max_output_tokens_to_policy",
 				"exec_command_does_not_expose_configured_noise_auth_token",
+				"exec_command_exports_originating_call_metadata_across_later_input",
 				"exec_command_rejects_login_when_disabled",
 				"exec_command_hides_and_rejects_tty_when_disabled",
 				"exec_command_reports_chunk_and_exit_metadata",
@@ -106,22 +107,9 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			// suite grew from 8 to 15 table-driven cases as environment-backed
 			// tool exposure and process-event replay were covered; the login
 			// test on unified_exec.rs also dropped its `hides_and_` prefix.
-			TestCases: 15,
+			TestCases: 26,
 			Tests: []string{
 				"exec_command_consumes_pushed_remote_process_events",
-			},
-		},
-		{
-			Path:     "core/tests/suite/unified_exec_zsh_fork_approvals.rs",
-			Owner:    "shell, execpolicy, tool",
-			Focus:    "zsh fork parent approval flow, denied reads, intercepted exec escalation, and explicit prompt rules",
-			Platform: "Unix-style zsh fork flow; Rust helper skips unsupported targets",
-			Tests: []string{
-				"unified_exec_zsh_fork_guardian_reviews_intercepted_execve",
-				"unified_exec_zsh_fork_guardian_reviews_persistent_terminal_in_current_turn",
-				"unified_exec_zsh_fork_parent_approval_escalates_intercepted_exec",
-				"unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule",
-				"unified_exec_zsh_fork_parent_approval_preserves_denied_reads",
 			},
 		},
 		{
@@ -183,7 +171,7 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 			Path:     "core/src/tools/handlers/unified_exec_tests.rs",
 			Owner:    "tool, turn, shell",
 			Focus:    "unified exec command selection, shell restrictions, remote direct mode, and pre/post tool-use payloads",
-			Platform: "unit tests; includes bash, PowerShell, cmd, zsh fork, and remote environment modes",
+			Platform: "unit tests; includes bash, PowerShell, and cmd modes (the zsh-fork cases were removed upstream by #52160)",
 			Tests: []string{
 				"exec_command_post_tool_use_payload_skips_running_sessions",
 				"exec_command_post_tool_use_payload_uses_output_for_interactive_completion",
@@ -192,12 +180,10 @@ func rustUnifiedExecSandboxManifest() []rustUnifiedExecSandboxSuiteCase {
 				"exec_command_pre_tool_use_payload_uses_raw_command",
 				"exec_command_rejects_login_when_selected_environment_disallows_it",
 				"exec_command_reuses_foreign_windows_grant",
-				"shell_mode_for_environment_uses_direct_mode_for_remote_environments",
 				"test_get_command_rejects_explicit_login_when_disallowed",
 				"test_get_command_does_not_change_nested_login_or_powershell",
 				"test_get_command_keeps_path_prepends_after_login_startup",
 				"test_get_command_runs_login_shell_when_path_is_readonly",
-				"test_get_command_rejects_explicit_shell_in_zsh_fork_mode",
 				"test_get_command_respects_explicit_bash_shell",
 				"test_get_command_respects_explicit_cmd_shell",
 				"test_get_command_resolves_powershell_by_type",

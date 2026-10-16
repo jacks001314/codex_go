@@ -35,14 +35,18 @@ func TestRustConfigTomlTopLevelSurfaceSnapshot(t *testing.T) {
 	// Re-pinned to upstream 18e28fe1b9 (#51556): ConfigToml gains `daybreak`
 	// (default Daybreak preference for new threads and non-interactive turns),
 	// taking the top-level count from 104 to 105.
-	if len(fields) != 105 {
-		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 105", len(fields))
+	// Re-anchored to head 4eb4a65407 (round-90 pin advance): ConfigToml gains
+	// include_environment_context_time (Option<bool>, unwrap_or(true)), taking
+	// the top-level count from 105 to 106.
+	if len(fields) != 106 {
+		t.Fatalf("Rust ConfigToml top-level field count drift: got %d want 106", len(fields))
 	}
 	for _, required := range []string{
 		"agents",
 		"cloud",
 		"daybreak",
 		"features",
+		"include_environment_context_time",
 		"model_auto_compact_token_limit",
 		"model_auto_compact_token_limit_scope",
 		"model_post_turn_compact_threshold_percent",

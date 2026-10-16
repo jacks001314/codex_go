@@ -168,7 +168,6 @@ func rustWorkspaceMembersSnapshot() []string {
 		"config-schema",
 		"context-fragments",
 		"shell-command",
-		"shell-escalation",
 		"skills",
 		"core",
 		"core-api",
@@ -300,21 +299,24 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Round-89 re-anchor to head 95ec468619: the checkout advanced with the
 		// code_mode_tool_description_first registration (#51690); only
 		// core/tests/suite/mod.rs changed, and its pin is updated below.
+		// Round-90 re-anchor to head 4eb4a65407: the checkout advanced across the
+		// 338-commit #54590 delta; seven of the nine pins below changed and the
+		// workspace lost the shell-escalation crate (#52160).
 		// Previously re-pinned to upstream 18e28fe1b9 (#51556): every hash below
 		// was recomputed from the then-current Rust tree so the critical-file
 		// drift check tracks the protocol, exec, client and suite surfaces the
 		// Go port mirrors after the 498-commit gap from the 5f3180c793 pin.
 		// Re-pinned to upstream e75b36efde (#48100): the
 		// agent-message-board-client workspace member.
-		{Path: "Cargo.toml", SHA256: "26a713b6714637e008a30b0bf17fb03f1111c09f3d944857e2c4c1b050a20779"},
-		{Path: "cli/src/lib.rs", SHA256: "cf24032f801314033b2ff21e6c5a85ad8c2898012e9fba279f3a5c91439c1ab6"},
+		{Path: "Cargo.toml", SHA256: "a368b2e4bb7dcc86bf64334fdea1defa951d6752d8a6c43f4b0492aba803e114"},
+		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
 		// Re-anchored to head 5b0b253035 via 1fbe15c962 (#51595): the two
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "8f53a22a562e913f652f971c9955b987c1966e7facc0940aa1aab4d5ab5c4ab9"},
+		{Path: "exec/src/lib.rs", SHA256: "9dea85e185a5446d58c4036f2ae32e67dec32106b0b4e64a5d6512e73a1b2e95"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},
@@ -327,15 +329,15 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// `include_internal_metadata` provider grant for tool metadata.
 		// Re-pinned to upstream 12de0e395d (#48508): the interrupt seam that
 		// preserves WebSocket continuations when steering a turn.
-		{Path: "core/src/client.rs", SHA256: "6ca16eb5fb185192738d321c22eacf74664e0ae2c107176c1c8a7f23fde33089"},
+		{Path: "core/src/client.rs", SHA256: "5c0dd767eeb5d8740ed67b4d6037c44cde80ad3cba3c7d242cdfdf21a406b2a8"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
-		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "e25ebb90bf79be79def79ebf2dd704057577fa9806710fbea0ee240a909d0dc1"},
+		{Path: "app-server-protocol/src/protocol/common.rs", SHA256: "0e42a89d3bba3ac938867aea4ab653660e5c8d59343b9b9a5fe7e3d6c9a96564"},
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "8a9ec914063f50d62f16e71b7648943948314e4b169ec83d0a23e53d811ac0dc"},
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "1b5bbbd4c36d53639e59f7094deaedf1bae917b403336689ce62cb021981f8c1"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module
@@ -343,7 +345,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-pinned to upstream 95ec468619 (round-89 pin advance): the core suite
 		// module dropped its windows_sandbox module declaration when #51678 moved
 		// that file to core/tests/windows_sandbox.rs.
-		{Path: "core/tests/suite/mod.rs", SHA256: "4a94d1807b0411002c6d1aded283fe7978aef071f2f3f1698bcb52f0cde0969e"},
+		{Path: "core/tests/suite/mod.rs", SHA256: "ca88b198e3ca41d80ff0a163025df751790562cb52bc35a09b728f0775996e19"},
 	}
 }
 

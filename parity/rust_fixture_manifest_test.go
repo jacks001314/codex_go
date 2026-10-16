@@ -56,7 +56,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// (#48213).
 			// Re-pinned to upstream a6bd19261c (#48491): the restrictive Windows
 			// launcher adds the embedded-fallback warning snapshot.
-			Files: 41,
+			Files: 45,
 			Owner: "cli, app",
 			Focus: "CLI help, hidden commands, feature flags, MCP/plugin/login flows",
 			Required: []string{
@@ -100,7 +100,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// This pass adds the plugin-metadata, mcp-resource,
 			// thread-settings, project, environment and executor
 			// bearer-token fixtures (#46917-#48004).
-			Files: 165,
+			Files: 167,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -140,7 +140,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #48353 added the cloud-skills-across-executor-readiness snapshot.
 			// #51678 then moved windows_sandbox.rs out to core/tests/windows_sandbox.rs
 			// (round-89 pin advance to 95ec468619), so the suite loses one file.
-			Files: 321,
+			Files: 352,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{
@@ -164,7 +164,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// dynamic-activity, transcript-copy and transcript-composer suites.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// startup-warning, warnings-viewer and effect-toggle coverage.
-			Files: 133,
+			Files: 140,
 			Owner: "tui",
 			Focus: "chat widget behavior and snapshot coverage",
 			Required: []string{
@@ -180,7 +180,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// history-projection, dynamic-activity and transcript-copy ones.
 			// This pass adds the prompt-suggestion, transcript-search,
 			// warnings-viewer and markdown/effect snapshot set.
-			Files: 79,
+			Files: 82,
 			Owner: "tui",
 			Focus: "Rust terminal snapshot goldens",
 			Required: []string{
@@ -191,7 +191,7 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// This pass adds the advertised-identity and model-specific
 			// description coverage (#47118/#47642/#47670/#47981).
 			Path:  "tools/src",
-			Files: 41,
+			Files: 42,
 			Owner: "tool, turn",
 			Focus: "tool schemas, dynamic tools, MCP tools, tool search",
 			Required: []string{

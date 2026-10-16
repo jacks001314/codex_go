@@ -179,7 +179,6 @@ func rustTopLevelDirectoriesSnapshot() []string {
 		"scripts",
 		"secrets",
 		"shell-command",
-		"shell-escalation",
 		"skills",
 		"state",
 		"stdio-to-uds",

@@ -104,11 +104,13 @@ func TestDefaultsIncludesStableShellTool(t *testing.T) {
 	}
 }
 
-// TestRealtimeConversationFeatureIsStableAndOnLikeRust pins Rust #44921, which
-// moved realtime_conversation from experimental/off to stable/on. Go consumes
-// this key only through the feature registry (voice RPCs stay gated by the
-// experimental API capability), so the registry metadata is the alignment.
-func TestRealtimeConversationFeatureIsStableAndOnLikeRust(t *testing.T) {
+// TestRealtimeConversationFeatureIsRemovedAndOnLikeRust pins the round-90 pin
+// re-anchor: the upstream registry marks realtime_conversation as removed while
+// keeping it enabled by default (Rust features/src/lib.rs Stage::Removed,
+// default_enabled = true). Go consumes this key only through the feature
+// registry (voice RPCs stay gated by the experimental API capability), so the
+// registry metadata is the alignment.
+func TestRealtimeConversationFeatureIsRemovedAndOnLikeRust(t *testing.T) {
 	if !Known("realtime_conversation") {
 		t.Fatal("realtime_conversation should be known")
 	}
@@ -117,8 +119,8 @@ func TestRealtimeConversationFeatureIsStableAndOnLikeRust(t *testing.T) {
 	}
 	for _, spec := range Registry {
 		if spec.Key == "realtime_conversation" {
-			if spec.Stage != StageStable || !spec.DefaultEnabled {
-				t.Fatalf("realtime_conversation spec = %#v, want stable and enabled by default", spec)
+			if spec.Stage != StageRemoved || !spec.DefaultEnabled {
+				t.Fatalf("realtime_conversation spec = %#v, want removed and enabled by default", spec)
 			}
 			return
 		}

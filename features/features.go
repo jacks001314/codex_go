@@ -57,9 +57,9 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #42718): gate unified-exec TTY
 	// support behind a feature flag.
 	{Key: "unified_exec_tty", Stage: StageStable, DefaultEnabled: true},
-	{Key: "shell_zsh_fork", Stage: StageUnderDevelopment},
+	{Key: "shell_zsh_fork", Stage: StageRemoved},
 	{Key: "sleep_tool", Stage: StageStable, DefaultEnabled: true},
-	{Key: "unified_exec_zsh_fork", Stage: StageRemoved, DefaultEnabled: true},
+	{Key: "unified_exec_zsh_fork", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "shell_snapshot", Stage: StageStable, DefaultEnabled: true},
 	{Key: "shell_snapshot_v2", Stage: StageUnderDevelopment},
 	{Key: "deferred_executor", Stage: StageUnderDevelopment},
@@ -74,7 +74,7 @@ var Registry = []Spec{
 	{Key: "code_mode_host", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 509565820f): terminate active code-mode
 	// cells when their turn is interrupted.
-	{Key: "code_mode_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "code_mode_interrupt", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 95ec468619 #51690): place each tool
 	// description before its namespace description in Code Mode.
 	{Key: "code_mode_tool_description_first", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -140,7 +140,7 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs #48135): yield foreground code-mode
 	// observations when new user input arrives, so a queued message is delivered
 	// while the cell keeps running.
-	{Key: "instant_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "instant_interrupt", Stage: StageUnderDevelopment, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #47946): shared discussion tools for an
 	// agent tree (the in-memory agent message board).
 	{Key: "agent_message_board", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -247,7 +247,7 @@ var Registry = []Spec{
 	{Key: "personality", Stage: StageRemoved, DefaultEnabled: false},
 	{Key: "artifact", Stage: StageUnderDevelopment},
 	{Key: "fast_mode", Stage: StageStable, DefaultEnabled: true},
-	{Key: "realtime_conversation", Stage: StageStable, DefaultEnabled: true},
+	{Key: "realtime_conversation", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "remote_control", Stage: StageRemoved},
 	{Key: "image_detail_original", Stage: StageRemoved},
 	{Key: "tui_app_server", Stage: StageRemoved, DefaultEnabled: true},
@@ -275,7 +275,7 @@ var Registry = []Spec{
 	{Key: "workspace_dependencies", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs #42196, #44870): managed Git
 	// worktrees; stable and enabled by default since #44870.
-	{Key: "worktrees", Stage: StageStable, DefaultEnabled: true},
+	{Key: "worktrees", Stage: StageRemoved, DefaultEnabled: true},
 	{Key: "psp", Stage: StageUnderDevelopment},
 	// Rust (codex-rs/features/src/lib.rs f5420174da): feature-key surface frozen
 	// during the sync26 static re-target.
@@ -311,7 +311,7 @@ var Registry = []Spec{
 	},
 	// Rust (codex-rs/features/src/lib.rs 335c7f8eca #50962): gate stable
 	// environment tool exposure behind a feature flag.
-	{Key: "stable_environment_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "stable_environment_tools", Stage: StageRemoved, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 4d15794336 #51209): ranked tool
 	// discovery for JavaScript code mode.
 	{Key: "code_mode_tool_search", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -320,10 +320,10 @@ var Registry = []Spec{
 	{Key: "code_mode_only_strict_3p_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 5ad6891696 #51207): gate the CLI
 	// Daybreak controls and model selection behind an opt-in.
-	{Key: "cli_daybreak", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "cli_daybreak", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 7c35e1551f #49406): explicit cyber
 	// access programs with OpenAI API keys.
-	{Key: "api_key_cyber_access_programs", Stage: StageStable, DefaultEnabled: false},
+	{Key: "api_key_cyber_access_programs", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 2e5fea64ee #49560): opt-in model
 	// catalog in multi-agent context.
 	{Key: "model_catalog_in_context", Stage: StageUnderDevelopment, DefaultEnabled: false},
@@ -345,6 +345,17 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 7ac954ea24 #51253): enforce the Fast
 	// and Ultra Fast service-tier policies independently.
 	{Key: "ultrafast_mode", Stage: StageStable, DefaultEnabled: true},
+	// Rust (codex-rs/features/src/lib.rs 4eb4a65407): round-90 pin re-anchor.
+	// The eight specs below are registered surface-only, all UnderDevelopment
+	// and disabled by default in Rust; behaviour work is tracked separately.
+	{Key: "async_compaction", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "code_mode_host_grpc", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "credential_masking", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "executor_capability_discovery_v2", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "guardian_trust_orchestrator_connectors", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "output_token_replay", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "retain_client_tool_outputs", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	{Key: "subagent_default_context_limits", Stage: StageUnderDevelopment, DefaultEnabled: false},
 }
 
 func preventIdleSleepStage() Stage {

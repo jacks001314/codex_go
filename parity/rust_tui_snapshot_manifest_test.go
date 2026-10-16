@@ -38,8 +38,11 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// footers and #48101's truncated multiline `/ps` preview.
 	// #48211 added the external-editor visible-handoff suite snapshot.
 	// #48352 added the turn-tip placement snapshot.
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1375 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1375", got)
+	// Round-90 re-anchor to head 4eb4a65407: the TUI snapshot tree moved from
+	// 1375 to 1432 goldens across the 338-commit #54590 delta (the config
+	// panel directory is new; the per-directory counts below follow).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1432 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1432", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -102,7 +105,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// Re-pinned to upstream 18e28fe1b9: #48621 removed follow-up prompt
 			// suggestions from the TUI, so the prompt-suggestion request-history
 			// snapshot is gone and the dir now holds 85 files.
-			Files:    85,
+			Files:    92,
 			Owner:    "tui/app, tui/chatwidget",
 			Focus:    "desktop history UI, cancelled-turn composer restore, and thread goal action rendering",
 			Priority: []string{"app", "composer", "history"},
@@ -135,7 +138,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// two startup-warning summaries into the warnings-viewer snapshots.
 			// #48121 added the command-center draft-handoff snapshot.
 			// #48135 added the remapped-left external-writer view snapshot.
-			Files:    70,
+			Files:    74,
 			Owner:    "tui/app",
 			Focus:    "app-level catalog and migration prompts",
 			Priority: []string{"app", "model"},
@@ -151,7 +154,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		{
 			Path: "tui/src/bottom_pane/async_questions/snapshots",
 			// #46691 added the capped option and clipped-Other boundary snapshots.
-			Files:    15,
+			Files:    16,
 			Owner:    "tui/bottom_pane",
 			Focus:    "asynchronous question prompts with inline Other answers, capped and wrapped option layouts",
 			Priority: []string{"approval", "request-user-input"},
@@ -288,7 +291,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// warnings-summary presentation and #46752 added the tmux
 			// pets-unavailable notice; #48015 added the declined-tool-suggestion
 			// snapshot; #48116 added the two Max-reasoning footer snapshots.
-			Files:    318,
+			Files:    334,
 			Owner:    "tui/chatwidget, tui/tea",
 			Focus:    "main chat widget terminal snapshots for status lines, approvals, plugins, hooks, review, usage, and unified exec",
 			Priority: []string{"approval", "status", "history", "unified-exec", "review"},
@@ -307,7 +310,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// ordering snapshots; #46711/#46731 added the history-projection and
 			// dynamic-activity ones; #46732/#46734 added the transcript-copy
 			// outcomes and the completion-only replay exploration group.
-			Files:    79,
+			Files:    82,
 			Owner:    "tui/chatwidget",
 			Focus:    "chatwidget approval request modal, async question reply, and history snapshots",
 			Priority: []string{"approval", "history"},
@@ -321,13 +324,26 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/clipboard_copy/snapshots",
-			Files:    3,
+			Files:    4,
 			Owner:    "tui/clipboard_copy",
 			Focus:    "clipboard copy failure routing for empty selections and tmux targets",
 			Priority: []string{"render"},
 			Required: []string{
 				"tui/src/clipboard_copy/snapshots/codex_tui__clipboard_copy__routing_tests__empty_copy_reports_failure_without_touching_clipboards.snap",
 				"tui/src/clipboard_copy/snapshots/codex_tui__clipboard_copy__tmux__tests__tmux_clipboard_target_rejects_no_attached_client.snap",
+			},
+		},
+		{
+			Path: "tui/src/config_panel/snapshots",
+			// Round-90 re-anchor to head 4eb4a65407: the config panel surface
+			// gained its own snapshot directory (18 goldens).
+			Files:    18,
+			Owner:    "tui/config_panel",
+			Focus:    "config panel rendering, choice widgets, global search and validation states",
+			Priority: []string{"status"},
+			Required: []string{
+				"tui/src/config_panel/snapshots/codex_tui__config_panel__tests__config_Appearance.snap",
+				"tui/src/config_panel/snapshots/codex_tui__config_panel__tests__config_global_search.snap",
 			},
 		},
 		{
@@ -372,7 +388,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #48101 added the truncated multiline `/ps` command preview.
 			// #48562 removed the halfwidth sound-marks header snapshot with the
 			// boxed card.
-			Files:    90,
+			Files:    92,
 			Owner:    "tui/history_cell",
 			Focus:    "history cell rendering for exec, MCP, plan updates, errors, sessions, user messages, and web search",
 			Priority: []string{"history-cell", "mcp", "status"},
@@ -404,7 +420,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			Path: "tui/src/onboarding/snapshots",
 			// #46695 added the four restricted/long-path trust-directory pickers;
 			// #46752 added the animated welcome logo at 160x48.
-			Files:    17,
+			Files:    16,
 			Owner:    "tui/onboarding",
 			Focus:    "trust-directory onboarding states",
 			Priority: []string{"onboarding"},
@@ -446,7 +462,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// guard.
 			// #48562 removed the clear-UI fast-status and thread-read-model
 			// header snapshots with the boxed card.
-			Files:    193,
+			Files:    197,
 			Owner:    "tui, tui/markdown, tui/app",
 			Focus:    "diff render, markdown render, keymap, resume picker, pager overlay, model migration, and status indicator snapshots",
 			Priority: []string{"diff", "markdown", "status", "session", "keymap"},
@@ -479,7 +495,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// text helpers, follow control, prompt header, search,
 			// selection hints, composer gap, and the compact/detailed copy
 			// presentations.
-			Files:    45,
+			Files:    46,
 			Owner:    "tui/transcript_view",
 			Focus:    "interactive transcript viewport: layout cache, text/tab rendering, prompt header, search, selection hints, and copy feedback",
 			Priority: []string{"history", "app", "composer"},
@@ -503,7 +519,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 		},
 		{
 			Path:     "tui/src/streaming/snapshots",
-			Files:    8,
+			Files:    9,
 			Owner:    "tui/streaming",
 			Focus:    "incremental Markdown rendering equivalence and visualization context",
 			Priority: []string{"markdown", "history-cell"},
