@@ -152,8 +152,12 @@ func TestSelectAgentThreadDecisionMatchRust(t *testing.T) {
 		EntryExists:       true,
 		EntryIsClosed:     true,
 	})
-	if !closedWithoutChannel.NoLongerAvailable {
-		t.Fatalf("closed without channel decision = %#v", closedWithoutChannel)
+	// Rust #53895 (app/session_lifecycle.rs): a closed entry with a saved
+	// transcript is resumed through the replay attachment flow instead of being
+	// reported as unavailable. Upstream replaced this assertion together with the
+	// branch it covered.
+	if !closedWithoutChannel.Proceed || !closedWithoutChannel.IsReplayOnly || !closedWithoutChannel.ShouldAttachLive || closedWithoutChannel.NoLongerAvailable || closedWithoutChannel.ErrorMessage != "" {
+		t.Fatalf("closed without channel decision = %#v, want a replay resume", closedWithoutChannel)
 	}
 
 	attachedReplay := SelectAgentThreadDecision(AgentThreadSelectionInput{

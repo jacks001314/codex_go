@@ -34,10 +34,15 @@ type AgentThreadSelectionInput struct {
 	EntryExists           bool
 	EntryIsClosed         bool
 	HasThreadEventChannel bool
-	LivenessAvailable     bool
-	AttachAttempted       bool
-	AttachError           error
-	LiveAttached          bool
+	// ChannelIsLive reports the cached thread-event channel's attachment
+	// (Rust
+	//
+	// app/session_lifecycle.rs:780-781 reads `channel.attachment()` directly).
+	ChannelIsLive     bool
+	LivenessAvailable bool
+	AttachAttempted   bool
+	AttachError       error
+	LiveAttached      bool
 }
 
 type AgentThreadSelectionDecision struct {
@@ -216,8 +221,16 @@ func RefreshAgentPickerThreadLiveness(nav *AgentNavigationState, read AgentPicke
 	}
 }
 
-func ShouldAttachLiveThreadForSelection(hasThreadEventChannel bool, entryExists bool, entryIsClosed bool) bool {
-	return !hasThreadEventChannel && (!entryExists || !entryIsClosed)
+// ShouldAttachLiveThreadForSelection mirrors Rust
+// app/session_lifecycle.rs:774-782: a selection re-attaches when the navigation
+// entry is closed (an unloaded subagent with a saved transcript is resumed
+// instead of being reported as unavailable), or when the cached channel is
+// missing or is not the live attachment (is_none_or(|channel|
+// channel.attachment() != ThreadEventAttachment::Live)).
+func ShouldAttachLiveThreadForSelection(hasThreadEventChannel bool, channelIsLive bool, entryExists bool, entryIsClosed bool) bool {
+	entryClosed := entryExists && entryIsClosed
+	channelNotLive := !hasThreadEventChannel || !channelIsLive
+	return entryClosed || channelNotLive
 }
 
 func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelectionDecision {
@@ -237,7 +250,7 @@ func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelec
 	}
 
 	isReplayOnly := input.EntryExists && input.EntryIsClosed
-	shouldAttach := ShouldAttachLiveThreadForSelection(input.HasThreadEventChannel, input.EntryExists, input.EntryIsClosed)
+	shouldAttach := ShouldAttachLiveThreadForSelection(input.HasThreadEventChannel, input.ChannelIsLive, input.EntryExists, input.EntryIsClosed)
 	if shouldAttach {
 		if input.AttachAttempted && input.AttachError != nil {
 			return AgentThreadSelectionDecision{
@@ -261,12 +274,11 @@ func SelectAgentThreadDecision(input AgentThreadSelectionInput) AgentThreadSelec
 		}
 	}
 
-	if !input.HasThreadEventChannel && isReplayOnly {
-		return AgentThreadSelectionDecision{
-			ErrorMessage:      "Agent thread " + threadID + " is no longer available.",
-			NoLongerAvailable: true,
-		}
-	}
+	// Rust #53895 deleted the `!contains_key && is_replay_only => no longer
+	// available` branch (app/session_lifecycle.rs:609-614 before the fix): a thread
+	// with a saved transcript must be resumed through the replay attachment flow
+	// instead of being reported as unavailable. Unreachable now that the predicate
+	// re-attaches closed entries.
 	return AgentThreadSelectionDecision{Proceed: true, IsReplayOnly: isReplayOnly}
 }
 

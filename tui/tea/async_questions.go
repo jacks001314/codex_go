@@ -603,8 +603,12 @@ func wrapAsyncQuestionTitleLines(title string, width int) []string {
 		width = 1
 	}
 	out := []string{}
-	for _, paragraph := range strings.Split(title, "\n") {
-		wrapped := codextui.AdaptiveWrapLine(paragraph, codextui.WrapOptions{Width: width, BreakWords: true})
+	for _, logical := range strings.Split(title, "\n") {
+		// Rust #51866 (bottom_pane/async_questions/mod.rs:163-178; strip at :166):
+		// each logical line is wrapped and annotated on its own, and one trailing CR
+		// is stripped first so LF and CRLF titles render identically.
+		logical = strings.TrimSuffix(logical, "\r")
+		wrapped := codextui.AdaptiveWrapLine(logical, codextui.WrapOptions{Width: width, BreakWords: true})
 		for _, line := range wrapped {
 			out = append(out, codextui.AnnotateCompleteWebURLsInLine(line))
 		}
