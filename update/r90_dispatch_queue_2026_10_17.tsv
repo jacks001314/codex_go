@@ -1,5 +1,5 @@
 pr	sha	subject	lane_face	files	note
-54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	
+54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	TR-5 blocked_precondition on #54309: __CODEX_SHELL_SNAPSHOT_CONFIGURED_/supportsCredentialSnapshot/restoreFallback/credential_snapshot = 0 hits.
 54424	aff92080f2	Add remote plugin metadata to plugin configuration (#54424)	other:core-plugins	6	
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
 54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	
@@ -9,7 +9,7 @@ pr	sha	subject	lane_face	files	note
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54363	3df96b085c	Filter uninspectable network roots from implicit MXC read grants (#54363)	other:mxc-sandbox	5	
 54315	86ee40c380	Keep TUI Markdown colors readable against their backgrounds (#54315)	TUI	20	
-54309	7d33d0d93f	Enable credential masking for remote exec-server commands (#54309)	exec	22	
+54309	7d33d0d93f	Enable credential masking for remote exec-server commands (#54309)	exec	22	TR-5 implementable but NEEDS A CARVE-OUT first: face spans tool/** (runtimes/unified_exec), network/** (credential_broker) and execserver/**; the masking body itself is absent (Masking/CredentialMasking/unmasked/maskCredential = 0 hits) even though #52302's config half landed in 38e21026.
 54273	3bae578af3	Protect metadata writes through macOS case aliases (#54273)	other:protocol	5	
 54264	b687844674	Track Guardian transcript admission across failed reviews (#54264)	guardian	5	
 54263	4b9c24f98c	Require fresh Guardian approval for escalated tool retries (#54263)	A-core	1	
@@ -42,7 +42,7 @@ pr	sha	subject	lane_face	files	note
 53932	400f2356d6	Preserve conversation history when compaction fails (#53932)	A-core	2	TR-4 implementable: buffer compaction output and only write history/rollout at response.completed, tagging successful items compaction_output: true (core/src/compact.rs, +18/-20). Go has retainedctx/retained_context.go:169 CompactionOutput and appserver/retained_context.go:375 sessionItemIsCompactionOutput but no buffering semantics (recordAnnotatedConversationItems has no counterpart). Implementer must first pin the commit point (candidates appserver/turn_runtime.go / compact/compact.go). Runs after #52937.
 53908	95273b84fb	Keep the agent dashboard browsable during task removal (#53908)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53879	7eed30ad1b	Preserve running turn recovery across thread settings updates (#53879)	A-core	7	
-53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	
+53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	TR-5 implementable and the most complete carrier in the family (BaseInstructions 240 hits/29 files, WorldState 310/26, IncrementalTools 28/8). HELD because it edits core/src/compact.rs, i.e. Go compact/**, which the A lane is writing for #52937/#53932.
 53859	c22a06c180	Record bucketed terminal sizes in TUI telemetry (#53859)	TUI	16	
 53853	e342df7b66	Reuse staged file digests when preparing daemon installs (#53853)	other:app-server-daemon	3	
 53845	2f05c0a71f	Fix daemon updater socket binding and bootstrap readiness on Unix (#53845)	other:app-server-transport	6	
@@ -51,7 +51,7 @@ pr	sha	subject	lane_face	files	note
 53811	eb1d7065f8	Support daemon installation from Windows WinGet packages (#53811)	other:app-server-daemon	3	
 53805	ca2b076fff	Add safe diagnostics to workspace routing configuration errors (#53805)	pin-protocol	3	
 53804	923f276f57	Keep the Agent command center visible during archive and delete (#53804)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-53800	9e03960cf8	Wire background compaction into the turn lifecycle (#53800)	A-core	11	
+53800	9e03960cf8	Wire background compaction into the turn lifecycle (#53800)	A-core	11	TR-5 blocked_precondition on #53620 -> #53614 -> #53606: background compaction is not wired into the turn lifecycle in Go.
 53797	2b2d792305	Refresh Guardian reviews when review context changes (#53797)	guardian	2	
 53795	8af93416dd	Use the bundled model catalog in the MCP startup invalidation test (#53795)	A-core	1	
 53794	a373281e9e	Retain rollout migration locks across worker cancellation (#53794)	other:thread-store	3	
@@ -59,7 +59,7 @@ pr	sha	subject	lane_face	files	note
 53784	6786dccbe7	Forward client voice session IDs in realtime requests (#53784)	tests-only	19	
 53781	b56a579fc6	Remove the product-gating TODO from `SkillPolicy` (#53781)	other:skills	1	
 53780	8b507a8e45	Remove redundant Codex manual cache directory check (#53780)	other:skills	1	
-53763	20b4ff2f35	Enrich V2 capability discovery with resolved plugin and skill metadata (#53	exec	20	
+53763	20b4ff2f35	Enrich V2 capability discovery with resolved plugin and skill metadata (#53	exec	20	TR-5 blocked_precondition on #53723 (judged implementable in TR-3): discoverV2/DiscoverV2/capabilityDiscoveryV2 = 0 hits; it shares exec-server-protocol/src/capabilities.rs with #53723 so it must be rebased after it.
 53754	21c1616119	Support Command/Super shortcuts in the TUI keymap (#53754)	TUI	17	
 53753	3517671c60	Extend copy-on-select to composer text (#53753)	TUI	23	
 53751	e762c05bd6	Apply feature overrides when restarting the app-server daemon (#53751)	other:app-server-daemon	8	
@@ -77,18 +77,18 @@ pr	sha	subject	lane_face	files	note
 53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	TR-4 implementable: guardian-context/src/budget.rs estimate_input_tokens_from_serialized_len (12 bytes/token for ciphertext, ceil) plus estimate_compaction_content_length are absent (0 hits); Go approximates at appserver/guardian_reviewer.go:1370-1390 (its own comment admits it uses the summary bytes). 0 file overlap with the compaction chain, so it can run in parallel with #52937/#53932.
 53689	c03bbff483	Constrain API-key model access programs to server support (#53689)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	
+53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	TR-5 implementable but HELD: its Go face is appserver/turn_runtime.go + runtime_router.go + state/state.go and turn_runtime.go is currently owned by the pin lane (P-b10 false-fallback work) - re-dispatch only after P-b10 merges.
 53672	4c1cd8bbcc	Keep discovered Apps tools available during startup recovery (#53672)	B-mcp/sandbox	7	
-53670	816fa702ec	Account for token usage from incomplete responses (#53670)	A-core	12	
+53670	816fa702ec	Account for token usage from incomplete responses (#53670)	A-core	12	TR-5 implementable (smallest complete carrier): Go ResponseIncompleteError carries only Reason (model/responses_stream.go:1324) where Rust also carries response_id+usage; carriers present (ResponseIncomplete 25/7 files). Face: model/** + appserver/previous_model_compact.go (no overlap with the pin lane's analytics files). Dispatched to the new A-core lane.
 53660	73bbb654b3	Extract shared multi-agent v2 thread spawning (#53660)	A-core	3	
 53657	ab82af0b2c	Share hook configuration across cloned hook views (#53657)	other:hooks	4	
 53654	4e7ef7d19d	Keep spawned children provisional until the spawn result returns (#53654)	A-core	5	
 53633	90f00bd89e	Add an environment API key fallback for Guardian Decisions (#53633)	guardian	3	
 53622	b043762f9e	Preserve remote exec output until it is collected (#53622)	A-core	4	
-53620	9167a0b2d4	Reuse background results for remote V2 compaction (#53620)	A-core	7	
+53620	9167a0b2d4	Reuse background results for remote V2 compaction (#53620)	A-core	7	TR-5 blocked_precondition on #53614 -> #53606: CompactionInstallation = 0 hits. Shares 5 Rust files with #53800 (tightest pair in the family).
 53617	308ddf5e7c	Allow hiding native tools while retaining the multi-agent V2 runtime (#5361	A-core	8	
-53614	1a69ad3237	Add infrastructure for speculative remote V2 compaction (#53614)	A-core	6	
-53606	be5296d467	Prepare compaction helpers for background requests (#53606)	A-core	7	
+53614	1a69ad3237	Add infrastructure for speculative remote V2 compaction (#53614)	A-core	6	TR-5 blocked_precondition on #53606: Go has no AsyncCompaction/BackgroundCompaction/captureBackgroundInput/CompactionAttempt (0 hits); flag async_compaction registered but dead at features/features.go:351.
+53606	be5296d467	Prepare compaction helpers for background requests (#53606)	A-core	7	TR-5 implementable (chain head, pure preparatory refactor): Go isRealUserOrAgentMessage/CompactionPrefix/replaceCompactedHistory/currentWindowFromState/ResponsesHttpExecutor = 0 hits; half-carrier CompactedHistory 31 hits/10 files. #53614 -> #53620 -> #53800 all depend on it, so it goes first.
 53595	669449b02c	Add async compaction feature configuration (#53595)	config	7	
 53556	f82e365922	Deduplicate TUI modifier handling and terminal color caching (#53556)	TUI	3	
 53506	12cca49c81	Reject duplicate Host headers in the network proxy (#53506)	other:network-proxy	2	
