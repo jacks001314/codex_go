@@ -133,3 +133,23 @@ main = `757aba59`（已 push）。在跑 **7 条**：
    - Rust **配置默认** `DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS = 30_000`（`codex-rs/core/src/config/mod.rs:1204`，经 `description.rs:31` 的 `{{ default_exec_yield_time_ms }}` 渲染进 tool 描述）⇒ Go `tool/code_mode_exec.go:35` 的 30s 对齐，`code_mode_yield_default_like_rust_test.go:29` 已钉。
    - Rust `DEFAULT_EXEC_YIELD_TIME_MS = 10_000`（`codex-rs/code-mode-protocol/src/runtime.rs:15`）**只在 `description.rs` 的 `#[test]` 里当夹具**（`:756/:775/:834/:879/:986/:1026/:1071/:1088` 全在测试函数内）；用户可见的 "Defaults to 10000 ms." 是 **`wait` 工具的静态文案**（`description.rs:50`），Go 逐字镜像于 `tool/code_mode_exec.go:576`，并由 `:591` 只替换**第一处**。
    ⇒ 判 **无漂移，不要改**。教训：比对两个「同名近似」常量前，先确认各自消费者（配置路径 vs 协议夹具/静态文案）。
+### R5-sexies · 第 90 轮 turn#26 修订（2026-10-17，leader 实测）
+
+1. **R5-quater 的一处措辞被推翻**（P-b10 车道实测 + leader 复核）：原文说「车道台在 `dev\codex_go_wt\<name>`（两层）就 SKIP」——**不成立**。决定 RUN/SKIP 的是 **env 里的绝对路径**，不是台面层级：只要显式给全 5 个 env，任意层级的台面守卫都真 RUN（`=== RUN` 且 PASS）。⇒ 口径改为「**必须显式给全 5 env；给全后任意层级都真 RUN**」。否则车道为了凑「主工作区」把自己的改动挤出台面，反而测不到自己的改动。
+
+2. **新增已知 flake（Windows 清理竞态，勿判红线）**：`appserver` 整包可能报
+   `--- FAIL: TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust`，
+   全文只有 `testing.go:1464: TempDir RemoveAll cleanup: unlinkat ...\<dir>: The directory is not empty.` —— **无任何断言失败**。
+   实测：孤立 `-count=3`（合并树）全 PASS、`-count=5`（pristine `007ffa2f`）全 PASS。
+   ⇒ 判红前先看 FAIL 行是不是**只有 cleanup 文案**；是则判环境型，不计入新增失败。
+
+3. **「0 命中 ⇒ N/A」必须带时点**（TR-7 自纠，leader 采纳）：TR-7 在 `007ffa2f` 上判 `#52273` 未落地（`leader`/`tui_keymap` 0 命中、`keymap.go:37` 仍绑 `ctrl-x`）——证据全真、**结论全错**，因为落地物在下一笔 `f6bf18a2`。
+   ⇒ 跑 `git grep` 前先 `git log --oneline <base>..<真 tip>`；base 陈旧就按 tip 重跑，档案里的 0 命中必须同时写**时点 sha**。
+
+4. **资产类改动按路径判，不要按符号 grep**（TR-6 → TR-7 教训，已修）：`#53745`/`#53780` 曾被判 N/A（Rust 新符号 0 命中），实际 Go 仓**镜像了这些资产文件本身**，已实际落地（`007ffa2f`）。⇒ `assets/`、`scripts/`、`*.schema.json`、`*.snap` 一律先 `git ls-files -- '<同路径>'` 查载体。
+
+5. **平台专属 ≠ 可批量 N/A**（TR-6 纠正，leader 终裁）：`#[cfg(target_os)]` 的 MXC / Windows 沙箱系在 Go 侧**有真实后端本体**（`mxc` 413 / `bubblewrap` 55 / `seatbelt` 140 命中）。`#51841`/`#51840`/`#51831`/`#51828` 判 **R2/R3**；`#51835`/`#51812`（flag-only）判 **R2**（仅注册、消费者未接）。
+
+6. **账目时点（`f6bf18a2` 之后）**：账本 `update/r90_commit_ledger_2026_10_16.tsv` = **127 行**（表头 + 126 数据；`landed` 44）；底表 `update/r90_dispatch_queue_2026_10_17.tsv` = **218 行**（表头 + 217 数据）；两表 sha 交集 = **0**。本轮新入账 `#52937`/`#51828`/`#52273`（三条均已从底表删除）；`#53932` 记 `blocked_precondition`（`compaction_output` 在 `compact/**` 0 命中）；`#53723` 标 in-flight。
+
+7. **推送通道仍不可达**：`github.com:443` 连续 3 次 `Connection was reset` / `Failed to connect to github.com port 443`。本地 main = `f6bf18a2`，`origin/main` 仍 `fe19d8c5`。**未推送 ≠ 未落地**，但交付必须明写未推送。
