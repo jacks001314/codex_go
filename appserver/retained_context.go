@@ -695,7 +695,9 @@ func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverTh
 	}
 	fragment := state.GuardianSenderMessages{Source: sourceThreadID, Delivery: deliveryID}
 	if sourceThreadID != "" {
-		fragment.Messages = senderContextExchanges(r.retainedContextForThread(sourceThreadID))
+		context, fromStorage := r.senderContextEvidence(sourceThreadID)
+		fragment.FromStorage = fromStorage
+		fragment.Messages = senderContextExchanges(context)
 	}
 	snapshot := &retainedctx.SenderUserMessages{
 		ReceiverTurnID:    receiverTurnID,
@@ -704,6 +706,48 @@ func (r *RuntimeRouter) captureSenderUserMessages(item *session.Item, receiverTh
 	}
 	snapshot.Bound()
 	return snapshot, true
+}
+
+// senderContextEvidence resolves one delivery's sender evidence the way Rust's
+// `capture_sender_user_messages` does after #51734: a sender whose runtime this
+// host already loaded supplies its live retained context, while an unloaded
+// sender is read through the persisted thread store without being resumed, and
+// the evidence is labelled so the reviewer knows newer unpersisted messages may
+// be missing. Rust adopts a stored session only when its source is not internal
+// (`meta.source.is_internal()`), so an internal host session can never lend a
+// delegation its instructions.
+func (r *RuntimeRouter) senderContextEvidence(sourceThreadID string) (*retainedctx.RetainedContext, bool) {
+	if r == nil || strings.TrimSpace(sourceThreadID) == "" {
+		return nil, false
+	}
+	if r.threads.HasLiveThread(session.ThreadID(sourceThreadID)) {
+		return r.retainedContextForThread(sourceThreadID), false
+	}
+	record, err := r.threadRecord(session.ThreadID(sourceThreadID), true, false)
+	if err != nil || record == nil || senderSessionSourceIsInternal(record) {
+		return nil, false
+	}
+	return r.retainedContextForThread(sourceThreadID), true
+}
+
+// internalGuardianSessionSource is the guardian peer of
+// `internalMemorySessionSource` (memory_startup.go): Rust's
+// `InternalSessionSource::{MemoryConsolidation, Guardian}` are the two session
+// sources `SessionSource::is_internal` reports, and Go persists them in the
+// same display form.
+const internalGuardianSessionSource = "internal_guardian"
+
+// senderSessionSourceIsInternal mirrors Rust's `SessionSource::is_internal`
+// (`protocol/src/protocol.rs:3016`): only the host's internal sessions are
+// ineligible as sender evidence. A sub-agent thread is still an eligible
+// sender, so the check is exact rather than a prefix test.
+func senderSessionSourceIsInternal(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	source := strings.ToLower(strings.TrimSpace(record.Metadata.Source))
+	source = strings.NewReplacer("-", "_", ":", "_", "/", "_").Replace(source)
+	return source == internalMemorySessionSource || source == internalGuardianSessionSource
 }
 
 // senderDelegationSource extracts the source thread id from a
