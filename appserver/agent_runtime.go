@@ -337,6 +337,12 @@ type guardianReviewPlan struct {
 	// injects it as its own developer fragment only when the reviewed action
 	// qualifies.
 	NodeReplPolicy string
+	// CyberAccessProgram is the reviewed turn's explicit Cyber program after the
+	// reviewer's normalization (Rust guardian-reviewer
+	// settings::guardian_cyber_access_program, #52689): either Daybreak
+	// selection is reviewed as Blue and Standard is preserved, so the review
+	// request samples with the parent turn's selected program.
+	CyberAccessProgram string
 }
 
 // guardianReviewPlanForTurn mirrors Rust resolve_review_model: every review
@@ -379,10 +385,11 @@ func (r *RuntimeRouter) guardianReviewPlanForTurn(threadID, turnID string) guard
 		autoReview = &cloned
 	}
 	return guardianReviewPlan{
-		Selection:      selection,
-		AutoReview:     autoReview,
-		Instructions:   guardianReviewInstructions(cfg, autoReview),
-		NodeReplPolicy: guardianNodeReplPolicy(autoReview),
+		Selection:          selection,
+		AutoReview:         autoReview,
+		Instructions:       guardianReviewInstructions(cfg, autoReview),
+		NodeReplPolicy:     guardianNodeReplPolicy(autoReview),
+		CyberAccessProgram: model.GuardianCyberAccessProgram(active.RunConfig.CyberAccessProgram),
 	}
 }
 

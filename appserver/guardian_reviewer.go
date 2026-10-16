@@ -646,12 +646,16 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		InputItems:      inputItems,
 		Model:           plan.Selection.Model,
 		ReasoningEffort: plan.Selection.ReasoningEffort,
-		TaskKind:        model.AgentTaskReview,
-		ThreadID:        threadID,
-		TurnID:          turnID,
-		Originator:      "guardian",
-		OutputSchema:    guardianAssessmentOutputSchema(),
-		ClientMetadata:  r.reviewClientMetadata(threadID, turnID, targetItemID),
+		// Rust #52689 forwards the parent turn's Cyber program to the reviewer
+		// (turn_start_options.cyber_access_program), normalized to Blue for
+		// either Daybreak selection.
+		CyberAccessProgram: plan.CyberAccessProgram,
+		TaskKind:           model.AgentTaskReview,
+		ThreadID:           threadID,
+		TurnID:             turnID,
+		Originator:         "guardian",
+		OutputSchema:       guardianAssessmentOutputSchema(),
+		ClientMetadata:     r.reviewClientMetadata(threadID, turnID, targetItemID),
 	}
 	if r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)

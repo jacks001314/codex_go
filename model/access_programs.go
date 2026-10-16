@@ -114,3 +114,18 @@ func authHasChatGPTAccountForProgram(snapshot *auth.AuthDotJSON) bool {
 		return false
 	}
 }
+
+// GuardianCyberAccessProgram mirrors Rust
+// `guardian-reviewer::settings::guardian_cyber_access_program` (#52689): a
+// Guardian review keeps the reviewed turn's explicit Cyber program, but either
+// Daybreak selection is reviewed as Blue, while Standard (and no selection) are
+// preserved unchanged. `program.map(|p| match p { Standard => Standard,
+// DaybreakBlue | DaybreakRed => DaybreakBlue })`.
+func GuardianCyberAccessProgram(program string) string {
+	switch CyberAccessProgram(program) {
+	case CyberAccessProgramDaybreakBlue, CyberAccessProgramDaybreakRed:
+		return string(CyberAccessProgramDaybreakBlue)
+	default:
+		return program
+	}
+}
