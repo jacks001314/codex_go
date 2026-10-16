@@ -218,3 +218,13 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 4. **Linux 节点缺口**：无 powershell/jq；裸 curl 到 github/proxy.golang.org 超时（goproxy.cn 通、git-over-https 通）；`appserver` 整包需 5 个 `CODEX_RUST_*` env 指向 Linux 侧路径，否则成片 SKIP。
 5. 放置规则：Linux-only 门禁与实现（bubblewrap/landlock/symlink/NFS/loopback e2e/zsh-fork）放 Linux 节点；改同一批文件的车道仍留 Windows 节点。同一文件同一时刻只能一个写入者。
 6. **陈旧重放**：同一回包可能在多轮后重复投递（实测收到 7 小时前的 T2 回包，其 §8 警告的内容早已入库 `8e5a51f0`）。并入前先查当前 tip 是否已包含（`git log --oneline -1 -- <path>` / `git cat-file`），不要按陈旧回包重复派工。
+
+## R5-terdecies · push 后的跨节点同步广播（队长硬纪律，2026-10-17 立）
+
+1. 任何一次 `git push origin main` **成功后，同一 turn 内**必须向**每个其它节点**的在跑车道广播 sync 通知（`send_a2a_message`，`type=request`）。通知必须给：新 `origin/main` 的 **40 位 sha**、该节点**仓库绝对路径**、要求 `git -C <repo> fetch origin main`、以及"用新 sha **新建** worktree"；**禁止** `checkout`/`reset` 已在跑的台面。
+2. 车道回包必须含三项，缺一项即视为**未同步**：`git rev-parse origin/main` 实值、`git cat-file -t <新sha>`、`git rev-parse main`（是否与队长一致）。
+3. **直连不通时的替代通道（已实测可用）**：`git bundle create <p> <旧sha>..main`（**只打包增量**；实测 `3f3c44f7..89a19fb7` = 145,388 B）→ `git bundle verify` → 经 Master `project_file_sync` 落到 `update/r90_sync_<sha>.bundle` → 车道 `project_fetch` 后**先核 bundle 的 SHA-256**，再 `git fetch <bundle> <sha>:refs/heads/bundle-<sha>`，用该 sha 建台面。bundle 是**临时传输物**，远端 push 成功后即删。
+4. **push 的单一权威仍在队长**：车道**不得**自行 push，除非派工单显式授权且三条前置全部满足——`git cat-file -t <sha>` = `commit`；`git ls-remote origin main` 现值 == **预期旧 sha**；只允许 `git push origin <sha>:refs/heads/main`（快进，**禁 `--force`/`--mirror`**）。推完必须回报 `ls-remote` 现值。
+5. 通道可用性的**最小探针**（先跑再下结论，别猜）：Windows `Test-NetConnection github.com -Port 443`；Linux `timeout 10 bash -c "</dev/tcp/github.com/443"`；两平台都补 `git ls-remote origin main`。**DNS 能解析 != 通道可用**：本机实测 DNS 正常解析到 `20.205.243.166`，而 443 连续三次 False、`git ls-remote` 21s 超时（2026-10-17 06:5x）。
+6. 队长侧 push 失败时的纪律（沿用 R5-decies）：**失败即止、不在同 turn 重试**；如实记"本地已提交、远端落后 N 笔"，**不改写结论**；下一轮可再试一次，并同时启用 §3 的 bundle 通道保证其它节点不缺代码。
+7. **已完成同步的判定要看两侧**：远端 `origin/main` 与新 tip 一致 **且** 每个其它节点的车道回包三项齐全。只有前者不算同步完成（车道台面可能仍停在旧 sha）。
