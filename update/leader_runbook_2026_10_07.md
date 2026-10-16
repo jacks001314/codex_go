@@ -194,3 +194,11 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 
 - 夹带检查 24 项**零夹带**；字节一致性 A-b11/C-b10/AC-1/P-b11 **12/12 same=True**（T9 5 文件未覆盖，原因见上）；门禁 A/B 失败集合**逐名相同、新增失败 0**；appserver 整包 A 低负载复跑 **2437/2430/0/7 = ok**（高负载下那 1 条 `TestStdioServerGoalSetResponsePrecedesGoalNotification` 定位为环境型 flake：隔离 5× 及并发 150 次全绿）；6 组反例全部 “撚⇒FAIL⇒复原⇒PASS”。
 - **新开待办备选（RC-4c）**：`model/responses_stream.go` 的 `jsonNumberLiteral` 收尾守卫**承重但零 shipped 覆盖** —— 把它改成 `return true` 会让 V 自建探针红（带引号数字 / `null` 成员）而**同树 3 个 shipped 新用例仍绿**。建议补 2 个子用例：`quoted_budget_units`、`null_token_member`。
+
+
+## R5-decies · 推送纪律（用户指示，2026-10-17）
+
+1. **不要频繁 push**。攒批推送：**一次“并入选批”完成后再 push**，不要每个小改动/每个 commit 都推。
+2. 单次 push 失败（`Failed to connect` / `Connection was reset`）时：**记录现状就此打住**（本地 sha、`origin/main` sha、领先几个提交），**不要在同一 turn 内连续重试**。实测教训：上一轮我连试 5–6 次，第三次起就变成 `Connection was reset` —— 频繁重试会加剧故障。下一个并入选批后自然重试即可（当时一次成功）。
+3. 失败时**不改写交付结论**：如实写“本地已提交、远端落后 N 个提交、等通道恢复”，不能写成“已交付”也不能写成“交付失败”。
+4. 车道侧不变：R9 仍禁止车道 `commit/push/tag/stash`，所以推送节流只作用于队长。
