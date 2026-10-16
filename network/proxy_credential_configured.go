@@ -55,6 +55,9 @@ func ConfiguredCredentialProvider(id string, config CredentialProviderConfig) *P
 		InsertHeader: func(headers map[string][]string, value string) {
 			configuredInsertHeader(config, headers, value)
 		},
+		HeaderName: func() string {
+			return configuredHeaderName(config)
+		},
 	}
 	if config.URLPrefixFromEnv != nil {
 		provider.DestinationEnvKeys = []string{*config.URLPrefixFromEnv}

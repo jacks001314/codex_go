@@ -80,6 +80,12 @@ type ClientMetadataTransform func(map[string]string) map[string]string
 type WarningCallback func(message string)
 type TokenUsageCallback func(usage model.AgentUsage)
 
+// IncompleteResponseUsageCallback receives the usage a terminal incomplete
+// response reported (Rust #53670). The loop invokes it immediately before it
+// returns that response's terminal error, so the spend a response reported
+// before it stopped is still accounted for even though the turn fails.
+type IncompleteResponseUsageCallback func(usage model.AgentUsage)
+
 type AgentLoop struct {
 	agent                  model.AgentRunner
 	dispatcher             *ToolDispatcher
@@ -191,6 +197,13 @@ type AgentLoopRequest struct {
 	// Rust's `run_turn` placement: the step's world state is recorded first and
 	// the check runs immediately before inference.
 	PreSamplingValidation AgentPreSamplingValidation
+	// OnIncompleteResponseUsage receives the usage a terminal incomplete
+	// response reported, before the loop returns that response's error (Rust
+	// #53670 `Session::record_incomplete_response_usage`). The model layer
+	// only carries a usage the server actually reported, so the callback is
+	// skipped for a missing or malformed usage instead of charging an
+	// estimate made up from the partial response.
+	OnIncompleteResponseUsage IncompleteResponseUsageCallback
 }
 
 // AgentPreSamplingValidation is the pre-sampling gate of a turn, invoked with
@@ -465,6 +478,19 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		sampling.CloseAt(l.now())
 		if err != nil {
 			endSamplingRequestSpan()
+			// Rust #53670 (session/turn.rs `try_run_sampling_request`): a
+			// terminal incomplete response still reports the usage it consumed,
+			// and that usage is accounted for before the original error is
+			// returned - the error itself is never replaced. Rust charges an
+			// already-received terminal error even when cancellation raced it;
+			// the sampling call has already returned here, so the accounting
+			// below runs for whichever response failed the step.
+			if request.OnIncompleteResponseUsage != nil {
+				var incomplete model.ResponseIncompleteError
+				if errors.As(err, &incomplete) && incomplete.Usage != nil {
+					request.OnIncompleteResponseUsage(*incomplete.Usage)
+				}
+			}
 			return nil, err
 		}
 		if response.Preempted {

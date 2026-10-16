@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -55,6 +56,21 @@ type ProxyCredentialProvider struct {
 	RequestHeader      func(map[string][]string) (string, bool)
 	RequestHeaderValue func(string) (string, bool)
 	InsertHeader       func(map[string][]string, string)
+	// HeaderName reports the request header this provider injects credentials
+	// through, mirroring the header name Rust's
+	// BrokeredCredentialProvider::translate_request_headers resolves
+	// (network-proxy/src/credential_broker/registry.rs). It lets the broker
+	// compare a translated alias header against the headers injection would
+	// overwrite without mutating the request (#52661).
+	HeaderName func() string
+}
+
+// requestHeaderName is the nil-safe accessor for HeaderName.
+func (p *ProxyCredentialProvider) requestHeaderName() string {
+	if p == nil || p.HeaderName == nil {
+		return ""
+	}
+	return p.HeaderName()
 }
 
 // embeddedCredentialPattern pairs a configured pattern with whether it carries
@@ -374,12 +390,28 @@ func (b *ProxyCredentialBroker) InjectRequestHeadersForDestination(scheme string
 	if b == nil {
 		return
 	}
-	normalized := NormalizeProxyHost(host)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if !b.enabled {
 		return
 	}
+	credential := b.selectedCredentialLocked(scheme, host, port, path, headers)
+	if credential == nil {
+		return
+	}
+	headerValue, ok := credential.Provider.RequestHeaderValue(credential.RealValue)
+	if !ok {
+		return
+	}
+	credential.Provider.InsertHeader(headers, headerValue)
+}
+
+// matchingCredentialsLocked is the credential filter shared by injection and
+// the hooked-host alias check (#52661): credentials bound to the request host
+// whose configured provider authorizes the destination. Callers must hold at
+// least the read lock.
+func (b *ProxyCredentialBroker) matchingCredentialsLocked(scheme string, host string, port uint16, path string) []*ProxyCredentialRecord {
+	normalized := NormalizeProxyHost(host)
 	matching := make([]*ProxyCredentialRecord, 0)
 	for index := range b.credentials {
 		credential := &b.credentials[index]
@@ -391,15 +423,156 @@ func (b *ProxyCredentialBroker) InjectRequestHeadersForDestination(scheme string
 		}
 		matching = append(matching, credential)
 	}
-	credential := selectCredential(headers, matching)
-	if credential == nil {
-		return
+	return matching
+}
+
+// selectedCredentialLocked is the selection half of injection: the credential
+// the request's own dummy header selects, or nil when none or several match.
+// Callers must hold at least the read lock.
+func (b *ProxyCredentialBroker) selectedCredentialLocked(scheme string, host string, port uint16, path string, headers map[string][]string) *ProxyCredentialRecord {
+	return selectCredential(headers, b.matchingCredentialsLocked(scheme, host, port, path))
+}
+
+// RequestMatchesHookedHostAlias mirrors
+// CredentialBroker::request_matches_hooked_host_alias
+// (network-proxy/src/credential_broker.rs:1294-1360, #52661): a request whose
+// own host has no MITM hooks is still denied when the brokered credential
+// selected for its destination is also bound to a hooked host, because
+// replacing the dummy there would hand the real credential to a host whose hook
+// policy was never enforced. It uses the same destination parsing and
+// credential-selection rules as injection.
+//
+// Rust also filters by environment_id; a Go broker already belongs to a single
+// environment (ProxyServer.environmentID), so that filter has no counterpart
+// here.
+func (b *ProxyCredentialBroker) RequestMatchesHookedHostAlias(destination string, headers map[string][]string, hookedHosts []string) bool {
+	if b == nil {
+		return false
 	}
-	headerValue, ok := credential.Provider.RequestHeaderValue(credential.RealValue)
+	scheme, host, port, path, ok := ParseBrokerCredentialDestination(destination)
 	if !ok {
-		return
+		return false
 	}
-	credential.Provider.InsertHeader(headers, headerValue)
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if !b.enabled {
+		return false
+	}
+	matching := b.matchingCredentialsLocked(scheme, host, port, path)
+	selected := selectCredential(headers, matching)
+	if selected == nil {
+		return false
+	}
+	selectedHeader := selected.Provider.requestHeaderName()
+	if selectedHeader == "" {
+		return false
+	}
+	normalized := NormalizeProxyHost(host)
+	for _, credential := range matching {
+		if !credentialMatchesHookedHostname(credential, normalized, hookedHosts) {
+			continue
+		}
+		// Ambiguity removes the whole header, so every translation for a
+		// surviving header contributed through equivalent deduplication or
+		// Basic-field merging: the alias is only reachable when its dummy
+		// travels in a header that injection overwrites.
+		for _, candidate := range matching {
+			if !sameCredentialProvider(candidate.Provider, credential.Provider) {
+				continue
+			}
+			if candidate.RealValue != credential.RealValue {
+				continue
+			}
+			if candidate.Provider.requestHeaderName() == selectedHeader {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// credentialMatchesHookedHostname mirrors CredentialHostBinding::matches_hostname
+// (network-proxy/src/credential_broker/providers.rs:116-126, #52661): hooks
+// apply to the host regardless of each credential destination's port or path,
+// and a hooked host equal to the request host is handled by the ordinary hook
+// evaluation instead.
+func credentialMatchesHookedHostname(credential *ProxyCredentialRecord, normalizedHost string, hookedHosts []string) bool {
+	if credential == nil {
+		return false
+	}
+	for _, hookedHost := range hookedHosts {
+		if hookedHost == normalizedHost {
+			continue
+		}
+		if credential.matchesHostname(hookedHost) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesHostname mirrors CredentialHostBinding::matches_hostname (#52661):
+// configured providers match through their declared destinations, built-ins
+// through their credential host binding.
+func (r *ProxyCredentialRecord) matchesHostname(host string) bool {
+	if r == nil {
+		return false
+	}
+	if r.Provider != nil && len(r.Provider.Destinations) > 0 {
+		for _, destination := range r.Provider.Destinations {
+			if destination.MatchesHostname(host) {
+				return true
+			}
+		}
+		return false
+	}
+	return r.HostBinding.MatchesHost(host)
+}
+
+// sameCredentialProvider mirrors BrokeredCredentialProvider::same_provider: the
+// broker builds one provider instance per credential family, so identity is
+// pointer equality.
+func sameCredentialProvider(candidate *ProxyCredentialProvider, credential *ProxyCredentialProvider) bool {
+	return candidate != nil && candidate == credential
+}
+
+// ParseBrokerCredentialDestination parses the credential destination string the
+// proxy hands to the broker, mirroring the parsing Rust shares between
+// select_credentials and its alias check
+// (network-proxy/src/credential_broker/registry.rs:193-206, #52661): only a
+// scheme-qualified destination carries a request URL, a destination without an
+// authority is treated as a bare host, and an unparsable destination selects no
+// credentials at all.
+func ParseBrokerCredentialDestination(destination string) (scheme string, host string, port uint16, path string, ok bool) {
+	if !strings.Contains(destination, "://") {
+		return "", destination, 0, "", true
+	}
+	parsed, err := url.Parse(destination)
+	if err != nil || parsed.Host == "" {
+		return "", "", 0, "", false
+	}
+	scheme = strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", "", 0, "", false
+	}
+	host = NormalizeProxyHost(parsed.Hostname())
+	path = parsed.Path
+	if path == "" {
+		path = "/"
+	}
+	defaultPort := uint16(80)
+	if scheme == "https" {
+		defaultPort = 443
+	}
+	port = defaultPort
+	if raw := parsed.Port(); raw != "" {
+		parsedPort, parseErr := strconv.ParseUint(raw, 10, 16)
+		if parseErr != nil {
+			return "", "", 0, "", false
+		}
+		port = uint16(parsedPort)
+	}
+	return scheme, host, port, path, true
 }
 
 // authorizesDestination reports whether a provider may substitute credentials
@@ -818,6 +991,7 @@ var githubProvider = ProxyCredentialProvider{
 	RequestHeader:      authorizationHeader,
 	RequestHeaderValue: bearerHeaderValue,
 	InsertHeader:       insertAuthorizationHeader,
+	HeaderName:         authorizationHeaderName,
 }
 
 // providerEnvValue reads a provider environment key, comparing
@@ -873,6 +1047,7 @@ var openAIProvider = ProxyCredentialProvider{
 	RequestHeader:      authorizationHeader,
 	RequestHeaderValue: bearerHeaderValue,
 	InsertHeader:       insertAuthorizationHeader,
+	HeaderName:         authorizationHeaderName,
 }
 
 // openAIHostBinding mirrors Rust's openai_provider::host_binding: the default
@@ -938,6 +1113,13 @@ func bearerHeaderValue(value string) (string, bool) {
 
 func insertAuthorizationHeader(headers map[string][]string, value string) {
 	headers[textproto.CanonicalMIMEHeaderKey("authorization")] = []string{value}
+}
+
+// authorizationHeaderName reports the header the built-in providers inject
+// through, mirroring BrokeredCredentialProvider::translate_request_headers
+// (network-proxy/src/credential_broker/registry.rs).
+func authorizationHeaderName() string {
+	return textproto.CanonicalMIMEHeaderKey("authorization")
 }
 
 func githubCloudHost(host string) bool {

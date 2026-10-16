@@ -1068,24 +1068,40 @@ func (s *ProxyServer) handleHTTPRequest(request *http.Request, ctx *goproxy.Prox
 			return request, proxyBlockedHTTPResponse(request, reason)
 		}
 	}
+	scheme := "http"
 	if isMITM {
-		evaluation := EvaluateProxyMITMHooks(policy.mitmHooks, host, NewProxyHTTPRequestFromHTTP(request))
+		scheme = "https"
+	}
+	path := "/"
+	if request.URL != nil && request.URL.Path != "" {
+		path = request.URL.Path
+	}
+	injectCredentials := isMITM || policy.settings.DangerouslyAllowPlaintextCredentialInjection
+	var credentialDestinations []string
+	if injectCredentials {
+		credentialDestinations = append(credentialDestinations, proxyCredentialDestination(scheme, host, requestPort, path))
+		if !isMITM {
+			// Rust also scopes a host-level destination when unrestricted
+			// plaintext injection is enabled (http_proxy.rs:1010-1020).
+			credentialDestinations = append(credentialDestinations, NormalizeProxyHost(host))
+		}
+	}
+	// The hook policy is evaluated on the request as it arrived, before any
+	// brokered dummy credential is replaced: an unhooked provider alias bound to
+	// a hooked host must not receive the real credential (#52661,
+	// network-proxy/src/http_proxy.rs:910-975).
+	if isMITM || injectCredentials {
+		evaluation := evaluateProxyMITMHookRequest(policy.mitmHooks, policy.broker, host, NewProxyHTTPRequestFromHTTP(request), credentialDestinations)
 		switch evaluation.Kind {
 		case ProxyHookEvaluationHookedNoMatch:
 			return request, proxyBlockedHTTPResponse(request, ProxyReasonMITMHookDenied)
 		case ProxyHookEvaluationMatched:
-			applyProxyMITMHookActions(request.Header, evaluation.Actions)
+			if isMITM {
+				applyProxyMITMHookActions(request.Header, evaluation.Actions)
+			}
 		}
 	}
-	if isMITM || policy.settings.DangerouslyAllowPlaintextCredentialInjection {
-		scheme := "http"
-		if isMITM {
-			scheme = "https"
-		}
-		path := "/"
-		if request.URL != nil && request.URL.Path != "" {
-			path = request.URL.Path
-		}
+	if injectCredentials {
 		policy.broker.InjectRequestHeadersForDestination(scheme, host, requestPort, path, request.Header)
 	}
 	removeProxyHopByHopRequestHeaders(request.Header)
@@ -1118,6 +1134,32 @@ func proxyHTTPDestinationHost(request *http.Request) string {
 		return request.Host
 	}
 	return parts.Host
+}
+
+// proxyCredentialDestination mirrors the credential destination string Rust
+// builds for hook evaluation and injection (network-proxy/src/mitm.rs:80-90,
+// network-proxy/src/http_proxy.rs:1005-1029, #52661): scheme, authority with
+// the default port omitted, and the request path with a server-wide OPTIONS
+// target normalized to "/".
+func proxyCredentialDestination(scheme string, host string, port uint16, path string) string {
+	defaultPort := uint16(443)
+	if strings.EqualFold(scheme, "http") {
+		defaultPort = 80
+	}
+	authority := host
+	switch {
+	case strings.Contains(host, ":") && port == defaultPort:
+		authority = "[" + host + "]"
+	case strings.Contains(host, ":"):
+		authority = "[" + host + "]:" + strconv.Itoa(int(port))
+	case port == defaultPort:
+	default:
+		authority = host + ":" + strconv.Itoa(int(port))
+	}
+	if path == "" || path == "*" {
+		path = "/"
+	}
+	return scheme + "://" + authority + path
 }
 
 func proxyBlockedHTTPResponse(request *http.Request, reason string) *http.Response {

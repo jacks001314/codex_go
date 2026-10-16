@@ -49,9 +49,14 @@ type CredentialDestination struct {
 // MatchesHost mirrors CredentialDestination::matches_host: exact host (or a
 // scoped `*.` wildcard) at the same port.
 func (d CredentialDestination) MatchesHost(host string, port uint16) bool {
-	if d.Port != port {
-		return false
-	}
+	return d.Port == port && d.MatchesHostname(host)
+}
+
+// MatchesHostname mirrors CredentialDestination::matches_hostname (#52661,
+// network-proxy/src/credential_broker/destination.rs:118-131): the same
+// wildcard-aware host comparison without the port, because MITM hooks apply to
+// the host regardless of each credential destination's port or path.
+func (d CredentialDestination) MatchesHostname(host string) bool {
 	normalized := NormalizeProxyHost(host)
 	if d.Wildcard {
 		return strings.HasSuffix(normalized, "."+d.Host)

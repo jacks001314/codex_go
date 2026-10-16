@@ -1736,6 +1736,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnTokenUsage: func(usage model.AgentUsage) {
 			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
+		// Rust #53670: the usage a terminal incomplete response reported is
+		// charged to the cumulative total and to the shared rollout budget
+		// instead of being dropped with the error, while the context baseline
+		// stays put and the turn keeps failing with its own terminal error.
+		OnIncompleteResponseUsage: func(usage model.AgentUsage) {
+			r.recordIncompleteResponseUsage(threadID, turnID, runConfig.Model, params, usage)
+		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
 	// Rust #53452: the turn's task has finished, so its input admission closes
@@ -5480,6 +5487,101 @@ func (r *RuntimeRouter) persistCompactTokenStatus(threadID string, modelID strin
 		return nil, nil, err
 	}
 	return &status, info, nil
+}
+
+// recordIncompleteResponseUsage mirrors Rust #53670's
+// `Session::record_incomplete_response_usage` (core/src/session/mod.rs): the
+// usage a terminal incomplete response reported is charged to the thread's
+// cumulative total, to the shared rollout budget and to the token-usage
+// contributors, while the stored context baseline is deliberately left alone.
+// Counting the partial response as a new baseline would double-count its input
+// and trigger another compaction on the next turn.
+//
+// The budget result is swallowed on purpose, like the Rust caller's
+// `let _ = ...`: accounting that exhausts the budget must not replace the
+// terminal error the turn is already failing with.
+func (r *RuntimeRouter) recordIncompleteResponseUsage(threadID string, turnID string, modelID string, params *turn.TurnStartParams, usage model.AgentUsage) {
+	if r == nil {
+		return
+	}
+	total := r.accumulateSpendingOnlyTokenUsage(threadID, modelID, params, usage)
+	if total == nil {
+		return
+	}
+	// Rust's `record_token_usage_info` hands the freshly accumulated totals to
+	// the token-usage contributors.
+	if strings.TrimSpace(turnID) != "" {
+		r.recordGoalTokenUsageWithDescendants(threadID, turnID, *total)
+	}
+	if budget := r.rolloutBudgetForSession(); budget != nil {
+		// Per-response charging, mirroring Rust's `record_rollout_budget_usage`
+		// reached from `record_token_usage_info`.
+		r.rolloutBudgetCharged.Store(true)
+		exhausted, err := budget.RecordUsage(runtimeutil.TokenUsage{
+			InputTokens:             usage.InputTokens,
+			CachedInputTokens:       usage.CachedInputTokens,
+			OutputTokens:            usage.OutputTokens,
+			CodexRolloutBudgetUnits: usage.CodexRolloutBudgetUnits,
+		})
+		if err == nil && exhausted {
+			r.rolloutBudgetExhausted.Store(true)
+		}
+	}
+}
+
+// accumulateSpendingOnlyTokenUsage adds a reported usage to the thread's
+// cumulative total and returns the accumulated usage. It is Go's
+// `TokenUsageContext::SpendingOnly` arm of Rust's `record_token_usage_info`
+// (core/src/session/mod.rs): only `total_token_usage` moves, so the response is
+// charged without becoming the context baseline compaction is evaluated
+// against. `last_token_usage`, `auto_compact_window_prefill*` and
+// `model_context_window` keep their previous values.
+func (r *RuntimeRouter) accumulateSpendingOnlyTokenUsage(threadID string, modelID string, params *turn.TurnStartParams, usage model.AgentUsage) *model.AgentUsage {
+	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
+	if err != nil || record == nil {
+		return nil
+	}
+	extra := cloneAnyMap(record.Metadata.Extra)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	total := tokenUsageBreakdownFromMetadata(extra["total_token_usage"])
+	if total == nil {
+		total = &TokenUsageBreakdown{}
+	}
+	addAgentUsageToBreakdown(total, usage)
+	totalMap := tokenUsageBreakdownMetadataMap(total)
+	extra["total_token_usage"] = totalMap
+	info, _ := extra["token_usage_info"].(map[string]any)
+	info = cloneAnyMap(info)
+	if info == nil {
+		info = map[string]any{}
+		// A thread that never sampled carries no window yet; Rust seeds the
+		// fresh info with the turn's context window.
+		if window := r.effectiveModelContextWindowForModel(modelID, params); window > 0 {
+			extra["model_context_window"] = window
+		}
+	}
+	info["total_token_usage"] = totalMap
+	extra["token_usage_info"] = info
+	if runtimeRecordEphemeral(record) {
+		record.Metadata.Extra = extra
+		r.saveEphemeralThreadRecord(record)
+	} else if _, err := r.runtimeUpdateThreadMetadata(session.ThreadID(threadID), &session.MetadataPatch{Extra: extra}, true); err != nil {
+		return nil
+	}
+	accumulated := model.AgentUsage{
+		InputTokens:           total.InputTokens,
+		CachedInputTokens:     total.CachedInputTokens,
+		CacheWriteInputTokens: total.CacheWriteInputTokens,
+		OutputTokens:          total.OutputTokens,
+		ReasoningOutputTokens: total.ReasoningOutputTokens,
+		TotalTokens:           total.TotalTokens,
+	}
+	return &accumulated
 }
 
 func addAgentUsageToBreakdown(total *TokenUsageBreakdown, usage model.AgentUsage) {

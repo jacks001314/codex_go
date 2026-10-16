@@ -126,7 +126,6 @@ pr	sha	subject	lane_face	files	note
 52679	6e093c6081	Add timeout-aware exec-server configuration reads (#52679)	exec	5	
 52676	aab4f96148	Refresh persisted capability roots from owner-provided configuration (#5267	A-core	3	
 52671	04ad786998	Add retention annotations to submitted tool outputs (#52671)	pin-protocol	5	TR-4 implementable: protocol/src/turn_input.rs AnnotatedResponseItem{annotations: ResponseItemAnnotations{retain: bool}} plus core/src/session/turn_input.rs (+33/-6) - ResponseItemAnnotations/AnnotatedResponseItem/requestCompactionRetention all 0 hits in Go; carriers exist in retainedctx/**, appserver/turn_input_span.go, appserver/daemon_recovery_snapshot.go:117,139. Serial: #52671 -> #52686 (shared generated schema).
-52661	65b82cdf96	Prevent brokered credential aliases from bypassing MITM hooks (#52661)	other:network-proxy	10	
 52659	8a0437ff34	Add an opt-in feature for subagent model context defaults (#52659)	A-core	3	
 52652	89c8759d8c	Bound local exec-server output draining after process exit (#52652)	A-core	6	
 52648	d3f9b22b74	Limit daemon feature compatibility checks to explicit CLI overrides (#52648	TUI	6	

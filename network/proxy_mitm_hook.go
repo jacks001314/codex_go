@@ -257,6 +257,29 @@ func EvaluateProxyMITMHooks(hooksByHost ProxyMITMHooksByHost, host string, req P
 	return ProxyHookEvaluation{Kind: ProxyHookEvaluationHookedNoMatch}
 }
 
+// evaluateProxyMITMHookRequest mirrors
+// NetworkProxyState::evaluate_mitm_hook_request
+// (network-proxy/src/runtime.rs:982-1013, #52661): when the request host itself
+// has no hooks, a brokered credential alias bound to one of the configured
+// hooked hosts still yields HookedHostNoMatch, so the real credential is never
+// substituted for an unhooked alias.
+func evaluateProxyMITMHookRequest(hooksByHost ProxyMITMHooksByHost, broker *ProxyCredentialBroker, host string, req ProxyHTTPRequest, credentialDestinations []string) ProxyHookEvaluation {
+	evaluation := EvaluateProxyMITMHooks(hooksByHost, host, req)
+	if evaluation.Kind != ProxyHookEvaluationNoHooksForHost || len(hooksByHost) == 0 {
+		return evaluation
+	}
+	hookedHosts := make([]string, 0, len(hooksByHost))
+	for hookedHost := range hooksByHost {
+		hookedHosts = append(hookedHosts, hookedHost)
+	}
+	for _, destination := range credentialDestinations {
+		if broker.RequestMatchesHookedHostAlias(destination, req.Headers, hookedHosts) {
+			return ProxyHookEvaluation{Kind: ProxyHookEvaluationHookedNoMatch}
+		}
+	}
+	return evaluation
+}
+
 func NewProxyHTTPRequestFromHTTP(req *http.Request) ProxyHTTPRequest {
 	headers := map[string][]string{}
 	if req != nil {
