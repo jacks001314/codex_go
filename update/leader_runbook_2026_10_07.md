@@ -153,3 +153,30 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 6. **账目时点（`f6bf18a2` 之后）**：账本 `update/r90_commit_ledger_2026_10_16.tsv` = **127 行**（表头 + 126 数据；`landed` 44）；底表 `update/r90_dispatch_queue_2026_10_17.tsv` = **218 行**（表头 + 217 数据）；两表 sha 交集 = **0**。本轮新入账 `#52937`/`#51828`/`#52273`（三条均已从底表删除）；`#53932` 记 `blocked_precondition`（`compaction_output` 在 `compact/**` 0 命中）；`#53723` 标 in-flight。
 
 7. **推送通道仍不可达**：`github.com:443` 连续 3 次 `Connection was reset` / `Failed to connect to github.com port 443`。本地 main = `f6bf18a2`，`origin/main` 仍 `fe19d8c5`。**未推送 ≠ 未落地**，但交付必须明写未推送。
+### R5-septies · 第 90 轮 turn#27 修订（2026-10-17，leader 实测 + B-b10 / V-b10 回执）
+
+1. **夹带检查的基数必须取「真父」**：`git rev-list --parents -1 <sha>`（不要用更早的祖先）。
+   V-b10 实测：`38e21026` 的**唯一父是 `d74ead74`**，`3ad49960` 只是更早祖先；
+   用 `3ad49960` 当基数 ⇒ `git diff --stat` = 71 文件，会把其它车道已入库的提交**误报成夹带**。
+   同上：`f6bf18a2` 的父是 `007ffa2f`。
+
+2. **派工单里的 base sha 必须是「派工时刻的 tip」**。本轮我犯过一次：给 B-b10 写「`007ffa2f` 已含 B-b9 的 `sandbox/integrity/**`」，
+   但 B-b9 的入库点是**之后**才产生的 `f6bf18a2`（`git ls-tree 007ffa2f -- sandbox/integrity` = 0 文件，`f6bf18a2` = 5 文件）。
+   车道 B **没有擅自 rebase**、而是在回包里指出 ⇒ 正确行为，保留。
+   规则：能先 commit 就**先 commit 再派工**；不得不先派工时，必须写明「你的写面与即将落地的文件集不相交」，并在 base 一行注明"以我落地后的 tip 为准"。
+
+3. **设计类 N/A 要单列，不要混进"未落地缺口"**。B-b10 证明 Go 的 deny-glob 快照展开是**进程内走查、从不启 `rg`**
+   （`sandbox/linuxsandbox/linux.go:591/596`、`sandbox/windowssandbox/deny_read_resolver.go:136`，由
+   `sandbox/linuxsandbox/linux_test.go:142-148` 的注释冻结）⇒ 上游那族"显式环境扫描器入口"**永远不会有 Go 对应物**。
+   引入外部扫描器属**设计变更**，不是同步。登记见下表。
+
+4. **新建登记表：`update/r90_redundant_guards_2026_10_17.md`**（冗余实现 / 无效守卫 / 设计类 N/A）。
+   当前 4 条：RG-1 plugin merge 层策略空转 + 守合成输入的用例（只登记）；
+   RG-2 appserver 别名门控守卫有洞（已派修 P-b11）；RG-3 设计类扫描器系列；RG-4 方法类。
+   **新增规则的用途**：防止后续车道把空转代码当缺口去"补"，或把无效守卫当护栏去信任。
+
+5. **同一前置的 blocked 项应合并成一条 backlog**，不要按 PR 拆成 3 条永远读不完的"未决"。
+   B-b10 判定 `#51831`/`#51840`/`#51841`（+`#51842`）是**一整块**：必须先建 exec-server integrity 的
+   backend 接口 + 三适配器 + runner + telemetry 骨架；这与「不落骨架」裁决直接冲突 ⇒ 维持 blocked，
+   但按**一条**记账。附：整个 `sandbox_integrity` 家族在 pin `4eb4a65407` 就已存在 ⇒ 这是
+   「pin 内生产可达子系统 Go 侧无对应物」，**不是**上游新增漂移。
