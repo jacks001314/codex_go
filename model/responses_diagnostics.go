@@ -33,6 +33,13 @@ func responsesDiagnosticErrorKind(err error) string {
 	if errors.As(err, &responsesError) && responsesError != nil {
 		return fmt.Sprintf("http_%d", responsesError.StatusCode)
 	}
+	if IsResponseIncompleteError(err) {
+		// Rust #53451 records an incomplete response as its own sampler failure
+		// (the companion of `telemetry_api_error_message` reporting it as
+		// "incomplete response"), so the failure kind is named instead of
+		// falling through to the Go type name.
+		return "response_incomplete"
+	}
 	return fmt.Sprintf("%T", err)
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,6 +227,10 @@ func TestShouldRetryCompactionWithCurrentModelLikeRust(t *testing.T) {
 		{name: "context canceled", err: context.Canceled, previous: previous, current: current, auth: apiKeyAuth(), want: false},
 		{name: "wrapped cancellation", err: errors.Join(errors.New("compact failed"), context.Canceled), previous: previous, current: current, auth: apiKeyAuth(), want: false},
 		{name: "session budget exceeded", err: ErrSessionBudgetExceeded, previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		// Rust #53451: a response that hit its own limit is terminal, so
+		// compaction stops without falling back to the selected model.
+		{name: "incomplete response", err: model.ResponseIncompleteError{Reason: "max_output_tokens"}, previous: previous, current: current, auth: apiKeyAuth(), want: false},
+		{name: "wrapped incomplete response", err: fmt.Errorf("compact failed: %w", model.ResponseIncompleteError{Reason: "max_output_tokens"}), previous: previous, current: current, auth: apiKeyAuth(), want: false},
 		{name: "nil error", err: nil, previous: previous, current: current, auth: apiKeyAuth(), want: false},
 		{name: "same model and program", err: errors.New("server overloaded"), previous: previous, current: currentSamePair, auth: apiKeyAuth(), want: false},
 		{name: "same model with a changed program", err: errors.New("server overloaded"), previous: previous, current: func() compactionAttemptIdentity {

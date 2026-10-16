@@ -208,7 +208,12 @@ func (r *RuntimeRouter) shouldRetryCompactionWithCurrentModel(err error, previou
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBudgetExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, ErrSessionBudgetExceeded) ||
+		model.IsResponseIncompleteError(err) {
+		// Rust #53451 adds `CodexErrorDetails::ResponseIncomplete(_)` to the
+		// terminal arm beside `TurnAborted`, `Interrupted` and
+		// `SessionBudgetExceeded`: compaction stops instead of falling back to
+		// the selected model.
 		return false
 	}
 	if r == nil {

@@ -624,10 +624,14 @@ const senderContextMessageLimit = 3
 
 // senderContextDeliveryRecognized mirrors the namespace/name tuple Rust's
 // `capture_sender_user_messages` accepts: the Desktop and TUI delegation tool,
-// and the cloud-thread producer's compact delivery (#49951).
+// the Desktop `create_thread` delivery (Rust #54590), and the cloud-thread
+// producer's compact delivery (#49951).
 func senderContextDeliveryRecognized(namespace string, name string) bool {
 	switch strings.TrimSpace(namespace) {
-	case "codex_app", "codex_tui":
+	case "codex_app":
+		name = strings.TrimSpace(name)
+		return name == "send_message_to_thread" || name == "create_thread"
+	case "codex_tui":
 		return strings.TrimSpace(name) == "send_message_to_thread"
 	case "cloud_threads":
 		return strings.TrimSpace(name) == "send_message"

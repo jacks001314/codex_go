@@ -168,6 +168,24 @@ func (r *StateRuntime) ThreadHistoryMode(ctx context.Context, threadID string) (
 	return mode, true, nil
 }
 
+// threadHistoryItemsPageQuery mirrors Rust's thread-store `page_item_rows`
+// statement (thread_history/segment_paging.rs). Rust #54351 forces
+// `idx_thread_items_by_turn_page` for a turn-scoped item page: the thread-wide
+// `idx_thread_items_page` can scan earlier turns when a turn's final page is
+// underfilled, because the turn filter is only a post-filter on that index. The
+// hint applies exactly where Rust applies it - a turn-scoped page that carries
+// no item-id or updated-at anchor.
+func threadHistoryItemsPageQuery(turnScoped bool) string {
+	query := `
+SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
+FROM thread_items`
+	if turnScoped {
+		query += " INDEXED BY idx_thread_items_by_turn_page"
+	}
+	return query + `
+WHERE thread_id = ? AND rollout_ordinal >= ?`
+}
+
 func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params ThreadHistoryListItemsParams) (*ThreadHistoryItemsPage, error) {
 	lineage, db, err := r.prepareThreadHistoryRead(ctx, params.ThreadID, "list_items")
 	if err != nil {
@@ -194,10 +212,7 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 		if remaining <= 0 {
 			break
 		}
-		query := `
-SELECT turn_id, item_id, rollout_ordinal, updated_at_ordinal, created_at_ms, item_json
-FROM thread_items
-WHERE thread_id = ? AND rollout_ordinal >= ?`
+		query := threadHistoryItemsPageQuery(params.TurnID != nil)
 		args := []any{segment.segment.ThreadID, sqliteInt(segment.segment.Start)}
 		if segment.segment.End != nil {
 			query += ` AND rollout_ordinal < ?`

@@ -112,6 +112,15 @@ func TestRuntimeRouterCapturesSenderUserMessagesLikeRust(t *testing.T) {
 			wantSourc: "Source thread: " + string(sender) + "\n",
 		},
 		{
+			name:      "desktop create-thread delivery captures sender instructions",
+			receiver:  receiverApp,
+			namespace: "codex_app",
+			toolName:  "create_thread",
+			output:    indented,
+			wantLines: capturedLines,
+			wantSourc: "Source thread: " + string(sender) + "\n",
+		},
+		{
 			name:      "cloud-thread producer's compact envelope keeps provenance",
 			receiver:  receiverCloud,
 			namespace: "cloud_threads",
@@ -263,8 +272,10 @@ func TestRuntimeRouterSenderCaptureSharesExchangeBudgetLikeRust(t *testing.T) {
 	}
 }
 
-// A paired tool result and an unregistered tool name never capture, matching
-// Rust's destructuring (`call_id: None`, name/namespace match).
+// A paired tool result, an unregistered tool name and a namespace/name pair
+// Rust does not list never capture, matching Rust's destructuring (`call_id:
+// None`, name/namespace match). `create_thread` is registered for `codex_app`
+// only (Rust #54590), so the TUI namespace still rejects it.
 func TestRuntimeRouterSenderCaptureGatesLikeRust(t *testing.T) {
 	home := t.TempDir()
 	store := session.NewStore(home)
@@ -277,7 +288,8 @@ func TestRuntimeRouterSenderCaptureGatesLikeRust(t *testing.T) {
 	})
 	for _, item := range []session.Item{
 		{ID: "paired", Type: "function_call_output", CallID: "call-1", Name: "send_message_to_thread", Namespace: "codex_app", Text: "ok"},
-		{ID: "other-name", Type: "function_call_output", Name: "create_thread", Namespace: "codex_app", Text: "ok"},
+		{ID: "tui-create-thread", Type: "function_call_output", Name: "create_thread", Namespace: "codex_tui", Text: "ok"},
+		{ID: "other-name", Type: "function_call_output", Name: "fork_thread", Namespace: "codex_app", Text: "ok"},
 		{ID: "other-namespace", Type: "function_call_output", Name: "send_message_to_thread", Namespace: "untrusted", Text: "ok"},
 		{ID: "cloud-other-name", Type: "function_call_output", Name: "send_message_to_thread", Namespace: "cloud_threads", Text: "ok"},
 	} {

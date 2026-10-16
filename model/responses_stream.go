@@ -513,6 +513,12 @@ func isRetryableResponsesStreamError(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
+	if IsResponseIncompleteError(err) {
+		// Rust #53451: a response that hit a limit of its own (for example
+		// `max_output_tokens`) is terminal, so the stream must not spend a retry
+		// on it.
+		return false
+	}
 	var apiError *codexapi.APIError
 	if errors.As(err, &apiError) {
 		details := apiError.Details()
@@ -1309,11 +1315,35 @@ func isContentFilterStreamError(err error) bool {
 	return errors.As(err, &contentFilter)
 }
 
+// ResponseIncompleteError is the typed incomplete response Rust models as
+// `ApiError::ResponseIncomplete` / `CodexErrorDetails::ResponseIncomplete`
+// (#53451). It preserves the server-provided reason, stops stream processing
+// immediately, and is terminal: it neither spends the stream retry budget nor
+// lets compaction fall back to the selected model. Only the content-filter
+// reason keeps its own retryable type (Rust #49119).
+type ResponseIncompleteError struct {
+	Reason string
+}
+
+func (e ResponseIncompleteError) Error() string {
+	return "Incomplete response returned, reason: " + e.Reason
+}
+
+// IsResponseIncompleteError reports whether err is an incomplete response
+// (Rust's `CodexErrorDetails::ResponseIncomplete`), the terminal class
+// compaction must not retry with another model (Rust
+// `compact_model_fallback::should_retry_with_current_model`).
+func IsResponseIncompleteError(err error) bool {
+	var incomplete ResponseIncompleteError
+	return errors.As(err, &incomplete)
+}
+
 func responseIncompleteError(data []byte) error {
-	if responseIncompleteReason(data) == "content_filter" {
+	if reason := responseIncompleteReason(data); reason == "content_filter" {
 		return contentFilterStreamError{}
+	} else {
+		return ResponseIncompleteError{Reason: reason}
 	}
-	return fmt.Errorf("Incomplete response returned, reason: %s", responseIncompleteReason(data))
 }
 
 // responseIncompleteReason reports the response's incomplete reason, defaulting
