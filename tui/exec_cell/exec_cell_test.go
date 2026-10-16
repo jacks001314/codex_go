@@ -358,3 +358,92 @@ func TestExecCellDropsDisclosureHintWhenItDoesNotFitLikeRust(t *testing.T) {
 		t.Fatalf("narrow render lost the hidden-line count: %q", narrow)
 	}
 }
+
+// Mirrors Rust #54433: a nonzero exit is reported with the neutral compact
+// label and the red marker is gone, while a zero exit keeps the green marker
+// and the plain "Ran" label.
+func TestExecCellNonzeroExitUsesNeutralCompactLabelLikeRust(t *testing.T) {
+	const ansiRed = "\x1b[1;31m"
+	const ansiGreen = "\x1b[1;32m"
+
+	failed := NewExecCell(ExecCall{
+		CallID:  "call-1",
+		Command: []string{"bash", "-lc", "echo output"},
+		Output: &CommandOutput{
+			ExitCode:         1,
+			AggregatedOutput: "boom\n",
+			FormattedOutput:  "boom\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+
+	display := strings.Join(failed.DisplayLinesWithTheme(80, "dracula"), "\n")
+	clean := utils.StripANSI(display)
+	if !strings.Contains(clean, "Exited (status 1) echo output") {
+		t.Fatalf("nonzero exit label = %q, want the neutral status label", clean)
+	}
+	if strings.Contains(clean, "Failed (exit") {
+		t.Fatalf("nonzero exit still uses the old label: %q", clean)
+	}
+	if strings.Contains(display, ansiRed) {
+		t.Fatalf("nonzero exit marker kept the red styling: %q", display)
+	}
+
+	ok := NewExecCell(ExecCall{
+		CallID:  "call-2",
+		Command: []string{"bash", "-lc", "echo output"},
+		Output: &CommandOutput{
+			ExitCode:         0,
+			AggregatedOutput: "ok\n",
+			FormattedOutput:  "ok\n",
+		},
+		Source: ExecSourceAgent,
+	}, false)
+
+	okDisplay := strings.Join(ok.DisplayLinesWithTheme(80, "dracula"), "\n")
+	if !strings.Contains(utils.StripANSI(okDisplay), "Ran echo output") {
+		t.Fatalf("zero exit label changed: %q", okDisplay)
+	}
+	if !strings.Contains(okDisplay, ansiGreen) {
+		t.Fatalf("zero exit marker lost the green styling: %q", okDisplay)
+	}
+}
+
+// Mirrors Rust #54433: the compact exploration summary reports the neutral count
+// of nonzero exits (singular and plural) and keeps the header plus the shared
+// three-row detail budget.
+func TestExecCellExploringSummaryUsesNeutralNonzeroExitCountsLikeRust(t *testing.T) {
+	readCall := func(id string, code int) ExecCall {
+		return ExecCall{
+			CallID:  id,
+			Command: []string{"bash", "-lc", "cat " + id},
+			Parsed:  []ParsedCommand{{Kind: ParsedRead, Name: id + ".txt"}},
+			Output:  &CommandOutput{ExitCode: code},
+			Source:  ExecSourceAgent,
+		}
+	}
+
+	singular := strings.Join(ExecCell{Calls: []ExecCall{readCall("first", 1), readCall("second", 0)}}.DisplayLines(80), "\n")
+	if !strings.Contains(singular, "\u00b7 1 nonzero exit") {
+		t.Fatalf("singular nonzero exit summary = %q", singular)
+	}
+	if strings.Contains(singular, "nonzero exits") {
+		t.Fatalf("one nonzero exit must not render the plural label: %q", singular)
+	}
+	if strings.Contains(singular, "failed") {
+		t.Fatalf("exploration summary kept the old failure label: %q", singular)
+	}
+
+	plural := ExecCell{Calls: []ExecCall{readCall("a", 1), readCall("b", 1), readCall("c", 1), readCall("d", 1)}}
+	rows := plural.DisplayLines(80)
+	got := strings.Join(rows, "\n")
+	if !strings.Contains(got, "\u00b7 4 nonzero exits") {
+		t.Fatalf("plural nonzero exit summary = %q", got)
+	}
+	if len(rows) != tui.PreviewLines+1 {
+		t.Fatalf("exploration preview rows = %d, want %d (header plus the shared detail budget): %#v", len(rows), tui.PreviewLines+1, rows)
+	}
+	if !strings.HasPrefix(got, "\u2022 Explored \u00b7 4 nonzero exits") {
+		t.Fatalf("exploration header = %q, want the count appended to the header", strings.SplitN(got, "\n", 2)[0])
+	}
+}

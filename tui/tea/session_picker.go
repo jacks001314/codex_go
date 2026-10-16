@@ -427,6 +427,9 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 		status = "idle"
 	}
 	m.setStatus(status)
+	// Rust #54047: a replayed in-progress turn keeps the elapsed time it had
+	// already spent instead of resetting the Working timer to zero.
+	m.resetTaskTimerFromReplayedStart(response.WorkingTurnStartedAtMS)
 	// Rust #43921: restore the resumed turn's active reasoning heading.
 	m.resetReasoningSummaryHeader()
 	m.setWorkingStatusHeader(response.WorkingStatusHeader)

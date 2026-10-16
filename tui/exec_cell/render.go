@@ -20,7 +20,6 @@ const (
 	ansiBold                  = "\x1b[1m"
 	ansiDim                   = "\x1b[2m"
 	ansiGreenBold             = "\x1b[1;32m"
-	ansiRedBold               = "\x1b[1;31m"
 )
 
 type OutputLinesParams struct {
@@ -170,6 +169,25 @@ func (c ExecCell) exploringDisplayLines(width int) []string {
 			out = append(out, wrapped...)
 		}
 	}
+	// Rust #54433: the compact exploration summary counts the calls that exited
+	// nonzero with a neutral label, and the preview keeps the header plus the
+	// shared detail budget (Rust compact_hyperlink_lines).
+	if len(out) > 1+tui.PreviewLines {
+		out = out[:1+tui.PreviewLines]
+	}
+	nonzeroExits := 0
+	for _, call := range c.Calls {
+		if call.Output != nil && call.Output.ExitCode != 0 {
+			nonzeroExits++
+		}
+	}
+	if nonzeroExits > 0 {
+		label := "nonzero exits"
+		if nonzeroExits == 1 {
+			label = "nonzero exit"
+		}
+		out[0] += " · " + tui.FormatInt(int64(nonzeroExits)) + " " + label
+	}
 	return out
 }
 
@@ -191,12 +209,15 @@ func (c ExecCell) commandDisplayLinesStyled(width int, themeID string, styled bo
 func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, styled bool) []string {
 	width = max(width, 1)
 	success := call.Output != nil && call.Output.ExitCode == 0
-	failed := call.Output != nil && call.Output.ExitCode != 0
+	// Rust #54433: a nonzero exit is a neutral compact outcome, so the marker
+	// keeps bold without the red styling and the title reports the exit status
+	// instead of labelling the command as failed.
+	nonzeroExit := call.Output != nil && call.Output.ExitCode != 0
 	bullet := "•"
 	if styled {
 		switch {
-		case failed:
-			bullet = ansiWrap(ansiRedBold, bullet)
+		case nonzeroExit:
+			bullet = ansiWrap(ansiBold, bullet)
 		case success:
 			bullet = ansiWrap(ansiGreenBold, bullet)
 		default:
@@ -204,12 +225,13 @@ func commandCallDisplayLinesStyled(width int, call ExecCall, themeID string, sty
 		}
 	}
 	title := "Running"
-	if call.Output != nil {
-		if call.IsUserShellCommand() {
-			title = "You ran"
-		} else {
-			title = "Ran"
-		}
+	switch {
+	case nonzeroExit:
+		title = "Exited (status " + tui.FormatInt(int64(call.Output.ExitCode)) + ")"
+	case call.Output != nil && call.IsUserShellCommand():
+		title = "You ran"
+	case call.Output != nil:
+		title = "Ran"
 	}
 	cmdDisplay := StripShellCommand(call.Command)
 	if call.IsUnifiedExecInteraction() {

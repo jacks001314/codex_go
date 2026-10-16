@@ -2459,7 +2459,9 @@ func TestModelFailsRunningToolCellsAndClearsUnconfirmedThread(t *testing.T) {
 		t.Fatalf("Status = %q, want error", state.Status)
 	}
 	view := model.View()
-	for _, want := range []string{"Ran pwd", "Error: network boom"} {
+	// Rust #54433: a nonzero exit renders as the neutral `Exited (status N)` label
+	// instead of `Ran <cmd>`, so a failed tool cell must not read as a clean run.
+	for _, want := range []string{"Exited (status 1) pwd", "Error: network boom"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("View() missing %q:\n%s", want, view)
 		}
@@ -8942,7 +8944,8 @@ func TestModelCommandActivityKeepsFailuresVisible(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ItemCompleted(commandExecutionItemWithSource("call-broken", "printf broken", "broken\n", &exit1, "failed", "agent"))})
 
 	view := utils.StripANSI(model.View())
-	if !strings.Contains(view, "Ran printf broken") {
+	// Rust #54433: the failed command keeps its own cell, labelled `Exited (status 1)`.
+	if !strings.Contains(view, "Exited (status 1) printf broken") {
 		t.Fatalf("failed command must stay visible:\n%s", view)
 	}
 	if strings.Contains(view, "Running printf broken") {

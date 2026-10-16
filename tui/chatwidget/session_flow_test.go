@@ -134,3 +134,48 @@ func TestSessionFlowInitialMessageSuppressionAndSandboxGateMatchRust(t *testing.
 		t.Fatalf("initial prompt should submit after suppression clears")
 	}
 }
+
+// TestSessionFlowDaybreakNoticeFollowsSessionHeaderLikeRust covers Rust #54097
+// (chatwidget/session_flow.rs:232-238): the "Daybreak is on for new turns."
+// notice is emitted after the placeholder session header is replaced or
+// removed, is gated by the cli_daybreak feature and the session preference, and
+// only fires for a thread change.
+func TestSessionFlowDaybreakNoticeFollowsSessionHeaderLikeRust(t *testing.T) {
+	// Normal display: the header is (re)placed and the notice follows it.
+	state := SessionFlowState{ThreadID: "thread-1", CLIDaybreakEnabled: true}
+	result := state.ConfigureSession(ThreadSessionSnapshot{ThreadID: "thread-2", DaybreakEnabled: true}, SessionConfiguredDisplayNormal)
+	if !result.ShowSessionHeader || !result.EmitDaybreakNotice || result.DaybreakNotice != DaybreakNewTurnsNotice {
+		t.Fatalf("normal daybreak result = %#v", result)
+	}
+	if !state.DaybreakEnabled {
+		t.Fatalf("state daybreak = %v, want true", state.DaybreakEnabled)
+	}
+
+	// Quiet display removes the active header first; the notice still follows
+	// the header decision instead of being emitted before it.
+	state.ActiveSessionHeader = true
+	quiet := state.ConfigureSession(ThreadSessionSnapshot{ThreadID: "thread-3", DaybreakEnabled: true}, SessionConfiguredDisplayQuiet)
+	if quiet.ShowSessionHeader || !quiet.ClearActiveSessionHeader || !quiet.EmitDaybreakNotice {
+		t.Fatalf("quiet daybreak result = %#v", quiet)
+	}
+
+	// An unchanged thread keeps its Daybreak state but must not re-announce it.
+	same := state.ConfigureSession(ThreadSessionSnapshot{ThreadID: "thread-3", DaybreakEnabled: true}, SessionConfiguredDisplayNormal)
+	if same.EmitDaybreakNotice || same.DaybreakNotice != "" {
+		t.Fatalf("unchanged-thread result = %#v", same)
+	}
+
+	// Side conversations never keep Daybreak on.
+	state.ActiveSessionHeader = true
+	side := state.ConfigureSession(ThreadSessionSnapshot{ThreadID: "thread-4", DaybreakEnabled: true}, SessionConfiguredDisplaySideConversation)
+	if side.EmitDaybreakNotice || state.DaybreakEnabled {
+		t.Fatalf("side daybreak result = %#v state=%v", side, state.DaybreakEnabled)
+	}
+
+	// The cli_daybreak feature gate turns the notice off.
+	gated := SessionFlowState{ThreadID: "thread-5"}
+	gatedResult := gated.ConfigureSession(ThreadSessionSnapshot{ThreadID: "thread-6", DaybreakEnabled: true}, SessionConfiguredDisplayNormal)
+	if gatedResult.EmitDaybreakNotice || gated.DaybreakEnabled {
+		t.Fatalf("feature-gated result = %#v", gatedResult)
+	}
+}

@@ -197,6 +197,10 @@ type SessionResumeResponse struct {
 	// CompletedTurns seeds the automatic-recap accounting for the resumed thread
 	// (Rust RecapState::seed_from_turns).
 	CompletedTurns int
+	// WorkingTurnStartedAtMS restores the Working timer of a replayed in-progress
+	// turn so the elapsed time already spent is kept (Rust #54047
+	// ChatWidget::on_replayed_task_started). Nil keeps the zero-time fallback.
+	WorkingTurnStartedAtMS *int64
 }
 
 type AgentThreadReaderFunc func(currentThreadID string) ([]codextui.AgentThreadEntry, error)
@@ -4625,6 +4629,22 @@ func (m *Model) setStatus(status string) {
 	m.syncTaskRunningTimer()
 }
 
+// resetTaskTimerFromReplayedStart mirrors Rust ChatWidget::on_replayed_task_started
+// (#54047, chatwidget/turn_runtime.rs:114-124): a replayed in-progress turn
+// keeps the time it has already spent, so the status timer is moved back to the
+// turn's `started_at`. A missing timestamp keeps the zero-time fallback and a
+// future timestamp clamps to zero elapsed time (Rust's saturating_sub).
+func (m *Model) resetTaskTimerFromReplayedStart(startedAtMS *int64) {
+	if m == nil || startedAtMS == nil || *startedAtMS <= 0 {
+		return
+	}
+	started := time.UnixMilli(*startedAtMS)
+	if now := m.currentTime(); started.After(now) {
+		started = now
+	}
+	m.taskStartedAt = started
+}
+
 func (m *Model) syncTaskRunningTimer() {
 	if m == nil {
 		return
@@ -4974,6 +4994,10 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
 		}
 		m.setStatus("running")
+		// Rust #54047: a replayed in-progress turn restores its elapsed time, so
+		// the timer starts at the turn's `started_at` instead of zero. A live
+		// turn/started carries no timestamp and keeps the zero-time fallback.
+		m.resetTaskTimerFromReplayedStart(event.StartedAtMS)
 		// Rust warning_display_state.startup_complete: after the first turn the
 		// startup window is over, so later diagnostics use the warning path.
 		m.startupWarningsComplete = true

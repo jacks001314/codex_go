@@ -35,6 +35,9 @@ type ThreadSessionSnapshot struct {
 	ApprovalsReviewer       string
 	Personality             string
 	InstructionSourcePaths  []string
+	// DaybreakEnabled is the thread's persisted Daybreak preference
+	// (Rust `session.daybreak_enabled`; see #54097).
+	DaybreakEnabled bool
 }
 
 type SessionConfiguredResult struct {
@@ -56,7 +59,14 @@ type SessionConfiguredResult struct {
 	SubmitInitialMessage       bool
 	EmitForkEvent              bool
 	ForkEventLine              string
-	RequestRedraw              bool
+	// EmitDaybreakNotice mirrors Rust #54097: the Daybreak notice is emitted
+	// *after* the placeholder session header is replaced or removed, so a
+	// consumer must apply it after ShowSessionHeader /
+	// ClearActiveSessionHeader.
+	EmitDaybreakNotice bool
+	// DaybreakNotice is the info message to emit when EmitDaybreakNotice is set.
+	DaybreakNotice string
+	RequestRedraw  bool
 }
 
 type ThreadNameUpdateResult struct {
@@ -97,9 +107,20 @@ type SessionFlowState struct {
 	ElevatedWindowsSandboxSetupRequired bool
 	ShowWelcomeBanner                   bool
 	ConnectorsEnabled                   bool
-	SuppressConfiguredRedraw            bool
-	RecentAutoReviewDenialsResetCount   int
+	// CLIDaybreakEnabled is the `Feature::CliDaybreak` gate Rust reads from
+	// `config.features` when it re-derives `self.daybreak_enabled` (#54097).
+	CLIDaybreakEnabled bool
+	// DaybreakEnabled mirrors Rust `ChatWidget::daybreak_enabled` after
+	// ConfigureSession re-derives it from the session preference (#54097).
+	DaybreakEnabled                   bool
+	SuppressConfiguredRedraw          bool
+	RecentAutoReviewDenialsResetCount int
 }
+
+// DaybreakNewTurnsNotice is the info message Rust emits when a thread with
+// Daybreak enabled replaces the session header (Rust #54097;
+// chatwidget/session_flow.rs:236-238).
+const DaybreakNewTurnsNotice = "Daybreak is on for new turns."
 
 func (s *SessionFlowState) Configure(threadID string) {
 	if s == nil {
@@ -142,6 +163,11 @@ func (s *SessionFlowState) ConfigureSession(session ThreadSessionSnapshot, displ
 	s.Personality = session.Personality
 	s.InstructionSourcePaths = append([]string(nil), session.InstructionSourcePaths...)
 	s.QueueSubmissions = false
+	// Rust session_flow.rs:76-78 re-derives the thread's Daybreak state from
+	// the cli_daybreak feature, the session preference and the display: a side
+	// conversation never keeps Daybreak on.
+	s.DaybreakEnabled = s.CLIDaybreakEnabled && session.DaybreakEnabled &&
+		display != SessionConfiguredDisplaySideConversation
 	if threadChanged {
 		s.RecentAutoReviewDenialsResetCount++
 	}
@@ -170,6 +196,12 @@ func (s *SessionFlowState) ConfigureSession(session ThreadSessionSnapshot, displ
 		SubmitInitialMessage:       submitInitial,
 		EmitForkEvent:              emitFork,
 		RequestRedraw:              !s.SuppressConfiguredRedraw,
+	}
+	// Rust #54097: the notice is emitted after the session header is replaced or
+	// removed, so it is produced only once the header decision above is known.
+	if s.DaybreakEnabled && threadChanged {
+		result.EmitDaybreakNotice = true
+		result.DaybreakNotice = DaybreakNewTurnsNotice
 	}
 	if emitFork {
 		result.ForkEventLine = ForkedThreadEventLine(session.ForkedFromID, session.ForkParentTitle)
