@@ -370,8 +370,25 @@ func sideConversationCommandAllowed(command codextui.Command) bool {
 	}
 }
 
+// rustSlashCommandOrder is the upstream popup presentation order: the order of the
+// SlashCommand enum in codex-rs/tui/src/slash_command.rs:12-89, which is
+// deliberately not alphabetical (upstream: "DO NOT ALPHA-SORT! Enum order is
+// presentation order in the popup"). BuiltinsForInput walks this table and skips
+// any name that has no Go frame, so an entry whose carrier is still missing is
+// inert; those names are recorded in rustSlashCommandsWithoutFrame below.
+//
+// Drift kept on purpose (update/r90tui_2026_10_16.md section T5 D-1): upstream
+// canonicalizes this slot as "agents" (SlashCommand::Agents, description "open
+// the agent command center") and Go routes /agents to codextui.CommandAgents in
+// tui/state.go:1076, but the Go popup still ships the legacy "agent" frame (no
+// upstream counterpart: SlashCommand has no "agent" spelling) and has no
+// "agents" frame at all. The legacy name stays at the upstream position so the
+// remaining ordering is aligned; renaming it moves the popup and dispatch
+// surface, so it is reported for the leader instead of changed here.
 var rustSlashCommandOrder = []string{
 	"model",
+	"presets",
+	"daybreak",
 	"ide",
 	"permissions",
 	"keymap",
@@ -390,20 +407,29 @@ var rustSlashCommandOrder = []string{
 	"delete",
 	"resume",
 	"fork",
+	"worktree",
 	"app",
 	"init",
 	"compact",
+	"config",
+	"recap",
 	"plan",
+	"voice",
 	"goal",
 	"agent",
 	"side",
 	"btw",
 	"copy",
+	"export",
 	"raw",
+	"tui",
 	"diff",
 	"mention",
 	"status",
+	"daemon",
 	"warnings",
+	"cd",
+	"pwd",
 	"usage",
 	"debug-config",
 	"title",
@@ -427,6 +453,17 @@ var rustSlashCommandOrder = []string{
 	"debug-m-update",
 }
 
+// rustSlashCommandsWithoutFrame lists the upstream commands that appear in
+// rustSlashCommandOrder without a Go carrier: the popup omits them until a frame
+// exists. They are new subsystems, tracked as round-90 立项 candidates and not
+// started, so adding a frame is what removes an entry here.
+var rustSlashCommandsWithoutFrame = map[string]bool{
+	"presets":  true, // SlashCommand::Presets, upstream #54380 (/presets)
+	"daybreak": true, // SlashCommand::Daybreak
+	"config":   true, // SlashCommand::Config
+	"tui":      true, // SlashCommand::Tui
+}
+
 var rustSlashCommandDescriptions = map[string]string{
 	"model":                 "choose what model and reasoning effort to use",
 	"ide":                   "include current selection, open files, and other context from your IDE",
@@ -443,11 +480,11 @@ var rustSlashCommandDescriptions = map[string]string{
 	"review":                "review my current changes and find issues",
 	"rename":                "rename the current thread",
 	"new":                   "start a new chat during a conversation",
-	"archive":               "archive this session and exit",
-	"delete":                "permanently delete this session and exit",
+	"archive":               "archive this session",
+	"delete":                "permanently delete this session",
 	"resume":                "resume a saved chat",
 	"fork":                  "fork the current chat",
-	"app":                   "continue this session in Codex Desktop",
+	"app":                   "continue this session in the Desktop app",
 	"init":                  "create an AGENTS.md file with instructions for Codex",
 	"compact":               "summarize conversation to prevent hitting the context limit",
 	"plan":                  "switch to Plan mode",
@@ -455,7 +492,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"agent":                 "switch the active agent thread",
 	"side":                  "start a side conversation in an ephemeral fork",
 	"btw":                   "start a side conversation in an ephemeral fork",
-	"copy":                  "copy last response as markdown",
+	"copy":                  "copy the last response or part of it",
 	"raw":                   "toggle raw scrollback mode for copy-friendly terminal selection",
 	"diff":                  "show git diff (including untracked files)",
 	"mention":               "mention a file",
@@ -467,7 +504,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"statusline":            "configure which items appear in the status line",
 	"theme":                 "choose a syntax highlighting theme",
 	"pets":                  "choose or hide the terminal pet",
-	"mcp":                   "list configured MCP tools; use /mcp verbose for details",
+	"mcp":                   "list MCP tools; use /mcp verbose or /mcp login <name>",
 	"apps":                  "manage apps",
 	"plugins":               "browse plugins",
 	"logout":                "log out of Codex",
@@ -479,7 +516,7 @@ var rustSlashCommandDescriptions = map[string]string{
 	"stop":                  "stop all background terminals",
 	"clear":                 "clear the terminal and start a new chat",
 	"test-approval":         "test approval request",
-	"subagents":             "switch the active agent thread",
+	"subagents":             "switch between this session's subagents",
 	"debug-m-drop":          "DO NOT USE",
 	"debug-m-update":        "DO NOT USE",
 }

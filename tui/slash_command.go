@@ -71,7 +71,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 		{Name: "import", Command: CommandImport, Description: "import setup, this project, and recent chats from Claude Code"},
 		{Name: "setup-default-sandbox", Command: CommandElevateSandbox, Description: "set up elevated agent sandbox"},
 		{Name: "rollout", Command: CommandRollout, Description: "print the rollout file path"},
-		{Name: "voice", Command: CommandVoice, Description: "start or stop a voice conversation; /voice mute toggles the microphone"},
+		{Name: "voice", Command: CommandVoice, Description: "start or stop voice; use /voice settings to choose a voice"},
 		{Name: "test-approval", Command: CommandTestApproval, Description: "debug approval flow"},
 		{Name: "debug-m-drop", Command: CommandMemoryDrop, Description: "debug memory drop"},
 		{Name: "debug-m-update", Command: CommandMemoryUpdate, Description: "debug memory update"},
