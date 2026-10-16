@@ -2235,14 +2235,22 @@ func threadForkSourceID(params *ThreadForkParams) (session.ThreadID, error) {
 	}
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		path := strings.TrimSpace(*params.Path)
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", err
+		// Rust resolves a requested rollout path to whichever representation currently
+		// exists before it derives the source thread
+		// (thread-store/src/local/read_thread.rs:202-263 `resolve_requested_rollout_path`,
+		// #54008), so a fork requested through the logical `.jsonl` path a client got
+		// from thread/list keeps working after startup compression replaced that file
+		// with its `.zst` sibling.
+		resolved, ok := rollout.ExistingRolloutPath(path)
+		if !ok {
+			// Rust inspects the requested metadata before resolving, so a directory keeps
+			// reporting the directory error instead of a resolution miss.
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				return "", fmt.Errorf("%w: path is a directory: %s", ErrInvalidRequest, path)
+			}
+			return "", fmt.Errorf("%w: failed to resolve rollout path `%s`: file does not exist", ErrInvalidRequest, path)
 		}
-		if info.IsDir() {
-			return "", fmt.Errorf("%w: path is a directory: %s", ErrInvalidRequest, path)
-		}
-		threadID, err := rollout.ThreadIDFromPath(path)
+		threadID, err := rollout.ThreadIDFromPath(resolved)
 		if err != nil {
 			return "", err
 		}

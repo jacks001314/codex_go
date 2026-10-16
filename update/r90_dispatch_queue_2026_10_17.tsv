@@ -1,7 +1,7 @@
 pr	sha	subject	lane_face	files	note
 54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	TR-5 blocked_precondition on #54309: __CODEX_SHELL_SNAPSHOT_CONFIGURED_/supportsCredentialSnapshot/restoreFallback/credential_snapshot = 0 hits.
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
-54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	
+54401	97ebf2d94d	Run managed daemon processes at background priority on macOS (#54401)	other:app-server-daemon	7	| TR-11 @e327426f: implementable, anchor medium.
 54388	f847a4bd3c	Add quick dial presets for terminal title and status line layouts (#54388)	TUI	4	| TR-9 @7786dc34: sha10 f847a4bd3c, judged implementable (R2). quick_dials / QuickDials / terminalTitlePreset / statusLinePreset are all 0 hits, hence same family as #54379 and the blocked #54380 chain.
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54315	86ee40c380	Keep TUI Markdown colors readable against their backgrounds (#54315)	TUI	20	
@@ -10,13 +10,13 @@ pr	sha	subject	lane_face	files	note
 54264	b687844674	Track Guardian transcript admission across failed reviews (#54264)	guardian	5	
 54263	4b9c24f98c	Require fresh Guardian approval for escalated tool retries (#54263)	A-core	1	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 54216	dffa0deb69	Show image previews in the fullscreen transcript (#54216)	TUI	24	
-54170	160b2b1ef6	Preserve ChatGPT authentication for Gov MCP servers (#54170)	B-mcp/sandbox	3	
+54170	160b2b1ef6	Preserve ChatGPT authentication for Gov MCP servers (#54170)	B-mcp/sandbox	3	| TR-11 @e327426f: implementable, anchor medium.
 54151	ac9db7d8b5	Generate keymap descriptors and binding accessors from one catalog (#54151)	TUI	1	
 54135	4ca84a1069	Allow large file writes over direct exec-server WebSockets (#54135)	exec	3	
 54119	d292f72124	Allow stdin review under active grants with sandbox prompts disabled (#5411	A-core	3	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 54114	dec54912f9	Report terminal completion states and blocking reasons (#54114)	TUI	20	
 54099	1ffa95ee8a	Wait for readiness in the SIGTERM cancellation test (#54099)	exec	1	
-54094	12fd621f62	Preserve specific MCP failure codes in metrics and spans (#54094)	B-mcp/sandbox	9	
+54094	12fd621f62	Preserve specific MCP failure codes in metrics and spans (#54094)	B-mcp/sandbox	9	| TR-11 @e327426f: implementable, anchor medium.
 54081	01ff831ce9	Centralize vertical navigation in TUI list views (#54081)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 54070	ae11049397	Expose gateway authentication as a reusable OAuth session API (#54070)	other:login	9	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 54059	b7ba02f880	Support store-owned preparation when resuming threads (#54059)	A-core	11	
@@ -25,7 +25,7 @@ pr	sha	subject	lane_face	files	note
 54050	9671d20fc8	Scope TUI skill refreshes and workspace commands to explicit directories (#	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 54048	534c70863c	Defer folder trust checks until starting a task from agents overview (#5404	TUI	6	
 54033	c0cfbfbb98	Extend memory extension resource retention to 14 days (#54033)	other:memories	3	TR-2 implementable: memories/extensions.go:11 retention 7 -> 14 with the fixture dates shifted 7 days like the upstream test
-54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
+54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1). | C-b12 @63e3e264: judged blocked_precondition - the <=8 bound already holds trivially in Go (measured peak in-flight = 1, the collector is serial), but the bounded-parallel shape and the single-file failure SKIP have no carrier outside tui/get_git_diff.go, which was outside the write face. Lead decision: (A) narrowly authorized - that one file plus its test, both halves, with an RC proving peak > 8 when the bound is removed.
 54027	81aee8c86b	Preserve Windows startup variables and MXC child environment defaults (#540	other:mxc-sandbox	6	
 53990	0b73618146	Keep host MCP and plugin configuration local with remote environments (#539	A-core	9	
 53987	835cd7552d	Skip service backoff for stale Guardian authorization retries (#53987)	guardian	2	
@@ -36,11 +36,10 @@ pr	sha	subject	lane_face	files	note
 53879	7eed30ad1b	Preserve running turn recovery across thread settings updates (#53879)	A-core	7	
 53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	TR-5 implementable and the most complete carrier in the family (BaseInstructions 240 hits/29 files, WorldState 310/26, IncrementalTools 28/8). HELD because it edits core/src/compact.rs, i.e. Go compact/**, which the A lane is writing for #52937/#53932.
 53859	c22a06c180	Record bucketed terminal sizes in TUI telemetry (#53859)	TUI	16	
-53853	e342df7b66	Reuse staged file digests when preparing daemon installs (#53853)	other:app-server-daemon	3	
-53845	2f05c0a71f	Fix daemon updater socket binding and bootstrap readiness on Unix (#53845)	other:app-server-transport	6	
-53827	0960e379a5	Prune unused app-server daemon releases safely (#53827)	other:app-server-daemon	11	
+53853	e342df7b66	Reuse staged file digests when preparing daemon installs (#53853)	other:app-server-daemon	3	| TR-11 @e327426f: implementable, anchor medium.
+53845	2f05c0a71f	Fix daemon updater socket binding and bootstrap readiness on Unix (#53845)	other:app-server-transport	6	| TR-11 @e327426f: implementable, anchor medium.
+53827	0960e379a5	Prune unused app-server daemon releases safely (#53827)	other:app-server-daemon	11	| TR-11 @e327426f: implementable, anchor strong.
 53816	c3733756a9	Reject Guardian review threads during interactive CLI resume (#53816)	TUI	3	
-53805	ca2b076fff	Add safe diagnostics to workspace routing configuration errors (#53805)	pin-protocol	3	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 53804	923f276f57	Keep the Agent command center visible during archive and delete (#53804)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53800	9e03960cf8	Wire background compaction into the turn lifecycle (#53800)	A-core	11	TR-5 blocked_precondition on #53620 -> #53614 -> #53606: background compaction is not wired into the turn lifecycle in Go.
 53797	2b2d792305	Refresh Guardian reviews when review context changes (#53797)	guardian	2	
@@ -64,8 +63,8 @@ pr	sha	subject	lane_face	files	note
 53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	TR-4 implementable: guardian-context/src/budget.rs estimate_input_tokens_from_serialized_len (12 bytes/token for ciphertext, ceil) plus estimate_compaction_content_length are absent (0 hits); Go approximates at appserver/guardian_reviewer.go:1370-1390 (its own comment admits it uses the summary bytes). 0 file overlap with the compaction chain, so it can run in parallel with #52937/#53932.
 53689	c03bbff483	Constrain API-key model access programs to server support (#53689)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	TR-5 implementable but HELD: its Go face is appserver/turn_runtime.go + runtime_router.go + state/state.go and turn_runtime.go is currently owned by the pin lane (P-b10 false-fallback work) - re-dispatch only after P-b10 merges. | TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
-53672	4c1cd8bbcc	Keep discovered Apps tools available during startup recovery (#53672)	B-mcp/sandbox	7	
+53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	TR-5 implementable but HELD: its Go face is appserver/turn_runtime.go + runtime_router.go + state/state.go and turn_runtime.go is currently owned by the pin lane (P-b10 false-fallback work) - re-dispatch only after P-b10 merges. | TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1). | TR-11 @e327426f: implementable, anchor strong (corrected): the semantics are the thread-level AutoCompactionDisabled marker, not a predictionFork symbol; the guard belongs in tool/handlers.go:409-427 with the marker threaded through appserver/runtime_router.go, serial with #54119, and it needs tool/** authorization. TR-8's turn_runtime.go:6021 citation is VOID.
+53672	4c1cd8bbcc	Keep discovered Apps tools available during startup recovery (#53672)	B-mcp/sandbox	7	| TR-11 @e327426f: implementable, anchor medium.
 53660	73bbb654b3	Extract shared multi-agent v2 thread spawning (#53660)	A-core	3	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 53657	ab82af0b2c	Share hook configuration across cloned hook views (#53657)	other:hooks	4	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 53654	4e7ef7d19d	Keep spawned children provisional until the spawn result returns (#53654)	A-core	5	
@@ -77,9 +76,8 @@ pr	sha	subject	lane_face	files	note
 53606	be5296d467	Prepare compaction helpers for background requests (#53606)	A-core	7	TR-5 implementable (chain head, pure preparatory refactor): Go isRealUserOrAgentMessage/CompactionPrefix/replaceCompactedHistory/currentWindowFromState/ResponsesHttpExecutor = 0 hits; half-carrier CompactedHistory 31 hits/10 files. #53614 -> #53620 -> #53800 all depend on it, so it goes first.
 53595	669449b02c	Add async compaction feature configuration (#53595)	config	7	
 53556	f82e365922	Deduplicate TUI modifier handling and terminal color caching (#53556)	TUI	3	
-53506	12cca49c81	Reject duplicate Host headers in the network proxy (#53506)	other:network-proxy	2	
+53506	12cca49c81	Reject duplicate Host headers in the network proxy (#53506)	other:network-proxy	2	| TR-11 @e327426f: UNVERIFIED: Go reads only the single request.Host value and never the raw Host slice, so the duplicate-Host path Rust guards may be unreachable; a read-only proxy probe must decide implementable vs not_applicable before dispatch.
 53496	92caad7828	Preserve pending Effects toggles across save refreshes (#53496)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-53438	7c1b64c5df	Stop identifying Apple Terminal from `TERM_SESSION_ID` (#53438)	other:terminal-detection	2	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 53436	6f47fcb0be	Route TUI request replies to their originating connection and thread (#5343	TUI	19	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53429	b3c3bad976	Apply configuration toggles live and improve settings navigation (#53429)	TUI	39	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53426	f605162354	Preserve Windows runtime registration failure diagnostics (#53426)	other:windows-sandbox-service	3	
@@ -93,7 +91,7 @@ pr	sha	subject	lane_face	files	note
 53224	a9b0815167	Support Windows clipboard text paste shortcuts in the TUI (#53224)	TUI	18	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53173	27065a91cc	Allow restarting managed background servers from the TUI (#53173)	TUI	35	chain step 6 - after #52990 (10 shared files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 53156	72f999edc7	Simplify the custom terminal drawing API (#53156)	TUI	1	
-53155	95db2cd5d5	Keep remote app-server events deliverable during shutdown (#53155)	pin-protocol	2	
+53155	95db2cd5d5	Keep remote app-server events deliverable during shutdown (#53155)	pin-protocol	2	| TR-11 @e327426f: implementable, anchor medium.
 53152	41fd60f561	Allow selecting and copying TUI turn tips (#53152)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53150	7c9bfb910e	Restore thread-owned permissions on cold resume (#53150)	A-core	8	
 53148	97c1f62898	Fix startup draft recovery for pending Vim Replace keys (#53148)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
@@ -103,9 +101,9 @@ pr	sha	subject	lane_face	files	note
 52967	7a8a9456e9	Reuse and prewarm the WSL clipboard text reader (#52967)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52959	47bcb3a3f9	Reduce stack usage in async TUI tests (#52959)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52952	b871a1b9f6	Verify reset notification during code-mode host recovery (#52952)	A-core	1	
-52825	806d9732c9	Report exec runtime resets before accepting further requests (#52825)	other:code-mode-host	4	
+52825	806d9732c9	Report exec runtime resets before accepting further requests (#52825)	other:code-mode-host	4	| TR-11 @e327426f: implementable, anchor medium.
 52756	322bbf4d84	Classify voice session failures and record terminal outcomes (#52756)	TUI	18	
-52748	1652992148	Make code-mode `exit()` stop the entire cell (#52748)	other:code-mode-runtime	7	
+52748	1652992148	Make code-mode `exit()` stop the entire cell (#52748)	other:code-mode-runtime	7	| TR-11 @e327426f: implementable, anchor medium.
 52742	5ef96ab278	Add opt-in output token replay for OpenAI requests (#52742)	A-core	119	TR-1 implementable: dead flag + missing provider double gate; Go model/responses_agent.go:1065,1594 hardcode the include list - dispatch together with #53963
 52736	e4490eff65	Allow model catalogs to override incremental tool notices (#52736)	A-core	11	
 52725	4bad6d78e9	Report terminal program status with OSC 7501 (#52725)	TUI	11	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
@@ -114,9 +112,9 @@ pr	sha	subject	lane_face	files	note
 52721	07757f448f	Explain session creation failures during server shutdown (#52721)	TUI	12	
 52696	2f761ae821	Fix marketplace path matching for Windows junctions (#52696)	other:core-plugins	4	
 52686	45311351c2	Add opt-in retention for turn tool outputs (#52686)	pin-protocol	12	
-52685	c261727370	Preserve code mode cancellation during output serialization (#52685)	other:code-mode-runtime	5	
+52685	c261727370	Preserve code mode cancellation during output serialization (#52685)	other:code-mode-runtime	5	| TR-11 @e327426f: implementable, anchor medium.
 52682	52950c5924	Validate Windows sandbox accounts before password repair (#52682)	other:windows-sandbox-service	3	
-52681	96be88cb53	Reject reserved Serde JSON keys in code mode (#52681)	other:code-mode-runtime	3	
+52681	96be88cb53	Reject reserved Serde JSON keys in code mode (#52681)	other:code-mode-runtime	3	| TR-11 @e327426f: implementable, anchor medium (map Serde reserved keys onto Sobek's, a semantic translation, not a symbol copy).
 52679	6e093c6081	Add timeout-aware exec-server configuration reads (#52679)	exec	5	
 52676	aab4f96148	Refresh persisted capability roots from owner-provided configuration (#5267	A-core	3	
 52671	04ad786998	Add retention annotations to submitted tool outputs (#52671)	pin-protocol	5	TR-4 implementable: protocol/src/turn_input.rs AnnotatedResponseItem{annotations: ResponseItemAnnotations{retain: bool}} plus core/src/session/turn_input.rs (+33/-6) - ResponseItemAnnotations/AnnotatedResponseItem/requestCompactionRetention all 0 hits in Go; carriers exist in retainedctx/**, appserver/turn_input_span.go, appserver/daemon_recovery_snapshot.go:117,139. Serial: #52671 -> #52686 (shared generated schema).
@@ -125,7 +123,7 @@ pr	sha	subject	lane_face	files	note
 52648	d3f9b22b74	Limit daemon feature compatibility checks to explicit CLI overrides (#52648	TUI	6	
 52640	8ec80de0ef	Count interrupted goal continuations toward the no-activity limit (#52640)	other:ext	5	
 52637	47c063de51	Add experimental thread item lookup by ID (#52637)	pin-protocol	15	
-52635	751e7edd0b	Skip background workspace routing reads without ChatGPT auth (#52635)	pin-protocol	5	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
+52635	751e7edd0b	Skip background workspace routing reads without ChatGPT auth (#52635)	pin-protocol	5	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1). | TR-11 @e327426f: implementable, anchor strong; shares appserver/workspace_routing.go with the now-landed #53805, so it may proceed.
 52629	7f2f4fd46e	Consolidate local message board storage helpers (#52629)	other:ext	4	
 52621	47b80571f0	Add template setup for local agent message boards (#52621)	other:ext	8	
 52610	c63929af50	Align Linux sandbox names and docs with bubblewrap and seccomp (#52610)	B-mcp/sandbox	7	
@@ -137,13 +135,13 @@ pr	sha	subject	lane_face	files	note
 52325	780d7ab097	Track history initialization in Responses turn metadata (#52325)	A-core	13	
 52295	0b755b1945	Emit one developer notice per incremental namespace update batch (#52295)	tests-only	14	
 52278	2c3156adf4	Honor custom OTLP metrics exporters when analytics is disabled (#52278)	config	9	
-52277	14ff9c3a43	Preserve UTF-8 byte semantics in network domain matching (#52277)	other:network-proxy	3	
+52277	14ff9c3a43	Preserve UTF-8 byte semantics in network domain matching (#52277)	other:network-proxy	3	| TR-11 @e327426f: implementable, anchor strong (Rust moved Vec<char> to Vec<u8> for the wildcard while Go's glob matcher stays rune-based - a real semantic difference).
 52274	6ac8b1b50b	Add structured tracing for Guardian reviews and background scoring (#52274)	guardian	7	
 52268	515c291d87	Preserve large arguments in executed tool call metadata (#52268)	A-core	10	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 52256	3b6ab3471a	Normalize formatting in docs, web assets, and sample scripts (#52256)	other:login	23	
 52245	c9e0fffbbc	Enable parallel execution for read-only tools (#52245)	other:ext	13	
 52241	845345b1dd	Preserve subagent capabilities independently of forked history (#52241)	A-core	13	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
-52235	137f25f643	Recover gRPC code-mode sessions after missing-session errors (#52235)	other:code-mode	7	
+52235	137f25f643	Recover gRPC code-mode sessions after missing-session errors (#52235)	other:code-mode	7	| TR-11 @e327426f: implementable, anchor medium.
 52234	54685110a7	Support request IDs in exec-server WebSocket handshakes (#52234)	pin-protocol	8	
 52228	5505a80f38	Honor API-key feature gates in TUI Daybreak selection (#52228)	TUI	10	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52226	96d238d0b9	Include foreground activity in iTerm2 session status (#52226)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
@@ -166,7 +164,6 @@ pr	sha	subject	lane_face	files	note
 51963	14c8b7771a	Attribute compaction analytics to the correct voice session (#51963)	other:analytics	8	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 51930	e974aad3b1	Support model-specific function description prefixes (#51930)	A-core	15	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 51908	82e70121f8	Honor the user input setting for asynchronous questions (#51908)	A-core	2	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
-51897	529cd6b860	Use a dedicated matcher for network domain policies (#51897)	other:network-proxy	6	
 51896	dd178bb7ca	Preserve native errors in Windows sandbox ACL diagnostics (#51896)	other:windows-sandbox-rs	6	
 51895	fac5d0ba91	Report specific reasons for WebSocket continuation failures (#51895)	A-core	5	
 51893	70efa82b09	Record metrics for incremental tool updates (#51893)	A-core	4	
@@ -180,7 +177,7 @@ pr	sha	subject	lane_face	files	note
 51840	d9960e12bb	Add a bubblewrap backend for sandbox integrity checks (#51840)	exec	14	MERGED BACKLOG 2026-10-17 (B-b10, verified by lead): #51831/#51840/#51841 are ONE indivisible block. B-b10 proved every new symbol's only non-test caller lives in exec-server/src/sandbox_integrity/runner.rs, which has no Go counterpart (SandboxExecRequest / SANDBOX_TYPE / critical_dependencies / DependencyTarget / run_integrity_checks = 0 hits on f6bf18a2), while run_integrity_checks has 4 production call sites upstream (fs_sandbox.rs:91, process_sandbox.rs:337, sandboxed_file_system.rs:96, core/src/sandboxing/mod.rs:122). The whole sandbox_integrity family already exists at the pin 4eb4a65407, so this is a production-reachable subsystem with no Go side rather than fresh upstream drift. A per-PR slice would require building the framework first (backend interface + 3 adapters + runner + telemetry skeleton), which conflicts with the standing no-skeleton ruling, so it stays blocked as ONE item until the lead authorises that subsystem as a standalone project. #51841 specifically: its only backend-side constant is already correct in Go (sandbox/seatbelt.go:11 = /usr/bin/sandbox-exec, used at :26) - that half has no gap. | DESIGN-CLASS N/A (B-b10, do not re-evaluate): Go expands deny-glob snapshots in-process and never launches an external scanner - sandbox/linuxsandbox/linux.go:591 expandLinuxDenyGlob / :596 doublestar.FilepathGlob, sandbox/windowssandbox/deny_read_resolver.go:136 collectExistingGlobMatches; frozen by the test comment at sandbox/linuxsandbox/linux_test.go:142-148 ("Go never invokes ripgrep for this walk"). While that design holds, expand_unreadable_globs_in_environment / GLOB_SCAN_PROGRAM / resolve_windows_deny_read_paths_in_environment will never have a Go counterpart. Registered in update/r90_redundant_guards_2026_10_17.md.
 51835	72c959528e	Enable code mode interruption by default (#51835)	tests-only	2	| LEAD RULING: R2, not N/A - the flag can be registered but the consumer is not wired (code_mode_interruption / instant_interrupts = 0 hits in *.go); record as "registration only, no consumer".
 51831	3342ee8c07	Add MXC sandbox integrity dependency and policy preparation (#51831)	exec	14	MERGED BACKLOG 2026-10-17 (B-b10, verified by lead): #51831/#51840/#51841 are ONE indivisible block. B-b10 proved every new symbol's only non-test caller lives in exec-server/src/sandbox_integrity/runner.rs, which has no Go counterpart (SandboxExecRequest / SANDBOX_TYPE / critical_dependencies / DependencyTarget / run_integrity_checks = 0 hits on f6bf18a2), while run_integrity_checks has 4 production call sites upstream (fs_sandbox.rs:91, process_sandbox.rs:337, sandboxed_file_system.rs:96, core/src/sandboxing/mod.rs:122). The whole sandbox_integrity family already exists at the pin 4eb4a65407, so this is a production-reachable subsystem with no Go side rather than fresh upstream drift. A per-PR slice would require building the framework first (backend interface + 3 adapters + runner + telemetry skeleton), which conflicts with the standing no-skeleton ruling, so it stays blocked as ONE item until the lead authorises that subsystem as a standalone project. #51841 specifically: its only backend-side constant is already correct in Go (sandbox/seatbelt.go:11 = /usr/bin/sandbox-exec, used at :26) - that half has no gap.
-51823	cef2a64531	Share MCP binding tool metadata with prepared calls (#51823)	B-mcp/sandbox	3	
+51823	cef2a64531	Share MCP binding tool metadata with prepared calls (#51823)	B-mcp/sandbox	3	| TR-11 @e327426f: implementable, anchor medium.
 51822	dd12f892f1	Avoid sharing violations when repairing Windows runtime ACLs (#51822)	other:windows-sandbox-rs	2	
 51812	406b0c4446	Enable instant interrupts by default (#51812)	tests-only	7	| LEAD RULING: R2, not N/A - the flag can be registered but the consumer is not wired (code_mode_interruption / instant_interrupts = 0 hits in *.go); record as "registration only, no consumer".
 51808	b38942ce7c	Preserve diagnostic reasons for MCP user verification failures (#51808)	TUI	20	

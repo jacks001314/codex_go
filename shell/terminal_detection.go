@@ -110,6 +110,13 @@ func UserAgent() string {
 	return CurrentTerminalInfo().UserAgentToken()
 }
 
+// Detect mirrors Rust's detect_terminal_info_from_env
+// (terminal-detection/src/lib.rs): TERM_PROGRAM (plus TERM_PROGRAM_VERSION)
+// drives the detected terminal name unless it identifies tmux, terminal-specific
+// variables (Ghostty, WezTerm, iTerm2, kitty, ...) are probed next, and TERM is
+// the capability fallback. TERM_SESSION_ID is not terminal-specific and cannot
+// identify Apple Terminal (Rust #53438); Apple Terminal is still detected
+// through TERM_PROGRAM=Apple_Terminal.
 func Detect(env Environment) *TerminalInfo {
 	if env == nil {
 		env = &ProcessEnvironment{}
@@ -126,9 +133,6 @@ func Detect(env Environment) *TerminalInfo {
 	}
 	if hasEnv(env, "ITERM_SESSION_ID") || hasEnv(env, "ITERM_PROFILE") || hasEnv(env, "ITERM_PROFILE_NAME") {
 		return fromName(TerminalIterm2, nil, multiplexer)
-	}
-	if hasEnv(env, "TERM_SESSION_ID") {
-		return fromName(TerminalAppleTerminal, nil, multiplexer)
 	}
 	if hasEnv(env, "KITTY_WINDOW_ID") || envContains(env, "TERM", "kitty") {
 		return fromName(TerminalKitty, nil, multiplexer)

@@ -45,8 +45,13 @@ func TestDetectNamedTerminals(t *testing.T) {
 		wantToken string
 	}{
 		{name: "iterm session", env: map[string]string{"ITERM_SESSION_ID": "w0t1p0"}, wantName: TerminalIterm2, wantToken: "iTerm.app"},
-		{name: "apple term program", env: map[string]string{"TERM_PROGRAM": "Apple_Terminal"}, wantName: TerminalAppleTerminal, wantToken: "Apple_Terminal"},
-		{name: "apple session", env: map[string]string{"TERM_SESSION_ID": "A1B2C3"}, wantName: TerminalAppleTerminal, wantToken: "Apple_Terminal"},
+		{name: "apple term program", env: map[string]string{"TERM_PROGRAM": "Apple_Terminal", "TERM_PROGRAM_VERSION": "455", "TERM_SESSION_ID": "A1B2C3"}, wantName: TerminalAppleTerminal, wantToken: "Apple_Terminal/455"},
+		// Rust #53438: TERM_SESSION_ID is not terminal-specific, so it no longer
+		// identifies Apple Terminal and no longer masks later probes.
+		{name: "term session id alone", env: map[string]string{"TERM_SESSION_ID": "A1B2C3"}, wantName: TerminalUnknown, wantToken: "unknown"},
+		{name: "term session id keeps windows terminal", env: map[string]string{"TERM_SESSION_ID": "A1B2C3", "WT_SESSION": "1"}, wantName: TerminalWindowsTerminal, wantToken: "WindowsTerminal"},
+		{name: "term session id keeps iterm", env: map[string]string{"TERM_SESSION_ID": "A1B2C3", "ITERM_SESSION_ID": "w0t1p0"}, wantName: TerminalIterm2, wantToken: "iTerm.app"},
+		{name: "term session id falls back to term", env: map[string]string{"TERM_SESSION_ID": "A1B2C3", "TERM": "xterm-256color"}, wantName: TerminalUnknown, wantToken: "xterm-256color"},
 		{name: "ghostty", env: map[string]string{"TERM_PROGRAM": "Ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
 		{name: "ghostty resources", env: map[string]string{"GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty"}, wantName: TerminalGhostty, wantToken: "Ghostty"},
 		{name: "vscode", env: map[string]string{"TERM_PROGRAM": "vscode", "TERM_PROGRAM_VERSION": "1.86.0"}, wantName: TerminalVSCode, wantToken: "vscode/1.86.0"},

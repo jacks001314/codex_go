@@ -89,6 +89,29 @@ func TestResponseIncompleteCarriesResponseIDAndReportedUsageLikeRust(t *testing.
 			wantID: "resp-incomplete",
 		},
 		{
+			// A quoted number is a JSON string, and Rust rejects it for
+			// `codex_rollout_budget_units: Option<serde_json::Number>`
+			// (`serde_json::from_value::<ResponseCompletedUsage>` fails, so the
+			// reported usage stays absent). Go's decoder *does* accept a quoted
+			// number for a `json.Number` target, so `jsonNumberLiteral`'s
+			// closing guard - the literal must open with a digit or `-`, the way
+			// Rust requires a JSON number - is what keeps the two in line. This
+			// is a pre-existing Go-vs-`json.Number` divergence the guard closes,
+			// not a new upstream behaviour.
+			name:   "quoted_budget_units",
+			event:  `{"type":"response.incomplete","response":{"id":"resp-incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":120,"output_tokens":30,"total_tokens":150,"codex_rollout_budget_units":"2.5"}}}`,
+			wantID: "resp-incomplete",
+		},
+		{
+			// Go's decoder reads a JSON null into an `int64` target without an
+			// error, leaving the zero value, where Rust's `i64` derive rejects
+			// null outright. The same guard keeps a null member from turning the
+			// partial response into a zero-valued usage estimate.
+			name:   "null_token_member",
+			event:  `{"type":"response.incomplete","response":{"id":"resp-incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":null,"output_tokens":30,"total_tokens":150}}}`,
+			wantID: "resp-incomplete",
+		},
+		{
 			name:      "event_without_response_id",
 			event:     `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
 			wantUsage: &AgentUsage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3},

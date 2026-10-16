@@ -3,13 +3,18 @@ package appserver
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/network"
 )
 
 // Rust parity: codex-rs/app-server/src/request_processors/account_processor/
@@ -84,9 +89,9 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, snap
 		r.authChangeTracker.SeedLastAuth(snapshot)
 		state = r.authChangeTracker.Snapshot()
 	}
-	identity, ok := r.workspaceRoutingConfigIdentity()
-	if !ok {
-		return nil, model.ErrWorkspaceRoutingRequirementsReload
+	identity, err := r.workspaceRoutingConfigIdentity()
+	if err != nil {
+		return nil, workspaceRoutingRequirementsLoadError(err)
 	}
 	key := workspaceRoutingCacheKey{
 		authGeneration:  state.Generation,
@@ -116,9 +121,9 @@ func (r *RuntimeRouter) workspaceRoutingForAccountRead(ctx context.Context, snap
 	if routing != nil && routing.ChatGPTAccountID != accountID {
 		return nil, model.ErrWorkspaceRoutingAccountChanged
 	}
-	latest, latestOK := r.workspaceRoutingConfigIdentity()
-	if !latestOK {
-		return nil, model.ErrWorkspaceRoutingRequirementsReload
+	latest, err := r.workspaceRoutingConfigIdentity()
+	if err != nil {
+		return nil, workspaceRoutingRequirementsReloadError(err)
 	}
 	if latest != identity {
 		return nil, model.ErrWorkspaceRoutingConfigurationChanged
@@ -138,21 +143,171 @@ type workspaceRoutingConfigIdentity struct {
 
 // workspaceRoutingConfigIdentity reads the effective routing scope from the
 // current configuration (Rust read_account's config capture).
-func (r *RuntimeRouter) workspaceRoutingConfigIdentity() (workspaceRoutingConfigIdentity, bool) {
+func (r *RuntimeRouter) workspaceRoutingConfigIdentity() (workspaceRoutingConfigIdentity, error) {
 	identity := workspaceRoutingConfigIdentity{}
 	if r == nil || r.services.Config == nil {
-		return identity, false
+		return identity, errWorkspaceRoutingNoConfigService
 	}
 	read, err := r.services.Config.Read(&config.ConfigReadParams{})
-	if err != nil || read == nil {
-		return identity, false
+	if err != nil {
+		return identity, err
+	}
+	if read == nil {
+		return identity, errWorkspaceRoutingNoConfigService
 	}
 	identity.baseURL = r.chatGPTBaseURL()
 	identity.modelProvider = strings.TrimSpace(stringFromMap(read.Config, "model_provider"))
 	if requirements := r.requireConfig().Requirements(); requirements != nil && requirements.Requirements != nil && requirements.Requirements.ChatgptBaseURL != nil {
 		identity.requiredBaseURL = strings.TrimSpace(*requirements.Requirements.ChatgptBaseURL)
 	}
-	return identity, true
+	return identity, nil
+}
+
+// errWorkspaceRoutingRequirementsLoad mirrors Rust
+// WorkspaceRoutingError::RequirementsLoad: the configuration scope could not be
+// captured before discovery. #53805 makes that message carry a safe reason so the
+// failure is no longer opaque; the reason never quotes configuration contents or
+// backend-supplied policy names and ids.
+var errWorkspaceRoutingRequirementsLoad = errors.New("failed to load workspace requirements")
+
+// errWorkspaceRoutingNoConfigService reports a router without a configuration
+// service. It is a Go wiring state with no Rust analogue and carries no typed
+// diagnostic, so its reason falls back to the error kind, exactly as Rust
+// reports an untyped io::Error.
+var errWorkspaceRoutingNoConfigService = errors.New("workspace routing has no configuration service")
+
+// workspaceRoutingRequirementsLoadError mirrors Rust
+// WorkspaceRoutingError::RequirementsLoad's message.
+func workspaceRoutingRequirementsLoadError(err error) error {
+	return fmt.Errorf("%w: %s", errWorkspaceRoutingRequirementsLoad, workspaceConfigLoadReason(err))
+}
+
+// workspaceRoutingRequirementsReloadError mirrors Rust
+// WorkspaceRoutingError::RequirementsReload's message. The model sentinel stays
+// wrapped so callers can still match the failure with errors.Is.
+func workspaceRoutingRequirementsReloadError(err error) error {
+	return fmt.Errorf("%w: %s", model.ErrWorkspaceRoutingRequirementsReload, workspaceConfigLoadReason(err))
+}
+
+// workspaceConfigLoadReason mirrors Rust
+// account_processor::workspace_routing::workspace_config_load_reason (#53805).
+//
+// The reason reaches JSON-RPC clients, login notifications, and tracing, while a
+// raw configuration error can quote secrets. Only structured diagnostics are
+// therefore forwarded: a configuration location, a cloud error category with its
+// HTTP status, a known application network policy denial, or an OS error.
+func workspaceConfigLoadReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if loadErr, ok := current.(*config.ConfigLoadError); ok {
+			return workspaceConfigLoadReasonFromLoadError(loadErr)
+		}
+		if cloudErr, ok := current.(*config.CloudConfigLoadError); ok {
+			return workspaceConfigLoadReasonFromCloudError(cloudErr)
+		}
+		if denial, ok := knownNetworkPolicyDenial(current); ok {
+			return denial
+		}
+	}
+	return workspaceConfigLoadReasonFallback(err)
+}
+
+// workspaceConfigLoadReasonFromLoadError mirrors the ConfigLoadError arm: report
+// the source location. A non-file diagnostic stores a display name that can
+// carry a backend-supplied policy name or id, so only its position is safe.
+func workspaceConfigLoadReasonFromLoadError(loadErr *config.ConfigLoadError) string {
+	line, column := loadErr.Line, loadErr.Column
+	if line <= 0 {
+		line = 1
+	}
+	if column <= 0 {
+		column = 1
+	}
+	if !filepath.IsAbs(loadErr.Path) {
+		return fmt.Sprintf("invalid non-file configuration at line %d, column %d", line, column)
+	}
+	return fmt.Sprintf("invalid configuration at %s:%d:%d", loadErr.Path, line, column)
+}
+
+// workspaceConfigLoadReasonFromCloudError mirrors the CloudConfigBundleLoadError
+// arm. Cloud bundle loading erases the typed denial, so only a message that
+// matches a known network policy denial verbatim is preserved; every other
+// message is replaced by its category because it can quote secrets.
+func workspaceConfigLoadReasonFromCloudError(cloudErr *config.CloudConfigLoadError) string {
+	reason := ""
+	switch cloudErr.Code {
+	case config.CloudConfigLoadTimeout:
+		reason = "request timed out"
+	case config.CloudConfigLoadAuth, config.CloudConfigLoadRequestFailed:
+		if denial, ok := knownNetworkPolicyDenialMessage(cloudErr.Error()); ok {
+			return denial
+		}
+		if cloudErr.Code == config.CloudConfigLoadAuth {
+			reason = "authentication failed"
+		} else {
+			reason = "request failed"
+		}
+	case config.CloudConfigLoadInvalidBundle:
+		reason = "invalid bundle"
+	default:
+		reason = "internal error"
+	}
+	if cloudErr.StatusCode != nil {
+		return fmt.Sprintf("cloud config: %s (HTTP %d)", reason, *cloudErr.StatusCode)
+	}
+	return "cloud config: " + reason
+}
+
+// workspaceRoutingNetworkPolicyDenials are the deterministic application network
+// policy denials Rust preserves verbatim (NetworkPolicyDenied). Any other
+// network-layer text is untrusted.
+var workspaceRoutingNetworkPolicyDenials = []error{
+	network.ErrNetworkPolicyUnavailable,
+	network.ErrNetworkPolicyDestination,
+	network.ErrNetworkPolicyRevoked,
+	network.ErrNetworkPolicyUnsupportedTransport,
+}
+
+// knownNetworkPolicyDenial reports whether err is one of those denials, which is
+// the only network failure safe to forward.
+func knownNetworkPolicyDenial(err error) (string, bool) {
+	for _, denial := range workspaceRoutingNetworkPolicyDenials {
+		if errors.Is(err, denial) {
+			return denial.Error(), true
+		}
+	}
+	return "", false
+}
+
+// knownNetworkPolicyDenialMessage reports whether message is verbatim one of
+// those denials.
+func knownNetworkPolicyDenialMessage(message string) (string, bool) {
+	for _, denial := range workspaceRoutingNetworkPolicyDenials {
+		if denial.Error() == message {
+			return denial.Error(), true
+		}
+	}
+	return "", false
+}
+
+// workspaceConfigLoadReasonFallback mirrors the tail of Rust's
+// workspace_config_load_reason: the OS error, otherwise the error kind. An
+// untyped error's message is never forwarded.
+func workspaceConfigLoadReasonFallback(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno.Error()
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "entity not found"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission denied"
+	default:
+		return "other"
+	}
 }
 
 // chatGPTWorkspaceAccountID mirrors Rust is_chatgpt_auth plus get_account_id:
