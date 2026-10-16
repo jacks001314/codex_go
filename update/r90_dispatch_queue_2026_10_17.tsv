@@ -188,3 +188,22 @@ pr	sha	subject	lane_face	files	note
 51755	4d53e6ba0e	Reuse MCP handler metadata for cache comparisons (#51755)	A-core	3	| TR-10 @63e3e264: implementable, anchor medium (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 51704	0a2a64e942	Honor tool-description-first ordering in Code Mode (#51704)	A-core	8	| TR-10 @63e3e264: implementable, anchor strong (detail + Rust/Go file:line in update/r90_triage_tr10_2026_10_17.md section 1).
 46749	de6ae71ad4	Add a find bar to the transcript pager (#46749)	pager	4	| T-b13 @3f3c44f7: LANDED - pager.find catalog entry (tui/keymap.go blob 8e590d25) + a find state machine (tui/chatwidget/transcript_overlay_find.go) + key wiring with a real consumer (tui/tea/model.go). Not ported: the Rust async cross-cell scan and the TextArea caret/paste semantics.
+54619	2bf2bdf82c	Bind plugin hook approval to plugin contents (#54619)	WAVE-92	31	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54623	b5115cdd66	Resolve stable releases dynamically for exec-server compatibility tests (#54623)	WAVE-92	9	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54637	34420d4264	Preserve disconnect reasons in Noise handshake errors (#54637)	WAVE-92	2	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54639	4491caf1ad	Stream rollout records during thread history materialization (#54639)	WAVE-92	2	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54641	b3cc59afcf	Retry npm release publishing and match macOS verification runners (#54641)	WAVE-92	2	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54647	fa46ef3af6	Make remote-control conflict retry tests deterministic (#54647)	WAVE-92	1	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54653	b26b0a7a77	Prefer resource-specific scopes during MCP OAuth discovery (#54653)	WAVE-92	6	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54654	beae473be8	Allow dynamic tool calls to execute in parallel (#54654)	WAVE-92	3	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54656	0df4aa6778	Honor MCP tool-list changes within a turn (#54656)	WAVE-92	19	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54664	96eb400d12	Distinguish retryable thread-store errors from unknown write outcomes (#54664)	WAVE-92	9	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54672	088c7a1e75	Use shared Bazel CI preparation for lint and V8 jobs (#54672)	WAVE-92	5	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54674	e7de1f4440	Add an opt-in tool for copying files between environments (#54674)	WAVE-92	17	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54679	a083a1e49e	Distinguish MCP approval cancellation reasons (#54679)	WAVE-92	10	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54681	440312f113	Keep TUI session selections bound to their backend (#54681)	WAVE-92	52	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54686	0e67502123	Preserve MCP tool-list metadata in server status (#54686)	WAVE-92	27	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54708	b9775a0d57	Honor home deletion preferences during Windows uninstall (#54708)	WAVE-92	7	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54710	3076caafdf	Move V8's ICU Bazel rules into the workspace (#54710)	WAVE-92	4	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54716	859bbc87fc	Keep prereleases in draft until release assets finish uploading (#54716)	WAVE-92	1	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
+54724	221e4e7c05	Preserve prereleased events when creating GitHub prereleases (#54724)	WAVE-92	1	WAVE-92 pin 221e4e7c05 (19 commits ahead of 4eb4a65407) - new upstream inventory, not yet triaged
