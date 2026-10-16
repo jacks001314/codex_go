@@ -30,12 +30,25 @@ type GuardianReviewer interface {
 }
 
 type modelGuardianReviewer struct {
-	agent          model.AgentRunner
-	store          *state.ReviewStore
-	breaker        *state.CircuitBreaker
-	scoreMu        sync.Mutex
-	scoreProgress  map[string]*guardianScoreProgress
-	maxToolCallLag int
+	agent         model.AgentRunner
+	store         *state.ReviewStore
+	breaker       *state.CircuitBreaker
+	scoreMu       sync.Mutex
+	scoreProgress map[string]*guardianScoreProgress
+	// admittedImagesMu guards admittedImages, the per-thread ledger of Guardian
+	// image references a reviewer conversation already received. Rust's
+	// ComposedContext::retain_new_images (#54278) proves delivery only from
+	// admitted history, so the ledger - not the pending prompt - decides which
+	// images a later review injects.
+	admittedImagesMu sync.Mutex
+	admittedImages   map[string]*codexctx.GuardianAdmittedImages
+	// reviewedEvidenceMu guards reviewedEvidence, the per-thread node_repl
+	// evidence cursor. Rust's reviewer session asks for the evidence admitted
+	// after its last review, so the Go transcript follows the same cursor
+	// (#54278) instead of replaying every retained response.
+	reviewedEvidenceMu sync.Mutex
+	reviewedEvidence   map[string]uint64
+	maxToolCallLag     int
 	// maxToolCallLagFor, when set, resolves the bound for the review's turn
 	// (configured value -> model catalog default -> Rust's default).
 	maxToolCallLagFor func(threadID, turnID string) int
@@ -206,6 +219,55 @@ func (r *modelGuardianReviewer) maxToolCallLagValue(threadID, turnID string) int
 		return r.maxToolCallLag
 	}
 	return defaultGuardianMaxToolCallLag
+}
+
+// guardianAdmittedImages returns the thread's admitted-image ledger, creating it
+// on first use. Rust #54278 keeps the admitted history of each reviewer
+// conversation, so the ledger is scoped per thread like the score progress.
+func (r *modelGuardianReviewer) guardianAdmittedImages(threadID string) *codexctx.GuardianAdmittedImages {
+	if r == nil {
+		return nil
+	}
+	r.admittedImagesMu.Lock()
+	defer r.admittedImagesMu.Unlock()
+	if r.admittedImages == nil {
+		r.admittedImages = map[string]*codexctx.GuardianAdmittedImages{}
+	}
+	ledger := r.admittedImages[threadID]
+	if ledger == nil {
+		ledger = codexctx.NewGuardianAdmittedImages()
+		r.admittedImages[threadID] = ledger
+	}
+	return ledger
+}
+
+// guardianReviewedEvidenceSequence returns the highest node_repl evidence
+// sequence the reviewer has already been shown for the thread, mirroring the
+// transcript cursor of Rust's reviewer session (#54278).
+func (r *modelGuardianReviewer) guardianReviewedEvidenceSequence(threadID string) uint64 {
+	if r == nil {
+		return 0
+	}
+	r.reviewedEvidenceMu.Lock()
+	defer r.reviewedEvidenceMu.Unlock()
+	return r.reviewedEvidence[threadID]
+}
+
+// noteGuardianReviewedEvidence advances the thread's evidence cursor. The
+// reviewer session keeps the evidence it already admitted, so a later review
+// asks only for what was admitted after this one (Rust #54278).
+func (r *modelGuardianReviewer) noteGuardianReviewedEvidence(threadID string, sequence uint64) {
+	if r == nil || sequence == 0 {
+		return
+	}
+	r.reviewedEvidenceMu.Lock()
+	defer r.reviewedEvidenceMu.Unlock()
+	if r.reviewedEvidence == nil {
+		r.reviewedEvidence = map[string]uint64{}
+	}
+	if sequence > r.reviewedEvidence[threadID] {
+		r.reviewedEvidence[threadID] = sequence
+	}
 }
 
 type guardianSessionRunner struct {
@@ -436,7 +498,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	var nodeReplEvidence *codexctx.NodeReplReviewEvidenceFragment
 	if r.nodeReplEvidence != nil {
-		nodeReplEvidence = r.nodeReplEvidence(threadID, 0)
+		nodeReplEvidence = r.nodeReplEvidence(threadID, r.guardianReviewedEvidenceSequence(threadID))
 	}
 	promptNodeReplEvidence := nodeReplEvidence
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
@@ -536,9 +598,30 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 	}
 	if nodeReplEvidence != nil && nodeReplEvidence.HasImages() {
-		for _, item := range nodeReplEvidence.MultimodalInputItems() {
+		// Rust ComposedContext::retain_new_images (#54278): a reviewer that already
+		// admitted an image must not be shown it again. The host-prepared reference
+		// is compared against admitted history ignoring image detail, so a repeated
+		// reference in newer evidence is dropped while that evidence's text stays.
+		ledger := r.guardianAdmittedImages(threadID)
+		newImages := ledger.RetainNewImages(nodeReplEvidence.ImageRefs(), nil)
+		keepImage := func(ref codexctx.GuardianImageRef) bool {
+			for _, candidate := range newImages {
+				if candidate == ref {
+					return true
+				}
+			}
+			return false
+		}
+		for _, item := range nodeReplEvidence.MultimodalInputItemsFiltered(keepImage) {
 			inputItems = append(inputItems, item)
 		}
+		// This request delivers the retained images, which is what admits them.
+		ledger.Admit(newImages...)
+	}
+	if nodeReplEvidence != nil {
+		// The snapshot above is already part of this request (prompt or input
+		// items), so the next review reads only evidence admitted after it.
+		r.noteGuardianReviewedEvidence(threadID, nodeReplEvidence.Sequence())
 	}
 	plan := r.planForTurn(threadID, turnID)
 	// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own

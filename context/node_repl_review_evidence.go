@@ -223,10 +223,38 @@ func (f *NodeReplReviewEvidenceFragment) HasImages() bool {
 	return false
 }
 
+// ImageRefs returns the snapshot's retained image references in source order,
+// without their detail. Rust compares exactly this identity when deduplicating
+// prepared images against admitted history (#54278).
+func (f *NodeReplReviewEvidenceFragment) ImageRefs() []GuardianImageRef {
+	if f == nil {
+		return nil
+	}
+	var refs []GuardianImageRef
+	for i := range f.responses {
+		for _, url := range f.responses[i].imageURLs {
+			if strings.TrimSpace(url) == "" {
+				continue
+			}
+			refs = append(refs, GuardianImageRef{Source: GuardianImageSourceInline, Ref: url})
+		}
+	}
+	return refs
+}
+
 // MultimodalInputItems renders the snapshot as user input items. Text-only
 // snapshots collapse to a single text item; snapshots with images append each
 // image URL after the text body (Rust #38454).
 func (f *NodeReplReviewEvidenceFragment) MultimodalInputItems() []map[string]any {
+	return f.MultimodalInputItemsFiltered(nil)
+}
+
+// MultimodalInputItemsFiltered renders the snapshot as user input items but
+// keeps only the image references keep accepts. Rust's ComposedContext::
+// retain_new_images (#54278) decides that set from admitted history, so an image
+// the reviewer already received is dropped while its text evidence stays. A nil
+// keep retains every image, which is MultimodalInputItems.
+func (f *NodeReplReviewEvidenceFragment) MultimodalInputItemsFiltered(keep func(GuardianImageRef) bool) []map[string]any {
 	if f == nil {
 		return nil
 	}
@@ -241,6 +269,9 @@ func (f *NodeReplReviewEvidenceFragment) MultimodalInputItems() []map[string]any
 	for i := range f.responses {
 		for _, url := range f.responses[i].imageURLs {
 			if strings.TrimSpace(url) == "" {
+				continue
+			}
+			if keep != nil && !keep(GuardianImageRef{Source: GuardianImageSourceInline, Ref: url}) {
 				continue
 			}
 			items = append(items, map[string]any{"type": "image", "image_url": url})

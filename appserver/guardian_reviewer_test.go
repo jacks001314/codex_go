@@ -1685,3 +1685,37 @@ func TestApproveGuardianDeniedActionRejectsNonObjectEventLikeRust(t *testing.T) 
 		})
 	}
 }
+
+// Rust #54316 (guardian-context/src/history.rs drops every non-message item):
+// reasoning, context-compaction and compaction-trigger items carry no guardrail
+// evidence, so the transcript renderer must drop them while the surrounding user
+// messages survive. This is the shipped regression for the exclusion helper.
+func TestGuardianReviewTranscriptExcludesNonMessageItemsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := "123e4567-e89b-42d3-a456-426614174111"
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{Source: "cli", ModelProvider: "openai"},
+		Items: []session.Item{
+			{ID: "before", Type: "message", Role: "user", Text: "Keep files private.", CreatedAt: now},
+			{ID: "reasoning", Type: "reasoning", Text: "scratch reasoning about secrets", CreatedAt: now},
+			{ID: "compaction", Type: "context_compaction", Text: "compacted context evidence", CreatedAt: now},
+			{ID: "trigger", Type: "compaction_trigger", Text: "compaction trigger evidence", CreatedAt: now},
+			{ID: "after", Type: "message", Role: "user", Text: "Also keep backups private.", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	lines := router.guardianReviewTranscript(threadID)
+	want := []string{"user: Keep files private.", "user: Also keep backups private."}
+	if len(lines) != len(want) || lines[0] != want[0] || lines[1] != want[1] {
+		t.Fatalf("guardian transcript = %#v, want %#v (non-message items must not reach the reviewer)", lines, want)
+	}
+}
