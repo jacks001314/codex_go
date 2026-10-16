@@ -509,3 +509,111 @@ func containsSandboxArg(args []string, want string) bool {
 	}
 	return false
 }
+
+// managedNetworkArgWindow reports whether args carries the exact
+// `--managed-network <json>` window the helper CLI expects.
+func managedNetworkArgWindow(args []string, context string) bool {
+	for i := 0; i+2 <= len(args); i++ {
+		if args[i] == "--managed-network" && args[i+1] == context {
+			return true
+		}
+	}
+	return false
+}
+
+// TestBuildCommandRunPlanForwardsManagedNetworkContext pins the L-4 plumbing:
+// a managed-network context reaches the Linux helper argv, and an absent
+// context leaves the argv byte-identical to the legacy builder.
+func TestBuildCommandRunPlanForwardsManagedNetworkContext(t *testing.T) {
+	context := `{"loopbackPorts":[3128],"allowLocalBinding":false,"allowUnixSockets":[],"dangerouslyAllowAllUnixSockets":true}`
+	profile := WorkspaceWritePermissionProfile()
+	cwd := t.TempDir()
+	legacy, err := BuildCommandRunPlan(&CommandRunRequest{
+		ResolvedPermissionProfile:   &profile,
+		ResolvedPermissionProfileID: "dev",
+		UseLegacyLandlock:           true,
+		AllowNetworkForProxy:        true,
+		Command:                     []string{"go", "version"},
+		CWD:                         cwd,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommandRunPlan() error = %v", err)
+	}
+	plan, err := BuildCommandRunPlan(&CommandRunRequest{
+		ResolvedPermissionProfile:   &profile,
+		ResolvedPermissionProfileID: "dev",
+		UseLegacyLandlock:           true,
+		AllowNetworkForProxy:        false,
+		ManagedNetworkJSON:          context,
+		Command:                     []string{"go", "version"},
+		CWD:                         cwd,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommandRunPlan() error = %v", err)
+	}
+	if plan.ManagedNetworkJSON != context {
+		t.Fatalf("ManagedNetworkJSON = %q, want %q", plan.ManagedNetworkJSON, context)
+	}
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// A context alone is proxy-mode evidence, exactly like the Rust helper
+	// (`allow_network_for_proxy = managed_network.is_some()`).
+	if !containsSandboxArg(plan.Command, "--allow-network-for-proxy") {
+		t.Fatalf("linux command missing managed proxy flag: %#v", plan.Command)
+	}
+	if !managedNetworkArgWindow(plan.Command, context) {
+		t.Fatalf("linux command missing managed network context: %#v", plan.Command)
+	}
+	// The legacy backend must stay out of the managed proxy path.
+	if containsSandboxArg(plan.Command, "--use-legacy-landlock") {
+		t.Fatalf("linux command should not combine legacy landlock with managed proxy routing: %#v", plan.Command)
+	}
+	// No context => no --managed-network, and the legacy argvs still agree.
+	if managedNetworkArgWindow(legacy.Command, context) {
+		t.Fatalf("legacy plan unexpectedly carried a managed network context: %#v", legacy.Command)
+	}
+	if got := legacy.ManagedNetworkJSON; got != "" {
+		t.Fatalf("ManagedNetworkJSON = %q, want empty", got)
+	}
+}
+
+// TestCreateLinuxSandboxCommandArgsManagedNetworkEmptyIsUnchanged pins the
+// zero-change requirement on the exported Linux builder itself.
+func TestCreateLinuxSandboxCommandArgsManagedNetworkEmptyIsUnchanged(t *testing.T) {
+	profileJSON := RuntimePermissionProfileJSONForTest(t)
+	cwd := t.TempDir()
+	legacy, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExe("/usr/bin/helper", []string{"echo", "hi"}, cwd, profileJSON, cwd, true, false)
+	if err != nil {
+		t.Fatalf("legacy builder error = %v", err)
+	}
+	same, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork("/usr/bin/helper", []string{"echo", "hi"}, cwd, profileJSON, cwd, true, false, "")
+	if err != nil {
+		t.Fatalf("managed-network builder error = %v", err)
+	}
+	if fmt.Sprint(legacy) != fmt.Sprint(same) {
+		t.Fatalf("argv changed without a managed network context:\nlegacy=%#v\nnew=%#v", legacy, same)
+	}
+	context := `{"dangerouslyAllowAllUnixSockets":true}`
+	granted, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork("/usr/bin/helper", []string{"echo", "hi"}, cwd, profileJSON, cwd, true, true, context)
+	if err != nil {
+		t.Fatalf("managed-network builder error = %v", err)
+	}
+	if !managedNetworkArgWindow(granted, context) {
+		t.Fatalf("argv missing the managed network context: %#v", granted)
+	}
+	if !containsSandboxArg(granted, "--allow-network-for-proxy") {
+		t.Fatalf("argv missing the managed proxy flag: %#v", granted)
+	}
+}
+
+// RuntimePermissionProfileJSONForTest returns a runtime permission profile JSON
+// for argv-shape tests.
+func RuntimePermissionProfileJSONForTest(t *testing.T) string {
+	t.Helper()
+	profileJSON, err := RuntimePermissionProfileJSON(WorkspaceWritePermissionProfile())
+	if err != nil {
+		t.Fatalf("RuntimePermissionProfileJSON() error = %v", err)
+	}
+	return profileJSON
+}

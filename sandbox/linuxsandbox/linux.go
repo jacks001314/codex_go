@@ -79,6 +79,22 @@ type linuxSpecialPath struct {
 	Subpath string
 }
 
+// linuxManagedNetworkContext is the portable managed-network context the
+// seccomp filter consults, mirroring the Rust
+// `codex_network_proxy::ManagedNetworkSandboxContext` wire shape transported by
+// the helper's `--managed-network` flag (camelCase, see
+// `linux-sandbox/src/linux_run_main.rs`).
+//
+// Only `dangerouslyAllowAllUnixSockets` changes enforcement today; the other
+// fields are decoded so a context produced by the Rust side round-trips
+// unchanged.
+type linuxManagedNetworkContext struct {
+	LoopbackPorts                  []uint16 `json:"loopbackPorts"`
+	AllowLocalBinding              bool     `json:"allowLocalBinding"`
+	AllowUnixSockets               []string `json:"allowUnixSockets"`
+	DangerouslyAllowAllUnixSockets bool     `json:"dangerouslyAllowAllUnixSockets"`
+}
+
 // linuxSandboxCommand is the CLI surface of the Linux sandbox helper, matching
 // the upstream Rust `LinuxSandboxCommand`. Bubblewrap provides filesystem
 // isolation and seccomp provides syscall filtering; the retained Landlock
@@ -91,9 +107,21 @@ type linuxSandboxCommand struct {
 	UseLegacyLandlock     bool
 	ApplySeccompThenExec  bool
 	AllowNetworkForProxy  bool
+	ManagedNetworkJSON    string
+	ManagedNetwork        *linuxManagedNetworkContext
 	ProxyRouteSpec        string
 	NoProc                bool
 	Command               []string
+}
+
+// managedNetworkEnabled reports whether the helper runs in managed-proxy mode.
+//
+// The Rust helper derives this from the presence of its managed-network context
+// (`allow_network_for_proxy = managed_network.is_some()`), so a context supplied
+// without the legacy flag still enables proxy mode; callers that only pass the
+// legacy flag keep their existing behaviour.
+func (cmd *linuxSandboxCommand) managedNetworkEnabled() bool {
+	return cmd.AllowNetworkForProxy || strings.TrimSpace(cmd.ManagedNetworkJSON) != ""
 }
 
 func RunHelper(args []string, stdout, stderr io.Writer) int {
@@ -136,6 +164,7 @@ func parseLinuxSandboxCommand(args []string, stderr io.Writer) (*linuxSandboxCom
 	flags.BoolVar(&cmd.UseLegacyLandlock, "use-legacy-landlock", false, "")
 	flags.BoolVar(&cmd.ApplySeccompThenExec, "apply-seccomp-then-exec", false, "")
 	flags.BoolVar(&cmd.AllowNetworkForProxy, "allow-network-for-proxy", false, "")
+	flags.StringVar(&cmd.ManagedNetworkJSON, "managed-network", "", "")
 	flags.StringVar(&cmd.ProxyRouteSpec, "proxy-route-spec", "", "")
 	flags.BoolVar(&cmd.NoProc, "no-proc", false, "")
 	if err := flags.Parse(args); err != nil {
@@ -156,7 +185,25 @@ func parseLinuxSandboxCommand(args []string, stderr io.Writer) (*linuxSandboxCom
 		return nil, err
 	}
 	cmd.PermissionProfile = profile
+	if strings.TrimSpace(cmd.ManagedNetworkJSON) != "" {
+		context, err := parseLinuxManagedNetworkContext(cmd.ManagedNetworkJSON)
+		if err != nil {
+			return nil, err
+		}
+		cmd.ManagedNetwork = context
+	}
 	return &cmd, nil
+}
+
+// parseLinuxManagedNetworkContext decodes the `--managed-network` payload. The
+// Rust helper rejects the same payload with
+// "invalid managed network context JSON"; keep the failure mode aligned.
+func parseLinuxManagedNetworkContext(raw string) (*linuxManagedNetworkContext, error) {
+	var context linuxManagedNetworkContext
+	if err := json.Unmarshal([]byte(raw), &context); err != nil {
+		return nil, fmt.Errorf("invalid managed network context JSON: %w", err)
+	}
+	return &context, nil
 }
 
 func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
@@ -166,8 +213,9 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 	if err := ensureLegacyLandlockSupportsPolicy(cmd); err != nil {
 		return err
 	}
+	managedNetwork := cmd.managedNetworkEnabled()
 	if cmd.ApplySeccompThenExec {
-		if cmd.AllowNetworkForProxy {
+		if managedNetwork {
 			if strings.TrimSpace(cmd.ProxyRouteSpec) == "" {
 				return errors.New("managed proxy mode requires --proxy-route-spec")
 			}
@@ -175,19 +223,19 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 				return fmt.Errorf("error activating Linux proxy routing bridge: %w", err)
 			}
 		}
-		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, cmd.AllowNetworkForProxy, cmd.AllowNetworkForProxy); err != nil {
+		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, managedNetwork, cmd.ManagedNetwork); err != nil {
 			return fmt.Errorf("error applying Linux sandbox restrictions: %w", err)
 		}
 		return execvpInDir(cmd.Command, cmd.CommandCWD)
 	}
-	if cmd.PermissionProfile.Filesystem.hasFullDiskWriteAccess() && !cmd.PermissionProfile.Filesystem.hasDenyReadEntries() && !cmd.AllowNetworkForProxy {
-		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, cmd.AllowNetworkForProxy, false); err != nil {
+	if cmd.PermissionProfile.Filesystem.hasFullDiskWriteAccess() && !cmd.PermissionProfile.Filesystem.hasDenyReadEntries() && !managedNetwork {
+		if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, false, managedNetwork, false, cmd.ManagedNetwork); err != nil {
 			return fmt.Errorf("error applying Linux sandbox restrictions: %w", err)
 		}
 		return execvpInDir(cmd.Command, cmd.CommandCWD)
 	}
 	if !cmd.UseLegacyLandlock {
-		if cmd.AllowNetworkForProxy {
+		if managedNetwork {
 			spec, err := prepareHostProxyRouteSpec()
 			if err != nil {
 				return fmt.Errorf("failed to prepare host proxy routing bridge: %w", err)
@@ -200,7 +248,7 @@ func runLinuxSandboxCommand(cmd *linuxSandboxCommand) error {
 		}
 		return execBubblewrap(cmd, inner)
 	}
-	if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, true, cmd.AllowNetworkForProxy, false); err != nil {
+	if err := applyLinuxPermissionProfile(cmd.PermissionProfile, cmd.SandboxPolicyCWD, true, managedNetwork, false, cmd.ManagedNetwork); err != nil {
 		return fmt.Errorf("error applying legacy Linux sandbox restrictions: %w", err)
 	}
 	return execvpInDir(cmd.Command, cmd.CommandCWD)
@@ -673,13 +721,13 @@ func ensureLegacyLandlockSupportsPolicy(cmd *linuxSandboxCommand) error {
 	return nil
 }
 
-func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, applyLandlockFS bool, allowNetworkForProxy bool, proxyRoutedNetwork bool) error {
+func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, applyLandlockFS bool, allowNetworkForProxy bool, proxyRoutedNetwork bool, managedNetwork *linuxManagedNetworkContext) error {
 	if profile == nil {
 		return errors.New("missing permission profile")
 	}
 	mode := linuxNetworkSeccompModeForProfile(profile, allowNetworkForProxy, proxyRoutedNetwork)
 	if mode != linuxNetworkSeccompNone {
-		if err := installLinuxNetworkSeccompFilter(mode); err != nil {
+		if err := installLinuxNetworkSeccompFilter(mode, managedNetwork); err != nil {
 			return err
 		}
 	}
@@ -741,7 +789,7 @@ func linuxNetworkSeccompModeForProfile(profile *linuxPermissionProfile, allowNet
 // Every mode that installs socket-family restrictions also blocks
 // `io_uring_setup`/`io_uring_enter`/`io_uring_register`, because io_uring can
 // create sockets (including `AF_VSOCK`) without going through `socket`.
-func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode) error {
+func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode, managedNetwork *linuxManagedNetworkContext) error {
 	groups := []seccomp.SyscallGroup{}
 	if mode != linuxNetworkSeccompVmSocketRestricted {
 		groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
@@ -779,12 +827,21 @@ func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode) error {
 			}},
 		)
 	case linuxNetworkSeccompProxyRouted:
+		// IP sockets stay allowed inside the isolated namespace so the command
+		// can reach the local routing bridge. A standalone AF_UNIX socket is
+		// denied unless the effective managed-network policy grants
+		// `dangerously_allow_all_unix_sockets`; AF_UNIX socket pairs stay
+		// allowed either way (see the socketpair rule below).
+		deniedSocketFamilies := []seccomp.Condition{
+			{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET)},
+			{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET6)},
+		}
+		if managedNetwork != nil && managedNetwork.DangerouslyAllowAllUnixSockets {
+			deniedSocketFamilies = append(deniedSocketFamilies, seccomp.Condition{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)})
+		}
 		groups = append(groups,
 			seccomp.SyscallGroup{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
-				{Name: "socket", Conditions: []seccomp.Condition{
-					{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET)},
-					{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_INET6)},
-				}},
+				{Name: "socket", Conditions: deniedSocketFamilies},
 				{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)}}},
 			}},
 		)
@@ -826,12 +883,15 @@ func buildInnerLinuxSandboxCommand(cmd *linuxSandboxCommand) ([]string, error) {
 		"--permission-profile", cmd.PermissionProfileJSON,
 		"--apply-seccomp-then-exec",
 	}
-	if cmd.AllowNetworkForProxy {
+	if cmd.managedNetworkEnabled() {
 		inner = append(inner, "--allow-network-for-proxy")
 		if strings.TrimSpace(cmd.ProxyRouteSpec) == "" {
 			return nil, errors.New("managed proxy mode requires --proxy-route-spec")
 		}
 		inner = append(inner, "--proxy-route-spec", cmd.ProxyRouteSpec)
+		if strings.TrimSpace(cmd.ManagedNetworkJSON) != "" {
+			inner = append(inner, "--managed-network", cmd.ManagedNetworkJSON)
+		}
 	}
 	inner = append(inner, "--")
 	inner = append(inner, cmd.Command...)
@@ -856,7 +916,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 	if !cmd.NoProc {
 		args = append(args, "--proc", "/proc")
 	}
-	if !cmd.PermissionProfile.NetworkEnabled || cmd.AllowNetworkForProxy {
+	if !cmd.PermissionProfile.NetworkEnabled || cmd.managedNetworkEnabled() {
 		args = append(args, "--unshare-net")
 	}
 	fs := cmd.PermissionProfile.Filesystem

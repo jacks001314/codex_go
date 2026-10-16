@@ -33,6 +33,7 @@ type CommandRunRequest struct {
 	LogDenials                    bool
 	UseLegacyLandlock             bool
 	AllowNetworkForProxy          bool
+	ManagedNetworkJSON            string
 	CodexLinuxSandboxExe          string
 	ConfigOverrides               []string
 	Command                       []string
@@ -48,6 +49,7 @@ type CommandRunPlan struct {
 	CodexLinuxSandboxExe    string
 	UseLegacyLandlock       bool
 	AllowNetworkForProxy    bool
+	ManagedNetworkJSON      string
 	RequiresPlatformSandbox bool
 	UnsupportedReason       string
 }
@@ -155,6 +157,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		SandboxType:          SandboxTypeNone,
 		UseLegacyLandlock:    req.UseLegacyLandlock,
 		AllowNetworkForProxy: req.AllowNetworkForProxy,
+		ManagedNetworkJSON:   strings.TrimSpace(req.ManagedNetworkJSON),
 		CodexLinuxSandboxExe: cleanRunPath(req.CodexLinuxSandboxExe),
 	}
 	var unsupported []string
@@ -250,7 +253,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExe(
+		wrapped, err := CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
 			plan.CodexLinuxSandboxExe,
 			plan.Command,
 			plan.CWD,
@@ -258,6 +261,7 @@ func BuildCommandRunPlan(req *CommandRunRequest) (*CommandRunPlan, error) {
 			plan.CWD,
 			plan.UseLegacyLandlock,
 			plan.AllowNetworkForProxy,
+			plan.ManagedNetworkJSON,
 		)
 		if err != nil {
 			return nil, err
@@ -1119,7 +1123,39 @@ func CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExe(
 	useLegacyLandlock bool,
 	allowNetworkForProxy bool,
 ) ([]string, error) {
-	args, err := linuxsandbox.CreateCommandArgsWithSandboxExe(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy)
+	return CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
+		sandboxExe,
+		command,
+		commandCWD,
+		profileJSON,
+		sandboxPolicyCWD,
+		useLegacyLandlock,
+		allowNetworkForProxy,
+		"",
+	)
+}
+
+// CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork
+// additionally forwards the effective managed-network context to the Linux
+// sandbox helper.
+//
+// The Rust helper treats that context as the proxy-mode switch
+// (`allow_network_for_proxy = managed_network.is_some()`) and reads
+// `dangerously_allow_all_unix_sockets` from it to decide whether standalone
+// `AF_UNIX` sockets stay blocked. An empty context therefore keeps the argv
+// byte-identical to
+// CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExe.
+func CreateLinuxSandboxCommandArgsForPermissionProfileJSONWithSandboxExeAndManagedNetwork(
+	sandboxExe string,
+	command []string,
+	commandCWD string,
+	profileJSON string,
+	sandboxPolicyCWD string,
+	useLegacyLandlock bool,
+	allowNetworkForProxy bool,
+	managedNetworkJSON string,
+) ([]string, error) {
+	args, err := linuxsandbox.CreateCommandArgsWithSandboxExeAndManagedNetwork(sandboxExe, command, commandCWD, profileJSON, sandboxPolicyCWD, useLegacyLandlock, allowNetworkForProxy, managedNetworkJSON)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSandboxRunRequest, err)
 	}
