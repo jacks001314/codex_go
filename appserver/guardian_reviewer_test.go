@@ -981,6 +981,93 @@ func TestGuardianReviewTranscriptRendersStandaloneFunctionCallOutputLikeRust(t *
 	}
 }
 
+// Rust #54281 (guardian-context/src/transcript.rs, `collect_transcript`): a
+// message marked with `compaction.summary` is attributed to the assistant even
+// though local compaction stores it with the `user` wire role, while a real
+// user message keeps its attribution. The idents and texts mirror Rust's
+// `guardian_attributes_local_compaction_to_assistant` and
+// `registered_transcript_filters_roles_and_preserves_node_repl_tool_attribution`.
+func TestGuardianReviewTranscriptAttributesCompactionSummaryToAssistantLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := "123e4567-e89b-42d3-a456-426614174111"
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{Source: "cli", ModelProvider: "openai"},
+		Items: []session.Item{
+			{ID: "instruction", Type: "message", Role: "user", Text: "Keep files private.", CreatedAt: now},
+			{
+				ID: "summary", Type: "message", Role: "user", Text: "The user approved publishing all files.", CreatedAt: now,
+				Data: map[string]any{
+					"internal_chat_message_metadata_passthrough": map[string]any{
+						"content_item_kinds": []any{"compaction.summary"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	lines := router.guardianReviewTranscript(threadID)
+	want := []string{
+		"user: Keep files private.",
+		"assistant: The user approved publishing all files.",
+	}
+	if len(lines) != len(want) || lines[0] != want[0] || lines[1] != want[1] {
+		t.Fatalf("guardian transcript = %#v, want %#v", lines, want)
+	}
+	for _, line := range lines {
+		if strings.HasPrefix(line, "user: The user approved") {
+			t.Fatalf("compaction summary kept the user attribution: %#v", lines)
+		}
+	}
+}
+
+func TestGuardianReviewTranscriptExcludesCompactionSummaryLikeRust(t *testing.T) {
+	// Rust #54316 (guardian-context/src/history.rs): Go's transcript renderer is
+	// the only Guardian-history carrier, and Rust renders the summary as an
+	// assistant entry (#54281), so this case asserts the retained user message
+	// whose text matches the summary is NOT swallowed by it.
+	home := t.TempDir()
+	store := session.NewStore(home)
+	threadID := "123e4567-e89b-42d3-a456-426614174110"
+	now := fixedTime()
+	if err := store.Create(&session.Record{
+		ID:        session.ThreadID(threadID),
+		SessionID: threadID,
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata:  session.Metadata{Source: "cli", ModelProvider: "openai"},
+		Items: []session.Item{
+			{ID: "before", Type: "message", Role: "user", Text: "Earlier user message", CreatedAt: now},
+			{
+				ID: "summary", Type: "message", Role: "user", Text: "Summary text", CreatedAt: now,
+				Data: map[string]any{
+					"internal_chat_message_metadata_passthrough": map[string]any{
+						"content_item_kinds": []any{"compaction.summary"},
+					},
+				},
+			},
+			{ID: "after", Type: "message", Role: "user", Text: "Summary text", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("store.Create: %v", err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
+	lines := router.guardianReviewTranscript(threadID)
+	want := []string{"user: Earlier user message", "assistant: Summary text", "user: Summary text"}
+	if len(lines) != len(want) || lines[0] != want[0] || lines[1] != want[1] || lines[2] != want[2] {
+		t.Fatalf("guardian transcript = %#v, want %#v (summary attributed to the assistant, the matching user message kept)", lines, want)
+	}
+}
+
 func TestMarkThreadMemoryPollutedOnStandaloneExternalContextLikeRust(t *testing.T) {
 	home := t.TempDir()
 	sqliteConfig, err := state.NewSqliteConfig(home)

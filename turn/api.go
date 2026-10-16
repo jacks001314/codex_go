@@ -226,24 +226,28 @@ type TurnStartParams struct {
 	ThreadID string `json:"threadId"`
 	// DisabledPluginIDs replaces this thread's disabled plugin IDs. Omitted or
 	// null preserves the saved list; an empty list clears it (Rust #44905).
-	DisabledPluginIDs     *[]string         `json:"disabledPluginIds,omitempty"`
-	Input                 []TurnUserInput   `json:"input,omitempty"`
-	ToolOutput            *TurnToolOutput   `json:"toolOutput,omitempty"`
-	Prompt                string            `json:"prompt,omitempty"`
-	ClientUserMessageID   string            `json:"clientUserMessageId,omitempty"`
-	ResponsesAPIMetadata  map[string]string `json:"responsesapiClientMetadata,omitempty"`
-	CWD                   string            `json:"cwd,omitempty"`
-	Model                 string            `json:"model,omitempty"`
-	Originator            string            `json:"originator,omitempty"`
-	TurnTrigger           string            `json:"turnTrigger,omitempty"`
-	ApprovalPolicy        any               `json:"approvalPolicy,omitempty"`
-	ApprovalsReviewer     *string           `json:"approvalsReviewer,omitempty"`
-	SandboxPolicy         any               `json:"sandboxPolicy,omitempty"`
-	Permissions           *string           `json:"permissions,omitempty"`
-	RuntimeWorkspaceRoots []string          `json:"runtimeWorkspaceRoots,omitempty"`
-	Environments          []map[string]any  `json:"environments,omitempty"`
-	ServiceTier           *string           `json:"serviceTier,omitempty"`
-	ServiceTierSet        bool              `json:"-"`
+	DisabledPluginIDs    *[]string         `json:"disabledPluginIds,omitempty"`
+	Input                []TurnUserInput   `json:"input,omitempty"`
+	ToolOutput           *TurnToolOutput   `json:"toolOutput,omitempty"`
+	Prompt               string            `json:"prompt,omitempty"`
+	ClientUserMessageID  string            `json:"clientUserMessageId,omitempty"`
+	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	// ResponsesAPIMetadataPatch adds or overwrites individual client
+	// metadata entries without replacing the map. It is applied after
+	// ResponsesAPIMetadata when both are supplied (Rust #54053).
+	ResponsesAPIMetadataPatch map[string]string `json:"responsesapiClientMetadataPatch,omitempty"`
+	CWD                       string            `json:"cwd,omitempty"`
+	Model                     string            `json:"model,omitempty"`
+	Originator                string            `json:"originator,omitempty"`
+	TurnTrigger               string            `json:"turnTrigger,omitempty"`
+	ApprovalPolicy            any               `json:"approvalPolicy,omitempty"`
+	ApprovalsReviewer         *string           `json:"approvalsReviewer,omitempty"`
+	SandboxPolicy             any               `json:"sandboxPolicy,omitempty"`
+	Permissions               *string           `json:"permissions,omitempty"`
+	RuntimeWorkspaceRoots     []string          `json:"runtimeWorkspaceRoots,omitempty"`
+	Environments              []map[string]any  `json:"environments,omitempty"`
+	ServiceTier               *string           `json:"serviceTier,omitempty"`
+	ServiceTierSet            bool              `json:"-"`
 	// ServiceTierForTurn overrides the service tier only for the turn this
 	// request starts ("default" for standard speed); it does not change the
 	// thread's tier and is ignored when the request steers a turn (Rust
@@ -450,14 +454,18 @@ func asciiLetter(value byte) bool {
 }
 
 type TurnSteerParams struct {
-	ThreadID             string                            `json:"threadId"`
-	ExpectedTurnID       string                            `json:"expectedTurnId"`
-	Input                []TurnUserInput                   `json:"input,omitempty"`
-	Prompt               string                            `json:"prompt,omitempty"`
-	ApprovalsReviewer    *string                           `json:"approvalsReviewer,omitempty"`
-	ClientUserMessageID  string                            `json:"clientUserMessageId,omitempty"`
-	ResponsesAPIMetadata map[string]string                 `json:"responsesapiClientMetadata,omitempty"`
-	AdditionalContext    map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
+	ThreadID             string            `json:"threadId"`
+	ExpectedTurnID       string            `json:"expectedTurnId"`
+	Input                []TurnUserInput   `json:"input,omitempty"`
+	Prompt               string            `json:"prompt,omitempty"`
+	ApprovalsReviewer    *string           `json:"approvalsReviewer,omitempty"`
+	ClientUserMessageID  string            `json:"clientUserMessageId,omitempty"`
+	ResponsesAPIMetadata map[string]string `json:"responsesapiClientMetadata,omitempty"`
+	// ResponsesAPIMetadataPatch adds or overwrites individual client
+	// metadata entries without replacing the map. It is applied after
+	// ResponsesAPIMetadata when both are supplied (Rust #54053).
+	ResponsesAPIMetadataPatch map[string]string                 `json:"responsesapiClientMetadataPatch,omitempty"`
+	AdditionalContext         map[string]AdditionalContextEntry `json:"additionalContext,omitempty"`
 }
 
 func (p *TurnSteerParams) MarshalJSON() ([]byte, error) {

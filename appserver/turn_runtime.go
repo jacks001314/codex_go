@@ -7271,7 +7271,15 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	postToolInputItems = r.currentTimePostToolInputItems(threadID, turnID, cfg, currentTimeState, postToolInputItems, appendExtraSessionItems)
 	postToolInputItems = r.networkApprovalPostToolInputItems(threadID, turnID, postToolInputItems, appendExtraSessionItems)
 	inputItems = append(inputItems, skillInputItems...)
-	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), params.ResponsesAPIMetadata)
+	// Rust #54053: the request's client-metadata update (replacement then patch)
+	// lands on the turn's own client metadata, which is then merged over the
+	// configured Responses metadata.
+	clientMetadata := turn.ApplyResponsesAPIClientMetadataUpdate(nil, turn.ResponsesAPIClientMetadataUpdate{
+		Replacement:    params.ResponsesAPIMetadata,
+		HasReplacement: params.ResponsesAPIMetadata != nil,
+		Patch:          params.ResponsesAPIMetadataPatch,
+	})
+	extraMetadata := turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), clientMetadata)
 	serviceTier := r.appServiceTierForTurn(cfg, params, modelProviderConfig.Model)
 	// Rust #41308: every subagent turn follows the root thread's service tier,
 	// not just the spawn turn. Fast mode still gates ordinary tiers, and #46230
@@ -8020,10 +8028,25 @@ func uint64PtrFromUnixSeconds(value time.Time) *uint64 {
 }
 
 func (r *RuntimeRouter) steerClientMetadata(params *turn.TurnSteerParams) map[string]string {
-	if r == nil || params == nil || len(params.ResponsesAPIMetadata) == 0 {
+	if r == nil || params == nil {
 		return nil
 	}
-	return r.activeTurnClientMetadata(params.ThreadID, params.ExpectedTurnID, params.ResponsesAPIMetadata)
+	update := turn.ResponsesAPIClientMetadataUpdate{
+		Replacement:    params.ResponsesAPIMetadata,
+		HasReplacement: params.ResponsesAPIMetadata != nil,
+		Patch:          params.ResponsesAPIMetadataPatch,
+	}
+	if update.Empty() {
+		return nil
+	}
+	// Rust #54053: a steer's update lands on the running turn's current client
+	// metadata, so a patch keeps the entries the turn already reports.
+	current := map[string]string(nil)
+	if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.ExpectedTurnID); active != nil && active.RunConfig != nil {
+		current = cloneStringMap(active.RunConfig.ClientMetadata)
+	}
+	return r.activeTurnClientMetadata(params.ThreadID, params.ExpectedTurnID,
+		turn.ApplyResponsesAPIClientMetadataUpdate(current, update))
 }
 
 // activeTurnClientMetadata rebuilds a running turn's request metadata from its

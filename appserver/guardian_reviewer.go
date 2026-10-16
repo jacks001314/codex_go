@@ -827,6 +827,12 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 	lines := make([]string, 0, maxLines)
 	for i := len(record.Items) - 1; i >= 0 && len(lines) < maxLines; i-- {
 		item := record.Items[i]
+		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
+		// excluded from the transcript while the surrounding user messages
+		// survive, including a message whose text matches the summary.
+		if guardianTranscriptExcludedItem(&item) {
+			continue
+		}
 		// Rust #39791: standalone function_call_output items (no call id) are
 		// external context; render them as tool results with the namespaced
 		// tool name and a placeholder for non-text content.
@@ -864,6 +870,13 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 		if role == "" {
 			role = strings.TrimSpace(item.Type)
 		}
+		if guardianTranscriptIsCompactionSummary(&item) {
+			// Rust #54281: local compaction stores generated summaries with the
+			// `user` wire role, but a summary is not user authorization, so the
+			// transcript attributes it to the assistant while real user
+			// messages keep their attribution.
+			role = "assistant"
+		}
 		if role != "" {
 			text = role + ": " + text
 		}
@@ -873,6 +886,37 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 		lines[i], lines[j] = lines[j], lines[i]
 	}
 	return lines
+}
+
+// guardianTranscriptExcludedItem reports whether a session item is kept out of
+// the Guardian review transcript. Reasoning, context-compaction and
+// compaction-trigger items carry no guardrail evidence (Rust's TranscriptHistory
+// drops every non-message item), so they never reach the reviewer.
+func guardianTranscriptExcludedItem(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.TrimSpace(item.Type) {
+	case "reasoning", "context_compaction", "compaction_trigger":
+		return true
+	}
+	return false
+}
+
+// guardianTranscriptIsCompactionSummary reports whether a session item is a
+// generated compaction summary (Rust #54281): either the harness-owned content
+// classification names the shared compaction summary kind, or Go's persisted
+// compaction marker names it. Both are model context, not user evidence.
+func guardianTranscriptIsCompactionSummary(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	for _, kind := range sessionItemContentItemKinds(item) {
+		if strings.EqualFold(kind, codexctx.CompactionSummaryKind) {
+			return true
+		}
+	}
+	return sessionItemIsCompactionOutput(item)
 }
 
 func (r *RuntimeRouter) notifyGuardianReviewEvent(threadID string, event *state.Event) {

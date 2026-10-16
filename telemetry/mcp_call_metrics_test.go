@@ -80,6 +80,141 @@ func TestMCPCallOutcomeForResultLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #54094: an allowlisted `codex/telemetry` error code is the fallback
+// after the structured content and connector authentication codes. The
+// classification only reads the result, so the model-visible output is
+// unchanged by construction (`MCPCallOutcomeForResult` takes no content).
+func TestMCPCallOutcomeReadsTelemetryCodeLikeRust(t *testing.T) {
+	meta := map[string]any{
+		MCPResultTelemetryMetaKey: map[string]any{"error_code": "locator_timeout"},
+	}
+	got := MCPCallOutcomeForResult(true, true, nil, meta)
+	want := MCPCallOutcome{Status: "error", ErrorType: MCPCallErrorTypeToolResult, ErrorCode: "locator_timeout"}
+	if got != want {
+		t.Fatalf("outcome = %#v, want %#v", got, want)
+	}
+}
+
+// Rust #54094: the telemetry code sits behind the structured content and the
+// connector authentication code, so it never wins over them.
+func TestMCPCallOutcomePreservesErrorCodePrecedenceLikeRust(t *testing.T) {
+	meta := map[string]any{
+		MCPResultTelemetryMetaKey: map[string]any{"error_code": "locator_timeout"},
+		"_codex_apps": map[string]any{
+			"connector_auth_failure": map[string]any{
+				"is_auth_failure": true,
+				"error_code":      "UNAUTHORIZED",
+			},
+		},
+	}
+	cases := []struct {
+		name              string
+		structuredContent map[string]any
+		wantCode          string
+	}{
+		{name: "structured content wins", structuredContent: map[string]any{"error_code": "RATE_LIMITED"}, wantCode: "RATE_LIMITED"},
+		{name: "connector auth failure wins over telemetry", structuredContent: nil, wantCode: "UNAUTHORIZED"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got := MCPCallOutcomeForResult(true, true, testCase.structuredContent, meta)
+			if got.ErrorCode != testCase.wantCode {
+				t.Fatalf("error code = %q, want %q", got.ErrorCode, testCase.wantCode)
+			}
+		})
+	}
+}
+
+// Rust #54094: unrecognized metadata codes are ignored instead of being relayed,
+// including values that carry a credential or a suffix.
+func TestMCPCallOutcomeIgnoresInvalidTelemetryCodesLikeRust(t *testing.T) {
+	metas := []map[string]any{
+		{MCPResultTelemetryMetaKey: "invalid"},
+		{MCPResultTelemetryMetaKey: map[string]any{"error_code": 42}},
+		{MCPResultTelemetryMetaKey: map[string]any{"error_code": "Bearer credential-sentinel"}},
+		{MCPResultTelemetryMetaKey: map[string]any{"error_code": "locator_timeout:secret-sentinel"}},
+	}
+	for _, meta := range metas {
+		got := MCPCallOutcomeForResult(true, true, map[string]any{"error_code": ""}, meta)
+		if got.ErrorCode != MCPCallErrorCodeUnknown {
+			t.Fatalf("outcome = %#v for meta %#v, want the unknown code", got, meta)
+		}
+	}
+}
+
+// Rust #54094 (`caller_error_code_only_applies_to_request_failures`): a
+// caller-classified request code replaces only an `mcp_request` failure's
+// fallback code.
+func TestMCPCallOutcomeRequestErrorCodeOnlyForRequestFailuresLikeRust(t *testing.T) {
+	request := MCPCallOutcomeForResult(false, false, nil, nil).WithRequestErrorCode("request_timeout")
+	wantRequest := MCPCallOutcome{Status: "error", ErrorType: MCPCallErrorTypeMCPRequest, ErrorCode: "request_timeout"}
+	if request != wantRequest {
+		t.Fatalf("request outcome = %#v, want %#v", request, wantRequest)
+	}
+	toolResult := MCPCallOutcomeForResult(true, true, map[string]any{"error_code": "locator_timeout"}, nil)
+	if got, want := toolResult.WithRequestErrorCode("request_timeout"), toolResult; got != want {
+		t.Fatalf("tool-result outcome = %#v, want it unchanged %#v", got, want)
+	}
+	if got := MCPCallOutcomeForResult(false, false, nil, nil).WithRequestErrorCode(""); got.ErrorCode != MCPCallErrorCodeUnknown {
+		t.Fatalf("empty caller code = %#v, want the unknown fallback", got)
+	}
+}
+
+// Rust #54046 (`McpCallMetricOutcome::approval_cancelled`): a cancelled MCP
+// approval reports `error_type=approval`, `error_code=cancelled` and the
+// reviewer that resolved it, defaulting to `unknown` for an absent or unknown
+// source.
+func TestMCPCallOutcomeApprovalCancelledLikeRust(t *testing.T) {
+	cases := []struct {
+		source string
+		want   string
+	}{
+		{source: "guardian", want: "guardian"},
+		{source: "user", want: "user"},
+		{source: "hook", want: "hook"},
+		{source: "", want: "unknown"},
+		{source: "bearer credential-sentinel", want: "unknown"},
+	}
+	for _, testCase := range cases {
+		outcome := MCPCallOutcomeApprovalCancelled(testCase.source)
+		if outcome.Status != "error" || outcome.ErrorType != "approval" || outcome.ErrorCode != "cancelled" {
+			t.Fatalf("outcome = %#v, want error/approval/cancelled", outcome)
+		}
+		if outcome.ApprovalSource != testCase.want {
+			t.Fatalf("approval source = %q, want %q", outcome.ApprovalSource, testCase.want)
+		}
+		sink := &recordingTurnMetricSink{}
+		EmitMCPCallMetrics(sink, outcome, "example", "shell", "", "", 0)
+		var found bool
+		for _, counter := range sink.counters {
+			if counter.name != MCPCallErrorCountMetric {
+				continue
+			}
+			found = true
+			if counter.tags["error_type"] != "approval" || counter.tags["error_code"] != "cancelled" {
+				t.Fatalf("error tags = %#v", counter.tags)
+			}
+			if counter.tags["approval_source"] != testCase.want {
+				t.Fatalf("approval_source tag = %q, want %q", counter.tags["approval_source"], testCase.want)
+			}
+		}
+		if !found {
+			t.Fatalf("no %s counter recorded", MCPCallErrorCountMetric)
+		}
+	}
+	// A call that is not an approval cancellation never carries the tag.
+	sink := &recordingTurnMetricSink{}
+	EmitMCPCallMetrics(sink, MCPCallOutcome{Status: "error", ErrorType: MCPCallErrorTypeToolResult, ErrorCode: "rate_limited"}, "example", "shell", "", "", 0)
+	for _, counter := range sink.counters {
+		if counter.name != MCPCallErrorCountMetric {
+			continue
+		}
+		if _, ok := counter.tags["approval_source"]; ok {
+			t.Fatalf("approval_source leaked into a tool-result failure: %#v", counter.tags)
+		}
+	}
+}
+
 // A reported error code longer than the cap is truncated like Rust's
 // truncate_str_to_char_boundary.
 func TestMCPCallOutcomeTruncatesErrorCodeLikeRust(t *testing.T) {

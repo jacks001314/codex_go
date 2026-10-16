@@ -82,6 +82,38 @@ type ExchangedTokens struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+// RefreshReason is the caller-reported diagnostic Rust attaches to a ChatGPT
+// token refresh request (Rust `login/src/oauth/client.rs::RefreshReason`,
+// #53991). It is never evidence of token validity; it only tells AuthAPI why
+// the refresh was requested.
+type RefreshReason string
+
+const (
+	// RefreshReasonProactiveExpiry means the access token is inside the refresh
+	// window (Rust `RefreshReason::ProactiveExpiry`).
+	RefreshReasonProactiveExpiry RefreshReason = "proactive_expiry"
+	// RefreshReasonScheduled means the periodic refresh interval elapsed
+	// (Rust `RefreshReason::Scheduled`).
+	RefreshReasonScheduled RefreshReason = "scheduled"
+	// RefreshReasonUnauthorizedRecovery means a 401 triggered the recovery flow
+	// (Rust `RefreshReason::UnauthorizedRecovery`).
+	RefreshReasonUnauthorizedRecovery RefreshReason = "unauthorized_recovery"
+	// RefreshReasonForced means an explicit refresh was requested
+	// (Rust `RefreshReason::Forced`, the default of `refresh_token`).
+	RefreshReasonForced RefreshReason = "forced"
+)
+
+// RefreshReasonValue reports the wire value Rust sends in the
+// `refresh_reason` grant parameter. An unknown reason is omitted instead of
+// being relayed.
+func RefreshReasonValue(reason RefreshReason) string {
+	switch reason {
+	case RefreshReasonProactiveExpiry, RefreshReasonScheduled, RefreshReasonUnauthorizedRecovery, RefreshReasonForced:
+		return string(reason)
+	}
+	return ""
+}
+
 type RefreshChatGPTTokenOptions struct {
 	CodexHome    string
 	Issuer       string
@@ -90,6 +122,11 @@ type RefreshChatGPTTokenOptions struct {
 	RefreshToken string
 	AuthSnapshot *AuthDotJSON
 	StoreOptions *StoreOptions
+	// Reason reports why the caller refreshes, mirroring Rust
+	// `RefreshTokenGrant::refresh_reason` (#53991). The zero value is Rust's
+	// `RefreshReason::Forced`, which is what the explicit `refresh_token`
+	// entry points report; gateway refreshes never carry the field.
+	Reason RefreshReason
 }
 
 func NormalizeOAuthOptions(opts *OAuthOptions) *OAuthOptions {
@@ -538,6 +575,16 @@ func RefreshChatGPTTokens(ctx context.Context, opts *RefreshChatGPTTokenOptions)
 		"client_id":     normalized.ClientID,
 		"grant_type":    "refresh_token",
 		"refresh_token": refreshToken,
+	}
+	// Rust #53991: report why the refresh was requested. The ChatGPT entry
+	// points default to `forced`; gateway refreshes go through their own
+	// request and never carry the field.
+	reason := opts.Reason
+	if reason == "" {
+		reason = RefreshReasonForced
+	}
+	if value := RefreshReasonValue(reason); value != "" {
+		body["refresh_reason"] = value
 	}
 	var out ExchangedTokens
 	if err := postJSON(ctx, normalized.HTTPClient, refreshTokenURL(normalized.Issuer), body, &out); err != nil {

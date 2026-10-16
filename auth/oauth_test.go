@@ -370,6 +370,61 @@ func TestRefreshChatGPTTokensPersistsUpdatedAccessToken(t *testing.T) {
 	}
 }
 
+// Rust #53991: the ChatGPT refresh request reports why the refresh was asked
+// for (`proactive_expiry`, `scheduled`, `unauthorized_recovery`, `forced`),
+// and an unset reason defaults to `forced` like Rust's `refresh_token`. An
+// unrecognized reason is omitted instead of being relayed.
+func TestRefreshChatGPTTokensReportsRefreshReasonLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		reason RefreshReason
+		want   string
+	}{
+		{name: "proactive expiry", reason: RefreshReasonProactiveExpiry, want: "proactive_expiry"},
+		{name: "scheduled", reason: RefreshReasonScheduled, want: "scheduled"},
+		{name: "unauthorized recovery", reason: RefreshReasonUnauthorizedRecovery, want: "unauthorized_recovery"},
+		{name: "forced", reason: RefreshReasonForced, want: "forced"},
+		{name: "unset defaults to forced", reason: "", want: "forced"},
+		{name: "unknown reason is omitted", reason: RefreshReason("Bearer credential-sentinel"), want: ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			clearAuthEnvForRefreshTests(t)
+			home := t.TempDir()
+			if err := PersistChatGPTTokens(home, &ExchangedTokens{
+				IDToken:      fakeJWT(map[string]any{"chatgpt_account_id": "account-123"}),
+				AccessToken:  "old-access-token",
+				RefreshToken: "old-refresh-token",
+			}); err != nil {
+				t.Fatalf("PersistChatGPTTokens() error = %v", err)
+			}
+			var requestBody map[string]string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+					t.Fatalf("Decode() error = %v", err)
+				}
+				writeJSONAuth(t, w, map[string]string{
+					"access_token":  "new-access-token",
+					"refresh_token": "new-refresh-token",
+				})
+			}))
+			defer server.Close()
+
+			if _, err := RefreshChatGPTTokens(context.Background(), &RefreshChatGPTTokenOptions{
+				CodexHome: home,
+				Issuer:    server.URL,
+				ClientID:  "client-test",
+				Reason:    testCase.reason,
+			}); err != nil {
+				t.Fatalf("RefreshChatGPTTokens() error = %v", err)
+			}
+			if got := requestBody["refresh_reason"]; got != testCase.want {
+				t.Fatalf("refresh_reason = %q, want %q (body %#v)", got, testCase.want, requestBody)
+			}
+		})
+	}
+}
+
 func TestRefreshChatGPTTokensRecordsPermanentFailure(t *testing.T) {
 	clearAuthEnvForRefreshTests(t)
 	home := t.TempDir()

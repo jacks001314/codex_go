@@ -61,6 +61,89 @@ type MCPCallOutcome struct {
 	Status    string
 	ErrorType string
 	ErrorCode string
+	// ApprovalSource names the reviewer that resolved a cancelled approval
+	// (Rust #54046 `approval_source`): `guardian`, `user`, `hook` or `unknown`.
+	// It identifies the reviewer, not who caused the cancellation.
+	ApprovalSource string
+}
+
+// MCPCallOutcomeApprovalCancelled builds Rust's
+// `McpCallMetricOutcome::approval_cancelled` (#54046): a cancelled MCP approval
+// reported as `error_type=approval`, `error_code=cancelled` plus the reviewer
+// that resolved it.
+func MCPCallOutcomeApprovalCancelled(approvalSource string) MCPCallOutcome {
+	source := strings.TrimSpace(strings.ToLower(approvalSource))
+	switch source {
+	case "guardian", "user", "hook":
+	default:
+		source = "unknown"
+	}
+	return MCPCallOutcome{
+		Status:         "error",
+		ErrorType:      "approval",
+		ErrorCode:      "cancelled",
+		ApprovalSource: source,
+	}
+}
+
+// WithRequestErrorCode carries a caller-classified request failure code into an
+// outcome, mirroring Rust `McpCallMetricOutcome::with_request_error_code`
+// (#54094): the code only replaces the fallback `unknown` code of an
+// `mcp_request` failure, so a tool-result code is never overwritten.
+func (outcome MCPCallOutcome) WithRequestErrorCode(code string) MCPCallOutcome {
+	if outcome.ErrorType == MCPCallErrorTypeMCPRequest && code != "" {
+		outcome.ErrorCode = code
+	}
+	return outcome
+}
+
+// allowlistedCodexTelemetryErrorCode reports whether a `codex/telemetry`
+// `error_code` is one of the bounded codes Rust's
+// `allowlisted_codex_telemetry_error_code` accepts (#54094). Anything else - an
+// unknown word, a non-string, a value carrying a credential or a suffix - is
+// rejected instead of being relayed into metrics and spans.
+func allowlistedCodexTelemetryErrorCode(code string) (string, bool) {
+	switch code {
+	case "kernel_start_failed",
+		"kernel_exited",
+		"kernel_io_error",
+		"execution_timeout",
+		"execution_cancelled",
+		"execution_error",
+		"execution_rejected",
+		"execution_reset",
+		"import_error",
+		"syntax_error",
+		"reference_error",
+		"type_error",
+		"uncaught_exception",
+		"unhandled_rejection",
+		"locator_timeout",
+		"guardian_denied":
+		return code, true
+	}
+	return code, false
+}
+
+// codexTelemetryErrorCode reads the allowlisted `error_code` a result reports
+// through `_meta["codex/telemetry"]` (Rust's fallback after the structured
+// content and connector authentication codes).
+func codexTelemetryErrorCode(meta map[string]any) string {
+	if meta == nil {
+		return ""
+	}
+	telemetryMeta, _ := meta[MCPResultTelemetryMetaKey].(map[string]any)
+	if telemetryMeta == nil {
+		return ""
+	}
+	code, _ := telemetryMeta["error_code"].(string)
+	if code == "" {
+		return ""
+	}
+	if allowlisted, ok := allowlistedCodexTelemetryErrorCode(code); ok {
+		return allowlisted
+	}
+	return ""
 }
 
 // MCPCallOutcomeForResult classifies one MCP tool call the way Rust's
@@ -83,6 +166,11 @@ func MCPCallOutcomeForResult(hasResult bool, isError bool, structuredContent map
 	}
 	if errorCode == "" {
 		errorCode = mcpConnectorAuthFailureErrorCode(meta)
+	}
+	if errorCode == "" {
+		// Rust #54094: an allowlisted `codex/telemetry` code is the last
+		// fallback before the `unknown` code.
+		errorCode = codexTelemetryErrorCode(meta)
 	}
 	if errorCode == "" {
 		errorCode = MCPCallErrorCodeUnknown
@@ -153,6 +241,10 @@ func EmitMCPCallMetrics(sink TurnMetricSink, outcome MCPCallOutcome, server stri
 	}
 	errorTags["error_type"] = SanitizeMetricTagValue(outcome.ErrorType)
 	errorTags["error_code"] = outcome.ErrorCode
+	if source := strings.TrimSpace(outcome.ApprovalSource); source != "" {
+		// Rust #54046: the source identifies the reviewer, not who cancelled.
+		errorTags["approval_source"] = SanitizeMetricTagValue(source)
+	}
 	sink.Counter(MCPCallErrorCountMetric, 1, errorTags)
 }
 

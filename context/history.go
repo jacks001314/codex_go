@@ -420,7 +420,7 @@ func replaceImagesInContent(content []eventmap.ContentItem, kinds []string, plac
 		if content[i].Kind == eventmap.ContentInputImage {
 			content[i] = eventmap.ContentItem{Kind: eventmap.ContentInputText, Text: placeholder}
 			if i < len(kinds) {
-				kinds[i] = "images.unsupported"
+				kinds[i] = UnsupportedImageKind
 			}
 			replaced = true
 		}

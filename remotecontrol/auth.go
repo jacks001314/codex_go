@@ -355,10 +355,13 @@ func (r *UnauthorizedRecovery) nextReload() (*UnauthorizedRecoveryStepResult, er
 }
 
 func (r *UnauthorizedRecovery) nextRefreshToken(ctx context.Context) (*UnauthorizedRecoveryStepResult, error) {
+	// Rust #53991: UnauthorizedRecovery's refresh step reports
+	// `unauthorized_recovery` rather than the `forced` default.
 	refreshed, err := auth.RefreshChatGPTTokens(ctx, &auth.RefreshChatGPTTokenOptions{
 		CodexHome:    r.codexHome,
 		AuthSnapshot: r.authSnapshot,
 		StoreOptions: r.storeOptions,
+		Reason:       auth.RefreshReasonUnauthorizedRecovery,
 	})
 	if err != nil {
 		return nil, err

@@ -601,6 +601,52 @@ func RootTurnIDFromResponsesMetadata(raw string) string {
 	return strings.TrimSpace(value)
 }
 
+// ResponsesAPIClientMetadataUpdate mirrors Rust's
+// `ResponsesApiClientMetadataUpdate` (codex-rs/protocol/src/turn_input.rs,
+// #54053): an optional replacement followed by a patch.
+type ResponsesAPIClientMetadataUpdate struct {
+	// Replacement replaces the current client metadata, including every
+	// unprotected entry when it is an empty map.
+	Replacement map[string]string
+	// HasReplacement distinguishes an empty replacement from an absent one, the
+	// way Rust's `Option<HashMap<_, _>>` does.
+	HasReplacement bool
+	// Patch adds or overwrites individual entries while keeping the others.
+	Patch map[string]string
+}
+
+// Empty reports whether the update carries neither a replacement nor a patch.
+func (u ResponsesAPIClientMetadataUpdate) Empty() bool {
+	return !u.HasReplacement && len(u.Patch) == 0
+}
+
+// ApplyResponsesAPIClientMetadataUpdate applies an update the way Rust's
+// `TurnMetadataState::update_responsesapi_client_metadata` does (#54053): the
+// replacement replaces the current map, then the patch overwrites and adds
+// individual entries. Reserved keys are dropped by the same filter every other
+// client-metadata entry passes through, and an empty update returns the current
+// map untouched.
+func ApplyResponsesAPIClientMetadataUpdate(current map[string]string, update ResponsesAPIClientMetadataUpdate) map[string]string {
+	patch := FilterClientMetadata(update.Patch)
+	if update.Empty() {
+		return current
+	}
+	out := make(map[string]string, len(current)+len(update.Replacement)+len(patch))
+	if update.HasReplacement {
+		for key, value := range FilterClientMetadata(update.Replacement) {
+			out[key] = value
+		}
+	} else {
+		for key, value := range current {
+			out[key] = value
+		}
+	}
+	for key, value := range patch {
+		out[key] = value
+	}
+	return out
+}
+
 func MergeClientMetadata(base map[string]string, overlay map[string]string) map[string]string {
 	if len(base) == 0 && len(overlay) == 0 {
 		return nil
