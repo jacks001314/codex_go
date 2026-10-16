@@ -202,3 +202,19 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 2. 单次 push 失败（`Failed to connect` / `Connection was reset`）时：**记录现状就此打住**（本地 sha、`origin/main` sha、领先几个提交），**不要在同一 turn 内连续重试**。实测教训：上一轮我连试 5–6 次，第三次起就变成 `Connection was reset` —— 频繁重试会加剧故障。下一个并入选批后自然重试即可（当时一次成功）。
 3. 失败时**不改写交付结论**：如实写“本地已提交、远端落后 N 个提交、等通道恢复”，不能写成“已交付”也不能写成“交付失败”。
 4. 车道侧不变：R9 仍禁止车道 `commit/push/tag/stash`，所以推送节流只作用于队长。
+
+## R5-undecies · 节点事实纪律（用户纠正后，2026-10-17）
+
+1. **换节点唯一入口 = 派生创建**（`agent_admin_create_derived` + `target_node_id`），只有队长能用；`target_node_id` 必须是**真实 node_id**，**禁止把显示名当 id**（实测：传 `"linux_node"` 被拒，错误文案是 `ResourceExhausted: node resources are unavailable`，我误判成"节点资源不足"，连续多轮写进 blocked，实际是我的 id 写错）。
+2. **node_id 查询路径**（无专门工具，实测有效）：Master 侧 `C:\Users\huoga\.syntropy\master\.syntropy-run-master\master.out.log` —— deploy 行 `deploy node <id> to <ip>:22 using artifact <artifact>` 与每 60s 的心跳行 `receive a heartbeat request from node:<id>,name:<name>`；本机自身画像在同名 run 日志的 `Ping master node ok` 行（含 name/os/arch/privIP/user）与 `conf\nbot.json` 的 `nodeId`。
+3. 拿到 `ResourceExhausted` 先做**两个**判断再下结论：① id 是否正确（未知节点与资源不足共用同一句话）；② 该节点最近心跳是否新鲜（master.out.log 尾部）。
+4. **已知节点（2026-10-17）**：Windows worker `19ff0e1d456d25a010ee9b62127663ae`（local_windows_amd64 / 192.168.1.37 / 16 vCPU·15.7GB / 全部 Windows 车道）；Linux worker `06aac1d3185c1999dee1e86482026deb`（linux_node / 192.168.1.99 / Kali Rolling 2026.1 / 16 核·31GiB·603GB / go1.26.3 / bwrap 0.11.0 + landlock）。
+
+## R5-duodecies · 跨节点车道纪律（Linux 节点，2026-10-17 实测）
+
+1. 跨节点**不共享本地文件系统**：唯一同源手段是 `git push/fetch`（队长 push 后车道 `fetch` 即可对齐）或经 Master 传 patch。派工单必须写清**目标节点上的仓库绝对路径**（Linux: `/home/jacks/jacks_dev/codex_go`；Rust 上游: `/home/jacks/jacks_dev/codex`）。
+2. 车道台落后队长 tip 时，它的"门禁通过"只对**那个旧时点**成立（L-0 的结论只对 r88 成立）。
+3. **Linux 节点已证能力**：`./sandbox/linuxsandbox/` 20/20 PASS（Windows 上该包编译失败）、bwrap 真沙箱 EXIT=0、windows-skip 的 symlink 用例真跑真过、`go build ./...` 43s（Windows 60–140s）、`./appserver/` 整包可在 Linux 跑（Windows 车道因 CPU 争抢不敢跑）。
+4. **Linux 节点缺口**：无 powershell/jq；裸 curl 到 github/proxy.golang.org 超时（goproxy.cn 通、git-over-https 通）；`appserver` 整包需 5 个 `CODEX_RUST_*` env 指向 Linux 侧路径，否则成片 SKIP。
+5. 放置规则：Linux-only 门禁与实现（bubblewrap/landlock/symlink/NFS/loopback e2e/zsh-fork）放 Linux 节点；改同一批文件的车道仍留 Windows 节点。同一文件同一时刻只能一个写入者。
+6. **陈旧重放**：同一回包可能在多轮后重复投递（实测收到 7 小时前的 T2 回包，其 §8 警告的内容早已入库 `8e5a51f0`）。并入前先查当前 tip 是否已包含（`git log --oneline -1 -- <path>` / `git cat-file`），不要按陈旧回包重复派工。
