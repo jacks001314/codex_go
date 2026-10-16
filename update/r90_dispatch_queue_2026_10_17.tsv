@@ -26,7 +26,6 @@ pr	sha	subject	lane_face	files	note
 54098	0c5720ea0f	Keep environment tools stable across readiness changes (#54098)	A-core	15	
 54094	12fd621f62	Preserve specific MCP failure codes in metrics and spans (#54094)	B-mcp/sandbox	9	
 54081	01ff831ce9	Centralize vertical navigation in TUI list views (#54081)	TUI	7	
-54080	57b5e89be8	Extract TUI user-turn submission into a dedicated module (#54080)	TUI	3	
 54070	ae11049397	Expose gateway authentication as a reusable OAuth session API (#54070)	other:login	9	
 54059	b7ba02f880	Support store-owned preparation when resuming threads (#54059)	A-core	11	
 54058	9e7b2a577f	Forward turn metadata to image generation and edit requests (#54058)	A-core	6	
@@ -162,7 +161,7 @@ pr	sha	subject	lane_face	files	note
 52621	47b80571f0	Add template setup for local agent message boards (#52621)	other:ext	8	
 52610	c63929af50	Align Linux sandbox names and docs with bubblewrap and seccomp (#52610)	B-mcp/sandbox	7	
 52568	36ae1561b9	Expose message board permissions and structured denials (#52568)	other:ext	14	
-52557	5fe4fc8f7c	Forward clipboard copies to the terminal in Herdr sessions (#52557)	TUI	2	
+52557	5fe4fc8f7c	Forward clipboard copies to the terminal in Herdr sessions (#52557)	TUI	2	blocked_precondition (lead ruling): the Herdr flag half cannot land alone - the non-SSH path would need Rust's eager forwarding (clipboard_copy.rs:234-236 .then(terminal_copy)), which changes existing tmux behaviour and needs a real terminal/tmux target to verify. A flag-only change would be a dead key. Keep blocked until a scope decision + a tmux-capable target exist.
 52381	5b3c1522f8	Preserve per-session routing for gRPC code mode (#52381)	other:code-mode	9	
 52363	03b761dca9	Expand realtime v3 voice support (#52363)	pin-protocol	13	
 52337	b6e8a2e207	Add durable thread read state with revision-checked updates (#52337)	A-core	6	
