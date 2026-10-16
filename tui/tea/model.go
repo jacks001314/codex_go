@@ -3042,6 +3042,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if m.keyMatches("global", "open_transcript", keySpec) {
 			return m, m.openTranscriptOverlay()
 		}
+		if m.keyMatches("global", "find_transcript", keySpec) {
+			// Rust #46734 (app/input.rs:584-597): the global find-transcript
+			// shortcut opens the transcript and starts its search bar.
+			return m, m.openTranscriptFind()
+		}
 		if m.keyMatches("global", "open_agents", keySpec) {
 			return m, m.applyAgentsCommand()
 		}
@@ -8008,6 +8013,20 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	return m.openPagerTerminalMode()
 }
 
+// openTranscriptFind opens the transcript pager and starts its find bar. Rust
+// #46734 `global.find_transcript` (keymap.rs:1678, app/input.rs:584-597) reaches
+// the overlay the same way: the shortcut opens the transcript overlay and calls
+// `begin_search` on it, so the search bar owns the keyboard from the first frame.
+func (m *Model) openTranscriptFind() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	command := m.openTranscriptOverlay()
+	if m.overlay != nil && m.overlayTranscript {
+		m.overlay.BeginFind()
+	}
+	return command
+}
 func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil

@@ -240,30 +240,22 @@ func ResolvedKeymapBindings(config *KeymapConfig, context string, action string)
 		if context == "global" && action == "open_warnings" && config.mainSurfaceBindingExists("f2") {
 			return nil, "default", false
 		}
-		// Rust #44424/#44433/#45255: the agents-dashboard defaults yield to an
-		// explicit binding for the same key on the agents, list, or global
-		// surface, so a new default never shadows an existing shortcut. The
-		// aliases are the actions' current default keys.
+		// Rust #44424/#44433/#45255/#49517 (tui/src/keymap.rs:1396-1428): each
+		// agents-dashboard default binding yields individually to a matching
+		// configured binding on the agents, list, or global surface, so a new
+		// default never shadows a shortcut the user already relies on. #49517
+		// added a second `agents.search` default (f3 and /) next to the new
+		// `agents.fork` default, so the guard works per binding like Rust's
+		// retain loop instead of per action.
 		if context == "agents" {
-			for _, candidate := range []struct {
-				action string
-				alias  string
-			}{
-				{action: "resume", alias: "o"},
-				{action: "search", alias: "f"},
-				{action: "new_task", alias: "n"},
-				{action: "new_worktree", alias: "w"},
-				{action: "rename", alias: "r"},
-				{action: "stop", alias: "x"},
-				{action: "archive", alias: "a"},
-				{action: "delete", alias: "delete"},
-				{action: "hide", alias: "h"},
-				{action: "toggle_pin", alias: "p"},
-				{action: "toggle_grouping", alias: "g"},
-			} {
-				if action == candidate.action && config.agentsAliasConfigured(candidate.alias) {
-					return nil, "default", false
+			if descriptor, ok := FindKeymapAction(context, action); ok {
+				kept := make([]string, 0, len(descriptor.DefaultBindings))
+				for _, binding := range descriptor.DefaultBindings {
+					if !config.agentsAliasConfigured(binding) {
+						kept = append(kept, binding)
+					}
 				}
+				return kept, "default", false
 			}
 		}
 	}

@@ -23,6 +23,7 @@ const keymapFeatureFastMode = "fast_mode"
 
 var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "open_transcript", "Open the transcript overlay.", []string{"ctrl-t"}),
+	keymapAction("global", "Global", "find_transcript", "Find text in the full transcript.", []string{"f3"}),
 	keymapAction("global", "Global", "open_agents", "Open the shared agents overview.", []string{"alt-a"}),
 	keymapAction("global", "Global", "open_warnings", "Open the retained warnings viewer.", []string{"f2"}),
 	keymapAction("global", "Global", "open_external_editor", "Open the current draft in an external editor.", []string{"ctrl-g"}),
@@ -156,9 +157,11 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("list", "List", "accept", "Accept the current list selection.", []string{"enter"}),
 	keymapAction("list", "List", "cancel", "Cancel and close selection views.", []string{"esc"}),
 	keymapAction("agents", "Agents", "resume", "Open the session resume picker.", []string{"o"}),
-	keymapAction("agents", "Agents", "search", "Search the available agent tasks.", []string{"f"}),
+	keymapAction("agents", "Agents", "search", "Search the available agent tasks.", []string{"f3", "/"}),
 	keymapAction("agents", "Agents", "new_task", "Open a new session in the selected checkout.", []string{"n"}),
 	keymapAction("agents", "Agents", "new_worktree", "Open a new session in a worktree from the project default branch.", []string{"w"}),
+	// Rust #49517 (keymap_setup/actions.rs:275, keymap.rs:1960): fork owns the plain f that agents.search used before the same change moved search to f3 and /.
+	keymapAction("agents", "Agents", "fork", "Fork the selected conversation and open the new session.", []string{"f"}),
 	keymapAction("agents", "Agents", "rename", "Rename the selected task.", []string{"r"}),
 	keymapAction("agents", "Agents", "stop", "Stop the selected running task.", []string{"x"}),
 	keymapAction("agents", "Agents", "hide", "Hide the selected task until explicitly resumed.", []string{"h"}),

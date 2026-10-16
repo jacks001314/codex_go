@@ -460,6 +460,11 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 		return m.newAgentsOverviewWorktreeCmd()
 	}
+	if m.keyMatches("agents", "fork", keySpec) {
+		// Rust #49517 (d42056091a): `f` forks the selected conversation and opens
+		// the new session.
+		return m.forkAgentsOverviewSelection()
+	}
 	if m.keyMatches("agents", "rename", keySpec) {
 		m.agentsOverview.BeginRename()
 	}
@@ -492,6 +497,55 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
+}
+
+// forkAgentsOverviewSelection forks the selected conversation and opens the new
+// session (Rust #49517 d42056091a, agents_overview fork_action ->
+// event_dispatch AgentsOverviewForkThread). The fork runs through the same
+// onSessionAction hook as `/fork`, so the host creates the child thread and the
+// dashboard hands the new session back to the shell; an open side conversation
+// must be closed first and a pending permission-profile switch blocks the fork,
+// matching Rust's guards.
+func (m *Model) forkAgentsOverviewSelection() bubbletea.Cmd {
+	if m == nil || m.agentsOverview == nil {
+		return nil
+	}
+	threadID := strings.TrimSpace(m.agentsOverview.SelectedThreadID())
+	if threadID == "" {
+		return nil
+	}
+	if strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.agentsOverviewNotice = "Wait for permissions to update before forking."
+		return nil
+	}
+	if m.inSideConversation() {
+		m.agentsOverviewNotice = "Close the side conversation before forking a task."
+		return nil
+	}
+	selection := codextui.SessionSelection{
+		Kind:   codextui.SessionSelectionFork,
+		Target: codextui.SessionTarget{ThreadID: threadID},
+	}
+	decision, notice, _ := m.applySessionSelection(selection)
+	if decision == nil {
+		if text := strings.TrimSpace(notice); text != "" {
+			m.agentsOverviewNotice = text
+		}
+		return nil
+	}
+	m.closeAgentsOverview()
+	if text := strings.TrimSpace(notice); text != "" {
+		m.notice = text
+	}
+	if m.onModalResponse == nil {
+		return nil
+	}
+	return m.onModalResponse(ModalResponse{
+		ID:       "fork-agents-overview",
+		Kind:     ModalKindPicker,
+		OptionID: threadID,
+		Picker:   decision,
+	})
 }
 
 // toggleAgentsOverviewPinCmd pins or unpins one task in the shared thread

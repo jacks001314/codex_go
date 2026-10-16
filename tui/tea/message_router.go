@@ -80,6 +80,12 @@ func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
 		m.openTranscriptOverlay()
 		return nil
 	}
+	if m.keyMatches("global", "find_transcript", keySpec) {
+		// Rust #46734: the find-transcript shortcut opens the pager with its
+		// search bar active (app/input.rs:584-597).
+		m.openTranscriptFind()
+		return nil
+	}
 	if m.keyMatches("global", "copy", keySpec) {
 		m.copyLastAgentResponse()
 		return nil

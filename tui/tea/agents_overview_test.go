@@ -82,9 +82,10 @@ func TestModelAgentsDashboardNavigationAndSearch(t *testing.T) {
 	if got := model.agentsOverview.SelectedThreadID(); got != "root-2" {
 		t.Fatalf("selection after down = %q, want root-2", got)
 	}
-	model.Update(agentsKeyEvent('f'))
+	// Rust #49517 moved the search shortcut to f3 and `/`; `f` now forks.
+	model.Update(agentsF3Event())
 	if !model.agentsOverview.State.Searching {
-		t.Fatal("f did not enter search")
+		t.Fatal("f3 did not enter search")
 	}
 	typeText(t, model, "gamma")
 	if visible := model.agentsOverview.VisibleIndices(); len(visible) != 1 {
@@ -135,7 +136,8 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 		},
 	})
 	openAgentsDashboard(t, editing)
-	editing.Update(agentsKeyEvent('f'))
+	// Rust #49517 moved the search shortcut to f3 and `/`.
+	editing.Update(agentsF3Event())
 	updated, _ = editing.Update(key(bubbletea.KeyRight))
 	editing = updated.(*Model)
 	if editing.agentsOverview == nil {

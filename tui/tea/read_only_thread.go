@@ -108,6 +108,11 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 	if m.keyMatches("global", "open_transcript", keySpec) {
 		return m.openTranscriptOverlay()
 	}
+	if m.keyMatches("global", "find_transcript", keySpec) {
+		// Rust #46734 (owned_transcript.rs:633): the locked transcript keeps the
+		// find-transcript shortcut and opens the pager with its search bar.
+		return m.openTranscriptFind()
+	}
 	if m.keyMatches("global", "toggle_raw_output", keySpec) {
 		return m.toggleRawOutputMode()
 	}

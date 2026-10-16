@@ -107,7 +107,8 @@ func TestAgentsKeymapActionsResolveDefaults(t *testing.T) {
 	config := NewKeymapConfig()
 	for action, want := range map[string]string{
 		"resume":          "o",
-		"search":          "f",
+		"search":          "f3,/",
+		"fork":            "f",
 		"new_task":        "n",
 		"new_worktree":    "w",
 		"rename":          "r",
