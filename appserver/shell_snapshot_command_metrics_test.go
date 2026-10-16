@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,17 @@ import (
 	"codex_go/telemetry"
 	"codex_go/tool"
 )
+
+// shellSnapshotMetricsPOSIXOnly explains why the command-metric cases below are
+// POSIX-only: Rust returns the command unchanged on Windows
+// (core/src/tools/runtimes/mod.rs:294 `if cfg!(windows) { return command.to_vec(); }`)
+// and never emits the command observation off unix
+// (core/src/tools/runtimes/unified_exec/snapshot_metrics.rs:27 `if !cfg!(unix)`), so
+// Go faithfully reproduces that gate on Windows and these cases cannot hold there.
+// The upstream cases are POSIX-only in exactly the same way.
+const shellSnapshotMetricsPOSIXOnly = "POSIX-only: Rust gates the wrapper on cfg!(windows) " +
+	"(core/src/tools/runtimes/mod.rs:294) and the command metrics on cfg!(unix) " +
+	"(core/src/tools/runtimes/unified_exec/snapshot_metrics.rs:27)"
 
 // Rust #51347 (`588f616e8b`): `codex.shell_snapshot.command` and
 // `codex.shell_snapshot.wait_ms` observe every eligible command preparation in
@@ -197,6 +209,9 @@ func assertSnapshotCommandObservation(t *testing.T, exporter *snapshotCommandMet
 // a second launch in the same session sees the now-cached snapshot as
 // `prewarm_ready`.
 func TestShellSnapshotCommandMetricsLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(shellSnapshotMetricsPOSIXOnly)
+	}
 	stubShellSnapshotRunner(t)
 	// No environment is registered, so the session's prewarm cannot resolve a
 	// shell and does not run: the first launch finds an empty cache
@@ -228,6 +243,9 @@ func TestShellSnapshotCommandMetricsLikeRust(t *testing.T) {
 // `protected`, and a snapshot that cannot be captured reports `unavailable`
 // with a `fallback` outcome.
 func TestShellSnapshotCommandMetricsReportProtectedAndUnavailableLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(shellSnapshotMetricsPOSIXOnly)
+	}
 	t.Run("protected", func(t *testing.T) {
 		stubShellSnapshotRunner(t)
 		// [features.network_proxy] credential_broker makes the session's
@@ -255,6 +273,9 @@ func TestShellSnapshotCommandMetricsReportProtectedAndUnavailableLikeRust(t *tes
 // `shell_mode == Direct` gate: a zsh-fork launch is outside the command-metric
 // denominator (it still replays the snapshot, but reports no observation).
 func TestShellSnapshotCommandMetricsSkipNonDirectLaunchesLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip(shellSnapshotMetricsPOSIXOnly)
+	}
 	stubShellSnapshotRunner(t)
 	router, threadID, cwd, exporter := newShellSnapshotCommandRouter(t, "sandbox_mode = \"workspace-write\"\n")
 
