@@ -94,3 +94,14 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 1. 跑 parity 必须显式 `$env:CODEX_RUST_ROOT`，否则会回落到陈旧检出（本机回落到镜像主工作树，其 rev 决定期望值）。
 2. `CODEX_RUST_APP_SERVER_SUITE_V2` / `CODEX_RUST_APP_SERVER_PROTOCOL_SCHEMA` 未设时，`appserver` 的 fixture 测试按 CWD 上溯候选路径找 `..\..\git\codex\codex-rs\…` ⇒ 判定台目录层级会改变结果（在 `D:\qax\reagent\dev\codex_go_wt\*` 下跳过，在 `D:\qax\reagent\dev\<bench>` 下命中）。
 3. 本机 `core.autocrlf=true`：新 worktree 全树 CRLF，`gofmt -l .` 会输出全部 .go（换行符产物）；门禁只对"本次改动文件"跑 gofmt。
+
+### R5-ter · Rust 面向测试的 CWD 依赖（2026-10-16 实测，必读）
+- `appserver` 里三条 Rust 面向测试用**相对路径**找 Rust 树：
+  - `rustAppServerProtocolSchemaRoot` / `rustAppServerProtocolTypeScriptRoot` / `rustAppServerProtocolRustRoot`（`appserver/schema_test.go:754-819`）
+  - `rustAppServerV2SuiteRoot`（`appserver_v2_suite_manifest_test.go:241-263`）
+- 候选顺序默认是 `..\..\git\codex\codex-rs\...`、`..\..\codex-main\codex-rs`、`..\..\..\codex-main\codex-rs`；测试进程的 CWD = **包目录**。
+  ⇒ `D:\qax\reagent\dev\codex_go\appserver` → `..\..` = `D:\qax\reagent\dev` → 命中镜像 `dev\git\codex\codex-rs`（**RUN**）
+  ⇒ `D:\qax\reagent\dev\codex_go_wt\r90X\appserver` → `..\..` = `codex_go_wt` → 全不命中（**SKIP**）
+- **同一份代码，appserver 包红数不同**：主工作区 9 红（既有 6 + pin 漂移 3）；车道 worktree 6 红（3 条被 SKIP）。
+- 车道里要让它们真跑，必须设 env：`CODEX_RUST_ROOT`（需含 `Cargo.toml`）、`CODEX_RUST_APP_SERVER_SUITE_V2`（需含 `mod.rs`）、`CODEX_RUST_APP_SERVER_PROTOCOL_TYPESCRIPT`；报数前必须用 `-v` 证明是 `=== RUN` 而非 `--- SKIP`。
+- 结论口径：**基线数字必须带上下文**（主工作区 / 车道台 / 是否设 env），否则会得出错误的「无新增失败」。
