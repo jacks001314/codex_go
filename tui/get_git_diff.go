@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/envutil"
@@ -19,6 +20,11 @@ import (
 const (
 	GitDiffCommandTimeout         = 30 * time.Second
 	ExecutableFilterConfigPattern = `^filter\..*\.(clean|process)$`
+	// MaxConcurrentUntrackedDiffs bounds how many untracked-file diffs one
+	// collection runs at once. Rust: codex-rs/git-utils/src/info.rs:43
+	// (`MAX_CONCURRENT_UNTRACKED_DIFFS`), used by the buffered stream at
+	// info.rs:761.
+	MaxConcurrentUntrackedDiffs = 8
 )
 
 type GitDiffRequest struct {
@@ -163,15 +169,44 @@ func ReadGitDiffWithRunner(ctx context.Context, runner WorkspaceCommandRunner, c
 	if err != nil {
 		return "", true, err
 	}
-	untrackedDiffs := []string{}
-	for _, file := range ParseUntrackedGitFiles(untrackedOutput) {
-		diff, err := runGitCaptureDiff(ctx, runner, cwd, fsmonitor, overrides, GitUntrackedDiffArgs(file))
-		if err != nil {
-			return "", true, err
-		}
-		untrackedDiffs = append(untrackedDiffs, diff)
-	}
+	untrackedDiffs := collectUntrackedGitDiffs(ctx, runner, cwd, fsmonitor, overrides, ParseUntrackedGitFiles(untrackedOutput))
 	return ComposeGitDiff(trackedDiff, untrackedDiffs), true, nil
+}
+
+// collectUntrackedGitDiffs runs the per-file untracked diffs with at most
+// MaxConcurrentUntrackedDiffs in flight and returns the patches in the order of
+// files. It mirrors Rust's `stream::iter(futures_iter).buffered(..)` in
+// codex-rs/git-utils/src/info.rs:761: work over the limit queues instead of
+// being dropped, the collected order follows `ls-files`, and a file whose diff
+// fails contributes nothing instead of failing the whole collection
+// (info.rs:764-770 - a spawn failure, a timeout, a status other than 0/1, or
+// non-UTF-8 output all skip just that entry).
+func collectUntrackedGitDiffs(ctx context.Context, runner WorkspaceCommandRunner, cwd string, fsmonitor GitFsmonitorOverride, overrides []GitConfigOverride, files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	diffs := make([]string, len(files))
+	semaphore := make(chan struct{}, MaxConcurrentUntrackedDiffs)
+	var waitGroup sync.WaitGroup
+	for index, file := range files {
+		// Take the slot before spawning so at most MaxConcurrentUntrackedDiffs
+		// git processes are alive for this collection.
+		semaphore <- struct{}{}
+		waitGroup.Add(1)
+		go func(index int, file string) {
+			defer waitGroup.Done()
+			defer func() { <-semaphore }()
+			diff, err := runGitCaptureDiff(ctx, runner, cwd, fsmonitor, overrides, GitUntrackedDiffArgs(file))
+			if err != nil {
+				return
+			}
+			// Index addressing keeps the patches in input order even though the
+			// diffs finish out of order.
+			diffs[index] = diff
+		}(index, file)
+	}
+	waitGroup.Wait()
+	return diffs
 }
 
 func DetectGitFsmonitorOverride(ctx context.Context, runner WorkspaceCommandRunner, cwd string) GitFsmonitorOverride {

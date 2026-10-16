@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -513,6 +514,16 @@ func (r *LifecycleRunner) TryRestartIfRunning(mode RestartMode, updaterRefreshMo
 			return "", err
 		}
 		_ = updaterRefreshMode
+		// All exits for busy, not-ready or superseded selections precede cleanup.
+		// Keep the operation lock, and recheck the selection under both locks.
+		if root := PackageRoot(daemonCodexHome(daemon)); filepath.Base(root) == daemonPackagesDirname {
+			if installLock, err := acquireExclusiveFileLock(filepath.Join(root, installLockFileName), installLockTimeout, installLockRetry, "daemon installer lock"); err == nil {
+				defer installLock.Close()
+				if canonicalPath(ManagedCodexBin(daemonCodexHome(daemon))) == canonicalPath(managedCodexBin) {
+					pruneDaemonReleasesBestEffort(daemon, root, settings)
+				}
+			}
+		}
 		return RestartRestarted, nil
 	default:
 		return "", fmt.Errorf("unknown restart decision %s", decision)

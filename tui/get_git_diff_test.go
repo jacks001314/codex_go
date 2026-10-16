@@ -2,13 +2,16 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestBuildGitDiffCommandMatchesRust(t *testing.T) {
@@ -227,4 +230,294 @@ func runTUIDiffGit(t *testing.T, dir string, args ...string) {
 
 func stripANSIGitDiffTest(value string) string {
 	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(value, "")
+}
+
+// untrackedDiffRunnerOptions configures the fake runner used by the untracked
+// diff collection tests below.
+type untrackedDiffRunnerOptions struct {
+	files []string
+	// gated makes every per-file diff wait for release() so the peak number of
+	// in-flight diffs is observable without guessing at timings.
+	gated  bool
+	target int
+	// skew makes later files finish first, so an implementation that appended
+	// patches in completion order would emit a reversed order.
+	skew time.Duration
+	// failExit marks files whose git diff fails with a status outside 0/1.
+	failExit map[string]bool
+	// failSpawn marks files whose git diff cannot be spawned at all.
+	failSpawn map[string]bool
+	// trackedExit / untrackedListExit override the tracked diff and ls-files
+	// statuses, which keep their original failure semantics.
+	trackedExit       int
+	untrackedListExit int
+}
+
+type untrackedDiffRunner struct {
+	mu          sync.Mutex
+	inFlight    int
+	peak        int
+	options     untrackedDiffRunnerOptions
+	filled      chan struct{}
+	fillOnce    sync.Once
+	release     chan struct{}
+	releaseOnce sync.Once
+	// overflow records that more than MaxConcurrentUntrackedDiffs per-file
+	// diffs were ever in flight at the same time; overCap is closed on the
+	// first such observation so a test can fail deterministically instead of
+	// sampling a timing window.
+	overflow    bool
+	overCap     chan struct{}
+	overCapOnce sync.Once
+}
+
+func newUntrackedDiffRunner(options untrackedDiffRunnerOptions) *untrackedDiffRunner {
+	if options.trackedExit == 0 {
+		// 1 is "success with a diff" for git diff.
+		options.trackedExit = 1
+	}
+	return &untrackedDiffRunner{
+		options: options,
+		filled:  make(chan struct{}),
+		release: make(chan struct{}),
+		overCap: make(chan struct{}),
+	}
+}
+
+func (r *untrackedDiffRunner) releaseAll() {
+	r.releaseOnce.Do(func() { close(r.release) })
+}
+
+func (r *untrackedDiffRunner) peakInFlight() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.peak
+}
+
+// capViolated reports whether any observation saw more than
+// MaxConcurrentUntrackedDiffs per-file diffs in flight at once.
+func (r *untrackedDiffRunner) capViolated() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.overflow
+}
+
+func (r *untrackedDiffRunner) RunWorkspaceCommand(_ context.Context, command WorkspaceCommand) (WorkspaceCommandOutput, error) {
+	subcommand, args := gitDiffTestSubcommand(command.Argv)
+	joined := strings.Join(command.Argv, " ")
+	switch {
+	case subcommand == "rev-parse":
+		return WorkspaceCommandOutput{ExitCode: 0, Stdout: "true\n"}, nil
+	case subcommand == "config":
+		// No fsmonitor and no diff-filter overrides.
+		return WorkspaceCommandOutput{ExitCode: 1}, nil
+	case subcommand == "ls-files":
+		return WorkspaceCommandOutput{
+			ExitCode: r.options.untrackedListExit,
+			Stdout:   strings.Join(r.options.files, "\n") + "\n",
+		}, nil
+	case strings.Contains(joined, "--no-index"):
+		file := args[len(args)-1]
+		r.mu.Lock()
+		r.inFlight++
+		if r.inFlight > r.peak {
+			r.peak = r.inFlight
+		}
+		if r.options.target > 0 && r.inFlight >= r.options.target {
+			r.fillOnce.Do(func() { close(r.filled) })
+		}
+		if r.inFlight > MaxConcurrentUntrackedDiffs {
+			r.overflow = true
+			r.overCapOnce.Do(func() { close(r.overCap) })
+		}
+		r.mu.Unlock()
+
+		if r.options.gated {
+			<-r.release
+		}
+		if r.options.skew > 0 {
+			index := len(r.options.files)
+			for i, name := range r.options.files {
+				if name == file {
+					index = i
+				}
+			}
+			time.Sleep(time.Duration(len(r.options.files)-index) * r.options.skew)
+		}
+
+		r.mu.Lock()
+		r.inFlight--
+		r.mu.Unlock()
+
+		if r.options.failSpawn[file] {
+			return WorkspaceCommandOutput{}, fmt.Errorf("git %s failed to spawn", file)
+		}
+		if r.options.failExit[file] {
+			return WorkspaceCommandOutput{ExitCode: 2, Stdout: "failed-output\n"}, nil
+		}
+		return WorkspaceCommandOutput{ExitCode: 1, Stdout: file + "\n"}, nil
+	default:
+		return WorkspaceCommandOutput{ExitCode: r.options.trackedExit, Stdout: "tracked\n"}, nil
+	}
+}
+
+func gitDiffTestSubcommand(argv []string) (string, []string) {
+	rest := argv
+	for len(rest) > 0 {
+		if rest[0] == "git" {
+			rest = rest[1:]
+			continue
+		}
+		if rest[0] == "-c" && len(rest) > 2 {
+			rest = rest[2:]
+			continue
+		}
+		return rest[0], rest
+	}
+	return "", nil
+}
+
+func untrackedDiffTestFiles(count int) []string {
+	files := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		files = append(files, fmt.Sprintf("file-%02d.txt", index))
+	}
+	return files
+}
+
+func expectedUntrackedDiff(files []string, skipped map[string]bool) string {
+	var builder strings.Builder
+	builder.WriteString("tracked\n")
+	for _, file := range files {
+		if skipped[file] {
+			continue
+		}
+		builder.WriteString(file + "\n")
+	}
+	return builder.String()
+}
+
+// Rust bounds one collection to MAX_CONCURRENT_UNTRACKED_DIFFS = 8
+// (git-utils/src/info.rs:43, buffered at info.rs:761): twelve untracked files
+// must never put more than eight diffs in flight at once.
+func TestReadGitDiffBoundsUntrackedDiffConcurrencyLikeRust(t *testing.T) {
+	files := untrackedDiffTestFiles(12)
+	runner := newUntrackedDiffRunner(untrackedDiffRunnerOptions{
+		files:  files,
+		gated:  true,
+		target: MaxConcurrentUntrackedDiffs,
+	})
+
+	type result struct {
+		diff   string
+		isRepo bool
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		diff, isRepo, err := ReadGitDiffWithRunner(context.Background(), runner, "")
+		done <- result{diff: diff, isRepo: isRepo, err: err}
+	}()
+
+	select {
+	case <-runner.filled:
+	case <-time.After(10 * time.Second):
+		runner.releaseAll()
+		got := <-done
+		t.Fatalf("untracked diffs never reached %d in flight (peak %d, err %v)", MaxConcurrentUntrackedDiffs, runner.peakInFlight(), got.err)
+	}
+	// Every in-flight diff is parked inside the runner, so a bounded collector
+	// can never start a ninth one. Waiting for that violation is an event wait
+	// rather than a timing assertion: with the semaphore in place it cannot
+	// fire no matter how slowly the machine runs.
+	select {
+	case <-runner.overCap:
+		runner.releaseAll()
+		<-done
+		t.Fatalf("peak in-flight untracked diffs = %d, want at most %d", runner.peakInFlight(), MaxConcurrentUntrackedDiffs)
+	case <-time.After(3 * time.Second):
+	}
+	if peak := runner.peakInFlight(); peak > MaxConcurrentUntrackedDiffs {
+		runner.releaseAll()
+		<-done
+		t.Fatalf("peak in-flight untracked diffs = %d, want at most %d", peak, MaxConcurrentUntrackedDiffs)
+	}
+	runner.releaseAll()
+	got := <-done
+	if got.err != nil || !got.isRepo {
+		t.Fatalf("ReadGitDiffWithRunner = (%v, %q, %v)", got.isRepo, got.diff, got.err)
+	}
+	// Twelve files with eight slots must fill every slot exactly once.
+	if peak := runner.peakInFlight(); peak != MaxConcurrentUntrackedDiffs {
+		t.Fatalf("peak in-flight untracked diffs = %d, want exactly %d", peak, MaxConcurrentUntrackedDiffs)
+	}
+	if want := expectedUntrackedDiff(files, nil); got.diff != want {
+		t.Fatalf("diff = %q, want %q", got.diff, want)
+	}
+}
+
+// The patches follow the ls-files order even though the diffs finish out of
+// order (later files finish first here), matching Rust's buffered append.
+func TestReadGitDiffPreservesUntrackedDiffOrderLikeRust(t *testing.T) {
+	files := untrackedDiffTestFiles(12)
+	runner := newUntrackedDiffRunner(untrackedDiffRunnerOptions{
+		files: files,
+		skew:  3 * time.Millisecond,
+	})
+	diff, isRepo, err := ReadGitDiffWithRunner(context.Background(), runner, "")
+	if err != nil || !isRepo {
+		t.Fatalf("ReadGitDiffWithRunner = (%v, %q, %v)", isRepo, diff, err)
+	}
+	if want := expectedUntrackedDiff(files, nil); diff != want {
+		t.Fatalf("diff = %q, want %q", diff, want)
+	}
+	if peak := runner.peakInFlight(); peak > MaxConcurrentUntrackedDiffs {
+		t.Fatalf("peak in-flight untracked diffs = %d, want at most %d", peak, MaxConcurrentUntrackedDiffs)
+	}
+	if runner.capViolated() {
+		t.Fatal("untracked diffs ran over the concurrency bound")
+	}
+}
+
+// A file whose diff fails only skips that file: the collection still returns
+// the tracked patch and every other untracked patch (git-utils/src/info.rs:764-770,
+// including the failing file-04 vector of diff_tests.rs:232-257).
+func TestReadGitDiffSkipsFailedUntrackedDiffsLikeRust(t *testing.T) {
+	files := untrackedDiffTestFiles(12)
+	runner := newUntrackedDiffRunner(untrackedDiffRunnerOptions{
+		files:     files,
+		failExit:  map[string]bool{"file-04.txt": true, "file-08.txt": true},
+		failSpawn: map[string]bool{"file-10.txt": true},
+	})
+	diff, isRepo, err := ReadGitDiffWithRunner(context.Background(), runner, "")
+	if err != nil {
+		t.Fatalf("a failed untracked diff must not fail the collection: %v", err)
+	}
+	if !isRepo {
+		t.Fatal("ReadGitDiffWithRunner reported a non-git repo")
+	}
+	skipped := map[string]bool{"file-04.txt": true, "file-08.txt": true, "file-10.txt": true}
+	if want := expectedUntrackedDiff(files, skipped); diff != want {
+		t.Fatalf("diff = %q, want %q", diff, want)
+	}
+}
+
+// The tracked diff and the ls-files listing keep Rust's failure semantics: a
+// status outside 0/1 still fails the whole read.
+func TestReadGitDiffKeepsTrackedAndUntrackedListFailureSemantics(t *testing.T) {
+	trackedFailure := newUntrackedDiffRunner(untrackedDiffRunnerOptions{
+		files:       []string{"new.txt"},
+		trackedExit: 2,
+	})
+	if _, isRepo, err := ReadGitDiffWithRunner(context.Background(), trackedFailure, ""); err == nil || !isRepo {
+		t.Fatalf("tracked diff failure = (%v, %v), want an error", isRepo, err)
+	}
+
+	listFailure := newUntrackedDiffRunner(untrackedDiffRunnerOptions{
+		files:             []string{"new.txt"},
+		untrackedListExit: 1,
+	})
+	if _, isRepo, err := ReadGitDiffWithRunner(context.Background(), listFailure, ""); err == nil || !isRepo {
+		t.Fatalf("ls-files failure = (%v, %v), want an error", isRepo, err)
+	}
 }

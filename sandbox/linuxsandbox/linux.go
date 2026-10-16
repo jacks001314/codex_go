@@ -50,6 +50,10 @@ const (
 	linuxNetworkSeccompNone linuxNetworkSeccompMode = iota
 	linuxNetworkSeccompRestricted
 	linuxNetworkSeccompProxyRouted
+	// linuxNetworkSeccompVmSocketRestricted mirrors the upstream
+	// `NetworkSeccompMode::VmSocketRestricted` mode: it denies `AF_VSOCK`
+	// sockets while leaving ordinary networking untouched.
+	linuxNetworkSeccompVmSocketRestricted
 )
 
 type linuxPermissionProfile struct {
@@ -75,6 +79,10 @@ type linuxSpecialPath struct {
 	Subpath string
 }
 
+// linuxSandboxCommand is the CLI surface of the Linux sandbox helper, matching
+// the upstream Rust `LinuxSandboxCommand`. Bubblewrap provides filesystem
+// isolation and seccomp provides syscall filtering; the retained Landlock
+// backend is selected with `--use-legacy-landlock`.
 type linuxSandboxCommand struct {
 	SandboxPolicyCWD      string
 	CommandCWD            string
@@ -669,7 +677,7 @@ func applyLinuxPermissionProfile(profile *linuxPermissionProfile, cwd string, ap
 	if profile == nil {
 		return errors.New("missing permission profile")
 	}
-	mode := linuxNetworkSeccompModeFor(profile.NetworkEnabled, allowNetworkForProxy, proxyRoutedNetwork)
+	mode := linuxNetworkSeccompModeForProfile(profile, allowNetworkForProxy, proxyRoutedNetwork)
 	if mode != linuxNetworkSeccompNone {
 		if err := installLinuxNetworkSeccompFilter(mode); err != nil {
 			return err
@@ -704,17 +712,49 @@ func linuxNetworkSeccompModeFor(networkEnabled bool, allowNetworkForProxy bool, 
 	return linuxNetworkSeccompRestricted
 }
 
+// linuxNetworkSeccompModeForProfile selects the seccomp filter for one
+// permission profile, mirroring the upstream Rust
+// `apply_permission_profile_to_current_thread`.
+//
+// The configured network policy decides the mode. When that policy installs no
+// network filter at all, a filesystem-restricted policy still installs the
+// VM-socket filter: `AF_VSOCK` can reach host services outside the filesystem
+// sandbox, and under WSL2 it aliases the Windows interop socket even when
+// `/run/WSL` is masked. A policy with full disk write access keeps unrestricted
+// networking and installs no filter.
+func linuxNetworkSeccompModeForProfile(profile *linuxPermissionProfile, allowNetworkForProxy bool, proxyRoutedNetwork bool) linuxNetworkSeccompMode {
+	if profile == nil {
+		return linuxNetworkSeccompNone
+	}
+	if mode := linuxNetworkSeccompModeFor(profile.NetworkEnabled, allowNetworkForProxy, proxyRoutedNetwork); mode != linuxNetworkSeccompNone {
+		return mode
+	}
+	if !profile.Filesystem.hasFullDiskWriteAccess() {
+		return linuxNetworkSeccompVmSocketRestricted
+	}
+	return linuxNetworkSeccompNone
+}
+
+// installLinuxNetworkSeccompFilter loads the seccomp filter for one
+// `linuxNetworkSeccompMode`.
+//
+// Every mode that installs socket-family restrictions also blocks
+// `io_uring_setup`/`io_uring_enter`/`io_uring_register`, because io_uring can
+// create sockets (including `AF_VSOCK`) without going through `socket`.
 func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode) error {
-	groups := []seccomp.SyscallGroup{
-		{Action: seccomp.ActionErrno, Names: []string{
+	groups := []seccomp.SyscallGroup{}
+	if mode != linuxNetworkSeccompVmSocketRestricted {
+		groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
 			"ptrace",
 			"process_vm_readv",
 			"process_vm_writev",
-			"io_uring_setup",
-			"io_uring_enter",
-			"io_uring_register",
-		}},
+		}})
 	}
+	groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, Names: []string{
+		"io_uring_setup",
+		"io_uring_enter",
+		"io_uring_register",
+	}})
 	switch mode {
 	case linuxNetworkSeccompRestricted:
 		groups = append(groups,
@@ -748,6 +788,13 @@ func installLinuxNetworkSeccompFilter(mode linuxNetworkSeccompMode) error {
 				{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.NotEqual, Value: uint64(unix.AF_UNIX)}}},
 			}},
 		)
+	case linuxNetworkSeccompVmSocketRestricted:
+		// Deny only the VM socket family; every other family, including
+		// `AF_UNIX`, keeps the behaviour of an unrestricted network policy.
+		groups = append(groups, seccomp.SyscallGroup{Action: seccomp.ActionErrno, NamesWithCondtions: []seccomp.NameWithConditions{
+			{Name: "socket", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.Equal, Value: uint64(unix.AF_VSOCK)}}},
+			{Name: "socketpair", Conditions: []seccomp.Condition{{Argument: 0, Operation: seccomp.Equal, Value: uint64(unix.AF_VSOCK)}}},
+		}})
 	}
 	filter := seccomp.Filter{
 		NoNewPrivs: true,

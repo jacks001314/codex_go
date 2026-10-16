@@ -20,6 +20,7 @@ const (
 	PagerHalfPageDown = "half_page_down"
 	PagerJumpTop      = "jump_top"
 	PagerJumpBottom   = "jump_bottom"
+	PagerFind         = "find"
 
 	defaultOverlayWidth  = 80
 	defaultOverlayHeight = 24
@@ -47,6 +48,8 @@ type TranscriptOverlay struct {
 	// `tui.mouse_scroll_speed` to each wheel event and keeps the fractional
 	// remainder for the next event.
 	mouseScroll codextui.MouseScrollAccumulator
+	// find is the Ctrl+T pager's find bar (Rust transcript_view::search).
+	find transcriptFind
 }
 
 func NewTranscriptOverlay(width int, height int, content string) *TranscriptOverlay {
@@ -118,9 +121,15 @@ func (o *TranscriptOverlay) SetContent(content string) {
 	o.viewport.SetContent(o.viewContent())
 	if follow {
 		o.viewport.GotoBottom()
+		if o.find.active() {
+			o.refreshFindMatches()
+		}
 		return
 	}
 	o.viewport.SetYOffset(offset)
+	if o.find.active() {
+		o.refreshFindMatches()
+	}
 }
 
 // SetHighlightRange highlights content lines [start, end) (0-based, end
@@ -166,19 +175,27 @@ func (o *TranscriptOverlay) HighlightRange() (int, int, bool) {
 // viewContent is the content the viewport renders: the base content, with the
 // highlighted lines wrapped in reverse video when a highlight is active.
 func (o *TranscriptOverlay) viewContent() string {
-	if o == nil || !o.hasHighlight || o.content == "" {
+	if o == nil || o.content == "" {
+		return o.content
+	}
+	_, hasFindMatch := o.find.matchLine()
+	if !o.hasHighlight && !hasFindMatch {
 		return o.content
 	}
 	lines := strings.Split(o.content, "\n")
-	if o.highlightStart >= len(lines) {
-		return o.content
+	if o.hasHighlight && o.highlightStart < len(lines) {
+		end := o.highlightEnd
+		if end > len(lines) {
+			end = len(lines)
+		}
+		for index := o.highlightStart; index < end; index++ {
+			lines[index] = reverseVideoLine(lines[index])
+		}
 	}
-	end := o.highlightEnd
-	if end > len(lines) {
-		end = len(lines)
-	}
-	for index := o.highlightStart; index < end; index++ {
-		lines[index] = reverseVideoLine(lines[index])
+	// Rust transcript_view::search reverses the matched rows; this pager has one
+	// line per match, so the matched line is the row it reverses (§T13).
+	if line, ok := o.find.matchLine(); ok && line < len(lines) {
+		lines[line] = reverseVideoLine(lines[line])
 	}
 	return strings.Join(lines, "\n")
 }
@@ -325,7 +342,10 @@ func (o *TranscriptOverlay) View() string {
 	}
 	width := firstPositive(o.width, defaultOverlayWidth)
 	header := overlayHeader(width, o.scrollPercent(), o.title)
-	help := fitLine("up/down/k/j scroll | pgup/pgdn page | home/end jump | q/ctrl+t close", width)
+	help := fitLine("up/down/k/j scroll | pgup/pgdn page | home/end jump | / find | q/ctrl+t close", width)
+	if o.find.active() {
+		help = fitLine(o.FindBarLine(), width)
+	}
 	return strings.Join([]string{header, o.viewport.View(), help}, "\n")
 }
 

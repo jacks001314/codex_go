@@ -3,11 +3,18 @@
 package linuxsandbox
 
 import (
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestParseLinuxPermissionProfileRustManagedShape(t *testing.T) {
@@ -327,4 +334,289 @@ func TestProtectedReadOnlySubpathsIncludeAWSMetadata(t *testing.T) {
 	if len(protected) != 4 {
 		t.Fatalf("protected subpaths = %#v, want exactly the four existing metadata dirs", protected)
 	}
+}
+
+// TestLinuxNetworkSeccompModeForProfile covers Rust parity for
+// `seccomp.rs::apply_permission_profile_to_current_thread`: the network policy
+// picks the mode, and a filesystem-restricted policy with unrestricted
+// networking still installs the VM-socket filter.
+func TestLinuxNetworkSeccompModeForProfile(t *testing.T) {
+	restrictedFS := linuxReadOnlyFilesystemPolicy()
+	if restrictedFS.hasFullDiskWriteAccess() {
+		t.Fatalf("read-only filesystem policy should not have full disk write access")
+	}
+	unrestrictedFS := linuxUnrestrictedFilesystemPolicy()
+	cases := []struct {
+		name        string
+		profile     *linuxPermissionProfile
+		allowProxy  bool
+		proxyRouted bool
+		want        linuxNetworkSeccompMode
+	}{
+		{
+			name:    "filesystem restricted network enabled installs vm socket filter",
+			profile: &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			want:    linuxNetworkSeccompVmSocketRestricted,
+		},
+		{
+			name:    "filesystem unrestricted network enabled installs nothing",
+			profile: &linuxPermissionProfile{Filesystem: unrestrictedFS, NetworkEnabled: true},
+			want:    linuxNetworkSeccompNone,
+		},
+		{
+			name:    "restricted network keeps the restricted filter",
+			profile: &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: false},
+			want:    linuxNetworkSeccompRestricted,
+		},
+		{
+			name:        "managed proxy routing keeps the proxy-routed filter",
+			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			allowProxy:  true,
+			proxyRouted: true,
+			want:        linuxNetworkSeccompProxyRouted,
+		},
+		{
+			name:       "managed proxy without routing keeps the restricted filter",
+			profile:    &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			allowProxy: true,
+			want:       linuxNetworkSeccompRestricted,
+		},
+		{
+			name:        "filesystem restricted falls back to vm sockets without proxy opt-in",
+			profile:     &linuxPermissionProfile{Filesystem: restrictedFS, NetworkEnabled: true},
+			proxyRouted: true,
+			want:        linuxNetworkSeccompVmSocketRestricted,
+		},
+		{
+			name:    "missing profile installs nothing",
+			profile: nil,
+			want:    linuxNetworkSeccompNone,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := linuxNetworkSeccompModeForProfile(tc.profile, tc.allowProxy, tc.proxyRouted)
+			if got != tc.want {
+				t.Fatalf("linuxNetworkSeccompModeForProfile() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+const (
+	linuxSeccompProbeEnv    = "CODEX_GO_LINUX_SECCOMP_PROBE"
+	linuxSeccompProbePrefix = "codex-seccomp-probe "
+)
+
+var linuxSeccompProbeNames = []string{
+	"vsock_socket",
+	"vsock_socketpair",
+	"unix_socket",
+	"unix_socketpair",
+	"inet_socket",
+	"io_uring_setup",
+}
+
+// linuxSeccompProbeNotEPerm asserts only that the probe did not return EPERM.
+const linuxSeccompProbeNotEPerm = syscall.Errno(0xffff)
+
+// TestLinuxSeccompFilterMatchesUpstreamRustSemantics re-executes this test
+// binary so every probe installs its seccomp filter in a fresh process, then
+// asserts the observed errno of real syscalls. A seccomp filter cannot be
+// removed, so probes cannot share the test process.
+func TestLinuxSeccompFilterMatchesUpstreamRustSemantics(t *testing.T) {
+	expectations := []struct {
+		mode string
+		want map[string]syscall.Errno
+	}{
+		{
+			// Baseline: without a filter, VM sockets, Unix sockets and IP
+			// sockets all reach the kernel.
+			mode: "control",
+			want: map[string]syscall.Errno{
+				"vsock_socket":   0,
+				"unix_socket":    0,
+				"inet_socket":    0,
+				"io_uring_setup": linuxSeccompProbeNotEPerm,
+			},
+		},
+		{
+			// Filesystem-restricted policy with unrestricted networking.
+			mode: "vm",
+			want: map[string]syscall.Errno{
+				"vsock_socket":     syscall.EPERM,
+				"vsock_socketpair": syscall.EPERM,
+				"unix_socket":      0,
+				"unix_socketpair":  0,
+				"inet_socket":      0,
+				"io_uring_setup":   syscall.EPERM,
+			},
+		},
+		{
+			mode: "restricted",
+			want: map[string]syscall.Errno{
+				"vsock_socket":   syscall.EPERM,
+				"inet_socket":    syscall.EPERM,
+				"unix_socket":    0,
+				"io_uring_setup": syscall.EPERM,
+			},
+		},
+		{
+			mode: "proxy",
+			want: map[string]syscall.Errno{
+				"vsock_socket":    syscall.EPERM,
+				"unix_socket":     syscall.EPERM,
+				"unix_socketpair": 0,
+				"inet_socket":     0,
+				"io_uring_setup":  syscall.EPERM,
+			},
+		},
+	}
+	for _, tc := range expectations {
+		t.Run(tc.mode, func(t *testing.T) {
+			got := runLinuxSeccompProbe(t, tc.mode)
+			for name, want := range tc.want {
+				have := got[name]
+				if want == linuxSeccompProbeNotEPerm {
+					if have == syscall.EPERM {
+						t.Fatalf("%s = EPERM, want anything else", name)
+					}
+					continue
+				}
+				if have != want {
+					t.Fatalf("%s = %v, want %v", name, have, want)
+				}
+			}
+		})
+	}
+}
+
+func runLinuxSeccompProbe(t *testing.T, mode string) map[string]syscall.Errno {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLinuxSeccompProbeChildProcess$")
+	cmd.Env = append(os.Environ(), linuxSeccompProbeEnv+"="+mode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("seccomp probe %q failed: %v\n%s", mode, err, out)
+	}
+	got := map[string]syscall.Errno{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, linuxSeccompProbePrefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(line, linuxSeccompProbePrefix), "=", 2)
+		if len(parts) != 2 {
+			t.Fatalf("malformed probe line %q", line)
+		}
+		value, convErr := strconv.Atoi(parts[1])
+		if convErr != nil {
+			t.Fatalf("malformed probe value %q: %v", line, convErr)
+		}
+		got[parts[0]] = syscall.Errno(value)
+	}
+	for _, name := range linuxSeccompProbeNames {
+		if _, ok := got[name]; !ok {
+			t.Fatalf("probe %q produced no result for %s:\n%s", mode, name, out)
+		}
+	}
+	return got
+}
+
+// TestLinuxSeccompProbeChildProcess is the child half of
+// TestLinuxSeccompFilterMatchesUpstreamRustSemantics. It does nothing during a
+// normal package run, which keeps the package free of skipped tests.
+func TestLinuxSeccompProbeChildProcess(t *testing.T) {
+	mode := os.Getenv(linuxSeccompProbeEnv)
+	if mode == "" {
+		return
+	}
+	runtime.LockOSThread()
+	switch mode {
+	case "control":
+	case "vm":
+		// Production entry point: a filesystem-restricted profile with
+		// unrestricted networking.
+		profile := &linuxPermissionProfile{
+			Filesystem:     linuxReadOnlyFilesystemPolicy(),
+			NetworkEnabled: true,
+		}
+		if err := applyLinuxPermissionProfile(profile, os.TempDir(), false, false, false); err != nil {
+			t.Fatalf("apply filesystem-restricted unrestricted-network profile: %v", err)
+		}
+	case "restricted":
+		if err := installLinuxNetworkSeccompFilter(linuxNetworkSeccompRestricted); err != nil {
+			t.Fatalf("install restricted seccomp filter: %v", err)
+		}
+	case "proxy":
+		if err := installLinuxNetworkSeccompFilter(linuxNetworkSeccompProxyRouted); err != nil {
+			t.Fatalf("install proxy-routed seccomp filter: %v", err)
+		}
+	default:
+		t.Fatalf("unknown probe mode %q", mode)
+	}
+	probes := map[string]func() error{
+		"vsock_socket": func() error {
+			fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+			if err == nil {
+				_ = unix.Close(fd)
+			}
+			return err
+		},
+		"vsock_socketpair": func() error {
+			fds, err := unix.Socketpair(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+			if err == nil {
+				_ = unix.Close(fds[0])
+				_ = unix.Close(fds[1])
+			}
+			return err
+		},
+		"unix_socket": func() error {
+			fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+			if err == nil {
+				_ = unix.Close(fd)
+			}
+			return err
+		},
+		"unix_socketpair": func() error {
+			fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+			if err == nil {
+				_ = unix.Close(fds[0])
+				_ = unix.Close(fds[1])
+			}
+			return err
+		},
+		"inet_socket": func() error {
+			fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, 0)
+			if err == nil {
+				_ = unix.Close(fd)
+			}
+			return err
+		},
+		"io_uring_setup": func() error {
+			_, _, errno := unix.Syscall(unix.SYS_IO_URING_SETUP, 0, 0, 0)
+			if errno != 0 {
+				return errno
+			}
+			return nil
+		},
+	}
+	for _, name := range linuxSeccompProbeNames {
+		probe, ok := probes[name]
+		if !ok {
+			t.Fatalf("missing probe implementation for %s", name)
+		}
+		fmt.Printf("%s%s=%d\n", linuxSeccompProbePrefix, name, int(errnoOfProbeError(probe())))
+	}
+}
+
+func errnoOfProbeError(err error) syscall.Errno {
+	if err == nil {
+		return 0
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno
+	}
+	return syscall.Errno(0xfffe)
 }

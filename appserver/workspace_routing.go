@@ -385,6 +385,41 @@ func (r *RuntimeRouter) applyWorkspaceRoutingToAgent(ctx context.Context, provid
 	return nil
 }
 
+// workspaceRoutingForBackgroundRead mirrors Rust
+// AccountRequestProcessor::read_account_for_background_workspace_routing
+// (#52635): a background routing read - app-server startup and connection
+// initialization - is skipped entirely, without reading configuration, unless the
+// credential store holds a ChatGPT credential. Routing requires ChatGPT
+// authentication, so a signed-out or API-key app-server must not reload
+// configuration for it. Explicit account/read keeps reading and reloading the
+// configuration (Rust read_account).
+func (r *RuntimeRouter) workspaceRoutingForBackgroundRead(ctx context.Context) (*auth.WorkspaceRouting, error) {
+	if !r.cachedChatGPTAuth() {
+		return nil, nil
+	}
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil || resolved == nil {
+		return nil, nil
+	}
+	return r.workspaceRoutingForAccountRead(ctx, &resolved.Auth)
+}
+
+// cachedChatGPTAuth reports whether the credential store's current credential is
+// a ChatGPT credential (Rust is_chatgpt_auth). It reads only the credential
+// store, never the configuration, which is what makes it safe to consult before
+// a background routing read.
+func (r *RuntimeRouter) cachedChatGPTAuth() bool {
+	if r == nil {
+		return false
+	}
+	resolved, err := r.authStore(r.codexHomeForRollout()).Resolve()
+	if err != nil || resolved == nil {
+		return false
+	}
+	_, ok := chatGPTWorkspaceAccountID(&resolved.Auth)
+	return ok
+}
+
 // notifyWorkspaceRoutingToConnection mirrors Rust
 // AccountRequestProcessor::notify_workspace_routing_to_connection: once a
 // connection has initialized, discover the workspace routing (best effort) and,
@@ -400,14 +435,7 @@ func (r *RuntimeRouter) notifyWorkspaceRoutingToConnection(connectionID string) 
 		if r.authChangeTracker.Snapshot().OwnerGeneration != ownerGeneration {
 			return
 		}
-		var snapshot *auth.AuthDotJSON
-		if resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout()); err == nil && resolved != nil {
-			snapshot = &resolved.Auth
-		}
-		if snapshot == nil {
-			return
-		}
-		routing, err := r.workspaceRoutingForAccountRead(context.Background(), snapshot)
+		routing, err := r.workspaceRoutingForBackgroundRead(context.Background())
 		if err != nil || routing == nil {
 			return
 		}

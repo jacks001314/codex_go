@@ -295,6 +295,13 @@ func prepareDaemonPackage(daemon *Daemon, settings *DaemonSettings, mode daemonI
 		}
 		staged = true
 	}
+	// Rust canonicalizes the published release before comparing it with the
+	// previous selection, so republishing the selected release leaves the recorded
+	// history alone (prepare_install.rs:380-401).
+	selectedRelease, err := resolveReleasePath(release)
+	if err != nil {
+		return err
+	}
 	followsLatest := mode == daemonInstallMissing && stable && followsStandaloneLatest(home, source)
 	if PackageRoot(home) != previousRoot || (!running && prepareSocketAnswers(daemon)) {
 		return errors.New("daemon package location or socket ownership changed while preparing its package; retry the command")
@@ -334,6 +341,13 @@ func prepareDaemonPackage(daemon *Daemon, settings *DaemonSettings, mode daemonI
 	if err := selectDaemonRelease(root, release); err != nil {
 		return err
 	}
+	if previousRelease != selectedRelease {
+		// Best effort, like Rust: a history that cannot be recorded only disables
+		// pruning later, it never fails the install.
+		if err := recordDaemonSelection(root, previousRelease); err != nil {
+			daemon.Diagnostic("warning: could not record daemon selection for pruning: %v", err)
+		}
+	}
 	if running {
 		daemon.refreshInstallation()
 		if _, err := startPIDBackend(NewPIDBackend(daemon.BackendPaths(settings))); err != nil {
@@ -343,6 +357,9 @@ func prepareDaemonPackage(daemon *Daemon, settings *DaemonSettings, mode daemonI
 			return err
 		}
 	}
+	// Retire releases nothing can run any more (Rust prepare_from_package). A
+	// failure only skips pruning, so an install never fails for cleanup.
+	pruneDaemonReleasesBestEffort(daemon, root, settings)
 	return nil
 }
 

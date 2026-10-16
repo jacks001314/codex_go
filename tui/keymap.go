@@ -144,6 +144,7 @@ var keymapActionCatalog = []KeymapAction{
 	keymapAction("pager", "Pager", "jump_bottom", "Jump to the end.", []string{"end"}),
 	keymapAction("pager", "Pager", "close", "Close the pager overlay.", []string{"q", "ctrl-c"}),
 	keymapAction("pager", "Pager", "close_transcript", "Close the transcript overlay.", []string{"ctrl-t"}),
+	keymapAction("pager", "Pager", "find", "Find text in a transcript pager.", []string{"/", "f3"}),
 	keymapAction("list", "List", "move_up", "Move list selection up.", []string{"up", "ctrl-p", "ctrl-k", "k"}),
 	keymapAction("list", "List", "move_down", "Move list selection down.", []string{"down", "ctrl-n", "ctrl-j", "j"}),
 	keymapAction("list", "List", "move_left", "Move horizontally left in list pickers.", []string{"left", "ctrl-h"}),

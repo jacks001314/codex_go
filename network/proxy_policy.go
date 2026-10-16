@@ -121,8 +121,87 @@ type ProxyDomainPattern struct {
 	Domain string
 }
 
+// ProxyDomainMatcher matches candidate hosts against normalized domain patterns.
+//
+// Wildcards operate on UTF-8 bytes, mirroring Rust
+// network-proxy/src/domain_matcher.rs (`DomainPatternSet::patterns` is
+// `Arc<[Vec<u8>]>` and `matches(pattern: &[u8], host: &[u8])`; #52277 /
+// 14ff9c3a). `?` therefore consumes exactly one byte, so "api??.com" matches
+// "apié.com" while "api?.com" does not, and literal bytes compare with ASCII
+// case folding (domain_matcher.rs:190-214).
 type ProxyDomainMatcher struct {
 	patterns []glob.Glob
+}
+
+// proxyDomainByteMatcher is a glob.Glob over UTF-8 bytes for the wildcard subset
+// Rust supports: `*`, `?` and literal bytes. gobwas/glob matches runes and only
+// lets `?` consume runes that appear in the pattern, so byte-level patterns are
+// compiled here instead. Patterns that use gobwas/glob extensions (`[...]`
+// classes, `{...}` alternatives, escapes) keep the glob library, whose ASCII
+// behavior is unchanged.
+type proxyDomainByteMatcher struct {
+	pattern string
+}
+
+func (m proxyDomainByteMatcher) String() string {
+	return m.pattern
+}
+
+func (m proxyDomainByteMatcher) Match(subject string) bool {
+	return proxyDomainByteMatch(m.pattern, subject)
+}
+
+// proxyDomainByteMatch ports Rust's byte matcher (network-proxy/src/domain_matcher.rs:190-214):
+// only the latest star is retried, so work stays bounded by pattern length times host length.
+func proxyDomainByteMatch(pattern string, host string) bool {
+	position := 0
+	index := 0
+	starResume := -1
+	starConsumed := 0
+	for index < len(host) {
+		if position < len(pattern) {
+			octet := pattern[position]
+			switch {
+			case octet == '*':
+				starResume = position + 1
+				starConsumed = index
+				position++
+				continue
+			case octet == '?' || proxyDomainByteEqualFold(octet, host[index]):
+				position++
+				index++
+				continue
+			}
+		}
+		if starResume >= 0 {
+			starConsumed++
+			position = starResume
+			index = starConsumed
+			continue
+		}
+		return false
+	}
+	for position < len(pattern) && pattern[position] == '*' {
+		position++
+	}
+	return position == len(pattern)
+}
+
+// proxyDomainByteEqualFold mirrors Rust's `u8::eq_ignore_ascii_case`: ASCII case
+// folding only, so non-ASCII bytes compare exactly.
+func proxyDomainByteEqualFold(left byte, right byte) bool {
+	if left == right {
+		return true
+	}
+	lowerLeft := left | 0x20
+	lowerRight := right | 0x20
+	return lowerLeft == lowerRight && lowerLeft >= 'a' && lowerLeft <= 'z'
+}
+
+// proxyDomainPatternUsesGlobExtensions reports whether candidate relies on a
+// gobwas/glob extension that the byte matcher does not implement.
+func proxyDomainPatternUsesGlobExtensions(candidate string) bool {
+	return strings.ContainsAny(candidate, "[]{}\\")
 }
 
 func CompileProxyDomainMatcher(patterns []string, rejectGlobalWildcard bool) (*ProxyDomainMatcher, error) {
@@ -146,9 +225,15 @@ func CompileProxyDomainMatcher(patterns []string, rejectGlobalWildcard bool) (*P
 			if seen[candidate] {
 				continue
 			}
-			compiled, err := glob.Compile(candidate)
-			if err != nil {
-				return nil, fmt.Errorf("invalid glob pattern %q: %w", candidate, err)
+			var compiled glob.Glob
+			if proxyDomainPatternUsesGlobExtensions(candidate) {
+				globbed, err := glob.Compile(candidate)
+				if err != nil {
+					return nil, fmt.Errorf("invalid glob pattern %q: %w", candidate, err)
+				}
+				compiled = globbed
+			} else {
+				compiled = proxyDomainByteMatcher{pattern: candidate}
 			}
 			seen[candidate] = true
 			matcher.patterns = append(matcher.patterns, compiled)

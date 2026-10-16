@@ -8121,6 +8121,11 @@ func (m *Model) updateTranscriptOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
 		return nil
 	}
+	// Rust transcript_view::search owns the keyboard while the find bar is open;
+	// the pager keymap only sees the keys the bar declines (paging while editing).
+	if handled, cmd := m.overlay.HandleFindKey(msg); handled {
+		return cmd
+	}
 	// Rust app_backtrack: with the *transcript* overlay open, Esc begins the
 	// backtrack preview; once the preview is active, Esc/Left step to an older
 	// prompt, Right steps to a newer one, and Enter confirms the highlighted
@@ -8158,6 +8163,13 @@ func (m *Model) updatePagerOverlayKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return nil
 	}
 	keySpec := keySpecFromKeyMsg(msg)
+	// Rust app_backtrack/legacy_input.rs:34 (pager.find -> begin_search): the
+	// transcript pager opens its find bar. Other pagers (diff, session
+	// transcript) have no find bar in Go (§T13).
+	if m.overlayTranscript && m.keyMatches("pager", chatwidget.PagerFind, keySpec) {
+		m.overlay.BeginFind()
+		return nil
+	}
 	if m.keyMatches("pager", "close", keySpec) || m.keyMatches("pager", "close_transcript", keySpec) {
 		return m.closeTranscriptOverlay()
 	}
