@@ -107,15 +107,19 @@ func executorCredentialFromHeaders(headers http.Header) (string, error) {
 	if len(headers) != 1 {
 		return "", errInvalidExecutorCredentialAuthorization
 	}
-	var name string
 	var values []string
+	// Rust looks the header up by its normalized name in a `HeaderMap`, so the
+	// gate cannot accept a companion header under any iteration order. Go's
+	// http.Header canonicalizes keys on Set/Add but a literal keeps both
+	// spellings, so every key is checked here instead of trusting the last one
+	// a map happens to yield.
 	for key, headerValues := range headers {
-		name, values = key, headerValues
+		if !strings.EqualFold(key, "Authorization") {
+			return "", errInvalidExecutorCredentialAuthorization
+		}
+		values = headerValues
 	}
-	// http.Header canonicalizes keys on Set/Add, so an equal-fold comparison
-	// matches Rust's normalized `HeaderMap` lookup without depending on the
-	// caller having used the canonical spelling.
-	if !strings.EqualFold(name, "Authorization") || len(values) != 1 {
+	if len(values) != 1 {
 		return "", errInvalidExecutorCredentialAuthorization
 	}
 	token, ok := strings.CutPrefix(values[0], "Bearer ")

@@ -29,7 +29,12 @@ var legacyFeatureAliases = map[string]string{
 }
 
 var ignoredFeatureKeys = map[string]bool{
-	"tui_app_server":                     true,
+	"tui_app_server": true,
+	// Rust #54175 (features/src/lib.rs `apply_map`): the retired
+	// `worktrees` / `realtime_conversation` toggles are skipped alongside
+	// `tui_app_server`, so a config override cannot bring back either one.
+	"worktrees":                          true,
+	"realtime_conversation":              true,
 	"undo":                               true,
 	"js_repl":                            true,
 	"js_repl_tools_only":                 true,

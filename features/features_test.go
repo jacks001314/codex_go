@@ -282,3 +282,38 @@ func TestNoticeForLegacyFeatureUsageMatchesRust(t *testing.T) {
 		})
 	}
 }
+
+// TestRetiredWorktreeAndVoiceConfigOverridesAreIgnoredLikeRust mirrors Rust
+// #54175 (`retired_worktree_and_voice_config_overrides_are_ignored` in
+// features/src/tests.rs plus the `"tui_app_server" | "worktrees" |
+// "realtime_conversation" => continue` arm of `apply_map`): a `[features]`
+// override of either retired toggle changes nothing, so the resolved settings
+// keep matching the defaults, where both keys stay enabled.
+func TestRetiredWorktreeAndVoiceConfigOverridesAreIgnoredLikeRust(t *testing.T) {
+	retired := []string{"worktrees", "realtime_conversation"}
+	for _, key := range retired {
+		if !Known(key) {
+			t.Fatalf("%s must stay a known removed compatibility flag", key)
+		}
+		if !Defaults()[key] {
+			t.Fatalf("%s default = false, want true", key)
+		}
+	}
+	for _, enabled := range []bool{false, true} {
+		settings, usages := ResolveSettings(map[string]any{
+			"worktrees":             enabled,
+			"realtime_conversation": enabled,
+		})
+		if len(settings) != 0 {
+			t.Fatalf("ResolveSettings(retired toggles, enabled=%v) = %#v, want the override ignored", enabled, settings)
+		}
+		if len(usages) != 0 {
+			t.Fatalf("ResolveSettings(retired toggles, enabled=%v) legacy usages = %#v, want none", enabled, usages)
+		}
+		for _, key := range retired {
+			if !Enabled(Defaults(), key) {
+				t.Fatalf("%s = false once the override is ignored, want the default true", key)
+			}
+		}
+	}
+}

@@ -115,9 +115,17 @@ func TestInvalidExecutorCredentialHeadersAreNeverSentLikeRust(t *testing.T) {
 		"token_too_long":      {"Authorization": {"Bearer " + tooLong}},
 		"two_values":          {"Authorization": {"Bearer a", "Bearer b"}},
 		"extra_header":        {"Authorization": {"Bearer a"}, "X-Account": {"account"}},
-		"wrong_header_name":   {"X-Authorization": {"Bearer a"}},
-		"lowercase_bearer":    {"Authorization": {"bearer a"}},
-		"trailing_space":      {"Authorization": {"Bearer a "}},
+		// A Go http.Header literal keeps both Authorization spellings as two
+		// entries (only Set/Add canonicalize), so this case depends on the
+		// "exactly one header" gate alone, in any map iteration order. Rust's
+		// normalized HeaderMap collapses the spellings into one entry, which the
+		// sibling two_values case covers there.
+		"two_authorization_spellings": {"Authorization": {"Bearer a"}, "authorization": {"Bearer b"}},
+		// A lone header that is not Authorization at all.
+		"non_authorization_header": {"Content-Type": {"application/json"}},
+		"wrong_header_name":        {"X-Authorization": {"Bearer a"}},
+		"lowercase_bearer":         {"Authorization": {"bearer a"}},
+		"trailing_space":           {"Authorization": {"Bearer a "}},
 	}
 	for name, headers := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -136,6 +144,92 @@ func TestInvalidExecutorCredentialHeadersAreNeverSentLikeRust(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&registryHits); got != 0 {
 		t.Fatalf("registry received %d requests, want 0: an invalid scoped credential must never be sent", got)
+	}
+}
+
+// TestExecutorCredentialHeaderCountGateLikeRust pins the two header-shape gates
+// of Rust #54346's scoped `resolve_auth` on their own -- `headers.len() == 1`
+// (the count gate) and the normalized `headers.get(AUTHORIZATION)` lookup (the
+// name gate). The companion test above drives the whole validation chain, so a
+// case that a later gate (token syntax, empty/oversized token, bearer prefix)
+// would reject anyway cannot tell whether these two still work. Every case
+// below carries a well-formed `Bearer` token, so only the gate named in its
+// comment can reject it, and the cases with two entries are rejected whichever
+// spelling the Go map yields last.
+func TestExecutorCredentialHeaderCountGateLikeRust(t *testing.T) {
+	authorization := func(value string) http.Header { return http.Header{"Authorization": {value}} }
+	for _, testCase := range []struct {
+		name    string
+		headers http.Header
+	}{
+		{
+			// Two Authorization-equal-fold keys with one value each: whichever
+			// entry the map yields last, only the header-count gate rejects it.
+			name:    "two_authorization_spellings",
+			headers: http.Header{"Authorization": {"Bearer a"}, "authorization": {"Bearer b"}},
+		},
+		{
+			name:    "authorization_plus_unrelated_header",
+			headers: http.Header{"Authorization": {"Bearer a"}, "X-Account": {"account"}},
+		},
+		{
+			name:    "two_values_on_one_header",
+			headers: http.Header{"Authorization": {"Bearer a", "Bearer b"}},
+		},
+		{
+			// A single header whose name is not Authorization, carrying a
+			// well-formed bearer: only the header-name gate rejects it (a
+			// count-only gate would let it through and the token would reach
+			// the registry).
+			name:    "non_authorization_header_only",
+			headers: http.Header{"Content-Type": {"Bearer a"}},
+		},
+		{
+			name:    "no_headers",
+			headers: http.Header{},
+		},
+		{
+			// Control: the same shape the scoped mode accepts.
+			name:    "single_bearer_is_accepted",
+			headers: authorization("Bearer scoped-token"),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			token, err := executorCredentialFromHeaders(testCase.headers)
+			wantAccepted := testCase.name == "single_bearer_is_accepted"
+			if wantAccepted {
+				if err != nil || token != "scoped-token" {
+					t.Fatalf("executorCredentialFromHeaders(%#v) = (%q, %v), want the scoped token", testCase.headers, token, err)
+				}
+				return
+			}
+			if !errors.Is(err, errInvalidExecutorCredentialAuthorization) {
+				t.Fatalf("executorCredentialFromHeaders(%#v) error = %v, want %v", testCase.headers, err, errInvalidExecutorCredentialAuthorization)
+			}
+		})
+	}
+
+	// The rejected headers must also never reach the registry.
+	var registryHits int32
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&registryHits, 1)
+		_, _ = w.Write([]byte(registryCredentialRegistrationBody("env-1", "")))
+	}))
+	defer registry.Close()
+	for _, headers := range []http.Header{
+		{"Authorization": {"Bearer a"}, "authorization": {"Bearer b"}},
+		{"Content-Type": {"Bearer a"}},
+	} {
+		scoped, err := registryCredentialConfig(registry.URL, "env-1", headers).WithExecutorCredentialAuth()
+		if err != nil {
+			t.Fatalf("WithExecutorCredentialAuth() error = %v", err)
+		}
+		if _, err := registerRemoteEnvironment(context.Background(), scoped, RemotePublicKey{}); err == nil {
+			t.Fatal("registerRemoteEnvironment() = nil, want the invalid credential error")
+		}
+	}
+	if got := atomic.LoadInt32(&registryHits); got != 0 {
+		t.Fatalf("registry received %d requests, want 0", got)
 	}
 }
 

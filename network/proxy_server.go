@@ -560,10 +560,10 @@ func (s *ProxyServer) mayUseUpstreamProxyForAddress(address string) bool {
 }
 
 func proxyUpstreamRootCAs(env map[string]string) (*x509.CertPool, error) {
-	pool, err := x509.SystemCertPool()
-	if err != nil || pool == nil {
-		pool = x509.NewCertPool()
-	}
+	// Rust #54056 (http-client/src/native_roots.rs): the startup bundles are
+	// layered onto a clone of the platform anchors, so one proxy server build
+	// cannot mutate the process-wide pool or another build's trust.
+	pool := PlatformRootPoolClone()
 	paths := map[string]bool{}
 	for _, path := range ProxyStartupCAFileEnvValues(env) {
 		paths[path] = true

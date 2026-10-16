@@ -3,7 +3,6 @@ package execserver
 import (
 	"bytes"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,10 +28,10 @@ func newExecServerHTTPClient(configured ...*http.Client) (*http.Client, error) {
 		return nil, fmt.Errorf("Failed to read CA certificate file %s selected by %s: %v. %s", path, sourceEnv, err, customCAHint)
 	}
 	pemData = normalizeTrustedCertificatePEM(pemData)
-	rootCAs, err := x509.SystemCertPool()
-	if err != nil || rootCAs == nil {
-		rootCAs = x509.NewCertPool()
-	}
+	// Rust #54056 (http-client/src/native_roots.rs): the platform anchors are
+	// read into a clone, so appending the custom bundle below cannot mutate the
+	// process-wide pool or leak into another client.
+	rootCAs := network.PlatformRootPoolClone()
 	if !rootCAs.AppendCertsFromPEM(pemData) {
 		return nil, fmt.Errorf("Failed to load CA certificates from %s selected by %s: no usable CERTIFICATE blocks found. %s", path, sourceEnv, customCAHint)
 	}
