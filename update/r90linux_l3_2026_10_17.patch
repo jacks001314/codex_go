@@ -1,0 +1,229 @@
+diff --git a/appserver/turn_runtime.go b/appserver/turn_runtime.go
+index 1781f441..41ee31f8 100644
+--- a/appserver/turn_runtime.go
++++ b/appserver/turn_runtime.go
+@@ -6201,7 +6201,7 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
+ 			})
+ 		}
+ 	}
+-	text := r.turnEnvironmentContextTextAtDate(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "")
++	text := r.turnEnvironmentContextTextAtDateWithTime(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime())
+ 	return append(items, compact.Item{
+ 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
+ 	}), nil
+@@ -7651,7 +7651,7 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
+ 	}
+ 	params = r.environmentContextParams(threadID, params)
+ 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
+-	text := r.turnEnvironmentContextTextAtDate(params, current, localTimezoneName(), shellVersion)
++	text := r.turnEnvironmentContextTextAtDateWithTime(params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime())
+ 	items := []any{}
+ 	sessionItems := []session.Item{}
+ 	if emitNotice {
+@@ -7729,6 +7729,17 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParam
+ // optional date. A nil date omits the element, which is how a nonfatal clock
+ // failure renders (#46006).
+ func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string) string {
++	return r.turnEnvironmentContextTextAtDateWithTime(params, date, timezone, shellVersion, true)
++}
++
++// turnEnvironmentContextTextAtDateWithTime mirrors Rust's
++// `include_environment_context_time` gate (#52164): with the flag off,
++// core/src/session/world_state.rs:281 leaves the date as None and
++// core/src/context/world_state/environment.rs:67 filters the timezone to None,
++// and the renderer (environment.rs:357-368 push_optional_element) writes nothing
++// for None - so both <current_date> and <timezone> disappear entirely instead of
++// rendering as empty elements. An unset flag is true (core/src/config/mod.rs:4161).
++func (r *RuntimeRouter) turnEnvironmentContextTextAtDateWithTime(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool) string {
+ 	environments := r.unifiedExecEnvironmentsForTurn(params)
+ 	defaultShellName := r.defaultEnvironmentShellName()
+ 	var b strings.Builder
+@@ -7759,10 +7770,12 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartP
+ 	if strings.TrimSpace(shellVersion) != "" {
+ 		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
+ 	}
+-	if date != nil {
+-		fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
++	if includeTime {
++		if date != nil {
++			fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
++		}
++		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
+ 	}
+-	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
+ 	if lines := r.environmentContextSubagentLines(strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
+ 		b.WriteString("  <subagents>\n")
+ 		for _, line := range lines {
+diff --git a/appserver/environment_context_time_like_rust_test.go b/appserver/environment_context_time_like_rust_test.go
+new file mode 100644
+index 00000000..89a531b6
+--- /dev/null
++++ b/appserver/environment_context_time_like_rust_test.go
+@@ -0,0 +1,167 @@
++package appserver
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"codex_go/compact"
++	"codex_go/config"
++	"codex_go/session"
++	"codex_go/turn"
++)
++
++// environmentContextTimeClock is the fixed instant every case below renders.
++var environmentContextTimeClock = time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
++
++// environmentContextTimeRouter builds the per-turn router used by the
++// include_environment_context_time cases.
++func environmentContextTimeRouter(t *testing.T, cwd string) (*RuntimeRouter, *turn.TurnStartParams) {
++	t.Helper()
++	threadRouter := NewRouter(session.NewStore(filepath.Join(t.TempDir(), "sessions")))
++	threadRouter.SetClock(func() time.Time { return environmentContextTimeClock })
++	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: threadRouter, DefaultCWD: cwd})
++	return router, &turn.TurnStartParams{ThreadID: "thread-environment-time", CWD: cwd}
++}
++
++// turnEnvironmentContextTimeText renders one per-turn <environment_context>
++// block for a config carrying include_environment_context_time. A nil value
++// leaves the key absent, which is the unset-config default.
++func turnEnvironmentContextTimeText(t *testing.T, cwd string, includeTime *bool) string {
++	t.Helper()
++	router, params := environmentContextTimeRouter(t, cwd)
++	values := map[string]any{}
++	if includeTime != nil {
++		values["include_environment_context_time"] = *includeTime
++	}
++	items, _, err := router.turnEnvironmentContextInputItemForTurn(
++		context.Background(), params.ThreadID, "turn-1", params, &config.Config{Values: values})
++	if err != nil {
++		t.Fatal(err)
++	}
++	texts := messageInputTextsForRole(items, "user")
++	if len(texts) != 1 {
++		t.Fatalf("environment context texts = %#v, want exactly one", texts)
++	}
++	return texts[0]
++}
++
++// withoutDateAndTimezoneLines drops the two gated lines so the remaining
++// template can be compared byte for byte.
++func withoutDateAndTimezoneLines(text string) string {
++	lines := strings.Split(text, "\n")
++	kept := make([]string, 0, len(lines))
++	for _, line := range lines {
++		if strings.Contains(line, "<current_date>") || strings.Contains(line, "<timezone>") {
++			continue
++		}
++		kept = append(kept, line)
++	}
++	return strings.Join(kept, "\n")
++}
++
++// TestEnvironmentContextTimeEnabledWritesDateAndTimezoneLikeRust covers the
++// flag-on arm of #52164: Rust keeps the date (core/src/session/world_state.rs:281)
++// and the timezone (core/src/context/world_state/environment.rs:67).
++func TestEnvironmentContextTimeEnabledWritesDateAndTimezoneLikeRust(t *testing.T) {
++	enabled := true
++	text := turnEnvironmentContextTimeText(t, t.TempDir(), &enabled)
++	wantDate := environmentContextTimeClock.In(time.Local).Format("2006-01-02")
++	if !strings.Contains(text, "<current_date>"+wantDate+"</current_date>") {
++		t.Fatalf("environment context = %q, want <current_date>%s</current_date>", text, wantDate)
++	}
++	if !strings.Contains(text, "<timezone>"+localTimezoneName()+"</timezone>") {
++		t.Fatalf("environment context = %q, want <timezone>%s</timezone>", text, localTimezoneName())
++	}
++}
++
++// TestEnvironmentContextTimeDisabledOmitsDateAndTimezoneLikeRust covers the
++// flag-off arm: Rust passes None for both values and push_optional_element
++// (core/src/context/world_state/environment.rs:357-368) writes nothing, so the
++// elements vanish instead of rendering empty. Everything else in the template
++// must stay byte-identical - that is the regression this case guards.
++func TestEnvironmentContextTimeDisabledOmitsDateAndTimezoneLikeRust(t *testing.T) {
++	enabled, disabled := true, false
++	cwd := t.TempDir()
++	withTime := turnEnvironmentContextTimeText(t, cwd, &enabled)
++	withoutTime := turnEnvironmentContextTimeText(t, cwd, &disabled)
++
++	if strings.Contains(withoutTime, "<current_date>") || strings.Contains(withoutTime, "<timezone>") {
++		t.Fatalf("disabled environment context = %q, want no <current_date>/<timezone>", withoutTime)
++	}
++	if want := withoutDateAndTimezoneLines(withTime); withoutTime != want {
++		t.Fatalf("disabled environment context =\n%q\nwant the enabled template minus the two gated lines =\n%q", withoutTime, want)
++	}
++	if !strings.Contains(withoutTime, "<cwd>") || !strings.HasSuffix(withoutTime, "</environment_context>") {
++		t.Fatalf("disabled environment context lost unrelated template content = %q", withoutTime)
++	}
++}
++
++// TestEnvironmentContextTimeDefaultsTrueLikeRust covers the default arm: an
++// absent key is true (core/src/config/mod.rs:4161 unwrap_or(true)), so the
++// rendering must match the explicit-true rendering byte for byte.
++func TestEnvironmentContextTimeDefaultsTrueLikeRust(t *testing.T) {
++	enabled := true
++	cwd := t.TempDir()
++	explicit := turnEnvironmentContextTimeText(t, cwd, &enabled)
++	unset := turnEnvironmentContextTimeText(t, cwd, nil)
++	if unset != explicit {
++		t.Fatalf("unset include_environment_context_time =\n%q\nwant the enabled rendering =\n%q", unset, explicit)
++	}
++	if !strings.Contains(unset, "<current_date>") || !strings.Contains(unset, "<timezone>") {
++		t.Fatalf("unset environment context = %q, want date and timezone", unset)
++	}
++}
++
++// compactEnvironmentContextTimeText renders the compaction-path consumer with a
++// codex home whose config.toml carries include_environment_context_time. This
++// exercises the second production call site, which resolves the flag through
++// the turn's effective config snapshot instead of a hand-built config value.
++func compactEnvironmentContextTimeText(t *testing.T, cwd string, includeTime string) string {
++	t.Helper()
++	home := t.TempDir()
++	body := "include_environment_context_time = " + includeTime + "\n"
++	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	threadRouter := NewRouter(session.NewStore(filepath.Join(t.TempDir(), "sessions")))
++	threadRouter.SetClock(func() time.Time { return environmentContextTimeClock })
++	router := NewRuntimeRouter(RuntimeServices{
++		ThreadRouter: threadRouter,
++		Config:       config.NewConfigService(home),
++		DefaultCWD:   cwd,
++	})
++	request := &compact.Request{ThreadID: "compact-environment-time", TurnID: "compact-environment-time-turn"}
++	items, err := router.compactEnvironmentContext(context.Background(), &session.Record{Metadata: session.Metadata{CWD: cwd}}, request)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(items) != 1 {
++		t.Fatalf("compact environment context items = %#v, want exactly one", items)
++	}
++	return items[0].Text
++}
++
++// TestCompactEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust
++// covers the compaction consumer, so the switch is wired on both production
++// call sites rather than only the per-turn one.
++func TestCompactEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust(t *testing.T) {
++	cwd := t.TempDir()
++	disabled := compactEnvironmentContextTimeText(t, cwd, "false")
++	if strings.Contains(disabled, "<current_date>") || strings.Contains(disabled, "<timezone>") {
++		t.Fatalf("disabled compact environment context = %q, want no <current_date>/<timezone>", disabled)
++	}
++	enabled := compactEnvironmentContextTimeText(t, cwd, "true")
++	wantDate := environmentContextTimeClock.In(time.Local).Format("2006-01-02")
++	if !strings.Contains(enabled, "<current_date>"+wantDate+"</current_date>") ||
++		!strings.Contains(enabled, "<timezone>"+localTimezoneName()+"</timezone>") {
++		t.Fatalf("enabled compact environment context = %q, want date and timezone", enabled)
++	}
++	if disabled != withoutDateAndTimezoneLines(enabled) {
++		t.Fatalf("disabled compact environment context =\n%q\nwant the enabled template minus the two gated lines =\n%q",
++			disabled, withoutDateAndTimezoneLines(enabled))
++	}
++}

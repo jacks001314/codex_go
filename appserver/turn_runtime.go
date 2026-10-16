@@ -6201,7 +6201,7 @@ func (r *RuntimeRouter) compactEnvironmentContext(ctx context.Context, record *s
 			})
 		}
 	}
-	text := r.turnEnvironmentContextTextAtDate(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "")
+	text := r.turnEnvironmentContextTextAtDateWithTime(r.environmentContextParams(request.ThreadID, params), current, localTimezoneName(), "", cfg.IncludeEnvironmentContextTime())
 	return append(items, compact.Item{
 		ID: "environment-context-" + safeIdentifier(request.TurnID), Type: "message", Role: "user", Kind: "environment_context", Text: text, Created: created,
 	}), nil
@@ -7651,7 +7651,7 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 	}
 	params = r.environmentContextParams(threadID, params)
 	shellVersion := r.powershellShellVersionForTurn(ctx, cfg, params)
-	text := r.turnEnvironmentContextTextAtDate(params, current, localTimezoneName(), shellVersion)
+	text := r.turnEnvironmentContextTextAtDateWithTime(params, current, localTimezoneName(), shellVersion, cfg.IncludeEnvironmentContextTime())
 	items := []any{}
 	sessionItems := []session.Item{}
 	if emitNotice {
@@ -7729,6 +7729,17 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAt(params *turn.TurnStartParam
 // optional date. A nil date omits the element, which is how a nonfatal clock
 // failure renders (#46006).
 func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string) string {
+	return r.turnEnvironmentContextTextAtDateWithTime(params, date, timezone, shellVersion, true)
+}
+
+// turnEnvironmentContextTextAtDateWithTime mirrors Rust's
+// `include_environment_context_time` gate (#52164): with the flag off,
+// core/src/session/world_state.rs:281 leaves the date as None and
+// core/src/context/world_state/environment.rs:67 filters the timezone to None,
+// and the renderer (environment.rs:357-368 push_optional_element) writes nothing
+// for None - so both <current_date> and <timezone> disappear entirely instead of
+// rendering as empty elements. An unset flag is true (core/src/config/mod.rs:4161).
+func (r *RuntimeRouter) turnEnvironmentContextTextAtDateWithTime(params *turn.TurnStartParams, date *time.Time, timezone string, shellVersion string, includeTime bool) string {
 	environments := r.unifiedExecEnvironmentsForTurn(params)
 	defaultShellName := r.defaultEnvironmentShellName()
 	var b strings.Builder
@@ -7759,10 +7770,12 @@ func (r *RuntimeRouter) turnEnvironmentContextTextAtDate(params *turn.TurnStartP
 	if strings.TrimSpace(shellVersion) != "" {
 		fmt.Fprintf(&b, "  <shell_version>%s</shell_version>\n", escapeEnvironmentXML(shellVersion))
 	}
-	if date != nil {
-		fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
+	if includeTime {
+		if date != nil {
+			fmt.Fprintf(&b, "  <current_date>%s</current_date>\n", escapeEnvironmentXML(date.In(time.Local).Format("2006-01-02")))
+		}
+		fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	}
-	fmt.Fprintf(&b, "  <timezone>%s</timezone>\n", escapeEnvironmentXML(timezone))
 	if lines := r.environmentContextSubagentLines(strings.TrimSpace(params.ThreadID)); len(lines) > 0 {
 		b.WriteString("  <subagents>\n")
 		for _, line := range lines {

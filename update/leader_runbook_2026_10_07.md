@@ -230,3 +230,11 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 7. **已完成同步的判定要看两侧**：远端 `origin/main` 与新 tip 一致 **且** 每个其它节点的车道回包三项齐全。只有前者不算同步完成（车道台面可能仍停在旧 sha）。
 
 8. **本机（Windows）通道根因与正确做法（2026-10-17 实测）**：`github.com` 直连 443 被阻断（DNS 解析到 `20.205.243.166` 正常、`Test-NetConnection` 三次 False、`git ls-remote` 21s 超时），但本机有**本地代理在监听 `127.0.0.1:7897`**（注册表 `HKCU:\...\Internet Settings` 的 `ProxyEnable=1` / `ProxyServer=127.0.0.1:7897`，`netsh winhttp` 却是 Direct），而 **git 默认不读 WinINET 代理** ⇒ 直连必失败。正确做法：给 github 作用域配代理，例如 `git config http.https://github.com/.proxy http://127.0.0.1:7897`（或单次 `git -c http.proxy=... push`）。配后 `ls-remote` **1.2s** 返回。**教训**：报"网络不通"前先查本地代理端口（`7890/7897/1080/10809/8889`）与 `HKCU` 代理设置，别把"缺代理配置"误报成"节点没网"。
+
+## R5-quaterdecies · flake 名单的 Linux 侧更正（2026-10-17，由 L-1/L-3 两批独立复跑给出）
+
+1. `appserver TestOtelProviderReloadsAfterAccountChange` **在 Linux 上不是 flake，是稳定红**：L-3 在自己的台面隔离跑 3/3 FAIL，又在**pristine 未改动台面**（`/tmp/l90/r90l1`，`git status` 为空）隔离跑 3/3 同一断言 FAIL（`otel_reloader_test.go:103: the telemetry exporters were not rebuilt after the account change`）。它在**整包**里时红时绿（受整包次序/负载影响）⇒ 归类应为"Linux 稳定红 + 整包次序敏感"，不要再当负载 flake 折扣掉。
+2. `appserver TestExistingThreadLoadsAPICuratedMCPAfterAuthSwitchSync` 在 Linux 隔离 `ok 0.025s` ⇒ **是真 flake**，两边都按 flake 处理。
+3. 判红时的正确做法：**先隔离复跑**（同一台面 ×3 + pristine 台面 ×3）；隔离稳定红 = 稳定红，整包时红时绿 ≠ flake。**同一台机器的整包计数不能跨时点直接比**（第 5 槽会换人），必须**逐名比失败集合**。
+4. Linux 侧 5-env 整包的稳定红基线（截至 `e786ba0c`）：`TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust`、`TestPluginContentHashMatchesRustBundleFingerprintLikeRust`、`TestPluginListHonorsPerRepositoryConfigLikeRust`、`TestRuntimeRouterTurnStartFileChangeApplyFailureLikeRust`、`TestOtelProviderReloadsAfterAccountChange`（后一条按 §1 口径）；唯一 SKIP = `TestServerRequestBrokerIntersectsPermissionsApprovalLikeRust`（Windows 专属 slash_tmp）。
+5. **Win 侧 appserver 基线（截至 `e786ba0c`）**：`RUN=2475 PASS_ALL=1883 FAIL=0 SKIP=7`（对象树，5 env 全设、清 `TERM`、CWD=包内）；`e786ba0c` 之前一笔 `89a19fb7` 是 `RUN=2471`，差值 = L-3 新增 4 条用例。
