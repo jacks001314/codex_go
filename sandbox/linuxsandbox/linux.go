@@ -925,16 +925,42 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
 	} else {
 		args = append(args, "--ro-bind", "/", "/")
+		// Rust create_filesystem_args mounts the minimal device tree right after
+		// the read-only root bind (`bwrap.rs:511-516`): the root bind is nodev,
+		// so standard device nodes such as `/dev/null` would otherwise be
+		// unusable inside the sandbox (the managed-proxy bridge opens
+		// `/dev/null` for a child's stdin, `linux.go` spawnProxyLocalBridge).
+		args = append(args, "--dev", "/dev")
 		for _, root := range fs.writableRoots(cmd.SandboxPolicyCWD) {
 			if root == "/" {
+				// Rebinding `/` shadows that device tree, so Rust recreates it
+				// together with shared memory (`bwrap.rs:650-657`).
 				args = append(args, "--bind", "/", "/")
+				args = append(args, "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm")
 				continue
 			}
 			if _, err := os.Stat(root); err == nil {
 				args = append(args, "--bind", root, root)
 			}
 		}
+		// Rust re-applies read-only protections only for subpaths a writable
+		// root would otherwise expose (`append_read_only_subpath_args`,
+		// `bwrap.rs:1243-1257`): the read baseline is already read-only, and an
+		// extra `--ro-bind / /` re-mounts the host root over the device tree and
+		// over the writable roots bound above. Ordinary read entries that no
+		// writable root covers keep the baseline protection.
+		writableRoots := fs.writableRoots(cmd.SandboxPolicyCWD)
+		fullWriteRoot := false
+		for _, root := range writableRoots {
+			if root == "/" {
+				fullWriteRoot = true
+				break
+			}
+		}
 		for _, path := range fs.protectedReadOnlySubpaths(cmd.SandboxPolicyCWD) {
+			if !fullWriteRoot && !linuxSandboxPathWithin(writableRoots, path) {
+				continue
+			}
 			args = append(args, "--ro-bind", path, path)
 		}
 	}
@@ -968,6 +994,17 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 		return execBundledBwrap(launcher.Program, args, os.Environ())
 	}
 	return unix.Exec(launcher.Program, args, os.Environ())
+}
+
+// linuxSandboxPathWithin reports whether path sits inside one of the roots the
+// sandbox made writable (Rust `is_within_allowed_write_paths`).
+func linuxSandboxPathWithin(roots []string, path string) bool {
+	for _, root := range roots {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUnreadableRootBwrapArgs(args *[]string, path string) (int, error) {

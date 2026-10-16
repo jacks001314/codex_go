@@ -238,3 +238,13 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 3. 判红时的正确做法：**先隔离复跑**（同一台面 ×3 + pristine 台面 ×3）；隔离稳定红 = 稳定红，整包时红时绿 ≠ flake。**同一台机器的整包计数不能跨时点直接比**（第 5 槽会换人），必须**逐名比失败集合**。
 4. Linux 侧 5-env 整包的稳定红基线（截至 `e786ba0c`）：`TestGatewayOAuthLoginForwardsAuthURLAndSucceedsLikeRust`、`TestPluginContentHashMatchesRustBundleFingerprintLikeRust`、`TestPluginListHonorsPerRepositoryConfigLikeRust`、`TestRuntimeRouterTurnStartFileChangeApplyFailureLikeRust`、`TestOtelProviderReloadsAfterAccountChange`（后一条按 §1 口径）；唯一 SKIP = `TestServerRequestBrokerIntersectsPermissionsApprovalLikeRust`（Windows 专属 slash_tmp）。
 5. **Win 侧 appserver 基线（截至 `e786ba0c`）**：`RUN=2475 PASS_ALL=1883 FAIL=0 SKIP=7`（对象树，5 env 全设、清 `TERM`、CWD=包内）；`e786ba0c` 之前一笔 `89a19fb7` 是 `RUN=2471`，差值 = L-3 新增 4 条用例。
+
+## R5-quindecies · 本地代理打通 Go 模块代理 ⇒ Windows 节点获得跨平台编译/静态检查能力（2026-10-17 实测）
+
+1. 同一个本地代理（`127.0.0.1:7897`）不只救 github：设 `HTTP_PROXY`/`HTTPS_PROXY=http://127.0.0.1:7897` 后，`curl https://proxy.golang.org/<module>` 从 **12s 超时（http_code=000）** 变成 **2.19s 可达（http_code=404 —— 该模块路径不存在，不是代理故障）**。
+2. 由此 Go 模块下载恢复，Linux-only 依赖可落盘：`github.com/landlock-lsm/go-landlock v0.9.0`、`github.com/elastic/go-seccomp-bpf v1.6.0`、`kernel.org/pub/linux/libs/security/libcap/psx v1.2.77`（均在 `%USERPROFILE%\go\pkg\mod`）。此前正是这些包让 `GOOS=linux go build` 在 Windows 上"失败于依赖下载"。
+3. **新增能力**（Windows 节点实测，全部先设代理 env）：`GOOS=linux go build ./sandbox/linuxsandbox/` = exit 0（51s，含下载）；`GOOS=linux go build ./appserverdaemon/ ./sandbox/ ./memories/ ./exec/ ./network/` = exit 0（49s）；`GOOS=linux go build ./...` = **exit 0（87.5s，整树）**；`GOOS=linux go vet ./sandbox/...` = exit 0；`GOOS=darwin GOARCH=arm64 go build ./sandbox/... ./appserverdaemon/ ./memories/` = exit 0。
+4. **纪律**：用完立刻 `Remove-Item Env:\GOOS,Env:\GOARCH`（否则后续门禁静默变成跨平台判据）。`go vet ./sandbox/...` 在 GOOS=windows 下仍命中白名单 `sandbox/linuxsandbox/bwrap_test.go:182 undefined: probeBwrapHelp`，属 Windows 侧基线。
+5. **"能编译 ≠ 能跑"**：真 errno、真 bwrap e2e、procfs/landlock 运行期结论仍只在 Linux 节点取；跨平台编译/vet 只是**静态面**补充（可先在 Windows 侧自证 Linux 代码编得过，再去 Linux 节点拿运行期证据）。
+6. 车道规则：需要 `GOOS=linux`/`darwin` 编译或 vet 的车道，**在 Windows 节点设代理 env 直接做**，不必为此新开跨节点车道；只有"必须真机运行"的部分才跨节点。
+7. **更正 R5-quaterdecies §1**：`TestOtelProviderReloadsAfterAccountChange` **不是** Linux 稳定红 —— L-3 后来在 pristine 台面隔离复跑（`-count=3` = PASS/FAIL/FAIL）证明它是 **5s 等待窗口的轮转 flake 槽**；Linux 稳定红恒为那 4 条，第 5 槽会换人。判红一律**逐名比失败集合**。

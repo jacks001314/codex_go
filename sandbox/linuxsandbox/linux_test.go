@@ -3,8 +3,12 @@
 package linuxsandbox
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -677,6 +682,78 @@ func linuxSyscallProbes() map[string]func() error {
 }
 
 // linuxRunSyscallProbes prints one `name=errno` line per probe.
+// linuxSandboxE2EProxyProbeEnv enables the managed-proxy round trip probe.
+const linuxSandboxE2EProxyProbeEnv = "CODEX_GO_LINUX_SANDBOX_PROXY_PROBE"
+
+// linuxSandboxE2EProxyPing / linuxSandboxE2EProxyPong are the fixed payloads
+// the round trip exchanges with the loopback endpoint the host bridge forwards
+// to.
+const (
+	linuxSandboxE2EProxyPing = "PING\n"
+	linuxSandboxE2EProxyPong = "PONG\n"
+)
+
+// linuxSandboxVSockDeviceOpenErrno opens the AF_VSOCK device node.
+//
+// 0 means the device was opened; any other value is the errno the sandbox
+// produced. The end-to-end test asserts the host can open the same path, so the
+// denial is attributable to the sandbox (the root bind is nodev, so the device
+// tree mounts it without device semantics) rather than to a missing module.
+func linuxSandboxVSockDeviceOpenErrno() syscall.Errno {
+	file, err := os.Open("/dev/vsock")
+	if err != nil {
+		return linuxSandboxErrnoFromError(err)
+	}
+	_ = file.Close()
+	return 0
+}
+
+// linuxSandboxProxyRoundtripErrno drives one request through the whole managed
+// proxy chain and reports the outcome as an errno.
+//
+// The sandboxed process connects to the loopback port the helper rewrote
+// `HTTP_PROXY` to (the local bridge inside the network namespace), which tunnels
+// the bytes over the Unix socket to the host bridge, which in turn dials the
+// real proxy endpoint. 0 means the configured endpoint's PONG came back;
+// anything else is the errno of the failing hop.
+func linuxSandboxProxyRoundtripErrno() syscall.Errno {
+	proxyURL := strings.TrimSpace(os.Getenv("HTTP_PROXY"))
+	if proxyURL == "" {
+		return syscall.ENOENT
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil || strings.TrimSpace(parsed.Host) == "" {
+		return syscall.EINVAL
+	}
+	conn, err := net.DialTimeout("tcp4", parsed.Host, 5*time.Second)
+	if err != nil {
+		return linuxSandboxErrnoFromError(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := io.WriteString(conn, linuxSandboxE2EProxyPing); err != nil {
+		return linuxSandboxErrnoFromError(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return linuxSandboxErrnoFromError(err)
+	}
+	if line != linuxSandboxE2EProxyPong {
+		return syscall.EIO
+	}
+	return 0
+}
+
+// linuxSandboxErrnoFromError unwraps a syscall errno, and reports EIO for
+// anything else so a probe never silently looks successful.
+func linuxSandboxErrnoFromError(err error) syscall.Errno {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno
+	}
+	return syscall.EIO
+}
+
 func linuxRunSyscallProbes() {
 	probes := linuxSyscallProbes()
 	for _, name := range linuxSeccompProbeNames {
@@ -762,6 +839,13 @@ func TestLinuxSandboxE2EProbeProcess(t *testing.T) {
 	// results below were produced inside the sandbox half instead of on the
 	// bare host.
 	fmt.Printf("%ssandbox_pid=%d\n", linuxSeccompProbePrefix, os.Getpid())
+	// Opening the AF_VSOCK device node: the host can open it (the end-to-end
+	// test asserts that precondition), so a denial here is the sandbox denying
+	// the device, not a missing driver.
+	fmt.Printf("%svsock_device_open=%d\n", linuxSeccompProbePrefix, linuxSandboxVSockDeviceOpenErrno())
+	if os.Getenv(linuxSandboxE2EProxyProbeEnv) != "" {
+		fmt.Printf("%sproxy_roundtrip=%d\n", linuxSeccompProbePrefix, linuxSandboxProxyRoundtripErrno())
+	}
 	linuxRunSyscallProbes()
 }
 
@@ -788,30 +872,26 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 		`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"path","path":%q},"access":"write"}]},"network":"enabled"}`,
 		cwd,
 	)
-	// The managed-proxy half runs on a writable filesystem on purpose. The Go
-	// bubblewrap builder only mounts the minimal device tree (`--dev /dev`) for
-	// the writable-root layout, so a filesystem-restricted proxy run cannot open
-	// `/dev/null` from inside the sandbox and never reaches the seccomp stage
-	// under test. Upstream mounts `--dev /dev` for the read-only root too
-	// (`codex-rs/linux-sandbox/src/bwrap.rs:504-525`); that parity gap is
-	// reported separately and is out of this ticket's scope, so the proxy cases
-	// pin the socket-family semantics on the writable layout instead. The
-	// seccomp mode is selected by the network policy, not by the filesystem
-	// layout, so the filter under test is identical either way.
-	proxyProfileJSON := fmt.Sprintf(
-		`{"type":"managed","file_system":{"type":"unrestricted"},"network":"enabled"}`,
-	)
 	profile, err := parseLinuxPermissionProfile(restrictedProfileJSON)
 	if err != nil {
 		t.Fatalf("parse end-to-end permission profile: %v", err)
 	}
-	proxyProfile, err := parseLinuxPermissionProfile(proxyProfileJSON)
-	if err != nil {
-		t.Fatalf("parse managed-proxy permission profile: %v", err)
+	// The managed-proxy half also runs on the filesystem-restricted layout: the
+	// device tree fix in this batch is what makes the proxy bridge's
+	// `/dev/null` open possible from inside the sandbox, so keeping every case on
+	// the restricted profile is exactly the coverage this test must pin.
+	//
+	// The round trip needs a real endpoint to answer, so the test runs one on
+	// loopback and lets the host bridge dial it.
+	proxyEndpoint := linuxSandboxE2EStartProxyUpstream(t)
+	// AF_VSOCK device coverage: the host must be able to open the device,
+	// otherwise a sandbox denial would be indistinguishable from a missing
+	// driver.
+	hostVSock, hostVSockErr := os.Open("/dev/vsock")
+	if hostVSockErr != nil {
+		t.Skipf("this host cannot open /dev/vsock (%v), so a sandboxed device open would prove nothing", hostVSockErr)
 	}
-	if !proxyProfile.Filesystem.hasFullDiskWriteAccess() {
-		t.Fatalf("the managed-proxy profile must keep the writable layout that mounts /dev")
-	}
+	_ = hostVSock.Close()
 	// The Go helper re-execs its own argv[0] to start the managed-proxy local
 	// bridge, and bubblewrap rewrites that argv[0] to the canonical sandbox
 	// name, so the inner stage resolves the helper through PATH (this is how an
@@ -855,8 +935,8 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 		want               map[string]syscall.Errno
 	}{
 		{name: "vm", profileJSON: restrictedProfileJSON, want: vmWant},
-		{name: "proxy", profileJSON: proxyProfileJSON, allowProxy: true, managedNetworkJSON: `{}`, want: proxyDeniedWant},
-		{name: "proxy-grant", profileJSON: proxyProfileJSON, allowProxy: true, managedNetworkJSON: `{"dangerouslyAllowAllUnixSockets":true}`, want: proxyGrantedWant},
+		{name: "proxy", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: `{}`, want: proxyDeniedWant},
+		{name: "proxy-grant", profileJSON: restrictedProfileJSON, allowProxy: true, managedNetworkJSON: `{"dangerouslyAllowAllUnixSockets":true}`, want: proxyGrantedWant},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -874,7 +954,7 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 				t.Fatalf("build sandbox argv: %v", err)
 			}
 			cmd := exec.Command(args[0], args[1:]...)
-			cmd.Env = linuxSandboxE2EChildEnv(tc.allowProxy, helperDir)
+			cmd.Env = linuxSandboxE2EChildEnv(tc.allowProxy, proxyEndpoint, helperDir)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("sandboxed probe failed: %v\n%s", err, out)
@@ -883,7 +963,19 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 			if !strings.Contains(string(out), linuxSeccompProbePrefix+"sandbox_pid=1") {
 				t.Fatalf("the probe did not observe itself as PID 1, so it did not run inside the bubblewrap sandbox:\n%s", out)
 			}
-			assertLinuxProbeErrnos(t, parseLinuxProbeOutput(t, tc.name, out), tc.want)
+			probes := parseLinuxProbeOutput(t, tc.name, out)
+			assertLinuxProbeErrnos(t, probes, tc.want)
+			if code := probes["vsock_device_open"]; code == 0 {
+				t.Fatalf("open(/dev/vsock) succeeded inside the sandbox while the host can open it; want a sandbox denial:\n%s", out)
+			} else {
+				t.Logf("%s: open(/dev/vsock) inside the sandbox = errno %d (host open succeeds)", tc.name, code)
+			}
+			if !tc.allowProxy {
+				return
+			}
+			if code := probes["proxy_roundtrip"]; code != 0 {
+				t.Fatalf("a request through the managed proxy chain failed with errno %d:\n%s", code, out)
+			}
 		})
 	}
 }
@@ -891,7 +983,7 @@ func TestLinuxBwrapTwoHalfManagedGrantEndToEnd(t *testing.T) {
 // linuxSandboxE2EChildEnv builds the environment for the end-to-end helper.
 // Proxy variables are dropped so a stray host proxy cannot add routes, and the
 // managed-proxy cases install one loopback HTTP proxy endpoint of their own.
-func linuxSandboxE2EChildEnv(withProxy bool, helperDir string) []string {
+func linuxSandboxE2EChildEnv(withProxy bool, proxyEndpoint string, helperDir string) []string {
 	env := []string{}
 	path := os.Getenv("PATH")
 	for _, entry := range os.Environ() {
@@ -912,9 +1004,184 @@ func linuxSandboxE2EChildEnv(withProxy bool, helperDir string) []string {
 	env = append(env, "PATH="+helperDir+string(os.PathListSeparator)+path)
 	env = append(env, linuxSandboxE2EHelperEnv+"=1", linuxSandboxE2EProbeEnv+"=1")
 	if withProxy {
-		// The bridge only dials this endpoint when a sandboxed connection
-		// arrives, so the endpoint does not need to be listening.
-		env = append(env, "HTTP_PROXY=http://127.0.0.1:1/")
+		env = append(env, "HTTP_PROXY=http://"+proxyEndpoint+"/", linuxSandboxE2EProxyProbeEnv+"=1")
 	}
 	return env
+}
+
+// linuxSandboxE2EStartProxyUpstream starts the loopback endpoint the host bridge
+// forwards to and answers every connection with the probe's expected PONG.
+func linuxSandboxE2EStartProxyUpstream(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("start the managed-proxy upstream endpoint: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer func() { _ = conn.Close() }()
+				buffer := make([]byte, 64)
+				_, _ = conn.Read(buffer)
+				_, _ = io.WriteString(conn, linuxSandboxE2EProxyPong)
+			}(conn)
+		}
+	}()
+	return listener.Addr().String()
+}
+
+// linuxSandboxFakeBwrapArgPrefix marks each argv word the fake launcher prints.
+const linuxSandboxFakeBwrapArgPrefix = "BWRAP-ARG:"
+
+// linuxSandboxFakeBwrapScript stands in for bubblewrap: it advertises the
+// capabilities the sandbox probes for (so it is selected like a real launcher)
+// and then echoes the argv it was handed. That lets a test pin the production
+// launcher argv without running a sandbox.
+const linuxSandboxFakeBwrapScript = `#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo "--as-pid-1 --perms --argv0 --ro-bind-fd --die-with-parent"
+  exit 0
+fi
+for arg in "$@"; do
+  printf '` + linuxSandboxFakeBwrapArgPrefix + `%s\n' "$arg"
+done
+`
+
+// linuxSandboxCaptureBwrapArgv runs the real helper with a fake launcher on PATH
+// and returns the argv the helper handed to bubblewrap.
+//
+// fakeDir must not be writable under profileJSON, otherwise the launcher filter
+// (Rust #51211) refuses a launcher the sandboxed command could replace.
+func linuxSandboxCaptureBwrapArgv(t *testing.T, fakeDir string, profileJSON string, cwd string) []string {
+	t.Helper()
+	launcher := filepath.Join(fakeDir, "bwrap")
+	if err := os.WriteFile(launcher, []byte(linuxSandboxFakeBwrapScript), 0o755); err != nil {
+		t.Fatalf("write the fake bubblewrap launcher: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve test binary: %v", err)
+	}
+	args, err := CreateCommandArgsWithSandboxExeAndManagedNetwork(exe, []string{exe, "-test.run=^$"}, cwd, profileJSON, cwd, false, false, "")
+	if err != nil {
+		t.Fatalf("build sandbox argv: %v", err)
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	env := []string{}
+	for _, entry := range os.Environ() {
+		key, _, ok := cutEnv(entry)
+		if ok && key == "PATH" {
+			continue
+		}
+		env = append(env, entry)
+	}
+	env = append(env,
+		"PATH="+fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		linuxSandboxE2EHelperEnv+"=1",
+	)
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the sandbox helper failed before the fake launcher ran: %v\n%s", err, out)
+	}
+	argv := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, linuxSandboxFakeBwrapArgPrefix) {
+			continue
+		}
+		argv = append(argv, strings.TrimPrefix(line, linuxSandboxFakeBwrapArgPrefix))
+	}
+	if len(argv) == 0 {
+		t.Fatalf("the helper never invoked the fake launcher:\n%s", out)
+	}
+	return argv
+}
+
+// linuxSandboxArgvWindowIndex returns the index of the first exact match of
+// window inside argv, or -1.
+func linuxSandboxArgvWindowIndex(argv []string, window []string) int {
+	for i := 0; i+len(window) <= len(argv); i++ {
+		matched := true
+		for j := range window {
+			if argv[i+j] != window[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return i
+		}
+	}
+	return -1
+}
+
+// linuxSandboxArgvWindowCount counts the exact matches of window inside argv.
+func linuxSandboxArgvWindowCount(argv []string, window []string) int {
+	count := 0
+	for i := 0; i+len(window) <= len(argv); i++ {
+		matched := true
+		for j := range window {
+			if argv[i+j] != window[j] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			count++
+		}
+	}
+	return count
+}
+
+// TestLinuxBwrapRestrictedLayoutMountsDeviceTreeLikeRust pins the device tree the
+// upstream builder mounts for a policy that reads `/` but writes only a scoped
+// root (`bwrap.rs:510-517`): the read-only root bind is nodev, so without
+// `--dev /dev` the managed-proxy bridge cannot open `/dev/null` from inside the
+// sandbox.
+func TestLinuxBwrapRestrictedLayoutMountsDeviceTreeLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	profileJSON := fmt.Sprintf(
+		`{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"},{"path":{"type":"path","path":%q},"access":"write"}]},"network":"enabled"}`,
+		cwd,
+	)
+	argv := linuxSandboxCaptureBwrapArgv(t, t.TempDir(), profileJSON, cwd)
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--ro-bind", "/", "/", "--dev", "/dev"}); index < 0 {
+		t.Fatalf("the restricted layout must mount the minimal device tree right after the read-only root bind:\n%#v", argv)
+	}
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--dev", "/dev"}); count != 1 {
+		t.Fatalf("the restricted layout must mount exactly one device tree, got %d:\n%#v", count, argv)
+	}
+	// Rust never re-binds the read baseline: a second `--ro-bind / /` would
+	// re-mount the host root over the device tree and over the writable root.
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--ro-bind", "/", "/"}); count != 1 {
+		t.Fatalf("the read-only root must be bound exactly once, got %d:\n%#v", count, argv)
+	}
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--bind-try", "/dev/shm", "/dev/shm"}); index >= 0 {
+		t.Fatalf("a layout without a writable root must not rebind shared memory:\n%#v", argv)
+	}
+}
+
+// TestLinuxBwrapRootRebindRestoresDeviceTreeLikeRust pins the second upstream
+// device-tree site: rebinding `/` shadows the earlier tree, so the builder
+// recreates it together with shared memory (`bwrap.rs:648-657`).
+func TestLinuxBwrapRootRebindRestoresDeviceTreeLikeRust(t *testing.T) {
+	fakeDir := t.TempDir()
+	cwd := t.TempDir()
+	// A writable `/` with a read-only carveout keeps the restricted builder (the
+	// policy is not a full-disk write) while the writable root is `/` itself; the
+	// carveout also keeps the fake launcher eligible.
+	profileJSON := `{"type":"managed","file_system":{"type":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"write"},{"path":{"type":"path","path":"/tmp"},"access":"read"}]},"network":"enabled"}`
+	argv := linuxSandboxCaptureBwrapArgv(t, fakeDir, profileJSON, cwd)
+	if index := linuxSandboxArgvWindowIndex(argv, []string{"--bind", "/", "/", "--dev", "/dev", "--bind-try", "/dev/shm", "/dev/shm"}); index < 0 {
+		t.Fatalf("rebinding / must recreate the device tree with shared memory:\n%#v", argv)
+	}
+	if count := linuxSandboxArgvWindowCount(argv, []string{"--dev", "/dev"}); count != 2 {
+		t.Fatalf("expected the device tree before and after the / rebind, got %d:\n%#v", count, argv)
+	}
 }
