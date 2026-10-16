@@ -88,6 +88,19 @@ func TestRustSlashInlineArgContractIsExhaustive(t *testing.T) {
 		// slash_command.rs supports_inline_args.
 		codextui.CommandModel:       true,
 		codextui.CommandPermissions: true,
+
+		// Batch T2-8b closes the rest of slash_command.rs:172-201: the command
+		// popup and the chatwidget dispatcher now read one shared list
+		// (codextui.Command.SupportsInlineArgs), so both sides agree. Only the
+		// commands listed in rustSlashCommandOrder reach the popup, so /fork is
+		// the newly aligned entry exercised here; /voice, /pwd, /export and /cd
+		// are still absent from that order list (reported as drift, not fixed
+		// here).
+		codextui.CommandVoice:  true,
+		codextui.CommandPwd:    true,
+		codextui.CommandExport: true,
+		codextui.CommandFork:   true,
+		codextui.CommandCd:     true,
 	}
 	flags := BuiltinCommandFlags{
 		CollaborationModesEnabled:   true,

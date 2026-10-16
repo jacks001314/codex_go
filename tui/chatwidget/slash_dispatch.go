@@ -385,42 +385,14 @@ func DecideQueuedSlashPrompt(queued QueuedUserMessage, flags bottompane.BuiltinC
 	}
 }
 
+// CommandSupportsInlineArgs reports whether `/command <args>` dispatches locally.
+// The list itself lives on codextui.Command (tui/slash_command_inline_args.go),
+// mirroring Rust where every caller reads
+// SlashCommand::supports_inline_args (codex-rs/tui/src/slash_command.rs:172-201,
+// chatwidget/slash_dispatch.rs:688 and :1212).
 func CommandSupportsInlineArgs(command codextui.Command) bool {
-	switch command {
-	case codextui.CommandReview,
-		// Rust #54378: `/model <args>` dispatches locally
-		// (codex-rs/tui/src/slash_command.rs:176).
-		codextui.CommandModel,
-		// Rust #54383: `/permissions <args>` dispatches locally
-		// (codex-rs/tui/src/slash_command.rs:177).
-		codextui.CommandPermissions,
-		codextui.CommandRename,
-		codextui.CommandNew,
-		codextui.CommandClear,
-		codextui.CommandPlan,
-		codextui.CommandGoal,
-		codextui.CommandIde,
-		codextui.CommandKeymap,
-		codextui.CommandMcp,
-		codextui.CommandExport,
-		codextui.CommandRaw,
-		codextui.CommandUsage,
-		codextui.CommandPets,
-		codextui.CommandSide,
-		codextui.CommandResume,
-		codextui.CommandFork,
-		codextui.CommandCd,
-		// Rust #54387: the status-surface commands take inline items, so
-		// `/title app-name` and `/statusline current-dir` dispatch locally
-		// (codex-rs/tui/src/slash_command.rs:181-182).
-		codextui.CommandTitle,
-		codextui.CommandStatusline:
-		return true
-	default:
-		return false
-	}
+	return command.SupportsInlineArgs()
 }
-
 func CommandAvailableInSideConversation(command codextui.Command) bool {
 	switch command {
 	case codextui.CommandCopy,

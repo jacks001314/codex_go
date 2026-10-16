@@ -7349,6 +7349,13 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandCd:
 		return m.applyWorkingDirectoryChangeCommand(invocation.Args)
 	case codextui.CommandPwd:
+		// Rust slash_dispatch.rs:846-848: `/pwd` takes no arguments, and the
+		// command only reaches this branch with args because
+		// supports_inline_args(Pwd) is true (slash_command.rs:172-201).
+		if strings.TrimSpace(invocation.Args) != "" {
+			m.notice = "Usage: /pwd"
+			break
+		}
 		m.applyWorkingDirectoryDisplayCommand()
 	case codextui.CommandArchive:
 		m.openCurrentSessionActionConfirmation(codextui.SessionSelectionArchive)

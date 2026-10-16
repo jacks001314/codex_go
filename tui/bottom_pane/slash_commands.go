@@ -69,39 +69,16 @@ func (i SlashCommandItem) CommandText() string {
 	return strings.TrimSpace(i.Name)
 }
 
+// SupportsInlineArgs reports whether the item takes inline arguments. Rust's
+// SlashCommandItem delegates to SlashCommand::supports_inline_args and rejects
+// service-tier entries (bottom_pane/slash_commands.rs:34-39); the command list
+// itself is the shared one in tui/slash_command_inline_args.go.
 func (i SlashCommandItem) SupportsInlineArgs() bool {
 	if i.Kind == SlashCommandItemServiceTier {
 		return false
 	}
-	switch i.Command {
-	case codextui.CommandReview,
-		// Rust #54378 adds Model to slash_command.rs supports_inline_args.
-		codextui.CommandModel,
-		// Rust #54383 adds Permissions to slash_command.rs supports_inline_args.
-		codextui.CommandPermissions,
-		codextui.CommandRename,
-		codextui.CommandNew,
-		codextui.CommandClear,
-		codextui.CommandPlan,
-		codextui.CommandGoal,
-		codextui.CommandIde,
-		codextui.CommandKeymap,
-		codextui.CommandMcp,
-		codextui.CommandRaw,
-		codextui.CommandUsage,
-		codextui.CommandPets,
-		codextui.CommandSide,
-		codextui.CommandResume,
-		// Rust #54387: the status-surface commands take inline items
-		// (codex-rs/tui/src/slash_command.rs:181-182).
-		codextui.CommandTitle,
-		codextui.CommandStatusline:
-		return true
-	default:
-		return false
-	}
+	return i.Command.SupportsInlineArgs()
 }
-
 func (i SlashCommandItem) AvailableInSideConversation() bool {
 	if i.Kind == SlashCommandItemServiceTier {
 		return false

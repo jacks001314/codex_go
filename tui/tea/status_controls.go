@@ -46,50 +46,33 @@ type statusSurfaceItemArgs struct {
 	useColors *bool
 }
 
-// scanStatusSurfaceItemArgs splits a status-surface argument string the way
-// Rust's shared `slash_command_args::parse` does: `--name=value` is rejected for
-// the value-less switches, an unknown `--name` is an error, and
-// `--colors`/`--no-colors` are accepted only when the command declares the
-// boolean setting.
+// scanStatusSurfaceItemArgs tokenizes a status-surface argument string with the
+// shared parser Rust uses for every slash command that takes inline arguments
+// (codex-rs/tui/src/chatwidget/slash_command_args.rs:54-102). `/title` passes
+// only the `--clear` switch; `/statusline` adds the `colors` boolean setting
+// (status_surface_commands.rs:77 and :94). Because the shared grammar owns the
+// tokenization, a bare `--` makes every later token positional, a repeated
+// setting is rejected, and unbalanced quoting fails with Rust's quoting error.
 func scanStatusSurfaceItemArgs(args string, allowColors bool) (statusSurfaceItemArgs, string) {
-	var parsed statusSurfaceItemArgs
-	for _, token := range strings.Fields(args) {
-		if token == "--" {
-			continue
-		}
-		if !strings.HasPrefix(token, "--") {
-			parsed.items = append(parsed.items, token)
-			continue
-		}
-		name := token
-		hasValue := false
-		if index := strings.IndexByte(token, '='); index >= 0 {
-			name = token[:index]
-			hasValue = true
-		}
-		switch name {
-		case "--clear":
-			if hasValue {
-				return parsed, fmt.Sprintf("Command setting `%s` does not take a value.", name)
-			}
-			parsed.clear = true
-		case "--colors", "--no-colors":
-			if !allowColors {
-				return parsed, fmt.Sprintf("Unknown command setting `%s`.", name)
-			}
-			if hasValue {
-				return parsed, fmt.Sprintf("Command setting `%s` does not take a value.", name)
-			}
-			value := name == "--colors"
-			if parsed.useColors != nil && *parsed.useColors != value {
-				return parsed, "Specify only one of --colors or --no-colors."
-			}
-			parsed.useColors = &value
-		default:
-			return parsed, fmt.Sprintf("Unknown command setting `%s`.", name)
+	var booleanSettings []string
+	if allowColors {
+		booleanSettings = []string{"colors"}
+	}
+	parsed, failure := parseSlashCommandArgs(args, nil, []string{"--clear"}, booleanSettings)
+	if failure != "" {
+		return statusSurfaceItemArgs{}, failure
+	}
+	result := statusSurfaceItemArgs{
+		items: append([]string(nil), parsed.positionals...),
+		clear: parsed.hasSwitch("--clear"),
+	}
+	if allowColors {
+		if value, ok := parsed.boolean("colors"); ok {
+			useColors := value
+			result.useColors = &useColors
 		}
 	}
-	return parsed, ""
+	return result, ""
 }
 
 // statusSurfaceUnknownItemNotice mirrors Rust #54387's
@@ -263,7 +246,16 @@ func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 		parsed.clear = true
 		parsed.items = nil
 	}
-	if parsed.clear && len(parsed.items) > 0 {
+	// Rust resolves every positional item before it inspects `--clear`
+	// (status_surface_commands.rs:94-104 with parse_item at :122-160), so
+	// `--clear nope` reports the unknown item instead of the combination error.
+	items, invalid := parseStatusLineItemsArgTokens(parsed.items)
+	if len(invalid) > 0 {
+		m.notice = statusSurfaceUnknownItemNotice("status-line", "/statusline", invalid[0])
+		m.refreshTranscript()
+		return nil
+	}
+	if parsed.clear && len(items) > 0 {
 		m.notice = "Cannot combine --clear with status-line items."
 		m.refreshTranscript()
 		return nil
@@ -283,15 +275,9 @@ func (m *Model) applyStatusLineCommand(args string) bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	if len(parsed.items) == 0 {
+	if len(items) == 0 {
 		// Rust #54387: `--colors`/`--no-colors` without items preserves the
 		// current selection and only updates the colour preference.
-		m.refreshTranscript()
-		return nil
-	}
-	items, invalid := parseStatusLineItemsArgTokens(parsed.items)
-	if len(invalid) > 0 {
-		m.notice = statusSurfaceUnknownItemNotice("status-line", "/statusline", invalid[0])
 		m.refreshTranscript()
 		return nil
 	}
@@ -322,7 +308,8 @@ func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
 		return m.applyTerminalTitleResult(result)
 	}
 	// Rust #54387 passes switches=["--clear"] for `/title` and no boolean
-	// settings, so `--colors` is an unknown setting here.
+	// settings (status_surface_commands.rs:77), so `--colors` is an unknown
+	// setting here.
 	parsed, argErr := scanStatusSurfaceItemArgs(args, false)
 	if argErr != "" {
 		m.notice = argErr
@@ -333,24 +320,23 @@ func (m *Model) applyTerminalTitleCommand(args string) bubbletea.Cmd {
 		parsed.clear = true
 		parsed.items = nil
 	}
-	if parsed.clear && len(parsed.items) > 0 {
+	// Rust resolves every positional item before it inspects `--clear`
+	// (status_surface_commands.rs:73-88).
+	items, invalid := parseTerminalTitleItemsArgTokens(parsed.items)
+	if len(invalid) > 0 {
+		m.notice = statusSurfaceUnknownItemNotice("terminal-title", "/title", invalid[0])
+		m.refreshTranscript()
+		return nil
+	}
+	if parsed.clear && len(items) > 0 {
 		m.notice = "Cannot combine --clear with terminal-title items."
 		m.refreshTranscript()
 		return nil
 	}
-	items := []chatwidget.TerminalTitleItem{}
 	if parsed.clear {
 		// Rust records `Some(vec![])` for --clear.
+		items = []chatwidget.TerminalTitleItem{}
 		m.statusSurfaceOverrides.recordTerminalTitle(m.currentThreadID(), []string{})
-	}
-	if !parsed.clear {
-		var invalid []string
-		items, invalid = parseTerminalTitleItemsArgTokens(parsed.items)
-		if len(invalid) > 0 {
-			m.notice = statusSurfaceUnknownItemNotice("terminal-title", "/title", invalid[0])
-			m.refreshTranscript()
-			return nil
-		}
 	}
 	m.ensureStatusControls()
 	result := m.statusControls.SetupTerminalTitle(items)

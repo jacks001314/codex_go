@@ -3,6 +3,10 @@ package tea
 import (
 	"strings"
 	"testing"
+
+	bubbletea "github.com/charmbracelet/bubbletea"
+
+	codextui "codex_go/tui"
 )
 
 // Rust #54385 (upstream 36803b180a) introduced
@@ -55,5 +59,34 @@ func TestSlashCommandArgsRejectsInvalidNamedArgumentsLikeRust(t *testing.T) {
 		if _, failure := parseSlashCommandArgs(testCase.args, []string{"--reviewer"}, []string{"--clear"}, []string{"colors"}); failure != testCase.message {
 			t.Fatalf("parseSlashCommandArgs(%q) failure = %q, want %q", testCase.args, failure, testCase.message)
 		}
+	}
+}
+
+// Batch T2-8b: the shared inline-argument list now marks Pwd and Voice like Rust
+// (codex-rs/tui/src/slash_command.rs:189 and :183), so `/pwd extra` and
+// `/voice nope` dispatch locally instead of being sent to the model as a prompt,
+// and they reach the commands' own argument handling (Rust
+// chatwidget/slash_dispatch.rs:846-848 and :861-872).
+func TestPwdAndVoiceArgsDispatchLocallyLikeRust(t *testing.T) {
+	state := codextui.NewState(&codextui.Options{Model: "gpt-5"})
+	model := NewModel(state, Options{
+		Width:  90,
+		Height: 24,
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			t.Fatalf("inline-argument command was submitted as a prompt: %#v", request)
+			return nil
+		},
+	})
+
+	typeText(t, model, "/pwd extra")
+	model.Update(key(bubbletea.KeyEnter))
+	if want := "Usage: /pwd"; model.notice != want {
+		t.Fatalf("/pwd extra notice = %q, want %q", model.notice, want)
+	}
+
+	typeText(t, model, "/voice nope")
+	model.Update(key(bubbletea.KeyEnter))
+	if notice := model.notice; !strings.Contains(notice, "Usage: /voice") {
+		t.Fatalf("/voice nope notice = %q, want the usage text", notice)
 	}
 }
