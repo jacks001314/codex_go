@@ -478,3 +478,36 @@ func agentsSharedOptions(opts *cli.AgentsOptions) *cli.SharedOptions {
 	}
 	return &shared
 }
+
+// explicitDefaultDaemonSocketPath reports whether an explicit attachment names
+// the default daemon control socket. Rust #54421 gates the local classification
+// on that equality before it verifies the endpoint (startup_orchestration.rs:
+// `Some(RemoteAppServerEndpoint::UnixSocket { socket_path }) if
+// default_daemon_socket == Some(socket_path)`).
+func explicitDefaultDaemonSocketPath(endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool) {
+	if endpoint == nil || endpoint.Kind != appserverdaemon.RemoteEndpointUnixSocket {
+		return "", false
+	}
+	socketPath := strings.TrimSpace(endpoint.SocketPath)
+	if socketPath == "" || socketPath != defaultLocalDaemonSocketPath() {
+		return "", false
+	}
+	return socketPath, true
+}
+
+// verifiedLocalDaemonEndpoint mirrors Rust #54421's verified explicit attachment:
+// the default daemon socket classifies as local only when it validates as the
+// daemon's private socket, so a socket bound directly at the advertised path (for
+// example an SSH forward) keeps remote workspace behavior.
+func verifiedLocalDaemonEndpoint(endpoint *appserverdaemon.RemoteAppServerEndpoint) (string, bool) {
+	socketPath, requested := explicitDefaultDaemonSocketPath(endpoint)
+	if !requested {
+		return "", false
+	}
+	return appserver.VerifiedLocalDaemonSocket(socketPath)
+}
+
+// ExplicitLocalDaemonSocketUnavailableError mirrors Rust startup_orchestration.rs:
+// an explicit attachment requires the server to be present, so a missing socket
+// is not silently reclassified as a remote workspace during a daemon restart.
+const ExplicitLocalDaemonSocketUnavailableError = "the requested app-server socket is not available"

@@ -47,3 +47,28 @@ func serveUnixSocket(ctx context.Context, socketPath string, routerFactory func(
 	defer os.Remove(validated)
 	return serveUnixSocketHTTP(ctx, listener, routerFactory, access, shutdown)
 }
+
+// verifiedLocalDaemonSocket validates the private rendezvous directory that holds
+// socketPath without creating or repairing it (Rust #54421's cfg(windows) arm:
+// codex_uds::validate_private_socket_path). The guard only pins the directory for
+// the caller; the TUI revalidates the directory and verifies the peer when it
+// connects through the same local-daemon path as an implicit launch, so the
+// validated path is all this check needs.
+func verifiedLocalDaemonSocket(socketPath string) (string, bool) {
+	socketPath = strings.TrimSpace(socketPath)
+	if socketPath == "" {
+		return "", false
+	}
+	validated, guard, err := codexuds.ValidatePrivateSocketPath(socketPath)
+	if err != nil {
+		return "", false
+	}
+	if guard != nil {
+		_ = guard.Close()
+	}
+	validated = strings.TrimSpace(validated)
+	if validated == "" {
+		return "", false
+	}
+	return validated, true
+}

@@ -1000,6 +1000,17 @@ func runInteractive(ctx context.Context, root *cli.RootOptions, stdin io.Reader,
 	if err != nil {
 		return interactiveFatalExit(stderr, err.Error())
 	}
+	// Rust #54421: an explicit attachment to the default daemon socket requires the
+	// server to be present during a restart window, and the advertised alias is
+	// replaced by the verified endpoint so it cannot redirect local configuration.
+	if socketPath, requested := explicitDefaultDaemonSocketPath(remoteEndpoint); requested {
+		if _, statErr := os.Stat(socketPath); statErr != nil {
+			return interactiveFatalExit(stderr, ExplicitLocalDaemonSocketUnavailableError)
+		}
+		if verified, ok := appserver.VerifiedLocalDaemonSocket(socketPath); ok {
+			remoteEndpoint = appserverdaemon.NewUnixSocketEndpoint(verified)
+		}
+	}
 	if remoteEndpoint == nil {
 		// Rust app_server_target_for_launch + startup_orchestration: an eligible
 		// interactive launch reuses a running shared daemon (or, with

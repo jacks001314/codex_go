@@ -281,3 +281,12 @@ func runDaemonShutdownHandshake(ctx context.Context, conn *websocket.Conn, shutd
 		shutdown()
 	}
 }
+
+// VerifiedLocalDaemonSocket reports whether socketPath is the shared daemon's own
+// private socket and returns the verified path when it is. It mirrors Rust
+// app-server-transport::verified_local_daemon_socket (#54421): a socket bound
+// directly at the advertised path (for example an SSH/socat forward) is not ours,
+// so the path alone cannot establish that the daemon is local.
+func VerifiedLocalDaemonSocket(socketPath string) (string, bool) {
+	return verifiedLocalDaemonSocket(socketPath)
+}

@@ -226,7 +226,11 @@ func interactiveRemoteEndpointIsLocal(endpoint *appserverdaemon.RemoteAppServerE
 		return false
 	}
 	if endpoint.Kind == appserverdaemon.RemoteEndpointUnixSocket {
-		return true
+		// Rust #54421: a bound socket at the advertised path may be an SSH forward,
+		// so the path alone cannot establish that the daemon is local. Only the
+		// verified default daemon endpoint keeps local workspace behavior.
+		_, verified := verifiedLocalDaemonEndpoint(endpoint)
+		return verified
 	}
 	if endpoint.Kind != appserverdaemon.RemoteEndpointWebSocket {
 		return false
