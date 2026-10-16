@@ -136,6 +136,66 @@ func TestMultiAgentV2WaitClampsTimeoutBelowConfiguredMinimum(t *testing.T) {
 	}
 }
 
+// TestMultiAgentV2WaitUsesConfiguredDefaultTimeoutLikeRust pins the
+// `None => default_timeout_ms` arm of Rust
+// core/src/tools/handlers/multi_agents_v2/wait.rs:57-65: when the model
+// omits timeout_ms the wait must run for the configured
+// features.multi_agent_v2.default_wait_timeout_ms, not for a hard-coded
+// 30s constant.
+func TestMultiAgentV2WaitUsesConfiguredDefaultTimeoutLikeRust(t *testing.T) {
+	controller := &waitCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
+		WaitConfigured: true, WaitMin: 50 * time.Millisecond, WaitMax: 2 * time.Second, WaitDefault: 250 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wait, _ := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, "wait_agent"))
+	output, err := wait.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind: tool.PayloadFunction, Arguments: `{}`,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if controller.timeoutMS != 250 {
+		t.Fatalf("controller timeout with an omitted timeout_ms = %dms, want the configured default 250ms", controller.timeoutMS)
+	}
+	want := `{"message":"Wait timed out.","timed_out":true}`
+	if output.Body != want {
+		t.Fatalf("wait output = %q, want %q", output.Body, want)
+	}
+}
+
+// TestMultiAgentV2WaitRejectsTimeoutAboveConfiguredMaximumLikeRust pins the
+// `Some(ms) if ms > max_timeout_ms` arm of the same Rust match: an over-max
+// request is rejected with the model-visible message instead of being
+// silently clamped.
+func TestMultiAgentV2WaitRejectsTimeoutAboveConfiguredMaximumLikeRust(t *testing.T) {
+	controller := &waitCaptureV2Controller{MemoryToolController: NewMemoryToolController()}
+	registry := tool.NewRegistry()
+	if err := RegisterMultiAgentHandlersWithOptions(registry, &MultiAgentHandlerOptions{
+		Controller: controller, Version: VersionV2, Namespace: MultiAgentV2Namespace,
+		WaitConfigured: true, WaitMin: 50 * time.Millisecond, WaitMax: time.Second, WaitDefault: 100 * time.Millisecond,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wait, _ := registry.Lookup(tool.NamespacedName(MultiAgentV2Namespace, "wait_agent"))
+	_, err := wait.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind: tool.PayloadFunction, Arguments: `{"timeout_ms":1500}`,
+	}})
+	var callErr *tool.FunctionCallError
+	if !tool.AsFunctionCallError(err, &callErr) || !callErr.RespondsToModel() {
+		t.Fatalf("error = %#v", err)
+	}
+	if got := callErr.ModelMessage(); got != "timeout_ms must be at most 1000" {
+		t.Fatalf("model message = %q, want %q", got, "timeout_ms must be at most 1000")
+	}
+	if controller.timeoutMS != 0 {
+		t.Fatalf("an over-max request reached the controller with %dms", controller.timeoutMS)
+	}
+}
+
 // TestMultiAgentV1ToolContractMatchesRust pins the V1 family specs: Rust
 // publishes them as one namespace tool (multi_agents_spec.rs
 // MULTI_AGENT_V1_NAMESPACE_DESCRIPTION), so every member spec must carry the

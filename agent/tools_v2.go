@@ -429,6 +429,15 @@ func (e *multiAgentV2ToolExecutor) Execute(ctx context.Context, invocation *tool
 				clamped := e.waitMin.Milliseconds()
 				args.TimeoutMS = &clamped
 			}
+			// Rust wait.rs:57-65 `None => default_timeout_ms`: an omitted timeout_ms
+			// runs for the configured features.multi_agent_v2.default_wait_timeout_ms.
+			// The executor owns the configured min/max/default trio, so resolve the
+			// default here rather than letting the controller fall back to its own
+			// hard-coded 30s constant.
+			if args.TimeoutMS == nil {
+				fallback := e.waitDefault.Milliseconds()
+				args.TimeoutMS = &fallback
+			}
 			result, err = e.controller.WaitForActivity(ctx, &args)
 			if waitResult, ok := result.(*WaitForActivityResult); ok && waitResult != nil && requestedTimeoutMS != nil && args.TimeoutMS != nil && *requestedTimeoutMS < *args.TimeoutMS {
 				waitResult.Message = fmt.Sprintf("%s\n\nRequested timeout of %dms was clamped to the minimum of %dms.", waitResult.Message, *requestedTimeoutMS, *args.TimeoutMS)
