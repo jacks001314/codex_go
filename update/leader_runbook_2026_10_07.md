@@ -248,3 +248,11 @@ main = `757aba59`（已 push）。在跑 **7 条**：
 5. **"能编译 ≠ 能跑"**：真 errno、真 bwrap e2e、procfs/landlock 运行期结论仍只在 Linux 节点取；跨平台编译/vet 只是**静态面**补充（可先在 Windows 侧自证 Linux 代码编得过，再去 Linux 节点拿运行期证据）。
 6. 车道规则：需要 `GOOS=linux`/`darwin` 编译或 vet 的车道，**在 Windows 节点设代理 env 直接做**，不必为此新开跨节点车道；只有"必须真机运行"的部分才跨节点。
 7. **更正 R5-quaterdecies §1**：`TestOtelProviderReloadsAfterAccountChange` **不是** Linux 稳定红 —— L-3 后来在 pristine 台面隔离复跑（`-count=3` = PASS/FAIL/FAIL）证明它是 **5s 等待窗口的轮转 flake 槽**；Linux 稳定红恒为那 4 条，第 5 槽会换人。判红一律**逐名比失败集合**。
+
+## R5-sexdecies · 本地代理是每个节点的通用后备通道（用户指示，2026-10-17）
+
+1. **每个 worker 本机都装了本地代理**：Windows `127.0.0.1:7897`（HKCU WinINET 配着，但 git/go 默认**不读** WinINET）；Linux `127.0.0.1:10808`（xray）。**直连失败时第一件事就是试本机代理**，不要立刻写"网络不可用/节点没网"。
+2. **探针（先跑再下结论）**：Windows `Test-NetConnection github.com -Port 443` + `curl.exe -x http://127.0.0.1:7897 -s -o NUL -w "%{http_code}" https://proxy.golang.org/`；Linux `timeout 10 bash -c "</dev/tcp/github.com/443"` + `ss -ltnp | grep -E ':(7890|7897|1080|10808|10809|8889)'`。
+3. **git 用法（作用域化，别全局乱改）**：Windows `git config http.https://github.com/.proxy http://127.0.0.1:7897`，或单次 `git -c http.proxy=http://127.0.0.1:7897 fetch origin main`；Linux `git -c http.proxy=http://127.0.0.1:10808 fetch origin main`（仅在该节点直连失败时用——该节点直连通常可用）。
+4. **Go 模块**：`HTTP_PROXY`/`HTTPS_PROXY=http://<本机代理>` 后再跑 `go build`/`go mod download`（Windows 侧实测：GOOS=linux 交叉编译整树 exit 0）。
+5. **纪律**：代理是**手段不是默认**——直连可用时不要强行走代理（避免把代理故障变成新的假红）；报告里必须写明"经代理/直连"；用完 env 必须清（见 R5-quindecies §4）。
