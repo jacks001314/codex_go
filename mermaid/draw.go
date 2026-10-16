@@ -9,11 +9,13 @@ func renderGraph(g *graph, maxWidth int) ([][]Span, error) {
 	horizontal := g.direction == directionRight || g.direction == directionLeft
 	labels := make([][]string, len(g.nodes))
 	for i, n := range g.nodes {
-		first := n.label
+		// Rust #54419: a node label may carry `<br>` line breaks. The box grows by
+		// one rendered line per break, and the decision marker stays on the first
+		// line only.
+		lines := strings.Split(n.label, "\n")
 		if n.shape == shapeDecision {
-			first = "\u25c7 " + n.label
+			lines[0] = "\u25c7 " + lines[0]
 		}
-		lines := []string{first}
 		if len(n.members) > 0 {
 			lines = append(lines, strings.Repeat("\u2500", textWidth(n.label)))
 			lines = append(lines, n.members...)

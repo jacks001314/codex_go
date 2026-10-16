@@ -126,6 +126,10 @@ func flowchartEdge(rest *string) (string, rune, rune, bool, error) {
 			if err != nil {
 				return "", 0, 0, false, err
 			}
+			// Edge labels never carry line breaks; they are validated whole.
+			if err := checkLabel(parsed); err != nil {
+				return "", 0, 0, false, err
+			}
 			label = parsed
 			*rest = remaining
 		}
@@ -157,6 +161,10 @@ func flowchartEdge(rest *string) (string, rune, rune, bool, error) {
 	}
 	parsed, err := flowchartLabel(strings.TrimSpace(text))
 	if err != nil {
+		return "", 0, 0, false, err
+	}
+	// Edge labels never carry line breaks; they are validated whole.
+	if err := checkLabel(parsed); err != nil {
 		return "", 0, 0, false, err
 	}
 	*rest = remaining[len(">"):]
@@ -213,6 +221,24 @@ func flowchartNode(rest *string, g *graph) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// Rust #54419: `<br>`, `<br/>` and `<br />` are line breaks inside flowchart
+	// node labels. The 40-display-cell bound applies per rendered line, a label
+	// that is only breaks or whitespace stays unsupported, and every other piece
+	// of markup is still rejected by checkLabel.
+	label = strings.ReplaceAll(label, "<br>", "\n")
+	label = strings.ReplaceAll(label, "<br/>", "\n")
+	label = strings.ReplaceAll(label, "<br />", "\n")
+	if strings.TrimSpace(label) == "" {
+		return 0, ErrUnsupported
+	}
+	for _, line := range strings.Split(label, "\n") {
+		if line == "" {
+			continue
+		}
+		if err := checkLabel(line); err != nil {
+			return 0, err
+		}
+	}
 	*rest = remaining
 	current := &g.nodes[index]
 	if current.declared && (current.label != label || current.shape != declared.shape) {
@@ -243,9 +269,8 @@ func flowchartLabel(label string) (string, error) {
 	if strings.Contains(resolved, "\"") {
 		return "", ErrUnsupported
 	}
-	if err := checkLabel(resolved); err != nil {
-		return "", err
-	}
+	// Callers validate the label: node labels after line-break expansion, edge
+	// labels as a whole (Rust #54419 moved `check_label` out of this helper).
 	return resolved, nil
 }
 

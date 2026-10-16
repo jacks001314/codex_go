@@ -702,10 +702,15 @@ func TestFlowchartRelationshipEndpointsReachRenderer(t *testing.T) {
 // for commit 44fe510ce3, so every direction must render the new operators, the
 // `&` group expansion and the spaced infix labels exactly as Rust does.
 func TestStadiumsWithOtherShapesInEveryDirectionMatchesRust(t *testing.T) {
-	const source = "flowchart %s; A([\u8bf7\u6c42]) -- go --> B[Work] & C{Done?}; B -. no .-> C; C <--> A; B --- A; C -.- B; A <-.-> B"
+	// Rust #54419 vectors the node labels through line breaks; the Go fixture below is
+	// the Rust snapshot recorded at
+	// `codex-rs/mermaid/src/snapshots/codex_mermaid__tests__stadiums_with_other_shapes_in_every_direction.snap`
+	// for commit 9fcb1f5ed4.
+	const source = "flowchart %s; A([\"\u8bf7\u6c42<br>Ready\"]) -- go --> B[Work<br/>next] & C{\"Done?<br />Retry?\"}; B -. no .-> C; C <--> A; B --- A; C -.- B; A <-.-> B"
 	const expected = `TD
 ╭─────────╮
 │ 请求    │
+│ Ready   │
 │         ├──go───┐
 │         ├──go───╪─┐
 │         ├◄──────╪─╪───┐
@@ -716,6 +721,7 @@ func TestStadiumsWithOtherShapesInEveryDirectionMatchesRust(t *testing.T) {
                   │ │   │ │   ┆
 ┌─────────┐       │ │   │ │   ┆
 │ Work    │       │ │   │ │   ┆
+│ next    │       │ │   │ │   ┆
 │         ├◄──────┘ │   │ │   ┆
 │         ├─┄no┄┄┄┄┄╪┄┐ │ │   ┆
 │         ├─────────╪─╪─╪─┘   ┆
@@ -726,6 +732,7 @@ func TestStadiumsWithOtherShapesInEveryDirectionMatchesRust(t *testing.T) {
                     │ ┆ │   ┆
 ┌─────────┐         │ ┆ │   ┆
 │ ◇ Done? │         │ ┆ │   ┆
+│ Retry?  │         │ ┆ │   ┆
 │         ├◄────────┘ ┆ │   ┆
 │         ├◄┄┄┄┄┄┄┄┄┄┄┘ │   ┆
 │         ├◄────────────┘   ┆
@@ -735,6 +742,7 @@ func TestStadiumsWithOtherShapesInEveryDirectionMatchesRust(t *testing.T) {
 BT
 ┌─────────┐
 │ ◇ Done? │
+│ Retry?  │
 │         ├◄────────┐
 │         ├◄┄┄┄┄┄┄┄┄╪┄┐
 │         ├◄────────╪─╪─┐
@@ -744,6 +752,7 @@ BT
                     │ ┆ │   ┆
 ┌─────────┐         │ ┆ │   ┆
 │ Work    │         │ ┆ │   ┆
+│ next    │         │ ┆ │   ┆
 │         ├◄──────┐ │ ┆ │   ┆
 │         ├─┄no┄┄┄╪┄╪┄┘ │   ┆
 │         ├───────╪─╪───╪─┐ ┆
@@ -754,6 +763,7 @@ BT
                   │ │   │ │   ┆
 ╭─────────╮       │ │   │ │   ┆
 │ 请求    │       │ │   │ │   ┆
+│ Ready   │       │ │   │ │   ┆
 │         ├──go───┘ │   │ │   ┆
 │         ├──go─────┘   │ │   ┆
 │         ├◄────────────┘ │   ┆
@@ -764,6 +774,7 @@ BT
 LR
 ╭────────────────────╮  ┌────────────────────┐  ┌────────────────┐
 │ 请求               │  │ Work               │  │ ◇ Done?        │
+│ Ready              │  │ next               │  │ Retry?         │
 ╰┬───┬───┬───┬───┬───╯  └┬───┬───┬───┬───┬───┘  └┬───┬───┬───┬───┘
  │   │   ▲   │   ▲       ▲   │   │   │   ▲       ▲   ▲   ▲   │
  │go │go │   │   ┆       │   ┆no │   ┆   ┆       │   ┆   │   ┆
@@ -786,6 +797,7 @@ LR
 RL
 ┌────────────────┐  ┌────────────────────┐  ╭────────────────────╮
 │ ◇ Done?        │  │ Work               │  │ 请求               │
+│ Retry?         │  │ next               │  │ Ready              │
 └┬───┬───┬───┬───┘  └┬───┬───┬───┬───┬───┘  ╰┬───┬───┬───┬───┬───╯
  ▲   ▲   ▲   │       ▲   │   │   │   ▲       │   │   ▲   │   ▲
  │   ┆   │   ┆       │   ┆no │   ┆   ┆       │go │go │   │   ┆
@@ -838,6 +850,80 @@ RL
 		}
 	}
 	t.Fatalf("rendered diagram does not match the Rust snapshot:\n%s", got)
+}
+
+// Mirrors the Rust #54419 vectors: `<br>`, `<br/>` and `<br />` are line breaks
+// inside quoted and unquoted flowchart node labels, the 40-display-cell bound is
+// applied per rendered line, the decision marker stays on the first line, and
+// every other unsupported label (including breaks in edge labels) still fails.
+func TestFlowchartLineBreakLabelsMatchRust(t *testing.T) {
+	var baseline string
+	for _, spelling := range []string{"<br>", "<br/>", "<br />"} {
+		for _, label := range []string{"one%stwo", "\"one%stwo\""} {
+			source := fmt.Sprintf("flowchart TD; A["+label+"]", spelling)
+			output, err := Render(source, 100)
+			if err != nil {
+				t.Fatalf("Render(%q) error = %v", source, err)
+			}
+			if !strings.Contains(output, "\u2502 one \u2502") || !strings.Contains(output, "\u2502 two \u2502") {
+				t.Fatalf("Render(%q) did not split the label into lines:\n%s", source, output)
+			}
+			if baseline == "" {
+				baseline = output
+				continue
+			}
+			if output != baseline {
+				t.Fatalf("Render(%q) = %q, want the same diagram as the first spelling", source, output)
+			}
+		}
+	}
+
+	// The decision marker is drawn on the first label line only.
+	decision, err := Render("flowchart TD; A{Done?<br/>Retry?}", 100)
+	if err != nil {
+		t.Fatalf("Render(decision) error = %v", err)
+	}
+	lines := strings.Split(decision, "\n")
+	if len(lines) < 3 || !strings.Contains(lines[1], "\u25c7 Done?") || !strings.Contains(lines[2], "Retry?") {
+		t.Fatalf("decision marker not on the first line:\n%s", decision)
+	}
+	if strings.Contains(lines[2], "\u25c7") {
+		t.Fatalf("decision marker repeated on a later line:\n%s", decision)
+	}
+
+	// Width limits are per rendered line, and the canvas still reports TooWide.
+	wide := fmt.Sprintf("graph LR; A[\"%s<br/>%s\"] --> B[Done]", strings.Repeat("\u754c", 20), strings.Repeat("x", 40))
+	output, err := Render(wide, 100)
+	if err != nil {
+		t.Fatalf("Render(multiline) error = %v", err)
+	}
+	width := 0
+	for _, line := range strings.Split(output, "\n") {
+		if w := textWidth(line); w > width {
+			width = w
+		}
+	}
+	if got, err := Render(wide, width); err != nil || got != output {
+		t.Fatalf("Render(multiline, width) = (%q, %v), want the same output", got, err)
+	}
+	if _, err := Render(wide, width-1); err != ErrTooWide {
+		t.Fatalf("Render(multiline, width-1) error = %v, want ErrTooWide", err)
+	}
+	if _, err := Render(fmt.Sprintf("graph TD; A[\"ok<br />%s\"]", strings.Repeat("\u754c", 21)), 200); err != ErrLimit {
+		t.Fatalf("Render(over-long line) error = %v, want ErrLimit", err)
+	}
+
+	for _, source := range []string{
+		"flowchart TD; A[\"one<br/><b>two</b>\"]",
+		"flowchart TD; A[\"one<br class='x'>two\"]",
+		"flowchart TD; A -->|one<br/>two| B",
+		"flowchart TD; A -- one<br>two --> B",
+		"flowchart TD; A[<br/><br />]",
+	} {
+		if _, err := Render(source, 100); err != ErrUnsupported {
+			t.Fatalf("Render(%q) error = %v, want ErrUnsupported", source, err)
+		}
+	}
 }
 
 func nodesEqual(a, b []node) bool {
