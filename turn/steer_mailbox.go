@@ -17,6 +17,12 @@ type SteerMailbox struct {
 	// state::MailboxDeliveryPhase, held by TurnState in Rust). The absence of a
 	// key is Rust's default CurrentTurn.
 	phases map[string]state.MailboxDeliveryPhase
+	// finishing carries the turns whose final batch is being recorded (Rust
+	// #53452's ActiveTurn::finishing). Input admission is closed for those turns
+	// even though their delivery phase has not moved to the next turn, so late
+	// mail cannot be queued after the final batch was drained. A turn that is
+	// reserved but has not started has no entry and still accepts input.
+	finishing map[string]chan struct{}
 	// changed is closed and replaced on every enqueue that stores input, so
 	// watchers wake without polling (Rust InputQueue::activity_tx).
 	changed chan struct{}
@@ -99,6 +105,70 @@ func (m *SteerMailbox) EnqueueIfAcceptingDelivery(params *SteerEnqueueParams) (b
 	}
 	m.storeLocked(key, items, metadata)
 	return true, nil
+}
+
+// BeginTurnFinish closes input admission for the turn while its final batch is
+// recorded and returns the function that reopens it (Rust #53452: tasks/mod.rs
+// sets ActiveTurn.finishing before pending input is drained and drops the guard
+// once the final items are recorded). The release wakes every waiter and is safe
+// to call more than once.
+func (m *SteerMailbox) BeginTurnFinish(threadID string, turnID string) func() {
+	if m == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+		return func() {}
+	}
+	key := steerMailboxKey(threadID, turnID)
+	m.mu.Lock()
+	if m.finishing == nil {
+		m.finishing = map[string]chan struct{}{}
+	}
+	if m.finishing[key] == nil {
+		m.finishing[key] = make(chan struct{})
+	}
+	m.mu.Unlock()
+	return func() { m.releaseTurnFinish(key) }
+}
+
+// releaseTurnFinish reopens the turn and wakes waiters. Releasing twice is a
+// no-op, so a deferred release and an explicit one can both run.
+func (m *SteerMailbox) releaseTurnFinish(key string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	release := m.finishing[key]
+	delete(m.finishing, key)
+	if release != nil {
+		close(release)
+	}
+}
+
+// IsTurnFinishing reports whether the turn closed input admission while its final
+// batch is recorded (Rust #53452).
+func (m *SteerMailbox) IsTurnFinishing(threadID string, turnID string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.finishing[steerMailboxKey(threadID, turnID)] != nil
+}
+
+// WaitForTurnFinish blocks until the turn's final batch is recorded (Rust #53452:
+// a late client response or notification waits for `finishing.cancelled()` before
+// it is appended to history, so it is recorded after the final batch instead of
+// ahead of it). It returns immediately when the turn is not finishing.
+func (m *SteerMailbox) WaitForTurnFinish(threadID string, turnID string) {
+	if m == nil {
+		return
+	}
+	key := steerMailboxKey(threadID, turnID)
+	m.mu.Lock()
+	release := m.finishing[key]
+	m.mu.Unlock()
+	if release != nil {
+		<-release
+	}
 }
 
 // storeLocked appends the input under an already held lock and wakes watchers.
@@ -307,6 +377,13 @@ func (m *SteerMailbox) AcceptsMailboxDeliveryForCurrentTurn(threadID string, tur
 // acceptsMailboxDeliveryLocked is AcceptsMailboxDeliveryForCurrentTurn for
 // callers that already hold the mailbox lock.
 func (m *SteerMailbox) acceptsMailboxDeliveryLocked(key string) bool {
+	// Rust #53452 (session/inject.rs::inject_if_running) filters on
+	// `turn.finishing.is_none()` before it extends the turn's pending input, so a
+	// finishing turn rejects injection even though its phase is still the current
+	// turn. The phase check below is the pre-existing terminal-output gate.
+	if m.finishing[key] != nil {
+		return false
+	}
 	return m.phases[key] != state.MailboxNextTurn
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -61,6 +62,15 @@ func (f *remoteEnvironmentFileSystemFake) WriteFile(_ context.Context, path stri
 	f.files[resolved] = append([]byte(nil), data...)
 	f.writes = append(f.writes, resolved)
 	return nil
+}
+
+// WriteFileStream mirrors Rust's default `ExecutorFileSystem::write_file_stream`
+// (codex-rs/file-system/src/lib.rs:781): a filesystem that cannot stream reports
+// `Unsupported` without consuming the input. This fake predates the streaming
+// interface method upstream #54505 (`a45b8ccb01`) added, so without it the whole
+// `turn` test binary failed to compile.
+func (f *remoteEnvironmentFileSystemFake) WriteFileStream(_ context.Context, _ string, _ execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
+	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
 }
 
 func (f *remoteEnvironmentFileSystemFake) CreateDirectory(_ context.Context, _ string, _ bool, _ *execserver.FileSystemSandboxContext) error {

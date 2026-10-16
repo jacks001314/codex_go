@@ -282,6 +282,13 @@ type RuntimeRouter struct {
 	authOwnerRevision uint64
 	authChangeTracker *auth.AuthChangeTracker
 	authChanged       chan struct{}
+	// modelCatalogAuthRevision records the authRevision the model catalog was
+	// last reconciled at. Rust #54169: a successful login or logout invalidates
+	// the catalog ("Invalidate the catalog after successful login and logout,
+	// then reload the effective configuration on the next model list or
+	// background refresh"), so the revision marks a reconciliation still owed.
+	// Guarded by authRevisionMu.
+	modelCatalogAuthRevision uint64
 	// workspaceRouting caches workspace routing discovery for account/read
 	// (Rust AccountRequestProcessor::workspace_routing).
 	workspaceRoutingOnce sync.Once
@@ -3766,7 +3773,16 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 // current credentials. A matching identity, an unresolvable identity, or a
 // failed rebuild all keep the running catalog.
 func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
-	if r == nil || r.services.Models == nil || r.services.Config == nil {
+	if r == nil {
+		return
+	}
+	// Rust #54169: this reconciliation is what consumes the account-change
+	// invalidation, so the revision is recorded before any early return (a
+	// missing model or config service is still "nothing left to reload").
+	r.authRevisionMu.Lock()
+	r.modelCatalogAuthRevision = r.authRevision
+	r.authRevisionMu.Unlock()
+	if r.services.Models == nil || r.services.Config == nil {
 		return
 	}
 	codexHome := strings.TrimSpace(r.services.Config.CodexHome())
@@ -3800,6 +3816,19 @@ func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 	r.servicesMu.Lock()
 	r.services.Models = service
 	r.servicesMu.Unlock()
+}
+
+// modelCatalogRefreshPending reports whether an account change happened after the
+// catalog was last reconciled (Rust #54169). Callers that answer from the catalog
+// reconcile first so a login or logout cannot leave them on the provider
+// settings the app server started with.
+func (r *RuntimeRouter) modelCatalogRefreshPending() bool {
+	if r == nil {
+		return false
+	}
+	r.authRevisionMu.Lock()
+	defer r.authRevisionMu.Unlock()
+	return r.modelCatalogAuthRevision != r.authRevision
 }
 
 func (r *RuntimeRouter) maybeDispatchQueuedSubmissionIfIdle(threadID string) {
@@ -10451,6 +10480,13 @@ func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListRespo
 	var params model.ModelListParams
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
+	}
+	// Rust #54169: the app server must not answer model/list from the provider it
+	// started with after a successful login or logout, so a pending account
+	// change reloads the effective configuration (provider selection and managed
+	// requirements) before the catalog is read.
+	if r.modelCatalogRefreshPending() {
+		r.refreshModelCatalogAfterAuthChange()
 	}
 	return r.requireModels().List(&params)
 }

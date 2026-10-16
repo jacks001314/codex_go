@@ -1738,6 +1738,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
+	// Rust #53452: the turn's task has finished, so its input admission closes
+	// while the final batch below is recorded. The deferred release keeps the
+	// window closed on every return path (it never opens earlier than upstream,
+	// which drops its guard directly after the final items are recorded).
+	finishTurn := r.beginRuntimeTurnFinish(threadID, turnID)
+	defer finishTurn()
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 		if ctx.Err() != nil {
@@ -2248,6 +2254,10 @@ func (r *RuntimeRouter) runReviewRuntime(ctx context.Context, params *turn.TurnS
 		},
 		ExecutedToolCallMetadataEnabled: runConfig.ExecutedToolCallMetadataEnabled,
 	})
+	// Rust #53452: the review turn's task has finished, so its input admission
+	// closes while the final batch below is recorded.
+	finishReviewTurn := r.beginRuntimeTurnFinish(threadID, turnID)
+	defer finishReviewTurn()
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 		if ctx.Err() != nil {
@@ -3738,6 +3748,23 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID s
 	}
 	r.clearPendingUnifiedExecItems(threadID, turnID)
 	return active, true
+}
+
+// beginRuntimeTurnFinish closes input admission for the turn while its final
+// batch is recorded and returns the release (Rust #53452: tasks/mod.rs sets
+// ActiveTurn.finishing before pending input is drained and drops the guard once
+// the final items are recorded). Mail that arrives in this window, including a
+// child's completion, is rejected instead of being queued after the final batch
+// was drained; a turn reserved but not yet started still accepts input.
+func (r *RuntimeRouter) beginRuntimeTurnFinish(threadID string, turnID string) func() {
+	if r == nil {
+		return func() {}
+	}
+	mailbox := r.requireSteerMailbox()
+	if mailbox == nil {
+		return func() {}
+	}
+	return mailbox.BeginTurnFinish(threadID, turnID)
 }
 
 func (r *RuntimeRouter) clearActiveRuntimeTurn(threadID string, turnID string) {
