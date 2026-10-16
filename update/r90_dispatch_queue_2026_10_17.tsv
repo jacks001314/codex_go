@@ -1,6 +1,4 @@
 pr	sha	subject	lane_face	files	note
-54589	144779cd24	Preserve evidence message structure in Guardian Decisions requests (#54589)	guardian	4	
-54434	16e578dd1d	Add rotating stdin credentials for remote exec-server (#54434)	docs/cli	8	
 54432	1c5ca2a979	Support remote credential masking with Zsh shell snapshots (#54432)	exec	18	
 54424	aff92080f2	Add remote plugin metadata to plugin configuration (#54424)	other:core-plugins	6	
 54414	341de32c33	Allow root turn suspension with live descendants (#54414)	A-core	4	
@@ -10,7 +8,6 @@ pr	sha	subject	lane_face	files	note
 54380	dcd9e95459	Add `/presets` for reusable prompts and slash commands (#54380)	TUI	30	chain step 2 - must follow #52273 (17 shared Rust files); upstream footprint is codex-rs/tui/** only (TR-3 conflict matrix)
 54379	1544ffc79d	Add configuration support for TUI input presets (#54379)	config	6	
 54363	3df96b085c	Filter uninspectable network roots from implicit MXC read grants (#54363)	other:mxc-sandbox	5	
-54346	0003732489	Add scoped executor credential auth for remote exec-server (#54346)	exec	3	
 54315	86ee40c380	Keep TUI Markdown colors readable against their backgrounds (#54315)	TUI	20	
 54309	7d33d0d93f	Enable credential masking for remote exec-server commands (#54309)	exec	22	
 54273	3bae578af3	Protect metadata writes through macOS case aliases (#54273)	other:protocol	5	
@@ -42,7 +39,7 @@ pr	sha	subject	lane_face	files	note
 53987	835cd7552d	Skip service backoff for stale Guardian authorization retries (#53987)	guardian	2	
 53963	0d58012ec2	Test memory extraction budgets with excluded items and ciphertext (#53963)	other:memories	1	TR-2 implementable: strip encrypted_content in memories/pipeline.go sanitizeMemoryResponseItem (Rust memories/write/src/rollout_input.rs:327,333); dispatch together with #52742
 53940	5670b1c18e	Bound rollout input for memory extraction (#53940)	other:memories	4	
-53932	400f2356d6	Preserve conversation history when compaction fails (#53932)	A-core	2	
+53932	400f2356d6	Preserve conversation history when compaction fails (#53932)	A-core	2	TR-4 implementable: buffer compaction output and only write history/rollout at response.completed, tagging successful items compaction_output: true (core/src/compact.rs, +18/-20). Go has retainedctx/retained_context.go:169 CompactionOutput and appserver/retained_context.go:375 sessionItemIsCompactionOutput but no buffering semantics (recordAnnotatedConversationItems has no counterpart). Implementer must first pin the commit point (candidates appserver/turn_runtime.go / compact/compact.go). Runs after #52937.
 53908	95273b84fb	Keep the agent dashboard browsable during task removal (#53908)	TUI	6	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53879	7eed30ad1b	Preserve running turn recovery across thread settings updates (#53879)	A-core	7	
 53872	cb03f28a40	Refresh model instructions in incremental-tool context windows (#53872)	A-core	21	
@@ -78,7 +75,7 @@ pr	sha	subject	lane_face	files	note
 53699	f6aca7dc46	Cancel Guardian V2 classifications that exceed the tool-call lag window (#5	guardian	10	
 53698	ffc1402633	Interrupt and drain canceled classifier responses before socket reuse (#536	guardian	12	
 53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	
+53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	TR-4 implementable: guardian-context/src/budget.rs estimate_input_tokens_from_serialized_len (12 bytes/token for ciphertext, ceil) plus estimate_compaction_content_length are absent (0 hits); Go approximates at appserver/guardian_reviewer.go:1370-1390 (its own comment admits it uses the summary bytes). 0 file overlap with the compaction chain, so it can run in parallel with #52937/#53932.
 53689	c03bbff483	Constrain API-key model access programs to server support (#53689)	TUI	9	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53678	044e74fef3	Preserve inherited context in prediction forks (#53678)	A-core	7	
 53672	4c1cd8bbcc	Keep discovered Apps tools available during startup recovery (#53672)	B-mcp/sandbox	7	
@@ -87,7 +84,6 @@ pr	sha	subject	lane_face	files	note
 53657	ab82af0b2c	Share hook configuration across cloned hook views (#53657)	other:hooks	4	
 53654	4e7ef7d19d	Keep spawned children provisional until the spawn result returns (#53654)	A-core	5	
 53633	90f00bd89e	Add an environment API key fallback for Guardian Decisions (#53633)	guardian	3	
-53628	f5297229c1	Record truncation metrics for accepted Guardian review inputs (#53628)	guardian	4	
 53622	b043762f9e	Preserve remote exec output until it is collected (#53622)	A-core	4	
 53620	9167a0b2d4	Reuse background results for remote V2 compaction (#53620)	A-core	7	
 53617	308ddf5e7c	Allow hiding native tools while retaining the multi-agent V2 runtime (#5361	A-core	8	
@@ -106,7 +102,6 @@ pr	sha	subject	lane_face	files	note
 53419	bf4ca52b61	Restore saved thread permissions during configuration loading (#53419)	A-core	10	
 53412	16845bb8e8	Isolate arg0 helper directories by operating system (#53412)	config	3	
 53400	97239fd052	Add explicit local board connections with fixed runtime access (#53400)	other:ext	13	
-53393	cab328f275	Distinguish Guardian parent-compaction failure reasons (#53393)	guardian	2	
 53389	27e6192e84	Use cached login credentials for Guardian decisions (#53389)	guardian	4	
 53369	6c372fbef4	Allow turns when the agent message board is unavailable (#53369)	A-core	2	
 53358	ddb33e34b2	Remove selected protocol, apply-patch, MCP, and TUI tests (#53358)	pin-protocol	6	
@@ -129,7 +124,7 @@ pr	sha	subject	lane_face	files	note
 52959	47bcb3a3f9	Reduce stack usage in async TUI tests (#52959)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52952	b871a1b9f6	Verify reset notification during code-mode host recovery (#52952)	A-core	1	
 52946	1badea29ab	Keep agent command center rows stable across progress updates (#52946)	TUI	5	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
-52937	6c0c6759d0	Retain client-marked tool outputs across compaction (#52937)	A-core	12	
+52937	6c0c6759d0	Retain client-marked tool outputs across compaction (#52937)	A-core	12	TR-4 implementable: retain_client_tool_outputs is a DEAD KEY in Go (features/features.go:357 has only the registration line, hits=1) - the rule core/src/compact_retained_tool_outputs.rs:1-17 is_retained_tool_output() is missing (RetainedToolOutputs 0 hits); half-carriers exist at compact/compact.go:568 metadata["client_authored"] and :434,503 retainClientDevelopers. Do NOT edit features/**, just consume the flag. Serial: #52937 -> #53932 -> #53670 (all touch core/src/compact.rs).
 52825	806d9732c9	Report exec runtime resets before accepting further requests (#52825)	other:code-mode-host	4	
 52778	c3d3b142d1	Make pinned transcript prompts clickable (#52778)	TUI	4	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52756	322bbf4d84	Classify voice session failures and record terminal outcomes (#52756)	TUI	18	
@@ -149,7 +144,7 @@ pr	sha	subject	lane_face	files	note
 52681	96be88cb53	Reject reserved Serde JSON keys in code mode (#52681)	other:code-mode-runtime	3	
 52679	6e093c6081	Add timeout-aware exec-server configuration reads (#52679)	exec	5	
 52676	aab4f96148	Refresh persisted capability roots from owner-provided configuration (#5267	A-core	3	
-52671	04ad786998	Add retention annotations to submitted tool outputs (#52671)	pin-protocol	5	
+52671	04ad786998	Add retention annotations to submitted tool outputs (#52671)	pin-protocol	5	TR-4 implementable: protocol/src/turn_input.rs AnnotatedResponseItem{annotations: ResponseItemAnnotations{retain: bool}} plus core/src/session/turn_input.rs (+33/-6) - ResponseItemAnnotations/AnnotatedResponseItem/requestCompactionRetention all 0 hits in Go; carriers exist in retainedctx/**, appserver/turn_input_span.go, appserver/daemon_recovery_snapshot.go:117,139. Serial: #52671 -> #52686 (shared generated schema).
 52661	65b82cdf96	Prevent brokered credential aliases from bypassing MITM hooks (#52661)	other:network-proxy	10	
 52659	8a0437ff34	Add an opt-in feature for subagent model context defaults (#52659)	A-core	3	
 52652	89c8759d8c	Bound local exec-server output draining after process exit (#52652)	A-core	6	
@@ -197,7 +192,6 @@ pr	sha	subject	lane_face	files	note
 52160	cd85a26cae	Remove the patched zsh shell execution backend (#52160)	A-core	105	TR-1 implementable: zsh-fork retired in features/features.go:60 but residuals remain in tool/shell.go:322,520-524,580 / tool/shell_executor.go:769-770 / tool/runtime_paths.go:117-120 / cli/dispatch.go:52 / cmd/codex/main.go:37; the upstream startup warning text is absent
 52119	9b738582b1	Expose originating tool call metadata in command environments (#52119)	exec	18	
 52081	2fdf047c96	Fix idle cleanup for disconnected multi-agent v2 children (#52081)	pin-protocol	13	
-52065	be2e129ecd	Require assessment text in the Guardian parser (#52065)	guardian	5	
 52040	b12ac84be9	Add regression coverage for cancelled agent reloads (#52040)	A-core	1	
 52034	d2a6dac20b	Preserve agent state when unloading idle multi-agent v2 children (#52034)	A-core	12	
 51974	ea27864f99	Log Windows sandbox availability and backend selection (#51974)	pin-protocol	4	
