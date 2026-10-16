@@ -162,26 +162,51 @@ func newFakeEnvironmentFileSystem(cwd string) *fakeEnvironmentFileSystem {
 
 func (f *fakeEnvironmentFileSystem) CWD() string { return f.cwd }
 
+// fixtureKey maps a path onto the fixture's POSIX key space. The fake models a
+// POSIX remote environment (Rust's `ExecutorFileSystem`), while apply_patch
+// resolves patch paths on the host first: `filepath.Join` + `filepath.Abs` turn
+// the environment cwd "/remote-x-workspace" + "remote-only.txt" into
+// `C:\remote-x-workspace\remote-only.txt` on Windows and into
+// "/remote-x-workspace/remote-only.txt" on a POSIX host. Both the seeded keys
+// and every lookup go through here so the host separator and drive prefix cannot
+// leak into the comparison, which otherwise made the preflight treat the target
+// as absent and fail with a missing shadow file.
+func fixtureKey(path string) string {
+	slashed := filepath.ToSlash(strings.TrimSpace(path))
+	if volume := filepath.VolumeName(slashed); volume != "" {
+		slashed = strings.TrimPrefix(slashed, volume)
+	}
+	if slashed == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return slashed
+}
+
 func (f *fakeEnvironmentFileSystem) GetMetadata(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) (*execserver.FSGetMetadataResponse, error) {
-	if data, ok := f.files[path]; ok {
+	key := fixtureKey(path)
+	if data, ok := f.files[key]; ok {
 		return &execserver.FSGetMetadataResponse{IsFile: true, Size: int64(len(data))}, nil
 	}
-	if f.dirs[path] {
+	if f.dirs[key] {
 		return &execserver.FSGetMetadataResponse{IsDirectory: true}, nil
 	}
 	return nil, &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist}
 }
 
 func (f *fakeEnvironmentFileSystem) ReadFile(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) ([]byte, error) {
-	if data, ok := f.files[path]; ok {
+	if data, ok := f.files[fixtureKey(path)]; ok {
 		return data, nil
 	}
 	return nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
 }
 
 func (f *fakeEnvironmentFileSystem) WriteFile(_ context.Context, path string, data []byte, _ *execserver.FileSystemSandboxContext) error {
-	f.files[path] = append([]byte(nil), data...)
-	f.writes = append(f.writes, path)
+	key := fixtureKey(path)
+	f.files[key] = append([]byte(nil), data...)
+	f.writes = append(f.writes, key)
 	return nil
 }
 
@@ -193,13 +218,14 @@ func (f *fakeEnvironmentFileSystem) WriteFileStream(_ context.Context, _ string,
 }
 
 func (f *fakeEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {
-	f.dirs[path] = true
+	f.dirs[fixtureKey(path)] = true
 	return nil
 }
 
 func (f *fakeEnvironmentFileSystem) Remove(_ context.Context, path string, _ bool, _ bool, _ *execserver.FileSystemSandboxContext) error {
-	delete(f.files, path)
-	f.removes = append(f.removes, path)
+	key := fixtureKey(path)
+	delete(f.files, key)
+	f.removes = append(f.removes, key)
 	return nil
 }
 

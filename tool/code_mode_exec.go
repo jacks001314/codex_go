@@ -22,6 +22,16 @@ const CodeModeExecToolName = "exec"
 // resumed cell.
 const CodeModeWaitToolName = "wait"
 
+// CodeModeDefaultExecYieldTime is the `exec` default yield time. It mirrors
+// Rust's config-level default, DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS
+// (codex-rs/core/src/config/mod.rs:1204 = 30_000), which is
+// `CodeModeConfig::default_exec_yield_time_ms` (mod.rs:1223) and the value
+// Rust substitutes into the exec description (core/src/tools/spec_plan.rs:1078
+// -> code-mode-protocol/src/description.rs:31). It is NOT Rust's protocol-level
+// DEFAULT_EXEC_YIELD_TIME_MS = 10_000 (code-mode-protocol/src/runtime.rs:15),
+// which the code-mode runtime service uses as its `unwrap_or` fallback
+// (code-mode-runtime/src/service.rs:71); Go mirrors that one in
+// codemode.ProtocolDefaultExecYieldTimeMS (codemode/protocol_types.go:13).
 const CodeModeDefaultExecYieldTime = 30 * time.Second
 
 // codeModeDeferredNestedToolsGuidance mirrors Rust's
@@ -53,17 +63,29 @@ type codeModeExecExecutor struct {
 	bindingMu         sync.RWMutex
 	registry          *Registry
 	nestedCommandTool ToolName
-	nextID            atomic.Uint64
-	storeMu           sync.RWMutex
-	store             map[string]json.RawMessage
-	cellsMu           sync.Mutex
-	cells             map[string]*codeModeCell
-	remote            CodeModeRemoteSession
-	provider          CodeModeRemoteProvider
-	disableFallback   bool
-	warningEmitted    atomic.Bool
-	remoteCellsMu     sync.RWMutex
-	remoteCells       map[string]*Registry
+	// nextID numbers this executor's nested tool calls, i.e. the
+	// `{parent_call_id}-nested-{n}` call id. It is deliberately separate from
+	// nextCellID: an exec call runs as an observable cell whenever the host
+	// attaches a preempt signal (#48123), and Rust's
+	// `steers_yield_exec_and_wait_without_stopping_the_cell`
+	// (core/tests/suite/pending_input.rs:1514, parametrized on/off) shows the
+	// nested call is the same in both modes. Sharing one counter made the id
+	// depend on the observation mode, so a preempted exec produced
+	// `-nested-2` instead of `-nested-1`.
+	nextID atomic.Uint64
+	// nextCellID numbers this executor's observable cells (`cell-%d`); it must
+	// not consume the nested-call counter (see nextID).
+	nextCellID      atomic.Uint64
+	storeMu         sync.RWMutex
+	store           map[string]json.RawMessage
+	cellsMu         sync.Mutex
+	cells           map[string]*codeModeCell
+	remote          CodeModeRemoteSession
+	provider        CodeModeRemoteProvider
+	disableFallback bool
+	warningEmitted  atomic.Bool
+	remoteCellsMu   sync.RWMutex
+	remoteCells     map[string]*Registry
 	// remoteCellOrigins retains the Responses item and conversation window that
 	// started each Code Mode cell (Rust `cell_originating_call`, #45409), so a
 	// nested call after a wait or a compaction still reports the cell's origin
@@ -668,7 +690,7 @@ func (e *codeModeExecExecutor) execute(ctx context.Context, invocation *Invocati
 		cellID = strings.TrimSpace(cellID)
 	}
 	if cellID == "" {
-		cellID = fmt.Sprintf("cell-%d", e.nextID.Add(1))
+		cellID = fmt.Sprintf("cell-%d", e.nextCellID.Add(1))
 	}
 	if callCellID != nil {
 		*callCellID = cellID

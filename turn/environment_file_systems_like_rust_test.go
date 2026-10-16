@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"codex_go/execserver"
@@ -41,15 +42,42 @@ func (f *remoteEnvironmentFileSystemFake) resolve(path string) string {
 	return filepath.Join(f.cwd, path)
 }
 
+// fixtureKey maps a path onto the fixture's POSIX key space. The fake models a
+// POSIX remote environment (Rust's `ExecutorFileSystem`), while the production
+// path resolution runs on the host: `filepath.Join` + `filepath.Abs` turn
+// "/remote-x-workspace" + "target.txt" into `C:\remote-x-workspace\target.txt`
+// on Windows and into "/remote-x-workspace/target.txt" on a POSIX host. Both the
+// seeded keys and every lookup go through here so the host separator and drive
+// prefix cannot leak into the comparison, which otherwise made every lookup miss
+// and the fake report a spurious not-found.
+func fixtureKey(path string) string {
+	slashed := filepath.ToSlash(strings.TrimSpace(path))
+	if volume := filepath.VolumeName(slashed); volume != "" {
+		slashed = strings.TrimPrefix(slashed, volume)
+	}
+	if slashed == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(slashed, "/") {
+		slashed = "/" + slashed
+	}
+	return slashed
+}
+
+// key is the fixture's canonical key for a caller-supplied path.
+func (f *remoteEnvironmentFileSystemFake) key(path string) string {
+	return fixtureKey(f.resolve(path))
+}
+
 func (f *remoteEnvironmentFileSystemFake) GetMetadata(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) (*execserver.FSGetMetadataResponse, error) {
-	if data, ok := f.files[f.resolve(path)]; ok {
+	if data, ok := f.files[f.key(path)]; ok {
 		return &execserver.FSGetMetadataResponse{IsFile: true, Size: int64(len(data))}, nil
 	}
 	return nil, &os.PathError{Op: "lstat", Path: path, Err: os.ErrNotExist}
 }
 
 func (f *remoteEnvironmentFileSystemFake) ReadFile(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) ([]byte, error) {
-	resolved := f.resolve(path)
+	resolved := f.key(path)
 	f.reads = append(f.reads, resolved)
 	if data, ok := f.files[resolved]; ok {
 		return data, nil
@@ -58,7 +86,7 @@ func (f *remoteEnvironmentFileSystemFake) ReadFile(_ context.Context, path strin
 }
 
 func (f *remoteEnvironmentFileSystemFake) WriteFile(_ context.Context, path string, data []byte, _ *execserver.FileSystemSandboxContext) error {
-	resolved := f.resolve(path)
+	resolved := f.key(path)
 	f.files[resolved] = append([]byte(nil), data...)
 	f.writes = append(f.writes, resolved)
 	return nil
@@ -78,7 +106,7 @@ func (f *remoteEnvironmentFileSystemFake) CreateDirectory(_ context.Context, _ s
 }
 
 func (f *remoteEnvironmentFileSystemFake) Remove(_ context.Context, path string, _ bool, _ bool, _ *execserver.FileSystemSandboxContext) error {
-	delete(f.files, f.resolve(path))
+	delete(f.files, f.key(path))
 	return nil
 }
 
