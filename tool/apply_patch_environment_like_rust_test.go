@@ -2,6 +2,7 @@ package tool
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,6 +183,13 @@ func (f *fakeEnvironmentFileSystem) WriteFile(_ context.Context, path string, da
 	f.files[path] = append([]byte(nil), data...)
 	f.writes = append(f.writes, path)
 	return nil
+}
+
+// WriteFileStream mirrors Rust's default `ExecutorFileSystem::write_file_stream`
+// (codex-rs/file-system/src/lib.rs:781): a filesystem that cannot stream reports
+// `Unsupported` without consuming the input.
+func (f *fakeEnvironmentFileSystem) WriteFileStream(_ context.Context, _ string, _ execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
+	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
 }
 
 func (f *fakeEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {

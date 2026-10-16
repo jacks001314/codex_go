@@ -104,6 +104,16 @@ const (
 	fsOpenModeReplace = "replace"
 )
 
+// FSOpenModeReplace is the wire value of Rust's `FsOpenMode::Replace`: an open
+// that creates or truncates the target for positional writes (Rust #50177).
+// A replacement open requires the executor's `file_write_streaming` capability.
+const FSOpenModeReplace = fsOpenModeReplace
+
+// FileWriteChunkSize is the largest block a replacement open accepts, and the
+// size a streamed writer sends per `fs/writeBlock` (Rust `FILE_WRITE_CHUNK_SIZE`,
+// codex-rs/file-system/src/lib.rs:661, upstream #54505 `a45b8ccb01`).
+const FileWriteChunkSize = fileWriteChunkSize
+
 var execServerExitedProcessRetention = 30 * time.Second
 
 type RequestID struct {

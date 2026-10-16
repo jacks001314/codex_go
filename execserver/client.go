@@ -1005,16 +1005,28 @@ func (c *Client) cachedEnvironmentInfo(ctx context.Context) (*EnvironmentInfo, e
 // (Rust #49805 `e7798c9944`).
 var errWritableFileStreamsUnsupported = errors.New("exec-server does not support writable file streams")
 
+// SupportsFileWriteStreaming reports whether the executor advertised the
+// `file_write_streaming` capability. Rust #54505 (`a45b8ccb01`) extracted this
+// probe from the open/write gates so a caller can pick the legacy whole-file
+// write before opening anything (codex-rs/exec-server/src/client.rs:971).
+func (c *Client) SupportsFileWriteStreaming(ctx context.Context) (bool, error) {
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return false, err
+	}
+	return info != nil && info.Capabilities.FileWriteStreaming, nil
+}
+
 // requireFileWriteStreaming reports whether the executor supports positional
 // writes over an open handle. Older executors ignore the fs/open mode and could
 // silently return a read-only handle for a writable open, so both
 // `FsOpenMode::Replace` opens and block writes are rejected locally.
 func (c *Client) requireFileWriteStreaming(ctx context.Context) error {
-	info, err := c.cachedEnvironmentInfo(ctx)
+	supported, err := c.SupportsFileWriteStreaming(ctx)
 	if err != nil {
 		return err
 	}
-	if info == nil || !info.Capabilities.FileWriteStreaming {
+	if !supported {
 		return errWritableFileStreamsUnsupported
 	}
 	return nil
@@ -1285,6 +1297,164 @@ func (c *Client) FSClose(ctx context.Context, params *FSCloseParams) (*FSCloseRe
 		return nil, err
 	}
 	return &response, nil
+}
+
+// FileWriteChunkSource yields the next block of a streaming replacement. It
+// reports ok=false at the end of the stream; every yielded block must be
+// nonempty and at most FileWriteChunkSize bytes, exactly like Rust's bounded
+// `BoxStream` of `Bytes` (Rust `ExecutorFileSystem::write_file_stream`,
+// codex-rs/file-system/src/lib.rs:664, upstream #54505 `a45b8ccb01`).
+type FileWriteChunkSource func(ctx context.Context) (block []byte, ok bool, err error)
+
+// errFileStreamOffsetOverflow mirrors the `InvalidData` guard Rust applies
+// before every block write (codex-rs/exec-server/src/remote_file_system.rs:473,
+// local_file_system.rs:348, upstream #54505 `a45b8ccb01`).
+var errFileStreamOffsetOverflow = errors.New("file stream offset overflow")
+
+// ValidateFileWriteBlock reports whether block satisfies the bounded block
+// contract a replacement open accepts (`fs/writeBlock`).
+func ValidateFileWriteBlock(block []byte) error {
+	if len(block) < 1 || len(block) > FileWriteChunkSize {
+		return fmt.Errorf("invalid file stream block length %d, want 1..%d", len(block), FileWriteChunkSize)
+	}
+	return nil
+}
+
+// WriteFileStream replaces path from a stream of bounded blocks and returns the
+// number of bytes written once the target is closed. Rust's
+// `RemoteFileSystem::write_file_stream` (codex-rs/exec-server/src/
+// remote_file_system.rs:333, upstream #54505 `a45b8ccb01`):
+//
+//   - an executor without `file_write_streaming` buffers the whole input and
+//     sends one `fs/writeFile`, so an open or block failure can never replay a
+//     replacement that already modified the file;
+//   - the capability is chosen before anything is opened;
+//   - `fs/open` + `fs/writeBlock` + `fs/close` drive a streaming executor, and a
+//     failed or cancelled transfer still attempts the close;
+//   - in-flight metadata requests are dropped for this path, so a later lookup
+//     cannot join a request that predates the replacement.
+//
+// A failure or a cancellation may leave a truncated or partial target.
+func (c *Client) WriteFileStream(ctx context.Context, path string, sandbox *FileSystemSandboxContext, contents FileWriteChunkSource) (int64, error) {
+	if c == nil {
+		return 0, errors.New("exec server client is nil")
+	}
+	if contents == nil {
+		return 0, errors.New("file write stream source is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	normalized, err := normalizeFSPathForWire(path)
+	if err != nil {
+		return 0, fmt.Errorf("fs/writeFileStream path: %w", err)
+	}
+	// Rust's MetadataInvalidation guard clears the in-flight metadata map when
+	// the replacement starts and again when it ends, in both the streaming and
+	// the legacy path.
+	c.clearInFlightMetadataRequests()
+	defer c.clearInFlightMetadataRequests()
+
+	streaming, err := c.SupportsFileWriteStreaming(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !streaming {
+		return c.bufferAndWriteFile(ctx, normalized, sandbox, contents)
+	}
+
+	opened, err := c.FSOpen(ctx, &FSOpenParams{
+		HandleID: strings.ReplaceAll(uuid.NewString(), "-", ""),
+		Path:     normalized,
+		Mode:     FSOpenModeReplace,
+		Sandbox:  sandbox,
+	})
+	if err != nil {
+		return 0, err
+	}
+	handleID := opened.HandleID
+	var written int64
+	for {
+		if err := ctx.Err(); err != nil {
+			c.closeFileHandleAfterFailure(ctx, handleID)
+			return 0, err
+		}
+		block, ok, err := contents(ctx)
+		if err != nil {
+			c.closeFileHandleAfterFailure(ctx, handleID)
+			return 0, err
+		}
+		if !ok {
+			break
+		}
+		if err := ValidateFileWriteBlock(block); err != nil {
+			c.closeFileHandleAfterFailure(ctx, handleID)
+			return 0, err
+		}
+		next := written + int64(len(block))
+		if next < written {
+			c.closeFileHandleAfterFailure(ctx, handleID)
+			return 0, errFileStreamOffsetOverflow
+		}
+		if _, err := c.FSWriteBlock(ctx, &FSWriteBlockParams{
+			HandleID: handleID,
+			Offset:   uint64(written),
+			Chunk:    base64.StdEncoding.EncodeToString(block),
+		}); err != nil {
+			c.closeFileHandleAfterFailure(ctx, handleID)
+			return 0, err
+		}
+		written = next
+	}
+	if _, err := c.FSClose(ctx, &FSCloseParams{HandleID: handleID}); err != nil {
+		// A failed close leaves the handle to the connection teardown, exactly
+		// like Rust's abandoned FileWriteRegistration.
+		return 0, err
+	}
+	return written, nil
+}
+
+// bufferAndWriteFile sends one legacy whole-file write for an executor without
+// writable file streams. Every block is validated first, so an invalid stream
+// never reaches the executor.
+func (c *Client) bufferAndWriteFile(ctx context.Context, path string, sandbox *FileSystemSandboxContext, contents FileWriteChunkSource) (int64, error) {
+	var data []byte
+	for {
+		block, ok, err := contents(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			break
+		}
+		if err := ValidateFileWriteBlock(block); err != nil {
+			return 0, err
+		}
+		if int64(len(data))+int64(len(block)) < int64(len(data)) {
+			return 0, errFileStreamOffsetOverflow
+		}
+		data = append(data, block...)
+	}
+	if _, err := c.FSWriteFile(ctx, &FSWriteFileParams{
+		Path:       path,
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+		Sandbox:    sandbox,
+	}); err != nil {
+		return 0, err
+	}
+	return int64(len(data)), nil
+}
+
+// closeFileHandleAfterFailure gives a failed transfer one best-effort close on a
+// context that outlives the caller's, mirroring Rust's FileWriteRegistration
+// drop, which spawns the close after the transfer is gone.
+func (c *Client) closeFileHandleAfterFailure(ctx context.Context, handleID string) {
+	if handleID == "" {
+		return
+	}
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	_, _ = c.FSClose(closeCtx, &FSCloseParams{HandleID: handleID})
 }
 
 func (c *Client) FSWriteFile(ctx context.Context, params *FSWriteFileParams) (*FSWriteFileResponse, error) {

@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,6 +47,15 @@ type EnvironmentFileSystem interface {
 	// WriteFile replaces the file's contents (Rust `ExecutorFileSystem::write_file`,
 	// codex-rs/file-system/src/lib.rs:629).
 	WriteFile(ctx context.Context, path string, data []byte, sandbox *execserver.FileSystemSandboxContext) error
+	// WriteFileStream replaces the file from a stream of bounded blocks and
+	// returns the bytes written once the target is closed (Rust
+	// `ExecutorFileSystem::write_file_stream`, codex-rs/file-system/src/lib.rs:664,
+	// upstream #54505 `a45b8ccb01`). Input blocks must be nonempty and at most
+	// `execserver.FileWriteChunkSize`; a failure or cancellation may leave a
+	// truncated or partial target. Rust's default trait method returns
+	// `Unsupported` without consuming the input, so an implementation that cannot
+	// stream must say so the same way.
+	WriteFileStream(ctx context.Context, path string, contents execserver.FileWriteChunkSource, sandbox *execserver.FileSystemSandboxContext) (int64, error)
 	// CreateDirectory creates the directory, recursively when recursive is set
 	// (Rust `ExecutorFileSystem::create_directory`).
 	CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error
@@ -154,6 +164,63 @@ func (f localEnvironmentFileSystem) WriteFile(_ context.Context, path string, da
 	return os.WriteFile(resolved, data, 0o600)
 }
 
+// WriteFileStream replaces the local file one block at a time. Go's
+// `os.File.Write` reaches the operating system before it returns and the file is
+// unbuffered, so - exactly like Rust's `write_all` + `flush` per block
+// (codex-rs/exec-server/src/local_file_system.rs:261) - a block is finished
+// before the source is asked for the next one.
+func (f localEnvironmentFileSystem) WriteFileStream(ctx context.Context, path string, contents execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
+	if contents == nil {
+		return 0, errors.New("file write stream source is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resolved := f.resolve(path)
+	if dir := filepath.Dir(resolved); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return 0, err
+		}
+	}
+	file, err := os.OpenFile(resolved, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return 0, err
+	}
+	var written int64
+	for {
+		if err := ctx.Err(); err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		block, ok, err := contents(ctx)
+		if err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		if !ok {
+			break
+		}
+		if err := execserver.ValidateFileWriteBlock(block); err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		next := written + int64(len(block))
+		if next < written {
+			_ = file.Close()
+			return 0, errors.New("file stream offset overflow")
+		}
+		if _, err := file.Write(block); err != nil {
+			_ = file.Close()
+			return 0, err
+		}
+		written = next
+	}
+	if err := file.Close(); err != nil {
+		return 0, err
+	}
+	return written, nil
+}
+
 func (f localEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {
 	return os.MkdirAll(f.resolve(path), 0o755)
 }
@@ -218,6 +285,21 @@ func (f remoteEnvironmentFileSystem) WriteFile(ctx context.Context, path string,
 		Sandbox:    sandbox,
 	})
 	return err
+}
+
+// WriteFileStream replaces the remote file through the executor's writable file
+// stream (`fs/open` + `fs/writeBlock` + `fs/close`) when it advertises
+// `file_write_streaming`, and otherwise buffers the whole input and sends one
+// `fs/writeFile` (Rust `RemoteFileSystem::write_file_stream`). The connection is
+// closed after the call, which also releases a handle a failed transfer could
+// not close.
+func (f remoteEnvironmentFileSystem) WriteFileStream(ctx context.Context, path string, contents execserver.FileWriteChunkSource, sandbox *execserver.FileSystemSandboxContext) (int64, error) {
+	client, err := f.client(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+	return client.WriteFileStream(ctx, f.resolve(path), sandbox, contents)
 }
 
 func (f remoteEnvironmentFileSystem) CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error {

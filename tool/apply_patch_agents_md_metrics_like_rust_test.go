@@ -289,6 +289,14 @@ func (f *agentsMdEnvironmentFileSystem) WriteFile(_ context.Context, name string
 	return nil
 }
 
+// WriteFileStream mirrors Rust's default `ExecutorFileSystem::write_file_stream`,
+// which reports `Unsupported` without consuming the input: this in-memory
+// filesystem only replaced files as whole buffers
+// (codex-rs/file-system/src/lib.rs:664, upstream #54505 `a45b8ccb01`).
+func (f *agentsMdEnvironmentFileSystem) WriteFileStream(_ context.Context, _ string, _ execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
+	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
+}
+
 func (f *agentsMdEnvironmentFileSystem) CreateDirectory(_ context.Context, name string, _ bool, _ *execserver.FileSystemSandboxContext) error {
 	f.dirs[normalizeAgentsMdEnvironmentPath(name)] = true
 	return nil
