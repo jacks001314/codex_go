@@ -33,7 +33,6 @@ pr	sha	subject	lane_face	files	note
 54032	8cbce63387	Bound concurrent Git diffs for untracked files (#54032)	other:git-utils	2	
 54027	81aee8c86b	Preserve Windows startup variables and MXC child environment defaults (#540	other:mxc-sandbox	6	
 54008	76ed3b484d	Fix session lookup and resume after rollout compression (#54008)	pin-protocol	3	
-54003	0c02887a0c	Include compressed rollouts in doctor storage statistics (#54003)	docs/cli	1	
 53997	c6327eba6a	Filter rollout filenames before checking compressed siblings (#53997)	other:rollout	3	
 53990	0b73618146	Keep host MCP and plugin configuration local with remote environments (#539	A-core	9	
 53987	835cd7552d	Skip service backoff for stale Guardian authorization retries (#53987)	guardian	2	
@@ -58,13 +57,11 @@ pr	sha	subject	lane_face	files	note
 53790	815ef9bbc4	Fix cancellation of macOS user-verification prompts (#53790)	other:user-verification	10	
 53784	6786dccbe7	Forward client voice session IDs in realtime requests (#53784)	tests-only	19	
 53781	b56a579fc6	Remove the product-gating TODO from `SkillPolicy` (#53781)	other:skills	1	
-53780	8b507a8e45	Remove redundant Codex manual cache directory check (#53780)	other:skills	1	
 53763	20b4ff2f35	Enrich V2 capability discovery with resolved plugin and skill metadata (#53	exec	20	TR-5 blocked_precondition on #53723 (judged implementable in TR-3): discoverV2/DiscoverV2/capabilityDiscoveryV2 = 0 hits; it shares exec-server-protocol/src/capabilities.rs with #53723 so it must be rebased after it.
 53754	21c1616119	Support Command/Super shortcuts in the TUI keymap (#53754)	TUI	17	
 53753	3517671c60	Extend copy-on-select to composer text (#53753)	TUI	23	
 53751	e762c05bd6	Apply feature overrides when restarting the app-server daemon (#53751)	other:app-server-daemon	8	
 53747	5d4922595a	Prefer remote Visualize installs over the bundled plugin (#53747)	other:core-plugins	2	
-53745	c12cdc924b	Remove `modelSlug` from the latest-model resolver output (#53745)	other:skills	1	
 53736	cf0ed4c600	Acquire and cache opt-in executor capability inventories via V2 (#53736)	other:ext	39	blocked_precondition (TR-1/TR-3): needs #53723 (703d253ed6) first; Go only has the V1 stack (execserver/capability_discovery*.go, server.go:62,64,443, client.go:1062)
 53733	4d82d36ccf	Default Guardian v2 async classification to conversation mode (#53733)	guardian	8	
 53732	efa159f7aa	Reuse compiled search patterns across compressed rollouts (#53732)	other:rollout	2	
@@ -72,7 +69,7 @@ pr	sha	subject	lane_face	files	note
 53717	6cc7d9cc5c	Enable Cyber access programs for API-key sessions by default (#53717)	TUI	11	
 53706	cb7091b180	Preserve URLs and email addresses during external agent migration (#53706)	other:external-agent-migration	8	
 53701	6fbfc352ca	Enable CLI Daybreak by default and enforce background-turn eligibility (#53	TUI	6	
-53699	f6aca7dc46	Cancel Guardian V2 classifications that exceed the tool-call lag window (#5	guardian	10	
+53699	f6aca7dc46	Cancel Guardian V2 classifications that exceed the tool-call lag window (#5	guardian	10	TR-6 batch-N/A candidate (guardian-v2-only): every changed file is under ext/guardian-v2/** and Go has AsyncScorer/asyncScorer/ConversationBackend = 0 hits. Leader has NOT ruled yet - still undecided.
 53698	ffc1402633	Interrupt and drain canceled classifier responses before socket reuse (#536	guardian	12	
 53693	31434401fa	Add keyboard selection support to the transcript view (#53693)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 53691	979771476a	Account for replay caches in encrypted compaction budgets (#53691)	guardian	10	TR-4 implementable: guardian-context/src/budget.rs estimate_input_tokens_from_serialized_len (12 bytes/token for ciphertext, ceil) plus estimate_compaction_content_length are absent (0 hits); Go approximates at appserver/guardian_reviewer.go:1370-1390 (its own comment admits it uses the summary bytes). 0 file overlap with the compaction chain, so it can run in parallel with #52937/#53932.
@@ -83,7 +80,7 @@ pr	sha	subject	lane_face	files	note
 53660	73bbb654b3	Extract shared multi-agent v2 thread spawning (#53660)	A-core	3	
 53657	ab82af0b2c	Share hook configuration across cloned hook views (#53657)	other:hooks	4	
 53654	4e7ef7d19d	Keep spawned children provisional until the spawn result returns (#53654)	A-core	5	
-53633	90f00bd89e	Add an environment API key fallback for Guardian Decisions (#53633)	guardian	3	
+53633	90f00bd89e	Add an environment API key fallback for Guardian Decisions (#53633)	guardian	3	TR-6 batch-N/A candidate (guardian-v2-only): same判据 as 53699 (ext/guardian-v2/** only, no Go async scorer). Leader has NOT ruled yet.
 53622	b043762f9e	Preserve remote exec output until it is collected (#53622)	A-core	4	
 53620	9167a0b2d4	Reuse background results for remote V2 compaction (#53620)	A-core	7	TR-5 blocked_precondition on #53614 -> #53606: CompactionInstallation = 0 hits. Shares 5 Rust files with #53800 (tightest pair in the family).
 53617	308ddf5e7c	Allow hiding native tools while retaining the multi-agent V2 runtime (#5361	A-core	8	
@@ -102,7 +99,7 @@ pr	sha	subject	lane_face	files	note
 53419	bf4ca52b61	Restore saved thread permissions during configuration loading (#53419)	A-core	10	
 53412	16845bb8e8	Isolate arg0 helper directories by operating system (#53412)	config	3	
 53400	97239fd052	Add explicit local board connections with fixed runtime access (#53400)	other:ext	13	
-53389	27e6192e84	Use cached login credentials for Guardian decisions (#53389)	guardian	4	
+53389	27e6192e84	Use cached login credentials for Guardian decisions (#53389)	guardian	4	TR-6 batch-N/A candidate (guardian-v2-only): same criterion as 53699. Leader has NOT ruled yet.
 53369	6c372fbef4	Allow turns when the agent message board is unavailable (#53369)	A-core	2	
 53358	ddb33e34b2	Remove selected protocol, apply-patch, MCP, and TUI tests (#53358)	pin-protocol	6	
 53331	7e9c061ceb	Finish remote exec cleanup when output streams remain open (#53331)	A-core	3	
@@ -163,7 +160,6 @@ pr	sha	subject	lane_face	files	note
 52330	22ebb0fb17	Clamp wrapped source ranges before remapping terminal hyperlinks (#52330)	TUI	2	
 52325	780d7ab097	Track history initialization in Responses turn metadata (#52325)	A-core	13	
 52304	99aa05341d	Persist remote-control RPC preferences in managed daemon settings (#52304)	pin-protocol	5	
-52302	bd274564e1	Add opt-in credential masking for proxied sandboxed sessions (#52302)	config	13	
 52295	0b755b1945	Emit one developer notice per incremental namespace update batch (#52295)	tests-only	14	
 52278	2c3156adf4	Honor custom OTLP metrics exporters when analytics is disabled (#52278)	config	9	
 52277	14ff9c3a43	Preserve UTF-8 byte semantics in network domain matching (#52277)	other:network-proxy	3	
@@ -180,7 +176,6 @@ pr	sha	subject	lane_face	files	note
 52226	96d238d0b9	Include foreground activity in iTerm2 session status (#52226)	TUI	7	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52225	bfe0fb9bb9	Fix config rebuild call in the Windows MXC preference test (#52225)	config	1	
 52223	d570b3632b	Enforce application network policy for daemon updates (#52223)	docs/cli	1	
-52220	89d68bc8d2	Add configurable default plugin activation policy (#52220)	other:core-plugins	49	
 52215	79773e8826	Enforce application network policy in standalone MCP commands (#52215)	docs/cli	3	
 52203	ade12342e2	Expose Codex lifecycle status in iTerm2 sessions (#52203)	TUI	11	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
 52200	c079352d83	Allow plugin toggles while searching and preserve filters on refresh (#5220	TUI	12	TUI lane never-dispatched per the lane T5.17 audit - upstream footprint is codex-rs/tui/** only, so no appserver/config/protocol prerequisite; independent of the #52273 chain, safe to batch by size
@@ -220,7 +215,7 @@ pr	sha	subject	lane_face	files	note
 51808	b38942ce7c	Preserve diagnostic reasons for MCP user verification failures (#51808)	TUI	20	
 51794	87be737b66	Advertise Ultrafast for GPT-6.1 Sol on Amazon Bedrock (#51794)	TUI	7	
 51775	9dd798805f	Prevent recursive Tokio tracing in telemetry and SQLite logs (#51775)	A-core	8	
-51768	bd5564fec4	Expand OpenAI Docs migration guidance to the GPT-6 model family (#51768)	other:skills	5	
+51768	bd5564fec4	Expand OpenAI Docs migration guidance to the GPT-6 model family (#51768)	other:skills	5	TR-6 batch-N/A candidate (docs-only): upstream touches docs/** guidance files only. Leader has NOT ruled yet - note that a docs/asset path claim must be re-checked by PATH (see 53745/53780), not by symbol grep.
 51761	3e544e8437	Reduce tool metadata cloning in the code-mode runtime (#51761)	other:code-mode-runtime	3	
 51755	4d53e6ba0e	Reuse MCP handler metadata for cache comparisons (#51755)	A-core	3	
 51704	0a2a64e942	Honor tool-description-first ordering in Code Mode (#51704)	A-core	8	

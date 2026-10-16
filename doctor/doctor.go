@@ -4547,6 +4547,11 @@ func collectRolloutStatsInnerForDoctor(path string, stats *rolloutStatsForDoctor
 }
 
 func isRolloutFileForDoctor(path string) bool {
+	// Rust #54003 (0c02887a0c, cli/src/doctor.rs): normalise a compressed rollout to its
+	// plain name first, so doctor storage statistics count `.jsonl.zst` rollouts as well.
+	// Both physical files are counted when a plain and a compressed representation coexist,
+	// while unrelated files and compression temporaries (`.jsonl.zst.tmp`) stay ignored.
+	path = rollout.PlainRolloutPath(path)
 	return filepath.Ext(path) == ".jsonl" && strings.HasPrefix(filepath.Base(path), "rollout-")
 }
 
