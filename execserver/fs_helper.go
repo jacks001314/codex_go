@@ -284,6 +284,9 @@ func prepareFSSandbox(ctx *FileSystemSandboxContext) (bool, *sandbox.PermissionP
 	if !hasJSONValue(ctx.Permissions) {
 		return true, nil, "", "", nil, requestError(-32602, "file system sandbox context permissions are required")
 	}
+	if err := ctx.SandboxOverride.Validate(); err != nil {
+		return true, nil, "", "", nil, requestError(-32602, "file system sandbox context: "+err.Error())
+	}
 	profileJSON, err := nativePermissionProfileJSON(ctx.Permissions)
 	if err != nil {
 		return true, nil, "", "", nil, requestError(-32602, fmt.Sprintf("invalid sandbox permission path URI: %v", err))

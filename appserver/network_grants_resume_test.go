@@ -13,6 +13,7 @@ import (
 
 	"codex_go/config"
 	"codex_go/execpolicy"
+	"codex_go/network"
 	"codex_go/sandbox"
 	"codex_go/turn"
 )
@@ -314,4 +315,19 @@ func coldResumeContains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestRuntimeRouterColdResumeEmptyHomeGrantsNothingLikeRust is the negative
+// control from lane B's G-3 case (update/r90b_b4_2026_10_16.md): a cold resume
+// against a home without persisted network rules must grant nothing. The rest of
+// B's duplicate file (same name as the case above) was dropped in favour of the
+// richer G-3 regression already on main.
+func TestRuntimeRouterColdResumeEmptyHomeGrantsNothingLikeRust(t *testing.T) {
+	empty := &network.ProxyConfig{Network: network.DefaultProxySettings()}
+	if err := applyExecPolicyNetworkRules(empty, filepath.Join(t.TempDir(), "codex-home")); err != nil {
+		t.Fatalf("applyExecPolicyNetworkRules(empty home) error = %v", err)
+	}
+	if len(empty.Network.AllowedDomains()) != 0 || len(empty.Network.DeniedDomains()) != 0 {
+		t.Fatalf("empty home granted allow=%#v deny=%#v", empty.Network.AllowedDomains(), empty.Network.DeniedDomains())
+	}
 }

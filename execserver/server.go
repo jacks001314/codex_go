@@ -493,7 +493,12 @@ type ManagedNetworkSandboxContext struct {
 }
 
 type FileSystemSandboxContext struct {
-	Permissions                     json.RawMessage                 `json:"permissions"`
+	Permissions json.RawMessage `json:"permissions"`
+	// SandboxOverride carries the controller's selection for observation only
+	// (Rust #51786 `sandboxOverride`). It never widens permissions and never
+	// changes the sandbox command, is omitted from the wire form when there is
+	// no override, and defaults to no override when the field is missing.
+	SandboxOverride                 SandboxOverride                 `json:"sandboxOverride,omitempty"`
 	CWD                             string                          `json:"cwd,omitempty"`
 	WorkspaceRoots                  []string                        `json:"workspaceRoots,omitempty"`
 	UserHomeDir                     string                          `json:"userHomeDir,omitempty"`
@@ -2130,6 +2135,9 @@ func prepareExecProcess(params *ExecParams) ([]string, string, sandbox.SandboxTy
 	var sandboxContext FileSystemSandboxContext
 	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
+	}
+	if err := sandboxContext.SandboxOverride.Validate(); err != nil {
+		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "invalid sandbox context: "+err.Error())
 	}
 	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
 	// unrecognized level is an invalid-params error rather than a fallback.

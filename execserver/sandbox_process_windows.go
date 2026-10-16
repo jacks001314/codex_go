@@ -24,6 +24,9 @@ func startExecServerSandboxProcess(params *ExecParams) (*startedExecServerSandbo
 	if err := json.Unmarshal(params.Sandbox, &sandboxContext); err != nil {
 		return nil, true, requestError(-32602, fmt.Sprintf("invalid sandbox context: %v", err))
 	}
+	if err := sandboxContext.SandboxOverride.Validate(); err != nil {
+		return nil, true, requestError(-32602, "invalid sandbox context: "+err.Error())
+	}
 	// Rust deserializes windows_sandbox_level as a kebab-case enum, so an
 	// unrecognized level is an invalid-params error rather than a silent
 	// fallback; "mxc" then has its own launch restrictions (Rust #45176).

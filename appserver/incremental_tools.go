@@ -8,7 +8,6 @@ import (
 
 	"codex_go/config"
 	"codex_go/features"
-	"codex_go/metrics"
 	"codex_go/model"
 	"codex_go/session"
 	"codex_go/turn"
@@ -117,8 +116,11 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 	if err != nil {
 		return incrementalToolCatalogResult{}, err
 	}
-	// Rust #54133 records the per-tool deltas of the same rendered diff.
-	recordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
+	// Rust #54133 records the per-tool deltas of the same rendered diff. The
+	// recorder now lives with the render step in `session`
+	// (`record_changed_tool_metrics` sits in the same file as `render_diff`),
+	// so this is its single call site.
+	session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
 	baseHash, baseUpdates := session.BaseInstructionsUpdate(instructions, baseKnown)
 	items := session.MergeWorldStateUpdates(append(toolUpdates, baseUpdates...))
 	for i := range items {
@@ -282,140 +284,4 @@ func sameToolDeclarationHashes(left map[string]string, right map[string]string) 
 		}
 	}
 	return true
-}
-
-// Per-tool incremental catalog metrics (Rust #54133 `Record per-tool
-// incremental update and description size metrics`,
-// codex-rs/core/src/context/world_state/top_level_tools.rs
-// `record_changed_tool_metrics`, plus the removal `inspect` inside
-// `TopLevelToolsState::render_diff`). Both the counters and the description-size
-// histogram carry the qualified tool name, so a namespace member is identified
-// as `namespace.member` exactly like the catalog hashes.
-const (
-	toolMetricActionTag = "action"
-	toolMetricToolTag   = "tool"
-
-	toolActionAdded         = "added"
-	toolActionRemoved       = "removed"
-	toolActionSchemaChanged = "schema_changed"
-)
-
-// recordChangedToolMetrics records the per-tool metrics of one rendered catalog
-// diff.
-//
-// Every added or replaced declaration counts once under its qualified name; a
-// replacement also observes its UTF-8 description bytes, and a declaration
-// without a description contributes no histogram sample. Every removed
-// declaration counts under its qualified name as well, including the members of
-// a namespace whose removal notice collapses them, while the removed namespace
-// header itself is not counted. The initial catalog of a window and a window
-// replacement have no previous state to diff against, so they record nothing
-// (Rust records only for `PreviousSectionState::Known`).
-func recordChangedToolMetrics(definitions []any, previous map[string]string, previousKnown bool, hashes map[string]string) {
-	if !previousKnown {
-		return
-	}
-	changed := func(name string) bool {
-		prior, hadPrior := previous[name]
-		current, hasCurrent := hashes[name]
-		return hadPrior != hasCurrent || prior != current
-	}
-	for _, definition := range definitions {
-		name := toolMetricDefinitionName(definition)
-		if members, ok := toolMetricDefinitionMembers(definition); ok {
-			for _, member := range members {
-				memberName := name + "." + toolMetricDefinitionName(member)
-				if changed(memberName) {
-					recordChangedToolMetric(memberName, member, previous)
-				}
-			}
-			continue
-		}
-		if changed(name) {
-			recordChangedToolMetric(name, definition, previous)
-		}
-	}
-	for name := range previous {
-		if _, stillDeclared := hashes[name]; stillDeclared {
-			continue
-		}
-		if toolMetricNamespaceHeaderRemoved(name, previous) {
-			// A removed namespace header travels in the notice's namespace
-			// section; only its members are counted.
-			continue
-		}
-		metrics.Counter(metrics.ToolIncrementalUpdatesMetric, 1, map[string]string{
-			toolMetricActionTag: toolActionRemoved,
-			toolMetricToolTag:   name,
-		})
-	}
-}
-
-// recordChangedToolMetric records one added or replaced declaration.
-func recordChangedToolMetric(name string, definition any, previous map[string]string) {
-	action := toolActionAdded
-	if _, declared := previous[name]; declared {
-		action = toolActionSchemaChanged
-	}
-	metrics.Counter(metrics.ToolIncrementalUpdatesMetric, 1, map[string]string{
-		toolMetricActionTag: action,
-		toolMetricToolTag:   name,
-	})
-	if action != toolActionSchemaChanged {
-		return
-	}
-	object, ok := definition.(map[string]any)
-	if !ok {
-		return
-	}
-	description, ok := object["description"].(string)
-	if !ok {
-		return
-	}
-	metrics.HistogramWithBounds(metrics.ToolSpecDescriptionBytesMetric, len(description), metrics.ToolSpecDescriptionBytesBoundaries, map[string]string{
-		toolMetricToolTag: name,
-	})
-}
-
-// toolMetricNamespaceHeaderRemoved reports whether name is a namespace header
-// the current catalog dropped: a previous declaration that still owns qualified
-// members but is itself gone.
-func toolMetricNamespaceHeaderRemoved(name string, previous map[string]string) bool {
-	if _, declared := previous[name]; !declared {
-		return false
-	}
-	prefix := name + "."
-	for key := range previous {
-		if strings.HasPrefix(key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// toolMetricDefinitionName mirrors the catalog's declaration naming: namespaces
-// and their members use `name`, built-ins fall back to their `type` (Rust
-// `definition_name`).
-func toolMetricDefinitionName(definition any) string {
-	object, ok := definition.(map[string]any)
-	if !ok {
-		return ""
-	}
-	if name, ok := object["name"].(string); ok && strings.TrimSpace(name) != "" {
-		return name
-	}
-	if kind, ok := object["type"].(string); ok {
-		return kind
-	}
-	return ""
-}
-
-// toolMetricDefinitionMembers returns the namespace members of a declaration.
-func toolMetricDefinitionMembers(definition any) ([]any, bool) {
-	object, ok := definition.(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	members, ok := object["tools"].([]any)
-	return members, ok
 }

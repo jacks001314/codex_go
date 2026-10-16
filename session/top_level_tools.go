@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"codex_go/metrics"
 )
 
 // This file ports the Responses Lite incremental tool catalog world-state
@@ -292,6 +294,123 @@ func TopLevelToolsUpdates(definitions []any, previous map[string]string, previou
 		}
 	}
 	return hashes, updates, nil
+}
+
+// Per-tool incremental catalog metrics (Rust #54133 `Record per-tool incremental
+// update and description size metrics`,
+// codex-rs/core/src/context/world_state/top_level_tools.rs
+// `record_changed_tool_metrics`, plus the removal counter inside
+// `TopLevelToolsState::render_diff`). They sit next to the render step they
+// measure - the same structural position `record_changed_tool_metrics` occupies
+// relative to `render_diff` - so the emitted catalog and its metrics come from
+// one diff and cannot drift apart. The counters and the description-size
+// histogram carry the qualified tool name, so a namespace member is identified as
+// `namespace.member` exactly like the catalog hashes. The metric names, tags and
+// boundaries stay in `codex_go/metrics`, which remains the low-level recorder.
+const (
+	toolMetricActionTag = "action"
+	toolMetricToolTag   = "tool"
+
+	toolMetricActionAdded         = "added"
+	toolMetricActionRemoved       = "removed"
+	toolMetricActionSchemaChanged = "schema_changed"
+)
+
+// RecordChangedToolMetrics records the per-tool metrics of one rendered catalog
+// diff (Rust `record_changed_tool_metrics`).
+//
+// Every added or replaced declaration counts once under its qualified name; a
+// replacement also observes its UTF-8 description bytes, and a declaration
+// without a description contributes no histogram sample. Every removed
+// declaration counts under its qualified name as well, including the members of a
+// namespace whose removal notice collapses them, while the removed namespace
+// header itself is not counted. The initial catalog of a window and a window
+// replacement have no previous state to diff against, so they record nothing
+// (Rust records only for `PreviousSectionState::Known`).
+//
+// Callers pass the same (definitions, previous, hashes) triple they rendered with
+// TopLevelToolsUpdates, so the recorded table cannot drift from the emitted
+// updates. The recorder is nil-safe.
+func RecordChangedToolMetrics(definitions []any, previous map[string]string, previousKnown bool, hashes map[string]string) {
+	if !previousKnown {
+		return
+	}
+	changed := func(name string) bool {
+		prior, hadPrior := previous[name]
+		current, hasCurrent := hashes[name]
+		return hadPrior != hasCurrent || prior != current
+	}
+	for _, definition := range definitions {
+		name := topLevelDefinitionName(definition)
+		if members, ok := topLevelDefinitionMembers(definition); ok {
+			for _, member := range members {
+				memberName := name + "." + topLevelDefinitionName(member)
+				if changed(memberName) {
+					recordChangedToolMetric(memberName, member, previous)
+				}
+			}
+			continue
+		}
+		if changed(name) {
+			recordChangedToolMetric(name, definition, previous)
+		}
+	}
+	for name := range previous {
+		if _, stillDeclared := hashes[name]; stillDeclared {
+			continue
+		}
+		if toolMetricNamespaceHeaderRemoved(name, previous) {
+			// A removed namespace header travels in the notice's namespace
+			// section; only its members are counted.
+			continue
+		}
+		metrics.Counter(metrics.ToolIncrementalUpdatesMetric, 1, map[string]string{
+			toolMetricActionTag: toolMetricActionRemoved,
+			toolMetricToolTag:   name,
+		})
+	}
+}
+
+// recordChangedToolMetric records one added or replaced declaration.
+func recordChangedToolMetric(name string, definition any, previous map[string]string) {
+	action := toolMetricActionAdded
+	if _, declared := previous[name]; declared {
+		action = toolMetricActionSchemaChanged
+	}
+	metrics.Counter(metrics.ToolIncrementalUpdatesMetric, 1, map[string]string{
+		toolMetricActionTag: action,
+		toolMetricToolTag:   name,
+	})
+	if action != toolMetricActionSchemaChanged {
+		return
+	}
+	object, ok := definition.(map[string]any)
+	if !ok {
+		return
+	}
+	description, ok := object["description"].(string)
+	if !ok {
+		return
+	}
+	metrics.HistogramWithBounds(metrics.ToolSpecDescriptionBytesMetric, len(description), metrics.ToolSpecDescriptionBytesBoundaries, map[string]string{
+		toolMetricToolTag: name,
+	})
+}
+
+// toolMetricNamespaceHeaderRemoved reports whether name is a namespace header
+// the current catalog dropped: a previous declaration that still owns qualified
+// members but is itself gone.
+func toolMetricNamespaceHeaderRemoved(name string, previous map[string]string) bool {
+	if _, declared := previous[name]; !declared {
+		return false
+	}
+	prefix := name + "."
+	for key := range previous {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // BaseInstructionsUpdate returns the ordered updates for the fixed base

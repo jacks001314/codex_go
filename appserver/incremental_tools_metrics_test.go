@@ -27,9 +27,12 @@ type toolMetricHistogramSample struct {
 	tool       string
 }
 
-// toolMetricRecorder captures the per-tool metrics the appserver emits. It
-// implements the explicit-boundary histogram the way telemetry.MetricsClient
-// does.
+// toolMetricRecorder captures the per-tool metrics the turn path emits for the
+// incremental catalog. It implements the explicit-boundary histogram the way
+// telemetry.MetricsClient does and records only the two #54133 metric names, so
+// counters other sections send to the same global recorder (thread and goal
+// metrics) cannot be mistaken for catalog deltas; an emission under the wrong
+// name therefore fails these tests instead of hiding in the list.
 type toolMetricRecorder struct {
 	counters   []toolMetricCounterSample
 	histograms []toolMetricHistogramSample
@@ -38,7 +41,10 @@ type toolMetricRecorder struct {
 
 func (r *toolMetricRecorder) RecordDuration(string, time.Duration, map[string]string) {}
 
-func (r *toolMetricRecorder) Counter(_ string, inc int, tags map[string]string) {
+func (r *toolMetricRecorder) Counter(name string, inc int, tags map[string]string) {
+	if name != metrics.ToolIncrementalUpdatesMetric {
+		return
+	}
 	r.counters = append(r.counters, toolMetricCounterSample{action: tags["action"], tool: tags["tool"], inc: inc})
 }
 
@@ -46,7 +52,10 @@ func (r *toolMetricRecorder) Histogram(_ string, value int, _ map[string]string)
 	r.plain = append(r.plain, value)
 }
 
-func (r *toolMetricRecorder) HistogramWithBounds(_ string, value int, boundaries []float64, tags map[string]string) {
+func (r *toolMetricRecorder) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	if name != metrics.ToolSpecDescriptionBytesMetric {
+		return
+	}
 	r.histograms = append(r.histograms, toolMetricHistogramSample{value: value, boundaries: boundaries, tool: tags["tool"]})
 }
 
@@ -136,15 +145,15 @@ func TestRecordChangedToolMetricsTagsPerToolLikeRust(t *testing.T) {
 	// The transition list of the Rust test: initial/full snapshots contribute
 	// nothing because there is no previous state, an unchanged catalog records
 	// nothing, and a whole namespace removal counts each member.
-	recordChangedToolMetrics(original, nil, false, hOriginal) // (Absent, Known(original))
-	recordChangedToolMetrics(original, hOriginal, true, hOriginal)
-	recordChangedToolMetrics(updated, hOriginal, true, hUpdated)
-	recordChangedToolMetrics(onlyOther, hUpdated, true, hOnlyOther)
-	recordChangedToolMetrics(original, hOnlyOther, true, hOriginal)
-	recordChangedToolMetrics(onlyFunctions, hUpdated, true, hOnlyFunctions)
-	recordChangedToolMetrics(empty, hUpdated, true, hEmpty)
-	recordChangedToolMetrics(empty, hEmpty, true, hEmpty)
-	recordChangedToolMetrics(restored, hEmpty, true, hRestored)
+	session.RecordChangedToolMetrics(original, nil, false, hOriginal) // (Absent, Known(original))
+	session.RecordChangedToolMetrics(original, hOriginal, true, hOriginal)
+	session.RecordChangedToolMetrics(updated, hOriginal, true, hUpdated)
+	session.RecordChangedToolMetrics(onlyOther, hUpdated, true, hOnlyOther)
+	session.RecordChangedToolMetrics(original, hOnlyOther, true, hOriginal)
+	session.RecordChangedToolMetrics(onlyFunctions, hUpdated, true, hOnlyFunctions)
+	session.RecordChangedToolMetrics(empty, hUpdated, true, hEmpty)
+	session.RecordChangedToolMetrics(empty, hEmpty, true, hEmpty)
+	session.RecordChangedToolMetrics(restored, hEmpty, true, hRestored)
 
 	counts := map[string]int{}
 	for _, sample := range recorder.counters {
@@ -195,7 +204,7 @@ func TestRecordChangedToolMetricsSkipsInitialCatalogLikeRust(t *testing.T) {
 	definitions := []any{
 		toolMetricNamespace("functions", []any{toolMetricDeclaration("exec")}),
 	}
-	recordChangedToolMetrics(definitions, nil, false, toolMetricHashes(t, definitions))
+	session.RecordChangedToolMetrics(definitions, nil, false, toolMetricHashes(t, definitions))
 	if len(recorder.counters) != 0 || len(recorder.histograms) != 0 {
 		t.Fatalf("initial catalog recorded counters=%v histograms=%v, want none", recorder.counters, recorder.histograms)
 	}
@@ -208,8 +217,17 @@ func TestRecordChangedToolMetricsSkipsInitialCatalogLikeRust(t *testing.T) {
 func TestRecordChangedToolMetricsSkipsNonReplacementHistogramsLikeRust(t *testing.T) {
 	recorder := installToolMetricRecorder(t)
 
-	recordChangedToolMetric("functions.new", map[string]any{"type": "function", "name": "new", "description": "Fresh tool."}, map[string]string{})
-	recordChangedToolMetric("functions.nodesc", map[string]any{"type": "function", "name": "nodesc"}, map[string]string{"functions.nodesc": "prior"})
+	// One namespace holding an added declaration with a description and a
+	// replaced declaration without one; the diff is taken through the shipped
+	// entry point so the guard itself is covered.
+	definitions := []any{
+		toolMetricNamespace("functions", []any{
+			toolMetricDeclaration("new"),
+			map[string]any{"type": "function", "name": "nodesc"},
+		}),
+	}
+	previous := map[string]string{"functions.nodesc": "prior"}
+	session.RecordChangedToolMetrics(definitions, previous, true, toolMetricHashes(t, definitions))
 
 	want := []toolMetricCounterSample{
 		{action: "added", tool: "functions.new", inc: 1},
@@ -251,11 +269,16 @@ func TestToolSpecDescriptionBytesBucketProbeLikeRust(t *testing.T) {
 	}
 	previous := map[string]string{"functions.probe": "prior"}
 	for _, probe := range probes {
-		recordChangedToolMetric("functions.probe", map[string]any{
-			"type":        "function",
-			"name":        "probe",
-			"description": probe.description,
-		}, previous)
+		// Each probe replaces the recorded declaration, so the shipped entry
+		// point observes one description-size sample per probe.
+		definitions := []any{
+			toolMetricNamespace("functions", []any{map[string]any{
+				"type":        "function",
+				"name":        "probe",
+				"description": probe.description,
+			}}),
+		}
+		session.RecordChangedToolMetrics(definitions, previous, true, toolMetricHashes(t, definitions))
 	}
 
 	if len(recorder.histograms) != len(probes) {
@@ -287,5 +310,44 @@ func TestToolSpecDescriptionBytesBucketProbeLikeRust(t *testing.T) {
 		if got := toolMetricBucketIndex(sample.boundaries, sample.value); got != probe.bucket {
 			t.Fatalf("%d description bytes landed in bucket %d, want %d", probe.bytes, got, probe.bucket)
 		}
+	}
+}
+
+// TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust pins the #54133
+// metrics to the turn path itself. The emission now lives with the render step
+// (`session.TopLevelToolsUpdates`, the Go `render_diff`), so the turn wiring has
+// exactly one call site; removing it silences every counter below while the
+// catalog updates themselves stay unchanged.
+func TestIncrementalToolCatalogRecordsChangedToolMetricsLikeRust(t *testing.T) {
+	recorder := installToolMetricRecorder(t)
+	router, _ := newResponsesLiteDeclarationRouter(t, "thread-incremental")
+	created := time.Now().UTC()
+	instructions := "Use the available tools to help the user."
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+
+	if _, err := router.incrementalToolCatalogForTurn("thread-incremental", nil, definitions, instructions, "turn-1", created); err != nil {
+		t.Fatal(err)
+	}
+	// A window start has no previous catalog to diff against, so Rust records
+	// nothing for it.
+	if len(recorder.counters) != 0 || len(recorder.histograms) != 0 {
+		t.Fatalf("window start counters = %v histograms = %v, want none", recorder.counters, recorder.histograms)
+	}
+
+	history := incrementalHistoryItems(t, router, "thread-incremental")
+	updated := incrementalCatalogLikeRust("Updated execution instructions.", incrementalToolSearchLikeRust())
+	if _, err := router.incrementalToolCatalogForTurn("thread-incremental", history, updated, instructions, "turn-2", created); err != nil {
+		t.Fatal(err)
+	}
+	want := []toolMetricCounterSample{{action: "schema_changed", tool: "functions.exec", inc: 1}}
+	if !reflect.DeepEqual(recorder.counters, want) {
+		t.Fatalf("counters = %v, want %v", recorder.counters, want)
+	}
+	if len(recorder.histograms) != 1 {
+		t.Fatalf("histograms = %v, want one replacement sample", recorder.histograms)
+	}
+	sample := recorder.histograms[0]
+	if sample.tool != "functions.exec" || sample.value != len("Updated execution instructions.") {
+		t.Fatalf("histogram sample = %#v, want the functions.exec replacement", sample)
 	}
 }
