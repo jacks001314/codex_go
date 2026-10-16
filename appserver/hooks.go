@@ -207,6 +207,12 @@ type HookMetadata struct {
 	TrustStatus HookTrustStatus   `json:"trustStatus"`
 	BypassTrust bool              `json:"-"`
 	Env         map[string]string `json:"-"`
+	// pluginTrust binds this handler's approval to its plugin bundle contents
+	// (Rust ConfiguredHandler::plugin_trust, codex-rs #54619). Discovery stores
+	// declarations without scanning bundles, so the runner re-verifies fresh
+	// contents before executing the handler. Internal execution guard: it is
+	// never serialized to the hooks/list wire.
+	pluginTrust *pluginHookTrust
 	// compiledMatcher is the handler's regex matcher compiled once during
 	// discovery and reused on every dispatch (Rust #49379). Nil for match-all
 	// and exact-name matchers, and for handlers built outside discovery.
@@ -477,6 +483,7 @@ func cloneMetadata(metadata HookMetadata) HookMetadata {
 	metadata.Command = cloneString(metadata.Command)
 	metadata.StatusMessage = cloneString(metadata.StatusMessage)
 	metadata.PluginID = cloneString(metadata.PluginID)
+	metadata.pluginTrust = metadata.pluginTrust.clone()
 	if metadata.Env != nil {
 		env := make(map[string]string, len(metadata.Env))
 		for key, value := range metadata.Env {

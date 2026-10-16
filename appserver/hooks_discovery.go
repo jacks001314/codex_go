@@ -43,6 +43,21 @@ func NewHookDiscoveryService(codexHome string) *HookDiscoveryService {
 type HookState struct {
 	Enabled     *bool
 	TrustedHash *string
+	// TrustedContentHash mirrors Rust HookStateToml::trusted_content_hash
+	// (config/src/hook_config.rs, codex-rs #54619): the approved plugin bundle
+	// contents. It is kept separate from TrustedHash so a declaration-only
+	// approval stays recognizable, and it is what binds an approval to the
+	// plugin bytes.
+	TrustedContentHash *string
+}
+
+// pluginFingerprint is the memoized outcome of hashing one plugin bundle
+// (Rust discovery.rs plugin_content_hash, #54619). An error is carried instead
+// of being dropped so a plugin hook without a usable fingerprint is skipped
+// with a load failure rather than silently trusted.
+type pluginFingerprint struct {
+	Hash string
+	Err  error
 }
 
 func (s *HookDiscoveryService) Discover(params *HookListParams, defaultCWD string) *HookListResponse {
@@ -311,6 +326,14 @@ type hookDiscoverySource struct {
 	// McpToolHooksEnabled lists mcp_tool handlers instead of warning that MCP
 	// invocation is not available yet.
 	McpToolHooksEnabled bool
+	// PluginRoot is the plugin bundle root of a plugin hook source.
+	PluginRoot string
+	// PluginFingerprint is the bundle content fingerprint of PluginRoot. Nil
+	// for non-plugin sources and for plugin sources without a bundle root.
+	PluginFingerprint *pluginFingerprint
+	// ConfigFile is the user config file used to derive the one-time legacy
+	// hook trust baseline (Rust plugin_trust.rs legacy_trust_path).
+	ConfigFile string
 }
 
 func (s *hookDiscoverySource) State(key string) *HookState {
@@ -324,6 +347,12 @@ func (s *HookDiscoveryService) appendPluginHooks(entry *HookListEntry) {
 	if s == nil {
 		return
 	}
+	configFile := ""
+	if home := strings.TrimSpace(s.CodexHome); home != "" {
+		configFile = filepath.Join(home, "config.toml")
+	}
+	// Rust discovery.rs memoizes one bundle fingerprint per plugin root.
+	fingerprints := make(map[string]*pluginFingerprint)
 	for _, source := range s.PluginHookSources {
 		pluginID := strings.TrimSpace(source.PluginID)
 		sourcePath := strings.TrimSpace(source.SourcePath)
@@ -339,6 +368,17 @@ func (s *HookDiscoveryService) appendPluginHooks(entry *HookListEntry) {
 		if pluginDataRoot == "" && pluginRoot != "" {
 			pluginDataRoot = filepath.Join(pluginRoot, "data")
 		}
+		// Rust discovery.rs (#54619) fingerprints the plugin bundle so the
+		// approval can be bound to the plugin contents.
+		var fingerprint *pluginFingerprint
+		if pluginRoot != "" {
+			fingerprint = fingerprints[pluginRoot]
+			if fingerprint == nil {
+				hash, err := pluginContentHash(pluginRoot)
+				fingerprint = &pluginFingerprint{Hash: hash, Err: err}
+				fingerprints[pluginRoot] = fingerprint
+			}
+		}
 		appendHooksJSONWithMessagePrefix(entry, &hookDiscoverySource{
 			Path:                sourcePath,
 			KeySource:           pluginID + ":" + filepath.ToSlash(relativePath),
@@ -347,6 +387,9 @@ func (s *HookDiscoveryService) appendPluginHooks(entry *HookListEntry) {
 			BypassTrust:         s.BypassTrust,
 			PluginID:            &pluginID,
 			McpToolHooksEnabled: s.McpToolHooksEnabled,
+			PluginRoot:          pluginRoot,
+			PluginFingerprint:   fingerprint,
+			ConfigFile:          configFile,
 			Env: map[string]string{
 				"PLUGIN_ROOT":        pluginRoot,
 				"CLAUDE_PLUGIN_ROOT": pluginRoot,
@@ -428,6 +471,9 @@ func appendHooksTOML(entry *HookListEntry, source *hookDiscoverySource) {
 		PluginID:            cloneString(source.PluginID),
 		Env:                 cloneHookEnv(source.Env),
 		McpToolHooksEnabled: source.McpToolHooksEnabled,
+		PluginRoot:          source.PluginRoot,
+		PluginFingerprint:   source.PluginFingerprint,
+		ConfigFile:          source.ConfigFile,
 	}
 	appendHookConfig(entry, normalized, file)
 }
@@ -475,6 +521,9 @@ func appendHooksJSONWithMessagePrefix(entry *HookListEntry, source *hookDiscover
 		PluginID:            cloneString(source.PluginID),
 		Env:                 cloneHookEnv(source.Env),
 		McpToolHooksEnabled: source.McpToolHooksEnabled,
+		PluginRoot:          source.PluginRoot,
+		PluginFingerprint:   source.PluginFingerprint,
+		ConfigFile:          source.ConfigFile,
 	}
 	appendHookConfig(entry, normalized, file)
 }
@@ -837,9 +886,28 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			additionalContextLimit := handler.additionalContextLimit()
-			currentHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit)
+			declarationHash := hookDiscoveryHash(event, group.Matcher, command, handler.Async, timeoutSec, handler.statusMessage(), additionalContextLimit)
 			state := source.State(key)
 			displayCommand := expandHookEnvPlaceholders(command, source.Env)
+			pluginContentHash, ok := source.pluginContentHash(entry, builtin)
+			if !ok {
+				continue
+			}
+			trustedHash := hookTrustedHash(false, state)
+			pluginTrust := pluginHookTrustForSource(source, builtin, declarationHash, trustedHash, state)
+			currentHash := pluginCombinedCurrentHash(declarationHash, pluginContentHash)
+			trustStatus := hookTrustStatus(false, builtin, currentHash, trustedHash)
+			if pluginContentHash != "" && pluginTrust != nil {
+				matches, err := pluginTrust.matchesHash(pluginContentHash)
+				if err != nil {
+					entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping plugin hook in %s: failed to migrate hook trust: %v", source.Path, err))
+					continue
+				}
+				trustStatus = HookTrustModified
+				if matches {
+					trustStatus = HookTrustTrusted
+				}
+			}
 			metadata := HookMetadata{
 				Key:                    key,
 				EventName:              event,
@@ -859,7 +927,8 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Enabled:                hookEnabled(false, builtin, state),
 				IsManaged:              false,
 				CurrentHash:            currentHash,
-				TrustStatus:            hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
+				TrustStatus:            trustStatus,
+				pluginTrust:            pluginTrust,
 				BypassTrust:            source.BypassTrust,
 				Env:                    cloneHookEnv(source.Env),
 			}
@@ -887,8 +956,27 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 			timeoutSec := handler.timeoutSecForEvent(event)
 			key := hookDiscoveryKey(source.KeySource, event, groupIndex, handlerIndex)
 			inputTemplate := cloneHookInput(handler.Input)
-			currentHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil)
+			declarationHash := hookDiscoveryHashHandler(event, group.Matcher, HookHandlerMCPTool, "", false, handler.Server, handler.Tool, inputTemplate, timeoutSec, handler.statusMessage(), nil)
 			state := source.State(key)
+			pluginContentHash, ok := source.pluginContentHash(entry, builtin)
+			if !ok {
+				continue
+			}
+			trustedHash := hookTrustedHash(false, state)
+			pluginTrust := pluginHookTrustForSource(source, builtin, declarationHash, trustedHash, state)
+			currentHash := pluginCombinedCurrentHash(declarationHash, pluginContentHash)
+			trustStatus := hookTrustStatus(false, builtin, currentHash, trustedHash)
+			if pluginContentHash != "" && pluginTrust != nil {
+				matches, err := pluginTrust.matchesHash(pluginContentHash)
+				if err != nil {
+					entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping plugin hook in %s: failed to migrate hook trust: %v", source.Path, err))
+					continue
+				}
+				trustStatus = HookTrustModified
+				if matches {
+					trustStatus = HookTrustTrusted
+				}
+			}
 			metadata := HookMetadata{
 				Key:             key,
 				EventName:       event,
@@ -909,7 +997,8 @@ func appendDiscoveredHookGroup(entry *HookListEntry, source *hookDiscoverySource
 				Enabled:         hookEnabled(false, builtin, state),
 				IsManaged:       false,
 				CurrentHash:     currentHash,
-				TrustStatus:     hookTrustStatus(false, builtin, currentHash, hookTrustedHash(false, state)),
+				TrustStatus:     trustStatus,
+				pluginTrust:     pluginTrust,
 				BypassTrust:     source.BypassTrust,
 				Env:             cloneHookEnv(source.Env),
 			}
@@ -1298,6 +1387,86 @@ func hookTrustedHash(isManaged bool, state *HookState) *string {
 		return nil
 	}
 	return cloneString(state.TrustedHash)
+}
+
+// hookTrustedContentHash mirrors Rust discovery.rs's effective
+// trusted_content_hash lookup (#54619).
+func hookTrustedContentHash(isManaged bool, state *HookState) *string {
+	if isManaged || state == nil {
+		return nil
+	}
+	return cloneString(state.TrustedContentHash)
+}
+
+// pluginCombinedCurrentHash mirrors Rust discovery.rs (#54619): the reported
+// current hash is `declaration/content` for plugin hooks, and the declaration
+// hash alone everywhere else.
+func pluginCombinedCurrentHash(declarationHash string, pluginContentHash string) string {
+	if pluginContentHash == "" {
+		return declarationHash
+	}
+	return declarationHash + "/" + pluginContentHash
+}
+
+// pluginContentHash reports the plugin bundle fingerprint for one handler,
+// mirroring Rust discovery.rs (#54619): a fingerprint failure skips the handler
+// with a load failure instead of silently trusting it. ok is false when the
+// handler must be skipped.
+func (s *hookDiscoverySource) pluginContentHash(entry *HookListEntry, builtin bool) (string, bool) {
+	if s == nil || s.PluginFingerprint == nil {
+		return "", true
+	}
+	if s.PluginFingerprint.Err != nil {
+		if !builtin && !s.BypassTrust {
+			entry.Warnings = append(entry.Warnings, fmt.Sprintf("skipping plugin hook in %s: failed to fingerprint plugin contents: %v", s.Path, s.PluginFingerprint.Err))
+			return "", false
+		}
+		return "", true
+	}
+	return s.PluginFingerprint.Hash, true
+}
+
+// pluginHookTrustForSource mirrors the Rust discovery.rs gate that decides when
+// a handler carries a plugin content approval (#54619).
+func pluginHookTrustForSource(source *hookDiscoverySource, builtin bool, declarationHash string, trustedHash *string, state *HookState) *pluginHookTrust {
+	if source == nil || builtin {
+		return nil
+	}
+	if source.BypassTrust && source.PluginFingerprint == nil {
+		return nil
+	}
+	if strings.TrimSpace(source.PluginRoot) == "" {
+		return nil
+	}
+	if source.PluginID == nil || strings.TrimSpace(*source.PluginID) == "" {
+		return nil
+	}
+	if trustedHash == nil {
+		return nil
+	}
+	recorded := *trustedHash
+	contentApproval := hookTrustedContentHash(false, state)
+	if declaration, content, found := strings.Cut(recorded, "/"); found {
+		// Go clients persist the combined `declaration/content` approval into
+		// hooks.state.<key>.trusted_hash (tui/hooks_rpc.go BuildHookTrustValue).
+		// Rust splits the two hashes on the config write path
+		// (app-server/src/config_manager_service.rs, #54619); Go has no
+		// config_manager analog, so the identical split is applied when the
+		// approval is read back. A declaration-only record keeps using the
+		// one-time legacy baseline path below.
+		recorded = declaration
+		if contentApproval == nil {
+			content := content
+			contentApproval = &content
+		}
+	}
+	return &pluginHookTrust{
+		Root:               source.PluginRoot,
+		DeclarationHash:    declarationHash,
+		TrustedHash:        recorded,
+		TrustedContentHash: contentApproval,
+		LegacyPath:         pluginLegacyTrustPath(source.ConfigFile, strings.TrimSpace(*source.PluginID)),
+	}
 }
 
 // hookTrustStatus mirrors Rust discovery.rs: builtin hooks are trusted without

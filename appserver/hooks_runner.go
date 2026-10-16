@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	osexec "os/exec"
@@ -183,7 +184,21 @@ func (r *HookRunner) runCommand(ctx context.Context, metadata HookMetadata, inpu
 	if timeoutSec <= 0 {
 		timeoutSec = defaultDiscoveredHookTimeoutSec
 	}
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	// Rust command_runner.rs (#54619): a plugin hook's approval is bound to the
+	// plugin contents, so fresh contents are verified before the command runs
+	// and the scan is charged to the handler's own timeout budget.
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	if err := verifyPluginHookTrustAtRun(metadata.pluginTrust, time.Until(deadline), fmt.Sprintf("hook timed out after %ds", timeoutSec)); err != nil {
+		completed := r.now()
+		return &hookCommandRunResult{
+			StartedAt:   startedAt,
+			CompletedAt: completed.UTC().UnixMilli(),
+			DurationMS:  completed.Sub(started).Milliseconds(),
+			Error:       stringPointer(err.Error()),
+		}
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, max(time.Until(deadline), 0))
 	defer cancel()
 
 	cmd := r.commandForHook(execCtx, metadata)
@@ -272,6 +287,15 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 		result.Error = stringPointer("MCP invocation is not available yet")
 		return result
 	}
+	// Rust mcp_runner.rs (#54619): verify the plugin contents first and charge
+	// the scan to the handler's timeout budget.
+	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
+	if err := verifyPluginHookTrustAtRun(metadata.pluginTrust, time.Until(deadline), "hook trust verification timed out"); err != nil {
+		result.CompletedAt = r.now().UTC().UnixMilli()
+		result.DurationMS = result.CompletedAt - startedAt
+		result.Error = stringPointer(err.Error())
+		return result
+	}
 	var hookEvent any
 	if strings.TrimSpace(request.InputJSON) != "" {
 		if err := json.Unmarshal([]byte(request.InputJSON), &hookEvent); err != nil {
@@ -284,12 +308,16 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 		result.Error = stringPointer(err.Error())
 		return result
 	}
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	remaining := time.Duration(timeoutSec) * time.Second
+	if metadata.pluginTrust != nil {
+		remaining = max(time.Until(deadline), 0)
+	}
+	execCtx, cancel := context.WithTimeout(ctx, remaining)
 	output, err := r.McpToolHookExecutor.Execute(execCtx, HookMcpCall{
 		Server:  ptrStringValue(metadata.Server),
 		Tool:    ptrStringValue(metadata.Tool),
 		Input:   input,
-		Timeout: time.Duration(timeoutSec) * time.Second,
+		Timeout: remaining,
 	})
 	cancel()
 	completed := r.now()
@@ -526,6 +554,32 @@ func selectHookHandlers(hooks []HookMetadata, event HookEventName, matcherInputs
 	}
 	sortHooks(out)
 	return out
+}
+
+// verifyPluginHookTrustAtRun mirrors Rust plugin_trust.rs::verify as called by
+// command_runner.rs / mcp_runner.rs (#54619): the bundle is re-fingerprinted at
+// execution time, a changed bundle raises "plugin contents changed; hook
+// approval required", and the scan is bounded by the handler's remaining
+// timeout budget so it cannot exceed the hook deadline.
+func verifyPluginHookTrustAtRun(trust *pluginHookTrust, remaining time.Duration, timeoutMessage string) error {
+	if trust == nil {
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- trust.verify()
+	}()
+	if remaining <= 0 {
+		return errors.New(timeoutMessage)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return errors.New(timeoutMessage)
+	}
 }
 
 func hookTrustAllowsExecution(metadata *HookMetadata) bool {
