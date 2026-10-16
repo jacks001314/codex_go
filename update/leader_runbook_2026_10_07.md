@@ -181,3 +181,16 @@ main = `757aba59`（已 push）。在跑 **7 条**：
    backend 接口 + 三适配器 + runner + telemetry 骨架；这与「不落骨架」裁决直接冲突 ⇒ 维持 blocked，
    但按**一条**记账。附：整个 `sandbox_integrity` 家族在 pin `4eb4a65407` 就已存在 ⇒ 这是
    「pin 内生产可达子系统 Go 侧无对应物」，**不是**上游新增漂移。
+
+
+## R5-nonies · 账本行尾事故的三个订正 + 一条回收纪律（V-b14 独立复核）
+
+1. **实测与我先前的表述不一致**：`a54cb9fb` 版 `update/r90_commit_ledger_2026_10_16.tsv` 是 **127 行双 CR + 12 行单 CR**（139 = 表头 + 138 数据行），不是“138 行双 CR”。字节账自洽：53236 − 52970 = **266 = 127 + 139**。说一句“138 行错位”是对的结果、错的原因描述。
+2. **判行尾要看 blob，不要看工作区**：该仓 `.tsv` 的约定是 **blob 内 LF-only**（另 3 个 `update/*.tsv` 的 CR 全为 0）；我的 “crlf=139” 只在工作区检出（`core.autocrlf=true`）成立。结论：同一份文件 “工作区 CRLF / blob LF” 是本仓常态，两种读法的 **lone-CR 都是 0** 才是可靠判据。
+3. **修复无数据丢失**（V-b14 独立复核）：两版各自 `Replace(“\r”,“”)` 后**逐行 0 mismatch、整串相等** ⇒ 字段文本零改动。
+4. **回收纪律（新）：不要让车道在验证者可能还需要“独立副本”时回收自己的台面。**我批准 T 车道删 `r90tui10`，恰好落在 V-b14 复查 T9 字节一致性的窗口内** ⇒ V 只能把“T9 5 文件字节一致性”记为**未覆盖**（他的快照里该台上还在，再查已消失）。以后：并入某批后，**先确认没有在跑的验证车依赖该台，再删台**。
+
+### V-b14 结论（对象 `05fdcd50` + `7786dc34`）
+
+- 夹带检查 24 项**零夹带**；字节一致性 A-b11/C-b10/AC-1/P-b11 **12/12 same=True**（T9 5 文件未覆盖，原因见上）；门禁 A/B 失败集合**逐名相同、新增失败 0**；appserver 整包 A 低负载复跑 **2437/2430/0/7 = ok**（高负载下那 1 条 `TestStdioServerGoalSetResponsePrecedesGoalNotification` 定位为环境型 flake：隔离 5× 及并发 150 次全绿）；6 组反例全部 “撚⇒FAIL⇒复原⇒PASS”。
+- **新开待办备选（RC-4c）**：`model/responses_stream.go` 的 `jsonNumberLiteral` 收尾守卫**承重但零 shipped 覆盖** —— 把它改成 `return true` 会让 V 自建探针红（带引号数字 / `null` 成员）而**同树 3 个 shipped 新用例仍绿**。建议补 2 个子用例：`quoted_budget_units`、`null_token_member`。
