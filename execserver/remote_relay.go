@@ -349,12 +349,23 @@ func validateRemoteHarnessKey(
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	for key, values := range cfg.AuthHeaders {
+	// Rust #54346 routes this through `resolve_auth` + `http_for_auth`, so the
+	// scoped mode validates its single bearer here too and uses the
+	// proxy-bypassing client for a loopback HTTP registry.
+	headers, executorCredential, err := resolveRemoteEnvironmentAuth(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	for key, values := range headers {
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}
 	}
-	response, err := cfg.HTTPClient.Do(request)
+	client, err := remoteRegistryHTTPClientForAuth(cfg)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return errors.New("environment registry harness key validation failed")
 	}
@@ -363,7 +374,14 @@ func validateRemoteHarnessKey(
 		return fmt.Errorf("environment registry harness key validation failed (%s)", response.Status)
 	}
 	var decoded remoteHarnessValidationResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&decoded); err != nil || !decoded.Valid {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 64*1024)).Decode(&decoded); err != nil {
+		if executorCredential != "" {
+			// The body could echo the credential, so only fixed text is used.
+			return errors.New("exec-server protocol error: invalid environment registry harness key validation response")
+		}
+		return errors.New("environment registry harness key validation failed")
+	}
+	if !decoded.Valid {
 		return errors.New("environment registry rejected Noise relay harness key")
 	}
 	return nil

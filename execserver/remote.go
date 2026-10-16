@@ -62,6 +62,34 @@ type RemoteEnvironmentConfig struct {
 	// EnvironmentConfigReader serves `environmentConfig/read` for the tunneled
 	// session; nil advertises the capability as false.
 	EnvironmentConfigReader EnvironmentConfigReader
+	// DirectHTTPClient is Rust's `http_direct` registry pool: the client a
+	// scoped executor credential must use when the registry is plain-HTTP
+	// loopback, so a system proxy can never receive the credential in plaintext
+	// (Rust #54346 `EnvironmentRegistryClient::http_for_auth`). When nil it is
+	// derived from HTTPClient by clearing its proxy.
+	DirectHTTPClient *http.Client
+	// authMode mirrors Rust's `RemoteEnvironmentConfig::auth_mode`
+	// (codex-rs/exec-server/src/remote.rs:619). It is unexported so the only way
+	// to select scoped auth is WithExecutorCredentialAuth, which enforces the
+	// URL restrictions of Rust #54346.
+	authMode registryAuthMode
+}
+
+// WithExecutorCredentialAuth selects Rust's scoped executor-credential mode
+// (codex-rs/exec-server/src/remote.rs:288, `RemoteEnvironmentConfig::
+// with_executor_credential_auth`, #54346): the registry request carries exactly
+// one environment-bound `Authorization: Bearer <credential>` header with no
+// account fallback, and the registry URL must be HTTPS or loopback HTTP.
+//
+// Rust also rejects the Direct transport here because it does not support scoped
+// credentials. The Go port has no Direct registry transport (only the Noise
+// rendezvous path of RunRemoteEnvironment), so there is no transport to reject.
+func (cfg RemoteEnvironmentConfig) WithExecutorCredentialAuth() (RemoteEnvironmentConfig, error) {
+	if err := requireSecureOrLoopback(cfg.BaseURL, "https"); err != nil {
+		return cfg, err
+	}
+	cfg.authMode = registryAuthModeExecutorCredential
+	return cfg, nil
 }
 
 type RemotePublicKey struct {
@@ -300,7 +328,7 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	headers, err := resolveRemoteEnvironmentAuthHeaders(ctx, cfg)
+	headers, executorCredential, err := resolveRemoteEnvironmentAuth(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("environment registry auth resolution failed: %w", err)
 	}
@@ -309,17 +337,31 @@ func registerRemoteEnvironment(ctx context.Context, cfg RemoteEnvironmentConfig,
 			request.Header.Add(key, value)
 		}
 	}
-	response, err := cfg.HTTPClient.Do(request)
+	client, err := remoteRegistryHTTPClientForAuth(cfg)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("environment registry request failed: %w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, remoteRegistryStatusError(response)
-	}
 	var decoded remoteRegistrationResponse
-	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("failed to decode environment registry response: %w", err)
+	if executorCredential != "" {
+		// A scoped credential must never be echoed back, so the response goes
+		// through the echo-rejecting parser instead of the preview diagnostics.
+		scoped, err := parseExecutorRegistrationResponse(response, executorCredential)
+		if err != nil {
+			return nil, err
+		}
+		decoded = *scoped
+	} else {
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			return nil, remoteRegistryStatusError(response)
+		}
+		if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+			return nil, fmt.Errorf("failed to decode environment registry response: %w", err)
+		}
 	}
 	if decoded.EnvironmentID != cfg.EnvironmentID {
 		return nil, errors.New("exec-server protocol error: environment registry returned a different environment id")

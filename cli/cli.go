@@ -271,6 +271,12 @@ type ExecServerOptions struct {
 	Name                 string
 	UseAgentIdentityAuth bool
 	ExitOnStdinClose     bool
+	// ExecutorCredentialStdin mirrors Rust #54434
+	// (cli/src/exec_server_command.rs `--executor-credential-stdin`): read
+	// rotating scoped executor credentials from stdin and exit when the pipe
+	// closes. It requires --remote and cannot be combined with
+	// --use-agent-identity-auth.
+	ExecutorCredentialStdin bool
 	// ProxyPrivateIPsViaUpstream mirrors Rust #48568
 	// (cli/src/exec_server_command.rs `--proxy-private-ips-via-upstream`): the
 	// trusted executor-local startup routing that lets permitted private IP
@@ -2421,6 +2427,9 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 			execServer.UseAgentIdentityAuth = true
 		case arg == "--exit-on-stdin-close":
 			execServer.ExitOnStdinClose = true
+		case arg == "--executor-credential-stdin":
+			// Rust #54434: clap `ArgAction::SetTrue`, so the flag takes no value.
+			execServer.ExecutorCredentialStdin = true
 		case arg == "--proxy-private-ips-via-upstream":
 			// Rust #48568: clap `ArgAction::SetTrue`, so the flag takes no value.
 			execServer.ProxyPrivateIPsViaUpstream = true
@@ -2473,6 +2482,15 @@ func parseExecServer(args []string, execServer *ExecServerOptions) error {
 	}
 	if execServer.ExitOnStdinClose && execServer.Remote == "" && forward == "" {
 		return errors.New("--exit-on-stdin-close requires --remote")
+	}
+	// Rust #54434: `requires = "exec_server_remote"` plus
+	// `conflicts_with_all = ["use_agent_identity_auth", "aws_sigv4"]`. The Go port
+	// has no --aws-sigv4 flag, so only the Agent Identity conflict applies.
+	if execServer.ExecutorCredentialStdin && execServer.Remote == "" && forward == "" {
+		return errors.New("--executor-credential-stdin requires --remote")
+	}
+	if execServer.ExecutorCredentialStdin && execServer.UseAgentIdentityAuth {
+		return errors.New("--executor-credential-stdin conflicts with --use-agent-identity-auth")
 	}
 	return execServer.ValidateWebsocketAuthFlags()
 }

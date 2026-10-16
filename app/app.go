@@ -844,6 +844,12 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 	if err != nil {
 		return err
 	}
+	if opts.ExecutorCredentialStdin {
+		// Rust #54434: the scoped credential pipe replaces account
+		// authentication and workload identity, and it owns the parent
+		// lifetime, so this branch returns before the account store is read.
+		return runExecServerRemoteWithExecutorCredential(ctx, opts, loadedConfig, baseURL, environmentID, preferMXC, environmentConfigReader, stdin)
+	}
 	if opts.UseAgentIdentityAuth {
 		accessToken := strings.TrimSpace(os.Getenv(auth.CodexAccessTokenEnv))
 		if accessToken == "" {
@@ -908,6 +914,78 @@ func runExecServerRemote(ctx context.Context, opts *cli.ExecServerOptions, rootC
 		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
 		EnvironmentConfigReader:    environmentConfigReader,
 	})
+}
+
+// runExecServerRemoteWithExecutorCredential mirrors Rust #54434's scoped mode
+// (cli/src/exec_server_command.rs, `--executor-credential-stdin`): the registry
+// credential arrives as rotating frames on the parent's stdin, the registry URL
+// must be HTTPS or loopback HTTP, and the executor stops as soon as the pipe
+// closes.
+//
+// Rust additionally skips the configured telemetry exporters in this mode
+// (`telemetry_config = (!executor_credential_stdin).then_some(&config)`) and
+// disables workload identity. The Go `codex exec-server` path never initializes
+// OTel exporters from config and never reads the account store here, so both
+// hold by construction.
+func runExecServerRemoteWithExecutorCredential(
+	ctx context.Context,
+	opts *cli.ExecServerOptions,
+	loadedConfig *config.Config,
+	baseURL string,
+	environmentID string,
+	preferMXC *bool,
+	environmentConfigReader execserver.EnvironmentConfigReader,
+	stdin io.Reader,
+) error {
+	pipe := execserver.NewExecutorCredentialPipe(environmentID, stdin)
+	if err := pipe.WaitForInitial(ctx); err != nil {
+		return err
+	}
+	cfg := execserver.RemoteEnvironmentConfig{
+		BaseURL:            baseURL,
+		EnvironmentID:      environmentID,
+		Name:               strings.TrimSpace(opts.Name),
+		ResolveAuthHeaders: pipe.ResolveAuthHeaders,
+		HTTPClient:         policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(loadedConfig.RespectSystemProxyEnabled(), 0)),
+		// Rust's `http_direct` pool is built with the legacy direct proxy rules:
+		// a loopback HTTP registry must never receive the credential through a
+		// system proxy, so the scoped request uses a proxy-free client.
+		DirectHTTPClient:           policyHTTPClient(loadedConfig, codexnetwork.NewHTTPClient(false, 0)),
+		PreferMXC:                  preferMXC,
+		ProxyPrivateIPsViaUpstream: opts.ProxyPrivateIPsViaUpstream,
+		EnvironmentConfigReader:    environmentConfigReader,
+	}
+	scoped, err := cfg.WithExecutorCredentialAuth()
+	if err != nil {
+		return err
+	}
+	runCtx, cancel := execServerCredentialParentContext(ctx, pipe)
+	defer cancel()
+	runErr := execserver.RunRemoteEnvironment(runCtx, scoped)
+	// Rust reports a failed credential pipe after the run rather than masking it
+	// with the shutdown that pipe failure caused.
+	if pipeErr := pipe.CheckPipeFailure(); pipeErr != nil {
+		return pipeErr
+	}
+	return runErr
+}
+
+// execServerCredentialParentContext is Rust's
+// `ParentLifetime::MonitoredStdin(parent_closed)`: the credential pipe closing
+// means the parent went away, so the executor stops with it.
+func execServerCredentialParentContext(ctx context.Context, pipe *execserver.ExecutorCredentialPipe) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-pipe.ParentClosed():
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+	return runCtx, cancel
 }
 
 func runExecServerRemoteWithParentLifetime(ctx context.Context, stdin io.Reader, exitOnStdinClose bool, cfg execserver.RemoteEnvironmentConfig) error {
