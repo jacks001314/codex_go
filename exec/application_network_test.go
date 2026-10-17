@@ -82,3 +82,35 @@ func TestExecRunPublishesApplicationNetworkPolicyLikeRust(t *testing.T) {
 		t.Fatal("an unpublished policy replaced the caller's client")
 	}
 }
+
+// policyHTTPClientForConfig backs callers that need a concrete *http.Client
+// (the proactive ChatGPT token refresh, #53991). It must still enforce the
+// run's published application policy, so a denied destination is rejected
+// before any connection is made.
+func TestExecPolicyHTTPClientForConfigEnforcesApplicationPolicyLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "requirements.toml"), []byte(`
+[application.network]
+[application.network.domains]
+"denied.example" = "deny"
+`), 0o600); err != nil {
+		t.Fatalf("write requirements.toml: %v", err)
+	}
+	cfg, err := config.LoadEffectiveWithOptions(home, nil)
+	if err != nil {
+		t.Fatalf("LoadEffectiveWithOptions() error = %v", err)
+	}
+	if controller := publishApplicationNetworkPolicy(cfg); controller == nil {
+		t.Fatal("publishApplicationNetworkPolicy() returned no controller")
+	}
+	client := (&Runner{}).policyHTTPClientForConfig(cfg)
+	if client == nil {
+		t.Fatal("policyHTTPClientForConfig() returned nil")
+	}
+	if _, err := client.Get("https://denied.example/v1"); !errors.Is(err, network.ErrNetworkPolicyDestination) {
+		t.Fatalf("denied request error = %v, want the published policy enforced", err)
+	}
+	if nilClient := (&Runner{}).policyHTTPClientForConfig(nil); nilClient == nil {
+		t.Fatal("policyHTTPClientForConfig(nil) returned nil")
+	}
+}

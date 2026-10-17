@@ -641,6 +641,10 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	} else if err != nil {
 		return nil, err
 	}
+	// Rust AuthManager::auth() proactively refreshes managed ChatGPT auth that
+	// is inside the expiry window or overdue on its eight-day schedule, and the
+	// refresh request reports the matching reason (#53991).
+	snapshot = r.proactiveRefreshManagedChatGPT(context.Background(), codexHome, cfg, snapshot)
 	if snapshot == nil && provider.RequiresOpenAIAuth {
 		return nil, nil
 	}
@@ -677,6 +681,30 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	// log_event!/trace_event! macros) for the conversation this turn belongs to.
 	r.installSessionTelemetry(agent, params.ThreadID)
 	return agent, nil
+}
+
+// proactiveRefreshManagedChatGPT mirrors the pre-request half of Rust
+// AuthManager::auth() (#53991): a managed ChatGPT auth inside the five-minute
+// access-token window refreshes with `proactive_expiry`, and one whose
+// last_refresh is older than eight days refreshes with `scheduled`. A failed
+// refresh is non-fatal, as in Rust, which logs the error and keeps serving the
+// cached auth.
+func (r *RuntimeRouter) proactiveRefreshManagedChatGPT(ctx context.Context, codexHome string, cfg *config.Config, snapshot *auth.AuthDotJSON) *auth.AuthDotJSON {
+	if r == nil || snapshot == nil {
+		return snapshot
+	}
+	refreshed, _, attempted, err := auth.ProactiveRefreshManagedChatGPT(ctx, &auth.RefreshChatGPTTokenOptions{
+		CodexHome:    codexHome,
+		HTTPClient:   r.policyHTTPClientForConfig(cfg),
+		AuthSnapshot: snapshot,
+		StoreOptions: r.authStoreOptions(),
+	}, time.Now())
+	if !attempted || err != nil || refreshed == nil {
+		return snapshot
+	}
+	r.requireAccount().ApplyAuthSnapshot(refreshed)
+	r.noteAuthChanged()
+	return refreshed
 }
 
 // installSessionTelemetry binds the session telemetry the model runner reports

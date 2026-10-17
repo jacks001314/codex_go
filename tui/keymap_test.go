@@ -238,19 +238,41 @@ func TestKeymapConfigRejectsConflictWithEffectiveDefaultBinding(t *testing.T) {
 	}
 }
 
-func TestKeymapConfigRejectsUnknownAndMisplacedActions(t *testing.T) {
-	for _, input := range []string{
-		"[tui.keymap]\nopen_transcript = \"ctrl-s\"\n",
-		"[tui.keymap.global]\nopen_transcrip = \"ctrl-s\"\n",
-		"[tui.keymap.vim_text_object]\ndouble_quotes = \"shift-quote\"\n",
-	} {
+// Rust #54766 removed serde's `deny_unknown_fields` from the keymap structs:
+// unknown contexts, an action misplaced at the keymap root, and unknown actions
+// are ignored during deserialization, leaving strict-config validation to report
+// them. A known context that is not a table is still a type error.
+func TestKeymapConfigIgnoresUnknownAndMisplacedActionsLikeRust(t *testing.T) {
+	ignored := []struct {
+		input  string
+		ctx    string
+		action string
+	}{
+		{"[tui.keymap]\nopen_transcript = \"ctrl-s\"\n", "global", "open_transcript"},
+		{"[tui.keymap.global]\nopen_transcrip = \"ctrl-s\"\n", "global", "open_transcrip"},
+		{"[tui.keymap.vim_text_object]\ndouble_quotes = \"shift-quote\"\n", "vim_text_object", "double_quotes"},
+		{"[tui.keymap.future_context]\nanything = \"ctrl-s\"\n", "future_context", "anything"},
+	}
+	for _, testCase := range ignored {
 		var values map[string]any
-		if err := toml.Unmarshal([]byte(input), &values); err != nil {
+		if err := toml.Unmarshal([]byte(testCase.input), &values); err != nil {
 			t.Fatalf("toml.Unmarshal error = %v", err)
 		}
-		if _, err := KeymapConfigFromConfigValues(values); err == nil {
-			t.Fatalf("KeymapConfigFromConfigValues(%q) returned nil error", input)
+		config, err := KeymapConfigFromConfigValues(values)
+		if err != nil {
+			t.Fatalf("KeymapConfigFromConfigValues(%q) error = %v, want the unknown field ignored", testCase.input, err)
 		}
+		if bindings, ok := config.Binding(testCase.ctx, testCase.action); ok {
+			t.Fatalf("unknown field produced bindings %#v", bindings)
+		}
+	}
+
+	var values map[string]any
+	if err := toml.Unmarshal([]byte("[tui.keymap]\nglobal = \"ctrl-s\"\n"), &values); err != nil {
+		t.Fatalf("toml.Unmarshal error = %v", err)
+	}
+	if _, err := KeymapConfigFromConfigValues(values); err == nil || !strings.Contains(err.Error(), "tui.keymap.global must be a table") {
+		t.Fatalf("non-table context error = %v", err)
 	}
 }
 

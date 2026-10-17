@@ -1729,3 +1729,81 @@ func TestUnifiedExecWriteStdinApprovalGateEscalatedLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// Rust `sandbox_override_for_first_attempt` (#51786): an approved escalation
+// bypasses the first attempt when the policy allows unsandboxed execution, and
+// reports the restricted variant when denied reads keep the sandbox in place.
+func TestUnifiedExecSandboxOverrideForFirstAttemptLikeRust(t *testing.T) {
+	fullAccess := sandbox.FullAccessPermissionProfile()
+	deniedReads := sandbox.WorkspaceWritePermissionProfile()
+	deniedReads.DeniedReadEntries = []sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "**/*.env"},
+		Access: sandbox.FileSystemAccessDeny,
+	}}
+	cases := []struct {
+		name    string
+		request *ShellRequest
+		want    execserver.SandboxOverride
+	}{
+		{"nil request", nil, execserver.SandboxOverrideNone},
+		{"default permissions", &ShellRequest{PermissionProfile: &fullAccess}, execserver.SandboxOverrideNone},
+		{
+			"approved escalation bypasses the sandbox",
+			&ShellRequest{PermissionProfile: &fullAccess, SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated},
+			execserver.SandboxOverrideBypassFirstAttempt,
+		},
+		{
+			"approved escalation with denied reads keeps the sandbox",
+			&ShellRequest{PermissionProfile: &deniedReads, SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated},
+			execserver.SandboxOverrideEscalatedWithRestrictions,
+		},
+		{
+			"denied reads without escalation",
+			&ShellRequest{PermissionProfile: &deniedReads, SandboxPermissions: sandbox.SandboxPermissionsUseDefault},
+			execserver.SandboxOverrideNone,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := sandboxOverrideForFirstAttempt(test.request); got != test.want {
+				t.Fatalf("sandboxOverrideForFirstAttempt() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// The override rides on the filesystem sandbox context and is omitted from the
+// wire form when there is none, exactly like Rust's skip_serializing_if.
+func TestUnifiedExecSandboxContextCarriesSandboxOverrideLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	fullAccess := sandbox.FullAccessPermissionProfile()
+	contextValue, err := unifiedExecSandboxContext(&ShellRequest{
+		CWD:                cwd,
+		PermissionProfile:  &fullAccess,
+		SandboxPermissions: sandbox.SandboxPermissionsRequireEscalated,
+	})
+	if err != nil {
+		t.Fatalf("unifiedExecSandboxContext() error = %v", err)
+	}
+	if contextValue.SandboxOverride != execserver.SandboxOverrideBypassFirstAttempt {
+		t.Fatalf("override = %q", contextValue.SandboxOverride)
+	}
+	encoded, err := json.Marshal(contextValue)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"sandboxOverride":"bypassSandboxFirstAttempt"`) {
+		t.Fatalf("wire form = %s", encoded)
+	}
+	plain, err := unifiedExecSandboxContext(&ShellRequest{CWD: cwd, PermissionProfile: &fullAccess})
+	if err != nil {
+		t.Fatalf("unifiedExecSandboxContext() error = %v", err)
+	}
+	encodedPlain, err := json.Marshal(plain)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encodedPlain), "sandboxOverride") {
+		t.Fatalf("no-override wire form = %s", encodedPlain)
+	}
+}

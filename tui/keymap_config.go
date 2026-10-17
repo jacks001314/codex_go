@@ -130,10 +130,11 @@ func KeymapConfigFromConfigValues(values map[string]any) (*KeymapConfig, error) 
 	for context, rawContext := range keymap {
 		context = strings.TrimSpace(context)
 		if _, ok := knownKeymapConfigContexts()[context]; !ok {
-			if _, actionOK := knownKeymapConfigActions("global")[context]; actionOK {
-				return nil, fmt.Errorf("keymap action `%s` must be placed under a context table like [tui.keymap.global]", context)
-			}
-			return nil, fmt.Errorf("unknown keymap context `%s`", context)
+			// Rust #54766 removed serde's `deny_unknown_fields` from the keymap
+			// structs: an unknown context (or an action misplaced at the keymap
+			// root) is ignored during deserialization and left to the shared
+			// strict-config policy instead of failing non-strict loads.
+			continue
 		}
 		actionValues, ok := rawContext.(map[string]any)
 		if !ok {
@@ -141,7 +142,8 @@ func KeymapConfigFromConfigValues(values map[string]any) (*KeymapConfig, error) 
 		}
 		for action, rawBinding := range actionValues {
 			if _, ok := knownKeymapConfigActions(context)[action]; !ok {
-				return nil, fmt.Errorf("unknown keymap action `%s` in context `%s`", action, context)
+				// Unknown actions are ignored for the same reason.
+				continue
 			}
 			bindings, err := parseKeybindingsConfigValue(rawBinding)
 			if err != nil {

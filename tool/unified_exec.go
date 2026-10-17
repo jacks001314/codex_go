@@ -842,7 +842,35 @@ func unifiedExecSandboxContext(req *ShellRequest) (*execserver.FileSystemSandbox
 		WindowsSandboxLevel:             req.WindowsSandboxLevel,
 		WindowsSandboxPrivateDesktop:    req.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: req.WindowsSandboxProxySettingsMode,
+		SandboxOverride:                 sandboxOverrideForFirstAttempt(req),
 	})
+}
+
+// sandboxOverrideForFirstAttempt mirrors Rust
+// `tools::sandboxing::sandbox_override_for_first_attempt` (#51786). The
+// selection rides along on the filesystem sandbox context for observation
+// only: it never widens permissions and never changes the sandbox command.
+//
+// Go approves (or rejects) an escalated launch before it builds the shell
+// request, so a `require_escalated` request that reaches this point is an
+// approved escalation. Denied reads keep the sandbox (Rust
+// `unsandboxed_execution_allowed` is false), so an approved escalation reports
+// `EscalatedSandboxWithRestrictions`; otherwise an approved escalation bypasses
+// the sandbox on its first attempt.
+func sandboxOverrideForFirstAttempt(req *ShellRequest) execserver.SandboxOverride {
+	if req == nil {
+		return execserver.SandboxOverrideNone
+	}
+	if !sandbox.UnsandboxedExecutionAllowed(req.PermissionProfile) {
+		if req.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated {
+			return execserver.SandboxOverrideEscalatedWithRestrictions
+		}
+		return execserver.SandboxOverrideNone
+	}
+	if req.SandboxPermissions == sandbox.SandboxPermissionsRequireEscalated {
+		return execserver.SandboxOverrideBypassFirstAttempt
+	}
+	return execserver.SandboxOverrideNone
 }
 
 type FileSystemSandboxContextOptions struct {
@@ -855,6 +883,9 @@ type FileSystemSandboxContextOptions struct {
 	WindowsSandboxPrivateDesktop    bool
 	WindowsSandboxProxySettingsMode execserver.WindowsSandboxProxySettingsMode
 	UseLegacyLandlock               bool
+	// SandboxOverride is the controller's selection carried for observation
+	// (Rust #51786). It never widens permissions or changes the sandbox command.
+	SandboxOverride execserver.SandboxOverride
 }
 
 // NewFileSystemSandboxContext keeps canonical permissions separate from the
@@ -917,6 +948,7 @@ func NewFileSystemSandboxContext(options FileSystemSandboxContextOptions) (*exec
 		WindowsSandboxPrivateDesktop:    options.WindowsSandboxPrivateDesktop,
 		WindowsSandboxProxySettingsMode: options.WindowsSandboxProxySettingsMode,
 		UseLegacyLandlock:               options.UseLegacyLandlock,
+		SandboxOverride:                 options.SandboxOverride,
 	}, nil
 }
 

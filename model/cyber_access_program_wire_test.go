@@ -100,9 +100,11 @@ func TestApiKeyCyberAccessProgramsFromConfigLikeRust(t *testing.T) {
 			}
 		}
 	}
-	// The feature defaults to off, so an absent entry is the disabled policy.
-	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{}, OpenAIProviderID); got != ApiKeyCyberAccessProgramsDisabled {
-		t.Fatalf("default policy = %v, want Disabled", got)
+	// Rust declares `api_key_cyber_access_programs` Stable and default-enabled
+	// (`FeatureSpec::ApiKeyCyberAccessPrograms`, features/src/lib.rs), so an
+	// absent entry is the enabled policy.
+	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{}, OpenAIProviderID); got != ApiKeyCyberAccessProgramsEnabled {
+		t.Fatalf("default policy = %v, want Enabled", got)
 	}
 	// A blank provider id is not the OpenAI provider id.
 	if got := ApiKeyCyberAccessProgramsFromConfig(map[string]bool{"api_key_cyber_access_programs": true}, "  "); got != ApiKeyCyberAccessProgramsUnsupportedProvider {

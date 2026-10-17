@@ -587,3 +587,64 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go test ./network -count=1` | ok |
 | `go test ./network -run "TestPlatformRootPoolClone"` | ok |
 | `go test ./execserver -run "CA|Cert"` | ok |
+
+# Round 106 增量（2026-10-17，lead）
+
+## 22.1 上游与范围
+
+- `git -C D:\qax\reagent\dev\git\codex pull origin main`：Rust 上游由 `e16b631d08` 推进到 `3b8f43a06b`，新增三个提交（#54761 / #54763 / #54766）。
+- 本轮同时闭环上一窗口遗留的 #53991（`f87ba04ec3`）与 #51786（`622e9e3696`）。
+- Go 仓基线仍为 `db882bd7`（parity baseline 保持冻结在 `970b7f2ff4`，见 §22.6）。
+
+## 22.2 已落地
+
+### #53991 ChatGPT token 刷新原因（`f87ba04ec3`）— landed
+
+- **Rust 行为**：`AuthManager::proactive_refresh_reason` 对 managed ChatGPT auth 判定刷新原因——access token 可解析 `exp` 且落在 5 分钟窗口内报 `proactive_expiry`；可解析但超出窗口则不再回退；`exp` 不可解析时回退到 `last_refresh` 超过 8 天报 `scheduled`。`AuthManager::auth()` 在请求前按该原因刷新，失败只记录日志并继续使用缓存 auth。
+- **Go 落地**：新增 `auth/proactive_refresh.go`（`ChatGPTAccessTokenRefreshWindowMinutes=5`、`ChatGPTTokenRefreshIntervalDays=8`、`JWTAccessTokenExpiration`、`ProactiveRefreshReason`、`ProactiveRefreshManagedChatGPT`）；两条请求准备路径接线：`appserver/agent_runtime.go::responsesAgentForTurn`（刷新后经 `AccountManager.ApplyAuthSnapshot` 广播）与 `exec/exec.go::RunContext`。
+- **HTTP 客户端**：`exec` 侧新增 `policyHTTPClientForConfig`，与 `appserver` 同名方法一致，用 `network.PolicyHTTPClient` 绑定应用网络策略后再交给刷新请求（此前用类型断言会静默退回 nil client，绕过策略）；`exec/application_network_test.go::TestExecPolicyHTTPClientForConfigEnforcesApplicationPolicyLikeRust` 固定该行为。
+- **测试**：`auth/proactive_refresh_test.go`（5 分钟边界、8 天 scheduled、可解析 exp 不回退 scheduled、fresh auth 不发请求、失败保留缓存 auth、wire reason）、`appserver/proactive_refresh_like_rust_test.go`。
+
+### #54766 TUI 未知配置字段交给 shared strict-config（`3b8f43a06b`）— landed
+
+- **Rust 行为**：非 strict 配置忽略未知 keymap context / action / 错位 action；strict 配置按 `serde_ignored` 路径报告 `tui.keymap.<context>`、`tui.keymap.<context>.<action>`、`profiles.<name>.tui.<key>`。
+- **Go 落地**：新增叶子包 `keymapschema`（11 context / 154 action，`global` 额外含 `submit`/`queue`/`toggle_shortcuts`）；`config/config.go` 在 `validateKnownTuiConfigFields` 中新增 `validateKnownTuiKeymapFields`，profile 的 tui 仅允许 `session_picker_view`；`tui/keymap_config.go` 改为忽略未知 context / 未知 action / 根下错位 action（已知 context 但值非 table 仍报错）。
+- **测试**：`tui/keymap_schema_parity_like_rust_test.go`（schema 与 `keymapActionCatalog` 完全一致）、`config/keymap_strict_like_rust_test.go`（strict 报告三类路径、非 strict 忽略、已知字段可加载）、`tui/keymap_test.go::TestKeymapConfigIgnoresUnknownAndMisplacedActionsLikeRust`。
+
+### #51786 跨执行请求保留 sandbox override（`622e9e3696`）— landed（本轮补齐 producer）
+
+- **Rust 行为**：`SandboxOverride` 进入共享 protocol，由 `sandbox_override_for_first_attempt` 产出，经 tool attempt / exec 请求 / exec-server 进程与文件系统沙箱准备一路透传，最终以 `sandboxOverride` 出现在 filesystem sandbox context（`skip_serializing_if` 省略 `NoOverride`），仅用于观测，不放宽权限、不改沙箱命令。
+- **此前已完成**：`execserver/sandbox_override.go` 枚举与 wire 形状、`FileSystemSandboxContext.SandboxOverride`、`execserver/server.go` / `sandbox_process_windows.go` / `fs_helper.go` 的合法性校验。
+- **本轮补齐**：`tool/unified_exec.go::sandboxOverrideForFirstAttempt` 逐条对齐 Rust 判定——策略不允许无沙箱执行（存在 denied reads）时，已批准的 `require_escalated` 报 `EscalatedSandboxWithRestrictions`，否则 `NoOverride`；允许无沙箱执行时，已批准的 `require_escalated` 报 `BypassSandboxFirstAttempt`。选择经 `FileSystemSandboxContextOptions.SandboxOverride` 写入 wire，`NoOverride` 时省略。
+- **测试**：`tool/unified_exec_test.go::TestUnifiedExecSandboxOverrideForFirstAttemptLikeRust`（含 nil / 默认 / 两种升级 / denied-reads 非升级共 5 例）、`TestUnifiedExecSandboxContextCarriesSandboxOverrideLikeRust`（wire 携带值与省略两种形态）。
+- **仍未移植的载体**：`SandboxAttempt` / `SandboxDirectSpawnTransformRequest` / `SandboxExecRequest.sandbox_override` 在 Go 为 0 命中（Go 没有 attempt/orchestrator 层），其唯一消费者 sandbox integrity runner 对应上游 #51842（`c2eb1f42a0`），该提交本身 `blocked_precondition`（前置 #51831/#51840/#51841）。override 在 Go 的语义因此与上游一致：观测字段，不改变执行。
+
+## 22.3 不适用（N/A）
+
+- **`df8990e261` #54761 zip 9.0.0 与插件归档解压**：Go 插件包不使用 zip（`git grep archive/zip -- '*.go'` 0 命中），走 tar.gz（`plugin/bundle_archive.go::UnpackPluginBundleTarGz`）；解压已用 `os.FileMode(header.Mode)&0o777`（`plugin/bundle_archive.go:212`），保留可执行位并剥掉 setuid/setgid/sticky，与 zip 9 后的契约一致。Cargo/Bazel 锁文件变更无 Go 对应物。
+- **`d13db678cb` #54763 移除 macOS daemon `taskpolicy -b`**：Go 从未使用 `taskpolicy`（0 命中），`appserverdaemon/pid_process_unix.go` 直接 `exec.Command` + `Setsid`，正是该提交之后的形状。
+
+## 22.4 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./auth -run "ProactiveRefresh"` | ok |
+| `go test ./appserver -run "TestResponsesAgentProactivelyRefreshesManagedChatGPTLikeRust|TestResponsesAgentKeepsFreshManagedChatGPTAuth"` | ok |
+| `go test ./config` | ok |
+| `go test ./tui` | ok |
+| `go test ./tool -run "SandboxOverride"` | ok |
+| `go test ./exec -run "TestExecRunPublishesApplicationNetworkPolicyLikeRust|TestExecPolicyHTTPClientForConfigEnforcesApplicationPolicyLikeRust"` | ok |
+| `go test ./execserver -run "SandboxOverride"` | ok |
+| `go test ./model -run "TestApiKeyCyberAccessProgramsFromConfigLikeRust"` | ok |
+
+
+**既有失败（不属本轮引入，已在 detached `db882bd7` 的干净 worktree 复现）**：`TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked`、`TestWindowsSandboxPowerShellFallbackWithoutCompatibleShellLikeRust`（execserver，Windows 环境/提权相关）、`TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust`、`TestLocalShellLaunchRestoresExecutorPathDirsLikeRust`（tool，依赖 `/bin/sh`）、`TestRunExecReviewUsesRustReviewRubricInstructions`（exec）、`TestRuntimeAgentControllerSpawnUsesCapturedStepSettingsLikeRust`、`TestProjectRootMarkersDriveDiscoveryLikeRust`、`TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust`、`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`（appserver）、`TestAgentsDashboardSearchAndGrouping`、`TestFeaturesEnableUnderDevelopmentWarnsLikeRust`、`TestNoDaemonRejectionsLikeRust`（app）。
+
+## 22.5 账本
+
+`update/r90_commit_ledger_2026_10_16.tsv`：landed 97 / not_applicable 79 / blocked_precondition 22 / complete 15 / AlreadyImplemented 12，partial 归零。
+
+## 22.6 baseline 说明
+
+parity baseline（`parity.json.rustBaseline`、`parity/baseline.json`、`parity/domains.json`）继续冻结在 `970b7f2ff4`：`parity/alignment_control_test.go` 同时硬编码 candidate SHA 与 `parity/commits.json` 的 52 条提交、README 与 plan 文本，单改 baseline 会让该测试失败。本轮只做功能同步，不移动 baseline。

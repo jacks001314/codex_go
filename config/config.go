@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/keymapschema"
 	"codex_go/network"
 
 	"github.com/pelletier/go-toml/v2"
@@ -904,7 +905,59 @@ func validateKnownTuiConfigFields(values map[string]any) error {
 			return fmt.Errorf("unknown configuration field `tui.%s`", key)
 		}
 	}
+	// Rust #54766: unknown keymap contexts/actions are ignored during
+	// deserialization and surface here as ignored fields when strict config
+	// validation is on (`serde_ignored` reports `tui.keymap.<context>[.<action>]`).
+	return validateKnownTuiKeymapFields(tui)
+}
+
+// validateKnownTuiKeymapFields reports the first unknown context or action in
+// `[tui.keymap]` with the path shape Rust's `serde_ignored` policy produces.
+func validateKnownTuiKeymapFields(tui map[string]any) error {
+	rawKeymap, ok := tui["keymap"]
+	if !ok {
+		return nil
+	}
+	keymap, ok := rawKeymap.(map[string]any)
+	if !ok {
+		// Type errors belong to the keymap parser; this check only reports the
+		// unknown paths Rust's strict policy sees.
+		return nil
+	}
+	contexts := make([]string, 0, len(keymap))
+	for context := range keymap {
+		contexts = append(contexts, context)
+	}
+	sort.Strings(contexts)
+	for _, context := range contexts {
+		if !keymapschema.KnownContext(context) {
+			return fmt.Errorf("unknown configuration field `tui.keymap.%s`", context)
+		}
+		actions, ok := keymap[context].(map[string]any)
+		if !ok {
+			continue
+		}
+		names := make([]string, 0, len(actions))
+		for action := range actions {
+			names = append(names, action)
+		}
+		sort.Strings(names)
+		for _, action := range names {
+			if !keymapschema.KnownAction(context, action) {
+				return fmt.Errorf("unknown configuration field `tui.keymap.%s.%s`", context, action)
+			}
+		}
+	}
 	return nil
+}
+
+func sortedConfigMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func validateKnownTopLevelConfigFields(values map[string]any) error {
@@ -940,6 +993,15 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 			}
 			if err := validateKnownFeatureFieldsAt(profile["features"], "profiles."+name+".features"); err != nil {
 				return err
+			}
+			// Rust #54766: `ProfileTui` no longer denies unknown fields during
+			// deserialization; the strict policy reports them as ignored fields.
+			if profileTui, ok := profile["tui"].(map[string]any); ok {
+				for _, key := range sortedConfigMapKeys(profileTui) {
+					if key != "session_picker_view" {
+						return fmt.Errorf("unknown configuration field `profiles.%s.tui.%s`", name, key)
+					}
+				}
 			}
 		}
 	}

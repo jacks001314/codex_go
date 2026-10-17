@@ -13,6 +13,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -240,6 +241,21 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	resolvedAuth, err := auth.NewStoreWithOptions(r.CodexHome, authStoreOptions).Resolve()
 	if err != nil {
 		return nil, err
+	}
+	// Rust AuthManager::auth() proactively refreshes managed ChatGPT auth that
+	// is inside the expiry window or overdue on its eight-day schedule, and
+	// reports the matching reason (#53991). A failed refresh is non-fatal: the
+	// run continues with the cached auth, as Rust does.
+	if resolvedAuth != nil {
+		httpClient := r.policyHTTPClientForConfig(cfg)
+		if refreshed, _, attempted, refreshErr := auth.ProactiveRefreshManagedChatGPT(ctx, &auth.RefreshChatGPTTokenOptions{
+			CodexHome:    r.CodexHome,
+			HTTPClient:   httpClient,
+			AuthSnapshot: &resolvedAuth.Auth,
+			StoreOptions: authStoreOptions,
+		}, time.Now()); attempted && refreshErr == nil && refreshed != nil {
+			resolvedAuth = &auth.ResolvedAuth{Auth: *refreshed, Source: resolvedAuth.Source}
+		}
 	}
 	instructions, err := baseInstructionsForRequest(req, cfg)
 	if err != nil {
@@ -1830,6 +1846,35 @@ func (r *Runner) httpClientForConfig(cfg *config.Config) model.HTTPDoer {
 		return base
 	}
 	return &network.PolicyHTTPDoer{Policy: policy, Next: base}
+}
+
+// policyHTTPClientForConfig returns the exec runner's concrete HTTP client with
+// the application network policy enforced by the client's own transport. Callers
+// that need an *http.Client (the proactive ChatGPT token refresh, for example)
+// use this instead of asserting a type on httpClientForConfig, whose policy-bound
+// result is a model.HTTPDoer.
+func (r *Runner) policyHTTPClientForConfig(cfg *config.Config) *http.Client {
+	var base *http.Client
+	if r != nil && r.HTTPClient != nil {
+		if client, ok := r.HTTPClient.(*http.Client); ok {
+			base = client
+		}
+	}
+	if base == nil {
+		respectProxy := false
+		if cfg != nil {
+			respectProxy = cfg.RespectSystemProxyEnabled()
+		}
+		base = network.NewHTTPClient(respectProxy, 0)
+	}
+	if cfg == nil {
+		return base
+	}
+	policy := cfg.NetworkPolicy()
+	if !policy.IsScoped() || !cfg.RestrictsApplicationTraffic() {
+		return base
+	}
+	return network.PolicyHTTPClient(policy, base)
 }
 
 type execResumeContext struct {
