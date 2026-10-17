@@ -1327,7 +1327,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7efa9d96fb34c3cafe108a3c870bfc33e5635772	45137	Remove Astra sparkle animation from the TUI composer (#45137)	2026-09-12	tui	0	0		0	0	not_applicable	
 7efb0262d6cb62abd059835453d118255da25620	44969	Open tasks managed elsewhere as read-only history in the command center (#44969)	2026-09-12	tui	0	0		0	0	not_applicable	
 7efc49b258587fbe872c7897e90ffa6144bea2a0	51512	Align Windows sandbox temp permissions with the child environment (#51512)	2026-10-06	execserver	2	1	0.50	0	0	audit_pending	ordered_env_entries
-7efd184c2410c02a9d0feb4896855f0f18a8f47e	52724	Add observers for initial exec-server connection attempts (#52724)	2026-10-09	execserver	3	0	0.00	0	0	implementation_pending	ConnectionAttemptOutcome,ConnectionObserver,observe_connection_attempts
+7efd184c2410c02a9d0feb4896855f0f18a8f47e	52724	Add observers for initial exec-server connection attempts (#52724)	2026-10-09	execserver	3	0	0.00	0	0	complete	ConnectionAttemptOutcome,ConnectionObserver,observe_connection_attempts
 7f01a84effccef40d4726c3ca12e6c839ec98d7a	45693	Move Guardian approval routing into the reviewer extension (#45693)	2026-09-15	guardian	3	3	1.00	0	0	complete	
 7f0ab958275e5a3ec40eff993aa077b3f0636abf	46009	Centralize compaction checkpoint selection and validation (#46009)	2026-09-16	guardian	5	1	0.20	0	0	audit_pending	CompactionCheckpoint,from_item,is_compatible_with,is_usable
 7f135e1314433a53d4e348cbf7d3df6072e5971a	41206	Make Ultra reasoning fallback model-aware (#41206)	2026-08-27	appserver	0	0		0	0	not_applicable	
