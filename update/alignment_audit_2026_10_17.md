@@ -463,3 +463,32 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go test ./turn` | ok |
 | `go test ./telemetry` | ok |
 | `go test ./appserver -run "MCP"` | ok |
+
+# Round 101 增量（2026-10-17，lead）
+
+## 17.1 已落地
+
+### #54315 Proposed Plan 的 Markdown 底色与可读前景（`86ee40c380`）— landed
+
+- **计划底色（Rust `style.rs::proposed_plan_style` / `plans.rs::plan_style`）**：`tui/style.go` 新增 `ProposedPlanSurface(level)`，用终端默认背景按 `ProposedPlanBackground`（浅色终端混 4% 黑、深色混 12% 白）解析出 plan fill；终端默认色未知时返回 `ok=false`，与 Rust 无 palette 时 `Style::default()` 不铺底色一致。
+- **整块着色（Rust `style_proposed_plan_line`）**：`tui/markdown/render.go` 新增 `RenderProposedPlanWithThemeCwd`。先按主题正常渲染 Markdown，再逐行套 plan fill：
+  - 每行行首写入 `48;2;r;g;b` / `48;5;n`，空白布局行也铺底色（Rust 对 `plan_lines` 的所有行调用 style patch）。
+  - 逐条改写 SGR：`38;2;r;g;b` 与 `38;5;n` 前景先经 `tui.ReadableColorOn(..., &fill)` 做对比度修正再重新编码；`49` 与 `0` 重置后重新断言 plan fill，避免内部 span 的 reset 打出空洞。
+  - SGR 参数以纯数字拼接（`planForegroundParams` / `planBackgroundParams`），不把完整 ESC 序列嵌进参数列表。
+- **cell 接线**：`tui/history_cell/plans.go` 的 `ProposedPlanCell` 增加 `ThemeID` / `CWD` 与 `NewProposedPlanWithTheme`，有主题时按 `width-4` 渲染并缩进两格，块首尾用 `markdown.ProposedPlanBlankLine()` 铺底（Rust 的 `plan_lines` 首尾各有一个 padded space 行）；无主题构造器保留 raw fallback。`tui/tea/model.go::renderProposedPlanState` 传入 `m.activeTUITheme()` 与 `m.sessionCWD`。
+- **测试钩子**：`tui/terminal_palette.go` 新增 `SetStdoutColorLevelForTest`，对应 Rust 在 `TEST_DEFAULT_COLORS` 存在时把 `effective_stdout_color_level()` 提升为 TrueColor 的行为。
+
+测试：
+
+- `tui/markdown/plan_surface_test.go::TestApplyPlanSurfacePaintsFillAndAdaptsForegrounds`：行首为 plan fill；`200/200/200` 前景在 `244/244/244` 底色上对比度不足被改写；`0` 重置后输出 `0;48;2;...`；无嵌套 ESC；空白行铺底。
+- `tui/markdown/plan_surface_test.go::TestRenderProposedPlanWithThemeCwdShadesMarkdown`：表格内容保留，且每一行（含空白行）都以 `48;2;` 开头。
+- `tui/history_cell/proposed_plan_surface_test.go::TestProposedPlanCellRendersShadedMarkdownLikeRust`：表体行与 padding 行都带底色，表头仍是 `• Proposed Plan`；无主题构造器保持 raw fallback。
+
+## 17.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./tui/markdown ./tui/history_cell` | ok |
+| `go test ./tui` | ok |
+| `go test ./tui/tea` | 仅既有 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 失败（本机无剪贴板，copied=""），与本轮改动无关 |

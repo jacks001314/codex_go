@@ -953,12 +953,12 @@ type Options struct {
 	TerminalSizeSettleDelay time.Duration
 	// OnTerminalSizeObservation overrides the metrics recorder (tests).
 	OnTerminalSizeObservation func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
-	Width               int
-	Height              int
-	NoAltScreen         bool
-	Placeholder         string
-	ModelPickerOptions  []codextui.ModelPickerOption
-	ServiceTierCommands []bottompane.ServiceTierCommand
+	Width                     int
+	Height                    int
+	NoAltScreen               bool
+	Placeholder               string
+	ModelPickerOptions        []codextui.ModelPickerOption
+	ServiceTierCommands       []bottompane.ServiceTierCommand
 	// ServiceTierRequirements carries the server's configRequirements/read
 	// response so the model catalog's service tiers are constrained by the
 	// server's reported speed policies before the picker and the service-tier
@@ -5575,7 +5575,7 @@ func (m *Model) renderProposedPlanState(state *proposedPlanDisplayState) {
 	if width < 20 {
 		width = 20
 	}
-	cell := historycell.NewProposedPlan(state.Text.String())
+	cell := historycell.NewProposedPlanWithTheme(state.Text.String(), m.activeTUITheme(), m.sessionCWD)
 	state.MessageIndex = m.upsertHistoryMessage(state.MessageIndex, cell.DisplayLines(width), cell.RawLines())
 }
 

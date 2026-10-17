@@ -62,6 +62,138 @@ func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd str
 	return dimRenderedLines(rendered), nil
 }
 
+// RenderProposedPlanWithThemeCwd renders a proposed plan's markdown inside the
+// shaded plan surface. Rust #54315 applies the plan fill after Markdown layout
+// and then adapts every foreground to that fill, for both streamed and
+// completed plans; Go renders ANSI directly, so the same pass paints each line's
+// background and re-resolves its foreground colours against it.
+func RenderProposedPlanWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
+	rendered, err := RenderWithThemeCwd(text, width, themeID, cwd)
+	if err != nil || strings.TrimSpace(rendered) == "" {
+		return rendered, err
+	}
+	level := codextui.DetectStdoutColorLevel()
+	surface, background, ok := codextui.ProposedPlanSurface(level)
+	if !ok {
+		return rendered, nil
+	}
+	return applyPlanSurface(rendered, surface, background, level), nil
+}
+
+// ProposedPlanBlankLine returns a single space painted with the plan fill.
+// Rust's ProposedPlanCell styles the plan block's leading and trailing padding
+// lines with the same surface, so the shaded block has no visual gaps.
+func ProposedPlanBlankLine() string {
+	level := codextui.DetectStdoutColorLevel()
+	surface, _, ok := codextui.ProposedPlanSurface(level)
+	if !ok {
+		return " "
+	}
+	return "\x1b[" + strings.Join(planBackgroundParams(surface, level), ";") + "m \x1b[0m"
+}
+
+// planSGRPattern matches SGR sequences; OSC 8 hyperlinks (ESC ] ...) never match.
+var planSGRPattern = regexp.MustCompile("\x1b\\[([0-9;]*)m")
+
+// applyPlanSurface paints the plan fill on every rendered line and adapts each
+// explicit foreground to the fill (Rust #54315 `style_proposed_plan_line`).
+func applyPlanSurface(rendered string, surface codextui.TerminalColor, background codextui.RGB, level codextui.StdoutColorLevel) string {
+	backgroundSGR := "\x1b[" + strings.Join(planBackgroundParams(surface, level), ";") + "m"
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			// Rust still paints the plan fill on blank layout lines.
+			lines[index] = backgroundSGR + "\x1b[0m"
+			continue
+		}
+		lines[index] = backgroundSGR + planSurfaceLine(line, background, level) + "\x1b[0m"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// planSurfaceLine rewrites one rendered line's SGR sequences for the plan
+// surface: foreground colours are contrast-corrected against the fill, the
+// default background is replaced by the fill, and every reset re-asserts the
+// fill so nested spans cannot punch holes in the shaded block.
+func planSurfaceLine(line string, background codextui.RGB, level codextui.StdoutColorLevel) string {
+	return planSGRPattern.ReplaceAllStringFunc(line, func(sequence string) string {
+		params := planSGRPattern.FindStringSubmatch(sequence)[1]
+		if params == "" {
+			return sequence
+		}
+		parts := strings.Split(params, ";")
+		out := make([]string, 0, len(parts)+3)
+		for index := 0; index < len(parts); index++ {
+			switch parts[index] {
+			case "38":
+				if index+4 < len(parts) && parts[index+1] == "2" {
+					red, rerr := strconv.Atoi(parts[index+2])
+					green, gerr := strconv.Atoi(parts[index+3])
+					blue, berr := strconv.Atoi(parts[index+4])
+					if rerr == nil && gerr == nil && berr == nil {
+						rgb := codextui.RGB{R: uint8(red), G: uint8(green), B: uint8(blue)}
+						adapted := codextui.ReadableColorOn(codextui.TerminalColor{RGB: &rgb}, &background, level)
+						out = append(out, planForegroundParams(adapted, level)...)
+						index += 4
+						continue
+					}
+				}
+				if index+2 < len(parts) && parts[index+1] == "5" {
+					value, ierr := strconv.Atoi(parts[index+2])
+					if ierr == nil {
+						indexValue := uint8(value)
+						adapted := codextui.ReadableColorOn(codextui.TerminalColor{Index: &indexValue}, &background, level)
+						out = append(out, planForegroundParams(adapted, level)...)
+						index += 2
+						continue
+					}
+				}
+				out = append(out, parts[index])
+			case "0":
+				out = append(out, "0")
+				out = append(out, planBackgroundParams(codextui.TerminalColor{RGB: &background}, level)...)
+			case "49":
+				out = append(out, planBackgroundParams(codextui.TerminalColor{RGB: &background}, level)...)
+			default:
+				out = append(out, parts[index])
+			}
+		}
+		return "\x1b[" + strings.Join(out, ";") + "m"
+	})
+}
+
+// planForegroundParams renders only the foreground component of a colour as SGR
+// parameters, so it can be spliced into an existing sequence without nesting
+// ESC sequences or resetting the surface.
+func planForegroundParams(color codextui.TerminalColor, level codextui.StdoutColorLevel) []string {
+	return planColorParams(color, true, level)
+}
+
+func planBackgroundParams(color codextui.TerminalColor, level codextui.StdoutColorLevel) []string {
+	return planColorParams(color, false, level)
+}
+
+func planColorParams(color codextui.TerminalColor, foreground bool, level codextui.StdoutColorLevel) []string {
+	parameter := "48"
+	if foreground {
+		parameter = "38"
+	}
+	resolved := color
+	if color.RGB != nil && level != codextui.ColorTrue {
+		resolved = codextui.BestColorForLevel(*color.RGB, level)
+	}
+	switch {
+	case resolved.RGB != nil:
+		return []string{parameter, "2", strconv.Itoa(int(resolved.RGB.R)), strconv.Itoa(int(resolved.RGB.G)), strconv.Itoa(int(resolved.RGB.B))}
+	case resolved.Index != nil:
+		return []string{parameter, "5", strconv.Itoa(int(*resolved.Index))}
+	case foreground:
+		return []string{"39"}
+	default:
+		return []string{"49"}
+	}
+}
+
 // dimRenderedLines applies faint to every rendered line, re-asserting it after
 // each span's reset so the whole block reads dimmed (Rust's style patch covers
 // every span of the cell).

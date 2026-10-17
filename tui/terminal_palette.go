@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/muesli/termenv"
 )
@@ -35,6 +36,23 @@ type TerminalColor struct {
 var detectedColorLevel StdoutColorLevel
 var detectedColorLevelOnce sync.Once
 
+// colorLevelOverride pins the color level for tests so rendering can be
+// exercised at a chosen palette depth without probing the host terminal. It
+// mirrors Rust's test-only promotion of TEST_DEFAULT_COLORS to truecolor in
+// terminal_palette.rs.
+var colorLevelOverride atomic.Pointer[StdoutColorLevel]
+
+// SetStdoutColorLevelForTest pins DetectStdoutColorLevel and returns a restore
+// function.
+func SetStdoutColorLevelForTest(level StdoutColorLevel) func() {
+	previous := colorLevelOverride.Load()
+	pinned := level
+	colorLevelOverride.Store(&pinned)
+	return func() {
+		colorLevelOverride.Store(previous)
+	}
+}
+
 // DetectStdoutColorLevel reports the terminal's color depth, cached for the
 // lifetime of the process so a render pass uses one stable palette.
 //
@@ -43,6 +61,9 @@ var detectedColorLevelOnce sync.Once
 // color but often advertises only ANSI-16 (no COLORTERM), so WT_SESSION is
 // promoted to truecolor unless FORCE_COLOR is set.
 func DetectStdoutColorLevel() StdoutColorLevel {
+	if level := colorLevelOverride.Load(); level != nil {
+		return *level
+	}
 	detectedColorLevelOnce.Do(func() {
 		detectedColorLevel = detectStdoutColorLevel()
 	})

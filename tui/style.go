@@ -83,6 +83,23 @@ func ProposedPlanBackground(terminalBG RGB, colorLevel StdoutColorLevel) Termina
 	return UserMessageBackground(terminalBG, colorLevel)
 }
 
+// ProposedPlanSurface resolves the shaded proposed-plan background against the
+// terminal's default background (Rust #54315 plans.rs `plan_style`). ok is
+// false when the terminal's default colors are unknown, in which case the plan
+// renders unshaded, like Rust's no-palette branch.
+func ProposedPlanSurface(level StdoutColorLevel) (TerminalColor, RGB, bool) {
+	_, terminalBG, known := defaultTerminalColorsRGB()
+	if !known {
+		return TerminalColor{}, RGB{}, false
+	}
+	surface := ProposedPlanBackground(terminalBG, level)
+	rgb, ok := terminalColorRGB(surface)
+	if !ok {
+		return TerminalColor{}, RGB{}, false
+	}
+	return surface, rgb, true
+}
+
 func TableSeparatorStyleFor(terminalFG *RGB, terminalBG *RGB, colorLevel StdoutColorLevel) StyleSpec {
 	if terminalFG == nil || terminalBG == nil {
 		return StyleSpec{Dim: true}
