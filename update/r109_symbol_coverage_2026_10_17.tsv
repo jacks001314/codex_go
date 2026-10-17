@@ -1190,7 +1190,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 72ec34ee9aced612c4fac9a4b0acc49825324a7d	47380	Route TUI voice controls through the app (#47380)	2026-09-22	tui	7	0	0.00	0	0	implementation_pending	VoiceControl,control_voice,handle_startup_submission_key,is_dispatch_token_event,stop_realtime_conversation,toggle_realtime_microphone,with_voice_toggle
 72f999edc7848961b99c4b98bf1e62d12fa35798	53156	Simplify the custom terminal drawing API (#53156)	2026-10-11	tui	1	0	0.00	0	0	implementation_pending	draw_with_size
 73129716c28bd56d49a8b02544934dcc8a961dc2	47029	Delete persisted message boards with their root threads (#47029)	2026-09-21	appserver	3	1	0.33	0	0	audit_pending	delete_boards,with_thread_data_cleanup
-73178e7ca60fe8655c49727e60a467d7c03f896c	51378	Keep Guardian v2 WebSocket pools warm with concurrent replenishment (#51378)	2026-10-06	guardian	2	1	0.50	0	0	audit_pending	connect_with_connector
+73178e7ca60fe8655c49727e60a467d7c03f896c	51378	Keep Guardian v2 WebSocket pools warm with concurrent replenishment (#51378)	2026-10-06	guardian	2	1	0.50	0	0	not_applicable	connect_with_connector
 731d4a5ca842739acdeb1e594834aed5ad9c82e2	47922	Allow full-access Windows setup to provision through registered Core (#47922)	2026-09-24	appserver	0	0		0	0	not_applicable	
 731d969d0387e768a7c35aff430c6d9d376bd951	40670	Clarify session exit messages (#40670)	2026-08-25	tui	0	0		0	0	not_applicable	
 7322c5e7904d3712f15e6fe3472267da438a0b98	45852	Preserve executor path conventions in permission summaries (#45852)	2026-09-16	tui	0	0		0	0	not_applicable	
