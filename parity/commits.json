@@ -19942,9 +19942,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/8); candidate gap: ListMcpResourceTemplatesHandler, ListMcpResourcesHandler, McpResourceToolMessages, ReadMcpResourceHandler, create_list_mcp_resource_templates_tool"
+        "Landed 5aef4cd0: model.McpResourceToolMessages + ToolMessages.McpResources + ModelMessages.MCPResources(), tool.ParseCatalogParameters, turn.registerMCPResourceHandlers applies per-tool description/parameters (invalid schema warns and keeps bundled) for list_mcp_resources/list_mcp_resource_templates/read_mcp_resource, appserver router wiring; tests model/catalog_test.go TestModelMessagesMCPResourcesLikeRust, turn/tools_test.go TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust. Go handler names differ (mcpResourceListExecutor/mcpResourceReadExecutor) but spec construction matches Rust mcp_resource_spec::with_model_messages."
       ]
     },
     {
