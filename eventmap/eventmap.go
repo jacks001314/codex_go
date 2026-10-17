@@ -2,6 +2,7 @@ package eventmap
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"encoding/xml"
 	"os"
 	"path/filepath"
@@ -26,7 +27,97 @@ type ContentItem struct {
 	Kind     ContentKind
 	Text     string
 	ImageURL string
+	// FileID is the uploaded-file form of an image reference (Rust
+	// `ImageReference::File`); when set it replaces ImageURL on the wire.
+	FileID string
+	// AudioURL carries an inline audio data URL (Rust
+	// `ContentItem::InputAudio`).
+	AudioURL string
 	Detail   string
+}
+
+// Wire renders the item in the shared content-part shape used by prompt
+// fragments, world-state contributions and tool outputs (Rust #54776's
+// `ContentItem` serde shape): the `type` tag first, then the reference the item
+// actually carries (`image_url` or `file_id`), then the optional detail.
+func (item ContentItem) Wire() map[string]any {
+	switch item.Kind {
+	case ContentInputImage:
+		out := map[string]any{"type": string(ContentInputImage)}
+		if item.FileID != "" {
+			out["file_id"] = item.FileID
+		} else if item.ImageURL != "" {
+			out["image_url"] = item.ImageURL
+		}
+		if item.Detail != "" {
+			out["detail"] = item.Detail
+		}
+		return out
+	case ContentInputAudio:
+		return map[string]any{"type": string(ContentInputAudio), "audio_url": item.AudioURL}
+	case ContentOutputText:
+		return map[string]any{"type": string(ContentOutputText), "text": item.Text}
+	default:
+		return map[string]any{"type": string(ContentInputText), "text": item.Text}
+	}
+}
+
+// RustJSON renders the item in Rust's serde byte shape (Rust #54776). Field
+// order and omission must match serde because the world-state hash covers these
+// bytes.
+func (item ContentItem) RustJSON() ([]byte, error) {
+	type textItem struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	type imageItem struct {
+		Type     string `json:"type"`
+		ImageURL string `json:"image_url,omitempty"`
+		FileID   string `json:"file_id,omitempty"`
+		Detail   string `json:"detail,omitempty"`
+	}
+	type audioItem struct {
+		Type     string `json:"type"`
+		AudioURL string `json:"audio_url"`
+	}
+	switch item.Kind {
+	case ContentInputImage:
+		imageURL, fileID := item.ImageURL, item.FileID
+		// Rust's ImageReference is an untagged either/or; keep the file form
+		// authoritative when both are set, matching Wire().
+		if fileID != "" {
+			imageURL = ""
+		}
+		return json.Marshal(imageItem{Type: string(ContentInputImage), ImageURL: imageURL, FileID: fileID, Detail: item.Detail})
+	case ContentInputAudio:
+		return json.Marshal(audioItem{Type: string(ContentInputAudio), AudioURL: item.AudioURL})
+	case ContentOutputText:
+		return json.Marshal(textItem{Type: string(ContentOutputText), Text: item.Text})
+	default:
+		return json.Marshal(textItem{Type: string(ContentInputText), Text: item.Text})
+	}
+}
+
+// ContentItemsRustJSON serializes typed content in Rust's serde shape for
+// world-state hashing: a single item serializes as that item (Rust fragments
+// render exactly one), while several serialize as an array.
+func ContentItemsRustJSON(items []ContentItem) []byte {
+	if len(items) == 1 {
+		if data, err := items[0].RustJSON(); err == nil {
+			return data
+		}
+	}
+	raw := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		if data, err := item.RustJSON(); err == nil {
+			raw = append(raw, data)
+		}
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return []byte("[]")
+	}
+	return data
 }
 
 type ResponseItemKind string

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	contextfrag "codex_go/context"
 	"codex_go/utils"
 
 	"github.com/grafana/sobek"
@@ -1841,8 +1842,38 @@ func codeModeToolResult(output *Output) map[string]any {
 		}
 		result[key] = value
 	}
-	result["output"] = normalizeNestedExecOutput(output.Body)
+	outputText := normalizeNestedExecOutput(output.Body)
+	if strings.TrimSpace(output.Body) == "" {
+		// Rust #54776 routes a typed tool result through the shared
+		// content-to-tool-output conversion, so code mode sees image references
+		// and audio instead of an empty string.
+		if parts, ok := codeModeContentParts(output.Data["content_items"]); ok {
+			if text := contextfrag.ToolOutputText(parts); text != "" {
+				outputText = text
+			}
+		}
+	}
+	result["output"] = outputText
 	return result
+}
+
+// codeModeContentParts accepts the two shapes Go uses for typed tool output:
+// the local []map[string]any and the dynamic-tool []any of maps.
+func codeModeContentParts(value any) ([]map[string]any, bool) {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed, len(typed) > 0
+	case []any:
+		parts := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if part, ok := item.(map[string]any); ok {
+				parts = append(parts, part)
+			}
+		}
+		return parts, len(parts) > 0
+	default:
+		return nil, false
+	}
 }
 
 func codeModeToolFailure(name ToolName, output *Output) (string, bool) {

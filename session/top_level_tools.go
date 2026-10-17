@@ -3,12 +3,14 @@ package session
 import (
 	"bytes"
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	"codex_go/eventmap"
 	"codex_go/metrics"
 )
 
@@ -64,6 +66,11 @@ type WorldStateUpdate struct {
 	Role string
 	// Text is the fragment body.
 	Text string
+	// ContentItems carries typed fragment content (Rust #54776's
+	// `RenderedWorldStateFragment` body): when non-empty it replaces Text as the
+	// message body, so contributions can carry images and audio. Text stays the
+	// fragment's text fallback and must be set for a text-only contribution.
+	ContentItems []eventmap.ContentItem
 	// Kind is the fragment's content_item_kind, recorded as message metadata.
 	Kind string
 	// Standalone marks a fragment that must not merge with its neighbours.
@@ -435,10 +442,37 @@ func BaseInstructionsUpdate(text string, previousKnown bool) (string, []WorldSta
 // `WorldStateHash::from_fragment` does (version tag + length-prefixed role and
 // rendered content, SHA-1 in lowercase hex).
 func BaseInstructionsHash(text string) string {
+	return textWorldStateFragmentHash("developer", text)
+}
+
+// textWorldStateFragmentHash is the Rust v1 branch of
+// `WorldStateHash::from_fragment`: a single InputText body keeps the existing
+// text digest so persisted snapshots stay valid.
+func textWorldStateFragmentHash(role string, text string) string {
 	hasher := sha1.New()
 	hasher.Write([]byte("codex-world-state-fragment-v1\x00"))
-	hashComponent(hasher, "developer")
+	hashComponent(hasher, role)
 	hashComponent(hasher, text)
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// TypedWorldStateFragmentHash mirrors Rust's `WorldStateHash::from_fragment`
+// for typed world-state content (Rust #54776): a single InputText fragment keeps
+// the v1 text hash, while any other content hashes under the v2 domain over the
+// role and the serialized content. Rust fragments render exactly one item; Go's
+// carrier may emit several, which hash as their serialized array.
+func TypedWorldStateFragmentHash(role string, items []eventmap.ContentItem) string {
+	if len(items) == 1 && items[0].Kind == eventmap.ContentInputText {
+		return textWorldStateFragmentHash(role, items[0].Text)
+	}
+	hasher := sha1.New()
+	hasher.Write([]byte("codex-world-state-fragment-v2\x00"))
+	hashComponent(hasher, role)
+	content := eventmap.ContentItemsRustJSON(items)
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(content)))
+	hasher.Write(length[:])
+	hasher.Write(content)
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -490,9 +524,9 @@ func MergeWorldStateUpdates(updates []WorldStateUpdate) []any {
 			items = append(items, cloneAnyMapDeep(update.Item))
 			continue
 		}
-		if update.Placement != WorldStateMergeable || strings.TrimSpace(update.Text) == "" {
+		if update.Placement != WorldStateMergeable || worldStateUpdateEmpty(update) {
 			flush()
-			if strings.TrimSpace(update.Text) == "" {
+			if worldStateUpdateEmpty(update) {
 				continue
 			}
 			items = append(items, renderedWorldStateMessage([]WorldStateUpdate{update}))
@@ -507,6 +541,28 @@ func MergeWorldStateUpdates(updates []WorldStateUpdate) []any {
 	return items
 }
 
+// worldStateUpdateEmpty reports whether a fragment contribution carries no
+// model-visible content at all (Rust skips an empty extension section).
+func worldStateUpdateEmpty(update WorldStateUpdate) bool {
+	return len(update.ContentItems) == 0 && strings.TrimSpace(update.Text) == ""
+}
+
+// worldStateUpdateItems returns the typed items a contribution renders to. A
+// plain text contribution keeps the existing single InputText item.
+func worldStateUpdateItems(update WorldStateUpdate) []eventmap.ContentItem {
+	if len(update.ContentItems) > 0 {
+		out := make([]eventmap.ContentItem, 0, len(update.ContentItems))
+		for _, item := range update.ContentItems {
+			if item.Kind == eventmap.ContentInputText {
+				item.Text = strings.Trim(item.Text, "\n")
+			}
+			out = append(out, item)
+		}
+		return out
+	}
+	return []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: strings.Trim(update.Text, "\n")}}
+}
+
 func worldStateUpdateRole(update WorldStateUpdate) string {
 	role := strings.TrimSpace(update.Role)
 	if role == "" {
@@ -519,10 +575,9 @@ func renderedWorldStateMessage(updates []WorldStateUpdate) map[string]any {
 	content := make([]map[string]any, 0, len(updates))
 	kinds := make([]string, 0, len(updates))
 	for _, update := range updates {
-		content = append(content, map[string]any{
-			"type": "input_text",
-			"text": strings.Trim(update.Text, "\n"),
-		})
+		for _, item := range worldStateUpdateItems(update) {
+			content = append(content, item.Wire())
+		}
 		if kind := strings.TrimSpace(update.Kind); kind != "" {
 			kinds = append(kinds, kind)
 		}

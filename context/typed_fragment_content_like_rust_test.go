@@ -60,9 +60,11 @@ func TestRenderSimpleFragmentStaysSingleInputTextLikeRust(t *testing.T) {
 }
 
 // TestToolOutputPartsPreservesAudioLikeRust covers the shared content-to-tool
-// output conversion for audio content.
+// output conversion for audio content. Rust's InputAudio carries only
+// `audio_url`, so the item now supplies it directly instead of overloading the
+// image URL field.
 func TestToolOutputPartsPreservesAudioLikeRust(t *testing.T) {
-	parts := ToolOutputParts([]eventmap.ContentItem{{Kind: eventmap.ContentInputAudio, Text: "transcript", ImageURL: "file:///tmp/a.wav"}})
+	parts := ToolOutputParts([]eventmap.ContentItem{{Kind: eventmap.ContentInputAudio, AudioURL: "file:///tmp/a.wav"}})
 	if len(parts) != 1 || parts[0]["type"] != "input_audio" || parts[0]["audio_url"] != "file:///tmp/a.wav" {
 		t.Fatalf("ToolOutputParts() = %#v", parts)
 	}

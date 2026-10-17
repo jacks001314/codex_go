@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"path/filepath"
 	"strings"
+
+	"codex_go/eventmap"
 )
 
 // Permission-instructions fragment markers (Rust
@@ -23,6 +25,9 @@ func RenderPermissionInstructions(body string) string {
 // worldStateFragmentDomain mirrors Rust's WorldStateHash domain separator.
 const worldStateFragmentDomain = "codex-world-state-fragment-v1\x00"
 
+// worldStateTypedFragmentDomain is Rust's #54776 domain for non-text content.
+const worldStateTypedFragmentDomain = "codex-world-state-fragment-v2\x00"
+
 // WorldStateFragmentHash ports Rust WorldStateHash::from_fragment: SHA-1 over
 // the domain separator plus the fragment role and rendered text, each written
 // length-prefixed after CRLF normalization.
@@ -31,6 +36,25 @@ func WorldStateFragmentHash(role string, rendered string) string {
 	_, _ = hasher.Write([]byte(worldStateFragmentDomain))
 	writeWorldStateHashComponent(hasher, role)
 	writeWorldStateHashComponent(hasher, rendered)
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// TypedWorldStateFragmentHash ports the Rust #54776 branch of
+// WorldStateHash::from_fragment: a single InputText fragment keeps the v1 text
+// hash, while any other typed content hashes under the v2 domain over the role
+// and the serialized content.
+func TypedWorldStateFragmentHash(role string, items []eventmap.ContentItem) string {
+	if len(items) == 1 && items[0].Kind == eventmap.ContentInputText {
+		return WorldStateFragmentHash(role, items[0].Text)
+	}
+	hasher := sha1.New()
+	_, _ = hasher.Write([]byte(worldStateTypedFragmentDomain))
+	writeWorldStateHashComponent(hasher, role)
+	content := eventmap.ContentItemsRustJSON(items)
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(content)))
+	_, _ = hasher.Write(length[:])
+	_, _ = hasher.Write(content)
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 

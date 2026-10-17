@@ -79,23 +79,46 @@ func RenderItems(fragment Fragment) []eventmap.ContentItem {
 func ToolOutputParts(items []eventmap.ContentItem) []map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		switch item.Kind {
-		case eventmap.ContentInputImage:
-			part := map[string]any{"type": "input_image"}
-			if item.ImageURL != "" {
-				part["image_url"] = item.ImageURL
-			}
-			if item.Detail != "" {
-				part["detail"] = item.Detail
-			}
-			out = append(out, part)
-		case eventmap.ContentInputAudio:
-			out = append(out, map[string]any{"type": "input_audio", "text": item.Text, "audio_url": item.ImageURL})
-		default:
-			out = append(out, map[string]any{"type": "input_text", "text": item.Text})
+		if item.Kind == eventmap.ContentOutputText {
+			// Rust's From<ContentItem> pairs OutputText with InputText in the
+			// tool-output representation.
+			item.Kind = eventmap.ContentInputText
 		}
+		out = append(out, item.Wire())
 	}
 	return out
+}
+
+// ToolOutputText mirrors Rust's `content_items_to_code_mode_result`: non-empty
+// text parts are joined with newlines, an image contributes its URL or file id,
+// and an audio part contributes its audio URL (Rust #54776 code-mode output).
+func ToolOutputText(parts []map[string]any) string {
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		kind, _ := part["type"].(string)
+		switch kind {
+		case "input_text", "output_text":
+			if text, _ := part["text"].(string); strings.TrimSpace(text) != "" {
+				texts = append(texts, text)
+			}
+		case "input_image":
+			if fileID, _ := part["file_id"].(string); strings.TrimSpace(fileID) != "" {
+				texts = append(texts, fileID)
+				continue
+			}
+			if imageURL, _ := part["image_url"].(string); strings.TrimSpace(imageURL) != "" {
+				texts = append(texts, imageURL)
+			}
+		case "input_audio":
+			if audioURL, _ := part["audio_url"].(string); strings.TrimSpace(audioURL) != "" {
+				texts = append(texts, audioURL)
+			}
+		}
+	}
+	return strings.Join(texts, "\n")
 }
 
 type SimpleFragment struct {

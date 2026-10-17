@@ -1,4 +1,4 @@
-# Rust/Go 功能对齐审计（最新：round 114，2026-10-17）
+# Rust/Go 功能对齐审计（最新：round 115，2026-10-17）
 
 > **当前状态只以本节为准。** 从 §2 开始的各节是历轮快照（round 91 起），其中的计数、上游 SHA 与
 > "冻结在 970b7f2ff4" 之类表述都是**当时**的事实，保留它们仅为追溯每轮证据，不应读作当前值。
@@ -7,18 +7,18 @@
 
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 432 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 431 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
 
-### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，231 数据行）
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，232 数据行）
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 107 |
+| `landed` | 108 |
 | `complete` | 27 |
 | `not_applicable` | 79 |
 | `blocked_precondition` | 17 |
 | `partial` | 1 |
-| **合计** | **231** |
+| **合计** | **232** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -26,10 +26,10 @@
 
 | 状态 | 行数 |
 | --- | --- |
-| `complete` | 446 |
+| `complete` | 447 |
 | `not_applicable` | 1171 |
 | `audit_pending` | 630 |
-| `implementation_pending` | 432 |
+| `implementation_pending` | 431 |
 | `blocked_precondition` | 15 |
 | `partial` | 1 |
 
@@ -790,7 +790,7 @@ go test ./appserver -run 'CollabToolsGate|DisableNativeToolsKeepsV2' # ok
   - `RenderedFragment.ContentItems`、`RenderItems()`：marker 只包裹 `InputText`，图片/音频原样透传；
   - `ToolOutputParts()`：把类型化内容转成 `input_text` / `input_image`（含 `detail`）/ `input_audio` 载荷；
   - 测试：`context/typed_fragment_content_like_rust_test.go` 三例（marker 只作用于文本、纯字符串片段仍为单个 InputText、音频转换）。
-- 未完成：`appserver/turn_runtime.go` 的 world-state 贡献仍以字符串拼接与文本哈希为主，extension prompt 贡献也还是纯文本；code-mode 输出尚未复用 `ToolOutputParts`。账本记为 `partial`。
+- Round 115 收口：`eventmap.ContentItem` 增加 `FileID`/`AudioURL` 与 `Wire()`/`RustJSON()`/`ContentItemsRustJSON()`（Rust serde 形状）；`session.WorldStateUpdate.ContentItems` 承载类型化 world-state 贡献（`MergeWorldStateUpdates` 原样发出 image/audio part）；`session`/`sandbox` 新增 `TypedWorldStateFragmentHash`（单 InputText 保持 v1，其余走 v2 域 + role + 序列化内容 + 8 字节长度，测试钉住独立摘要）；`tool/codeModeToolResult` 对类型化 `content_items` 复用 `context.ToolOutputText`。账本改为 `complete`。
 
 ---
 
@@ -995,5 +995,38 @@ go test ./appserver -run "Feedback|RolloutArchive|Archive" -count=1   # ok
 
 ### 28.3 剩余（目标未完成）
 
-`implementation_pending` 432 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
+`implementation_pending` 431 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
 继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。
+
+## 29. Round 115（2026-10-17）：TUI 侧会话跨线程导航保留
+
+### 29.1 #52184 保留侧会话（`5fe2152b60`）— landed
+
+- Rust 行为：线程导航不再关闭 `side_threads`；保留侧线程的监听器、事件通道和待处理请求。回到父线程后 `/side` 重开原侧线程，并可把内联问题提交到该侧线程；显式返回只丢弃当前活动侧会话，退出时统一关闭所有保留侧会话。
+- Go 落地：`tui/tea.Model.sideConversations` 以父线程 ID 保存侧会话。`resetThreadScopedState` 在切换前调用 `deactivateSideConversation` 保存当前可见快照，再隐藏侧会话；session picker、`/resume`、`/new`、`/cd` 和 agent picker 因此不再丢弃状态。
+- 事件保留：`applyThreadScopedEvent`、`applyInactiveThreadTurnCompleted`、`applyInactiveThreadTurnInterrupted` 和 `applySideParentStatusChange` 改为按保留侧会话路由；用户离开侧会话后，父/侧线程的新行、完成、失败和中断仍写回各自快照。
+- 重开与关闭：`startSideConversation` 先查当前父线程的保留侧会话；存在时直接 `activateRetainedSideConversation`，不再 fork 新线程，内联 `/side <question>` 在该侧线程提交。Ctrl+C 的显式返回从保留表移除并关闭该侧；agent switch 不再调用 `OnCloseSide`。
+- 测试：`tui/tea/side_navigation_like_rust_test.go` 4 例：导航后复用侧线程、离屏父/侧事件保留、只关闭当前侧、agent switch 保留侧会话。
+
+### 29.2 RC
+
+```text
+撤 retained-side reuse：
+  side_navigation_like_rust_test.go:76: side starter calls = 2, want the retained side to be reused
+
+把 resetThreadScopedState 的 deactivate 改回 activeSide=nil：
+  side_navigation_like_rust_test.go:85: reopened side lost its transcript: []tui.Message(nil)
+```
+
+两处恢复后定向用例重新 PASS。
+
+### 29.3 验证
+
+```text
+go test ./tui/tea -run 'TestRetainedSide|TestExplicitSideReturn|TestAgentSwitchRetainsSide' -count=1  # ok
+go test -race ./tui/tea -run 'TestRetainedSide|TestExplicitSideReturn|TestAgentSwitchRetainsSide' -count=1  # ok
+go vet ./tui/tea  # exit 0
+go build ./...    # exit 0
+powershell -File scripts/build.ps1  # bin/codex.exe rebuilt
+go test -p 1 ./tui/tea -count=1  # only existing clipboard baseline TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge FAIL
+```
