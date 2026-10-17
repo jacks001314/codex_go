@@ -1,6 +1,6 @@
 sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	verdict	unmatched
 0003732489a514748e61a0f76a652ac992a5f4f5	54346	Add scoped executor credential auth for remote exec-server (#54346)	2026-10-15	execserver	1	1	1.00	0	0	complete	
-0034ef93a7ae15e38652f09a55ed31adefb8e39f	43805	Centralize Guardian context composition (#43805)	2026-09-08	guardian	12	3	0.25	0	0	audit_pending	CollectedContext,ContextPresentation,RenderedContext,RenderedTranscript,SectionDelivery,SectionOutput,into_messages,into_user_inputs,transcript_entries
+0034ef93a7ae15e38652f09a55ed31adefb8e39f	43805	Centralize Guardian context composition (#43805)	2026-09-08	guardian	12	3	0.25	0	0	not_applicable	CollectedContext,ContextPresentation,RenderedContext,RenderedTranscript,SectionDelivery,SectionOutput,into_messages,into_user_inputs,transcript_entries
 0037b39cc1d5525bd3b92fb3c3341f7a18270e87	47926	Retry file blob uploads on HTTP 502 and 504 (#47926)	2026-09-24	core	0	0		0	0	not_applicable	
 008bbd5884122dc95aaece19ecfe0fc6a59dcf36	43126	Expose native Windows build tools through Bazel targets (#43126)	2026-09-05	core	0	0		0	0	not_applicable	
 00a7b888b23715989db19b74f6cb623ca46be620	39941	Discover HTTP MCP servers from selected executors (#39941)	2026-08-21	appserver	3	1	0.33	0	0	audit_pending	discover_http_mcp_servers,project_selected_environment_mcp_servers

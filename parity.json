@@ -1558,6 +1558,14 @@
             "reason": "Upstream 1c5ca2a979 (#54432 Support remote credential masking with Zsh shell snapshots) now has protocol, replay, wiring, broker masking, and post-source environment restoration: shellSnapshotV2, process/start.shellSnapshot, per-scope cached POSIX capture, safe file materialization, -c/-lc wrapping, shutdown cleanup, SnapshotProviderResult -> ShellRequest -> ExecParams propagation, destination-hint binding, real-env capture, real-to-dummy snapshot text masking, restore-and-disable fallback, and managed-proxy/brokered-dummy re-exports after sourcing. Remaining uncertainty is real Unix remote Zsh e2e coverage and a dedicated unsafe-alias/function reconstruction validator.",
             "userImpact": "Remote executors can capture and replay shell state without writing real broker-managed credentials into the snapshot file; unsafe capture falls back to an explicit unmasked-credentials warning.",
             "test": "go test ./network ./execserver -run 'SnapshotCredential|ShellSnapshot' -count=1; go build ./..."
+        },
+        {
+            "id": "guardian-context-composition",
+            "status": "not_applicable",
+            "area": "guardian",
+            "reason": "Audited upstream 0034ef93a7 (#43805 Centralize Guardian context composition): the upstream change removes duplicated composition between synchronous review and the Guardian V2 async scorer. Go has no async Guardian scorer, and its single reviewer path already composes bounded evidence through state.BuildPromptPartsWithOptions, preserving native encrypted transcript items through guardianPromptDelivery. There is no second composition path to merge; the Rust-only CollectedContext/SectionDelivery internals are not duplicated in Go.",
+            "userImpact": "Guardian evidence keeps one tested ordering and delivery path without an unnecessary parallel composer abstraction.",
+            "test": "go test ./appserver ./state -run Guardian -count=1"
         }
     ]
 }
