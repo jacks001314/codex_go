@@ -516,3 +516,31 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go build ./...` | exit 0 |
 | `go test ./tui/tea -run "TestStatusSurfaceOverrides|TestSavedStatusLineSetup|TestSavedColorPreference|TestStatusLineHostname"` | ok |
 | `go test ./tui/tea` | 仅既有 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 失败（本机无剪贴板，copied=""），与本轮改动无关 |
+
+
+# Round 103 增量（2026-10-17，lead）
+
+## 19.1 已落地
+
+### #53670 不完整响应的压缩侧记账与 rollout 载体（`816fa702ec`）— landed
+
+- **压缩请求的 incomplete 记账（Rust `compact_remote_v2.rs:397-420`）**：`appserver/turn_runtime.go` 在 `compact.CompactRemotely` 返回终止错误时调用新增的 `recordIncompleteCompactionUsage`。用 `errors.As(model.ResponseIncompleteError)` 取 usage，缺失/畸形则忽略、不估算：
+  - **Background（Rust `CompactionRequestKind::Background`）**：自动压缩随 turn 内联运行（Go `Trigger != TriggerManual`），只通过新的 `chargeRolloutBudgetUsage` 扣共享 rollout budget，不写 `total_token_usage` / `last_token_usage` / `token_usage_info`，与 Rust 的 `record_rollout_budget_usage` 一致。
+  - **Foreground（手工 / standalone 压缩）**：复用 `recordIncompleteResponseUsage`（SpendingOnly：累计总量 + 预算 + token-usage contributors），基线保持不变。
+  - 两种分支都保留原始终止错误；即使扣费耗尽预算，也不把 `ErrSessionBudgetExceeded` 传给调用方（Rust 的 `let _ = ...`）。自动压缩失败后走本地 fallback 时 `CompactRemotely` 本身不返回错误，因此该路径不触发记账（Rust 的 V2 手工路径没有本地 fallback）。
+- **rollout `token_usage` 记录**：Rust 为每个响应写 `RolloutItem::TokenUsageRecord`；Go 的等价账本载体是线程元数据 `total_token_usage` + `token_usage_info`（round-90 AC-2 已落地），且 Go 的 rollout budget 不依赖 rollout 行重建（`rolloutBudgetForSession` 从配置构造并内存扣费），因此不存在需要该行类型的消费方，属于载体差异而非功能缺失。
+
+测试：
+
+- 新增 `appserver/incomplete_compaction_usage_like_rust_test.go`：
+  - `TestForegroundIncompleteCompactionSpendsWithoutReplacingTheBaselineLikeRust`：累计 1100→1250，基线/`auto_compact_window_prefill` 不变，预算扣费并记录耗尽，错误仍是 incomplete。
+  - `TestBackgroundIncompleteCompactionOnlyChargesTheBudgetLikeRust`：元数据完全不 变，只扣预算。
+  - `TestIncompleteCompactionWithoutUsageIsNotEstimatedLikeRust`：无 usage 时不扣费、不改总量。
+
+## 19.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./appserver -run "Compact|compact"` | ok |
+| `go test ./appserver -run "TestForegroundIncompleteCompaction|TestBackgroundIncompleteCompaction|TestIncompleteCompactionWithoutUsage"` | ok |

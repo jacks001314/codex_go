@@ -5529,6 +5529,80 @@ func (r *RuntimeRouter) recordIncompleteResponseUsage(threadID string, turnID st
 	}
 }
 
+// recordIncompleteCompactionUsage mirrors Rust #53670's
+// `compact_remote_v2::collect_compaction_output` handling of a terminal
+// `response.incomplete` event for compaction requests:
+//
+//   - Background requests (Rust's `CompactionRequestKind::Background`, i.e. the
+//     auto compaction that runs inline with a turn) may only charge the shared
+//     rollout budget. They must not publish foreground token usage or move the
+//     stored context baseline.
+//   - Foreground requests (a standalone/manual compaction) record the reported
+//     usage as spending-only, exactly like an incomplete sampling response.
+//
+// A missing or malformed usage is ignored rather than estimated, and the
+// terminal error is never replaced: charging may exhaust the budget, but Rust
+// swallows that result with `let _ = ...` (codex-rs/core/src/compact_remote_v2.rs
+// :397-420). Go has no `CompactionRequestKind` enum; the trigger is the same
+// distinction (manual compaction is the standalone foreground path).
+func (r *RuntimeRouter) recordIncompleteCompactionUsage(record *session.Record, request *compact.Request, params *runtimeCompactRequest, err error) {
+	if r == nil || request == nil {
+		return
+	}
+	var incomplete model.ResponseIncompleteError
+	if !errors.As(err, &incomplete) || incomplete.Usage == nil {
+		return
+	}
+	usage := *incomplete.Usage
+	if request.Trigger != compact.TriggerManual {
+		r.chargeRolloutBudgetUsage(usage)
+		return
+	}
+	threadID := strings.TrimSpace(request.ThreadID)
+	modelID := ""
+	cwd := ""
+	if params != nil {
+		modelID = strings.TrimSpace(params.Model)
+	}
+	if record != nil {
+		cwd = strings.TrimSpace(record.Metadata.CWD)
+		if modelID == "" {
+			modelID = strings.TrimSpace(record.Metadata.Model)
+		}
+	}
+	turnParams := &turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      cwd,
+		Model:    modelID,
+	}
+	r.recordIncompleteResponseUsage(threadID, strings.TrimSpace(request.TurnID), modelID, turnParams, usage)
+}
+
+// chargeRolloutBudgetUsage charges one reported response against the shared
+// rollout budget, mirroring Rust's `Session::record_rollout_budget_usage`
+// reached from the background compaction arm. Budget exhaustion is recorded for
+// later reporting but never turned into an error: the caller already holds a
+// terminal failure.
+func (r *RuntimeRouter) chargeRolloutBudgetUsage(usage model.AgentUsage) {
+	if r == nil {
+		return
+	}
+	budget := r.rolloutBudgetForSession()
+	if budget == nil {
+		return
+	}
+	r.rolloutBudgetCharged.Store(true)
+	exhausted, err := budget.RecordUsage(runtimeutil.TokenUsage{
+		InputTokens:             usage.InputTokens,
+		CachedInputTokens:       usage.CachedInputTokens,
+		OutputTokens:            usage.OutputTokens,
+		CodexRolloutBudgetUnits: usage.CodexRolloutBudgetUnits,
+	})
+	if err == nil && exhausted {
+		r.rolloutBudgetExhausted.Store(true)
+	}
+}
+
 // accumulateSpendingOnlyTokenUsage adds a reported usage to the thread's
 // cumulative total and returns the accumulated usage. It is Go's
 // `TokenUsageContext::SpendingOnly` arm of Rust's `record_token_usage_info`
@@ -5945,6 +6019,10 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		FallbackToLocal:      !params.RemoteOnly,
 	})
 	if err != nil {
+		// Rust #53670: a terminal response.incomplete from the compaction
+		// request still reports usage. Charge it (budget-only for background
+		// auto compaction) before the original error is returned.
+		r.recordIncompleteCompactionUsage(record, request, params, err)
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, nil, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, nil, err
 	}
