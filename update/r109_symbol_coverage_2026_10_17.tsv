@@ -770,7 +770,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4b3b569f3975ba4e3bf64589e4d15039066077f8	47698	Allow WebSocket test server shutdown while waiting for requests (#47698)	2026-09-23	core	0	0		0	0	not_applicable	
 4b5c11134974dd6ec733b89d0e5a5f4c7d74856d	51452	Make banner URLs clickable across wrapped lines (#51452)	2026-10-06	tui	0	0		0	0	not_applicable	
 4b664e0ef0397f82e68c60088a90fcd035deb796	47399	Respect tmux mouse settings in fullscreen and overlays (#47399)	2026-09-23	tui	4	2	0.50	0	0	audit_pending	MouseCapture,enable_keyboard_enhancement
-4b81410a80df781aa5bab50e8f5aeac0bfae0e92	40623	Treat user input answers as Guardian authorization changes (#40623)	2026-08-25	guardian	5	0	0.00	0	0	implementation_pending	GuardianReviewEvidence,authorization_version,record_user_input,user_input_for_call,user_input_fragments
+4b81410a80df781aa5bab50e8f5aeac0bfae0e92	40623	Treat user input answers as Guardian authorization changes (#40623)	2026-08-25	guardian	5	0	0.00	0	0	complete	GuardianReviewEvidence,authorization_version,record_user_input,user_input_for_call,user_input_fragments
 4b97832cfb6c23a82fc7372abd34e71a98f43517	47927	Use `127.0.0.1` for local login redirects (#47927)	2026-09-24	appserver	0	0		0	0	not_applicable	
 4b9c24f98c6d886134fd2fc237355064708ff21f	54263	Require fresh Guardian approval for escalated tool retries (#54263)	2026-10-15	core	0	0		0	0	not_applicable	
 4b9e0cc77f264399385903b2a169b4bfd8f3d262	48238	Suppress console windows for local Windows MCP servers (#48238)	2026-09-25	mcp	1	1	1.00	0	0	complete	

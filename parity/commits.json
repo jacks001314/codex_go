@@ -1966,9 +1966,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: GuardianReviewEvidence, authorization_version, record_user_input, user_input_for_call, user_input_fragments"
+        "Round 292 (audit): Go models host-verified request_user_input answers as retained TrustedUserAnswers evidence, renders the marked section into Guardian prompts, includes it in context-change staleness, ignores empty answers, and carries the same evidence into worker reviews."
       ]
     },
     {
