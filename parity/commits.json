@@ -1822,10 +1822,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/3; needs review: TranscriptWindow, into_indices"
-      ]
+        "status": "not_applicable",
+        "evidence": [
+          "TranscriptWindow is private to the Guardian V2 asynchronous scorer transcript; Go has only the synchronous Guardian reviewer and no async transcript window lifecycle."
+        ]
     },
     {
       "sha": "70b5cfc73b25458a7af225d24b16ef4794f8f380",
@@ -19650,10 +19650,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/5; needs review: from_native, get_active_project_for_lookup, resolve_root_git_project_uri_for_trust"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Project trust lookups preserve cwd-before-repository-root and canonical-before-original precedence with Windows case folding; ActiveProjectForLookup applies them to merged project settings and host config projects the same layers."
+        ]
     },
     {
       "sha": "8bbe8f8702471b90c75df20104bf91d20001b0d7",
