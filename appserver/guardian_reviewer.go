@@ -279,10 +279,13 @@ type guardianSessionRunner struct {
 	agent    model.AgentRunner
 	previous string
 	seeded   string
-	// priorReview mirrors Rust's guardian review transcript cursor: set once a
-	// review ran in this guardian session, so the next review reports
-	// had_prior_review_context = true.
+	// priorReview mirrors Rust's ConversationState::cursor: set once review
+	// input was admitted by the guardian session, even if inference failed. The
+	// next review therefore reports had_prior_review_context = true.
 	priorReview bool
+	// completedReviews mirrors Rust's ConversationState::completed_review_count.
+	// A failed review may admit its input without counting as completed (#54264).
+	completedReviews int
 }
 
 // reviewSessionAttribution mirrors Rust's GuardianReviewSessionKind selection
@@ -308,14 +311,45 @@ func (r *guardianSessionRunner) reviewSessionAttribution() (kind string, hadPrio
 	return kind, &prior
 }
 
-// markPriorReview records that a review ran in this guardian session.
-func (r *guardianSessionRunner) markPriorReview() {
+// admitTranscript mirrors Rust's ConversationState::admit_transcript (#54264):
+// input retained by the live conversation advances the transcript cursor even
+// when inference failed, without counting as a completed review.
+func (r *guardianSessionRunner) admitTranscript() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	r.priorReview = true
 	r.mu.Unlock()
+}
+
+// completeReview mirrors Rust's ConversationState::complete_review: a completed
+// assessment advances the cursor and the completed-review count.
+func (r *guardianSessionRunner) completeReview() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.priorReview = true
+	r.completedReviews++
+	r.mu.Unlock()
+}
+
+// markPriorReview records that a review ran in this guardian session. Any
+// submitted review turn admits its input, so a later review builds on it.
+func (r *guardianSessionRunner) markPriorReview() {
+	r.admitTranscript()
+}
+
+// completedReviewCount exposes Rust's completed_review_count for attribution and
+// tests; admission without completion (#54264) leaves it unchanged.
+func (r *guardianSessionRunner) completedReviewCount() int {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.completedReviews
 }
 
 type guardianPrewarmer interface {
@@ -811,6 +845,12 @@ reviewAttempt:
 		return state.DecisionAborted, "", err
 	}
 	r.emit(threadID, completed)
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		// Rust complete_review: a completed assessment advances the transcript
+		// cursor and the completed-review count, unlike a failed-but-admitted
+		// attempt which only admits its input (#54264).
+		runner.completeReview()
+	}
 	decision := state.DecisionFromEvent(completed)
 	r.recordDecision(threadID, turnID, decision)
 	r.markScored(threadID)

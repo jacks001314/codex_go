@@ -288,3 +288,31 @@ landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 
 | `go test ./appserver -run "GuardianReview"` | ok |
 | `go test ./appserver -run "TestGuardianReview...(5 个新用例)"` | ok |
 | `go test ./appserver -count=1` | 仅既有环境失败 `TestProjectRootMarkersDriveDiscoveryLikeRust`、`TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust`、`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` |
+
+# Round 95 增量（2026-10-17，lead）
+
+## 11.1 已落地
+
+### #54264 失败评审仍推进 Guardian transcript admission（`b687844674`）
+
+- `appserver/guardian_reviewer.go`：`guardianSessionRunner` 现在把「已接纳的 transcript 进度」与「已完成的评审数」分开记录，对应 Rust `ConversationState::cursor` / `completed_review_count`：
+  - `admitTranscript()`：请求已提交、输入被 live conversation 保留，即使推理失败也推进 cursor，但**不**增加完成计数；
+  - `completeReview()`：评审完成时推进 cursor 并 +1；
+  - `markPriorReview()` 改为 `admitTranscript()` 的别名（任何被提交的 review turn 都接纳其输入）；
+  - `Review` 只在 `store.Complete` 成功后调用 `completeReview()`，失败/超时/中止路径只保留 admission。
+- 因此下一次评审 `had_prior_review_context` 为 true，与 Rust #54264 的可观察行为一致；失败评审不会被当成 completed review。
+- 结构差异：Rust 用 `PendingReviewContext` 判断 host 是否 finalize 了输入；Go 的 `guardianSessionRunner` 没有独立的 submit/finalize 阶段，`agent.Run` 被调用即视为输入已提交。Rust 的 committed fork checkpoint 在 Go 没有对应物，故无需保持“未完成评审不替换 checkpoint”的约束。
+
+### 测试
+
+- `appserver/guardian_transcript_admission_like_rust_test.go`
+  - `TestGuardianSessionAdmitsTranscriptWithoutCompletingFailedReviewLikeRust`：失败评审 → `had_prior_review_context=true`、`completedReviews=0`；随后成功评审 → completed=1。
+  - `TestGuardianSessionCompletesSuccessfulReviewLikeRust`：成功评审同时推进 cursor 与完成计数。
+
+## 11.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./appserver -run "TestGuardianSession"` | ok |
+| `go test ./appserver -run "Guardian|guardian"` | ok |
