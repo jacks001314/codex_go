@@ -101,7 +101,7 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 		},
 	}
 	data := map[string]any{}
-	ApplyMCPAppOutputMetadata(data, RuntimeCodexAppsMCPServerName, appsMeta, "calendar", "Calendar", "sample@openai-curated")
+	ApplyMCPAppOutputMetadata(data, RuntimeCodexAppsMCPServerName, appsMeta, "calendar", "Calendar", "sample@openai-curated", "")
 	appUI, ok := data["mcp_app_ui"].(McpAppUI)
 	if !ok || appUI.ResourceURI != "ui://widgets/calendar" || appUI.PreferredModelDisplayMode != McpAppDisplayModeFullscreen {
 		t.Fatalf("mcp_app_ui = %#v", data["mcp_app_ui"])
@@ -119,7 +119,7 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 	// resource URI but leaves the presentation unset (Rust #48764), and a
 	// non-Codex-Apps server never contributes the trusted identity.
 	plain := map[string]any{}
-	ApplyMCPAppOutputMetadata(plain, "plain_server", map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/x"}}, "calendar", "Calendar", "sample@openai-curated")
+	ApplyMCPAppOutputMetadata(plain, "plain_server", map[string]any{"ui": map[string]any{"resourceUri": "ui://widget/x"}}, "calendar", "Calendar", "sample@openai-curated", "")
 	if _, present := plain["mcp_app_ui"]; present {
 		t.Fatalf("mcp_app_ui should be unset without a preference: %#v", plain["mcp_app_ui"])
 	}
@@ -136,7 +136,7 @@ func TestApplyMCPAppOutputMetadataMirrorsTrustedCapture(t *testing.T) {
 
 	// No descriptor widget means no presentation at all.
 	empty := map[string]any{}
-	ApplyMCPAppOutputMetadata(empty, RuntimeCodexAppsMCPServerName, map[string]any{}, "calendar", "Calendar", "")
+	ApplyMCPAppOutputMetadata(empty, RuntimeCodexAppsMCPServerName, map[string]any{}, "calendar", "Calendar", "", "")
 	if _, present := empty["mcp_app_ui"]; present {
 		t.Fatalf("unexpected mcp_app_ui: %#v", empty)
 	}

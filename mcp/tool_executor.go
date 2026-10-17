@@ -341,6 +341,16 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	if err := e.ensureServerPermissionAuthority(); err != nil {
 		return nil, err
 	}
+	// Rust #42054: resolve the Apps account selector before approval or
+	// execution so a required link_id cannot be bypassed by omitting it.
+	linkID := ""
+	if IsCodexAppsMCPServerName(e.resolvedServerName()) {
+		resolved, err := resolveMCPToolAccount(&e.toolInfo, arguments)
+		if err != nil {
+			return nil, tool.RespondToModel(err.Error())
+		}
+		linkID = resolved
+	}
 	// Rust mcp_tool_call.rs maybe_request_mcp_tool_approval: a custom MCP server
 	// can require the user to approve a call before it runs.
 	if denied, err := e.approveToolCallIfNeeded(ctx, invocation.CallID, arguments); err != nil || denied != nil {
@@ -414,7 +424,7 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 	// can render MCP apps without waiting for the catalog, and the trusted Codex
 	// Apps connector/link/action identity that only the codex_apps server may
 	// contribute.
-	ApplyMCPAppOutputMetadata(data, e.resolvedServerName(), e.toolInfo.Meta, e.connectorID, e.connectorName, e.pluginID)
+	ApplyMCPAppOutputMetadata(data, e.resolvedServerName(), e.toolInfo.Meta, e.connectorID, e.connectorName, e.pluginID, linkID)
 	if rewrittenArguments != nil {
 		data[openAIFileHookInputKey] = rewrittenArguments
 	}

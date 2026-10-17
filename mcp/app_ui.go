@@ -151,7 +151,9 @@ func MCPAppUIFromMetadataMap(value map[string]any) *McpAppUI {
 // (Rust #45805 plus `McpToolCallItemMetadata::from_tool_metadata`): the widget
 // presentation comes from the invoked descriptor, while the connector, link,
 // app, and action identity may only be contributed by the codex_apps server.
-func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any, connectorID string, connectorName string, pluginID string) {
+// linkID is the account selector resolved for this call; when empty, the
+// catalog-provided identity is used for legacy Apps tools.
+func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any, connectorID string, connectorName string, pluginID string, linkID string) {
 	if data == nil {
 		return
 	}
@@ -177,7 +179,11 @@ func ApplyMCPAppOutputMetadata(data map[string]any, server string, toolMeta any,
 	if value := strings.TrimSpace(connectorName); value != "" {
 		data["connector_name"] = value
 	}
-	if value := MCPToolCallLinkID(toolMeta); value != "" {
+	value := strings.TrimSpace(linkID)
+	if value == "" {
+		value = MCPToolCallLinkID(toolMeta)
+	}
+	if value != "" {
 		data["link_id"] = value
 	}
 	if value := mcpToolCallActionName(toolMeta); value != "" {

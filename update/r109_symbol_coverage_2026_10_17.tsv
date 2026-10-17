@@ -139,7 +139,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0e03f88a30bbce4638aeabc62557dda90612d32c	41938	Clarify resume guidance in exit summaries (#41938)	2026-08-31	tui	1	0	0.00	0	0	implementation_pending	ResumableThread
 0e0f55fc4ec9308840e54ceba1f1f1dc9547380f	42638	Update GPT-6-Astra Fast tier speed description (#42638)	2026-09-03	model	0	0		0	0	not_applicable	
 0e1520605f67969b58e53762be4d675c036a981d	51710	Fix a discovery race in the external auth refresh test (#51710)	2026-10-07	appserver	0	0		0	0	not_applicable	
-0e37d834d4f2fefea63da419bbc52055af33e888	42054	Honor explicit account selectors for Apps tool calls (#42054)	2026-09-01	mcp	2	0	0.00	0	0	implementation_pending	McpToolAccountError,resolve_account
+0e37d834d4f2fefea63da419bbc52055af33e888	42054	Honor explicit account selectors for Apps tool calls (#42054)	2026-09-01	mcp	2	2	1.00	0	0	complete	
 0e67502123b4c6952b9fa5d672d2907fe4059f56	54686	Preserve MCP tool-list metadata in server status (#54686)	2026-10-16	tui	9	0	0.00	0	0	complete	cached_catalog,current_catalog_or,current_catalog_snapshot,list_available_server_capabilities,list_catalogs_with_errors,listed_catalog,publish_if_newest,sha1_hex,shared_tool_list_meta
 0e69d3bd9b1263dbe7a0c564e67fd4a7656dc1a5	47050	Batch message-board subscriber reads into one SQLite result (#47050)	2026-09-21	core	0	0		0	0	not_applicable	
 0e7ab7c1b5119ff0cc262b753e6b937b6c7ce13b	45765	Add Top chats to usage analytics (#45765)	2026-09-15	tui	14	8	0.57	0	0	audit_pending	SectionStates,chat_lines,chat_window,get_threads_usage,start_with_timeout,thread_usage_supported

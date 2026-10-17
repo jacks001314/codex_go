@@ -5388,9 +5388,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: McpToolAccountError, resolve_account"
+        "Round 115 (lead): landed in mcp - tool_account.go resolves a Codex Apps account selector from the call's link_id when _codex_apps.requires_explicit_link_id is true, rejects missing/null/non-string/blank values with MCPToolAccountError before approval or execution, and falls back to the catalog link_id for legacy Apps tools. tool_executor.go resolves before approval, and ApplyMCPAppOutputMetadata prefers the resolved argument selector while preserving catalog fallback. Tests: TestResolveMCPToolAccountLikeRust (required/legacy/malformed cases), TestApplyMCPAppOutputMetadataPrefersResolvedArgumentLinkIDLikeRust, TestMCPToolExecutorRejectsMissingExplicitLinkIDBeforeApprovalLikeRust. RC: ignoring requires_explicit_link_id returns nil for every invalid selector; ignoring arguments rejects a valid explicit link_id. go test ./mcp -count=1 + go vet ./mcp + go build ./mcp ./appserver ./turn ./tool green."
       ]
     },
     {
