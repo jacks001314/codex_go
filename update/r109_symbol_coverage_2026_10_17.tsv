@@ -1262,7 +1262,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 79ef00ded170bb2f096430f45ba4cadba8e69611	46845	Honor the system clock preference in TUI completion timestamps (#46845)	2026-09-20	tui	4	3	0.75	0	0	audit_pending	ClockFormat
 7a08c5f6271e818d832eb9061dac935936e2b539	53969	Avoid reconnect races in the daemon restart test (#53969)	2026-10-14	core	0	0		0	0	not_applicable	
 7a0a8ac9c4aba9b687e5a11b5daa6404dab09728	53452	Close input admission while a turn finishes recording (#53452)	2026-10-12	persistence	0	0		0	0	complete	
-7a15548c6a5a54c5af9dcb4b5e9cd89387cd89f0	46552	Move child completion routing into the agent controller (#46552)	2026-09-18	core	1	0	0.00	0	0	implementation_pending	notify_parent_of_terminal_turn
+7a15548c6a5a54c5af9dcb4b5e9cd89387cd89f0	46552	Move child completion routing into the agent controller (#46552)	2026-09-18	core	1	1	1.00	0	0	complete	
 7a3c5a83e4724bf7a7b5178f6b1f87f76a19703b	46303	Serialize release asset uploads to avoid secondary rate limits (#46303)	2026-09-17	core	0	0		0	0	not_applicable	
 7a48b95c6c399eb7986fb08b947fa2d45cb40370	45454	Preserve tabs in non-bracketed paste bursts (#45454)	2026-09-14	tui	2	1	0.50	0	0	audit_pending	append_control_char_if_active
 7a6f469dcff1337786aae046df2d899accea59ab	44826	Expose advertised MCP server capabilities in status responses (#44826)	2026-09-11	tui	1	0	0.00	0	0	implementation_pending	list_available_server_capabilities

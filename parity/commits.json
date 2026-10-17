@@ -16276,9 +16276,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: notify_parent_of_terminal_turn"
+        "Round 115 (lead): verified complete (equivalent mechanism) - #46552 only moves child terminal-result routing and completion activity delivery into Rust's agent controller. Go performs the same behavior in appserver/turn_runtime.go: deliverRuntimeAgentCompletion formats the parent completion message, queue-only delivers it to an active parent turn or the runtime queue, records queued/failed delivery, and notifies completion activity; emitRuntimeAgentCompleted routes completed activity to the initiating agent when different from the direct parent. Tests: TestRuntimeRouterChildCompletionRecordsActivityOnParentTurnLikeRust, TestSubAgentCompletedActivityRoutesToInitiatingAgentLikeRust, TestMultiAgentResultDeliveryRecordsOutcomeLikeRust, TestMultiAgentWaitDurationRecordsOutcomeLikeRust; go test ./appserver focused green."
       ]
     },
     {
