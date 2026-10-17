@@ -6,6 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -485,9 +489,70 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// the prompt, and the metrics duration is measured from that point.
 	reviewStartedAt := time.Now().UTC()
 	attribution := r.newGuardianReviewAttribution(threadID, turnID, action)
+	contextChanged := false
 	emitReviewMetrics := func() {
+		attribution.ContextChanged = contextChanged
 		r.emitGuardianReviewMetrics(attribution, guardianReviewMetricsDurationMS(reviewStartedAt.UnixMilli(), time.Now().UTC()))
 	}
+	store := r.store
+	if store == nil {
+		store = state.NewReviewStore()
+	}
+	event, err := store.Start(turnID, targetItemID, action)
+	if err != nil {
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "session_error"
+		emitReviewMetrics()
+		return state.DecisionAborted, "", err
+	}
+	r.emit(threadID, event)
+	timeout := r.timeout
+	if timeout <= 0 {
+		timeout = state.ReviewTimeout
+	}
+	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	plan := r.planForTurn(threadID, turnID)
+	// Rust #53987/#53797: retries share one attempt budget and deadline. A
+	// changed local review context is stale authorization, refreshed without
+	// the service backoff; parse failures keep Rust's exponential backoff.
+	finishTimedOut := func() (state.ReviewDecision, string, error) {
+		completed, finishErr := store.Timeout(event.ID)
+		if finishErr == nil {
+			r.emit(threadID, completed)
+		}
+		// Rust records a non-denial for a failed review: only a completed
+		// assessment with outcome deny counts as a policy denial.
+		r.recordNonDenial(turnID)
+		attribution.Decision = state.DecisionTimedOut
+		attribution.TerminalStatus = "timed_out"
+		attribution.FailureReason = "timeout"
+		emitReviewMetrics()
+		timeoutMessage := guardianTimeoutMessage(plan.AutoReview)
+		// Rust's timed-out completion records the review rationale on the
+		// assessment event and publishes it as the GuardianWarning, while the
+		// tool rejection carries the resolved timeout instructions.
+		r.emitWarning(threadID, state.GuardianTimeoutRationale())
+		return state.DecisionTimedOut, timeoutMessage, finishErr
+	}
+	finishAborted := func() (state.ReviewDecision, string, error) {
+		completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
+		if finishErr == nil {
+			r.emit(threadID, completed)
+		}
+		r.recordNonDenial(turnID)
+		attribution.Decision = state.DecisionAborted
+		attribution.TerminalStatus = "aborted"
+		attribution.FailureReason = "cancelled"
+		emitReviewMetrics()
+		return state.DecisionAborted, "", finishErr
+	}
+	attempts := 0
+	var assessment *state.Assessment
+	var response *model.AgentResponse
+reviewAttempt:
+	attempts++
 	var transcript []string
 	if r.transcript != nil {
 		transcript = r.transcript(threadID)
@@ -538,14 +603,14 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		PermissionContext: permissionContext,
 		RetainedContext:   retainedContext,
 	})
+	var rootAuthorization []string
 	if err == nil && r.rootUserAuthorization != nil {
-		var root []string
-		root = r.rootUserAuthorization(threadID, turnID)
-		if len(root) > 0 {
+		rootAuthorization = r.rootUserAuthorization(threadID, turnID)
+		if len(rootAuthorization) > 0 {
 			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
 				Presentation:          state.ActionPresentationSyncFull,
 				NodeReplEvidence:      promptNodeReplEvidence,
-				RootUserAuthorization: root,
+				RootUserAuthorization: rootAuthorization,
 				PermissionContext:     permissionContext,
 				RetainedContext:       retainedContext,
 			})
@@ -561,25 +626,6 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
-	store := r.store
-	if store == nil {
-		store = state.NewReviewStore()
-	}
-	event, err := store.Start(turnID, targetItemID, action)
-	if err != nil {
-		attribution.Decision = state.DecisionAborted
-		attribution.TerminalStatus = "aborted"
-		attribution.FailureReason = "session_error"
-		emitReviewMetrics()
-		return state.DecisionAborted, "", err
-	}
-	r.emit(threadID, event)
-	timeout := r.timeout
-	if timeout <= 0 {
-		timeout = state.ReviewTimeout
-	}
-	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	var inputItems []any
 	if r.environment != nil {
 		inputItems, err = r.environment(reviewCtx, threadID, turnID)
@@ -628,7 +674,6 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		reviewedEvidence = nodeReplEvidence.Sequence()
 		hasReviewedEvidence = true
 	}
-	plan := r.planForTurn(threadID, turnID)
 	// Rust ensure_guardian_node_repl_policy: the node-REPL rules are their own
 	// unmarked developer fragment, injected only when the reviewed action is a
 	// `js` call on a node-repl-backed server and the parent model requires
@@ -663,11 +708,42 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.SeedForReview(reviewRequest)
 	}
-	response, err := r.agent.Run(reviewCtx, reviewRequest)
+	response, err = r.agent.Run(reviewCtx, reviewRequest)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		// Rust records the reviewed-transcript cursor once a review ran in the
 		// guardian session.
 		runner.markPriorReview()
+	}
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, rootAuthorization) {
+		// Rust #53797 widens the invalidation predicate to local or root
+		// review context. Rust #53987 treats it as stale authorization, a local
+		// evidence refresh rather than a failed service request: yield, check
+		// cancellation and the shared deadline, then retry without backoff.
+		contextChanged = true
+		if attempts < guardianMaxReviewAttempts {
+			runtime.Gosched()
+			if waitErr := reviewCtx.Err(); waitErr != nil {
+				err = waitErr
+			} else {
+				goto reviewAttempt
+			}
+		}
+	}
+	if err != nil && attempts < guardianMaxReviewAttempts && guardianReviewRetryableError(err) {
+		// Rust should_retry_guardian_review: recoverable session failures keep
+		// the same attempt budget and pay the service backoff, honouring the
+		// server's Retry-After when it asks for a longer wait.
+		delay := guardianReviewRetryDelay(attempts)
+		if retryAfter := codexapi.RetryDelay(err); retryAfter > delay {
+			delay = retryAfter
+		}
+		if waitErr := waitGuardianReviewRetry(reviewCtx, delay); waitErr != nil {
+			if errors.Is(waitErr, context.DeadlineExceeded) {
+				return finishTimedOut()
+			}
+			return finishAborted()
+		}
+		goto reviewAttempt
 	}
 	if err == nil {
 		// Delivery accounting (Rust guardian-context/src/images.rs:29: "Only
@@ -685,35 +761,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	}
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(reviewCtx.Err(), context.DeadlineExceeded) {
-			completed, finishErr := store.Timeout(event.ID)
-			if finishErr == nil {
-				r.emit(threadID, completed)
-			}
-			// Rust records a non-denial for a failed review: only a completed
-			// assessment with outcome deny counts as a policy denial.
-			r.recordNonDenial(turnID)
-			attribution.Decision = state.DecisionTimedOut
-			attribution.TerminalStatus = "timed_out"
-			attribution.FailureReason = "timeout"
-			emitReviewMetrics()
-			timeoutMessage := guardianTimeoutMessage(plan.AutoReview)
-			// Rust's timed-out completion records the review rationale on the
-			// assessment event and publishes it as the GuardianWarning, while
-			// the tool rejection carries the resolved timeout instructions.
-			r.emitWarning(threadID, state.GuardianTimeoutRationale())
-			return state.DecisionTimedOut, timeoutMessage, finishErr
+			return finishTimedOut()
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(reviewCtx.Err(), context.Canceled) {
-			completed, finishErr := store.Abort(event.ID, "Guardian review was aborted.")
-			if finishErr == nil {
-				r.emit(threadID, completed)
-			}
-			r.recordNonDenial(turnID)
-			attribution.Decision = state.DecisionAborted
-			attribution.TerminalStatus = "aborted"
-			attribution.FailureReason = "cancelled"
-			emitReviewMetrics()
-			return state.DecisionAborted, "", finishErr
+			return finishAborted()
 		}
 		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
@@ -727,7 +778,17 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
-	assessment, err := state.ParseAssessment([]byte(guardianAssessmentText(response)))
+	assessment, err = state.ParseAssessment([]byte(guardianAssessmentText(response)))
+	if err != nil && attempts < guardianMaxReviewAttempts {
+		// Rust retries Parse failures inside the same attempt budget.
+		if waitErr := waitGuardianReviewRetry(reviewCtx, guardianReviewRetryDelay(attempts)); waitErr != nil {
+			if errors.Is(waitErr, context.DeadlineExceeded) {
+				return finishTimedOut()
+			}
+			return finishAborted()
+		}
+		goto reviewAttempt
+	}
 	if err != nil {
 		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
@@ -1394,4 +1455,69 @@ func guardianParentCompactionResponseID(compacted *compact.Result, maxTokens int
 		return ""
 	}
 	return strings.TrimSpace(compacted.ResponseID)
+}
+
+// guardianMaxReviewAttempts mirrors Rust's MAX_REVIEW_ATTEMPTS.
+const guardianMaxReviewAttempts = 3
+
+// guardianReviewRetryDelay mirrors wait_before_guardian_retry's service
+// backoff: 200ms * 2^(attempt-1) with a 0.9..1.1 jitter. Stale-context retries
+// never use it.
+func guardianReviewRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	base := 200.0 * math.Pow(2, float64(attempt-1))
+	jitter := 0.9 + rand.Float64()*0.2
+	return time.Duration(base * jitter * float64(time.Millisecond))
+}
+
+// guardianReviewRetryableError mirrors should_retry_guardian_review's session
+// arm: rate-limit, capacity and transient HTTP failures are recoverable, while
+// policy, budget, invalid-request and unknown failures fail closed immediately.
+func guardianReviewRetryableError(err error) bool {
+	var apiErr *codexapi.APIError
+	if !errors.As(err, &apiErr) || apiErr == nil {
+		return false
+	}
+	switch apiErr.Kind {
+	case codexapi.ErrorRateLimitExceeded, codexapi.ErrorFlexUnavailable, codexapi.ErrorServerOverloaded:
+		return true
+	case codexapi.ErrorTransport, codexapi.ErrorStream, codexapi.ErrorRetryable, codexapi.ErrorAPI:
+		return apiErr.Status == 0 || apiErr.Status == 408 || apiErr.Status == 429 ||
+			(apiErr.Status >= 500 && apiErr.Status <= 599)
+	}
+	return false
+}
+
+// waitGuardianReviewRetry waits for the service backoff while honouring the
+// shared review deadline and cancellation.
+func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// guardianReviewContextChanged mirrors Rust #53797's widened invalidation
+// predicate: local or root review evidence that changed while the reviewer was
+// running makes the assessment stale and triggers a fresh attempt.
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript, rootAuthorization []string) bool {
+	if r == nil {
+		return false
+	}
+	if r.transcript != nil && !slices.Equal(transcript, r.transcript(threadID)) {
+		return true
+	}
+	if r.rootUserAuthorization != nil && !slices.Equal(rootAuthorization, r.rootUserAuthorization(threadID, turnID)) {
+		return true
+	}
+	return false
 }

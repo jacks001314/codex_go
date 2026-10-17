@@ -40,8 +40,11 @@ type guardianReviewMetricAttribution struct {
 	UserAuthorization *state.UserAuthorization
 	Outcome           *state.Outcome
 	GuardianModel     string
-	TokenUsage        *model.AgentUsage
-	TimeToFirstToken  *time.Duration
+	// ContextChanged mirrors Rust's GuardianReviewAnalyticsResult field, kept
+	// across retries and exposed as the counter-only `context_changed` tag.
+	ContextChanged   bool
+	TokenUsage       *model.AgentUsage
+	TimeToFirstToken *time.Duration
 }
 
 // emitGuardianReviewMetrics mirrors emit_guardian_review_metrics.
@@ -51,14 +54,16 @@ func (r *modelGuardianReviewer) emitGuardianReviewMetrics(attribution guardianRe
 	}
 	tags := guardianReviewMetricTags(attribution)
 	sink := r.metrics
-	counterTags := tags
+	counterTags := make(map[string]string, len(tags)+2)
+	for key, value := range tags {
+		counterTags[key] = value
+	}
 	if toolTag, ok := guardianReviewMCPToolTag(attribution.ReviewedAction); ok {
-		counterTags = make(map[string]string, len(tags)+1)
-		for key, value := range tags {
-			counterTags[key] = value
-		}
 		counterTags["tool"] = toolTag
 	}
+	// Rust's guardian_review_count carries context_changed; the duration and
+	// token histograms do not.
+	counterTags["context_changed"] = guardianBoolTag(attribution.ContextChanged)
 	if durationMS < 0 {
 		durationMS = 0
 	}

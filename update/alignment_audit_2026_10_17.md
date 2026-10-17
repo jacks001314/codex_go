@@ -247,3 +247,44 @@ landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 
 | `go test ./telemetry -run AnalyticsConsent` | ok |
 | `go test ./app -run "InteractiveTUIStartTelemetry|InteractiveDaemonSelectionReason"` | ok |
 | `go test ./tui ./tui/tea ./otelinit ./telemetry` | 仅既有环境失败 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` |
+
+# Round 94 增量（2026-10-17，lead）
+
+## 10.1 已落地
+
+### #53987 Guardian 过期授权重试跳过服务退避（`835cd7552d`）
+
+- `appserver/guardian_reviewer.go`：`Review` 收敛为一次 `store.Start` + 统一 attempt 循环（`guardianMaxReviewAttempts = 3`），所有 attempt 共享同一个 `reviewCtx` 截止时间与 attempt 预算。
+- stale authorization：agent 成功返回后 `guardianReviewContextChanged` 检测到 transcript / root authorization 变化时置 `contextChanged = true`，用 `runtime.Gosched()` 让出执行权，检查取消与共享 deadline 后直接重试，**不支付服务退避**（Rust `wait_before_guardian_retry` 的 StaleAuthorization 分支）。
+- recoverable session error：`guardianReviewRetryableError` 按 Rust `should_retry_guardian_review` 的 session 分支判断（RateLimitExceeded / FlexUnavailable / ServerOverloaded；transport / stream / retryable / api 且 status 为空或 408/429/5xx），退避为 `200ms * 2^(attempt-1) * [0.9,1.1)`，并取 `Retry-After` 与退避的较大值；等待期间响应取消与 deadline。
+- Parse 失败同样计入共享 attempt 预算，并沿用 Rust 的指数退避。
+- 超时/中止收口抽成 `finishTimedOut` / `finishAborted`，多次 attempt 只产生一条 Guardian assessment 终态。
+
+### #53797 评审上下文变化时刷新 Guardian 评审（`2b2d792305`）
+
+- `appserver/guardian_reviewer.go`：`guardianReviewContextChanged` 在每次 attempt 结束后重新读取 host 的 transcript 与 root user authorization 快照，与本次 attempt 捕获的版本比较；变化即判定为 stale authorization 并在新 attempt 中用新证据重建 prompt。
+- 结构差异：Rust 比较 `user_message_revision` / `guardian_review_context_revision` / root authorization version 等修订号；Go 线程层没有对应的修订计数器，因此比较渲染后的字符串快照（`slices.Equal`）。两者的观测点相同——每轮 attempt 从 host 的实时来源重新取证据。
+
+### #54046 B 面 `context_changed` 指标标签（`3ee99cde70`）
+
+- `appserver/guardian_review_metrics.go`：`guardianReviewMetricAttribution` 新增 `ContextChanged`；`codex.guardian.review.count` 追加 `context_changed=true|false`，duration / token / TTFT 直方图不带该标签，与 Rust `metrics.rs` 只在 counter 上 push `("context_changed", bool_tag(...))` 一致。
+- Rust 的 `attempt_count` 只存在于 analytics 结果，不是指标标签；Go 同样不把它作为标签暴露。
+
+### 测试
+
+- `appserver/guardian_retry_like_rust_test.go`：
+  - `TestGuardianReviewRefreshesChangedContextLikeRust`：首轮 transcript 变化 → 第二轮拿到新 transcript，最终 allow，counter `context_changed=true`。
+  - `TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust`：上下文持续变化时正好 3 次 attempt，且总耗时远低于 200ms 服务退避。
+  - `TestGuardianReviewRetriesParseFailureLikeRust`：首次坏 JSON、第二次合法 → 成功；全部坏 JSON → 3 次后 failed_closed，`failure_reason=parse_error`、`context_changed=false`。
+  - `TestGuardianReviewContextChangedTagOnlyOnCounterLikeRust`：未变化时 counter 为 false，duration 直方图不含该标签。
+  - `TestGuardianReviewSessionRetryClassificationLikeRust`：15 个 kind/status 分类断言 + 可恢复错误消耗一次 attempt 后成功。
+
+## 10.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go vet ./appserver` | exit 0 |
+| `go test ./appserver -run "GuardianReview"` | ok |
+| `go test ./appserver -run "TestGuardianReview...(5 个新用例)"` | ok |
+| `go test ./appserver -count=1` | 仅既有环境失败 `TestProjectRootMarkersDriveDiscoveryLikeRust`、`TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust`、`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust` |
