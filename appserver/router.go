@@ -2434,8 +2434,13 @@ func (r *Router) archiveThreadRollout(threadID session.ThreadID, archived bool) 
 		return false, false
 	}
 	if archived {
+		// Mirrors Rust `archive_thread_with_paths` (#41908): the active-only
+		// rollout index decides which owned rollouts still have to move, so
+		// already archived history is never scanned and every owned active
+		// rollout (compressed originals and reverted replacements included)
+		// is archived together with the selected one.
 		var archivedPath string
-		archivedPath, err = rollout.Archive(path, codexHome)
+		archivedPath, err = rollout.ArchiveThreadRollouts(codexHome, []string{string(threadID)}, path)
 		if err == nil && r.state != nil {
 			_ = r.state.MarkThreadArchived(context.Background(), string(threadID), archivedPath, time.Now().UTC())
 		}

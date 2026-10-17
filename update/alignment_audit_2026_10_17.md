@@ -1,4 +1,4 @@
-# Rust/Go 功能对齐审计（最新：round 112，2026-10-17）
+# Rust/Go 功能对齐审计（最新：round 113，2026-10-17）
 
 > **当前状态只以本节为准。** 从 §2 开始的各节是历轮快照（round 91 起），其中的计数、上游 SHA 与
 > "冻结在 970b7f2ff4" 之类表述都是**当时**的事实，保留它们仅为追溯每轮证据，不应读作当前值。
@@ -7,18 +7,18 @@
 
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 435 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 434 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
 
-### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，228 数据行）
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，229 数据行）
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 104 |
+| `landed` | 105 |
 | `complete` | 27 |
 | `not_applicable` | 79 |
 | `blocked_precondition` | 17 |
 | `partial` | 1 |
-| **合计** | **228** |
+| **合计** | **229** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -26,10 +26,10 @@
 
 | 状态 | 行数 |
 | --- | --- |
-| `complete` | 443 |
+| `complete` | 444 |
 | `not_applicable` | 1171 |
 | `audit_pending` | 630 |
-| `implementation_pending` | 435 |
+| `implementation_pending` | 434 |
 | `blocked_precondition` | 15 |
 | `partial` | 1 |
 
@@ -888,3 +888,49 @@ go test ./tool -run 'RequestUserInputAsync|CatalogParameters' -count=1 # ok
 ### 26.6 剩余（目标未完成）
 
 `implementation_pending` 436 条 + `blocked_precondition` 15 条 + `partial` 1 条。按面：TUI 仍占最大头，其次 Guardian / appserver / core。下一轮继续按「appserver → core → sandbox → mcp → execserver → persistence → TUI」推进；`blocked_precondition` 中 #54048（交互式目录信任确认本身缺失）、#54216（全屏转录图片预览）、#54380/#54381（presets 子系统）需要先补底层能力。
+
+## 27. Round 113（2026-10-17）：#41908 归档只扫 active rollout 并移动线程全部 rollout
+
+### 27.1 #41908 归档线程不再扫描 archived 历史（landed）
+
+- Rust（`2f0a5d5516`）：`RolloutReferenceIndex::scan_unarchived` / `scan_unarchived_threads` 只扫 `sessions`；
+  `archive_thread_with_paths` 用该索引取「该线程拥有的全部未归档 rollout」，连同选中的 rollout 一起搬到
+  `archived_sessions`，已归档项跳过，任一移动失败用 `restore_rollout_moves` 回滚。
+- Go：
+  - `rollout/rollout.go` 新增 `OwnedUnarchivedThreadRollouts`（等价 `scan_unarchived_threads` +
+    `owned_rollout_paths_from_index`）：只遍历 `sessions` 树，先按 canonical 文件名预筛线程，
+    再用 `FirstSessionMeta` 确认归属，按 immutable rollout id 去重；与 `OwnedArchivedThreadRollouts`
+    共用 `ownedThreadRollouts` 实现。
+  - `rollout.ArchiveThreadRollouts`（等价 `archive_thread_with_paths`）：把该线程的每个 active rollout
+    （含 `.jsonl.zst` 压缩原件与 `_<rollout id>` 回退替换）移到归档目录，跳过已归档项，
+    失败时回滚已移动项，返回选中 rollout 的归档路径。
+  - `appserver/router.go` 的 `archiveThreadRollout` 改走该入口：此前只移动 `FindThreadPath` 选中的那一个
+    rollout，其余 owned active rollout 会留在 `sessions`。
+- 测试：
+  - `rollout/unarchived_thread_scan_like_rust_test.go`
+    `TestUnarchivedScanFindsAllActiveRolloutsOwnedByThreadLikeRust`（对齐 Rust
+    `unarchived_scan_finds_all_active_rollouts_owned_by_a_thread`：压缩原件 + 替换件被收录，
+    archived / 无关线程被排除）、`TestArchiveThreadRolloutsMovesEveryOwnedActiveRolloutLikeRust`。
+  - `appserver/archive_thread_rollouts_like_rust_test.go`
+    `TestRouterArchiveMovesEveryOwnedActiveRolloutLikeRust`：走 `thread/archive` RPC，断言两个 owned
+    active rollout 都进了归档目录、`sessions` 不再有它们、无关线程的 rollout 不受影响。
+  - 队长 RC：把 `archiveThreadRollout` 改回 `rollout.Archive`（只移动选中项）⇒ 上述 appserver 用例 FAIL。
+
+### 27.2 验证
+
+```
+go build ./...                                                        # exit 0
+go test ./rollout -count=1                                            # ok
+go test ./appserver -run "Archive" -count=1                           # ok
+go test ./appserver -count=1                                          # 仅 3 个既有环境相关失败
+```
+
+`go test ./appserver -count=1` 的 3 个失败（`TestProjectRootMarkersDriveDiscoveryLikeRust`、
+`TestRuntimeRouterThreadStartElevatedSandboxPersistsProjectTrust`、
+`TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`）在 pristine worktree
+`084ec624` 上逐条复现，与本轮改动无关。
+
+### 27.3 剩余（目标未完成）
+
+`implementation_pending` 434 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
+继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。

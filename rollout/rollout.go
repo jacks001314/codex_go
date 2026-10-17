@@ -2446,6 +2446,17 @@ func ParseRolloutFileName(name string) (RolloutFileName, bool) {
 	}, true
 }
 
+// OwnedUnarchivedThreadRollouts mirrors Rust's `scan_unarchived_threads`
+// combined with `owned_rollout_paths_from_index` (Rust #41908, #54060):
+// archiving only needs the active rollouts that still have to be moved, so
+// discovery is restricted to the `sessions` tree and to canonical filenames
+// belonging to the requested threads. Session metadata still decides ownership
+// among those candidates, and compressed originals plus reverted replacements
+// are included.
+func OwnedUnarchivedThreadRollouts(codexHome string, threadIDs []string) ([]string, error) {
+	return ownedThreadRollouts(filepath.Join(codexHome, SessionsSubdir), threadIDs)
+}
+
 // OwnedArchivedThreadRollouts mirrors Rust's
 // `RolloutReferenceIndex::scan_archived_threads` combined with
 // `owned_rollout_paths_from_index` (Rust #54060): discovery is restricted to
@@ -2454,6 +2465,10 @@ func ParseRolloutFileName(name string) (RolloutFileName, bool) {
 // originals and reverted replacements are included; unrelated archived history is
 // never opened.
 func OwnedArchivedThreadRollouts(codexHome string, threadIDs []string) ([]string, error) {
+	return ownedThreadRollouts(filepath.Join(codexHome, ArchivedSessionsSubdir), threadIDs)
+}
+
+func ownedThreadRollouts(root string, threadIDs []string) ([]string, error) {
 	wanted := make(map[string]struct{}, len(threadIDs))
 	for _, threadID := range threadIDs {
 		if trimmed := strings.TrimSpace(threadID); trimmed != "" {
@@ -2463,7 +2478,7 @@ func OwnedArchivedThreadRollouts(codexHome string, threadIDs []string) ([]string
 	if len(wanted) == 0 {
 		return nil, nil
 	}
-	paths, err := collectRolloutPaths(filepath.Join(codexHome, ArchivedSessionsSubdir))
+	paths, err := collectRolloutPaths(root)
 	if err != nil {
 		return nil, err
 	}
@@ -2498,6 +2513,58 @@ func OwnedArchivedThreadRollouts(codexHome string, threadIDs []string) ([]string
 	}
 	sort.Strings(owned)
 	return owned, nil
+}
+
+// ArchiveThreadRollouts mirrors Rust's `archive_thread_with_paths`
+// (thread-store/src/local/archive_thread.rs, Rust #41908): every active rollout
+// owned by the requested threads is moved into the archived sessions directory,
+// the selected rollout's archived path is reported, and already-archived or
+// duplicate entries are skipped. A failed move rolls the earlier moves back.
+func ArchiveThreadRollouts(codexHome string, threadIDs []string, selectedActivePath string) (string, error) {
+	owned, err := OwnedUnarchivedThreadRollouts(codexHome, threadIDs)
+	if err != nil {
+		return "", err
+	}
+	selected := filepath.Clean(strings.TrimSpace(selectedActivePath))
+	if strings.TrimSpace(selectedActivePath) != "" && !contains(owned, selected) {
+		owned = append(owned, selected)
+	}
+	archiveDir := filepath.Join(codexHome, ArchivedSessionsSubdir)
+	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+		return "", err
+	}
+	archivedPath := ""
+	moved := make([][2]string, 0, len(owned))
+	seen := make(map[string]struct{}, len(owned))
+	for _, path := range owned {
+		source := filepath.Clean(path)
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		if rolloutPathIsArchived(codexHome, source) {
+			continue
+		}
+		if _, ok := ParseRolloutFileName(filepath.Base(source)); !ok {
+			return "", fmt.Errorf("rollout path %q has an invalid filename", source)
+		}
+		destination := filepath.Join(archiveDir, filepath.Base(source))
+		if source == selected {
+			archivedPath = destination
+		}
+		target, err := moveRollout(source, archiveDir)
+		if err != nil {
+			for i := len(moved) - 1; i >= 0; i-- {
+				_ = os.Rename(moved[i][1], moved[i][0])
+			}
+			return "", err
+		}
+		moved = append(moved, [2]string{source, target})
+	}
+	if archivedPath == "" {
+		return "", fmt.Errorf("failed to archive selected rollout for thread %s", strings.Join(threadIDs, ","))
+	}
+	return archivedPath, nil
 }
 
 // RestoreThreadRollouts mirrors Rust's `unarchive_thread`

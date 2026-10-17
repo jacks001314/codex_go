@@ -4930,9 +4930,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: scan_unarchived"
+        "Landed: rollout/rollout.go OwnedUnarchivedThreadRollouts (active-only scan mirroring RolloutReferenceIndex::scan_unarchived_threads: canonical-filename prefilter, FirstSessionMeta ownership check, dedupe by rollout id) and ArchiveThreadRollouts (mirrors archive_thread_with_paths: moves every owned active rollout, skips already-archived entries, rolls back earlier moves on failure, reports the selected rollout's archived path). appserver/router.go archiveThreadRollout now uses it instead of moving only the selected file. Tests: rollout TestUnarchivedScanFindsAllActiveRolloutsOwnedByThreadLikeRust, TestArchiveThreadRolloutsMovesEveryOwnedActiveRolloutLikeRust; appserver TestRouterArchiveMovesEveryOwnedActiveRolloutLikeRust. Leader RC (archiveThreadRollout reverted to rollout.Archive) => appserver test FAILs."
       ]
     },
     {
