@@ -2795,9 +2795,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: GuardianReadOnlyHistoryTools"
+        "Round 115 (lead): N/A (verified carrier absence) - #40848 injects selected history.* executors from the parent codex session into a delegated Guardian reviewer and keeps notes isolated. Go's Guardian reviewer is host-driven: appserver/guardian_reviewer.go composes structured transcript/evidence and calls the reviewer agent directly, with no parent extension-tool executor registry or delegated codex session to forward. The guardian-context transcript is already read-only and supplied by the host, so there is no injectable extension-tool carrier. go build ./appserver green."
       ]
     },
     {
