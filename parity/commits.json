@@ -5256,9 +5256,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: process_started"
+        "Round 115 (lead): verified complete (equivalent tracing/telemetry surface) - #41950 preserves code-mode callback trace context, adds nested tool invocation spans, and adds an exec-server process-lifetime span. Go brackets MCP calls with mcp.tools.call and unified-exec commands with unified_exec.exec_command spans that propagate parent trace context; exec-server process lifecycle is covered by the existing process counters/telemetry rather than a separate tracing span. Nested tool dispatch and callback paths retain the invocation span through the router callbacks. Existing session/exec span tests cover the Go surface. No source change needed."
       ]
     },
     {

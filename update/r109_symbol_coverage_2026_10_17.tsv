@@ -895,7 +895,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 559264d92e4462e887d7508c705599f33daf4f1e	47353	Preserve `invalid_prompt` as a distinct error classification (#47353)	2026-09-22	guardian	0	0		0	0	not_applicable	
 55b6f282a810c3146a1f79c7c2e6e919cc0aa974	50546	Keep MCP resource helpers available in code mode (#50546)	2026-10-03	guardian	0	0		0	0	not_applicable	
 55db7e8c8870fea3eaeaf98d7a3ee103f35deea0	46305	Avoid cloning turn items for app-server active turn lookups (#46305)	2026-09-17	appserver	1	1	1.00	0	0	complete	
-55e5158e1841bb4b0b392a462c24b4d9fc38d597	41950	Improve tracing for nested tool calls and exec processes (#41950)	2026-09-01	execserver	1	0	0.00	0	0	implementation_pending	process_started
+55e5158e1841bb4b0b392a462c24b4d9fc38d597	41950	Improve tracing for nested tool calls and exec processes (#41950)	2026-09-01	execserver	1	1	1.00	0	0	complete	
 56012fafb86dbfc0c1491db25344c603ff1bfb53	39994	Add Guardian internal session support (#39994)	2026-08-21	guardian	10	4	0.40	0	0	audit_pending	GuardianExtension,InternalSessionSpawnFuture,InternalSessionSpawner,ThreadReadyInput,emit_thread_ready_lifecycle,spawn_internal_session
 5602705c9622593785441bd6a79237bd24ee3418	49704	Prevent npm alpha dist-tags from moving backward (#49704)	2026-09-30	core	0	0		0	0	not_applicable	
 56239d7a618896a37380c87002165ae1cc214e39	41193	Report affected capabilities from remote plugin syncs (#41193)	2026-08-27	appserver	4	0	0.00	0	0	implementation_pending	RemotePluginCapabilities,RemotePluginRemoval,include_active_bundle,plugin_skill_roots
