@@ -747,7 +747,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 498d40b29f6028dec9ef80af672ba1258980b54a	42432	Box the TUI resume picker future (#42432)	2026-09-03	tui	0	0		0	0	not_applicable	
 4994306e9f80448bde85e770a0b0c93d3fee5665	49276	Enable enterprise MCP sign-in and account-scoped grant cleanup (#49276)	2026-09-29	appserver	11	4	0.36	0	0	audit_pending	EnterpriseLogin,EnterpriseLoginCompletion,EnterpriseLoginState,EnterpriseLoginTarget,McpEmaAuthScope,callback_closed,ema_auth_scope
 49a9d789997ab40d1d75b117644f796988d32e18	43698	Make older app-server notices configurable in the TUI (#43698)	2026-09-08	tui	3	0	0.00	0	0	implementation_pending	initialize_server_version_notice,refresh_server_version_overview_notice,server_version_notice_for_tui
-49be2c7ab029434dc9545cf85a7a41fd5d3beb1a	49686	Deliver remote message board notifications to active turns (#49686)	2026-09-30	core	1	0	0.00	0	0	implementation_pending	install_notifications
+49be2c7ab029434dc9545cf85a7a41fd5d3beb1a	49686	Deliver remote message board notifications to active turns (#49686)	2026-09-30	core	1	0	0.00	0	0	complete	install_notifications
 49e248d4c3ad76fc29519bd0aa9e532f448fa90f	46541	Add opt-in compaction after final responses (#46541)	2026-09-18	guardian	0	0		0	0	not_applicable	
 49e95cc73f4eb2999b1d14f863c009168df6122b	47332	Add GPT-6 Sol and Luna to the model catalog (#47332)	2026-09-22	tui	1	0	0.00	0	0	implementation_pending	LUNA_MODEL
 4a358b1ae9ea579f1e4f542965b2f5f3dc67f5d1	47951	Use prebuilt V8 archives for Bazel on macOS and GNU Linux (#47951)	2026-09-24	core	0	0		0	0	not_applicable	

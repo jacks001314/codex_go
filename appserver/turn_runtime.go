@@ -1560,6 +1560,11 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnStarted(threadID))
 	r.notify(NotificationTurnStarted, &TurnStartedNotification{ThreadID: threadID, Turn: appTurn})
 	r.bindRealtimeTurn(threadID, turnID)
+	// Rust #49686: the active turn owns a live remote-board receiver. Its first
+	// connection attempt completes before inference, and it is cancelled on
+	// every stop/abort/error path as this worker unwinds.
+	stopMessageBoardNotifications := r.installMessageBoardNotifications(ctx, threadID, turnID, params)
+	defer stopMessageBoardNotifications()
 	// Rust #51402: a regular turn persists its attribution before startup work
 	// can be suspended, so recovery restores the original trigger instead of
 	// substituting `retry`.
