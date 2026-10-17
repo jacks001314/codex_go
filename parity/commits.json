@@ -10474,9 +10474,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: read_rollout_prefix"
+        "Landed: rollout.ReadRolloutPrefix mirrors codex-rollout read_rollout_prefix (plain-or-compressed resolve via ExistingRolloutPath, zstd decode, decoded byte bound, no durable JSONL). appserver FeedbackReadAttachmentPath sends rollout paths through it, so compressed-only rollouts are attached as decoded JSONL under the canonical .jsonl name (override preserved, text/plain) instead of being skipped or uploaded compressed; non-rollout files keep the bounded plain read. Tests: rollout TestReadRolloutPrefixDecodesCompressedLikeRust; appserver TestFeedbackReadAttachmentDecodesCompressedRolloutLikeRust, TestFeedbackReadAttachmentPrefersPlainSiblingLikeRust, TestFeedbackReadAttachmentFollowsRepresentationTransitionsLikeRust, TestFeedbackReadAttachmentBoundsDecodedBytesLikeRust, TestFeedbackReadAttachmentKeepsUnrelatedZstdOpaqueLikeRust. Leader RC (rollout branch disabled) => four appserver cases FAIL."
       ]
     },
     {

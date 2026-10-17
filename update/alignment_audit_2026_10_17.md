@@ -7,18 +7,18 @@
 
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 434 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 433 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
 
-### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，229 数据行）
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，230 数据行）
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 105 |
+| `landed` | 106 |
 | `complete` | 27 |
 | `not_applicable` | 79 |
 | `blocked_precondition` | 17 |
 | `partial` | 1 |
-| **合计** | **229** |
+| **合计** | **230** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -26,10 +26,10 @@
 
 | 状态 | 行数 |
 | --- | --- |
-| `complete` | 444 |
+| `complete` | 445 |
 | `not_applicable` | 1171 |
 | `audit_pending` | 630 |
-| `implementation_pending` | 434 |
+| `implementation_pending` | 433 |
 | `blocked_precondition` | 15 |
 | `partial` | 1 |
 
@@ -916,12 +916,33 @@ go test ./tool -run 'RequestUserInputAsync|CatalogParameters' -count=1 # ok
     active rollout 都进了归档目录、`sessions` 不再有它们、无关线程的 rollout 不受影响。
   - 队长 RC：把 `archiveThreadRollout` 改回 `rollout.Archive`（只移动选中项）⇒ 上述 appserver 用例 FAIL。
 
-### 27.2 验证
+### 27.2 #44175 诊断附件按 JSONL 读取压缩 rollout（landed）
+
+- Rust（`0df1daf526`）：`FeedbackAttachmentPath::read_attachment` 先判断路径是否为 rollout
+  （`rollout_id_from_path`），是则走 `read_rollout_prefix`（`RolloutReader::open` 解析 plain / `.zst`，
+  解码后有界读取，不落盘），附件名用 canonical `.jsonl` 名（override 优先），`.jsonl` 的内容类型为
+  `text/plain`；非 rollout 仍走「regular + 元数据大小 + max+1 读取」。
+- Go：
+  - `rollout/rollout.go` 新增 `ReadRolloutPrefix`：`ExistingRolloutPath` 优先 plain 兄弟文件，
+    `.zst` 用 zstd 解码，`io.LimitReader` 限定**解码后**字节数，不物化 plain 文件；缺失/非普通文件返回 ok=false。
+  - `appserver/rollout_archive.go` 的 `FeedbackReadAttachmentPath` 改为：rollout 路径走
+    `ReadRolloutPrefix(maxBytes+1)`，失败按 Rust 语义记日志跳过；附件名回落到 `PlainRolloutPath` 的
+    basename（override 仍优先），`.jsonl` 内容类型 `text/plain`；非 rollout 路径保留原有
+    stat/regular/size 检查并把整文件读取改为 `max+1` 有界读取。
+- 测试：
+  - `rollout/read_rollout_prefix_like_rust_test.go` `TestReadRolloutPrefixDecodesCompressedLikeRust`。
+  - `appserver/rollout_attachment_like_rust_test.go` 5 个用例，分别对齐 Rust
+    `compressed_paths_keep_canonical_names_and_filename_overrides`、`compressed_attachment_prefers_newer_plain_sibling`、
+    `queued_attachments_follow_both_representation_transitions`、`compressed_attachment_bounds_decoded_bytes`、
+    `nonregular_rollout_is_omitted_and_unrelated_zstd_attachment_stays_opaque`。
+  - 队长 RC：关掉 rollout 分支 ⇒ 4 个 appserver 用例 FAIL（压缩件被跳过 / 原始 zstd 字节被当作附件）。
+
+### 27.3 验证
 
 ```
 go build ./...                                                        # exit 0
 go test ./rollout -count=1                                            # ok
-go test ./appserver -run "Archive" -count=1                           # ok
+go test ./appserver -run "Archive|Feedback|RolloutArchive" -count=1   # ok
 go test ./appserver -count=1                                          # 仅 3 个既有环境相关失败
 ```
 
@@ -930,7 +951,7 @@ go test ./appserver -count=1                                          # 仅 3 �
 `TestRuntimeRouterTurnCompletedEmitsAcceptedLineFingerprintsLikeRust`）在 pristine worktree
 `084ec624` 上逐条复现，与本轮改动无关。
 
-### 27.3 剩余（目标未完成）
+### 27.4 剩余（目标未完成）
 
-`implementation_pending` 434 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
+`implementation_pending` 433 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
 继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。

@@ -130,7 +130,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0d654e653614b0f99b8da3e4a74aa2558ee61752	40987	Track window and fork positions in turn metadata (#40987)	2026-08-26	appserver	5	4	0.80	0	0	audit_pending	with_forked_from_ordinal_exclusive
 0d7b8117d3cc6d9ffe21d22375d70307133e9f16	49160	Support projectless TUI sessions with workspace defaults (#49160)	2026-09-29	tui	12	5	0.42	0	0	audit_pending	CURRENT_CONFIG,DirectoryTrustOptions,FreshStartupDefaults,ResumePermissions,check_background_terminals,from_overrides,resume_permission_overrides
 0d9bb6c34c2742ee8bcddfccb6404a447926ff9f	40423	Harden Windows file URI conversion (#40423)	2026-08-24	core	0	0		0	0	not_applicable	
-0df1daf5269b51c768c428e6bfded32210cc8cc9	44175	Attach compressed rollouts to diagnostic reports as JSONL (#44175)	2026-09-09	appserver	1	0	0.00	0	0	implementation_pending	read_rollout_prefix
+0df1daf5269b51c768c428e6bfded32210cc8cc9	44175	Attach compressed rollouts to diagnostic reports as JSONL (#44175)	2026-09-09	appserver	1	0	0.00	0	0	complete	read_rollout_prefix
 0df39752cbc4b88d0194ec62bdb0d56fbda4b014	43428	Notify opted-in stdio MCP servers of auth changes (#43428)	2026-09-07	mcp	5	5	1.00	0	0	complete	
 0df4aa67781ae45a3c97befa4db48b734afe46d9	54656	Honor MCP tool-list changes within a turn (#54656)	2026-10-16	mcp	6	4	0.67	0	0	complete	notifications_current,track_tool_list_changes
 0df6366a87dbadf5376cdd26b7675935ef76f893	44336	Add bounded tool-result metadata support to executed tool calls (#44336)	2026-09-09	mcp	6	5	0.83	0	0	audit_pending	history_with_tool_call_metadata

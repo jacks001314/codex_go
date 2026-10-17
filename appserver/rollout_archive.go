@@ -64,34 +64,75 @@ func FeedbackAttachmentPathFilename(attachment FeedbackAttachmentPath) string {
 //
 // Rust #49852: every skip is logged so operators can tell why an attachment was
 // dropped; the messages and fields mirror the Rust tracing events.
+//
+// Rust #44175: a path that names a rollout is read through the plain-or-compressed
+// resolver, decoded when only the `.jsonl.zst` representation exists, bounded by
+// the decoded byte count, and attached under the canonical `.jsonl` filename
+// (a caller override still wins). Non-rollout files keep the plain byte read.
 func FeedbackReadAttachmentPath(attachment FeedbackAttachmentPath, maxBytes int64) (FeedbackAttachment, bool, error) {
-	info, err := os.Stat(attachment.Path)
-	if err != nil {
-		if os.IsNotExist(err) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	var buffer []byte
+	rolloutPath := ""
+	if _, isRollout := rollout.ThreadIDFromFilename(filepath.Base(attachment.Path)); isRollout {
+		rolloutPath = rollout.PlainRolloutPath(attachment.Path)
+		decoded, ok, err := rollout.ReadRolloutPrefix(attachment.Path, maxBytes+1)
+		if err != nil {
+			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
+		}
+		if !ok {
 			slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
 			return FeedbackAttachment{}, false, nil
 		}
-		return FeedbackAttachment{}, false, fmt.Errorf("stat feedback attachment: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		slog.Error("feedback attachment skipped: not a regular file")
-		return FeedbackAttachment{}, false, nil
-	}
-	if info.Size() > maxBytes {
-		slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
-		return FeedbackAttachment{}, false, nil
-	}
-	buffer, err := os.ReadFile(attachment.Path)
-	if err != nil {
-		return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
+		buffer = decoded
+	} else {
+		info, err := os.Stat(attachment.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				slog.Error("feedback attachment skipped: rollout is missing or not a regular file")
+				return FeedbackAttachment{}, false, nil
+			}
+			return FeedbackAttachment{}, false, fmt.Errorf("stat feedback attachment: %w", err)
+		}
+		if !info.Mode().IsRegular() {
+			slog.Error("feedback attachment skipped: not a regular file")
+			return FeedbackAttachment{}, false, nil
+		}
+		if info.Size() > maxBytes {
+			slog.Error("feedback attachment skipped: size limit exceeded", "bytes", info.Size(), "max_bytes", maxBytes)
+			return FeedbackAttachment{}, false, nil
+		}
+		file, err := os.Open(attachment.Path)
+		if err != nil {
+			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", err)
+		}
+		// Keep one extra byte so growth after the metadata check is detected.
+		read, readErr := io.ReadAll(io.LimitReader(file, maxBytes+1))
+		closeErr := file.Close()
+		if readErr != nil {
+			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", readErr)
+		}
+		if closeErr != nil {
+			return FeedbackAttachment{}, false, fmt.Errorf("read feedback attachment: %w", closeErr)
+		}
+		buffer = read
 	}
 	if int64(len(buffer)) > maxBytes {
 		slog.Error("feedback attachment skipped: decoded size limit exceeded", "bytes_read", len(buffer), "max_bytes", maxBytes)
 		return FeedbackAttachment{}, false, nil
 	}
+	filename := FeedbackAttachmentPathFilename(attachment)
+	if rolloutPath != "" && (attachment.AttachmentFilenameOverride == nil || strings.TrimSpace(*attachment.AttachmentFilenameOverride) == "") {
+		filename = filepath.Base(rolloutPath)
+	}
+	contentType := "application/octet-stream"
+	if strings.EqualFold(filepath.Ext(filename), ".jsonl") {
+		contentType = "text/plain"
+	}
 	return FeedbackAttachment{
-		Filename:    FeedbackAttachmentPathFilename(attachment),
-		ContentType: "application/octet-stream",
+		Filename:    filename,
+		ContentType: contentType,
 		Buffer:      buffer,
 	}, true, nil
 }

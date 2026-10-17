@@ -1421,6 +1421,51 @@ func ExistingRolloutPath(path string) (string, bool) {
 	return "", false
 }
 
+// ReadRolloutPrefix mirrors Rust `read_rollout_prefix`
+// (codex-rs/rollout/src/seekable_reader.rs, Rust #44175): it returns at most
+// maxBytes DECODED rollout bytes, resolving the plain or compressed
+// representation without materializing a durable JSONL file. Plain siblings win
+// over a compressed copy, matching `RolloutReader::open`. ok is false for a
+// missing or non-regular source (Rust returns `Ok(None)`).
+func ReadRolloutPrefix(path string, maxBytes int64) ([]byte, bool, error) {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	existing, found := ExistingRolloutPath(path)
+	if !found {
+		return nil, false, nil
+	}
+	info, err := os.Stat(existing)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	file, err := os.Open(existing)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	var reader io.Reader = file
+	if strings.HasSuffix(strings.ToLower(existing), ".zst") {
+		decoder, decodeErr := zstd.NewReader(file)
+		if decodeErr != nil {
+			return nil, false, decodeErr
+		}
+		defer decoder.Close()
+		reader = decoder
+	}
+	var buffer bytes.Buffer
+	if _, err := io.Copy(&buffer, io.LimitReader(reader, maxBytes)); err != nil {
+		return nil, false, err
+	}
+	return buffer.Bytes(), true, nil
+}
+
 // MaterializeRolloutForReference restores a compressed rollout to its
 // canonical JSONL path before a HistoryPosition records physical byte offsets.
 func MaterializeRolloutForReference(path string) (string, error) {
