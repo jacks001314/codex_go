@@ -262,7 +262,7 @@ func DialNoiseRendezvousClient(
 		clientName:   clientName,
 		nextID:       1,
 		nextHTTPID:   1,
-		pending:      map[int64]chan clientCallResult{},
+		pending:      map[int64]chan RpcCompletion{},
 		sessions:     map[string]*clientProcessSession{},
 		httpStreams:  map[string]*HTTPBodyStream{},
 		inboundIDs:   map[int64]struct{}{},

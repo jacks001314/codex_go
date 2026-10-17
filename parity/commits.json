@@ -19998,9 +19998,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: RpcCompletion, record_receipt, trace_process_id"
+        "Round 286: exec-server reports request enqueue and response receipt events with reader-to-caller delay, records dispatch/response-enqueue offsets, carries completion time back to the caller, and emits bounded process spans for startup, sandbox/snapshot preparation, and spawning through a cycle-free tracehook adapter."
       ]
     },
     {

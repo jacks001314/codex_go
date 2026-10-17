@@ -1154,7 +1154,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6f51c65958ebdd5a57708e012d045f172fc9aab4	47879	Fix macOS system-alias matching in patch permission checks (#47879)	2026-09-24	execserver	9	3	0.33	0	0	audit_pending	LocalPolicyContext,PatchPolicyMatcher,as_context,normalize_system_aliases,prepare_local_matching,prepare_matching
 6f6af0fce4381233fa2e83dc24641167e68dfcb5	47568	Record sandbox backends in command execution analytics (#47568)	2026-09-23	tui	1	1	1.00	0	0	complete	
 6f6e80bcddab56a4e6518eb5adef0079ed30bb2b	52176	Show AWS GovCloud guidance at startup and remember acknowledgment (#52176)	2026-10-08	tui	4	1	0.25	0	0	audit_pending	check_gov_cloud,handle_guidance_key_event,run_gov_cloud_guidance
-6fa3bcaae8aaa7c90735816191c3bda0ae5654e4	47680	Add exec-server RPC timing and process startup tracing (#47680)	2026-09-23	execserver	3	0	0.00	0	0	implementation_pending	RpcCompletion,record_receipt,trace_process_id
+6fa3bcaae8aaa7c90735816191c3bda0ae5654e4	47680	Add exec-server RPC timing and process startup tracing (#47680)	2026-09-23	execserver	3	3	1.00	0	0	complete	none
 6fbd7be1518d259e30e6fef48f05f433d2461a20	54265	Add regression coverage for Guardian sandbox retry approvals (#54265)	2026-10-15	guardian	0	0		0	0	complete	
 6fbfc352cafb50332d62dbdc8720cb5d7fe3b7c7	53701	Enable CLI Daybreak by default and enforce background-turn eligibility (#53701)	2026-10-13	tui	0	0		0	0	not_applicable	
 6fee98cc85a69ee44a856121cac0f64505cf48d0	43645	Expand TUI regression coverage for realtime voice conversations (#43645)	2026-09-08	tui	0	0		0	0	not_applicable	

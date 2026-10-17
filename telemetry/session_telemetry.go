@@ -277,7 +277,8 @@ func WithSpan(ctx context.Context, span *Span) context.Context {
 	if span == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, sessionTelemetrySpanKey{}, span)
+	ctx = context.WithValue(ctx, sessionTelemetrySpanKey{}, span)
+	return withTracehookSpan(ctx, span)
 }
 
 // SpanFromContext returns the span carried by ctx, or nil.

@@ -1785,7 +1785,15 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if err != nil {
 			return nil, err
 		}
+		_, sandboxSpawnSpan := startExecServerSpan(
+			ctx,
+			execServerProcessSpawnSpan,
+			execServerProcessSpanAttributes(params.ProcessID, nil),
+		)
 		started, supported, startErr := startExecServerSandboxProcess(params)
+		if sandboxSpawnSpan != nil {
+			sandboxSpawnSpan.End()
+		}
 		if startErr != nil {
 			s.releaseStartingProcess(params.ProcessID, state)
 			return nil, startErr
@@ -1875,7 +1883,15 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		if err != nil {
 			return nil, err
 		}
+		_, ttySpawnSpan := startExecServerSpan(
+			ctx,
+			execServerProcessSpawnSpan,
+			execServerProcessSpanAttributes(params.ProcessID, nil),
+		)
 		startedTTY, supported, startErr := startExecServerTTY(cmd)
+		if ttySpawnSpan != nil {
+			ttySpawnSpan.End()
+		}
 		if startErr != nil {
 			s.releaseStartingProcess(params.ProcessID, state)
 			return nil, startErr

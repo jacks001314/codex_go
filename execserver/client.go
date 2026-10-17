@@ -33,7 +33,7 @@ type Client struct {
 	mu             sync.Mutex
 	nextID         int64
 	nextHTTPID     uint64
-	pending        map[int64]chan clientCallResult
+	pending        map[int64]chan RpcCompletion
 	sessions       map[string]*clientProcessSession
 	httpStreams    map[string]*HTTPBodyStream
 	inboundIDs     map[int64]struct{}
@@ -237,10 +237,31 @@ type FileReadStream struct {
 	closed     bool
 }
 
-type clientCallResult struct {
+// RpcCompletion carries the reader completion timestamp back to the awaiting
+// caller so receipt telemetry retains the caller's tracing context.
+type RpcCompletion struct {
 	response    clientResponse
 	err         error
 	completedAt time.Time
+}
+
+func (c RpcCompletion) recordReceipt(ctx context.Context, method string) {
+	if c.err != nil || c.completedAt.IsZero() {
+		return
+	}
+	outcome := "success"
+	if c.response.Error != nil {
+		outcome = "error"
+	}
+	delay := time.Since(c.completedAt).Nanoseconds()
+	if delay < 0 {
+		delay = 0
+	}
+	emitExecServerTraceEvent(ctx, execServerResponseReceivedEvent, map[string]string{
+		"rpc.method":          method,
+		"outcome":             outcome,
+		"reader_to_caller_ns": strconv.FormatInt(delay, 10),
+	})
 }
 
 type clientTransportError struct {
@@ -326,7 +347,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		clientName:   clientName,
 		nextID:       1,
 		nextHTTPID:   1,
-		pending:      map[int64]chan clientCallResult{},
+		pending:      map[int64]chan RpcCompletion{},
 		sessions:     map[string]*clientProcessSession{},
 		httpStreams:  map[string]*HTTPBodyStream{},
 		inboundIDs:   map[int64]struct{}{},
@@ -1843,7 +1864,7 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 	emitExecServerTraceEvent(ctx, execServerRequestEnqueuedEvent, map[string]string{
 		"rpc.method": method,
 	})
-	var result clientCallResult
+	var result RpcCompletion
 	select {
 	case result = <-responseCh:
 	case <-ctx.Done():
@@ -1856,21 +1877,7 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 			return errors.New("exec-server client is closed")
 		}
 	}
-	if result.err == nil && !result.completedAt.IsZero() {
-		outcome := "success"
-		if result.response.Error != nil {
-			outcome = "error"
-		}
-		delay := time.Since(result.completedAt).Nanoseconds()
-		if delay < 0 {
-			delay = 0
-		}
-		emitExecServerTraceEvent(ctx, execServerResponseReceivedEvent, map[string]string{
-			"rpc.method":       method,
-			"outcome":          outcome,
-			"reader_to_caller_ns": strconv.FormatInt(delay, 10),
-		})
-	}
+	result.recordReceipt(ctx, method)
 	if result.err != nil {
 		return result.err
 	}
@@ -2027,7 +2034,7 @@ func (c *Client) recoverConnection(ctx context.Context) error {
 	}
 }
 
-func (c *Client) reserveCall() (int64, chan clientCallResult, error) {
+func (c *Client) reserveCall() (int64, chan RpcCompletion, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	select {
@@ -2037,7 +2044,7 @@ func (c *Client) reserveCall() (int64, chan clientCallResult, error) {
 	}
 	id := c.nextID
 	c.nextID++
-	responseCh := make(chan clientCallResult, 1)
+	responseCh := make(chan RpcCompletion, 1)
 	c.pending[id] = responseCh
 	return id, responseCh, nil
 }
@@ -2122,7 +2129,7 @@ func (c *Client) readLoop(conn clientConnection) {
 		delete(c.pending, id)
 		c.mu.Unlock()
 		if responseCh != nil {
-			responseCh <- clientCallResult{response: response, completedAt: time.Now()}
+			responseCh <- RpcCompletion{response: response, completedAt: time.Now()}
 		}
 	}
 }
@@ -2417,7 +2424,7 @@ func (c *Client) failTransport(conn clientConnection, err error) error {
 	}
 	c.conn = nil
 	pending := c.pending
-	c.pending = map[int64]chan clientCallResult{}
+	c.pending = map[int64]chan RpcCompletion{}
 	httpStreams := c.httpStreams
 	c.httpStreams = map[string]*HTTPBodyStream{}
 	c.mu.Unlock()
@@ -2446,9 +2453,9 @@ func (c *Client) failTerminal(err error) {
 	})
 }
 
-func (c *Client) takeInFlightLocked() (map[int64]chan clientCallResult, map[string]*clientProcessSession, map[string]*HTTPBodyStream) {
+func (c *Client) takeInFlightLocked() (map[int64]chan RpcCompletion, map[string]*clientProcessSession, map[string]*HTTPBodyStream) {
 	pending := c.pending
-	c.pending = map[int64]chan clientCallResult{}
+	c.pending = map[int64]chan RpcCompletion{}
 	sessions := c.sessions
 	c.sessions = map[string]*clientProcessSession{}
 	httpStreams := c.httpStreams
@@ -2457,13 +2464,13 @@ func (c *Client) takeInFlightLocked() (map[int64]chan clientCallResult, map[stri
 }
 
 func failClientInFlight(
-	pending map[int64]chan clientCallResult,
+	pending map[int64]chan RpcCompletion,
 	sessions map[string]*clientProcessSession,
 	httpStreams map[string]*HTTPBodyStream,
 	err error,
 ) {
 	for _, responseCh := range pending {
-		responseCh <- clientCallResult{err: err}
+		responseCh <- RpcCompletion{err: err}
 	}
 	for _, session := range sessions {
 		if session != nil && session.subscription != nil {

@@ -105,7 +105,7 @@ func (c *networkPolicyTestConnection) CloseNow() error { return c.Close() }
 func newNetworkPolicyTestClient(conn clientConnection) *Client {
 	return &Client{
 		conn:         conn,
-		pending:      map[int64]chan clientCallResult{},
+		pending:      map[int64]chan RpcCompletion{},
 		sessions:     map[string]*clientProcessSession{},
 		httpStreams:  map[string]*HTTPBodyStream{},
 		inboundIDs:   map[int64]struct{}{},

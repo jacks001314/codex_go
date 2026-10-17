@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"codex_go/telemetry"
+	"codex_go/tracehook"
 )
 
 const (
@@ -17,6 +17,7 @@ const (
 	execServerPrepareSnapshotSpan   = "codex.exec_server.process_prepare_shell_snapshot"
 	execServerCaptureSnapshotSpan   = "codex.exec_server.process_capture_shell_snapshot"
 	execServerProcessSpawnSpan      = "codex.process.spawn"
+	traceSafeTarget                 = "codex_otel.trace_safe"
 )
 
 // traceProcessID bounds process identifiers attached to traces. Process
@@ -43,11 +44,11 @@ func startExecServerSpan(
 	ctx context.Context,
 	name string,
 	attributes map[string]string,
-) (context.Context, *telemetry.Span) {
+) (context.Context, tracehook.Span) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	parent := telemetry.SpanFromContext(ctx)
+	parent := tracehook.SpanFromContext(ctx)
 	if parent == nil {
 		return ctx, nil
 	}
@@ -55,11 +56,11 @@ func startExecServerSpan(
 	if span == nil {
 		return ctx, nil
 	}
-	return telemetry.WithSpan(ctx, span), span
+	return tracehook.WithSpan(ctx, span), span
 }
 
 func setExecServerSpanAttribute(ctx context.Context, key string, value int64) {
-	span := telemetry.SpanFromContext(ctx)
+	span := tracehook.SpanFromContext(ctx)
 	if span == nil {
 		return
 	}
@@ -70,18 +71,18 @@ func setExecServerSpanAttribute(ctx context.Context, key string, value int64) {
 }
 
 func emitExecServerTraceEvent(ctx context.Context, eventName string, fields map[string]string) {
-	span := telemetry.SpanFromContext(ctx)
+	span := tracehook.SpanFromContext(ctx)
 	if span == nil {
 		return
 	}
 	attributes := make(map[string]string, len(fields)+3)
 	attributes["level"] = "INFO"
-	attributes["target"] = telemetry.OtelTraceSafeTarget
+	attributes["target"] = traceSafeTarget
 	attributes["event.name"] = eventName
 	for key, value := range fields {
 		attributes[key] = value
 	}
-	span.AddEvent(eventName, attributes, time.Time{})
+	span.AddEvent(eventName, attributes)
 }
 
 func execServerOffsetNanos(started time.Time) int64 {
