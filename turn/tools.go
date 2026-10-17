@@ -95,6 +95,9 @@ type ToolRegistryOptions struct {
 	// calls. Nil results in an empty openai/confirmation_policies object for
 	// eligible node_repl/cua_repl calls.
 	ModelConfirmationPolicies *model.ConfirmationPolicies
+	// FunctionDescriptionPrefixes carries the active model's
+	// functions-namespace per-tool guidance (Rust #51930).
+	FunctionDescriptionPrefixes map[string]string
 	// SuppressActorConfirmationPolicies omits the confirmation-policies request
 	// metadata (Guardian review sessions).
 	SuppressActorConfirmationPolicies bool
@@ -752,6 +755,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if err := registry.Prepend(execExecutor); err != nil {
 			return nil, err
 		}
+	}
+	if err := registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(options.FunctionDescriptionPrefixes); err != nil {
+		return nil, err
 	}
 	return registry, nil
 }

@@ -14557,8 +14557,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		catalogTools = turnModelInfo.ExperimentalSupportedTools
 		if turnModelInfo.ModelMessages != nil {
 			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
-			if tools := turnModelInfo.ModelMessages.Tools; tools != nil && tools.SendUserMessageAsync != nil {
-				options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
+			if tools := turnModelInfo.ModelMessages.Tools; tools != nil {
+				if tools.SendUserMessageAsync != nil {
+					options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
+				}
+				options.FunctionDescriptionPrefixes = tools.FunctionsNamespaceFunctionsDescriptionPrefixes
 			}
 			// Rust #47773: request_user_input_async uses the same catalog
 			// entry's description and parameters override.

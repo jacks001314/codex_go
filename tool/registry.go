@@ -414,6 +414,48 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	return out
 }
 
+// ApplyFunctionsNamespaceFunctionDescriptionPrefixes prepends model-owned
+// guidance to available default-namespace tools. Values are trimmed; empty
+// values and unavailable names add nothing. The combined prefix text for
+// reachable tools, including two-byte separators, is capped at 256 UTF-8 bytes
+// (Rust #51930).
+func (r *Registry) ApplyFunctionsNamespaceFunctionDescriptionPrefixes(prefixes map[string]string) error {
+	if r == nil || len(prefixes) == 0 {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	remaining := 256
+	for _, key := range r.order {
+		spec := r.specs[key]
+		if strings.TrimSpace(spec.Name.Namespace) != "" {
+			continue
+		}
+		prefix, ok := prefixes[spec.Name.Name]
+		if !ok {
+			continue
+		}
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			continue
+		}
+		if len(prefix)+2 > remaining {
+			return errors.New("available functions' description prefixes exceed the 256-byte combined limit")
+		}
+		remaining -= len(prefix) + 2
+		spec.Description = prependToolDescriptionPrefix(prefix, spec.Description)
+		r.specs[key] = spec
+	}
+	return nil
+}
+
+func prependToolDescriptionPrefix(prefix string, description string) string {
+	if strings.TrimSpace(description) == "" {
+		return prefix
+	}
+	return prefix + "\n\n" + description
+}
+
 func (r *Registry) DeferredToolNamespaces() map[string]string {
 	namespaces := map[string]string{}
 	for _, spec := range r.DiscoverableSpecs() {

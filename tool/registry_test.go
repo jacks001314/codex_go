@@ -428,3 +428,48 @@ func TestRemoveNamespaceReturnsRemovedQualifiedNames(t *testing.T) {
 		t.Fatalf("other namespace tool should be preserved")
 	}
 }
+
+func TestRegistryAppliesFunctionsNamespaceDescriptionPrefixesLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	for _, spec := range []Spec{
+		{Name: PlainName("exec"), Description: "Run code.", Exposure: ExposureModelVisible},
+		{Name: PlainName("custom"), Description: "Custom tool.", Freeform: &FreeformSpec{Syntax: "text", Definition: "text"}, Exposure: ExposureDiscoverable},
+		{Name: NamespacedName("calendar", "create"), Description: "Create event.", Exposure: ExposureModelVisible},
+	} {
+		if err := registry.Register(NewExecutorFunc(spec, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := registry.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
+		"exec":    "  Exec guidance.  ",
+		"custom":  "Custom guidance.",
+		"create":  "Wrong namespace.",
+		"missing": "Unavailable tool.",
+		"empty":   "   ",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if spec, _ := registry.Spec(PlainName("exec")); spec.Description != "Exec guidance.\n\nRun code." {
+		t.Fatalf("exec description = %q", spec.Description)
+	}
+	if spec, _ := registry.Spec(PlainName("custom")); spec.Description != "Custom guidance.\n\nCustom tool." {
+		t.Fatalf("custom description = %q", spec.Description)
+	}
+	if spec, _ := registry.Spec(NamespacedName("calendar", "create")); spec.Description != "Create event." {
+		t.Fatalf("namespaced description = %q", spec.Description)
+	}
+
+	oversized := NewRegistry()
+	if err := oversized.Register(NewExecutorFunc(Spec{Name: PlainName("one"), Description: "One."}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := oversized.Register(NewExecutorFunc(Spec{Name: PlainName("two"), Description: "Two."}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := oversized.ApplyFunctionsNamespaceFunctionDescriptionPrefixes(map[string]string{
+		"one": strings.Repeat("x", 200),
+		"two": strings.Repeat("y", 100),
+	}); err == nil {
+		t.Fatal("combined prefix budget was not enforced")
+	}
+}

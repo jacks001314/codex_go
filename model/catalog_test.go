@@ -644,7 +644,8 @@ func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	desc := "Ask the user a clarifying question."
 	messages := ModelMessages{
 		Tools: &ToolMessages{
-			SendUserMessageAsync: &ToolMessage{Description: &desc},
+			SendUserMessageAsync:                           &ToolMessage{Description: &desc},
+			FunctionsNamespaceFunctionsDescriptionPrefixes: map[string]string{"exec": "Exec guidance."},
 		},
 	}
 	data, err := json.Marshal(&messages)
@@ -662,6 +663,10 @@ func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	tool, ok := tools["send_user_message_async"].(map[string]any)
 	if !ok || tool["description"] != desc {
 		t.Fatalf("send_user_message_async tool = %#v", tools)
+	}
+	prefixes, ok := tools["functions_namespace_functions_description_prefixes"].(map[string]any)
+	if !ok || prefixes["exec"] != "Exec guidance." {
+		t.Fatalf("function description prefixes = %#v", tools)
 	}
 
 	// A missing description falls back to a nil pointer (built-in), while an

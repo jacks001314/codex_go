@@ -768,6 +768,31 @@ func TestSkillsReadHonorsResponseBudgetAndReusesExecutorSnapshotLikeRust(t *test
 	}
 }
 
+func TestBuildToolRegistryAppliesModelFunctionDescriptionPrefixesLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = true
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.FunctionDescriptionPrefixes = map[string]string{
+		"exec":        "Exec guidance.",
+		"unavailable": "Ignored.",
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok {
+		t.Fatal("exec tool is missing")
+	}
+	if !strings.HasPrefix(spec.Description, "Exec guidance.\n\n") {
+		t.Fatalf("exec description = %q", spec.Description)
+	}
+}
+
 func TestSkillReadPageHonorsEscapedAndMultibyteBudgetsLikeRust(t *testing.T) {
 	contents := strings.Repeat("quote \" slash \\ newline\n emoji 😀 ", 40)
 	for _, budget := range []int{180, 300, 1024} {

@@ -222,6 +222,9 @@ type ConfirmationPolicies struct {
 // model-owned descriptions for built-in tools.
 type ToolMessages struct {
 	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+	// FunctionsNamespaceFunctionsDescriptionPrefixes prepends model-owned
+	// guidance to available default-namespace function descriptions.
+	FunctionsNamespaceFunctionsDescriptionPrefixes map[string]string `json:"functions_namespace_functions_description_prefixes,omitempty"`
 	// MultiAgent carries the Multi-Agent V2 tools' catalog overrides (Rust
 	// #46505).
 	MultiAgent *MultiAgentToolMessages `json:"multi_agent,omitempty"`
@@ -1868,6 +1871,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 		if messages.Tools != nil {
 			tools := *messages.Tools
 			tools.SendUserMessageAsync = cloneToolMessage(tools.SendUserMessageAsync)
+			tools.FunctionsNamespaceFunctionsDescriptionPrefixes = cloneStringMap(tools.FunctionsNamespaceFunctionsDescriptionPrefixes)
 			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
 			tools.McpResources = cloneMcpResourceToolMessages(tools.McpResources)
 			messages.Tools = &tools
