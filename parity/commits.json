@@ -514,9 +514,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: execute_handlers_with_metadata"
+        "Round 115 (lead): implemented metadata and executor-context propagation for MCP hook calls. Stop-request metadata reaches tools/call _meta; hook calls carry an optional environment ID that is validated before execution with Rust's mismatch error. Go has no executor-scoped hook source yet, so current local hooks correctly send nil. Metadata-drop RC and focused hook tests pass."
       ]
     },
     {

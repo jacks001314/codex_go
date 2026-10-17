@@ -189,6 +189,9 @@ type HookMetadata struct {
 	Input         map[string]any `json:"input,omitempty"`
 	TimeoutSec    int64          `json:"timeoutSec"`
 	StatusMessage *string        `json:"statusMessage"`
+	// EnvironmentID scopes an executor-backed hook to the environment that owns
+	// its source path. Empty means a host-local hook (Rust HandlerSourcePath).
+	EnvironmentID string `json:"-"`
 	// AdditionalContextLimit mirrors Rust HookMetadata.additional_context_limit
 	// (app-server hooks_list contract): nil means the default 2,500-token
 	// spilling threshold; 0 disables spilling.

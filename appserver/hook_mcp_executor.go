@@ -37,6 +37,9 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 	if strings.TrimSpace(config.URL) == "" && strings.TrimSpace(config.Command) == "" {
 		return "", fmt.Errorf("MCP hook server %q has no configured endpoint", server)
 	}
+	if err := validateHookMcpEnvironment(server, config, call.EnvironmentID); err != nil {
+		return "", err
+	}
 	var arguments map[string]any
 	if len(call.Input) > 0 {
 		arguments = call.Input
@@ -45,11 +48,25 @@ func (r *RuntimeRouter) Execute(ctx context.Context, call HookMcpCall) (string, 
 		Server:    server,
 		Tool:      toolName,
 		Arguments: arguments,
+		Meta:      cloneAnyMap(call.Metadata),
 	})
 	if err != nil {
 		return "", err
 	}
 	return mcpHookResponseText(response), nil
+}
+
+func validateHookMcpEnvironment(server string, config mcp.ServerConfig, environmentID string) error {
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" || config.EffectiveEnvironmentID() == environmentID {
+		return nil
+	}
+	return fmt.Errorf(
+		"MCP server `%s` is running in environment `%s`, expected `%s`",
+		server,
+		config.EffectiveEnvironmentID(),
+		environmentID,
+	)
 }
 
 func mcpHookResponseText(response *mcp.MCPToolCallResponse) string {

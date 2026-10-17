@@ -41,3 +41,17 @@ func TestRuntimeRouterExecuteFailsFastWhenMCPServiceUnavailable(t *testing.T) {
 		t.Fatalf("unexpected error = %v", err)
 	}
 }
+
+func TestValidateHookMcpEnvironmentLikeRust(t *testing.T) {
+	config := mcp.ServerConfig{EnvironmentID: "executor-a"}
+	if err := validateHookMcpEnvironment("docs", config, ""); err != nil {
+		t.Fatalf("host-local hook error = %v", err)
+	}
+	if err := validateHookMcpEnvironment("docs", config, "executor-a"); err != nil {
+		t.Fatalf("matching environment error = %v", err)
+	}
+	err := validateHookMcpEnvironment("docs", config, "executor-b")
+	if err == nil || err.Error() != "MCP server `docs` is running in environment `executor-a`, expected `executor-b`" {
+		t.Fatalf("mismatched environment error = %v", err)
+	}
+}

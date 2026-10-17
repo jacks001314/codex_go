@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ type recordingMcpToolHookExecutor struct {
 	server  string
 	tool    string
 	input   map[string]any
+	envID   string
+	meta    map[string]any
 	output  string
 	err     error
 	timeout time.Duration
@@ -23,8 +26,55 @@ func (e *recordingMcpToolHookExecutor) Execute(ctx context.Context, call HookMcp
 	e.server = call.Server
 	e.tool = call.Tool
 	e.input = call.Input
+	e.envID = call.EnvironmentID
+	e.meta = call.Metadata
 	e.timeout = call.Timeout
 	return e.output, e.err
+}
+
+func TestHookRunnerStopMcpCarriesRequestMetadataAndEnvironmentLikeRust(t *testing.T) {
+	runner := NewHookRunner()
+	server := "security"
+	toolName := "check"
+	executor := &recordingMcpToolHookExecutor{output: `{}`}
+	runner.McpToolHookExecutor = executor
+	requestMetadata := map[string]any{
+		"x-codex-turn-metadata": map[string]any{"turn_id": "turn-1"},
+	}
+	result, err := runner.RunStop(context.Background(), &HookStopRequest{
+		ThreadID:        "thread-1",
+		TurnID:          "turn-1",
+		CWD:             t.TempDir(),
+		Model:           "gpt-test",
+		PermissionMode:  "default",
+		RequestMetadata: requestMetadata,
+		Hooks: []HookMetadata{{
+			Key:           "mcp-stop",
+			EventName:     HookEventStop,
+			HandlerType:   HookHandlerMCPTool,
+			Server:        &server,
+			Tool:          &toolName,
+			EnvironmentID: "executor-a",
+			TimeoutSec:    5,
+			SourcePath:    "/tmp/executor-hooks.json",
+			Source:        HookSourcePlugin,
+			DisplayOrder:  1,
+			Enabled:       true,
+			TrustStatus:   HookTrustTrusted,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RunStop() error = %v", err)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Status != HookRunCompleted {
+		t.Fatalf("runs = %#v", result.Runs)
+	}
+	if executor.envID != "executor-a" {
+		t.Fatalf("environment ID = %q", executor.envID)
+	}
+	if !reflect.DeepEqual(executor.meta, requestMetadata) {
+		t.Fatalf("metadata = %#v, want %#v", executor.meta, requestMetadata)
+	}
 }
 
 func TestExpandMcpArgumentTemplateMatchesRust(t *testing.T) {

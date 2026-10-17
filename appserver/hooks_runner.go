@@ -42,10 +42,12 @@ type HookRunner struct {
 // HookMcpCall mirrors Rust HookMcpCall: one MCP tool call requested by a
 // configured mcp_tool hook handler.
 type HookMcpCall struct {
-	Server  string
-	Tool    string
-	Input   map[string]any
-	Timeout time.Duration
+	Server        string
+	Tool          string
+	EnvironmentID string
+	Metadata      map[string]any
+	Input         map[string]any
+	Timeout       time.Duration
 }
 
 // McpToolHookExecutor mirrors Rust HookMcpExecutor: returns text interpreted
@@ -62,6 +64,7 @@ type HookRunRequest struct {
 	MatcherInputs []string
 	RunIDSuffix   string
 	InputJSON     string
+	Metadata      map[string]any
 	Hooks         []HookMetadata
 }
 
@@ -314,10 +317,12 @@ func (r *HookRunner) runMcpToolHook(ctx context.Context, metadata HookMetadata, 
 	}
 	execCtx, cancel := context.WithTimeout(ctx, remaining)
 	output, err := r.McpToolHookExecutor.Execute(execCtx, HookMcpCall{
-		Server:  ptrStringValue(metadata.Server),
-		Tool:    ptrStringValue(metadata.Tool),
-		Input:   input,
-		Timeout: remaining,
+		Server:        ptrStringValue(metadata.Server),
+		Tool:          ptrStringValue(metadata.Tool),
+		EnvironmentID: strings.TrimSpace(metadata.EnvironmentID),
+		Metadata:      cloneAnyMap(request.Metadata),
+		Input:         input,
+		Timeout:       remaining,
 	})
 	cancel()
 	completed := r.now()

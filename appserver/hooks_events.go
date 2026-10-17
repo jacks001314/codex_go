@@ -51,6 +51,7 @@ type HookStopRequest struct {
 	TranscriptPath       *string
 	Model                string
 	PermissionMode       string
+	RequestMetadata      map[string]any
 	StopHookActive       bool
 	LastAssistantMessage *string
 	Hooks                []HookMetadata
@@ -235,6 +236,7 @@ func (r *HookRunner) RunStop(ctx context.Context, request *HookStopRequest) (*Ho
 		CWD:       request.CWD,
 		EventName: HookEventStop,
 		InputJSON: inputJSON,
+		Metadata:  cloneAnyMap(request.RequestMetadata),
 		Hooks:     request.Hooks,
 	})
 }
