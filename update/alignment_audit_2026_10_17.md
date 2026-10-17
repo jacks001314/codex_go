@@ -829,3 +829,43 @@ go test ./config -run MultiAgentV2Config -count=1                  # ok
 
 454 条 `implementation_pending` 是当前「功能对齐」的量化缺口（TUI 161 条为主，其次 Guardian 73、appserver 60）。下一轮建议按面推进：appserver → core → sandbox → mcp → execserver → persistence → TUI（遵循「核心优先，TUI 最后」）。
 
+## 26. Round 110/111（2026-10-17）：catalog 覆盖两笔 + 账本口径收敛
+
+### 26.1 #47773 `request_user_input_async` 使用 catalog schema（landed）
+
+- Rust：`send_user_message_async.parameters` 同时作为 `request_user_input_async` 的 schema 覆盖；无效覆盖告警并回退 bundled，description 独立保留（`catalog_parameters::parse`：合法 JSON、object 根、`type:"object"`、支持的 schema 子集）。
+- Go：新增 `tool/catalog_parameters.go`（`catalogParametersParse` / `ParseCatalogParameters`，复用 `jsonschema.SubsetSchema` 做子集归一化），`RequestUserInputAsyncHandler.Parameters`，`model.ModelMessages.RequestUserInputAsyncDescription/ParametersOverride`，`turn.ToolRegistryOptions.RequestUserInputAsync*`，appserver 路由从 catalog 取值。
+- 测试：`tool/request_user_input_async_catalog_schema_like_rust_test.go`（合法覆盖、未知关键字丢弃、9 种非法覆盖回退且保留 catalog description）、`turn/tools_test.go`、`model/catalog_test.go`。
+
+### 26.2 #47677 MCP 资源 helper 的 catalog 覆盖（landed）
+
+- Rust：`model_messages.tools.mcp_resources` 的三个条目分别覆盖 `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource` 的 description 与 parameters；二者独立生效，非法 schema 告警回退 bundled（`mcp_resource_spec::with_model_messages`）。
+- Go：`model.McpResourceToolMessages` + `ToolMessages.McpResources` + `ModelMessages.MCPResources()`，`turn.registerMCPResourceHandlers` 接收并按工具应用覆盖（`applyMCPResourceCatalogMessage`），appserver 路由接线；direct 与 CodeModeOnly 两条注册路径共用。
+- 测试：`model/catalog_test.go` `TestModelMessagesMCPResourcesLikeRust`、`turn/tools_test.go` `TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust`。
+
+### 26.3 账本口径收敛
+
+- 新增可复现脚本 `update/r110_recompute_status_2026_10_17.py`：从 `update/r90_commit_ledger_2026_10_16.tsv` 的 evidence 状态重新推导 `update/r109_symbol_coverage_2026_10_17.tsv` 的 verdict（120 行被纠正，例如 #47540 / #52065 / #52302 / #54135 / #54686 由 pending 变为 complete）。
+- `r90` 账本中 12 条 `AlreadyImplemented` 统一改为 `complete`（证据文本保留并标注原始判定），状态词汇与 TSV/commits.json 对齐。
+- 当前账本分布：landed 104 / complete 27 / not_applicable 79 / blocked_precondition 17 / partial 1。
+- 覆盖面（TSV，2695 提交）：complete 442、not_applicable 1171、audit_pending 630、implementation_pending 436、blocked_precondition 15、partial 1。
+
+### 26.4 锚点核对
+
+- Rust `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 为其前两个提交）。
+- `parity/baseline.json`：`verified.rustCommit` = `target.rustCommit` = `ce0323f2f2d3b25e82806cd555237da3db4e1897`，`parity.json.rustBaseline` = `ce0323f2f2`，`parity/alignment_control_test.go` 的 `candidateRustTo` 同值。
+- verifier 上一轮引用的「baseline 冻结在 970b7f2ff4」与当前工作树不符：`970b7f2ff4` 仅出现在历史审计文本与 `update/plan_2026_08_22.md` 中，不是当前锚点。
+
+### 26.5 验证
+
+```
+go build ./...                                                        # exit 0
+go test ./parity -count=1                                             # ok
+go test ./turn ./model ./mcp ./config ./agent -count=1                # all ok
+go test ./appserver -run 'ManifestCoversRustModules|Guardian' -count=1 # ok
+go test ./tool -run 'RequestUserInputAsync|CatalogParameters' -count=1 # ok
+```
+
+### 26.6 剩余（目标未完成）
+
+`implementation_pending` 436 条 + `blocked_precondition` 15 条 + `partial` 1 条。按面：TUI 仍占最大头，其次 Guardian / appserver / core。下一轮继续按「appserver → core → sandbox → mcp → execserver → persistence → TUI」推进；`blocked_precondition` 中 #54048（交互式目录信任确认本身缺失）、#54216（全屏转录图片预览）、#54380/#54381（presets 子系统）需要先补底层能力。
