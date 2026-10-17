@@ -333,7 +333,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 20cdcb0156254cfcd1dc5f2e10f68345c6e47c40	47073	Wait for thread idle in Guardian context budget tests (#47073)	2026-09-21	guardian	0	0		0	0	not_applicable	
 20f109eadb9b45360e6ca4f1dee2e82c83a48f7a	44121	Reuse MCP bindings while cached servers remain dormant (#44121)	2026-09-09	mcp	2	0	0.00	0	0	not_applicable	BindingCatalogRevision,current_revision
 20f4d12f76fc0dbe77bb4052e8acc1615bef5f5d	46044	Include Code Mode tool metadata in compaction prompts (#46044)	2026-09-16	core	1	1	1.00	0	0	complete	
-2126f9361751017f61a0eca0d7ab868f4920b552	40449	Route peer agent completion activity to the initiating turn (#40449)	2026-08-24	core	2	1	0.50	0	0	audit_pending	set_initiating_agent_path
+2126f9361751017f61a0eca0d7ab868f4920b552	40449	Route peer agent completion activity to the initiating turn (#40449)	2026-08-24	core	2	1	0.50	0	0	complete	set_initiating_agent_path
 2151d3a5b78ca93128496b26333bc30187385a5f	39852	Reset registry retries when refreshing Noise bundles (#39852)	2026-08-21	execserver	0	0		0	0	not_applicable	
 2161ec272a7d6b775c9c721e6206f4fe63e383f2	40257	Support `cua_repl` as a Node REPL-backed MCP server (#40257)	2026-08-23	tui	2	1	0.50	0	0	audit_pending	is_node_repl_backed_tool
 2181224dad147a9ed37e698b66487aba54acdb65	41456	Support app targets in executor plugin hooks (#41456)	2026-08-29	mcp	1	0	0.00	0	0	implementation_pending	executor_plugin_hook_sources

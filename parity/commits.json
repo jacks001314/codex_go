@@ -1294,10 +1294,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/2; needs review: set_initiating_agent_path"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Harness-owned InitiatingAgentPath is carried through turn attribution; peer completion activity reaches the initiating agent's thread when applicable, with normal-parent fallback for missing or ghost initiators."
+        ]
     },
     {
       "sha": "4aa52f2cb2cdffa9c826f9e4e421a5435a05af06",
