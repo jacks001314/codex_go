@@ -77,6 +77,9 @@ Be concise, structured, and focused on helping the next LLM seamlessly continue 
 const (
 	RetainClientToolOutputsKey       = "retain_client_tool_outputs"
 	RetainClientDeveloperMessagesKey = "retain_client_developer_messages"
+	// CompactionImageBudgetKey is the opt-in feature that charges retained
+	// images against the remote-compaction message budget (Rust #40280).
+	CompactionImageBudgetKey = "compaction_image_budget"
 )
 
 var ErrInvalidCompaction = errors.New("invalid compaction")
@@ -551,7 +554,18 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 	retainedReversed := make([]Item, 0, len(candidates))
 	for i := len(candidates) - 1; i >= 0 && remaining > 0; i-- {
 		item := candidates[i]
-		cost := max(1, EstimateItemTokens(&item))
+		clientDeveloper := IsClientAuthoredDeveloperMessage(item)
+		chargeImages := policy.imageBudget && !clientDeveloper
+		textCost := EstimateTextTokens(ItemText(&item))
+		contentCost := EstimateItemTokens(&item)
+		cost := max(1, contentCost)
+		itemType := strings.ToLower(strings.TrimSpace(item.Type))
+		isMessage := itemType == "message" || itemType == "user_message" || itemType == "assistant_message"
+		if isMessage && !clientDeveloper && !chargeImages {
+			// Without the image budget, retained messages charge their text only
+			// (Rust #40280); outputs and other items keep the serialized estimate.
+			cost = max(1, textCost)
+		}
 		if cost <= remaining {
 			retainedReversed = append(retainedReversed, item)
 			remaining -= cost
@@ -567,6 +581,17 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 		if isStructuredAgentMessage(&item) {
 			continue
 		}
+		if chargeImages && retainedMessageImageCount(item) > 0 {
+			// Rust #40280: an image at the truncation boundary is kept or dropped
+			// whole with its adjacent labels. Once it does not fit, stop
+			// backfilling the remaining budget with older messages.
+			budget := remaining
+			remaining = 0
+			if truncated, ok := truncateRetainedMessageWithImages(item, budget); ok {
+				retainedReversed = append(retainedReversed, truncated)
+			}
+			continue
+		}
 		item.Text = truncateTextToTokens(ItemText(&item), remaining)
 		item.Content = nil
 		item.Data = nil
@@ -580,6 +605,158 @@ func retainedMessagesForRemoteCompaction(items []Item, maxTokens int, policy ret
 		retainedReversed[left], retainedReversed[right] = retainedReversed[right], retainedReversed[left]
 	}
 	return cloneItems(retainedReversed)
+}
+
+// retainedMessageImageCount counts input images in a retained message.
+func retainedMessageImageCount(item Item) int {
+	count := 0
+	for _, part := range item.Content {
+		if strings.EqualFold(strings.TrimSpace(part.Type), "input_image") {
+			count++
+		}
+	}
+	return count
+}
+
+// truncateRetainedMessageWithImages keeps later content within a token budget,
+// treating each image (and its immediate `<image>` / `</image>` labels) as an
+// atomic group. Text follows the normal token truncation policy; audio and
+// other media stay uncharged, mirroring Rust #40280.
+func truncateRetainedMessageWithImages(item Item, maxTokens int) (Item, bool) {
+	if maxTokens <= 0 || len(item.Content) == 0 {
+		return Item{}, false
+	}
+	parts := cloneContentParts(item.Content)
+	remaining := maxTokens
+	keptReversed := make([]ContentPart, 0, len(parts))
+	for len(parts) > 0 && remaining > 0 {
+		last := len(parts) - 1
+		imageIndex := -1
+		switch {
+		case isRetainedImagePart(parts[last]):
+			imageIndex = last
+		case isRetainedImageCloseLabel(parts[last]) && last > 0 && isRetainedImagePart(parts[last-1]):
+			imageIndex = last - 1
+		}
+		if imageIndex >= 0 {
+			start := imageIndex
+			if start > 0 && isRetainedImageOpenLabel(parts[start-1]) {
+				start--
+			}
+			groupTokens := 0
+			for _, part := range parts[start:] {
+				groupTokens += retainedContentPartTokens(part)
+			}
+			fits := groupTokens <= remaining
+			if fits {
+				remaining -= groupTokens
+			} else {
+				remaining = 0
+			}
+			if fits {
+				for index := len(parts) - 1; index >= start; index-- {
+					keptReversed = append(keptReversed, parts[index])
+				}
+			}
+			parts = parts[:start]
+			continue
+		}
+		part := parts[last]
+		parts = parts[:last]
+		switch retainedContentPartKind(part) {
+		case "input_text":
+			if remaining == 0 {
+				continue
+			}
+			tokens := EstimateTextTokens(part.Text)
+			if tokens <= remaining {
+				remaining -= tokens
+			} else {
+				part.Text = truncateTextToTokens(part.Text, remaining)
+				remaining = 0
+			}
+			if part.Text != "" {
+				keptReversed = append(keptReversed, part)
+			}
+		case "input_audio":
+			keptReversed = append(keptReversed, part)
+		default:
+			keptReversed = append(keptReversed, part)
+		}
+	}
+	if len(keptReversed) == 0 {
+		return Item{}, false
+	}
+	retained := make([]ContentPart, 0, len(keptReversed))
+	for index := len(keptReversed) - 1; index >= 0; index-- {
+		retained = append(retained, keptReversed[index])
+	}
+	item.Content = retained
+	item.Text = retainedMessageText(retained)
+	item.Raw = nil
+	if item.Data != nil {
+		if _, ok := item.Data["content_item_kinds"]; ok {
+			item.Data["content_item_kinds"] = retainedContentItemKinds(retained)
+		}
+	}
+	return item, true
+}
+
+func retainedContentPartKind(part ContentPart) string {
+	return strings.ToLower(strings.TrimSpace(part.Type))
+}
+
+func retainedContentPartTokens(part ContentPart) int {
+	switch retainedContentPartKind(part) {
+	case "input_text", "output_text":
+		return EstimateTextTokens(part.Text)
+	case "input_image":
+		return compactTokensFromBytes(compactImageReferenceBytes(part))
+	default:
+		// Audio and other media remain uncharged, matching Rust.
+		return 0
+	}
+}
+
+func isRetainedImagePart(part ContentPart) bool {
+	return retainedContentPartKind(part) == "input_image"
+}
+
+func isRetainedImageOpenLabel(part ContentPart) bool {
+	if retainedContentPartKind(part) != "input_text" {
+		return false
+	}
+	text := part.Text
+	return text == "<image>" || (strings.HasPrefix(text, "<image name=") && strings.HasSuffix(text, ">"))
+}
+
+func isRetainedImageCloseLabel(part ContentPart) bool {
+	return retainedContentPartKind(part) == "input_text" && part.Text == "</image>"
+}
+
+func retainedMessageText(parts []ContentPart) string {
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if retainedContentPartKind(part) == "input_text" && part.Text != "" {
+			texts = append(texts, part.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+func retainedContentItemKinds(parts []ContentPart) []string {
+	kinds := make([]string, 0, len(parts))
+	for _, part := range parts {
+		switch retainedContentPartKind(part) {
+		case "input_image":
+			kinds = append(kinds, "user.image")
+		case "input_audio":
+			kinds = append(kinds, "user.audio")
+		default:
+			kinds = append(kinds, "user.text")
+		}
+	}
+	return kinds
 }
 
 // IsClientAuthoredDeveloperMessage reports whether a compact item is a
@@ -659,6 +836,7 @@ func toolOutputCallID(item Item) string {
 type retentionPolicy struct {
 	clientDeveloperMessages bool
 	clientToolOutputs       bool
+	imageBudget             bool
 }
 
 // retentionPolicyFromFlags maps the positional `...bool` retention arguments of
@@ -685,6 +863,7 @@ func resolveRetentionPolicy(settings map[string]bool, retainClientDeveloperMessa
 			features.Enabled(settings, RetainClientDeveloperMessagesKey),
 		clientToolOutputs: retainClientToolOutputs ||
 			features.Enabled(settings, RetainClientToolOutputsKey),
+		imageBudget: features.Enabled(settings, CompactionImageBudgetKey),
 	}
 }
 
