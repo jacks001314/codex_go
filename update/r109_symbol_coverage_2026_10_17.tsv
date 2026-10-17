@@ -1451,7 +1451,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 89a4eec6dafce21486c5a56e6599095e7517c4b1	42801	Keep the Windows sandbox command runner hidden (#42801)	2026-09-04	sandbox	0	0		0	0	not_applicable	
 89a7298aff55db29f9cb2ad2430e3efe02b7a454	47281	Add regression coverage for message board unsubscribe persistence (#47281)	2026-09-22	core	0	0		0	0	not_applicable	
 89bf86d0bd8f575758dc7d75657886e0ba6a9e62	48776	Remove the `current` badge from TUI task rows (#48776)	2026-09-27	tui	0	0		0	0	not_applicable	
-89c8759d8c497b30629a2d67a51c163aa9ed3c44	52652	Bound local exec-server output draining after process exit (#52652)	2026-10-09	core	1	0	0.00	0	0	implementation_pending	OutputDrainPolicy
+89c8759d8c497b30629a2d67a51c163aa9ed3c44	52652	Bound local exec-server output draining after process exit (#52652)	2026-10-09	core	1	0	0.00	0	0	complete	OutputDrainPolicy
 89c8bcf37d64be69e4c8286f4541c1a84ed312a4	44948	Add context snapshots for async questions and plugin refresh (#44948)	2026-09-12	plugins	0	0		0	0	not_applicable	
 89d68bc8d2cdcaa1695cf55e9273208093153cb2	52220	Add configurable default plugin activation policy (#52220)	2026-10-08	appserver	6	4	0.67	0	0	complete	CachedPluginMetadata,refresh_hooks
 8a0437ff34c920af41dd83af71bc8474c452fb10	52659	Add an opt-in feature for subagent model context defaults (#52659)	2026-10-09	config	0	0		0	0	not_applicable	

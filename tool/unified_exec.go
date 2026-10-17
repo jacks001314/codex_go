@@ -501,7 +501,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	}
 	go func() {
 		err := cmd.Wait()
-		readers.Wait()
+		waitForUnifiedExecOutputDrain(&readers, started.readers, localUnifiedExecOutputDrainGrace)
 		process.finish(err)
 	}()
 	if req.TimeoutMS > 0 {
@@ -586,7 +586,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	}
 	go func() {
 		exitCode, waitErr := started.process.Wait()
-		readers.Wait()
+		waitForUnifiedExecOutputDrain(&readers, started.readers, localUnifiedExecOutputDrainGrace)
 		if closeErr := started.process.Close(); waitErr == nil && closeErr != nil {
 			waitErr = closeErr
 		}
@@ -597,6 +597,41 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	}
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+}
+
+var localUnifiedExecOutputDrainGrace = 5 * time.Second
+
+// waitForUnifiedExecOutputDrain bounds a local process's post-exit reader wait.
+// A descendant can inherit stdout/stderr after the foreground process exits;
+// remote executors intentionally keep waiting so buffered output is retained
+// (Rust #52652).
+func waitForUnifiedExecOutputDrain(readers *sync.WaitGroup, closers []io.ReadCloser, grace time.Duration) bool {
+	if readers == nil {
+		return false
+	}
+	done := make(chan struct{})
+	go func() {
+		readers.Wait()
+		close(done)
+	}()
+	if grace <= 0 {
+		<-done
+		return false
+	}
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return false
+	case <-timer.C:
+		for _, closer := range closers {
+			if closer != nil {
+				_ = closer.Close()
+			}
+		}
+		<-done
+		return true
+	}
 }
 
 // localLaunchPrependPathDirs reports the directories the local executor wants
