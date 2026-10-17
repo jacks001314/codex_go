@@ -1598,6 +1598,14 @@
             "reason": "Aligned upstream 9d8de19674 (#47641 Honor Retry-After and preserve server retry deadlines): codexapi.RetryAfter captures delay seconds or HTTP dates as a monotonic deadline when headers arrive. The deadline survives wrapped Responses/Bedrock errors and exhausted retry state; stream and transport retries use only the remaining delay. Expired advice remains explicit zero advice, while absent or invalid advice retains local backoff. WithRetryDelay remains as a compatibility constructor.",
             "userImpact": "Server-requested retries no longer restart their full delay after error propagation or reporting, so request pacing matches the upstream deadline.",
             "test": "go test ./codexapi ./model -run 'Retry|HTTPError|ResponseFailed|RetryAfter' -count=1; go test ./appserver -run 'GuardianReviewHonorsServerRetryDelay|GuardianReview.*Retry' -count=1"
+        },
+        {
+            "id": "contextual-fragment-content-kinds",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 422239eb4b (#40180 Classify contextual fragments with content kinds): Go's Fragment contract requires ContentKind, and RenderedFragment carries role, rendered content, stable kind, and typed content items together. Producers persist content_item_kinds in internal chat metadata and consumers compare shared constants. The Rust-only AnnotatedContent::into_parts helper is represented by RenderedFragment's exported fields and typed ContentItems boundary.",
+            "userImpact": "Harness-generated context remains classifiable at API boundaries without text parsing or losing role/content-kind metadata.",
+            "test": "go test ./context ./appserver -run 'Fragment|ContentKind|Incremental|GuardianApproved|UserMessageInputItem' -count=1"
         }
     ]
 }
