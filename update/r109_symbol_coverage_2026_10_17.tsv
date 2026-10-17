@@ -48,7 +48,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0533f96c447b55b0eea414072db1436c42fba85e	40301	Label Business Pro Lite plans as Business Premium (#40301)	2026-08-24	tui	0	0		0	0	not_applicable	
 054588acfe4a51ef73bf0209dcaff370419322ab	39952	Honor required MCP servers from selected executors (#39952)	2026-08-21	appserver	0	0		0	0	not_applicable	
 0588fc941c3bd5abd0cb8cd38c51cd6e72e9eb16	42380	Require confirmation for safety-buffered retries (#42380)	2026-09-02	tui	1	0	0.00	0	0	implementation_pending	confirm_safety_buffered_retry
-05a93a8a1d739b85c07928603473a9dab592e51f	46511	Avoid cloning excluded turn items during thread resume (#46511)	2026-09-18	appserver	2	0	0.00	0	0	implementation_pending	active_turn_snapshot_with_items_view,project_items
+05a93a8a1d739b85c07928603473a9dab592e51f	46511	Avoid cloning excluded turn items during thread resume (#46511)	2026-09-18	appserver	2	2	1.00	0	0	complete	
 05de93520542d5d1a3f3af76ad446607a12d98fd	46544	Expose declared onboarding skills in plugin details (#46544)	2026-09-18	tui	0	0		0	0	not_applicable	
 05ea5f757e2d696b13a2da0f660c694e381a1a8d	49392	Add attributed MCP OAuth credential storage telemetry (#49392)	2026-09-29	appserver	9	6	0.67	0	0	audit_pending	ResolvedOAuthCredentialStore,record_secure_error,save_with_refresh_telemetry
 05f39d7346e6b6e1f9c7908ebf96a4353dea87a6	46929	Remove the `Error` prefix from TUI `config.toml` load errors (#46929)	2026-09-21	tui	0	0		0	0	not_applicable	

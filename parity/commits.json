@@ -15904,9 +15904,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: active_turn_snapshot_with_items_view, project_items"
+        "Round 115 (lead): landed view-aware running-turn snapshots - activeRuntimeTurnSnapshotWithItemsView builds the active turn while retaining only the requested items: NotLoaded keeps metadata only, Summary keeps the first user message plus final agent message, and Full keeps all. applyRunningThreadResumeSnapshot now uses a full snapshot only for returned Thread.Turns and a separately projected snapshot for InitialTurnsPage, preserving full turns alongside summary pages. Existing resume/initial-page/turn-items-view tests pass; go vet ./appserver + go build ./appserver green."
       ]
     },
     {

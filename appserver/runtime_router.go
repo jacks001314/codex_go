@@ -7054,12 +7054,22 @@ func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Re
 	if activeTurnMetadata == nil {
 		return nil
 	}
-	needsTurnItems := !params.ExcludeTurns ||
-		(params.InitialTurnsPage != nil && params.InitialTurnsPage.ItemsView != TurnItemsNotLoaded)
-	activeTurn := activeTurnMetadata
-	if needsTurnItems {
+	activeTurnFull := activeTurnMetadata
+	if !params.ExcludeTurns {
 		if full := r.activeRuntimeTurnSnapshot(threadID); full != nil {
-			activeTurn = full
+			activeTurnFull = full
+		}
+	}
+	activeTurnPage := activeTurnMetadata
+	if params.InitialTurnsPage != nil {
+		view := params.InitialTurnsPage.ItemsView
+		if view == "" {
+			view = TurnItemsSummary
+		}
+		if view != TurnItemsNotLoaded {
+			if projected := r.activeRuntimeTurnSnapshotWithItemsView(threadID, view); projected != nil {
+				activeTurnPage = projected
+			}
 		}
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, params.InitialTurnsPage != nil)
@@ -7097,11 +7107,11 @@ func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Re
 			}
 			response.Thread.Turns = turns
 		}
-		response.Thread.Turns = mergeTurnHistoryWithActiveTurn(response.Thread.Turns, *activeTurn)
+		response.Thread.Turns = mergeTurnHistoryWithActiveTurn(response.Thread.Turns, *activeTurnFull)
 	}
 	if params.InitialTurnsPage != nil {
 		if paginatedResume {
-			page, pageErr := r.paginatedRunningResumeInitialTurnsPage(threadID, params.InitialTurnsPage, *activeTurn, loadedStatus)
+			page, pageErr := r.paginatedRunningResumeInitialTurnsPage(threadID, params.InitialTurnsPage, *activeTurnPage, loadedStatus)
 			if pageErr != nil {
 				return pageErr
 			}
@@ -7112,7 +7122,7 @@ func (r *RuntimeRouter) applyRunningThreadResumeSnapshot(result any, request *Re
 				Limit:         params.InitialTurnsPage.Limit,
 				SortDirection: params.InitialTurnsPage.SortDirection,
 				ItemsView:     params.InitialTurnsPage.ItemsView,
-			}, &turnsResponseOptions{ActiveTurn: activeTurn, LoadedStatus: loadedStatus})
+			}, &turnsResponseOptions{ActiveTurn: activeTurnPage, LoadedStatus: loadedStatus})
 			if pageErr != nil {
 				return pageErr
 			}
@@ -13850,7 +13860,7 @@ func (r *RuntimeRouter) activeTurnParams(threadID string) *turn.TurnStartParams 
 }
 
 func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
-	return r.activeRuntimeTurnSnapshotWithItems(threadID, true)
+	return r.activeRuntimeTurnSnapshotWithItemsView(threadID, TurnItemsFull)
 }
 
 // activeRuntimeTurnSnapshotMetadata returns the running turn without
@@ -13859,10 +13869,20 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshot(threadID string) *Turn {
 // TurnItemsNotLoaded, which is what a metadata-only resume needs for its status
 // check and its NotLoaded initial page.
 func (r *RuntimeRouter) activeRuntimeTurnSnapshotMetadata(threadID string) *Turn {
-	return r.activeRuntimeTurnSnapshotWithItems(threadID, false)
+	return r.activeRuntimeTurnSnapshotWithItemsView(threadID, TurnItemsNotLoaded)
 }
 
 func (r *RuntimeRouter) activeRuntimeTurnSnapshotWithItems(threadID string, includeItems bool) *Turn {
+	view := TurnItemsNotLoaded
+	if includeItems {
+		view = TurnItemsFull
+	}
+	return r.activeRuntimeTurnSnapshotWithItemsView(threadID, view)
+}
+
+// activeRuntimeTurnSnapshotWithItemsView projects the active turn while it is
+// built, retaining only the items requested by the resume view (Rust #46511).
+func (r *RuntimeRouter) activeRuntimeTurnSnapshotWithItemsView(threadID string, view TurnItemsView) *Turn {
 	if r == nil {
 		return nil
 	}
@@ -13892,18 +13912,41 @@ func (r *RuntimeRouter) activeRuntimeTurnSnapshotWithItems(threadID string, incl
 		Status:     TurnStatusInProgress,
 		StartedAt:  &startedAt,
 	}
-	if !includeItems {
+	if view == "" {
+		view = TurnItemsSummary
+	}
+	if view == TurnItemsNotLoaded {
 		return turn
 	}
 	items := []ThreadItem{}
+	var firstUser *ThreadItem
+	var finalAgent *ThreadItem
 	for _, item := range r.sessionItemsForTurn(turnID, params, nil, createdAt) {
 		if sessionItemIsHiddenThreadItem(&item) {
 			continue
 		}
-		items = append(items, BuildThreadItem(item))
+		threadItem := BuildThreadItem(item)
+		if view == TurnItemsFull {
+			items = append(items, threadItem)
+			continue
+		}
+		if firstUser == nil && threadItemIsUserMessage(threadItem) {
+			firstUser = &threadItem
+		}
+		if threadItemIsAgentMessage(threadItem) && threadItemMessagePhase(threadItem) == string(MessagePhaseFinalAnswer) {
+			finalAgent = &threadItem
+		}
+	}
+	if view == TurnItemsSummary {
+		if firstUser != nil {
+			items = append(items, *firstUser)
+		}
+		if finalAgent != nil && (firstUser == nil || finalAgent.ID != firstUser.ID) {
+			items = append(items, *finalAgent)
+		}
 	}
 	turn.Items = items
-	turn.ItemsView = TurnItemsFull
+	turn.ItemsView = view
 	return turn
 }
 
