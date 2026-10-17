@@ -2182,8 +2182,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): features.SupportedEnablementKeys now includes background_paginated_rollout_migration, so experimentalFeature/enablement/set can turn it on at runtime (Rust #40668); appserver.handleExperimentalFeatureSet records the pre-apply value and, on the disabled->enabled transition, starts the shared one-shot migration via MaybeMigrateRolloutsOnStartup against the reloaded config. Tests: appserver/runtime_feature_migration_test.go (settable key, transition truth table, effective config read after SetFeatureEnablementDefaults). RC: removing the key from the supported list fails the test; go build ./... and ./features ./appserver are green.",
         "No new upstream public identifier found in Go (0/1); candidate gap: start_background_rollout_migration"
       ]
     },

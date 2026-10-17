@@ -697,7 +697,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 44fe0289c6ef35a0153c291e81cf9a232b49499c	51449	Make URLs clickable in TUI user input questions (#51449)	2026-10-06	tui	1	1	1.00	0	0	complete	
 44fe510ce3ee61c8ef623adcbf89b901c73ddd61	48895	Expand native Mermaid flowchart syntax support (#48895)	2026-09-28	tui	0	0		0	0	not_applicable	
 45134c04632b971776d88edfdea71c051ebe4161	44032	Generate Python SDK types from repository app-server schemas (#44032)	2026-09-09	appserver	0	0		0	0	not_applicable	
-45288d994d8bbb4d91762b1a779aba65c065e65c	40668	Start rollout migration after runtime feature enablement (#40668)	2026-08-25	appserver	1	0	0.00	0	0	implementation_pending	start_background_rollout_migration
+45288d994d8bbb4d91762b1a779aba65c065e65c	40668	Start rollout migration after runtime feature enablement (#40668)	2026-08-25	appserver	1	1	1.00	0	0	complete	
 45305dd229c01e6cb6e122f6559e4f9b805bae6b	43690	Make the voice mute shortcut configurable in the TUI (#43690)	2026-09-08	tui	4	1	0.25	0	0	audit_pending	handle_realtime_microphone_shortcut,realtime_microphone_shortcut_available,update_realtime_footer
 45311351c218f62ea81b72f16e9b6667b572059d	52686	Add opt-in retention for turn tool outputs (#52686)	2026-10-09	tui	0	0		0	0	not_applicable	
 453a9bcc69704f9cf49f3e09fce1ebe0f22b8309	41158	Reduce Guardian V2's default tool-call lag (#41158)	2026-08-27	guardian	0	0		0	0	not_applicable	

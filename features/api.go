@@ -154,7 +154,9 @@ func NewFeatureService(catalog []FeatureEntry) *FeatureService {
 }
 
 func SupportedEnablementKeys() []string {
-	return []string{"api_key_model_discovery", "auth_elicitation", "memories", "mentions_v2", "remote_control", "remote_plugin", "tool_suggest"}
+	// Rust #40668 lets clients enable the background rollout migration at
+	// runtime; the app server starts that one-shot task on the transition.
+	return []string{"api_key_model_discovery", "auth_elicitation", "background_paginated_rollout_migration", "memories", "mentions_v2", "remote_control", "remote_plugin", "tool_suggest"}
 }
 
 func DefaultFeatureCatalog() []FeatureEntry {

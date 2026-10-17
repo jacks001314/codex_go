@@ -9118,6 +9118,11 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	// Rust #40668: most runtime features are read later from config, but the
+	// background rollout migration is a one-shot process task, so remember
+	// whether this request is the transition that turns it on.
+	requestedBackgroundRolloutMigration := params.Enablement["background_paginated_rollout_migration"]
+	backgroundRolloutMigrationWasEnabled := r.backgroundRolloutMigrationEnabled()
 	response, err := r.requireFeatures().SetEnablement(&params)
 	if err != nil {
 		return nil, err
@@ -9139,7 +9144,31 @@ func (r *RuntimeRouter) handleExperimentalFeatureSet(request *Request) (*feature
 	if response != nil && len(response.Enablement) > 0 {
 		r.reloadUserConfigForLoadedThreads()
 	}
+	if shouldStartBackgroundRolloutMigration(requestedBackgroundRolloutMigration, backgroundRolloutMigrationWasEnabled, r.backgroundRolloutMigrationEnabled()) {
+		// Start the migration against the reloaded config; the startup path and
+		// this path share the same one-shot implementation.
+		MaybeMigrateRolloutsOnStartup(r.codexHomeForInstructions(), r.services.StateRuntime, r.services.Config)
+	}
 	return response, nil
+}
+
+// backgroundRolloutMigrationEnabled reports the effective runtime value of the
+// feature after feature-enablement overrides are applied.
+func (r *RuntimeRouter) backgroundRolloutMigrationEnabled() bool {
+	if r == nil || r.services.Config == nil {
+		return false
+	}
+	read, err := r.services.Config.Read(&config.ConfigReadParams{})
+	if err != nil || read == nil || read.Config == nil {
+		return false
+	}
+	return features.Enabled((&config.Config{Values: read.Config}).FeatureSettings(), "background_paginated_rollout_migration")
+}
+
+// shouldStartBackgroundRolloutMigration ports Rust #40668's transition check:
+// start only when this request enables the feature and it was off before.
+func shouldStartBackgroundRolloutMigration(requested bool, wasEnabled bool, nowEnabled bool) bool {
+	return requested && !wasEnabled && nowEnabled
 }
 
 func (r *RuntimeRouter) experimentalFeatureSettingsForList(params *features.FeatureListParams) (map[string]bool, error) {
