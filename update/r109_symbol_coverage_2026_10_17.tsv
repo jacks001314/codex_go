@@ -777,7 +777,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4bad6d78e9b50f9fa8bd941f1db012ed491ad2da	52725	Report terminal program status with OSC 7501 (#52725)	2026-10-09	tui	7	6	0.86	0	0	audit_pending	refresh_terminal_program_status
 4bc83aa5f7ebfec8492bb5747affe0fc8433fcad	52702	Retry bootstrap GETs through the system proxy after request failures (#52702)	2026-10-09	core	0	0		0	0	complete	
 4beea50e26dd45ae58c68ecaa6b98fa22078138a	40376	Advertise shell snapshot v2 support on Unix (#40376)	2026-08-24	execserver	0	0		0	0	not_applicable	
-4c1cd8bbccb337c7043817c8e894058b103c9cdd	53672	Keep discovered Apps tools available during startup recovery (#53672)	2026-10-13	mcp	1	0	0.00	0	0	implementation_pending	reconnect_in_background
+4c1cd8bbccb337c7043817c8e894058b103c9cdd	53672	Keep discovered Apps tools available during startup recovery (#53672)	2026-10-13	mcp	1	0	0.00	0	0	complete	reconnect_in_background
 4c8cf3964dc0ae324222b77cc907940f0aedbb8a	48799	Fix SGR mouse reporting for Windows terminal capture (#48799)	2026-09-27	tui	0	0		0	0	not_applicable	
 4c9f42f4f849e513e5fd99fe1c1a717ce93fadbf	51133	Allow Guardian Decisions to fall back to `OPENAI_API_KEY` (#51133)	2026-10-05	guardian	0	0		0	0	not_applicable	
 4ca84a10696623fcd7c200db3df9c41671d3bad0	54135	Allow large file writes over direct exec-server WebSockets (#54135)	2026-10-14	execserver	1	0	0.00	0	0	complete	from_direct_websocket

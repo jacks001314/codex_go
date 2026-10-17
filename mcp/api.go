@@ -1799,7 +1799,13 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 		status.State = MCPServerFailed
 		status.Error = &message
 		status.ToolsError = &message
-		status.Tools = nil
+		// Rust #53672: startup recovery must not remove Codex Apps functions the
+		// model already discovered. The failed state still reports the error, but
+		// the retained catalog remains available to binding capture and a later
+		// invocation can join the shared startup retry.
+		if !IsCodexAppsMCPServerName(name) || len(status.Tools) == 0 {
+			status.Tools = nil
+		}
 		status.Resources = nil
 		status.ResourceTemplates = nil
 	}
