@@ -3107,8 +3107,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - #40989 only widened Rust visibility (resolve_permission_profile / compile_permission_profile pub(crate) -> pub). Go already exposes the equivalent core API: config.Config.ResolveSandboxPermissionProfile and ResolveSandboxPermissionProfileWithWorkspaceRoots compile named profiles into runtime filesystem/network policies, PermissionProfileSummaries lists them, and ResolvePermissionProfileSelection applies requirement defaults. Covered by config/permissions_test.go (TestResolveSandboxPermissionProfileCompilesCustomRuntimeJSON, ...WithWorkspaceRootsAnchorsProjectRootsLikeRust) and config/permissions_test.go/permission_profile_requirements_test.go selection cases; go test ./config -run 'ResolveSandboxPermissionProfile|ResolvePermissionProfileSelection' green.",
         "Partial symbol coverage 1/2; needs review: compile_permission_profile"
       ]
     },
