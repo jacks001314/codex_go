@@ -375,9 +375,9 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 25a6e316c81fb7600d1d75f3e63ffe26be10b7c8	40775	Make history and notes tools Bridge-compatible (#40775)	2026-08-26	appserver	0	0		0	0	not_applicable	
 25ba0ae6cd5b41a2b99d2bd032f5001fc0ddce15	42066	Remove selected core test cases (#42066)	2026-09-01	telemetry	0	0		0	0	not_applicable	
 2617ed2e1c4b9fb59a9058fe28a8f9e78bc81878	44252	Move synchronous Guardian orchestration into the reviewer extension (#44252)	2026-09-09	guardian	33	9	0.27	0	0	audit_pending	GuardianReviewForkSnapshot,GuardianReviewSession,GuardianReviewSessionHost,GuardianReviewSessionManager,GuardianReviewSessionReuseKey,PreparedApproval,PreparedReview,PreparedSession,ReviewCompletion,ReviewHost
-2635431edbd43279a4da9c1199456758fbbc8ad3	50094	Add attachment owner lookup to the app-server (#50094)	2026-10-01	appserver	6	4	0.67	0	0	audit_pending	ListThreadAttachmentThreadsParams,thread_attachment_owner_list
+2635431edbd43279a4da9c1199456758fbbc8ad3	50094	Add attachment owner lookup to the app-server (#50094)	2026-10-01	appserver	6	6	1.00	0	0	complete	
 2685e3a4cec1cf6ec8df5231bf2311ff7ae9551f	50026	Preserve user restrictions in Guardian handoff context (#50026)	2026-10-01	guardian	0	0		0	0	not_applicable	
-26a49b38824a9c9d951e44b2e7a54e48d5cb2abb	50083	Add paginated reverse lookup for thread attachments (#50083)	2026-10-01	persistence	4	2	0.50	0	0	audit_pending	ThreadAttachmentArchiveFilter,ThreadAttachmentOwnerPage
+26a49b38824a9c9d951e44b2e7a54e48d5cb2abb	50083	Add paginated reverse lookup for thread attachments (#50083)	2026-10-01	persistence	4	4	1.00	0	0	complete	
 26cb4d73e2ce25575644038d7af5beb2440d0ed0	47125	Add extra policy configuration for Guardian reviews (#47125)	2026-09-21	tui	1	0	0.00	0	0	implementation_pending	render_classifier_instructions
 26ce6649a256c00f89121cf56bdefb5c90577319	44061	Build Python SDK artifacts before publishing the runtime (#44061)	2026-09-09	core	0	0		0	0	not_applicable	
 26dd19ef478cfa294406413bafedb84b49f93ea4	49325	Retry Windows sandbox runner logon once on error 1056 (#49325)	2026-09-29	sandbox	1	1	1.00	0	0	complete	
