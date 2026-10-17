@@ -78,6 +78,10 @@ type RuntimeServices struct {
 	HooksDiscovery         *HookDiscoveryService
 	HookRunner             *HookRunner
 	Skills                 *SkillsService
+	// SkillInvocationContributors are extension contributors that may require
+	// host-owned skills; any one of them disables skip_host_skill_discovery
+	// (Rust #40631).
+	SkillInvocationContributors []SkillInvocationContributor
 	// DisabledExecutorSkillPaths is caller-owned per-environment disablement for
 	// executor skill catalogs (Rust ExecutorSkillProvider::with_disabled_skill_paths,
 	// #46015). Paths identify SKILL.md documents in their executor's filesystem;
@@ -2156,7 +2160,7 @@ func (r *RuntimeRouter) ConnectionClosed(connectionID string) {
 		r.services.FS.ConnectionClosed(connectionID)
 	}
 	if r.services.ServerRequests != nil {
-		r.services.ServerRequests.RejectPending(connectionID, fmt.Errorf("server request failed: connection closed"))
+		r.services.ServerRequests.RejectPending(connectionID, ErrServerRequestConnectionClosed)
 	}
 }
 
@@ -16575,7 +16579,7 @@ func (r *RuntimeRouter) requiredMCPServersForTurn(threadID string, cfg *config.C
 		}
 	}
 
-	metadata := r.skillMetadataForMCPRequirements(threadID, params)
+	metadata := r.skillMetadataForMCPRequirements(threadID, cfg, params)
 	selected := promptctx.CollectExplicitSkillMentions(&promptctx.ExplicitSkillMentionOptions{
 		Inputs: skillMentionInputsFromTurn(params), Skills: metadata,
 	})
@@ -16628,7 +16632,7 @@ func (r *RuntimeRouter) requiredPluginsForTurn(threadID string, cfg *config.Conf
 	return out
 }
 
-func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, params *turn.TurnStartParams) []promptctx.InstructionsSkillMetadata {
+func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, cfg *config.Config, params *turn.TurnStartParams) []promptctx.InstructionsSkillMetadata {
 	if r == nil || r.services.Skills == nil {
 		return nil
 	}
@@ -16641,12 +16645,20 @@ func (r *RuntimeRouter) skillMetadataForMCPRequirements(threadID string, params 
 			listParams.CWDs = []string{cwd}
 		}
 	}
-	response, err := r.services.Skills.List(listParams)
-	if err != nil || response == nil {
-		return nil
+	// Rust #40631: host and plugin skill discovery is skipped when the feature
+	// is enabled and no extension requires host-owned skills.
+	skipHostSkillDiscovery := cfg != nil &&
+		features.Enabled(cfg.FeatureSettings(), "skip_host_skill_discovery") &&
+		!requiresHostSkillDiscovery(r.services.SkillInvocationContributors)
+	var entries []SkillsListEntry
+	if !skipHostSkillDiscovery {
+		response, err := r.services.Skills.List(listParams)
+		if err != nil || response == nil {
+			return nil
+		}
+		entries = cloneSkills(response.Skills)
 	}
-	entries := cloneSkills(response.Skills)
-	if r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled {
+	if !skipHostSkillDiscovery && (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) {
 		if pluginEntries, pluginErr := r.pluginSkillEntriesForRuntime(threadID); pluginErr == nil {
 			if pluginEntries, pluginErr = r.services.Skills.applyConfigEntries(pluginEntries, listParams.Config); pluginErr == nil {
 				entries = append(entries, pluginEntries...)

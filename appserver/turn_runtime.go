@@ -3358,11 +3358,13 @@ func unifiedExecThreadItem(event tool.UnifiedExecEvent, status CommandExecutionS
 	data := map[string]any{
 		"command":        command,
 		"cwd":            event.CWD,
-		"processId":      strconv.Itoa(event.ProcessID),
-		"process_id":     event.ProcessID,
 		"source":         string(CommandExecutionSourceUnifiedExecStartup),
 		"status":         string(status),
 		"commandActions": commandExecutionActions(commandArgs, command, event.CWD),
+	}
+	if event.ProcessID > 0 {
+		data["processId"] = strconv.Itoa(event.ProcessID)
+		data["process_id"] = event.ProcessID
 	}
 	if !event.StartedAt.IsZero() {
 		data["startedAtMs"] = event.StartedAt.UTC().UnixMilli()
@@ -9430,28 +9432,39 @@ func (r *RuntimeRouter) instructionsWithSkillsContextForTurn(ctx context.Context
 	if cwd := turnCWD(params); cwd != "" {
 		listParams.CWDs = []string{cwd}
 	}
-	response, err := r.services.Skills.List(listParams)
-	if err != nil {
-		return "", nil, nil, err
+	// Rust #40631: skip_host_skill_discovery bypasses host and plugin skill
+	// discovery for turn setup. Go has no skill-invocation contributor registry,
+	// so no extension requires host-owned skills and the feature flag alone
+	// decides. Executor, orchestrator, and custom catalogs stay available.
+	skipHostSkillDiscovery := cfg != nil &&
+		features.Enabled(cfg.FeatureSettings(), "skip_host_skill_discovery") &&
+		!requiresHostSkillDiscovery(r.services.SkillInvocationContributors)
+	var skillEntries []SkillsListEntry
+	if !skipHostSkillDiscovery {
+		response, err := r.services.Skills.List(listParams)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		hostWarnings := make([]string, 0, len(response.Errors))
+		for _, skillErr := range response.Errors {
+			hostWarnings = append(hostWarnings, fmt.Sprintf("Failed to load skill at %s: %s", skillErr.Path, skillErr.Message))
+		}
+		r.notifySkillWarnings(threadID, hostWarnings)
+		skillEntries = cloneSkills(response.Skills)
 	}
-	hostWarnings := make([]string, 0, len(response.Errors))
-	for _, skillErr := range response.Errors {
-		hostWarnings = append(hostWarnings, fmt.Sprintf("Failed to load skill at %s: %s", skillErr.Path, skillErr.Message))
-	}
-	r.notifySkillWarnings(threadID, hostWarnings)
-	skillEntries := cloneSkills(response.Skills)
 	pluginSkillEntries := []SkillsListEntry(nil)
-	if (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) && (cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")) {
+	if !skipHostSkillDiscovery && (r.services.WorkspaceCodexPluginsEnabled == nil || *r.services.WorkspaceCodexPluginsEnabled) && (cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")) {
+		var err error
 		pluginSkillEntries, err = r.pluginSkillEntriesForRuntime(threadID)
 		if err != nil {
 			return "", nil, nil, err
 		}
+		pluginSkillEntries, err = r.services.Skills.applyConfigEntries(pluginSkillEntries, listParams.Config)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		skillEntries = append(skillEntries, pluginSkillEntries...)
 	}
-	pluginSkillEntries, err = r.services.Skills.applyConfigEntries(pluginSkillEntries, listParams.Config)
-	if err != nil {
-		return "", nil, nil, err
-	}
-	skillEntries = append(skillEntries, pluginSkillEntries...)
 	hostSkillEntries := cloneSkills(skillEntries)
 	executorSandboxContexts, err := r.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 
 	"codex_go/config"
 	contextfrag "codex_go/context"
+	"codex_go/features"
 	promptctx "codex_go/prompt"
 	"codex_go/turn"
 )
@@ -18,6 +19,28 @@ type HostSkillsPromptOptions struct {
 	Prompt        string
 	Inputs        []turn.TurnUserInput
 	ContextWindow int64
+	// Contributors are the skill-invocation extensions registered for this
+	// session. Any contributor that requires host-owned skills keeps host
+	// discovery enabled even when skip_host_skill_discovery is on (Rust #40631).
+	Contributors []SkillInvocationContributor
+}
+
+// SkillInvocationContributor is an extension that contributes skill
+// invocations during session setup (Rust extension-api InvocationContributor,
+// #40631). It reports whether it depends on the host-owned skill catalog.
+type SkillInvocationContributor interface {
+	RequiresHostSkillDiscovery() bool
+}
+
+// requiresHostSkillDiscovery preserves host discovery when any registered
+// contributor depends on host-owned skills. An empty registry allows skipping.
+func requiresHostSkillDiscovery(contributors []SkillInvocationContributor) bool {
+	for _, contributor := range contributors {
+		if contributor != nil && contributor.RequiresHostSkillDiscovery() {
+			return true
+		}
+	}
+	return false
 }
 
 type HostSkillsPromptContext struct {
@@ -43,6 +66,15 @@ func skillMetadataBudgetForConfig(cfg *config.Config, contextWindow int64) promp
 func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkillsPromptContext, error) {
 	if options == nil {
 		options = &HostSkillsPromptOptions{}
+	}
+	// Rust #40631: an enabled skip_host_skill_discovery feature supplies an
+	// empty host skill snapshot; executor and orchestrator catalogs are built
+	// independently by the turn context. A contributor that needs host-owned
+	// skills keeps the snapshot.
+	if options.Config != nil &&
+		features.Enabled(options.Config.FeatureSettings(), "skip_host_skill_discovery") &&
+		!requiresHostSkillDiscovery(options.Contributors) {
+		return &HostSkillsPromptContext{}, nil
 	}
 	codexHome := strings.TrimSpace(options.CodexHome)
 	configService := config.NewConfigService(codexHome)
