@@ -29434,9 +29434,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: create_directory_junction"
+        "Landed: plugin/marketplace_source.go pathsMatchAfterNormalization (canonicalize + Windows case folding, direct-equality fallback, mirroring codex_utils_path), plugin/api.go marketplaceForSourceLocked resolves an already-added marketplace by normalized local source / exact git URL+ref and matching sparse paths so AddMarketplace returns the recorded root instead of a duplicate; tests plugin/api_test.go TestAddMarketplaceMatchesEquivalentLocalSourceLikeRust, TestAddMarketplaceJunctionSourceKeepsRecordedRootLikeRust, TestPathsMatchAfterNormalizationLikeRust. Rust's create_directory_junction symbol is a test helper only. Managed-root canonical-target acceptance has no Go carrier (Go has no managed marketplace root)."
       ]
     },
     {

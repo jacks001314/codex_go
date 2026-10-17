@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -195,4 +196,37 @@ func safeMarketplaceDirName(marketplaceName string) (string, error) {
 		return "", fmt.Errorf("%w: marketplace name %q cannot be used as an install directory", ErrInvalidPluginRequest, marketplaceName)
 	}
 	return safe, nil
+}
+
+// pathsMatchAfterNormalization mirrors Rust
+// codex_utils_path::paths_match_after_normalization (#52696): both paths are
+// canonicalized before comparison, and the comparison falls back to direct
+// equality when either path cannot be resolved. Windows path comparison is
+// case-insensitive, matching the filesystem's own semantics.
+func pathsMatchAfterNormalization(left string, right string) bool {
+	normalizedLeft, leftOK := normalizeForPathComparison(left)
+	normalizedRight, rightOK := normalizeForPathComparison(right)
+	if leftOK && rightOK {
+		return normalizedLeft == normalizedRight
+	}
+	return left == right
+}
+
+func normalizeForPathComparison(path string) (string, bool) {
+	if strings.TrimSpace(path) == "" {
+		return "", false
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", false
+	}
+	resolved = filepath.Clean(resolved)
+	if runtime.GOOS == "windows" {
+		resolved = strings.ToLower(resolved)
+	}
+	return resolved, true
 }

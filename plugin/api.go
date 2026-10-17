@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1552,6 +1553,19 @@ func (s *PluginService) AddMarketplace(params *MarketplaceAddParams) (*Marketpla
 			AlreadyPresent:  true,
 		}, nil
 	}
+	// Rust #52696: an equivalent source that was already added resolves to the
+	// recorded root, so spelling the same local directory another way (or
+	// retargeting a junction) neither re-adds nor switches the returned root.
+	if existing, ok := s.marketplaceForSourceLocked(parsedSource, params.SparsePaths); ok {
+		s.mu.Unlock()
+		return &MarketplaceAddResponse{
+			MarketplaceName: existing.Name,
+			InstalledRoot:   existing.RootPath,
+			AlreadyAdded:    true,
+			Marketplace:     existing,
+			AlreadyPresent:  true,
+		}, nil
+	}
 	s.mu.Unlock()
 
 	rootPath := filepath.Join(installRoot, safeName)
@@ -1593,6 +1607,33 @@ func (s *PluginService) AddMarketplace(params *MarketplaceAddParams) (*Marketpla
 		InstalledRoot:   marketplace.RootPath,
 		Marketplace:     marketplace,
 	}, nil
+}
+
+// marketplaceForSourceLocked mirrors Rust #52696
+// installed_marketplace_root_for_source: local sources compare after filesystem
+// normalization so canonical and junction spellings match, git sources compare
+// the exact URL with its ref, and both also compare sparse paths.
+func (s *PluginService) marketplaceForSourceLocked(source *ParsedMarketplaceSource, sparsePaths []string) (Marketplace, bool) {
+	if source == nil {
+		return Marketplace{}, false
+	}
+	for _, existing := range s.marketplaces {
+		if existing.SourceType != string(source.Kind) || !slices.Equal(existing.SparsePaths, sparsePaths) {
+			continue
+		}
+		switch source.Kind {
+		case MarketplaceSourceLocal:
+			if pathsMatchAfterNormalization(existing.RootPath, source.Path) ||
+				pathsMatchAfterNormalization(existing.SourceURL, source.Path) {
+				return existing, true
+			}
+		case MarketplaceSourceGit:
+			if existing.SourceURL == source.Display() {
+				return existing, true
+			}
+		}
+	}
+	return Marketplace{}, false
 }
 
 func (s *PluginService) RemoveMarketplace(params *MarketplaceRemoveParams) (*MarketplaceRemoveResponse, error) {

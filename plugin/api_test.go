@@ -1222,6 +1222,66 @@ func TestAddMarketplaceLocalSourceAndSparseValidation(t *testing.T) {
 	}
 }
 
+// Rust #52696: an equivalent local marketplace source matches after filesystem
+// normalization, so a second spelling resolves to the recorded marketplace
+// instead of registering a duplicate or switching the returned root.
+func TestAddMarketplaceMatchesEquivalentLocalSourceLikeRust(t *testing.T) {
+	root := t.TempDir()
+	service := NewPluginService()
+	first, err := service.AddMarketplace(&MarketplaceAddParams{Source: root, Name: "first"})
+	if err != nil {
+		t.Fatalf("AddMarketplace(first) error = %v", err)
+	}
+	equivalent := filepath.Join(root, ".", "nested", "..")
+	second, err := service.AddMarketplace(&MarketplaceAddParams{Source: equivalent, Name: "second"})
+	if err != nil {
+		t.Fatalf("AddMarketplace(equivalent source) error = %v", err)
+	}
+	if !second.AlreadyAdded || !second.AlreadyPresent {
+		t.Fatalf("equivalent source response = %#v", second)
+	}
+	if second.MarketplaceName != "first" || second.InstalledRoot != first.InstalledRoot {
+		t.Fatalf("equivalent source resolved to %q (%q), want first marketplace %q", second.MarketplaceName, second.InstalledRoot, first.InstalledRoot)
+	}
+	if _, ok := service.marketplaces["second"]; ok {
+		t.Fatal("equivalent source registered a duplicate marketplace")
+	}
+
+	// A genuinely different directory is still added under the new name.
+	other, err := service.AddMarketplace(&MarketplaceAddParams{Source: t.TempDir(), Name: "other"})
+	if err != nil {
+		t.Fatalf("AddMarketplace(other) error = %v", err)
+	}
+	if other.AlreadyAdded || other.MarketplaceName != "other" {
+		t.Fatalf("distinct source response = %#v", other)
+	}
+}
+
+// Rust #52696: retargeting a junction must not switch the marketplace root;
+// the recorded root of the already-added source wins.
+func TestAddMarketplaceJunctionSourceKeepsRecordedRootLikeRust(t *testing.T) {
+	target := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	service := NewPluginService()
+	first, err := service.AddMarketplace(&MarketplaceAddParams{Source: target, Name: "target-market"})
+	if err != nil {
+		t.Fatalf("AddMarketplace(target) error = %v", err)
+	}
+	second, err := service.AddMarketplace(&MarketplaceAddParams{Source: alias, Name: "alias-market"})
+	if err != nil {
+		t.Fatalf("AddMarketplace(alias) error = %v", err)
+	}
+	if !second.AlreadyPresent || second.MarketplaceName != "target-market" {
+		t.Fatalf("alias response = %#v", second)
+	}
+	if second.InstalledRoot != first.InstalledRoot {
+		t.Fatalf("alias root = %q, want recorded root %q", second.InstalledRoot, first.InstalledRoot)
+	}
+}
+
 func TestAddPluginNormalizesSummaryIdentity(t *testing.T) {
 	service := NewPluginService()
 	service.AddPlugin(PluginDetail{Summary: PluginSummary{
@@ -2095,5 +2155,21 @@ func TestPluginDisabledReasonMapsUnknownValuesForForwardCompatibility(t *testing
 	}
 	if reason != PluginDisabledReasonUnknown {
 		t.Fatalf("reason = %q, want %q", reason, PluginDisabledReasonUnknown)
+	}
+}
+
+// pathsMatchAfterNormalization mirrors Rust codex_utils_path (#52696): equal
+// paths compare true after canonicalization and unresolvable paths fall back to
+// direct equality.
+func TestPathsMatchAfterNormalizationLikeRust(t *testing.T) {
+	root := t.TempDir()
+	if !pathsMatchAfterNormalization(root, filepath.Join(root, ".", "nested", "..")) {
+		t.Fatal("equivalent spellings should match after normalization")
+	}
+	if pathsMatchAfterNormalization(root, t.TempDir()) {
+		t.Fatal("distinct directories must not match")
+	}
+	if !pathsMatchAfterNormalization("", "") || pathsMatchAfterNormalization("", root) {
+		t.Fatal("empty paths should fall back to direct equality")
 	}
 }

@@ -464,7 +464,7 @@
 2f412e60d735b47caeec6b0e79070f673a191c4f	51235	Remove default model labels from TUI model pickers (#51235)	2026-10-06	tui	0	0		0	0	not_applicable	
 2f4b1055147d7601eb425da102c477f10e0e1b4c	40658	Prevent telemetry exporters from feeding back into themselves (#40658)	2026-08-25	persistence	0	0		0	0	not_applicable	
 2f522c5dc0a025ab998697e0604ad73bbbe7d9a4	46488	Split analytics tests into focused suites (#46488)	2026-09-18	telemetry	0	0		0	0	not_applicable	
-2f761ae8210082c21cdd471131fa2118680a6059	52696	Fix marketplace path matching for Windows junctions (#52696)	2026-10-09	plugins	1	0	0.00	0	0	implementation_pending	create_directory_junction
+2f761ae8210082c21cdd471131fa2118680a6059	52696	Fix marketplace path matching for Windows junctions (#52696)	2026-10-09	plugins	1	0	0.00	0	0	complete	create_directory_junction
 2f8603f07547247e698748884542ba60a157621c	45420	Extract Guardian sampler execution into a dedicated module (#45420)	2026-09-14	guardian	1	0	0.00	0	0	implementation_pending	SamplingExecution
 2fc4bda3ca3e93b764dd3845cb8c1a15a10866e1	44866	Preserve originating context for yielded code-mode tool calls (#44866)	2026-09-11	guardian	6	2	0.33	0	0	audit_pending	CodeModeCellDelegate,as_legacy_begin_event,as_legacy_end_event,record_guardian_denial_for_test
 2fdcdeaf0e219eea34c710e01de2ee0571ddeeb5	45711	Add startup tool allowlists for threads (#45711)	2026-09-15	guardian	4	1	0.25	0	0	audit_pending	AllowedTools,reviewer_allowed_tools,with_allowed_tools
