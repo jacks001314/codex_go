@@ -1704,13 +1704,29 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, requestError(-32602, fmt.Sprintf("invalid envPolicy.inherit %q", params.EnvPolicy.Inherit))
 		}
 	}
+	originalEnv := cloneShellSnapshotEnv(params.Env)
 	preparedParams, preparedProxy, policyCancel, err := s.prepareExecutorNetworkProxy(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 	params = preparedParams
 	if s.shellSnapshots != nil {
-		rewritten, rewriteErr := s.shellSnapshots.rewrite(ctx, params)
+		captureEnv := shellSnapshotEnvironment(nil)
+		var credentialPairs []network.CredentialMaskPair
+		if preparedProxy != nil {
+			if source := preparedProxy.SnapshotSourceEnv(); source != nil {
+				captureEnv = source
+			}
+			for key, value := range originalEnv {
+				captureEnv[key] = value
+			}
+			credentialPairs = preparedProxy.PrepareSnapshotCredentialMask(captureEnv)
+		} else {
+			for key, value := range originalEnv {
+				captureEnv[key] = value
+			}
+		}
+		rewritten, rewriteErr := s.shellSnapshots.rewrite(ctx, params, captureEnv, credentialPairs)
 		if rewriteErr != nil {
 			if policyCancel != nil {
 				policyCancel()

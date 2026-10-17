@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/network"
 	"codex_go/shell"
 	"codex_go/utils"
 )
@@ -34,7 +35,7 @@ func newShellSnapshotManager() *shellSnapshotManager {
 	return &shellSnapshotManager{cache: map[string]string{}, capture: runShellSnapshotCapture}
 }
 
-func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams) (*ExecParams, error) {
+func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (*ExecParams, error) {
 	if m == nil || params == nil || params.ShellSnapshot == nil {
 		return params, nil
 	}
@@ -54,9 +55,15 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams) 
 	if scriptIndex < 0 {
 		return nil, requestError(-32602, "shell snapshot requires a shell -c or -lc invocation")
 	}
-	path, err := m.snapshotPath(ctx, params, shellType)
+	path, err := m.snapshotPath(ctx, params, shellType, captureEnv, credentialPairs)
 	if err != nil {
-		return nil, requestError(-32603, "failed to capture shell snapshot: "+err.Error())
+		rewritten := *params
+		rewritten.Argv = append([]string(nil), params.Argv...)
+		rewritten.Env = cloneShellSnapshotEnv(params.Env)
+		network.RestoreSnapshotCredentials(rewritten.Env, credentialPairs)
+		warning := "Credential masking is unavailable for this shell snapshot; running with unmasked credentials."
+		rewritten.Argv[scriptIndex] = "\\builtin printf '%s\\n' " + shellSingleQuote(warning) + " >&2\n" + params.Argv[scriptIndex]
+		return &rewritten, nil
 	}
 	rewritten := *params
 	rewritten.Argv = append([]string(nil), params.Argv...)
@@ -64,7 +71,7 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams) 
 	return &rewritten, nil
 }
 
-func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecParams, shellType shell.ShellType) (string, error) {
+func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (string, error) {
 	key, err := shellSnapshotKey(params, shellType)
 	if err != nil {
 		return "", err
@@ -86,7 +93,7 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 		return "", errors.New("unsupported snapshot shell")
 	}
 	cwd := shellSnapshotNativeCWD(params.CWD)
-	env := shellSnapshotEnvironment(params.Env)
+	env := shellSnapshotEnvironment(captureEnv)
 	captureCtx, cancel := context.WithTimeout(ctx, shellSnapshotCaptureTimeout)
 	defer cancel()
 	output, err := m.capture(captureCtx, []string{params.ShellSnapshot.Shell.Path, "-lc", captureScript}, cwd, env)
@@ -112,7 +119,8 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 		_ = temp.Close()
 		return "", err
 	}
-	if _, err := temp.WriteString(captured.RenderScript(nil)); err != nil {
+	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
+	if _, err := temp.WriteString(rendered); err != nil {
 		_ = temp.Close()
 		return "", err
 	}
@@ -225,6 +233,17 @@ func shellSnapshotEnvironment(values map[string]string) map[string]string {
 		}
 	}
 	return env
+}
+
+func cloneShellSnapshotEnv(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func runShellSnapshotCapture(ctx context.Context, command []string, cwd string, env map[string]string) ([]byte, error) {
