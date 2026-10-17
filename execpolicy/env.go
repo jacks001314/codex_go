@@ -7,8 +7,11 @@ import (
 )
 
 const (
-	ThreadIDEnvVar          = "CODEX_THREAD_ID"
-	SessionIDEnvVar         = "CODEX_SESSION_ID"
+	ThreadIDEnvVar  = "CODEX_THREAD_ID"
+	SessionIDEnvVar = "CODEX_SESSION_ID"
+	// VersionEnvVar carries the running harness version to model-reachable
+	// shell commands (Rust #42395); it overrides stale policy/snapshot values.
+	VersionEnvVar           = "CODEX_VERSION"
 	PermissionProfileEnvVar = "CODEX_PERMISSION_PROFILE"
 )
 
@@ -203,12 +206,24 @@ func InjectPermissionProfile(env map[string]string, profileID *string) {
 // shell commands. The session ID is applied after the shell environment policy
 // so the runtime-selected value is authoritative.
 func InjectSessionID(env map[string]string, sessionID *string) {
+	InjectSessionEnv(env, sessionID, "")
+}
+
+// InjectSessionEnv exposes the shared root-session identity and the running
+// harness version to model-reachable shell commands (Rust #42395). Both values
+// are applied after the shell environment policy so the runtime-selected values
+// stay authoritative.
+func InjectSessionEnv(env map[string]string, sessionID *string, version string) {
 	if env == nil {
 		return
 	}
 	removeKey(env, SessionIDEnvVar)
 	if sessionID != nil && strings.TrimSpace(*sessionID) != "" {
 		env[SessionIDEnvVar] = strings.TrimSpace(*sessionID)
+	}
+	removeKey(env, VersionEnvVar)
+	if value := strings.TrimSpace(version); value != "" {
+		env[VersionEnvVar] = value
 	}
 }
 

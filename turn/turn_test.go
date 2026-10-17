@@ -464,7 +464,9 @@ func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
 		`"sandbox_mode":"workspace-write","turn_started_at_unix_ms":1700,"workspace_kind":"git",` +
 		`"tool_namespaces_info":{"functions":{"name":"functions"}}}`
 
-	document := MCPTurnMetadataFromResponsesMetadata(raw, false)
+	// Rust #42395: `codex_version` is reserved and always reports the running
+	// harness version, replacing the client-supplied value.
+	document := MCPTurnMetadataFromResponsesMetadata(raw, false, "9.9.9")
 	for _, key := range []string{
 		"installation_id", "window_id", "window_number", "context_window_id",
 		"request_kind", "compaction", "agent_name", "parent_turn_id", "root_turn_id",
@@ -482,7 +484,7 @@ func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
 		"parent_thread_id":        "parent-thread",
 		"model":                   "gpt-5.4",
 		"reasoning_effort":        "high",
-		"codex_version":           "1.2.3",
+		"codex_version":           "9.9.9",
 		"sandbox_mode":            "workspace-write",
 		"turn_started_at_unix_ms": float64(1700),
 		"workspace_kind":          "git",
@@ -494,13 +496,16 @@ func TestMCPTurnMetadataFromResponsesMetadataLikeRust(t *testing.T) {
 	if _, ok := document["user_input_requested_during_turn"]; ok {
 		t.Fatalf("MCP metadata flagged user input the turn never requested: %#v", document)
 	}
-	if requested := MCPTurnMetadataFromResponsesMetadata(raw, true); requested["user_input_requested_during_turn"] != true {
+	if requested := MCPTurnMetadataFromResponsesMetadata(raw, true, "9.9.9"); requested["user_input_requested_during_turn"] != true {
 		t.Fatalf("MCP metadata missing the user-input flag: %#v", requested)
 	}
-	if document := MCPTurnMetadataFromResponsesMetadata("   ", true); document != nil {
+	if withoutVersion := MCPTurnMetadataFromResponsesMetadata(raw, false, ""); withoutVersion["codex_version"] != nil {
+		t.Fatalf("empty harness version kept a client codex_version: %#v", withoutVersion)
+	}
+	if document := MCPTurnMetadataFromResponsesMetadata("   ", true, "9.9.9"); document != nil {
 		t.Fatalf("empty metadata produced a document: %#v", document)
 	}
-	if document := MCPTurnMetadataFromResponsesMetadata("{", true); document != nil {
+	if document := MCPTurnMetadataFromResponsesMetadata("{", true, "9.9.9"); document != nil {
 		t.Fatalf("malformed metadata produced a document: %#v", document)
 	}
 }

@@ -553,7 +553,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 // request identity and the harness-owned agent/parent/root turn fields are
 // dropped, and the per-turn user-input flag is added when the model asked for
 // input. It returns nil when there is no document to report.
-func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool) map[string]any {
+func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool, codexVersion string) map[string]any {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -578,6 +578,13 @@ func MCPTurnMetadataFromResponsesMetadata(raw string, userInputRequested bool) m
 		delete(document, key)
 	}
 	delete(document, "window_number")
+	// Rust #42395: the reserved `codex_version` field always reports the running
+	// harness version, replacing any client-supplied value.
+	if version := strings.TrimSpace(codexVersion); version != "" {
+		document["codex_version"] = version
+	} else {
+		delete(document, "codex_version")
+	}
 	if userInputRequested {
 		document[codexapi.UserInputRequestedDuringTurnKey] = true
 	}

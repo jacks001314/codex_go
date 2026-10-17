@@ -217,6 +217,7 @@ func (r *RuntimeRouter) mcpTurnMetadataProvider(threadID string, turnID string) 
 		return turn.MCPTurnMetadataFromResponsesMetadata(
 			metadata[codexapi.ClientCodexTurnMetadataHeader],
 			r.turnUserInputRequested(threadID, turnID),
+			appServerVersion(),
 		)
 	}
 }

@@ -6673,8 +6673,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): execpolicy.InjectSessionEnv sets CODEX_VERSION together with the session id after the shell environment policy (removing stale/case-variant values), appserver/thread_shell_command uses it with appServerVersion(), and turn.MCPTurnMetadataFromResponsesMetadata now treats codex_version as reserved: the harness version (appServerVersion in appserver, doctor.Version in exec) replaces any client value and an empty version removes it. The shell-snapshot half was already present (tool/shell_snapshot.go restores CODEX_VERSION). Tests: execpolicy/inject_session_env_test.go, turn TestMCPTurnMetadataFromResponsesMetadataLikeRust (9.9.9 overrides 1.2.3; empty version clears), appserver metadata-provider assertion. RC: keeping the client value fails the turn test; go build ./... + ./turn ./execpolicy green.",
         "Partial symbol coverage 1/2; needs review: inject_session_env"
       ]
     },

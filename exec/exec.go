@@ -1434,6 +1434,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 				return turn.MCPTurnMetadataFromResponsesMetadata(
 					clientMetadata[codexapi.ClientCodexTurnMetadataHeader],
 					userInputRequested.Load(),
+					doctor.Version(),
 				)
 			}
 			options.MCPTurnRootTurnID = func() string {

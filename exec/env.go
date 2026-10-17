@@ -21,6 +21,7 @@ const (
 const (
 	ThreadIDEnvVar          = execpolicy.ThreadIDEnvVar
 	SessionIDEnvVar         = execpolicy.SessionIDEnvVar
+	VersionEnvVar           = execpolicy.VersionEnvVar
 	PermissionProfileEnvVar = execpolicy.PermissionProfileEnvVar
 )
 
@@ -49,4 +50,10 @@ func InjectPermissionProfile(env map[string]string, profileID *string) {
 // InjectSessionID sets the session id env var (see execpolicy.InjectSessionID).
 func InjectSessionID(env map[string]string, sessionID *string) {
 	execpolicy.InjectSessionID(env, sessionID)
+}
+
+// InjectSessionEnv sets the session id and harness version env vars (see
+// execpolicy.InjectSessionEnv, Rust #42395).
+func InjectSessionEnv(env map[string]string, sessionID *string, version string) {
+	execpolicy.InjectSessionEnv(env, sessionID, version)
 }

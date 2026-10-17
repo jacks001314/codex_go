@@ -146,9 +146,13 @@ func (r *RuntimeRouter) threadShellCommandEnv(run *threadShellCommandRun, cfg *c
 			sessionID = strings.TrimSpace(record.SessionID)
 		}
 	}
+	var sessionIDPtr *string
 	if sessionID != "" {
-		env["CODEX_SESSION_ID"] = sessionID
+		sessionIDPtr = &sessionID
 	}
+	// Rust #42395: inject the session identity and the running harness version
+	// after the shell policy, overriding stale policy or snapshot values.
+	execpolicy.InjectSessionEnv(env, sessionIDPtr, appServerVersion())
 	if threadID := strings.TrimSpace(run.ThreadID); threadID != "" {
 		env["CODEX_THREAD_ID"] = threadID
 	}

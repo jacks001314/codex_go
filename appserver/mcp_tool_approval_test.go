@@ -348,6 +348,9 @@ func TestMCPTurnMetadataProviderLikeRust(t *testing.T) {
 	if meta["thread_id"] != "thread-1" || meta["turn_id"] != "turn-1" || meta["model"] != "gpt-5.4" {
 		t.Fatalf("MCP turn metadata = %#v", meta)
 	}
+	if meta["codex_version"] != appServerVersion() {
+		t.Fatalf("MCP turn metadata codex_version = %#v, want %q", meta["codex_version"], appServerVersion())
+	}
 	if _, ok := meta["user_input_requested_during_turn"]; ok {
 		t.Fatalf("MCP turn metadata flagged user input the turn never requested: %#v", meta)
 	}
