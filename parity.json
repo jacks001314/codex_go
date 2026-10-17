@@ -1606,6 +1606,14 @@
             "reason": "Aligned upstream 422239eb4b (#40180 Classify contextual fragments with content kinds): Go's Fragment contract requires ContentKind, and RenderedFragment carries role, rendered content, stable kind, and typed content items together. Producers persist content_item_kinds in internal chat metadata and consumers compare shared constants. The Rust-only AnnotatedContent::into_parts helper is represented by RenderedFragment's exported fields and typed ContentItems boundary.",
             "userImpact": "Harness-generated context remains classifiable at API boundaries without text parsing or losing role/content-kind metadata.",
             "test": "go test ./context ./appserver -run 'Fragment|ContentKind|Incremental|GuardianApproved|UserMessageInputItem' -count=1"
+        },
+        {
+            "id": "heartbeat-human-override",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream e7f119819a (#47851 Preserve human overrides across repeated heartbeat instructions): Go derives heartbeat origin from the exact user.heartbeat kind, parses bounded scheduler envelopes, and coalesces only unchanged instructions per automation after acceptance ordering. Changed heartbeat versions and all ordinary user messages remain, so later human authorization overrides are preserved. UserInputOrigin and RetainedUserMessage metadata cover Rust's UserInputMetadata carrier.",
+            "userImpact": "Repeated scheduler heartbeats no longer hide a later human instruction from retained context or Guardian authorization evidence.",
+            "test": "go test ./retainedctx ./appserver -run 'Heartbeat|Retained' -count=1"
         }
     ]
 }
