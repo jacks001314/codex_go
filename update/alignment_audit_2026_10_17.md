@@ -1,25 +1,37 @@
-# Rust/Go 功能对齐审计（2026-10-17，round 91）
+# Rust/Go 功能对齐审计（最新：round 112，2026-10-17）
 
-## 1. 结论摘要
+> **当前状态只以本节为准。** 从 §2 开始的各节是历轮快照（round 91 起），其中的计数、上游 SHA 与
+> "冻结在 970b7f2ff4" 之类表述都是**当时**的事实，保留它们仅为追溯每轮证据，不应读作当前值。
 
-- **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` HEAD = `e16b631d08`（#54754），`git pull origin main` 返回 `Already up to date`。
-- **Go 仓**：`D:\qax\reagent\dev\codex_go`，本轮从 `634daa4e` 继续。
-- **parity 控制面**：本轮开始时 `go test ./parity` **6 项失败**，现已 **全绿**（见 §3）。
-- **协议 oracle**：`appserver/schema/precomputed/*.zst` 已按 Rust 重新 vendored；Go 侧重新生成的 TypeScript/JSON/internal-JSON 导出树与 Rust 预计算产物**逐文件一致**（`TestPrecomputedExportsAreWrittenToDiskLikeRust` / `...Experimental...` 通过）。
-- **提交账本覆盖**：`update/r90_commit_ledger_2026_10_16.tsv` 共 222 行；本轮把 2 行从 `implementable` 推进到 `landed`。账本**不是** `970b7f2ff4..e16b631d08` 全量 2639 提交的逐笔认证，只是按功能面筛选后的跟踪表，因此本文件按"协议/数据面 + 功能面"给出证据，不宣称逐提交认证。
+## 1. 结论摘要（当前）
 
-### 账本状态分布（本轮更新后）
+- **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
+- **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 435 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，228 数据行）
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 78 |
-| `not_applicable` | 75 |
-| `blocked_precondition` | 20 |
-| `complete` | 15 |
-| `implementable` | 11 |
-| `partial` | 12 |
-| `AlreadyImplemented` | 10 |
-| `unverified` | 1 |
+| `landed` | 104 |
+| `complete` | 27 |
+| `not_applicable` | 79 |
+| `blocked_precondition` | 17 |
+| `partial` | 1 |
+| **合计** | **228** |
+
+不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
+
+### 1.2 当前 2695 提交覆盖分布（`update/r109_symbol_coverage_2026_10_17.tsv`）
+
+| 状态 | 行数 |
+| --- | --- |
+| `complete` | 443 |
+| `not_applicable` | 1171 |
+| `audit_pending` | 630 |
+| `implementation_pending` | 435 |
+| `blocked_precondition` | 15 |
+| `partial` | 1 |
 
 ## 2. 方法与证据源
 
@@ -643,11 +655,11 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 
 ## 22.5 账本
 
-`update/r90_commit_ledger_2026_10_16.tsv`：landed 97 / not_applicable 79 / blocked_precondition 22 / complete 15 / AlreadyImplemented 12，partial 归零。
+**（历史快照，round 106/107 时点；当前值见 §1）** `update/r90_commit_ledger_2026_10_16.tsv`：landed 97 / not_applicable 79 / blocked_precondition 22 / complete 15 / AlreadyImplemented 12，partial 归零。
 
 ## 22.6 baseline 说明
 
-parity baseline（`parity.json.rustBaseline`、`parity/baseline.json`、`parity/domains.json`）继续冻结在 `970b7f2ff4`：`parity/alignment_control_test.go` 同时硬编码 candidate SHA 与 `parity/commits.json` 的 52 条提交、README 与 plan 文本，单改 baseline 会让该测试失败。本轮只做功能同步，不移动 baseline。
+**（历史快照，round 106 时点；当前锚点见 §1 = `ce0323f2f2`）** parity baseline（`parity.json.rustBaseline`、`parity/baseline.json`、`parity/domains.json`）当时冻结在 `970b7f2ff4`：`parity/alignment_control_test.go` 同时硬编码 candidate SHA 与 `parity/commits.json` 的 52 条提交、README 与 plan 文本，单改 baseline 会让该测试失败。本轮只做功能同步，不移动 baseline。
 
 # Round 107 增量（2026-10-17，lead）
 
