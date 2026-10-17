@@ -1,0 +1,242 @@
+package appserver
+
+import (
+	"context"
+	"sync"
+	"time"
+
+	"codex_go/compact"
+	"codex_go/config"
+	"codex_go/features"
+	"codex_go/model"
+)
+
+// asyncCompactionThresholdPercent is Rust's
+// `async_compaction_threshold_percent`; token budgets take precedence over
+// speculative compaction.
+func asyncCompactionThresholdPercent(cfg *config.Config) (int, bool) {
+	if cfg == nil {
+		return 0, false
+	}
+	settings, err := cfg.AsyncCompactionConfig()
+	if err != nil || settings == nil || !settings.Enabled {
+		return 0, false
+	}
+	if features.Enabled(cfg.FeatureSettings(), "token_budget") {
+		return 0, false
+	}
+	return settings.ModelAsyncCompactThresholdPercent, true
+}
+
+// asyncCompactionEligible mirrors Rust `async_compaction::maybe_start`'s
+// preconditions. The background task is only started when the provider speaks
+// remote compaction V2, the turn is below foreground token limits, and the
+// active context crossed the configured percentage.
+func asyncCompactionEligible(cfg *config.Config, support model.RemoteCompactionSupport, phase compact.Phase, status *compact.TokenStatus, usableWindow int64, hasTurnState bool) bool {
+	threshold, ok := asyncCompactionThresholdPercent(cfg)
+	if !ok || support != model.RemoteCompactionV2 || status == nil || status.ShouldCompact {
+		return false
+	}
+	if phase == compact.PhasePreTurn && !hasTurnState {
+		return false
+	}
+	if phase == compact.PhasePostTurn && turnEndCompactionThresholdReached(cfg, status, usableWindow) {
+		return false
+	}
+	if usableWindow <= 0 {
+		return false
+	}
+	return int64(status.ActiveContextTokens)*100 >= usableWindow*int64(threshold)
+}
+
+type compactionAttemptKey struct {
+	HistoryVersion      uint64
+	ModelSlug           string
+	CompactionHash      string
+	AuthOwnerGeneration uint64
+}
+
+type backgroundCompactionInput struct {
+	Prefix              compact.CompactionPrefix
+	History             []compact.Item
+	TurnState           string
+	Window              compactionResponseWindow
+	BaseInstructions    string
+	ModelSlug           string
+	CompactionHash      string
+	AuthOwnerGeneration uint64
+}
+
+type backgroundCompactionCandidate struct {
+	Key      compactionAttemptKey
+	Prefix   compact.CompactionPrefix
+	Input    backgroundCompactionInput
+	Result   *compact.Result
+	Response *model.AgentResponse
+}
+
+// captureBackgroundCompactionInput snapshots the history a speculative request
+// will summarize. Later history items remain in place when the candidate is
+// installed.
+func captureBackgroundCompactionInput(history []compact.Item, prefixLen int, turnState string, window compactionResponseWindow, baseInstructions string, modelSlug string, compactionHash string, authOwnerGeneration uint64, usableWindow int64) backgroundCompactionInput {
+	prefixLen = max(0, min(prefixLen, len(history)))
+	history = compact.TrimHistoryToContextWindow(history, int(usableWindow), baseInstructions)
+	authOwner := authOwnerGeneration
+	return backgroundCompactionInput{
+		Prefix: compact.CompactionPrefix{
+			Len:                 prefixLen,
+			AuthOwnerGeneration: &authOwner,
+		},
+		History:             append([]compact.Item(nil), history...),
+		TurnState:           turnState,
+		Window:              window,
+		BaseInstructions:    baseInstructions,
+		ModelSlug:           modelSlug,
+		CompactionHash:      compactionHash,
+		AuthOwnerGeneration: authOwnerGeneration,
+	}
+}
+
+type backgroundCompactionRunner func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error)
+
+// asyncCompactionState holds the newest candidate and cancels in-flight
+// speculative requests when its session shuts down. The turn loop is wired in a
+// later layer; this state provides capture, deduplication, and lifecycle.
+type asyncCompactionState struct {
+	mu           sync.Mutex
+	lastAttempt  *compactionAttemptKey
+	candidate    *backgroundCompactionCandidate
+	taskCtx      context.Context
+	cancel       context.CancelFunc
+	tasks        sync.WaitGroup
+	shuttingDown bool
+}
+
+func newAsyncCompactionState() *asyncCompactionState {
+	return &asyncCompactionState{}
+}
+
+// MaybeStart launches one background attempt for a captured history. Repeated
+// calls with the same history/model/hash/auth owner are ignored.
+func (s *asyncCompactionState) MaybeStart(ctx context.Context, input backgroundCompactionInput, currentAuthOwner func() uint64, run backgroundCompactionRunner) bool {
+	if s == nil || run == nil || len(input.History) == 0 {
+		return false
+	}
+	if currentAuthOwner != nil && currentAuthOwner() != input.AuthOwnerGeneration {
+		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	key := compactionAttemptKey{
+		HistoryVersion:      compact.HistoryVersion(input.History),
+		ModelSlug:           input.ModelSlug,
+		CompactionHash:      input.CompactionHash,
+		AuthOwnerGeneration: input.AuthOwnerGeneration,
+	}
+	s.mu.Lock()
+	if s.shuttingDown || (s.lastAttempt != nil && *s.lastAttempt == key) {
+		s.mu.Unlock()
+		return false
+	}
+	if s.cancel == nil {
+		s.taskCtx, s.cancel = context.WithCancel(context.Background())
+	}
+	taskCtx := s.taskCtx
+	s.lastAttempt = &key
+	s.candidate = nil
+	s.tasks.Add(1)
+	s.mu.Unlock()
+
+	go func() {
+		defer s.tasks.Done()
+		candidate, err := run(taskCtx, input)
+		if err != nil || candidate == nil {
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.shuttingDown || s.lastAttempt == nil || *s.lastAttempt != key {
+			return
+		}
+		candidate.Key = key
+		s.candidate = candidate
+	}()
+	return true
+}
+
+// TakeCandidate returns and clears the newest completed candidate.
+func (s *asyncCompactionState) TakeCandidate() *backgroundCompactionCandidate {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := s.candidate
+	s.candidate = nil
+	return candidate
+}
+
+// Shutdown cancels network work and waits for completed usage accounting to
+// drain. The caller's deadline bounds the wait.
+func (s *asyncCompactionState) Shutdown(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	s.shuttingDown = true
+	s.candidate = nil
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.tasks.Wait()
+		close(done)
+	}()
+	if ctx == nil {
+		<-done
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *ThreadManager) asyncCompactionState(threadID string) *asyncCompactionState {
+	if m == nil || threadID == "" {
+		return nil
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	if m.asyncCompaction == nil {
+		m.asyncCompaction = map[string]*asyncCompactionState{}
+	}
+	state := m.asyncCompaction[threadID]
+	if state == nil {
+		state = newAsyncCompactionState()
+		m.asyncCompaction[threadID] = state
+	}
+	return state
+}
+
+func (m *ThreadManager) shutdownAsyncCompaction(threadID string) {
+	if m == nil || threadID == "" {
+		return
+	}
+	m.turnsMu.Lock()
+	state := m.asyncCompaction[threadID]
+	delete(m.asyncCompaction, threadID)
+	m.turnsMu.Unlock()
+	if state == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = state.Shutdown(ctx)
+}

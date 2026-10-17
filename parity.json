@@ -1486,6 +1486,14 @@
             "reason": "Aligned upstream be5296d467 (#53606 Prepare compaction helpers for background requests): compaction prefixes can install a summarized history while preserving later items, initial context is placed after real later user/agent messages or at the summary boundary, real-user/agent classification excludes final answers and summaries, history trimming accepts a captured context window, and compaction metadata accepts a captured window identity. Go's agent runner is already a stateless HTTP executor and the router exposes credential-owner revisions for future background requests.",
             "userImpact": "Speculative compaction can preserve history appended while a request is in flight and keep the request metadata tied to the window it actually captured.",
             "test": "go test ./compact -count=1; go test ./appserver -run 'CompactResponsesClientMetadata|AsyncCompaction' -count=1"
+        },
+        {
+            "id": "speculative-remote-compaction-infrastructure",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream 1a69ad3237 (#53614 Add infrastructure for speculative remote V2 compaction): thread-scoped async state captures history, routing, window, model/compaction hash, base instructions, and auth-owner generation; deduplicates attempts by history fingerprint/model/hash/owner; retains only the newest candidate; and cancels plus drains tasks on shutdown while preserving completed usage accounting. Eligibility honors the disabled-by-default threshold, token-budget precedence, remote V2 support, foreground-limit exclusion, pre-turn routing, and post-turn threshold rules.",
+            "userImpact": "Speculative compaction can run without duplicating work and can be cleanly discarded or drained when the thread closes, while the later turn-loop integration can consume the candidate.",
+            "test": "go test -race ./appserver -run 'AsyncCompaction|CaptureBackgroundCompaction' -count=1"
         }
     ]
 }

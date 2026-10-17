@@ -25,6 +25,7 @@ type ThreadManager struct {
 	// capabilityDiscoveryV2 is retained for idle callers and replaced when a
 	// new turn starts (Rust #53736 thread extension data).
 	capabilityDiscoveryV2 map[string]*runtimeCapabilityDiscoveryV2Cache
+	asyncCompaction       map[string]*asyncCompactionState
 	closing               bool
 	turnWG                sync.WaitGroup
 
@@ -58,6 +59,7 @@ func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 		active:                map[string]*activeRuntimeTurn{},
 		diffs:                 map[string]*runtimeutil.DiffTracker{},
 		capabilityDiscoveryV2: map[string]*runtimeCapabilityDiscoveryV2Cache{},
+		asyncCompaction:       map[string]*asyncCompactionState{},
 		ephemeral:             map[string]*session.Record{},
 		subscriptions:         map[string]map[string]struct{}{},
 		liveThreads:           map[session.ThreadID]*managedLiveThread{},
@@ -134,6 +136,9 @@ func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 		delete(m.capabilityDiscoveryV2, string(threadID))
 	}
 	m.turnsMu.Unlock()
+	for _, threadID := range threadIDs {
+		m.shutdownAsyncCompaction(string(threadID))
+	}
 	m.liveThreadsMu.Lock()
 	liveThreads := make([]*managedLiveThread, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
@@ -170,6 +175,9 @@ func (m *ThreadManager) CloseLiveThreads() error {
 		delete(m.capabilityDiscoveryV2, string(threadID))
 	}
 	m.turnsMu.Unlock()
+	for _, threadID := range threadIDs {
+		m.shutdownAsyncCompaction(string(threadID))
+	}
 	m.clearModelProviderRoutes(threadIDs)
 	var closeErr error
 	for _, liveThread := range liveThreads {
