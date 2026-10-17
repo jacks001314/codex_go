@@ -573,13 +573,16 @@ func worldStateUpdateRole(update WorldStateUpdate) string {
 
 func renderedWorldStateMessage(updates []WorldStateUpdate) map[string]any {
 	content := make([]map[string]any, 0, len(updates))
-	kinds := make([]string, 0, len(updates))
+	kinds := []string{}
 	for _, update := range updates {
-		for _, item := range worldStateUpdateItems(update) {
+		items := worldStateUpdateItems(update)
+		for _, item := range items {
 			content = append(content, item.Wire())
 		}
 		if kind := strings.TrimSpace(update.Kind); kind != "" {
-			kinds = append(kinds, kind)
+			for range items {
+				kinds = append(kinds, kind)
+			}
 		}
 	}
 	item := map[string]any{

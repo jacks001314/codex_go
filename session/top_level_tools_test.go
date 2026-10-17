@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"testing"
+
+	"codex_go/eventmap"
 )
 
 // The cases in this file mirror Rust
@@ -459,5 +461,45 @@ func TestWorldStateSnapshotWindowScopingLikeRust(t *testing.T) {
 	}
 	if _, ok := TopLevelToolsSnapshotForWindow(zero, 1); ok {
 		t.Fatal("window 0 must not match window 1")
+	}
+}
+
+// Rust #40184's build_rendered_message pairs every emitted content item with a
+// positional classification. A typed fragment contributes more than one item,
+// so the metadata list must grow with the content list rather than the number
+// of fragments.
+func TestMergeWorldStateUpdatesPreservesKindsPerTypedContentItemLikeRust(t *testing.T) {
+	items := MergeWorldStateUpdates([]WorldStateUpdate{{
+		Role: "user",
+		Kind: "test.context",
+		ContentItems: []eventmap.ContentItem{
+			{Kind: eventmap.ContentInputText, Text: "hello"},
+			{Kind: eventmap.ContentInputImage, ImageURL: "data:image/png;base64,AAA"},
+			{Kind: eventmap.ContentInputAudio, AudioURL: "data:audio/wav;base64,YXVkaW8="},
+		},
+	}})
+	if len(items) != 1 {
+		t.Fatalf("items = %#v", items)
+	}
+	message, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("message type = %T", items[0])
+	}
+	content, ok := message["content"].([]map[string]any)
+	if !ok || len(content) != 3 {
+		t.Fatalf("content = %#v", message["content"])
+	}
+	metadata, ok := message["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v", message["internal_chat_message_metadata_passthrough"])
+	}
+	kinds, ok := metadata["content_item_kinds"].([]string)
+	if !ok || len(kinds) != len(content) {
+		t.Fatalf("kinds = %#v, want %d entries", metadata["content_item_kinds"], len(content))
+	}
+	for i := range kinds {
+		if kinds[i] != "test.context" {
+			t.Fatalf("kind %d = %q", i, kinds[i])
+		}
 	}
 }

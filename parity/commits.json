@@ -754,9 +754,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: build_rendered_message"
+        "Round 115 (lead): completed rendered-message parity by preserving typed text/image/audio content and one positional content-item classification per entry in both appserver fragment rendering and session world-state merging. Typed-only fragments are retained, and two reverse probes prove the old flattening and one-kind-per-fragment behavior are gone."
       ]
     },
     {

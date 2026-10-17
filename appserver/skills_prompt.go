@@ -101,7 +101,7 @@ func BuildHostSkillsPromptContext(options *HostSkillsPromptOptions) (*HostSkills
 		}
 		name, renderPath, contents, truncated := promptctx.TruncateSkillInstructionFields(skill.Name, firstNonEmpty(skill.LocatorPath, skill.Path), contents)
 		rendered := contextfrag.Render(contextfrag.NewSkillInstructions(name, renderPath, contents))
-		if item := renderedFragmentInputItem(rendered); item != nil {
+		if item := buildRenderedMessage(rendered); item != nil {
 			result.InputItems = append(result.InputItems, item)
 		}
 		if truncated {

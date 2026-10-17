@@ -8711,7 +8711,7 @@ func (r *RuntimeRouter) explicitAppInputItems(threadID string, params *turn.Turn
 			app = apps.AppEntry{ID: id, Name: id, InstallURL: &installURL}
 		}
 		rendered := contextfrag.Render(contextfrag.NewAppInstructions(appInstructionsData(&app)))
-		if item := renderedFragmentInputItem(rendered); item != nil {
+		if item := buildRenderedMessage(rendered); item != nil {
 			items = append(items, item)
 		}
 	}
@@ -10991,7 +10991,7 @@ func (r *RuntimeRouter) skillInstructionsInputItemWithProvider(threadID string, 
 		fragment = contextfrag.NewSkillInstructions(name, renderPath, contents)
 	}
 	rendered := contextfrag.Render(fragment)
-	return renderedFragmentInputItem(rendered), truncated, nil
+	return buildRenderedMessage(rendered), truncated, nil
 }
 
 func skillMentionInputsFromTurn(params *turn.TurnStartParams) []promptctx.SkillMentionInput {
@@ -11013,27 +11013,45 @@ func skillMentionInputsFromTurn(params *turn.TurnStartParams) []promptctx.SkillM
 	return inputs
 }
 
-func renderedFragmentInputItem(rendered *contextfrag.RenderedFragment) any {
-	if rendered == nil || strings.TrimSpace(rendered.Content) == "" {
+// buildRenderedMessage converts one rendered context fragment into a response
+// message while keeping every typed content item and its positional
+// classification (Rust context_manager::build_rendered_message, #40184).
+func buildRenderedMessage(rendered *contextfrag.RenderedFragment) any {
+	if rendered == nil {
 		return nil
 	}
 	role := strings.TrimSpace(rendered.Role)
 	if role == "" {
 		role = contextfrag.RoleUser
 	}
-	item := map[string]any{
-		"type": "message",
-		"role": role,
-		"content": []map[string]any{{
+	content := make([]map[string]any, 0, max(1, len(rendered.ContentItems)))
+	if len(rendered.ContentItems) > 0 {
+		for _, item := range rendered.ContentItems {
+			content = append(content, item.Wire())
+		}
+	} else if strings.TrimSpace(rendered.Content) != "" {
+		content = append(content, map[string]any{
 			"type": "input_text",
 			"text": rendered.Content,
-		}},
+		})
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	item := map[string]any{
+		"type":    "message",
+		"role":    role,
+		"content": content,
 	}
 	// Preserve the harness-owned content classification as message metadata
 	// (mirrors Rust `content_item_kinds` from the 2026-08-23 sync25 batch).
 	if kind := strings.TrimSpace(rendered.ContentKind); kind != "" {
+		kinds := make([]string, len(content))
+		for i := range kinds {
+			kinds[i] = kind
+		}
 		item["internal_chat_message_metadata_passthrough"] = map[string]any{
-			"content_item_kinds": []string{kind},
+			"content_item_kinds": kinds,
 		}
 	}
 	return item
@@ -12393,7 +12411,7 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 		"</collaboration_mode>",
 		instructions,
 	))
-	return renderedFragmentInputItem(rendered), nil
+	return buildRenderedMessage(rendered), nil
 }
 
 func recordHasRetainedCollaborationMode(record *session.Record) bool {
@@ -12581,7 +12599,7 @@ func (r *RuntimeRouter) realtimeWorldStateInputItem(threadID string, cfg *config
 			return nil, err
 		}
 	}
-	return renderedFragmentInputItem(rendered), nil
+	return buildRenderedMessage(rendered), nil
 }
 
 // modelWorldStateInputItems emits the model-switch world-state instruction when
@@ -12611,7 +12629,7 @@ func (r *RuntimeRouter) modelWorldStateInputItems(threadID string, info *model.M
 	items := []any{}
 	if modelKnown && previousModel != currentModel && strings.TrimSpace(modelInstructions) != "" {
 		rendered := contextfrag.RenderStandalone(&contextfrag.ModelSwitchInstructions{Instructions: modelInstructions})
-		items = append(items, renderedFragmentInputItem(rendered))
+		items = append(items, buildRenderedMessage(rendered))
 	}
 	modelSnapshot, err := json.Marshal(currentModel)
 	if err != nil {
@@ -12677,7 +12695,7 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 			return nil, err
 		}
 		rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: removalNotice})
-		return renderedFragmentInputItem(rendered), nil
+		return buildRenderedMessage(rendered), nil
 	}
 	snapshot, err := json.Marshal(message)
 	if err != nil {
@@ -12699,7 +12717,7 @@ func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string
 		return nil, err
 	}
 	rendered := contextfrag.RenderStandalone(&contextfrag.ContextWindowGuidance{Message: displayMessage})
-	return renderedFragmentInputItem(rendered), nil
+	return buildRenderedMessage(rendered), nil
 }
 
 // historyNotesThreadHintInputItem fetches the history-notes context-window hint
@@ -12719,7 +12737,7 @@ func (r *RuntimeRouter) historyNotesThreadHintInputItem(cfg *config.Config, para
 		return nil, false
 	}
 	fragment := contextfrag.NewSimpleFragmentWithKind(contextfrag.RoleDeveloper, "", "", text, "notes.thread_hint")
-	return renderedFragmentInputItem(contextfrag.Render(fragment)), true
+	return buildRenderedMessage(contextfrag.Render(fragment)), true
 }
 
 func sameJSONValue(left json.RawMessage, right json.RawMessage) bool {
@@ -12853,7 +12871,7 @@ func (r *RuntimeRouter) multiAgentModeInputItem(threadID string, params *turn.Tu
 		body = proactiveMultiAgentModeText
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_mode>", "</multi_agent_mode>", body))
-	return renderedFragmentInputItem(rendered), nil
+	return buildRenderedMessage(rendered), nil
 }
 
 // multiAgentModeCatalogText resolves the catalog-provided multi-agent mode
@@ -12942,7 +12960,7 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 		return nil, err
 	}
 	rendered := contextfrag.Render(contextfrag.NewSimpleFragment(contextfrag.RoleDeveloper, "<multi_agent_usage_hint>", "</multi_agent_usage_hint>", hint))
-	return renderedFragmentInputItem(rendered), nil
+	return buildRenderedMessage(rendered), nil
 }
 
 // multiAgentCatalogRoleInstructions returns the model-catalog multi-agent role
@@ -13020,5 +13038,5 @@ func (r *RuntimeRouter) deferredToolsWorldStateInputItem(threadID string, runtim
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, err
 	}
-	return renderedFragmentInputItem(contextfrag.Render(fragment)), nil
+	return buildRenderedMessage(contextfrag.Render(fragment)), nil
 }

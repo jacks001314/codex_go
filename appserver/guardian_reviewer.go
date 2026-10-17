@@ -714,7 +714,7 @@ reviewAttempt:
 	// computer-use review.
 	if nodeReplAutoReviewRequired && isNodeReplJSApprovalAction(action) {
 		if fragment := codexctx.NewGuardianNodeReplPolicy(plan.NodeReplPolicy); fragment != nil {
-			if item := renderedFragmentInputItem(codexctx.Render(fragment)); item != nil {
+			if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
 				inputItems = append(inputItems, item)
 			}
 		}
