@@ -4254,6 +4254,7 @@ func TestResponsesAgentRunnerContentItemKindsGate(t *testing.T) {
 			},
 			"internal_chat_message_metadata_passthrough": map[string]any{
 				"content_item_kinds": []any{"user.text"},
+				"turn_id":            "turn-1",
 			},
 		}
 	}
@@ -4279,8 +4280,22 @@ func TestResponsesAgentRunnerContentItemKindsGate(t *testing.T) {
 	// An explicit disabled gate clears content_item_kinds from the request item.
 	disabled := false
 	runnerDisabled := &ResponsesAgentRunner{ContentItemKindsEnabled: &disabled}
-	if got := runnerDisabled.gateContentItemKinds([]any{newItem()}); hasKinds(got[0]) {
-		t.Fatalf("disabled gate did not strip content_item_kinds: %#v", got[0])
+	got := runnerDisabled.gateContentItemKinds([]any{newItem()})[0].(map[string]any)
+	if hasKinds(got) {
+		t.Fatalf("disabled gate did not strip content_item_kinds: %#v", got)
+	}
+	metadata, _ := got["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if metadata["turn_id"] != "turn-1" {
+		t.Fatalf("disabled gate removed unrelated metadata: %#v", got)
+	}
+
+	// Matching Rust's default-value cleanup: metadata containing only the
+	// classification disappears instead of leaving an empty object on the wire.
+	onlyKinds := newItem()
+	delete(onlyKinds["internal_chat_message_metadata_passthrough"].(map[string]any), "turn_id")
+	cleaned := runnerDisabled.gateContentItemKinds([]any{onlyKinds})[0].(map[string]any)
+	if _, present := cleaned["internal_chat_message_metadata_passthrough"]; present {
+		t.Fatalf("disabled gate left empty metadata: %#v", cleaned)
 	}
 }
 

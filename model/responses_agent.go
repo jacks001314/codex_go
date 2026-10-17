@@ -2576,6 +2576,9 @@ func stripResponseItemContentKinds(items []any) []any {
 			md, ok := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
 			if ok {
 				delete(md, "content_item_kinds")
+				if len(md) == 0 {
+					delete(typed, "internal_chat_message_metadata_passthrough")
+				}
 			}
 		case responsesInputMessage:
 			typed.Metadata = nil

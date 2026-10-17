@@ -1306,9 +1306,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: clear_content_item_kinds"
+        "Round 115 (lead): verified the content_item_kinds feature surface and runtime wiring, and completed Rust's clear_content_item_kinds semantics: disabled requests keep unrelated passthrough metadata but remove the field and the entire metadata object when it becomes default/empty. Typed Responses Lite messages are covered too. Enabled/disabled/empty-metadata tests and the empty-object-removal RC pass."
       ]
     },
     {

@@ -753,7 +753,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4a358b1ae9ea579f1e4f542965b2f5f3dc67f5d1	47951	Use prebuilt V8 archives for Bazel on macOS and GNU Linux (#47951)	2026-09-24	core	0	0		0	0	not_applicable	
 4a8cfe6bb7a4ac90ca38f932627a214d7b10567b	47121	Pass thread IDs to attachment uploads (#47121)	2026-09-21	persistence	0	0		0	0	not_applicable	
 4a93bd249a4e73e24c3cc889053c947c6986362a	53485	Update `quinn-proto` to 0.11.18 (#53485)	2026-10-12	core	0	0		0	0	not_applicable	
-4aa52f2cb2cdffa9c826f9e4e421a5435a05af06	40450	Gate content item kinds behind a feature flag (#40450)	2026-08-24	model	1	0	0.00	0	0	implementation_pending	clear_content_item_kinds
+4aa52f2cb2cdffa9c826f9e4e421a5435a05af06	40450	Gate content item kinds behind a feature flag (#40450)	2026-08-24	model	1	1	1.00	0	0	complete	
 4aa94dce270de668eff6e2fa8585c82385e84455	52707	Migrate the Windows MXC sandbox to split MXC crates (#52707)	2026-10-09	sandbox	0	0		0	0	blocked_precondition	
 4aaee872e31abefe0d32e91faab23b09b6968824	51539	Add completion-aware realtime attachment and session-scoped detach (#51539)	2026-10-07	realtime	2	1	0.50	0	0	audit_pending	handle_attach
 4abcb8d1dacc1343c7695acf815b096089e5fe9e	46710	Restore rich tool details in persisted TUI transcripts (#46710)	2026-09-19	tui	12	3	0.25	0	0	audit_pending	CommandHistory,DynamicToolCallCell,McpHistory,from_item,historical_tool_fallback,into_cell,mark_interrupted,update_from_item,with_activity_id
