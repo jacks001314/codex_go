@@ -231,10 +231,11 @@ type ToolMessages struct {
 type ToolMessage struct {
 	Description *string `json:"description,omitempty"`
 	// Parameters is a complete JSON Schema encoded as a string, consumed by the
-	// Multi-Agent V2 tools only (Rust #46505). Missing, null, invalid or
+	// Multi-Agent V2 tools (Rust #46505) and by request_user_input_async through
+	// the send_user_message_async entry (Rust #47773). Missing, null, invalid or
 	// unsupported structures, or a root without `type: "object"` retain the
-	// harness parameters; overrides must declare harness-encrypted properties so
-	// their annotations can be retained.
+	// harness parameters; Multi-Agent overrides must also declare
+	// harness-encrypted properties so their annotations can be retained.
 	Parameters *string `json:"parameters,omitempty"`
 }
 
@@ -293,6 +294,28 @@ func (m *ModelMessages) MultiAgentToolParametersOverride(toolName string) *strin
 		return nil
 	}
 	return tool.Parameters
+}
+
+// RequestUserInputAsyncDescription returns the catalog description for
+// request_user_input_async. The tool shares the send_user_message_async catalog
+// entry (Rust #47773, ResolvedModelMessages::request_user_input_async_description);
+// nil keeps the bundled description.
+func (m *ModelMessages) RequestUserInputAsyncDescription() *string {
+	if m == nil || m.Tools == nil || m.Tools.SendUserMessageAsync == nil {
+		return nil
+	}
+	return m.Tools.SendUserMessageAsync.Description
+}
+
+// RequestUserInputAsyncParametersOverride returns the catalog JSON Schema
+// string for request_user_input_async, or nil to keep the bundled schema. The
+// value comes from the send_user_message_async entry (Rust #47773); parsing
+// belongs to the tool consumer.
+func (m *ModelMessages) RequestUserInputAsyncParametersOverride() *string {
+	if m == nil || m.Tools == nil || m.Tools.SendUserMessageAsync == nil {
+		return nil
+	}
+	return m.Tools.SendUserMessageAsync.Parameters
 }
 
 func (m *ModelMessages) UnmarshalJSON(data []byte) error {

@@ -682,6 +682,48 @@ func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+// request_user_input_async resolves its description and parameter override
+// from the send_user_message_async catalog entry (Rust #47773).
+func TestModelMessagesRequestUserInputAsyncCatalogEntryLikeRust(t *testing.T) {
+	var messages ModelMessages
+	document := `{"tools":{"send_user_message_async":{"description":"Catalog async text.","parameters":"{\"type\":\"object\"}"}}}`
+	if err := json.Unmarshal([]byte(document), &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := messages.RequestUserInputAsyncDescription(); got == nil || *got != "Catalog async text." {
+		t.Fatalf("description = %#v", got)
+	}
+	if got := messages.RequestUserInputAsyncParametersOverride(); got == nil || *got != `{"type":"object"}` {
+		t.Fatalf("parameters = %#v", got)
+	}
+
+	// An explicit empty description is preserved; a missing parameters field
+	// keeps the bundled schema (nil).
+	var empty ModelMessages
+	if err := json.Unmarshal([]byte(`{"tools":{"send_user_message_async":{"description":""}}}`), &empty); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got := empty.RequestUserInputAsyncDescription(); got == nil || *got != "" {
+		t.Fatalf("empty description = %#v", got)
+	}
+	if got := empty.RequestUserInputAsyncParametersOverride(); got != nil {
+		t.Fatalf("missing parameters = %#v, want nil", got)
+	}
+
+	// No catalog entry at all resolves to nil for both.
+	var missing ModelMessages
+	if got := missing.RequestUserInputAsyncDescription(); got != nil {
+		t.Fatalf("missing description = %#v, want nil", got)
+	}
+	if got := missing.RequestUserInputAsyncParametersOverride(); got != nil {
+		t.Fatalf("missing parameters = %#v, want nil", got)
+	}
+	var nilMessages *ModelMessages
+	if nilMessages.RequestUserInputAsyncDescription() != nil || nilMessages.RequestUserInputAsyncParametersOverride() != nil {
+		t.Fatal("nil ModelMessages should resolve to nil overrides")
+	}
+}
+
 func TestModelMessagesMultiAgentProactiveRoundTrip(t *testing.T) {
 	proactive := "Use proactive delegation from the model catalog."
 	messages := ModelMessages{
