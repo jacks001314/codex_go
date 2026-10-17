@@ -29,6 +29,12 @@ type SuggestedPluginList struct {
 	Plugins []SuggestedPlugin
 }
 
+type suggestedPluginFetch struct {
+	done chan struct{}
+	list *SuggestedPluginList
+	err  error
+}
+
 type SuggestedPlugin struct {
 	ID              string
 	RemotePluginID  string
@@ -143,10 +149,14 @@ func (s *PluginService) SetSuggestedPluginProviderWithKey(provider SuggestedPlug
 		s.suggestedProvider = nil
 		s.suggestedProviderKey = ""
 		s.suggestedCache = nil
+		s.suggestedGeneration++
+		s.suggestedFetch = nil
 		return
 	}
 	if s.suggestedProviderKey != key {
 		s.suggestedCache = nil
+		s.suggestedGeneration++
+		s.suggestedFetch = nil
 	}
 	s.suggestedProvider = provider
 	s.suggestedProviderKey = key
@@ -158,6 +168,8 @@ func (s *PluginService) ClearRecommendedPluginsCache() {
 	}
 	s.mu.Lock()
 	s.suggestedCache = nil
+	s.suggestedGeneration++
+	s.suggestedFetch = nil
 	s.mu.Unlock()
 }
 
@@ -165,33 +177,78 @@ func (s *PluginService) suggestedDiscoverableCandidates(ctx context.Context, det
 	if s == nil {
 		return nil, false
 	}
+	suggested, err := s.suggestedPluginList(ctx)
+	if err != nil || suggested == nil {
+		return nil, false
+	}
+	if !suggested.Enabled {
+		return nil, false
+	}
+	return discoverableCandidatesFromSuggested(suggested.Plugins, details), true
+}
+
+// PrewarmSuggestedPlugins fetches and publishes the recommendation catalog
+// without requiring plugin details. Context construction still filters the
+// cached list against installed/disabled plugins.
+func (s *PluginService) PrewarmSuggestedPlugins(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	_, _ = s.suggestedPluginList(ctx)
+}
+
+// suggestedPluginList returns the published recommendation list or joins one
+// in-flight fetch. A fetch invalidated by ClearRecommendedPluginsCache or a
+// provider change returns its result to existing waiters without repopulating
+// the cache (Rust #41375).
+func (s *PluginService) suggestedPluginList(ctx context.Context) (*SuggestedPluginList, error) {
+	if s == nil {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
 	provider := s.suggestedProvider
 	providerKey := s.suggestedProviderKey
 	cached := cloneSuggestedPluginList(s.suggestedCache)
-	s.mu.Unlock()
-	if provider == nil {
-		return nil, false
-	}
-	if cached == nil {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		fetched, err := provider.ListSuggestedPlugins(ctx)
-		if err != nil || fetched == nil {
-			return nil, false
-		}
-		cached = cloneSuggestedPluginList(fetched)
-		s.mu.Lock()
-		if s.suggestedProviderKey == providerKey {
-			s.suggestedCache = cloneSuggestedPluginList(fetched)
-		}
+	if cached != nil {
 		s.mu.Unlock()
+		return cached, nil
 	}
-	if !cached.Enabled {
-		return nil, false
+	if provider == nil {
+		s.mu.Unlock()
+		return nil, nil
 	}
-	return discoverableCandidatesFromSuggested(cached.Plugins, details), true
+	if fetch := s.suggestedFetch; fetch != nil {
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-fetch.done:
+			return cloneSuggestedPluginList(fetch.list), fetch.err
+		}
+	}
+	fetch := &suggestedPluginFetch{done: make(chan struct{})}
+	generation := s.suggestedGeneration
+	s.suggestedFetch = fetch
+	s.mu.Unlock()
+
+	fetched, err := provider.ListSuggestedPlugins(ctx)
+	s.mu.Lock()
+	fetch.list = cloneSuggestedPluginList(fetched)
+	fetch.err = err
+	if s.suggestedFetch == fetch {
+		s.suggestedFetch = nil
+	}
+	if err == nil && fetched != nil &&
+		s.suggestedGeneration == generation &&
+		s.suggestedProviderKey == providerKey {
+		s.suggestedCache = cloneSuggestedPluginList(fetched)
+	}
+	close(fetch.done)
+	s.mu.Unlock()
+	return cloneSuggestedPluginList(fetched), err
 }
 
 func discoverableCandidatesFromSuggested(plugins []SuggestedPlugin, details []PluginDetail) []DiscoverableInfo {

@@ -5024,6 +5024,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	modelID = threadStartProviderFallbackModel(modelID, providerID, params.AllowProviderModelFallback)
 	reasoningEffort := firstNonEmpty(stringConfigValue(cfg, "model_reasoning_effort"), stringConfigValue(cfg, "modelReasoningEffort"))
 	serviceTier := r.threadStartServiceTier(cfg, &params, modelID)
+	r.prewarmSuggestedPluginsForThreadStart(cfg)
 	response.ApprovalPolicy = params.ApprovalPolicy
 	response.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
 	response.Sandbox = threadStartResponseSandbox(params.Sandbox)

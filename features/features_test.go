@@ -17,6 +17,26 @@ func TestKnownFeature(t *testing.T) {
 	}
 }
 
+func TestPluginRecommendationsEnabledLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values map[string]bool
+		want   bool
+	}{
+		{name: "tool suggest", values: map[string]bool{"apps": true, "plugins": true, "tool_suggest": true}, want: true},
+		{name: "recommended plugins", values: map[string]bool{"apps": true, "plugins": true, "recommended_plugins": true}, want: true},
+		{name: "both disabled", values: map[string]bool{"apps": true, "plugins": true, "tool_suggest": false, "recommended_plugins": false}, want: false},
+		{name: "apps disabled", values: map[string]bool{"apps": false, "plugins": true, "tool_suggest": true}, want: false},
+		{name: "plugins disabled", values: map[string]bool{"apps": true, "plugins": false, "recommended_plugins": true}, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := PluginRecommendationsEnabled(test.values); got != test.want {
+				t.Fatalf("PluginRecommendationsEnabled(%#v) = %v, want %v", test.values, got, test.want)
+			}
+		})
+	}
+}
+
 func TestIncrementalToolsFeatureRegisteredLikeRust(t *testing.T) {
 	// Rust (codex-rs/features/src/lib.rs #50464): an under-development,
 	// default-disabled flag exposed for top-level and profile feature settings.

@@ -1475,7 +1475,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8b79d8a5f537068a9128687af2dd5c1a5fac01ac	46879	Count TUI launches by fullscreen transcript configuration (#46879)	2026-09-20	tui	0	0		0	0	not_applicable	
 8b8ee28a9b0df8188fec8d4e3855a7b3af3ed8a2	42451	Acknowledge pending TUI steers by submission ID (#42451)	2026-09-03	tui	1	1	1.00	0	0	complete	
 8bbe8f8702471b90c75df20104bf91d20001b0d7	47623	Fix read-only metadata mount ordering for nested writable roots (#47623)	2026-09-23	sandbox	0	0		0	0	not_applicable	
-8bcac28f93f78b70d1159d97dbf11254bfb56a49	41375	Preload plugin recommendations during session startup (#41375)	2026-08-28	plugins	1	0	0.00	0	0	implementation_pending	plugin_recommendations_enabled
+8bcac28f93f78b70d1159d97dbf11254bfb56a49	41375	Preload plugin recommendations during session startup (#41375)	2026-08-28	plugins	1	1	1.00	0	0	complete	
 8bd5a136ffabf5cd4868f9eb8aff298d1f25d8ef	49119	Add recovery guidance to content-filter retries (#49119)	2026-09-29	guardian	2	2	1.00	0	0	complete	
 8c0f7011674145da7e10627769fb221c74fbf7a0	53049	Add connection-bound reply handles for app-server requests (#53049)	2026-10-11	tui	8	4	0.50	0	0	audit_pending	AppServerReplyHandle,reject_server_request,resolve_server_request,server_request_reply_handle
 8c3612fb638d356579c446de68421288164484dc	49444	Use `memrchr` to find newlines in reverse JSONL scans (#49444)	2026-09-30	persistence	0	0		0	0	not_applicable	

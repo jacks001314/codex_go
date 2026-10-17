@@ -4140,9 +4140,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: plugin_recommendations_enabled"
+        "Round 115 (lead): recommendation-enabled gating is centralized in features; plugin suggestions use a generation-guarded single-flight cache, stale completions cannot republish after clear/provider changes, prewarm populates the same cache, and thread startup launches prewarm without blocking initial context construction. Stale-fetch RC and plugin/features tests pass."
       ]
     },
     {

@@ -1391,6 +1391,8 @@ type PluginService struct {
 	suggestedProvider             SuggestedPluginProvider
 	suggestedProviderKey          string
 	suggestedCache                *SuggestedPluginList
+	suggestedGeneration           uint64
+	suggestedFetch                *suggestedPluginFetch
 	shareBackend                  PluginShareBackend
 	codexHome                     string
 	authMode                      string

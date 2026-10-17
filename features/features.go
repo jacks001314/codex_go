@@ -414,6 +414,15 @@ func Enabled(settings map[string]bool, key string) bool {
 	return enabled
 }
 
+// PluginRecommendationsEnabled reports whether apps/plugins and either
+// plugin-suggestion surface are enabled (Rust
+// Features::plugin_recommendations_enabled, #41375).
+func PluginRecommendationsEnabled(settings map[string]bool) bool {
+	return Enabled(settings, "apps") &&
+		Enabled(settings, "plugins") &&
+		(Enabled(settings, "tool_suggest") || Enabled(settings, "recommended_plugins"))
+}
+
 func ModelClientBetaFeaturesHeader(settings map[string]bool) string {
 	effective := Defaults()
 	for key, enabled := range settings {

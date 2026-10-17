@@ -8893,6 +8893,23 @@ func (r *RuntimeRouter) configureSuggestedPluginProviderForTurn(cfg *config.Conf
 	r.services.Plugins.SetSuggestedPluginProviderWithKey(provider, strings.TrimRight(strings.TrimSpace(baseURL), "/"))
 }
 
+// prewarmSuggestedPluginsForThreadStart overlaps the recommendation catalog
+// request with the remaining thread initialization work. Context construction
+// still filters and injects the cached result (Rust #41375).
+func (r *RuntimeRouter) prewarmSuggestedPluginsForThreadStart(cfg *config.Config) {
+	if r == nil || r.services.Plugins == nil || cfg == nil ||
+		!features.PluginRecommendationsEnabled(cfg.FeatureSettings()) {
+		return
+	}
+	r.configureSuggestedPluginProviderForTurn(cfg)
+	service := r.services.Plugins
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		service.PrewarmSuggestedPlugins(ctx)
+	}()
+}
+
 func suggestedPluginAccessTokenFromAuth(snapshot *auth.AuthDotJSON) string {
 	if snapshot == nil || snapshot.Tokens == nil {
 		return ""
@@ -8922,10 +8939,7 @@ func suggestedPluginsEnabledForConfig(cfg *config.Config) bool {
 	if cfg == nil {
 		return false
 	}
-	settings := cfg.FeatureSettings()
-	return features.Enabled(settings, "apps") &&
-		features.Enabled(settings, "plugins") &&
-		(features.Enabled(settings, "tool_suggest") || features.Enabled(settings, "recommended_plugins"))
+	return features.PluginRecommendationsEnabled(cfg.FeatureSettings())
 }
 
 func sortedBoolKeys(values map[string]bool) []string {
