@@ -108,3 +108,47 @@ func TestAuthUsesAPIKey(t *testing.T) {
 		t.Fatal("nil auth must not be treated as an API key")
 	}
 }
+
+// Mirrors Rust #46561: a custom inference base URL alone does not opt API-key
+// sessions into remote catalog discovery; an explicit model_catalog_url does.
+func TestCustomBaseURLNeedsExplicitCatalogURLForDiscoveryLikeRust(t *testing.T) {
+	apiKeyAuth := &auth.AuthDotJSON{AuthMode: "api-key", OpenAIAPIKey: "sk-test"}
+	provider := CreateRuntimeProvider(CreateOpenAIProvider("https://example.com/codex"), apiKeyAuth)
+	configured, ok := provider.(*ConfiguredProvider)
+	if !ok {
+		t.Fatalf("provider type = %T", provider)
+	}
+	manager, ok := configured.ModelsManager(nil).(*RemoteModelsManager)
+	if !ok {
+		t.Fatalf("manager type = %T", configured.ModelsManager(nil))
+	}
+	if manager.SupportsAPIKeyDiscovery() {
+		t.Fatal("custom base URL without catalog URL enabled API-key discovery")
+	}
+	endpoint := &recordingModelsEndpoint{responses: []*ModelsEndpointResponse{{Models: []ModelInfo{{
+		Slug: "remote-only", Visibility: VisibilityList, SupportedInAPI: true,
+	}}}}}
+	manager.endpoint = endpoint
+	manager.SetAPIKeyModelDiscoveryEnabled(true)
+	catalog := manager.RawModelCatalog(RefreshOnline)
+	if endpoint.calls != 0 {
+		t.Fatalf("disabled discovery made %d requests, want 0", endpoint.calls)
+	}
+	if len(catalog.Models) == 1 && catalog.Models[0].Slug == "remote-only" {
+		t.Fatal("custom base URL reused a remote catalog without an explicit catalog URL")
+	}
+
+	configured.info.ModelCatalogURL = "https://example.com/codex/models"
+	explicitProvider := CreateRuntimeProvider(configured.info, apiKeyAuth)
+	explicit, ok := explicitProvider.(*ConfiguredProvider)
+	if !ok {
+		t.Fatalf("explicit provider type = %T", explicitProvider)
+	}
+	explicitManager, ok := explicit.ModelsManager(nil).(*RemoteModelsManager)
+	if !ok {
+		t.Fatalf("explicit manager type = %T", explicit.ModelsManager(nil))
+	}
+	if !explicitManager.SupportsAPIKeyDiscovery() {
+		t.Fatal("explicit model_catalog_url did not enable API-key discovery")
+	}
+}

@@ -1433,7 +1433,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 883af106b957d21cba92121f70ce68bf58ecea50	45809	Retire the personality feature flag and document deprecated settings (#45809)	2026-09-15	appserver	0	0		0	0	not_applicable	
 885113aa1d68ccbc567b83698feac3cd42163088	44288	Prevent command hooks from hanging on blocked stdin (#44288)	2026-09-09	core	0	0		0	0	not_applicable	
 888948e5229d094021b2329347098bf376141921	48197	Optimize `blake3` in Bazel fastbuilds (#48197)	2026-09-25	core	0	0		0	0	not_applicable	
-888be42a20c5a727214d898c4e335ac2e27161af	46561	Support explicit provider model catalog URLs (#46561)	2026-09-18	guardian	2	1	0.50	0	0	audit_pending	without_request_logging
+888be42a20c5a727214d898c4e335ac2e27161af	46561	Support explicit provider model catalog URLs (#46561)	2026-09-18	guardian	2	2	1.00	0	0	complete	
 888e02db34bc6fe226e2131448413c051491f5b8	47389	Enforce network policy throughout HTTP and WebSocket requests (#47389)	2026-09-22	tui	44	25	0.57	0	0	audit_pending	ConnectionInner,HttpClientBackend,ProxyRouting,RequestBuilder,StartupSyncHttpClient,TransportClient,apply_default_headers,bearer_auth,body_stream,build_with_custom_ca_fallback
 88912c04cd1180becf77f7a74e3b10351f0779bb	42413	Enable coordinated MCP OAuth refresh (#42413)	2026-09-03	mcp	7	2	0.29	0	0	audit_pending	OAuthRuntime,PROACTIVE_REFRESH_TIMEOUT,REFRESH_REQUEST_TIMEOUT,acquire_transaction_guard,refresh_if_needed
 88b498ded45c7a7ce6c57b4d8cd48ce9639c0a3e	47617	Route Linux PTY launches through the process setup helper (#47617)	2026-09-23	core	4	2	0.50	0	0	audit_pending	configure_child_terminal,is_available

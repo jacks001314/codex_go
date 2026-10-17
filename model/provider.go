@@ -301,12 +301,18 @@ func (p *ConfiguredProvider) ModelsManager(configCatalog *ModelsResponse) Models
 	}
 	endpoint := NewHTTPModelsEndpoint(&apiProvider, &authHeaders, nil)
 	endpoint.CatalogURL = strings.TrimSpace(p.info.ModelCatalogURL)
+	customBaseURL := strings.TrimSpace(p.info.BaseURL) != ""
+	// Rust #46561: a custom inference base URL alone must not opt API-key
+	// sessions into remote catalog discovery; an explicit model_catalog_url is
+	// required.
+	disableAPIKeyDiscovery := usesAPIKeyAuth && customBaseURL && strings.TrimSpace(p.info.ModelCatalogURL) == ""
 	return NewRemoteModelsManagerWithOptions(&RemoteModelsManagerOptions{
 		Endpoint:                        endpoint,
 		UseRemoteCatalogAsSourceOfTruth: authHasChatGPTAccount(p.auth),
 		Identity:                        ModelsCatalogIdentity(&p.info, p.auth, &authHeaders, p.residency),
 		SupportsAPIKeyModels:            supportsAPIKeyModels,
 		APIKeyAuth:                      usesAPIKeyAuth,
+		DisableAPIKeyDiscovery:          disableAPIKeyDiscovery,
 		HasAuth:                         p.auth != nil,
 		CommandAuth:                     p.info.HasCommandAuth(),
 	})

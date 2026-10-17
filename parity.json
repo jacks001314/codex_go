@@ -1342,6 +1342,14 @@
             "reason": "Aligned upstream deb1471166 (#42404 Read voice helper frames independently of pipe chunks): VoiceHost owns one persistent frame reader over the helper stdout, decoding complete frames regardless of pipe chunk boundaries and preserving late frames across a timed-out exchange for the next handshake/shutdown response. This removes the abandoned per-request read goroutine that could race the next reader.",
             "userImpact": "Voice helper handshake/shutdown exchanges no longer lose or misread frames when pipe output is split, coalesced, or arrives after a timeout.",
             "test": "go test ./voicehost -run 'TestVoiceHostFrameReaderHandlesSplitAndCoalescedFramesLikeRust|TestVoiceHostRequestRetainsLateFrameLikeRust' -count=1"
+        },
+        {
+            "id": "provider-model-catalog-url",
+            "status": "done",
+            "area": "model",
+            "reason": "Aligned upstream 888be42a20 (#46561 Support explicit provider model catalog URLs): model_catalog_url is parsed and serialized, fetched as a full URL with provider auth/headers/client_version, bounded to 1 MiB, rejects redirects, scoped into cache identity, and gated by api_key_model_discovery. A custom inference base_url without an explicit catalog URL now disables remote API-key catalog discovery and cached-catalog reuse while preserving bundled models and inference routing.",
+            "userImpact": "Providers can serve model metadata independently of their inference endpoint without accidentally opting custom base URLs into remote discovery.",
+            "test": "go test ./model -run 'TestCustomBaseURLNeedsExplicitCatalogURLForDiscoveryLikeRust|TestAPIKeyModelDiscoveryGateAndAuthoritativeCatalog|TestConfiguredProviderRoutesAPIKeyModelDiscoveryToCodexBackend' -count=1"
         }
     ]
 }

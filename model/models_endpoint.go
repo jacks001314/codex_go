@@ -85,7 +85,7 @@ func (m *RemoteModelsManager) SupportsAPIKeyDiscovery() bool {
 	if m == nil {
 		return false
 	}
-	return m.supportsAPIKeyModels && !m.commandAuth && m.apiKeyAuth
+	return !m.apiKeyDiscoveryDisabled && m.supportsAPIKeyModels && !m.commandAuth && m.apiKeyAuth
 }
 
 // metricsAuthMode mirrors Rust's `metric_auth_mode` for the remote-model fetch
@@ -234,11 +234,14 @@ type RemoteModelsManager struct {
 	// key (Rust #44392). apiKeyAuth reports that API-key auth is in use, either
 	// from an explicit provider key or an OpenAI API-key login (Rust
 	// `uses_api_key_auth`). Discovery stays disabled until the feature opts in.
-	supportsAPIKeyModels        bool
-	apiKeyAuth                  bool
-	hasAuth                     bool
-	metricsAuthModeOverride     string
-	commandAuth                 bool
+	supportsAPIKeyModels    bool
+	apiKeyAuth              bool
+	hasAuth                 bool
+	metricsAuthModeOverride string
+	commandAuth             bool
+	// apiKeyDiscoveryDisabled mirrors Rust #46561: a custom inference base URL
+	// without an explicit model_catalog_url must not opt into remote discovery.
+	apiKeyDiscoveryDisabled     bool
 	apiKeyModelDiscoveryEnabled bool
 	now                         func() time.Time
 }
@@ -275,6 +278,9 @@ type RemoteModelsManagerOptions struct {
 	// CommandAuth reports whether the provider resolves credentials through a
 	// command, which keeps the bundled API-key catalog.
 	CommandAuth bool
+	// DisableAPIKeyDiscovery blocks remote API-key catalog discovery while
+	// leaving API-key inference and bundled models available (#46561).
+	DisableAPIKeyDiscovery bool
 }
 
 func NewRemoteModelsManager(modelCatalog *ModelsResponse, endpoint ModelsEndpoint) *RemoteModelsManager {
@@ -302,6 +308,7 @@ func NewRemoteModelsManagerWithOptions(options *RemoteModelsManagerOptions) *Rem
 		hasAuth:                         options.HasAuth,
 		metricsAuthModeOverride:         strings.TrimSpace(options.MetricsAuthMode),
 		commandAuth:                     options.CommandAuth,
+		apiKeyDiscoveryDisabled:         options.DisableAPIKeyDiscovery,
 		now:                             time.Now,
 	}
 }
@@ -466,7 +473,7 @@ func (m *RemoteModelsManager) refreshAvailableModels(strategy RefreshStrategy) {
 	// so a custom base URL without `model_catalog_url` keeps the bundled models
 	// even when an earlier run cached one. Command-auth providers retain their
 	// existing discovery behavior.
-	if m.apiKeyAuth && !m.commandAuth && (!m.supportsAPIKeyModels || !m.apiKeyModelDiscoveryEnabledValue()) {
+	if m.apiKeyAuth && !m.commandAuth && (m.apiKeyDiscoveryDisabled || !m.supportsAPIKeyModels || !m.apiKeyModelDiscoveryEnabledValue()) {
 		return
 	}
 	switch strategy {
