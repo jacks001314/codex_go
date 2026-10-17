@@ -103,6 +103,7 @@ func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, c
 		RevisedPromptPresent:   threadItemStringPtrFromData(item.Data, "revisedPrompt", "revised_prompt") != nil,
 		SavedPathPresent:       threadItemStringPtrFromData(item.Data, "savedPath", "saved_path") != nil,
 		TransparentBackground:  threadItemBoolPtrFromData(item.Data, "transparentBackground", "transparent_background"),
+		ImagegenRequestID:      stringPtrIfNotEmpty(r.takeImageGenerationRequestID(threadID, firstNonEmpty(item.CallID, item.ID))),
 	}
 	r.emitToolEvent(threadID, turnID, &params.CodexToolItemEventBase, func() {
 		sink.TrackCodexImageGenerationEvent(ctx, telemetry.NewCodexImageGenerationEvent(params))

@@ -34,6 +34,10 @@ const (
 	imageGenerationDefaultDetail = "high"
 	imageGenerationOutputPrefix  = "data:image/png;base64,"
 	imageTurnIDHeader            = "x-codex-image-turn-id"
+	// imagegenRequestIDHeader carries the nested ImageGen service request id
+	// (Rust #47327). It is retained only for in-process analytics; serialized
+	// items and rollout records must not include it.
+	imagegenRequestIDHeader = "x-codex-imagegen-request-id"
 )
 
 type ImageGenerationOptions struct {
@@ -50,6 +54,10 @@ type ImageGenerationOptions struct {
 	Ephemeral  bool
 	HTTPClient model.HTTPDoer
 	InputItems []any
+	// RequestIDObserver receives the nested ImageGen request id observed for one
+	// call so analytics can retain it without serializing it on the item (Rust
+	// #47327 `ImageGenerationItem::imagegen_request_id` is `#[serde(skip)]`).
+	RequestIDObserver func(threadID string, callID string, requestID string)
 }
 
 type ImageGenerationHandler struct {
@@ -82,8 +90,10 @@ type imageGenerationRequest struct {
 // imageGenerationAPIError carries the usage-limit failure (if any) alongside
 // the API error message (Rust #38024).
 type imageGenerationAPIError struct {
-	message string
-	failure map[string]any
+	message   string
+	failure   map[string]any
+	requestID string
+	cause     error
 }
 
 func (e *imageGenerationAPIError) Error() string {
@@ -91,6 +101,47 @@ func (e *imageGenerationAPIError) Error() string {
 		return ""
 	}
 	return e.message
+}
+
+func (e *imageGenerationAPIError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+// imageGenerationRequestError is a failure with a nested ImageGen request id
+// but no usage-limit classification (decode failures and empty image data).
+type imageGenerationRequestError struct {
+	message   string
+	requestID string
+	cause     error
+}
+
+func (e *imageGenerationRequestError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *imageGenerationRequestError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func imageGenerationErrorRequestID(err error) string {
+	var apiErr *imageGenerationAPIError
+	if errors.As(err, &apiErr) {
+		return strings.TrimSpace(apiErr.requestID)
+	}
+	var requestErr *imageGenerationRequestError
+	if errors.As(err, &requestErr) {
+		return strings.TrimSpace(requestErr.requestID)
+	}
+	return ""
 }
 
 func NewImageGenerationHandler(options *ImageGenerationOptions) *ImageGenerationHandler {
@@ -130,8 +181,12 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	if err != nil {
 		return imageGenerationErrorOutput(invocation, args.Prompt, err.Error()), nil
 	}
-	result, transparentBackground, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
+	result, transparentBackground, requestID, err := h.executeImageRequest(ctx, request, imageGenerationTurnID(invocation))
 	if err != nil {
+		if requestID == "" {
+			requestID = imageGenerationErrorRequestID(err)
+		}
+		h.observeImageGenerationRequestID(invocation, requestID)
 		var apiErr *imageGenerationAPIError
 		failure := map[string]any(nil)
 		if errors.As(err, &apiErr) {
@@ -141,6 +196,7 @@ func (h *ImageGenerationHandler) Execute(ctx context.Context, invocation *tool.I
 	}
 	result = strings.TrimSpace(result)
 	if result == "" {
+		h.observeImageGenerationRequestID(invocation, requestID)
 		return imageGenerationErrorOutput(invocation, args.Prompt, "image generation returned no image data"), nil
 	}
 	savedPath := ""
@@ -316,27 +372,41 @@ func (h *ImageGenerationHandler) requestForArgs(ctx context.Context, args *image
 	}, inputImages, nil
 }
 
-func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, error) {
+func (h *ImageGenerationHandler) executeImageRequest(ctx context.Context, request *imageGenerationRequest, turnID string) (string, *bool, string, error) {
 	if request == nil {
-		return "", nil, fmt.Errorf("image request is nil")
+		return "", nil, "", fmt.Errorf("image request is nil")
 	}
 	var response *codexapi.ImageResponse
+	var requestID string
 	var err error
 	switch request.kind {
 	case imageGenerationRequestGenerate:
-		response, err = h.postImageRequest(ctx, "images/generations", request.generate, turnID)
+		response, requestID, err = h.postImageRequest(ctx, "images/generations", request.generate, turnID)
 	case imageGenerationRequestEdit:
-		response, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
+		response, requestID, err = h.postImageRequest(ctx, "images/edits", request.edit, turnID)
 	default:
-		return "", nil, fmt.Errorf("unknown image request kind %q", request.kind)
+		return "", nil, "", fmt.Errorf("unknown image request kind %q", request.kind)
 	}
 	if err != nil {
-		return "", nil, err
+		return "", nil, requestID, err
 	}
 	if response == nil || len(response.Data) == 0 {
-		return "", nil, fmt.Errorf("image generation returned no image data")
+		return "", nil, requestID, &imageGenerationRequestError{
+			message:   "image generation returned no image data",
+			requestID: requestID,
+		}
 	}
-	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), nil
+	return response.Data[0].B64JSON, transparentBackgroundValue(response.Background), requestID, nil
+}
+
+// observeImageGenerationRequestID records the nested ImageGen request id for
+// analytics only; callers must never add it to serialized item data.
+func (h *ImageGenerationHandler) observeImageGenerationRequestID(invocation *tool.Invocation, requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	if h == nil || h.options.RequestIDObserver == nil || requestID == "" || invocation == nil {
+		return
+	}
+	h.options.RequestIDObserver(strings.TrimSpace(h.options.SessionID), invocation.CallID, requestID)
 }
 
 // transparentBackgroundValue mirrors Rust's Images API background mapping:
@@ -357,10 +427,10 @@ func transparentBackgroundValue(background *codexapi.ImageBackground) *bool {
 	}
 }
 
-func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path string, payload any, turnID string) (*codexapi.ImageResponse, error) {
+func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path string, payload any, turnID string) (*codexapi.ImageResponse, string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode image request: %w", err)
+		return nil, "", fmt.Errorf("failed to encode image request: %w", err)
 	}
 	endpoint := (&codexapi.Provider{
 		Name:        h.options.Provider.Name,
@@ -370,7 +440,7 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 	}).URLForPath(path)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if turnID = strings.TrimSpace(turnID); turnID != "" && !strings.ContainsAny(turnID, "\r\n") {
@@ -379,7 +449,7 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 	addHeaderValues(req.Header, h.options.Provider.Headers)
 	signed, err := h.options.Auth.ApplyRequest(ctx, req, body)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if signed != nil && signed.Body != nil {
 		body = signed.Body
@@ -397,12 +467,13 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
+	requestID := strings.TrimSpace(resp.Header.Get(imagegenRequestIDHeader))
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return nil, readErr
+		return nil, requestID, &imageGenerationRequestError{message: readErr.Error(), requestID: requestID, cause: readErr}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := strings.TrimSpace(string(respBody))
@@ -410,15 +481,19 @@ func (h *ImageGenerationHandler) postImageRequest(ctx context.Context, path stri
 			message = resp.Status
 		}
 		if failure := imageGenerationUsageLimitFailure(respBody); failure != nil {
-			return nil, &imageGenerationAPIError{message: message, failure: failure}
+			return nil, requestID, &imageGenerationAPIError{message: message, failure: failure, requestID: requestID}
 		}
-		return nil, errors.New(message)
+		return nil, requestID, &imageGenerationRequestError{message: message, requestID: requestID}
 	}
 	var decoded codexapi.ImageResponse
 	if err := json.Unmarshal(respBody, &decoded); err != nil {
-		return nil, fmt.Errorf("failed to decode image response: %w", err)
+		return nil, requestID, &imageGenerationRequestError{
+			message:   fmt.Sprintf("failed to decode image response: %v", err),
+			requestID: requestID,
+			cause:     err,
+		}
 	}
-	return &decoded, nil
+	return &decoded, requestID, nil
 }
 
 func imageGenerationTurnID(invocation *tool.Invocation) string {

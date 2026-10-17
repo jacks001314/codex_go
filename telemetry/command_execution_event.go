@@ -236,6 +236,10 @@ type CodexImageGenerationEventParams struct {
 	CodexToolItemEventBase
 	RevisedPromptPresent bool `json:"revised_prompt_present"`
 	SavedPathPresent     bool `json:"saved_path_present"`
+	// ImagegenRequestID is the nested ImageGen service request id observed on a
+	// failed call (Rust #47327). It is analytics-only and never serialized on
+	// the thread item or rollout record.
+	ImagegenRequestID *string `json:"imagegen_request_id,omitempty"`
 	// TransparentBackground mirrors Rust #40544: the optional image-generation
 	// transparent-background value is carried in the Analytics event params.
 	TransparentBackground *bool `json:"transparent_background,omitempty"`

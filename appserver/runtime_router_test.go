@@ -20675,6 +20675,7 @@ func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
 			"completedAtMs": completedAtMS,
 		},
 	}
+	router.recordImageGenerationRequestID(threadID, "image-analytics", "req-imagegen-failed-123")
 	router.emitImageGenerationAnalyticsEvent(context.Background(), connectionID, threadID, turnID, &imageItem, &appTurnRunConfig{})
 	imageEvent := waitForImageGenerationAnalyticsEvent(t, analyticsSink, turnID)
 	imageParams := imageEvent.EventParams
@@ -20688,6 +20689,9 @@ func TestRuntimeRouterCollabAndImageToolAnalyticsLikeRust(t *testing.T) {
 		imageParams.FailureKind == nil || *imageParams.FailureKind != telemetry.ToolItemFailureKindToolError ||
 		imageParams.FinalApprovalOutcome != telemetry.FinalApprovalOutcomeUnknown {
 		t.Fatalf("image analytics outcome = %#v", imageParams)
+	}
+	if imageParams.ImagegenRequestID == nil || *imageParams.ImagegenRequestID != "req-imagegen-failed-123" {
+		t.Fatalf("imagegen_request_id = %#v", imageParams.ImagegenRequestID)
 	}
 	if imageParams.StartedAtMS != uint64(startedAtMS) ||
 		imageParams.CompletedAtMS != uint64(completedAtMS) ||

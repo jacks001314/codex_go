@@ -497,6 +497,11 @@ type RuntimeRouter struct {
 	// it when the runtime unloads).
 	messageBoardHandles   map[string]agentboard.Board
 	messageBoardHandlesMu sync.Mutex
+	// imageGenerationRequestIDs holds nested ImageGen request ids observed for
+	// calls until their analytics event is emitted. They are deliberately kept
+	// out of item data and rollout records (Rust #47327 `#[serde(skip)]`).
+	imageGenerationRequestIDsMu sync.Mutex
+	imageGenerationRequestIDs   map[string]string
 	agentActivityMu       sync.Mutex
 	agentActivity         map[string]chan string
 	agentMessagesMu       sync.Mutex

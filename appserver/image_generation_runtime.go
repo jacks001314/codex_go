@@ -53,13 +53,47 @@ func (r *RuntimeRouter) imageGenerationOptionsForTurn(cfg *config.Config, params
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
 	return &turn.ImageGenerationOptions{
-		SessionID:  threadID,
-		CodexHome:  r.codexHomeForRollout(),
-		Provider:   apiProvider,
-		Auth:       authHeaders,
-		HTTPClient: r.httpClientForConfig(cfg),
-		InputItems: r.imageGenerationInputItemsForTurn(threadID, params),
+		SessionID:         threadID,
+		CodexHome:         r.codexHomeForRollout(),
+		Provider:          apiProvider,
+		Auth:              authHeaders,
+		HTTPClient:        r.httpClientForConfig(cfg),
+		InputItems:        r.imageGenerationInputItemsForTurn(threadID, params),
+		RequestIDObserver: r.recordImageGenerationRequestID,
 	}, nil
+}
+
+// recordImageGenerationRequestID keeps the nested ImageGen request id until the
+// failure's analytics event is emitted (Rust #47327). The id never enters item
+// data, so clients and rollout persistence do not observe it.
+func (r *RuntimeRouter) recordImageGenerationRequestID(threadID string, callID string, requestID string) {
+	if r == nil {
+		return
+	}
+	callID = strings.TrimSpace(callID)
+	requestID = strings.TrimSpace(requestID)
+	if callID == "" || requestID == "" {
+		return
+	}
+	key := strings.TrimSpace(threadID) + "\x00" + callID
+	r.imageGenerationRequestIDsMu.Lock()
+	if r.imageGenerationRequestIDs == nil {
+		r.imageGenerationRequestIDs = map[string]string{}
+	}
+	r.imageGenerationRequestIDs[key] = requestID
+	r.imageGenerationRequestIDsMu.Unlock()
+}
+
+func (r *RuntimeRouter) takeImageGenerationRequestID(threadID string, callID string) string {
+	if r == nil {
+		return ""
+	}
+	key := strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(callID)
+	r.imageGenerationRequestIDsMu.Lock()
+	requestID := r.imageGenerationRequestIDs[key]
+	delete(r.imageGenerationRequestIDs, key)
+	r.imageGenerationRequestIDsMu.Unlock()
+	return strings.TrimSpace(requestID)
 }
 
 func (r *RuntimeRouter) hostedToolsForTurn(params *turn.TurnStartParams, turnRuntimes ...*turn.Runtime) ([]any, error) {
