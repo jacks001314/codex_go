@@ -1,8 +1,20 @@
 {
   "schemaVersion": 1,
   "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-  "rustToInclusive": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
+  "rustToInclusive": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
   "commits": [
+    {
+      "sha": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+      "subject": "Add negotiated zstd compression to app-server WebSockets (#54930)",
+      "kind": "protocol",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 284: TCP and local-socket WebSockets negotiate zstd-stream-v1, use persistent zstd streams per direction with binary JSON messages, keep plain text fallback, enforce 1 MiB decoder windows and 64 MiB message limits, and close malformed compressed connections."
+      ]
+    },
     {
       "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
       "subject": "Include context window IDs in response metadata (#39847)",

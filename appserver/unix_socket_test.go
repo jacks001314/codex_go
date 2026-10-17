@@ -16,6 +16,16 @@ import (
 // app-server-client::connect_unix_socket_endpoint).
 func dialControlSocketWebSocket(t *testing.T, socketPath string) *websocket.Conn {
 	t.Helper()
+	conn, _ := dialControlSocketWebSocketWithHeader(t, socketPath, nil)
+	return conn
+}
+
+func dialControlSocketWebSocketWithHeader(
+	t *testing.T,
+	socketPath string,
+	headers map[string][]string,
+) (*websocket.Conn, *http.Response) {
+	t.Helper()
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
 			var dialer net.Dialer
@@ -24,12 +34,13 @@ func dialControlSocketWebSocket(t *testing.T, socketPath string) *websocket.Conn
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		conn, _, err := websocket.Dial(context.Background(), "ws://localhost/rpc", &websocket.DialOptions{
+		conn, response, err := websocket.Dial(context.Background(), "ws://localhost/rpc", &websocket.DialOptions{
 			HTTPClient: &http.Client{Transport: transport},
+			HTTPHeader: headers,
 		})
 		if err == nil {
 			t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
-			return conn
+			return conn, response
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("control socket %s never accepted a websocket connection: %v", socketPath, err)

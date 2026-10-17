@@ -1490,6 +1490,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8d44977aa2fb9ae1b128660668dc5b36966613fa	50131	Add opt-in JSON diagnostics for TCP tunnels (#50131)	2026-10-02	core	6	6	1.00	0	0	complete	
 8d48f71922dcb8b8cb17a9aef63b4a610538a617	49145	Hide reasoning summary settings in `/status` for server connections (#49145)	2026-09-29	tui	0	0		0	0	not_applicable	
 8d7cc24a87f4aa66aa434eb4f25f4f4bafc0e0a9	43282	Make Bazel binary stamping opt-in (#43282)	2026-09-06	tui	0	0		0	0	not_applicable	
+8d9f6466ff0294785d56f55b1fe363d132fe4133	54930	Add negotiated zstd compression to app-server WebSockets (#54930)	2026-10-17	appserver	5	5	1.00	0	0	complete	none
 8dd0a0816064a1cbc57caeb1cd957be8ebcce45b	47962	Request transparent huge pages for Cargo and eligible Bazel rustc jobs (#47962)	2026-09-24	config	0	0		0	0	not_applicable	
 8de2d336b880bed7e6135fedfc2e65e722a744b3	47679	Add extension hooks for model requests and response streams (#47679)	2026-09-23	model	9	1	0.11	0	0	audit_pending	ModelRequestContributor,ModelRequestInput,ModelRequestKind,ModelResponseInterceptor,ModelResponseStream,intercept_stream,model_request_contributor,model_request_contributors
 8e17909b27875b76b1e9a883a604ed24e969d609	47663	Preserve managed network policy in route-aware transports (#47663)	2026-09-23	core	0	0		0	0	not_applicable	

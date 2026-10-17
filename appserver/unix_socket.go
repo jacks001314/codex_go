@@ -239,6 +239,11 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if max := DefaultWebSocketMaxMessageSize; max > 0 {
 		w.Header().Set(maxUnfragmentedMessageBytesHeader, strconv.FormatInt(max, 10))
 	}
+	compression := WebsocketCompressionPlain
+	if r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
+		compression = WebsocketCompressionZstd
+		w.Header().Set(WebsocketCompressionHeader, WebsocketZstdStreamProtocol)
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		return
@@ -246,7 +251,7 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if DefaultWebSocketMaxMessageSize > 0 {
 		conn.SetReadLimit(DefaultWebSocketMaxMessageSize)
 	}
-	_ = serveWebSocketConnection(r.Context(), conn, h.routerFactory())
+	_ = serveWebSocketConnectionWithCompression(r.Context(), conn, h.routerFactory(), compression)
 }
 
 // runDaemonShutdownHandshake reads the owner's PID, echoes it, and asks the

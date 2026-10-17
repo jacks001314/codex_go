@@ -224,6 +224,11 @@ func (s *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	compression := WebsocketCompressionPlain
+	if r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
+		compression = WebsocketCompressionZstd
+		w.Header().Set(WebsocketCompressionHeader, WebsocketZstdStreamProtocol)
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		return
@@ -231,10 +236,19 @@ func (s *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.maxMessageSize > 0 {
 		conn.SetReadLimit(s.maxMessageSize)
 	}
-	_ = serveWebSocketConnection(r.Context(), conn, s.routerFactory())
+	_ = serveWebSocketConnectionWithCompression(r.Context(), conn, s.routerFactory(), compression)
 }
 
 func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router *RuntimeRouter) error {
+	return serveWebSocketConnectionWithCompression(ctx, conn, router, WebsocketCompressionPlain)
+}
+
+func serveWebSocketConnectionWithCompression(
+	ctx context.Context,
+	conn *websocket.Conn,
+	router *RuntimeRouter,
+	compression WebsocketCompression,
+) error {
 	if conn == nil {
 		return errors.New("app-server websocket connection is nil")
 	}
@@ -249,6 +263,24 @@ func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer conn.Close(websocket.StatusNormalClosure, "")
+	var compressor *ZstdEncoder
+	var decompressor *ZstdDecoder
+	if compression == WebsocketCompressionZstd {
+		var err error
+		compressor, err = NewZstdEncoder()
+		if err != nil {
+			_ = conn.Close(websocket.StatusInternalError, "websocket compression initialization failed")
+			return err
+		}
+		decompressor, err = NewZstdDecoder(MaxWebsocketDecompressedMessageSize)
+		if err != nil {
+			_ = compressor.Close()
+			_ = conn.Close(websocket.StatusInternalError, "websocket compression initialization failed")
+			return err
+		}
+		defer compressor.Close()
+		defer decompressor.Close()
+	}
 	connectionID := fmt.Sprintf("websocket-%d", atomic.AddUint64(&websocketConnectionCounter, 1))
 	var cleanupOnce sync.Once
 	cleanupConnection := func() {
@@ -280,6 +312,13 @@ func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router 
 		defer cancel()
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		if compressor != nil {
+			payload, err := compressor.Encode(string(data))
+			if err != nil {
+				return err
+			}
+			return conn.Write(writeCtx, websocket.MessageBinary, payload)
+		}
 		return conn.Write(writeCtx, websocket.MessageText, data)
 	}
 
@@ -315,11 +354,28 @@ func serveWebSocketConnection(ctx context.Context, conn *websocket.Conn, router 
 			}
 			return err
 		}
-		if messageType != websocket.MessageText {
+		switch {
+		case compression == WebsocketCompressionZstd && messageType != websocket.MessageBinary:
+			_ = conn.Close(websocket.StatusUnsupportedData, "app-server websocket expects compressed binary JSON messages")
+			cleanupConnection()
+			requests.Wait()
+			return fmt.Errorf("%w: app-server websocket expects compressed binary JSON messages", ErrInvalidRequest)
+		case compression == WebsocketCompressionPlain && messageType != websocket.MessageText:
 			_ = conn.Close(websocket.StatusUnsupportedData, "app-server websocket expects text JSON messages")
 			cleanupConnection()
 			requests.Wait()
 			return fmt.Errorf("%w: app-server websocket expects text JSON messages", ErrInvalidRequest)
+		case decompressor != nil:
+			decodeCtx, cancelDecode := context.WithTimeout(ctx, websocketCompressionDecodeTimeout)
+			decoded, err := decompressor.DecodeContext(decodeCtx, data)
+			cancelDecode()
+			if err != nil {
+				_ = conn.Close(websocket.StatusUnsupportedData, "invalid compressed JSON message")
+				cleanupConnection()
+				requests.Wait()
+				return fmt.Errorf("%w: invalid compressed JSON message: %v", ErrInvalidRequest, err)
+			}
+			data = []byte(decoded)
 		}
 		data = []byte(strings.TrimSpace(string(data)))
 		if len(data) == 0 {
