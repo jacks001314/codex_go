@@ -15,11 +15,13 @@ Rust source: `703d253ed6`.
   returned metadata.
 - Request sandbox context is forwarded through the existing V1 discovery
   filesystem operations.
+- The client retries V2 discovery once with the original request parameters
+  after a recoverable executor disconnect.
 
 ## Remaining for full parity
 
 - Startup/prewarmed location cache and on-demand retry after prewarm failure.
-- Replay once after executor recovery while preserving request parameters.
+- Prewarm/watch-backed replay and cache invalidation after recovery.
 - Filesystem watch registration success tracking and request-time reload when
   registration fails.
 

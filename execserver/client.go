@@ -1167,6 +1167,16 @@ func (c *Client) DiscoverCapabilitiesV2(ctx context.Context, params *DiscoverV2C
 	if params == nil || strings.TrimSpace(params.CWD) == "" {
 		return nil, errors.New("capabilities/discoverV2 cwd is required")
 	}
+	response, err := c.discoverCapabilitiesV2Once(ctx, params)
+	if err != nil && IsRetryableRecoveryError(err) {
+		// Preserve the original request while replaying once after a recoverable
+		// executor disconnect.
+		response, err = c.discoverCapabilitiesV2Once(ctx, params)
+	}
+	return response, err
+}
+
+func (c *Client) discoverCapabilitiesV2Once(ctx context.Context, params *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
 	var response DiscoverV2CapabilitiesResponse
 	if err := c.call(ctx, MethodCapabilitiesDiscoverV2, params, &response); err != nil {
 		return nil, err
