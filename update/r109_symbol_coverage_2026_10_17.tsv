@@ -196,7 +196,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 132c2be239ecbc1f2a9bb22d9210fefe887986a5	46680	Improve TUI contrast, keyboard hints, and picker layouts (#46680)	2026-09-19	tui	27	11	0.41	0	0	audit_pending	PickerLayoutSizes,PickerSurface,SelectionAppearance,TabAppearance,accent_color,accent_color_on,first_fitting_line,footer_hint_label_style,history_prompt_style,key_label_spans
 132c73917181b88d9c6959e000c7f6e78efa4f51	44946	Retire Friendly and Pragmatic personality selection (#44946)	2026-09-12	tui	2	0	0.00	0	0	implementation_pending	get_model_instructions,personality_opt_out_only
 136391a23ec456be08d68b1e6695946b731c19af	49105	Resume unsent TUI input after reconnecting (#49105)	2026-09-28	tui	4	0	0.00	0	0	implementation_pending	MessageDelivery,has_unconfirmed_messages,reconcile_recovered_messages,restore_reconnected_input
-137f25f6439ce8be758f15dbd1e1b297c6cd0c3b	52235	Recover gRPC code-mode sessions after missing-session errors (#52235)	2026-10-08	core	1	0	0.00	0	0	implementation_pending	session_request
+137f25f6439ce8be758f15dbd1e1b297c6cd0c3b	52235	Recover gRPC code-mode sessions after missing-session errors (#52235)	2026-10-08	core	1	1	1.00	0	0	complete	
 13869ca39e7ae749aad2018f4a3a5f67741286d9	47620	Add portable project trust lookup APIs (#47620)	2026-09-23	execserver	5	2	0.40	0	0	audit_pending	from_native,get_active_project_for_lookup,resolve_root_git_project_uri_for_trust
 13a966fc652d1037c7ee93a15b2bdfa0610748ae	47321	Honor the system clock preference across more TUI timestamps (#47321)	2026-09-22	tui	3	2	0.67	0	0	audit_pending	date_time_format
 13bc770eaf0ad8548776bde59c3d6e5316406279	41902	Add installed voice host lifecycle support (#41902)	2026-08-31	realtime	3	3	1.00	0	0	complete	

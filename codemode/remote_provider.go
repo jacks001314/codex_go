@@ -15,6 +15,8 @@ import (
 
 	"codex_go/protocol"
 	"codex_go/tool"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // codeModeTraceContextFromContext carries the active trace context across the
@@ -264,6 +266,7 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
 		TraceContext: codeModeTraceContextFromContext(ctx),
 	}, preempt)
+	s.invalidateSessionOnNotFound(connection, err)
 	return publicRemoteResponseForGeneration(response, s.generation), err
 }
 
@@ -283,6 +286,7 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 		return connection.RequestWithYield(ctx, WaitSessionRequest(s.id, WaitRequest{CellID: remoteCellID, YieldTimeMS: yieldTimeMS}), preempt)
 	})
 	if err != nil {
+		s.invalidateSessionOnNotFound(connection, err)
 		if errors.Is(err, errCodeModeHostRequestTimeout) {
 			s.invalidateConnection(connection)
 		}
@@ -307,6 +311,7 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 		return connection.Request(ctx, TerminateSessionRequest(s.id, remoteCellID))
 	})
 	if err != nil {
+		s.invalidateSessionOnNotFound(connection, err)
 		if errors.Is(err, errCodeModeHostRequestTimeout) {
 			s.invalidateConnection(connection)
 		}
@@ -316,6 +321,25 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid terminate response")
 	}
 	return publicRemoteResponseForGeneration(outcome.Outcome.Response, s.generation), nil
+}
+
+// invalidateSessionOnNotFound mirrors Rust #52235: Execute, Wait and Terminate
+// reserve NOT_FOUND for an unknown session. Retire only the session binding so
+// the next execution opens a fresh session; the failed call itself is never
+// replayed. CompleteToolCall NOT_FOUND is intentionally excluded because it may
+// identify a missing invocation in an otherwise live session.
+func (s *remoteSession) invalidateSessionOnNotFound(connection *remoteConnection, err error) {
+	if s == nil || connection == nil || err == nil {
+		return
+	}
+	var grpcStatus interface{ GRPCStatus() *status.Status }
+	if !errors.As(err, &grpcStatus) {
+		return
+	}
+	st := grpcStatus.GRPCStatus()
+	if st != nil && st.Code() == codes.NotFound {
+		s.invalidateConnection(connection)
+	}
 }
 
 // invalidateConnection drops the session's association with a dead connection so
