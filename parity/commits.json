@@ -8007,9 +8007,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: sampler_failure_reason"
+        "Round 115 (lead): N/A (async scorer/sampler carrier absent) - #43005 adds failure_reason tags to Rust Guardian V2 classification metrics and codex.guardian_v2.connection.duration_ms for LunaSampler WebSocket attempts, mapping sampler errors to bounded labels. Go has no Guardian V2 async scorer, LunaSampler WebSocket pool/connection timing path, or sampler_failure_reason mapper; its Guardian V2 telemetry is event-based classification/fast-decision data plus review metrics. No sampler connection/metrics carrier exists to extend. No source change needed."
       ]
     },
     {
