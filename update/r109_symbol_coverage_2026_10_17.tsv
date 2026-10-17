@@ -366,7 +366,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 23ae65bb064f4e304e1c9848fce6853c34580e83	47113	Persist thread creator identity in rollouts and SQLite (#47113)	2026-09-21	appserver	1	1	1.00	0	0	complete	
 23cedf48023879d9666e41d8eee765a9482120c0	40716	Add thread ownership metadata for managed worktrees (#40716)	2026-08-25	core	6	6	1.00	0	0	complete	
 2426ed7684c87f9a627c60b54271cfed77c979df	46856	Support stadium nodes in Mermaid terminal diagrams (#46856)	2026-09-20	tui	0	0		0	0	not_applicable	
-242c5ce01cd3388f7d23a87b68615b2042a04bfc	44606	Preserve whole diagnostic attachments and report incomplete uploads (#44606)	2026-09-10	persistence	4	0	0.00	0	0	implementation_pending	encode_attachment_envelope,encode_envelope,envelope_request,send_envelope
+242c5ce01cd3388f7d23a87b68615b2042a04bfc	44606	Preserve whole diagnostic attachments and report incomplete uploads (#44606)	2026-09-10	persistence	4	0	0.00	0	0	not_applicable	none
 24462234b2aeeb27373e17bbe226baf9c0e97d3b	47397	Refresh bundled model metadata and instructions (#47397)	2026-09-22	plugins	0	0		0	0	not_applicable	
 2457571e4cd109e602d3ac278d93ec24f1f2e483	47898	Preserve local-binding inheritance in environment network policies (#47898)	2026-09-24	config	0	0		0	0	not_applicable	
 2497518490a4cfc67a0c7a5c099ef632fdc2ed78	40488	Export turn cost as an OTEL metric (#40488)	2026-08-24	appserver	1	1	1.00	0	0	complete	

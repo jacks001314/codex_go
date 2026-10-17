@@ -11499,9 +11499,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: encode_attachment_envelope, encode_envelope, envelope_request, send_envelope"
+        "Round 296 (audit): N/A - Go's feedback port prepares whole local attachments/archives and has no Sentry envelope encoder or network upload carrier; it already rejects missing, non-regular, and over-limit sources while preserving bytes within the 200MiB decoded limit."
       ]
     },
     {
