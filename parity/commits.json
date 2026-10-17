@@ -4320,9 +4320,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: set_last_known_step_context"
+        "Round 115 (lead): not applicable - Rust retains an Arc<StepContext> in completed turn task state for speculative remote-compaction fallbacks. Go uses synchronous turn configuration and has no StepContext/speculative capture or completed-turn retained-state consumer, so no equivalent behavior surface exists."
       ]
     },
     {
