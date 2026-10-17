@@ -243,6 +243,7 @@ type Server struct {
 	// is why the advertised capability follows this field.
 	environmentConfigReader EnvironmentConfigReader
 	v2Discovery             *v2DiscoveryManager
+	shellSnapshots          *shellSnapshotManager
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -491,6 +492,8 @@ type EnvironmentCapabilities struct {
 	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
 	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
 	CapabilityDiscoveryV2      bool `json:"capabilityDiscoveryV2"`
+	// ShellSnapshotV2 advertises process/start.shellSnapshot support.
+	ShellSnapshotV2 bool `json:"shellSnapshotV2"`
 	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
 	// defaults to false when deserializing legacy executor responses.
 	EnvironmentConfigRead bool `json:"environmentConfigRead"`
@@ -531,6 +534,7 @@ type ExecParams struct {
 	Argv                  []string                        `json:"argv"`
 	CWD                   string                          `json:"cwd"`
 	EnvPolicy             *ExecEnvPolicy                  `json:"envPolicy,omitempty"`
+	ShellSnapshot         *ShellSnapshotRequest           `json:"shellSnapshot,omitempty"`
 	Env                   map[string]string               `json:"env"`
 	TTY                   bool                            `json:"tty"`
 	PipeStdin             bool                            `json:"pipeStdin"`
@@ -539,6 +543,13 @@ type ExecParams struct {
 	EnforceManagedNetwork bool                            `json:"enforceManagedNetwork,omitempty"`
 	ManagedNetwork        *ManagedNetworkSandboxContext   `json:"managedNetwork,omitempty"`
 	NetworkProxy          *RemoteNetworkProxyLaunchConfig `json:"networkProxy,omitempty"`
+}
+
+// ShellSnapshotRequest identifies executor-owned shell state for one
+// attachment within an executor session.
+type ShellSnapshotRequest struct {
+	ScopeID string    `json:"scopeId"`
+	Shell   ShellInfo `json:"shell"`
 }
 
 type ManagedNetworkSandboxContext struct {
@@ -964,6 +975,7 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 		sessions:           map[string]*serverSessionEntry{},
 		detachedSessionTTL: 30 * time.Second,
 		v2Discovery:        newV2DiscoveryManager(),
+		shellSnapshots:     newShellSnapshotManager(),
 	}
 }
 
@@ -976,11 +988,12 @@ func newSessionServer(httpClient *http.Client) *Server {
 // handler, not on the session).
 func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server) *Server {
 	server := &Server{
-		processes:   map[string]*processState{},
-		handles:     map[string]*fileHandleEntry{},
-		fileSlots:   make(chan struct{}, maxOpenFiles),
-		httpClient:  httpClient,
-		v2Discovery: newV2DiscoveryManager(),
+		processes:      map[string]*processState{},
+		handles:        map[string]*fileHandleEntry{},
+		fileSlots:      make(chan struct{}, maxOpenFiles),
+		httpClient:     httpClient,
+		v2Discovery:    newV2DiscoveryManager(),
+		shellSnapshots: newShellSnapshotManager(),
 	}
 	if parent != nil {
 		server.SetPreferMXC(parent.preferMXCValue())
@@ -1173,6 +1186,9 @@ func (s *Server) shutdown() {
 		break
 	}
 	s.mu.Unlock()
+	if s.shellSnapshots != nil {
+		s.shellSnapshots.close()
+	}
 	if requests != nil {
 		requests.close()
 	}
@@ -1693,6 +1709,19 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		return nil, err
 	}
 	params = preparedParams
+	if s.shellSnapshots != nil {
+		rewritten, rewriteErr := s.shellSnapshots.rewrite(ctx, params)
+		if rewriteErr != nil {
+			if policyCancel != nil {
+				policyCancel()
+			}
+			if preparedProxy != nil {
+				_ = preparedProxy.Close()
+			}
+			return nil, rewriteErr
+		}
+		params = rewritten
+	}
 	preparedNetworkOwned := false
 	defer func() {
 		if preparedNetworkOwned {
@@ -3605,6 +3634,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 			NetworkProxyLaunch:         true,
 			CapabilityDiscoverySandbox: true,
 			CapabilityDiscoveryV2:      true,
+			ShellSnapshotV2:            runtime.GOOS != "windows",
 			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
 			// Go now implements the request (execserver/environment_config_read.go,
 			// mirroring exec-server/src/server/registry.rs -> environment_config_read),
