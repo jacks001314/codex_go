@@ -9,6 +9,7 @@ import (
 
 	"codex_go/sandbox"
 	"codex_go/sandbox/sandboxpath"
+	"codex_go/utils"
 
 	"github.com/bmatcuk/doublestar/v4"
 )
@@ -51,6 +52,9 @@ type PreparedPolicy struct {
 type ReadDenyMatcher struct {
 	entries []sandbox.FileSystemSandboxEntry
 	cwd     string
+	// convention is the policy context's path convention, inferred from cwd.
+	// A candidate using an incompatible convention fails closed (#41209).
+	convention utils.PathConvention
 }
 
 // IsLocalPathReadDenied mirrors Rust
@@ -59,6 +63,12 @@ type ReadDenyMatcher struct {
 func (m *ReadDenyMatcher) IsLocalPathReadDenied(path string) bool {
 	if m == nil || len(m.entries) == 0 {
 		return false
+	}
+	if m.convention != "" {
+		legacy := utils.NewLegacyAppPathString(path)
+		if candidate, ok := legacy.InferAbsolutePathConvention(); ok && candidate != m.convention {
+			return true
+		}
 	}
 	return sandbox.ResolveFileSystemEntryAccess(m.entries, path, m.cwd) == sandbox.FileSystemAccessDeny
 }
@@ -105,7 +115,9 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 	}
 	var globDenials *ReadDenyMatcher
 	if len(globEntries) > 0 {
-		globDenials = &ReadDenyMatcher{entries: globEntries, cwd: cwd}
+		legacy := utils.NewLegacyAppPathString(cwd)
+		convention, _ := legacy.InferAbsolutePathConvention()
+		globDenials = &ReadDenyMatcher{entries: globEntries, cwd: cwd, convention: convention}
 	}
 	roots := writableRoots(entries, cwd)
 	return &PreparedPolicy{Roots: roots, GlobDenials: globDenials}, nil

@@ -64,3 +64,28 @@ func TestReadDenyMatcherChecksAliasAndCanonicalLikeRust(t *testing.T) {
 		t.Fatal("deny rule matching the canonical path did not deny the alias")
 	}
 }
+
+// Mirrors Rust #41209: a candidate whose path convention disagrees with the
+// policy context fails closed instead of being evaluated as another spelling.
+func TestReadDenyMatcherFailsClosedOnIncompatiblePathConventionLikeRust(t *testing.T) {
+	windowsPolicy, err := PreparePolicy([]sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: `C:\repo\**\*.key`},
+		Access: sandbox.FileSystemAccessDeny,
+	}}, `C:\repo`)
+	if err != nil {
+		t.Fatalf("PreparePolicy(windows) error = %v", err)
+	}
+	if !windowsPolicy.GlobDenials.IsLocalPathReadDenied("/posix/secret.key") {
+		t.Fatal("POSIX candidate under a Windows policy did not fail closed")
+	}
+	posixPolicy, err := PreparePolicy([]sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "/repo/**/*.key"},
+		Access: sandbox.FileSystemAccessDeny,
+	}}, "/repo")
+	if err != nil {
+		t.Fatalf("PreparePolicy(posix) error = %v", err)
+	}
+	if !posixPolicy.GlobDenials.IsLocalPathReadDenied(`C:\secret.key`) {
+		t.Fatal("Windows candidate under a POSIX policy did not fail closed")
+	}
+}
