@@ -42,7 +42,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0462dcc062b822bb8fff16cc31ce6eeab69823b9	49246	Use executable fixture copying in the bundled bwrap test (#49246)	2026-09-29	sandbox	0	0		0	0	not_applicable	
 048a936a23b88c8653f4820e68f987de10e3c583	42674	Persist server-advertised experimental features from the TUI (#42674)	2026-09-04	tui	4	3	0.75	0	0	audit_pending	FeatureWriteResult
 04907ab95a186d176021abffccac3b627ff1e32e	40807	Use step settings for MCP request metadata (#40807)	2026-08-26	mcp	1	1	1.00	0	0	complete	
-04ad786998e9ec2683ba8c387aaf311adc6f1233	52671	Add retention annotations to submitted tool outputs (#52671)	2026-10-09	appserver	2	0	0.00	0	0	implementation_pending	AnnotatedResponseItem,ResponseItemAnnotations
+04ad786998e9ec2683ba8c387aaf311adc6f1233	52671	Add retention annotations to submitted tool outputs (#52671)	2026-10-09	appserver	2	2	1.00	0	0	complete	
 04e4d2b40ffdeb7768319bec80bad6b2951c92e4	46500	Block mutating fcntls in restricted macOS Seatbelt policies (#46500)	2026-09-18	sandbox	0	0		0	0	not_applicable	
 04fc75adbe67a612a1cb0fc469533f24b24fa499	47340	Add conditional turn interruption that preserves pending input (#47340)	2026-09-22	core	4	1	0.25	0	0	audit_pending	finish_turn_abort,interrupt_if_no_pending_input,interrupt_turn_if_no_pending_input
 0533f96c447b55b0eea414072db1436c42fba85e	40301	Label Business Pro Lite plans as Business Premium (#40301)	2026-08-24	tui	0	0		0	0	not_applicable	

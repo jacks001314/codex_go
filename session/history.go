@@ -339,6 +339,10 @@ func sanitizeHistoryInputItem(input any) any {
 		if nonModelVisibleHistoryItemType(itemType) {
 			return nil
 		}
+		// Harness metadata records provenance for storage and compaction; it is
+		// not part of the model-visible item (Rust #52671 keeps retention
+		// annotations out of model requests).
+		delete(typed, "harness_metadata")
 		// Preserve harness-owned content classifications through history
 		// sanitization: content_item_kinds are model-visible and must survive
 		// (Rust #40264 preserves message/passthrough metadata on truncation).

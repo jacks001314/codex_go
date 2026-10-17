@@ -11519,6 +11519,12 @@ func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
 	if strings.TrimSpace(output.Namespace) != "" {
 		item["namespace"] = output.Namespace
 	}
+	if output.Retain {
+		// Rust #52671: a retained client output is marked as client-authored in
+		// harness metadata so compaction keeps it; the marker stays out of model
+		// requests (session history sanitization drops harness metadata).
+		item["harness_metadata"] = map[string]any{"client_authored": true}
+	}
 	return item
 }
 

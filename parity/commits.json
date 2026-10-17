@@ -29328,8 +29328,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): turn.TurnToolOutput gains the `retain` annotation; appserver/standaloneToolOutputInputItem records a retained client output as harness_metadata.client_authored=true (so compaction retains it), and session.sanitizeHistoryInputItem drops harness metadata from model-request projections. Tests: appserver/turn_tool_output_retention_test.go and session/harness_metadata_sanitize_test.go (ordinary outputs stay unmarked, content kinds survive sanitization). RC: keeping harness metadata in the sanitizer fails the session test; go build ./... + ./session ./turn green.",
         "No new upstream public identifier found in Go (0/2); candidate gap: AnnotatedResponseItem, ResponseItemAnnotations"
       ]
     },

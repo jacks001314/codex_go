@@ -110,6 +110,10 @@ type TurnToolOutput struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
 	Output    string `json:"output"`
+	// Retain marks a client-submitted tool output that must be retained as
+	// client-authored history (Rust #52671 `retain` annotation). The marker is
+	// stored as harness metadata and never reaches a model request.
+	Retain bool `json:"retain,omitempty"`
 }
 
 type ByteRange struct {
