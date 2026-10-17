@@ -397,6 +397,21 @@ type EnvironmentRecord struct {
 	RequiredSkills []string
 }
 
+// LastReadyInfo returns a snapshot of the last accepted Ready report.
+//
+// nil means no Ready report has been accepted, including for ordinary
+// environments. An empty report is distinct from nil. The returned snapshot does
+// not change when later reports arrive and says nothing about connection health
+// (Rust Environment::last_ready_info, #42403).
+func (r *EnvironmentRecord) LastReadyInfo() *EnvironmentReadyInfo {
+	if r == nil || r.Provisioning == nil {
+		return nil
+	}
+	r.Provisioning.mu.Lock()
+	defer r.Provisioning.mu.Unlock()
+	return cloneEnvironmentReadyInfo(r.Provisioning.readyInfo)
+}
+
 type EnvironmentManager struct {
 	mu           sync.Mutex
 	defaultShell EnvironmentShellInfo

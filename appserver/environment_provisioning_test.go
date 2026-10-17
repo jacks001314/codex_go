@@ -4,12 +4,59 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"codex_go/execserver"
 )
+
+func TestLastReadyInfoPreservesSnapshotsThroughReplacementAndClearLikeRust(t *testing.T) {
+	manager := NewEnvironmentManager(EnvironmentShellInfo{Name: "sh", Path: "/bin/sh"}, "")
+	provider := &failingNoiseProvider{}
+	selected := provisionedReadyInfo("selected-root", "tools")
+	record, err := manager.ReportProvisioningStatus("tools", &selected, nil, provider)
+	if err != nil {
+		t.Fatalf("ReportProvisioningStatus() error = %v", err)
+	}
+	snapshot := record.LastReadyInfo()
+	if snapshot == nil || !reflect.DeepEqual(snapshot, &selected) {
+		t.Fatalf("last ready info = %#v, want selected", snapshot)
+	}
+
+	for _, replacement := range []EnvironmentReadyInfo{
+		provisionedReadyInfo("different-root", "tools"),
+		{},
+	} {
+		reported, err := manager.ReportProvisioningStatus("tools", &replacement, nil, provider)
+		if err != nil {
+			t.Fatalf("ReportProvisioningStatus(replacement) error = %v", err)
+		}
+		if got := reported.LastReadyInfo(); !reflect.DeepEqual(got, &replacement) {
+			t.Fatalf("replacement ready info = %#v, want %#v", got, replacement)
+		}
+		if !reflect.DeepEqual(snapshot, &selected) {
+			t.Fatal("an earlier ready-info snapshot changed after replacement")
+		}
+	}
+
+	invalid := provisionedReadyInfo("invalid-root", "other")
+	if _, err := manager.ReportProvisioningStatus("tools", &invalid, nil, provider); err == nil {
+		t.Fatal("invalid ready report should fail")
+	}
+	if got := record.LastReadyInfo(); got == nil || len(got.SelectedCapabilityRoots) != 0 {
+		t.Fatalf("failed report changed the last accepted ready info: %#v", got)
+	}
+
+	pending := &EnvironmentRecord{Provisioning: newProvisioningState()}
+	if got := pending.LastReadyInfo(); got != nil {
+		t.Fatalf("pending environment last ready info = %#v, want nil", got)
+	}
+	if got := (&EnvironmentRecord{}).LastReadyInfo(); got != nil {
+		t.Fatalf("ordinary environment last ready info = %#v, want nil", got)
+	}
+}
 
 // failingNoiseProvider mirrors Rust's FailingNoiseConnectProvider: it counts
 // calls and always fails, so tests can assert that a provisioned environment

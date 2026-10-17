@@ -6723,9 +6723,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: last_ready_info"
+        "Round 115 (lead): exposed an immutable LastReadyInfo snapshot on environment records. Pending/ordinary environments return nil, an accepted empty report is distinct, prior snapshots stay immutable across replacements, and rejected reports do not alter the last accepted value. Focused tests and the nil-return RC pass."
       ]
     },
     {
