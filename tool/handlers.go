@@ -631,6 +631,9 @@ type CoreHandlerOptions struct {
 	ContextStatus                  func() compact.TokenStatus
 	UserInputResponder             UserInputResponder
 	RequestUserInputAvailableModes []string
+	// DisableRequestUserInput omits the direct request_user_input handler
+	// (Rust tools.experimental_request_user_input.enabled, #51908).
+	DisableRequestUserInput bool
 	// VerifiedAnswerRecorder receives the accepted answers of a
 	// `request_user_input` call. Rust installs it whenever the guardian-approval
 	// feature is enabled (request_user_input.rs).
@@ -665,11 +668,11 @@ func RegisterCoreHandlersWithOptions(registry *Registry, options *CoreHandlerOpt
 	if options == nil {
 		options = &CoreHandlerOptions{}
 	}
-	handlers := []Executor{
-		NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes),
-	}
-	if handler, ok := handlers[0].(*RequestUserInputHandler); ok {
+	handlers := []Executor{}
+	if !options.DisableRequestUserInput {
+		handler := NewRequestUserInputHandlerWithModes(options.UserInputResponder, options.RequestUserInputAvailableModes)
 		handler.verifiedAnswer = options.VerifiedAnswerRecorder
+		handlers = append(handlers, handler)
 	}
 	if !options.DisableGetContextRemaining {
 		handlers = append(handlers, NewGetContextRemainingHandler(options.ContextStatus))

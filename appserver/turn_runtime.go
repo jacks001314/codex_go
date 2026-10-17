@@ -457,14 +457,9 @@ func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, p
 	enabled := features.PersistentModeEnabled(appReasoningEffortForTurn(cfg, params))
 	asyncAvailable := false
 	if modelInfo != nil {
-		for _, supported := range modelInfo.ExperimentalSupportedTools {
-			if supported == tool.DefaultSendUserMessageAsyncToolName ||
-				supported == tool.DefaultSendMessageToUserAsyncToolName ||
-				supported == tool.DefaultRequestUserInputAsyncToolName {
-				asyncAvailable = true
-				break
-			}
-		}
+		rootAgent := !r.turnThreadIsSubagent(threadID)
+		asyncAvailable = requestUserInputAsyncAvailable(rootAgent, cfg.ExperimentalRequestUserInputEnabled(), modelInfo.ExperimentalSupportedTools) ||
+			freeformAsyncToolAvailable(rootAgent, modelInfo.ExperimentalSupportedTools, features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async"))
 	}
 	// Rust uses the model catalog's persistent_instructions (missing uses the
 	// bundled default, an explicit empty string disables the section).

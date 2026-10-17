@@ -4392,6 +4392,21 @@ func freeformAsyncToolAvailable(rootAgent bool, catalogTools []string, featureEn
 	return false
 }
 
+// requestUserInputAsyncAvailable mirrors Rust #51908: the structured async
+// question tool requires the user-input setting, a root agent, and either the
+// current or legacy model capability name.
+func requestUserInputAsyncAvailable(rootAgent bool, enabled bool, catalogTools []string) bool {
+	if !rootAgent || !enabled {
+		return false
+	}
+	for _, name := range catalogTools {
+		if name == tool.DefaultRequestUserInputAsyncToolName || name == tool.DefaultSendUserMessageAsyncToolName {
+			return true
+		}
+	}
+	return false
+}
+
 func runtimeThreadListShouldDefaultModelProvider(request *Request, params *ThreadListParams) bool {
 	if request == nil || params == nil {
 		return false
@@ -14448,6 +14463,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	options.DisableCodeModeFallback = r.services.DisableCodeModeFallback
 	options.EnableUnifiedExec = cfg != nil && features.Enabled(cfg.FeatureSettings(), "unified_exec")
 	options.OmitToolSearchSources = cfg != nil && features.Enabled(cfg.FeatureSettings(), "deferred_tool_world_state")
+	requestUserInputEnabled := cfg == nil || cfg.ExperimentalRequestUserInputEnabled()
+	options.DisableRequestUserInput = !requestUserInputEnabled
 	options.EnableWaitForEnvironment = waitForEnvironmentEnabled
 	options.EnvironmentWaiter = appServerEnvironmentWaiter{manager: r.services.Environment}
 	options.SelectedEnvironmentIDs = selectedEnvironmentIDs(params)
@@ -14459,18 +14476,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	freeformAsyncFeature := cfg != nil && features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async")
 	var catalogTools []string
 	if turnModelInfo != nil {
-		sendUserMessageAsyncAdded := false
-		requestUserInputAsyncAdded := false
-		for _, supported := range turnModelInfo.ExperimentalSupportedTools {
-			if supported == tool.DefaultSendUserMessageAsyncToolName && !sendUserMessageAsyncAdded {
-				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
-				sendUserMessageAsyncAdded = true
-			}
-			if supported == tool.DefaultRequestUserInputAsyncToolName && !requestUserInputAsyncAdded {
-				options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, supported)
-				requestUserInputAsyncAdded = true
-			}
-		}
 		catalogTools = turnModelInfo.ExperimentalSupportedTools
 		if turnModelInfo.ModelMessages != nil {
 			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
@@ -14485,6 +14490,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			// `mcp_resources` entries.
 			options.MCPResourceMessages = turnModelInfo.ModelMessages.MCPResources()
 		}
+	}
+	if requestUserInputAsyncAvailable(freeformAsyncRootAgent, requestUserInputEnabled, catalogTools) {
+		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultRequestUserInputAsyncToolName)
 	}
 	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature) {
 		options.ExperimentalSupportedTools = append(options.ExperimentalSupportedTools, tool.DefaultSendMessageToUserAsyncToolName)

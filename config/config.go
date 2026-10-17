@@ -1757,6 +1757,25 @@ func (c *Config) UpdatePlanEnabled() bool {
 	return ok && enabled
 }
 
+// ExperimentalRequestUserInputEnabled reports whether request_user_input and
+// its asynchronous catalog variant may be exposed. Rust defaults an absent
+// tools.experimental_request_user_input table to enabled.
+func (c *Config) ExperimentalRequestUserInputEnabled() bool {
+	if c == nil || c.Values == nil {
+		return true
+	}
+	tools, ok := c.Values["tools"].(map[string]any)
+	if !ok {
+		return true
+	}
+	value, ok := tools["experimental_request_user_input"].(map[string]any)
+	if !ok {
+		return true
+	}
+	enabled, ok := value["enabled"].(bool)
+	return !ok || enabled
+}
+
 // AllowLoginShell reports whether shell tools may expose the `login`
 // parameter. Rust defaults to allowing login shells
 // (`allow_login_shell.unwrap_or(true)`, per-environment since b258c028fe).

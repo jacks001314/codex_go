@@ -44,6 +44,30 @@ func TestFreeformAsyncToolAvailableLikeRust(t *testing.T) {
 	}
 }
 
+func TestRequestUserInputAsyncAvailableLikeRust(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		root     bool
+		enabled  bool
+		catalog  []string
+		expected bool
+	}{
+		{name: "root without capability", root: true, enabled: true},
+		{name: "legacy capability enabled", root: true, enabled: true, catalog: []string{tool.DefaultSendUserMessageAsyncToolName}, expected: true},
+		{name: "legacy capability disabled", root: true, catalog: []string{tool.DefaultSendUserMessageAsyncToolName}},
+		{name: "current capability enabled", root: true, enabled: true, catalog: []string{tool.DefaultRequestUserInputAsyncToolName}, expected: true},
+		{name: "current capability disabled", root: true, catalog: []string{tool.DefaultRequestUserInputAsyncToolName}},
+		{name: "subagent", enabled: true, catalog: []string{tool.DefaultRequestUserInputAsyncToolName}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := requestUserInputAsyncAvailable(testCase.root, testCase.enabled, testCase.catalog); got != testCase.expected {
+				t.Fatalf("requestUserInputAsyncAvailable(root=%v, enabled=%v, catalog=%v) = %v, want %v",
+					testCase.root, testCase.enabled, testCase.catalog, got, testCase.expected)
+			}
+		})
+	}
+}
+
 func TestSessionItemForAppAsyncMessageCarriesDelivery(t *testing.T) {
 	createdAt := time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC)
 	execution := &turn.ToolExecutionResult{

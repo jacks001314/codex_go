@@ -793,40 +793,53 @@ func TestBuildToolRegistryClockToolsFollowOptions(t *testing.T) {
 	}
 }
 
-func TestBuildToolRegistrySourcesAsyncMessageDescriptionFromCatalog(t *testing.T) {
-	// A model-catalog description replaces the built-in tool description (#41461).
+func TestBuildToolRegistryMapsLegacyAsyncCapabilityToRequestUserInputAsync(t *testing.T) {
+	// Rust #51908: an older model catalog's send_user_message_async capability
+	// now registers the structured request_user_input_async tool.
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.ExperimentalSupportedTools = []string{tool.DefaultSendUserMessageAsyncToolName}
-	options.SendUserMessageAsync = func(string) {}
 	override := "Ask the user a clarifying question."
-	options.SendUserMessageAsyncDescription = &override
+	options.RequestUserInputAsyncDescription = &override
 	registry, err := BuildToolRegistry(options)
 	if err != nil {
-		t.Fatalf("BuildToolRegistry(async message) error = %v", err)
+		t.Fatalf("BuildToolRegistry(legacy async capability) error = %v", err)
 	}
-	spec, ok := registry.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName))
+	spec, ok := registry.Spec(tool.PlainName(tool.DefaultRequestUserInputAsyncToolName))
 	if !ok {
-		t.Fatal("send_user_message_async tool missing")
+		t.Fatal("request_user_input_async tool missing")
 	}
 	if spec.Description != override {
 		t.Fatalf("description = %q, want %q", spec.Description, override)
 	}
+	if _, ok := registry.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName)); ok {
+		t.Fatal("legacy send_user_message_async tool should not be registered")
+	}
 
-	// A nil catalog description falls back to the built-in description.
-	defaultSpec := (&tool.SendUserMessageAsyncHandler{}).Spec()
+	defaultSpec := (&tool.RequestUserInputAsyncHandler{}).Spec()
 	options2 := DefaultToolRegistryOptions(t.TempDir())
 	options2.ExperimentalSupportedTools = []string{tool.DefaultSendUserMessageAsyncToolName}
-	options2.SendUserMessageAsync = func(string) {}
 	registry2, err := BuildToolRegistry(options2)
 	if err != nil {
-		t.Fatalf("BuildToolRegistry(async message nil) error = %v", err)
+		t.Fatalf("BuildToolRegistry(legacy async capability nil) error = %v", err)
 	}
-	spec2, ok := registry2.Spec(tool.PlainName(tool.DefaultSendUserMessageAsyncToolName))
+	spec2, ok := registry2.Spec(tool.PlainName(tool.DefaultRequestUserInputAsyncToolName))
 	if !ok {
-		t.Fatal("send_user_message_async tool missing (nil description)")
+		t.Fatal("request_user_input_async tool missing (nil description)")
 	}
 	if spec2.Description != defaultSpec.Description {
 		t.Fatalf("default description = %q, want built-in %q", spec2.Description, defaultSpec.Description)
+	}
+}
+
+func TestBuildToolRegistryHonorsDisabledRequestUserInputLikeRust(t *testing.T) {
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.DisableRequestUserInput = true
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(disabled request_user_input) error = %v", err)
+	}
+	if _, ok := registry.Spec(tool.PlainName("request_user_input")); ok {
+		t.Fatal("request_user_input registered while disabled")
 	}
 }
 

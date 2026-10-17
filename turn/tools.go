@@ -161,8 +161,11 @@ type ToolRegistryOptions struct {
 	EnableAgents               bool
 	EnableToolSearch           bool
 	OmitToolSearchSources      bool
-	EnableCurrentTimeTool      bool
-	EnableSleepTool            bool
+	// DisableRequestUserInput hides request_user_input when
+	// tools.experimental_request_user_input.enabled is false (Rust #51908).
+	DisableRequestUserInput bool
+	EnableCurrentTimeTool   bool
+	EnableSleepTool         bool
 	// NonfatalClockReadErrors mirrors the feature of the same name (#46006).
 	NonfatalClockReadErrors  bool
 	EnableWaitForEnvironment bool
@@ -474,6 +477,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			ContextStatus:                  options.ContextStatus,
 			UserInputResponder:             options.UserInputResponder,
 			RequestUserInputAvailableModes: options.RequestUserInputAvailableModes,
+			DisableRequestUserInput:        options.DisableRequestUserInput,
 			VerifiedAnswerRecorder:         options.VerifiedAnswerRecorder,
 			ClockProvider:                  options.ClockProvider,
 			ThreadID:                       options.ThreadID,
@@ -492,17 +496,12 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 					return nil, err
 				}
 			}
-			if supported == "send_user_message_async" {
-				if err := registry.Register(&tool.SendUserMessageAsyncHandler{EmitAsyncMessage: options.SendUserMessageAsync, Description: options.SendUserMessageAsyncDescription}); err != nil {
-					return nil, err
-				}
-			}
 			if supported == tool.DefaultSendMessageToUserAsyncToolName {
 				if err := registry.Register(tool.NewSendMessageToUserAsyncHandler(options.SendUserMessageAsync)); err != nil {
 					return nil, err
 				}
 			}
-			if supported == tool.DefaultRequestUserInputAsyncToolName {
+			if supported == tool.DefaultRequestUserInputAsyncToolName || supported == tool.DefaultSendUserMessageAsyncToolName {
 				if err := registry.Register(&tool.RequestUserInputAsyncHandler{
 					Description: options.RequestUserInputAsyncDescription,
 					Parameters:  options.RequestUserInputAsyncParameters,
