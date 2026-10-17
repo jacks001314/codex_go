@@ -444,6 +444,7 @@ func (m *UnifiedExecManager) Exec(ctx context.Context, req *ShellRequest, callID
 	openSession.finish(err, ctx)
 	if err != nil {
 		m.releaseProcessID(processID)
+		emitUnifiedExecLaunchFailure(req, callID, err)
 		return nil, err
 	}
 	process := &unifiedExecProcess{
@@ -535,6 +536,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	openSession.finish(err, ctx)
 	if err != nil {
 		m.releaseProcessID(processID)
+		emitUnifiedExecLaunchFailure(req, callID, err)
 		return nil, err
 	}
 	process := &unifiedExecProcess{
@@ -794,6 +796,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		events.Close()
 		_ = client.Close()
 		m.releaseProcessID(processID)
+		emitUnifiedExecLaunchFailure(req, callID, err)
 		return nil, err
 	}
 	process := &unifiedExecProcess{
@@ -869,6 +872,32 @@ func unifiedExecWireMetadata(req *ShellRequest, callID string) *execserver.ExecM
 		metadata.ThreadID = &threadID
 	}
 	return metadata
+}
+
+// emitUnifiedExecLaunchFailure publishes the attempt and terminal failure when
+// process creation fails before a unified-exec session exists. No process id is
+// reported; approval rejection paths never reach this helper.
+func emitUnifiedExecLaunchFailure(req *ShellRequest, callID string, cause error) {
+	if req == nil || req.UnifiedExecEventSink == nil || cause == nil {
+		return
+	}
+	startedAt := time.Now()
+	common := UnifiedExecEvent{
+		CallID:      callID,
+		Command:     append([]string(nil), req.Command...),
+		HookCommand: req.HookCommand,
+		CWD:         req.CWD,
+		TTY:         req.TTY,
+		StartedAt:   startedAt,
+	}
+	begin := common
+	begin.Kind = UnifiedExecEventBegin
+	req.UnifiedExecEventSink(begin)
+	end := common
+	end.Kind = UnifiedExecEventEnd
+	end.Output = cause.Error()
+	end.ExitCode = -1
+	req.UnifiedExecEventSink(end)
 }
 
 func unifiedExecManagedNetworkContext(value *network.ProxyManagedNetworkSandboxContext) *execserver.ManagedNetworkSandboxContext {
@@ -1691,11 +1720,7 @@ func (p *unifiedExecProcess) applyRemoteReadResponse(response *execserver.ReadRe
 		if chunk.Seq <= *lastSeq {
 			continue
 		}
-		data, decodeErr := base64.StdEncoding.DecodeString(chunk.Chunk)
-		if decodeErr != nil {
-			return false, decodeErr
-		}
-		p.appendOutput(data)
+		p.appendOutput(chunk.Chunk)
 	}
 	if response.NextSeq > 0 {
 		*lastSeq = max(*lastSeq, response.NextSeq-1)

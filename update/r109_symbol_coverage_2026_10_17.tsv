@@ -2366,7 +2366,7 @@ de7874067fe8cb8f4846dd4d8b848965ce79070f	42824	Refine user input guidance for GP
 de8fab6d7adfcef8b4ce6f02f3b5c8be4092015a	52972	Upgrade `rmcp` to `3.5.1` and harden lifecycle tests (#52972)	2026-10-10	tui	0	0		0	0	not_applicable	
 de9e78e3e7caed0fdd75d20ae617faa646dfef3c	48151	Add item anchors to `thread/items/list` pagination (#48151)	2026-09-25	tui	3	3	1.00	0	0	complete	
 deb0a08f240fb9b630e514417ad2256cf8e4afba	47085	Update model catalog descriptions and GPT-5.6-Sol priority (#47085)	2026-09-21	tui	0	0		0	0	not_applicable	
-deb147116661d298c5e0408226f80342c3cc349f	42404	Read voice helper frames independently of pipe chunks (#42404)	2026-09-02	realtime	2	1	0.50	0	0	audit_pending	MessageReader
+deb147116661d298c5e0408226f80342c3cc349f	42404	Read voice helper frames independently of pipe chunks (#42404)	2026-09-02	realtime	2	2	1.00	0	0	complete	
 dec54912f9dbd307ebbe8beeb3509a6da30dbf96	54114	Report terminal completion states and blocking reasons (#54114)	2026-10-14	tui	4	4	1.00	0	0	complete	
 dee21ec1bc26cdf9f3c4d77a17706cd19dcf05de	43002	Replace Guardian tickets with parent response IDs (#43002)	2026-09-05	guardian	1	1	1.00	0	0	complete	
 df06bb054cc1259c64790433a8da2f2cdd8aeed8	47856	Initialize media estimates outside the global cache lock (#47856)	2026-09-24	core	1	1	1.00	0	0	complete	

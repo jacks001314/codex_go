@@ -38,10 +38,39 @@ type VoiceHost struct {
 	process *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
+	reader  *voiceHostFrameReader
 
 	mu     sync.Mutex
 	closed bool
 	readMu sync.Mutex
+}
+
+type voiceHostReadResult struct {
+	message *Message
+	err     error
+}
+
+// voiceHostFrameReader owns the helper's output pipe and decodes frames
+// independently of pipe chunk boundaries. Frames that arrive after a request
+// timeout stay buffered for the next exchange instead of being lost with an
+// abandoned read goroutine (Rust #42404).
+type voiceHostFrameReader struct {
+	frames chan voiceHostReadResult
+}
+
+func newVoiceHostFrameReader(reader io.Reader) *voiceHostFrameReader {
+	r := &voiceHostFrameReader{frames: make(chan voiceHostReadResult, 8)}
+	go func() {
+		defer close(r.frames)
+		for {
+			message, err := ReadMessage(reader)
+			r.frames <- voiceHostReadResult{message: message, err: err}
+			if err != nil || message == nil {
+				return
+			}
+		}
+	}()
+	return r
 }
 
 // Connect starts the helper and completes the hello/ready handshake. The caller
@@ -71,6 +100,7 @@ func Connect(ctx context.Context, executable string, buildCommit string) (*Voice
 		return nil, fmt.Errorf("start voice helper: %w", err)
 	}
 	host := &VoiceHost{process: command, stdin: stdin, stdout: stdout}
+	host.reader = newVoiceHostFrameReader(stdout)
 	// Startup-linked native libraries load before the helper can acknowledge
 	// Hello, so the handshake shares the runtime initialization budget.
 	requestContext, cancel := context.WithTimeout(ctx, hostRuntimeInitializationDeadline)
@@ -266,19 +296,16 @@ func (h *VoiceHost) request(ctx context.Context, message Message) (Message, erro
 	if err := WriteMessage(h.stdin, message); err != nil {
 		return Message{}, fmt.Errorf("write voice helper request: %w", err)
 	}
-	type readResult struct {
-		message *Message
-		err     error
+	if h.reader == nil {
+		return Message{}, ErrVoiceHostExited
 	}
-	result := make(chan readResult, 1)
-	go func() {
-		response, err := ReadMessage(h.stdout)
-		result <- readResult{message: response, err: err}
-	}()
 	select {
 	case <-ctx.Done():
 		return Message{}, ctx.Err()
-	case response := <-result:
+	case response, ok := <-h.reader.frames:
+		if !ok {
+			return Message{}, ErrVoiceHostExited
+		}
 		if response.err != nil {
 			return Message{}, fmt.Errorf("read voice helper response: %w", response.err)
 		}

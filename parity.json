@@ -1334,6 +1334,14 @@
             "reason": "Aligned upstream a933dd77db (#49972 Share byte buffers across exec-server output chunks): retained process output now stores raw []byte chunks instead of base64 strings. Retention accounting, read byte selection and sandbox aggregated output use the shared bytes directly, while encoding/json serializes []byte as base64 so the process/read and recovered-process wire contracts are unchanged.",
             "userImpact": "Exec-server output handling avoids decoding retained chunks and keeps the wire format compatible.",
             "test": "go test ./execserver -run 'TestOutputChunkSharesBytesAndSerializesBase64LikeRust|ProcessRead' -count=1"
+        },
+        {
+            "id": "voice-helper-stateful-frame-reader",
+            "status": "done",
+            "area": "realtime",
+            "reason": "Aligned upstream deb1471166 (#42404 Read voice helper frames independently of pipe chunks): VoiceHost owns one persistent frame reader over the helper stdout, decoding complete frames regardless of pipe chunk boundaries and preserving late frames across a timed-out exchange for the next handshake/shutdown response. This removes the abandoned per-request read goroutine that could race the next reader.",
+            "userImpact": "Voice helper handshake/shutdown exchanges no longer lose or misread frames when pipe output is split, coalesced, or arrives after a timeout.",
+            "test": "go test ./voicehost -run 'TestVoiceHostFrameReaderHandlesSplitAndCoalescedFramesLikeRust|TestVoiceHostRequestRetainsLateFrameLikeRust' -count=1"
         }
     ]
 }
