@@ -1332,7 +1332,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7f0ab958275e5a3ec40eff993aa077b3f0636abf	46009	Centralize compaction checkpoint selection and validation (#46009)	2026-09-16	guardian	5	1	0.20	0	0	audit_pending	CompactionCheckpoint,from_item,is_compatible_with,is_usable
 7f135e1314433a53d4e348cbf7d3df6072e5971a	41206	Make Ultra reasoning fallback model-aware (#41206)	2026-08-27	appserver	0	0		0	0	not_applicable	
 7f21b5ee9c69f0f05171e5a42f5f00c99f574efc	51184	Remove obsolete Guardian thread-context enables from tests (#51184)	2026-10-05	guardian	0	0		0	0	not_applicable	
-7f2f4fd46e0f50798fd8d3436a8e14a5386d253b	52629	Consolidate local message board storage helpers (#52629)	2026-10-09	core	3	2	0.67	0	0	audit_pending	DATABASE_FILE
+7f2f4fd46e0f50798fd8d3436a8e14a5386d253b	52629	Consolidate local message board storage helpers (#52629)	2026-10-09	core	3	3	1.00	0	0	complete	
 7f501cd334af76dea303980a500c3df2003b1dd7	45813	Track Windows sandbox policy and per-thread executor hosts in the TUI (#45813)	2026-09-16	tui	7	3	0.43	0	0	audit_pending	WindowsSandboxConfig,from_responses,host_from_environments,requires_elevated
 7f6c0f9387a0a60f396f61cc58f6b38bc98f2473	48513	Refresh the TUI welcome screen for new sessions (#48513)	2026-09-26	tui	13	3	0.23	0	0	audit_pending	cancel_replay,continue_from,end_drag,first_screen_composer,fullscreen_session_lines,has_pending_latest_selection,is_eligible,remaining_area,render_first_screen,set_session_greeting
 7f823973633472ec75b9ab86342e01561f78dd42	40961	Restrict macOS scratch access to process sandboxes (#40961)	2026-08-26	sandbox	0	0		0	0	not_applicable	
@@ -2274,7 +2274,7 @@ d6350e24be4d8151a090dd74811774618fe9ecd7	42354	Add free-form asynchronous user m
 d63a9b8344cfe58bc78bbe319b560378fc8756ef	51223	Remove legacy personality template metadata (#51223)	2026-10-06	tui	0	0		0	0	not_applicable	
 d64360f6281df5c062b86715c5c49a9dce03edfb	50215	Support Ctrl+Insert for copying TUI selections (#50215)	2026-10-02	tui	0	0		0	0	not_applicable	
 d6489472f3c15e87d2d7763a5fde033545c530f8	43715	Enable user verification for the bundled TUI on supported devices (#43715)	2026-09-08	appserver	0	0		0	0	not_applicable	
-d650bd7c05a9b67b1d397c501acfa5caa8183655	52183	Add optional descriptions to agent message board channels (#52183)	2026-10-08	core	2	1	0.50	0	0	audit_pending	ChannelDescription
+d650bd7c05a9b67b1d397c501acfa5caa8183655	52183	Add optional descriptions to agent message board channels (#52183)	2026-10-08	core	2	2	1.00	0	0	complete	
 d6571322d270b77c7d044fc714272929a6b467c7	49388	Fix Windows path inference for opaque URIs with slash prefixes (#49388)	2026-09-29	core	0	0		0	0	not_applicable	
 d665e3bbc81b013baa73d067507169c20395b988	43491	Include unloaded children in multi-agent v2 environment context (#43491)	2026-09-07	core	0	0		0	0	not_applicable	
 d6c3b448a41311ece3255c52ec3dbfd9ff36f154	49959	Test session index thread-name append and removal (#49959)	2026-10-01	persistence	0	0		0	0	not_applicable	
