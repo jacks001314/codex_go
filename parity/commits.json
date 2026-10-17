@@ -19902,9 +19902,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: start_streaming_output"
+        "Round 259 (audit): unifiedExecProcess records a bounded head/tail transcript as output arrives, independent of streaming subscribers and polling; completion events use it as AggregatedOutput, preserving pre-subscription output alongside later output. Tests: go test ./tool -run 'UnifiedExecHeadTailBuffer|UnifiedExecOutputDrain' -count=1"
       ]
     },
     {
@@ -20167,9 +20167,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: OutputBuffers"
+        "Round 259 (audit): unifiedExecProcess updates its head/tail transcript through a mutex-guarded buffer, so delta writers and completion snapshots cannot observe a torn buffer or interleave partial writes; one snapshot feeds completion and model-visible output. Tests: go test ./tool -run 'UnifiedExecHeadTailBuffer|UnifiedExecOutputDrain' -count=1"
       ]
     },
     {
@@ -21032,9 +21032,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: InMemoryAgentMessageBoard"
+        "Round 259 (audit): multi-agent v2 message_board_in_memory enables agentboard.InMemoryMessageBoards for ephemeral sessions; ref-counted board state is shared across one agent tree, released with the last handle, and implements channels, posts, subscriptions, notifications, search, paginated reads, and request deduplication. Tests: go test ./agentboard ./appserver -run 'MessageBoard|InMemory' -count=1"
       ]
     },
     {

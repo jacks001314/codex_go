@@ -735,7 +735,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4854cfa64343bc507c9bc28faa6612e68ead5a10	51471	Preserve clickable URLs in pending input previews (#51471)	2026-10-06	tui	1	0	0.00	0	0	implementation_pending	HyperlinkRows
 4875084025582f9443afeb907e2aa20644241dda	43423	Remove the app-server docs update requirement from `AGENTS.md` (#43423)	2026-09-07	core	0	0		0	0	not_applicable	
 4878401e8fbd205c683255b0d224a4592ff95a09	41392	Add shared Guardian context primitives (#41392)	2026-08-28	guardian	14	6	0.43	0	0	audit_pending	ContextSection,ContextTarget,ConversationTranscriptEntry,ConversationTranscriptEntryKind,SectionContributor,SectionInput,SectionRegistry,SectionScope
-4891c4e35fe8b306433f6c0f04dd74bd9e4257e9	47712	Update unified exec output buffers atomically (#47712)	2026-09-24	core	2	1	0.50	0	0	audit_pending	OutputBuffers
+4891c4e35fe8b306433f6c0f04dd74bd9e4257e9	47712	Update unified exec output buffers atomically (#47712)	2026-09-24	core	2	1	0.50	0	0	complete	OutputBuffers
 48bd7667ca270a8ce7e3e1aa57f88a0f54aee15b	52062	Add scenario coverage for worker context across idle eviction (#52062)	2026-10-08	core	0	0		0	0	not_applicable	
 48e22a5fa08b03a9d8acc6a6577dd334c5319446	41452	Report code mode host request durations (#41452)	2026-08-28	appserver	6	4	0.67	0	0	audit_pending	record_code_mode_host_duration,with_code_mode_host_duration
 48f897e4ce94152818ce0563b3a8aac3a70ce9b8	46989	Expand agent message board tool integration coverage (#46989)	2026-09-21	core	0	0		0	0	not_applicable	
@@ -2245,7 +2245,7 @@ d42056091aded7feb1d88ac7e83972108b2aa478	49517	Add a fork shortcut to the TUI co
 d42aecc56be30bda8df6137c1d74d6ed9365a23f	50504	Center TUI confirmations over their retained backdrop (#50504)	2026-10-03	tui	8	1	0.12	0	0	audit_pending	CenteredView,DialogOverlay,ViewPresentation,ViewStack,backdrop_with_options,centered_dialog,has_centered_view
 d43f1e7eb27b204fd0e565891869280df3ba2346	44942	Clarify the Windows Visual C++ runtime notice for voice packages (#44942)	2026-09-11	realtime	0	0		0	0	not_applicable	
 d44696065723a56b9de6538cd6348fcbe6c1542e	39953	Support voice-aware configuration and version-skew builds (#39953)	2026-08-21	execserver	0	0		0	0	not_applicable	
-d47b9a8c002f41433784fef2536892d49c9facfb	47665	Preserve early unified exec output in completion events (#47665)	2026-09-23	core	2	1	0.50	0	0	audit_pending	start_streaming_output
+d47b9a8c002f41433784fef2536892d49c9facfb	47665	Preserve early unified exec output in completion events (#47665)	2026-09-23	core	2	1	0.50	0	0	complete	start_streaming_output
 d47e5cc0e2bbd35774dff15c83570519735d2ac4	40958	Add Vim buffer jump motions (#40958)	2026-08-26	tui	0	0		0	0	not_applicable	
 d4998d611ad37de0aa9723b6fdd2d9a2f8ff4763	40901	Record reviewed actions with security risk scores (#40901)	2026-08-26	guardian	0	0		0	0	not_applicable	
 d4a475adda850d80b6149c76454de94e0cf4fd51	49813	Support AWS GovCloud regions for Amazon Bedrock Mantle (#49813)	2026-09-30	model	0	0		0	0	not_applicable	
@@ -2348,7 +2348,7 @@ dd6eff3954949d074ca45ee80da89499b955bf8e	47036	Share stored JSON payloads across
 dd90f160ed9bf91320c417335ddff848b6a23dd0	49946	Prevent stale file search results from being labeled with a new query (#49946)	2026-10-01	core	2	0	0.00	0	0	implementation_pending	RecordingReporter,for_query
 dd9512c0008859f6c95fb2dae2290a2cb94b38fb	43846	Include completed commentary in the `/copy` picker (#43846)	2026-09-08	tui	0	0		0	0	not_applicable	
 dd9a7101d9ddbaab68030e04d288d71bead68552	48200	Extract Responses header conversion into a shared module (#48200)	2026-09-25	core	1	1	1.00	0	0	complete	
-dda227891d27b6e0f3f244eda149a98d098969ad	47946	Add an in-memory agent message board for ephemeral sessions (#47946)	2026-09-24	config	3	2	0.67	0	0	audit_pending	InMemoryAgentMessageBoard
+dda227891d27b6e0f3f244eda149a98d098969ad	47946	Add an in-memory agent message board for ephemeral sessions (#47946)	2026-09-24	config	3	2	0.67	0	0	complete	InMemoryAgentMessageBoard
 ddabe594e6f053f2d6d193b5768ece5f4c8c771d	51502	Bound relay connection attempts and handle pongs during blocked writes (#51502)	2026-10-06	execserver	3	3	1.00	0	0	complete	
 ddb33e34b278ca1b7d16d1e68f8ad363a2042f2e	53358	Remove selected protocol, apply-patch, MCP, and TUI tests (#53358)	2026-10-12	tui	0	0		0	0	not_applicable	
 dde5f8c5ae9b644c6882b3a48581ac317255d597	50764	Allow `/archive` while a turn is running (#50764)	2026-10-04	tui	0	0		0	0	not_applicable	
