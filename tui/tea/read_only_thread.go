@@ -95,7 +95,10 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 		return nil
 	}
 	if m.commandCenterAvailable() {
-		if msg.Type == bubbletea.KeyEsc || (msg.Type == bubbletea.KeyLeft && m.agentsNavigationKeyAvailable()) {
+		// Rust app/input.rs:600-605 accepts Left only as a plain press with no
+		// modifiers, so Alt+Left (the composer agent-navigation chord) must not
+		// fall through to the command center here.
+		if msg.Type == bubbletea.KeyEsc || (PlainKey(bubbletea.KeyLeft).IsPress(msg) && m.agentsNavigationKeyAvailable()) {
 			return m.applyAgentsCommand()
 		}
 	} else if msg.Type == bubbletea.KeyEsc {

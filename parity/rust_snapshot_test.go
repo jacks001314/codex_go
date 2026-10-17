@@ -314,7 +314,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// agent-message-board-client workspace member.
 		// Round-91 re-anchor to head e16b631d08: Cargo.toml gained the
 		// ext/multi-env-copy-file workspace member (#54674).
-		{Path: "Cargo.toml", SHA256: "1d477861e702166a83762906ce70d7f6838cf479a40826d8c173ea4e41e8ff8f"},
+		// Round-106 re-anchor to head 3b8f43a06b: the zip dependency moved to
+		// 9.0.0 (#54761); every other pin below is unchanged at that head.
+		{Path: "Cargo.toml", SHA256: "97f3323253c8f48adc234db8fc08e865550a4bfa54f075503304d6c9e574619f"},
 		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.

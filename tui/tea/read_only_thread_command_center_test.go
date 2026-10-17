@@ -145,3 +145,17 @@ func TestReadOnlyViewWithoutCommandCenterKeepsExitKeys(t *testing.T) {
 		}
 	}
 }
+
+// Rust app/input.rs:600-605 only treats a plain Left press as the command
+// center shortcut: the modifier check must stay, or Alt+Left (the composer's
+// agent-navigation chord) would open the dashboard instead of switching agents.
+func TestReadOnlyViewIgnoresModifiedLeftLikeRust(t *testing.T) {
+	model := readOnlyCommandCenterModel(t, availableCommandCenterOptions())
+	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft, Alt: true}); command != nil || model.agentsOverview != nil {
+		t.Fatal("Alt+Left must not open the command center")
+	}
+	// Control: the unmodified key still returns to the command center.
+	if _, command := model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyLeft}); command == nil || model.agentsOverview == nil {
+		t.Fatal("plain Left must open the command center")
+	}
+}

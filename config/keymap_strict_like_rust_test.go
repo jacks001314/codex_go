@@ -58,6 +58,11 @@ func TestStrictConfigAcceptsKnownTuiKeymapFieldsLikeRust(t *testing.T) {
 	body := "profile = \"work\"\n\n" +
 		"[tui.keymap.global]\nopen_external_editor = \"ctrl-e\"\n\n" +
 		"[tui.keymap.vim_text_object]\ndouble_quote = \"shift-quote\"\n\n" +
+		// Upstream spellings for behavior Go implements under another name
+		// stay valid: the strict policy must not report them as unknown.
+		"[tui.keymap.vim_normal]\nenter_replace_mode = \"shift-r\"\n" +
+		"find_forward = \"f\"\n\n" +
+		"[tui.keymap.vim_search]\nforward = \"ctrl-f\"\n\n" +
 		"[profiles.work.tui]\nsession_picker_view = \"fuzzy\"\n"
 	if err := os.WriteFile(ConfigPath(dir), []byte(body), 0o600); err != nil {
 		t.Fatalf("WriteFile error = %v", err)

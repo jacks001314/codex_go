@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"codex_go/keymapschema"
 )
 
 // Rust parity: codex-rs/tui/src/keymap_setup/actions.rs at 4eb4a65407
@@ -160,12 +162,23 @@ func TestKeymapCatalogRustInventoryLedger(t *testing.T) {
 		if _, ok := FindKeymapAction(context, action); ok {
 			t.Fatalf("%s is registered in the catalog although it is accepted as a rename (%s); land the consumer or drop the accepted row", key, rename)
 		}
-		if err := NewKeymapConfig().Set(context, action, []string{"ctrl-u"}); err == nil {
-			t.Fatalf("%s is accepted as a config target although only the Go name is wired (%s)", key, rename)
-		}
 		goContext, goAction := splitAcceptedRename(t, rename)
 		if _, ok := FindKeymapAction(goContext, goAction); !ok {
 			t.Fatalf("Go name %s.%s of accepted rename %s is missing from the catalog", goContext, goAction, key)
+		}
+		// Rust #54766: the upstream spelling stays a valid config target and
+		// binds the Go action that implements the behavior, so a config
+		// authored against upstream keeps working here.
+		if alias, ok := keymapschema.ActionAliases[key]; !ok || alias != goContext+"."+goAction {
+			t.Fatalf("keymapschema.ActionAliases[%q] = %q, %v; want %q", key, alias, ok, goContext+"."+goAction)
+		}
+		config := NewKeymapConfig()
+		if err := config.Set(context, action, []string{"ctrl-u"}); err != nil {
+			t.Fatalf("%s must stay a valid config target through keymapschema.ActionAliases: %v", key, err)
+		}
+		bindings, source, ok := ResolvedKeymapBindings(config, goContext, goAction)
+		if !ok || source != "custom" || len(bindings) != 1 || bindings[0] != "ctrl-u" {
+			t.Fatalf("%s resolved to %v via %q (%v); want the Go target %s.%s bound to ctrl-u", key, bindings, source, ok, goContext, goAction)
 		}
 	}
 	for key, note := range goOnlyKeymapActions {

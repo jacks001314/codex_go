@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"codex_go/keymapschema"
 )
 
 const MaxFunctionKey = 24
@@ -123,13 +125,14 @@ func (c *KeymapConfig) setRaw(context string, action string, bindings []string) 
 
 func KeymapConfigFromConfigValues(values map[string]any) (*KeymapConfig, error) {
 	config := NewKeymapConfig()
+	configuredFrom := map[string]string{}
 	keymap, ok, err := keymapTableFromValues(values)
 	if err != nil || !ok {
 		return config, err
 	}
 	for context, rawContext := range keymap {
 		context = strings.TrimSpace(context)
-		if _, ok := knownKeymapConfigContexts()[context]; !ok {
+		if _, ok := knownKeymapConfigContexts()[context]; !ok && !keymapschema.KnownContext(context) {
 			// Rust #54766 removed serde's `deny_unknown_fields` from the keymap
 			// structs: an unknown context (or an action misplaced at the keymap
 			// root) is ignored during deserialization and left to the shared
@@ -141,7 +144,11 @@ func KeymapConfigFromConfigValues(values map[string]any) (*KeymapConfig, error) 
 			return nil, fmt.Errorf("tui.keymap.%s must be a table", context)
 		}
 		for action, rawBinding := range actionValues {
-			if _, ok := knownKeymapConfigActions(context)[action]; !ok {
+			// Upstream action names that Go implements under a different name
+			// (Rust `config/src/tui_keymap.rs`) stay valid and bind the Go
+			// target, so a Rust-authored config keeps working (#54766).
+			targetContext, targetAction, _ := keymapschema.ResolveAlias(context, action)
+			if _, ok := knownKeymapConfigActions(targetContext)[targetAction]; !ok {
 				// Unknown actions are ignored for the same reason.
 				continue
 			}
@@ -149,7 +156,13 @@ func KeymapConfigFromConfigValues(values map[string]any) (*KeymapConfig, error) 
 			if err != nil {
 				return nil, fmt.Errorf("tui.keymap.%s.%s: %w", context, action, err)
 			}
-			config.setRaw(context, action, bindings)
+			targetKey := targetContext + "." + targetAction
+			sourceKey := context + "." + action
+			if previous, ok := configuredFrom[targetKey]; ok && previous != sourceKey {
+				return nil, fmt.Errorf("tui.keymap.%s and tui.keymap.%s both configure %s", previous, sourceKey, targetKey)
+			}
+			configuredFrom[targetKey] = sourceKey
+			config.setRaw(targetContext, targetAction, bindings)
 		}
 	}
 	if err := config.Validate(); err != nil {
@@ -817,6 +830,9 @@ func normalizeKeymapTarget(context string, action string) (string, string, error
 	action = strings.TrimSpace(action)
 	if context == "" || action == "" {
 		return "", "", fmt.Errorf("keymap target must include context and action")
+	}
+	if targetContext, targetAction, ok := keymapschema.ResolveAlias(context, action); ok {
+		return targetContext, targetAction, nil
 	}
 	if _, ok := knownKeymapConfigActions(context)[action]; !ok {
 		if _, contextOK := knownKeymapConfigContexts()[context]; !contextOK {

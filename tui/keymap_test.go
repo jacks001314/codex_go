@@ -344,3 +344,60 @@ func TestAsyncQuestionKeymapActionsResolveDefaults(t *testing.T) {
 		t.Fatalf("edit_queued_message description = %q", editDescription)
 	}
 }
+
+// Rust keeps the vim action names (and the separate vim_search context) that
+// Go implements as differently named catalog entries. A config written against
+// upstream must still bind the Go behavior instead of being ignored (#54766).
+func TestKeymapConfigAppliesUpstreamVimActionAliasesLikeRust(t *testing.T) {
+	var values map[string]any
+	input := `
+[tui.keymap.vim_normal]
+enter_replace_mode = "shift-r"
+find_forward = "f"
+till_backward = "shift-t"
+
+[tui.keymap.vim_search]
+forward = "ctrl-f"
+previous = "ctrl-p"
+`
+	if err := toml.Unmarshal([]byte(input), &values); err != nil {
+		t.Fatalf("toml.Unmarshal error = %v", err)
+	}
+	config, err := KeymapConfigFromConfigValues(values)
+	if err != nil {
+		t.Fatalf("KeymapConfigFromConfigValues error = %v", err)
+	}
+	for _, testCase := range []struct {
+		context string
+		action  string
+		want    string
+	}{
+		{"vim_normal", "replace_mode", "shift-r"},
+		{"vim_normal", "find_char_forward", "f"},
+		{"vim_normal", "till_char_backward", "shift-t"},
+		{"vim_normal", "search_forward", "ctrl-f"},
+		{"vim_normal", "search_prev", "ctrl-p"},
+	} {
+		bindings, ok := config.Binding(testCase.context, testCase.action)
+		if !ok || len(bindings) != 1 || bindings[0] != testCase.want {
+			t.Fatalf("%s.%s bindings = %#v ok=%v, want %q", testCase.context, testCase.action, bindings, ok, testCase.want)
+		}
+	}
+}
+
+// An alias and its canonical Go action must not silently fight over the same
+// target; the loader reports the conflict instead of letting map order decide.
+func TestKeymapConfigRejectsAliasCanonicalConflictLikeRust(t *testing.T) {
+	var values map[string]any
+	input := `
+[tui.keymap.vim_normal]
+replace_mode = "shift-r"
+enter_replace_mode = "ctrl-r"
+`
+	if err := toml.Unmarshal([]byte(input), &values); err != nil {
+		t.Fatalf("toml.Unmarshal error = %v", err)
+	}
+	if _, err := KeymapConfigFromConfigValues(values); err == nil {
+		t.Fatal("expected the alias/canonical conflict to be reported")
+	}
+}

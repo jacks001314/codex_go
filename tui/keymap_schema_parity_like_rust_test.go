@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"codex_go/keymapschema"
@@ -40,5 +41,30 @@ func TestKeymapSchemaMatchesCatalogLikeRust(t *testing.T) {
 				t.Fatalf("action %s.%s missing from keymapschema", context, action)
 			}
 		}
+	}
+}
+
+// Every accepted upstream rename must be in the schema's alias table (the
+// strict-config validator reads it) and every alias must name a real catalog
+// entry, so an alias can never point at behavior that does not exist.
+func TestKeymapSchemaAliasesMatchCatalogLikeRust(t *testing.T) {
+	catalog := map[string]bool{}
+	for _, action := range keymapActionCatalog {
+		catalog[action.Context+"."+action.Action] = true
+	}
+	for source, target := range keymapschema.ActionAliases {
+		if !catalog[target] {
+			t.Fatalf("alias %s -> %s has no catalog entry", source, target)
+		}
+		if catalog[source] {
+			t.Fatalf("alias source %s is already a catalog action", source)
+		}
+		context, action, ok := strings.Cut(source, ".")
+		if !ok || !keymapschema.KnownContext(context) || !keymapschema.KnownAction(context, action) {
+			t.Fatalf("alias %s is not accepted by the schema", source)
+		}
+	}
+	if len(keymapschema.ActionAliases) != len(acceptedKeymapRenames) {
+		t.Fatalf("schema aliases = %d, accepted renames = %d", len(keymapschema.ActionAliases), len(acceptedKeymapRenames))
 	}
 }

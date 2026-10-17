@@ -648,3 +648,56 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 ## 22.6 baseline 说明
 
 parity baseline（`parity.json.rustBaseline`、`parity/baseline.json`、`parity/domains.json`）继续冻结在 `970b7f2ff4`：`parity/alignment_control_test.go` 同时硬编码 candidate SHA 与 `parity/commits.json` 的 52 条提交、README 与 plan 文本，单改 baseline 会让该测试失败。本轮只做功能同步，不移动 baseline。
+
+# Round 107 增量（2026-10-17，lead）
+
+## 23.1 系统性 parity 套件回归修复
+
+上一轮只跑了定向测试，漏掉了仓库自带的 parity 对比套件；`go test ./parity` 当时为红，本轮先把它跑绿，因为它是「系统比对」的主闸门。
+
+- `TestGoTopLevelDirectoryInventory`：新增的 `keymapschema` 顶层包未登记，已加入 `parity/rust_inventory_test.go` 的 Go 目录快照。
+- `TestRustCriticalFileHashesSnapshot`：上游拉到 `3b8f43a06b` 后 `Cargo.toml` 变化（zip 9.0.0，即 #54761）。按既有惯例用 `git cat-file blob 3b8f43a06b:codex-rs/<path>` 重算九个 pin，只有 `Cargo.toml` 变化（`1d477861…` → `97f33232…`），其余八项同一 head 下不变；注释已标注 Round-106 re-anchor。
+- 结果：`go test ./parity -count=1` → ok（此前 FAIL）。
+
+## 23.2 只读会话返回键漂移修正（Rust #48132 家族）
+
+`tui/tea/read_only_thread.go` 的返回命令中心判定只比较 `msg.Type == KeyLeft`，而 Rust `app/input.rs:600-605` 要求 `KeyEventKind::Press` 且 `modifiers == NONE`。因此 Go 里 `Alt+Left`（composer 的 agent 导航组合键）会误开 command center。
+
+- 改为 `PlainKey(bubbletea.KeyLeft).IsPress(msg)`，与同文件其它按键判定一致；bubbletea 无法区分 Press/Repeat，修饰键这半边已对齐，重复键这半无载体。
+- 新增 `tui/tea/read_only_thread_command_center_test.go::TestReadOnlyViewIgnoresModifiedLeftLikeRust`：Alt+Left 不打开面板，plain Left 仍打开。
+
+## 23.3 上游 keymap 名称/上下文兼容（Rust #54766 的 strict-config 补全）
+
+Go 的 keymap catalog 与 Rust `config/src/tui_keymap.rs` 有 9 个「同行为不同名」的 action（以及一个 `vim_search` 上下文）。此前这些 Rust 名称既不能绑定（`/keymap set` 报未知），又会被刚落地的 strict-config 误报为未知字段 —— 等于 Rust 合法配置在 Go 里失效。
+
+- 新增 `keymapschema.ActionAliases`（9 条，单一事实源）：`vim_normal.enter_replace_mode → replace_mode`、`find_forward/backward → find_char_forward/backward`、`till_forward/backward → till_char_forward/backward`、`vim_search.{forward,backward,next,previous} → vim_normal.search_{forward,backward,next,prev}`。
+- `keymapschema.KnownContext/KnownAction` 接受只存在于别名的上下文与动作，strict-config 不再误报。
+- `tui/keymap_config.go`：`KeymapConfigFromConfigValues` 在未知动作过滤前解析别名并写入 Go 目标；`normalizeKeymapTarget` 同样解析，使 `/keymap set|unset vim_search.forward` 可用；同一目标被别名与正式名同时配置时报冲突，避免 map 迭代顺序决定结果。
+- 测试：`tui/keymap_test.go::TestKeymapConfigAppliesUpstreamVimActionAliasesLikeRust`、`TestKeymapConfigRejectsAliasCanonicalConflictLikeRust`；`tui/keymap_schema_parity_like_rust_test.go::TestKeymapSchemaAliasesMatchCatalogLikeRust`（别名必须指向真实 catalog 条目、数量与 `acceptedKeymapRenames` 一致）；`config/keymap_strict_like_rust_test.go` 增加 Rust 拼写的接受用例。
+
+## 23.4 账本校正
+
+复核后 5 条 TUI keymap 账目由 `blocked_precondition` 改为 `landed`，1 条更新为「一半已落地」：
+
+| 账目 | 新状态 | 依据 |
+| --- | --- | --- |
+| #49517 `agents.fork` | landed | `tui/keymap.go:163` + `tui/tea/agents_overview.go:463` |
+| #46749 `pager.find` | landed | `tui/keymap.go:148` + `tui/chatwidget/transcript_overlay_find.go` |
+| #42194 `enter_replace_mode` | landed | 别名解析（本轮） |
+| #40785 `find_/till_` 四名 | landed | 别名解析（本轮） |
+| #41586 `vim_search` 上下文 | landed | 别名上下文（本轮） |
+| #46734 `find_transcript`/`focus_activity` | 仍 blocked | find_transcript 已落地；focus_activity 无活动分组聚焦载体 |
+
+统计：landed 102 / not_applicable 79 / blocked_precondition 17 / complete 15 / AlreadyImplemented 12（partial = 0）。
+
+## 23.5 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./parity -count=1` | ok（本轮修复前 FAIL） |
+| `go test ./tui ./config ./keymapschema -count=1` | ok |
+| `go test ./tui/tea -run "TestReadOnlyView" -count=1` | ok |
+| `go test ./... -count=1` | 仅剩既有/环境失败，已在 detached `db882bd7` worktree 复现同一组（app 3、appserver 4-5、doctor 3、exec 1、execserver 3、gitutil 3、memories 1、model 3、prompt 3、recordreplay 1、state 1、tool 2、tui/tea 1、sandbox/linuxsandbox 构建） |
+
+`memories::TestMemoryV2TemplateMatchesRust` 的根因已定位：`go:embed` 读取工作区 CRLF 文件，而测试只把 Rust 侧归一化成 LF；属于 Windows 检出环境问题，不是本轮上游漂移。

@@ -1,5 +1,7 @@
 package keymapschema
 
+import "strings"
+
 // ContextActions is the set of keymap contexts and actions the TUI accepts.
 // It mirrors the strongly typed Rust keymap structs (`config/src/tui_keymap.rs`).
 // Unknown keys are ignored during deserialization and reported by the shared
@@ -187,18 +189,56 @@ var ContextActions = map[string]map[string]struct{}{
 	},
 }
 
+// ActionAliases maps an upstream keymap action name to the Go catalog entry
+// that implements the same behavior. Upstream (`config/src/tui_keymap.rs`)
+// keeps these names, so a Rust-authored config must stay valid here even
+// though Go implements the behavior under a different action (and, for vim
+// search, a different context). The TUI loader applies the alias, and the
+// shared strict-config policy accepts the upstream spelling instead of
+// reporting it as an unknown field (Rust #54766).
+var ActionAliases = map[string]string{
+	"vim_normal.enter_replace_mode": "vim_normal.replace_mode",
+	"vim_normal.find_forward":       "vim_normal.find_char_forward",
+	"vim_normal.find_backward":      "vim_normal.find_char_backward",
+	"vim_normal.till_forward":       "vim_normal.till_char_forward",
+	"vim_normal.till_backward":      "vim_normal.till_char_backward",
+	"vim_search.forward":            "vim_normal.search_forward",
+	"vim_search.backward":           "vim_normal.search_backward",
+	"vim_search.next":               "vim_normal.search_next",
+	"vim_search.previous":           "vim_normal.search_prev",
+}
+
 // KnownContext reports whether the keymap context is part of the schema.
 func KnownContext(context string) bool {
-	_, ok := ContextActions[context]
+	if _, ok := ContextActions[context]; ok {
+		return true
+	}
+	for key := range ActionAliases {
+		if aliasContext, _, _ := strings.Cut(key, "."); aliasContext == context {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownAction reports whether the action belongs to the context, either
+// directly or through an upstream action alias.
+func KnownAction(context, action string) bool {
+	if actions, ok := ContextActions[context]; ok {
+		if _, ok := actions[action]; ok {
+			return true
+		}
+	}
+	_, ok := ActionAliases[context+"."+action]
 	return ok
 }
 
-// KnownAction reports whether the action belongs to the context.
-func KnownAction(context, action string) bool {
-	actions, ok := ContextActions[context]
+// ResolveAlias maps an upstream action name to the Go catalog target.
+func ResolveAlias(context, action string) (string, string, bool) {
+	target, ok := ActionAliases[context+"."+action]
 	if !ok {
-		return false
+		return context, action, false
 	}
-	_, ok = actions[action]
-	return ok
+	goContext, goAction, _ := strings.Cut(target, ".")
+	return goContext, goAction, true
 }

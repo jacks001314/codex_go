@@ -238,6 +238,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"historynotes",
 		"install",
 		"jsonschema",
+		"keymapschema",
 		"keyring",
 		"mcp",
 		"memories",
