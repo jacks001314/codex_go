@@ -278,7 +278,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1afffeabb2aaaed78d209d23864265ab6a45cd06	44619	Allow discarded code mode tool responses to be garbage collected (#44619)	2026-09-10	core	0	0		0	0	not_applicable	
 1b1835f751ebdc0cfc50b3fe55d4571dbb294563	48973	Isolate realtime auth fallback test from startup prewarm (#48973)	2026-09-28	realtime	0	0		0	0	not_applicable	
 1b1b58f5a532286959592208216376f1123f8ff0	47338	Move the activity inspection hint into keyboard shortcut help (#47338)	2026-09-22	tui	0	0		0	0	not_applicable	
-1b53f6a44eff890b5169bde8d3bd5b12b8766946	42676	Add WebRTC negotiation to the voice host (#42676)	2026-09-04	realtime	9	8	0.89	0	0	audit_pending	into_sdp
+1b53f6a44eff890b5169bde8d3bd5b12b8766946	42676	Add WebRTC negotiation to the voice host (#42676)	2026-09-04	realtime	9	8	0.89	0	0	complete	into_sdp
 1b5e27c7f0e94e395aed438a0b361d0dca07230e	44925	Accept voice response audio before captions on quiet turns (#44925)	2026-09-11	tui	1	0	0.00	0	0	implementation_pending	suppress_active_realtime_speaker
 1b6e0d8145e1fe5b2663d32fbe7ee02f51a10e1c	53831	Track content provenance through prompt assembly and compaction (#53831)	2026-10-14	guardian	30	15	0.50	0	0	complete	AttributedFragment,ContentItemMetadata,ContentItemNamespace,ContentItemProvenance,HookContext,HookMcpOutput,clear_content_item_metadata,command_hook,into_content,into_parts
 1b83e5cdf99889e72fbf3f92d9848fdf31de652e	44670	Restrict login setup redirects to known platform origins (#44670)	2026-09-10	core	0	0		0	0	not_applicable	
@@ -598,7 +598,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3c062df036070ad5819a9a74160a448b414e9b92	41461	Source async user message descriptions from the model catalog (#41461)	2026-08-29	guardian	3	3	1.00	0	0	complete	
 3c3a990da04e04a4db37f4c1fe3fc00cd934d6f5	50454	Measure rollout persistence size reductions (#50454)	2026-10-02	persistence	0	0		0	0	not_applicable	
 3c6bb8b3ebfe3462e781047d00bd6aae11a54c83	42068	Detect standalone installs from the macOS CLI bundle (#42068)	2026-09-01	core	0	0		0	0	not_applicable	
-3c6f32ca8293e24879859501793f31422d2012be	46002	Extract route-aware HTTP request execution into a separate module (#46002)	2026-09-16	core	3	1	0.33	0	0	audit_pending	retry_with_rustls,send_with_resolver
+3c6f32ca8293e24879859501793f31422d2012be	46002	Extract route-aware HTTP request execution into a separate module (#46002)	2026-09-16	core	3	1	0.33	0	0	not_applicable	retry_with_rustls,send_with_resolver
 3c837e568c24e4281bba4abdf3bc3c398f3fff13	42718	Gate unified exec TTY support behind a feature flag (#42718)	2026-09-04	config	0	0		0	0	not_applicable	
 3caf9f9586baedb4158a7b91545ead3dd320c348	43676	Style spoken prompts and link workspace files in voice transcripts (#43676)	2026-09-08	tui	6	2	0.33	0	0	audit_pending	TrustedWorkspaceFile,annotate_spoken_artifacts,new_spoken,trusted_workspace_file
 3cd255a4ee8e9c3eef331e03356c5d917d6e4293	46332	Dim conversation recaps in the TUI (#46332)	2026-09-18	tui	0	0		0	0	not_applicable	

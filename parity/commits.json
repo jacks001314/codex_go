@@ -7323,10 +7323,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 8/9; needs review: into_sdp"
-      ]
+        "status": "complete",
+        "evidence": [
+          "The Go voice host negotiates offer/answer SDP through the helper protocol, validates and redacts bounded SDP values, and gates capture/device operations on completed negotiation."
+        ]
     },
     {
       "sha": "f3f6922519fa38487c8250c2b8a670a39a2cf9ff",
@@ -14535,10 +14535,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/3; needs review: retry_with_rustls, send_with_resolver"
-      ]
+        "status": "not_applicable",
+        "evidence": [
+          "The commit is a private Rust http-client refactor around rustls and its route-aware pool; Go uses net/http with separate proxy/policy transports and has no rustls resolver path."
+        ]
     },
     {
       "sha": "43354d0f61c1bda3eff26decaf13276bb57039e7",
