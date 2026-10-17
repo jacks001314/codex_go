@@ -786,7 +786,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4cb8d8679c051663c27827d3c2f15289671f864b	41062	Forward truncation policies to the history notes backend (#41062)	2026-08-27	core	0	0		0	0	not_applicable	
 4cedd0caac89f9fdcb5ad385e8093da5363d91c2	50339	Add end-to-end coverage for MCP sandbox state enforcement (#50339)	2026-10-02	mcp	0	0		0	0	not_applicable	
 4cf84b7603548f476678ea1444faf15c7cbdd5fb	46038	Test Windows sandbox bin DACL modification permissions (#46038)	2026-09-16	sandbox	0	0		0	0	not_applicable	
-4d15794336668d6098c0e36eb8e96cbbbfdb1d2d	51209	Add ranked tool discovery to JavaScript code mode (#51209)	2026-10-06	config	6	1	0.17	0	0	audit_pending	DeferredToolDiscovery,TOOL_SEARCH_GUIDANCE,apply_code_mode_description,create_code_mode_tool,prepare_code_mode_tool_definitions
+4d15794336668d6098c0e36eb8e96cbbbfdb1d2d	51209	Add ranked tool discovery to JavaScript code mode (#51209)	2026-10-06	config	6	6	1.00	0	0	complete	
 4d160ea71dddc8e3b7e780b1aa159e79baaa535f	46979	Index channel posts by timestamp for latest-message lookups (#46979)	2026-09-21	core	0	0		0	0	not_applicable	
 4d205c7a4dc36b719679a0356a45b23133732265	44931	Stop setting `YARN_NO_PROXY` in the managed proxy environment (#44931)	2026-09-11	core	0	0		0	0	not_applicable	
 4d23af09755efd5b2d79cdcce62a53a0fd59057d	46490	Compose gateway OAuth with primary provider authentication (#46490)	2026-09-18	model	5	3	0.60	0	0	audit_pending	AuthRuntimeConfig,seed_gateway_auth
