@@ -17705,9 +17705,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: into_shared_annotated_items, new_deferred"
+        "Round 290 (audit): N/A - Rust adds a lazy ConversationHistory loader for extension-tool invocation snapshots. Go extension executors receive concrete conversation slices and have no ConversationHistory/ResponseItemEnvelope lazy-conversion carrier."
       ]
     },
     {

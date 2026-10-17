@@ -617,7 +617,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3e544e843713d254dfc22ced37b902235a7573f8	51761	Reduce tool metadata cloning in the code-mode runtime (#51761)	2026-10-07	core	1	0	0.00	0	0	not_applicable	none
 3e581ebca854a3b0c99a1bead92b1848bbc7f35d	46297	Support catalog descriptions for all multi-agent V2 tools (#46297)	2026-09-17	model	2	2	1.00	0	0	complete	
 3e9d1d29370ee7239585b9d1d576bea8263768ec	47861	Avoid nested read locking when rendering browser sign-in (#47861)	2026-09-24	tui	0	0		0	0	not_applicable	
-3ead67394691548e5c2f1be4cad649907f075e66	47035	Defer extension tool history materialization until first access (#47035)	2026-09-21	core	2	0	0.00	0	0	implementation_pending	into_shared_annotated_items,new_deferred
+3ead67394691548e5c2f1be4cad649907f075e66	47035	Defer extension tool history materialization until first access (#47035)	2026-09-21	core	2	0	0.00	0	0	not_applicable	none
 3ebfe7b3009839dd4fee195ffe69753fe61b85a1	47355	Reserve spacing after recaps at the transcript tail (#47355)	2026-09-22	tui	0	0		0	0	not_applicable	
 3ece80b784c7629230c38927b3a8f85fc059c66d	53443	Use local MSVC toolchains for native Windows Bazel tests (#53443)	2026-10-12	core	0	0		0	0	not_applicable	
 3ed49879c8b138df83e923083b0308eec8c3a704	46278	Reduce R2 release upload concurrency and enable standard retries (#46278)	2026-09-17	core	0	0		0	0	not_applicable	
