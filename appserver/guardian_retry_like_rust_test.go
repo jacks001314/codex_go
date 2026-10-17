@@ -63,10 +63,10 @@ func TestGuardianReviewRefreshesChangedContextLikeRust(t *testing.T) {
 	}
 }
 
-// Rust #53987: the stale-authorization retry yields to the executor instead of
-// sleeping before the next attempt, while still honouring the shared attempt
-// budget. Three changing attempts therefore finish far below the 200ms service
-// backoff, and the final attempt's decision is the one reported.
+// Rust #53987/#47819: the stale-authorization retry yields to the executor
+// instead of sleeping before the next attempt, while still honouring the
+// shared attempt budget. Three changing allow attempts finish far below the
+// 200ms service backoff, and exhausting the budget fails closed.
 func TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust(t *testing.T) {
 	metrics := state.NewTaskMetrics()
 	transcript := []string{"user: initial request"}
@@ -84,19 +84,50 @@ func TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust(t *testing.T) {
 		},
 	}
 	started := time.Now()
-	decision, _, err := reviewer.Review(context.Background(), "thread-budget", "turn-budget", "call-budget", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()})
+	decision, message, err := reviewer.Review(context.Background(), "thread-budget", "turn-budget", "call-budget", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()})
 	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("review error = %v", err)
 	}
-	if decision != state.DecisionApproved {
-		t.Fatalf("decision = %q, want the final attempt's approval", decision)
+	if decision != state.DecisionDenied {
+		t.Fatalf("decision = %q, want a failed-closed denial", decision)
+	}
+	if !strings.Contains(message, "authorization changed before approval could be applied") {
+		t.Fatalf("message = %q, want the stale-authorization denial", message)
 	}
 	if calls != guardianMaxReviewAttempts {
 		t.Fatalf("agent calls = %d, want %d (shared attempt budget)", calls, guardianMaxReviewAttempts)
 	}
 	if elapsed >= 200*time.Millisecond {
 		t.Fatalf("stale-context retries took %v, want no service backoff", elapsed)
+	}
+}
+
+// Rust #47819 invalidates only an allow: a deny is reported from the evidence
+// it already saw instead of consuming the stale-authorization retry budget.
+func TestGuardianReviewDenySkipsStaleRetryLikeRust(t *testing.T) {
+	transcript := []string{"user: initial request"}
+	calls := 0
+	reviewer := &modelGuardianReviewer{
+		agent: guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			calls++
+			transcript = append(transcript, "user: change while reviewing")
+			return &model.AgentResponse{Message: `{"riskLevel":"high","userAuthorization":"low","outcome":"deny","rationale":"risky"}`}, nil
+		}),
+		store: state.NewReviewStore(),
+		transcript: func(string) []string {
+			return append([]string(nil), transcript...)
+		},
+	}
+	decision, _, err := reviewer.Review(context.Background(), "thread-deny-stale", "turn-deny-stale", "call-deny-stale", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("review error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("agent calls = %d, want the deny reported without a stale retry", calls)
+	}
+	if decision != state.DecisionDenied {
+		t.Fatalf("decision = %q, want denied", decision)
 	}
 }
 

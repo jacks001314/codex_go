@@ -1271,6 +1271,14 @@
             "reason": "Aligned upstream 2dc0791c7d (#52723 Add opt-in gRPC over stdio for the code-mode host): the disabled-by-default code_mode_host_grpc feature selects a process-owned provider that lazily spawns one host, runs HTTP/2 gRPC over its stdin/stdout, shares the channel across isolated sessions, uses keepalives, reaps a dead host and spawns a fresh one on the next connect. The host serves the existing code-mode protocol loop over the framed Transport stream and exits when its stdio connection closes.",
             "userImpact": "Operators can opt into the gRPC code-mode host transport while the default legacy stdio transport and session isolation stay unchanged.",
             "test": "go test ./codemode -run 'TestGrpcProcessProvider|TestGrpcStdioHost|TestProcessProvider' -count=1; go test ./appserver -run TestCodeModeHostGrpcFeatureSelectsProcessProviderLikeRust -count=1"
+        },
+        {
+            "id": "guardian-stale-authorization-retry",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 49862b62be (#47819 Retry Guardian reviews when authorization changes): only a completed allow whose transcript or root authorization changed is retried, within the existing attempt budget and shared deadline and without service backoff. Denies stand on the evidence they saw. Exhausting the budget is a failed-closed denial with the stale_authorization failure reason and the exact 'authorization changed before approval could be applied' rationale.",
+            "userImpact": "New user input during a review can no longer approve an action against stale authorization; stale allows re-review or fail closed, while denies are reported immediately.",
+            "test": "go test ./appserver -run 'TestGuardianReviewRefreshesChangedContextLikeRust|TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust|TestGuardianReviewDenySkipsStaleRetryLikeRust|Guardian' -count=1"
         }
     ]
 }

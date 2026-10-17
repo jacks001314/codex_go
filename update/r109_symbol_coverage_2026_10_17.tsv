@@ -742,7 +742,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4906ddf5b80d4cf4e54ac1a22dc000c389835e9c	53895	Resume unloaded subagent threads when selected in the TUI (#53895)	2026-10-14	tui	0	0		0	0	complete	
 49305d74b4c0048ee44702e3dd058e08ad3b4a51	45984	Isolate app-server Unix sockets from filesystem-restricted commands (#45984)	2026-09-16	appserver	3	0	0.00	0	0	implementation_pending	prepare_shared_daemon_socket_directory,reject_daemon_mount_aliases,shared_daemon_socket_directory
 4981037e99a322ee9cf29bc8730cb64d263fa00b	47441	Use secondary text styling for the transcript footer shortcut hint (#47441)	2026-09-23	tui	0	0		0	0	not_applicable	
-49862b62be3a90aa6538e000848497b46c0a442f	47819	Retry Guardian reviews when authorization changes (#47819)	2026-09-24	guardian	2	0	0.00	0	0	implementation_pending	ApprovalEvidence,run_with_retry
+49862b62be3a90aa6538e000848497b46c0a442f	47819	Retry Guardian reviews when authorization changes (#47819)	2026-09-24	guardian	2	2	1.00	0	0	complete	
 49880081fe9d6cf89ec86e3d31c99bbe26a736c4	40486	Add root turn IDs to turn and tool analytics (#40486)	2026-08-24	appserver	1	0	0.00	0	0	complete	TurnAnalyticsMetadata
 498d40b29f6028dec9ef80af672ba1258980b54a	42432	Box the TUI resume picker future (#42432)	2026-09-03	tui	0	0		0	0	not_applicable	
 4994306e9f80448bde85e770a0b0c93d3fee5665	49276	Enable enterprise MCP sign-in and account-scoped grant cleanup (#49276)	2026-09-29	appserver	11	4	0.36	0	0	audit_pending	EnterpriseLogin,EnterpriseLoginCompletion,EnterpriseLoginState,EnterpriseLoginTarget,McpEmaAuthScope,callback_closed,ema_auth_scope

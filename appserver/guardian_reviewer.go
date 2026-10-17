@@ -801,20 +801,40 @@ reviewAttempt:
 		// guardian session.
 		runner.markPriorReview()
 	}
+	var staleAuthorization bool
 	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, rootAuthorization) {
-		// Rust #53797 widens the invalidation predicate to local or root
-		// review context. Rust #53987 treats it as stale authorization, a local
-		// evidence refresh rather than a failed service request: yield, check
-		// cancellation and the shared deadline, then retry without backoff.
-		contextChanged = true
-		if attempts < guardianMaxReviewAttempts {
-			runtime.Gosched()
-			if waitErr := reviewCtx.Err(); waitErr != nil {
-				err = waitErr
-			} else {
-				goto reviewAttempt
+		// Rust #47819 only invalidates a completed allow: a deny stands on the
+		// evidence it saw, while an approval must match the latest authorization.
+		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
+			staleAuthorization = true
+			contextChanged = true
+			// Rust #53987 treats stale authorization as a local evidence refresh,
+			// not a failed service request: yield, check cancellation and the
+			// shared deadline, then retry without backoff.
+			if attempts < guardianMaxReviewAttempts {
+				runtime.Gosched()
+				if waitErr := reviewCtx.Err(); waitErr != nil {
+					err = waitErr
+				} else {
+					goto reviewAttempt
+				}
 			}
 		}
+	}
+	if err == nil && staleAuthorization && attempts >= guardianMaxReviewAttempts {
+		// Rust #47819: exhausting the retry budget on changed authorization is a
+		// failed-closed denial, never a stale approval.
+		message := "authorization changed before approval could be applied"
+		rationale := guardianReviewFailureRationale(message)
+		failedClosed, _ := store.FailClosed(event.ID, rationale)
+		r.emit(threadID, failedClosed)
+		r.recordNonDenial(turnID)
+		attribution.Decision = state.DecisionDenied
+		attribution.TerminalStatus = "failed_closed"
+		attribution.FailureReason = "stale_authorization"
+		emitReviewMetrics()
+		r.emitWarning(threadID, rationale)
+		return state.DecisionDenied, guardianReviewFailureMessage(message), nil
 	}
 	if err != nil && attempts < guardianMaxReviewAttempts && guardianReviewRetryableError(err) {
 		// Rust should_retry_guardian_review: recoverable session failures keep
