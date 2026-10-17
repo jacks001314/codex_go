@@ -24,6 +24,7 @@ import (
 	"codex_go/attachmentstore"
 	"codex_go/auth"
 	"codex_go/codexapi"
+	contextfrag "codex_go/context"
 	"codex_go/envutil"
 	"codex_go/eventmap"
 	"codex_go/network"
@@ -387,10 +388,15 @@ type responsesTextFormat struct {
 }
 
 type responsesInputMessage struct {
-	ID      string                  `json:"id,omitempty"`
-	Type    string                  `json:"type,omitempty"`
-	Role    string                  `json:"role"`
-	Content []responsesInputContent `json:"content"`
+	ID       string                         `json:"id,omitempty"`
+	Type     string                         `json:"type,omitempty"`
+	Role     string                         `json:"role"`
+	Content  []responsesInputContent        `json:"content"`
+	Metadata *responsesInputMessageMetadata `json:"internal_chat_message_metadata_passthrough,omitempty"`
+}
+
+type responsesInputMessageMetadata struct {
+	ContentItemKinds []string `json:"content_item_kinds,omitempty"`
 }
 
 type responsesInputContent struct {
@@ -1048,6 +1054,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 		// support it before sending the request over the websocket transport.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
 	}
+	if !strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName) {
+		inputItems = clearInternalChatMessageMetadata(inputItems)
+	}
 	accessPrograms, err := AccessProgramsForAuth(request.CyberAccessProgram, r.AuthSnapshot, r.ApiKeyCyberAccessPrograms)
 	if err != nil {
 		return nil, err
@@ -1559,6 +1568,9 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		// receiving model does not support it. Stored image details are left
 		// untouched so switching back to a supporting model retains `original`.
 		inputItems = normalizeResponseInputImageDetailsForModel(inputItems, modelInfo.SupportsImageDetailOriginal)
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName) {
+		inputItems = clearInternalChatMessageMetadata(inputItems)
 	}
 	inputItems = r.gateContentItemKinds(inputItems)
 	// Send raw tool-result metadata only to allowed OpenAI/ChatGPT HTTPS
@@ -2558,16 +2570,48 @@ func (r *ResponsesAgentRunner) gateContentItemKinds(items []any) []any {
 // from each message item in place. Items without the passthrough metadata are
 // left untouched.
 func stripResponseItemContentKinds(items []any) []any {
-	for _, item := range items {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
+	for i, item := range items {
+		switch typed := item.(type) {
+		case map[string]any:
+			md, ok := typed["internal_chat_message_metadata_passthrough"].(map[string]any)
+			if ok {
+				delete(md, "content_item_kinds")
+			}
+		case responsesInputMessage:
+			typed.Metadata = nil
+			items[i] = typed
+		case *responsesInputMessage:
+			if typed != nil {
+				clone := *typed
+				clone.Metadata = nil
+				items[i] = &clone
+			}
 		}
-		md, ok := m["internal_chat_message_metadata_passthrough"].(map[string]any)
-		if !ok {
-			continue
+	}
+	return items
+}
+
+// clearInternalChatMessageMetadata removes harness-only response metadata for
+// providers other than OpenAI. Rust applies this after the Responses Lite
+// prefix is inserted (#40296), so the generated base-instruction message cannot
+// leak its internal classification to third-party providers.
+func clearInternalChatMessageMetadata(items []any) []any {
+	for i, item := range items {
+		switch typed := item.(type) {
+		case map[string]any:
+			clone := cloneMapAny(typed)
+			delete(clone, "internal_chat_message_metadata_passthrough")
+			items[i] = clone
+		case responsesInputMessage:
+			typed.Metadata = nil
+			items[i] = typed
+		case *responsesInputMessage:
+			if typed != nil {
+				clone := *typed
+				clone.Metadata = nil
+				items[i] = &clone
+			}
 		}
-		delete(md, "content_item_kinds")
 	}
 	return items
 }
@@ -2666,14 +2710,18 @@ func responsesLiteInputItems(inputItems []any, tools []any, instructions string,
 	// thread or the payload changes the IDs.
 	prefixItems := []any{responsesLiteAdditionalToolsItem(tools, threadID)}
 	if strings.TrimSpace(instructions) != "" {
+		fragment := contextfrag.BaseInstructionsFragment{Text: strings.TrimSpace(instructions)}
 		prefixItems = append(prefixItems, responsesInputMessage{
 			ID:   responsesLiteItemID("msg", []byte(strings.TrimSpace(instructions)), threadID),
 			Type: "message",
-			Role: "developer",
+			Role: fragment.Role(),
 			Content: []responsesInputContent{{
 				Type: "input_text",
-				Text: strings.TrimSpace(instructions),
+				Text: fragment.Body(),
 			}},
+			Metadata: &responsesInputMessageMetadata{
+				ContentItemKinds: []string{fragment.ContentKind()},
+			},
 		})
 	}
 	items := make([]any, 0, len(prefixItems)+len(inputItems))

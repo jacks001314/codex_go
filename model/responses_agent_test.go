@@ -1418,6 +1418,80 @@ func TestResponsesLitePrefixItemsUseStableDeterministicIDsLikeRust(t *testing.T)
 	}
 }
 
+func TestResponsesLiteBaseInstructionsMetadataLikeRust(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		providerName  string
+		kindsEnabled  bool
+		wantKindsSeen bool
+	}{
+		{name: "OpenAI feature enabled", providerName: OpenAIProviderName, kindsEnabled: true, wantKindsSeen: true},
+		{name: "OpenAI feature disabled", providerName: OpenAIProviderName, kindsEnabled: false},
+		{name: "non-OpenAI provider", providerName: "Azure OpenAI", kindsEnabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var recordedBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&recordedBody); err != nil {
+					t.Errorf("Decode request body error = %v", err)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id":"resp-1",
+					"model":"gpt-lite",
+					"output":[{"id":"msg-1","type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],
+					"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+				}`))
+			}))
+			defer server.Close()
+
+			enabled := test.kindsEnabled
+			runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+				Provider:                &APIProvider{Name: test.providerName, BaseURL: server.URL + "/v1"},
+				ContentItemKindsEnabled: &enabled,
+				ModelsManager: NewStaticModelsManager(ModelsResponse{Models: []ModelInfo{{
+					Slug:             "gpt-lite",
+					UseResponsesLite: true,
+				}}}),
+			})
+			if _, err := runner.Run(context.Background(), &AgentRequest{
+				Model:        "gpt-lite",
+				Prompt:       "hello",
+				Instructions: "test instructions",
+			}); err != nil {
+				t.Fatalf("Run error = %v", err)
+			}
+			inputs, ok := recordedBody["input"].([]any)
+			if !ok || len(inputs) < 2 {
+				t.Fatalf("input = %#v", recordedBody["input"])
+			}
+			message, ok := inputs[1].(map[string]any)
+			if !ok || message["role"] != "developer" {
+				t.Fatalf("base instructions = %#v", inputs[1])
+			}
+			content, ok := message["content"].([]any)
+			if !ok || len(content) != 1 {
+				t.Fatalf("base instruction content = %#v", message["content"])
+			}
+			block, ok := content[0].(map[string]any)
+			if !ok || block["type"] != "input_text" || block["text"] != "test instructions" {
+				t.Fatalf("base instruction block = %#v", content[0])
+			}
+			metadata, kindsSeen := message["internal_chat_message_metadata_passthrough"].(map[string]any)
+			if kindsSeen != test.wantKindsSeen {
+				t.Fatalf("metadata = %#v, want present=%v", message["internal_chat_message_metadata_passthrough"], test.wantKindsSeen)
+			}
+			if kindsSeen {
+				kinds, _ := metadata["content_item_kinds"].([]any)
+				if len(kinds) != 1 || kinds[0] != "model.base_instructions" {
+					t.Fatalf("content_item_kinds = %#v", metadata["content_item_kinds"])
+				}
+			}
+		})
+	}
+}
+
 func TestResponsesAgentRunnerParsesImageGenerationCall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{

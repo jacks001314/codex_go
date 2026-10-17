@@ -1396,7 +1396,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 845345b1dd4f8e2a5d5ce91363fff666e41b07fc	52241	Preserve subagent capabilities independently of forked history (#52241)	2026-10-08	appserver	1	0	0.00	0	0	implementation_pending	spawn_child_thread
 8476434a97d308cb746a8cd5f247a724fd59591e	40497	Harden internal Guardian session isolation (#40497)	2026-08-24	guardian	1	1	1.00	0	0	complete	
 84aa75204ad604bcf498df180d128181c89b2f0b	42109	Format Python scripts across the repository (#42109)	2026-09-01	appserver	0	0		0	0	not_applicable	
-84c989acf9af93f35c2f3c36b297cd4dc0f830b3	40296	Annotate Responses Lite base instructions (#40296)	2026-08-23	core	1	0	0.00	0	0	implementation_pending	BaseInstructionsFragment
+84c989acf9af93f35c2f3c36b297cd4dc0f830b3	40296	Annotate Responses Lite base instructions (#40296)	2026-08-23	core	1	1	1.00	0	0	complete	
 84cc4b3fb5240d3774cbec24c99fc021a3257f7f	48824	Keep voice RTP timestamps aligned to 20 ms packets (#48824)	2026-09-28	realtime	0	0		0	0	not_applicable	
 84d5437b6e558f5159551949a35aedb84ddb89be	50345	Keep the subagent picker consistent with thread archive state (#50345)	2026-10-02	tui	10	0	0.00	0	0	implementation_pending	AgentPickerRefreshState,AgentPickerThreadRefresh,AgentPickerThreadVisibility,finish_picker_refresh,handle_agent_picker_visibility_notification,prune_untracked_picker_exclusions,queue_picker_refresh,set_agent_picker_thread_visibility,set_picker_thread_visibility,visible_threads
 84e7d4a1fefd0c595c29cdb9af6c065fc7277d98	44746	Check folder trust after resolving the startup destination (#44746)	2026-09-11	tui	4	2	0.50	0	0	audit_pending	check_directory_trust,normalized_project_trust_keys

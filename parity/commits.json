@@ -958,9 +958,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: BaseInstructionsFragment"
+        "Round 115 (lead): landed BaseInstructionsFragment in context and annotated the Responses Lite developer prefix with model.base_instructions; the content-item-kinds gate now handles typed prefix messages, and non-OpenAI HTTP/websocket requests clear harness metadata after prefix insertion, matching Rust #40296's ordering. Enabled/disabled/non-OpenAI request-shape tests and three RC probes pass."
       ]
     },
     {
