@@ -1616,7 +1616,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 97e46694e1459f758fe03c297e31f40ba1384cd4	42755	Stabilize the interactive tmux startup safety test (#42755)	2026-09-04	core	0	0		0	0	not_applicable	
 97ebf2d94d62e2ff2045f3ea17b6e11eae9a21fb	54401	Run managed daemon processes at background priority on macOS (#54401)	2026-10-15	appserver	1	1	1.00	0	0	complete	
 98072cf5f68a2959961d5aa0ef0c9a78d6db80d1	48623	Preserve empty Markdown list markers in the TUI (#48623)	2026-09-27	tui	0	0		0	0	not_applicable	
-981d6b652b710991e5e1c09e12ee7a7ee1a6c0da	41934	Omit undersized WAV output from Code Mode (#41934)	2026-08-31	core	1	0	0.00	0	0	implementation_pending	wav_duration_seconds
+981d6b652b710991e5e1c09e12ee7a7ee1a6c0da	41934	Omit undersized WAV output from Code Mode (#41934)	2026-08-31	core	1	1	1.00	0	0	complete	
 985cf47a4eb6084b2ff6b30ebdb1216acda85bb4	48575	Allow provisioned executors more time to come online (#48575)	2026-09-26	execserver	0	0		0	0	not_applicable	
 986ff1cc7ced0081ec5014b700a376333d87f869	42151	Expose model settings in app-server thread metadata (#42151)	2026-09-01	tui	1	0	0.00	0	0	implementation_pending	apply_live_model_settings
 9899091441d63676bbb2ab9104bb15538ba511c6	45749	Extract reusable Bash and Zsh startup scripts (#45749)	2026-09-15	core	1	1	1.00	0	0	complete	

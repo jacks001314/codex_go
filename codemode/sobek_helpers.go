@@ -18,6 +18,22 @@ func installSobekHelpers(runtime *sobek.Runtime, items *[]ContentItem) error {
 	}); err != nil {
 		return fmt.Errorf("install text helper: %w", err)
 	}
+	if err := runtime.Set("audio", func(call sobek.FunctionCall) sobek.Value {
+		value := sobek.Undefined()
+		if len(call.Arguments) > 0 {
+			value = call.Argument(0)
+		}
+		item, message := normalizeSobekAudio(value)
+		if message != "" {
+			// Sobek host functions report JavaScript errors by panicking with
+			// an Error object; the runtime converts it into a script exception.
+			panic(runtime.NewTypeError(message))
+		}
+		*items = append(*items, item)
+		return sobek.Undefined()
+	}); err != nil {
+		return fmt.Errorf("install audio helper: %w", err)
+	}
 	if err := runtime.Set("exit", func() {
 		runtime.Interrupt(errEngineExit)
 	}); err != nil {

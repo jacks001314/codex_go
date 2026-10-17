@@ -5148,9 +5148,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: wav_duration_seconds"
+        "Round 115 (lead): landed Code Mode audio normalization and WAV duration measurement; audio() accepts string/object/MCP forms, omits WAV clips under 25 ms with Rust's text, and preserves unknown formats and surrounding output. The parser matches Rust's streaming-size, chunk-alignment and payload-bound rules. Boundary/order/error tests and the guard-removal RC pass."
       ]
     },
     {
