@@ -24,18 +24,18 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 		b.authority = map[string]bool{}
 	}
 	for _, status := range statuses {
-		if status.State != "" && status.State != MCPServerReady {
-			continue
-		}
 		server := status.effectiveName()
 		if server == "" {
 			continue
 		}
-		set := map[string]bool{}
-		for _, tool := range status.Tools {
-			if name := strings.TrimSpace(tool.Name); name != "" {
-				set[name] = true
-			}
+		set := cachedTools(status)
+		// Rust #41336 snapshots the cached catalog before waiting for server
+		// startup. A non-ready server remains capturable when it already has a
+		// published catalog; ordinary servers need at least one cached tool, while
+		// the Apps server may legitimately publish an empty catalog.
+		if status.State != "" && status.State != MCPServerReady &&
+			len(set) == 0 && !IsCodexAppsMCPServerName(server) {
+			continue
 		}
 		b.tools[server] = set
 		if b.authorityPublished {
@@ -45,6 +45,19 @@ func (s *MCPService) CaptureBinding(statuses []MCPServerStatus) *Binding {
 		}
 	}
 	return b
+}
+
+// cachedTools snapshots the tool names already published on a server status.
+// It intentionally does not require the connection to be ready, matching
+// Rust's AsyncManagedClient::cached_tools during binding capture (#41336).
+func cachedTools(status MCPServerStatus) map[string]bool {
+	tools := map[string]bool{}
+	for _, tool := range status.Tools {
+		if name := strings.TrimSpace(tool.Name); name != "" {
+			tools[name] = true
+		}
+	}
+	return tools
 }
 func (b *Binding) Generation() uint64 {
 	if b == nil {

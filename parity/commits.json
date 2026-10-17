@@ -4032,9 +4032,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: cached_tools"
+        "Round 115 (lead): MCP binding capture now retains already-published cached tool catalogs for non-ready servers, including the Apps empty-catalog case, while still omitting non-ready servers with no cache. The ready-only RC and the full mcp suite pass."
       ]
     },
     {
