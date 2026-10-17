@@ -4920,9 +4920,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: McpEventStreamUpdate"
+        "Round 257 (audit): mcpEventStreamManager scopes streams by subscription/thread/connection, keeps active streams alive through background contexts, waits for activation with a 90s deadline, retries activation with bounded backoff, forwards subscription-tagged notifications, and cancels/waits on stop, clear, auth/thread access changes, and shutdown. Rust's McpEventStreamUpdate maps to McpServerEventStreamNotification. Tests: go test ./appserver -run 'MCPEventStream' -count=1"
       ]
     },
     {
@@ -9567,9 +9567,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: get_prompt"
+        "Round 257 (audit): Go has the dedicated v2 consolidation and read_path templates, writes memory_summary.md without requiring raw_memories.md/MEMORY.md, validates the summary under 10,000 UTF-8 bytes, caps injected content at 2,500 tokens so the whole bounded summary fits, and isolates reads/citation stores through memories_v2. Rust's get_prompt accessor adds no observable behavior. Tests: go test ./memories ./appserver -run 'Memory|MemoryV2|MemorySummary' -count=1"
       ]
     },
     {

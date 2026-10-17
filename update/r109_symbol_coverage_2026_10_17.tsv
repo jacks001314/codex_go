@@ -888,7 +888,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 551844b3efc426c563128b0e011e36dad95a865b	46739	Add compact transcript browsing and prompt navigation to the TUI (#46739)	2026-09-20	tui	22	3	0.14	0	0	audit_pending	BrowsingOrigin,SuppressedHeader,TranscriptBookmark,bookmark,browsing_details,browsing_needs_history,cancel_primed_browsing_for_event,cancel_transcript_browsing,composer_tip,handle_owned_backtrack_event
 551bd409ebf03fc6ea0dcad0915368d8a493f012	51402	Preserve turn attribution across recovery and compaction (#51402)	2026-10-06	tui	6	4	0.67	0	0	audit_pending	emit_turn_started,record_started_turn
 5533375287179260650fff35479c3f973b18fb9a	42814	Support custom report event titles (#42814)	2026-09-04	core	0	0		0	0	not_applicable	
-553df1c691fe8bf7747e50da22f1342984495ae0	43813	Add dedicated memory v2 consolidation and read prompts (#43813)	2026-09-08	appserver	3	2	0.67	0	0	audit_pending	get_prompt
+553df1c691fe8bf7747e50da22f1342984495ae0	43813	Add dedicated memory v2 consolidation and read prompts (#43813)	2026-09-08	appserver	3	2	0.67	0	0	complete	get_prompt
 55543d87724bb66bdd51bde65254feb9b4c9ed10	48123	Add early yielding for code-mode observations (#48123)	2026-09-25	core	14	8	0.57	0	0	audit_pending	reserve_execution,retire_execution_observation,spawn_watcher,with_yield_signal,yield_execution,yield_wait
 555b82afa9b6dab81ca034ac61a2c8892844d670	43352	Add opt-in MCP user-verification transport (#43352)	2026-09-07	tui	15	3	0.20	0	0	audit_pending	disconnect_user_verification_connection,enable_user_verification_connection,filter_json,filter_ts,from_client_result,notify_client_error,notify_client_response,process_error,process_response,verification_auth_revision
 55922b79845bfa355d3afc03ded33b05444ebf96	50499	Include installer stderr in daemon update failures (#50499)	2026-10-03	appserver	1	1	1.00	0	0	complete	
@@ -1860,7 +1860,7 @@ ade0ccacf9182e665cf784de041c51a79e35bc31	42094	Record Windows MXC availability (
 ade12342e21c34a859d14cd5be47e7531fabb734	52203	Expose Codex lifecycle status in iTerm2 sessions (#52203)	2026-10-08	tui	6	0	0.00	0	0	complete	ItermSessionStatus,clear_iterm_session_status,desired_iterm_session_status,invalidate_iterm_session_status,refresh_iterm_session_status,set_iterm_session_status
 ade17c62b0caf6fb1354eb7f3bc25853f44656ab	51200	Upgrade Bazel to 9.2.0 and refresh the module lockfile (#51200)	2026-10-05	core	0	0		0	0	not_applicable	
 adee0b04fa27a8ba5d2e3612b900363cffe72930	43521	Preserve standalone release pins during daemon updates (#43521)	2026-09-07	appserver	2	2	1.00	0	0	complete	
-ae0ecd7484a2f9b5420a618e801d03c1f0aead2f	41906	Add a manager for MCP event streams (#41906)	2026-08-31	mcp	5	4	0.80	0	0	audit_pending	McpEventStreamUpdate
+ae0ecd7484a2f9b5420a618e801d03c1f0aead2f	41906	Add a manager for MCP event streams (#41906)	2026-08-31	mcp	5	4	0.80	0	0	complete	McpEventStreamUpdate
 ae110493973d5b72f60d42efe2fae91d51ca9c0e	54070	Expose gateway authentication as a reusable OAuth session API (#54070)	2026-10-14	core	12	12	1.00	0	0	complete
 ae132dc50ab5d8214a8fe599c3c1cfbb5f2ef186	47590	Serialize numeric custom reasoning effort as JSON numbers (#47590)	2026-09-23	core	0	0		0	0	not_applicable	
 ae357e7250402af7c3bbede18a46cc565a7670d4	41005	Attach verified access context to eligible plugin MCP calls (#41005)	2026-08-26	appserver	4	1	0.25	0	0	audit_pending	add_trusted_access_context,from_runtime,local_http_client
