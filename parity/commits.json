@@ -2555,10 +2555,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/10; needs review: LOG_QUEUE_DROPPED_METRIC, LOG_WRITE_BYTES_METRIC, LOG_WRITE_DURATION_METRIC, LOG_WRITE_ENTRIES_METRIC, LOG_WRITE_MAX_ENTRY_BYTES_METRIC"
-      ]
+        "status": "complete",
+        "evidence": [
+          "SQLite log writes emit status, duration, entry-count, batch-byte, and largest-entry metrics with explicit byte boundaries, and queue drops are counted."
+        ]
     },
     {
       "sha": "4213b38f3c555049bf6f494065698a3dfe587c16",
