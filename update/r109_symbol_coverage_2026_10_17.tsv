@@ -345,7 +345,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 21c16161191ff965031d1ac41fe9046011610743	53754	Support Command/Super shortcuts in the TUI keymap (#53754)	2026-10-13	tui	0	0		0	0	not_applicable	
 21c58c90f2298587c6519e077d0692ce4c563d37	40808	Harden Windows sandbox helper cleanup (#40808)	2026-08-26	execserver	3	1	0.33	0	0	audit_pending	drain_helper_stderr,reap_helper_after_response
 21eb35513df478a2a090bfc2c0293caaf435b36d	48779	Preserve independent Guardian history across parent compaction (#48779)	2026-09-27	guardian	6	3	0.50	0	0	complete	GuardianHistoryCheckpoint,for_session,truncate_before
-21ff2e802cd74eee8b25db6b17d9bd4891a42e38	40976	Expose MCP provenance to tool lifecycle extensions (#40976)	2026-08-26	guardian	7	5	0.71	0	0	audit_pending	from_prepared_call,notify_tool_start
+21ff2e802cd74eee8b25db6b17d9bd4891a42e38	40976	Expose MCP provenance to tool lifecycle extensions (#40976)	2026-08-26	guardian	7	5	0.71	0	0	complete	from_prepared_call,notify_tool_start
 2210190435febb8fad3e517ce82bd18b8fecf8f3	47601	Add opt-in WebSocket authentication to exec-server (#47601)	2026-09-23	execserver	0	0		0	0	not_applicable	
 221e4e7c05386d06aa7b91da2a9b04f7f2bd921f	54724	Preserve prereleased events when creating GitHub prereleases (#54724)	2026-10-16	core	0	0		0	0	not_applicable	
 222e24b737e36ec8bbb56be2a27638c428b266bf	49089	Render follow-up directive labels in the TUI and copied responses (#49089)	2026-09-28	tui	2	0	0.00	0	0	implementation_pending	InlineDirectives,followup_labels

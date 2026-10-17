@@ -3023,10 +3023,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 5/7; needs review: from_prepared_call, notify_tool_start"
-      ]
+        "status": "complete",
+        "evidence": [
+          "MCP tool lifecycle start carries prepared connector/plugin provenance, including wrapper-lag preservation for evicted wrappers."
+        ]
     },
     {
       "sha": "a57b398351a803c9ec94e38042bc82f527bed2a4",
