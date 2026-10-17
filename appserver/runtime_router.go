@@ -732,6 +732,10 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 	router.services.ServerRequests.SetRequestedCallback(router.noteServerRequestPending)
 	router.services.ServerRequests.SetResolvedCallback(router.notifyServerRequestResolved)
 	router.services.ServerRequests.SetResolvedResponseCallback(router.handleServerRequestResolvedResponse)
+	// Rust #51974 records the selected Windows sandbox backend at app-server
+	// startup so diagnostics can tell MXC/disabled/unelevated/elevated apart.
+	// Logging is Windows-only and best effort.
+	logWindowsSandboxSelectionForConfig(router.config)
 	if router.services.ThreadRouter != nil && router.services.SpawnGraph != nil {
 		router.services.ThreadRouter.SetSpawnGraph(router.services.SpawnGraph)
 	}

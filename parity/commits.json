@@ -28487,8 +28487,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
+        "Round 115 (lead): partial - appserver/windows_sandbox_logging.go records the selected Windows sandbox backend (mxc/disabled/unelevated/elevated) as a `.sandbox` note at app-server startup, resolving the effective level from the config service (logWindowsSandboxStartup selection half); NewRuntimeRouter wires it on Windows. Tests: windows_sandbox_logging_windows_test.go (all four labels, note contents, config-resolved level); RC: mapping elevated to disabled fails. Remaining: the MXC availability line needs a Go windows_mxc_available probe/launcher (backlog G11), and the settings-update re-log needs a windows sandbox level field on TurnSettingsUpdateParams, which Go's settings surface lacks.",
         "No new upstream public identifier found in Go (0/2); candidate gap: log_windows_sandbox_change, log_windows_sandbox_startup"
       ]
     },

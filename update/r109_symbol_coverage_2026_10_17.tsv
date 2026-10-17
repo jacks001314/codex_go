@@ -2489,7 +2489,7 @@ e9b4c6967ee308ed1d1880ec36e3fda183c1a9ac	47647	Apply Guardian computer-use revie
 e9e6cf63492da108a3cabaf3cc7b23d0640ef4cf	52178	Strip symbols from source-built release package binaries (#52178)	2026-10-08	core	0	0		0	0	complete	
 ea2046f36d5ee12d39c8e168fc3e5129301afa2b	42668	Cancel remote control enrollment on stdio shutdown (#42668)	2026-09-04	appserver	0	0		0	0	not_applicable	
 ea218f5cd8a536b6e89dbd7f2338c93e87bc5bbf	46302	Validate network socket policies using the executor OS (#46302)	2026-09-17	execserver	6	3	0.50	0	0	audit_pending	NetworkProxyExecutorOs,build_config_state_for_spec,from_platform_os
-ea27864f99f0b086cec2f9f0251b7190fb9844f1	51974	Log Windows sandbox availability and backend selection (#51974)	2026-10-08	appserver	2	0	0.00	0	0	implementation_pending	log_windows_sandbox_change,log_windows_sandbox_startup
+ea27864f99f0b086cec2f9f0251b7190fb9844f1	51974	Log Windows sandbox availability and backend selection (#51974)	2026-10-08	appserver	2	1	0.50	0	0	partial	windows_mxc_available probe, settings-update re-log
 ea3c4848d8481aa741475a7e29304115c1adb8aa	45509	Share MCP tool specs until search results are selected (#45509)	2026-09-14	mcp	2	0	0.00	0	0	implementation_pending	from_shared_spec,to_loadable_spec
 ea53c8d4f78e3f2c9ae2bafcb387d677f33d8b6a	44392	Add opt-in model discovery for OpenAI API keys (#44392)	2026-09-10	appserver	0	0		0	0	not_applicable	
 ea647275560ffbcd4cf240d048eab44aa66ba9ae	48783	Add single-server MCP status discovery with thread connection reuse (#48783)	2026-09-27	tui	6	3	0.50	0	0	audit_pending	current_mcp_runtime_context,list_available_server_infos,list_tools_with_errors
