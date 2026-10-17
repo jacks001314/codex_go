@@ -7,18 +7,24 @@
 
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 431 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **镜像工作树（round 115 修正）**：`D:\qax\reagent\dev\git\codex` 此前仍 checkout 在旧 pin `4eb4a65407`，而 parity 测试读取**工作树**文件，导致三项假红（feature key `mcp_tool_list_changed`/`multi_env_copy_file`、precomputed export、TUI snapshot 1432 vs 1433）。`git pull --ff-only origin main` fast-forward 到 `ce0323f2f2` 后 `go test ./parity -count=1` **ok**（27s）。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 431 条 + `blocked_precondition` 15 条（2695 条口径；`partial` 已在 round 115 清零，`#54776` 收口）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
 
-### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，232 数据行）
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`）
+
+Round 115 收口后（提交 `1b94cf05`）的已提交账本为 **231 数据行**：
+`landed` 107 / `complete` 28 / `not_applicable` 79 / `blocked_precondition` 17 / `partial` 0。
+工作区另有 in-flight 的 `#52184`（TUI 侧会话保留）`landed` 行尚未提交；两者合并后为 232 行
+（`landed` 108 / `complete` 28 / `not_applicable` 79 / `blocked_precondition` 17）。
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 108 |
-| `complete` | 27 |
+| `landed` | 107（+1 in-flight `#52184`） |
+| `complete` | 28 |
 | `not_applicable` | 79 |
 | `blocked_precondition` | 17 |
-| `partial` | 1 |
-| **合计** | **232** |
+| `partial` | 0 |
+| **合计** | **231（工作区 232）** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -995,7 +1001,7 @@ go test ./appserver -run "Feedback|RolloutArchive|Archive" -count=1   # ok
 
 ### 28.3 剩余（目标未完成）
 
-`implementation_pending` 431 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
+`implementation_pending` 431 条 + `blocked_precondition` 15 条（2695 提交口径；`partial` 已清零）。
 继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。
 
 ## 29. Round 115（2026-10-17）：TUI 侧会话跨线程导航保留

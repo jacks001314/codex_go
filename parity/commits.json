@@ -32338,8 +32338,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): completed. eventmap.ContentItem carries FileID/AudioURL with Wire()/RustJSON()/ContentItemsRustJSON() in Rust's serde shape; context.ToolOutputParts preserves file ids, URLs, detail and audio and context.ToolOutputText mirrors content_items_to_code_mode_result; session.WorldStateUpdate.ContentItems carries typed world-state contributions and MergeWorldStateUpdates emits the typed parts; session/sandbox TypedWorldStateFragmentHash implement the v2 domain (single InputText keeps v1; otherwise role + serialized content with an 8-byte length) pinned by independent digests 59ed86b1/811a17a9/9a648382/208a4f0f; tool/codeModeToolResult routes typed content_items through context.ToolOutputText. RC: removing the typed merge, v2 hash or code-mode branch fails their tests. Gates: go build ./...; ./eventmap ./context ./session ./sandbox ./turn ./appserver green; ./tool only the two known login-shell baseline reds.",
         "Round 108 (lead): typed-content layer landed in context/fragments.go - BodyItems() provider, RenderedFragment.ContentItems, RenderItems() (markers wrap only InputText; every other item passes through unchanged), ToolOutputParts() preserving image URL/detail and audio; tests context/typed_fragment_content_like_rust_test.go (3 cases) + fragments_test.go expectation updated; go test ./context ok. Remaining drift: extension prompt/world-state contributions still pass strings (appserver turn_runtime world-state hashing is text-only) and code-mode output conversion is not routed through ToolOutputPa"
       ]
     }
