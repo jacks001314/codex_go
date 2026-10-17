@@ -122,11 +122,13 @@ func TestGuardianReviewDeliversEncryptedAgentMessageLikeRust(t *testing.T) {
 			return &model.AgentResponse{Message: guardianDecisionDurationAssessment}, nil
 		}),
 		store: state.NewReviewStore(),
-		transcriptEntries: func(string) []state.GuardianTranscriptEntry {
-			return []state.GuardianTranscriptEntry{
-				{Author: "user", LineRole: "user", Text: "Please deploy."},
-				{Author: "assistant", Native: native},
-				{Author: "user", LineRole: "user", Text: "Only staging."},
+		transcriptSelection: func(string) guardianTranscriptSelection {
+			return guardianTranscriptSelection{
+				Entries: []state.GuardianTranscriptEntry{
+					{Author: "user", LineRole: "user", Text: "Please deploy."},
+					{Author: "assistant", Native: native},
+					{Author: "user", LineRole: "user", Text: "Only staging."},
+				},
 			}
 		},
 		transcriptFormat: func(string) state.GuardianTranscriptFormat {

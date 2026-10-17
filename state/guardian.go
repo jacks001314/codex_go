@@ -586,6 +586,10 @@ type BuildPromptOptions struct {
 	// TranscriptFormat selects the rendering of transcript entries: line keeps
 	// the role-prefixed form, json emits host-attributed records (#51465).
 	TranscriptFormat GuardianTranscriptFormat
+	// TranscriptOmissionNote is the profile's notice that retention dropped at
+	// least one collected entry (#43806). It is separate from the transcript
+	// records so JSON mode cannot mistake it for authored evidence.
+	TranscriptOmissionNote string
 	// NodeReplEvidence includes bounded node_repl results as untrusted
 	// evidence in the review prompt (Rust #38397).
 	NodeReplEvidence *context.NodeReplReviewEvidenceFragment
@@ -714,7 +718,7 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 	if items := TrustedUserAnswersSectionItems(RenderVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
 		addSection(strings.Join(items, ""))
 	}
-	if len(transcript) > 0 {
+	if len(transcript) > 0 || options.TranscriptOmissionNote != "" {
 		var run strings.Builder
 		run.WriteString("Recent transcript:\n")
 		for _, entry := range transcript {
@@ -733,6 +737,10 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 			}
 			run.WriteString("- ")
 			run.WriteString(line)
+			run.WriteByte('\n')
+		}
+		if options.TranscriptOmissionNote != "" {
+			run.WriteString(options.TranscriptOmissionNote)
 			run.WriteByte('\n')
 		}
 		addSection(run.String())

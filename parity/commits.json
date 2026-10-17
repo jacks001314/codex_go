@@ -9543,9 +9543,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/7; needs review: ContextProfile, MAX_MESSAGE_ENTRY_TOKENS, MAX_MESSAGE_TRANSCRIPT_TOKENS, MAX_RECENT_NON_USER_ENTRIES, MAX_TOOL_ENTRY_TOKENS"
+        "Round 249: state.ContextProfile centralizes the synchronous and asynchronous Guardian transcript policies. Sync keeps the first user anchor, the newest 40 non-user entries within separate 20k message / 10k tool budgets, applies 5k/1k per-entry caps, preserves original numbering, and emits the omission note through BuildPromptOptions. Async applies a 2k message entry cap, 10k message budget, five-entry tool reservation, chunked eviction, and truncation observations; include_images is derived from the profile. guardianReviewTranscriptSelection applies the profile after collection and stale-context invalidation compares the retained selection. Tests: go test ./state -run Guardian -count=1; go test ./appserver -run Guardian -count=1; go build ./..."
       ]
     },
     {

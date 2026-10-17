@@ -29,6 +29,7 @@ import (
 	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/turn"
+	"codex_go/utils"
 )
 
 type GuardianReviewer interface {
@@ -62,10 +63,11 @@ type modelGuardianReviewer struct {
 	logAssessment     func(threadID string, event *state.Event)
 	interrupt         func(threadID, turnID, reason string)
 	transcript        func(threadID string) []string
-	// transcriptEntries carries host-attributed entries, including native
-	// encrypted agent messages that cannot be rendered as text (#49038).
-	transcriptEntries func(threadID string) []state.GuardianTranscriptEntry
-	transcriptFormat  func(threadID string) state.GuardianTranscriptFormat
+	// transcriptSelection carries the profile-retained host-attributed entries,
+	// including native encrypted agent messages that cannot be rendered as text
+	// (#49038), plus the retention omission and truncation observations.
+	transcriptSelection func(threadID string) guardianTranscriptSelection
+	transcriptFormat    func(threadID string) state.GuardianTranscriptFormat
 	// feedbackCaptureEnabled gates the bounded failed-review records exported
 	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
 	// feedback collection retain nothing.
@@ -688,12 +690,15 @@ reviewAttempt:
 	attempts++
 	var transcript []string
 	var transcriptEntries []state.GuardianTranscriptEntry
+	var transcriptOmissionNote string
 	transcriptFormat := state.GuardianTranscriptFormatLine
 	if r.transcriptFormat != nil {
 		transcriptFormat = r.transcriptFormat(threadID)
 	}
-	if r.transcriptEntries != nil {
-		transcriptEntries = r.transcriptEntries(threadID)
+	if r.transcriptSelection != nil {
+		selection := r.transcriptSelection(threadID)
+		transcriptEntries = selection.Entries
+		transcriptOmissionNote = selection.OmissionNote
 		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
 	} else if r.transcript != nil {
 		transcript = r.transcript(threadID)
@@ -743,6 +748,7 @@ reviewAttempt:
 	buildOptions := state.BuildPromptOptions{
 		Presentation:              state.ActionPresentationSyncFull,
 		TranscriptFormat:          transcriptFormat,
+		TranscriptOmissionNote:    transcriptOmissionNote,
 		NodeReplEvidence:          promptNodeReplEvidence,
 		PermissionContext:         permissionContext,
 		RetainedContext:           retainedContext,
@@ -882,7 +888,7 @@ reviewAttempt:
 		runner.markPriorReview()
 	}
 	var staleAuthorization bool
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, rootAuthorization) {
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, transcriptOmissionNote, rootAuthorization) {
 		// Rust #47819 only invalidates a completed allow: a deny stands on the
 		// evidence it saw, while an approval must match the latest authorization.
 		if parsed, parseErr := state.ParseAssessment([]byte(guardianAssessmentText(response))); parseErr == nil && parsed.Outcome == state.OutcomeAllow {
@@ -1270,24 +1276,47 @@ func guardianPromptDelivery(parts []state.GuardianPromptPart) (string, []any) {
 const (
 	// guardianNativeAgentMessageMaxBytes mirrors Rust's sync transcript
 	// native-message budget (#49038): the serialized item must fit
-	// TruncationPolicy::Tokens(message_tokens=5_000).byte_budget(), otherwise
-	// the whole message becomes an omission notice at the same position.
-	guardianNativeAgentMessageMaxBytes = 5_000 * 4
-	guardianTranscriptOmissionNotice   = "Some conversation entries were omitted."
+	// the profile's message entry cap in bytes, otherwise the whole message
+	// becomes an omission notice at the same position.
+	guardianNativeAgentMessageMaxBytes = state.MaxMessageEntryTokens * 4
+	guardianTranscriptOmissionNotice   = state.GuardianTranscriptOmissionNotice
 )
 
-// guardianReviewTranscriptEntries collects the bounded transcript with the
-// host-assigned attribution both formats share: author, label and position come
-// from the stored item, never from its text (#51465).
+// guardianTranscriptSelection is the host-selected, profile-retained transcript
+// plus the retention notices that must accompany the prompt (#43806).
+type guardianTranscriptSelection struct {
+	Entries      []state.GuardianTranscriptEntry
+	OmissionNote string
+	Truncations  []state.TranscriptTruncationObservation
+}
+
+// guardianReviewTranscriptEntries returns the retained transcript entries.
 func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state.GuardianTranscriptEntry {
+	return r.guardianReviewTranscriptSelection(threadID).Entries
+}
+
+// guardianReviewTranscriptSelection collects the full host snapshot, applies
+// the shared synchronous profile's per-entry caps and aggregate retention, and
+// preserves original entry numbering for JSON records (#43806, #51465).
+func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guardianTranscriptSelection {
 	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
 	if err != nil || record == nil {
-		return nil
+		return guardianTranscriptSelection{}
 	}
-	const maxLines = 12
-	const maxChars = 4000
-	entries := make([]state.GuardianTranscriptEntry, 0, maxLines)
-	for i := len(record.Items) - 1; i >= 0 && len(entries) < maxLines; i-- {
+	profile := state.SynchronousContextProfile()
+	profile.Transcript.EntryLimits.NodeReplOutputTokens = codexctx.GuardianMaxNodeReplToolResultTokens
+	toolCalls := map[string]session.Item{}
+	for _, item := range record.Items {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "function_call", "custom_tool_call":
+			if callID := strings.TrimSpace(item.CallID); callID != "" {
+				toolCalls[callID] = item
+			}
+		}
+	}
+	entries := make([]state.GuardianTranscriptEntry, 0, len(record.Items))
+	evidence := make([]state.TranscriptEvidenceEntry, 0, len(record.Items))
+	for i := range record.Items {
 		item := record.Items[i]
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
 		// excluded from the transcript while the surrounding user messages
@@ -1305,8 +1334,23 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 					LineRole: "assistant",
 					Text:     guardianTranscriptOmissionNotice,
 				})
+				evidence = append(evidence, state.TranscriptEvidenceEntry{
+					Kind:          state.GuardianTranscriptProtectedMessage,
+					Role:          "assistant",
+					Text:          guardianTranscriptOmissionNotice,
+					OriginalBytes: 0,
+				})
 			} else {
 				entries = append(entries, state.GuardianTranscriptEntry{Author: "assistant", Native: native})
+				// Native ciphertext cannot be text-truncated or rendered. Charge
+				// its serialized cost to the protected-message pool so retention
+				// still bounds the total evidence, while keeping it out of the
+				// async text-truncation observations.
+				evidence = append(evidence, state.TranscriptEvidenceEntry{
+					Kind:   state.GuardianTranscriptProtectedMessage,
+					Role:   "assistant",
+					Tokens: utils.ApproxTokenCount(string(native)),
+				})
 			}
 			continue
 		}
@@ -1325,11 +1369,23 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 			if text == "" {
 				text = "[non-text output]"
 			}
+			tokenLimit := profile.Transcript.EntryLimits.ToolTokens
+			if mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
+				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name)) {
+				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
+			}
+			limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
 			entries = append(entries, state.GuardianTranscriptEntry{
 				Author:   "tool",
 				Label:    name,
 				LineRole: "tool " + name + " result",
-				Text:     text,
+				Text:     limited,
+			})
+			evidence = append(evidence, state.TranscriptEvidenceEntry{
+				Kind:          state.GuardianTranscriptTool,
+				Role:          "tool " + name + " result",
+				Text:          limited,
+				OriginalBytes: len(text),
 			})
 			continue
 		}
@@ -1345,9 +1401,6 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 		if text == "" {
 			continue
 		}
-		if len(text) > maxChars {
-			text = text[:maxChars]
-		}
 		role := strings.TrimSpace(item.Role)
 		if role == "" {
 			role = strings.TrimSpace(item.Type)
@@ -1359,27 +1412,99 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 			// messages keep their attribution.
 			role = "assistant"
 		}
+		kind := guardianTranscriptKindForItem(&item, role)
+		tokenLimit := profile.Transcript.EntryLimits.MessageTokens
+		if kind == state.GuardianTranscriptTool {
+			tokenLimit = profile.Transcript.EntryLimits.ToolTokens
+			nodeRepl := mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Namespace)) ||
+				mcp.IsNodeReplBackedServer(strings.TrimSpace(item.Name))
+			if !nodeRepl {
+				if call, ok := toolCalls[strings.TrimSpace(item.CallID)]; ok {
+					nodeRepl = mcp.IsNodeReplBackedServer(strings.TrimSpace(call.Namespace)) ||
+						mcp.IsNodeReplBackedServer(strings.TrimSpace(call.Name))
+				}
+			}
+			if nodeRepl {
+				tokenLimit = profile.Transcript.EntryLimits.NodeReplOutputTokens
+			}
+		}
+		limited, _ := truncateGuardianTranscriptEntry(text, tokenLimit)
 		if role != "" {
 			entries = append(entries, state.GuardianTranscriptEntry{
 				Author:   guardianTranscriptAuthor(role),
 				Label:    guardianTranscriptLabel(role),
 				LineRole: role,
-				Text:     text,
+				Text:     limited,
 			})
 		} else {
 			entries = append(entries, state.GuardianTranscriptEntry{
 				Author: guardianTranscriptAuthor(role),
-				Text:   text,
+				Text:   limited,
 			})
 		}
+		label := guardianTranscriptLabel(role)
+		if label == "" {
+			label = role
+		}
+		evidence = append(evidence, state.TranscriptEvidenceEntry{
+			Kind:          kind,
+			Role:          label,
+			Text:          limited,
+			OriginalBytes: len(text),
+		})
 	}
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
+	rendered := profile.RenderTranscript(evidence, 0)
+	retained := make([]state.GuardianTranscriptEntry, 0, len(rendered.Indices))
+	for _, index := range rendered.Indices {
+		entry := entries[index]
+		entry.Index = index
+		retained = append(retained, entry)
 	}
-	for index := range entries {
-		entries[index].Index = index
+	return guardianTranscriptSelection{
+		Entries:      retained,
+		OmissionNote: rendered.OmissionNote,
+		Truncations:  rendered.Truncations,
 	}
-	return entries
+}
+
+// guardianTranscriptKindForItem maps one stored item to the profile's retention
+// pools. Developer messages and final assistant answers are protected context;
+// commentary and compaction summaries use the ordinary message pool.
+func guardianTranscriptKindForItem(item *session.Item, role string) state.GuardianTranscriptKind {
+	if item != nil {
+		switch strings.ToLower(strings.TrimSpace(item.Type)) {
+		case "function_call", "custom_tool_call", "local_shell_call", "web_search_call",
+			"function_call_output", "custom_tool_call_output", "tool_output":
+			return state.GuardianTranscriptTool
+		}
+	}
+	switch strings.TrimSpace(role) {
+	case "user":
+		return state.GuardianTranscriptUser
+	case "developer":
+		return state.GuardianTranscriptProtectedMessage
+	case "tool":
+		return state.GuardianTranscriptTool
+	case "assistant":
+		if item == nil || guardianTranscriptIsCompactionSummary(item) {
+			return state.GuardianTranscriptMessage
+		}
+		if phase, _ := item.Data["phase"].(string); strings.TrimSpace(phase) == "commentary" {
+			return state.GuardianTranscriptMessage
+		}
+		return state.GuardianTranscriptProtectedMessage
+	default:
+		return state.GuardianTranscriptMessage
+	}
+}
+
+// truncateGuardianTranscriptEntry applies the profile's per-entry token cap
+// before aggregate retention, matching Rust's collect_transcript.
+func truncateGuardianTranscriptEntry(text string, tokenLimit int) (string, bool) {
+	if tokenLimit <= 0 || len(text) <= utils.ApproxBytesForTokens(tokenLimit) {
+		return text, false
+	}
+	return utils.TruncateText(text, utils.TokensPolicy(tokenLimit)), true
 }
 
 // guardianTranscriptAuthor mirrors Rust's ConversationTranscriptEntryKind
@@ -1973,12 +2098,13 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
 // predicate: local or root review evidence that changed while the reviewer was
 // running makes the assessment stale and triggers a fresh attempt.
-func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, rootAuthorization []string) bool {
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []string) bool {
 	if r == nil {
 		return false
 	}
-	if r.transcriptEntries != nil {
-		if !reflect.DeepEqual(entries, r.transcriptEntries(threadID)) {
+	if r.transcriptSelection != nil {
+		selection := r.transcriptSelection(threadID)
+		if !reflect.DeepEqual(entries, selection.Entries) || omissionNote != selection.OmissionNote {
 			return true
 		}
 	} else if r.transcript != nil && !slices.Equal(transcript, r.transcript(threadID)) {
