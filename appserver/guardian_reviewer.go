@@ -1491,10 +1491,36 @@ func guardianParentCompactionResponseID(compacted *compact.Result, maxTokens int
 	if maxTokens <= 0 {
 		maxTokens = 25_000
 	}
+	// Rust #53691: encrypted checkpoint payloads include sampled-token replay
+	// caches, so budget their model-visible length at twelve ciphertext bytes per
+	// token. The configured token limit and the previous 100k-token wire limit
+	// are enforced independently.
+	if item := latestGuardianParentCompactionItem(compacted); item != nil {
+		wireBytes, ok := compact.CompactionItemWireBytes(item)
+		if !ok || wireBytes > guardianParentCompactionMaxWireBytes || compact.EstimateItemTokens(item) > maxTokens {
+			return ""
+		}
+		return strings.TrimSpace(compacted.ResponseID)
+	}
 	if len(compacted.Summary) > maxTokens*4 {
 		return ""
 	}
 	return strings.TrimSpace(compacted.ResponseID)
+}
+
+const guardianParentCompactionMaxWireBytes = 100_000 * 4
+
+func latestGuardianParentCompactionItem(compacted *compact.Result) *compact.Item {
+	if compacted == nil {
+		return nil
+	}
+	for index := len(compacted.NewHistory) - 1; index >= 0; index-- {
+		itemType := strings.ToLower(strings.TrimSpace(compacted.NewHistory[index].Type))
+		if itemType == "compaction" || itemType == "context_compaction" {
+			return &compacted.NewHistory[index]
+		}
+	}
+	return nil
 }
 
 // guardianMaxReviewAttempts mirrors Rust's MAX_REVIEW_ATTEMPTS.

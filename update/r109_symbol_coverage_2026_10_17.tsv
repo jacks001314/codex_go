@@ -1610,7 +1610,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 975d30c043cdd03607859503473e045f6a5b476b	47902	Avoid repeated table clones during config merging (#47902)	2026-09-24	config	0	0		0	0	not_applicable	
 977193486dfe7a88c4dab24abeafe9b754f5b13f	45928	Bound model catalog decode errors and classify request timeouts (#45928)	2026-09-16	model	0	0		0	0	not_applicable	
 97771b1d78cf6366bc3946fe9e4bbca4ebee31d1	53897	Isolate daemon package tests to reduce disk contention (#53897)	2026-10-14	config	0	0		0	0	not_applicable	
-979771476a6dc8cae59dfc9224b91ae0515b04fd	53691	Account for replay caches in encrypted compaction budgets (#53691)	2026-10-13	guardian	3	0	0.00	0	0	implementation_pending	MAX_MODEL_CONTEXT_ITEM_TOKENS,estimate_compaction_content_length,estimate_input_tokens_from_serialized_len
+979771476a6dc8cae59dfc9224b91ae0515b04fd	53691	Account for replay caches in encrypted compaction budgets (#53691)	2026-10-13	guardian	3	0	0.00	0	0	complete	MAX_MODEL_CONTEXT_ITEM_TOKENS,estimate_compaction_content_length,estimate_input_tokens_from_serialized_len
 97c1f628983a401b14fefc2b2b2573806c4e9931	53148	Fix startup draft recovery for pending Vim Replace keys (#53148)	2026-10-11	tui	2	0	0.00	0	0	implementation_pending	flush_pending,replace_vim_text
 97da50c1aa4169cb6bab68d7e4c9c7e7cd2c842f	47970	Expose current environment selections for a running turn (#47970)	2026-09-24	core	1	0	0.00	0	0	implementation_pending	current_turn_environment_selections
 97e46694e1459f758fe03c297e31f40ba1384cd4	42755	Stabilize the interactive tmux startup safety test (#42755)	2026-09-04	core	0	0		0	0	not_applicable	

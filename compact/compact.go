@@ -693,6 +693,10 @@ func EstimateItemTokens(item *Item) int {
 		return 0
 	}
 	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "compaction", "context_compaction":
+		if tokens, ok := estimateCompactionItemTokens(item); ok {
+			return tokens
+		}
 	case "function_call", "custom_tool_call":
 		return compactTokensFromBytes(functionCallModelVisibleBytes(item))
 	case "function_call_output", "custom_tool_call_output", "tool_output":
@@ -708,6 +712,53 @@ func EstimateItemTokens(item *Item) int {
 		return compactTokensFromBytes(compactItemContentBytes(item))
 	}
 	return EstimateTextTokens(ItemText(item))
+}
+
+// EstimateCompactionContentLength mirrors Rust #53691's replay-cache-aware
+// content estimate: encrypted payloads grow roughly threefold, so twelve
+// ciphertext bytes represent about one token.
+func EstimateCompactionContentLength(encodedLen int) int {
+	if encodedLen <= 0 {
+		return 0
+	}
+	return (encodedLen + 2) / 3
+}
+
+// CompactionItemWireBytes returns the serialized bytes of an encrypted
+// compaction item and whether the item carries encrypted content.
+func CompactionItemWireBytes(item *Item) (int, bool) {
+	if item == nil || len(item.Raw) == 0 {
+		return 0, false
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil {
+		return 0, false
+	}
+	if _, ok := raw["encrypted_content"].(string); !ok {
+		return 0, false
+	}
+	return len(item.Raw), true
+}
+
+func estimateCompactionItemTokens(item *Item) (int, bool) {
+	if item == nil || len(item.Raw) == 0 {
+		return 0, false
+	}
+	var raw map[string]any
+	if json.Unmarshal(item.Raw, &raw) != nil {
+		return 0, false
+	}
+	encrypted, ok := raw["encrypted_content"].(string)
+	if !ok {
+		return 0, false
+	}
+	framingBytes := len(item.Raw) - len(encrypted)
+	if framingBytes < 0 {
+		framingBytes = 0
+	}
+	framingTokens := compactTokensFromBytes(framingBytes)
+	contentTokens := compactTokensFromBytes(EstimateCompactionContentLength(len(encrypted)))
+	return framingTokens + contentTokens, true
 }
 
 // functionNamespaceDefault mirrors Rust DEFAULT_FUNCTION_NAMESPACE.

@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +94,35 @@ func TestGuardianParentCompactionResponseIDBoundsOversizedSummary(t *testing.T) 
 	big := &compact.Result{ResponseID: "big", Summary: strings.Repeat("b", 25_000*4+1)}
 	if got := guardianParentCompactionResponseID(big, 0); got != "" {
 		t.Fatalf("oversized default-bound response id = %q, want fail closed", got)
+	}
+}
+
+func TestGuardianParentCompactionUsesEncryptedReplayCacheBudgetLikeRust(t *testing.T) {
+	newEncrypted := func(encoded int) *compact.Result {
+		raw, err := json.Marshal(map[string]any{
+			"type":              "compaction",
+			"id":                "cmp_encrypted",
+			"encrypted_content": strings.Repeat("a", encoded),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &compact.Result{
+			ResponseID: "cmp-encrypted",
+			NewHistory: []compact.Item{{ID: "cmp_encrypted", Type: "compaction", Raw: raw}},
+		}
+	}
+
+	// 18k ciphertext bytes estimate about 1.5k tokens, not 4.5k summary bytes.
+	if got := guardianParentCompactionResponseID(newEncrypted(18_000), 7_000); got != "cmp-encrypted" {
+		t.Fatalf("cached compaction response id = %q, want reuse", got)
+	}
+	if got := guardianParentCompactionResponseID(newEncrypted(18_000), 1_000); got != "" {
+		t.Fatalf("token-oversized compaction response id = %q, want fail closed", got)
+	}
+	wireOversized := newEncrypted(guardianParentCompactionMaxWireBytes)
+	if got := guardianParentCompactionResponseID(wireOversized, 100_000); got != "" {
+		t.Fatalf("wire-oversized compaction response id = %q, want fail closed", got)
 	}
 }
 
