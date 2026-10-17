@@ -161,3 +161,50 @@ go test ./parity -count=1
 3. **20 个 blocked_precondition**：需在报告中逐条给出可验证的 N/A 理由，而不是保持 "blocked"。
 4. **baseline 提升**：`parity/baseline.json` / `parity.json.rustBaseline` / `parity/domains.json.targetRustCommit` 仍指向 `970b7f2ff4`，待 open 项收敛后统一提升到 `e16b631d08`。
 5. **账本覆盖范围**：若要求"逐提交认证"，需为 2639 个提交建立全量分类（当前 222 行仅为筛选跟踪）。
+
+---
+
+# Round 92 增量（2026-10-17，lead）
+
+## 8.1 本轮落地
+
+### #54681 TUI 会话选择绑定后端（`440312f113`，commit `dfb3397d`）
+
+- 新增 `tui/backend_id.go`：进程内 `BackendID`（Rust `backend_id.rs`），`ProcessBackendID()` 代表启动所有者。
+- `SessionTarget` 增加 `BackendID` 与 `EnsureBackend`，拒绝文案与 Rust 完全一致：
+  `This session belongs to a different backend. Open the session picker again.`
+- `SessionPickerState` 为每个选择打戳（`NewSessionPickerStateForBackend` 供显式所有者使用）；`tea.Model` 新增 `Options.BackendID`（缺省为进程所有者），六处交互式 target 全部打戳。
+- 本地与 remote TUI 各自持有后端身份；两套 resume/fork/archive/unarchive/delete handler 在触碰 store 或打开客户端**之前**拒绝外来 target。
+- 测试：`tui/backend_id_test.go`（3 个）、`app/backend_ownership_like_rust_test.go`（5 种 kind）。
+- 结构 N/A：embedded fallback 抑制半。Go 没有由 picker 发起的辅助 app server（`app/daemon_startup.go` 启动时探测一次，`app/remote_tui.go` 复用启动 endpoint），因此没有可抑制的 fallback。
+
+### #54114 终端完成态与阻塞原因（`dec54912f9`，commit `b72afee2`）
+
+- Go 此前**完全没有** `terminal_program_status` 模块；本轮整体移植并叠加 #54114 扩展。
+- `tui/program_status.go`：Idle/Working/Blocked(kind)/Done/Error；OSC 7501 输出 `state=done|error` 与 `:kind=permission|question|auth`；保留 OSC 21337 标签与指示色（done/error → Idle）；进程级去重缓存、invalidate/clear、iTerm detail 清洗与 240 字符上限。
+- `tui/tea/program_status.go`：从 modal 栈分类阻塞（approval=permission；MCP elicitation / app-link 非 auth=question；app-link auth=auth；user_input=question；异步问题仅在空闲时=question）；pending steers / unified exec / active goal 保持 working；Done/Error 保留到键盘、粘贴、鼠标按下（鼠标移动不确认）。
+- 状态迁移：turn.started→idle、实时完成→done、实时失败→error、中断→idle；非当前线程的完成事件不改变上报状态。
+- 测试：`tui/program_status_test.go`（4 个）、`tui/tea/program_status_like_rust_test.go`（4 个）。
+- 结构 N/A：Rust 的 `from_replay`（Go `TurnCompletedMsg` 无该标志）与 `delayed_approval_requests`（Go 直接打开审批 modal，无延迟队列）。
+
+## 8.2 本轮新增的“缺失前置层”结论
+
+| 项 | 结论 | 证据 |
+| --- | --- | --- |
+| `#54048` `534c70863c` | 降级为 `blocked_precondition` | Go 没有交互式目录信任同意步骤：`tui/onboarding.NewTrustDirectoryPrompt` 只有测试调用，信任只经 config layer stack 解析；`codex agents` 独立 dashboard 不初始化 session |
+| `#53859` `c22a06c180` | 仍为 implementable，但需先建 `codex.tui.start` 启动遥测 | `git grep -n "codex\.tui"` 0 命中；otel 基础设施（`otelinit` / `metrics.Global` / `telemetry.InstallGlobalMetrics`）已就绪 |
+
+## 8.3 账本状态（round 92 更新后）
+
+landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 12 / AlreadyImplemented 10 / implementable 8 / unverified 1（共 222 数据行）。
+
+## 8.4 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./tui/ ./tui/tea -run "ProgramStatus|Backend"` | ok |
+| `go test ./tui/...` | 仅既有 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 失败（pristine worktree 可复现） |
+| `go test ./app -run BackendOwnership` | ok |
+
+远端：`refs/heads/main` = `b72afee2`。
