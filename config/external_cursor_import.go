@@ -409,8 +409,10 @@ func (s *ConfigService) importExternalCursorInstructions(scope externalMigration
 }
 
 func rewriteCursorTerms(content string) string {
-	rewritten := replaceExternalTerm(content, externalCursorRulesFile, "AGENTS.md")
-	return replaceExternalTermCaseSensitive(rewritten, "Cursor", "Codex")
+	return rewriteExternalTermsPreservingLinks(content, externalCursorRulesFile, func(segment string) string {
+		rewritten := replaceExternalTerm(segment, externalCursorRulesFile, "AGENTS.md")
+		return replaceExternalTermCaseSensitive(rewritten, "Cursor", "Codex")
+	})
 }
 
 func replaceExternalTermCaseSensitive(input string, needle string, replacement string) string {

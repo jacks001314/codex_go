@@ -468,11 +468,13 @@ func rejectExternalSymlinkComponents(root string, target string) error {
 }
 
 func rewriteClaudeTerms(content string) string {
-	rewritten := replaceExternalTerm(content, externalClaudeDocFile, "AGENTS.md")
-	for _, term := range []string{"claude code", "claude-code", "claude_code", "claudecode", "claude"} {
-		rewritten = replaceExternalTerm(rewritten, term, "Codex")
-	}
-	return rewritten
+	return rewriteExternalTermsPreservingLinks(content, externalClaudeDocFile, func(segment string) string {
+		rewritten := replaceExternalTerm(segment, externalClaudeDocFile, "AGENTS.md")
+		for _, term := range []string{"claude code", "claude-code", "claude_code", "claudecode", "claude"} {
+			rewritten = replaceExternalTerm(rewritten, term, "Codex")
+		}
+		return rewritten
+	})
 }
 
 func replaceExternalTerm(input string, needle string, replacement string) string {
