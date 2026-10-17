@@ -9783,10 +9783,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 13/17; needs review: PreparedSnapshot, SnapshotCredentialEnvironment, ValuePart, prepare_snapshot_credentials"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Shell snapshot capture, credential preparation, export rendering, runtime environment restoration, brokered wrapping, and replay are implemented with execserver restoration tests and tool replay tests."
+        ]
     },
     {
       "sha": "2e220af1f63e0dc8cd0282a283de9ec2ce5dfeb9",

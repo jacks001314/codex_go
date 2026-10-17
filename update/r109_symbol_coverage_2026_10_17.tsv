@@ -211,7 +211,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 14a477ea89712071944244022e8a10142845456e	50219	Bound tmux option probes to one second (#50219)	2026-10-02	tui	0	0		0	0	not_applicable	
 14c8b7771ab2b617a131f5d8e55e98d18e56ed09	51963	Attribute compaction analytics to the correct voice session (#51963)	2026-10-08	appserver	1	1	1.00	0	0	complete	
 14ff9c3a43ebf9bf543cf5f7c45cff2bfea2e512	52277	Preserve UTF-8 byte semantics in network domain matching (#52277)	2026-10-08	core	0	0		0	0	complete	
-1530f828cbaea015bc0fc53c0486e2f889a677f3	43907	Preserve complete shell snapshot exports through filtering and replay (#43907)	2026-09-08	execserver	17	13	0.76	0	0	audit_pending	PreparedSnapshot,SnapshotCredentialEnvironment,ValuePart,prepare_snapshot_credentials
+1530f828cbaea015bc0fc53c0486e2f889a677f3	43907	Preserve complete shell snapshot exports through filtering and replay (#43907)	2026-09-08	execserver	17	13	0.76	0	0	complete	PreparedSnapshot,SnapshotCredentialEnvironment,ValuePart,prepare_snapshot_credentials
 15312c326c9b8d76fb74f8189f50d035c148bca4	46844	Select read-only permissions for temporary structured threads (#46844)	2026-09-20	tui	0	0		0	0	not_applicable	
 1537497e52f3284253884472c3bd796ade5fc02b	46529	Allow compatible feature overrides when starting the shared daemon (#46529)	2026-09-18	tui	3	3	1.00	0	0	complete	
 1544ffc79d60d29d492ca432fc0a5b2f3745ddce	54379	Add configuration support for TUI input presets (#54379)	2026-10-15	tui	2	2	1.00	0	0	complete	
