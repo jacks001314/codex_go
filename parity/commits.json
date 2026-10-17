@@ -17741,9 +17741,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ToolCallState, dispatch_any_with_state, dispatch_tool_call_with_state"
+        "Round 298 (audit): N/A - Go's hook pipeline has no ToolCallState/dispatch_with_state carrier and no User Messaging delivered-message evidence channel attached through blocked or cancelled post-tool results."
       ]
     },
     {

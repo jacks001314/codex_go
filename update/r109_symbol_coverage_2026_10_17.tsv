@@ -526,7 +526,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 34420d42648f627f766bd347532dcaad5475a68b	54637	Preserve disconnect reasons in Noise handshake errors (#54637)	2026-10-16	execserver	0	0		0	0	not_applicable	
 346c4db7c2ee64a56ca75124bfa4cbe27e312f96	40714	Track image generation request IDs in analytics (#40714)	2026-08-25	tui	0	0		0	0	not_applicable	
 3470b807b4370eb4932160855300a7c0b9dc04f9	40438	Use rust-lld for Bazel Windows MSVC Rust links (#40438)	2026-08-24	core	0	0		0	0	not_applicable	
-3483294596ea86edd1fdc30bf360b8951b9d7022	47039	Preserve delivered messages through post-tool hook failures (#47039)	2026-09-21	guardian	3	0	0.00	0	0	implementation_pending	ToolCallState,dispatch_any_with_state,dispatch_tool_call_with_state
+3483294596ea86edd1fdc30bf360b8951b9d7022	47039	Preserve delivered messages through post-tool hook failures (#47039)	2026-09-21	guardian	3	0	0.00	0	0	not_applicable	none
 348ef773eec1a42d6b3cede64a50aeb3e0448e71	54133	Record per-tool incremental update and description size metrics (#54133)	2026-10-14	persistence	2	2	1.00	0	0	complete	
 348f49b292e7882fa84830565be219c5d3139d9b	40544	Include transparent background in image generation analytics (#40544)	2026-08-25	telemetry	0	0		0	0	not_applicable	
 34c4f7e72dd11a5b5a1f767fe2bc5036bd0c91f5	41923	Allow per-call sideband endpoints for existing realtime calls (#41923)	2026-08-31	appserver	0	0		0	0	not_applicable	
