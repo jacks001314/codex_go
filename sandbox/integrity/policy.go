@@ -63,6 +63,14 @@ func (m *ReadDenyMatcher) IsLocalPathReadDenied(path string) bool {
 	return sandbox.ResolveFileSystemEntryAccess(m.entries, path, m.cwd) == sandbox.FileSystemAccessDeny
 }
 
+// IsLocalPathReadDeniedWithCanonical mirrors Rust's
+// `ReadDenyMatcher::is_read_denied_with_canonical_path` (#41209): a walker may
+// have already resolved the target, but the alias and the canonical location
+// are both checked so denying either spelling denies the contents.
+func (m *ReadDenyMatcher) IsLocalPathReadDeniedWithCanonical(path, canonicalPath string) bool {
+	return m.IsLocalPathReadDenied(path) || m.IsLocalPathReadDenied(canonicalPath)
+}
+
 // PreparePolicy mirrors Rust `sandbox_integrity::prepare_policy`
 // (sandbox_integrity/policy.rs:18-30).
 //

@@ -1308,7 +1308,7 @@
             "id": "deny-read-executor-path-semantics",
             "status": "partial",
             "area": "sandbox",
-            "reason": "Aligned upstream 34e74fda0e (#41209 Align deny-read matching with executor path semantics) partially: PathUri.DecodedPathBytes now exposes percent-decoded, byte-oriented path bytes and is used by Windows identity matching; Windows exact-path and glob permission matching fold case and normalize separators; sandbox/integrity.PreparePolicy expands `~` deny-read globs against the executor's local home. Remaining: the integrity ReadDenyMatcher still lacks Rust's PathUri host projection/convention validation and canonical-path matching, which need the executor home/convention threaded through the matcher.",
+            "reason": "Aligned upstream 34e74fda0e (#41209 Align deny-read matching with executor path semantics) partially: PathUri.DecodedPathBytes now exposes percent-decoded, byte-oriented path bytes and is used by Windows identity matching; Windows exact-path and glob permission matching fold case and normalize separators; sandbox/integrity.PreparePolicy expands `~` deny-read globs against the executor's local home. The integrity ReadDenyMatcher also checks the walker-provided canonical location together with the alias. Remaining: Rust's PathUri host projection/convention validation, which needs the executor home/convention threaded through the matcher.",
             "test": "go test ./sandbox ./sandbox/integrity ./utils -run 'CaseOnWindows|HomeGlob|DecodedPathBytes' -count=1"
         }
     ]

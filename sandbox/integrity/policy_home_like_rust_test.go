@@ -33,3 +33,34 @@ func TestPreparePolicyExpandsHomeGlobLikeRust(t *testing.T) {
 		t.Fatal("home-relative deny glob did not match the secret file")
 	}
 }
+
+// Mirrors Rust #41209: a walker-provided canonical location is checked in
+// addition to the alias, so denying either spelling denies the contents.
+func TestReadDenyMatcherChecksAliasAndCanonicalLikeRust(t *testing.T) {
+	cwd := t.TempDir()
+	alias := filepath.Join(cwd, "alias", "file")
+	canonical := filepath.Join(cwd, "real", "file")
+	aliasPolicy, err := PreparePolicy([]sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: filepath.ToSlash("alias/**")},
+		Access: sandbox.FileSystemAccessDeny,
+	}}, cwd)
+	if err != nil {
+		t.Fatalf("PreparePolicy(alias) error = %v", err)
+	}
+	if !aliasPolicy.GlobDenials.IsLocalPathReadDeniedWithCanonical(alias, canonical) {
+		t.Fatal("deny rule matching the alias did not deny its canonical target")
+	}
+	if aliasPolicy.GlobDenials.IsLocalPathReadDenied(canonical) {
+		t.Fatal("canonical target unexpectedly matched the alias-only rule")
+	}
+	canonicalPolicy, err := PreparePolicy([]sandbox.FileSystemSandboxEntry{{
+		Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: filepath.ToSlash("real/**")},
+		Access: sandbox.FileSystemAccessDeny,
+	}}, cwd)
+	if err != nil {
+		t.Fatalf("PreparePolicy(canonical) error = %v", err)
+	}
+	if !canonicalPolicy.GlobDenials.IsLocalPathReadDeniedWithCanonical(alias, canonical) {
+		t.Fatal("deny rule matching the canonical path did not deny the alias")
+	}
+}

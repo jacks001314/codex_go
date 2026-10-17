@@ -99,7 +99,7 @@ func (c *FileContentsChecker) Check(target string) (*Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.policy.GlobDenials.IsLocalPathReadDenied(resolvedTarget) {
+	if c.policy.GlobDenials.IsLocalPathReadDeniedWithCanonical(target, resolvedTarget) {
 		return nil, nil
 	}
 	writeRoots := make([]string, 0, len(c.policy.Roots))
