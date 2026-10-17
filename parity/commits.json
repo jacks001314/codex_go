@@ -3132,9 +3132,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: from_chunks"
+        "Round 264 (audit): TrustedAccessContext fetches account-bound verified-access grants with a bounded 1MiB/2.5s request, derives granted/inactive/unknown status, rejects unsupported auth/account mismatches/malformed or oversized responses, and replaces caller-supplied openai/entitlementContext metadata on eligible plugin MCP calls only. Rust's HttpResponseBodyStream::from_chunks is a test/in-memory stream helper with no separate Go carrier. Tests: go test ./mcp -run 'TrustedAccess' -count=1"
       ]
     },
     {
@@ -8475,9 +8475,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: validate_response"
+        "Round 264 (audit): user verification is recognized as openai/userVerification only when advertised; NormalizeUserVerificationResponse validates the bounded proof shape and base64url signature, returns a bounded closed reason for decline/cancel/invalid responses, discards proof on non-acceptance, and keeps verification inactive (cancel rather than prompt) until activation. Tests: go test ./mcp ./appserver -run 'UserVerification' -count=1"
       ]
     },
     {
@@ -9867,9 +9867,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: cancel_user_verification_request"
+        "Round 264 (audit): app-server userVerification/cancel validates thread/turn/request identity and routes cancellation into the pending native verification request; the MCP cancellation memory remembers early cancellations per connection, bounds them at 1024, cancels on saturation, and resets per reconnect. Tests: go test ./mcp ./appserver -run 'UserVerification|Elicitation.*Cancel' -count=1"
       ]
     },
     {

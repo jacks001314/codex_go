@@ -602,7 +602,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3c837e568c24e4281bba4abdf3bc3c398f3fff13	42718	Gate unified exec TTY support behind a feature flag (#42718)	2026-09-04	config	0	0		0	0	not_applicable	
 3caf9f9586baedb4158a7b91545ead3dd320c348	43676	Style spoken prompts and link workspace files in voice transcripts (#43676)	2026-09-08	tui	6	2	0.33	0	0	audit_pending	TrustedWorkspaceFile,annotate_spoken_artifacts,new_spoken,trusted_workspace_file
 3cd255a4ee8e9c3eef331e03356c5d917d6e4293	46332	Dim conversation recaps in the TUI (#46332)	2026-09-18	tui	0	0		0	0	not_applicable	
-3cd6004dc43c96c38946d9697a7cf72af1562563	43289	Add capability-gated MCP user-verification handling (#43289)	2026-09-06	mcp	3	2	0.67	0	0	audit_pending	validate_response
+3cd6004dc43c96c38946d9697a7cf72af1562563	43289	Add capability-gated MCP user-verification handling (#43289)	2026-09-06	mcp	3	2	0.67	0	0	complete	validate_response
 3d3ae4965ab370217e871b3a7f0d15589557ee4b	46268	Add filesystem accessors bound to environment permissions (#46268)	2026-09-17	execserver	6	1	0.17	0	0	audit_pending	EnvironmentAccess,EnvironmentAccessExt,EnvironmentAccessKey,FileSystemEnvironmentAccessor,filesystem_ref
 3d3df0a0cad5d3d8d3340b633787e9dd304ea463	44060	Raise Guardian's action review limit to 200,000 bytes (#44060)	2026-09-09	guardian	1	1	1.00	0	0	complete	
 3d5b66c655c1fe89403c4fcac65b48371a117685	46482	Handle unknown error classifications and configure gateway OAuth (#46482)	2026-09-18	appserver	3	3	1.00	0	0	complete	
@@ -1378,7 +1378,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8260619cb6dbb23fc43fd9b8567e98fb103aebd4	43458	Centralize Guardian context mode and checkpoint policy (#43458)	2026-09-07	guardian	11	0	0.00	0	0	implementation_pending	GuardianContextMode,ParentCompaction,ParentCompactionError,ReviewContextPolicy,context_mode,for_context,from_features,parent_compaction,root_authorization_version,select_parent_compaction
 8283bc56b1825737e1526e009d7b36a428423588	43281	Move npm package staging into a separate release workflow job (#43281)	2026-09-06	core	0	0		0	0	not_applicable	
 82883da25e3be5883e905afa02c3a639d02a97aa	52384	Notify subscribers when thread read state changes (#52384)	2026-10-09	tui	2	2	1.00	0	0	complete	
-82d4a989124d6786b1145f871a7ca610cdc220a4	43925	Add cancellation for native user-verification RPCs (#43925)	2026-09-08	appserver	3	2	0.67	0	0	audit_pending	cancel_user_verification_request
+82d4a989124d6786b1145f871a7ca610cdc220a4	43925	Add cancellation for native user-verification RPCs (#43925)	2026-09-08	appserver	3	2	0.67	0	0	complete	cancel_user_verification_request
 82d958597f672b0f05c8f1fe3a43a9b93dc28ba5	54741	Gate the file-copy extension behind `multi_env_copy_file` (#54741)	2026-10-16	appserver	0	0		0	0	complete	
 82e70121f86bc1f6fea7f2bb7bbc169d259b3c6b	51908	Honor the user input setting for asynchronous questions (#51908)	2026-10-08	core	0	0		0	0	complete	
 830363bd7ca7bd6d98c7a766da0ce2684730985c	42353	Add experimental Windows sandbox service provisioning (#42353)	2026-09-02	appserver	3	0	0.00	0	0	implementation_pending	UnsupportedHomeDrive,emit_windows_sandbox_setup_failure_metrics,windows_sandbox_proxy_listeners
@@ -1808,7 +1808,7 @@ a97cf1b72eaad05aa49847bc81d09ceac9327754	42879	List GPT-6-Astra in the model pic
 a97fb78085f16ff5c4ab58b44584297c90006350	50039	Keep transcript Find results readable after closing the query (#50039)	2026-10-01	tui	6	2	0.33	0	0	audit_pending	allows_viewport_paging,is_reading,is_search_editing,match_layout
 a9896da3febcaf30e1c5d7b452fb6334b1a0bc51	43248	Connect voice-host RTP audio to speaker playback (#43248)	2026-09-06	realtime	7	5	0.71	0	0	audit_pending	reset_render,set_speaker_disabled
 a98a07759a3f4eefa9fe375b9551f29f043507f8	47745	Skip startup prewarm preparation when the WebSocket is ready (#47745)	2026-09-24	core	1	0	0.00	0	0	implementation_pending	is_websocket_prewarmed
-a98b94625e32d3fd62217364999eab33536bb61b	40992	Add trusted access context for MCP metadata (#40992)	2026-08-26	execserver	3	2	0.67	0	0	audit_pending	from_chunks
+a98b94625e32d3fd62217364999eab33536bb61b	40992	Add trusted access context for MCP metadata (#40992)	2026-08-26	execserver	3	2	0.67	0	0	complete	from_chunks
 a9abdeaff1773ec6e867253ae59b19128077676f	51441	Fix core integration tests for updated turn APIs (#51441)	2026-10-06	mcp	0	0		0	0	not_applicable	
 a9b0815167c27ab13719dd12d13b63e02b70d221	53224	Support Windows clipboard text paste shortcuts in the TUI (#53224)	2026-10-11	tui	7	2	0.29	0	0	audit_pending	ClipboardPasteTarget,clipboard_paste_target,flush_pending_paste_burst,prepare_composer_clipboard_paste,start_clipboard_text_paste
 a9bc7bebfa439e608543f45e9fc3415895c39153	51499	Load rollout history on a single blocking worker (#51499)	2026-10-06	persistence	1	0	0.00	0	0	implementation_pending	read_rollout_lines
