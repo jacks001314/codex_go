@@ -23325,10 +23325,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 19/24; needs review: CloudConfigBundleBindingGuard, CloudConfigBundlePolicyChanges, ema_policy_changes, get_latest_snapshot, with_cloud_config_binding"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Cloud config bundle revisions are tracked and bound to loaded configs; superseded/retired revisions cannot replace the active cache or authorize enterprise MCP, and runtime reloads fail closed on invalid or revoked policy."
+        ]
     },
     {
       "sha": "677b07eca037cce69dc9b82323792b22a5101c52",
