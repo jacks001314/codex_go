@@ -225,6 +225,10 @@ func createRealtimeWebRTCCall(ctx context.Context, backend *TransportBackendConf
 	}
 	request.Header = backend.CallHeaders.Clone()
 	request.Header.Set("Content-Type", contentType)
+	// Rust passes the realtime session headers to the WebRTC call request too
+	// (RealtimeStart::extra_headers), including the client voice session id
+	// (#53784).
+	applyRealtimeSessionHeaders(request.Header, config)
 	if backend.PrepareCall != nil {
 		if err := backend.PrepareCall(ctx, request, body); err != nil {
 			return nil, fmt.Errorf("authenticate realtime call: %w", err)

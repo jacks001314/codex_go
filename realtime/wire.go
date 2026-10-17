@@ -39,9 +39,7 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 	if headers == nil {
 		headers = make(http.Header)
 	}
-	if config.RealtimeSessionID != "" {
-		headers.Set("x-session-id", config.RealtimeSessionID)
-	}
+	applyRealtimeSessionHeaders(headers, config)
 	switch config.Version {
 	case VersionV1:
 		if headers.Get("openai-alpha") == "" {
@@ -105,6 +103,22 @@ func dialRealtimeTransport(ctx context.Context, threadID string, backend *Transp
 		}
 	}
 	return connection, nil
+}
+
+// applyRealtimeSessionHeaders mirrors Rust's realtime_request_headers session
+// ids: the Realtime API session id rides on `x-session-id`, while the
+// client-generated product voice session id rides on `voice-session-id`
+// (Rust #53784). Both are opaque header values and are skipped when empty.
+func applyRealtimeSessionHeaders(headers http.Header, config *SessionConfig) {
+	if headers == nil || config == nil {
+		return
+	}
+	if config.RealtimeSessionID != "" {
+		headers.Set("x-session-id", config.RealtimeSessionID)
+	}
+	if config.VoiceSessionID != "" {
+		headers.Set("voice-session-id", config.VoiceSessionID)
+	}
 }
 
 func realtimeWebsocketURL(backend *TransportBackendConfig, config *SessionConfig, callID string) (string, error) {

@@ -41,8 +41,10 @@ func TestRustTUISnapshotManifestCoversPrioritySurfaces(t *testing.T) {
 	// Round-90 re-anchor to head 4eb4a65407: the TUI snapshot tree moved from
 	// 1375 to 1432 goldens across the 338-commit #54590 delta (the config
 	// panel directory is new; the per-directory counts below follow).
-	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1432 {
-		t.Fatalf("Rust TUI snapshot total drift: got %d want 1432", got)
+	// Round-91 re-anchor to head e16b631d08: #54742 added the
+	// history-search absorbed-slash composer snapshot (1433 total).
+	if got := countSnapFilesRecursive(t, filepath.Join(root, "tui")); got != 1433 {
+		t.Fatalf("Rust TUI snapshot total drift: got %d want 1433", got)
 	}
 
 	gotDirs := rustTUISnapshotDirs(t, root)
@@ -168,7 +170,8 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 			// #46734/#46749/#46751 added the transcript find/copy footers, the
 			// mention menu above history, the status-surface layouts and the
 			// warning-notice styles.
-			Files:    30,
+			// #54742 added the history-search absorbed-slash snapshot.
+			Files:    31,
 			Owner:    "tui/bottom_pane/chat_composer",
 			Focus:    "draft and voice composer layout snapshots",
 			Priority: []string{"composer"},
@@ -177,6 +180,7 @@ func rustTUISnapshotManifest() []rustTUISnapshotDir {
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__snapshot_tests__voice_composer.snap",
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__footer_state__tests__transcript_find_copy_footer.snap",
 				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__warning_notice__tests__warning_notice_styles.snap",
+				"tui/src/bottom_pane/chat_composer/snapshots/codex_tui__bottom_pane__chat_composer__history_search__paste_tests__history_search_absorbed_slash.snap",
 			},
 		},
 		{

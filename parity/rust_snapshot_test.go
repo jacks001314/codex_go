@@ -29,7 +29,10 @@ func TestRustCriticalFileHashesSnapshot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(%s) error = %v", path, err)
 		}
-		sum := sha256.Sum256(data)
+		// Upstream embeds these files with LF; a Windows checkout of the Rust
+		// tree may hand us CRLF, so normalize before hashing to keep the pins
+		// platform independent (blob digests).
+		sum := sha256.Sum256(bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n")))
 		got := hex.EncodeToString(sum[:])
 		if got != entry.SHA256 {
 			t.Fatalf("Rust critical file hash drift for %s: got %s want %s", entry.Path, got, entry.SHA256)
@@ -189,6 +192,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"ext/agent-message-board",
 		"ext/connectors",
 		"ext/extension-api",
+		"ext/multi-env-copy-file",
 		"ext/goal",
 		"ext/git-attribution",
 		"ext/guardian-reviewer",
@@ -308,7 +312,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Go port mirrors after the 498-commit gap from the 5f3180c793 pin.
 		// Re-pinned to upstream e75b36efde (#48100): the
 		// agent-message-board-client workspace member.
-		{Path: "Cargo.toml", SHA256: "a368b2e4bb7dcc86bf64334fdea1defa951d6752d8a6c43f4b0492aba803e114"},
+		// Round-91 re-anchor to head e16b631d08: Cargo.toml gained the
+		// ext/multi-env-copy-file workspace member (#54674).
+		{Path: "Cargo.toml", SHA256: "1d477861e702166a83762906ce70d7f6838cf479a40826d8c173ea4e41e8ff8f"},
 		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.
@@ -316,7 +322,7 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ThreadListParams literals in resolve_resume_thread_id gained
 		// `excluded_thread_ids: None` (mechanical consequence of the
 		// thread/list exclusion field; Go side already landed as sync551).
-		{Path: "exec/src/lib.rs", SHA256: "9dea85e185a5446d58c4036f2ae32e67dec32106b0b4e64a5d6512e73a1b2e95"},
+		{Path: "exec/src/lib.rs", SHA256: "36c6bb343db323ed6bb0b2679a4298d43db50bbf333409155ab44e96e2b4da7b"},
 		// Re-pinned to upstream 7498521d (#46319): exec JSON web-search items
 		// now carry the structured results array.
 		{Path: "exec/src/exec_events.rs", SHA256: "dafa872d7e86a099e56e28a329dcb9c03db90ed768c3b88cca8c91d46dc1d0e5"},

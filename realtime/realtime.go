@@ -300,9 +300,13 @@ type StartParams struct {
 	InitialItems        []InitialTextItem `json:"initialItems,omitempty"`
 	Prompt              OptionalString    `json:"prompt,omitempty"`
 	RealtimeSessionID   *string           `json:"realtimeSessionId,omitempty"`
-	Transport           *StartTransport   `json:"transport,omitempty"`
-	Version             *Version          `json:"version,omitempty"`
-	Voice               *Voice            `json:"voice,omitempty"`
+	// VoiceSessionID is a client-generated identifier for the product voice
+	// session. It is distinct from RealtimeSessionID and is forwarded as the
+	// `voice-session-id` header (Rust #53784).
+	VoiceSessionID *string         `json:"voiceSessionId,omitempty"`
+	Transport      *StartTransport `json:"transport,omitempty"`
+	Version        *Version        `json:"version,omitempty"`
+	Voice          *Voice          `json:"voice,omitempty"`
 }
 
 // String implements fmt.Stringer with the same redaction contract as Rust's
@@ -343,6 +347,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		InitialItems                        []InitialTextItem         `json:"initialItems"`
 		Prompt                              *OptionalString           `json:"prompt,omitempty"`
 		RealtimeSessionID                   *string                   `json:"realtimeSessionId"`
+		VoiceSessionID                      *string                   `json:"voiceSessionId"`
 		Transport                           *StartTransport           `json:"transport"`
 		Version                             *Version                  `json:"version"`
 		Voice                               *Voice                    `json:"voice"`
@@ -361,6 +366,7 @@ func (p StartParams) MarshalJSON() ([]byte, error) {
 		InitialItems:                        p.InitialItems,
 		Prompt:                              prompt,
 		RealtimeSessionID:                   p.RealtimeSessionID,
+		VoiceSessionID:                      p.VoiceSessionID,
 		Transport:                           p.Transport,
 		Version:                             p.Version,
 		Voice:                               p.Voice,
@@ -565,6 +571,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 	return &SessionConfig{
 		ThreadID:                            p.ThreadID,
 		RealtimeSessionID:                   firstNonEmptyString(stringValue(p.RealtimeSessionID), p.ThreadID),
+		VoiceSessionID:                      stringValue(p.VoiceSessionID),
 		Model:                               model,
 		OutputModality:                      p.OutputModality,
 		Version:                             version,
@@ -867,6 +874,7 @@ type ListVoicesResponse struct {
 type SessionConfig struct {
 	ThreadID                            string
 	RealtimeSessionID                   string
+	VoiceSessionID                      string
 	Model                               string
 	OutputModality                      OutputModality
 	Version                             Version

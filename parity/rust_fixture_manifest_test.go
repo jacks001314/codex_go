@@ -140,7 +140,10 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #48353 added the cloud-skills-across-executor-readiness snapshot.
 			// #51678 then moved windows_sandbox.rs out to core/tests/windows_sandbox.rs
 			// (round-89 pin advance to 95ec468619), so the suite loses one file.
-			Files: 352,
+			// #54654 then added the dynamic-tool parallel-execution suite and its
+			// CodeModeOnly/Direct MCP tool-discovery snapshots (round-91 pin
+			// advance to e16b631d08), so the suite grows by three files.
+			Files: 355,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

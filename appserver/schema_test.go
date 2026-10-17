@@ -154,8 +154,13 @@ func TestPrecomputedExportArtifactsMatchTargetRustCommit(t *testing.T) {
 		// (#54420, local image inputs on completed image-generation items; the
 		// preceding change was aabf13307a / #54398). Both SHA-256 values below were
 		// recomputed from the re-vendored bytes and equal the Rust tree's artifacts.
-		{"stable", stablePrecomputedExports, "eaa1a12d1f025917e7ecde27c50b4020ff19017ba220ac1c5b5184c03b925db0"},
-		{"experimental", experimentalPrecomputedExports, "1b76e20f419ff08e2abbad142a8372e232276fb4edb14e6aac52be380db70b8b"},
+		// Re-vendored from upstream head e16b631d08 (round-91 pin advance): both
+		// exports were re-copied byte-for-byte from
+		// app-server-protocol/schema/precomputed/. The pair last changed at
+		// 0e67502123 (#54686, McpServerStatus.toolListMeta) and 6786dccbe7
+		// (#53784, ThreadRealtimeStartParams.voiceSessionId).
+		{"stable", stablePrecomputedExports, "0042e6d2041bb58fdffe4fcd55ff928ed344c8d9c542d30532dfc823e4eca9fd"},
+		{"experimental", experimentalPrecomputedExports, "5087303b0b5bd18746a43f5f771c423c85b219d4e702a26edd9b0f6305b853f1"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

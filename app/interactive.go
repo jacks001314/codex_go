@@ -2148,6 +2148,8 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		SessionPickerView:       interactiveTUIStringFromConfig(values, "session_picker_view"),
 		// Rust #50786: remember the Command Center grouping across launches.
 		AgentsOverviewGrouping: interactiveTUIStringFromConfig(values, "agents_overview_grouping"),
+		// Rust #54379: `tui.presets` ride along in the TUI local settings.
+		QuickDials:             loaded.TUIPresets(),
 		PluginUserMarketplaces: userMarketplaces,
 		PluginGitMarketplaces:  gitMarketplaces,
 	}

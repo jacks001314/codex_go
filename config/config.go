@@ -629,6 +629,11 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if percent, ok := configInt(cfg.Values["model_post_turn_compact_threshold_percent"]); ok && percent > 100 {
 		return nil, fmt.Errorf("model_post_turn_compact_threshold_percent must be between 0 and 100")
 	}
+	// Rust #54379: `tui.presets` entries must use a single-digit slot, carry a
+	// nonempty prompt or slash command, and stay under the 8,000-byte limit.
+	if err := ValidateTUIPresets(cfg.Values); err != nil {
+		return nil, err
+	}
 	if opts != nil && opts.StrictConfig {
 		if err := validateKnownTopLevelConfigFields(cfg.Values); err != nil {
 			return nil, err
@@ -876,6 +881,7 @@ var knownTuiConfigFields = map[string]struct{}{
 	"agents_overview_grouping":        {},
 	"resume_cwd":                      {},
 	"keymap":                          {},
+	"presets":                         {},
 	"model_availability_nux":          {},
 	"terminal_resize_reflow_max_rows": {},
 }

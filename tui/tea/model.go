@@ -333,6 +333,9 @@ type SettingsWriteResult struct {
 	// `tui.agents_overview_grouping` value (Rust #50786). Empty keeps the current
 	// Command Center grouping.
 	AgentsOverviewGrouping string
+	// QuickDials carries the configured `tui.presets` entries (Rust #54379),
+	// keyed by a single digit from 0 to 9. Nil keeps the current set.
+	QuickDials             map[string]config.TUIPreset
 	PluginUserMarketplaces map[string]bool
 	PluginGitMarketplaces  map[string]bool
 	// Rendering carries the resolved `tui.rendering` preferences so a settings
