@@ -17609,9 +17609,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: MetadataReadError"
+        "Round 115 (lead): landed in rollout - FirstSessionMeta classifies metadata failures as invalid_history_mode, response_before_metadata, or missing_metadata through metadataReadError while preserving the underlying error. Compression stats count metadata_read_failures, the completion log reports the total, scan metrics add the bounded reason tag, and at most five warnings per run log only trigger, parsed rollout id, reason, error kind, size, and mtime age, never the path or error text. Tests: TestFirstSessionMetaClassifiesMetadataReadFailuresLikeRust and TestRolloutCompressionMetadataDiagnosticsLikeRust. RC: forcing reason=io fails the reasoned metric; removing the warning cap emits 7 warnings instead of 5; disabling history-mode validation returns nil instead of invalid_history_mode. go test ./rollout -count=1 + go vet ./rollout + go build ./rollout ./appserver ./state ./session green."
       ]
     },
     {

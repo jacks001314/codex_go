@@ -3,6 +3,7 @@ package rollout
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -369,14 +370,30 @@ func FirstSessionMeta(path string) (*SessionMeta, error) {
 		return nil, err
 	}
 	for i := range lines {
+		if lines[i].Type == "session_meta" {
+			var payload struct {
+				HistoryMode string `json:"history_mode"`
+			}
+			if len(lines[i].Payload) > 0 && json.Unmarshal(lines[i].Payload, &payload) == nil {
+				if err := validateThreadHistoryMode(payload.HistoryMode); err != nil {
+					return nil, &metadataReadError{Reason: "invalid_history_mode", Err: err}
+				}
+			}
+		}
 		if lines[i].Meta != nil {
 			meta := *lines[i].Meta
 			meta.HistoryBase = cloneHistoryPosition(lines[i].Meta.HistoryBase)
 			meta.SubagentHistoryStartOrdinal = cloneUint64Ptr(lines[i].Meta.SubagentHistoryStartOrdinal)
 			return &meta, nil
 		}
+		if lines[i].Type == "item" || lines[i].Type == "inter_agent_communication" {
+			return nil, &metadataReadError{
+				Reason: "response_before_metadata",
+				Err:    fmt.Errorf("rollout at %s does not start with session metadata", path),
+			}
+		}
 	}
-	return nil, errMissingSessionMeta(path)
+	return nil, &metadataReadError{Reason: "missing_metadata", Err: errMissingSessionMeta(path)}
 }
 
 func RecordFromPath(path string, archived bool) (*session.Record, error) {
@@ -2365,4 +2382,44 @@ func errEmptyRollout(path string) error {
 
 func errMissingSessionMeta(path string) error {
 	return fmt.Errorf("rollout session metadata not found: %s", path)
+}
+
+// metadataReadError carries Rust's bounded metadata scan reason while
+// preserving the underlying error for callers that need the details.
+type metadataReadError struct {
+	Reason string
+	Err    error
+}
+
+func (e *metadataReadError) Error() string {
+	if e == nil || e.Err == nil {
+		return "rollout session metadata could not be read"
+	}
+	return e.Err.Error()
+}
+
+func (e *metadataReadError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// metadataReadReason returns Rust's bounded diagnostic reason; errors without a
+// classified metadata failure are I/O errors.
+func metadataReadReason(err error) string {
+	var metadataErr *metadataReadError
+	if errors.As(err, &metadataErr) && strings.TrimSpace(metadataErr.Reason) != "" {
+		return metadataErr.Reason
+	}
+	return "io"
+}
+
+func validateThreadHistoryMode(mode string) error {
+	switch mode {
+	case "", "legacy", "paginated":
+		return nil
+	default:
+		return fmt.Errorf("invalid session metadata history_mode %q: expected `legacy` or `paginated`", mode)
+	}
 }

@@ -131,6 +131,18 @@ func rolloutCompressionFailure(counter string, outcomeKey string, trigger *Rollo
 	metrics.Counter(counter, 1, tags)
 }
 
+// rolloutCompressionMetadataFailure mirrors Rust's metadata scan counter: the
+// bounded scan reason is reported alongside the error kind and trigger.
+func rolloutCompressionMetadataFailure(trigger RolloutCompressionTrigger, err error, reason string) {
+	metrics.Counter(rolloutCompressionScanCounter, 1, map[string]string{
+		"outcome":    "failed",
+		"stage":      "read_metadata",
+		"error_kind": rolloutCompressionErrorKind(err),
+		"trigger":    trigger.tag(),
+		"reason":     reason,
+	})
+}
+
 // rolloutCompressionErrorKind mirrors Rust's `error_kind`: a fixed set of
 // categories so error messages and paths never become metric tags.
 func rolloutCompressionErrorKind(err error) string {

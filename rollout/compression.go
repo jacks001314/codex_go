@@ -30,6 +30,7 @@ const (
 	compressionWorkerMaxRuntime  = 5 * time.Hour
 	compressionRunMarkerFileName = "rollout-compression.lock"
 	maxConcurrentCompressions    = 2
+	maxMetadataWarningsPerRun    = 5
 )
 
 // RolloutCompressionTrigger records which entry point asked for a compression
@@ -52,9 +53,10 @@ type RolloutCompressionStats struct {
 	Failed     int
 	// ScanErrors / CleanupErrors / TimeBudgetExhausted feed the completion
 	// metrics (Rust's CompressionStats flags).
-	ScanErrors          bool
-	CleanupErrors       bool
-	TimeBudgetExhausted bool
+	ScanErrors           bool
+	CleanupErrors        bool
+	TimeBudgetExhausted  bool
+	MetadataReadFailures int
 }
 
 // SpawnRolloutCompressionWorker starts Rust's fire-and-forget background job
@@ -127,6 +129,7 @@ func RunRolloutCompression(ctx context.Context, codexHome string, trigger Rollou
 		"compressed", stats.Compressed,
 		"skipped", stats.Skipped,
 		"failed", stats.Failed,
+		"metadata_read_failures", stats.MetadataReadFailures,
 	)
 	// Rust keeps the completed outcome even when a scan or cleanup failed: it
 	// means the pass returned, not that every directory or file was handled.
@@ -321,11 +324,18 @@ func compressRolloutsInRoot(ctx context.Context, root string, deadline time.Time
 		}
 		meta, err := FirstSessionMeta(path)
 		if err != nil {
+			reason := metadataReadReason(err)
+			metadataReadFailures := 0
 			mu.Lock()
 			stats.ScanErrors = true
 			stats.Skipped++
+			stats.MetadataReadFailures++
+			metadataReadFailures = stats.MetadataReadFailures
 			mu.Unlock()
-			rolloutCompressionFailure(rolloutCompressionScanCounter, "outcome", &trigger, "read_metadata", err)
+			rolloutCompressionMetadataFailure(trigger, err, reason)
+			if metadataReadFailures <= maxMetadataWarningsPerRun {
+				logRolloutMetadataSkip(trigger, path, reason, err)
+			}
 			rolloutCompressionFile(trigger, "skipped_unreadable_meta")
 			continue
 		}
@@ -364,6 +374,32 @@ func compressRolloutsInRoot(ctx context.Context, root string, deadline time.Time
 	}
 	wg.Wait()
 	return nil
+}
+
+// logRolloutMetadataSkip mirrors Rust's bounded metadata warning: only parsed
+// IDs and stable labels are logged, never the rollout path or error text.
+func logRolloutMetadataSkip(trigger RolloutCompressionTrigger, path string, reason string, err error) {
+	rolloutID := ""
+	if parsed, ok := ParseRolloutFileName(filepath.Base(path)); ok {
+		rolloutID = parsed.RolloutID
+	}
+	var fileSizeBytes any
+	var mtimeAgeSeconds any
+	if info, statErr := os.Stat(path); statErr == nil {
+		fileSizeBytes = info.Size()
+		if age := time.Since(info.ModTime()); age >= 0 {
+			mtimeAgeSeconds = int64(age / time.Second)
+		}
+	}
+	slog.Warn(
+		"skipping rollout compression because session metadata could not be read",
+		"trigger", trigger.tag(),
+		"rollout_id", rolloutID,
+		"reason", reason,
+		"error_kind", rolloutCompressionErrorKind(err),
+		"file_size_bytes", fileSizeBytes,
+		"mtime_age_seconds", mtimeAgeSeconds,
+	)
 }
 
 // compressRolloutIfCold mirrors Rust's `compress_rollout_if_cold_blocking`: a
