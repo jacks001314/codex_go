@@ -49,6 +49,48 @@ func TestGoalEmptyAutomaticContinuationsBlockAfterThree(t *testing.T) {
 	}
 }
 
+// Rust #52640: interrupted automatic continuations without activity count
+// toward the same three-turn breaker, while tool/user activity still resets it.
+func TestGoalInterruptedAutomaticContinuationsCountTowardNoActivityLikeRust(t *testing.T) {
+	router, stateRuntime, threadID := newGoalToolTestRouter(t)
+	ctx := context.Background()
+	goal, err := stateRuntime.InsertThreadGoal(ctx, threadID, "objective", state.ThreadGoalActive, nil)
+	if err != nil || goal == nil {
+		t.Fatalf("InsertThreadGoal() = %#v, %v", goal, err)
+	}
+	interrupted := func(turnID string) {
+		t.Helper()
+		startAutomaticGoalTurn(router, threadID, turnID, goal.GoalID)
+		router.markGoalTurnInterrupted(threadID, turnID)
+		router.finishStateThreadGoalTurn(threadID, turnID, time.Now().UTC(), 0, nil)
+	}
+	for index := 0; index < goalEmptyResponseThreshold; index++ {
+		interrupted(fmt.Sprintf("interrupted-%d", index))
+	}
+	updated, err := stateRuntime.GetThreadGoal(ctx, threadID)
+	if err != nil || updated == nil || updated.Status != state.ThreadGoalBlocked {
+		t.Fatalf("goal after interrupted continuations = %#v, %v", updated, err)
+	}
+
+	// Tool activity between interrupted turns breaks the streak.
+	second, err := stateRuntime.UpdateThreadGoal(ctx, threadID, state.GoalUpdate{Status: ptrThreadGoalStatus(state.ThreadGoalActive)})
+	if err != nil || second == nil {
+		t.Fatalf("reactivate goal = %#v, %v", second, err)
+	}
+	interrupted("interrupted-a")
+	interrupted("interrupted-b")
+	toolTurn := "tool-activity-after-interrupt"
+	startAutomaticGoalTurn(router, threadID, toolTurn, second.GoalID)
+	router.recordGoalToolOutcome(threadID, toolTurn, goalExecFailureExecution(tool.DefaultShellCommandToolName, true, true))
+	router.recordGoalResultItems(threadID, toolTurn, &turn.TurnStartParams{ThreadID: threadID}, emptyGoalFinalResult())
+	router.finishStateThreadGoalTurn(threadID, toolTurn, time.Now().UTC(), 0, nil)
+	interrupted("interrupted-c")
+	interrupted("interrupted-d")
+	if updated, _ := stateRuntime.GetThreadGoal(ctx, threadID); updated == nil || updated.Status != state.ThreadGoalActive {
+		t.Fatalf("tool activity did not reset interrupted streak: %#v", updated)
+	}
+}
+
 // TestGoalEmptyStreakResetsOnActivityAndNonAutomaticTurns verifies the streak
 // resets on final-answer text, commentary, or tool activity, and that
 // non-automatic turns never advance it.

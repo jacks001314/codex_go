@@ -1414,6 +1414,14 @@
             "reason": "Aligned upstream ae11049397 (#54070 Expose gateway authentication as a reusable OAuth session API): the existing gateway credential manager is now exposed through OAuthSessionConfig, OAuthSessionManager, OAuthSessionStatus, OAuthSessionStatusChange, OAuthLoginControl and OAuthSessionStorage compatibility aliases, with a reusable constructor, status subscription, wrapped credential-state error and compatibility status constants. Existing gateway names, storage namespace, redirect policy and refresh behavior are unchanged.",
             "userImpact": "Consumers can use the credential grant manager without depending on inference-gateway-specific naming, while existing gateway integrations remain compatible.",
             "test": "go test ./auth -run TestOAuthSessionAliasesKeepGatewayBehaviorLikeRust -count=1"
+        },
+        {
+            "id": "interrupted-goal-no-activity-breaker",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 8ec80de0ef (#52640 Count interrupted goal continuations toward the no-activity limit): interrupted automatic goal continuations are marked on the turn snapshot and count toward the existing three-turn no-activity breaker when no user, tool, reasoning, or other activity occurred. A pending marker covers interruption/admission races, activity still resets the streak, and non-automatic turns remain excluded.",
+            "userImpact": "Repeatedly interrupted automatic goal continuations can no longer keep a goal running indefinitely without progress.",
+            "test": "go test ./appserver -run 'TestGoalInterruptedAutomaticContinuationsCountTowardNoActivityLikeRust|TestGoalEmpty' -count=1"
         }
     ]
 }

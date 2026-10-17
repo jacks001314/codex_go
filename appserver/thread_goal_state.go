@@ -45,6 +45,10 @@ type stateGoalTurnSnapshot struct {
 	// text. Three consecutive empty automatic continuations block the goal.
 	EmptyFinal  bool
 	HasActivity bool
+	// Interrupted marks an automatically admitted continuation that ended via
+	// cancellation. Without activity it counts toward the no-activity breaker
+	// (Rust #52640).
+	Interrupted bool
 }
 
 // goalEmptyResponseState carries the consecutive-empty-automatic-continuation
@@ -358,7 +362,8 @@ func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalI
 		r.lastAccountedDescendant = map[string]int64{}
 	}
 	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
-	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
+	key := stateGoalTurnKey(threadID, turnID)
+	snapshot := stateGoalTurnSnapshot{
 		GoalID:             goalID,
 		GoalStatus:         goalStatus,
 		StartedAtMS:        nowMS,
@@ -366,6 +371,11 @@ func (r *RuntimeRouter) markStateThreadGoalTurnActiveNow(threadID, turnID, goalI
 		LastAccountedUsage: currentUsage,
 		FinishMode:         state.GoalAccountingActiveOnly,
 	}
+	if r.goalInterruptedTurns[key] {
+		snapshot.Interrupted = true
+		delete(r.goalInterruptedTurns, key)
+	}
+	r.goalAccountingTurns[key] = snapshot
 	// Rust #41183: anchoring a goal re-baselines descendant token accounting so
 	// descendant usage does not carry across to a replacement goal.
 	r.lastAccountedDescendant[strings.TrimSpace(threadID)] = r.descendantTokenUsage[strings.TrimSpace(threadID)]
@@ -981,7 +991,8 @@ func (r *RuntimeRouter) beginStateThreadGoalTurn(threadID, turnID string, starte
 		r.goalTurnUsage = map[string]model.AgentUsage{}
 	}
 	currentUsage := r.goalTurnUsage[stateGoalTurnKey(threadID, turnID)]
-	r.goalAccountingTurns[stateGoalTurnKey(threadID, turnID)] = stateGoalTurnSnapshot{
+	key := stateGoalTurnKey(threadID, turnID)
+	snapshot := stateGoalTurnSnapshot{
 		GoalID:             goal.GoalID,
 		GoalStatus:         goal.Status,
 		StartedAtMS:        startedAtMS,
@@ -990,6 +1001,11 @@ func (r *RuntimeRouter) beginStateThreadGoalTurn(threadID, turnID string, starte
 		ConnectionID:       strings.TrimSpace(connectionID),
 		FinishMode:         state.GoalAccountingActiveOnly,
 	}
+	if r.goalInterruptedTurns[key] {
+		snapshot.Interrupted = true
+		delete(r.goalInterruptedTurns, key)
+	}
+	r.goalAccountingTurns[key] = snapshot
 	r.goalAccountingMu.Unlock()
 	r.clearGoalIdleActive()
 }
@@ -1011,6 +1027,7 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 		delete(r.goalTurnUsage, key)
 	}
 	delete(r.goalAccountingTurns, key)
+	delete(r.goalInterruptedTurns, key)
 	r.goalAccountingMu.Unlock()
 	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
 		return

@@ -4278,6 +4278,12 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	completedAt := now.Unix()
 	durationMS := now.UnixMilli() - startedAtMS
 	r.persistInterruptedTurnMarker(threadID, turnID, now)
+	if strings.EqualFold(strings.TrimSpace(reason), turnAbortReasonInterrupted) {
+		if analytics != nil && analytics.Result != nil {
+			r.recordGoalResultItems(threadID, turnID, analytics.Params, analytics.Result)
+		}
+		r.markGoalTurnInterrupted(threadID, turnID)
+	}
 	r.finishStateThreadGoalTurn(threadID, turnID, now, 0, nil)
 	_ = r.appendRuntimeTurnAborted(threadID, turnID, firstNonEmpty(strings.TrimSpace(reason), turnAbortReasonInterrupted), now, durationMS)
 	r.requireSteerMailbox().Clear(&turn.SteerDrainParams{ThreadID: threadID, TurnID: turnID})

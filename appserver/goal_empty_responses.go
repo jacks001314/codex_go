@@ -31,6 +31,32 @@ func (r *RuntimeRouter) markGoalContinuation(threadID, turnID string) {
 	r.emptyResponseTurns[threadID] = state
 }
 
+// markGoalTurnInterrupted defers an interrupted turn's no-activity accounting
+// until its snapshot is available. Cancellation can race turn admission, so an
+// early interruption is retained by key and consumed when the turn starts.
+func (r *RuntimeRouter) markGoalTurnInterrupted(threadID, turnID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	key := stateGoalTurnKey(threadID, turnID)
+	r.goalAccountingMu.Lock()
+	defer r.goalAccountingMu.Unlock()
+	if snapshot, ok := r.goalAccountingTurns[key]; ok {
+		snapshot.Interrupted = true
+		r.goalAccountingTurns[key] = snapshot
+		return
+	}
+	if r.goalInterruptedTurns == nil {
+		r.goalInterruptedTurns = map[string]bool{}
+	}
+	r.goalInterruptedTurns[key] = true
+}
+
 // resetGoalEmptyResponses invalidates the automatic turn and clears the streak
 // (Rust #44320 reset_empty_responses).
 func (r *RuntimeRouter) resetGoalEmptyResponses(threadID string) {
@@ -44,6 +70,11 @@ func (r *RuntimeRouter) resetGoalEmptyResponses(threadID string) {
 	r.goalAccountingMu.Lock()
 	defer r.goalAccountingMu.Unlock()
 	delete(r.emptyResponseTurns, threadID)
+	for key := range r.goalInterruptedTurns {
+		if strings.HasPrefix(key, threadID+"\x00") {
+			delete(r.goalInterruptedTurns, key)
+		}
+	}
 }
 
 // recordGoalResultItems updates the active goal's turn snapshot from the
@@ -220,7 +251,7 @@ func (r *RuntimeRouter) advanceGoalEmptyResponses(threadID, turnID, goalID strin
 		}
 	}
 	automatic := strings.TrimSpace(state.AutomaticTurnID) == turnID
-	empty := automatic && snapshot.EmptyFinal && !snapshot.HasActivity
+	empty := automatic && !snapshot.HasActivity && (snapshot.EmptyFinal || snapshot.Interrupted)
 	if !empty {
 		state.Turns = 0
 		state.AutomaticTurnID = ""

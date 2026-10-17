@@ -1506,7 +1506,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8ea2428c38f8994e18d789669f5cbc5df75e1f17	49861	Add Daybreak state to the status line and terminal title (#49861)	2026-10-01	tui	0	0		0	0	not_applicable	
 8ea297ff604f358d0e973f1abc34743b56dfcf92	42101	Add a TUI setting to disable automatic recaps (#42101)	2026-09-01	tui	1	1	1.00	0	0	complete	
 8ea2c0e0d4bc1261258eb532b5a9d616147b6571	49425	Prune diagnostic logs periodically by age and database size (#49425)	2026-09-30	persistence	1	1	1.00	0	0	complete	
-8ec80de0ef55d2fb393332d75c32df9751496a58	52640	Count interrupted goal continuations toward the no-activity limit (#52640)	2026-10-09	appserver	3	1	0.33	0	0	audit_pending	interrupted_turn_id,turn_start_permit
+8ec80de0ef55d2fb393332d75c32df9751496a58	52640	Count interrupted goal continuations toward the no-activity limit (#52640)	2026-10-09	appserver	3	3	1.00	0	0	complete
 8ece31a7bf849ddb1d1f01aa72033cd106a1c2ba	45837	Hide WSLg's duplicate root in restricted Linux sandboxes (#45837)	2026-09-16	sandbox	3	0	0.00	0	0	implementation_pending	WSLG_DISTRO_ROOT,ensure_supported_path,is_duplicate_root
 8edb95f274ae70faac9dc35f079ed7b997dd862c	39979	Preserve MCP compatibility with older executors (#39979)	2026-08-21	appserver	0	0		0	0	not_applicable	
 8edfca892d46624a114a1e9a7095a8ed4e334232	47350	Reuse cloud skill catalogs across turns until invalidated (#47350)	2026-09-22	core	1	0	0.00	0	0	implementation_pending	current_resource_cache_key
