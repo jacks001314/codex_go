@@ -32,12 +32,31 @@ func NormalizeDeferredToolNamespaces(namespaces map[string]string) map[string]st
 }
 
 func DeferredToolsStateFragment(current map[string]string, previous map[string]string, previousKnown bool) Fragment {
+	fragment, _ := DeferredToolsStateFragmentWithReport(current, previous, previousKnown)
+	return fragment
+}
+
+// DeferredToolsFragmentReport carries the deferred-namespace block sizes
+// measured before and after the 4 KiB cap (Rust #47873). Snapshot reports a
+// full catalog; delta reports only the changed entries.
+type DeferredToolsFragmentReport struct {
+	Snapshot         bool
+	BeforeNamespaces int
+	BeforeBytes      int
+	AfterNamespaces  int
+	AfterBytes       int
+}
+
+// DeferredToolsStateFragmentWithReport renders the fragment and returns the
+// before/after measurements used by the deferred-tool telemetry histograms.
+// Unchanged state returns a nil fragment and no report.
+func DeferredToolsStateFragmentWithReport(current map[string]string, previous map[string]string, previousKnown bool) (Fragment, *DeferredToolsFragmentReport) {
 	current = NormalizeDeferredToolNamespaces(current)
 	if previousKnown && equalStringMaps(current, previous) {
-		return nil
+		return nil, nil
 	}
 	if len(current) == 0 && !previousKnown {
-		return nil
+		return nil, nil
 	}
 	groups := []deferredNamespaceGroup{}
 	if !previousKnown {
@@ -60,8 +79,9 @@ func DeferredToolsStateFragment(current map[string]string, previous map[string]s
 			deferredNamespaceGroup{label: "Removed deferred tool namespaces", values: removed},
 		)
 	}
-	body := renderDeferredNamespaceGroups(groups, len(current) == 0)
-	return NewSimpleFragment(RoleDeveloper, "<tools>", "</tools>", body)
+	body, report := renderDeferredNamespaceGroups(groups, len(current) == 0)
+	report.Snapshot = !previousKnown
+	return NewSimpleFragment(RoleDeveloper, "<tools>", "</tools>", body), &report
 }
 
 type deferredNamespaceGroup struct {
@@ -69,16 +89,21 @@ type deferredNamespaceGroup struct {
 	values map[string]string
 }
 
-func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty bool) string {
+func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty bool) (string, DeferredToolsFragmentReport) {
 	bodyBudget := maxDeferredToolsFragmentBytes - len("<tools>") - len("</tools>")
 	emptyState := ""
 	if currentEmpty {
 		emptyState = "No deferred tool namespaces remain.\n"
 	}
+	report := DeferredToolsFragmentReport{
+		BeforeBytes: len("<tools>") + len("</tools>") + 1 + len(emptyState),
+	}
 	fixedBytes := 1
 	for _, group := range groups {
 		if len(group.values) > 0 {
 			fixedBytes += len(group.label) + len(":\n")
+			report.BeforeBytes += len(group.label) + len(":\n")
+			report.BeforeNamespaces += len(group.values)
 		}
 	}
 	fixedBytes += len(emptyState)
@@ -108,7 +133,12 @@ func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty
 		}
 		sort.Strings(keys)
 		omitted := 0
-		for range keys {
+		for _, namespace := range keys {
+			description := group.values[namespace]
+			report.BeforeBytes += len("- ") + len(namespace) + len("\n")
+			if description != "" {
+				report.BeforeBytes += len(": ") + len(description)
+			}
 			entry := entries[entryIndex]
 			entryIndex++
 			if entry.omitted {
@@ -117,6 +147,7 @@ func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty
 			}
 			rendered.WriteString(entry.text)
 		}
+		report.AfterNamespaces += len(keys) - omitted
 		if omitted > 0 {
 			fmt.Fprintf(&rendered, "... %d additional namespaces omitted.\n", omitted)
 		}
@@ -124,7 +155,8 @@ func renderDeferredNamespaceGroups(groups []deferredNamespaceGroup, currentEmpty
 	if currentEmpty {
 		rendered.WriteString(emptyState)
 	}
-	return rendered.String()
+	report.AfterBytes = len("<tools>") + rendered.Len() + len("</tools>")
+	return rendered.String(), report
 }
 
 func equalStringMaps(left map[string]string, right map[string]string) bool {

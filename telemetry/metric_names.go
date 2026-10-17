@@ -83,6 +83,11 @@ const (
 	ThreadSkillsKeptTotalMetric                 = "codex.thread.skills.kept_total"
 	ThreadSkillsDescriptionTruncatedCharsMetric = "codex.thread.skills.description_truncated_chars"
 	ThreadSkillsTruncatedMetric                 = "codex.thread.skills.truncated"
+	// ThreadToolsNamespacesTotalMetric and ThreadToolsFragmentBytesMetric
+	// measure the deferred tool namespace block before and after its 4 KiB cap,
+	// tagged by stage (before/after) and kind (snapshot/delta) (Rust #47873).
+	ThreadToolsNamespacesTotalMetric = "codex.thread.tools.namespaces_total"
+	ThreadToolsFragmentBytesMetric   = "codex.thread.tools.fragment_bytes"
 
 	// GuardianDecisionDurationMetric measures the complete Guardian approval
 	// decision -- fast decisions, preparation and cancellation alongside the

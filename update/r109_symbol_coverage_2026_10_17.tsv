@@ -633,7 +633,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3fd9e7e30e4a5854d98e30dea38f4050ff40f693	46522	Enable Guardian parent-compaction reuse by default (#46522)	2026-09-18	guardian	0	0		0	0	not_applicable	
 3fde89f628281b9b049376fb0cec4d1577bfeaec	42819	Route Guardian approvals independently of async scoring (#42819)	2026-09-04	guardian	3	1	0.33	0	0	audit_pending	GuardianApprovalReviewer,requires_sync_for_compaction
 400f2356d60c4663d46817a40b4d09c5c86f35ad	53932	Preserve conversation history when compaction fails (#53932)	2026-10-14	core	0	0		0	0	not_applicable	
-4021746a1568c764619e868c310a079d6c36079b	47873	Measure deferred tool namespace fragments before and after truncation (#47873)	2026-09-24	persistence	3	0	0.00	0	0	implementation_pending	CONTEXT_FRAGMENT_BYTES_BUCKETS,THREAD_TOOLS_FRAGMENT_BYTES_METRIC,THREAD_TOOLS_NAMESPACES_TOTAL_METRIC
+4021746a1568c764619e868c310a079d6c36079b	47873	Measure deferred tool namespace fragments before and after truncation (#47873)	2026-09-24	persistence	3	0	0.00	0	0	complete	CONTEXT_FRAGMENT_BYTES_BUCKETS,THREAD_TOOLS_FRAGMENT_BYTES_METRIC,THREAD_TOOLS_NAMESPACES_TOTAL_METRIC
 402f5b6fdf28a7a72c153dbe6fe01e252205d7d6	51119	Clarify incremental tool namespace updates in Responses Lite (#51119)	2026-10-05	persistence	0	0		0	0	not_applicable	
 404cd42aa5254af56a6080af1a775f730ac6b7d0	51422	Accept environment requests at thread and turn settings boundaries (#51422)	2026-10-06	guardian	3	1	0.33	0	0	audit_pending	TurnEnvironmentRequests,into_requests
 40584fad87aa2cd63e03db4784ccfd5b50a59bed	46066	Keep MCP user interaction on the root thread (#46066)	2026-09-17	appserver	3	1	0.33	0	0	audit_pending	APPROVAL_KIND_BROWSER_AUTH,REQUIRES_USER_INPUT_KEY

@@ -13073,7 +13073,10 @@ func (r *RuntimeRouter) deferredToolsWorldStateInputItem(threadID string, runtim
 	if runtime != nil {
 		current = contextfrag.NormalizeDeferredToolNamespaces(runtime.DeferredToolNamespaces())
 	}
-	fragment := contextfrag.DeferredToolsStateFragment(current, previous, previousKnown)
+	fragment, fragmentReport := contextfrag.DeferredToolsStateFragmentWithReport(current, previous, previousKnown)
+	if fragment != nil {
+		r.recordDeferredToolsFragmentMetrics(fragmentReport)
+	}
 	if len(current) == 0 {
 		state.Tools = nil
 	} else {

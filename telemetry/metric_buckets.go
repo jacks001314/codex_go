@@ -9,9 +9,13 @@ import (
 // codex-rs/otel/src/metrics/names.rs).
 //
 // Rust also defines `THREAD_TOOLS_METRIC_BUCKETS` (logarithmic through 32,768)
-// for `codex.thread.tools.fragment_bytes` and `codex.thread.tools.namespaces_total`;
-// the Go port does not emit that metric family yet, so only the skill families
-// are carried here.
+// for `codex.thread.tools.fragment_bytes` and
+// `codex.thread.tools.namespaces_total` (Rust #47873).
+
+// ThreadToolsMetricBoundaries are the logarithmic boundaries through 2^15 used
+// by both deferred-tool namespace histograms (Rust
+// `THREAD_TOOLS_METRIC_BUCKETS`).
+var ThreadToolsMetricBoundaries = contextLogBuckets(15)
 
 // ThreadSkillsCountMetricBoundaries are integer boundaries from 0 through 512
 // for the enabled and kept skill counts. Rust

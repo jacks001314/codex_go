@@ -24,6 +24,8 @@ func TestContextMetricBoundariesPreserveZeroAndFamilyRanges(t *testing.T) {
 		{ThreadSkillsKeptTotalMetric, ThreadSkillsCountMetricBoundaries, 512},
 		{ThreadSkillsDescriptionTruncatedCharsMetric, ThreadSkillsDescriptionTruncatedCharsBoundaries, 131_072},
 		{ThreadSkillsTruncatedMetric, ThreadSkillsTruncatedBoundaries, 1},
+		{ThreadToolsNamespacesTotalMetric, ThreadToolsMetricBoundaries, 32_768},
+		{ThreadToolsFragmentBytesMetric, ThreadToolsMetricBoundaries, 32_768},
 	}
 
 	doer := &recordingHTTPDoer{}
