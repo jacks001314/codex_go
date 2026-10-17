@@ -91,6 +91,38 @@ func TestExecutorSkillSandboxContextsPreserveRestrictedProfileAndWorkspaceRoots(
 	}
 }
 
+func TestExecutorSkillLocalContextUsesLocalSelectionNotRemotePrimaryLikeRust(t *testing.T) {
+	hostCWD := t.TempDir()
+	localCWD := t.TempDir()
+	cfg := &config.Config{Values: map[string]any{
+		"default_permissions": "restricted",
+		"permissions": map[string]any{
+			"restricted": map[string]any{
+				"filesystem": map[string]any{":minimal": "read"},
+			},
+		},
+	}}
+	router := NewRuntimeRouter(RuntimeServices{DefaultCWD: hostCWD})
+	contexts, err := router.executorSkillSandboxContextsForTurn(cfg, hostCWD, &turn.TurnStartParams{
+		CWD: "/remote/project",
+		Environments: []map[string]any{
+			{"environmentId": "remote", "cwd": "/remote/project"},
+			{"environmentId": "local", "cwd": localCWD, "workspaceRoots": []any{}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("executorSkillSandboxContextsForTurn() error = %v", err)
+	}
+	local := contexts["local"]
+	if local == nil {
+		t.Fatal("local sandbox context is missing")
+	}
+	want, _ := utils.FromHostNativePath(localCWD)
+	if local.CWD != want.String() {
+		t.Fatalf("local skill cwd = %q, want %q", local.CWD, want.String())
+	}
+}
+
 func TestSelectedExecutorSkillRootWithoutMatchingSandboxContextFailsClosed(t *testing.T) {
 	root := t.TempDir()
 	skillDir := filepath.Join(root, "secret")

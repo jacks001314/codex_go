@@ -105,7 +105,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0b45b171ca7141fd7723f16adb59cd8e7c1a74c3	41464	Preserve permissions when updating session metadata (#41464)	2026-08-29	core	0	0		0	0	not_applicable	
 0b47040dc9eb08d9c37d51e0824870ce5b27101b	51483	Add correlated, credential-free rendezvous connection diagnostics (#51483)	2026-10-06	execserver	1	1	1.00	0	0	complete	
 0b509e930e191a463746799f4b2a05c0e1bbd15f	42199	Refactor shared TUI input routing (#42199)	2026-09-02	tui	3	0	0.00	0	0	implementation_pending	handle_backtrack_preview_event,handle_legacy_transcript_event,handle_shared_app_keymap_action
-0b73618146d55a2565589bf4e2d5e40e8f298d9e	53990	Keep host MCP and plugin configuration local with remote environments (#53990)	2026-10-14	mcp	2	0	0.00	0	0	implementation_pending	local_selection,skills_load_input_for_environments
+0b73618146d55a2565589bf4e2d5e40e8f298d9e	53990	Keep host MCP and plugin configuration local with remote environments (#53990)	2026-10-14	mcp	2	2	1.00	0	0	complete	
 0b755b1945bf4a31560df2ce1469aeb044dccbc9	52295	Emit one developer notice per incremental namespace update batch (#52295)	2026-10-08	persistence	2	1	0.50	0	0	audit_pending	IncrementalToolsHint
 0b78ddb03588ca6718ca9b8da34aa4e95dfb9e8d	47903	Move config key alias normalization ahead of merging (#47903)	2026-09-24	config	2	2	1.00	0	0	complete	
 0b863c69f50335acd92164aab971cb58d298c2fe	51473	Preserve URL destinations in wrapped hook details (#51473)	2026-10-06	tui	5	2	0.40	0	0	audit_pending	detail_line,detail_wrapped_lines,render_buffer
@@ -1202,7 +1202,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 73e94ee7a60704d4094142c543958f6a794f78e9	42326	Harden Windows control socket rendezvous (#42326)	2026-09-02	appserver	6	5	0.83	0	0	audit_pending	token_user
 742472c52587a80576cf461b0a7dd484682a0750	44298	Set turn triggers for guardian and memory requests (#44298)	2026-09-09	guardian	0	0		0	0	not_applicable	
 745d86552113399ed90f2e4ee5d700f5c5c6f483	51848	Align Bazel release builds with Cargo and fix platform compatibility (#51848)	2026-10-07	tui	0	0		0	0	not_applicable	
-746103b592a381704b665d2431e8997b3a7d738e	51865	Use readable plugin mentions without suppressing same-name skills (#51865)	2026-10-07	tui	1	0	0.00	0	0	implementation_pending	test_plugin_summary
+746103b592a381704b665d2431e8997b3a7d738e	51865	Use readable plugin mentions without suppressing same-name skills (#51865)	2026-10-07	tui	1	0	0.00	0	0	complete	test_plugin_summary
 746798b2f752888935a137fe0328dd4cf2b7a735	41918	Restore agent navigation after TUI reconnects (#41918)	2026-08-31	tui	1	0	0.00	0	0	implementation_pending	restore_runtime_permissions
 74772623dbe1141763858dd6a5e444279d3ae85f	40864	Stop overriding Rust debuginfo in Bazel CI (#40864)	2026-08-26	core	0	0		0	0	not_applicable	
 748d8ac834157bb1f29aa0966efe86b8ad824d41	39937	Bound unified exec output delta frames (#39937)	2026-08-21	core	0	0		0	0	not_applicable	

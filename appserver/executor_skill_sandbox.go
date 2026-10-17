@@ -91,10 +91,10 @@ func (r *RuntimeRouter) executorSkillSandboxContextsForTurn(cfg *config.Config, 
 		return nil
 	}
 
-	localCWD := firstNonEmpty(primaryTurnEnvironmentCWD(params, cwd), cwd, r.services.DefaultCWD)
+	localCWD := firstNonEmpty(localTurnEnvironmentCWD(params, cwd), cwd)
 	localRoots := []string(nil)
 	if params != nil {
-		localRoots = append(localRoots, params.RuntimeWorkspaceRoots...)
+		localRoots = localTurnEnvironmentWorkspaceRoots(params, params.RuntimeWorkspaceRoots)
 	}
 	if err := add("local", localCWD, localRoots, resolution.Profile, profileJSON); err != nil {
 		return nil, err

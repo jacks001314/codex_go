@@ -5246,6 +5246,9 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadStartRequest(request *Request
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
+	if host := r.hostMCPPathContextForTurn("", &turn.TurnStartParams{CWD: params.CWD, Environments: params.Environments}); host.CWD != "" {
+		params.CWD = host.CWD
+	}
 	cfg, err := r.effectiveConfigForThreadStart(&params)
 	if err != nil {
 		return nil, err
@@ -5288,6 +5291,9 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadResume(response *ThreadResume
 	providerID := firstNonEmpty(stringPtrValue(params.ModelProvider), response.ModelProvider, record.Metadata.ModelProvider)
 	if providerID != "" {
 		turnParams.Config["model_provider"] = providerID
+	}
+	if host := r.hostMCPPathContextForTurn(response.Thread.ID, turnParams); host.CWD != "" {
+		turnParams.CWD = host.CWD
 	}
 	cfg, err := r.effectiveConfigForTurn(turnParams)
 	if err != nil {
@@ -13230,6 +13236,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
+		applyHostMCPRuntimePaths(config, r.hostMCPPathContextForTurn(threadID, turnParams))
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.
 		config.AvailableEnvironment = append([]string(nil), availableEnvironment...)
@@ -13309,6 +13316,11 @@ func (r *RuntimeRouter) effectiveMCPConfigForThread(threadID string) *config.Con
 				params.Config = mergeTurnConfigOverrides(params.Config, map[string]any{"model_provider": strings.TrimSpace(record.Metadata.ModelProvider)})
 			}
 		}
+	}
+	if host := r.hostMCPPathContextForTurn(strings.TrimSpace(threadID), params); host.CWD != "" {
+		cloned := *params
+		cloned.CWD = host.CWD
+		params = &cloned
 	}
 	cfg, err := r.effectiveConfigForTurn(params)
 	if err != nil || cfg == nil {
