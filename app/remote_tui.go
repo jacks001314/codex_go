@@ -3372,6 +3372,10 @@ func (c *remoteAppServerTUIClient) chatGPTAuthTokensRefresh(ctx context.Context,
 		CodexHome:    codexHome,
 		AuthSnapshot: remoteLoadAuthSnapshot(codexHome, storeOptions),
 		StoreOptions: storeOptions,
+		// Rust #53991: the TUI refreshes on the app server's behalf after an
+		// unauthorized response, so the request reports
+		// `unauthorized_recovery` rather than the `forced` default.
+		Reason: auth.RefreshReasonUnauthorizedRecovery,
 	})
 	if err != nil {
 		return nil, err

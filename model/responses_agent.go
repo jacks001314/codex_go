@@ -3895,6 +3895,10 @@ func (r *ResponsesAgentRunner) refreshManagedChatGPTAuth(ctx context.Context) er
 		RefreshToken: stringFromAny(r.AuthSnapshot.Tokens, "refresh_token"),
 		AuthSnapshot: r.AuthSnapshot,
 		StoreOptions: r.StoreOptions,
+		// Rust #53991: this refresh runs as the managed auth source's
+		// UnauthorizedRecoveryStepRefreshToken after a 401, so it reports
+		// `unauthorized_recovery` instead of the `forced` default.
+		Reason: auth.RefreshReasonUnauthorizedRecovery,
 	})
 	if err != nil {
 		return err
