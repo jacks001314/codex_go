@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
@@ -57,7 +58,7 @@ type modelGuardianReviewer struct {
 	// (configured value -> model catalog default -> Rust's default).
 	maxToolCallLagFor func(threadID, turnID string) int
 	notify            func(threadID string, event *state.Event)
-	interrupt         func(threadID, turnID string)
+	interrupt         func(threadID, turnID, reason string)
 	transcript        func(threadID string) []string
 	// reviewModel resolves the catalog-backed reviewer selection for the
 	// reviewed turn: the model, its request-level reasoning effort, and the
@@ -852,7 +853,7 @@ reviewAttempt:
 		runner.completeReview()
 	}
 	decision := state.DecisionFromEvent(completed)
-	r.recordDecision(threadID, turnID, decision)
+	r.recordDecision(threadID, turnID, decision, assessment.Rationale)
 	r.markScored(threadID)
 	riskLevel := assessment.RiskLevel
 	userAuthorization := assessment.UserAuthorization
@@ -975,7 +976,7 @@ func (r *modelGuardianReviewer) emitWarning(threadID, message string) {
 	r.warn(threadID, message)
 }
 
-func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision state.ReviewDecision) {
+func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision state.ReviewDecision, reason string) {
 	if r == nil || r.breaker == nil {
 		return
 	}
@@ -999,7 +1000,7 @@ func (r *modelGuardianReviewer) recordDecision(threadID, turnID string, decision
 		r.metrics.Counter(telemetry.GuardianDenialLimitReachedMetric, 1, nil)
 	}
 	if r.interrupt != nil {
-		r.interrupt(threadID, turnID)
+		r.interrupt(threadID, turnID, reason)
 	}
 }
 
@@ -1238,15 +1239,80 @@ func guardianRequestPermissionProfile(values map[string]any) *RequestPermissionP
 	return &profile
 }
 
-func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID string) {
+func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID, reason string) {
 	if r == nil {
 		return
 	}
 	if active, ok := r.cancelActiveRuntimeTurn(threadID, turnID); ok {
 		r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted)
+		r.deliverGuardianInterruptionToParent(threadID, reason)
 		return
 	}
 	_, _ = r.requireTurns().Interrupt(&turn.TurnInterruptParams{ThreadID: threadID, TurnID: turnID})
+	r.deliverGuardianInterruptionToParent(threadID, reason)
+}
+
+// deliverGuardianInterruptionToParent forwards a strict-mode
+// `tooManyDenials` interruption to a MultiAgentV2 child's parent (Rust #49312).
+// Ordinary interruptions and the default circuit-break action stay silent.
+func (r *RuntimeRouter) deliverGuardianInterruptionToParent(threadID, reason string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err != nil || cfg == nil || cfg.GuardianCircuitBreakAction() != "strict" {
+		return
+	}
+	if !r.threadUsesMultiAgentV2(threadID) {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || strings.TrimSpace(record.Metadata.AgentPath) == "" || record.ParentThreadID == "" {
+		return
+	}
+	rootID, _ := r.runtimeAgentIdentity(threadID)
+	parentPath := "/root"
+	if parent, parentErr := r.threadRecord(record.ParentThreadID, true, false); parentErr == nil && parent != nil && strings.TrimSpace(parent.Metadata.AgentPath) != "" {
+		parentPath = strings.TrimSpace(parent.Metadata.AgentPath)
+	}
+	message, ok := agent.FormatGuardianInterruptionMessage(
+		parentPath,
+		record.Metadata.AgentPath,
+		firstNonEmpty(strings.TrimSpace(reason), "Guardian denied the action repeatedly."),
+	)
+	if !ok {
+		return
+	}
+	input := map[string]any{
+		"type": "agent_message", "author": record.Metadata.AgentPath, "recipient": parentPath,
+		"content": []any{map[string]any{"type": "input_text", "text": message}},
+	}
+	parentID := string(record.ParentThreadID)
+	if active := r.activeRuntimeTurnSnapshot(parentID); active != nil {
+		r.recordMultiAgentResultDelivery(r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: parentID, TurnID: active.ID, InputItems: []any{input}}))
+	} else {
+		r.enqueueRuntimeAgentMessage(parentID, input)
+		r.recordMultiAgentResultDelivery(nil)
+	}
+	r.notifyRuntimeAgentActivity(rootID, "Wait completed.")
+}
+
+// threadUsesMultiAgentV2 reports whether the thread's effective multi-agent
+// version is V2, the only family whose Guardian interruptions reach a parent.
+func (r *RuntimeRouter) threadUsesMultiAgentV2(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	if err != nil || cfg == nil {
+		return false
+	}
+	agentsConfig, err := cfg.AgentsConfig(r.configBaseDirForAgents())
+	if err != nil {
+		return false
+	}
+	return r.runtimeMultiAgentVersionForThread(threadID, cfg, agentsConfig) == agent.VersionV2
 }
 
 func (r *RuntimeRouter) handleThreadApproveGuardianDeniedActionRuntime(request *Request) (*ThreadApproveGuardianDeniedActionResponse, error) {

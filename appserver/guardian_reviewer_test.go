@@ -1169,7 +1169,7 @@ func TestModelGuardianReviewerInterruptsAfterDenialThreshold(t *testing.T) {
 	interrupts := 0
 	reviewer := &modelGuardianReviewer{
 		store: state.NewReviewStore(), breaker: state.NewCircuitBreaker(),
-		interrupt: func(threadID, turnID string) {
+		interrupt: func(threadID, turnID, reason string) {
 			if threadID != "thread-1" || turnID != "turn-1" {
 				t.Fatalf("interrupt=%s/%s", threadID, turnID)
 			}

@@ -10,6 +10,9 @@ const (
 	CompletionMessageEnvelopeTokenReserve = 100
 	ErrorMaxTokens                        = CompletionMessageMaxTokens - CompletionMessageEnvelopeTokenReserve
 	ErrorNextAction                       = "This agent's turn failed. If you still need this agent, use the available collaboration tools to give it another task."
+	// GuardianNextAction is Rust's GUARDIAN_NEXT_ACTION guidance for a child
+	// stopped by the Guardian denial circuit breaker (#49312).
+	GuardianNextAction = "Tell the user this agent stopped after repeated Guardian denials. Do not resume this agent or retry its blocked work until the user explicitly confirms that it should continue."
 )
 
 type AgentMessageStatusKind string
@@ -65,6 +68,22 @@ func FormatInterAgentCompletionMessage(taskName string, sender string, status Ag
 	default:
 		return "", false
 	}
+	return strings.Join([]string{
+		"Message Type: FINAL_ANSWER",
+		"Task name: " + taskName,
+		"Sender: " + sender,
+		"Payload:",
+		payload,
+	}, "\n"), true
+}
+
+// FormatGuardianInterruptionMessage renders the parent-facing completion for a
+// child interrupted by repeated Guardian denials (Rust #49312). The denial text
+// is bounded before the guidance, so a long review message cannot crowd it out.
+func FormatGuardianInterruptionMessage(taskName string, sender string, reason string) (string, bool) {
+	payload := "Agent interrupted by Guardian: " +
+		truncateTokens(strings.TrimSpace(reason), ErrorMaxTokens) +
+		"\n\n" + GuardianNextAction
 	return strings.Join([]string{
 		"Message Type: FINAL_ANSWER",
 		"Task name: " + taskName,

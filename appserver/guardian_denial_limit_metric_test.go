@@ -18,11 +18,11 @@ func TestGuardianDenialLimitReachedMetricLikeRust(t *testing.T) {
 	reviewer := &modelGuardianReviewer{
 		breaker:   state.NewCircuitBreaker(),
 		metrics:   metrics,
-		interrupt: func(threadID, turnID string) { interrupted++ },
+		interrupt: func(threadID, turnID, reason string) { interrupted++ },
 	}
 
 	for i := 0; i < state.MaxConsecutiveDenialsPerTurn; i++ {
-		reviewer.recordDecision("thread-1", "turn-1", state.DecisionDenied)
+		reviewer.recordDecision("thread-1", "turn-1", state.DecisionDenied, "")
 	}
 	if interrupted != 1 {
 		t.Fatalf("interrupts = %d, want 1 (the denial limit interrupts once)", interrupted)
@@ -33,7 +33,7 @@ func TestGuardianDenialLimitReachedMetricLikeRust(t *testing.T) {
 
 	// The denial window warns once per turn: further denials in the same turn do
 	// not count again and do not interrupt again.
-	reviewer.recordDecision("thread-1", "turn-1", state.DecisionDenied)
+	reviewer.recordDecision("thread-1", "turn-1", state.DecisionDenied, "")
 	if interrupted != 1 {
 		t.Fatalf("interrupts after the warning = %d, want 1", interrupted)
 	}
@@ -43,7 +43,7 @@ func TestGuardianDenialLimitReachedMetricLikeRust(t *testing.T) {
 
 	// A fresh turn gets its own window and its own counter.
 	for i := 0; i < state.MaxConsecutiveDenialsPerTurn; i++ {
-		reviewer.recordDecision("thread-1", "turn-2", state.DecisionDenied)
+		reviewer.recordDecision("thread-1", "turn-2", state.DecisionDenied, "")
 	}
 	if interrupted != 2 {
 		t.Fatalf("interrupts for the second turn = %d, want 2", interrupted)
@@ -56,9 +56,9 @@ func TestGuardianDenialLimitReachedMetricLikeRust(t *testing.T) {
 	belowLimit := state.NewTaskMetrics()
 	belowReviewer := &modelGuardianReviewer{breaker: state.NewCircuitBreaker(), metrics: belowLimit}
 	for i := 0; i < state.MaxConsecutiveDenialsPerTurn-1; i++ {
-		belowReviewer.recordDecision("thread-2", "turn-3", state.DecisionDenied)
+		belowReviewer.recordDecision("thread-2", "turn-3", state.DecisionDenied, "")
 	}
-	belowReviewer.recordDecision("thread-2", "turn-3", state.DecisionApproved)
+	belowReviewer.recordDecision("thread-2", "turn-3", state.DecisionApproved, "")
 	if got := len(guardianMetricRecords(belowLimit, telemetry.GuardianDenialLimitReachedMetric)); got != 0 {
 		t.Fatalf("denial-limit counters below the limit = %d, want 0", got)
 	}

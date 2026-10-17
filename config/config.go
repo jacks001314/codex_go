@@ -1601,6 +1601,24 @@ func (c *Config) GuardianPolicyTemplate() (string, bool) {
 	return autoReviewConfigValue(c.Values, "experimental_policy_template")
 }
 
+// GuardianCircuitBreakAction mirrors Rust's
+// `auto_review.circuit_break_action` (#48796): "strict" attaches a structured
+// tooManyDenials error to a Guardian denial-limit interruption, while the
+// default leaves the error unset for older clients.
+func (c *Config) GuardianCircuitBreakAction() string {
+	if c == nil {
+		return "default"
+	}
+	value, ok := autoReviewConfigValue(c.Values, "circuit_break_action")
+	if !ok {
+		return "default"
+	}
+	if strings.EqualFold(value, "strict") {
+		return "strict"
+	}
+	return "default"
+}
+
 // autoReviewConfigValue reads a normalized `[auto_review]` string value.
 func autoReviewConfigValue(values map[string]any, key string) (string, bool) {
 	autoReview, ok := values["auto_review"].(map[string]any)

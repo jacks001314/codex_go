@@ -1037,7 +1037,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 62fb56ee569e8ed6a9ad7ec575b0e78c25df4b17	40892	Route Guardian inference through dedicated endpoints (#40892)	2026-08-26	guardian	5	2	0.40	0	0	audit_pending	free_guardian_enabled,with_endpoint,with_free_guardian_enabled
 6326163b9abd7802c0e57be4e326e5f898bbba75	50540	Send incremental tool catalog updates in Responses Lite (#50540)	2026-10-03	persistence	4	2	0.50	0	0	audit_pending	prefix_item,uses_incremental_tools
 633ab199cfd724aa78013c006b27a2b3d049fc3b	41953	Enforce marketplace source policy for curated plugins (#41953)	2026-09-01	plugins	1	1	1.00	0	0	complete	
-63475131ce5f6a479ffdf01163bd1d95873536a2	49312	Notify parent agents when Guardian stops a subagent (#49312)	2026-09-29	guardian	1	0	0.00	0	0	implementation_pending	format_guardian_interruption_message
+63475131ce5f6a479ffdf01163bd1d95873536a2	49312	Notify parent agents when Guardian stops a subagent (#49312)	2026-09-29	guardian	1	0	0.00	0	0	complete	format_guardian_interruption_message
 634ebc1865c6ac840ed3ba118f040d527bf4b55d	44089	Support credential brokering in plaintext HTTP tunnels (#44089)	2026-09-09	core	4	0	0.00	0	0	implementation_pending	forward_http_request,mitm_stream,remove_hop_by_hop_request_headers,requires_http_interception
 637c3227b3c5327d64a73fe0b3764ade139efd1f	42324	Avoid executing PATH helpers before workspace trust (#42324)	2026-09-02	tui	4	3	0.75	0	0	audit_pending	system_path
 639d2478cc2e16d6ca715952d2e726a3aecc024e	47191	Render aligned equations and optimization notation in TUI math (#47191)	2026-09-22	tui	3	2	0.67	0	0	audit_pending	display_sum
