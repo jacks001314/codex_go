@@ -443,7 +443,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2ce38ae6d84a0aa96768742a5ac888a02ff622c7	44027	Support image attachments in agents overview background tasks (#44027)	2026-09-09	tui	1	0	0.00	0	0	implementation_pending	restore_agents_overview_prompt
 2ce64843be07eb0bc99c188e8e751776fd86b310	49096	Update `h2` from 0.4.16 to 0.4.19 in Cargo and Bazel lockfiles (#49096)	2026-09-28	core	0	0		0	0	not_applicable	
 2cfee7de25d98b20c55ced2ed82736d4c452f8a0	43039	Refresh live thread tools through `app/installed` (#43039)	2026-09-05	appserver	0	0		0	0	not_applicable	
-2d90e054d6cbe7c64fc14969fcb4d6a83625a790	45964	Expose partial completion in rollout compression metrics (#45964)	2026-09-16	persistence	3	1	0.33	0	0	audit_pending	RUN_DURATION_HISTOGRAM,duration_histogram
+2d90e054d6cbe7c64fc14969fcb4d6a83625a790	45964	Expose partial completion in rollout compression metrics (#45964)	2026-09-16	persistence	3	1	0.33	0	0	complete	RUN_DURATION_HISTOGRAM,duration_histogram
 2d929eb7c39a612b84e0987f2af4a4c2282249e2	41221	Honor turn token budgets in Guardian review rollover (#41221)	2026-08-27	guardian	0	0		0	0	not_applicable	
 2dae757b8713d3317e8da58828bdac821386982c	51734	Load persisted sender context for Guardian reviews (#51734)	2026-10-07	guardian	2	1	0.50	0	0	complete	reconstruct_rollout
 2db0ab7af1d9d7e6f0545b2778b9ac8fd789008a	46895	Add right-click copying for transcript and composer selections (#46895)	2026-09-20	tui	3	0	0.00	0	0	implementation_pending	contains_mouse,copy_composer_selection,copy_selection
@@ -628,7 +628,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3f59eb965a8bed447065dfcc1b5047f987a647bc	44921	Enable TUI voice conversations by default (#44921)	2026-09-11	tui	0	0		0	0	not_applicable	
 3f76e88a480f15258eab3512e7eafca77bbe80ee	43797	Add configurable memory versions with isolated storage (#43797)	2026-09-08	appserver	8	8	1.00	0	0	complete	
 3f97f2b3bd890744240374a832137b4b7d0fe1f4	50199	Restore the account email in `/status` after account updates (#50199)	2026-10-02	tui	2	0	0.00	0	0	implementation_pending	on_account_email_loaded,refresh_account_email
-3fa9039bd70d2e4f6b4e614e11b971e261e604e2	45461	Label rollout compression failures by stage and I/O error kind (#45461)	2026-09-14	persistence	6	2	0.33	0	0	audit_pending	FILE_COUNTER,MATERIALIZE_COUNTER,RUN_COUNTER,TEMP_CLEANUP_COUNTER
+3fa9039bd70d2e4f6b4e614e11b971e261e604e2	45461	Label rollout compression failures by stage and I/O error kind (#45461)	2026-09-14	persistence	6	2	0.33	0	0	complete	FILE_COUNTER,MATERIALIZE_COUNTER,RUN_COUNTER,TEMP_CLEANUP_COUNTER
 3fd5160cd6c78f2051bb54359d53f09207171733	47116	Honor the configured product SKU in remote plugin requests (#47116)	2026-09-21	appserver	1	1	1.00	0	0	complete	
 3fd9e7e30e4a5854d98e30dea38f4050ff40f693	46522	Enable Guardian parent-compaction reuse by default (#46522)	2026-09-18	guardian	0	0		0	0	not_applicable	
 3fde89f628281b9b049376fb0cec4d1577bfeaec	42819	Route Guardian approvals independently of async scoring (#42819)	2026-09-04	guardian	3	1	0.33	0	0	audit_pending	GuardianApprovalReviewer,requires_sync_for_compaction

@@ -12963,10 +12963,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/6; needs review: FILE_COUNTER, MATERIALIZE_COUNTER, RUN_COUNTER, TEMP_CLEANUP_COUNTER"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Rollout compression failures carry failed outcomes with static stage and bounded I/O error kinds for file, materialize, run, and temp-cleanup counters."
+        ]
     },
     {
       "sha": "99b3ab2131a8672089fd7d78da62483187ba1122",
@@ -14415,10 +14415,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/3; needs review: RUN_DURATION_HISTOGRAM, duration_histogram"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Completed rollout compression runs report completion_reason plus file, scan, and cleanup error flags on run counters and duration observations."
+        ]
     },
     {
       "sha": "da18000cae9884ab45f83b2d07fbd5a220a1de39",
