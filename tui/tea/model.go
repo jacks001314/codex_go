@@ -1103,8 +1103,11 @@ type Options struct {
 	// RequiresOpenAIAuth is the session provider's requires_openai_auth
 	// capability (Rust ChatWidget::requires_openai_auth). Nil derives it from
 	// the session provider (implicit/OpenAI => true).
-	RequiresOpenAIAuth        *bool
-	OnWriteTerminalTitle      TerminalTitleWriterFunc
+	RequiresOpenAIAuth   *bool
+	OnWriteTerminalTitle TerminalTitleWriterFunc
+	// OnWriteProgramStatus writes the OSC 7501/21337 lifecycle sequence
+	// (Rust #54114). Defaults to printing it to the terminal output.
+	OnWriteProgramStatus      TerminalTitleWriterFunc
 	OnPostNotification        NotificationPostFunc
 	OnReadGitDiff             GitDiffReaderFunc
 	OnStopBackgroundTerminals StopBackgroundTerminalsFunc
@@ -1800,14 +1803,19 @@ type Model struct {
 	// rateLimitRecoveryPending holds user turns while the session waits for the
 	// backend-authorized Reserve switch, so a prompt is not sent on the blocked
 	// model (Rust input_queue.rate_limit_recovery_pending).
-	rateLimitRecoveryPending          bool
-	codexHome                         string
-	modelCatalogOpts                  []codextui.ModelPickerOption
-	nextModelCatalogRequestID         uint64
-	pendingModelCatalogRequestID      uint64
-	nextStatusRateLimitRequestID      uint64
-	pendingStatusRateLimitRequests    map[uint64]pendingStatusRateLimitRequest
-	terminalTitleWriter               TerminalTitleWriterFunc
+	rateLimitRecoveryPending       bool
+	codexHome                      string
+	modelCatalogOpts               []codextui.ModelPickerOption
+	nextModelCatalogRequestID      uint64
+	pendingModelCatalogRequestID   uint64
+	nextStatusRateLimitRequestID   uint64
+	pendingStatusRateLimitRequests map[uint64]pendingStatusRateLimitRequest
+	terminalTitleWriter            TerminalTitleWriterFunc
+	// programStatusWriter writes OSC 7501/21337 lifecycle updates.
+	programStatusWriter TerminalTitleWriterFunc
+	// programStatusAfterTurn retains a completed or failed live turn until the
+	// user interacts again (Rust #54114 status_state::program_status_after_turn).
+	programStatusAfterTurn            codextui.ProgramStatus
 	notificationPost                  NotificationPostFunc
 	notifications                     chatwidget.NotificationState
 	notificationSettings              chatwidget.NotificationsSetting
@@ -2207,6 +2215,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		requiresOpenAIAuthOverride:      options.RequiresOpenAIAuth,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
 		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
+		programStatusWriter:             terminalTitleWriterOrDefault(options.OnWriteProgramStatus),
 		notificationPost:                options.OnPostNotification,
 		notificationSettings:            notificationSettingsOrDefault(options.Notifications),
 		notificationMethod:              notificationMethodOrDefault(options.NotificationMethod),
@@ -2488,7 +2497,27 @@ func (m *Model) Init() bubbletea.Cmd {
 	return bubbletea.Batch(commands...)
 }
 
+// Update handles one message. Rust #54114: deliberate input acknowledges a
+// retained turn result first, and the message may change the lifecycle state
+// reported to the terminal.
 func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
+	if m == nil {
+		return m, nil
+	}
+	m.acknowledgeProgramStatusOnInput(message)
+	model, cmd := m.updateMessage(message)
+	next, ok := model.(*Model)
+	if !ok || next == nil {
+		return model, cmd
+	}
+	statusCmd := next.refreshTerminalProgramStatusCmd()
+	if statusCmd == nil {
+		return model, cmd
+	}
+	return model, bubbletea.Batch(cmd, statusCmd)
+}
+
+func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
 	}
@@ -4896,6 +4925,8 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 	m.flushActiveExecCell()
 	m.deferPendingSteers()
 	if message.Err != nil {
+		// Rust #54114: a live failure is a terminal result, not idle.
+		m.programStatusAfterTurn = codextui.ProgramStatus{State: codextui.ProgramStatusError}
 		m.setStatus("error")
 		m.finishUnifiedExecWaitStreak()
 		m.resetReasoningSummaryHeader()
@@ -4927,6 +4958,8 @@ func (m *Model) applyTurnCompleted(message TurnCompletedMsg) bubbletea.Cmd {
 		elapsedSeconds = &value
 	}
 	m.Transcript.appendCompletionFooter(m.State, m.width, elapsedSeconds, time.Now())
+	// Rust #54114: a live completion is reported as done until acknowledged.
+	m.programStatusAfterTurn = codextui.ProgramStatus{State: codextui.ProgramStatusDone}
 	m.setStatus("idle")
 	m.Transcript.lastTurnError = ""
 	m.notice = ""
@@ -4956,6 +4989,8 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	m.flushComputerActivityGroup()
 	m.flushActiveExecCell()
 	m.deferPendingSteers()
+	// Rust #54114: cancellation is idle, not a failed task.
+	m.programStatusAfterTurn = codextui.ProgramStatus{}
 	m.setStatus("idle")
 	text := "Interrupted current turn."
 	if message.Err != nil {
@@ -5026,6 +5061,8 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
 		m.turnFinalAnswerSeen = false
+		// Rust #54114: a new turn clears the retained result before any work.
+		m.programStatusAfterTurn = codextui.ProgramStatus{}
 		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), m.currentTime())
 		if m.showTooltips {
 			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
