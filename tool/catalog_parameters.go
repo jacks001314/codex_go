@@ -7,6 +7,13 @@ import (
 	"codex_go/jsonschema"
 )
 
+// ParseCatalogParameters is the exported form of catalogParametersParse for
+// other packages that own catalog overrides (Rust's
+// `crate::tools::catalog_parameters::parse`).
+func ParseCatalogParameters(raw string) (map[string]any, error) {
+	return catalogParametersParse(raw)
+}
+
 // catalogParametersParse mirrors Rust core/src/tools/catalog_parameters.rs
 // (#47773): catalog parameter overrides are accepted only when they decode as
 // JSON, declare an object root, and use the harness-supported JSON Schema

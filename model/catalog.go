@@ -223,6 +223,9 @@ type ToolMessages struct {
 	// MultiAgent carries the Multi-Agent V2 tools' catalog overrides (Rust
 	// #46505).
 	MultiAgent *MultiAgentToolMessages `json:"multi_agent,omitempty"`
+	// McpResources carries the built-in MCP resource helpers' overrides
+	// (Rust #47677).
+	McpResources *McpResourceToolMessages `json:"mcp_resources,omitempty"`
 }
 
 // ToolMessage mirrors Rust protocol::openai_models::ToolMessage (#41461):
@@ -249,6 +252,15 @@ type MultiAgentToolMessages struct {
 	WaitAgent      *ToolMessage `json:"wait_agent,omitempty"`
 	InterruptAgent *ToolMessage `json:"interrupt_agent,omitempty"`
 	ListAgents     *ToolMessage `json:"list_agents,omitempty"`
+}
+
+// McpResourceToolMessages mirrors Rust protocol::openai_models::
+// McpResourceToolMessages (#47677): model-owned descriptions and parameters for
+// the built-in MCP resource helpers.
+type McpResourceToolMessages struct {
+	ListMCPResources         *ToolMessage `json:"list_mcp_resources,omitempty"`
+	ListMCPResourceTemplates *ToolMessage `json:"list_mcp_resource_templates,omitempty"`
+	ReadMCPResource          *ToolMessage `json:"read_mcp_resource,omitempty"`
 }
 
 // MultiAgentToolMessage selects a V2 tool's catalog messages by tool name,
@@ -283,6 +295,17 @@ func (m *ModelMessages) MultiAgentToolDescriptionOverride(toolName string) *stri
 		return nil
 	}
 	return tool.Description
+}
+
+// MCPResources returns the catalog entries for the built-in MCP resource
+// helpers, or nil when the catalog has none (Rust #47677,
+// ResolvedModelMessages::mcp_resources). Schema parsing belongs to the tool
+// owner.
+func (m *ModelMessages) MCPResources() *McpResourceToolMessages {
+	if m == nil || m.Tools == nil {
+		return nil
+	}
+	return m.Tools.McpResources
 }
 
 // MultiAgentToolParametersOverride returns a V2 tool's complete parameter schema
@@ -1844,6 +1867,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 			tools := *messages.Tools
 			tools.SendUserMessageAsync = cloneToolMessage(tools.SendUserMessageAsync)
 			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
+			tools.McpResources = cloneMcpResourceToolMessages(tools.McpResources)
 			messages.Tools = &tools
 		}
 		out.ModelMessages = &messages
@@ -1873,6 +1897,17 @@ func cloneMultiAgentToolMessages(in *MultiAgentToolMessages) *MultiAgentToolMess
 		WaitAgent:      cloneToolMessage(in.WaitAgent),
 		InterruptAgent: cloneToolMessage(in.InterruptAgent),
 		ListAgents:     cloneToolMessage(in.ListAgents),
+	}
+}
+
+func cloneMcpResourceToolMessages(in *McpResourceToolMessages) *McpResourceToolMessages {
+	if in == nil {
+		return nil
+	}
+	return &McpResourceToolMessages{
+		ListMCPResources:         cloneToolMessage(in.ListMCPResources),
+		ListMCPResourceTemplates: cloneToolMessage(in.ListMCPResourceTemplates),
+		ReadMCPResource:          cloneToolMessage(in.ReadMCPResource),
 	}
 }
 

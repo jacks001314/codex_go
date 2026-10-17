@@ -184,8 +184,11 @@ type ToolRegistryOptions struct {
 	// (Rust #47773).
 	RequestUserInputAsyncDescription *string
 	RequestUserInputAsyncParameters  *string
-	DisableWaitAgent                 bool
-	DisableDirectMessage             bool
+	// MCPResourceMessages carries the model catalog's `mcp_resources` entries
+	// for the built-in resource helpers (Rust #47677).
+	MCPResourceMessages  *model.McpResourceToolMessages
+	DisableWaitAgent     bool
+	DisableDirectMessage bool
 	// MessageBoard, when set, registers the shared discussion board's nine
 	// collaboration tools for this turn's caller (Rust
 	// `install_agent_message_board`). The host owns board selection, the tool
@@ -686,7 +689,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	// removed. They are independent of tool search, so models can list or read
 	// resources even when the servers' other tools are deferred.
 	if options.MCPService.HasServers() || options.ToolMode == model.ToolModeCodeModeOnly {
-		if err := registerMCPResourceHandlers(registry, options.MCPService, options.ThreadID); err != nil {
+		if err := registerMCPResourceHandlers(registry, options.MCPService, options.MCPResourceMessages, options.ThreadID); err != nil {
 			return nil, err
 		}
 	}

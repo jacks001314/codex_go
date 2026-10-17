@@ -14274,6 +14274,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			// entry's description and parameters override.
 			options.RequestUserInputAsyncDescription = turnModelInfo.ModelMessages.RequestUserInputAsyncDescription()
 			options.RequestUserInputAsyncParameters = turnModelInfo.ModelMessages.RequestUserInputAsyncParametersOverride()
+			// Rust #47677: the built-in MCP resource helpers take the catalog's
+			// `mcp_resources` entries.
+			options.MCPResourceMessages = turnModelInfo.ModelMessages.MCPResources()
 		}
 	}
 	if freeformAsyncToolAvailable(freeformAsyncRootAgent, catalogTools, freeformAsyncFeature) {

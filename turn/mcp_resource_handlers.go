@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"codex_go/mcp"
+	"codex_go/model"
 	"codex_go/tool"
 )
 
-func registerMCPResourceHandlers(registry *tool.Registry, service *mcp.MCPService, threadID ...string) error {
+// registerMCPResourceHandlers mirrors Rust #47677 add_mcp_resource_tools: the
+// three built-in resource helpers take their catalog entries from
+// model_messages.tools.mcp_resources for the current model.
+func registerMCPResourceHandlers(registry *tool.Registry, service *mcp.MCPService, messages *model.McpResourceToolMessages, threadID ...string) error {
 	if service == nil {
 		return nil
 	}
@@ -18,8 +23,16 @@ func registerMCPResourceHandlers(registry *tool.Registry, service *mcp.MCPServic
 	if len(threadID) > 0 {
 		id = strings.TrimSpace(threadID[0])
 	}
+	listMessages := (*model.ToolMessage)(nil)
+	templateMessages := (*model.ToolMessage)(nil)
+	readMessages := (*model.ToolMessage)(nil)
+	if messages != nil {
+		listMessages = messages.ListMCPResources
+		templateMessages = messages.ListMCPResourceTemplates
+		readMessages = messages.ReadMCPResource
+	}
 	for _, executor := range []tool.Executor{
-		&mcpResourceListExecutor{service: service, threadID: id}, &mcpResourceListExecutor{service: service, templates: true, threadID: id}, &mcpResourceReadExecutor{service: service, threadID: id},
+		&mcpResourceListExecutor{service: service, threadID: id, message: listMessages}, &mcpResourceListExecutor{service: service, templates: true, threadID: id, message: templateMessages}, &mcpResourceReadExecutor{service: service, threadID: id, message: readMessages},
 	} {
 		if err := registry.Register(executor); err != nil {
 			return err
@@ -32,6 +45,7 @@ type mcpResourceListExecutor struct {
 	service   *mcp.MCPService
 	templates bool
 	threadID  string
+	message   *model.ToolMessage
 }
 
 func (h *mcpResourceListExecutor) Spec() tool.Spec {
@@ -45,7 +59,7 @@ func (h *mcpResourceListExecutor) Spec() tool.Spec {
 	}
 	// Rust's MCP resource list handlers override
 	// `supports_parallel_tool_calls` with true.
-	return tool.Spec{Name: tool.PlainName(name), Description: description, Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name. Omit to list resources from every configured server."}, "cursor": map[string]any{"type": "string", "description": cursor}}, "additionalProperties": false}}
+	return applyMCPResourceCatalogMessage(tool.Spec{Name: tool.PlainName(name), Description: description, Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name. Omit to list resources from every configured server."}, "cursor": map[string]any{"type": "string", "description": cursor}}, "additionalProperties": false}}, h.message)
 }
 func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocation) (*tool.Output, error) {
 	_ = ctx
@@ -96,10 +110,11 @@ func (h *mcpResourceListExecutor) Execute(ctx context.Context, inv *tool.Invocat
 type mcpResourceReadExecutor struct {
 	service  *mcp.MCPService
 	threadID string
+	message  *model.ToolMessage
 }
 
 func (h *mcpResourceReadExecutor) Spec() tool.Spec {
-	return tool.Spec{Name: tool.PlainName("read_mcp_resource"), Description: "Read a specific resource from an MCP server given the server name and resource URI.", Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."}, "uri": map[string]any{"type": "string", "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."}}, "required": []string{"server", "uri"}, "additionalProperties": false}}
+	return applyMCPResourceCatalogMessage(tool.Spec{Name: tool.PlainName("read_mcp_resource"), Description: "Read a specific resource from an MCP server given the server name and resource URI.", Parallel: true, InputSchema: map[string]any{"type": "object", "properties": map[string]any{"server": map[string]any{"type": "string", "description": "MCP server name exactly as configured. Must match the 'server' field returned by list_mcp_resources."}, "uri": map[string]any{"type": "string", "description": "Resource URI to read. Must be one of the URIs returned by list_mcp_resources."}}, "required": []string{"server", "uri"}, "additionalProperties": false}}, h.message)
 }
 func (h *mcpResourceReadExecutor) Execute(ctx context.Context, inv *tool.Invocation) (*tool.Output, error) {
 	_ = ctx
@@ -128,6 +143,31 @@ func (h *mcpResourceReadExecutor) Execute(ctx context.Context, inv *tool.Invocat
 }
 
 // effectiveResourceServer mirrors Rust's default "codex" pseudo-server for the
+// applyMCPResourceCatalogMessage mirrors Rust mcp_resource_spec::with_model_messages
+// (#47677): description and parameter overrides apply independently, and an
+// invalid parameter override keeps the bundled schema with a warning.
+func applyMCPResourceCatalogMessage(spec tool.Spec, message *model.ToolMessage) tool.Spec {
+	if message == nil {
+		return spec
+	}
+	if message.Description != nil {
+		spec.Description = *message.Description
+	}
+	if message.Parameters != nil {
+		schema, err := tool.ParseCatalogParameters(*message.Parameters)
+		if err != nil {
+			slog.Warn(
+				"Invalid catalog tool parameters; using bundled parameters",
+				"tool", spec.Name.Key(),
+				"reason", err,
+			)
+		} else {
+			spec.InputSchema = schema
+		}
+	}
+	return spec
+}
+
 // built-in list_mcp_resources/list_mcp_resource_templates tools.
 func effectiveResourceServer(requested string) string {
 	if strings.TrimSpace(requested) != "" {

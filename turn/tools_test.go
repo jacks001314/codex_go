@@ -1925,3 +1925,67 @@ func TestBuildToolRegistrySourcesRequestUserInputAsyncCatalogEntry(t *testing.T)
 		t.Fatalf("fallback schema = %#v, want bundled %#v", spec2.InputSchema, bundled.InputSchema)
 	}
 }
+
+// TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust mirrors Rust
+// #47677: the three MCP resource helpers take mcp_resources entries from the
+// model catalog; descriptions and parameters override independently and an
+// invalid parameter override keeps the bundled schema.
+func TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust(t *testing.T) {
+	listDescription := "Catalog list description."
+	readDescription := "Catalog read description."
+	parameters := `{"type":"object","properties":{"server":{"type":"string"}},"additionalProperties":false}`
+	invalid := `{"type":"array"}`
+
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableMCP = false
+	options.MCPService = mcp.NewMCPService(nil)
+	options.ToolMode = model.ToolModeCodeModeOnly
+	options.MCPResourceMessages = &model.McpResourceToolMessages{
+		ListMCPResources: &model.ToolMessage{Description: &listDescription, Parameters: &parameters},
+		ReadMCPResource:  &model.ToolMessage{Description: &readDescription, Parameters: &invalid},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+
+	listSpec, ok := registry.Spec(tool.PlainName("list_mcp_resources"))
+	if !ok {
+		t.Fatal("list_mcp_resources missing")
+	}
+	if listSpec.Description != listDescription {
+		t.Fatalf("list description = %q, want %q", listSpec.Description, listDescription)
+	}
+	listProperties, _ := listSpec.InputSchema["properties"].(map[string]any)
+	if _, ok := listProperties["server"]; !ok {
+		t.Fatalf("catalog properties missing: %#v", listSpec.InputSchema)
+	}
+	if _, ok := listProperties["cursor"]; ok {
+		t.Fatalf("bundled properties kept alongside catalog schema: %#v", listSpec.InputSchema)
+	}
+
+	// No catalog entry for the templates helper: its bundled spec is untouched.
+	templateSpec, ok := registry.Spec(tool.PlainName("list_mcp_resource_templates"))
+	if !ok {
+		t.Fatal("list_mcp_resource_templates missing")
+	}
+	if templateSpec.Description == listDescription {
+		t.Fatal("templates helper picked up the list helper's description")
+	}
+	templateProperties, _ := templateSpec.InputSchema["properties"].(map[string]any)
+	if _, ok := templateProperties["cursor"]; !ok {
+		t.Fatalf("templates helper lost its bundled schema: %#v", templateSpec.InputSchema)
+	}
+
+	readSpec, ok := registry.Spec(tool.PlainName("read_mcp_resource"))
+	if !ok {
+		t.Fatal("read_mcp_resource missing")
+	}
+	if readSpec.Description != readDescription {
+		t.Fatalf("read description = %q, want catalog description", readSpec.Description)
+	}
+	required, _ := readSpec.InputSchema["required"].([]string)
+	if len(required) != 2 || required[0] != "server" || required[1] != "uri" {
+		t.Fatalf("invalid parameter override did not fall back: %#v", readSpec.InputSchema)
+	}
+}

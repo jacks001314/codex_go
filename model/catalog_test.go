@@ -724,6 +724,55 @@ func TestModelMessagesRequestUserInputAsyncCatalogEntryLikeRust(t *testing.T) {
 	}
 }
 
+// #47677: mcp_resources carries per-tool entries for the built-in MCP
+// resource helpers; description and parameters resolve independently.
+func TestModelMessagesMCPResourcesLikeRust(t *testing.T) {
+	var messages ModelMessages
+	document := `{"tools":{"mcp_resources":{"list_mcp_resources":{"description":"Catalog list."},"read_mcp_resource":{"parameters":"{\"type\":\"object\"}"}}}}`
+	if err := json.Unmarshal([]byte(document), &messages); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	resources := messages.MCPResources()
+	if resources == nil {
+		t.Fatal("mcp_resources = nil")
+	}
+	if resources.ListMCPResources == nil || resources.ListMCPResources.Description == nil || *resources.ListMCPResources.Description != "Catalog list." {
+		t.Fatalf("list_mcp_resources = %#v", resources.ListMCPResources)
+	}
+	if resources.ListMCPResources.Parameters != nil {
+		t.Fatalf("list_mcp_resources parameters = %#v, want nil", resources.ListMCPResources.Parameters)
+	}
+	if resources.ListMCPResourceTemplates != nil {
+		t.Fatalf("list_mcp_resource_templates = %#v, want nil", resources.ListMCPResourceTemplates)
+	}
+	if resources.ReadMCPResource == nil || resources.ReadMCPResource.Parameters == nil || *resources.ReadMCPResource.Parameters != `{"type":"object"}` {
+		t.Fatalf("read_mcp_resource = %#v", resources.ReadMCPResource)
+	}
+	if resources.ReadMCPResource.Description != nil {
+		t.Fatalf("read_mcp_resource description = %#v, want nil", resources.ReadMCPResource.Description)
+	}
+
+	// The catalog copy must not share override pointers with the original.
+	cloned := cloneModelInfo(ModelInfo{ModelMessages: &messages})
+	clonedResources := cloned.ModelMessages.MCPResources()
+	if clonedResources == nil || clonedResources == resources {
+		t.Fatalf("cloned mcp_resources = %#v", clonedResources)
+	}
+	*clonedResources.ListMCPResources.Description = "rewritten"
+	if *messages.MCPResources().ListMCPResources.Description != "Catalog list." {
+		t.Fatal("mutating the clone changed the original")
+	}
+
+	var missing ModelMessages
+	if missing.MCPResources() != nil {
+		t.Fatal("missing catalog should resolve mcp_resources to nil")
+	}
+	var nilMessages *ModelMessages
+	if nilMessages.MCPResources() != nil {
+		t.Fatal("nil ModelMessages should resolve mcp_resources to nil")
+	}
+}
+
 func TestModelMessagesMultiAgentProactiveRoundTrip(t *testing.T) {
 	proactive := "Use proactive delegation from the model catalog."
 	messages := ModelMessages{

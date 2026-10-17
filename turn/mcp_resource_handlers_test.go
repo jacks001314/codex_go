@@ -12,7 +12,7 @@ import (
 
 func TestMCPResourceToolsMatchRustSurface(t *testing.T) {
 	registry := tool.NewRegistry()
-	if err := registerMCPResourceHandlers(registry, mcp.NewMCPService(nil)); err != nil {
+	if err := registerMCPResourceHandlers(registry, mcp.NewMCPService(nil), nil); err != nil {
 		t.Fatalf("registerMCPResourceHandlers() error = %v", err)
 	}
 	for _, name := range []string{"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"} {
