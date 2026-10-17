@@ -52,20 +52,25 @@ func TestExecutedToolCallRecorderBindsDirectRecordToOutputLikeRust(t *testing.T)
 		t.Fatalf("stale record attached: %d calls", got)
 	}
 
-	// Truncated arguments cannot claim a complete inventory (Rust #45185).
-	large := `{"text":"` + strings.Repeat("x", model.MaxExecutedToolCallArgumentBytes+1) + `"}`
-	truncatedInvocation := directMetadataTestInvocation("call-3", large)
-	truncatedCall, truncatedPermit := recorder.PrepareDirectCall(truncatedInvocation, "")
-	truncatedOutput := &ToolResponseItem{Type: "function_call_output", CallID: "call-3", Output: NewFunctionCallOutputPayload("ok", nil)}
-	recorder.AttachDirectCallToOutput(truncatedOutput, truncatedCall, truncatedPermit)
-	truncatedPermit.Release()
-	if truncatedCall == nil || !truncatedCall.Truncated() {
-		t.Fatalf("large arguments were not truncated: %#v", truncatedCall)
+	// Large arguments are retained in full and the inventory stays complete
+	// (Rust #51892/#52268).
+	large := `{"text":"` + strings.Repeat("x", 9*1024) + `"}`
+	largeInvocation := directMetadataTestInvocation("call-3", large)
+	largeCall, largePermit := recorder.PrepareDirectCall(largeInvocation, "")
+	largeOutput := &ToolResponseItem{Type: "function_call_output", CallID: "call-3", Output: NewFunctionCallOutputPayload("ok", nil)}
+	recorder.AttachDirectCallToOutput(largeOutput, largeCall, largePermit)
+	largePermit.Release()
+	if largeCall == nil || largeCall.Truncated() || !largeCall.HasCompleteInventory() {
+		t.Fatalf("large direct arguments were truncated: %#v", largeCall)
 	}
-	truncatedObject := marshalExecutedToolCallItem(t, truncatedOutput)
-	truncatedMetadata, _ := truncatedObject["internal_chat_message_metadata_passthrough"].(map[string]any)
-	if truncatedMetadata != nil && truncatedMetadata["tool_calls_complete"] == true {
-		t.Fatalf("truncated arguments claimed completeness: %#v", truncatedMetadata)
+	largeObject := marshalExecutedToolCallItem(t, largeOutput)
+	largeMetadata, _ := largeObject["internal_chat_message_metadata_passthrough"].(map[string]any)
+	if largeMetadata == nil || largeMetadata["tool_calls_complete"] != true {
+		t.Fatalf("large direct arguments lost completeness: %#v", largeMetadata)
+	}
+	recordedCalls, _ := largeMetadata["executed_tool_calls"].([]any)
+	if len(recordedCalls) != 1 || recordedCalls[0].(map[string]any)["arguments"].(map[string]any)["text"] != strings.Repeat("x", 9*1024) {
+		t.Fatalf("large direct arguments were not retained: %#v", recordedCalls)
 	}
 }
 

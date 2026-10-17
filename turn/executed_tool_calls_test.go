@@ -198,7 +198,7 @@ func TestExecutedToolCallRecorderCoalescesCodeModeCellAcrossExecAndWait(t *testi
 	recorder.CommitAttachment(secondToken)
 }
 
-func TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes(t *testing.T) {
+func TestExecutedToolCallRecorderBoundsPendingCallsAndPreservesNestedArguments(t *testing.T) {
 	recorder := NewExecutedToolCallRecorder()
 	prepared := 0
 	var permits []*ExecutedToolCallPermit
@@ -226,8 +226,6 @@ func TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes(t *testing.
 
 	for index := 0; index < 6; index++ {
 		recorder.RecordToolCall(&tool.Invocation{
-			// Distinct invocation IDs, so the per-output argument budget is what
-			// bounds the inventory (a repeated ID replaces its attempt, Rust #48222).
 			CallID:   "nested-large-" + strconv.Itoa(index),
 			ToolName: tool.PlainName("large"),
 			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"value":"` + strings.Repeat("x", 7900) + `"}`},
@@ -241,12 +239,17 @@ func TestExecutedToolCallRecorderBoundsPendingAndNestedArgumentBytes(t *testing.
 	if len(calls) != 6 {
 		t.Fatalf("nested calls = %d", len(calls))
 	}
-	encoded, err := json.Marshal(calls[4])
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if !strings.Contains(string(encoded), "_codex_executed_tool_call_truncated") {
-		t.Fatalf("fifth call was not truncated: %s", encoded)
+	for index, call := range calls {
+		if call.Truncated() || !call.HasCompleteInventory() {
+			t.Fatalf("call %d lost its argument inventory: %#v", index, call)
+		}
+		encoded, err := json.Marshal(call)
+		if err != nil {
+			t.Fatalf("Marshal(call %d) error = %v", index, err)
+		}
+		if strings.Contains(string(encoded), "_codex_executed_tool_call_truncated") {
+			t.Fatalf("call %d was truncated: %s", index, encoded)
+		}
 	}
 }
 

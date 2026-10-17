@@ -1120,3 +1120,39 @@ go vet ./metrics ./tool ./turn ./appserver                               # exit 
 （3 条 `TestCollaborationModeWorldState*`、2 条
 `TestRuntimeRouterContextWindowGuidance*`）；已在 detached `e2ff1fa7` 干净 worktree
 逐条复现，新增失败为空。`./tui/...` 全绿。
+
+## 32. Round 116（2026-10-17）：tool-call inventory completeness（complete）
+
+### 32.1 落地
+
+- 合并 Rust `#51892`（`35a9b70444`）与 `#52268`（`515c291d87`）的最终语义。
+- `model/executed_tool_calls.go`
+  - 删除 8 KiB per-call / 32 KiB per-output 参数记录上限；
+  - `ExecutedToolCall.HasCompleteInventory` 只检查 `omitted_calls` 与
+    `original_name_bytes`，参数截断不降低 completeness；
+  - `NormalizeExecutedToolCallCompleteness` 在同 cell 任一调用丢失清单时清除整 cell
+    的 completion；
+  - message-budget 参数裁剪与 `distribute_remaining_budget` 保留完整参数/名字时不再
+    清除 completion。
+- `turn/executed_tool_calls.go`
+  - Direct / Code Mode 记录完整参数；pending-limit 的截断记录仍保留调用名和清单位置；
+  - 删除 32 KiB attach-stage 与按输出累加的 argument budget；
+  - completeness 改由 `HasCompleteInventory` 判断；追加 normalize 调用；
+  - `ToolResponseItem` 补齐 `ClearExecutedToolCallsComplete`。
+
+### 32.2 验证
+
+```text
+go test ./model -count=1   # ok
+go test ./turn -count=1    # ok
+go build ./...             # exit 0
+```
+
+RC：
+
+- 重新加入 8 KiB recorder cap ⇒ 40 KiB Code Mode 用例立即失败（参数变成截断 marker）。
+- 在 message-budget 参数裁剪处恢复 `clear_tool_calls_complete` ⇒ 用例失败
+  （completion 被错误清除）。
+
+`go vet ./model` 仍有既有的 `model/responses_agent.go:1509` mutex-copy 告警；
+`go vet ./turn` 无告警。

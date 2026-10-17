@@ -10,11 +10,9 @@ import (
 )
 
 const (
-	MaxExecutedToolCallArgumentBytes = 8 * 1024
 	// MaxExecutedToolCallMetadataBytes is Rust's protocol
 	// `MAX_EXECUTED_TOOL_CALL_METADATA_BYTES`: the budget for one serialized
-	// prompt. The 32 KiB per-output gate is the *retention* threshold and lives in
-	// the turn recorder (`maxExecutedToolCallFullArgumentBytesPerItem`), not here.
+	// prompt.
 	MaxExecutedToolCallMetadataBytes = 2 * 1024 * 1024
 	MaxToolResultSources             = 32
 	MaxToolResultSourceFieldBytes    = 128
@@ -287,10 +285,24 @@ func (c ExecutedToolCall) MarshalJSON() ([]byte, error) {
 	return json.Marshal(payload)
 }
 
-// Truncated reports whether the recorded tool call had its arguments (or the
-// call itself) truncated by the recording limit (Rust #41058).
+// Truncated reports whether the recorded tool call has local truncation
+// metadata. Argument truncation does not by itself omit a call or its name.
 func (c ExecutedToolCall) Truncated() bool {
 	return c.truncation != nil
+}
+
+// HasCompleteInventory reports whether this entry retains its invocation and
+// full tool name, regardless of whether its arguments were truncated (Rust
+// #51892).
+func (c ExecutedToolCall) HasCompleteInventory() bool {
+	if c.truncation == nil {
+		return true
+	}
+	omittedCalls := 0
+	if c.truncation.OmittedCalls != nil {
+		omittedCalls = *c.truncation.OmittedCalls
+	}
+	return omittedCalls == 0 && c.truncation.OriginalNameBytes == nil
 }
 
 func (i *AgentItem) AppendExecutedToolCalls(calls ...ExecutedToolCall) {
@@ -397,8 +409,7 @@ func BoundExecutedToolCallsForPrompt(items []any) []any {
 // BoundExecutedToolCallsForPromptPrioritizingRecent mirrors Rust's
 // `bound_executed_tool_calls_for_prompt_prioritizing_recent`: retained history is
 // bounded without letting older calls displace the newest calls (Rust reverses
-// the items, bounds, and reverses back). It is applied behind the 32 KiB
-// attach-stage gate.
+// the items, bounds, and reverses back).
 func BoundExecutedToolCallsForPromptPrioritizingRecent(items []any) []any {
 	return boundExecutedToolCallsForPrompt(items, true)
 }
@@ -457,6 +468,30 @@ func BoundExecutedToolCallsForMessage(items []any, maxMetadataBytes int) []any {
 	}
 	boundExecutedToolCallItemsWithBudget(carriers, maxMetadataBytes, true, false)
 	return items
+}
+
+// NormalizeExecutedToolCallCompleteness clears completion across a cell when
+// recorded calls or tool names were lost. Argument truncation preserves
+// inventory completeness and does not modify the arguments (Rust #51892).
+func NormalizeExecutedToolCallCompleteness(items []any) {
+	carriers := executedToolCallCarriers(items)
+	if len(carriers) == 0 {
+		return
+	}
+	damagedCells := map[string]bool{}
+	for _, item := range carriers {
+		for _, call := range item.ExecutedToolCalls() {
+			if call.HasCompleteInventory() {
+				continue
+			}
+			clearExecutedToolCallsComplete(item)
+			if cell := executedToolCallCellID(item); cell != "" {
+				damagedCells[cell] = true
+			}
+			break
+		}
+	}
+	clearDamagedCellCompleteness(carriers, damagedCells)
 }
 
 func clonePromptItemWithoutForgedExecutedToolCalls(value any) (any, ExecutedToolCallCarrier) {
@@ -757,7 +792,7 @@ func shedResultSources(items []ExecutedToolCallCarrier, maxMetadataBytes int, wh
 // truncateCallArgumentsToFit mirrors Rust's `truncate_call_arguments_to_fit`: a
 // large outgoing message should not lose the other tool names in a cell when
 // replacing one call's arguments is enough to make it fit.
-func truncateCallArgumentsToFit(items []ExecutedToolCallCarrier, maxMetadataBytes int, overageBytes int, damagedCells map[string]bool) {
+func truncateCallArgumentsToFit(items []ExecutedToolCallCarrier, maxMetadataBytes int, overageBytes int) {
 	for itemIndex := range items {
 		for overageBytes > 0 {
 			calls := items[itemIndex].ExecutedToolCalls()
@@ -775,25 +810,19 @@ func truncateCallArgumentsToFit(items []ExecutedToolCallCarrier, maxMetadataByte
 					retained = 0
 				}
 				candidate := calls[index]
-				setExecutedToolCallTruncation(&candidate, original, minInt(retained, MaxExecutedToolCallArgumentBytes), nil, nil)
+				setExecutedToolCallTruncation(&candidate, original, retained, nil, nil)
 				truncatedBytes := jsonSize(map[string]any{executedToolCallTruncatedField: *candidate.truncation})
 				if truncatedBytes >= original {
 					continue
 				}
 				calls[index] = candidate
 				changed = true
-				clearExecutedToolCallsComplete(items[itemIndex])
-				if cell := executedToolCallCellID(items[itemIndex]); cell != "" {
-					damagedCells[cell] = true
-				}
 				break
 			}
 			if !changed {
 				break
 			}
 			items[itemIndex].ReplaceExecutedToolCalls(calls)
-			// Losing one call's arguments invalidates every output in that cell.
-			clearDamagedCellCompleteness(items, damagedCells)
 			overageBytes = executedToolCallMetadataBytesOf(items) - maxMetadataBytes
 			if overageBytes < 0 {
 				overageBytes = 0
@@ -823,33 +852,7 @@ func boundExecutedToolCallItemsWithBudget(items []ExecutedToolCallCarrier, maxMe
 	originalBytes := 0
 	damagedCells := map[string]bool{}
 	for _, item := range items {
-		calls := item.ExecutedToolCalls()
-		truncated := false
-		for index := range calls {
-			call := &calls[index]
-			argumentBytes := executedToolCallArgumentBytes(*call)
-			if call.truncation == nil && argumentBytes > MaxExecutedToolCallArgumentBytes {
-				setExecutedToolCallTruncation(call, argumentBytes, MaxExecutedToolCallArgumentBytes, nil, nil)
-			}
-			truncated = truncated || call.truncation != nil
-		}
-		item.ReplaceExecutedToolCalls(calls)
-		if truncated {
-			// An inventory whose calls or arguments were lost cannot claim
-			// completeness (Rust #41058 `mark_tool_calls_complete`).
-			clearExecutedToolCallsComplete(item)
-			if cell := executedToolCallCellID(item); cell != "" {
-				damagedCells[cell] = true
-			}
-		}
 		originalBytes += executedToolCallMetadataBytes(item)
-	}
-	// Every item in a damaged cell loses its completion claim too, so a later
-	// output cannot present the cell's surviving calls as complete.
-	for _, item := range items {
-		if damagedCells[executedToolCallCellID(item)] {
-			clearExecutedToolCallsComplete(item)
-		}
 	}
 	if originalBytes <= maxMetadataBytes {
 		return
@@ -868,7 +871,7 @@ func boundExecutedToolCallItemsWithBudget(items []ExecutedToolCallCarrier, maxMe
 		// before resource-access evidence (Rust's whole-message ordering).
 		overage := shedResultSources(items, maxMetadataBytes, true)
 		if overage > 0 {
-			truncateCallArgumentsToFit(items, maxMetadataBytes, overage, damagedCells)
+			truncateCallArgumentsToFit(items, maxMetadataBytes, overage)
 		}
 		originalBytes = executedToolCallMetadataBytesOf(items)
 	}
@@ -911,13 +914,14 @@ func boundExecutedToolCallItemsWithBudget(items []ExecutedToolCallCarrier, maxMe
 	}
 
 	distributeRemainingBudget(items, maxMetadataBytes, prioritizeRecent, damagedCells)
+	clearDamagedCellCompleteness(items, damagedCells)
 }
 
 // distributeRemainingBudget mirrors Rust's `distribute_remaining_budget`: give
 // each output that still holds evidence a share of what is left (the whole
 // remainder, newest first, when the retained-history entry point prioritizes
-// recent calls), truncate the outputs that exceed their share, and revoke their
-// completion claims.
+// recent calls), truncate the outputs that exceed their share, and revoke a
+// completion claim only when the bound loses calls or tool names.
 func distributeRemainingBudget(items []ExecutedToolCallCarrier, maxMetadataBytes int, prioritizeRecent bool, damagedCells map[string]bool) {
 	remainingItems := 0
 	for _, item := range items {
@@ -939,12 +943,20 @@ func distributeRemainingBudget(items []ExecutedToolCallCarrier, maxMetadataBytes
 			itemBudget = remainingBytes
 		}
 		if itemBytes > itemBudget {
-			if cell := executedToolCallCellID(item); cell != "" {
-				damagedCells[cell] = true
-			}
-			clearExecutedToolCallsComplete(item)
+			cell := executedToolCallCellID(item)
 			fieldBytes := executedToolCallMetadataFieldBytes()
 			boundExecutedToolCallsWithBudget(item, itemBudget-minInt(itemBudget, fieldBytes))
+			calls := item.ExecutedToolCalls()
+			inventoryComplete := len(calls) > 0
+			for _, call := range calls {
+				inventoryComplete = inventoryComplete && call.HasCompleteInventory()
+			}
+			if !inventoryComplete {
+				clearExecutedToolCallsComplete(item)
+				if cell != "" {
+					damagedCells[cell] = true
+				}
+			}
 		}
 		remainingBytes -= minInt(remainingBytes, executedToolCallMetadataBytes(item))
 		remainingItems--
@@ -983,15 +995,14 @@ func boundExecutedToolCallsWithBudget(item ExecutedToolCallCarrier, maxCallBytes
 		value := representedCalls - 1
 		omittedCalls = &value
 	}
-	maxBytes := minInt(maxCallBytes, MaxExecutedToolCallArgumentBytes)
-	setExecutedToolCallTruncation(&call, originalBytes, maxBytes, omittedCalls, originalNameBytes)
+	setExecutedToolCallTruncation(&call, originalBytes, maxCallBytes, omittedCalls, originalNameBytes)
 	if jsonSize([]ExecutedToolCall{call}) > maxCallBytes {
 		recordedName := originalNameBytes
 		if recordedName == nil {
 			value := len(call.Name)
 			recordedName = &value
 		}
-		setExecutedToolCallTruncation(&call, originalBytes, maxBytes, omittedCalls, recordedName)
+		setExecutedToolCallTruncation(&call, originalBytes, maxCallBytes, omittedCalls, recordedName)
 		// Removing UTF-8 name bytes saves at least that many serialized JSON bytes.
 		nameLimit := len(call.Name) - (jsonSize([]ExecutedToolCall{call}) - maxCallBytes)
 		if nameLimit < 0 {

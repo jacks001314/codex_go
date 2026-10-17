@@ -235,6 +235,12 @@ func (i *ToolResponseItem) SetExecutedToolCallsComplete(complete bool) {
 	}
 }
 
+func (i *ToolResponseItem) ClearExecutedToolCallsComplete() {
+	if i != nil {
+		i.toolCallsComplete = nil
+	}
+}
+
 func (i *ToolResponseItem) MarshalJSON() ([]byte, error) {
 	if i == nil {
 		return []byte("null"), nil

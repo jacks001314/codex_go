@@ -174,10 +174,9 @@ func TestBoundExecutedToolCallsShedsLargestSnapshotFirstLikeRust(t *testing.T) {
 	}
 }
 
-// Mirrors Rust's damaged-cell bookkeeping (`bound_executed_tool_calls_for_prompt`
-// -> `clear_damaged_cell_completeness`): a cell whose calls or arguments were
-// lost cannot keep a completion claim, so every item of that cell loses it.
-func TestBoundExecutedToolCallsClearsDamagedCellCompletenessLikeRust(t *testing.T) {
+// Mirrors Rust #51892/#52268: argument truncation preserves inventory
+// completeness, while omitted calls and truncated tool names still clear it.
+func TestExecutedToolCallCompletenessDependsOnInventoryNotArgumentsLikeRust(t *testing.T) {
 	cell := func(callID string, arguments string) *AgentItem {
 		item := &AgentItem{Type: "function_call", Name: "tool", CallID: callID, Arguments: arguments}
 		RecordExecutedToolCall(item)
@@ -185,24 +184,31 @@ func TestBoundExecutedToolCallsClearsDamagedCellCompletenessLikeRust(t *testing.
 		item.SetExecutedToolCallsComplete(true)
 		return item
 	}
-	// The first call's arguments exceed the per-call limit, so the bound truncates
-	// them and the cell is damaged; the second call is intact but shares the cell.
-	truncated := cell("call-large", `{"value":"`+strings.Repeat("x", MaxExecutedToolCallArgumentBytes)+`"}`)
+	large := cell("call-large", `{"value":"`+strings.Repeat("x", 9*1024)+`"}`)
 	intact := cell("call-small", `{"value":1}`)
 
-	bounded := BoundExecutedToolCallsForPrompt([]any{truncated, intact})
+	bounded := BoundExecutedToolCallsForPrompt([]any{large, intact})
+	for index, value := range bounded {
+		item := value.(*AgentItem)
+		if item.toolCallsComplete == nil || !*item.toolCallsComplete {
+			t.Fatalf("item %d lost completeness after argument recording: %#v", index, item.toolCallsComplete)
+		}
+		if calls := item.ExecutedToolCalls(); len(calls) != 1 || calls[0].Truncated() {
+			t.Fatalf("item %d arguments were truncated: %#v", index, calls)
+		}
+	}
+
+	// Losing one call from the inventory clears every output in that cell.
+	lossy := bounded[0].(*AgentItem)
+	calls := lossy.ExecutedToolCalls()
+	setExecutedToolCallTruncation(&calls[0], 9_000, 0, intPointer(1), nil)
+	lossy.ReplaceExecutedToolCalls(calls)
+	NormalizeExecutedToolCallCompleteness(bounded)
 	for index, value := range bounded {
 		item := value.(*AgentItem)
 		if item.toolCallsComplete != nil {
-			t.Fatalf("item %d kept a completion claim for a damaged cell: %#v", index, *item.toolCallsComplete)
+			t.Fatalf("item %d kept a completion claim after inventory loss: %#v", index, *item.toolCallsComplete)
 		}
-	}
-	encoded, err := json.Marshal(bounded)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if strings.Contains(string(encoded), "tool_calls_complete") {
-		t.Fatalf("damaged cell serialized a completion claim: %s", encoded)
 	}
 }
 

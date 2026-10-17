@@ -13,20 +13,16 @@ import (
 // must retain that binding and let the late result update the original output
 // across retries, waits and compaction.
 
-// recordTruncatedNestedCall records a nested call whose arguments exceed the
-// per-call recording limit, so the recorder stores a truncation marker instead
-// of the arguments.
+// recordTruncatedNestedCall records the explicit argument-truncation shape used
+// by the request budget. Large arguments alone are retained in full after
+// #52268, so these late-result tests seed the truncation directly.
 func recordTruncatedNestedCall(recorder *ExecutedToolCallRecorder, cellID string, callID string) {
-	recorder.RecordToolCall(&tool.Invocation{
-		CallID:   callID,
-		ToolName: tool.NamespacedName("mcp", "echo"),
-		Payload: tool.Payload{
-			Kind:      tool.PayloadFunction,
-			Arguments: `{"padding":"` + strings.Repeat("x", 9_000) + `"}`,
-		},
-		Source:  "code_mode",
-		Context: map[string]any{tool.CodeModeCellIDContextKey: cellID},
-	}, model.ToolModeCodeMode)
+	recorder.recordNested(
+		"cell:"+cellID,
+		callID,
+		model.NewTruncatedExecutedToolCall("mcp__echo", 9_000, 0),
+		9_000,
+	)
 }
 
 // lateResultInvocation is the nested invocation whose result arrives after its

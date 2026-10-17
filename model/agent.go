@@ -128,8 +128,8 @@ type AgentItem struct {
 	// cell shared across its exec and wait outputs (Rust #41058). Input cannot
 	// forge this field.
 	cellID string
-	// toolCallsComplete reports whether the host finished recording the cell's
-	// calls without losing calls or arguments (Rust #41058).
+	// toolCallsComplete reports whether the host retained the cell's complete
+	// ordered call inventory. Arguments may be truncated independently.
 	toolCallsComplete *bool
 }
 
@@ -302,8 +302,9 @@ func (i *AgentItem) SetExecutedToolCallCell(cellID string) {
 	}
 }
 
-// SetExecutedToolCallsComplete marks whether the host finished recording the
-// cell's calls without losing calls or arguments (Rust #41058).
+// SetExecutedToolCallsComplete marks whether the host retained the cell's
+// complete ordered call inventory. Arguments may be truncated independently
+// (Rust #51892).
 func (i *AgentItem) SetExecutedToolCallsComplete(complete bool) {
 	if i != nil {
 		value := complete

@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	maxPendingExecutedToolCalls                 = 256
-	maxExecutedToolCallFullArgumentBytesPerItem = 32 * 1024
+	maxPendingExecutedToolCalls = 256
 	// maxRetainedDirectMetadataBytes limits the Direct metadata retained in
 	// history across one recorder lifetime. A new process cannot recover the
 	// prior budget because raw result metadata is not deserialized (Rust #45185).
@@ -113,8 +112,7 @@ func (p *ExecutedToolCallPermit) Release() {
 }
 
 type recordedToolCallGroup struct {
-	pending   []recordedToolCall
-	fullBytes int
+	pending []recordedToolCall
 	// finished mirrors Rust's CellCompletion::Complete (#46081): the cell's
 	// dispatch gate closed, so its inventory is final even when it is empty.
 	finished bool
@@ -133,8 +131,9 @@ type recordedToolCallGroup struct {
 	// truncated call, so a closed cell may still need its binding retained.
 	observedTruncatedCall bool
 	// incomplete mirrors Rust's CellCompletion::Incomplete: the inventory can no
-	// longer be reported as complete (a truncated argument or an overflow), but
-	// the cell's identity is still trusted for late truncated backfill.
+	// longer be reported as complete (an omitted call, truncated tool name or
+	// overflow), but the cell's identity is still trusted for late truncated
+	// backfill. Argument truncation alone preserves completeness.
 	incomplete bool
 	// dispatchClosed records that the cell's dispatch gate closed; a later
 	// nested call for it cannot be trusted (Rust #48222).
@@ -142,9 +141,8 @@ type recordedToolCallGroup struct {
 }
 
 type recordedToolCall struct {
-	call      model.ExecutedToolCall
-	callID    string
-	fullBytes int
+	call   model.ExecutedToolCall
+	callID string
 }
 
 // retainedToolCallBinding mirrors Rust's RetainedToolCalls: the calls attached to
@@ -403,7 +401,7 @@ func (r *ExecutedToolCallRecorder) PrepareDirectCall(invocation *tool.Invocation
 
 // AttachDirectCallToOutput mirrors Rust's attach_direct_call_to_output: the
 // prepared record joins the invocation's output item, the item is marked
-// complete when the arguments were fully recorded, and the retained-metadata
+// complete when the call inventory is retained, and the retained-metadata
 // budget drops tool-result metadata first and the record second.
 func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *model.ExecutedToolCall, permit *ExecutedToolCallPermit) {
 	if r == nil || item == nil || call == nil {
@@ -414,7 +412,7 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 	if r.lifetime == nil || permit == nil || permit.lifetime != r.lifetime {
 		return
 	}
-	complete := !call.Truncated()
+	complete := call.HasCompleteInventory()
 	if !attachDirectCallToItem(item, *call, complete) {
 		return
 	}
@@ -551,24 +549,9 @@ func (r *ExecutedToolCallRecorder) recordNested(groupID string, callID string, c
 		// its truncated calls cannot be bound to an output for late backfill.
 		group.truncatedMetadataBindingValid = false
 	}
-	maxBytes := model.MaxExecutedToolCallArgumentBytes
-	remaining := maxExecutedToolCallFullArgumentBytesPerItem - group.fullBytes
-	if remaining < maxBytes {
-		maxBytes = remaining
-	}
-	if maxBytes < 0 {
-		maxBytes = 0
-	}
 	recorded := recordedToolCall{call: call, callID: trimmedCallID}
 	if atPendingCallLimit {
 		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, 0)
-		group.incomplete = true
-	} else if originalBytes <= maxBytes {
-		recorded.fullBytes = originalBytes
-		group.fullBytes += originalBytes
-	} else {
-		recorded.call = model.NewTruncatedExecutedToolCall(call.Name, originalBytes, maxBytes)
-		group.incomplete = true
 	}
 	// A duplicate call ID cannot be proven to belong to this cell, so revoke
 	// completeness while retaining the recorded attempt (Rust #44472).
@@ -885,6 +868,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	r.ensureState()
 	r.seedHistoryOnce(out)
 	if len(r.outputs) == 0 && len(r.retained) == 0 {
+		model.NormalizeExecutedToolCallCompleteness(out)
 		return out, nil
 	}
 	attachment := &ExecutedToolCallAttachment{}
@@ -970,7 +954,7 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			if _, seen := seenGroups[groupID]; !seen && group != nil {
 				if len(group.pending) > 0 || groupFinished {
 					for _, pending := range group.pending {
-						if pending.call.Truncated() {
+						if !pending.call.HasCompleteInventory() {
 							complete = false
 						}
 						calls = append(calls, pending.call)
@@ -1004,14 +988,9 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 			out[index] = clonePromptOutputWithExecutedToolCalls(out[index], calls, metadataCellID, completePtr)
 		}
 	}
+	model.NormalizeExecutedToolCallCompleteness(out)
 	if len(attachment.groups) == 0 {
 		return out, nil
-	}
-	// Rust's attach stage ("retained") bounds the request items once they carry
-	// more than the per-output gate, preserving the newest calls so an older
-	// call cannot displace them (the retained-inventory bound).
-	if model.ExecutedToolCallMetadataTotalBytes(out) > maxExecutedToolCallFullArgumentBytesPerItem {
-		out = model.BoundExecutedToolCallsForPromptPrioritizingRecent(out)
 	}
 	return out, attachment
 }
@@ -1076,10 +1055,6 @@ func (r *ExecutedToolCallRecorder) CommitAttachment(attachment *ExecutedToolCall
 			r.retainBinding(attached, group)
 		}
 		group.pending = append([]recordedToolCall(nil), group.pending[count:]...)
-		group.fullBytes = 0
-		for _, pending := range group.pending {
-			group.fullBytes += pending.fullBytes
-		}
 		if len(group.pending) == 0 && !r.keepTruncatedBinding(group) {
 			delete(r.groups, attached.groupID)
 			delete(r.invalidGroups, attached.groupID)
@@ -1480,9 +1455,6 @@ func executedToolCallFromInvocation(invocation *tool.Invocation) (model.Executed
 		if err := json.Unmarshal([]byte(invocation.Payload.Arguments), &arguments); err != nil {
 			arguments = invocation.Payload.Arguments
 		}
-	}
-	if originalBytes > model.MaxExecutedToolCallArgumentBytes {
-		return model.NewTruncatedExecutedToolCall(name, originalBytes, model.MaxExecutedToolCallArgumentBytes), originalBytes
 	}
 	return model.NewExecutedToolCall(name, arguments), originalBytes
 }

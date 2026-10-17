@@ -534,7 +534,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 34f33e4ada8f417203d87f3b5858c97add8dad6b	52968	Keep startup modals protected when terminal input draining times out (#52968)	2026-10-10	tui	1	0	0.00	0	0	implementation_pending	discard_startup_modal_input
 3517671c6061e1704cf1c0df4a5039de23514df8	53753	Extend copy-on-select to composer text (#53753)	2026-10-13	tui	12	1	0.08	0	0	audit_pending	SelectionCopy,cancel_composer_primary,cancel_primary,clear_selection,copies_clipboard,copy_composer_selection_on_release,copy_selection,copy_selection_on_release,on_select,publishes_primary
 3525845978210579572bd8ec4fe8c8296445fb8f	43069	Support managed worktrees for interactive sessions and forks (#43069)	2026-09-05	tui	6	2	0.33	0	0	audit_pending	ManagedTuiWorktree,check_source_policy,fork_source,report_startup_failure
-35a9b704447b7876997ddd8541ccf0cb64c864c7	51892	Preserve tool call completeness when recorded arguments are truncated (#51892)	2026-10-08	model	2	0	0.00	0	0	implementation_pending	has_complete_inventory,has_same_tool_call_inventory
+35a9b704447b7876997ddd8541ccf0cb64c864c7	51892	Preserve tool call completeness when recorded arguments are truncated (#51892)	2026-10-08	model	2	0	0.00	0	0	complete	has_complete_inventory,has_same_tool_call_inventory
 35b746a3e3fb54f612e38bfef314b496bfde5b5e	46493	Allow `/review` during MCP startup (#46493)	2026-09-18	tui	1	0	0.00	0	0	implementation_pending	requires_dispatch_validation
 35d9e4bc4d7a44dc84d86a54f4e815ea5cad6986	43796	Preserve reasoning effort through compaction and reset it on success (#43796)	2026-09-08	persistence	1	1	1.00	0	0	complete	
 3620b2caf8afecfcedd5c5c9520c0d239c880f26	49701	Detect SQLite corruption during startup and preserve recovery backups (#49701)	2026-09-30	tui	8	7	0.88	0	0	audit_pending	open_read_write_pool
@@ -840,7 +840,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5106a5234ff10f49f2403e84b1f668ac2b4a61b5	47178	Enable the fullscreen transcript by default (#47178)	2026-09-22	tui	0	0		0	0	not_applicable	
 5121aeff13aa6615081f9467c8051289201893fc	47348	Overlap subagent spawn persistence and clean up cancelled children (#47348)	2026-09-22	persistence	4	0	0.00	0	0	implementation_pending	PendingSpawn,disarm,set_edge_write,wait_for_edge
 515530d9b274f82c0da03de856c22c5ecfafb3ca	46040	Default TUI animations off when a screen reader is detected (#46040)	2026-09-16	tui	3	1	0.33	0	0	audit_pending	animation_default,narrator_running
-515c291d875e07faa64e3fa43dc9bbffed8db31f	52268	Preserve large arguments in executed tool call metadata (#52268)	2026-10-08	model	1	0	0.00	0	0	implementation_pending	normalize_executed_tool_call_completeness
+515c291d875e07faa64e3fa43dc9bbffed8db31f	52268	Preserve large arguments in executed tool call metadata (#52268)	2026-10-08	model	1	0	0.00	0	0	complete	normalize_executed_tool_call_completeness
 516f2780fd227a80cd9fe89488f5039245090b71	45255	Open new sessions directly from the command center (#45255)	2026-09-13	tui	4	3	0.75	0	0	audit_pending	layout_areas
 517f51a6f7101e2bda4c96cbd0605f8c55aba20b	47143	Extract exec-server CLI startup into a dedicated module (#47143)	2026-09-22	core	6	1	0.17	0	0	audit_pending	ExecServerRemoteTransport,ExecServerSubcommand,is_supported_exec_server_remote_auth,validate_api_key_remote_host,validate_remote_transport
 51c30ad800a16502dc18ac0019af253670cb9c64	46043	Repair expired Windows sandbox account passwords during setup (#46043)	2026-09-16	sandbox	0	0		0	0	not_applicable	
