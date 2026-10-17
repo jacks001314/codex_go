@@ -959,8 +959,12 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	var oldStdioClients []*stdioClient
 	for name, cached := range s.httpClients {
 		config, ok := refreshed.configs[name]
+		sharedHTTPClientKey := refreshed.sharedHTTPClientKey
+		if ok && config.HTTPClient != nil {
+			sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
+		}
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, refreshed.sharedHTTPClientKey) {
+			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, sharedHTTPClientKey) {
 			nextHTTPClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -2831,6 +2835,10 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	openAIForm := s.openAIForm
 	sharedHTTPClient := s.sharedHTTPClient
 	sharedHTTPClientKey := s.sharedHTTPClientKey
+	if config.HTTPClient != nil {
+		sharedHTTPClient = config.HTTPClient
+		sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
+	}
 	key := mcpHTTPConnectionCacheKey(config, openAIForm, sharedHTTPClientKey)
 	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {

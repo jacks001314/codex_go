@@ -94,7 +94,11 @@ type ServerConfig struct {
 	ToolTimeout               time.Duration                     `json:"-"`
 	CatalogItemLimit          int                               `json:"-"`
 	ApplyHTTPRequest          func(*http.Request, []byte) error `json:"-"`
-	ProtocolMode              MCPProtocolMode                   `json:"-"`
+	// HTTPClient overrides the runtime's shared HTTP transport for this server.
+	// Executor-discovered HTTP MCP servers use a route-bound client so their
+	// requests originate from the selected executor.
+	HTTPClient   HTTPDoer        `json:"-"`
+	ProtocolMode MCPProtocolMode `json:"-"`
 	// ProtocolModeOverride is set by extension/overlay contributions that
 	// select an HTTP protocol mode for their own server (Rust #44571). When
 	// non-nil it wins over the default and host-owned-Apps modes; nil preserves

@@ -20,6 +20,9 @@ type runtimeCapabilityDiscoveryV2Cache struct {
 
 	mu      sync.Mutex
 	clients map[string]*execserverclient.Client
+
+	executorMCPMu        sync.Mutex
+	executorMCPDiscovery map[string]executorMCPDiscoveryResult
 }
 
 func newRuntimeCapabilityDiscoveryV2Cache() *runtimeCapabilityDiscoveryV2Cache {

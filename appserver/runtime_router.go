@@ -13289,15 +13289,20 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	if cfg == nil {
 		cfg = r.effectiveMCPConfigForThread(threadID)
 	}
-	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && (r.services.Plugins == nil || len(r.services.Plugins.EnabledMCPServerContributions()) == 0) {
-		return nil, false
-	}
 	authRevision, _ := r.authRevisionSnapshot(context.Background())
 	// Rust #46335: the captured turn-environment snapshot decides MCP tool
 	// availability, and a change to that snapshot (a selection saved for the
 	// next turn) must refresh the published runtime. Capture it once so the
 	// refresh decision and the applied runtime config agree.
 	turnParams := r.activeTurnParams(threadID)
+	if turnParams == nil {
+		if persisted := r.threadEnvironmentSelections(threadID); len(persisted) > 0 {
+			turnParams = &turn.TurnStartParams{
+				ThreadID:     threadID,
+				Environments: persisted,
+			}
+		}
+	}
 	// Rust #51503: capture the complete executor selection once, including
 	// pending and failed entries in priority order, and hand the same snapshot to
 	// MCP contributors and to the availability filter.
@@ -13306,6 +13311,21 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 	environmentFingerprint := mcpEnvironmentRuntimeFingerprint(turnParams)
 	environmentAuthority := environmentSelections.Authority()
 	contributionContext := mcp.NewMCPServerContributionContext(threadID, environmentSelections)
+	hasExecutorMCPCandidate := false
+	for _, selection := range mcpRuntimeEnvironmentSelections(r, threadID, turnParams) {
+		environmentID := selectionEnvironmentID(selection)
+		if environmentID != "" && environmentID != execserver.LocalEnvironmentID {
+			hasExecutorMCPCandidate = true
+			break
+		}
+	}
+	if !r.mcpConfigManaged.Load() && !mcpConfigContainsThreadRuntime(cfg) && !hasExecutorMCPCandidate &&
+		(r.services.Plugins == nil || len(r.services.Plugins.EnabledMCPServerContributions()) == 0) {
+		return nil, false
+	}
+	discoveryCache := r.threads.capabilityDiscoveryV2Cache(threadID)
+	r.discoverExecutorHTTPMCPServers(context.Background(), threadID, turnParams, discoveryCache)
+	selectedEnvironmentMaps := mcpRuntimeEnvironmentSelections(r, threadID, turnParams)
 	runtimeConfig := func(cfg *config.Config) *mcp.RuntimeConfig {
 		values := map[string]any{}
 		if cfg != nil && cfg.Values != nil {
@@ -13314,6 +13334,7 @@ func (r *RuntimeRouter) managedMCPServiceForThread(threadID string, cfg *config.
 		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
 		runtimeAuth := mcp.RuntimeAuthFromSnapshot(r.requireAccount().AuthSnapshot())
 		config := r.runtimeMCPConfigForThread(contributionContext, values, codexHome, runtimeAuth, cfg.Requirements)
+		discoveryCache.applyExecutorMCPServers(r, config, selectedEnvironmentMaps, cfg.Requirements)
 		applyHostMCPRuntimePaths(config, r.hostMCPPathContextForTurn(threadID, turnParams))
 		// Rust #39335: attachment-scoped MCP servers are only enabled when
 		// their environment is selected and available for the thread.

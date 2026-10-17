@@ -3,7 +3,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0034ef93a7ae15e38652f09a55ed31adefb8e39f	43805	Centralize Guardian context composition (#43805)	2026-09-08	guardian	12	3	0.25	0	0	not_applicable	CollectedContext,ContextPresentation,RenderedContext,RenderedTranscript,SectionDelivery,SectionOutput,into_messages,into_user_inputs,transcript_entries
 0037b39cc1d5525bd3b92fb3c3341f7a18270e87	47926	Retry file blob uploads on HTTP 502 and 504 (#47926)	2026-09-24	core	0	0		0	0	not_applicable	
 008bbd5884122dc95aaece19ecfe0fc6a59dcf36	43126	Expose native Windows build tools through Bazel targets (#43126)	2026-09-05	core	0	0		0	0	not_applicable	
-00a7b888b23715989db19b74f6cb623ca46be620	39941	Discover HTTP MCP servers from selected executors (#39941)	2026-08-21	appserver	3	1	0.33	0	0	audit_pending	discover_http_mcp_servers,project_selected_environment_mcp_servers
+00a7b888b23715989db19b74f6cb623ca46be620	39941	Discover HTTP MCP servers from selected executors (#39941)	2026-08-21	appserver	3	3	1.00	0	0	complete	
 00b7152a601218aeb8424d9cefef621a127242a8	40748	Fix MCP denial assertion for structured output (#40748)	2026-08-26	mcp	0	0		0	0	not_applicable	
 00d92ad3ee7f29142bca187a3391b8f38064baf0	47329	Standardize TUI menu description wording and punctuation (#47329)	2026-09-22	tui	1	0	0.00	0	0	implementation_pending	permission_preset_description
 011f803f3cd44802354873de259778913c56ef94	49076	Avoid collecting unused Git metadata in skill analytics (#49076)	2026-09-28	telemetry	1	1	1.00	0	0	complete	
