@@ -139,7 +139,12 @@ func registerMultiAgentV2Handlers(registry *tool.Registry, options *MultiAgentHa
 	if !options.WaitConfigured && waitDefault <= 0 {
 		waitDefault = MultiAgentV2DefaultWait
 	}
-	kinds := []multiAgentV2ToolKind{multiAgentV2Spawn, multiAgentV2Send, multiAgentV2Followup}
+	kinds := []multiAgentV2ToolKind{multiAgentV2Spawn}
+	// Rust #47540: disable_direct_message omits send_message and followup_task
+	// while preserving spawning, automatic child results and management tools.
+	if !options.DisableDirectMessage {
+		kinds = append(kinds, multiAgentV2Send, multiAgentV2Followup)
+	}
 	if !options.DisableWaitAgent {
 		kinds = append(kinds, multiAgentV2Wait)
 	}

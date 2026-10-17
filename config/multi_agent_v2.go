@@ -30,7 +30,11 @@ type MultiAgentV2Config struct {
 	// DisableNativeTools mirrors `features.multi_agent_v2.disable_native_tools`
 	// (#53617): hide the native collaboration tools while keeping the V2 runtime
 	// and its instructions enabled for host-provided tools.
-	DisableNativeTools            bool
+	DisableNativeTools bool
+	// DisableDirectMessage mirrors `features.multi_agent_v2.disable_direct_message`
+	// (#47540): omit send_message/followup_task while keeping spawning, automatic
+	// child results and the remaining management tools.
+	DisableDirectMessage          bool
 	NonCodeModeOnly               bool
 	SubagentDeveloperInstructions *string
 	// MessageBoardInMemory mirrors `features.multi_agent_v2.message_board_in_memory`:
@@ -142,6 +146,7 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
 		"wait_agent_enabled":                 &out.WaitAgentEnabled,
 		"disable_native_tools":               &out.DisableNativeTools,
+		"disable_direct_message":             &out.DisableDirectMessage,
 		"non_code_mode_only":                 &out.NonCodeModeOnly,
 		"message_board_in_memory":            &out.MessageBoardInMemory,
 	} {

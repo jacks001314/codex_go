@@ -14455,6 +14455,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		})
 	}
 	options.EnableAgents = false
+	// Hoisted so the #47540 post-tool check after router construction can see
+	// the resolved V2 config and the thread source.
+	var v2Config *config.MultiAgentV2Config
+	var threadRecord *session.Record
 	if cfg != nil && r.services.ThreadRouter != nil && r.services.ThreadRouter.store != nil {
 		agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
 		if agentsErr != nil {
@@ -14478,7 +14482,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		// first, then the model's declared multi-agent version, then the stable
 		// `multi_agent` (Collab) feature falls back to V1. `agents.enabled=false`
 		// disables the whole surface regardless of model/features.
-		threadRecord := (*session.Record)(nil)
+		threadRecord = nil
 		if record, recordErr := r.threadRecord(session.ThreadID(threadID), true, false); recordErr == nil && record != nil {
 			threadRecord = record
 		}
@@ -14487,7 +14491,6 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		// only when the native tools are exposed: #53617 gates the tool surface
 		// on `disable_native_tools` while the V2 runtime and its instructions
 		// stay enabled for host-provided tools.
-		var v2Config *config.MultiAgentV2Config
 		if version == agent.VersionV2 {
 			resolved, configErr := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
 			if configErr != nil {
@@ -14547,6 +14550,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 					options.AgentExposure = tool.ExposureModelVisible
 				}
 				options.DisableWaitAgent = options.DisableWaitAgent || !v2Config.WaitAgentEnabled
+				options.DisableDirectMessage = options.DisableDirectMessage || v2Config.DisableDirectMessage
 				defaults.DeveloperInstructions = v2Config.SubagentDeveloperInstructions
 			}
 			options.AgentVersion = version
@@ -14678,7 +14682,28 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			FirstTurnID: source.FirstTurnID,
 		})
 	}
-	return turn.BuildToolRouter(options)
+	toolRouter, err := turn.BuildToolRouter(options)
+	if err != nil {
+		return nil, err
+	}
+	// Rust #47540: disabling direct messaging requires an available message-board
+	// post tool, except for internal worker sessions that never use the board.
+	if v2Config != nil && v2Config.DisableDirectMessage && options.EnableAgents && !runtimeThreadSourceIsInternal(threadRecord) {
+		postName := tool.ToolName{Namespace: v2Config.ToolNamespace, Name: "post"}
+		if _, ok := toolRouter.Executor(postName); !ok {
+			return nil, errors.New("disable_direct_message requires an available agent message board in this session")
+		}
+	}
+	return toolRouter, nil
+}
+
+// runtimeThreadSourceIsInternal mirrors Rust SessionSource::is_internal(): the
+// source is the Internal(_) variant, which Go stores as "internal_<name>".
+func runtimeThreadSourceIsInternal(record *session.Record) bool {
+	if record == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(record.Metadata.Source)), "internal")
 }
 
 // historyNotesToolsForTurn mirrors Rust HistoryNotesExtension::tools (#39827):

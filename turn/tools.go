@@ -180,6 +180,7 @@ type ToolRegistryOptions struct {
 	// value (#41461). A non-nil pointer to an empty string keeps it empty.
 	SendUserMessageAsyncDescription *string
 	DisableWaitAgent                bool
+	DisableDirectMessage            bool
 	// MessageBoard, when set, registers the shared discussion board's nine
 	// collaboration tools for this turn's caller (Rust
 	// `install_agent_message_board`). The host owns board selection, the tool
@@ -614,6 +615,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			Roles:                     options.AgentRoles,
 			Defaults:                  options.AgentDefaults,
 			DisableWaitAgent:          options.DisableWaitAgent,
+			DisableDirectMessage:      options.DisableDirectMessage,
 			ToolOverrides:             options.AgentToolOverrides,
 		}); err != nil {
 			return nil, err

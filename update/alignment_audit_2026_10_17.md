@@ -780,3 +780,52 @@ go test ./appserver -run 'CollabToolsGate|DisableNativeToolsKeepsV2' # ok
   - 测试：`context/typed_fragment_content_like_rust_test.go` 三例（marker 只作用于文本、纯字符串片段仍为单个 InputText、音频转换）。
 - 未完成：`appserver/turn_runtime.go` 的 world-state 贡献仍以字符串拼接与文本哈希为主，extension prompt 贡献也还是纯文本；code-mode 输出尚未复用 `ToolOutputParts`。账本记为 `partial`。
 
+---
+
+# Round 109（2026-10-17，lead）· 全量符号覆盖审计 + #47540
+
+## 25.1 方法（可复现）
+
+脚本：`update/r109_symbol_coverage_2026_10_17.py`；结果：`update/r109_symbol_coverage_2026_10_17.tsv`。
+
+1. 对 `bd19459358..ce0323f2f2` 的每个提交，从**非测试文件**的新增行里提取 Rust 新增的**公共 API 标识符**（`pub fn/struct/enum/trait/const/static/type`），以及新增的 snake_case 字符串字面量（配置键）。
+2. 把全部 Go 源码的标识符与字符串字面量做「去下划线 + 小写」归一化，构成匹配集合。
+3. 计算 `matched/total` 覆盖率，并记录未匹配符号。
+4. 判定：覆盖率 ≥0.9 → `regression_pending`（Go 已暴露同一公共面，回归未逐条验证）；覆盖率 =0 → `implementation_pending`（明确缺口）；其余 → `audit_pending`；无新增公共符号 → 私有/行为型改动，保持待审。
+
+**这是比对辅助，不是正确性证明**：符号存在只说明 Go 暴露了同名能力，不说明行为逐条对齐。
+
+## 25.2 结果（`parity/commits.json` 状态重算）
+
+| status | 条数 | 含义 |
+| --- | --- | --- |
+| complete | 386 | 既有账本已落地 + Rust-only test/build/release 变更 |
+| regression_pending | 319 | Go 已暴露上游新增公共面（覆盖率 ≥0.9） |
+| implementation_pending | 454 | **Go 完全没有对应公共符号**（明确缺口） |
+| audit_pending | 1536 | 部分覆盖或无新增公共符号，需人工比对 |
+
+缺口按面分布（覆盖率 =0）：tui 161、guardian 73、appserver 60、core 43、sandbox 27、mcp 23、execserver 22、persistence 21、model 8、config 6、telemetry 5、plugins 3、realtime 2。
+
+## 25.3 本轮落地：#47540 `disable_direct_message`
+
+- Rust：`features.multi_agent_v2.disable_direct_message`，默认 false；开启时省略 `send_message` 与 `followup_task`，保留 spawn / 自动子结果 / 其余管理工具；启用时要求会话具备 message-board `post` 工具（internal worker 豁免）。
+- Go：
+  - `config/multi_agent_v2.go`：新增 `DisableDirectMessage` 与解析。
+  - `agent/tools.go` / `agent/tools_v2.go`：选项透传，`registerMultiAgentV2Handlers` 在开启时跳过 send/followup。
+  - `turn/tools.go`：`Options.DisableDirectMessage` 接线。
+  - `appserver/runtime_router.go`：`v2Config.DisableDirectMessage` 写入 turn 选项；路由构建后按 Rust 文案 `disable_direct_message requires an available agent message board in this session` 校验 `post` 工具，internal 源（`internal_*`）豁免。
+  - 测试：`config/multi_agent_v2_test.go`（默认 false / 解析 true / 不影响其它开关）、`agent/tools_v2_direct_message_like_rust_test.go`（缺省暴露、开启后 send/followup 消失且 spawn/wait/interrupt/list 保留）。
+
+## 25.4 验证
+
+```
+go build ./...                              # exit 0
+go test ./parity -count=1                   # ok
+go test ./agent -run 'DirectMessage|DirectToolsDefault' -count=1   # ok
+go test ./config -run MultiAgentV2Config -count=1                  # ok
+```
+
+## 25.5 剩余
+
+454 条 `implementation_pending` 是当前「功能对齐」的量化缺口（TUI 161 条为主，其次 Guardian 73、appserver 60）。下一轮建议按面推进：appserver → core → sandbox → mcp → execserver → persistence → TUI（遵循「核心优先，TUI 最后」）。
+

@@ -312,6 +312,9 @@ type MultiAgentHandlerOptions struct {
 	Roles                     map[string]RoleConfig
 	Defaults                  SpawnDefaults
 	DisableWaitAgent          bool
+	// DisableDirectMessage omits the V2 send_message/followup_task tools
+	// (Rust #47540 `features.multi_agent_v2.disable_direct_message`).
+	DisableDirectMessage      bool
 	WaitDefault               time.Duration
 	WaitMin                   time.Duration
 	WaitMax                   time.Duration

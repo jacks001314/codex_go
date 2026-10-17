@@ -122,3 +122,28 @@ func TestMultiAgentV2ConfigDisableNativeToolsLikeRust(t *testing.T) {
 		t.Fatalf("MultiAgentV2Config() accepted an inverted wait window")
 	}
 }
+
+// Rust parity (#47540): features.multi_agent_v2.disable_direct_message
+// defaults to false and hides send_message/followup_task when enabled.
+func TestMultiAgentV2ConfigDisableDirectMessageLikeRust(t *testing.T) {
+	defaults, err := (&Config{}).MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.DisableDirectMessage {
+		t.Fatalf("default disable_direct_message = true, want false")
+	}
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{
+		"disable_direct_message": true,
+	}}}}
+	got, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.DisableDirectMessage {
+		t.Fatalf("disable_direct_message = false, want true")
+	}
+	if got.DisableNativeTools || !got.WaitAgentEnabled {
+		t.Fatalf("disable_direct_message changed unrelated settings: %#v", got)
+	}
+}
