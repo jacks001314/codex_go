@@ -1542,6 +1542,14 @@
             "reason": "Aligned upstream 2e5ee418ad (#42033 Improve Guardian report diagnostics): feedback uploads select at most eight tree rollouts, retain the reported thread, prioritize descendants with failed review records, and include a feedback-thread-index.json with selected rollout filenames, bounded omissions, retained failure threads, and process-wide discarded-record accounting. Failed-review snapshots now expose newest-first unique thread IDs.",
             "userImpact": "Large agent trees keep the most diagnostic Guardian evidence while the report explicitly records what was omitted.",
             "test": "go test ./appserver -run 'FeedbackThreadIndex|GuardianFeedback|FeedbackUpload' -count=1"
+        },
+        {
+            "id": "shared-guardian-transcript-collection",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Audited upstream 032d15cba7 (#41870 Use shared transcript collection for Guardian reviews): Go already centralizes bounded transcript collection in guardianReviewTranscriptEntries and renders it through state.RenderGuardianTranscript, including host attribution, filtered compaction summaries, native encrypted messages, JSON/line formats, and stale-context comparison. Prompt-local duplicate collection is absent.",
+            "userImpact": "Guardian review prompts and stale-context checks observe one consistent transcript representation.",
+            "test": "go test ./appserver ./state -run 'GuardianTranscript|GuardianReviewTranscript' -count=1"
         }
     ]
 }

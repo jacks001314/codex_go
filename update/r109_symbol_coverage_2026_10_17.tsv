@@ -25,7 +25,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 02f47d3fb36414d99cdf34fff553826d587d1405	42192	Use native spawning for bare macOS MCP commands (#42192)	2026-09-02	mcp	0	0		0	0	not_applicable	
 0305dde9203917f7ef24bf58e94305415191685a	42640	Harden TUI parsing of assistant markup (#42640)	2026-09-04	tui	4	4	1.00	0	0	complete	
 03147407e3a078c559f92f9fbad39d13541c3049	41416	Add app-server notification media filtering (#41416)	2026-08-28	appserver	1	1	1.00	0	0	complete	
-032d15cba77e28d4eb697b1f11bc395c2522d12b	41870	Use shared transcript collection for Guardian reviews (#41870)	2026-08-31	guardian	2	1	0.50	0	0	audit_pending	collect_guardian_transcript_entries
+032d15cba77e28d4eb697b1f11bc395c2522d12b	41870	Use shared transcript collection for Guardian reviews (#41870)	2026-08-31	guardian	2	2	1.00	0	0	complete	
 0337192dfd10e12ac633dcd159fa6d6120dbfe11	43806	Centralize Guardian transcript policy in context profiles (#43806)	2026-09-08	guardian	7	1	0.14	0	0	audit_pending	ContextProfile,MAX_MESSAGE_ENTRY_TOKENS,MAX_MESSAGE_TRANSCRIPT_TOKENS,MAX_RECENT_NON_USER_ENTRIES,MAX_TOOL_ENTRY_TOKENS,MAX_TOOL_TRANSCRIPT_TOKENS
 0340e12f5dc468f35ff922065ac1800459939b08	40993	Allow bundled browser plugins to run executor cleanup hooks (#40993)	2026-08-26	plugins	0	0		0	0	not_applicable	
 0344625ccf4ae0ab6472c6c1e7b4ace6af14661e	41921	Start fresh Vim drafts in Insert mode (#41921)	2026-08-31	tui	0	0		0	0	not_applicable	
