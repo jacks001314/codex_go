@@ -39,3 +39,73 @@ func TestGuardianCircuitBreakerInterruptionEmitsIdleStatusLikeRust(t *testing.T)
 		t.Fatal("the active turn was not cancelled")
 	}
 }
+
+func TestGuardianConditionalInterruptionPreservesPendingInputLikeRust(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestedID string
+		queueInput  bool
+		wantAbort   bool
+	}{
+		{name: "current turn", requestedID: "turn-child", wantAbort: true},
+		{name: "stale turn", requestedID: "turn-stale"},
+		{name: "pending user input", requestedID: "turn-child", queueInput: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router, parentID, childID := guardianNotificationTestRouter(t, true)
+			threadID := string(childID)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			router.requireThreadStatus().NoteTurnStarted(threadID)
+			if err := router.threads.ReserveTurn(threadID); err != nil {
+				t.Fatalf("ReserveTurn() error = %v", err)
+			}
+			if err := router.threads.RegisterTurn(threadID, "turn-child", cancel, time.Now().UTC().UnixMilli(), &turn.TurnStartParams{ThreadID: threadID}); err != nil {
+				t.Fatalf("RegisterTurn() error = %v", err)
+			}
+			if tc.queueInput {
+				if err := router.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{
+					ThreadID: threadID,
+					TurnID:   "turn-child",
+					InputItems: []any{map[string]any{
+						"type": "message",
+						"role": "user",
+						"content": []any{map[string]any{
+							"type": "input_text",
+							"text": "preserve this input",
+						}},
+					}},
+				}); err != nil {
+					t.Fatalf("Enqueue() error = %v", err)
+				}
+			}
+
+			router.interruptTurnForGuardianCircuitBreaker(threadID, tc.requestedID, "denied repeatedly")
+
+			select {
+			case <-ctx.Done():
+				if !tc.wantAbort {
+					t.Fatal("the active turn was cancelled despite pending or stale input")
+				}
+			default:
+				if tc.wantAbort {
+					t.Fatal("the active turn was not cancelled")
+				}
+			}
+			texts := guardianNotificationTexts(router.drainRuntimeAgentMessages(string(parentID)))
+			if tc.wantAbort {
+				if len(texts) != 1 {
+					t.Fatalf("parent notifications = %#v, want one", texts)
+				}
+				return
+			}
+			if len(texts) != 0 {
+				t.Fatalf("unexpected parent notification = %#v", texts)
+			}
+			if tc.queueInput && !router.requireSteerMailbox().HasPendingUserInput(threadID, "turn-child") {
+				t.Fatal("pending user input was discarded")
+			}
+		})
+	}
+}

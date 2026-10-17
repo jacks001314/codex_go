@@ -3778,6 +3778,24 @@ func (r *RuntimeRouter) cancelActiveRuntimeTurn(threadID string, turnID string) 
 	return active, true
 }
 
+// interruptRuntimeTurnIfNoPendingInput mirrors Rust's conditional extension
+// interruption (#47340): cancel only the named active turn and only when no
+// queued input is waiting for it. A stale turn ID or pending input leaves the
+// turn running so the caller cannot discard work it did not own.
+func (r *RuntimeRouter) interruptRuntimeTurnIfNoPendingInput(threadID string, turnID string) (*activeRuntimeTurn, bool) {
+	if r == nil {
+		return nil, false
+	}
+	active := r.activeRuntimeTurnSnapshot(threadID)
+	if active == nil || active.ID != strings.TrimSpace(turnID) {
+		return nil, false
+	}
+	if mailbox := r.requireSteerMailbox(); mailbox != nil && mailbox.HasPending(threadID, turnID) {
+		return nil, false
+	}
+	return r.cancelActiveRuntimeTurn(threadID, turnID)
+}
+
 func (r *RuntimeRouter) cancelActiveRuntimeTurnTracked(threadID string, turnID string) (*activeRuntimeTurn, bool) {
 	if r == nil {
 		return nil, false

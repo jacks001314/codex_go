@@ -18821,10 +18821,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/4; needs review: finish_turn_abort, interrupt_if_no_pending_input, interrupt_turn_if_no_pending_input"
-      ]
+        "status": "complete",
+        "evidence": [
+          "RuntimeRouter interrupts only a matching active turn with no queued user or mailbox input; stale turns and pending input are preserved, and Guardian uses the conditional path."
+        ]
     },
     {
       "sha": "d93909a939e40c3c1031f5a713bacad8c0d9afe6",

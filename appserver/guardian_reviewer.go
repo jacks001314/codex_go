@@ -1551,7 +1551,11 @@ func (r *RuntimeRouter) interruptTurnForGuardianCircuitBreaker(threadID, turnID,
 	if r == nil {
 		return
 	}
-	if active, ok := r.cancelActiveRuntimeTurn(threadID, turnID); ok {
+	if r.activeRuntimeTurnSnapshot(threadID) != nil {
+		active, ok := r.interruptRuntimeTurnIfNoPendingInput(threadID, turnID)
+		if !ok {
+			return
+		}
 		r.finishTurnInterruptedAnalytics(threadID, turnID, active.StartedAtMS, analyticsContextFromActiveRuntimeTurn(active), turnAbortReasonInterrupted)
 		r.deliverGuardianInterruptionToParent(threadID, reason)
 		return
