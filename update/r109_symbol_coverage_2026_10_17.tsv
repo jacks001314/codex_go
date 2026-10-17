@@ -413,7 +413,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 29a57861e31aecb97c7d2d8420bc3ed234d58e8c	46578	Fix standalone network proxy policy initialization (#46578)	2026-09-19	core	0	0		0	0	not_applicable	
 29aa1df62ea188036a3219f6a6a0dd6063badae9	47582	Retain assistant context for Guardian authorization reviews (#47582)	2026-09-23	guardian	6	5	0.83	0	0	audit_pending	RetainedMessageSource
 29e6bc814ef2173fb99a8c6a64eed9bccbc89b1c	46033	Preserve orchestrator skill caches across MCP runtime updates (#46033)	2026-09-16	mcp	4	0	0.00	0	0	implementation_pending	McpResourceServerCacheKey,invalidate_resource_caches,resource_cache_key,server_cache_key
-29f056c26c09b51db123069ed3ec2095b227d6db	47773	Honor catalog schemas for asynchronous user input (#47773)	2026-09-24	model	1	0	0.00	0	0	implementation_pending	request_user_input_async_parameters_override
+29f056c26c09b51db123069ed3ec2095b227d6db	47773	Honor catalog schemas for asynchronous user input (#47773)	2026-09-24	model	1	1	1.00	0	0	complete	
 2a34aef79484bf769b4b225f3f595755f2962170	49369	Update Bedrock GPT-6 Sol catalog tests to expect multi-agent V2 (#49369)	2026-09-29	model	0	0		0	0	not_applicable	
 2a6ecbb93c42c3eea835126c0c332517968ab2f4	54257	Preserve recent speech when trimming realtime transcripts (#54257)	2026-10-15	appserver	0	0		0	0	not_applicable	
 2aaefa32b0762491d1340675a6082fad26bbb57f	39873	Add keybindings for cycling TUI permission modes (#39873)	2026-08-21	tui	4	0	0.00	0	0	implementation_pending	apply_permission_shortcut,complete_permission_shortcut,handle_permission_shortcut,permission_mode_disabled_reason

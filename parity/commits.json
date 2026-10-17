@@ -20302,9 +20302,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: request_user_input_async_parameters_override"
+        "Landed d7fd0142: tool.RequestUserInputAsyncHandler.Parameters + tool/catalog_parameters.go (JSON object root + jsonschema subset, matching Rust catalog_parameters::parse), model.ModelMessages.RequestUserInputAsyncDescription/ParametersOverride, turn options and appserver router wiring; tests tool/request_user_input_async_catalog_schema_like_rust_test.go, turn/tools_test.go, model/catalog_test.go"
       ]
     },
     {
