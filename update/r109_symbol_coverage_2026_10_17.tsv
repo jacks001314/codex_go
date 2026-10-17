@@ -673,7 +673,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 42624fd63bb8b818cccda0e485828479763fff30	40719	Preserve bounds in reserved tool schemas (#40719)	2026-08-25	appserver	0	0		0	0	not_applicable	
 426fa8cdab4247e5623e9617d531f6917482b947	41227	Use compatible PowerShell for elevated Windows sandbox commands (#41227)	2026-08-27	core	2	2	1.00	0	0	complete	
 429afbcaa97a9397e59976afdc0c38a15db64956	47083	Extract per-thread enrichment into a dedicated async helper (#47083)	2026-09-21	appserver	0	0		0	0	not_applicable	
-42cd1ec497dd8829f39bcde216df062fb86fb25f	44903	Wire up the native Windows MXC helper entry point (#44903)	2026-09-11	sandbox	5	4	0.80	0	0	audit_pending	run_main
+42cd1ec497dd8829f39bcde216df062fb86fb25f	44903	Wire up the native Windows MXC helper entry point (#44903)	2026-09-11	sandbox	5	4	0.80	0	0	not_applicable	
 430d26b543b219049192de559987b8cf506efacf	41331	Classify clock tools as built-in control tools (#41331)	2026-08-28	appserver	0	0		0	0	not_applicable	
 43354d0f61c1bda3eff26decaf13276bb57039e7	46004	Preserve attachment Unix socket grants when controller policy is omitted (#46004)	2026-09-16	tui	0	0		0	0	not_applicable	
 4347f94d5539880e8583028a50a19df5b202d9fa	40554	Register the transcript v2 feature flag (#40554)	2026-08-25	config	0	0		0	0	not_applicable	
@@ -1704,7 +1704,7 @@ a0bfaac70ccdd14291763d832f6f7f3f4558e662	50464	Add the `incremental_tools` featu
 a0dcfe2ada3f5bbd5059a34c0fc6fac244741a67	42256	Skip Guardian scoring in User approval mode (#42256)	2026-09-02	guardian	1	1	1.00	0	0	complete	
 a10c8127f732d50015a75472ffebd8e1ec7d7923	40653	Add live turn settings updates (#40653)	2026-08-25	guardian	7	4	0.57	0	0	audit_pending	TurnSettingsUpdateOutcome,apply_turn_settings,constrained_approval_policy
 a113f3e063dcb4b0a7d8a4e63cfb2fea83996116	45672	Consolidate Guardian reviewer lifecycle ownership (#45672)	2026-09-15	guardian	0	0		0	0	not_applicable	
-a129392ebb87946cf435613d1c43af906193ca87	46318	Add OAuth credential management for model provider gateways (#46318)	2026-09-17	mcp	16	14	0.88	0	0	audit_pending	CallbackListener,StoredToken
+a129392ebb87946cf435613d1c43af906193ca87	46318	Add OAuth credential management for model provider gateways (#46318)	2026-09-17	mcp	16	16	1.00	0	0	complete	
 a1294e57f12e9474088a2f6e6a9142ed3e1ddccd	42749	Improve automatic thread naming in the TUI (#42749)	2026-09-04	tui	10	4	0.40	0	0	audit_pending	finish_thread_title_generation,refresh_thread_title_progress_for_time_tick,set_thread_title_generation_pending,sync_thread_title_progress,terminal_title_spinner_frame_at,with_thread_title_progress
 a12c4f4c01f0fbbcd7060021fbf77327dc8be7cb	40441	Preserve Windows root reads with deny-read rules (#40441)	2026-08-24	sandbox	1	1	1.00	0	0	complete	
 a14ef02e1cda08ebc0887b014b43cbf53ae98f72	42374	Extract PID startup into a dedicated module (#42374)	2026-09-02	appserver	1	1	1.00	0	0	complete	

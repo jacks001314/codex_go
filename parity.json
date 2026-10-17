@@ -1295,6 +1295,14 @@
             "reason": "Aligned upstream 6ce16aadce (#45504 Allow ConPTY output to close after the last console client exits): the Windows exec-server drops the pseudoconsole creation handles with FinishSpawn immediately after CreateProcess, so the output reader reaches EOF when the last attached client exits even while the session object lives.",
             "userImpact": "ConPTY sessions no longer leave a blocked output reader after the child exits, so callers do not have to close the PTY to stop reading.",
             "test": "go test ./execserver -run TestExecServerTTYOutputReachesEOFWithoutClosingThePTY -count=1"
+        },
+        {
+            "id": "gateway-oauth-credential-management",
+            "status": "done",
+            "area": "auth",
+            "reason": "Aligned upstream a129392ebb (#46318 Add OAuth credential management for model provider gateways): the Go auth package already provides encrypted provider-oauth credential storage with the cross-process gateway lock, validated token responses and rotation with refresh skew, WhenExpired/AfterRejection reuse and rejection handling, redacted endpoint diagnostics, and a single-shot loopback callback listener with state validation.",
+            "userImpact": "Model-provider gateway OAuth credentials are stored, refreshed, rotated and reused safely across processes.",
+            "test": "go test ./auth -run Gateway -count=1"
         }
     ]
 }
