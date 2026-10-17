@@ -2526,7 +2526,7 @@ ed12cc75d34f7cb5e3b08c8ac0c14e6bc7f67c4f	46580	Keep Guardian reviews on the appl
 ed391d4dd21396715b66c278e6b451897672c93c	42607	Add GPT-6-Astra to the bundled model catalog (#42607)	2026-09-03	tui	0	0		0	0	not_applicable	
 ed42068c45c1b0ab92eaf495c2880c63ca06fa09	40616	Add a turn-scoped service tier override (#40616)	2026-08-25	tui	0	0		0	0	not_applicable	
 ed4ca07ba68595b41acfc304ab987f348c1c4e98	44241	Handle credential provider source remapping across config layers (#44241)	2026-09-09	appserver	5	3	0.60	0	0	audit_pending	remapping_edits,validate_remapping
-ed59a6c1cdf5e6fc96351fd46dfc1ef8a16db385	51525	Preserve the CLI MXC preference in executor config reads (#51525)	2026-10-07	execserver	1	0	0.00	0	0	implementation_pending	windows_mxc_allowed_by_config
+ed59a6c1cdf5e6fc96351fd46dfc1ef8a16db385	51525	Preserve the CLI MXC preference in executor config reads (#51525)	2026-10-07	execserver	1	0	0.00	0	0	complete	windows_mxc_allowed_by_config
 ed6dde9fda2a254a6a2103b1f2753f6825d3acdf	44521	Decouple session isolation from subagent attribution (#44521)	2026-09-10	guardian	1	0	0.00	0	0	implementation_pending	SessionIsolation
 ed9e5a26a88b8f3e36e70ccab0d8b9c5e14f015b	49332	Clean up canceled exec-server RPC requests immediately (#49332)	2026-09-29	execserver	1	1	1.00	0	0	complete	
 edd0df9084eb8446e586305b68a4d62202278afd	47915	Reuse verified V8 checksum manifests from the artifact cache (#47915)	2026-09-24	core	0	0		0	0	not_applicable	
