@@ -217,6 +217,31 @@ func (f *fakeEnvironmentFileSystem) WriteFileStream(_ context.Context, _ string,
 	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
 }
 
+// ReadFileStream streams a fixture file in bounded blocks. Rust's
+// `ExecutorFileSystem::read_file_stream` has no default implementation, so every
+// filesystem implements it (codex-rs/file-system/src/lib.rs:658, upstream #54674
+// `e7de1f4440`).
+func (f *fakeEnvironmentFileSystem) ReadFileStream(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error) {
+	data, ok := f.files[fixtureKey(path)]
+	if !ok {
+		return nil, nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+	}
+	offset := 0
+	source := func(context.Context) ([]byte, bool, error) {
+		if offset >= len(data) {
+			return nil, false, nil
+		}
+		end := offset + execserver.FileReadChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		block := data[offset:end]
+		offset = end
+		return block, true, nil
+	}
+	return source, func() error { return nil }, nil
+}
+
 func (f *fakeEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {
 	f.dirs[fixtureKey(path)] = true
 	return nil

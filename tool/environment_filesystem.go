@@ -56,6 +56,15 @@ type EnvironmentFileSystem interface {
 	// `Unsupported` without consuming the input, so an implementation that cannot
 	// stream must say so the same way.
 	WriteFileStream(ctx context.Context, path string, contents execserver.FileWriteChunkSource, sandbox *execserver.FileSystemSandboxContext) (int64, error)
+	// ReadFileStream opens the file and returns a pull-based source of bounded
+	// blocks together with the release hook for the handle it opened (Rust
+	// `ExecutorFileSystem::read_file_stream`, codex-rs/file-system/src/lib.rs:658,
+	// upstream #54674 `e7de1f4440`). Every yielded block is nonempty and at most
+	// `execserver.FileReadChunkSize`, and the source reports ok=false at the end
+	// of the file. Rust's trait method has no default implementation, so an
+	// implementation that cannot stream reports the failure instead of pretending
+	// it read the file.
+	ReadFileStream(ctx context.Context, path string, sandbox *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error)
 	// CreateDirectory creates the directory, recursively when recursive is set
 	// (Rust `ExecutorFileSystem::create_directory`).
 	CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error
@@ -221,6 +230,17 @@ func (f localEnvironmentFileSystem) WriteFileStream(ctx context.Context, path st
 	return written, nil
 }
 
+// ReadFileStream opens the local file through the executor's regular-file
+// resolver, so the in-process environment keeps Rust's symlink and file-type
+// rules (`openRegularFileForRead`; Rust #39200, upstream #54674).
+func (f localEnvironmentFileSystem) ReadFileStream(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error) {
+	stream, err := execserver.OpenLocalFileReadStream(f.resolve(path))
+	if err != nil {
+		return nil, nil, err
+	}
+	return stream.Next, stream.Close, nil
+}
+
 func (f localEnvironmentFileSystem) CreateDirectory(_ context.Context, path string, _ bool, _ *execserver.FileSystemSandboxContext) error {
 	return os.MkdirAll(f.resolve(path), 0o755)
 }
@@ -300,6 +320,42 @@ func (f remoteEnvironmentFileSystem) WriteFileStream(ctx context.Context, path s
 	}
 	defer client.Close()
 	return client.WriteFileStream(ctx, f.resolve(path), sandbox, contents)
+}
+
+// ReadFileStream streams the remote file through the executor's readable file
+// stream (`fs/open` + `fs/readBlock` + `fs/close`; Rust
+// `RemoteFileSystem::read_file_stream`, upstream #54674). The connection stays
+// open until the caller releases the stream, so the handle is closed on the
+// session that opened it.
+func (f remoteEnvironmentFileSystem) ReadFileStream(ctx context.Context, path string, sandbox *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error) {
+	client, err := f.client(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	stream, err := client.FSReadFileStream(ctx, &execserver.FSReadFileParams{
+		Path:    f.resolve(path),
+		Sandbox: sandbox,
+	})
+	if err != nil {
+		client.Close()
+		return nil, nil, err
+	}
+	source := func(nextCtx context.Context) ([]byte, bool, error) {
+		block, done, err := stream.Next(nextCtx)
+		if err != nil {
+			return nil, false, err
+		}
+		if done {
+			return nil, false, nil
+		}
+		return block, true, nil
+	}
+	release := func() error {
+		closeErr := stream.Close(ctx)
+		client.Close()
+		return closeErr
+	}
+	return source, release, nil
 }
 
 func (f remoteEnvironmentFileSystem) CreateDirectory(ctx context.Context, path string, recursive bool, sandbox *execserver.FileSystemSandboxContext) error {

@@ -460,7 +460,7 @@ func fsOperationFailure(err error) *requestFailure {
 	case os.IsNotExist(err):
 		return &requestFailure{code: -32004, message: err.Error()}
 	case os.IsPermission(err), errors.Is(err, os.ErrInvalid):
-		return &requestFailure{code: -32600, message: err.Error()}
+		return &requestFailure{code: fsPermissionErrorCode, message: err.Error()}
 	default:
 		return &requestFailure{code: -32603, message: err.Error()}
 	}

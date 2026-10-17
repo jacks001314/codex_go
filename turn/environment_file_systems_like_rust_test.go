@@ -92,13 +92,62 @@ func (f *remoteEnvironmentFileSystemFake) WriteFile(_ context.Context, path stri
 	return nil
 }
 
-// WriteFileStream mirrors Rust's default `ExecutorFileSystem::write_file_stream`
-// (codex-rs/file-system/src/lib.rs:781): a filesystem that cannot stream reports
-// `Unsupported` without consuming the input. This fake predates the streaming
-// interface method upstream #54505 (`a45b8ccb01`) added, so without it the whole
-// `turn` test binary failed to compile.
-func (f *remoteEnvironmentFileSystemFake) WriteFileStream(_ context.Context, _ string, _ execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
-	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
+// WriteFileStream replaces the fixture file one bounded block at a time, the
+// contract the real environment filesystems implement (Rust #54505
+// `a45b8ccb01`). The fake reported `Unsupported` while it only had to satisfy the
+// interface; a copy routed through the turn registry needs a target that streams.
+func (f *remoteEnvironmentFileSystemFake) WriteFileStream(ctx context.Context, path string, contents execserver.FileWriteChunkSource, _ *execserver.FileSystemSandboxContext) (int64, error) {
+	if contents == nil {
+		return 0, fmt.Errorf("file write stream source is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resolved := f.key(path)
+	var written int64
+	var data []byte
+	for {
+		block, ok, err := contents(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			break
+		}
+		if err := execserver.ValidateFileWriteBlock(block); err != nil {
+			return 0, err
+		}
+		written += int64(len(block))
+		data = append(data, block...)
+	}
+	f.files[resolved] = data
+	f.writes = append(f.writes, resolved)
+	return written, nil
+}
+
+// ReadFileStream streams a fixture file in bounded blocks. Rust's
+// `ExecutorFileSystem::read_file_stream` has no default implementation, so the
+// fake implements it too (codex-rs/file-system/src/lib.rs:658, upstream #54674
+// `e7de1f4440`).
+func (f *remoteEnvironmentFileSystemFake) ReadFileStream(_ context.Context, path string, _ *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error) {
+	data, ok := f.files[f.key(path)]
+	if !ok {
+		return nil, nil, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
+	}
+	offset := 0
+	source := func(context.Context) ([]byte, bool, error) {
+		if offset >= len(data) {
+			return nil, false, nil
+		}
+		end := offset + execserver.FileReadChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		block := data[offset:end]
+		offset = end
+		return block, true, nil
+	}
+	return source, func() error { return nil }, nil
 }
 
 func (f *remoteEnvironmentFileSystemFake) CreateDirectory(_ context.Context, _ string, _ bool, _ *execserver.FileSystemSandboxContext) error {

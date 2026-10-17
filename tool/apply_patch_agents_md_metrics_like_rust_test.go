@@ -297,6 +297,29 @@ func (f *agentsMdEnvironmentFileSystem) WriteFileStream(_ context.Context, _ str
 	return 0, fmt.Errorf("filesystem does not support streaming writes: unsupported")
 }
 
+// ReadFileStream streams a fixture file in bounded blocks, the same way the
+// real environment filesystems do (upstream #54674 `e7de1f4440`).
+func (f *agentsMdEnvironmentFileSystem) ReadFileStream(_ context.Context, name string, _ *execserver.FileSystemSandboxContext) (execserver.FileReadChunkSource, func() error, error) {
+	data, ok := f.files[normalizeAgentsMdEnvironmentPath(name)]
+	if !ok {
+		return nil, nil, &os.PathError{Op: "open", Path: name, Err: os.ErrNotExist}
+	}
+	offset := 0
+	source := func(context.Context) ([]byte, bool, error) {
+		if offset >= len(data) {
+			return nil, false, nil
+		}
+		end := offset + execserver.FileReadChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		block := data[offset:end]
+		offset = end
+		return block, true, nil
+	}
+	return source, func() error { return nil }, nil
+}
+
 func (f *agentsMdEnvironmentFileSystem) CreateDirectory(_ context.Context, name string, _ bool, _ *execserver.FileSystemSandboxContext) error {
 	f.dirs[normalizeAgentsMdEnvironmentPath(name)] = true
 	return nil

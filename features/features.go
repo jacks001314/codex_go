@@ -315,6 +315,11 @@ var Registry = []Spec{
 	// Rust (codex-rs/features/src/lib.rs 335c7f8eca #50962): gate stable
 	// environment tool exposure behind a feature flag.
 	{Key: "stable_environment_tools", Stage: StageRemoved, DefaultEnabled: false},
+	// Rust (codex-rs/features/src/lib.rs #54741 `6d8b4c7479`): opt-in
+	// multi-environment file copying, under development and off by default. The
+	// Go host installs the tool only when this feature is enabled
+	// (appserver/runtime_router.go, exec/exec.go).
+	{Key: "multi_env_copy_file", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 4d15794336 #51209): ranked tool
 	// discovery for JavaScript code mode.
 	{Key: "code_mode_tool_search", Stage: StageUnderDevelopment, DefaultEnabled: false},

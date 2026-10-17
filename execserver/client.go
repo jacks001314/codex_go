@@ -389,6 +389,35 @@ func (e *rpcServerError) Error() string {
 // wire: fsOperationFailure classifies os.IsNotExist as -32004.
 const fsNotExistErrorCode = -32004
 
+// fsPermissionErrorCode is the code fsOperationFailure classifies a permission
+// denial or an invalid input parameter as.
+const fsPermissionErrorCode = -32600
+
+const (
+	// FSNotExistErrorCode is the exported spelling of the exec-server not-found
+	// code Rust reports as `io::ErrorKind::NotFound`.
+	FSNotExistErrorCode = fsNotExistErrorCode
+	// FSPermissionErrorCode is the exported spelling of the exec-server
+	// permission / invalid-input code.
+	FSPermissionErrorCode = fsPermissionErrorCode
+)
+
+// FSErrorCode reports the exec-server JSON-RPC error code carried by err, when
+// err is an exec-server error response: fsOperationFailure classifies a
+// filesystem failure as not-found (-32004), permission / invalid input (-32600)
+// or other (-32603). A caller rebuilding Rust's `io::ErrorKind` needs the code,
+// because the wire message is an OS string rather than a kind.
+func FSErrorCode(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	var serverError *rpcServerError
+	if !errors.As(err, &serverError) {
+		return 0, false
+	}
+	return serverError.Code, true
+}
+
 // IsFSNotExistError reports whether err means the filesystem entry does not
 // exist. Rust distinguishes NotFound from a real metadata failure (a failed
 // probe must not be read as "absent"), so callers need this classification.

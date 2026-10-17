@@ -148,9 +148,14 @@ type ToolRegistryOptions struct {
 	// ToolMode is the turn's resolved tool mode (Rust `effective_tool_mode`).
 	// CodeModeOnly keeps the MCP resource helpers registered even without
 	// configured servers (Rust #50546).
-	ToolMode                   string
-	EnableApplyPatch           bool
-	EnableMCP                  bool
+	ToolMode         string
+	EnableApplyPatch bool
+	EnableMCP        bool
+	// EnableMultiEnvCopyFile mirrors the default-off `multi_env_copy_file`
+	// feature (Rust #54741 `6d8b4c7479`): the host installs the file-copy
+	// extension, and the tool stays advertised whether or not the turn selected
+	// an environment.
+	EnableMultiEnvCopyFile     bool
 	EnableRequestPermissions   bool
 	RequestPermissionsReviewer tool.RequestPermissionsReviewer
 	EnableAgents               bool
@@ -640,6 +645,15 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		viewImageOptions.EnvironmentCheck = environmentPlan.Check
 		viewImageOptions.EnvironmentFileSystems = options.EnvironmentFileSystems
 		if err := registry.Register(tool.NewViewImageHandler(viewImageOptions)); err != nil {
+			return nil, err
+		}
+	}
+	// Rust #54741: the host installs the file-copy extension when the
+	// `multi_env_copy_file` feature is on. The tool is advertised independently
+	// of the turn's environments, so a call against an unavailable endpoint
+	// reports it instead of the tool being hidden.
+	if options.EnableMultiEnvCopyFile {
+		if err := registry.Register(tool.NewMultiEnvCopyFileHandler(tool.MultiEnvCopyFileOptions{EnvironmentFileSystems: options.EnvironmentFileSystems})); err != nil {
 			return nil, err
 		}
 	}

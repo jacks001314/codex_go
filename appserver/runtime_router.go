@@ -14338,6 +14338,11 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			// to the off state, so the effective config has to be wired here or the
 			// flag stays unreachable from the app server.
 			options.StableEnvironmentTools = features.Enabled(cfg.FeatureSettings(), "stable_environment_tools")
+			// Rust #54741 installs the file-copy extension only when the
+			// default-off `multi_env_copy_file` feature is enabled; the effective
+			// config has to be read here or the flag stays unreachable from the
+			// app server.
+			options.EnableMultiEnvCopyFile = features.Enabled(cfg.FeatureSettings(), "multi_env_copy_file")
 		}
 		if guardianTurnStart(params) {
 			options.Shell.Validation.WindowsSandboxProxySettingsMode = execserver.WindowsSandboxProxySettingsPreserve

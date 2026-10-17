@@ -975,7 +975,7 @@ func TestStrictConfigAcceptsRecentFeatureKeys(t *testing.T) {
 		"omit_app_server_notification_media", "context_management", "worktrees",
 		"guardianv2.thread_context", "mcp_oauth_refresh_coordination", "unified_exec_tty",
 		"windows_sandbox_service", "api_key_model_discovery", "codex_apps_mcp_2026_07_28",
-		"reasoning_effort_override", "mcp_tool_list_changed",
+		"reasoning_effort_override", "mcp_tool_list_changed", "multi_env_copy_file",
 	} {
 		features[key] = true
 	}

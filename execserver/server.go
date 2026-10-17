@@ -114,6 +114,11 @@ const FSOpenModeReplace = fsOpenModeReplace
 // codex-rs/file-system/src/lib.rs:661, upstream #54505 `a45b8ccb01`).
 const FileWriteChunkSize = fileWriteChunkSize
 
+// FileReadChunkSize is the largest block a streamed read yields (Rust
+// `FILE_READ_CHUNK_SIZE`, codex-rs/file-system/src/lib.rs:658
+// `ExecutorFileSystem::read_file_stream`, upstream #54674 `e7de1f4440`).
+const FileReadChunkSize = fileReadChunkSize
+
 var execServerExitedProcessRetention = 30 * time.Second
 
 type RequestID struct {

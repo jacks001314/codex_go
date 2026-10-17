@@ -1330,6 +1330,9 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		// gates have to be applied here as well as in the app-server router.
 		options.DisableUpdatePlan = !run.Config.UpdatePlanEnabled()
 		options.DisableGetContextRemaining = !features.Enabled(run.Config.FeatureSettings(), "token_budget")
+		// Rust #54741: the standalone exec lane installs the file-copy extension
+		// from the same feature flag as the app server.
+		options.EnableMultiEnvCopyFile = features.Enabled(run.Config.FeatureSettings(), "multi_env_copy_file")
 		// Rust #49467: the executor-reported PATH directories are restored only
 		// when `login_shell_package_path` is enabled for this run.
 		if options.Shell != nil {
