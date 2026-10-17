@@ -21212,9 +21212,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: prepare_call_for_tool"
+        "Round 273 (audit): Go normalizes runtime tools from the selected server/catalog, keeps raw server/connector/tool identity for calls while deriving callable namespace/name, and the executor uses the advertised tool's current schema, annotations, approval metadata, timeout, and connector identity. Tests: go test ./mcp -run 'RuntimeTool|Callable|ToolExecutor' -count=1"
       ]
     },
     {
