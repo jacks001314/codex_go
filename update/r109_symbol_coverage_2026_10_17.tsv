@@ -106,7 +106,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0b47040dc9eb08d9c37d51e0824870ce5b27101b	51483	Add correlated, credential-free rendezvous connection diagnostics (#51483)	2026-10-06	execserver	1	1	1.00	0	0	complete	
 0b509e930e191a463746799f4b2a05c0e1bbd15f	42199	Refactor shared TUI input routing (#42199)	2026-09-02	tui	3	0	0.00	0	0	implementation_pending	handle_backtrack_preview_event,handle_legacy_transcript_event,handle_shared_app_keymap_action
 0b73618146d55a2565589bf4e2d5e40e8f298d9e	53990	Keep host MCP and plugin configuration local with remote environments (#53990)	2026-10-14	mcp	2	2	1.00	0	0	complete	
-0b755b1945bf4a31560df2ce1469aeb044dccbc9	52295	Emit one developer notice per incremental namespace update batch (#52295)	2026-10-08	persistence	2	1	0.50	0	0	audit_pending	IncrementalToolsHint
+0b755b1945bf4a31560df2ce1469aeb044dccbc9	52295	Emit one developer notice per incremental namespace update batch (#52295)	2026-10-08	persistence	2	2	1.00	0	0	complete	
 0b78ddb03588ca6718ca9b8da34aa4e95dfb9e8d	47903	Move config key alias normalization ahead of merging (#47903)	2026-09-24	config	2	2	1.00	0	0	complete	
 0b863c69f50335acd92164aab971cb58d298c2fe	51473	Preserve URL destinations in wrapped hook details (#51473)	2026-10-06	tui	5	2	0.40	0	0	audit_pending	detail_line,detail_wrapped_lines,render_buffer
 0b94751cc463d02dec397c4c4dbb77fd9b93d94d	40726	Add telemetry for SQLite log persistence (#40726)	2026-08-25	appserver	10	2	0.20	0	0	audit_pending	LOG_QUEUE_DROPPED_METRIC,LOG_WRITE_BYTES_METRIC,LOG_WRITE_DURATION_METRIC,LOG_WRITE_ENTRIES_METRIC,LOG_WRITE_MAX_ENTRY_BYTES_METRIC,LOG_WRITE_METRIC,record_log_queue_drop,record_log_write

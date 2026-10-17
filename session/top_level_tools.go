@@ -29,9 +29,11 @@ import (
 // stays byte-identical.
 
 const (
-	// NamespaceUpdateHint decorates a namespace that is re-declared because one
-	// of its members changed (Rust `NAMESPACE_UPDATE_HINT`, #51119).
-	NamespaceUpdateHint = "This is an incremental namespace update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one."
+	// ToolUpdateHint precedes an incremental namespace declaration batch
+	// (Rust `ResolvedIncrementalToolMessages::tool_update_hint`, #52295).
+	ToolUpdateHint = "This is an incremental tools update. Previously declared tools remain available for direct calls unless explicitly marked unavailable. If a tool is redefined here, its latest definition replaces the earlier one."
+	// NamespaceUpdateHint is the pre-#52295 name for ToolUpdateHint.
+	NamespaceUpdateHint = ToolUpdateHint
 	// removedToolsHeader and removedNamespacesHeader head the two sections of a
 	// single removal notice (#51202 distinguishes whole namespace removals).
 	removedToolsHeader      = "The following tools are no longer available. Do not call them:"
@@ -39,6 +41,7 @@ const (
 
 	// Content kinds recorded on the harness-authored developer messages.
 	ToolCatalogDeveloperInstructionsKind = "generic.developer_instructions"
+	ToolCatalogUpdateHintKind            = "tools.incremental_update"
 	ToolCatalogRemovedDefinitionKind     = "tools.removed_definition"
 	BaseInstructionsContentKind          = "model.base_instructions"
 )
@@ -72,7 +75,7 @@ func ResolveIncrementalToolMessages(overrides *IncrementalToolMessageOverrides) 
 		return *value
 	}
 	return ResolvedIncrementalToolMessages{
-		ToolUpdateHint:               resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.ToolUpdateHint }), NamespaceUpdateHint),
+		ToolUpdateHint:               resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.ToolUpdateHint }), ToolUpdateHint),
 		RemovedToolsHeader:           resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.RemovedToolsHeader }), removedToolsHeader),
 		RemovedNamespacesHeader:      resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.RemovedNamespacesHeader }), removedNamespacesHeader),
 		NamespaceInstructionsPrefix:  resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.NamespaceInstructionsPrefix }), "Updated instructions for the {name} namespace:\n"),
@@ -352,7 +355,7 @@ func TopLevelToolsUpdatesWithMessages(definitions []any, previous map[string]str
 				Placement: WorldStatePrefix,
 				Role:      "developer",
 				Text:      messages.ToolUpdateHint,
-				Kind:      ToolCatalogDeveloperInstructionsKind,
+				Kind:      ToolCatalogUpdateHintKind,
 			})
 		}
 		updates = append(updates, WorldStateUpdate{

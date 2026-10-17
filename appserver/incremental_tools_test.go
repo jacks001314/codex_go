@@ -1,11 +1,13 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/config"
 	contextfrag "codex_go/context"
 	"codex_go/model"
@@ -222,6 +224,16 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 	if len(result.Items) != 2 || incrementalInputType(t, result.Items[0]) != "message" || incrementalInputType(t, result.Items[1]) != "additional_tools" {
 		t.Fatalf("changed catalog items = %#v", result.Items)
 	}
+	if len(result.SessionItems) != 2 {
+		t.Fatalf("changed catalog session items = %#v", result.SessionItems)
+	}
+	hintKinds := sessionItemContentItemKinds(&result.SessionItems[0])
+	if len(hintKinds) != 1 || hintKinds[0] != session.ToolCatalogUpdateHintKind {
+		t.Fatalf("update hint content kinds = %#v, want %q", hintKinds, session.ToolCatalogUpdateHintKind)
+	}
+	if result.SessionItems[0].Text != session.ToolUpdateHint {
+		t.Fatalf("update hint = %q, want %q", result.SessionItems[0].Text, session.ToolUpdateHint)
+	}
 	catalog, _ := result.Items[1].(map[string]any)
 	tools, _ := catalog["tools"].([]any)
 	if len(tools) != 1 {
@@ -240,7 +252,7 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 		t.Fatalf("incremental member = %#v", members[0])
 	}
 	description, _ := namespace["description"].(string)
-	if strings.Contains(description, session.NamespaceUpdateHint) {
+	if strings.Contains(description, session.ToolUpdateHint) {
 		t.Fatalf("namespace description acquired the separate hint: %q", description)
 	}
 
@@ -260,6 +272,57 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 	hashes, ok := session.TopLevelToolsSnapshotForWindow(state.TopLevelTools, 0)
 	if !ok || hashes["functions.exec"] == "" {
 		t.Fatalf("catalog snapshot = %s", string(state.TopLevelTools))
+	}
+}
+
+// Rust #52295: a full-history fork keeps the update notice next to the
+// namespace declarations it introduces, and keeps it exactly once.
+func TestIncrementalToolUpdateNoticeSurvivesFullHistoryForkLikeRust(t *testing.T) {
+	const parentID = "thread-incremental-fork-parent"
+	router, parent := newResponsesLiteDeclarationRouter(t, parentID)
+	created := time.Now().UTC()
+	instructions := "Use the available tools to help the user."
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	if _, err := router.incrementalToolCatalogForTurn(parentID, nil, definitions, instructions, "turn-1", created); err != nil {
+		t.Fatal(err)
+	}
+	history := incrementalHistoryItems(t, router, parentID)
+	updated := incrementalCatalogLikeRust("Updated execution instructions.", incrementalToolSearchLikeRust())
+	if _, err := router.incrementalToolCatalogForTurn(parentID, history, updated, instructions, "turn-2", created.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	controller, ok := newRuntimeAgentControllerWithVersion(router, parentID, parent.Metadata.CWD, 2, agent.VersionV2).(agent.V2ToolController)
+	if !ok {
+		t.Fatal("runtime controller does not implement V2ToolController")
+	}
+	message := "Continue the parent task."
+	spawned, err := controller.SpawnAgent(context.Background(), &agent.SpawnAgentArgs{
+		TaskName: "worker",
+		Message:  &message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := router.threadRecord(session.ThreadID(spawned.AgentID), true, true)
+	if err != nil || child == nil {
+		t.Fatalf("child threadRecord error = %v", err)
+	}
+	hintCount := 0
+	catalogCount := 0
+	for i := range child.Items {
+		if incrementalDeclarationContainsKind(&child.Items[i], session.ToolCatalogUpdateHintKind) {
+			hintCount++
+			if child.Items[i].Text != session.ToolUpdateHint {
+				t.Fatalf("forked update hint = %q, want %q", child.Items[i].Text, session.ToolUpdateHint)
+			}
+		}
+		if child.Items[i].Type == "additional_tools" {
+			catalogCount++
+		}
+	}
+	if hintCount != 1 || catalogCount != 2 {
+		t.Fatalf("forked items = %#v, want one update notice with both declaration batches", child.Items)
 	}
 }
 

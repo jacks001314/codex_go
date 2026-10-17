@@ -188,6 +188,63 @@ func TestCompactionInstallsLatestIncrementalInstructionsLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #52295: a legacy compaction rebuild carries the window's initial
+// declarations and drops update notices that belonged to later batches.
+func TestLegacyCompactionDiscardsIncrementalToolUpdateNoticeLikeRust(t *testing.T) {
+	created := time.Now().UTC()
+	instructions := "Use the available tools to help the user."
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	prefix := declarationPrefixSessionItemsLikeRust(t, definitions, instructions, "thread", created)
+	updateItems := session.MergeWorldStateUpdates([]session.WorldStateUpdate{{
+		Placement: session.WorldStatePrefix,
+		Role:      "developer",
+		Text:      session.ToolUpdateHint,
+		Kind:      session.ToolCatalogUpdateHintKind,
+	}})
+	hint, ok := incrementalToolCatalogSessionItem("turn-2", 0, updateItems[0], created)
+	if !ok {
+		t.Fatal("update hint was not recordable")
+	}
+	updatedCatalog, ok := incrementalToolCatalogSessionItem("turn-2", 1, map[string]any{
+		"type": "additional_tools", "role": "developer",
+		"tools": []any{map[string]any{
+			"type": "namespace", "name": "functions", "description": "Built-in tools",
+			"tools": []any{map[string]any{"type": "custom", "name": "exec", "description": "Updated."}},
+		}},
+	}, created)
+	if !ok {
+		t.Fatal("updated catalog was not recordable")
+	}
+	sourceItems := append(append(append([]session.Item{}, prefix...), hint, updatedCatalog), session.Item{
+		ID: "summary", Type: "message", Role: "user", Text: "summary", CreatedAt: created,
+	})
+	rebuiltPrefix := incrementalDeclarationPrefixItems(sourceItems)
+	if len(rebuiltPrefix) != 2 || rebuiltPrefix[0].Type != "additional_tools" || rebuiltPrefix[1].Type != "message" {
+		t.Fatalf("rebuilt prefix = %#v, want only the initial catalog and base instructions", rebuiltPrefix)
+	}
+	for i := range rebuiltPrefix {
+		if incrementalDeclarationContainsKind(&rebuiltPrefix[i], session.ToolCatalogUpdateHintKind) {
+			t.Fatalf("rebuilt prefix retained a stale update notice: %#v", rebuiltPrefix)
+		}
+	}
+
+	record := &session.Record{
+		ID: "thread", Metadata: session.Metadata{Model: "gpt-next", Extra: map[string]any{}},
+		Items: []session.Item{{ID: "summary", Type: "message", Role: "user", Text: "summary", CreatedAt: created}},
+	}
+	if err := placeIncrementalCatalogBeforeCompactedHistory(record, rebuiltPrefix, 1, "gpt-next", &instructions); err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Items) < 2 || record.Items[0].Type != "additional_tools" || record.Items[1].Text != instructions {
+		t.Fatalf("replacement items = %#v, want the rebuilt declarations", record.Items)
+	}
+	for i := range record.Items {
+		if incrementalDeclarationContainsKind(&record.Items[i], session.ToolCatalogUpdateHintKind) {
+			t.Fatalf("compaction replacement retained a stale update notice: %#v", record.Items)
+		}
+	}
+}
+
 func declarationPrefixSessionItemsLikeRust(t *testing.T, tools []any, instructions string, threadID string, createdAt time.Time) []session.Item {
 	t.Helper()
 	items := []any{

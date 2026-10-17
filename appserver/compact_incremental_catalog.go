@@ -23,21 +23,73 @@ import (
 // two agree whenever the tool set is stable across the window (the case the
 // Rust ordering tests exercise).
 
-// incrementalDeclarationPrefixItems returns the leading run of harness-authored
-// declaration items a context window recorded at its start: the
-// `additional_tools` catalog and the base-instruction developer message. The
-// window-start path places them ahead of the window's first user message
-// (`incrementalToolCatalogForTurn`), and a later turn's incremental updates
-// append after them, so a leading-run scan yields exactly the window prefix.
+// incrementalDeclarationPrefixItems returns the harness-authored declarations
+// a context window recorded at its start: the first `additional_tools` catalog
+// and the base-instruction developer message that follows it. The window-start
+// path places them ahead of the window's first user message
+// (`incrementalToolCatalogForTurn`).
+//
+// Later turns append incremental update notices and replacement declarations
+// with the same catalog-kind metadata. Rust #52295 treats a notice as part of
+// the batch it precedes, not as a persistent window baseline, so a rebuilt
+// prefix stops before the first notice and keeps at most one catalog and one
+// base-instruction item.
 func incrementalDeclarationPrefixItems(items []session.Item) []session.Item {
 	prefix := make([]session.Item, 0, 2)
+	sawCatalog := false
+	sawInstructions := false
 	for i := range items {
 		if incrementalDeclarationItemKind(&items[i]) != incrementalToolCatalogKind {
 			break
 		}
+		if incrementalDeclarationContainsKind(&items[i], session.ToolCatalogUpdateHintKind) {
+			break
+		}
+		switch strings.TrimSpace(items[i].Type) {
+		case "additional_tools":
+			if sawCatalog {
+				return prefix
+			}
+			sawCatalog = true
+		case "message":
+			if !sawCatalog || sawInstructions ||
+				!incrementalDeclarationIsBaseInstructions(&items[i]) {
+				return prefix
+			}
+			sawInstructions = true
+		default:
+			return prefix
+		}
 		prefix = append(prefix, items[i])
+		if sawCatalog && sawInstructions {
+			return prefix
+		}
 	}
 	return prefix
+}
+
+func incrementalDeclarationContainsKind(item *session.Item, want string) bool {
+	for _, kind := range sessionItemContentItemKinds(item) {
+		if kind == want {
+			return true
+		}
+	}
+	return false
+}
+
+func incrementalDeclarationIsBaseInstructions(item *session.Item) bool {
+	kinds := sessionItemContentItemKinds(item)
+	if len(kinds) == 0 {
+		// Older records did not stamp the base-instruction kind. The item still
+		// has to be the first developer message after the initial catalog.
+		return sessionItemRole(item) == "developer"
+	}
+	for _, kind := range kinds {
+		if kind != session.BaseInstructionsContentKind {
+			return false
+		}
+	}
+	return true
 }
 
 // incrementalDeclarationItemKind reads the harness kind the window-start path

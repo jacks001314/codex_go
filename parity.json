@@ -1462,6 +1462,14 @@
             "reason": "Aligned upstream e4490eff65 (#52736 Allow model catalogs to override incremental tool notices): model tool messages resolve custom update-hint, removal-header, and namespace instruction wording with missing/oversize fallback and empty-text suppression. Catalog diffs emit one update hint before changed declarations, substitute the runtime namespace name, append runtime instructions verbatim, and leave descriptions/search hashes unchanged for wording-only changes.",
             "userImpact": "Model catalogs can tune incremental tool notices without changing tool identity, update timing, or catalog hashes.",
             "test": "go test ./session -run TestTopLevelToolsCatalogMessageOverridesLikeRust -count=1; go test ./appserver -run IncrementalTool -count=1"
+        },
+        {
+            "id": "incremental-tool-update-notice-batch",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream 0b755b1945 (#52295 Emit one developer notice per incremental namespace update batch): each changed or newly added namespace batch emits one developer notice before its additional_tools item, tagged with tools.incremental_update and using the Rust tools-update wording. Full-history forks retain the notice with its declarations, and compaction rebuilds keep only the initial catalog and base instructions instead of carrying notices from later batches.",
+            "userImpact": "The model receives one batch-level explanation for incremental namespace updates without stale notices surviving a rebuilt context window.",
+            "test": "go test ./session -run TopLevelTools -count=1; go test ./appserver -run 'IncrementalTool|LegacyCompactionDiscardsIncremental' -count=1"
         }
     ]
 }
