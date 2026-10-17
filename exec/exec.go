@@ -1202,7 +1202,12 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		provider := r.CodeModeProvider
 		if provider == nil {
 			if run.CodeModeHostEnabled || run.DisableCodeModeFallback {
-				provider = codemode.NewProcessProvider(install.Current().CodeModeHostProgram())
+				program := install.Current().CodeModeHostProgram()
+				if run.Config != nil && features.Enabled(run.Config.FeatureSettings(), "code_mode_host_grpc") {
+					provider = codemode.NewGrpcProcessProvider(program)
+				} else {
+					provider = codemode.NewProcessProvider(program)
+				}
 			} else {
 				provider = codemode.NewDisabledProvider()
 			}

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"codex_go/tool"
 )
@@ -16,10 +17,16 @@ import (
 const processHostHelperEnv = "CODEX_GO_PROCESS_HOST_TEST_HELPER"
 
 func init() {
-	if os.Getenv(processHostHelperEnv) != "1" {
+	var err error
+	switch os.Getenv(processHostHelperEnv) {
+	case "1":
+		err = RunStdioHost(context.Background(), os.Stdin, os.Stdout)
+	case "grpc":
+		err = RunGrpcStdioHost(context.Background(), os.Stdin, os.Stdout)
+	default:
 		return
 	}
-	if err := RunStdioHost(context.Background(), os.Stdin, os.Stdout); err != nil {
+	if err != nil {
 		_, _ = io.WriteString(os.Stderr, err.Error())
 		os.Exit(1)
 	}
@@ -78,6 +85,129 @@ func TestProcessProviderExecutesNestedToolsOutsideClientProcess(t *testing.T) {
 	if notified != "HOST_NOTIFY" {
 		t.Fatalf("notify = %q", notified)
 	}
+}
+
+// Mirrors Rust #52723: the opt-in feature runs the same code-mode host over a
+// gRPC Transport stream on the child's stdio, with nested tool calls intact.
+func TestGrpcProcessProviderExecutesNestedToolsOverStdio(t *testing.T) {
+	hostProgram := copyProcessHostTestBinary(t)
+	t.Setenv(processHostHelperEnv, "grpc")
+	provider := NewGrpcProcessProvider(hostProgram)
+	if err := provider.Availability(); err != nil {
+		t.Fatalf("Availability() error = %v", err)
+	}
+	defer func() {
+		if err := provider.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{
+		Name: tool.PlainName("echo"), Description: "Echo a value",
+		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}}},
+	}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		if !strings.Contains(invocation.Payload.Arguments, "grpc-stdio") {
+			t.Errorf("nested arguments = %q", invocation.Payload.Arguments)
+		}
+		return &tool.Output{CallID: invocation.CallID, ToolName: invocation.ToolName, Success: true, Body: "GRPC_STDIO_OK"}, nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	execExecutor, _ := tool.NewCodeModeExecutorsWithProvider(registry, provider, false)
+	notified := ""
+	output, err := execExecutor.Execute(context.Background(), &tool.Invocation{
+		CallID:  "grpc-process-call",
+		Payload: tool.Payload{Kind: tool.PayloadCustom, Input: `const result = await tools.echo({value: "grpc-stdio"}); notify("GRPC_NOTIFY"); text(result.output);`},
+		Context: map[string]any{"code_mode_notify": tool.CodeModeNotifyFunc(func(_ string, text string) { notified = text })},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || codeModeBodyAfterHeader(t, output.Body) != "GRPC_STDIO_OK" {
+		t.Fatalf("output = %#v", output)
+	}
+	if notified != "GRPC_NOTIFY" {
+		t.Fatalf("notify = %q", notified)
+	}
+}
+
+// Mirrors Rust #52723: sessions share the lazy host process and gRPC channel
+// while keeping their code-mode state isolated.
+func TestGrpcProcessProviderKeepsSessionsIsolated(t *testing.T) {
+	hostProgram := copyProcessHostTestBinary(t)
+	t.Setenv(processHostHelperEnv, "grpc")
+	provider := NewGrpcProcessProvider(hostProgram)
+	defer provider.Close()
+	runtimeA := tool.NewCodeModeRuntime(provider, false)
+	defer runtimeA.Close()
+	runtimeB := tool.NewCodeModeRuntime(provider, false)
+	defer runtimeB.Close()
+	execA, _ := runtimeA.Executors(tool.NewRegistry())
+	execB, _ := runtimeB.Executors(tool.NewRegistry())
+	run := func(exec interface {
+		Execute(context.Context, *tool.Invocation) (*tool.Output, error)
+	}, callID, script string) string {
+		t.Helper()
+		output, err := exec.Execute(context.Background(), &tool.Invocation{
+			CallID:  callID,
+			Payload: tool.Payload{Kind: tool.PayloadCustom, Input: script},
+		})
+		if err != nil {
+			t.Fatalf("Execute(%s) error = %v", callID, err)
+		}
+		return codeModeBodyAfterHeader(t, output.Body)
+	}
+	run(execA, "store-a", `store("nb", {value: 1}); text("stored-a")`)
+	run(execB, "store-b", `store("nb", {value: 2}); text("stored-b")`)
+	if got := run(execA, "read-a", `text(JSON.stringify(load("nb")))`); got != `{"value":1}` {
+		t.Fatalf("session A state = %q, want its own notebook", got)
+	}
+	if got := run(execB, "read-b", `text(JSON.stringify(load("nb")))`); got != `{"value":2}` {
+		t.Fatalf("session B state = %q, want its own notebook", got)
+	}
+}
+
+// Mirrors Rust #52723: a dead host is reaped and a fresh one serves the next
+// connection attempt.
+func TestGrpcProcessProviderRecoversAfterHostDeath(t *testing.T) {
+	hostProgram := copyProcessHostTestBinary(t)
+	t.Setenv(processHostHelperEnv, "grpc")
+	provider := NewGrpcProcessProvider(hostProgram)
+	defer provider.Close()
+	runtime := tool.NewCodeModeRuntime(provider, false)
+	defer runtime.Close()
+	execExecutor, _ := runtime.Executors(tool.NewRegistry())
+	execute := func(callID string) (string, error) {
+		output, err := execExecutor.Execute(context.Background(), &tool.Invocation{
+			CallID:  callID,
+			Payload: tool.Payload{Kind: tool.PayloadCustom, Input: `text("alive")`},
+		})
+		if err != nil {
+			return "", err
+		}
+		return codeModeBodyAfterHeader(t, output.Body), nil
+	}
+	if body, err := execute("before-death"); err != nil || body != "alive" {
+		t.Fatalf("initial execute = %q, %v", body, err)
+	}
+	provider.mu.Lock()
+	process := provider.process
+	provider.mu.Unlock()
+	if process == nil || process.Process == nil {
+		t.Fatal("provider has no host process to kill")
+	}
+	_ = process.Process.Kill()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		body, err := execute(fmt.Sprintf("after-death-%d", attempt))
+		if err == nil && body == "alive" {
+			return
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("provider did not recover after host death: %v", lastErr)
 }
 
 func TestProcessProviderRuntimePersistsStateAndCellsAcrossRegistryRebinds(t *testing.T) {

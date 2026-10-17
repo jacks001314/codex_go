@@ -1429,7 +1429,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 		if program == "" {
 			program = install.Current().CodeModeHostProgram()
 		}
-		services.CodeModeProvider = codemode.NewProcessProvider(program)
+		services.CodeModeProvider = newRuntimeCodeModeProcessProvider(options, program)
 	default:
 		services.CodeModeProvider = codemode.NewDisabledProvider()
 	}
@@ -1475,6 +1475,15 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	// background pass on startup when the feature is enabled.
 	MaybeSpawnRolloutCompressionOnStartup(codexHome, configService)
 	return router
+}
+
+// newRuntimeCodeModeProcessProvider mirrors Rust #52723's feature selection:
+// code_mode_host_grpc selects gRPC over stdio for the process-owned host.
+func newRuntimeCodeModeProcessProvider(options *RuntimeRouterOptions, program string) tool.CodeModeRemoteProvider {
+	if options != nil && options.FeatureEnablement["code_mode_host_grpc"] {
+		return codemode.NewGrpcProcessProvider(program)
+	}
+	return codemode.NewProcessProvider(program)
 }
 
 // taskMetrics exposes the router's metrics sink. Startup corruption telemetry

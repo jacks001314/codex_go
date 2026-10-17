@@ -14,9 +14,9 @@ import (
 )
 
 type stdioHostServer struct {
-	ctx    context.Context
-	reader *FramedReader
-	writer *FramedWriter
+	ctx     context.Context
+	read    func(*ClientToHost) (bool, error)
+	writeFn func(any) error
 
 	writeMu      sync.Mutex
 	mu           sync.Mutex
@@ -44,11 +44,24 @@ type delegateHostResult struct {
 }
 
 func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	reader := NewFramedReader(stdin)
+	writer := NewFramedWriter(stdout)
+	return runCodemodeHost(
+		ctx,
+		func(message *ClientToHost) (bool, error) { return reader.Read(message) },
+		func(message any) error { return writer.Write(message) },
+	)
+}
+
+// runCodemodeHost runs the code-mode host protocol over an arbitrary message
+// transport. Rust's gRPC stdio host serves the same logic over a framed gRPC
+// stream (#52723).
+func runCodemodeHost(ctx context.Context, read func(*ClientToHost) (bool, error), write func(any) error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	host := &stdioHostServer{
-		ctx: ctx, reader: NewFramedReader(stdin), writer: NewFramedWriter(stdout),
+		ctx: ctx, read: read, writeFn: write,
 		sessions: map[SessionID]*stdioHostSession{}, seen: map[SessionID]struct{}{},
 		requests: map[RequestID]*stdioHostRequest{}, pending: map[DelegateRequestID]chan delegateHostResult{},
 	}
@@ -57,7 +70,7 @@ func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error 
 	}
 	for {
 		var message ClientToHost
-		ok, err := host.reader.Read(&message)
+		ok, err := host.read(&message)
 		if err != nil {
 			host.shutdown()
 			return fmt.Errorf("failed to read code-mode client message: %w", err)
@@ -84,7 +97,7 @@ func RunStdioHost(ctx context.Context, stdin io.Reader, stdout io.Writer) error 
 
 func (h *stdioHostServer) negotiate() error {
 	var first ClientToHost
-	ok, err := h.reader.Read(&first)
+	ok, err := h.read(&first)
 	if err != nil {
 		return fmt.Errorf("failed to read code-mode client hello: %w", err)
 	}
@@ -306,7 +319,7 @@ func (h *stdioHostServer) completeDelegate(id DelegateRequestID, result *WireRes
 func (h *stdioHostServer) write(message any) error {
 	h.writeMu.Lock()
 	defer h.writeMu.Unlock()
-	return h.writer.Write(message)
+	return h.writeFn(message)
 }
 
 func (h *stdioHostServer) shutdown() {

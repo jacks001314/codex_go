@@ -1263,6 +1263,14 @@
             "reason": "Aligned upstream 0ae94fdd49 (#41436 Respond to terminal queries from TTY subprocesses): PTY output is wrapped by a chunk-aware state machine that answers device-status, window-size, cursor-position and well-formed DEC private-mode queries, writes bounded responses to the process input, and removes handled queries from client output while preserving unrelated and incomplete escape sequences (incomplete bytes flush at EOF). Wired into the shared Unix/Windows PTY spawn path.",
             "userImpact": "TTY programs that wait for terminal replies no longer block; the client sees clean output without the internal queries.",
             "test": "go test ./execserver -run 'TestTerminalQuer|TestTTYRespondsToCursorPositionQueryLikeRust' -count=1"
+        },
+        {
+            "id": "code-mode-grpc-stdio-host",
+            "status": "done",
+            "area": "codemode",
+            "reason": "Aligned upstream 2dc0791c7d (#52723 Add opt-in gRPC over stdio for the code-mode host): the disabled-by-default code_mode_host_grpc feature selects a process-owned provider that lazily spawns one host, runs HTTP/2 gRPC over its stdin/stdout, shares the channel across isolated sessions, uses keepalives, reaps a dead host and spawns a fresh one on the next connect. The host serves the existing code-mode protocol loop over the framed Transport stream and exits when its stdio connection closes.",
+            "userImpact": "Operators can opt into the gRPC code-mode host transport while the default legacy stdio transport and session isolation stay unchanged.",
+            "test": "go test ./codemode -run 'TestGrpcProcessProvider|TestGrpcStdioHost|TestProcessProvider' -count=1; go test ./appserver -run TestCodeModeHostGrpcFeatureSelectsProcessProviderLikeRust -count=1"
         }
     ]
 }
