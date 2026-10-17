@@ -266,7 +266,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 19c4793964f3d70a9c916010376f96f636847a95	51517	Pass thread persistence intent to attachment uploads (#51517)	2026-10-06	guardian	0	0		0	0	not_applicable	
 19e554bb70103b17aa7dca6bbd0dbf1c8b2eddb6	50558	Avoid reading the current directory when resolving absolute paths (#50558)	2026-10-03	core	0	0		0	0	not_applicable	
 1a02867bd14fb9fb962ca933046c8c842f20e17e	45455	Refactor Windows sandbox setup and service helpers (#45455)	2026-09-14	appserver	9	5	0.56	0	0	audit_pending	ProvisioningListener,load_from,resolve_command_runner,save_to
-1a169eda1105f0f0f5ff589e0e9704c7e618730c	50559	Distinguish daemon release identity from executable contents (#50559)	2026-10-03	appserver	1	0	0.00	0	0	implementation_pending	same_contents
+1a169eda1105f0f0f5ff589e0e9704c7e618730c	50559	Distinguish daemon release identity from executable contents (#50559)	2026-10-03	appserver	1	1	1.00	0	0	complete	
 1a4096e273e80da30947e57fdfa45be92858ca91	44086	Add untrusted external messages to the Python SDK (#44086)	2026-09-09	core	0	0		0	0	not_applicable	
 1a69ad3237fc485273ccfa9731239fdf789b43e4	53614	Add infrastructure for speculative remote V2 compaction (#53614)	2026-10-13	persistence	10	2	0.20	0	0	audit_pending	AsyncCompactionState,BackgroundCompactionCandidate,BackgroundCompactionInput,RemoteCompactV2AttemptInput,capture_background_input,maybe_start,run_background_compaction,shutdown_cancellation
 1a89aec960cd92e2c59ce49b7f3c3347a915e4a9	48483	Prevent console windows for piped Windows child processes (#48483)	2026-09-26	core	0	0		0	0	not_applicable	
