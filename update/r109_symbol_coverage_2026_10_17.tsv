@@ -1598,7 +1598,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9671d20fc82ea269d49ecc70b29a8630b29c1a32	54050	Scope TUI skill refreshes and workspace commands to explicit directories (#54050)	2026-10-14	tui	0	0		0	0	not_applicable	
 968835997714baaff199cfed5f89a2c65d8ca77d	44493	Bound MCP descriptions separately from Guardian action JSON (#44493)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 9695e7151981a9a64830ea7c47282323f93dcc45	40656	Add turn-scoped settings updates to the app server (#40656)	2026-08-25	appserver	4	3	0.75	0	0	audit_pending	TurnSettingsUpdateStatus
-96aca987f72e29a639ecabe5b76ccd6e5693fc88	46258	Preserve uploaded image file IDs in user message display history (#46258)	2026-09-17	persistence	1	0	0.00	0	0	implementation_pending	prepare_annotated_conversation_items_for_history
+96aca987f72e29a639ecabe5b76ccd6e5693fc88	46258	Preserve uploaded image file IDs in user message display history (#46258)	2026-09-17	persistence	1	1	1.00	0	0	complete	
 96be88cb53931c0e77c8686602b8ad673628bee8	52681	Reject reserved Serde JSON keys in code mode (#52681)	2026-10-09	core	0	0		0	0	not_applicable	
 96c2b4377f5f0b1363ba4d4057fbbb7c6dccd9d8	44055	Gate Python SDK publishing on runtime availability and verify PyPI files (#44055)	2026-09-09	core	0	0		0	0	not_applicable	
 96d238d0b95096c3dce32b31ebaef4650bcae1fc	52226	Include foreground activity in iTerm2 session status (#52226)	2026-10-08	tui	4	3	0.75	0	0	audit_pending	set_iterm_session_status

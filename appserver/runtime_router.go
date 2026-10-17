@@ -509,12 +509,17 @@ type RuntimeRouter struct {
 	// out of item data and rollout records (Rust #47327 `#[serde(skip)]`).
 	imageGenerationRequestIDsMu sync.Mutex
 	imageGenerationRequestIDs   map[string]string
-	agentActivityMu             sync.Mutex
-	agentActivity               map[string]chan string
-	agentMessagesMu             sync.Mutex
-	agentMessages               map[string][]any
-	nodeReplEvidenceMu          sync.Mutex
-	nodeReplEvidence            map[string]*codexctx.NodeReplReviewEvidence
+	// preparedUserContent caches the image-prepared structured user message for
+	// a turn so the live event, session item and model request all carry the
+	// same uploaded file IDs (#46258).
+	preparedUserContentMu sync.Mutex
+	preparedUserContent   map[string][]map[string]any
+	agentActivityMu       sync.Mutex
+	agentActivity         map[string]chan string
+	agentMessagesMu       sync.Mutex
+	agentMessages         map[string][]any
+	nodeReplEvidenceMu    sync.Mutex
+	nodeReplEvidence      map[string]*codexctx.NodeReplReviewEvidence
 	// retainedContexts is the thread-owned retained evidence the Guardian review
 	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
 	// the thread's newest compaction checkpoint and then kept current from the

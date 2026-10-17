@@ -1532,6 +1532,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	}
 	threadID := params.ThreadID
 	turnID := record.ID
+	defer r.clearPreparedUserMessageContent(turnID)
 	startedAt := time.Unix(record.StartedAt, 0).UTC()
 	if record.StartedAt == 0 {
 		startedAt = time.Now().UTC()
@@ -1639,6 +1640,13 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if len(runConfig.OverrideInputItems) > 0 {
 		params.AdditionalInputItems = append(params.AdditionalInputItems, runConfig.OverrideInputItems...)
 	}
+	// Rust #46258: prepare structured images before emitting the user message
+	// event so the live event and persisted display history carry the prepared
+	// uploaded file IDs.
+	var preparedUserItem, preparedUserNotice any
+	if turnStartUsesStructuredUserInput(params) {
+		preparedUserItem, preparedUserNotice = r.preparedUserMessageInputItem(turnID, params)
+	}
 	promptPersisted = r.persistRuntimeTurnPrompt(threadID, turnID, params, startedAt)
 	agentPrompt := promptFromTurnStart(params)
 	inputItems := append([]any(nil), runConfig.InputItems...)
@@ -1655,15 +1663,12 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// Rust 6f647caa9b: async hook results recorded before the user prompt
 	// appear ahead of the new prompt in conversation history.
 	inputItems = append(inputItems, r.asyncHookContextInputItems(threadID)...)
-	if turnStartUsesStructuredUserInput(params) {
-		item, notice := r.preparedUserMessageInputItem(params)
-		if item != nil {
-			inputItems = append(inputItems, item)
-			if notice != nil {
-				inputItems = append(inputItems, notice)
-			}
-			agentPrompt = ""
+	if preparedUserItem != nil {
+		inputItems = append(inputItems, preparedUserItem)
+		if preparedUserNotice != nil {
+			inputItems = append(inputItems, preparedUserNotice)
 		}
+		agentPrompt = ""
 	}
 	if params.ToolOutput != nil && !turnStartUsesStructuredUserInput(params) {
 		// Rust #40991/#41002: a standalone named tool output starts the turn
@@ -3843,7 +3848,7 @@ func (r *RuntimeRouter) persistRuntimeTurnPrompt(threadID string, turnID string,
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return false
 	}
-	item, ok := runtimeUserPromptSessionItem(turnID, params, createdAt)
+	item, ok := r.runtimeUserPromptSessionItem(turnID, params, createdAt)
 	if !ok {
 		return false
 	}
@@ -4766,7 +4771,7 @@ func (r *RuntimeRouter) sessionItemsForTurn(turnID string, params *turn.TurnStar
 		return nil
 	}
 	items := []session.Item{}
-	if item, ok := runtimeUserPromptSessionItem(turnID, params, createdAt); ok {
+	if item, ok := r.runtimeUserPromptSessionItem(turnID, params, createdAt); ok {
 		items = append(items, item)
 	}
 	items = append(items, trustedConfigurationUpdateSessionItems(params.AdditionalInputItems, turnID, createdAt)...)
@@ -5242,8 +5247,27 @@ func sessionItemIsHiddenThreadItem(item *session.Item) bool {
 }
 
 func runtimeUserPromptSessionItem(turnID string, params *turn.TurnStartParams, createdAt time.Time) (session.Item, bool) {
+	return runtimeUserPromptSessionItemWithPreparedContent(turnID, params, createdAt, nil)
+}
+
+func (r *RuntimeRouter) runtimeUserPromptSessionItem(turnID string, params *turn.TurnStartParams, createdAt time.Time) (session.Item, bool) {
+	var prepared []map[string]any
+	if r != nil {
+		prepared = r.preparedUserMessageContentFor(turnID)
+	}
+	return runtimeUserPromptSessionItemWithPreparedContent(turnID, params, createdAt, prepared)
+}
+
+func runtimeUserPromptSessionItemWithPreparedContent(turnID string, params *turn.TurnStartParams, createdAt time.Time, prepared []map[string]any) (session.Item, bool) {
 	prompt := promptFromTurnStart(params)
 	content := sessionContentFromTurnStart(params)
+	dataContent := threadUserInputContentFromTurnStart(params)
+	// Rust #46258: the display history carries the prepared image file IDs from
+	// the same content the model request used, not the original local paths.
+	if len(prepared) > 0 {
+		content = sessionContentFromPreparedUserBlocks(prepared)
+		dataContent = threadContentFromPreparedUserBlocks(prepared, dataContent)
+	}
 	if strings.TrimSpace(prompt) == "" && len(content) == 0 {
 		return session.Item{}, false
 	}
@@ -5258,12 +5282,78 @@ func runtimeUserPromptSessionItem(turnID string, params *turn.TurnStartParams, c
 		Text:      prompt,
 		Content:   content,
 		CreatedAt: createdAt,
-		Data:      runtimeUserPromptThreadItemData(params),
+		Data:      userPromptThreadItemData(dataContent),
 		Metadata: appTurnMetadata(turnID, map[string]any{
 			"clientId":            clientID,
 			"client_user_message": clientID,
 		}),
 	}, true
+}
+
+func userPromptThreadItemData(content []map[string]any) map[string]any {
+	if len(content) == 0 {
+		return nil
+	}
+	return map[string]any{"content": content}
+}
+
+// sessionContentFromPreparedUserBlocks converts prepared model input blocks to
+// the session item's display content.
+func sessionContentFromPreparedUserBlocks(blocks []map[string]any) []session.ContentPart {
+	content := make([]session.ContentPart, 0, len(blocks))
+	for _, block := range blocks {
+		switch strings.TrimSpace(stringFromAny(block["type"])) {
+		case "input_text":
+			content = append(content, session.ContentPart{Type: "input_text", Text: stringFromAny(block["text"])})
+		case "input_image":
+			part := session.ContentPart{
+				Type:     "input_image",
+				ImageURL: stringFromAny(block["image_url"]),
+				FileID:   firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"])),
+			}
+			if detail := stringFromAny(block["detail"]); detail != "" {
+				part.Detail = &detail
+			}
+			content = append(content, part)
+		}
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	return content
+}
+
+// threadContentFromPreparedUserBlocks converts prepared model input blocks to
+// the app-server thread item's display content.
+func threadContentFromPreparedUserBlocks(blocks []map[string]any, original []map[string]any) []map[string]any {
+	content := make([]map[string]any, 0, len(blocks))
+	for index, block := range blocks {
+		switch strings.TrimSpace(stringFromAny(block["type"])) {
+		case "input_text":
+			entry := map[string]any{"type": "text", "text": stringFromAny(block["text"]), "text_elements": []turn.TextElement{}}
+			if index < len(original) {
+				if elements, ok := original[index]["text_elements"].([]turn.TextElement); ok {
+					entry["text_elements"] = elements
+				}
+			}
+			content = append(content, entry)
+		case "input_image":
+			entry := map[string]any{"type": "image"}
+			if fileID := firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"])); fileID != "" {
+				entry["fileId"] = fileID
+			} else if imageURL := stringFromAny(block["image_url"]); imageURL != "" {
+				entry["url"] = imageURL
+			}
+			if detail := stringFromAny(block["detail"]); detail != "" {
+				entry["detail"] = detail
+			}
+			content = append(content, entry)
+		}
+	}
+	if len(content) == 0 {
+		return nil
+	}
+	return content
 }
 
 func runtimeUserPromptThreadItemData(params *turn.TurnStartParams) map[string]any {
@@ -11596,7 +11686,7 @@ func standaloneToolOutputInputItem(output *turn.TurnToolOutput) any {
 // ImageResizeNotice fragment is returned as the second value, mirroring Rust
 // prepare_response_items (session/mod.rs prepare_turn_context_response_items)
 // which appends the notice right after the user message.
-func (r *RuntimeRouter) preparedUserMessageInputItem(params *turn.TurnStartParams) (any, any) {
+func (r *RuntimeRouter) preparedUserMessageInputItem(turnID string, params *turn.TurnStartParams) (any, any) {
 	if r == nil || params == nil {
 		return userMessageInputItemFromTurnUserInputs(promptFromTurnStart(params), params.Input), nil
 	}
@@ -11607,6 +11697,7 @@ func (r *RuntimeRouter) preparedUserMessageInputItem(params *turn.TurnStartParam
 	content, _ := item.(map[string]any)["content"].([]map[string]any)
 	prepared, resized := prepareUserMessageContentImages(content)
 	item.(map[string]any)["content"] = prepared
+	r.setPreparedUserMessageContent(turnID, prepared)
 	if !r.imageResizeNoticeEnabledForTurn(params) || len(resized) == 0 {
 		return item, nil
 	}
@@ -11632,6 +11723,48 @@ func (r *RuntimeRouter) preparedUserMessageInputItem(params *turn.TurnStartParam
 		}},
 	}
 	return item, notice
+}
+
+func (r *RuntimeRouter) setPreparedUserMessageContent(turnID string, content []map[string]any) {
+	if r == nil || strings.TrimSpace(turnID) == "" {
+		return
+	}
+	cloned := make([]map[string]any, len(content))
+	for i := range content {
+		cloned[i] = cloneAnyMap(content[i])
+	}
+	r.preparedUserContentMu.Lock()
+	defer r.preparedUserContentMu.Unlock()
+	if r.preparedUserContent == nil {
+		r.preparedUserContent = map[string][]map[string]any{}
+	}
+	r.preparedUserContent[turnID] = cloned
+}
+
+func (r *RuntimeRouter) preparedUserMessageContentFor(turnID string) []map[string]any {
+	if r == nil {
+		return nil
+	}
+	r.preparedUserContentMu.Lock()
+	defer r.preparedUserContentMu.Unlock()
+	content := r.preparedUserContent[turnID]
+	if len(content) == 0 {
+		return nil
+	}
+	cloned := make([]map[string]any, len(content))
+	for i := range content {
+		cloned[i] = cloneAnyMap(content[i])
+	}
+	return cloned
+}
+
+func (r *RuntimeRouter) clearPreparedUserMessageContent(turnID string) {
+	if r == nil {
+		return
+	}
+	r.preparedUserContentMu.Lock()
+	defer r.preparedUserContentMu.Unlock()
+	delete(r.preparedUserContent, turnID)
 }
 
 // threadIsEphemeral reports whether a thread intentionally skips durable
@@ -11679,9 +11812,11 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 	items := make([]eventmap.ImagePrepContentItem, len(content))
 	for i, block := range content {
 		if blockType, _ := block["type"].(string); blockType == "input_image" {
+			fileID := firstNonEmpty(stringFromAny(block["file_id"]), stringFromAny(block["fileId"]))
 			items[i] = eventmap.ImagePrepContentItem{
 				Kind:     eventmap.ImagePrepContentImage,
 				ImageURL: stringFromAny(block["image_url"]),
+				FileID:   fileID,
 				Detail:   eventmap.ImagePrepDetail(stringFromAny(block["detail"])),
 			}
 		} else {
@@ -11700,15 +11835,28 @@ func prepareUserMessageContentImages(content []map[string]any) ([]map[string]any
 		switch item.Kind {
 		case eventmap.ImagePrepContentImage:
 			out[i] = map[string]any{
-				"type":      "input_image",
-				"image_url": item.ImageURL,
-				"detail":    string(item.Detail),
+				"type":   "input_image",
+				"detail": string(item.Detail),
+			}
+			if item.FileID != "" {
+				out[i]["file_id"] = item.FileID
+			} else {
+				out[i]["image_url"] = item.ImageURL
 			}
 		default:
-			out[i] = map[string]any{
-				"type": "input_text",
-				"text": item.Text,
+			// Text spans survive image preparation: the original block's
+			// text_elements are copied while the prepared text replaces the body.
+			block := cloneAnyMap(content[i])
+			if block == nil {
+				block = map[string]any{}
 			}
+			block["type"] = "input_text"
+			block["text"] = item.Text
+			delete(block, "image_url")
+			delete(block, "file_id")
+			delete(block, "fileId")
+			delete(block, "detail")
+			out[i] = block
 		}
 	}
 	return out, resized

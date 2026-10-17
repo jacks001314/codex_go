@@ -1279,6 +1279,14 @@
             "reason": "Aligned upstream 49862b62be (#47819 Retry Guardian reviews when authorization changes): only a completed allow whose transcript or root authorization changed is retried, within the existing attempt budget and shared deadline and without service backoff. Denies stand on the evidence they saw. Exhausting the budget is a failed-closed denial with the stale_authorization failure reason and the exact 'authorization changed before approval could be applied' rationale.",
             "userImpact": "New user input during a review can no longer approve an action against stale authorization; stale allows re-review or fail closed, while denies are reported immediately.",
             "test": "go test ./appserver -run 'TestGuardianReviewRefreshesChangedContextLikeRust|TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust|TestGuardianReviewDenySkipsStaleRetryLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "uploaded-image-file-ids-display-history",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream 96aca987f7 (#46258 Preserve uploaded image file IDs in user message display history): structured user images are prepared before the user message event, uploaded file_id references are preserved (rather than rewritten to an empty image_url), original text blocks are copied so text_elements survive, and the prepared content is cached per turn so the session item Content and thread item Data carry the same prepared file IDs the model received.",
+            "userImpact": "Live and persisted user messages show the uploaded image reference instead of losing it or falling back to a local path.",
+            "test": "go test ./appserver -run TestUploadedImageFileIDsReachUserMessageDisplayHistoryLikeRust -count=1"
         }
     ]
 }
