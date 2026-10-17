@@ -729,7 +729,7 @@ Go 的 keymap catalog 与 Rust `config/src/tui_keymap.rs` 有 9 个「同行为�
 
 | 状态 | 条数 | 来源 |
 | --- | --- | --- |
-| complete | 280 | 221 条既有账本（landed/complete/AlreadyImplemented/not_applicable）+ 187 条规则判定的 Rust-only test/build/release 变更 |
+| complete | 385 | 198 条既有账本（93 landed + 14 complete + 12 AlreadyImplemented + 79 not_applicable）+ 187 条规则判定的 Rust-only test/build/release 变更 |
 | implementation_pending | 15 | 既有 `blocked_precondition` 行 |
 | audit_pending | 2295 | 尚未逐条比对的提交（本次新增的完整缺口清单） |
 
