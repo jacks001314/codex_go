@@ -7667,6 +7667,13 @@ func (r *RuntimeRouter) turnEnvironmentContextInputItemForTurn(ctx context.Conte
 // while other sources use the router's own clock. A nil time means the caller
 // renders without a date.
 func (r *RuntimeRouter) environmentClockForTurn(ctx context.Context, threadID string, turnID string, cfg *config.Config) (*time.Time, bool, error) {
+	if cfg != nil && !cfg.IncludeEnvironmentContextTime() {
+		// Rust #52164 (core/src/session/world_state.rs): with the environment
+		// time disabled the date is None without a clock read, so a stalled
+		// provider can neither fail the context nor emit the
+		// CurrentTimeUnavailable notice.
+		return nil, false, nil
+	}
 	if cfg != nil {
 		if reminder := cfg.CurrentTimeReminder(); reminder != nil && reminder.Enabled && reminder.ClockSource == config.CurrentTimeSourceExternal {
 			return r.readClockForContext(ctx, threadID, turnID, cfg)
