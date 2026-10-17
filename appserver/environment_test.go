@@ -322,10 +322,10 @@ func TestFetchRemoteEnvironmentStatusRetriesAfterTransientStartupFailureLikeRust
 	t.Cleanup(server.Close)
 	record := &EnvironmentRecord{ExecServerURL: "ws" + strings.TrimPrefix(server.URL, "http")}
 
-	if _, err := fetchRemoteEnvironmentStatus(context.Background(), record); err == nil {
+	if _, err := fetchRemoteEnvironmentStatus(context.Background(), record, nil); err == nil {
 		t.Fatal("first readiness check should fail transiently")
 	}
-	status, err := fetchRemoteEnvironmentStatus(context.Background(), record)
+	status, err := fetchRemoteEnvironmentStatus(context.Background(), record, nil)
 	if err != nil {
 		t.Fatalf("later readiness check should retry startup: %v", err)
 	}

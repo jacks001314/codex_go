@@ -224,6 +224,7 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 				record.ConnectTimeoutMS = &milliseconds
 			}
 		}
+		m.cancelConnectionAttempts(id)
 		m.records[id] = record
 	}
 	return nil
@@ -397,6 +398,139 @@ type EnvironmentRecord struct {
 	RequiredSkills []string
 }
 
+// ConnectionAttemptOutcome is the result of an initial exec-server connection
+// attempt (Rust ConnectionAttemptOutcome, #52724).
+type ConnectionAttemptOutcome string
+
+const (
+	// ConnectionAttemptOutcomeSuccess reports that the connection and its
+	// handshake completed and the client was installed.
+	ConnectionAttemptOutcomeSuccess ConnectionAttemptOutcome = "success"
+	// ConnectionAttemptOutcomeFailure reports that the attempt failed in a way
+	// that leaves the environment eligible for a startup retry.
+	ConnectionAttemptOutcomeFailure ConnectionAttemptOutcome = "failure"
+	// ConnectionAttemptOutcomeCancelled reports that the caller context ended
+	// or the environment was replaced while the attempt was in flight.
+	ConnectionAttemptOutcomeCancelled ConnectionAttemptOutcome = "cancelled"
+)
+
+// ConnectionObserver observes one initial exec-server connection attempt,
+// receiving the time measured from the start of the transport connection
+// through client installation (Rust #52724).
+type ConnectionObserver func(elapsed time.Duration, outcome ConnectionAttemptOutcome)
+
+// connectionAttemptObserver is the per-environment observer slot used by
+// EnvironmentManager.ObserveConnectionAttempts. The first registered observer
+// wins. It keeps reporting failed startup attempts so a retry can observe
+// Success, then disarms on Success or Cancelled so later reconnections are
+// omitted (Rust #52724).
+type connectionAttemptObserver struct {
+	mu       sync.Mutex
+	observer ConnectionObserver
+	done     bool
+	active   map[*connectionAttempt]context.CancelFunc
+}
+
+// set registers observer unless another observer already registered first.
+func (o *connectionAttemptObserver) set(observer ConnectionObserver) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.observer == nil {
+		o.observer = observer
+	}
+}
+
+// begin starts an observed attempt for the caller context, or reports false
+// when the observer is absent or already disarmed.
+func (o *connectionAttemptObserver) begin(ctx context.Context) (*connectionAttempt, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.observer == nil || o.done {
+		return nil, false
+	}
+	attemptCtx, cancel := context.WithCancel(ctx)
+	attempt := &connectionAttempt{
+		observer: o,
+		ctx:      attemptCtx,
+		cancel:   cancel,
+		started:  time.Now(),
+		report:   o.observer,
+	}
+	if o.active == nil {
+		o.active = make(map[*connectionAttempt]context.CancelFunc)
+	}
+	o.active[attempt] = cancel
+	return attempt, true
+}
+
+// cancelActive cancels every in-flight observed attempt, which makes the
+// attempt report Cancelled once it unwinds.
+func (o *connectionAttemptObserver) cancelActive() {
+	o.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(o.active))
+	for _, cancel := range o.active {
+		cancels = append(cancels, cancel)
+	}
+	o.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+}
+
+// connectionAttempt tracks one initial connection attempt for reporting.
+type connectionAttempt struct {
+	observer *connectionAttemptObserver
+	ctx      context.Context
+	cancel   context.CancelFunc
+	started  time.Time
+	report   ConnectionObserver
+	once     sync.Once
+}
+
+// succeed reports a completed connection and installation.
+func (a *connectionAttempt) succeed() {
+	a.finish(ConnectionAttemptOutcomeSuccess)
+}
+
+// finishUnsuccessful reports Failure, or Cancelled when the attempt context
+// ended. It is meant to be deferred so every early return is covered; a prior
+// success wins because outcomes are reported at most once.
+func (a *connectionAttempt) finishUnsuccessful() {
+	if a == nil {
+		return
+	}
+	if a.ctx.Err() != nil {
+		a.finish(ConnectionAttemptOutcomeCancelled)
+		return
+	}
+	a.finish(ConnectionAttemptOutcomeFailure)
+}
+
+func (a *connectionAttempt) finish(outcome ConnectionAttemptOutcome) {
+	if a == nil {
+		return
+	}
+	a.once.Do(func() {
+		a.observer.mu.Lock()
+		delete(a.observer.active, a)
+		if outcome != ConnectionAttemptOutcomeFailure {
+			a.observer.done = true
+		}
+		a.observer.mu.Unlock()
+		if a.report != nil {
+			a.report(time.Since(a.started), outcome)
+		}
+	})
+}
+
+// release ends the attempt context once the connection is finished. The
+// context must outlive the connection: cancelling it tears down the transport.
+func (a *connectionAttempt) release() {
+	if a != nil {
+		a.cancel()
+	}
+}
+
 // LastReadyInfo returns a snapshot of the last accepted Ready report.
 //
 // nil means no Ready report has been accepted, including for ordinary
@@ -423,6 +557,9 @@ type EnvironmentManager struct {
 	// environment (Rust EnvironmentManager::default_environment).
 	providerDefault execserverclient.EnvironmentDefault
 	hasProvider     bool
+	// connectionObservers holds the one-shot initial connection observers,
+	// registered through ObserveConnectionAttempts (Rust #52724).
+	connectionObservers map[string]*connectionAttemptObserver
 }
 
 func NewEnvironmentManager(defaultShell EnvironmentShellInfo, defaultCWD string) *EnvironmentManager {
@@ -431,10 +568,11 @@ func NewEnvironmentManager(defaultShell EnvironmentShellInfo, defaultCWD string)
 
 func NewEnvironmentManagerWithHTTPClient(defaultShell EnvironmentShellInfo, defaultCWD string, httpClient *http.Client) *EnvironmentManager {
 	return &EnvironmentManager{
-		defaultShell: defaultShell,
-		defaultCWD:   pathURI(defaultCWD),
-		records:      map[string]EnvironmentRecord{},
-		httpClient:   httpClient,
+		defaultShell:        defaultShell,
+		defaultCWD:          pathURI(defaultCWD),
+		records:             map[string]EnvironmentRecord{},
+		httpClient:          httpClient,
+		connectionObservers: map[string]*connectionAttemptObserver{},
 	}
 }
 
@@ -456,6 +594,7 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 		// `skills.required` value that `environments.toml` sets statically.
 		RequiredSkills: requiredEnvironmentSkills(params.Skills),
 	}
+	m.cancelConnectionAttempts(record.EnvironmentID)
 	m.records[record.EnvironmentID] = record
 	return &EnvironmentAddResponse{}, nil
 }
@@ -512,6 +651,68 @@ func (m *EnvironmentManager) RequiredSkills(environmentID string) []string {
 	return append([]string(nil), record.RequiredSkills...)
 }
 
+// ObserveConnectionAttempts observes the environment's initial exec-server
+// connection attempts, reporting elapsed time and the outcome of each attempt
+// through client installation (Rust #52724). Register before connecting; the
+// first observer wins, and past attempts, later reconnections, and unknown
+// environments are ignored. Failed startup attempts keep the observer armed so
+// a retry can report Success, while Success or Cancelled disarms it.
+func (m *EnvironmentManager) ObserveConnectionAttempts(environmentID string, observer ConnectionObserver) {
+	if m == nil || observer == nil {
+		return
+	}
+	environmentID = strings.TrimSpace(environmentID)
+	if environmentID == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.records[environmentID]; !ok {
+		return
+	}
+	slot := m.connectionObservers[environmentID]
+	if slot == nil {
+		slot = &connectionAttemptObserver{}
+		m.connectionObservers[environmentID] = slot
+	}
+	slot.set(observer)
+}
+
+// beginConnectionAttempt arms an observed attempt for the first connection
+// path that reaches a transport. Environments without a registered observer
+// keep the caller context unchanged.
+func (m *EnvironmentManager) beginConnectionAttempt(ctx context.Context, environmentID string) (context.Context, *connectionAttempt) {
+	if m == nil {
+		return ctx, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	slot := m.connectionObservers[environmentID]
+	if slot == nil {
+		return ctx, nil
+	}
+	attempt, ok := slot.begin(ctx)
+	if !ok {
+		return ctx, nil
+	}
+	return attempt.ctx, attempt
+}
+
+// cancelConnectionAttempts cancels in-flight initial attempts and forgets the
+// observer slot when an environment is replaced or removed. A replacement is
+// a cancelled startup, so the attempt reports Cancelled once (Rust #52724).
+func (m *EnvironmentManager) cancelConnectionAttempts(environmentID string) {
+	if m == nil {
+		return
+	}
+	slot := m.connectionObservers[environmentID]
+	if slot == nil {
+		return
+	}
+	delete(m.connectionObservers, environmentID)
+	slot.cancelActive()
+}
+
 func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) error {
 	environmentID = strings.TrimSpace(environmentID)
 	if environmentID == "" {
@@ -522,6 +723,7 @@ func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverc
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cancelConnectionAttempts(environmentID)
 	m.records[environmentID] = EnvironmentRecord{
 		EnvironmentID: environmentID,
 		NoiseProvider: provider,
@@ -594,6 +796,7 @@ func (m *EnvironmentManager) RegisterDeferredNoiseEnvironment(environmentID stri
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.cancelConnectionAttempts(environmentID)
 	state := newProvisioningState()
 	m.records[environmentID] = EnvironmentRecord{
 		EnvironmentID: environmentID,
@@ -912,7 +1115,8 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 		}
 	}
 	if !record.InfoOverride {
-		info, err := fetchRemoteEnvironmentInfo(ctx, &record)
+		attemptCtx, attempt := m.beginConnectionAttempt(ctx, params.EnvironmentID)
+		info, err := fetchRemoteEnvironmentInfo(attemptCtx, &record, attempt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get info for environment `%s`: %w", params.EnvironmentID, err)
 		}
@@ -974,7 +1178,8 @@ func (m *EnvironmentManager) StatusContext(ctx context.Context, params *Environm
 	if strings.TrimSpace(record.ExecServerURL) == "" && record.NoiseProvider == nil && !recordUsesStdioTransport(&record) {
 		return &EnvironmentStatusResponse{Status: EnvironmentStatusPending}, nil
 	}
-	status, err := fetchRemoteEnvironmentStatus(ctx, &record)
+	attemptCtx, attempt := m.beginConnectionAttempt(ctx, params.EnvironmentID)
+	status, err := fetchRemoteEnvironmentStatus(attemptCtx, &record, attempt)
 	if err != nil {
 		return &EnvironmentStatusResponse{
 			Status: EnvironmentStatusDisconnected,
@@ -1023,6 +1228,7 @@ func (m *EnvironmentManager) Remove(environmentID string) bool {
 	if _, ok := m.records[environmentID]; !ok {
 		return false
 	}
+	m.cancelConnectionAttempts(environmentID)
 	delete(m.records, environmentID)
 	return true
 }
@@ -1136,10 +1342,12 @@ type execServerJSONRPCResponse struct {
 	Params *json.RawMessage `json:"params,omitempty"`
 }
 
-func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) (*EnvironmentInfoResponse, error) {
+func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord, attempt *connectionAttempt) (*EnvironmentInfoResponse, error) {
 	if record == nil {
 		return nil, errors.New("environment record is nil")
 	}
+	defer attempt.release()
+	defer attempt.finishUnsuccessful()
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	if record.NoiseProvider != nil {
@@ -1147,6 +1355,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		if err != nil {
 			return nil, err
 		}
+		attempt.succeed()
 		defer client.Close()
 		info, err := client.EnvironmentInfo(ctx)
 		if err != nil {
@@ -1171,6 +1380,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 		if err != nil {
 			return nil, err
 		}
+		attempt.succeed()
 		defer client.Close()
 		info, err := client.EnvironmentInfo(ctx)
 		if err != nil {
@@ -1212,6 +1422,7 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 	}); err != nil {
 		return nil, err
 	}
+	attempt.succeed()
 	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      2,
@@ -1233,10 +1444,12 @@ func fetchRemoteEnvironmentInfo(ctx context.Context, record *EnvironmentRecord) 
 	return &info, nil
 }
 
-func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord) (*EnvironmentStatusResponse, error) {
+func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord, attempt *connectionAttempt) (*EnvironmentStatusResponse, error) {
 	if record == nil {
 		return nil, errors.New("environment record is nil")
 	}
+	defer attempt.release()
+	defer attempt.finishUnsuccessful()
 	ctx, cancel := context.WithTimeout(ctx, environmentConnectDeadlineForRecord(record))
 	defer cancel()
 	if record.NoiseProvider != nil {
@@ -1244,6 +1457,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 		if err != nil {
 			return nil, err
 		}
+		attempt.succeed()
 		defer client.Close()
 		status, err := client.EnvironmentStatus(ctx)
 		if err != nil {
@@ -1259,6 +1473,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 			}
 			return nil, err
 		}
+		attempt.succeed()
 		defer client.Close()
 		status, err := client.EnvironmentStatus(ctx)
 		if err != nil {
@@ -1296,6 +1511,7 @@ func fetchRemoteEnvironmentStatus(ctx context.Context, record *EnvironmentRecord
 	}); err != nil {
 		return nil, err
 	}
+	attempt.succeed()
 	if err := writeExecServerJSON(ctx, conn, &execServerJSONRPCRequest{
 		JSONRPC: "2.0",
 		ID:      2,
