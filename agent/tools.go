@@ -79,6 +79,9 @@ type SpawnAgentArgs struct {
 	NicknameCandidates    []string `json:"-"`
 	DeveloperInstructions *string  `json:"-"`
 	Plaintext             bool     `json:"-"`
+	// DisabledPluginIDs is the spawning turn's explicit plugin selection.
+	// Omission inherits that turn's current choices; an empty list overrides.
+	DisabledPluginIDs *[]string `json:"-"`
 }
 
 type SpawnAgentResult struct {
@@ -304,14 +307,14 @@ func RegisterMultiAgentHandlers(registry *tool.Registry, controller ToolControll
 }
 
 type MultiAgentHandlerOptions struct {
-	Controller                ToolController
-	Exposure                  tool.Exposure
-	Version                   MultiAgentVersion
-	Namespace                 string
-	UsageHintText             *string
-	Roles                     map[string]RoleConfig
-	Defaults                  SpawnDefaults
-	DisableWaitAgent          bool
+	Controller       ToolController
+	Exposure         tool.Exposure
+	Version          MultiAgentVersion
+	Namespace        string
+	UsageHintText    *string
+	Roles            map[string]RoleConfig
+	Defaults         SpawnDefaults
+	DisableWaitAgent bool
 	// DisableDirectMessage omits the V2 send_message/followup_task tools
 	// (Rust #47540 `features.multi_agent_v2.disable_direct_message`).
 	DisableDirectMessage      bool

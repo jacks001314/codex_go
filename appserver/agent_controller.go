@@ -40,6 +40,7 @@ type runtimeAgentController struct {
 	maxDepth           int
 	version            agent.MultiAgentVersion
 	environments       []map[string]any
+	disabledPluginIDs  []string
 	registry           *agent.Registry
 }
 
@@ -173,6 +174,12 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if len(inheritedEnvironments) > 0 {
 		extra[runtimeEnvironmentSelectionsExtraKey] = cloneMapSlice(inheritedEnvironments)
 	}
+	disabledPluginIDs, inheritDisabledPluginIDs := c.spawnDisabledPluginIDs(args)
+	if inheritDisabledPluginIDs {
+		// Rust #52241: plugin choices belong to the spawning turn and are
+		// independent of whether forked history was copied.
+		extra["disabled_plugin_ids"] = append([]string{}, disabledPluginIDs...)
+	}
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
 	if c.version == agent.VersionV2 && forkTurns != "none" {
@@ -244,6 +251,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	prompt := agentStringValue(args.Message)
 	if prompt != "" || len(args.Items) > 0 {
 		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
+		if inheritDisabledPluginIDs {
+			values := append([]string{}, disabledPluginIDs...)
+			params.DisabledPluginIDs = &values
+		}
 		if c.version == agent.VersionV2 {
 			// Rust #51402 `tasks/mod.rs`: a turn triggered by an inter-agent
 			// communication records that communication's author as its
@@ -290,6 +301,16 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		Model:           modelID,
 		ReasoningEffort: c.resolvedSpawnReasoningEffort(modelID, args, capturedEffort),
 	}, nil
+}
+
+func (c *runtimeAgentController) spawnDisabledPluginIDs(args *agent.SpawnAgentArgs) ([]string, bool) {
+	if args != nil && args.DisabledPluginIDs != nil {
+		return append([]string{}, (*args.DisabledPluginIDs)...), true
+	}
+	if c == nil || c.disabledPluginIDs == nil {
+		return nil, false
+	}
+	return append([]string{}, c.disabledPluginIDs...), true
 }
 
 // resolvedSpawnReasoningEffort mirrors Rust #51463: the child's resolved startup

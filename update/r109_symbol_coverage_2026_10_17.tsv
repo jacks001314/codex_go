@@ -1393,7 +1393,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8436b749a410133c58ec61fe89db07496ca22033	42132	Bound Git root discovery for metadata enrichment (#42132)	2026-09-01	guardian	4	1	0.25	0	0	audit_pending	GitRootDiscovery,git_root_discovery,spawn_git_enrichment_task
 8444cf63b50a8a88521e0d2970d49f659b48eac7	40551	Derive sandbox contexts from turn environments (#40551)	2026-08-25	tui	1	1	1.00	0	0	complete	
 8452164c761c9225b2ee12c2bd1d48f818573704	46081	Mark finished empty Code Mode tool inventories as complete (#46081)	2026-09-17	model	0	0		0	0	not_applicable	
-845345b1dd4f8e2a5d5ce91363fff666e41b07fc	52241	Preserve subagent capabilities independently of forked history (#52241)	2026-10-08	appserver	1	0	0.00	0	0	implementation_pending	spawn_child_thread
+845345b1dd4f8e2a5d5ce91363fff666e41b07fc	52241	Preserve subagent capabilities independently of forked history (#52241)	2026-10-08	appserver	1	0	0.00	0	0	complete	spawn_child_thread
 8476434a97d308cb746a8cd5f247a724fd59591e	40497	Harden internal Guardian session isolation (#40497)	2026-08-24	guardian	1	1	1.00	0	0	complete	
 84aa75204ad604bcf498df180d128181c89b2f0b	42109	Format Python scripts across the repository (#42109)	2026-09-01	appserver	0	0		0	0	not_applicable	
 84c989acf9af93f35c2f3c36b297cd4dc0f830b3	40296	Annotate Responses Lite base instructions (#40296)	2026-08-23	core	1	1	1.00	0	0	complete	

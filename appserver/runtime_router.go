@@ -7579,14 +7579,16 @@ func (r *RuntimeRouter) threadDisabledPluginIDs(threadID string) []string {
 			return active
 		}
 	}
+	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
+	if err == nil && record != nil && record.Metadata.Extra != nil {
+		if raw, present := record.Metadata.Extra["disabled_plugin_ids"]; present {
+			return stringSliceFromAny(raw)
+		}
+	}
 	if settings := r.threadSettingsForTurn(threadID); settings != nil && settings.DisabledPluginIDs != nil {
 		return append([]string{}, settings.DisabledPluginIDs...)
 	}
-	record, err := r.threadRecord(session.ThreadID(threadID), false, false)
-	if err != nil || record == nil {
-		return nil
-	}
-	return stringSliceFromAny(record.Metadata.Extra["disabled_plugin_ids"])
+	return nil
 }
 
 func applyThreadSettingsToTurnStartParams(params *turn.TurnStartParams, settings *Settings) {
@@ -14773,6 +14775,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.AgentController = newRuntimeAgentControllerForTurn(r, threadID, turnID, effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, ""), params.TurnTrigger, parentProgram, cwd, maxThreads, version, params.Environments)
 			if runtimeController, ok := options.AgentController.(*runtimeAgentController); ok {
 				runtimeController.maxDepth = maxDepth
+				runtimeController.disabledPluginIDs = r.threadDisabledPluginIDs(threadID)
 			}
 			options.AgentRoles = agentsConfig.Roles
 			options.AgentDefaults = defaults
