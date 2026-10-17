@@ -15399,9 +15399,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ThreadStartupMetadata, startup_metadata, to_session_configured_event"
+        "Round 115 (lead): N/A (verified carrier absence) - #46294 introduces Rust ThreadStartupMetadata and separates it from replay history carried on SessionConfiguredEvent. Go has no SessionConfiguredEvent, ThreadStartupMetadata, startup_metadata or toSessionConfiguredEvent; thread startup/resume return typed protocol responses and replay history through thread/turn read APIs. There is no startup-event replay payload to separate or retain. go build ./appserver green."
       ]
     },
     {

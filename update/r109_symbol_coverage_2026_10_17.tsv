@@ -239,7 +239,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 171dd0d39c4b5fffc3e27c870f77c47670951f09	47122	Increase OpenAI file blob upload timeout from 60 seconds to 5 minutes (#47122)	2026-09-21	core	0	0		0	0	not_applicable	
 172f8a2901119ceab4d8552e906ea65d98626076	46069	Use syntax theme colors for inline code and file paths (#46069)	2026-09-17	tui	0	0		0	0	not_applicable	
 17a9df60e420b58e3edc55efb1bb052e39492bbc	49403	Add an experimental flag for bundled tools in login shells (#49403)	2026-09-29	tui	0	0		0	0	not_applicable	
-17baabd01b3131a8d07327185a00cb2a771ff1a7	46294	Separate thread startup metadata from replay history (#46294)	2026-09-17	guardian	3	0	0.00	0	0	implementation_pending	ThreadStartupMetadata,startup_metadata,to_session_configured_event
+17baabd01b3131a8d07327185a00cb2a771ff1a7	46294	Separate thread startup metadata from replay history (#46294)	2026-09-17	guardian	3	0	0.00	0	0	not_applicable	ThreadStartupMetadata,startup_metadata,to_session_configured_event
 17c4c47dfa87ea4a6cb6d0f1630f32abffc2cbb2	40677	Default durable threads to paginated history (#40677)	2026-08-25	guardian	0	0		0	0	not_applicable	
 17cd2834e3d38706cead62cb97b8b403d3b8a4ec	47695	Repair rejected Windows sandbox credentials during provisioning (#47695)	2026-09-23	sandbox	1	1	0.50	0	0	partial	provisioning-side completed-setup credential probe (no Go carrier)
 17e5a4dbcb4106955dad3e6a661459c77193ea1d	49706	Upgrade the argument comment lint toolchain and Dylint (#49706)	2026-09-30	core	0	0		0	0	not_applicable	
