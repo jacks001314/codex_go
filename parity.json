@@ -1630,6 +1630,14 @@
             "reason": "Aligned upstream 3801fc8dea (#46660 Make local child process launch settings explicit): Go's local MCP launcher supplies an explicit environment and argv, owns piped stdio, creates a Unix process group, and uses Windows CREATE_SUSPENDED plus a kill-on-job-close Job Object before resume. Teardown reaches descendants. The Rust ChildKind/NativeChild backend-selection wrappers are represented by Go's platform-specific process files.",
             "userImpact": "Local MCP children have one explicit launch and containment contract across Unix and Windows, preventing descendant leaks on shutdown.",
             "test": "go test ./mcp -run 'StdioProcess|StdioCommand|TerminationReaches|Containment|ProcessGroup' -count=1"
+        },
+        {
+            "id": "resolved-step-settings-snapshot",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 68301fa45f (#40651 Snapshot resolved settings for each model step): turn.AgentStepSettings captures model, reasoning effort, reasoning summary, service tier, and client metadata, and AgentLoop applies that immutable snapshot to the following request. App-server step resolution preserves config/model defaults, observes mid-turn summary updates, re-filters service tiers for the updated model, and uses the per-turn model catalog during filtering.",
+            "userImpact": "Mid-turn model/settings changes affect only subsequent model steps and use options valid for the newly selected model.",
+            "test": "go test ./turn -count=1; go test ./appserver -run 'StepSettings|RefreshesStep|ServiceTier' -count=1"
         }
     ]
 }

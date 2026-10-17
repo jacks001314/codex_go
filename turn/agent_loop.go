@@ -114,9 +114,11 @@ type AgentLoop struct {
 // turn/settings/update applies to the following step instead of only to the
 // next turn.
 type AgentStepSettings struct {
-	Model           string
-	ReasoningEffort string
-	ClientMetadata  map[string]string
+	Model            string
+	ReasoningEffort  string
+	ReasoningSummary string
+	ServiceTier      string
+	ClientMetadata   map[string]string
 }
 
 type AgentLoopRequest struct {
@@ -333,12 +335,16 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		// steps keep it because the steer path records it on the turn.
 		stepModel := strings.TrimSpace(request.Model)
 		stepReasoningEffort := request.ReasoningEffort
+		stepReasoningSummary := request.ReasoningSummary
+		stepServiceTier := request.ServiceTier
 		if iteration > 0 && request.StepSettings != nil {
 			if settings := request.StepSettings(); settings != nil {
 				if modelID := strings.TrimSpace(settings.Model); modelID != "" {
 					stepModel = modelID
 				}
 				stepReasoningEffort = settings.ReasoningEffort
+				stepReasoningSummary = settings.ReasoningSummary
+				stepServiceTier = settings.ServiceTier
 				if len(settings.ClientMetadata) > 0 {
 					clientMetadata = transformClientMetadata(settings.ClientMetadata, request.ClientMetadataTransform)
 				}
@@ -476,14 +482,14 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			PreviousResponseID:           previousResponseID,
 			ParallelToolCalls:            request.ParallelToolCalls,
 			ReasoningEffort:              stepReasoningEffort,
-			ReasoningSummary:             request.ReasoningSummary,
+			ReasoningSummary:             stepReasoningSummary,
 			DropReasoningEffortUpdates:   request.DropReasoningEffortUpdates,
 			ConcurrentReasoningSummaries: request.ConcurrentReasoningSummaries,
 			ModelVerbosity:               request.ModelVerbosity,
 			IncludeTimingMetrics:         request.IncludeTimingMetrics,
 			BetaFeaturesHeader:           request.BetaFeaturesHeader,
 			ItemIDsEnabled:               request.ItemIDsEnabled,
-			ServiceTier:                  request.ServiceTier,
+			ServiceTier:                  stepServiceTier,
 			PromptCacheKey:               request.PromptCacheKey,
 			CyberAccessProgram:           request.CyberAccessProgram,
 			ClientMetadata:               cloneStringMap(clientMetadata),

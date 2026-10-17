@@ -1080,7 +1080,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 67a709665ac7b50311b93e32612c9a8281684787	48646	Fix the session-start helper call in the command center test (#48646)	2026-09-27	tui	0	0		0	0	not_applicable	
 67cc3c318dc8b5532db6ade4182b1dc6f3870889	42082	Attribute nested REPL reviews to their tool calls (#42082)	2026-09-01	guardian	0	0		0	0	not_applicable	
 6824dabe0393337a38cb257d5fe75ae5ca168470	47597	Guard prerelease channel and canary updates against older versions (#47597)	2026-09-23	core	0	0		0	0	not_applicable	
-68301fa45f0d8b692ff821c20073e747fe19250d	40651	Snapshot resolved settings for each model step (#40651)	2026-08-25	guardian	13	11	0.85	0	0	audit_pending	resolve_model_info,selected_collaboration_mode
+68301fa45f0d8b692ff821c20073e747fe19250d	40651	Snapshot resolved settings for each model step (#40651)	2026-08-25	guardian	13	13	1.00	0	0	complete	
 685270a56a96c76ae5b0853373a19d6ed5bc6fd4	51203	Make apply_patch preserve line endings unconditionally (#51203)	2026-10-05	appserver	1	1	1.00	0	0	complete	
 68bc5369ba0e694909b61603554d6622009b0cab	44870	Enable worktrees by default and clarify local daemon errors (#44870)	2026-09-11	tui	1	0	0.00	0	0	implementation_pending	background_terminals_blocker
 68c9556cdf14c069e289904ed087f62205c4ba91	42149	Upgrade Git marketplaces from merged configuration (#42149)	2026-09-01	appserver	5	1	0.20	0	0	audit_pending	ConfigLayerReload,PluginStartupConfig,config_builder,for_cwd

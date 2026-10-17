@@ -8591,10 +8591,34 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 		if active.RunConfig != nil {
 			settings.Model = strings.TrimSpace(active.RunConfig.Model)
 			settings.ReasoningEffort = strings.TrimSpace(active.RunConfig.ReasoningEffort)
+			settings.ReasoningSummary = strings.TrimSpace(active.RunConfig.ReasoningSummary)
+			settings.ServiceTier = strings.TrimSpace(active.RunConfig.ServiceTier)
 			settings.ClientMetadata = stepTurnClientMetadata(active.RunConfig.ClientMetadata, settings.Model, settings.ReasoningEffort)
 		}
 		if settings.Model == "" && active.Params != nil {
 			settings.Model = strings.TrimSpace(active.Params.Model)
+		}
+		if cfg, err := r.effectiveConfigForTurn(active.Params); err == nil && cfg != nil {
+			if (active.Params != nil && active.Params.Summary != nil) ||
+				stringConfigValue(cfg, "model_reasoning_summary") != "" {
+				settings.ReasoningSummary = turnReasoningSummary(cfg, active.Params)
+			}
+			serviceTierSet := false
+			if active.Params != nil &&
+				(active.Params.ServiceTierForTurn != nil || active.Params.ServiceTierSet || active.Params.ServiceTier != nil) {
+				serviceTierSet = true
+			}
+			rootTier := r.subagentRootServiceTier(threadID)
+			if rootTier != "" || stringConfigValue(cfg, "service_tier") != "" || stringConfigValue(cfg, "serviceTier") != "" {
+				serviceTierSet = true
+			}
+			if serviceTierSet {
+				settings.ServiceTier = r.appServiceTierForTurn(cfg, active.Params, settings.Model)
+			}
+			if rootTier != "" {
+				info := r.modelInfoForRuntimeWithConfig(settings.Model, cfg)
+				settings.ServiceTier = model.ServiceTierForConfiguredRequest(info, rootTier, features.Enabled(cfg.FeatureSettings(), "fast_mode"))
+			}
 		}
 		return settings
 	}
@@ -11566,7 +11590,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 		// Rust applies TurnStartOptions.service_tier to the turn's settings copy
 		// after persisting the thread settings, so a per-turn override wins for
 		// this turn without changing the thread's tier (turn_context.rs).
-		info := r.modelInfoForRuntime(modelID)
+		info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 		return model.ServiceTierForRequest(info, stringPtrValue(params.ServiceTierForTurn))
 	}
 	settings := map[string]bool{}
@@ -11582,7 +11606,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 			requested = stringPtrValue(params.ServiceTier)
 		}
 		if params.ServiceTierSet || params.ServiceTier != nil {
-			info := r.modelInfoForRuntime(modelID)
+			info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 			return model.ServiceTierForRequest(info, requested)
 		}
 	}
@@ -11593,7 +11617,7 @@ func (r *RuntimeRouter) appServiceTierForTurn(cfg *config.Config, params *turn.T
 	if value == "" {
 		return ""
 	}
-	info := r.modelInfoForRuntime(modelID)
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
 	// Rust #46230: a configured flex tier survives a disabled fast mode.
 	return model.ServiceTierForConfiguredRequest(info, value, fastModeEnabled)
 }

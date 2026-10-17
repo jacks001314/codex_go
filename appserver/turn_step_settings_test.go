@@ -26,8 +26,10 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 	}
 	if !router.threads.UpdateTurn("thread-1", "turn-1", func(active *activeRuntimeTurn) {
 		active.RunConfig = &appTurnRunConfig{
-			Model:           "gpt-initial",
-			ReasoningEffort: "low",
+			Model:            "gpt-initial",
+			ReasoningEffort:  "low",
+			ReasoningSummary: "concise",
+			ServiceTier:      "",
 			ClientMetadata: map[string]string{
 				codexapi.ClientCodexTurnMetadataHeader: `{"thread_id":"thread-1","model":"gpt-initial","reasoning_effort":"low","codex_version":"1.2.3"}`,
 			},
@@ -52,7 +54,7 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 		Effort:   &effort,
 	})
 	after := provider()
-	if after.Model != "gpt-updated" || after.ReasoningEffort != "high" {
+	if after.Model != "gpt-updated" || after.ReasoningEffort != "high" || after.ReasoningSummary != "concise" {
 		t.Fatalf("updated step settings = %#v", after)
 	}
 	metadata := after.ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]
@@ -84,6 +86,16 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 	})
 	if metadata := provider().ClientMetadata[codexapi.ClientCodexTurnMetadataHeader]; strings.Contains(metadata, "reasoning_effort") {
 		t.Fatalf("cleared step metadata = %q", metadata)
+	}
+
+	summary := "detailed"
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Summary:  &summary,
+	})
+	if got := provider().ReasoningSummary; got != summary {
+		t.Fatalf("updated reasoning summary = %q, want %q", got, summary)
 	}
 
 	// A turn that is no longer active reports nothing.
@@ -129,6 +141,66 @@ func TestCurrentTurnModelLikeRust(t *testing.T) {
 	}
 	if got := router.currentTurnModel("thread-1", "turn-1"); got != "" {
 		t.Fatalf("currentTurnModel(completed) = %q, want empty", got)
+	}
+}
+
+func TestTurnStepSettingsRefilterServiceTierForUpdatedModelLikeRust(t *testing.T) {
+	dir := t.TempDir()
+	catalogPath := filepath.Join(dir, "models.json")
+	catalog := model.ModelsResponse{Models: []model.ModelInfo{
+		{Slug: "gpt-priority", ServiceTiers: []string{"priority"}},
+		{Slug: "gpt-no-tier"},
+	}}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalogPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{})
+	tier := "priority"
+	params := &turn.TurnStartParams{
+		ThreadID:       "thread-step-tier",
+		Model:          "gpt-priority",
+		ServiceTier:    &tier,
+		ServiceTierSet: true,
+		Config: map[string]any{
+			"model_catalog_json": catalogPath,
+			"features": map[string]any{
+				"fast_mode": map[string]any{"enabled": true},
+			},
+		},
+	}
+	if err := router.threads.RegisterTurn(params.ThreadID, "turn-step-tier", nil, 0, params); err != nil {
+		t.Fatal(err)
+	}
+	if !router.threads.UpdateTurn(params.ThreadID, "turn-step-tier", func(active *activeRuntimeTurn) {
+		active.RunConfig = &appTurnRunConfig{Model: "gpt-priority", ServiceTier: "priority"}
+	}) {
+		t.Fatal("UpdateTurn() did not find the registered turn")
+	}
+	provider := router.turnStepSettingsProvider(params.ThreadID, "turn-step-tier")
+	if got := provider().ServiceTier; got != "priority" {
+		t.Fatalf("initial service tier = %q, want priority", got)
+	}
+	modelID := "gpt-no-tier"
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID: params.ThreadID,
+		TurnID:   "turn-step-tier",
+		Model:    &modelID,
+	})
+	if got := provider().ServiceTier; got != "" {
+		t.Fatalf("unsupported model service tier = %q, want empty", got)
+	}
+	modelID = "gpt-priority"
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID: params.ThreadID,
+		TurnID:   "turn-step-tier",
+		Model:    &modelID,
+	})
+	if got := provider().ServiceTier; got != "priority" {
+		t.Fatalf("restored model service tier = %q, want priority", got)
 	}
 }
 

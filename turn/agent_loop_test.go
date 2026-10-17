@@ -895,17 +895,21 @@ func TestAgentLoopRefreshesStepSettingsLikeRust(t *testing.T) {
 
 	stepCalls := 0
 	_, err := loop.Run(context.Background(), &AgentLoopRequest{
-		Prompt:          "run echo",
-		Model:           "gpt-initial",
-		ReasoningEffort: "low",
+		Prompt:           "run echo",
+		Model:            "gpt-initial",
+		ReasoningEffort:  "low",
+		ReasoningSummary: "concise",
+		ServiceTier:      "flex",
 		ClientMetadata: map[string]string{
 			"x-codex-turn-metadata": `{"thread_id":"thread-1","model":"gpt-initial","reasoning_effort":"low"}`,
 		},
 		StepSettings: func() *AgentStepSettings {
 			stepCalls++
 			return &AgentStepSettings{
-				Model:           "gpt-updated",
-				ReasoningEffort: "high",
+				Model:            "gpt-updated",
+				ReasoningEffort:  "high",
+				ReasoningSummary: "detailed",
+				ServiceTier:      "priority",
 				ClientMetadata: map[string]string{
 					"x-codex-turn-metadata": `{"thread_id":"thread-1","model":"gpt-updated","reasoning_effort":"high"}`,
 				},
@@ -918,12 +922,14 @@ func TestAgentLoopRefreshesStepSettingsLikeRust(t *testing.T) {
 	if len(agent.requests) != 2 {
 		t.Fatalf("sampling requests = %d, want 2", len(agent.requests))
 	}
-	if first := agent.requests[0]; first.Model != "gpt-initial" || first.ReasoningEffort != "low" {
-		t.Fatalf("first step settings = %q/%q, want the turn's initial ones", first.Model, first.ReasoningEffort)
+	if first := agent.requests[0]; first.Model != "gpt-initial" || first.ReasoningEffort != "low" ||
+		first.ReasoningSummary != "concise" || first.ServiceTier != "flex" {
+		t.Fatalf("first step settings = %q/%q/%q/%q, want the turn's initial ones", first.Model, first.ReasoningEffort, first.ReasoningSummary, first.ServiceTier)
 	}
 	second := agent.requests[1]
-	if second.Model != "gpt-updated" || second.ReasoningEffort != "high" {
-		t.Fatalf("second step settings = %q/%q, want the updated ones", second.Model, second.ReasoningEffort)
+	if second.Model != "gpt-updated" || second.ReasoningEffort != "high" ||
+		second.ReasoningSummary != "detailed" || second.ServiceTier != "priority" {
+		t.Fatalf("second step settings = %q/%q/%q/%q, want the updated ones", second.Model, second.ReasoningEffort, second.ReasoningSummary, second.ServiceTier)
 	}
 	if metadata := second.ClientMetadata["x-codex-turn-metadata"]; !strings.Contains(metadata, "gpt-updated") {
 		t.Fatalf("second step metadata = %q, want the updated model", metadata)
