@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/gitutil"
 	"codex_go/mcp"
 	"codex_go/protocol"
 	"codex_go/rollout"
@@ -5701,6 +5702,12 @@ func MetadataPatchToSessionWithExisting(params *ThreadMetadataUpdateParams, exis
 		if err != nil {
 			return session.MetadataPatch{}, err
 		}
+		if value != "" {
+			value, err = gitutil.SanitizeGitURL(value)
+			if err != nil {
+				return session.MetadataPatch{}, fmt.Errorf("gitInfo.originUrl: %w", err)
+			}
+		}
 		patch.Git["origin_url"] = value
 	}
 	return patch, nil
@@ -6074,9 +6081,13 @@ func gitInfoFromMap(values map[string]string) *GitInfo {
 		return nil
 	}
 	info := &GitInfo{
-		SHA:       stringPtrIfNotEmpty(values["sha"]),
-		Branch:    stringPtrIfNotEmpty(values["branch"]),
-		OriginURL: stringPtrIfNotEmpty(firstNonEmpty(values["origin_url"], values["originUrl"])),
+		SHA:    stringPtrIfNotEmpty(values["sha"]),
+		Branch: stringPtrIfNotEmpty(values["branch"]),
+	}
+	if origin := strings.TrimSpace(firstNonEmpty(values["origin_url"], values["originUrl"])); origin != "" {
+		if sanitized, err := gitutil.SanitizeGitURL(origin); err == nil {
+			info.OriginURL = &sanitized
+		}
 	}
 	if info.SHA == nil && info.Branch == nil && info.OriginURL == nil {
 		return nil

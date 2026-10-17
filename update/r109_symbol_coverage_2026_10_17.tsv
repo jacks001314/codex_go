@@ -283,7 +283,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1b6e0d8145e1fe5b2663d32fbe7ee02f51a10e1c	53831	Track content provenance through prompt assembly and compaction (#53831)	2026-10-14	guardian	30	15	0.50	0	0	complete	AttributedFragment,ContentItemMetadata,ContentItemNamespace,ContentItemProvenance,HookContext,HookMcpOutput,clear_content_item_metadata,command_hook,into_content,into_parts
 1b83e5cdf99889e72fbf3f92d9848fdf31de652e	44670	Restrict login setup redirects to known platform origins (#44670)	2026-09-10	core	0	0		0	0	not_applicable	
 1badea29abf49e56530a778ac3bb2d3da3bc4d5e	52946	Keep agent command center rows stable across progress updates (#52946)	2026-10-10	tui	0	0		0	0	complete	
-1bc02aea5065dd5d1df540ecc9625794ad7a3172	40713	Sanitize credentials from Git remote metadata (#40713)	2026-08-25	appserver	5	2	0.40	0	0	audit_pending	deserialize_optional_sanitized_git_url,get_git_remote_urls,get_git_remote_urls_assume_git_repo
+1bc02aea5065dd5d1df540ecc9625794ad7a3172	40713	Sanitize credentials from Git remote metadata (#40713)	2026-08-25	appserver	5	2	0.40	0	0	complete	deserialize_optional_sanitized_git_url,get_git_remote_urls,get_git_remote_urls_assume_git_repo
 1bc8fb16ae53512c0c7723a436e4b11be81ad4a8	42309	Separate Windows sandbox provisioning from ACL refresh (#42309)	2026-09-02	tui	2	1	0.50	0	0	audit_pending	prepare_elevated_sandbox
 1bd1bfa7ca4cd15f0dbf5efb8a28b9142c961d37	46125	Fix daemon socket isolation checks for private tmp mounts (#46125)	2026-09-17	tui	0	0		0	0	not_applicable	
 1bf73324cadc72a53ed467edc7d3fd2b145a6166	48135	Add opt-in code-mode yielding on new user input (#48135)	2026-09-25	config	1	1	1.00	0	0	complete	

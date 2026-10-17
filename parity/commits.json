@@ -2435,10 +2435,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/5; needs review: deserialize_optional_sanitized_git_url, get_git_remote_urls, get_git_remote_urls_assume_git_repo"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Git remote URLs are sanitized before thread metadata persistence, and response projections sanitize stored origins or omit malformed values so credentials do not reach rollout, SQLite, or API payloads."
+        ]
     },
     {
       "sha": "346c4db7c2ee64a56ca75124bfa4cbe27e312f96",

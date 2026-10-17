@@ -18,6 +18,7 @@ import (
 
 	"codex_go/agent"
 	"codex_go/compact"
+	"codex_go/gitutil"
 	"codex_go/mcp"
 	"codex_go/memories"
 	"codex_go/model"
@@ -1015,9 +1016,13 @@ func conversationGitInfoFromMap(values map[string]string) *ConversationGitInfo {
 		return nil
 	}
 	info := &ConversationGitInfo{
-		SHA:       stringPtrIfNotEmpty(values["sha"]),
-		Branch:    stringPtrIfNotEmpty(values["branch"]),
-		OriginURL: stringPtrIfNotEmpty(firstNonEmpty(values["origin_url"], values["originUrl"])),
+		SHA:    stringPtrIfNotEmpty(values["sha"]),
+		Branch: stringPtrIfNotEmpty(values["branch"]),
+	}
+	if origin := strings.TrimSpace(firstNonEmpty(values["origin_url"], values["originUrl"])); origin != "" {
+		if sanitized, err := gitutil.SanitizeGitURL(origin); err == nil {
+			info.OriginURL = &sanitized
+		}
 	}
 	if info.SHA == nil && info.Branch == nil && info.OriginURL == nil {
 		return nil

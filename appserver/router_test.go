@@ -1667,7 +1667,7 @@ func TestRouterSetNameAndMetadata(t *testing.T) {
 
 	metadataJSON := []byte(`{
 		"threadId":"thread-a",
-		"gitInfo":{"sha":"abc","branch":null,"originUrl":"git@example"}
+		"gitInfo":{"sha":"abc","branch":null,"originUrl":"git@example.com:org/repo.git"}
 	}`)
 	request := &Request{ID: IntID(2), Method: MethodThreadMetadataUpdate, Params: metadataJSON}
 	updated := router.Handle(request)
@@ -1684,7 +1684,7 @@ func TestRouterSetNameAndMetadata(t *testing.T) {
 	if record.Metadata.Extra[explicitThreadNameExtraKey] != true {
 		t.Fatalf("explicit name marker = %#v", record.Metadata.Extra)
 	}
-	if record.Metadata.Git["sha"] != "abc" || record.Metadata.Git["branch"] != "" || record.Metadata.Git["origin_url"] != "git@example" {
+	if record.Metadata.Git["sha"] != "abc" || record.Metadata.Git["branch"] != "" || record.Metadata.Git["origin_url"] != "git@example.com:org/repo.git" {
 		t.Fatalf("git = %#v", record.Metadata.Git)
 	}
 
@@ -1747,6 +1747,44 @@ func TestRouterSetNameAndMetadata(t *testing.T) {
 	}
 	if got := read.Result.(*ThreadReadResponse).Thread.GitInfo; got != nil {
 		t.Fatalf("cleared read gitInfo = %+v, want nil", got)
+	}
+}
+
+func TestRouterSanitizesGitOriginURLMetadataLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	router := NewRouter(store)
+	createRecord(t, store, "thread-sanitize", fixedTime())
+
+	metadataJSON := []byte(`{
+		"threadId":"thread-sanitize",
+		"gitInfo":{"originUrl":"https://alice:secret@github.com/org/repo.git"}
+	}`)
+	updated := router.Handle(&Request{ID: IntID(1), Method: MethodThreadMetadataUpdate, Params: metadataJSON})
+	if updated.Error != nil {
+		t.Fatalf("metadata error: %+v", updated.Error)
+	}
+	const want = "https://github.com/org/repo.git"
+	record, err := store.Read("thread-sanitize", true, false)
+	if err != nil {
+		t.Fatalf("Read thread error = %v", err)
+	}
+	if got := record.Metadata.Git["origin_url"]; got != want {
+		t.Fatalf("stored origin_url = %q, want %q", got, want)
+	}
+	read := router.Handle(requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{ThreadID: "thread-sanitize"}))
+	if read.Error != nil {
+		t.Fatalf("thread/read error = %+v", read.Error)
+	}
+	info := read.Result.(*ThreadReadResponse).Thread.GitInfo
+	if info == nil || info.OriginURL == nil || *info.OriginURL != want {
+		t.Fatalf("read gitInfo = %#v, want sanitized origin URL", info)
+	}
+	encoded, err := json.Marshal(read.Result)
+	if err != nil {
+		t.Fatalf("Marshal(thread/read) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "secret") {
+		t.Fatalf("thread/read leaked credentials: %s", encoded)
 	}
 }
 
@@ -2049,7 +2087,7 @@ func TestRouterSetNameAndMetadataRepairRolloutOnlyThread(t *testing.T) {
 
 	metadataJSON := []byte(`{
 		"threadId":"thread-rollout",
-		"gitInfo":{"sha":"abc","branch":null,"originUrl":"git@example"}
+		"gitInfo":{"sha":"abc","branch":null,"originUrl":"git@example.com:org/repo.git"}
 	}`)
 	updated := router.Handle(&Request{ID: IntID(2), Method: MethodThreadMetadataUpdate, Params: metadataJSON})
 	if updated.Error != nil {
@@ -2066,14 +2104,14 @@ func TestRouterSetNameAndMetadataRepairRolloutOnlyThread(t *testing.T) {
 	if record.Title != "Recovered" || record.Preview != "from rollout" || len(record.Items) != 1 {
 		t.Fatalf("record = %+v", record)
 	}
-	if record.Metadata.Git["sha"] != "abc" || record.Metadata.Git["branch"] != "" || record.Metadata.Git["origin_url"] != "git@example" {
+	if record.Metadata.Git["sha"] != "abc" || record.Metadata.Git["branch"] != "" || record.Metadata.Git["origin_url"] != "git@example.com:org/repo.git" {
 		t.Fatalf("git = %#v", record.Metadata.Git)
 	}
 	fromRollout, err := rollout.RecordFromPath(recorder.Path(), false)
 	if err != nil {
 		t.Fatalf("RecordFromPath(updated rollout) error = %v", err)
 	}
-	if fromRollout.Metadata.Git["sha"] != "abc" || fromRollout.Metadata.Git["branch"] != "" || fromRollout.Metadata.Git["origin_url"] != "git@example" {
+	if fromRollout.Metadata.Git["sha"] != "abc" || fromRollout.Metadata.Git["branch"] != "" || fromRollout.Metadata.Git["origin_url"] != "git@example.com:org/repo.git" {
 		t.Fatalf("rollout git = %#v", fromRollout.Metadata.Git)
 	}
 }
