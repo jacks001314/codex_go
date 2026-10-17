@@ -28070,9 +28070,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: install_globals"
+        "Round 289 (audit): N/A - this removes Rust V8 RuntimeState.enabled_tools clones and moves global installation before callback metadata is retained. Go's code-mode host does not hold a clonable V8 tool-metadata vector in runtime state; definitions are marshaled into the host protocol, with unchanged wire order and dispatch indices."
       ]
     },
     {
