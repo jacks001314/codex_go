@@ -540,7 +540,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3620b2caf8afecfcedd5c5c9520c0d239c880f26	49701	Detect SQLite corruption during startup and preserve recovery backups (#49701)	2026-09-30	tui	8	7	0.88	0	0	audit_pending	open_read_write_pool
 3627bb91b2f14f47c1a415412ec2f1e132e50647	47084	Avoid building a host SQLite driver for SQLx macros (#47084)	2026-09-21	persistence	6	0	0.00	0	0	implementation_pending	GOALS_MIGRATOR,LOGS_MIGRATOR,MEMORIES_MIGRATOR,QUEUE_MIGRATOR,STATE_MIGRATOR,THREAD_HISTORY_MIGRATOR
 3629508849fe7679ae6362ffa1541fb0ab9fb0cb	50442	Preserve native USD amounts in thread usage responses (#50442)	2026-10-02	tui	0	0		0	0	not_applicable	
-36430b36881cf5c289cb48e671cfc9e8b542ae7b	46509	Flush completed Guardian reviews before delivering decisions (#46509)	2026-09-18	guardian	1	0	0.00	0	0	implementation_pending	is_private_guardian_reviewer
+36430b36881cf5c289cb48e671cfc9e8b542ae7b	46509	Flush completed Guardian reviews before delivering decisions (#46509)	2026-09-18	guardian	1	0	0.00	0	0	not_applicable	is_private_guardian_reviewer
 364b511dcd60bcde3849bde4e579a5c7cad1e96a	45554	Use shared Bazel cache preparation in SDK CI (#45554)	2026-09-15	core	0	0		0	0	not_applicable	
 36803b180a50e611331b75ff2b4c475c02846b53	54385	Allow saving current permission settings as presets (#54385)	2026-10-15	tui	5	4	0.80	0	0	complete	open_quick_dial_prefills
 368e5eae2f006a70a91dddfdc96e6b2d11498f81	49038	Preserve encrypted agent messages in Guardian reviews (#49038)	2026-09-28	guardian	2	0	0.00	0	0	implementation_pending	TRANSCRIPT_OMISSION_NOTICE,TranscriptContent

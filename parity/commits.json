@@ -15880,9 +15880,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_private_guardian_reviewer"
+        "Round 115 (lead): N/A (reviewer session-task carrier absent) - #46509 orders Rust reviewer rollout flushing with the TurnComplete event and clears the reviewer active turn before delivering the Guardian decision to the parent, so consecutive reviews cannot overlap stale completion persistence. Go's Guardian reviewer is a direct host-side Review call with structured evidence and a synchronous decision return; it has no private reviewer session task, TurnComplete event, or rollout flush barrier to reorder. No equivalent persistence/delivery race exists. No source change needed."
       ]
     },
     {
