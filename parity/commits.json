@@ -4,6 +4,30 @@
   "rustToInclusive": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
   "commits": [
     {
+      "sha": "ffd3429d754991183433b4d41b67551e5656ba27",
+      "subject": "Preserve model catalog caches across header credential rotation (#54946)",
+      "kind": "security",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 288: header auth with ChatGPT-Account-ID reuses the model catalog across opaque credential rotation; missing accounts, explicit provider keys/bearer tokens, and command auth retain credential-sensitive identities."
+      ]
+    },
+    {
+      "sha": "1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b",
+      "subject": "Share additional tool declarations across response item clones (#54945)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "not_applicable",
+      "evidence": [
+        "Round 288 (audit): N/A - this is a Rust Vec-to-Arc clone optimization. Go's additional-tools items use slices/JSON values whose assignment already shares the declaration backing array; the serialized protocol is unchanged."
+      ]
+    },
+    {
       "sha": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
       "subject": "Gate app-server WebSocket compression behind a feature flag (#54949)",
       "kind": "protocol",

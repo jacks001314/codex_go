@@ -293,6 +293,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1c40ffe4275d178d6a88f593d263b29d5ca36ce2	43144	Add Windows MSVC Bazel targets for native voice libraries (#43144)	2026-09-06	realtime	0	0		0	0	not_applicable	
 1c5ca2a9791ded685e94233ee07832e619ec2af2	54432	Support remote credential masking with Zsh shell snapshots (#54432)	2026-10-15	execserver	8	5	0.62	0	0	audit_pending	bind_credential_broker_environment,credential_snapshot_proxy,restore_fallback
 1c7c43cd856a1ef451cb7ff9dc1b701ac7942c9d	51819	Migrate the MXC sandbox to the 1.0.0 SDK (#51819)	2026-10-07	sandbox	0	0		0	0	blocked_precondition	
+1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b	54945	Share additional tool declarations across response item clones (#54945)	2026-10-17	core	0	0		0	0	not_applicable	none
 1cc7e2361237ce7244430ee1d581c77f95c57ac8	48830	Show a short, neutral TUI interruption notice (#48830)	2026-09-28	tui	0	0		0	0	not_applicable	
 1cc81ca89a0b7660bcb332da09d1c3e966cf0298	41357	Support compression for shared rollout lineages (#41357)	2026-08-28	persistence	5	3	0.60	0	0	audit_pending	RolloutCompressionMode,rollout_contains_prefix
 1cc9917508ab791e0bf996e6ada8d91eb3edfe33	50045	Keep transcript Find expansion scoped to the current match (#50045)	2026-10-01	tui	7	0	0.00	0	0	implementation_pending	base_layout,entry_layout,install_search_match,is_search_expanded,match_anchor,search_layout,sync_search_live_tail
@@ -2696,3 +2697,4 @@ ff9ab4aed96aa2e105f78b9521dbbd3a6b329dc8	51411	Suppress repeated image paste pre
 ffae979216bfbe94070bd21868d1695277105a63	45845	Revert the current thread when editing an earlier TUI prompt (#45845)	2026-09-16	tui	5	0	0.00	0	0	implementation_pending	HistoryHydrationScope,backtrack_revert_before_turn_id,reset_after_prompt_revert,restore_backtrack_prompt_after_revert_error,revert_thread
 ffbd30aeb71a669045a70e5ff74ed4aa116f79af	46981	Canonicalize the workspace trust key in the doctor config test (#46981)	2026-09-21	core	0	0		0	0	not_applicable	
 ffc14026337b3637cb2b61b9adee55aa4dcba2e6	53698	Interrupt and drain canceled classifier responses before socket reuse (#53698)	2026-10-13	guardian	5	3	0.60	0	0	not_applicable
+ffd3429d754991183433b4d41b67551e5656ba27	54946	Preserve model catalog caches across header credential rotation (#54946)	2026-10-17	model	0	0		0	0	complete	none

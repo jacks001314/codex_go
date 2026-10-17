@@ -75,7 +75,21 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 		rawPlan = auth.ChatGPTPlanTypeRawFromAuth(authSnapshot)
 		fedramp = fedrampFromMap(authSnapshot.Tokens)
 	}
-	stableAccount := hasStableAccountAuthMode(authMode) && accountID != "" && (userID != "" || email != "")
+	headerAuth := authMode == "headers" || authSnapshot == nil && authHeaders != nil
+	if headerAuth {
+		authMode = "headers"
+		if accountID == "" {
+			accountID = headerAuthAccountID(authHeaders)
+		}
+	}
+	stableAccount := false
+	if headerAuth {
+		// Header auth only has stable ownership when it carries an account ID.
+		// User/email metadata is not part of that credential shape.
+		stableAccount = accountID != "" && !provider.HasCommandAuth()
+	} else {
+		stableAccount = hasStableAccountAuthMode(authMode) && accountID != "" && (userID != "" || email != "")
+	}
 
 	// Rust resolves the routing half through `provider_info.to_api_provider`: the
 	// effective backend auth mode (externally managed ChatGPT tokens normalize to
@@ -137,7 +151,7 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 		}
 		identityField(digest, encoded)
 	}
-	if authSnapshot != nil {
+	if authSnapshot != nil || headerAuth {
 		identityOptionalString(digest, accountID)
 		identityOptionalString(digest, userID)
 		identityOptionalString(digest, email)
@@ -173,6 +187,23 @@ func ModelsCatalogIdentity(provider *ProviderInfo, authSnapshot *auth.AuthDotJSO
 	}
 
 	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func headerAuthAccountID(headers *AuthHeaders) string {
+	if headers == nil {
+		return ""
+	}
+	for name, values := range headers.Headers {
+		if !strings.EqualFold(strings.TrimSpace(name), "ChatGPT-Account-ID") {
+			continue
+		}
+		for _, value := range values {
+			if value = strings.TrimSpace(value); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func identityField(digest hash.Hash, value []byte) {

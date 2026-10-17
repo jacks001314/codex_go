@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"codex_go/auth"
@@ -69,6 +70,49 @@ func TestModelsCatalogIdentityTracksAccountNotTokenRefresh(t *testing.T) {
 		if got := catalogIdentity(t, &provider, snapshot); got == key {
 			t.Fatalf("%s: identity matched the ChatGPT account key", name)
 		}
+	}
+}
+
+// Mirrors Rust #54946: header auth with a stable account ID keeps the catalog
+// across opaque header rotation, while missing IDs and explicit credentials
+// remain credential-sensitive.
+func TestModelsCatalogIdentityUsesHeaderAuthAccountLikeRust(t *testing.T) {
+	provider := CreateOpenAIProvider("")
+	headerAuth := func(token, account string) *AuthHeaders {
+		headers := http.Header{"Authorization": []string{"Bearer " + token}}
+		if account != "" {
+			headers.Set("ChatGPT-Account-ID", account)
+		}
+		return &AuthHeaders{Headers: headers}
+	}
+	first := ModelsCatalogIdentity(&provider, nil, headerAuth("first-token", "account-1"), "")
+	rotated := ModelsCatalogIdentity(&provider, nil, headerAuth("second-token", "account-1"), "")
+	if first == "" || rotated != first {
+		t.Fatalf("header auth rotation changed identity: first=%q rotated=%q", first, rotated)
+	}
+	if got := ModelsCatalogIdentity(&provider, nil, headerAuth("third-token", "account-2"), ""); got == first {
+		t.Fatal("header auth account change reused the catalog identity")
+	}
+	missing := ModelsCatalogIdentity(&provider, nil, headerAuth("first-token", ""), "")
+	missingRotated := ModelsCatalogIdentity(&provider, nil, headerAuth("second-token", ""), "")
+	if missing == "" || missingRotated == missing {
+		t.Fatal("accountless header auth did not remain credential-sensitive")
+	}
+
+	explicitBearer := provider
+	explicitBearer.ExperimentalBearerToken = "provider-token"
+	explicitFirst := ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("first-token", "account-1"), "")
+	explicitRotated := ModelsCatalogIdentity(&explicitBearer, nil, headerAuth("second-token", "account-1"), "")
+	if explicitFirst == explicitRotated {
+		t.Fatal("explicit provider bearer reused a header-rotated identity")
+	}
+
+	commandAuth := provider
+	commandAuth.Auth = &ProviderAuthInfo{Command: "credential-helper"}
+	commandFirst := ModelsCatalogIdentity(&commandAuth, nil, headerAuth("first-token", "account-1"), "")
+	commandRotated := ModelsCatalogIdentity(&commandAuth, nil, headerAuth("second-token", "account-1"), "")
+	if commandFirst == commandRotated {
+		t.Fatal("command auth reused a header-rotated identity")
 	}
 }
 
