@@ -1518,6 +1518,14 @@
             "reason": "Aligned upstream 30758e5c77 (#47870 Add opt-in OTLP logging for Guardian assessments): otel.log_guardian_assessments requires an explicit opt-in and OTLP HTTP or gRPC log exporter. Completed synchronous model assessments emit a log-only codex.guardian_assessment record with review/turn/item identity, status, model outcome, risk, authorization, timestamps, and rationale metadata; rationale text is capped at 64 KiB on a UTF-8 boundary. Fail-closed, timeout and in-progress records omit the model outcome.",
             "userImpact": "Operators can opt in to bounded Guardian assessment diagnostics without leaking the payload into traces, local state logs, or feedback buffers.",
             "test": "go test ./config ./telemetry -run 'GuardianAssessment|Otel' -count=1; go test ./appserver -run Guardian -count=1"
+        },
+        {
+            "id": "fork-ordinal-turn-metadata",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 0d654e6536 (#40987 Track window and fork positions in turn metadata): client and Responses metadata serialize forked_from_ordinal_exclusive alongside fork lineage. The cutoff comes from the logical history base only when it names the direct fork parent, so ambiguous revert/ancestor bases omit it instead of reporting another thread's boundary. Context-inheriting subagents emit parent_thread_id without fork lineage. Window number metadata was already aligned.",
+            "userImpact": "Fork lineage remains correct after appends, reverts, and cold resumes without conflating a physical history base with the logical fork parent.",
+            "test": "go test ./turn ./codexapi ./appserver -run 'ForkOrdinal|MergesExtraIntoTurnMetadata|ClientMetadata' -count=1"
         }
     ]
 }

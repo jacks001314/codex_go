@@ -110,16 +110,18 @@ type ClientMetadata struct {
 	// "/root" like Rust.
 	AgentName          string
 	ForkedFromThreadID string
-	ParentThreadID     string
-	ParentTurnID       string
-	RootTurnID         string
-	SubagentHeader     string
-	SubagentKind       string
-	ThreadSource       string
-	TurnTrigger        string
-	CodexVersion       string
-	Sandbox            string
-	SandboxMode        string
+	// ForkedFromOrdinalExclusive is emitted only alongside fork lineage.
+	ForkedFromOrdinalExclusive *uint64
+	ParentThreadID             string
+	ParentTurnID               string
+	RootTurnID                 string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	TurnTrigger                string
+	CodexVersion               string
+	Sandbox                    string
+	SandboxMode                string
 	// Model and ReasoningEffort describe the execution settings that issued the
 	// request (Rust `ExecutionMetadata::apply_to`), so request metadata reports
 	// the capturing step's settings instead of a turn's initial ones. Empty
@@ -202,6 +204,9 @@ func (m *ClientMetadata) TurnMetadataValue() map[string]any {
 	}
 	if m.ForkedFromThreadID != "" {
 		value["forked_from_thread_id"] = m.ForkedFromThreadID
+	}
+	if m.ForkedFromOrdinalExclusive != nil {
+		value[ForkedFromOrdinalExclusiveKey] = *m.ForkedFromOrdinalExclusive
 	}
 	if m.ParentThreadID != "" {
 		value["parent_thread_id"] = m.ParentThreadID

@@ -127,7 +127,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0d46c252b3f29f10bacf0ef58a17a1aa5d17ead3	44002	Encapsulate executed tool call metadata recording (#44002)	2026-09-09	mcp	4	3	0.75	0	0	audit_pending	attach_to_prompt
 0d502a423031396a8d11c096e5b9f1cb0d30b3d0	42328	Support durable reasoning configuration updates (#42328)	2026-09-02	guardian	1	1	1.00	0	0	complete	
 0d58012ec20d0f42ea1c11056815e4a0c5122e99	53963	Test memory extraction budgets with excluded items and ciphertext (#53963)	2026-10-14	core	0	0		0	0	complete	
-0d654e653614b0f99b8da3e4a74aa2558ee61752	40987	Track window and fork positions in turn metadata (#40987)	2026-08-26	appserver	5	4	0.80	0	0	audit_pending	with_forked_from_ordinal_exclusive
+0d654e653614b0f99b8da3e4a74aa2558ee61752	40987	Track window and fork positions in turn metadata (#40987)	2026-08-26	appserver	5	5	1.00	0	0	complete	
 0d7b8117d3cc6d9ffe21d22375d70307133e9f16	49160	Support projectless TUI sessions with workspace defaults (#49160)	2026-09-29	tui	12	5	0.42	0	0	audit_pending	CURRENT_CONFIG,DirectoryTrustOptions,FreshStartupDefaults,ResumePermissions,check_background_terminals,from_overrides,resume_permission_overrides
 0d9bb6c34c2742ee8bcddfccb6404a447926ff9f	40423	Harden Windows file URI conversion (#40423)	2026-08-24	core	0	0		0	0	not_applicable	
 0df1daf5269b51c768c428e6bfded32210cc8cc9	44175	Attach compressed rollouts to diagnostic reports as JSONL (#44175)	2026-09-09	appserver	1	0	0.00	0	0	complete	read_rollout_prefix

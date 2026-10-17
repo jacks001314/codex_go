@@ -134,24 +134,27 @@ type ResponsesWorkspace struct {
 }
 
 type ResponsesMetadata struct {
-	InstallationID      string
-	SessionID           string
-	ThreadID            string
-	TurnID              string
-	WindowID            string
-	ContextWindowID     string
-	RequestKind         *ResponsesRequestKind
-	ForkedFromThreadID  string
-	ParentThreadID      string
-	ParentTurnID        string
-	SubagentHeader      string
-	SubagentKind        string
-	ThreadSource        string
-	Sandbox             string
-	SandboxMode         string
-	Workspaces          map[string]ResponsesWorkspace
-	TurnStartedAtUnixMS *int64
-	Extra               map[string]string
+	InstallationID     string
+	SessionID          string
+	ThreadID           string
+	TurnID             string
+	WindowID           string
+	ContextWindowID    string
+	RequestKind        *ResponsesRequestKind
+	ForkedFromThreadID string
+	// ForkedFromOrdinalExclusive is the logical fork cutoff captured before
+	// later appends or reverts (Rust #40987).
+	ForkedFromOrdinalExclusive *uint64
+	ParentThreadID             string
+	ParentTurnID               string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	Sandbox                    string
+	SandboxMode                string
+	Workspaces                 map[string]ResponsesWorkspace
+	TurnStartedAtUnixMS        *int64
+	Extra                      map[string]string
 }
 
 func NewResponsesMetadata(installationID string, sessionID string, threadID string, windowID string) *ResponsesMetadata {
@@ -193,6 +196,9 @@ func (m *ResponsesMetadata) TurnMetadataValue() map[string]any {
 		}
 	}
 	putStringAny(payload, ForkedFromThreadIDKey, m.ForkedFromThreadID)
+	if m.ForkedFromOrdinalExclusive != nil {
+		payload[ForkedFromOrdinalExclusiveKey] = *m.ForkedFromOrdinalExclusive
+	}
 	putStringAny(payload, ParentThreadIDKey, m.ParentThreadID)
 	putStringAny(payload, ParentTurnIDKey, m.ParentTurnID)
 	putStringAny(payload, SubagentKindKey, m.SubagentKind)

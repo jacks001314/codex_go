@@ -285,21 +285,22 @@ func cloneBoolPtr(value *bool) *bool {
 }
 
 type MetadataState struct {
-	mu                  sync.RWMutex
-	SessionID           string
-	ThreadID            string
-	ForkedFromThreadID  string
-	ParentThreadID      string
-	ParentTurnID        string
-	RootTurnID          string
-	SubagentHeader      string
-	SubagentKind        string
-	ThreadSource        string
-	TurnID              string
-	Sandbox             string
-	SandboxMode         string
-	Workspaces          map[string]WorkspaceMetadata
-	TurnStartedAtUnixMS int64
+	mu                         sync.RWMutex
+	SessionID                  string
+	ThreadID                   string
+	ForkedFromThreadID         string
+	ForkedFromOrdinalExclusive *uint64
+	ParentThreadID             string
+	ParentTurnID               string
+	RootTurnID                 string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	TurnID                     string
+	Sandbox                    string
+	SandboxMode                string
+	Workspaces                 map[string]WorkspaceMetadata
+	TurnStartedAtUnixMS        int64
 	// AnalyticsEnabled reports the selected session analytics client's
 	// collection state (Rust #44628); nil omits the key.
 	AnalyticsEnabled             *bool
@@ -385,6 +386,9 @@ func (m *MetadataState) MetadataValue(model string, reasoningEffort string) map[
 	if m.ForkedFromThreadID != "" {
 		value["forked_from_thread_id"] = m.ForkedFromThreadID
 	}
+	if m.ForkedFromOrdinalExclusive != nil {
+		value[codexapi.ForkedFromOrdinalExclusiveKey] = *m.ForkedFromOrdinalExclusive
+	}
 	if m.ParentThreadID != "" {
 		value["parent_thread_id"] = m.ParentThreadID
 	}
@@ -433,20 +437,21 @@ type ResponsesClientMetadataOptions struct {
 	ContextWindowID string
 	// WindowNumber is the zero-based current context window number included in
 	// Responses turn metadata (Rust #40987).
-	WindowNumber       *uint64
-	RequestKind        codexapi.ClientRequestKind
-	ForkedFromThreadID string
-	ParentThreadID     string
-	ParentTurnID       string
-	RootTurnID         string
-	SubagentHeader     string
-	SubagentKind       string
-	ThreadSource       string
-	TurnTrigger        string
-	CodexVersion       string
-	Sandbox            string
-	SandboxMode        string
-	AgentName          string
+	WindowNumber               *uint64
+	RequestKind                codexapi.ClientRequestKind
+	ForkedFromThreadID         string
+	ForkedFromOrdinalExclusive *uint64
+	ParentThreadID             string
+	ParentTurnID               string
+	RootTurnID                 string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
+	TurnTrigger                string
+	CodexVersion               string
+	Sandbox                    string
+	SandboxMode                string
+	AgentName                  string
 	// Model and ReasoningEffort are the settings that issued the request (Rust
 	// `ExecutionMetadata::from_settings`); empty values omit the keys.
 	Model           string
@@ -514,6 +519,9 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 		metadata.RequestKind = codexapi.ClientRequestTurn
 	}
 	metadata.ForkedFromThreadID = strings.TrimSpace(options.ForkedFromThreadID)
+	if metadata.ForkedFromThreadID != "" {
+		metadata.ForkedFromOrdinalExclusive = options.ForkedFromOrdinalExclusive
+	}
 	metadata.ParentThreadID = strings.TrimSpace(options.ParentThreadID)
 	metadata.ParentTurnID = strings.TrimSpace(options.ParentTurnID)
 	metadata.RootTurnID = strings.TrimSpace(options.RootTurnID)

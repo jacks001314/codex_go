@@ -148,6 +148,7 @@ func (r *RuntimeRouter) compactResponsesClientMetadataForWindow(record *session.
 		RequestKind:                codexapi.ClientRequestCompaction,
 		Compaction:                 compaction,
 		ForkedFromThreadID:         lineage.ForkedFromThreadID,
+		ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
 		ParentThreadID:             lineage.ParentThreadID,
 		ParentTurnID:               parentTurnID,
 		RootTurnID:                 rootTurnID,

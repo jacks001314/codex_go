@@ -96,20 +96,22 @@ func TestMetadataState(t *testing.T) {
 }
 
 func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
+	forkOrdinal := uint64(7)
 	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
-		InstallationID:     "install",
-		SessionID:          "session",
-		ThreadID:           "thread",
-		TurnID:             "turn",
-		WindowID:           "thread:1",
-		RequestKind:        codexapi.ClientRequestTurn,
-		ForkedFromThreadID: "source-thread",
-		ParentThreadID:     "parent-thread",
-		ParentTurnID:       "parent-turn",
-		SubagentHeader:     "guardian",
-		SubagentKind:       "guardian",
-		ThreadSource:       "automation",
-		SandboxMode:        "workspace-write",
+		InstallationID:             "install",
+		SessionID:                  "session",
+		ThreadID:                   "thread",
+		TurnID:                     "turn",
+		WindowID:                   "thread:1",
+		RequestKind:                codexapi.ClientRequestTurn,
+		ForkedFromThreadID:         "source-thread",
+		ForkedFromOrdinalExclusive: &forkOrdinal,
+		ParentThreadID:             "parent-thread",
+		ParentTurnID:               "parent-turn",
+		SubagentHeader:             "guardian",
+		SubagentKind:               "guardian",
+		ThreadSource:               "automation",
+		SandboxMode:                "workspace-write",
 		Extra: map[string]string{
 			"workspace_kind":           "git",
 			"thread_id":                "bad",
@@ -145,6 +147,9 @@ func TestBuildResponsesClientMetadataMergesExtraIntoTurnMetadata(t *testing.T) {
 	}
 	if turnMetadata["forked_from_thread_id"] != "source-thread" || turnMetadata["parent_thread_id"] != "parent-thread" || turnMetadata["parent_turn_id"] != "parent-turn" || turnMetadata["subagent_kind"] != "guardian" || turnMetadata["thread_source"] != "automation" {
 		t.Fatalf("lineage turn metadata = %#v", turnMetadata)
+	}
+	if turnMetadata[codexapi.ForkedFromOrdinalExclusiveKey] != float64(forkOrdinal) {
+		t.Fatalf("fork ordinal = %#v", turnMetadata[codexapi.ForkedFromOrdinalExclusiveKey])
 	}
 	if turnMetadata["x-codex-parent-thread-id"] != nil {
 		t.Fatalf("reserved extra leaked into turn metadata: %#v", turnMetadata)

@@ -7457,12 +7457,13 @@ type appTurnRunConfig struct {
 }
 
 type responsesMetadataLineage struct {
-	SessionID          string
-	ForkedFromThreadID string
-	ParentThreadID     string
-	SubagentHeader     string
-	SubagentKind       string
-	ThreadSource       string
+	SessionID                  string
+	ForkedFromThreadID         string
+	ForkedFromOrdinalExclusive *uint64
+	ParentThreadID             string
+	SubagentHeader             string
+	SubagentKind               string
+	ThreadSource               string
 }
 
 func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turnID string, connectionID string, params *turn.TurnStartParams, startedAtMS int64, turnRuntime *turn.Runtime) (*appTurnRunConfig, error) {
@@ -7847,27 +7848,28 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		UseModelTokenBudgetDefaults:     useModelTokenBudgetDefaults,
 		TokenBudgetFeatureEnabled:       featureEnabled,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
-			InstallationID:     installationID,
-			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
-			ThreadID:           threadID,
-			TurnID:             turnID,
-			WindowID:           r.windowIDForThread(threadID),
-			ContextWindowID:    r.contextWindowIDForThread(threadID),
-			WindowNumber:       uint64PtrAppserver(r.windowNumberForThread(threadID)),
-			RequestKind:        codexapi.ClientRequestTurn,
-			ForkedFromThreadID: lineage.ForkedFromThreadID,
-			ParentThreadID:     lineage.ParentThreadID,
-			ParentTurnID:       params.ParentTurnID,
-			RootTurnID:         effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
-			SubagentHeader:     lineage.SubagentHeader,
-			SubagentKind:       lineage.SubagentKind,
-			ThreadSource:       lineage.ThreadSource,
-			TurnTrigger:        params.TurnTrigger,
-			CodexVersion:       appServerVersion(),
-			SandboxMode:        permissionProfilePolicyTag(permissionProfile, cwd),
-			AgentName:          r.agentNameForThread(threadID),
-			Model:              modelProviderConfig.Model,
-			ReasoningEffort:    requestReasoningEffort,
+			InstallationID:             installationID,
+			SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
+			ThreadID:                   threadID,
+			TurnID:                     turnID,
+			WindowID:                   r.windowIDForThread(threadID),
+			ContextWindowID:            r.contextWindowIDForThread(threadID),
+			WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
+			RequestKind:                codexapi.ClientRequestTurn,
+			ForkedFromThreadID:         lineage.ForkedFromThreadID,
+			ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
+			ParentThreadID:             lineage.ParentThreadID,
+			ParentTurnID:               params.ParentTurnID,
+			RootTurnID:                 effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
+			SubagentHeader:             lineage.SubagentHeader,
+			SubagentKind:               lineage.SubagentKind,
+			ThreadSource:               lineage.ThreadSource,
+			TurnTrigger:                params.TurnTrigger,
+			CodexVersion:               appServerVersion(),
+			SandboxMode:                permissionProfilePolicyTag(permissionProfile, cwd),
+			AgentName:                  r.agentNameForThread(threadID),
+			Model:                      modelProviderConfig.Model,
+			ReasoningEffort:            requestReasoningEffort,
 			// Rust with_window_and_fork_metadata: the history-notes extension
 			// asks the backend to ingest the request.
 			HistoryIngestRequested:     tokenBudget != nil && tokenBudget.UseHistoryNotesExtension,
@@ -8544,6 +8546,7 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 		WindowID:                   r.windowIDForThread(threadID),
 		RequestKind:                codexapi.ClientRequestTurn,
 		ForkedFromThreadID:         lineage.ForkedFromThreadID,
+		ForkedFromOrdinalExclusive: lineage.ForkedFromOrdinalExclusive,
 		ParentThreadID:             lineage.ParentThreadID,
 		ParentTurnID:               parentTurnID,
 		RootTurnID:                 rootTurnID,
@@ -8750,11 +8753,28 @@ func (r *RuntimeRouter) responsesMetadataLineage(threadID string) responsesMetad
 	lineage.SubagentHeader, lineage.SubagentKind = codexapi.ClientSubagentMetadataFromSource(source)
 	if runtimeSessionSourceIsSubagent(source) || lineage.SubagentHeader != "" || lineage.SubagentKind != "" {
 		lineage.ParentThreadID = firstNonEmpty(strings.TrimSpace(string(record.ParentThreadID)), runtimeParentThreadIDFromSessionSource(source))
-		lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
+		if lineage.ParentThreadID == "" {
+			lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
+			lineage.ForkedFromOrdinalExclusive = forkedFromOrdinalExclusiveForRecord(record)
+		}
 		return lineage
 	}
 	lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
+	lineage.ForkedFromOrdinalExclusive = forkedFromOrdinalExclusiveForRecord(record)
 	return lineage
+}
+
+func forkedFromOrdinalExclusiveForRecord(record *session.Record) *uint64 {
+	if record == nil || record.ForkedFromID == "" || record.HistoryBase == nil {
+		return nil
+	}
+	if record.HistoryBase.ThreadID != record.ForkedFromID {
+		// A revert may carry another ancestor's physical history base. Without a
+		// separately persisted logical cutoff, omit the ambiguous legacy value.
+		return nil
+	}
+	ordinal := record.HistoryBase.EndOrdinalExclusive
+	return &ordinal
 }
 
 func (r *RuntimeRouter) threadHistoryInitialization(threadID string) string {
