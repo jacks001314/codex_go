@@ -11586,6 +11586,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 		if guardianFailures.Attachment != nil {
 			historyAttachments = append(historyAttachments, *guardianFailures.Attachment)
 		}
+		historyAttachments = append(historyAttachments, DaemonLogAttachments(r.codexHomeForRollout())...)
 		if includeThreadIndex {
 			if attachment, err := threadIndex.attachment(); err == nil {
 				historyAttachments = append(historyAttachments, attachment)

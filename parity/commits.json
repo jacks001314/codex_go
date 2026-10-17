@@ -24743,9 +24743,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: daemon_log_attachments"
+        "Round 267: detached launches preserve the last 256KiB of a regular nonempty stderr log into <log>.previous via an atomic write before truncation; missing/empty/symlinked/nonregular logs and preservation failures never block launch. Feedback with IncludeLogs attaches at most two 256KiB updater tails (current and previous), preferring daemon-updater.stderr.log over the legacy app-server-updater.stderr.log per suffix, with a 512KiB total cap. Tests: go test ./appserverdaemon -run PreserveStderr -count=1; go test ./appserver -run DaemonLogAttachments -count=1; go build ./..."
       ]
     },
     {

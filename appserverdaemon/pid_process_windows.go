@@ -46,6 +46,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 		return 0, "", err
 	}
 	defer devNull.Close()
+	preserveStderrLogBestEffort(backend.StderrLogPath())
 	stderrLog, err := os.OpenFile(backend.StderrLogPath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return 0, "", fmt.Errorf("failed to open stderr log for pid-managed app server %s: %w", backend.StderrLogPath(), err)
