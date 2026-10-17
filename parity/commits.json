@@ -22292,9 +22292,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: copy_executable, write_executable"
+        "Round 115 (lead): N/A (test-infrastructure-only, carrier absent) - #48727 extracts Rust test fixture helpers into codex_utils_cargo_bin, writing/copying executables through subprocesses on Linux and removing one program-resolver ETXTBSY retry loop. Go has no shared cargo-bin-style executable fixture API and no executable-busy retry loop; the commit changes no production behavior. Nothing to port into the Go runtime or protocol surface. No source change needed."
       ]
     },
     {

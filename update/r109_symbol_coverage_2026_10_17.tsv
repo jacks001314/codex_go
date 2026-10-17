@@ -248,7 +248,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 17f37f56be7e23602c758c4b6039ca32755d3e4d	48138	Suppress console windows when spawning the code-mode host on Windows (#48138)	2026-09-25	core	0	0		0	0	not_applicable	
 18131270fe82ef947830840eb5d6923d4b82609f	49713	Remove repository-local Codex guidance, skills, and environment config (#49713)	2026-09-30	core	0	0		0	0	not_applicable	
 18194bfd3534ca567d886eac454028dafaa68b6c	49280	Restrict capability roots to captured turn environments (#49280)	2026-09-29	appserver	0	0		0	0	not_applicable	
-18344a972ddf06aa0bb80773bfb7564576e8991b	48727	Centralize executable fixture creation to avoid Linux ETXTBSY races (#48727)	2026-09-27	execserver	2	0	0.00	0	0	implementation_pending	copy_executable,write_executable
+18344a972ddf06aa0bb80773bfb7564576e8991b	48727	Centralize executable fixture creation to avoid Linux ETXTBSY races (#48727)	2026-09-27	execserver	2	0	0.00	0	0	not_applicable	copy_executable,write_executable
 184ea845263887846e0ead9309e20e26401878f7	46542	Add authenticated remote plugin measurement references (#46542)	2026-09-18	plugins	10	4	0.40	0	0	audit_pending	PluginMeasurementReference,RemoteInstalledPluginsAuthIdentity,RemotePluginMeasurementCache,fetch_measurement_reference_bundle,from_auth,from_measurement_reference
 184ff338ad7d737b0bd6d5e913a070cfd5c666bd	40266	Preserve content annotations when filtering forked agent history (#40266)	2026-08-23	core	0	0		0	0	not_applicable	
 1866e516779012d3ff20541d21074f00be010b32	47924	Make project trust lookup paths explicit and defer root resolution (#47924)	2026-09-24	config	2	2	1.00	0	0	complete	
