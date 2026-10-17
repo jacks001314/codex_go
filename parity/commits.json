@@ -29223,9 +29223,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: LocalBoardSetup, configure_local_board"
+        "Round 115 (lead): implemented agentboard/configure_local_board.go (LocalBoardSetup/LocalBoardTemplate/ConfigureLocalBoard) with strict version-1 template validation, 64 KiB/64-channel caps, 512-byte descriptions and deny-unknown-fields JSON; the board_templates pin and initial /root channels are written atomically, identical retries are safe, and conflicting/deleted/previously-used boards retain Rust's exact errors. local.go adds board_templates, migrates channels.description via pragma_table_info, returns the description in ChannelSummary and deletes the pin with the board. Tests + RC cover persistence, retry/conflict/deletion, timestamp, validation and legacy DB migration."
       ]
     },
     {

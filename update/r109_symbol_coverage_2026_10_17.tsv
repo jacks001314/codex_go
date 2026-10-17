@@ -726,7 +726,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 47a8bd73219bcb0aa683a6312482e449d62c0c63	49795	Avoid duplicate sync reviews in Guardian classifier continuations (#49795)	2026-09-30	guardian	4	0	0.00	0	0	implementation_pending	PreviousReview,into_annotated_message,retain_new_reviews,try_from_fragments
 47b0f7d540e9abf932e9b518ab306e389744998e	42792	Extract the note input view into its own module (#42792)	2026-09-04	tui	1	1	1.00	0	0	complete	
 47b195de5c001299a2d9612b64fcb4e01eec9175	51856	Build Bazel release artifacts alongside Cargo artifacts (#51856)	2026-10-07	core	0	0		0	0	not_applicable	
-47b80571f0d6587060a580c47f6af0cfaefb0d5c	52621	Add template setup for local agent message boards (#52621)	2026-10-09	config	3	1	0.33	0	0	audit_pending	LocalBoardSetup,configure_local_board
+47b80571f0d6587060a580c47f6af0cfaefb0d5c	52621	Add template setup for local agent message boards (#52621)	2026-10-09	config	3	3	1.00	0	0	complete	
 47bcb3a3f9e0904aed485389aaf410282b6b23fa	52959	Reduce stack usage in async TUI tests (#52959)	2026-10-10	tui	2	0	0.00	0	0	implementation_pending	box_future,make_test_app
 47c063de518810144f6b518ad78d643ccde37e22	52637	Add experimental thread item lookup by ID (#52637)	2026-10-09	appserver	3	3	1.00	0	0	complete	
 47c27cbffa6e17bce3548d87440484e36e1cbfc3	46027	Document and test `?` wildcards in network proxy domain patterns (#46027)	2026-09-16	core	0	0		0	0	not_applicable	

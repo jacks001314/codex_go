@@ -44,9 +44,10 @@ const localBoardTimestampFormat = "2006-01-02T15:04:05.999999999-07:00"
 
 // agentMessageBoardSchema mirrors Rust's SCHEMA verbatim.
 const agentMessageBoardSchema = `
+CREATE TABLE IF NOT EXISTS board_templates (board TEXT PRIMARY KEY NOT NULL, template TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS deleted_boards (board TEXT PRIMARY KEY NOT NULL);
 CREATE TABLE IF NOT EXISTS channels (
- board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL,
+ board TEXT NOT NULL, name TEXT NOT NULL, name_search TEXT NOT NULL, created_at TEXT NOT NULL, timestamp INTEGER NOT NULL, author TEXT NOT NULL, description TEXT,
  PRIMARY KEY(board,name)
 );
 CREATE TABLE IF NOT EXISTS posts (
@@ -172,10 +173,39 @@ func acquireLocalBoardPool(ctx context.Context, sqlite state.SqliteConfig, path 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.ExecContext(ctx, agentMessageBoardSchema); err != nil {
+	conn, err := state.BeginImmediate(ctx, db)
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+		_ = conn.Close()
+		if !committed {
+			_ = db.Close()
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, agentMessageBoardSchema); err != nil {
+		return nil, err
+	}
+	var hasDescription bool
+	if err := conn.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pragma_table_info('channels') WHERE name='description')",
+	).Scan(&hasDescription); err != nil {
+		return nil, err
+	}
+	if !hasDescription {
+		if _, err := conn.ExecContext(ctx, "ALTER TABLE channels ADD COLUMN description TEXT"); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, err
+	}
+	committed = true
 	localBoardPools.pools[path] = &localBoardPool{db: db, refs: 1}
 	return db, nil
 }
@@ -271,6 +301,7 @@ func DeleteLocalBoards(ctx context.Context, sqlite state.SqliteConfig, roots []s
 			"DELETE FROM subscription_opt_outs WHERE board=?",
 			"DELETE FROM posts WHERE board=?",
 			"DELETE FROM channels WHERE board=?",
+			"DELETE FROM board_templates WHERE board=?",
 		} {
 			if _, err := conn.ExecContext(ctx, statement, root); err != nil {
 				return err
@@ -348,7 +379,7 @@ func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller strin
 		return nil, err
 	}
 	defer tx.rollback(ctx)
-	if err := b.insertChannel(ctx, tx, request.ChannelName, author, now); err != nil {
+	if err := b.insertChannel(ctx, tx, request.ChannelName, author, now, nil); err != nil {
 		return nil, err
 	}
 	if request.Subscription == Subscribe {
@@ -480,7 +511,7 @@ func (b *LocalAgentMessageBoard) resolvePostDestination(ctx context.Context, tx 
 		if err := validateChannelName(destination.Name); err != nil {
 			return "", "", SubscriptionTarget{}, err
 		}
-		if err := b.insertChannel(ctx, tx, destination.Name, author, now); err != nil {
+		if err := b.insertChannel(ctx, tx, destination.Name, author, now, nil); err != nil {
 			return "", "", SubscriptionTarget{}, err
 		}
 		return destination.Name, id, SubscriptionTarget{Kind: "channel", ChannelName: destination.Name}, nil
@@ -897,10 +928,18 @@ func channelExistsIn(ctx context.Context, querier queryRower, identity string, n
 	return exists, nil
 }
 
-func (b *LocalAgentMessageBoard) insertChannel(ctx context.Context, tx *localBoardWrite, name string, author agent.AgentPath, now time.Time) error {
-	result, err := tx.conn.ExecContext(ctx,
-		"INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author) VALUES(?,?,?,?,?,?)",
-		b.identity, name, foldCase(name), now.UTC().Format(localBoardTimestampFormat), now.UnixMicro(), string(author))
+func (b *LocalAgentMessageBoard) insertChannel(ctx context.Context, tx *localBoardWrite, name string, author agent.AgentPath, now time.Time, description *string) error {
+	return insertLocalBoardChannel(ctx, tx.conn, b.identity, name, author, now, description)
+}
+
+func insertLocalBoardChannel(ctx context.Context, conn *sql.Conn, board string, name string, author agent.AgentPath, now time.Time, description *string) error {
+	var descriptionValue any
+	if description != nil {
+		descriptionValue = *description
+	}
+	result, err := conn.ExecContext(ctx,
+		"INSERT OR IGNORE INTO channels(board,name,name_search,created_at,timestamp,author,description) VALUES(?,?,?,?,?,?,?)",
+		board, name, foldCase(name), now.UTC().Format(localBoardTimestampFormat), now.UnixMicro(), string(author), descriptionValue)
 	if err != nil {
 		return err
 	}
@@ -997,14 +1036,15 @@ func (b *LocalAgentMessageBoard) channelSummaryByName(ctx context.Context, name 
 func channelSummaryIn(ctx context.Context, querier queryRower, identity string, name string) (*ChannelSummary, error) {
 	var createdAt string
 	var author string
+	var description sql.NullString
 	var messageCount int64
 	var lastMessageID sql.NullString
 	err := querier.QueryRowContext(ctx,
-		"SELECT c.created_at,c.author,"+
+		"SELECT c.created_at,c.author,c.description,"+
 			"(SELECT COUNT(*) FROM posts p WHERE p.board=c.board AND p.channel=c.name) AS message_count,"+
 			"(SELECT p.id FROM posts p WHERE p.board=c.board AND p.channel=c.name ORDER BY p.timestamp DESC,p.seq DESC LIMIT 1) AS last_message_id "+
 			"FROM channels c WHERE c.board=? AND c.name=?",
-		identity, name).Scan(&createdAt, &author, &messageCount, &lastMessageID)
+		identity, name).Scan(&createdAt, &author, &description, &messageCount, &lastMessageID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, invalid("channel not found in this board")
@@ -1020,6 +1060,10 @@ func channelSummaryIn(ctx context.Context, querier queryRower, identity string, 
 		CreatedAt:    parsed.UTC(),
 		CreatedBy:    agent.AgentPath(author),
 		MessageCount: int(messageCount),
+	}
+	if description.Valid {
+		value := description.String
+		summary.Description = &value
 	}
 	if lastMessageID.Valid {
 		value := lastMessageID.String

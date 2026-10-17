@@ -50,7 +50,10 @@ type ThreadSummary struct {
 
 // ChannelSummary describes one channel.
 type ChannelSummary struct {
-	ChannelName   string          `json:"channel_name"`
+	ChannelName string `json:"channel_name"`
+	// Description is the channel purpose when the board was initialized from a
+	// template (Rust #52621; absent on boards without template metadata).
+	Description   *string         `json:"description,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 	CreatedBy     agent.AgentPath `json:"created_by"`
 	MessageCount  int             `json:"message_count"`
