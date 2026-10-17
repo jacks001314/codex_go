@@ -61,8 +61,9 @@ const (
 	MethodHTTPRequest             = "http/request"
 	MethodCapabilityRootsDiscover = "capabilityRoots/discoverV1"
 	// MethodCapabilitiesDiscover is retained as a source-compatible name for Go callers.
-	MethodCapabilitiesDiscover = MethodCapabilityRootsDiscover
-	MethodHTTPRequestBodyDelta = "http/request/bodyDelta"
+	MethodCapabilitiesDiscover   = MethodCapabilityRootsDiscover
+	MethodCapabilitiesDiscoverV2 = "capabilities/discoverV2"
+	MethodHTTPRequestBodyDelta   = "http/request/bodyDelta"
 )
 
 func (s *ProcessSandboxType) UnmarshalJSON(data []byte) error {
@@ -379,6 +380,40 @@ type CapabilityRootsDiscoverResponse struct {
 	Roots []CapabilityRootDiscovery `json:"roots"`
 }
 
+type DiscoverV2CapabilitiesParams struct {
+	CWD     string                    `json:"cwd"`
+	Sandbox *FileSystemSandboxContext `json:"sandbox,omitempty"`
+}
+
+type DiscoverV2CapabilitiesResponse struct {
+	Plugins  []ExecutorPlugin `json:"plugins"`
+	Skills   []ExecutorSkill  `json:"skills"`
+	Warnings []string         `json:"warnings,omitempty"`
+}
+
+type ExecutorPlugin struct {
+	ID             string                `json:"id"`
+	DisplayName    string                `json:"displayName"`
+	RemotePluginID *string               `json:"remotePluginId,omitempty"`
+	Version        string                `json:"version"`
+	Root           string                `json:"root"`
+	Files          DiscoveredPluginFiles `json:"files"`
+	Skills         []ExecutorSkill       `json:"skills"`
+}
+
+type SkillDiscoveryRoot struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
+type ExecutorSkill struct {
+	Name             string              `json:"name"`
+	Description      string              `json:"description"`
+	ShortDescription *string             `json:"shortDescription,omitempty"`
+	Path             string              `json:"path"`
+	DiscoveryRoot    *SkillDiscoveryRoot `json:"discoveryRoot,omitempty"`
+}
+
 // Compatibility aliases keep the existing Go API while its wire contract follows Rust V1.
 type CapabilityDiscoveryRoot = CapabilityRootDiscoverRequest
 type CapabilityDiscoveryParams = CapabilityRootsDiscoverParams
@@ -451,6 +486,7 @@ type EnvironmentInfo struct {
 type EnvironmentCapabilities struct {
 	NetworkProxyLaunch         bool `json:"networkProxyLaunch"`
 	CapabilityDiscoverySandbox bool `json:"capabilityDiscoverySandbox"`
+	CapabilityDiscoveryV2      bool `json:"capabilityDiscoveryV2"`
 	// Rust 646f7c0a91: whether this executor supports environmentConfig/read;
 	// defaults to false when deserializing legacy executor responses.
 	EnvironmentConfigRead bool `json:"environmentConfigRead"`
@@ -1436,6 +1472,12 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 			return nil, err
 		}
 		return discoverCapabilityRoots(&params)
+	case MethodCapabilitiesDiscoverV2:
+		var params DiscoverV2CapabilitiesParams
+		if err := decodeParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		return discoverCapabilitiesV2(&params)
 	case MethodProcessStart:
 		var params ExecParams
 		if err := decodeParams(req.Params, &params); err != nil {
@@ -3559,6 +3601,7 @@ func localEnvironmentInfo() *EnvironmentInfo {
 		Capabilities: EnvironmentCapabilities{
 			NetworkProxyLaunch:         true,
 			CapabilityDiscoverySandbox: true,
+			CapabilityDiscoveryV2:      true,
 			// Rust 646f7c0a91: local executors advertise environmentConfig/read.
 			// Go now implements the request (execserver/environment_config_read.go,
 			// mirroring exec-server/src/server/registry.rs -> environment_config_read),

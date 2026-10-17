@@ -1158,6 +1158,22 @@ func (c *Client) DiscoverCapabilities(ctx context.Context, params *CapabilityDis
 	return c.DiscoverCapabilityRoots(ctx, params)
 }
 
+// DiscoverCapabilitiesV2 queries the executor-owned capability inventory for a
+// cwd. Callers should check environment capabilities before invoking it.
+func (c *Client) DiscoverCapabilitiesV2(ctx context.Context, params *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
+	if c == nil {
+		return nil, errors.New("exec-server client is nil")
+	}
+	if params == nil || strings.TrimSpace(params.CWD) == "" {
+		return nil, errors.New("capabilities/discoverV2 cwd is required")
+	}
+	var response DiscoverV2CapabilitiesResponse
+	if err := c.call(ctx, MethodCapabilitiesDiscoverV2, params, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSReadFileResponse, error) {
 	normalized, err := normalizeFSReadFileParams(params)
 	if err != nil {

@@ -1158,7 +1158,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6fbd7be1518d259e30e6fef48f05f433d2461a20	54265	Add regression coverage for Guardian sandbox retry approvals (#54265)	2026-10-15	guardian	0	0		0	0	complete	
 6fbfc352cafb50332d62dbdc8720cb5d7fe3b7c7	53701	Enable CLI Daybreak by default and enforce background-turn eligibility (#53701)	2026-10-13	tui	0	0		0	0	not_applicable	
 6fee98cc85a69ee44a856121cac0f64505cf48d0	43645	Expand TUI regression coverage for realtime voice conversations (#43645)	2026-09-08	tui	0	0		0	0	not_applicable	
-703d253ed676c26e4b9708a374b7344b5c1bcc53	53723	Wire V2 capability discovery through exec-server RPC (#53723)	2026-10-13	execserver	3	0	0.00	0	0	implementation_pending	discover_capabilities_v2,discover_with_recovery,registration_succeeded
+703d253ed676c26e4b9708a374b7344b5c1bcc53	53723	Wire V2 capability discovery through exec-server RPC (#53723)	2026-10-13	execserver	3	1	0.33	0	0	partial	discover_with_recovery,registration_succeeded
 709efcb7a9c7c2a953d0350608dd104218209d5f	45683	Consolidate guardian transcript tests in `guardian-context` (#45683)	2026-09-15	guardian	0	0		0	0	not_applicable	
 70b5cfc73b25458a7af225d24b16ef4794f8f380	40598	Probe Windows terminal colors without risking startup input (#40598)	2026-08-25	tui	6	4	0.67	0	0	audit_pending	probe_default_colors_after_protected_startup,ready_for_terminal_color_probe
 70e8fe1be3100fd2c1f1942a61f9ac70a0177e91	46117	Add opt-in automatic background server startup (#46117)	2026-09-17	tui	2	1	0.50	0	0	audit_pending	EXTERNAL_AGENT_CONFIG_MIGRATION_DAEMON_UNAVAILABLE_MESSAGE
