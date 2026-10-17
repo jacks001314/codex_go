@@ -500,7 +500,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 328feb0c298ffa093f4b37a6eb7761930caed7d7	46555	Track executor registrations across connection refresh and recovery (#46555)	2026-09-18	execserver	2	0	0.00	0	0	implementation_pending	active_turn_environment_selections,cached_executor_registration_id
 32b54cffdd3bfa6bc018b67886a3be575afb9533	46239	Prefer the provisioning service for automatic Windows sandbox setup (#46239)	2026-09-17	sandbox	0	0		0	0	not_applicable	
 32c303c197e437cb13d444389d651fbaae02a6ed	42609	Condense TUI startup warnings (#42609)	2026-09-03	tui	4	3	0.75	0	0	audit_pending	project_config_warning
-32ce703a80ef8828a07d452e2af5630cc0825aae	40688	Bound SQLite integrity checks for diagnostic attachments (#40688)	2026-08-25	appserver	2	0	0.00	0	0	implementation_pending	SqliteIntegrityCheck,open_read_only_pool
+32ce703a80ef8828a07d452e2af5630cc0825aae	40688	Bound SQLite integrity checks for diagnostic attachments (#40688)	2026-08-25	appserver	2	0	0.00	0	0	complete	SqliteIntegrityCheck,open_read_only_pool
 32f48598a0609a882e5847f0d3e35d6d67f375bc	41893	Show successful TUI commands individually (#41893)	2026-08-31	tui	0	0		0	0	not_applicable	
 32f578485143354d1c321840a3e990aabdbaca9c	48764	Preserve MCP app resource URIs without defaulting display mode (#48764)	2026-09-27	appserver	0	0		0	0	not_applicable	
 32fd056313fec252311b4c91282b5f59075c61ef	40717	Support sandboxed exec-server test environments (#40717)	2026-08-25	execserver	0	0		0	0	not_applicable	
