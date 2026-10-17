@@ -8680,6 +8680,16 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID strin
 		} else if item != nil {
 			items = append(items, item)
 		}
+		if item, realtimeErr := r.realtimeWorldStateInputItem(threadID, runConfig.Config); realtimeErr != nil {
+			return nil, realtimeErr
+		} else if item != nil {
+			items = append(items, item)
+			if persisted, ok := realtimeWorldStateSessionItemForTurn(turnID, item, time.Now().UTC()); ok {
+				if _, appendErr := r.runtimeAppendItem(session.ThreadID(threadID), persisted); appendErr != nil {
+					return nil, appendErr
+				}
+			}
+		}
 		return items, nil
 	}
 }

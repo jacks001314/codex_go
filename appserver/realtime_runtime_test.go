@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -642,6 +643,68 @@ func TestRealtimeWorldStateDoesNotEmitEndWhenStartWasNotRetained(t *testing.T) {
 	}
 	if item != nil {
 		t.Fatalf("unseen realtime start produced an end fragment: %#v", item)
+	}
+}
+
+// Mirrors Rust #47596: a realtime call starting or ending during one text turn
+// must be reflected by the next model request, not only by the turn-start
+// context.
+func TestRealtimeWorldStateRefreshesPerStepLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	threadID := "thread-realtime-step"
+	if err := store.Save(&session.Record{ID: session.ThreadID(threadID), Metadata: session.Metadata{CWD: t.TempDir()}}); err != nil {
+		t.Fatalf("save thread: %v", err)
+	}
+	manager := realtime.NewManager()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Realtime: manager})
+	t.Cleanup(func() { _ = router.Close() })
+	provider := router.turnStepInputItemsProvider(threadID, "turn-realtime-step", &appTurnRunConfig{
+		Config: &config.Config{Values: map[string]any{}},
+	})
+	realtimeText := func(items []any) string {
+		for _, item := range items {
+			if nestedValueContains(item, "<realtime_conversation>") {
+				return fmt.Sprint(item)
+			}
+		}
+		return ""
+	}
+
+	items, err := provider(nil, 0, "gpt-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := realtimeText(items); text != "" {
+		t.Fatalf("inactive realtime step emitted context: %q", text)
+	}
+
+	if _, _, err := manager.Start(&realtime.StartParams{ThreadID: threadID, OutputModality: realtime.OutputText}); err != nil {
+		t.Fatalf("start realtime: %v", err)
+	}
+	items, err = provider(nil, 1, "gpt-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := realtimeText(items); !strings.Contains(text, defaultRealtimeStartInstructions) {
+		t.Fatalf("started realtime step = %q", text)
+	}
+	items, err = provider(nil, 2, "gpt-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := realtimeText(items); text != "" {
+		t.Fatalf("unchanged active realtime step re-emitted context: %q", text)
+	}
+
+	if _, _, err := manager.Stop(&realtime.StopParams{ThreadID: threadID}, "requested"); err != nil {
+		t.Fatalf("stop realtime: %v", err)
+	}
+	items, err = provider(nil, 3, "gpt-test", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := realtimeText(items); !strings.Contains(text, defaultRealtimeEndInstructions) {
+		t.Fatalf("ended realtime step = %q", text)
 	}
 }
 

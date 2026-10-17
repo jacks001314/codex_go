@@ -19494,9 +19494,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: RealtimeConversationSnapshot"
+        "Round 266: turnStepInputItemsProvider reevaluates realtimeWorldStateInputItem on every sampling step, so a realtime call starting or ending during a text turn emits start/end instructions in the next request. Emitted items are persisted into the thread with the hidden session-item shape, allowing the end transition to recognize the retained start. Tests: go test ./appserver -run RealtimeWorldState -count=1; go build ./..."
       ]
     },
     {
