@@ -54,6 +54,7 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 	}
 	lineage := r.responsesMetadataLineage(request.ThreadID)
 	sessionID := firstNonEmpty(strings.TrimSpace(record.SessionID), lineage.SessionID, request.ThreadID)
+	voiceSessionID := r.voiceSessionIDForCompaction(request.ThreadID, startedAt)
 	event := telemetry.NewCodexCompactionEvent(telemetry.CodexCompactionEventInput{
 		ThreadID:                        request.ThreadID,
 		SessionID:                       sessionID,
@@ -70,6 +71,7 @@ func (r *RuntimeRouter) emitCompactionAnalyticsEvent(ctx context.Context, connec
 		Phase:                           compactionAnalyticsPhase(request.Phase),
 		Strategy:                        telemetry.CompactionStrategyMemento,
 		Status:                          compactionAnalyticsStatus(result, compactErr),
+		VoiceSessionID:                  stringPtrIfNotEmpty(voiceSessionID),
 		CodexErrorKind:                  codexErrorKind,
 		CodexErrorHTTPStatusCode:        codexErrorHTTPStatusCode,
 		UsageLimitWindowMinutes:         usageLimitWindowMinutes,

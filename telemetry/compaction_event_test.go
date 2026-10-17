@@ -56,6 +56,7 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 	if params["codex_error_kind"] != nil ||
 		params["codex_error_http_status_code"] != nil ||
 		params["usage_limit_window_minutes"] != nil ||
+		params["voice_session_id"] != nil ||
 		params["retained_image_count"] != nil ||
 		params["compaction_summary_tokens"] != nil ||
 		params["cached_input_tokens"] != nil || params["cache_write_input_tokens"] != nil {
@@ -65,6 +66,16 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 		params["active_context_tokens_after"] != float64(18000) ||
 		params["duration_ms"] != float64(6543) {
 		t.Fatalf("numeric fields = %s", data)
+	}
+}
+
+func TestCodexCompactionEventIncludesVoiceSessionIDLikeRust(t *testing.T) {
+	event := NewCodexCompactionEvent(CodexCompactionEventInput{
+		ThreadID:       "thread-1",
+		VoiceSessionID: stringPtrTelemetry("voice-1"),
+	})
+	if event.EventParams.VoiceSessionID == nil || *event.EventParams.VoiceSessionID != "voice-1" {
+		t.Fatalf("voice session id = %#v", event.EventParams.VoiceSessionID)
 	}
 }
 

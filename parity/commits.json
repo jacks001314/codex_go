@@ -28478,9 +28478,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: track_realtime_session_updated"
+        "Round 115 (lead): landed - realtime now surfaces session.updated internally, and appserver/voice_session_analytics.go tracks the active voice-session window plus up to 16 recent closed windows per thread (start/update/close boundaries). Compaction analytics resolves the session containing the compaction start timestamp, falling back to the active realtime session, and telemetry serializes voice_session_id. Tests: TestVoiceSessionWindowsResolveCompactionAttributionLikeRust, TestCompactionAnalyticsUsesCompactionStartVoiceSessionLikeRust (delayed completion after a replacement session), TestCodexCompactionEventIncludesVoiceSessionIDLikeRust and TestNotificationFromEvent. RC: removing timestamp lookup loses every window attribution; dropping closed windows loses delayed attribution. go test ./realtime ./telemetry -count=1 + focused appserver compaction/realtime tests + go vet ./realtime ./appserver ./telemetry + go build ./realtime ./appserver ./telemetry ./turn green."
       ]
     },
     {

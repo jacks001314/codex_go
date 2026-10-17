@@ -1562,6 +1562,7 @@ func TestNotificationFromEvent(t *testing.T) {
 		event Event
 		want  NotificationMethod
 	}{
+		{Event{Type: "session.updated", RealtimeSessionID: "sess-1"}, NotificationSessionUpdated},
 		{Event{Type: "input_audio_buffer.speech_started", ItemID: "item-a"}, NotificationItemAdded},
 		{Event{Type: "input_transcript.delta", Delta: "he"}, NotificationTranscriptDelta},
 		{Event{Type: "input_transcript.done", Text: "hello"}, NotificationTranscriptDone},
@@ -1582,8 +1583,8 @@ func TestNotificationFromEvent(t *testing.T) {
 			t.Fatalf("event %s method = %s, want %s", tc.event.Type, notification.Method, tc.want)
 		}
 	}
-	if _, ok := NotificationFromEvent("thread-a", Event{Type: "session.updated"}); ok {
-		t.Fatal("session.updated should be ignored")
+	if _, ok := NotificationFromEvent("thread-a", Event{Type: "unrelated.event"}); ok {
+		t.Fatal("unrelated events should be ignored")
 	}
 }
 
@@ -1681,7 +1682,7 @@ func stripRealtimeTimelineNotifications(notifications []Notification) []Notifica
 // canonical timeline item rather than session or transport state.
 func isRealtimeTimelineNotification(method NotificationMethod) bool {
 	switch method {
-	case NotificationItemStarted, NotificationItemCompleted, NotificationItemTranscriptDelta:
+	case NotificationSessionUpdated, NotificationItemStarted, NotificationItemCompleted, NotificationItemTranscriptDelta:
 		return true
 	default:
 		return false

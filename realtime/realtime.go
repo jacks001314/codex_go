@@ -20,6 +20,7 @@ const (
 	MethodListVoices   Method = "thread/realtime/listVoices"
 
 	NotificationStarted             NotificationMethod = "thread/realtime/started"
+	NotificationSessionUpdated      NotificationMethod = "thread/realtime/sessionUpdated"
 	NotificationItemAdded           NotificationMethod = "thread/realtime/itemAdded"
 	NotificationItemStarted         NotificationMethod = "thread/realtime/item/started"
 	NotificationItemTranscriptDelta NotificationMethod = "thread/realtime/item/transcript/delta"
@@ -1787,6 +1788,11 @@ type StartedNotification struct {
 	Version           Version `json:"version"`
 }
 
+type SessionUpdatedNotification struct {
+	ThreadID          string  `json:"threadId"`
+	RealtimeSessionID *string `json:"realtimeSessionId"`
+}
+
 type ItemAddedNotification struct {
 	ThreadID string         `json:"threadId"`
 	Item     map[string]any `json:"item"`
@@ -1889,6 +1895,14 @@ type TranscriptEntry struct {
 
 func NotificationFromEvent(threadID string, event Event) (Notification, bool) {
 	switch event.Type {
+	case "session.updated":
+		return Notification{
+			Method: NotificationSessionUpdated,
+			Params: SessionUpdatedNotification{
+				ThreadID:          threadID,
+				RealtimeSessionID: stringPtrIfNotEmpty(event.RealtimeSessionID),
+			},
+		}, true
 	case "input_audio_buffer.speech_started":
 		itemID := event.ItemID
 		return Notification{

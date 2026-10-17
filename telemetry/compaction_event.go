@@ -69,6 +69,7 @@ type CodexCompactionEventParams struct {
 	Phase                           string                       `json:"phase"`
 	Strategy                        string                       `json:"strategy"`
 	Status                          string                       `json:"status"`
+	VoiceSessionID                  *string                      `json:"voice_session_id"`
 	CodexErrorKind                  *string                      `json:"codex_error_kind"`
 	CodexErrorHTTPStatusCode        *uint16                      `json:"codex_error_http_status_code"`
 	UsageLimitWindowMinutes         *uint16                      `json:"usage_limit_window_minutes"`
@@ -102,6 +103,7 @@ type CodexCompactionEventInput struct {
 	Phase                           string
 	Strategy                        string
 	Status                          string
+	VoiceSessionID                  *string
 	CodexErrorKind                  *string
 	CodexErrorHTTPStatusCode        *uint16
 	UsageLimitWindowMinutes         *uint16
@@ -141,6 +143,7 @@ func NewCodexCompactionEvent(input CodexCompactionEventInput) CodexCompactionEve
 			Phase:                           firstNonEmptyTelemetry(input.Phase, CompactionPhaseStandaloneTurn),
 			Strategy:                        firstNonEmptyTelemetry(input.Strategy, CompactionStrategyMemento),
 			Status:                          firstNonEmptyTelemetry(input.Status, CompactionStatusCompleted),
+			VoiceSessionID:                  input.VoiceSessionID,
 			CodexErrorKind:                  input.CodexErrorKind,
 			CodexErrorHTTPStatusCode:        input.CodexErrorHTTPStatusCode,
 			UsageLimitWindowMinutes:         input.UsageLimitWindowMinutes,

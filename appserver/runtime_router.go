@@ -464,6 +464,9 @@ type RuntimeRouter struct {
 	// voiceDurationRecorded deduplicates the voice session duration metric,
 	// which is recorded once per completed session.
 	voiceDurationRecorded map[string]bool
+	// voiceSessionWindows retains the active and recent closed realtime sessions
+	// per thread so delayed compaction analytics can resolve their start time.
+	voiceSessionWindows   map[string][]voiceSessionWindow
 	internalMemoryThreads sync.Map
 	sessionEndMu          sync.Mutex
 	sessionEnded          map[string]struct{}
@@ -708,6 +711,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		realtimeOpsCancel:       realtimeOpsCancel,
 		realtimeOpsQueues:       map[string]chan func(context.Context){},
 		realtimeEventLocks:      map[string]*sync.Mutex{},
+		voiceSessionWindows:     map[string][]voiceSessionWindow{},
 		agentRegistry:           agent.NewRegistry(),
 		agentRegistries:         map[string]*agent.Registry{},
 		agentActivity:           map[string]chan string{},
@@ -8945,7 +8949,32 @@ func (r *RuntimeRouter) ensureRealtimeThread(threadID string) error {
 func (r *RuntimeRouter) notifyRealtime(notifications []realtime.Notification) {
 	for i := range notifications {
 		notification := &notifications[i]
-		if notification.Method == realtime.NotificationClosed {
+		switch notification.Method {
+		case realtime.NotificationStarted:
+			if params, ok := realtimeStartedNotification(notification); ok {
+				startedAt := time.Now().UTC()
+				if r.services.Realtime != nil {
+					if state, found := r.services.Realtime.State(params.ThreadID); found && state != nil {
+						startedAt = state.StartedAt
+					}
+				}
+				r.trackRealtimeSessionStarted(params.ThreadID, stringPtrValue(params.RealtimeSessionID), startedAt)
+			}
+		case realtime.NotificationSessionUpdated:
+			if params, ok := realtimeSessionUpdatedNotification(notification); ok {
+				r.trackRealtimeSessionUpdated(params.ThreadID, stringPtrValue(params.RealtimeSessionID))
+			}
+			continue
+		case realtime.NotificationClosed:
+			closedAt := time.Now().UTC()
+			if params, ok := realtimeClosedNotification(notification); ok {
+				if r.services.Realtime != nil {
+					if state, found := r.services.Realtime.State(params.ThreadID); found && state != nil && state.ClosedAt != nil {
+						closedAt = *state.ClosedAt
+					}
+				}
+				r.trackRealtimeSessionClosed(params.ThreadID, closedAt)
+			}
 			r.recordVoiceSessionDuration(notification)
 		}
 		method, params, ok := realtimeNotificationPayload(notification)
@@ -8954,6 +8983,51 @@ func (r *RuntimeRouter) notifyRealtime(notifications []realtime.Notification) {
 		}
 		r.notify(method, params)
 	}
+}
+
+func realtimeStartedNotification(notification *realtime.Notification) (realtime.StartedNotification, bool) {
+	if notification == nil {
+		return realtime.StartedNotification{}, false
+	}
+	switch params := notification.Params.(type) {
+	case realtime.StartedNotification:
+		return params, true
+	case *realtime.StartedNotification:
+		if params != nil {
+			return *params, true
+		}
+	}
+	return realtime.StartedNotification{}, false
+}
+
+func realtimeSessionUpdatedNotification(notification *realtime.Notification) (realtime.SessionUpdatedNotification, bool) {
+	if notification == nil {
+		return realtime.SessionUpdatedNotification{}, false
+	}
+	switch params := notification.Params.(type) {
+	case realtime.SessionUpdatedNotification:
+		return params, true
+	case *realtime.SessionUpdatedNotification:
+		if params != nil {
+			return *params, true
+		}
+	}
+	return realtime.SessionUpdatedNotification{}, false
+}
+
+func realtimeClosedNotification(notification *realtime.Notification) (realtime.ClosedNotification, bool) {
+	if notification == nil {
+		return realtime.ClosedNotification{}, false
+	}
+	switch params := notification.Params.(type) {
+	case realtime.ClosedNotification:
+		return params, true
+	case *realtime.ClosedNotification:
+		if params != nil {
+			return *params, true
+		}
+	}
+	return realtime.ClosedNotification{}, false
 }
 
 func realtimeNotificationPayload(notification *realtime.Notification) (NotificationMethod, any, bool) {
