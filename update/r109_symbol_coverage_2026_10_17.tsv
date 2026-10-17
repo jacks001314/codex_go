@@ -159,7 +159,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0fd85b075288c4fee50f0df3e4e4f98f80c693fe	54069	Fix Windows environment handling for remote MCP servers (#54069)	2026-10-14	mcp	0	0		0	0	complete	
 0fe877b4dedc86a29c8bebb3edbd3efcc3580c7d	40447	Retry failed shell snapshot captures (#40447)	2026-08-24	execserver	0	0		0	0	not_applicable	
 102ae5e2e6ff63d2e7346138182e7eec2fc0711a	40985	Prewarm Guardian WebSockets without blocking thread startup (#40985)	2026-08-26	guardian	1	1	1.00	0	0	complete	
-102e1763b90e70d79a0bba5d262cf71f904583c1	43950	Keep app-server thread RPCs active until delegated work completes (#43950)	2026-09-09	appserver	1	0	0.00	0	0	implementation_pending	discard_closed
+102e1763b90e70d79a0bba5d262cf71f904583c1	43950	Keep app-server thread RPCs active until delegated work completes (#43950)	2026-09-09	appserver	1	0	0.00	0	0	not_applicable	discard_closed
 102fc57e4ac485f7a669d3bc6a8994335c3fbe46	44492	Distinguish HTTP quota errors from rate limits (#44492)	2026-09-10	core	0	0		0	0	not_applicable	
 1032738aa09b0f0d0d45f7e24e4a96fff219926a	43937	Tag TUI startup metrics with terminal and multiplexer categories (#43937)	2026-09-08	tui	0	0		0	0	not_applicable	
 105fe8761cd56bb9cf143106435f487f7e902b62	46031	Keep Noise relay streams alive after repeated handshake failures (#46031)	2026-09-16	execserver	0	0		0	0	not_applicable	

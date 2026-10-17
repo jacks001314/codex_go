@@ -10011,9 +10011,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: discard_closed"
+        "Round 115 (lead): N/A (verified carrier absence) - #43950 fixes Rust's request-serialization queue/running-thread listener lifetime for async resume, rollback and startup: queued requests are discarded when their gate closes and rollback/resume handlers await listener completion. Go's app-server dispatches thread start/resume/read synchronously in Router.Handle, has no RequestSerializationQueues equivalent, no running-thread listener command queue, and no thread/rollback RPC/waiters (the deprecated Rust API was later removed in #44915). Synchronous return already keeps the RPC active through its work, so there is no delegated request-lifetime or queued-request cleanup path to port. go build ./appserver green."
       ]
     },
     {
