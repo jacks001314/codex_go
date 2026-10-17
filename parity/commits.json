@@ -2663,9 +2663,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: bind_otlp_trace_receiver, run_otel_trace_listener, run_otlp_trace_receiver, trace_batch_channel"
+        "Round 115 (lead): N/A (standalone host transport absent) - #40760 adds code-mode-host process flags for direct OTLP/HTTP trace export or a trace-only WebSocket backed by a loopback OTLP receiver, plus host request/gRPC spans and bounded trace flush. Go's code-mode host is an in-process provider (`codemode.NewProcessProvider`/remote provider) without that standalone axum/listen-url process, OTLP trace receiver, or trace-batch channel. Existing Go trace propagation is covered at the MCP/unified-exec span boundaries. No host-process tracing carrier exists to extend."
       ]
     },
     {
