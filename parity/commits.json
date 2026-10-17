@@ -1,8 +1,20 @@
 {
   "schemaVersion": 1,
   "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-  "rustToInclusive": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+  "rustToInclusive": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
   "commits": [
+    {
+      "sha": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
+      "subject": "Gate app-server WebSocket compression behind a feature flag (#54949)",
+      "kind": "protocol",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 287: app_server_websocket_compression is an opt-in under-development feature; TCP and Unix WebSocket listeners negotiate zstd only when enabled and fall back to text for absent or unsupported offers."
+      ]
+    },
     {
       "sha": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
       "subject": "Add negotiated zstd compression to app-server WebSockets (#54930)",

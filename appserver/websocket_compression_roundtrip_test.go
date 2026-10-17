@@ -4,21 +4,39 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"codex_go/config"
 	"codex_go/session"
 )
+
+func TestWebSocketCompressionFeatureGateFromConfig(t *testing.T) {
+	home := t.TempDir()
+	if webSocketCompressionFeatureEnabled(home) {
+		t.Fatal("compression feature enabled by default")
+	}
+	document := "[features]\napp_server_websocket_compression = true\n"
+	if err := os.WriteFile(config.ConfigPath(home), []byte(document), 0o600); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+	if !webSocketCompressionFeatureEnabled(home) {
+		t.Fatal("compression feature was not read from config")
+	}
+}
 
 func TestWebSocketServerNegotiatesPersistentZstdStreams(t *testing.T) {
 	codexHome := t.TempDir()
 	routerFactory := func() *RuntimeRouter {
 		return NewDefaultRuntimeRouter(session.NewStore(t.TempDir()), codexHome)
 	}
-	server := httptest.NewServer(NewWebSocketServer(nil, routerFactory))
+	websocketServer := NewWebSocketServer(nil, routerFactory)
+	websocketServer.SetCompressionEnabled(true)
+	server := httptest.NewServer(websocketServer)
 	defer server.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -99,16 +117,14 @@ func TestWebSocketServerKeepsTextFallbackWithoutNegotiation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, response, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &websocket.DialOptions{
-		HTTPHeader: map[string][]string{
-			WebsocketCompressionHeader: {"unsupported-stream-v9"},
-		},
+		HTTPHeader: map[string][]string{WebsocketCompressionHeader: {WebsocketZstdStreamProtocol}},
 	})
 	if err != nil {
 		t.Fatalf("websocket dial error = %v", err)
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 	if got := response.Header.Get(WebsocketCompressionHeader); got != "" {
-		t.Fatalf("unsupported offer was acknowledged with %q", got)
+		t.Fatalf("disabled compression feature was acknowledged with %q", got)
 	}
 	if err := conn.Write(ctx, websocket.MessageText, []byte(
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"text-test","version":"1.0.0"}}}`,
@@ -126,7 +142,9 @@ func TestCompressedWebSocketRejectsTextAndMalformedBinary(t *testing.T) {
 	routerFactory := func() *RuntimeRouter {
 		return NewDefaultRuntimeRouter(session.NewStore(t.TempDir()), codexHome)
 	}
-	server := httptest.NewServer(NewWebSocketServer(nil, routerFactory))
+	websocketServer := NewWebSocketServer(nil, routerFactory)
+	websocketServer.SetCompressionEnabled(true)
+	server := httptest.NewServer(websocketServer)
 	defer server.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

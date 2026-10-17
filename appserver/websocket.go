@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/session"
 	"codex_go/state"
 )
@@ -33,12 +34,32 @@ type WebSocketOptions struct {
 	Auth           *WebSocketAuthSettings
 	Ready          io.Writer
 	RuntimeOptions *RuntimeRouterOptions
+	// CompressionEnabled overrides the app_server_websocket_compression feature
+	// for tests and embedders. Nil derives the value from config.
+	CompressionEnabled *bool
 }
 
 type WebSocketServer struct {
 	policy         *WebSocketAuthPolicy
 	routerFactory  func() *RuntimeRouter
 	maxMessageSize int64
+	compression    bool
+}
+
+// SetCompressionEnabled controls whether this server negotiates zstd WebSocket
+// compression. It must be called before serving requests.
+func (s *WebSocketServer) SetCompressionEnabled(enabled bool) {
+	if s != nil {
+		s.compression = enabled
+	}
+}
+
+func webSocketCompressionFeatureEnabled(codexHome string) bool {
+	cfg, err := config.LoadWithOptions(codexHome, nil)
+	if err != nil {
+		return false
+	}
+	return features.Enabled(cfg.FeatureSettings(), "app_server_websocket_compression")
 }
 
 func WebSocketListenAddress(listen string) (string, error) {
@@ -134,9 +155,16 @@ func ServeWebSocket(ctx context.Context, options *WebSocketOptions) error {
 	if options.Ready != nil {
 		fmt.Fprintf(options.Ready, "app-server websocket listening on %s\n", WebSocketURLFromAddr(listener.Addr()))
 	}
-	server := &http.Server{
-		Handler: NewWebSocketServer(policy, NewWebSocketRouterFactoryWithOptions(codexHome, options.StoreRoot, preparedRuntimeOptions)),
+	websocketServer := NewWebSocketServer(
+		policy,
+		NewWebSocketRouterFactoryWithOptions(codexHome, options.StoreRoot, preparedRuntimeOptions),
+	)
+	compressionEnabled := webSocketCompressionFeatureEnabled(codexHome)
+	if options.CompressionEnabled != nil {
+		compressionEnabled = *options.CompressionEnabled
 	}
+	websocketServer.SetCompressionEnabled(compressionEnabled)
+	server := &http.Server{Handler: websocketServer}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -225,7 +253,7 @@ func (s *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	compression := WebsocketCompressionPlain
-	if r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
+	if s.compression && r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
 		compression = WebsocketCompressionZstd
 		w.Header().Set(WebsocketCompressionHeader, WebsocketZstdStreamProtocol)
 	}

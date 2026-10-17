@@ -15,7 +15,7 @@ import (
 
 // serveUnixSocket binds the Windows control socket after securing its private
 // directory (Rust codex-uds + app-server-transport's control socket startup).
-func serveUnixSocket(ctx context.Context, socketPath string, routerFactory func() *RuntimeRouter, access DaemonShutdownAccess, shutdown func()) error {
+func serveUnixSocket(ctx context.Context, socketPath string, routerFactory func() *RuntimeRouter, access DaemonShutdownAccess, shutdown func(), compressionEnabled bool) error {
 	socketPath = strings.TrimSpace(socketPath)
 	if socketPath == "" {
 		return fmt.Errorf("%w: socket path is empty", ErrInvalidRequest)
@@ -45,7 +45,7 @@ func serveUnixSocket(ctx context.Context, socketPath string, routerFactory func(
 	}
 	defer listener.Close()
 	defer os.Remove(validated)
-	return serveUnixSocketHTTP(ctx, listener, routerFactory, access, shutdown)
+	return serveUnixSocketHTTP(ctx, listener, routerFactory, access, shutdown, compressionEnabled)
 }
 
 // verifiedLocalDaemonSocket validates the private rendezvous directory that holds

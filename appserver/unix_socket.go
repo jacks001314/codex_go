@@ -31,6 +31,9 @@ type UnixSocketOptions struct {
 	ShutdownAccess DaemonShutdownAccess
 	// OnDaemonShutdown is invoked after a successful shutdown handshake.
 	OnDaemonShutdown func()
+	// CompressionEnabled overrides the app_server_websocket_compression feature
+	// for tests and embedders. Nil derives the value from config.
+	CompressionEnabled *bool
 }
 
 func UnixSocketPath(listen string, codexHome string) (string, error) {
@@ -137,11 +140,15 @@ func ServeUnixSocket(ctx context.Context, options *UnixSocketOptions) error {
 	if recoveryRestore != nil && recoveryRestore.router != nil {
 		recoveryRestore.router.SetDaemonRecoverySink(recoverySink)
 	}
+	compressionEnabled := webSocketCompressionFeatureEnabled(codexHome)
+	if options.CompressionEnabled != nil {
+		compressionEnabled = *options.CompressionEnabled
+	}
 	serveErr := serveUnixSocket(ctx, socketPath, func() *RuntimeRouter {
 		router := newRouter()
 		router.SetDaemonRecoverySink(recoverySink)
 		return router
-	}, options.ShutdownAccess, options.OnDaemonShutdown)
+	}, options.ShutdownAccess, options.OnDaemonShutdown, compressionEnabled)
 	// Release the daemon-lifetime router before the snapshot is written so its
 	// restored threads contribute to the next generation.
 	if recoveryRestore != nil {
@@ -192,11 +199,16 @@ const (
 // uses (app-server-transport::start_control_socket_acceptor): every accepted
 // connection upgrades, the managed shutdown path is gated by access, and any
 // other path is the JSON-RPC control channel.
-func serveUnixSocketHTTP(ctx context.Context, listener net.Listener, routerFactory func() *RuntimeRouter, access DaemonShutdownAccess, shutdown func()) error {
+func serveUnixSocketHTTP(ctx context.Context, listener net.Listener, routerFactory func() *RuntimeRouter, access DaemonShutdownAccess, shutdown func(), compressionEnabled bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	handler := &unixSocketHandler{routerFactory: routerFactory, access: access, shutdown: shutdown}
+	handler := &unixSocketHandler{
+		routerFactory:      routerFactory,
+		access:             access,
+		shutdown:           shutdown,
+		compressionEnabled: compressionEnabled,
+	}
 	server := &http.Server{Handler: handler}
 	go func() {
 		<-ctx.Done()
@@ -213,9 +225,10 @@ func serveUnixSocketHTTP(ctx context.Context, listener net.Listener, routerFacto
 }
 
 type unixSocketHandler struct {
-	routerFactory func() *RuntimeRouter
-	access        DaemonShutdownAccess
-	shutdown      func()
+	routerFactory      func() *RuntimeRouter
+	access             DaemonShutdownAccess
+	shutdown           func()
+	compressionEnabled bool
 }
 
 func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +253,7 @@ func (h *unixSocketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(maxUnfragmentedMessageBytesHeader, strconv.FormatInt(max, 10))
 	}
 	compression := WebsocketCompressionPlain
-	if r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
+	if h.compressionEnabled && r.Header.Get(WebsocketCompressionHeader) == WebsocketZstdStreamProtocol {
 		compression = WebsocketCompressionZstd
 		w.Header().Set(WebsocketCompressionHeader, WebsocketZstdStreamProtocol)
 	}

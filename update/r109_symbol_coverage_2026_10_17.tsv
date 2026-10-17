@@ -1277,6 +1277,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7ae831991792744434027c431dfbc7e81dd5c12c	54369	Retry SQLite operations on transient writer contention (#54369)	2026-10-15	persistence	3	3	1.00	0	0	complete	
 7b06e4af664049a3c1ed3113c4ee52ec3d5993f2	53673	Publish Rust releases with the GitHub CLI (#53673)	2026-10-13	core	0	0		0	0	not_applicable	
 7b491281c89023fc3efebcf338ed30d166098cc8	44877	Return public key metadata from user verification enrollment (#44877)	2026-09-11	appserver	0	0		0	0	not_applicable	
+7b44ac1661433ae3a6f375fde873fa7123c935fe	54949	Gate app-server WebSocket compression behind a feature flag (#54949)	2026-10-17	appserver	1	1	1.00	0	0	complete	none
 7b5b3bd5a2418a5e142449c9ab95e057d14bc98a	40186	Identify detached memory requests as memory consolidation (#40186)	2026-08-23	core	0	0		0	0	not_applicable	
 7b66c21f580e2695d0345f62b4f860b1915a182e	47690	Remove obsolete Guardian context capture mode branches (#47690)	2026-09-23	guardian	2	0	0.00	0	0	not_applicable	for_session,reserve_user_input_order
 7b6dd0c7b8ddfc44f14ed52845665f5380b159b9	45981	Preserve session config when switching thread permission profiles (#45981)	2026-09-16	appserver	1	1	1.00	0	0	complete	

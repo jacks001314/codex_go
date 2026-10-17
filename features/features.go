@@ -48,6 +48,9 @@ var Registry = []Spec{
 	// startup was promoted to stable and is enabled by default; the
 	// experimental menu entry and announcement are gone.
 	{Key: "daemon_auto_start", Stage: StageStable, DefaultEnabled: true},
+	// Rust #54949: negotiated zstd app-server WebSocket/UDS compression is
+	// opt-in while the transport feature is under development.
+	{Key: "app_server_websocket_compression", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	{Key: "undo", Stage: StageRemoved},
 	{Key: "shell_tool", Stage: StageStable, DefaultEnabled: true},
 	{Key: "secret_auth_storage", Stage: StageStable, DefaultEnabled: runtime.GOOS == "windows"},
