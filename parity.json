@@ -1526,6 +1526,14 @@
             "reason": "Aligned upstream 0d654e6536 (#40987 Track window and fork positions in turn metadata): client and Responses metadata serialize forked_from_ordinal_exclusive alongside fork lineage. The cutoff comes from the logical history base only when it names the direct fork parent, so ambiguous revert/ancestor bases omit it instead of reporting another thread's boundary. Context-inheriting subagents emit parent_thread_id without fork lineage. Window number metadata was already aligned.",
             "userImpact": "Fork lineage remains correct after appends, reverts, and cold resumes without conflating a physical history base with the logical fork parent.",
             "test": "go test ./turn ./codexapi ./appserver -run 'ForkOrdinal|MergesExtraIntoTurnMetadata|ClientMetadata' -count=1"
+        },
+        {
+            "id": "generated-context-fragment-kinds",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 287587c32c (#40275 Classify additional generated context fragments): compaction summaries carry compaction.summary metadata, Guardian denied-action approvals carry guardian.approved_action on persisted and steer items, and shared kind constants classify subagent notifications. Go currently has no runtime carrier for subagent notification text fragments, so that classification is available to future producers without duplicating the formatter.",
+            "userImpact": "Harness consumers can identify generated summaries and manual approvals by stable content kinds rather than parsing message text.",
+            "test": "go test ./compact ./appserver -run 'BuildCompactedHistory|GuardianApprovedActionItem' -count=1"
         }
     ]
 }

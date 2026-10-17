@@ -154,6 +154,11 @@ func TestBuildCompactedHistory(t *testing.T) {
 	if !strings.Contains(history[2].Text, SummaryPrefix) || !strings.Contains(history[2].Text, "summary") {
 		t.Fatalf("summary item = %+v", history[2])
 	}
+	passthrough, _ := history[2].Data["internal_chat_message_metadata_passthrough"].(map[string]any)
+	kinds, _ := passthrough["content_item_kinds"].([]any)
+	if len(kinds) != 1 || kinds[0] != "compaction.summary" {
+		t.Fatalf("summary content kinds = %#v", passthrough["content_item_kinds"])
+	}
 }
 
 func TestCompactLocallyInjectsInitialContext(t *testing.T) {

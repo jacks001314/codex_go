@@ -24,6 +24,15 @@ func copiedManualApprovalItem(id string, action string, createdAt time.Time) ses
 	}
 }
 
+func TestGuardianApprovedActionItemCarriesContentKindLikeRust(t *testing.T) {
+	event := state.Event{ID: "review-1", TurnID: "turn-1", Action: state.Action{Type: "command", Command: "pwd", CWD: "/repo"}}
+	item := guardianApprovedActionSessionItem(event, "approved", fixedTime())
+	kinds := sessionItemContentItemKinds(&item)
+	if len(kinds) != 1 || kinds[0] != "guardian.approved_action" {
+		t.Fatalf("approved action content kinds = %#v", kinds)
+	}
+}
+
 func inheritedMetadataItem(t *testing.T, item session.Item, raw string) session.Item {
 	t.Helper()
 	if !json.Valid([]byte(raw)) {

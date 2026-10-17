@@ -16,6 +16,12 @@ const (
 	// `codex_context_fragments::COMPACTION_SUMMARY_KIND`, shared between core and
 	// guardian-context).
 	CompactionSummaryKind = "compaction.summary"
+	// GuardianApprovedActionKind classifies the user's approval of one exact
+	// previously denied Guardian action (Rust `GuardianApprovedAction`).
+	GuardianApprovedActionKind = "guardian.approved_action"
+	// SubagentNotificationKind classifies harness-authored child status
+	// notifications (Rust `SubagentNotification`).
+	SubagentNotificationKind = "multi_agent.subagent_notification"
 	// MemoryReadInstructionsKind classifies the memory read-path instructions
 	// fragment (Rust `MemoryContextFragment::READ_INSTRUCTIONS_KIND`).
 	MemoryReadInstructionsKind = "memories.instructions"

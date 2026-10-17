@@ -401,7 +401,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2833985d88389c0812f32560a8c793920fda34f2	46241	Repair Windows sandbox access to existing runtime children (#46241)	2026-09-17	sandbox	1	0	0.00	0	0	implementation_pending	grant_read_execute_aces
 283f34387b7e16bd524d8f3a431f77aa7395471d	44043	Use `StartThreadOptions` across thread fork APIs (#44043)	2026-09-09	guardian	0	0		0	0	not_applicable	
 286d4ecf44b4e9daba0a9fdd229a4047b770a71a	47323	Persist resume metadata in compaction checkpoints (#47323)	2026-09-22	tui	2	2	1.00	0	0	complete	
-287587c32c9cbc1e78edbf2aaae6a6d84f5b0c56	40275	Classify additional generated context fragments (#40275)	2026-08-23	guardian	3	1	0.33	0	0	audit_pending	GuardianApprovedAction,inject_fragment_without_turn
+287587c32c9cbc1e78edbf2aaae6a6d84f5b0c56	40275	Classify additional generated context fragments (#40275)	2026-08-23	guardian	3	3	1.00	0	0	complete	
 287e4f7dbf2e9002d8100bd3c5346f5c9f4cdaed	44570	Preserve Guardian authorization evidence until request budgeting (#44570)	2026-09-10	guardian	2	1	0.50	0	0	audit_pending	HistoryTruncation
 28a264fbc766a59f2b550b8318f88e4a4b8dffe1	51126	Add promise settlement streaming helpers to code mode (#51126)	2026-10-05	core	0	0		0	0	not_applicable	
 28b91c7c311600edcc5f4e2831ca3ec35ca9c83d	51220	Honor the OTLP metrics temporality preference (#51220)	2026-10-06	telemetry	0	0		0	0	not_applicable	

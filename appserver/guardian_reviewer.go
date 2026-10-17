@@ -1597,22 +1597,37 @@ func (r *RuntimeRouter) handleThreadApproveGuardianDeniedActionRuntime(request *
 		"Treat this as approval to perform that exact action in the same context in which it was originally requested.\n" +
 		"Do not assume this also authorizes similar operations with different payloads.\n\n" +
 		"Approved action:\n" + string(approvedJSON)
-	item := session.Item{
-		ID: "guardian-denied-action-approval-" + safeIdentifier(event.ID), Type: "message", Role: "developer", Text: text,
-		Content: []session.ContentPart{{Type: "input_text", Text: text}}, CreatedAt: runtimeRouterNow(r).UTC(),
-		Metadata: map[string]any{"turnId": event.TurnID, "turn_id": event.TurnID, "guardianReviewId": event.ID, "guardian_review_id": event.ID},
-	}
+	item := guardianApprovedActionSessionItem(event, text, runtimeRouterNow(r).UTC())
 	if _, err := r.runtimeAppendItem(session.ThreadID(params.ThreadID), item); err != nil {
 		return nil, err
 	}
 	_ = r.appendRuntimeRollout(params.ThreadID, []session.Item{item}, item.CreatedAt)
 	if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, event.TurnID); active != nil {
-		input := map[string]any{"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text", "text": text}}}
+		input := map[string]any{
+			"type": "message", "role": "developer",
+			"content": []any{map[string]any{"type": "input_text", "text": text}},
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []any{codexctx.GuardianApprovedActionKind},
+			},
+		}
 		if err := r.requireSteerMailbox().Enqueue(&turn.SteerEnqueueParams{ThreadID: params.ThreadID, TurnID: event.TurnID, InputItems: []any{input}}); err != nil {
 			return nil, err
 		}
 	}
 	return &ThreadApproveGuardianDeniedActionResponse{}, nil
+}
+
+func guardianApprovedActionSessionItem(event state.Event, text string, now time.Time) session.Item {
+	return session.Item{
+		ID: "guardian-denied-action-approval-" + safeIdentifier(event.ID), Type: "message", Role: "developer", Text: text,
+		Content: []session.ContentPart{{Type: "input_text", Text: text}}, CreatedAt: now,
+		Metadata: map[string]any{"turnId": event.TurnID, "turn_id": event.TurnID, "guardianReviewId": event.ID, "guardian_review_id": event.ID},
+		Data: map[string]any{
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []any{codexctx.GuardianApprovedActionKind},
+			},
+		},
+	}
 }
 
 func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*ThreadInjectItemsResponse, error) {

@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"codex_go/audioutil"
+	contextfrag "codex_go/context"
 	"codex_go/eventmap"
 	"codex_go/features"
 	"codex_go/retainedctx"
@@ -310,6 +311,11 @@ func BuildCompactedHistory(prefix []Item, userMessages []Item, summary string) [
 		Role: "user",
 		Kind: "compaction_summary",
 		Text: strings.TrimSpace(SummaryPrefix + "\n" + summary),
+		Data: map[string]any{
+			"internal_chat_message_metadata_passthrough": map[string]any{
+				"content_item_kinds": []any{contextfrag.CompactionSummaryKind},
+			},
+		},
 	})
 	return history
 }
