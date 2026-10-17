@@ -22628,9 +22628,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: prepare_powershell_command_for_windows_sandbox"
+        "Round 262: preparePowerShellCommandForWindowsSandbox applies Store-PowerShell fallback discovery to elevated and MXC sandboxes. MXC replaces an inaccessible WindowsApps pwsh/powershell with a compatible local executable but keeps arguments unchanged; elevated keeps the existing fallback plus -NoProfile insertion. Non-Windows, remote, disabled, and unelevated paths stay unchanged. Tests: go test ./tool -run 'PowerShell|MXC|Sandbox' -count=1"
       ]
     },
     {

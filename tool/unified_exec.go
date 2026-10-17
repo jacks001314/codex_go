@@ -518,7 +518,7 @@ func (m *UnifiedExecManager) execWindowsSandbox(ctx context.Context, req *ShellR
 	// PowerShell. Replace Store PowerShell with a compatible pwsh/powershell.exe
 	// and ensure -NoProfile for local elevated sandbox commands.
 	if len(req.Command) > 0 {
-		preparedCommand := preparePowerShellCommandForElevatedWindowsSandbox(
+		preparedCommand := preparePowerShellCommandForWindowsSandbox(
 			req.Command,
 			DetectShellType(req.Command[0]),
 			/*sandboxRequested*/ true,

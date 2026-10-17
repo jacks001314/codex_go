@@ -822,7 +822,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4fa6ad173055f6438e8baf81cd55cb59f46179d7	40585	Track remaining multi-agent v2 tools in analytics (#40585)	2026-08-25	tui	4	1	0.25	0	0	audit_pending	ToolCallAnalytics,handle_message_string_tool,set_receiver
 4fa7e82274bd70e145da05c66117865f7615e61d	46036	Preserve config error causes when saving the approvals reviewer (#46036)	2026-09-16	tui	0	0		0	0	not_applicable	
 4fd2c460dd3e02495c1d0aae8bce4ccbd59915a9	43903	Extract Windows deny-read glob scan planning into protocol (#43903)	2026-09-08	sandbox	2	0	0.00	0	0	complete	WindowsDenyReadGlobScan,windows_deny_read_glob_scan
-4fd5745e8486d655a0c7e7d762741465b986130b	49019	Use a compatible PowerShell fallback for the Windows MXC sandbox (#49019)	2026-09-28	core	2	1	0.50	0	0	audit_pending	prepare_powershell_command_for_windows_sandbox
+4fd5745e8486d655a0c7e7d762741465b986130b	49019	Use a compatible PowerShell fallback for the Windows MXC sandbox (#49019)	2026-09-28	core	2	2	1.00	0	0	complete
 4fdf4c11131ec901a303f68e5ad8962469697bb6	42348	Add Windows sandbox client authentication (#42348)	2026-09-02	sandbox	6	0	0.00	0	0	implementation_pending	AuthorizedClientProcess,ClientIdentity,authenticate_client,authorize_client,authorize_client_process,enable_foreground_mode
 4fea5234664ebc628b1a5322761cb132eaacc9e2	41218	Share linked tool mention parsing in the TUI (#41218)	2026-08-27	tui	2	2	1.00	0	0	complete	
 5009a99dfc07830ddf7464c26f310a2b8532b55d	54742	Render slash command prefixes as composer prompt markers (#54742)	2026-10-16	tui	7	2	0.29	0	0	complete	absorb_prompt_prefix,element_range,is_delete_backward_key,remove_element,unmark_slash_command_element

@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"codex_go/sandbox"
@@ -87,5 +89,56 @@ func TestFallbackPowerShellShellForElevatedWindowsSandboxNonStoreReturnsNil(t *t
 	}
 	if shell := fallbackPowerShellShellForElevatedWindowsSandbox(``); shell != nil {
 		t.Fatalf("fallback(empty) = %#v, want nil", shell)
+	}
+}
+
+// Mirrors Rust #49019: MXC gets the local Store-PowerShell fallback but the
+// elevated-only -NoProfile insertion is not applied.
+func TestPreparePowerShellCommandForMXCWindowsSandboxLikeRust(t *testing.T) {
+	compatible := filepath.Join(t.TempDir(), "pwsh.exe")
+	if err := os.WriteFile(compatible, []byte("stub"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(compatible))
+	storePowerShell := `C:\Users\user\AppData\Local\Microsoft\WindowsApps\pwsh.exe`
+	command := []string{storePowerShell, "-Command", "Write-Output ok"}
+
+	got := preparePowerShellCommandForWindowsSandbox(
+		command,
+		ShellPowerShell,
+		/*sandboxRequested*/ true,
+		sandbox.WindowsSandboxMxc,
+		/*environmentIsRemote*/ false,
+	)
+	want := []string{compatible, "-Command", "Write-Output ok"}
+	if !equalStringSlices(got, want) {
+		t.Fatalf("MXC command = %#v, want %#v", got, want)
+	}
+
+	// Elevated still inserts -NoProfile after the replacement.
+	elevated := preparePowerShellCommandForWindowsSandbox(
+		command,
+		ShellPowerShell,
+		/*sandboxRequested*/ true,
+		sandbox.WindowsSandboxElevated,
+		/*environmentIsRemote*/ false,
+	)
+	want = []string{compatible, "-NoProfile", "-Command", "Write-Output ok"}
+	if !equalStringSlices(elevated, want) {
+		t.Fatalf("elevated command = %#v, want %#v", elevated, want)
+	}
+
+	// Disabled/restricted levels and remote environments stay unchanged.
+	for _, level := range []sandbox.WindowsSandboxLevel{sandbox.WindowsSandboxDisabled, sandbox.WindowsSandboxUnelevated} {
+		if got := preparePowerShellCommandForWindowsSandbox(
+			command, ShellPowerShell, true, level, false,
+		); !equalStringSlices(got, command) {
+			t.Fatalf("%s command = %#v, want unchanged", level, got)
+		}
+	}
+	if got := preparePowerShellCommandForWindowsSandbox(
+		command, ShellPowerShell, true, sandbox.WindowsSandboxMxc, true,
+	); !equalStringSlices(got, command) {
+		t.Fatalf("remote MXC command = %#v, want unchanged", got)
 	}
 }

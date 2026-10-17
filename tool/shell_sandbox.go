@@ -97,11 +97,11 @@ func elevatedSandboxCompatiblePowerShellPath(binaryName string, fallbackPaths []
 	return "", false
 }
 
-// fallbackPowerShellShellForElevatedWindowsSandbox returns a replacement shell
-// only when shellPath targets a Store (WindowsApps) PowerShell and a compatible
-// elevated-sandbox PowerShell can be discovered. Mirror of Rust
-// fallback_powershell_shell_for_elevated_windows_sandbox (#41227).
-func fallbackPowerShellShellForElevatedWindowsSandbox(shellPath string) *Shell {
+// fallbackPowerShellShellForWindowsSandbox returns a replacement shell only
+// when shellPath targets a Store (WindowsApps) PowerShell and a compatible
+// local PowerShell can be discovered. It is shared by elevated and MXC
+// sandboxes (Rust #49019).
+func fallbackPowerShellShellForWindowsSandbox(shellPath string) *Shell {
 	if len(shellPath) == 0 || !targetsInaccessibleWindowsAppsPowerShell(shellPath) {
 		return nil
 	}
@@ -112,6 +112,41 @@ func fallbackPowerShellShellForElevatedWindowsSandbox(shellPath string) *Shell {
 		return &Shell{Type: ShellPowerShell, Path: replacement}
 	}
 	return nil
+}
+
+// fallbackPowerShellShellForElevatedWindowsSandbox is the elevated-sandbox
+// spelling retained for the existing preparation path and tests.
+func fallbackPowerShellShellForElevatedWindowsSandbox(shellPath string) *Shell {
+	return fallbackPowerShellShellForWindowsSandbox(shellPath)
+}
+
+// preparePowerShellCommandForWindowsSandbox switches Store PowerShell to a
+// compatible local executable for elevated and MXC sandboxes. Only the elevated
+// sandbox adds -NoProfile; MXC keeps the caller's arguments unchanged.
+func preparePowerShellCommandForWindowsSandbox(
+	command []string,
+	shellType ShellType,
+	sandboxRequested bool,
+	windowsSandboxLevel sandbox.WindowsSandboxLevel,
+	environmentIsRemote bool,
+) []string {
+	if shellType != ShellPowerShell || !sandboxRequested || environmentIsRemote || len(command) == 0 {
+		return command
+	}
+	switch windowsSandboxLevel {
+	case sandbox.WindowsSandboxElevated:
+		return preparePowerShellCommandForElevatedWindowsSandbox(
+			command, shellType, sandboxRequested, windowsSandboxLevel, environmentIsRemote,
+		)
+	case sandbox.WindowsSandboxMxc:
+		command = append([]string(nil), command...)
+		if fallback := fallbackPowerShellShellForWindowsSandbox(command[0]); fallback != nil && fallback.Path != "" {
+			command[0] = fallback.Path
+		}
+		return command
+	default:
+		return command
+	}
 }
 
 // preparePowerShellCommandForElevatedWindowsSandbox rewrites a local elevated
