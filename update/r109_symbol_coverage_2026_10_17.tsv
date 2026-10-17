@@ -2640,7 +2640,7 @@ f88a6efe437eec1329d8e8810c788c90ac547888	50389	Honor configured keybindings befo
 f88ff940c0f5b20628e94abc27d04196a14c5b94	41901	Load bounded context after empty wake turns (#41901)	2026-08-31	persistence	0	0		0	0	not_applicable	
 f8ab57359dde6b6d5de1aee613c18fe60b661aeb	44629	Add manual callback input to MCP OAuth login (#44629)	2026-09-10	mcp	3	0	0.00	0	0	implementation_pending	McpLoginMode,perform_oauth_login_retry_without_scopes,perform_oauth_login_with_callback_input
 f8bed26f7b180a8fe9df57a6347ae3bceb882ad5	45440	Share Apps tool catalogs without retaining unused snapshots (#45440)	2026-09-14	mcp	6	1	0.17	0	0	audit_pending	ConnectorRuntimePayload,run_with_snapshot,shared_tools,tools_version,without_live_scope
-f8c6026c38682c628e71d1ae4978ba643499250a	46319	Preserve web search actions and results in exec JSON output (#46319)	2026-09-17	core	0	0		0	0	not_applicable	
+f8c6026c38682c628e71d1ae4978ba643499250a	46319	Preserve web search actions and results in exec JSON output (#46319)	2026-09-17	core	0	0	1.00	0	0	complete	
 f908e5a968ce03c91ce8d7008703cc27108a412a	47235	Route multi-agent spawning through `SpawnRequest` (#47235)	2026-09-22	core	3	1	0.33	0	0	audit_pending	SpawnInitialInput,spawn_agent_internal
 f90a578f7696ca077455d59bfba60854806d401f	52193	Enforce managed MXC requirements on Windows (#52193)	2026-10-08	tui	2	0	0.00	0	0	implementation_pending	validate_windows_mxc_requirement,validate_windows_mxc_requirement_from
 f915e0de0794db24c0ff1419933f81028887069e	46054	Render Mermaid code blocks as diagrams in the TUI (#46054)	2026-09-16	tui	3	3	1.00	0	0	complete	

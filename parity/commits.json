@@ -15519,8 +15519,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - exec/exec.go maps web-search actions explicitly (search/open_page/find_in_page with URL and pattern) and forwards structured results through protocol.WebSearchItemWithResults, omitting `results` when unavailable while preserving empty arrays and error payloads. Test: TestExecWebSearchPageActionsAndResultsSurviveJSONOutput mirrors Rust's web_search_page_actions_and_results_survive_json_output (#46319) for absent/empty/success/error results; go test ./exec -run ... green.",
         "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
       ]
     },
