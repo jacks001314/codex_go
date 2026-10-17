@@ -168,11 +168,11 @@ go test ./parity -count=1
 
 ## 7. 风险与下一步
 
-1. **剩余 11 个 implementable**：优先处理协议/核心面（#54059 thread-store 恢复准备、#54135 exec-server 直连 WebSocket 大写入、#53987 Guardian 重试退避、#53797 Guardian 审查失效、#53879 running turn 恢复），再处理 TUI 面。
-2. **12 个 partial**：需要逐条收敛 drift，尤其是 #54316 Guardian transcript 排除、#54046 `context_changed`、#54175 retired feature overrides。
-3. **20 个 blocked_precondition**：需在报告中逐条给出可验证的 N/A 理由，而不是保持 "blocked"。
-4. **baseline 提升**：`parity/baseline.json` / `parity.json.rustBaseline` / `parity/domains.json.targetRustCommit` 仍指向 `970b7f2ff4`，待 open 项收敛后统一提升到 `e16b631d08`。
-5. **账本覆盖范围**：若要求"逐提交认证"，需为 2639 个提交建立全量分类（当前 222 行仅为筛选跟踪）。
+1. **当时的剩余 implementable 清单（数量已过时，当前值见 §1）**：优先处理协议/核心面（#54059 thread-store 恢复准备、#54135 exec-server 直连 WebSocket 大写入、#53987 Guardian 重试退避、#53797 Guardian 审查失效、#53879 running turn 恢复），再处理 TUI 面。
+2. **当时的 partial 项（数量已过时，当前值见 §1）**：需要逐条收敛 drift，尤其是 #54316 Guardian transcript 排除、#54046 `context_changed`、#54175 retired feature overrides。
+3. **当时的 blocked_precondition 项（数量已过时，当前值见 §1）**：需在报告中逐条给出可验证的 N/A 理由，而不是保持 "blocked"。
+4. **baseline 提升**：当时 `parity/baseline.json` / `parity.json.rustBaseline` / `parity/domains.json.targetRustCommit` 指向 `970b7f2ff4`；当前锚点见 §1。
+5. **账本覆盖范围**：若要求"逐提交认证"，需为 2639 个提交建立全量分类（当时 222 行仅为筛选跟踪；当前行数见 §1）。
 
 ---
 
@@ -208,7 +208,7 @@ go test ./parity -count=1
 
 ## 8.3 账本状态（round 92 更新后）
 
-landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 12 / AlreadyImplemented 10 / implementable 8 / unverified 1（共 222 数据行）。
+（历史快照：round 92 的账本分布，数值已过时，当前分布见 §1。）
 
 ## 8.4 验证
 
@@ -606,7 +606,7 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 
 - `git -C D:\qax\reagent\dev\git\codex pull origin main`：Rust 上游由 `e16b631d08` 推进到 `3b8f43a06b`，新增三个提交（#54761 / #54763 / #54766）。
 - 本轮同时闭环上一窗口遗留的 #53991（`f87ba04ec3`）与 #51786（`622e9e3696`）。
-- Go 仓基线仍为 `db882bd7`（parity baseline 保持冻结在 `970b7f2ff4`，见 §22.6）。
+- Go 仓基线仍为 `db882bd7`（parity baseline 当时仍在 `970b7f2ff4`，见 §22.6；当前锚点见 §1）。
 
 ## 22.2 已落地
 
@@ -655,7 +655,7 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 
 ## 22.5 账本
 
-**（历史快照，round 106/107 时点；当前值见 §1）** `update/r90_commit_ledger_2026_10_16.tsv`：landed 97 / not_applicable 79 / blocked_precondition 22 / complete 15 / AlreadyImplemented 12，partial 归零。
+**（历史快照，round 106/107 时点）** `update/r90_commit_ledger_2026_10_16.tsv` 当时的状态分布；数值已过时，当前分布见 §1。
 
 ## 22.6 baseline 说明
 
@@ -700,7 +700,7 @@ Go 的 keymap catalog 与 Rust `config/src/tui_keymap.rs` 有 9 个「同行为�
 | #41586 `vim_search` 上下文 | landed | 别名上下文（本轮） |
 | #46734 `find_transcript`/`focus_activity` | 仍 blocked | find_transcript 已落地；focus_activity 无活动分组聚焦载体 |
 
-统计：landed 102 / not_applicable 79 / blocked_precondition 17 / complete 15 / AlreadyImplemented 12（partial = 0）。
+（历史快照：该轮统计，数值已过时；当前分布见 §1。）
 
 ## 23.5 验证
 
@@ -720,7 +720,7 @@ Go 的 keymap catalog 与 Rust `config/src/tui_keymap.rs` 有 9 个「同行为�
 
 ## 24.1 背景
 
-上一轮 verifier 驳回理由：parity baseline 冻结在 `970b7f2ff4`，账本仍有 open 项，因此不能宣称功能对齐。
+（历史）当时 verifier 的驳回理由是 parity baseline 还停在 `970b7f2ff4` 且账本仍有 open 项。锚点问题已解决（当前锚点见 §1），open 项仍然存在。
 本轮先解决**结构性**问题：把对齐控制面全部提升到上游 HEAD，并建立**逐提交全量账本**。
 
 ## 24.2 parity 控制面提升到 `ce0323f2f2`
@@ -779,7 +779,7 @@ go test ./appserver -run 'CollabToolsGate|DisableNativeToolsKeepsV2' # ok
 ## 24.6 结论与剩余
 
 - 结构性阻塞（baseline 冻结）已解除：控制面、账本、manifest 全部指向 `ce0323f2f2`。
-- 真实功能缺口仍以账本形式显式存在：**2295 条 audit_pending + 15 条 implementation_pending**，本轮新增 #54776 为 implementable（Go 侧 fragment body 仍返回 string，缺少 ContentItem 返回路径）。
+- 真实功能缺口仍以账本形式显式存在（当时 2295 条 audit_pending；当前分布见 §1），本轮新增 #54776 为 implementable（Go 侧 fragment body 仍返回 string，缺少 ContentItem 返回路径）。
 - 该数量就是「功能对齐」尚未达成的量化证据，不再用抽样账本掩盖。
 
 ## 24.7 #54776 typed content（部分落地）
