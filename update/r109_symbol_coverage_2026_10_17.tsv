@@ -728,7 +728,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 47b195de5c001299a2d9612b64fcb4e01eec9175	51856	Build Bazel release artifacts alongside Cargo artifacts (#51856)	2026-10-07	core	0	0		0	0	not_applicable	
 47b80571f0d6587060a580c47f6af0cfaefb0d5c	52621	Add template setup for local agent message boards (#52621)	2026-10-09	config	3	1	0.33	0	0	audit_pending	LocalBoardSetup,configure_local_board
 47bcb3a3f9e0904aed485389aaf410282b6b23fa	52959	Reduce stack usage in async TUI tests (#52959)	2026-10-10	tui	2	0	0.00	0	0	implementation_pending	box_future,make_test_app
-47c063de518810144f6b518ad78d643ccde37e22	52637	Add experimental thread item lookup by ID (#52637)	2026-10-09	appserver	3	2	0.67	0	0	audit_pending	thread_items_read
+47c063de518810144f6b518ad78d643ccde37e22	52637	Add experimental thread item lookup by ID (#52637)	2026-10-09	appserver	3	3	1.00	0	0	complete	
 47c27cbffa6e17bce3548d87440484e36e1cbfc3	46027	Document and test `?` wildcards in network proxy domain patterns (#46027)	2026-09-16	core	0	0		0	0	not_applicable	
 47ca4619be10c20c1cec6ee9944738c5b961fa1d	43102	Include GIO in voice SDKs and native runtimes (#43102)	2026-09-05	realtime	0	0		0	0	not_applicable	
 47fc8d661e425e79f93c03f6aa6dbd3dc76f2252	46293	Route skill discovery and loading through `EnvironmentAccess` (#46293)	2026-09-17	plugins	0	0		0	0	not_applicable	

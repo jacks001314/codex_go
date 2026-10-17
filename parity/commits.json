@@ -29259,8 +29259,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): landed - experimental thread/items/read implemented via appserver/router.go handleThreadItemsRead (+ RuntimeRouter dispatch, experimental gate and ephemeral rejection) with ThreadItemsReadParams/Response (required threadId/turnId, 1..100 ids), canonical stored order, requested-turn scoping and missing ids omitted; state.ListThreadHistoryItems gained an ItemIDs filter so the paginated path never scans unrelated history. Tests: TestRouterThreadItemsReadByIDLikeRust (order/turn scope/missing/limits) and TestThreadHistoryItemIDsFilterMatchesRust; RC removing the store filter returns unrequested items. go build ./... + focused appserver green; state has only the known TestOpenRuntimeDBValidatesBeforeMigrateLikeRust baseline red.",
         "Partial symbol coverage 2/3; needs review: thread_items_read"
       ]
     },

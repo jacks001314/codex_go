@@ -3133,6 +3133,88 @@ type ThreadItemEntry struct {
 	Item   ThreadItem `json:"item"`
 }
 
+// ThreadItemsReadParams mirrors Rust's experimental ThreadItemsReadParams
+// (#52637): retrieve a bounded set of persisted items from one turn.
+type ThreadItemsReadParams struct {
+	ThreadID string   `json:"threadId"`
+	TurnID   string   `json:"turnId"`
+	ItemIDs  []string `json:"itemIds"`
+}
+
+// MaxThreadItemsReadIDs bounds one thread/items/read request (Rust #52637).
+const MaxThreadItemsReadIDs = 100
+
+func (p *ThreadItemsReadParams) Validate() error {
+	if p == nil {
+		return jsonRPCInvalidRequest("thread/items/read params are required")
+	}
+	if strings.TrimSpace(p.ThreadID) == "" {
+		return jsonRPCInvalidRequest("threadId is required")
+	}
+	if strings.TrimSpace(p.TurnID) == "" {
+		return jsonRPCInvalidRequest("turnId is required")
+	}
+	if len(p.ItemIDs) == 0 {
+		return jsonRPCInvalidRequest("itemIds must contain at least one item id")
+	}
+	if len(p.ItemIDs) > MaxThreadItemsReadIDs {
+		return jsonRPCInvalidRequest("itemIds must contain at most 100 item ids")
+	}
+	for _, id := range p.ItemIDs {
+		if strings.TrimSpace(id) == "" {
+			return jsonRPCInvalidRequest("itemIds must not contain empty ids")
+		}
+	}
+	return nil
+}
+
+// ThreadItemsReadResponse mirrors Rust's ThreadItemsReadResponse: matching
+// persisted items in canonical stored order.
+type ThreadItemsReadResponse struct {
+	Data []ThreadItemEntry `json:"data"`
+}
+
+func (r *ThreadItemsReadResponse) MarshalJSON() ([]byte, error) {
+	data := append([]ThreadItemEntry(nil), r.Data...)
+	if data == nil {
+		data = []ThreadItemEntry{}
+	}
+	return json.Marshal(struct {
+		Data []ThreadItemEntry `json:"data"`
+	}{Data: data})
+}
+
+// BuildItemsReadResponse filters a stored record's items for
+// thread/items/read: only the requested turn, only requested ids, canonical
+// stored order, and missing ids omitted (Rust #52637).
+func BuildItemsReadResponse(record *session.Record, params *ThreadItemsReadParams) (*ThreadItemsReadResponse, error) {
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	requested := make(map[string]bool, len(params.ItemIDs))
+	for _, id := range params.ItemIDs {
+		requested[strings.TrimSpace(id)] = true
+	}
+	response := &ThreadItemsReadResponse{}
+	if record == nil {
+		return response, nil
+	}
+	for _, item := range record.Items {
+		if sessionItemIsHiddenThreadItem(&item) {
+			continue
+		}
+		threadItem := BuildThreadItem(item)
+		if threadItem.TurnID != strings.TrimSpace(params.TurnID) {
+			continue
+		}
+		if !requested[strings.TrimSpace(threadItem.ID)] {
+			continue
+		}
+		response.Data = append(response.Data, ThreadItemEntry{TurnID: threadItem.TurnID, Item: threadItem})
+	}
+	return response, nil
+}
+
 func (r *ThreadItemsListResponse) MarshalJSON() ([]byte, error) {
 	data := append([]ThreadItemEntry(nil), r.Data...)
 	if data == nil {

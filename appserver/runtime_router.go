@@ -2932,6 +2932,9 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 		if request.Method == MethodThreadItemsList {
 			return r.handleThreadItemsListRuntime(request)
 		}
+		if request.Method == MethodThreadItemsRead {
+			return r.handleThreadItemsReadRuntime(request)
+		}
 		if request.Method == MethodThreadTurnsList {
 			return r.handleThreadTurnsListRuntime(request)
 		}
@@ -3452,6 +3455,33 @@ func (r *RuntimeRouter) handleThreadItemsListRuntime(request *Request) (*ThreadI
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
 	return BuildItemsResponse(record, &params)
+}
+
+// handleThreadItemsReadRuntime mirrors handleThreadItemsListRuntime for the
+// experimental by-id lookup (#52637): experimental-gated dispatch, ephemeral
+// threads rejected, and state-backed history delegated to the thread router.
+func (r *RuntimeRouter) handleThreadItemsReadRuntime(request *Request) (*ThreadItemsReadResponse, error) {
+	var params ThreadItemsReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest("ephemeral threads do not support thread/items/read")
+	}
+	if r.services.ThreadRouter != nil && r.services.StateRuntime != nil {
+		return r.services.ThreadRouter.handleThreadItemsRead(request)
+	}
+	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		return nil, threadItemsListReadError(params.ThreadID, err)
+	}
+	if unmaterializedThread(record) {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/read is unavailable before first user message", record.ID))
+	}
+	return BuildItemsReadResponse(record, &params)
 }
 
 // runInterruptHook discovers and runs the managed Interrupt hooks for a turn

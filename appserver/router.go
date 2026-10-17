@@ -1169,6 +1169,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadLoadedList(request)
 	case MethodThreadItemsList:
 		return r.handleThreadItemsList(request)
+	case MethodThreadItemsRead:
+		return r.handleThreadItemsRead(request)
 	case MethodThreadTurnsList:
 		return r.handleThreadTurnsList(request)
 	case MethodThreadRevert:
@@ -3431,6 +3433,77 @@ func (r *Router) handleThreadItemsList(request *Request) (*ThreadItemsListRespon
 		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/list is unavailable before first user message", record.ID))
 	}
 	return BuildItemsResponse(record, &params)
+}
+
+// handleThreadItemsRead ports Rust's experimental thread/items/read (#52637):
+// persisted items from one turn, filtered by id, in canonical stored order.
+func (r *Router) handleThreadItemsRead(request *Request) (*ThreadItemsReadResponse, error) {
+	var params ThreadItemsReadParams
+	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	if err := params.Validate(); err != nil {
+		return nil, err
+	}
+	if r.state != nil {
+		mode, _, err := r.threadHistoryModeWithRepair(session.ThreadID(params.ThreadID))
+		if err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+			return r.readPaginatedThreadItems(&params)
+		}
+	}
+	record, err := r.readThreadRecord(session.ThreadID(params.ThreadID), true, true)
+	if err != nil {
+		record, err = r.readThreadRecordFromRollout(session.ThreadID(params.ThreadID), true, true)
+		if err != nil {
+			return nil, threadItemsListReadError(params.ThreadID, err)
+		}
+	}
+	if unmaterializedThread(record) {
+		return nil, jsonRPCInvalidRequest(fmt.Sprintf("thread %s is not materialized yet; thread/items/read is unavailable before first user message", record.ID))
+	}
+	return BuildItemsReadResponse(record, &params)
+}
+
+// readPaginatedThreadItems queries the state store with an item-id filter so a
+// request never scans unrelated history (Rust #52637 adds the same filter to
+// the thread store).
+func (r *Router) readPaginatedThreadItems(params *ThreadItemsReadParams) (*ThreadItemsReadResponse, error) {
+	turnID := strings.TrimSpace(params.TurnID)
+	seen := make(map[string]bool, len(params.ItemIDs))
+	response := &ThreadItemsReadResponse{}
+	var position *state.ThreadHistoryListItemsPosition
+	for page := 0; page < 1000; page++ {
+		result, err := r.state.ListThreadHistoryItems(context.Background(), state.ThreadHistoryListItemsParams{
+			ThreadID:      params.ThreadID,
+			TurnID:        &turnID,
+			ItemIDs:       params.ItemIDs,
+			Position:      position,
+			PageSize:      MaxThreadItemsReadIDs,
+			SortDirection: state.ThreadHistorySortAsc,
+		})
+		if err != nil {
+			return nil, paginatedThreadHistoryError(err, true, false)
+		}
+		for _, stored := range result.Items {
+			if seen[stored.ItemID] {
+				continue
+			}
+			seen[stored.ItemID] = true
+			item, err := deserializeStateThreadItem(stored)
+			if err != nil {
+				return nil, err
+			}
+			response.Data = append(response.Data, ThreadItemEntry{TurnID: stored.TurnID, Item: item})
+		}
+		if result.NextCursor == nil || len(seen) >= len(params.ItemIDs) {
+			break
+		}
+		position = &state.ThreadHistoryListItemsPosition{Cursor: result.NextCursor}
+	}
+	return response, nil
 }
 
 func (r *Router) handleThreadTurnsList(request *Request) (*TurnsPage, error) {

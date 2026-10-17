@@ -95,8 +95,11 @@ type ThreadHistoryTurnsPage struct {
 }
 
 type ThreadHistoryListItemsParams struct {
-	ThreadID      string
-	TurnID        *string
+	ThreadID string
+	TurnID   *string
+	// ItemIDs restricts the page to the named persisted items (Rust #52637
+	// thread/items/read). Empty means no item filter.
+	ItemIDs       []string
 	Position      *ThreadHistoryListItemsPosition
 	PageSize      int
 	SortDirection ThreadHistorySortDirection
@@ -221,6 +224,20 @@ func (r *StateRuntime) ListThreadHistoryItems(ctx context.Context, params Thread
 		if params.TurnID != nil {
 			query += ` AND turn_id = ?`
 			args = append(args, *params.TurnID)
+		}
+		if len(params.ItemIDs) > 0 {
+			placeholders := make([]string, 0, len(params.ItemIDs))
+			for _, itemID := range params.ItemIDs {
+				itemID = strings.TrimSpace(itemID)
+				if itemID == "" {
+					continue
+				}
+				placeholders = append(placeholders, "?")
+				args = append(args, itemID)
+			}
+			if len(placeholders) > 0 {
+				query += ` AND item_id IN (` + strings.Join(placeholders, ",") + `)`
+			}
 		}
 		query, args = appendHistoryCursorClause(query, args, direction, segment.cursor)
 		query += ` ORDER BY rollout_ordinal ` + historySQLDirection(direction) + ` LIMIT ?`
