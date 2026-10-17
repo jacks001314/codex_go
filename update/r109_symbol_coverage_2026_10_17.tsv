@@ -1843,7 +1843,7 @@ ac7634b9f73ec1bf96466be7a5869f0949d20b30	47267	Stream agent snapshots from local
 ac985376787fcf69a9dcd4ef43c4eb1752f230d0	47081	Track cumulative MCP attribution across requests and thread history (#47081)	2026-09-21	guardian	17	13	0.76	0	0	audit_pending	MAX_MCP_ATTRIBUTION_BYTES,MCP_ATTRIBUTION_CLIENT_METADATA_KEY,persist_rollout_items,to_json_string_bounded
 ac9b5b8380517ded445b09dd3196d8d9e2ba3c59	51527	Ignore ripgrep configuration when expanding sandbox deny globs (#51527)	2026-10-07	sandbox	0	0		0	0	not_applicable	
 ac9db7d8b556c7c34a73793aed34b1f980a4fe39	54151	Generate keymap descriptors and binding accessors from one catalog (#54151)	2026-10-15	tui	2	1	0.50	0	0	complete	binding_slot
-acc20df49f8c730afd50943e55b5b95cc262cd96	47240	Prevent V2 agent eviction from racing with queued messages (#47240)	2026-09-22	guardian	2	1	0.50	0	0	audit_pending	pin_v2_residency
+acc20df49f8c730afd50943e55b5b95cc262cd96	47240	Prevent V2 agent eviction from racing with queued messages (#47240)	2026-09-22	guardian	2	1	0.50	0	0	not_applicable	
 acd5ed9207cd65239f67182829b585b09c7d19fb	47571	Wait for idle before injecting remote compaction test history (#47571)	2026-09-23	core	0	0		0	0	not_applicable	
 acf9818faef932ad0b26049c6f7f8b1acd94149b	50786	Remember Command Center grouping across launches (#50786)	2026-10-04	tui	2	2	1.00	0	0	complete	
 ad26b2520ab9e26c9c6d17ef51aa6ec3705674aa	47648	Support bearer tokens for app-server executor connections (#47648)	2026-09-23	appserver	1	1	1.00	0	0	complete	
