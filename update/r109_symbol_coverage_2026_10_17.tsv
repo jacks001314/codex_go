@@ -312,7 +312,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1ef30bcbe784f1006548adc1542985be32b05109	54389	Preserve existing SQLite journal modes on startup (#54389)	2026-10-15	persistence	0	0		0	0	complete	
 1f17a0a04b5c53ef2ea89b7d874764139321b26a	47975	Prevent stale voice answers from reappearing during speech recovery (#47975)	2026-09-25	tui	0	0		0	0	not_applicable	
 1f4c47343a1bff2d8cddc429c5d39503fb5a6c30	42113	Apply remote platform semantics to exec safety checks (#42113)	2026-09-01	core	4	2	0.50	0	0	audit_pending	dangerous_command_match_for_platform,dangerous_powershell_words_match
-1f52d407041d933e490ca3033729bce6319d07fa	49880	Bind permission grants to the originating turn (#49880)	2026-10-01	guardian	5	3	0.60	0	0	audit_pending	apply_granted_turn_permissions,for_review
+1f52d407041d933e490ca3033729bce6319d07fa	49880	Bind permission grants to the originating turn (#49880)	2026-10-01	guardian	5	5	1.00	0	0	complete	
 1f5c9ba18395884947343b02af4ee229fcbfae31	40597	Optimize Guardian transcript window retention (#40597)	2026-08-25	guardian	3	1	0.33	0	0	audit_pending	TranscriptWindow,into_indices
 1f631def3f5fc99d93f68ba4376bcfcdf5de20a2	46322	Set the Windows sandbox type in the pending environment test (#46322)	2026-09-17	core	0	0		0	0	not_applicable	
 1f77c0cfa63484e1feee46de8dd5669581cd3adb	49785	Persist empty paginated threads when naming them (#49785)	2026-09-30	appserver	0	0		0	0	not_applicable	
