@@ -5820,9 +5820,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: resolve_against"
+        "Round 271 (audit): Go resolves permission-prompt paths and deny entries against the selected executor's CWD, home, platform/path convention, and workspace roots; symbolic temp/project-root entries fail closed when executor facts are missing, and opaque Windows working directories preserve the executor convention. The request_permissions flow carries the originating environment context. Tests: go test ./sandbox ./appserver -run 'Permission.*Executor|RequestPermissions|PermissionPrompt' -count=1"
       ]
     },
     {
@@ -21164,9 +21164,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: current_turn_environment_selections"
+        "Round 271: currentTurnEnvironmentSelections returns the live turn's current Params.Environments, including pending/failed entries, while the turn-start snapshot stays unchanged. Mismatched and completed turns return nil. Tests: go test ./appserver -run CurrentTurnEnvironmentSelections -count=1"
       ]
     },
     {

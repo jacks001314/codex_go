@@ -8904,6 +8904,17 @@ func (r *RuntimeRouter) activeRuntimeTurnStateSnapshot(threadID string, turnID s
 	return active
 }
 
+// currentTurnEnvironmentSelections returns the running turn's current
+// environment selections, including entries that are still starting or failed.
+// It returns nil when the requested turn is no longer active (Rust #47970).
+func (r *RuntimeRouter) currentTurnEnvironmentSelections(threadID string, expectedTurnID string) []map[string]any {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(expectedTurnID))
+	if active == nil || active.Params == nil {
+		return nil
+	}
+	return cloneMapSlice(active.Params.Environments)
+}
+
 func (r *RuntimeRouter) historyInputItemsForTurn(threadID string) ([]any, string) {
 	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
 		return nil, ""

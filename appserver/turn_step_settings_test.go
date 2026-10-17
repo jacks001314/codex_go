@@ -176,6 +176,45 @@ func TestTurnSettingsUpdateRequiresStepModelSwitchingLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #47970: reads of the running turn's environment selections
+// reflect mid-turn settings updates, while the turn-start snapshot stays intact
+// and completed turns report no selection.
+func TestCurrentTurnEnvironmentSelectionsReflectUpdatesLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	initial := []map[string]any{{"environmentId": "initial", "cwd": t.TempDir()}}
+	if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, &turn.TurnStartParams{
+		ThreadID:     "thread-1",
+		Environments: initial,
+	}); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	if got := router.currentTurnEnvironmentSelections("thread-1", "turn-1"); len(got) != 1 || selectionEnvironmentID(got[0]) != "initial" {
+		t.Fatalf("initial current selections = %#v", got)
+	}
+
+	updated := []map[string]any{{"environmentId": "updated", "cwd": t.TempDir()}}
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID:     "thread-1",
+		TurnID:       "turn-1",
+		Environments: updated,
+	})
+	if got := router.currentTurnEnvironmentSelections("thread-1", "turn-1"); len(got) != 1 || selectionEnvironmentID(got[0]) != "updated" {
+		t.Fatalf("updated current selections = %#v", got)
+	}
+	if selectionEnvironmentID(initial[0]) != "initial" {
+		t.Fatalf("turn-start snapshot was mutated: %#v", initial)
+	}
+	if got := router.currentTurnEnvironmentSelections("thread-1", "other-turn"); got != nil {
+		t.Fatalf("mismatched turn selections = %#v, want nil", got)
+	}
+	if _, ok := router.threads.ConsumeTurn("thread-1", "turn-1", true); !ok {
+		t.Fatal("ConsumeTurn() did not find the active turn")
+	}
+	if got := router.currentTurnEnvironmentSelections("thread-1", "turn-1"); got != nil {
+		t.Fatalf("completed turn selections = %#v, want nil", got)
+	}
+}
+
 // Mirrors Rust #50128: current_turn_model returns the model selected for the
 // named running turn's next step, ignoring other turn ids and reporting nothing
 // once the turn stops running.

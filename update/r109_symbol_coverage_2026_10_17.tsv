@@ -1612,7 +1612,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 97771b1d78cf6366bc3946fe9e4bbca4ebee31d1	53897	Isolate daemon package tests to reduce disk contention (#53897)	2026-10-14	config	0	0		0	0	not_applicable	
 979771476a6dc8cae59dfc9224b91ae0515b04fd	53691	Account for replay caches in encrypted compaction budgets (#53691)	2026-10-13	guardian	3	0	0.00	0	0	complete	MAX_MODEL_CONTEXT_ITEM_TOKENS,estimate_compaction_content_length,estimate_input_tokens_from_serialized_len
 97c1f628983a401b14fefc2b2b2573806c4e9931	53148	Fix startup draft recovery for pending Vim Replace keys (#53148)	2026-10-11	tui	2	0	0.00	0	0	implementation_pending	flush_pending,replace_vim_text
-97da50c1aa4169cb6bab68d7e4c9c7e7cd2c842f	47970	Expose current environment selections for a running turn (#47970)	2026-09-24	core	1	0	0.00	0	0	implementation_pending	current_turn_environment_selections
+97da50c1aa4169cb6bab68d7e4c9c7e7cd2c842f	47970	Expose current environment selections for a running turn (#47970)	2026-09-24	core	1	1	1.00	0	0	complete
 97e46694e1459f758fe03c297e31f40ba1384cd4	42755	Stabilize the interactive tmux startup safety test (#42755)	2026-09-04	core	0	0		0	0	not_applicable	
 97ebf2d94d62e2ff2045f3ea17b6e11eae9a21fb	54401	Run managed daemon processes at background priority on macOS (#54401)	2026-10-15	appserver	1	1	1.00	0	0	complete	
 98072cf5f68a2959961d5aa0ef0c9a78d6db80d1	48623	Preserve empty Markdown list markers in the TUI (#48623)	2026-09-27	tui	0	0		0	0	not_applicable	
@@ -2180,7 +2180,7 @@ cd2f9ca692397e3092315f5b6d39273383e882c9	46557	Fix active-turn environment selec
 cd4a9cbd254ade36de9fea0cdac3b6a9d40d55b1	49859	Honor Daybreak settings in TUI continuations and background tasks (#49859)	2026-10-01	tui	2	0	0.00	0	0	implementation_pending	model_preset_from_api_model,notice_for_setting
 cd7d9e128cc53a8cc3d510772721ccd897b2c366	50756	Show unavailable slash commands when searched in side conversations (#50756)	2026-10-04	tui	1	1	1.00	0	0	complete	
 cd85a26cae00385a0dd9247381ef5d1d7ffe9ef3	52160	Remove the patched zsh shell execution backend (#52160)	2026-10-08	tui	2	1	0.50	0	0	audit_pending	active_arg0_helper_dir
-cd8bd62c6e289b96d5f8eb0443c6d8561c2e8c54	42146	Resolve permission requests in the executor context (#42146)	2026-09-01	appserver	1	0	0.00	0	0	implementation_pending	resolve_against
+cd8bd62c6e289b96d5f8eb0443c6d8561c2e8c54	42146	Resolve permission requests in the executor context (#42146)	2026-09-01	appserver	1	0	0.00	0	0	complete	resolve_against
 cd8d61b223d95fd540bb646d627e7f0e7cfa6146	54087	Upgrade Bazel's `rules_python` to 2.4.2 (#54087)	2026-10-14	core	0	0		0	0	not_applicable	
 cda82a2c6853b484e0ba56d38f13902adfb2a6a1	49819	Recover daemon startup and updater re-exec after cwd deletion (#49819)	2026-10-01	appserver	2	2	1.00	0	0	complete	
 cdfda82386f99c28e34f34adb5b5334bebde170b	46518	Handle delayed process startup in the Guardian network approval test (#46518)	2026-09-18	core	0	0		0	0	not_applicable	
