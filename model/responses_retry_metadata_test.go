@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,38 @@ func TestResponsesHTTPErrorPreservesExplicitZeroRetryAfter(t *testing.T) {
 	}, nil)
 	if got, ok := codexapi.RetryDelayInfo(err); !ok || got != 0 {
 		t.Fatalf("RetryDelayInfo() = %v, %t", got, ok)
+	}
+}
+
+func TestResponsesHTTPErrorPreservesRetryDeadlineAcrossWrapping(t *testing.T) {
+	before := time.Now()
+	err := responsesHTTPError("openai", http.StatusServiceUnavailable, http.Header{
+		"Retry-After": []string{"17"},
+	}, []byte(`{"error":{"message":"busy"}}`))
+	after := time.Now()
+	wrapped := fmt.Errorf("outer: %w", err)
+	retryAfter, ok := codexapi.RetryAfterInfo(wrapped)
+	if !ok {
+		t.Fatal("wrapped response error lost retry advice")
+	}
+	deadline := retryAfter.Deadline()
+	if deadline.Before(before.Add(17*time.Second)) || deadline.After(after.Add(17*time.Second)) {
+		t.Fatalf("retry deadline = %v, want between %v and %v", deadline, before.Add(17*time.Second), after.Add(17*time.Second))
+	}
+}
+
+func TestResponsesHTTPErrorAnchorsRetryAfterAtHeaderReceipt(t *testing.T) {
+	receivedAt := time.Now().Add(-5 * time.Second)
+	err := responsesHTTPError("openai", http.StatusServiceUnavailable, http.Header{
+		"Retry-After": []string{"17"},
+	}, []byte(`{"error":{"message":"busy"}}`), receivedAt)
+	retryAfter, ok := codexapi.RetryAfterInfo(err)
+	if !ok {
+		t.Fatal("response error lost retry advice")
+	}
+	deadline := retryAfter.Deadline()
+	if deadline.Before(receivedAt.Add(17*time.Second)) || deadline.After(receivedAt.Add(17*time.Second+10*time.Millisecond)) {
+		t.Fatalf("retry deadline = %v, want about %v", deadline, receivedAt.Add(17*time.Second))
 	}
 }
 

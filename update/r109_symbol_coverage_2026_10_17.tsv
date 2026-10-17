@@ -1675,7 +1675,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9d57be71ba33bbb2e2dfbed244287f04e01c259f	42202	Separate TUI preferences from server configuration (#42202)	2026-09-02	tui	8	6	0.75	0	0	audit_pending	app_server_platform_family,app_server_platform_os
 9d83c48e5c4761c4fe29995305914021dcfbe7cd	43894	Preserve thread identity in code-mode tool dispatch traces (#43894)	2026-09-08	core	0	0		0	0	not_applicable	
 9d88e9ae086128b83292f4ad9868aadb0ed6b0d9	43927	Rename thread artifacts to attachments in the state database (#43927)	2026-09-08	persistence	0	0		0	0	not_applicable	
-9d8de196748b57d7f463a7757eaa447b6483a331	47641	Honor Retry-After and preserve server retry deadlines (#47641)	2026-09-23	guardian	8	7	0.88	0	0	audit_pending	from_delay
+9d8de196748b57d7f463a7757eaa447b6483a331	47641	Honor Retry-After and preserve server retry deadlines (#47641)	2026-09-23	guardian	8	8	1.00	0	0	complete	
 9daf7d22ca707c2b2f40860bf2b2035d8cc4deef	43244	Add bounded GStreamer playback components to the voice host (#43244)	2026-09-06	realtime	10	6	0.60	0	0	audit_pending	PlaybackPort,PlaybackState,PlaybackWriter,fail_if_current
 9db8162d658100bbf0a5a151996f9c3396ff1791	48604	Remove the bundled `plugin-creator` skill (#48604)	2026-09-27	appserver	0	0		0	0	not_applicable	
 9dd798805fdf9dd0f836f35ccc9480cb0af17784	51775	Prevent recursive Tokio tracing in telemetry and SQLite logs (#51775)	2026-10-07	mcp	0	0		0	0	not_applicable	

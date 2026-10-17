@@ -472,6 +472,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 	streamCtx, streamSpan := r.telemetryTracerFor().StartSpan(ctx, nil, StreamRequestSpanName, nil)
 	defer streamSpan.End()
 	httpResponse, err := r.doResponsesHTTPRequestWithRetry(streamCtx, request, apiRequest, "text/event-stream", r.requestMaxRetries())
+	receivedAt := time.Now()
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +493,7 @@ func (r *ResponsesAgentRunner) runStreamingOnce(ctx context.Context, request *Ag
 		if readErr != nil {
 			return nil, readErr
 		}
-		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody, receivedAt)
 		setResponsesAPIErrorURL(apiErr, httpResponse)
 		emitUsageLimitErrorHeaderEvents(handler, httpResponse.Header, apiErr)
 		return nil, apiErr
@@ -2565,7 +2566,7 @@ func responseFailedError(data []byte) error {
 	// nested `error.headers`, parsed with the HTTP Retry-After rules and
 	// preferred over rate-limit message advice (falling back when absent or
 	// invalid). Flex failures remain terminal and ignore it.
-	retryAfterHeader, hasRetryAfterHeader := responsesFailedRetryAfterFromRawError(rawError)
+	retryAfter, hasRetryAfter := responsesFailedRetryAfterFromRawError(rawError)
 	// Rust checks the Flex shape with `Value::get("code")` before decoding the
 	// strict error body, so a Flex-capacity failure ends the turn even when
 	// another field is malformed (Rust #47967, #48229).
@@ -2578,11 +2579,11 @@ func responseFailedError(data []byte) error {
 	}
 	var errBody responsesFailedErrorBody
 	if err := json.Unmarshal(rawError, &errBody); err != nil {
-		if hasRetryAfterHeader {
+		if hasRetryAfter {
 			return (&codexapi.APIError{
 				Kind:    codexapi.ErrorRetryable,
 				Message: errResponsesStreamFailed.Error(),
-			}).WithRetryDelay(retryAfterHeader)
+			}).WithRetryAfter(retryAfter)
 		}
 		return errResponsesStreamFailed
 	}
@@ -2630,8 +2631,8 @@ func responseFailedError(data []byte) error {
 		return &codexapi.APIError{Kind: codexapi.ErrorInvalidRequest, Message: message}
 	case "server_is_overloaded":
 		overloaded := &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
-		if hasRetryAfterHeader {
-			return overloaded.WithRetryDelay(retryAfterHeader)
+		if hasRetryAfter {
+			return overloaded.WithRetryAfter(retryAfter)
 		}
 		return overloaded
 	}
@@ -2641,22 +2642,26 @@ func responseFailedError(data []byte) error {
 		retryable := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: message}
 		// Rust #50418: a valid Retry-After header beats message advice; an
 		// absent or invalid header falls back to the plaintext duration.
-		if hasRetryAfterHeader {
-			return retryable.WithRetryDelay(retryAfterHeader)
+		if hasRetryAfter {
+			return retryable.WithRetryAfter(retryAfter)
 		}
 		if delay, ok := responseFailedRetryDelay(code, message); ok {
-			return retryable.WithRetryDelay(delay)
+			if retryAfter, ok := codexapi.NewRetryAfter(delay); ok {
+				return retryable.WithRetryAfter(retryAfter)
+			}
 		}
 		return retryable
 	}
 	// Rust's fallback arm reports an unclassified failure as retryable; a
 	// malformed payload never reaches here (it degrades to the sentinel above).
 	retryable := &codexapi.APIError{Kind: codexapi.ErrorRetryable, Message: message}
-	if hasRetryAfterHeader {
-		return retryable.WithRetryDelay(retryAfterHeader)
+	if hasRetryAfter {
+		return retryable.WithRetryAfter(retryAfter)
 	}
 	if delay, ok := responseFailedRetryDelay(code, message); ok {
-		return retryable.WithRetryDelay(delay)
+		if retryAfter, ok := codexapi.NewRetryAfter(delay); ok {
+			return retryable.WithRetryAfter(retryAfter)
+		}
 	}
 	return retryable
 }
@@ -2666,17 +2671,17 @@ func responseFailedError(data []byte) error {
 // `RetryAfter::from_headers(json_headers_to_http_headers(error.headers))`: the
 // nested `headers` object is mapped through the shared JSON header conversion
 // and then parsed with the HTTP Retry-After rules.
-func responsesFailedRetryAfterFromRawError(rawError []byte) (time.Duration, bool) {
+func responsesFailedRetryAfterFromRawError(rawError []byte) (codexapi.RetryAfter, bool) {
 	var envelope struct {
 		Headers map[string]any `json:"headers"`
 	}
 	if err := json.Unmarshal(rawError, &envelope); err != nil {
-		return 0, false
+		return codexapi.RetryAfter{}, false
 	}
 	if len(envelope.Headers) == 0 {
-		return 0, false
+		return codexapi.RetryAfter{}, false
 	}
-	return responsesRetryAfterFromHeaderValue(jsonHeadersToHTTPHeaders(envelope.Headers).Get("Retry-After"), time.Now())
+	return responsesRequestedRetryAfter(jsonHeadersToHTTPHeaders(envelope.Headers), time.Now())
 }
 
 // responsesRetryAfterFromHeaderValue mirrors Rust's `RetryAfter::from_header`:

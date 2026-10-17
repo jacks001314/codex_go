@@ -1590,6 +1590,14 @@
             "reason": "Audited upstream 0182ff3480 (#41195 Finalize model-specific tool plans in ToolRouter): Go resolves the selected model before building the per-turn tool.Router and turn.Runtime, while candidate and previous-model compaction use a separate compact runner that does not construct or republish tool plans. The Rust-only capability getters are consumers for a later live tool-plan path that Go does not have.",
             "userImpact": "Preparing a fallback or compaction candidate cannot overwrite the selected model's tool mode, visible specs, or Responses Lite inventory.",
             "test": "go test ./appserver -run 'PreviousModelCompact|CompactionIncrementalCatalog|ToolInventory|ToolNamespace' -count=1; go test ./turn -run 'ToolMode|ToolNamespaces|ModelVisible|CodeModeOnly' -count=1"
+        },
+        {
+            "id": "retry-after-deadline",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 9d8de19674 (#47641 Honor Retry-After and preserve server retry deadlines): codexapi.RetryAfter captures delay seconds or HTTP dates as a monotonic deadline when headers arrive. The deadline survives wrapped Responses/Bedrock errors and exhausted retry state; stream and transport retries use only the remaining delay. Expired advice remains explicit zero advice, while absent or invalid advice retains local backoff. WithRetryDelay remains as a compatibility constructor.",
+            "userImpact": "Server-requested retries no longer restart their full delay after error propagation or reporting, so request pacing matches the upstream deadline.",
+            "test": "go test ./codexapi ./model -run 'Retry|HTTPError|ResponseFailed|RetryAfter' -count=1; go test ./appserver -run 'GuardianReviewHonorsServerRetryDelay|GuardianReview.*Retry' -count=1"
         }
     ]
 }

@@ -63,27 +63,42 @@ type HTTPDoer interface {
 }
 
 func responsesRequestedRetryDelay(headers http.Header, now time.Time) (time.Duration, bool) {
-	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
-	if retryAfter == "" {
+	retryAfter, ok := responsesRequestedRetryAfter(headers, now)
+	if !ok {
 		return 0, false
 	}
-	if seconds, err := strconv.ParseFloat(retryAfter, 64); err == nil && seconds >= 0 {
-		return time.Duration(seconds * float64(time.Second)), true
+	delay := retryAfter.Deadline().Sub(now)
+	if delay < 0 {
+		delay = 0
 	}
-	if when, err := http.ParseTime(retryAfter); err == nil {
-		delay := when.Sub(now)
-		if delay > 0 {
-			return delay, true
-		}
+	return delay, true
+}
+
+func responsesRequestedRetryAfter(headers http.Header, now time.Time) (codexapi.RetryAfter, bool) {
+	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
+	if retryAfter == "" {
+		return codexapi.RetryAfter{}, false
 	}
-	return 0, false
+	delay, ok := responsesRetryAfterFromHeaderValue(retryAfter, now)
+	if !ok {
+		return codexapi.RetryAfter{}, false
+	}
+	return codexapi.NewRetryAfterAt(now.Add(delay)), true
 }
 
 func (e *ResponsesAPIError) RequestedRetryDelay() (time.Duration, bool) {
-	if e == nil {
+	retryAfter, ok := e.RequestedRetryAfter()
+	if !ok {
 		return 0, false
 	}
-	return e.retryDelay, e.hasRetryDelay
+	return retryAfter.RemainingDelay(), true
+}
+
+func (e *ResponsesAPIError) RequestedRetryAfter() (codexapi.RetryAfter, bool) {
+	if e == nil || !e.hasRetryAfter {
+		return codexapi.RetryAfter{}, false
+	}
+	return e.retryAfter, true
 }
 
 type ResponsesAgentOptions struct {
@@ -482,8 +497,8 @@ type ResponsesAPIError struct {
 	CFRay                  string
 	AuthorizationError     string
 	AuthorizationErrorCode string
-	retryDelay             time.Duration
-	hasRetryDelay          bool
+	retryAfter             codexapi.RetryAfter
+	hasRetryAfter          bool
 }
 
 // unexpectedResponseBodyMaxBytes is Rust's `UNEXPECTED_RESPONSE_BODY_MAX_BYTES`.
@@ -1610,6 +1625,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		return r.runStreaming(ctx, request, apiRequest)
 	}
 	httpResponse, preempted, err := r.runResponsesHTTPRequestPreemptible(ctx, request, apiRequest)
+	receivedAt := time.Now()
 	if preempted {
 		return preemptedAgentResponse(request), nil
 	}
@@ -1622,7 +1638,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 		return nil, err
 	}
 	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody)
+		apiErr := responsesHTTPError(r.providerName(), httpResponse.StatusCode, httpResponse.Header, responseBody, receivedAt)
 		setResponsesAPIErrorURL(apiErr, httpResponse)
 		emitUsageLimitErrorHeaderEvents(combinedResponsesStreamHandler(r.StreamHandler, request.StreamHandler), httpResponse.Header, apiErr)
 		return nil, apiErr
@@ -3400,7 +3416,11 @@ func usageLimitWindowMinutesFromValue(value any) *uint16 {
 	return &converted
 }
 
-func responsesHTTPError(providerName string, statusCode int, headers http.Header, body []byte) error {
+func responsesHTTPError(providerName string, statusCode int, headers http.Header, body []byte, receivedAt ...time.Time) error {
+	retryAfterReceivedAt := time.Now()
+	if len(receivedAt) > 0 && !receivedAt[0].IsZero() {
+		retryAfterReceivedAt = receivedAt[0]
+	}
 	var payload struct {
 		Error *responsesAgentAPIErrorBody `json:"error"`
 	}
@@ -3450,8 +3470,8 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			// retry only while that advice is present, so the classification has
 			// to keep it.
 			overloaded := &codexapi.APIError{Kind: codexapi.ErrorServerOverloaded, Message: message}
-			if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
-				return overloaded.WithRetryDelay(delay)
+			if retryAfter, ok := responsesRequestedRetryAfter(headers, retryAfterReceivedAt); ok {
+				return overloaded.WithRetryAfter(retryAfter)
 			}
 			return overloaded
 		case "slow_down":
@@ -3459,8 +3479,8 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 			// advice (Rust #45602 classifies it), so the retry waits for the
 			// server's deadline instead of the local backoff.
 			slowDown := &codexapi.APIError{Kind: codexapi.ErrorRateLimitExceeded, Message: strings.TrimSpace(payload.Error.Message)}
-			if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
-				return slowDown.WithRetryDelay(delay)
+			if retryAfter, ok := responsesRequestedRetryAfter(headers, retryAfterReceivedAt); ok {
+				return slowDown.WithRetryAfter(retryAfter)
 			}
 			return slowDown
 		}
@@ -3512,9 +3532,9 @@ func responsesHTTPError(providerName string, statusCode int, headers http.Header
 		AuthorizationError:     responseHeaderValue(headers, "x-openai-authorization-error"),
 		AuthorizationErrorCode: responseAuthorizationErrorCode(headers),
 	}
-	if delay, ok := responsesRequestedRetryDelay(headers, time.Now()); ok {
-		apiError.retryDelay = delay
-		apiError.hasRetryDelay = true
+	if retryAfter, ok := responsesRequestedRetryAfter(headers, retryAfterReceivedAt); ok {
+		apiError.retryAfter = retryAfter
+		apiError.hasRetryAfter = true
 	}
 	return apiError
 }

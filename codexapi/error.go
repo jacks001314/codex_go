@@ -53,8 +53,8 @@ type APIError struct {
 	Delay time.Duration `json:"delay,omitempty"`
 
 	details       *APIErrorDetails
-	retryDelay    time.Duration
-	hasRetryDelay bool
+	retryAfter    RetryAfter
+	hasRetryAfter bool
 }
 
 type APIErrorDetails struct {
@@ -173,27 +173,76 @@ func (e *APIError) Details() APIErrorDetails {
 
 func (e *APIError) WithRetryDelay(delay time.Duration) *APIError {
 	if e != nil && delay >= 0 {
-		e.retryDelay = delay
-		e.hasRetryDelay = true
+		if retryAfter, ok := NewRetryAfter(delay); ok {
+			e.retryAfter = retryAfter
+			e.hasRetryAfter = true
+		}
 	}
 	return e
 }
 
-func (e *APIError) RequestedRetryDelay() (time.Duration, bool) {
+// WithRetryAfter retains an already captured server deadline.
+func (e *APIError) WithRetryAfter(retryAfter RetryAfter) *APIError {
+	if e != nil {
+		e.retryAfter = retryAfter
+		e.hasRetryAfter = true
+	}
+	return e
+}
+
+// RequestedRetryAfter returns the captured server deadline.
+func (e *APIError) RequestedRetryAfter() (RetryAfter, bool) {
 	if e == nil {
+		return RetryAfter{}, false
+	}
+	if e.hasRetryAfter {
+		return e.retryAfter, true
+	}
+	if e.Delay > 0 {
+		if retryAfter, ok := NewRetryAfter(e.Delay); ok {
+			return retryAfter, true
+		}
+	}
+	return RetryAfter{}, false
+}
+
+func (e *APIError) RequestedRetryDelay() (time.Duration, bool) {
+	retryAfter, ok := e.RequestedRetryAfter()
+	if !ok {
 		return 0, false
 	}
-	if e.hasRetryDelay {
-		return e.retryDelay, true
-	}
-	return e.Delay, e.Delay > 0
+	return retryAfter.RemainingDelay(), true
 }
 
 type retryDelayProvider interface {
 	RequestedRetryDelay() (time.Duration, bool)
 }
 
+type retryAfterProvider interface {
+	RequestedRetryAfter() (RetryAfter, bool)
+}
+
+// RetryAfterInfo returns the captured server deadline from the first wrapped
+// error that carries one.
+func RetryAfterInfo(err error) (RetryAfter, bool) {
+	for err != nil {
+		if provider, ok := err.(retryAfterProvider); ok {
+			return provider.RequestedRetryAfter()
+		}
+		type unwrapper interface{ Unwrap() error }
+		wrapped, ok := err.(unwrapper)
+		if !ok {
+			return RetryAfter{}, false
+		}
+		err = wrapped.Unwrap()
+	}
+	return RetryAfter{}, false
+}
+
 func RetryDelayInfo(err error) (time.Duration, bool) {
+	if retryAfter, ok := RetryAfterInfo(err); ok {
+		return retryAfter.RemainingDelay(), true
+	}
 	for err != nil {
 		if provider, ok := err.(retryDelayProvider); ok {
 			return provider.RequestedRetryDelay()
