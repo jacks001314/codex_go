@@ -988,7 +988,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5ee2bdf1e0e04064bc427ae31a49a01e8f7064df	46697	Unify TUI picker styling and improve compact session layouts (#46697)	2026-09-19	tui	4	3	0.75	0	0	audit_pending	PickerAreas
 5eea8d0dd3f6b38b0e457d266fd7c918eb189bb6	41328	Review terminal input against retained permissions (#41328)	2026-08-28	guardian	4	2	0.50	0	0	audit_pending	TerminalSandboxSource,for_launch
 5ef96ab2785f3ecddf279639eff7b1b42c906fa4	52742	Add opt-in output token replay for OpenAI requests (#52742)	2026-10-10	tui	1	0	0.00	0	0	implementation_pending	clear_encrypted_content
-5f2ce5e02c56905cebcb5781ec198b676f32f27c	47741	Attribute tool telemetry to the invoking turn's product SKU (#47741)	2026-09-24	telemetry	1	0	0.00	0	0	implementation_pending	with_product_sku
+5f2ce5e02c56905cebcb5781ec198b676f32f27c	47741	Attribute tool telemetry to the invoking turn's product SKU (#47741)	2026-09-24	telemetry	1	1	1.00	0	0	complete	
 5f300d3f74eb48e30a42128c8e8ec34efcfc697d	49792	Add retained conversation support to Guardian async sampling (#49792)	2026-09-30	guardian	13	4	0.31	0	0	audit_pending	CollectedTranscript,PreparedRequest,RetainedCompletion,SamplingMode,collect_context,prepare_input,prepare_retained,sample_retained,take_history
 5f3180c79374bd9440db733e23ead8bc9f62d64b	48224	Preserve model and access program pairs during compaction (#48224)	2026-09-25	appserver	0	0		0	0	not_applicable	
 5f371ba30ae4a4bf4527eb0729ab6b36e3a0c123	47672	Fix no-reparse directory opens on Windows 10 (#47672)	2026-09-23	sandbox	0	0		0	0	not_applicable	

@@ -20215,9 +20215,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: with_product_sku"
+        "Round 115 (lead): verified complete (equivalent bounded SKU attribution) - #47741 reads the invoking turn's apps_mcp_product_sku and adds a normalized product_sku tag (codex/other/omitted) to tool metrics, logs and traces. Go's telemetry/agent_spawn_failure.go and binding_catalog.go carry the same bounded product_sku field, appserver resolves it from effective apps_mcp_product_sku, and MCP catalog/tool telemetry includes product_sku tags. Existing telemetry tests pin codex/other/omitted behavior. No source change needed."
       ]
     },
     {
