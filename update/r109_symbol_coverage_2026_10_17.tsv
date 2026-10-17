@@ -1890,7 +1890,7 @@ b06b7d2f7773d860ee5a3685d5775c1974c3c0d7	50058	Upgrade Windows bindings to `wind
 b086ad5493f06decd4eadeedb89929466c72f179	47654	Make Linux descriptor cleanup fork-safe (#47654)	2026-09-23	mcp	1	0	0.00	0	0	not_applicable	close_inherited_fds_except
 b090e901f8702f63a5fedbcdcf3f4d021d10a8a0	43844	Add staged enterprise OIDC login and coordinated logout (#43844)	2026-09-08	mcp	29	19	0.66	0	0	audit_pending	EnterpriseOAuthGeneration,EnterpriseOAuthHttpClient,OAuthHttpContext,OAuthLoginPurpose,OauthLoginFlow,delete_oauth_tokens_with_lock_held,perform_enterprise_oauth_login_return_url,resolve_enterprise_authorization_manager,warm_http_client,without_oauth_resource
 b095b2ef236d8f45f85a9d5526bfbf2618ab2d63	54383	Support inline permission profile selection with `/permissions` (#54383)	2026-10-15	tui	8	2	0.25	0	0	complete	cancel_pending_permission_profile_selection,complete_inline_permission_profile_selection,inline_permission_profile_selection_pending,recover_inline_permission_profile_selection,select_permission_profile_by_id,try_select_permission_profile_by_id
-b0a5191bd6ac383313353d86b464859596c9ef39	51472	Preserve clickable URLs in TUI selection rows (#51472)	2026-10-06	tui	3	0	0.00	0	0	implementation_pending	full_hyperlink_row,wrap_row_lines,wrap_two_column_row
+b0a5191bd6ac383313353d86b464859596c9ef39	51472	Preserve clickable URLs in TUI selection rows (#51472)	2026-10-06	tui	3	0	0.00	0	0	complete	full_hyperlink_row,wrap_row_lines,wrap_two_column_row
 b0a6b8d86f455d3db9dd869fc1178a5fbd865e7f	51463	Record resolved model and reasoning effort in sub-agent activity (#51463)	2026-10-06	tui	0	0		0	0	not_applicable	
 b0a9dcb843f60c52de9c5e2be37fa4ce0bdb12a6	47757	Refactor tool telemetry product SKU matching to use an allowlist (#47757)	2026-09-24	telemetry	0	0		0	0	not_applicable	
 b0af519c39766c173191fc39b341808619b51c74	45649	Add elicitation classification support to app and MCP analytics (#45649)	2026-09-15	mcp	5	2	0.40	0	0	audit_pending	McpToolCallElicitation,track_app_used,track_mcp_tool_call_elicitation
@@ -2257,7 +2257,7 @@ d4eed6dca57fc72298808aed5a4bfe43285bf98f	50445	Assert that only direct tool call
 d515b2f85ec1b24a4b5ec3fbd86db27fd51aea3b	49277	Avoid a turn teardown race in the Guardian agent message test (#49277)	2026-09-29	guardian	0	0		0	0	not_applicable	
 d52478c52ef09f001142a4b82339467c3880877f	40570	Preserve Unicode paths in Windows batch aliases (#40570)	2026-08-25	core	0	0		0	0	not_applicable	
 d5355e95ef24de93ef4b3c070c7fc221a71a4e93	48211	Keep Codex visible during external editor handoff (#48211)	2026-09-25	tui	6	1	0.17	0	0	audit_pending	DisableModifyOtherKeys,TerminalHandoff,previous_buffer,release_input,with_restored
-d570b3632b100e36f931797cdbdb8906d0fcafa8	52223	Enforce application network policy for daemon updates (#52223)	2026-10-08	core	0	0		0	0	not_applicable	
+d570b3632b100e36f931797cdbdb8906d0fcafa8	52223	Enforce application network policy for daemon updates (#52223)	2026-10-08	core	0	0		0	0	complete	
 d583e73c4d1204f1e9f654ef87065e9f0dd07ac7	47055	Fetch local message board thread summaries in one query (#47055)	2026-09-21	core	0	0		0	0	not_applicable	
 d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budgeting by default (#41803)	2026-08-31	model	1	1	1.00	0	0	complete	
 d5afb62bb3d8f900530b49a1268cb110380bedfd	46574	Notify users when asynchronous questions arrive in the TUI (#46574)	2026-09-19	tui	0	0		0	0	not_applicable	

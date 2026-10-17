@@ -167,14 +167,21 @@ func validateInstallerScript(script []byte, mode installerMode, packageRoot stri
 // fetchInstallerScript downloads the published installer the updater runs
 // (Rust fetch_installer_script).
 func fetchInstallerScript(ctx context.Context) ([]byte, error) {
+	return fetchInstallerScriptWithClient(ctx, http.DefaultClient)
+}
+
+func fetchInstallerScriptWithClient(ctx context.Context, client *http.Client) ([]byte, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if client == nil {
+		client = http.DefaultClient
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, InstallScriptEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	response, err := http.DefaultClient.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch standalone Codex updater: %w", err)
 	}

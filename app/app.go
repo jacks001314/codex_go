@@ -1629,6 +1629,9 @@ func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, an
 			return err
 		}
 		loopOptions := appserverdaemon.DefaultUpdateLoopOptions()
+		if err := appserverdaemon.ConfigureUpdaterNetworkPolicy(loopOptions, auth.DefaultCodexHome()); err != nil {
+			return err
+		}
 		loopOptions.RestoreRelease = opts.RestoreRelease
 		return appserverdaemon.RunPIDUpdateLoop(ctx, runner, loopOptions)
 	default:

@@ -92,6 +92,14 @@ func RequestManualUpdate(ctx context.Context, codexHome string, options *ManualU
 			return nil, err
 		}
 		if supported {
+			if options.Migration == nil {
+				options.Migration = &MigrationOptions{}
+			}
+			if options.Migration.FetchScript == nil {
+				if err := ConfigureMigrationNetworkPolicy(options.Migration, codexHome); err != nil {
+					return nil, err
+				}
+			}
 			return runDaemonMigration(ctx, daemon, options.Migration)
 		}
 	}
