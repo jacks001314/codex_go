@@ -2596,7 +2596,7 @@ f53f5a6fed662bd6f352d08066925c871a061182	49138	Expose original error details to 
 f5420174dafba153913a3e697f89002c338dfd7e	40866	Include originating item IDs in MCP request metadata (#40866)	2026-08-26	mcp	3	0	0.00	0	0	implementation_pending	cell_originating_item_id,mark_cell_ready_for_dispatch,originating_item_id
 f542ba68e502bb6e5079e9b616c4b4d4f2fea2e0	49786	Clarify V2 spawn model override guidance for context catalogs (#49786)	2026-09-30	core	0	0		0	0	not_applicable	
 f5430515a8acf9251f60cacae6c86ae43686c960	49098	Resolve Windows sandbox PowerShell fallbacks on the exec server (#49098)	2026-09-28	execserver	0	0		0	0	not_applicable	
-f5636bb733c4653a6b91413fed1aaf8842374f2e	41567	Restore thread cwd from owned settings snapshots (#41567)	2026-08-29	appserver	1	0	0.00	0	0	implementation_pending	acquire_persistence_lock
+f5636bb733c4653a6b91413fed1aaf8842374f2e	41567	Restore thread cwd from owned settings snapshots (#41567)	2026-08-29	appserver	1	1	1.00	0	0	complete	
 f580dd886fe57259168c0afc0e3e7820942eed14	39980	Enforce environment network policies for remote execution (#39980)	2026-08-21	sandbox	3	2	0.67	0	0	audit_pending	build_state_with_audit_metadata
 f5853cbe908c27b9c222ff40f4050ce12277c496	40634	Reconnect MCP servers when authentication mode changes (#40634)	2026-08-25	mcp	0	0		0	0	not_applicable	
 f585f13a120bc4b748a3bb7302487634f6a57f6b	47030	Preserve ordered assistant context in Guardian reviews (#47030)	2026-09-21	guardian	1	1	1.00	0	0	complete	

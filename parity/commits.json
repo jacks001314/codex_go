@@ -4524,9 +4524,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: acquire_persistence_lock"
+        "Round 115 (lead): verified complete (equivalent owned-snapshot mechanism) - #41567 restores resumed thread cwd from the thread-owned settings snapshot rather than fork-copied settings. Go Router.latestPersistedOwnedThreadCWD scans the thread's persisted lineage, ignores fork-copied snapshots from other threads, and resume uses it before record metadata cwd. Focused collaboration-mode resume tests pass. No source change needed."
       ]
     },
     {
