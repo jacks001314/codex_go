@@ -3284,6 +3284,12 @@ func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResu
 		if err != nil {
 			return codextea.SessionResumeResponse{}, err
 		}
+		// Rust #53816: interactive CLI resume refuses Guardian review threads.
+		if record != nil {
+			if err := validateResumeTargetSource(record.Metadata.Source, string(record.ParentThreadID)); err != nil {
+				return codextea.SessionResumeResponse{}, err
+			}
+		}
 		// Rust session_start.rs: the embedded app server rejects resuming an
 		// archived conversation so the TUI can offer to unarchive and retry.
 		if record != nil && record.Archived {

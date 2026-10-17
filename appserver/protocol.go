@@ -573,6 +573,28 @@ const (
 	SessionSourceUnknown   SessionSource = "unknown"
 )
 
+// UnmarshalJSON accepts both the plain string Rust emits for unit variants and
+// the externally tagged object it emits for payload variants
+// ({"subAgent":{"other":"guardian"}}). The canonical display form is kept in
+// the Go string type.
+func (s *SessionSource) UnmarshalJSON(data []byte) error {
+	source, err := session.ParseSessionSourceJSON(data)
+	if err != nil {
+		return err
+	}
+	*s = SessionSource(source)
+	return nil
+}
+
+// MarshalJSON keeps the Rust v2 externally tagged representation for the
+// subagent variants Go can reconstruct from the canonical display string.
+func (s SessionSource) MarshalJSON() ([]byte, error) {
+	if subAgent, ok := session.SubAgentSourceWire(string(s)); ok {
+		return json.Marshal(map[string]any{"subAgent": subAgent})
+	}
+	return json.Marshal(string(s))
+}
+
 type ThreadSource string
 
 const (

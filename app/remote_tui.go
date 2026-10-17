@@ -1612,6 +1612,18 @@ func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appser
 			return codextea.SessionResumeResponse{}, err
 		}
 		defer client.close()
+		// Rust #53816: check the selected thread's metadata before resuming and
+		// refuse Guardian review threads. A failed metadata read preserves the
+		// existing resume behavior.
+		if thread, readErr := remoteTUIReadThread(ctx, client, threadID, false); readErr == nil && thread != nil {
+			parentThreadID := ""
+			if thread.ParentThreadID != nil {
+				parentThreadID = *thread.ParentThreadID
+			}
+			if guardErr := validateResumeTargetSource(string(thread.Source), parentThreadID); guardErr != nil {
+				return codextea.SessionResumeResponse{}, guardErr
+			}
+		}
 		// Rust #43253: resume through the app server so the server owns the
 		// writer and reports the thread's saved settings. When another app owns
 		// the conversation the resume fails with the active-writer conflict and

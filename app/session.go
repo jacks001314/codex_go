@@ -58,10 +58,22 @@ func runSessionResume(opts *cli.SessionOptions, root *cli.RootOptions, stdout io
 		if !ok || response.Thread == nil {
 			return session.ErrThreadNotFound
 		}
+		// Rust #53816: a Guardian review thread cannot be resumed; point at its
+		// parent session instead.
+		parentThreadID := ""
+		if response.Thread.ParentThreadID != nil {
+			parentThreadID = *response.Thread.ParentThreadID
+		}
+		if err := validateResumeTargetSource(string(response.Thread.Source), parentThreadID); err != nil {
+			return err
+		}
 		return writeSessionSummary(stdout, "resumed", sessionRecordFromAppServerThread(response.Thread, false))
 	}
 	record, err := store.Read(target, true, true)
 	if err != nil {
+		return err
+	}
+	if err := validateResumeTargetSource(record.Metadata.Source, string(record.ParentThreadID)); err != nil {
 		return err
 	}
 	return writeSessionSummary(stdout, "resumed", record)
@@ -473,6 +485,15 @@ func runRemoteSessionResume(ctx context.Context, endpoint *appserverdaemon.Remot
 	}
 	thread, err := remoteThreadRead(ctx, client, target.threadID, true)
 	if err != nil {
+		return err
+	}
+	// Rust #53816: a Guardian review thread cannot be resumed; point at its
+	// parent session instead.
+	parentThreadID := ""
+	if thread.ParentThreadID != nil {
+		parentThreadID = *thread.ParentThreadID
+	}
+	if err := validateResumeTargetSource(string(thread.Source), parentThreadID); err != nil {
 		return err
 	}
 	return writeSessionSummary(stdout, "resumed", sessionRecordFromAppServerThread(thread, false))

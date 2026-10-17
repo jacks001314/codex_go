@@ -5224,6 +5224,20 @@ func TestInteractiveRemoteResumeSessionForwardsCallerCWD(t *testing.T) {
 			switch req.Method {
 			case string(appserver.MethodInitialize):
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadRead):
+				// Rust #53816 reads the selected thread metadata (without turns)
+				// before resuming so Guardian review threads can be refused.
+				var params appserver.ThreadReadParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.ThreadID != "thread-resume" || params.IncludeTurns {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/read params = %#v", params))
+					return
+				}
+				thread := remoteSessionTestThread("thread-resume", "resumed", false, 0)
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
 			case string(appserver.MethodThreadResume):
 				thread := remoteSessionTestThread("thread-resume", "resumed", false, 0)
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"thread": thread}})
@@ -5243,6 +5257,9 @@ func TestInteractiveRemoteResumeSessionForwardsCallerCWD(t *testing.T) {
 	}
 	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {
 		t.Fatalf("initialize method = %s", initialize.Method)
+	}
+	if read := remoteTUITestReadCapturedRequest(t, requests); read.Method != string(appserver.MethodThreadRead) {
+		t.Fatalf("read method = %s", read.Method)
 	}
 	resume := remoteTUITestReadCapturedRequest(t, requests)
 	if resume.Method != string(appserver.MethodThreadResume) {

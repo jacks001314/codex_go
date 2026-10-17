@@ -135,10 +135,22 @@ func (m *SessionMeta) UnmarshalJSON(data []byte) error {
 	var wire struct {
 		*sessionMetaAlias
 		BaseInstructions json.RawMessage `json:"base_instructions"`
+		Source           json.RawMessage `json:"source"`
 	}
 	wire.sessionMetaAlias = (*sessionMetaAlias)(m)
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
+	}
+	// Rust serializes SessionSource externally tagged, so subagent rollouts
+	// carry an object ({"subagent":{"other":"guardian"}}) instead of a string.
+	// Normalize either form to the display string the rest of the store uses.
+	m.Source = ""
+	if len(wire.Source) > 0 && string(wire.Source) != "null" {
+		source, err := session.ParseSessionSourceJSON(wire.Source)
+		if err != nil {
+			return fmt.Errorf("source: %w", err)
+		}
+		m.Source = source
 	}
 	if len(wire.BaseInstructions) == 0 || string(wire.BaseInstructions) == "null" {
 		m.BaseInstructions = ""
@@ -170,8 +182,16 @@ func (m SessionMeta) MarshalJSON() ([]byte, error) {
 	var wire struct {
 		*sessionMetaAlias
 		BaseInstructions any `json:"base_instructions,omitempty"`
+		Source           any `json:"source,omitempty"`
 	}
 	wire.sessionMetaAlias = (*sessionMetaAlias)(&m)
+	// Keep the Rust externally tagged representation for sources whose enum
+	// payload is reconstructible from the canonical display string.
+	if subAgent, ok := session.SubAgentSourceWire(m.Source); ok {
+		wire.Source = map[string]any{"subagent": subAgent}
+	} else if m.Source != "" {
+		wire.Source = m.Source
+	}
 	if m.BaseInstructions != "" {
 		wire.BaseInstructions = struct {
 			Text       string                              `json:"text"`
