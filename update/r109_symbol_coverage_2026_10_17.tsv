@@ -848,7 +848,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 51d221a9b77ad4810608f148e90231f0e48b5c82	47064	Stop redundant message-board reads when limits reach one (#47064)	2026-09-21	core	0	0		0	0	not_applicable	
 51d45620702cd3c825d3520ddc7d7e8052a16b87	47797	Support close-on-exec attachments without changing PTY semantics (#47797)	2026-09-24	appserver	4	0	0.00	0	0	implementation_pending	ChildFds,as_slice,inherit_fds,make_fds_inheritable
 51d66fdd3b75e1d34fdb82616e7e9c4089684b56	47956	Support file references in image edit requests (#47956)	2026-09-24	core	0	0		0	0	not_applicable	
-51d8d12236f7ab91a885839c8755db2ea42a2b42	40006	Synchronize Git enrichment tests explicitly (#40006)	2026-08-21	core	1	0	0.00	0	0	implementation_pending	wait_for_git_enrichment
+51d8d12236f7ab91a885839c8755db2ea42a2b42	40006	Synchronize Git enrichment tests explicitly (#40006)	2026-08-21	core	1	0	0.00	0	0	not_applicable	wait_for_git_enrichment
 51ebf5b1842d44a8e2c955e8b5cd2a589d41e71e	39985	Truncate Guardian instructions after rendering the policy (#39985)	2026-08-21	guardian	0	0		0	0	not_applicable	
 520e13a4bccfad50edf652d8243b4f1e9e67d6ff	45516	Allow configuring the Guardian prompt template (#45516)	2026-09-14	guardian	0	0		0	0	not_applicable	
 523519d9747625dfd012a8336b1f52e7b4ec6c34	40431	Render Guardian review evidence with async scorer truncation (#40431)	2026-08-24	guardian	5	1	0.20	0	0	audit_pending	GuardianReviewEvidence,GuardianReviewEvidenceFragment,GuardianReviewEvidenceRecord,render_review_evidence

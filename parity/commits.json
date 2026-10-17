@@ -466,9 +466,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: wait_for_git_enrichment"
+        "Round 115 (lead): not applicable - the upstream commit is test synchronization for Rust's asynchronous git-enrichment task plus a test-only tool wait flag. Go has no enrichment task/completion channel and builds workspace metadata synchronously before request assembly, so there is no equivalent pending state or behavior to port."
       ]
     },
     {
