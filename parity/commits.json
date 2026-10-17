@@ -30378,9 +30378,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: AutoCompactionDisabled"
+        "Round 115 (lead): N/A (verified carrier absence) - #53678 inserts a thread-local AutoCompactionDisabled policy only for experimental prediction forks and skips pre/during/post-turn compaction, context-limit recovery, reminders and new_context resets on those threads. Go's appserver/thread_prediction.go explicitly leaves thread/prediction/request unimplemented (method-not-found), so prediction forks and inherited prediction context do not exist; there is no thread lifecycle to attach the policy to. Ordinary threads retain their existing compaction behavior. No source change needed."
       ]
     },
     {

@@ -37,7 +37,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 03f014564deef528c25e80fe67ec51871cb6ee51	44472	Harden Code Mode tool-call completeness tracking (#44472)	2026-09-10	mcp	8	8	1.00	0	0	complete	
 0447e4a1fd2ceedfd50e3781adafc03f1cf2f46c	44352	Remove path-bearing fields from Guardian review analytics (#44352)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 044da98b4a7ff2dd0079f706280e0a6934048222	51503	Expose selected environments to MCP contributors (#51503)	2026-10-06	mcp	2	2	1.00	0	0	complete	
-044e74fef3d1af2b01f4375158ac1e7ad4ae17ea	53678	Preserve inherited context in prediction forks (#53678)	2026-10-13	appserver	1	0	0.00	0	0	implementation_pending	AutoCompactionDisabled
+044e74fef3d1af2b01f4375158ac1e7ad4ae17ea	53678	Preserve inherited context in prediction forks (#53678)	2026-10-13	appserver	1	0	0.00	0	0	not_applicable	AutoCompactionDisabled
 04581f96044a9fe6062593c4d557036477aee961	45854	Add `/daemon` menu for local background server updates (#45854)	2026-09-16	tui	4	4	1.00	0	0	complete	
 0462dcc062b822bb8fff16cc31ce6eeab69823b9	49246	Use executable fixture copying in the bundled bwrap test (#49246)	2026-09-29	sandbox	0	0		0	0	not_applicable	
 048a936a23b88c8653f4820e68f987de10e3c583	42674	Persist server-advertised experimental features from the TUI (#42674)	2026-09-04	tui	4	3	0.75	0	0	audit_pending	FeatureWriteResult
