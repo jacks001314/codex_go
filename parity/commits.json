@@ -19842,9 +19842,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: close_inherited_fds_except"
+        "Round 115 (lead): N/A (verified spawn-carrier difference) - #47654 rewrites Rust's post-fork descriptor cleanup in the custom PTY/stdio launcher: CLOSE_RANGE_CLOEXEC, a stack-backed getdents64 fallback, and preserved spawn-error descriptors. Go launches these processes through os/exec, which creates its own child setup and honors CLOEXEC; it has no allocating fork pre-exec callback, DescriptorPolicy Explicit cleanup helper, or close_inherited_fds_except carrier. The existing Go paths already open descriptors CLOEXEC and use ExtraFiles explicitly where needed. No source change needed."
       ]
     },
     {
