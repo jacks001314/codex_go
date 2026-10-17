@@ -1196,7 +1196,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7322c5e7904d3712f15e6fe3472267da438a0b98	45852	Preserve executor path conventions in permission summaries (#45852)	2026-09-16	tui	0	0		0	0	not_applicable	
 7342991f0c100151def8f621ebb6ed12e49b657d	47585	Preserve delivered assistant messages in Guardian retained context (#47585)	2026-09-23	guardian	0	0		0	0	not_applicable	
 73a1148c9c775c2a4616ce5096291740a00ed68a	44138	Coordinate rollout compression with active thread writers (#44138)	2026-09-09	tui	7	3	0.43	0	0	audit_pending	WriterLockGuard,materialize_rollout_for_append,new_with_writer_lock,try_acquire_for_publication
-73bbb654b3b9796b11624914b3be908ab8a0551f	53660	Extract shared multi-agent v2 thread spawning (#53660)	2026-10-13	core	4	1	0.25	0	0	audit_pending	ThreadSpawnError,ThreadSpawnRequest,ThreadSpawnResult
+73bbb654b3b9796b11624914b3be908ab8a0551f	53660	Extract shared multi-agent v2 thread spawning (#53660)	2026-10-13	core	4	4	1.00	0	0	complete	
 73bf1812722f9b6fdbfac4997b2d96d7b64ff7c3	46032	Require forced macOS preferences for managed configuration (#46032)	2026-09-16	config	0	0		0	0	not_applicable	
 73db60e71f7b29de2cdcbf66cb32dd5e83e155c2	45821	Use app-server state for TUI Windows sandbox decisions (#45821)	2026-09-16	tui	3	0	0.00	0	0	implementation_pending	refresh_windows_sandbox_config,refresh_windows_sandbox_for_thread,set_windows_sandbox_mode
 73e94ee7a60704d4094142c543958f6a794f78e9	42326	Harden Windows control socket rendezvous (#42326)	2026-09-02	appserver	6	6	1.00	0	0	complete	
@@ -2619,7 +2619,7 @@ f6726e898612e27c66a25f7c6b294f6269d9ed4f	41223	Add recency sorting to `project/l
 f6805328c434eebb032bced0da29e39ba6dc3aee	40722	Add enterprise ID-JAG exchange for MCP OAuth (#40722)	2026-08-25	mcp	16	15	0.94	0	0	complete	EmaAccessToken
 f6976ab0369921a59e23416083587149807d8f93	43120	Add managed worktree creation to TUI session commands (#43120)	2026-09-05	tui	10	4	0.40	0	0	audit_pending	ManagedWorktreeMode,set_local_worktree_operations,show_managed_worktree_picker,show_session_checkout_picker,switch_to_managed_worktree,sync_worktrees_enabled
 f6a4bd81e3109d79842230dd344b6fe895d5bd1a	48168	Generate unique exec-server process IDs for every request (#48168)	2026-09-25	core	0	0		0	0	not_applicable	
-f6aca7dc461d6a9e0ae12828cd04845c31dd504e	53699	Cancel Guardian V2 classifications that exceed the tool-call lag window (#53699)	2026-10-13	guardian	5	2	0.40	0	0	audit_pending	PendingScore,is_expired,pending_discount
+f6aca7dc461d6a9e0ae12828cd04845c31dd504e	53699	Cancel Guardian V2 classifications that exceed the tool-call lag window (#53699)	2026-10-13	guardian	5	2	0.40	0	0	not_applicable	PendingScore,is_expired,pending_discount
 f6cf05af1dc701322664bb3f22ee4dafbc733ffc	51440	Honor Retry-After in WebSocket error events (#51440)	2026-10-06	core	0	0		0	0	not_applicable	
 f6fd7f17ed2ef4bf28e5b320789d764350ce4529	47894	Clean up temporary Codex homes after TUI tests (#47894)	2026-09-24	tui	0	0		0	0	not_applicable	
 f70810bcd210ed780a3da5940e9e60f74ac8ee60	49951	Include preceding assistant context in Guardian sender reviews (#49951)	2026-10-01	guardian	1	1	1.00	0	0	complete	
