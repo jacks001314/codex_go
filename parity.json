@@ -1239,6 +1239,14 @@
             "reason": "Aligned upstream 5ca55db09c (#49796 Deduplicate Guardian retained-context omission notices): the reviewer records host-scoped delivered omission states for retained user instructions and assistant context. Missing metadata is unknown and redelivers; an unchanged state suppresses a section left with only host notices and markers; a cleared omission emits the availability-change notice after START, creating the section when no retained originals remain. Only exact host notices count, so matching text inside coalesced tool output cannot prove delivery.",
             "userImpact": "Guardian continuations no longer repeat the same retained-context omission notice, and recovered availability is stated explicitly once.",
             "test": "go test ./state -run RetainedOmission -count=1; go test ./appserver -run TestGuardianReviewDeduplicatesRetainedOmissionNoticesLikeRust -count=1"
+        },
+        {
+            "id": "guardian-extension-interruption-idle-lifecycle",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 0265dd7b45 (#45677 Move Guardian review reporting and denial accounting into the extension) as an equivalent mechanism: the single modelGuardianReviewer owns assessment events, telemetry, warnings, decision recording and consecutive-denial accounting, so no separate extension/host split is needed. The behavioral half is verified: interrupting a still-active turn through the circuit breaker consumes and cancels it, runs the interrupted completion path, and emits the interrupted thread-idle lifecycle transition before any strict-mode parent warning.",
+            "userImpact": "Guardian-requested interruptions leave the thread visibly idle instead of appearing active after the turn has been cancelled.",
+            "test": "go test ./appserver -run 'TestGuardianCircuitBreakerInterruptionEmitsIdleStatusLikeRust|TestGuardianSubagentInterruptionNotifiesParentOnlyInStrictModeLikeRust|Guardian' -count=1"
         }
     ]
 }

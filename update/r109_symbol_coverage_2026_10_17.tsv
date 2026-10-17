@@ -15,7 +15,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 01ff831ce9c1c9d3ae98f271014b22401308ec06	54081	Centralize vertical navigation in TUI list views (#54081)	2026-10-14	tui	2	0	0.00	0	0	complete	apply_vertical_action,vertical_action_for
 0227158fd58e2c7381148bea47cf3ba56453ff99	42356	Initialize questions in buffered replay test messages (#42356)	2026-09-02	tui	0	0		0	0	not_applicable	
 023d81b057dec77fc5c6ffa0ec646d29bef10782	47108	Preserve required Windows runtime variables for filesystem helpers (#47108)	2026-09-21	execserver	0	0		0	0	not_applicable	
-0265dd7b4547fd6a88c6458f359b3c20731421c4	45677	Move Guardian review reporting and denial accounting into the extension (#45677)	2026-09-15	guardian	2	0	0.00	0	0	implementation_pending	SynchronousReview,interrupt_turn_with_warning
+0265dd7b4547fd6a88c6458f359b3c20731421c4	45677	Move Guardian review reporting and denial accounting into the extension (#45677)	2026-09-15	guardian	2	2	1.00	0	0	complete	
 0276f2ee551f2cedf03f54ddab7fbc63a7579e94	42123	Preserve descriptive labels on local file links (#42123)	2026-09-01	tui	3	2	0.67	0	0	audit_pending	should_render_local_link_label
 0280d73c1e86365847c83dfe719f7eeba1c8f8a8	40484	Broker credential aliases in child environments (#40484)	2026-08-24	core	6	1	0.17	0	0	audit_pending	brokered_credential_binding_env_keys,credential_binding_env_keys,discover_parent_credentials,virtualize_brokered_text,virtualize_text
 02a8f038b87ad34d4a1dc5058eda26972ed7aa6c	44755	Check folder consent before creating or resuming TUI tasks (#44755)	2026-09-11	tui	2	2	1.00	0	0	complete	
