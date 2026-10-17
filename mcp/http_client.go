@@ -172,6 +172,10 @@ type httpClient struct {
 	serverCapabilities   json.RawMessage
 	initializeDeadline   time.Time
 	initializeDeadlineOn bool
+	// toolListChanges counts tools/list_changed notifications received on this
+	// connection, so a catalog captured before one is never reused
+	// (Rust #54656).
+	toolListChanges mcpToolListRevision
 }
 
 type httpClientCallOptions struct {
@@ -656,7 +660,7 @@ func (c *httpClient) readRPCResponseWithStreamHandler(response *http.Response, i
 		contentType = response.Header.Get("Content-Type")
 	}
 	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
-		return readMCPHTTPSSEWithLimit(response.Body, id, 0, onNotification)
+		return readMCPHTTPSSEWithLimit(response.Body, id, 0, c.trackingToolListNotifications(onNotification))
 	}
 	return c.readRPCResponse(response, id, sessionID)
 }
@@ -1111,6 +1115,30 @@ func readMCPHTTPRPCResponse(response *http.Response, id int64) (*httpRPCResponse
 	return readMCPHTTPRPCResponseWithHandler(response, id, nil)
 }
 
+// toolsListRevision reports this connection's tool catalog invalidation
+// sequence (Rust #54656).
+func (c *httpClient) toolsListRevision() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.toolListChanges.current()
+}
+
+// trackingToolListNotifications wraps a stream's notification handler so a
+// tools/list_changed notification invalidates this connection's catalog before
+// the caller observes it (Rust #54656).
+func (c *httpClient) trackingToolListNotifications(handler func(envelope *stdioRPCEnvelope) error) func(envelope *stdioRPCEnvelope) error {
+	return func(envelope *stdioRPCEnvelope) error {
+		if envelope != nil {
+			recordMCPToolListChangedNotification(&c.toolListChanges, envelope.Method)
+		}
+		if handler == nil {
+			return nil
+		}
+		return handler(envelope)
+	}
+}
+
 func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionID string) (*httpRPCResponse, error) {
 	return readMCPHTTPRPCResponseWithHandlerAndLimit(response, id, modernMCPMessageLimit(c.protocolMode), func(envelope *stdioRPCEnvelope) error {
 		if envelope == nil {
@@ -1118,6 +1146,9 @@ func (c *httpClient) readRPCResponse(response *http.Response, id int64, sessionI
 		}
 		ctx := contextWithMCPClientContextAndRoots(context.Background(), c.threadID, c.turnID, c.itemID, c.roots)
 		if len(envelope.ID) == 0 {
+			// Rust #54656: a tools/list_changed notification invalidates this
+			// connection's catalog before a later response can be delivered.
+			recordMCPToolListChangedNotification(&c.toolListChanges, envelope.Method)
 			return handleMCPClientNotification(ctx, c.serverName, c.progress, envelope.Method, envelope.Params)
 		}
 		result, rpcErr := mcpClientRequestResult(ctx, c.serverName, c.elicitation, envelope.Method, envelope.ID, envelope.Params)

@@ -730,6 +730,13 @@ type MCPService struct {
 	// appsMCPProductSKU is the runtime's `apps_mcp_product_sku`, used to bound
 	// product SKU attribution on raw catalog size telemetry (Rust #51215).
 	appsMCPProductSKU string
+	// refreshToolListOnNotifications mirrors Rust McpConfig::mcp_tool_list_changed
+	// (feature mcp_tool_list_changed, disabled by default) for ordinary MCP
+	// servers (Rust #54656).
+	refreshToolListOnNotifications bool
+	// toolListRefresh holds each server's notification-refresh bookkeeping
+	// (Rust #54656). Guarded by mu.
+	toolListRefresh map[string]*mcpToolListRefreshState
 }
 
 // SetTrustedAccess installs the trusted-access context used to attach
@@ -786,6 +793,7 @@ func NewMCPService(runtime *RuntimeConfig) *MCPService {
 		service.environmentCWDs = cloneStringMap(runtime.EnvironmentCWDs)
 		service.environmentUseMXC = cloneBoolMap(runtime.EnvironmentUseMXC)
 		service.sharedHTTPClientKey = mcpHTTPDoerIdentity(runtime.HTTPClient)
+		service.refreshToolListOnNotifications = runtime.RefreshToolListOnNotifications
 		if strings.TrimSpace(runtime.CodexHome) != "" {
 			service.oauth = NewOAuthStoreWithMode(runtime.CodexHome, runtime.OAuthCredentialsStoreMode)
 		}
@@ -1426,6 +1434,166 @@ type mcpInventoryStatusResult struct {
 	Err    error
 }
 
+// mcpToolListRefreshApplies mirrors Rust's notification-refresh gate: the
+// refresh covers ordinary MCP servers only, and only when the
+// `mcp_tool_list_changed` feature is enabled (Rust #54656). The host-owned Codex
+// Apps registration keeps its shared provider.
+func (s *MCPService) mcpToolListRefreshApplies(name string) bool {
+	if s == nil || !s.refreshToolListOnNotifications {
+		return false
+	}
+	return !IsCodexAppsMCPServerName(name)
+}
+
+// toolListRefreshStateFor returns the per-server notification-refresh
+// bookkeeping, creating it on first use.
+func (s *MCPService) toolListRefreshStateFor(name string) *mcpToolListRefreshState {
+	name = strings.TrimSpace(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.toolListRefresh == nil {
+		s.toolListRefresh = map[string]*mcpToolListRefreshState{}
+	}
+	state := s.toolListRefresh[name]
+	if state == nil {
+		state = &mcpToolListRefreshState{}
+		s.toolListRefresh[name] = state
+	}
+	return state
+}
+
+// cachedToolListRevision reports the tool-list invalidation revision of the
+// connection this service already established for a server. A server without a
+// live connection cannot have reported a change, so its revision is zero.
+func (s *MCPService) cachedToolListRevision(name string) uint64 {
+	if s == nil {
+		return 0
+	}
+	name = strings.TrimSpace(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var revision uint64
+	if cached := s.httpClients[name]; cached != nil && cached.client != nil {
+		revision = cached.client.toolsListRevision()
+	}
+	if cached := s.stdioClients[name]; cached != nil && cached.client != nil {
+		if stdioRevision := cached.client.toolsListRevision(); stdioRevision > revision {
+			revision = stdioRevision
+		}
+	}
+	return revision
+}
+
+// retainedToolCatalogUsable reports whether a status read may answer from the
+// retained tool catalog. Rust #54656 refuses the cached catalog while the
+// connection has an unconsumed tools/list_changed notification, so the read
+// falls through to a fresh listing instead.
+func (s *MCPService) retainedToolCatalogUsable(name string) bool {
+	if !s.mcpToolListRefreshApplies(name) {
+		return true
+	}
+	state := s.toolListRefreshStateFor(name)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.decisionLocked(s.cachedToolListRevision(name), time.Now()) != mcpToolListRefresh
+}
+
+// retainedToolCatalogInventory rebuilds the discovery result of an already
+// published catalog, mirroring Rust's retained catalog when a notification
+// refresh fails. It returns nil when nothing was published yet.
+func retainedToolCatalogInventory(status MCPServerStatus) *stdioInventory {
+	if len(status.Tools) == 0 {
+		return nil
+	}
+	return &stdioInventory{
+		Tools:              append([]MCPToolInfo(nil), status.Tools...),
+		Resources:          append([]MCPResource(nil), status.Resources...),
+		ResourceTemplates:  append([]MCPResourceTemplate(nil), status.ResourceTemplates...),
+		ToolListMeta:       cloneMCPRawMessage(status.ToolListMeta),
+		ServerCapabilities: cloneMCPRawMessage(status.ServerCapabilities),
+	}
+}
+
+// listCatalogIfStable lists one server and reports the catalog together with the
+// revision it was listed at and whether that listing stayed stable across its
+// own pages. A listing that raced a notification is reported as not stable, so
+// it is never published as the current catalog (Rust #54656).
+func (s *MCPService) listCatalogIfStable(name string, config *ServerConfig, threadID string) (*stdioInventory, uint64, bool, error) {
+	revision := s.cachedToolListRevision(name)
+	inventory, err := s.listInventoryForConfig(name, config, threadID)
+	if err != nil {
+		return nil, revision, false, err
+	}
+	return inventory, revision, s.cachedToolListRevision(name) == revision, nil
+}
+
+// discoverToolCatalogForStatus returns the catalog to publish for one status
+// read, mirroring Rust's refresh_notified_catalog (Rust #54656): an ordinary
+// server whose connection reported a tool-list change is listed again, and only
+// a listing that stayed stable across the fetch is published - a listing
+// invalidated while its pages were being fetched is retried once. A refresh
+// that fails (or keeps churning) keeps the previously published catalog and
+// starts a short retry cooldown, so a flapping server neither drops its catalog
+// nor hammers the connection.
+func (s *MCPService) discoverToolCatalogForStatus(name string, config *ServerConfig, threadID string, retained MCPServerStatus) (*stdioInventory, error) {
+	if !s.mcpToolListRefreshApplies(name) {
+		return s.listInventoryForConfig(name, config, threadID)
+	}
+	state := s.toolListRefreshStateFor(name)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	switch state.decisionLocked(s.cachedToolListRevision(name), time.Now()) {
+	case mcpToolListInCooldown:
+		// A failed or churning refresh keeps serving the catalog it published
+		// before the notification arrived, and the server is not listed again
+		// until the retry cooldown expires.
+		if retainedInventory := retainedToolCatalogInventory(retained); retainedInventory != nil {
+			return retainedInventory, nil
+		}
+	case mcpToolListNoChange:
+		// Nothing was invalidated on this connection, so the read lists the
+		// server exactly as a read without the feature does.
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID)
+		if err != nil {
+			return nil, err
+		}
+		if stable {
+			state.publishedLocked(revision)
+		}
+		return inventory, nil
+	}
+	// A tools/list_changed notification invalidated the published catalog, so
+	// the server is listed again; only a listing that stayed stable across its
+	// own pages is published.
+	var lastErr error
+	for attempt := 0; attempt < mcpToolListNotificationRefreshAttempts; attempt++ {
+		inventory, revision, stable, err := s.listCatalogIfStable(name, config, threadID)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		if !stable {
+			// Another notification arrived while the pages were fetched, so
+			// this listing is already stale; Rust retries it exactly once.
+			continue
+		}
+		state.publishedLocked(revision)
+		return inventory, nil
+	}
+	state.cooldownLocked(time.Now())
+	if retainedInventory := retainedToolCatalogInventory(retained); retainedInventory != nil {
+		// Keeping the previously published catalog is the Rust contract on this
+		// path, so a failed refresh is not reported to the caller.
+		return retainedInventory, nil
+	}
+	if lastErr == nil {
+		// The listing kept changing while its pages were fetched, so no stable
+		// catalog could be published for this read.
+		lastErr = fmt.Errorf("MCP server %q changed its tool list while it was being listed", name)
+	}
+	return nil, lastErr
+}
+
 func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams, detail *MCPServerStatusDetail, observer MCPStartupObserver, servers []MCPServerStatus, configs map[string]ServerConfig, dynamicConfigs map[string]bool, threadID string) []MCPServerStatus {
 	if !detail.includesTools() {
 		return servers
@@ -1484,7 +1652,10 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 		// catalog capture until one of the server's tools is called.
 		if params != nil && params.NonBlockingOptional &&
 			servers[i].State == MCPServerReady && len(servers[i].Tools) > 0 &&
-			(config.Required || required[name]) {
+			(config.Required || required[name]) &&
+			// Rust #54656: never answer from a catalog the connection already
+			// invalidated with a tools/list_changed notification.
+			s.retainedToolCatalogUsable(name) {
 			// Rust #51215: the retained catalog is the cached source, so the raw
 			// size telemetry reports "cached" rather than a stale live read.
 			servers[i].catalogSource = BindingCatalogSourceCached
@@ -1590,7 +1761,10 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	// The catalog comes from the server itself on this path, so the raw size
 	// telemetry reports a live source even when discovery fails (Rust #51215).
 	status.catalogSource = BindingCatalogSourceLive
-	inventory, err := s.listInventoryForConfig(name, config, threadID)
+	// Rust #54656: an ordinary server whose connection reported a tool-list
+	// change is listed again before its catalog is published, and the previous
+	// catalog is retained when that refresh fails.
+	inventory, err := s.discoverToolCatalogForStatus(name, config, threadID, status)
 	status.ServerCapabilities = nil
 	// A failed discovery reports no catalog metadata either, so the wire field
 	// stays null (Rust #54686).

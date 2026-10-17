@@ -283,6 +283,11 @@ type RuntimeConfig struct {
 	Auth                 *RuntimeAuth
 	Requirements         *managedconfig.ConfigRequirements
 	ProtocolMode         MCPProtocolMode
+	// RefreshToolListOnNotifications mirrors Rust McpConfig::mcp_tool_list_changed
+	// (feature mcp_tool_list_changed, disabled by default): an ordinary server
+	// that reports a tools/list_changed notification is re-listed before its
+	// catalog is used again (Rust #54656).
+	RefreshToolListOnNotifications bool
 	// HostOwnedAppsProtocolMode is the independent protocol mode for the
 	// trusted, HTTP Codex Apps registration (Rust #44318/#44571).
 	HostOwnedAppsProtocolMode MCPProtocolMode
@@ -356,7 +361,10 @@ func RuntimeConfigFromValuesWithAuthAndRequirements(values map[string]any, codex
 		Requirements:              managedconfig.CloneConfigRequirements(requirements),
 		ProtocolMode:              mcpProtocolModeFromValues(values),
 		HostOwnedAppsProtocolMode: hostOwnedAppsProtocolModeFromValues(values),
-		OAuthCredentialsStoreMode: runtimeOAuthCredentialsStoreMode(values),
+		// Rust #54656 reads the notification refresh from the same feature set
+		// as the MCP protocol modes.
+		RefreshToolListOnNotifications: mcpFeatureEnabled(values, "mcp_tool_list_changed"),
+		OAuthCredentialsStoreMode:      runtimeOAuthCredentialsStoreMode(values),
 	}
 	rawServers, ok := runtimeConfigMapAny(values, "mcp_servers", "mcpServers")
 	if !ok {

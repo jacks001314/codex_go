@@ -70,6 +70,9 @@ type stdioClient struct {
 	// serverCapabilities is the initialized server's advertised capabilities
 	// object (Rust #44826); nil when unavailable or before initialization.
 	serverCapabilities json.RawMessage
+	// toolListChanges counts tools/list_changed notifications received on this
+	// connection, so a catalog captured before one is never reused (Rust #54656).
+	toolListChanges mcpToolListRevision
 }
 
 // os/exec copies a child's output from background goroutines. Keep each
@@ -674,13 +677,26 @@ func (c *stdioClient) handleReadFrame(data []byte) error {
 // cancellations that belong to an elicitation before delegating to the shared
 // progress handler.
 func (c *stdioClient) handleClientNotification(ctx context.Context, serverName string, progress MCPProgressHandler, method string, params json.RawMessage) error {
+	// Rust #54656: count a tools/list_changed notification in transport order,
+	// before this read loop can deliver any later response.
+	recordMCPToolListChangedNotification(&c.toolListChanges, method)
 	if strings.TrimSpace(method) == "notifications/cancelled" {
+
 		if id := mcpCancelledNotificationRequestID(params); len(id) > 0 {
 			c.elicitationCancellations.remember(id)
 		}
 		return nil
 	}
 	return handleMCPClientNotification(ctx, serverName, progress, method, params)
+}
+
+// toolsListRevision reports this connection's tool catalog invalidation
+// sequence (Rust #54656).
+func (c *stdioClient) toolsListRevision() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.toolListChanges.current()
 }
 
 // dispatchElicitationRequest answers a server elicitation on its own goroutine
