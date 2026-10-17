@@ -222,6 +222,8 @@ type ConfirmationPolicies struct {
 // model-owned descriptions for built-in tools.
 type ToolMessages struct {
 	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+	// IncrementalTools overrides harness-owned incremental catalog notices.
+	IncrementalTools *IncrementalToolMessages `json:"incremental_tools,omitempty"`
 	// FunctionsNamespaceFunctionsDescriptionPrefixes prepends model-owned
 	// guidance to available default-namespace function descriptions.
 	FunctionsNamespaceFunctionsDescriptionPrefixes map[string]string `json:"functions_namespace_functions_description_prefixes,omitempty"`
@@ -231,6 +233,17 @@ type ToolMessages struct {
 	// McpResources carries the built-in MCP resource helpers' overrides
 	// (Rust #47677).
 	McpResources *McpResourceToolMessages `json:"mcp_resources,omitempty"`
+}
+
+// IncrementalToolMessages mirrors Rust's model-catalog overrides for
+// incremental tool notices (#52736). Missing or values over 512 bytes fall back
+// to bundled wording; empty values suppress the static text.
+type IncrementalToolMessages struct {
+	ToolUpdateHint               *string `json:"tool_update_hint,omitempty"`
+	RemovedToolsHeader           *string `json:"removed_tools_header,omitempty"`
+	RemovedNamespacesHeader      *string `json:"removed_namespaces_header,omitempty"`
+	NamespaceInstructionsPrefix  *string `json:"namespace_instructions_prefix,omitempty"`
+	NamespaceInstructionsCleared *string `json:"namespace_instructions_cleared,omitempty"`
 }
 
 // ToolMessage mirrors Rust protocol::openai_models::ToolMessage (#41461):
@@ -1871,6 +1884,15 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 		if messages.Tools != nil {
 			tools := *messages.Tools
 			tools.SendUserMessageAsync = cloneToolMessage(tools.SendUserMessageAsync)
+			if tools.IncrementalTools != nil {
+				incremental := *tools.IncrementalTools
+				incremental.ToolUpdateHint = cloneStringPointer(incremental.ToolUpdateHint)
+				incremental.RemovedToolsHeader = cloneStringPointer(incremental.RemovedToolsHeader)
+				incremental.RemovedNamespacesHeader = cloneStringPointer(incremental.RemovedNamespacesHeader)
+				incremental.NamespaceInstructionsPrefix = cloneStringPointer(incremental.NamespaceInstructionsPrefix)
+				incremental.NamespaceInstructionsCleared = cloneStringPointer(incremental.NamespaceInstructionsCleared)
+				tools.IncrementalTools = &incremental
+			}
 			tools.FunctionsNamespaceFunctionsDescriptionPrefixes = cloneStringMap(tools.FunctionsNamespaceFunctionsDescriptionPrefixes)
 			tools.MultiAgent = cloneMultiAgentToolMessages(tools.MultiAgent)
 			tools.McpResources = cloneMcpResourceToolMessages(tools.McpResources)

@@ -7712,7 +7712,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	declarationItems := []any{}
 	incrementalActive := false
 	if incrementalToolsEnabledForTurn(cfg, modelInfo) {
-		incremental, incrementalErr := r.incrementalToolCatalogForTurnWithModel(
+		incremental, incrementalErr := r.incrementalToolCatalogForTurnWithModelMessages(
 			threadID,
 			historyItems,
 			responsesLiteToolDeclarations(turnRuntime, toolMode, cfg.DisableCodeModeInProcessFallback(), hostedTools),
@@ -7720,6 +7720,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			modelProviderConfig.Model,
 			turnID,
 			time.UnixMilli(startedAtMS).UTC(),
+			incrementalToolMessageOverrides(modelInfo.ModelMessages),
 		)
 		if incrementalErr != nil {
 			return nil, incrementalErr

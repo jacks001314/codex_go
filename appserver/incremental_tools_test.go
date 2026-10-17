@@ -219,10 +219,10 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 	if !result.Active || result.Prefix {
 		t.Fatalf("changed catalog result = %#v, want an appended update", result)
 	}
-	if len(result.Items) != 1 || incrementalInputType(t, result.Items[0]) != "additional_tools" {
+	if len(result.Items) != 2 || incrementalInputType(t, result.Items[0]) != "message" || incrementalInputType(t, result.Items[1]) != "additional_tools" {
 		t.Fatalf("changed catalog items = %#v", result.Items)
 	}
-	catalog, _ := result.Items[0].(map[string]any)
+	catalog, _ := result.Items[1].(map[string]any)
 	tools, _ := catalog["tools"].([]any)
 	if len(tools) != 1 {
 		t.Fatalf("incremental tools = %#v, want only the changed member", catalog["tools"])
@@ -240,8 +240,8 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 		t.Fatalf("incremental member = %#v", members[0])
 	}
 	description, _ := namespace["description"].(string)
-	if !strings.Contains(description, session.NamespaceUpdateHint) {
-		t.Fatalf("namespace description = %q, want the incremental hint", description)
+	if strings.Contains(description, session.NamespaceUpdateHint) {
+		t.Fatalf("namespace description acquired the separate hint: %q", description)
 	}
 
 	// The window's earlier declarations are untouched and the update follows the
@@ -250,7 +250,7 @@ func TestIncrementalToolCatalogAppendsChangedCatalogLikeRust(t *testing.T) {
 	if err != nil || record == nil {
 		t.Fatalf("threadRecord error = %v", err)
 	}
-	if len(record.Items) != 3 || record.Items[0].Type != "additional_tools" || record.Items[2].Type != "additional_tools" {
+	if len(record.Items) != 4 || record.Items[0].Type != "additional_tools" || record.Items[2].Type != "message" || record.Items[3].Type != "additional_tools" {
 		t.Fatalf("recorded items = %#v, want the update appended after the window start", record.Items)
 	}
 	state, err := session.DecodeWorldState(record.Metadata.WorldState)

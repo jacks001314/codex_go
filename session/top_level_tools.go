@@ -43,6 +43,50 @@ const (
 	BaseInstructionsContentKind          = "model.base_instructions"
 )
 
+// IncrementalToolMessageOverrides carries model-catalog notice wording before
+// Rust-compatible fallback validation (#52736).
+type IncrementalToolMessageOverrides struct {
+	ToolUpdateHint               *string
+	RemovedToolsHeader           *string
+	RemovedNamespacesHeader      *string
+	NamespaceInstructionsPrefix  *string
+	NamespaceInstructionsCleared *string
+}
+
+// ResolvedIncrementalToolMessages is the bounded wording used by one tool
+// catalog diff. Runtime-owned names and instructions remain the caller's.
+type ResolvedIncrementalToolMessages struct {
+	ToolUpdateHint               string
+	RemovedToolsHeader           string
+	RemovedNamespacesHeader      string
+	NamespaceInstructionsPrefix  string
+	NamespaceInstructionsCleared string
+}
+
+// ResolveIncrementalToolMessages applies the Rust #52736 fallback table.
+func ResolveIncrementalToolMessages(overrides *IncrementalToolMessageOverrides) ResolvedIncrementalToolMessages {
+	resolve := func(value *string, fallback string) string {
+		if value == nil || len(*value) > 512 {
+			return fallback
+		}
+		return *value
+	}
+	return ResolvedIncrementalToolMessages{
+		ToolUpdateHint:               resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.ToolUpdateHint }), NamespaceUpdateHint),
+		RemovedToolsHeader:           resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.RemovedToolsHeader }), removedToolsHeader),
+		RemovedNamespacesHeader:      resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.RemovedNamespacesHeader }), removedNamespacesHeader),
+		NamespaceInstructionsPrefix:  resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.NamespaceInstructionsPrefix }), "Updated instructions for the {name} namespace:\n"),
+		NamespaceInstructionsCleared: resolve(ptrFromOverrides(overrides, func(v *IncrementalToolMessageOverrides) *string { return v.NamespaceInstructionsCleared }), "The {name} namespace no longer has additional instructions."),
+	}
+}
+
+func ptrFromOverrides(overrides *IncrementalToolMessageOverrides, selectValue func(*IncrementalToolMessageOverrides) *string) *string {
+	if overrides == nil {
+		return nil
+	}
+	return selectValue(overrides)
+}
+
 // WorldStatePlacement mirrors Rust `Placement`: how one world-state
 // contribution is placed when the context is assembled (#50441).
 type WorldStatePlacement int
@@ -237,6 +281,12 @@ func TopLevelToolsHashes(definitions []any) (map[string]string, error) {
 // only added or changed declarations. Namespace instruction changes and the
 // removal notice follow as developer messages.
 func TopLevelToolsUpdates(definitions []any, previous map[string]string, previousKnown bool) (map[string]string, []WorldStateUpdate, error) {
+	return TopLevelToolsUpdatesWithMessages(definitions, previous, previousKnown, ResolveIncrementalToolMessages(nil))
+}
+
+// TopLevelToolsUpdatesWithMessages is TopLevelToolsUpdates with resolved
+// model-catalog notice wording.
+func TopLevelToolsUpdatesWithMessages(definitions []any, previous map[string]string, previousKnown bool, messages ResolvedIncrementalToolMessages) (map[string]string, []WorldStateUpdate, error) {
 	hashes, err := TopLevelToolsHashes(definitions)
 	if err != nil {
 		return nil, nil, err
@@ -273,14 +323,6 @@ func TopLevelToolsUpdates(definitions []any, previous map[string]string, previou
 				return nil, nil, err
 			}
 			namespace["tools"] = changedMembers
-			if _, previouslyDeclared := previous[name]; previousKnown && previouslyDeclared {
-				description := topLevelDefinitionDescription(definition)
-				if description == "" {
-					namespace["description"] = NamespaceUpdateHint
-				} else {
-					namespace["description"] = description + "\n" + NamespaceUpdateHint
-				}
-			}
 			tools = append(tools, namespace)
 			continue
 		}
@@ -288,21 +330,31 @@ func TopLevelToolsUpdates(definitions []any, previous map[string]string, previou
 			// A namespace declaration requires a member, so a metadata-only
 			// change travels as developer text instead.
 			instructions := topLevelDefinitionDescription(definition)
-			text := fmt.Sprintf("The %s namespace no longer has additional instructions.", name)
+			text := strings.ReplaceAll(messages.NamespaceInstructionsCleared, "{name}", name)
 			if instructions != "" {
-				text = fmt.Sprintf("Updated instructions for the %s namespace:\n%s", name, instructions)
+				text = strings.ReplaceAll(messages.NamespaceInstructionsPrefix, "{name}", name) + instructions
 			}
-			namespaceUpdates = append(namespaceUpdates, WorldStateUpdate{
-				Placement: WorldStateMergeable,
-				Role:      "developer",
-				Text:      text,
-				Kind:      ToolCatalogDeveloperInstructionsKind,
-			})
+			if text != "" {
+				namespaceUpdates = append(namespaceUpdates, WorldStateUpdate{
+					Placement: WorldStateMergeable,
+					Role:      "developer",
+					Text:      text,
+					Kind:      ToolCatalogDeveloperInstructionsKind,
+				})
+			}
 		}
 	}
 
 	updates := []WorldStateUpdate{}
 	if len(tools) > 0 {
+		if previousKnown && toolsContainNamespace(tools) && messages.ToolUpdateHint != "" {
+			updates = append(updates, WorldStateUpdate{
+				Placement: WorldStatePrefix,
+				Role:      "developer",
+				Text:      messages.ToolUpdateHint,
+				Kind:      ToolCatalogDeveloperInstructionsKind,
+			})
+		}
 		updates = append(updates, WorldStateUpdate{
 			Placement: WorldStatePrefix,
 			Item: map[string]any{
@@ -319,12 +371,21 @@ func TopLevelToolsUpdates(definitions []any, previous map[string]string, previou
 			updates = append(updates, WorldStateUpdate{
 				Placement: WorldStateStandalone,
 				Role:      "developer",
-				Text:      RemovedToolsNotice(namespaces, removedTools),
+				Text:      RemovedToolsNoticeWithMessages(namespaces, removedTools, messages),
 				Kind:      ToolCatalogRemovedDefinitionKind,
 			})
 		}
 	}
 	return hashes, updates, nil
+}
+
+func toolsContainNamespace(tools []any) bool {
+	for _, tool := range tools {
+		if _, ok := topLevelDefinitionMembers(tool); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Per-tool incremental catalog metrics (Rust #54133 `Record per-tool incremental
@@ -550,12 +611,18 @@ func TypedWorldStateFragmentHash(role string, items []eventmap.ContentItem) stri
 // namespace removals and individual tool removals in separate sections
 // (Rust `RemovedTools::body`).
 func RemovedToolsNotice(namespaces []string, tools []string) string {
+	return RemovedToolsNoticeWithMessages(namespaces, tools, ResolveIncrementalToolMessages(nil))
+}
+
+// RemovedToolsNoticeWithMessages renders the removal notice with resolved
+// catalog wording.
+func RemovedToolsNoticeWithMessages(namespaces []string, tools []string, messages ResolvedIncrementalToolMessages) string {
 	sections := []struct {
 		header string
 		names  []string
 	}{
-		{removedNamespacesHeader, namespaces},
-		{removedToolsHeader, tools},
+		{messages.RemovedNamespacesHeader, namespaces},
+		{messages.RemovedToolsHeader, tools},
 	}
 	var body strings.Builder
 	for _, section := range sections {
@@ -571,7 +638,7 @@ func RemovedToolsNotice(namespaces []string, tools []string) string {
 			body.WriteString(name)
 		}
 	}
-	return body.String()
+	return strings.TrimSpace(body.String())
 }
 
 // MergeWorldStateUpdates flattens ordered world-state updates into request

@@ -71,6 +71,15 @@ func mustUpdates(t *testing.T, definitions []any, previous map[string]string, pr
 	return hashes, MergeWorldStateUpdates(updates)
 }
 
+func mustUpdatesWithMessages(t *testing.T, definitions []any, previous map[string]string, previousKnown bool, messages ResolvedIncrementalToolMessages) (map[string]string, []any) {
+	t.Helper()
+	hashes, updates, err := TopLevelToolsUpdatesWithMessages(definitions, previous, previousKnown, messages)
+	if err != nil {
+		t.Fatalf("TopLevelToolsUpdatesWithMessages: %v", err)
+	}
+	return hashes, MergeWorldStateUpdates(updates)
+}
+
 func mustSnapshot(t *testing.T, definitions []any) map[string]string {
 	t.Helper()
 	hashes, err := TopLevelToolsHashes(definitions)
@@ -169,11 +178,11 @@ func TestTopLevelToolsNamespaceTransitionsLikeRust(t *testing.T) {
 		t.Fatalf("known -> same = %#v", updates)
 	}
 
-	// Only the changed member is re-declared and the namespace header carries the hint.
+	// One update hint precedes only the changed member declarations.
 	expectedNamespace := liteNamespace("functions", []any{changedDeclaration, liteDeclaration("added")})
-	expectedNamespace["description"] = "Tools.\n" + NamespaceUpdateHint
 	_, updates = mustUpdates(t, updatedDefinitions, original, true)
 	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage(NamespaceUpdateHint, ToolCatalogDeveloperInstructionsKind),
 		liteAdditionalTools([]any{expectedNamespace}),
 		liteDeveloperMessage("The following tools are no longer available. Do not call them:\n- functions.removed", ToolCatalogRemovedDefinitionKind),
 	}, updates) {
@@ -189,11 +198,14 @@ func TestTopLevelToolsNamespaceTransitionsLikeRust(t *testing.T) {
 		t.Fatalf("known updated -> only other = %#v", updates)
 	}
 
-	// A namespace that was absent is declared without the incremental hint.
+	// A namespace that was absent shares the same one-time update hint.
 	_, updates = mustUpdates(t, originalDefinitions, onlyOtherSnapshot, true)
-	if !sameWorldStateJSON(t, []any{liteAdditionalTools([]any{
-		liteNamespace("functions", []any{liteDeclaration("unchanged"), liteDeclaration("removed"), liteDeclaration("changed")}),
-	})}, updates) {
+	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage(NamespaceUpdateHint, ToolCatalogDeveloperInstructionsKind),
+		liteAdditionalTools([]any{
+			liteNamespace("functions", []any{liteDeclaration("unchanged"), liteDeclaration("removed"), liteDeclaration("changed")}),
+		}),
+	}, updates) {
 		t.Fatalf("known only other -> original = %#v", updates)
 	}
 
@@ -223,10 +235,65 @@ func TestTopLevelToolsNamespaceTransitionsLikeRust(t *testing.T) {
 
 	// Restoration declares both an old member and one that has never been available.
 	_, updates = mustUpdates(t, restored, empty, true)
-	if !sameWorldStateJSON(t, []any{liteAdditionalTools([]any{
-		liteNamespace("functions", []any{liteDeclaration("unchanged"), liteDeclaration("restored")}),
-	})}, updates) {
+	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage(NamespaceUpdateHint, ToolCatalogDeveloperInstructionsKind),
+		liteAdditionalTools([]any{
+			liteNamespace("functions", []any{liteDeclaration("unchanged"), liteDeclaration("restored")}),
+		}),
+	}, updates) {
 		t.Fatalf("known empty -> restored = %#v", updates)
+	}
+}
+
+func TestTopLevelToolsCatalogMessageOverridesLikeRust(t *testing.T) {
+	empty := ""
+	updateHint := "Catalog update."
+	prefix := "Catalog {name}: "
+	cleared := "Cleared {name}."
+	removedTools := "Unavailable tools:"
+	removedNamespaces := "Unavailable namespaces:"
+	messages := ResolveIncrementalToolMessages(&IncrementalToolMessageOverrides{
+		ToolUpdateHint:               &updateHint,
+		NamespaceInstructionsPrefix:  &prefix,
+		NamespaceInstructionsCleared: &cleared,
+		RemovedToolsHeader:           &removedTools,
+		RemovedNamespacesHeader:      &removedNamespaces,
+	})
+	original := []any{liteNamespace("functions", []any{liteDeclaration("lookup")})}
+	previous := mustSnapshot(t, original)
+	withInstructions := liteNamespace("functions", []any{liteDeclaration("lookup")})
+	withInstructions["description"] = "Literal {name}."
+	_, updates := mustUpdatesWithMessages(t, []any{withInstructions}, previous, true, messages)
+	if !sameWorldStateJSON(t, []any{liteDeveloperMessage("Catalog functions: Literal {name}.", ToolCatalogDeveloperInstructionsKind)}, updates) {
+		t.Fatalf("namespace instruction override = %#v", updates)
+	}
+
+	removed := []any{liteNamespace("other", []any{liteDeclaration("lookup")})}
+	_, updates = mustUpdatesWithMessages(t, removed, previous, true, messages)
+	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage("Catalog update.", ToolCatalogDeveloperInstructionsKind),
+		liteAdditionalTools(removed),
+		liteDeveloperMessage("Unavailable namespaces:\n- functions", ToolCatalogRemovedDefinitionKind),
+	}, updates) {
+		t.Fatalf("removal header override = %#v", updates)
+	}
+
+	emptyHint := ResolveIncrementalToolMessages(&IncrementalToolMessageOverrides{
+		ToolUpdateHint: &empty,
+	})
+	changed := []any{liteNamespace("functions", []any{liteDeclaration("lookup"), liteDeclaration("added")})}
+	_, updates = mustUpdatesWithMessages(t, changed, previous, true, emptyHint)
+	if len(updates) != 1 {
+		t.Fatalf("empty hint should retain declarations only: %#v", updates)
+	}
+	item, _ := updates[0].(map[string]any)
+	if item["type"] != "additional_tools" {
+		t.Fatalf("empty hint should retain declarations only: %#v", updates)
+	}
+	tooLong := strings.Repeat("x", 513)
+	fallback := ResolveIncrementalToolMessages(&IncrementalToolMessageOverrides{ToolUpdateHint: &tooLong})
+	if fallback.ToolUpdateHint != NamespaceUpdateHint {
+		t.Fatalf("oversized override = %q, want bundled wording", fallback.ToolUpdateHint)
 	}
 }
 
@@ -278,7 +345,10 @@ func TestTopLevelToolsEmptyCatalogPersistedLikeRust(t *testing.T) {
 		t.Fatalf("removal notice = %#v", updates)
 	}
 	_, updates = mustUpdates(t, definitions, snapshot, true)
-	if !sameWorldStateJSON(t, []any{liteAdditionalTools(definitions)}, updates) {
+	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage(NamespaceUpdateHint, ToolCatalogDeveloperInstructionsKind),
+		liteAdditionalTools(definitions),
+	}, updates) {
 		t.Fatalf("re-added catalog = %#v", updates)
 	}
 }
@@ -313,8 +383,8 @@ func TestTopLevelToolsToolTypeChangeLikeRust(t *testing.T) {
 	}
 	_, updates := mustUpdates(t, []any{liteNamespace("functions", []any{custom})}, previous, true)
 	expectedNamespace := liteNamespace("functions", []any{custom})
-	expectedNamespace["description"] = "Tools.\n" + NamespaceUpdateHint
 	if !sameWorldStateJSON(t, []any{
+		liteDeveloperMessage(NamespaceUpdateHint, ToolCatalogDeveloperInstructionsKind),
 		liteAdditionalTools([]any{expectedNamespace}),
 		liteDeveloperMessage("The following tools are no longer available. Do not call them:\n- functions.removed", ToolCatalogRemovedDefinitionKind),
 	}, updates) {

@@ -2423,7 +2423,7 @@ e3c2a8393725c0fd8b0d1084301bf15ef35b6092	50207	Release stable Markdown tables in
 e412b93d08eb3d9d116373727349c4123baca16e	46063	Trim Guardian tests and tighten request layout assertions (#46063)	2026-09-17	guardian	0	0		0	0	not_applicable	
 e416eadf7f990d96bc1b538c02ddcdb062d5542c	46559	Encapsulate rollout budget accounting in `LocalAgentControl` (#46559)	2026-09-18	guardian	3	1	0.33	0	0	audit_pending	mark_budget_reminder_delivered,pending_budget_reminder
 e444aa99d76beeb8b5b0610b793c0cdefe58da58	44349	Distinguish forked sessions in session-start hooks (#44349)	2026-09-10	core	0	0		0	0	not_applicable	
-e4490eff65d9f4dcd986f140e81927058bfa296d	52736	Allow model catalogs to override incremental tool notices (#52736)	2026-10-10	persistence	4	1	0.25	0	0	audit_pending	IncrementalToolMessages,IncrementalToolsHint,ResolvedIncrementalToolMessages
+e4490eff65d9f4dcd986f140e81927058bfa296d	52736	Allow model catalogs to override incremental tool notices (#52736)	2026-10-10	persistence	4	4	1.00	0	0	complete
 e44b9bb3da036320853abd032e2e2f065342b964	51457	Preserve status usage hyperlinks when the URL wraps (#51457)	2026-10-06	tui	0	0		0	0	not_applicable	
 e44bd9b64d8a1fa54da7f0d0c12881c61bb5da57	40637	Retry timed-out cloud config loads in the background (#40637)	2026-08-25	config	0	0		0	0	not_applicable	
 e45069d770c6d0b8984c58a6e7cbaf221ad37599	52395	Add experimental app-server thread read-state updates (#52395)	2026-10-09	appserver	7	2	0.29	0	0	complete	ThreadReadStateOperation,ThreadReadViewError,read_thread_view,thread_read_state_update,thread_read_view_error

@@ -1454,6 +1454,14 @@
             "reason": "Aligned upstream 780d7ab097 (#52325 Track history initialization in Responses turn metadata): thread runtimes classify history as new, cleared, cold resume, warm/cold fork, or supplied history, preserving the value for live resumes while distinguishing forks from loaded and unloaded source runtimes. x-codex-turn-metadata carries the classification and the key is reserved against client overrides.",
             "userImpact": "Backend diagnostics can distinguish reconstructed history paths without inferring provenance from missing tool metadata.",
             "test": "go test ./codexapi ./turn ./session ./appserver -run 'HistoryInitialization|ThreadResume|ThreadFork|ResponsesClientMetadata' -count=1"
+        },
+        {
+            "id": "incremental-tool-notice-overrides",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream e4490eff65 (#52736 Allow model catalogs to override incremental tool notices): model tool messages resolve custom update-hint, removal-header, and namespace instruction wording with missing/oversize fallback and empty-text suppression. Catalog diffs emit one update hint before changed declarations, substitute the runtime namespace name, append runtime instructions verbatim, and leave descriptions/search hashes unchanged for wording-only changes.",
+            "userImpact": "Model catalogs can tune incremental tool notices without changing tool identity, update timing, or catalog hashes.",
+            "test": "go test ./session -run TestTopLevelToolsCatalogMessageOverridesLikeRust -count=1; go test ./appserver -run IncrementalTool -count=1"
         }
     ]
 }

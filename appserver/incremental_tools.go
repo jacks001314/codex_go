@@ -60,6 +60,20 @@ func incrementalToolsEnabledForTurn(cfg *config.Config, info *model.ModelInfo) b
 	return features.Enabled(cfg.FeatureSettings(), "incremental_tools")
 }
 
+func incrementalToolMessageOverrides(messages *model.ModelMessages) *session.IncrementalToolMessageOverrides {
+	if messages == nil || messages.Tools == nil || messages.Tools.IncrementalTools == nil {
+		return nil
+	}
+	incremental := messages.Tools.IncrementalTools
+	return &session.IncrementalToolMessageOverrides{
+		ToolUpdateHint:               incremental.ToolUpdateHint,
+		RemovedToolsHeader:           incremental.RemovedToolsHeader,
+		RemovedNamespacesHeader:      incremental.RemovedNamespacesHeader,
+		NamespaceInstructionsPrefix:  incremental.NamespaceInstructionsPrefix,
+		NamespaceInstructionsCleared: incremental.NamespaceInstructionsCleared,
+	}
+}
+
 // responsesLiteToolDeclarations resolves the serialized Responses Lite tool
 // catalog for a turn: the model-visible tool definitions, which is the value
 // Rust sends through `create_tools_json_for_responses_lite(&model_visible_specs())`.
@@ -87,6 +101,10 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 }
 
 func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModel(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time) (incrementalToolCatalogResult, error) {
+	return r.incrementalToolCatalogForTurnWithModelMessages(threadID, historyItems, definitions, instructions, modelID, turnID, createdAt, nil)
+}
+
+func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModelMessages(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time, messageOverrides *session.IncrementalToolMessageOverrides) (incrementalToolCatalogResult, error) {
 	if r == nil || r.services.ThreadRouter == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return incrementalToolCatalogResult{}, nil
 	}
@@ -119,7 +137,12 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModel(threadID string, 
 	}
 	previousModel, previousBaseHash, baseKnown := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber)
 
-	hashes, toolUpdates, err := session.TopLevelToolsUpdates(definitions, previousHashes, previousKnown)
+	hashes, toolUpdates, err := session.TopLevelToolsUpdatesWithMessages(
+		definitions,
+		previousHashes,
+		previousKnown,
+		session.ResolveIncrementalToolMessages(messageOverrides),
+	)
 	if err != nil {
 		return incrementalToolCatalogResult{}, err
 	}

@@ -642,10 +642,14 @@ func TestModelMessagesMultiAgentToolOverridesLikeRust(t *testing.T) {
 
 func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	desc := "Ask the user a clarifying question."
+	updateHint := "Catalog update."
 	messages := ModelMessages{
 		Tools: &ToolMessages{
 			SendUserMessageAsync:                           &ToolMessage{Description: &desc},
 			FunctionsNamespaceFunctionsDescriptionPrefixes: map[string]string{"exec": "Exec guidance."},
+			IncrementalTools: &IncrementalToolMessages{
+				ToolUpdateHint: &updateHint,
+			},
 		},
 	}
 	data, err := json.Marshal(&messages)
@@ -667,6 +671,10 @@ func TestModelMessagesToolMessagesRoundTrip(t *testing.T) {
 	prefixes, ok := tools["functions_namespace_functions_description_prefixes"].(map[string]any)
 	if !ok || prefixes["exec"] != "Exec guidance." {
 		t.Fatalf("function description prefixes = %#v", tools)
+	}
+	incremental, ok := tools["incremental_tools"].(map[string]any)
+	if !ok || incremental["tool_update_hint"] != "Catalog update." {
+		t.Fatalf("incremental tool messages = %#v", tools)
 	}
 
 	// A missing description falls back to a nil pointer (built-in), while an
