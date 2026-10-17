@@ -201,7 +201,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 13a966fc652d1037c7ee93a15b2bdfa0610748ae	47321	Honor the system clock preference across more TUI timestamps (#47321)	2026-09-22	tui	3	2	0.67	0	0	audit_pending	date_time_format
 13bc770eaf0ad8548776bde59c3d6e5316406279	41902	Add installed voice host lifecycle support (#41902)	2026-08-31	realtime	3	3	1.00	0	0	complete	
 13d75cd1c3e9bbb69c1b9d5a73c28ef5e5e807a6	41936	Attach failed Guardian reviews to diagnostic reports (#41936)	2026-08-31	guardian	3	3	1.00	0	0	complete	
-13f580ef090887bf0dfcdd366fa783ac553e273e	49127	Deduplicate cloud and executor skill listings before budgeting (#49127)	2026-09-29	core	6	5	0.83	0	0	audit_pending	render_prepared_skill_catalogs
+13f580ef090887bf0dfcdd366fa783ac553e273e	49127	Deduplicate cloud and executor skill listings before budgeting (#49127)	2026-09-29	core	6	5	0.83	0	0	complete	render_prepared_skill_catalogs
 13fe2bcb7a3b1d57f6e67897c633a7d80d4918e7	40706	Redact Bedrock API keys from debug output (#40706)	2026-08-25	core	0	0		0	0	not_applicable	
 141bf7680d7721ba8271b91473323fb6b58ebdd0	54387	Add session-only arguments to `/title` and `/statusline` (#54387)	2026-10-15	tui	6	4	0.67	0	0	complete	handle_status_line_command_args,handle_terminal_title_command_args
 142360dac8ea59234262c10bfd9a73df3f39b45c	47101	Honor configured proxies for realtime WebSocket connections (#47101)	2026-09-21	realtime	0	0		0	0	not_applicable	

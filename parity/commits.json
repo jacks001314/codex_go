@@ -23084,10 +23084,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 5/6; needs review: render_prepared_skill_catalogs"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Available-skill rendering deduplicates cloud and executor catalogs before metadata budgeting while preserving alias numbering and unique executor descriptions."
+        ]
     },
     {
       "sha": "a9118edae8b77bf23b7182fd071a7b6251898bed",
