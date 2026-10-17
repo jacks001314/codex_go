@@ -103,6 +103,40 @@ func TestManagedModelProviderDefinitionChangeRejectsRetainedThread(t *testing.T)
 	assertManagedProviderRejection(t, response)
 }
 
+// Mirrors Rust #46917: model/list validates the retained startup provider even
+// when the catalog is already cached, and returns restart guidance on change.
+func TestModelListValidatesStartupProviderRequirementsLikeRust(t *testing.T) {
+	home := t.TempDir()
+	writeManagedProviderRequirements(t, home, managedProviderRequirements)
+	router := newManagedProviderRouter(t, home)
+
+	initial := router.Handle(requestWithParams(t, IntID(1), MethodModelList, model.ModelListParams{}))
+	if initial.Error != nil {
+		t.Fatalf("initial model/list error = %+v", initial.Error)
+	}
+	if _, ok := initial.Result.(*model.ModelListResponse); !ok {
+		t.Fatalf("initial model/list result = %#v", initial.Result)
+	}
+
+	writeManagedProviderRequirements(t, home, strings.Replace(managedProviderRequirements, `model_provider = "gateway"`, `model_provider = "other"`, 1))
+	changed := router.Handle(requestWithParams(t, IntID(2), MethodModelList, model.ModelListParams{}))
+	assertManagedProviderRejection(t, changed)
+
+	// Reverting the requirement restores access to the retained catalog.
+	writeManagedProviderRequirements(t, home, managedProviderRequirements)
+	recovered := router.Handle(requestWithParams(t, IntID(3), MethodModelList, model.ModelListParams{}))
+	if recovered.Error != nil {
+		t.Fatalf("recovered model/list error = %+v", recovered.Error)
+	}
+
+	writeManagedProviderRequirements(t, home, "invalid toml !!!")
+	invalid := router.Handle(requestWithParams(t, IntID(4), MethodModelList, model.ModelListParams{}))
+	if invalid.Error == nil || invalid.Error.Code != -32600 ||
+		!strings.HasPrefix(invalid.Error.Message, "failed to load configuration:") {
+		t.Fatalf("invalid requirements model/list = %+v", invalid.Error)
+	}
+}
+
 func TestManagedModelProviderUnrelatedChangeKeepsRetainedThread(t *testing.T) {
 	home := t.TempDir()
 	writeManagedProviderRequirements(t, home, managedProviderRequirements)

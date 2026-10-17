@@ -295,6 +295,12 @@ type RuntimeRouter struct {
 	// background refresh"), so the revision marks a reconciliation still owed.
 	// Guarded by authRevisionMu.
 	modelCatalogAuthRevision uint64
+	// startupModelProviderRoute is the provider route the app server retained
+	// when it started. model/list and background catalog refreshes must keep
+	// validating it against current managed requirements (Rust #46917).
+	startupModelProviderRoute          threadModelProviderRoute
+	startupModelProviderRouteSet       bool
+	startupModelProviderRouteAttempted bool
 	// workspaceRouting caches workspace routing discovery for account/read
 	// (Rust AccountRequestProcessor::workspace_routing).
 	workspaceRoutingOnce sync.Once
@@ -788,6 +794,7 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 			router.notify(NotificationSkillsChanged, &SkillsChangedNotification{})
 		})
 	}
+	router.captureStartupModelProviderRoute()
 	return router
 }
 
@@ -3918,6 +3925,12 @@ func (r *RuntimeRouter) maybeDispatchNextQueuedSubmission(threadID string) {
 // failed rebuild all keep the running catalog.
 func (r *RuntimeRouter) refreshModelCatalogAfterAuthChange() {
 	if r == nil {
+		return
+	}
+	if err := r.checkStartupModelProvider(); err != nil {
+		// Rust #46917: log only the blocked reason, never parser/auth text that
+		// could contain credentials.
+		slog.Warn("model catalog refresh blocked by managed provider requirements")
 		return
 	}
 	// Rust #54169: this reconciliation is what consumes the account-change
@@ -10832,6 +10845,11 @@ func (r *RuntimeRouter) handlePluginUninstall(request *Request) (*plugin.PluginU
 func (r *RuntimeRouter) handleModelList(request *Request) (*model.ModelListResponse, error) {
 	var params model.ModelListParams
 	if err := request.DecodeParams(&params); err != nil {
+		return nil, err
+	}
+	// Rust #46917: even a warm catalog must validate the retained startup
+	// provider against current managed requirements before answering.
+	if err := r.checkStartupModelProvider(); err != nil {
 		return nil, err
 	}
 	// Rust #54169: the app server must not answer model/list from the provider it

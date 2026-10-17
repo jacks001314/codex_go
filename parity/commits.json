@@ -17369,9 +17369,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: supported_models"
+        "Round 270: the router captures the startup model provider route and checkStartupModelProvider validates it against current managed requirements before model/list, even when the catalog is warm. Requirement load failures and provider selection/definition changes return -32600 with restart guidance; reverting restores access. Background refreshes use the same gate and log only a fixed blocked reason. Tests: go test ./appserver -run 'ModelListValidatesStartupProvider|ManagedModelProvider' -count=1; go build ./..."
       ]
     },
     {

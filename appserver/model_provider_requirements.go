@@ -123,15 +123,21 @@ func (r *RuntimeRouter) checkThreadModelProvider(record *session.Record) error {
 	if r == nil || record == nil {
 		return nil
 	}
+	route, ok := r.threadModelProviderRoute(record)
+	if !ok {
+		return nil
+	}
+	return r.checkModelProviderRoute(route)
+}
+
+// checkModelProviderRoute validates one retained provider route against the
+// current managed requirements.
+func (r *RuntimeRouter) checkModelProviderRoute(route threadModelProviderRoute) error {
 	requirements, err := r.managedModelProviderRequirements()
 	if err != nil {
 		return configLoadInvalidRequest(err)
 	}
 	if requirements == nil {
-		return nil
-	}
-	route, ok := r.threadModelProviderRoute(record)
-	if !ok {
 		return nil
 	}
 	if requirements.ModelProvider != nil && *requirements.ModelProvider != route.providerID {
@@ -149,6 +155,40 @@ func (r *RuntimeRouter) checkThreadModelProvider(record *session.Record) error {
 		return configLoadInvalidRequest(errModelProviderRequirementsChanged)
 	}
 	return nil
+}
+
+// captureStartupModelProviderRoute records the provider the app server started
+// with so later requirement changes can be detected even when model/list is
+// answered from a warm catalog.
+func (r *RuntimeRouter) captureStartupModelProviderRoute() {
+	if r == nil {
+		return
+	}
+	r.startupModelProviderRouteAttempted = true
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{})
+	if err != nil || cfg == nil {
+		return
+	}
+	providerID := firstNonEmpty(
+		stringConfigValue(cfg, "model_provider"),
+		stringConfigValue(cfg, "modelProvider"),
+		model.OpenAIProviderID,
+	)
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil || provider == nil {
+		return
+	}
+	r.startupModelProviderRoute = threadModelProviderRoute{providerID: providerID, provider: *provider}
+	r.startupModelProviderRouteSet = true
+}
+
+// checkStartupModelProvider rejects catalog access when the retained startup
+// provider no longer satisfies current requirements.
+func (r *RuntimeRouter) checkStartupModelProvider() error {
+	if r == nil || !r.startupModelProviderRouteSet {
+		return nil
+	}
+	return r.checkModelProviderRoute(r.startupModelProviderRoute)
 }
 
 // checkThreadModelProviderForID resolves the thread record and applies the

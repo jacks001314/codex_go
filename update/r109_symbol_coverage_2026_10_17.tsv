@@ -1214,7 +1214,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7596ab19a661598b045916810d4b22e8607bb15b	48199	Keep archived threads with empty previews visible in listings (#48199)	2026-09-25	appserver	0	0		0	0	not_applicable	
 75a714843b7fc3c4e76235f31e2fd32aaf596ebf	48549	Preserve Markdown tables and whitespace when copying TUI responses (#48549)	2026-09-26	tui	1	1	1.00	0	0	complete	
 75cb7c903d474b6637a6e9fe6f76cedf76ef1472	40737	Preserve MCP tool output as content items (#40737)	2026-08-25	appserver	0	0		0	0	not_applicable	
-75db67bbc6a18200b52698c8870adaedd7746dea	46917	Enforce current provider requirements for the model catalog (#46917)	2026-09-21	appserver	4	3	0.75	0	0	audit_pending	supported_models
+75db67bbc6a18200b52698c8870adaedd7746dea	46917	Enforce current provider requirements for the model catalog (#46917)	2026-09-21	appserver	4	3	0.75	0	0	complete	supported_models
 75e0b4088eff1760443856cc5f187fc9327e37b5	52250	Add opt-in Guardian trust for orchestrator connector identities (#52250)	2026-10-08	guardian	1	0	0.00	0	0	not_applicable	TrustedToolSource
 75e0e0aad97a86138b8b1ec87d9b544b4a35ecbf	47981	Prepare MCP calls directly from advertised tool identities (#47981)	2026-09-25	mcp	2	1	0.50	0	0	audit_pending	prepare_call_for_tool
 75ec81c8623c0ca50b129de5a82521a23d37b726	47179	Enable automatic daemon startup by default (#47179)	2026-09-22	tui	0	0		0	0	not_applicable	
