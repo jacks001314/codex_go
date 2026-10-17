@@ -19354,9 +19354,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: exposes_tool"
+        "Landed Round 109: config/multi_agent_v2.go parses disable_direct_message (default false); agent/tools_v2.go omits send_message/followup_task when set while keeping spawn/wait/interrupt/list; turn/tools.go plumbs the option; appserver/runtime_router.go enforces the Rust post-tool requirement for non-internal sessions; tests config/multi_agent_v2_test.go TestMultiAgentV2ConfigDisableDirectMessageLikeRust, agent/tools_v2_direct_message_like_rust_test.go."
       ]
     },
     {
