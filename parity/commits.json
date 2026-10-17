@@ -6445,8 +6445,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete (equivalent mechanism) - appserverdaemon/daemon_shutdown_watch.go polls CODEX_DAEMON_SHUTDOWN_FILE with a bounded u32-PID read and removes the request only when its own PID matches, and update_loop.go wires the watcher for the detached updater; pid_shutdown_windows.go requests a graceful stop for the managed app-server over the user-only /daemon/shutdown control socket and writes the plain-PID file for the updater, so Windows daemons drain instead of being force-killed. Rust uses the file for the app-server; Go's protected control socket is the equivalent user-only channel (pinned by the 'app-server must not write a shutdown file' assertion). Tests: daemon_shutdown_watch_windows_test.go and TestRequestGracefulPIDShutdownBranchesLikeRust; go test ./appserverdaemon green.",
         "Partial symbol coverage 1/2; needs review: daemon_shutdown_signal"
       ]
     },
