@@ -13635,9 +13635,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/8; needs review: GuardianRejectionCircuitBreaker, GuardianRejectionCircuitBreakerAction, parse_guardian_assessment"
+        "Round 277 (audit): Go parses assessments through ParseAssessment, which validates structured risk/authorization/outcome fields and rejects unknown outcomes; CircuitBreaker owns per-turn consecutive/recent denial state and emits interrupt decisions. Tests: go test ./state ./appserver -run 'Guardian.*Assessment|CircuitBreaker|Guardian.*Denial' -count=1"
       ]
     },
     {
@@ -18269,9 +18269,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 9/18; needs review: GatewayAuthStatusSnapshot, allow_automatic_login, for_host, for_runtime, lock_cached_token"
+        "Round 277 (audit): Go's GatewayAuthManager/control exposes readiness statuses, status subscriptions scoped to the configured OAuth account, explicit browser-login control, cached-token locking, and login-required errors. Tests: go test ./auth ./appserver -run 'Gateway.*Auth|Gateway.*Login' -count=1"
       ]
     },
     {
