@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-const ExtensionResourceRetentionDays = 7
+// ExtensionResourceRetentionDays is the pruning window for extension-owned
+// resources (Rust memories/write extension_resources::RETENTION_DAYS, #54033:
+// extended from 7 to 14 days).
+const ExtensionResourceRetentionDays = 14
 
 //go:embed templates/ad_hoc_instructions.md
 var adHocInstructions string

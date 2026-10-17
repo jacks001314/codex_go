@@ -40,9 +40,11 @@ func TestPruneOldExtensionResourcesMatchesRustCutoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	files := []string{
-		"2026-04-06T11-59-59-abcd-10min-old.md",
-		"2026-04-07T12-00-00-abcd-10min-cutoff.md",
-		"2026-04-08T12-00-00-abcd-10min-recent.md",
+		// Rust #54033 moved the retention window to 14 days: now is
+		// 2026-04-14T12:00:00Z, so the cutoff is 2026-03-31T12:00:00Z.
+		"2026-03-30T11-59-59-abcd-10min-old.md",
+		"2026-03-31T12-00-00-abcd-10min-cutoff.md",
+		"2026-04-01T12-00-00-abcd-10min-recent.md",
 		"not-a-timestamp.md",
 	}
 	for _, name := range files {
@@ -74,7 +76,7 @@ func TestPruneOldExtensionResourcesMatchesRustCutoff(t *testing.T) {
 		t.Fatalf("resource without instructions was pruned: %v", err)
 	}
 	parsed, ok := extensionResourceTimestamp(files[0])
-	if !ok || parsed.Unix() != 1_775_476_799 {
+	if !ok || parsed.Unix() != 1_774_871_999 {
 		t.Fatalf("parsed timestamp = %v/%v", parsed, ok)
 	}
 }

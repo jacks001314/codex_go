@@ -31054,8 +31054,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): memories/extensions.go ExtensionResourceRetentionDays is 14 (Rust memories/write extension_resources::RETENTION_DAYS #54033); PruneOldExtensionResources prunes only resources older than the 14-day cutoff (the exact-cutoff resource is pruned) and memories/extensions_test.go pins the new 2026-04-14T12:00Z fixture. RC: retention back to 7 fails the retained-recent assertion. go test ./memories green.",
         "No new upstream public identifier found in Go (0/1); candidate gap: RETENTION_DAYS"
       ]
     },
