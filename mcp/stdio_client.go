@@ -722,12 +722,29 @@ func (c *stdioClient) dispatchElicitationRequest(ctx context.Context, serverName
 // (Rust #44238). Remembered cancellations are consumed so a reused request id
 // starts fresh.
 func (c *stdioClient) elicitationRequestResult(ctx context.Context, serverName string, elicitation MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) any {
-	if c.elicitationCancellations.take(id) || mcpContextCancelled(ctx) {
+	userVerification := IsUserVerificationElicitation(parseMCPElicitationRequest(serverName, method, id, params))
+	if cancelled, saturated := c.elicitationCancellations.takeWithSaturation(id); cancelled {
+		if userVerification {
+			reason := UserVerificationReasonInterrupted
+			if saturated {
+				reason = UserVerificationReasonApprovalUnavailable
+			}
+			return mcpUserVerificationCancel(reason)
+		}
+		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
+	}
+	if mcpContextCancelled(ctx) {
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonInterrupted)
+		}
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
 	result := mcpElicitationResult(ctx, serverName, elicitation, method, id, params)
 	if c.elicitationCancellations.cancelled(id) || mcpContextCancelled(ctx) {
 		c.elicitationCancellations.forget(id)
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonInterrupted)
+		}
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
 	return result

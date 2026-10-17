@@ -303,8 +303,10 @@ func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
 		} {
 			has, err := windowssandbox.PathMaskAllows(windowssandbox.ACLRequest{Path: root, SID: subject.sid, Mask: writeMask}, true)
 			if err != nil {
-				refreshErrors = append(refreshErrors, fmt.Sprintf("write mask check failed on %s for %s: %v", root, subject.label, err))
-				setupLogLine(log, fmt.Sprintf("write mask check failed on %s for %s: %v; continuing", root, subject.label, err))
+				target := fmt.Sprintf("%s for %s", root, subject.label)
+				if err := recordSetupACLFailure(&refreshErrors, setupACLRefreshCheck, target, err, log); err != nil {
+					return err
+				}
 				needGrant = true
 				continue
 			}
@@ -316,8 +318,9 @@ func runSetupFull(payload *setupPayload, log io.Writer, sbxDir string) error {
 			setupLogLine(log, fmt.Sprintf("granting write ACE to %s for sandbox group and capability SID", root))
 			for _, sid := range []string{sandboxGroupSID, rootCapSID} {
 				if err := windowssandbox.EnsureAllowWriteACEs(windowssandbox.ACLRequest{Path: root, SID: sid}); err != nil {
-					refreshErrors = append(refreshErrors, fmt.Sprintf("write ACE failed on %s: %v", root, err))
-					setupLogLine(log, fmt.Sprintf("write ACE grant failed on %s: %v", root, err))
+					if err := recordSetupACLFailure(&refreshErrors, setupACLRefreshGrant, root, err, log); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -446,8 +449,9 @@ func applyDenyWritePaths(payload *setupPayload, log io.Writer, refreshErrors *[]
 		}
 		for _, sid := range denySIDs {
 			if err := windowssandbox.AddDenyWriteACE(windowssandbox.ACLRequest{Path: path, SID: sid}); err != nil {
-				appendSetupRefreshError(refreshErrors, fmt.Sprintf("deny ACE failed on %s: %v", path, err))
-				setupLogLine(log, fmt.Sprintf("deny ACE failed on %s: %v", path, err))
+				if err := recordSetupACLFailure(refreshErrors, setupACLRefreshDeny, path, err, log); err != nil {
+					return err
+				}
 				continue
 			}
 			setupLogLine(log, fmt.Sprintf("applied deny ACE to protect %s", path))
@@ -562,7 +566,12 @@ func lockSandboxBinDir(payload *setupPayload, sandboxGroupSID []byte, log io.Wri
 		uint32(windows.FILE_GENERIC_READ|windows.FILE_GENERIC_WRITE|windows.FILE_GENERIC_EXECUTE|windows.DELETE),
 	)
 	if err != nil {
-		return setupFailuref(windowssandbox.SetupErrorHelperSandboxLockFailed, "lock sandbox bin dir %s failed: %v", windowssandbox.SandboxBinDir(payload.CodexHome), err)
+		return setupFailuref(
+			windowssandbox.SetupErrorHelperSandboxLockFailed,
+			"lock sandbox bin dir %s failed: %s",
+			windowssandbox.SandboxBinDir(payload.CodexHome),
+			formatSetupErrorChain(err),
+		)
 	}
 	return nil
 }
@@ -686,6 +695,66 @@ func appendSetupRefreshError(refreshErrors *[]string, message string) {
 	if refreshErrors != nil {
 		*refreshErrors = append(*refreshErrors, message)
 	}
+}
+
+type setupACLRefreshOperation int
+
+const (
+	setupACLRefreshCheck setupACLRefreshOperation = iota
+	setupACLRefreshGrant
+	setupACLRefreshDeny
+)
+
+// recordSetupACLFailure retains the ACL failure before attempting to log it, so
+// a logging failure cannot hide the native cause from the refreshed summary.
+func recordSetupACLFailure(refreshErrors *[]string, operation setupACLRefreshOperation, path string, cause error, log io.Writer) error {
+	detail := path + ": " + formatSetupErrorChain(cause)
+	var summary string
+	var logMessage string
+	switch operation {
+	case setupACLRefreshCheck:
+		summary = "write ACE check failed on " + detail
+		logMessage = summary + "; continuing"
+	case setupACLRefreshGrant:
+		summary = "write ACE failed on " + detail
+		logMessage = "write ACE grant failed on " + detail
+	case setupACLRefreshDeny:
+		summary = "deny ACE failed on " + detail
+		logMessage = summary
+	default:
+		summary = "ACL refresh failed on " + detail
+		logMessage = summary
+	}
+	appendSetupRefreshError(refreshErrors, summary)
+	if log == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(log, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), logMessage)
+	return err
+}
+
+// formatSetupErrorChain renders every distinct wrapped cause so native Windows
+// diagnostics survive the setup error report.
+func formatSetupErrorChain(err error) string {
+	if err == nil {
+		return ""
+	}
+	var parts []string
+	for err != nil {
+		message := strings.TrimSpace(err.Error())
+		if message != "" && (len(parts) == 0 || parts[len(parts)-1] != message) {
+			parts = append(parts, message)
+		}
+		next := errors.Unwrap(err)
+		if next == nil {
+			break
+		}
+		if message != "" && strings.Contains(message, next.Error()) {
+			break
+		}
+		err = next
+	}
+	return strings.Join(parts, ": ")
 }
 
 func setupFailuref(code windowssandbox.SetupErrorCode, format string, args ...interface{}) *windowssandbox.SetupFailure {

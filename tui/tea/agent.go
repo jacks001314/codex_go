@@ -48,9 +48,21 @@ func (m *Model) applyAgentCommand() bubbletea.Cmd {
 			}},
 		})
 	}
-	if m.pendingAgentRefreshRequestID != 0 {
+	return m.refreshAgentPickerThreadsCmd()
+}
+
+func (m *Model) refreshAgentPickerThreadsCmd() bubbletea.Cmd {
+	if m == nil || m.onReadAgents == nil || m.pendingAgentRefreshRequestID != 0 {
 		return nil
 	}
+	currentThreadID := ""
+	if m.State != nil {
+		currentThreadID = strings.TrimSpace(m.State.ThreadID)
+	}
+	if currentThreadID == "" {
+		return nil
+	}
+	reader := m.onReadAgents
 	m.nextAgentRefreshRequestID++
 	requestID := m.nextAgentRefreshRequestID
 	m.pendingAgentRefreshRequestID = requestID
@@ -61,13 +73,13 @@ func (m *Model) applyAgentCommand() bubbletea.Cmd {
 	}
 }
 
-func (m *Model) applyAgentListResult(message AgentListResultMsg) {
+func (m *Model) applyAgentListResult(message AgentListResultMsg) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	if message.RequestID != 0 {
 		if message.RequestID != m.pendingAgentRefreshRequestID || strings.TrimSpace(message.CurrentThreadID) != m.pendingAgentRefreshThreadID {
-			return
+			return nil
 		}
 		m.pendingAgentRefreshRequestID = 0
 		m.pendingAgentRefreshThreadID = ""
@@ -76,7 +88,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 	if currentThreadID != strings.TrimSpace(message.CurrentThreadID) &&
 		!agentEntriesContainThread(message.Entries, currentThreadID) &&
 		!m.agentThreadArchived(currentThreadID) {
-		return
+		return nil
 	}
 	if message.Err != nil {
 		if len(m.agentItems) == 0 {
@@ -84,10 +96,32 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 			m.addErrorHistoryMessage("Failed to load agent threads: " + strings.TrimSpace(message.Err.Error()))
 			m.refreshTranscript()
 		}
-		return
+		if m.agentPickerRefreshFollowUp {
+			m.agentPickerRefreshFollowUp = false
+			return m.refreshAgentPickerThreadsCmd()
+		}
+		return nil
 	}
 	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
 	m.updateAgentArchivedVisibility(entries)
+	for threadID, archived := range m.agentPickerVisibilityChanged {
+		if archived {
+			m.archivedAgentThreads[threadID] = true
+		} else {
+			delete(m.archivedAgentThreads, threadID)
+		}
+		for index := range entries {
+			if strings.TrimSpace(entries[index].ThreadID) == threadID {
+				entries[index].Archived = archived
+			}
+		}
+	}
+	followUp := m.agentPickerRefreshFollowUp
+	if followUp {
+		m.agentPickerRefreshFollowUp = false
+	} else {
+		m.agentPickerVisibilityChanged = nil
+	}
 	visible := m.visibleAgentEntries(entries)
 	if len(visible) == 0 {
 		m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
@@ -95,7 +129,10 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 			m.modal = nil
 			m.showAgentInfo("No agents available yet.")
 		}
-		return
+		if followUp {
+			return m.refreshAgentPickerThreadsCmd()
+		}
+		return nil
 	}
 	m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
 	selectedID := ""
@@ -109,6 +146,10 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 	if showPicker {
 		m.showAgentPicker(visible, currentThreadID, selectedID)
 	}
+	if followUp {
+		return m.refreshAgentPickerThreadsCmd()
+	}
+	return nil
 }
 
 func (m *Model) showAgentPicker(entries []codextui.AgentThreadEntry, currentThreadID string, selectedThreadID string) {
@@ -169,9 +210,12 @@ func (m *Model) resetAgentPickerRefresh(clearEntries bool) {
 	m.nextAgentRefreshRequestID++
 	m.pendingAgentRefreshRequestID = 0
 	m.pendingAgentRefreshThreadID = ""
+	m.agentPickerVisibilityChanged = nil
+	m.agentPickerRefreshFollowUp = false
 	if clearEntries {
 		m.agentItems = nil
 		m.activeAgentLabel = ""
+		m.agentThreadArchiveCause = nil
 		m.clearBackgroundThreadEvents()
 	}
 }
@@ -593,11 +637,19 @@ func (m *Model) updateAgentArchivedVisibility(entries []codextui.AgentThreadEntr
 	if m == nil {
 		return
 	}
+	if m.agentThreadArchiveCause == nil {
+		m.agentThreadArchiveCause = map[string]string{}
+	}
 	archived := map[string]bool{}
 	for _, entry := range entries {
 		threadID := strings.TrimSpace(entry.ThreadID)
 		if threadID != "" && entry.Archived {
 			archived[threadID] = true
+			if m.agentThreadArchiveCause[threadID] == "" {
+				m.agentThreadArchiveCause[threadID] = "self"
+			}
+		} else if threadID != "" {
+			delete(m.agentThreadArchiveCause, threadID)
 		}
 	}
 	m.archivedAgentThreads = archived
@@ -616,28 +668,91 @@ func (m *Model) agentThreadArchived(threadID string) bool {
 
 // setAgentPickerThreadVisibility updates picker visibility after a local archive or
 // unarchive, preserving the selected thread id while rows change.
-func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) {
+func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) bubbletea.Cmd {
 	if m == nil {
-		return
+		return nil
 	}
 	threadID = strings.TrimSpace(threadID)
 	if threadID == "" {
-		return
+		return nil
 	}
+	_, cached := m.agentEntry(threadID)
 	if m.archivedAgentThreads == nil {
 		m.archivedAgentThreads = map[string]bool{}
 	}
-	if archived {
-		m.archivedAgentThreads[threadID] = true
-	} else {
-		delete(m.archivedAgentThreads, threadID)
+	if m.agentThreadArchiveCause == nil {
+		m.agentThreadArchiveCause = map[string]string{}
 	}
-	for i := range m.agentItems {
-		if strings.TrimSpace(m.agentItems[i].ThreadID) == threadID {
-			m.agentItems[i].Archived = archived
+	closure := m.agentThreadVisibilityClosure(threadID)
+	for _, visibleID := range closure {
+		if archived {
+			m.archivedAgentThreads[visibleID] = true
+			if visibleID == threadID {
+				m.agentThreadArchiveCause[visibleID] = "self"
+			} else if m.agentThreadArchiveCause[visibleID] == "" {
+				m.agentThreadArchiveCause[visibleID] = "parent:" + threadID
+			}
+		} else {
+			cause := m.agentThreadArchiveCause[visibleID]
+			if visibleID == threadID || cause == "parent:"+threadID || !m.archivedAgentThreads[visibleID] {
+				delete(m.agentThreadArchiveCause, visibleID)
+				delete(m.archivedAgentThreads, visibleID)
+			} else {
+				continue
+			}
+		}
+		for i := range m.agentItems {
+			if strings.TrimSpace(m.agentItems[i].ThreadID) == visibleID {
+				m.agentItems[i].Archived = archived
+				if archived {
+					m.agentItems[i].IsRunning = false
+				}
+			}
+		}
+		if archived {
+			delete(m.backgroundThreadEvents, visibleID)
 		}
 	}
+	if m.pendingAgentRefreshRequestID != 0 {
+		if m.agentPickerVisibilityChanged == nil {
+			m.agentPickerVisibilityChanged = map[string]bool{}
+		}
+		for _, visibleID := range closure {
+			m.agentPickerVisibilityChanged[visibleID] = archived
+		}
+		m.agentPickerRefreshFollowUp = true
+	}
 	m.refreshAgentPickerAfterVisibilityChange()
+	if !archived && !cached {
+		return m.refreshAgentPickerThreadsCmd()
+	}
+	return nil
+}
+
+// agentThreadVisibilityClosure returns the thread and every cached descendant.
+// Archive/unarchive is a tree operation; the server refresh remains
+// authoritative for rows it has not loaded yet.
+func (m *Model) agentThreadVisibilityClosure(threadID string) []string {
+	threadID = strings.TrimSpace(threadID)
+	if m == nil || threadID == "" {
+		return nil
+	}
+	out := []string{threadID}
+	seen := map[string]bool{threadID: true}
+	for changed := true; changed; {
+		changed = false
+		for _, entry := range m.agentItems {
+			child := strings.TrimSpace(entry.ThreadID)
+			parent := strings.TrimSpace(entry.ParentThreadID)
+			if child == "" || parent == "" || seen[child] || !seen[parent] {
+				continue
+			}
+			seen[child] = true
+			out = append(out, child)
+			changed = true
+		}
+	}
+	return out
 }
 
 func (m *Model) visibleThreads() []codextui.AgentThreadEntry {
@@ -687,6 +802,7 @@ func (m *Model) removeAgentEntry(threadID string) {
 	}
 	m.agentItems = items
 	delete(m.archivedAgentThreads, threadID)
+	delete(m.agentThreadArchiveCause, threadID)
 	m.refreshAgentPickerAfterVisibilityChange()
 }
 

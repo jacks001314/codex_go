@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
@@ -660,12 +661,25 @@ func (m *Model) writeQuickDial(slot int, preset *config.TUIPreset) bubbletea.Cmd
 	if m == nil || slot < 0 || slot > 9 {
 		return nil
 	}
+	key := strconv.Itoa(slot)
+	if preset != nil && m.presetSetReadOnly[key] {
+		m.quickDialPending = nil
+		cmd := m.openQuickDialEditor(slot, preset.Input)
+		m.notice = fmt.Sprintf("Preset %d is defined outside your user config. Edit its source configuration instead.", slot)
+		m.refreshTranscript()
+		return cmd
+	}
+	if preset == nil && m.presetClearReadOnly[key] {
+		m.quickDialPending = nil
+		m.notice = fmt.Sprintf("Preset %d is defined outside your user config. Edit its source configuration instead.", slot)
+		m.refreshTranscript()
+		return nil
+	}
 	if m.onWriteSettings == nil {
 		m.notice = "Saving presets requires configuration write support."
 		m.refreshTranscript()
 		return nil
 	}
-	key := strconv.Itoa(slot)
 	var value any
 	if preset != nil {
 		label := ""

@@ -375,6 +375,44 @@ func TestUnifiedExecForegroundEndEventPrecedesToolReturnLikeRust(t *testing.T) {
 	}
 }
 
+func TestUnifiedExecLaunchFailureEmitsLifecycleEventsLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	var mu sync.Mutex
+	var observed []UnifiedExecEvent
+	missing := filepath.Join(t.TempDir(), "missing-unified-exec-binary")
+	result, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:     []string{missing, "arg"},
+		HookCommand: "missing command",
+		CWD:         t.TempDir(),
+		TTY:         true,
+		UnifiedExecEventSink: func(event UnifiedExecEvent) {
+			mu.Lock()
+			observed = append(observed, event)
+			mu.Unlock()
+		},
+	}, "failed-launch")
+	if err == nil || result != nil {
+		t.Fatalf("Exec() result/error = %#v/%v, want launch failure", result, err)
+	}
+	mu.Lock()
+	events := append([]UnifiedExecEvent(nil), observed...)
+	mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("launch failure events = %#v, want begin then end", events)
+	}
+	begin, end := events[0], events[1]
+	if begin.Kind != UnifiedExecEventBegin || begin.CallID != "failed-launch" ||
+		begin.HookCommand != "missing command" || !begin.TTY || begin.ProcessID != 0 ||
+		!equalStringSlices(begin.Command, []string{missing, "arg"}) {
+		t.Fatalf("begin event = %#v", begin)
+	}
+	if end.Kind != UnifiedExecEventEnd || end.CallID != "failed-launch" || end.ProcessID != 0 ||
+		end.ExitCode != -1 || end.Duration != 0 || !strings.Contains(end.Output, "missing-unified-exec-binary") {
+		t.Fatalf("end event = %#v", end)
+	}
+}
+
 func TestUnifiedExecRemoteExecServerSessionReusesStdinLikeRust(t *testing.T) {
 	probeCtx, cancelProbe := context.WithTimeout(context.Background(), 3*time.Second)
 	ttyAvailable, probeErr := execserver.TTYOutputAvailable(probeCtx)

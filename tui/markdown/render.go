@@ -232,6 +232,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	mathPlaceholders, text := protectMathSpans(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
+	renderText = rewriteTaskListMarkers(renderText)
 	colorLevel := codextui.DetectStdoutColorLevel()
 	style = applyThemeMarkupColors(style, themeID, colorLevel)
 	renderer, err := glamour.NewTermRenderer(
@@ -247,8 +248,10 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if err != nil {
 		return "", err
 	}
+	out = stripRenderedTaskBullets(out)
 	out = colorOrderedListMarkers(out, orderedListMarkerSGRForTheme(themeID))
 	out = colorUnorderedListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
+	out = colorTaskListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
 	out = restoreRenderedTables(out, tables, width)
 	out = restoreMathPlaceholders(out, mathPlaceholders)
@@ -257,6 +260,52 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	out = restoreURLPlaceholders(out, urlPlaceholders)
 	return strings.TrimRight(out, "\n"), nil
+}
+
+var taskListSourceRE = regexp.MustCompile(`(?m)^([ \t]*(?:>[ \t]*)*)([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([xX ])\]([ \t]+)`)
+
+// rewriteTaskListMarkers lets glamour retain the list's indentation and ordered
+// numbering while the checkbox becomes the Rust TUI's Unicode marker.
+func rewriteTaskListMarkers(text string) string {
+	return taskListSourceRE.ReplaceAllStringFunc(text, func(match string) string {
+		parts := taskListSourceRE.FindStringSubmatch(match)
+		if len(parts) != 5 {
+			return match
+		}
+		checkbox := "☐"
+		if strings.EqualFold(parts[3], "x") {
+			checkbox = "☑"
+		}
+		return parts[1] + parts[2] + checkbox + parts[4]
+	})
+}
+
+var renderedTaskBulletRE = regexp.MustCompile(`(?m)^((?:` + blockQuoteIndentToken + `)*[ \t]*)` + unorderedListMarkerToken + `([☑☐]) `)
+var renderedTaskMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*[ \t]*)([☑☐]) `)
+var renderedOrderedMarkerRE = regexp.MustCompile(`^(?:` + blockQuoteIndentToken + `)*[ \t]*\d+\. `)
+
+// stripRenderedTaskBullets removes the bullet glamour inserts before the
+// Unicode checkbox. Ordered task items keep their numbering.
+func stripRenderedTaskBullets(rendered string) string {
+	return renderedTaskBulletRE.ReplaceAllString(rendered, "$1$2 ")
+}
+
+func colorTaskListMarkers(rendered string, markerSGR string) string {
+	if markerSGR == "" {
+		return rendered
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		plain := utils.StripANSI(line)
+		if renderedOrderedMarkerRE.MatchString(plain) {
+			continue
+		}
+		lines[index] = renderedTaskMarkerRE.ReplaceAllString(
+			line,
+			"$1"+markerSGR+"$2"+orderedListMarkerResetSGR+" ",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // blockQuoteIndentToken is the indent the TUI paints in front of every

@@ -140,6 +140,7 @@ type modalState struct {
 	kind              ModalKind
 	title             string
 	body              string
+	bodyOffset        int
 	options           []ModalOption
 	selected          int
 	footerNote        string
@@ -396,6 +397,16 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 			}
 		}
 	}
+	if m.modal.kind == ModalKindMisalignment {
+		switch message.Type {
+		case bubbletea.KeyPgUp:
+			m.scrollMisalignmentBody(-m.misalignmentBodyPage())
+			return nil
+		case bubbletea.KeyPgDown:
+			m.scrollMisalignmentBody(m.misalignmentBodyPage())
+			return nil
+		}
+	}
 	switch message.Type {
 	case bubbletea.KeyEsc:
 		return m.respondModal(true)
@@ -424,6 +435,69 @@ func (m *Model) updateModal(message bubbletea.KeyMsg) bubbletea.Cmd {
 		}
 	}
 	return nil
+}
+
+func (m *Model) misalignmentBodyPage() int {
+	if m == nil || m.height <= 0 {
+		return 10
+	}
+	page := m.height / 2
+	if page < 3 {
+		page = 3
+	}
+	return page
+}
+
+func (m *Model) scrollMisalignmentBody(delta int) {
+	if m == nil || m.modal == nil || delta == 0 {
+		return
+	}
+	lines := strings.Split(m.modal.body, "\n")
+	maxLines := m.misalignmentBodyPage()
+	maxOffset := len(lines) - maxLines
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	m.modal.bodyOffset += delta
+	if m.modal.bodyOffset < 0 {
+		m.modal.bodyOffset = 0
+	}
+	if m.modal.bodyOffset > maxOffset {
+		m.modal.bodyOffset = maxOffset
+	}
+}
+
+func (m *Model) renderMisalignmentBody() string {
+	if m == nil || m.modal == nil {
+		return ""
+	}
+	body := strings.TrimRight(m.modal.body, "\r\n")
+	lines := strings.Split(body, "\n")
+	maxLines := m.misalignmentBodyPage()
+	if len(lines) <= maxLines {
+		m.modal.bodyOffset = 0
+		return body
+	}
+	maxOffset := len(lines) - maxLines
+	if m.modal.bodyOffset > maxOffset {
+		m.modal.bodyOffset = maxOffset
+	}
+	if m.modal.bodyOffset < 0 {
+		m.modal.bodyOffset = 0
+	}
+	start := m.modal.bodyOffset
+	end := start + maxLines
+	if end > len(lines) {
+		end = len(lines)
+	}
+	out := append([]string(nil), lines[start:end]...)
+	if start > 0 {
+		out = append([]string{"↑ older findings"}, out...)
+	}
+	if end < len(lines) {
+		out = append(out, "↓ newer findings · PgUp/PgDn")
+	}
+	return strings.Join(out, "\n")
 }
 
 // activateModalOption selects an option and runs it, except that an option
@@ -1451,8 +1525,12 @@ func (m *Model) renderModal() string {
 	var builder strings.Builder
 	builder.WriteString(m.modal.title)
 	builder.WriteString("\n")
-	if m.modal.body != "" {
-		builder.WriteString(indentLines(m.modal.body, "  "))
+	body := m.modal.body
+	if m.modal.kind == ModalKindMisalignment {
+		body = m.renderMisalignmentBody()
+	}
+	if body != "" {
+		builder.WriteString(indentLines(body, "  "))
 		builder.WriteString("\n")
 	}
 	// A modal whose picker hides narrow descriptions renders through the

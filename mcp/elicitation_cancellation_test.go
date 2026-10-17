@@ -45,8 +45,8 @@ func TestMCPElicitationCancellationMemorySaturatesWithoutEvicting(t *testing.T) 
 	}
 	// A new id after saturation cancels every subsequent elicitation.
 	memory.remember(json.RawMessage(`"overflow"`))
-	if !memory.take(json.RawMessage(`"fresh"`)) {
-		t.Fatal("saturated memory did not cancel a new elicitation")
+	if cancelled, saturated := memory.takeWithSaturation(json.RawMessage(`"fresh"`)); !cancelled || !saturated {
+		t.Fatalf("saturated take = cancelled:%v saturated:%v, want both true", cancelled, saturated)
 	}
 }
 

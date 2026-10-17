@@ -215,8 +215,8 @@ func appendSubmissionMentionItems(items []SubmittedInputItem, text string, bindi
 	selectedAppIDs := map[string]bool{}
 
 	for _, binding := range bindings {
-		name, path := parseSubmissionMentionBinding(binding)
-		if name != "" {
+		sigil, name, path := parseSubmissionMentionBinding(binding)
+		if name != "" && sigil == '$' {
 			boundNames[name] = true
 		}
 		if path == "" || !IsSkillMentionPath(path) {
@@ -257,13 +257,10 @@ func appendSubmissionMentionItems(items []SubmittedInputItem, text string, bindi
 	}
 
 	for _, binding := range bindings {
-		name, path := parseSubmissionMentionBinding(binding)
+		_, _, path := parseSubmissionMentionBinding(binding)
 		pluginID := strings.TrimSpace(strings.TrimPrefix(path, "plugin://"))
 		if pluginID == "" || pluginID == path || selectedPluginIDs[pluginID] {
 			continue
-		}
-		if name != "" {
-			boundNames[name] = true
 		}
 		if plugin, ok := findSubmissionPlugin(catalog.Plugins, pluginID); ok {
 			selectedPluginIDs[pluginID] = true
@@ -276,13 +273,10 @@ func appendSubmissionMentionItems(items []SubmittedInputItem, text string, bindi
 	}
 
 	for _, binding := range bindings {
-		name, path := parseSubmissionMentionBinding(binding)
+		_, _, path := parseSubmissionMentionBinding(binding)
 		appID := AppIDFromMentionPath(path)
 		if appID == "" || selectedAppIDs[appID] {
 			continue
-		}
-		if name != "" {
-			boundNames[name] = true
 		}
 		if app, ok := findSubmissionApp(catalog.Apps, appID); ok {
 			selectedAppIDs[appID] = true
@@ -326,20 +320,24 @@ func PendingSteerCompareKeyFromSubmittedItems(items []SubmittedInputItem) Pendin
 	return key
 }
 
-func parseSubmissionMentionBinding(binding string) (string, string) {
+func parseSubmissionMentionBinding(binding string) (byte, string, string) {
 	binding = strings.TrimSpace(binding)
 	if binding == "" {
-		return "", ""
+		return 0, "", ""
+	}
+	var sigil byte
+	if binding[0] == '$' || binding[0] == '@' {
+		sigil = binding[0]
 	}
 	for _, sep := range []string{"|", "\t", "="} {
 		if left, right, ok := strings.Cut(binding, sep); ok {
-			return normalizeSubmissionMentionName(left), strings.TrimSpace(right)
+			return sigil, normalizeSubmissionMentionName(left), strings.TrimSpace(right)
 		}
 	}
 	if strings.Contains(binding, "://") {
-		return mentionNameFromPath(binding), strings.TrimSpace(binding)
+		return sigil, mentionNameFromPath(binding), strings.TrimSpace(binding)
 	}
-	return normalizeSubmissionMentionName(binding), ""
+	return sigil, normalizeSubmissionMentionName(binding), ""
 }
 
 func normalizeSubmissionMentionName(name string) string {

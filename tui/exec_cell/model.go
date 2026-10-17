@@ -1,6 +1,7 @@
 package execcell
 
 import (
+	"strings"
 	"time"
 
 	"codex_go/tui"
@@ -61,6 +62,21 @@ type ExecCell struct {
 	// exploring group was the active cell (Rust #46565). They render only in
 	// the expanded transcript, never in the compact preview or raw output.
 	Reasoning []tui.ActivityReasoning
+}
+
+// ActivityIDs returns the stable call identities of this exploring group.
+func (c ExecCell) ActivityIDs() []string {
+	ids := make([]string, 0, len(c.Calls))
+	seen := map[string]bool{}
+	for _, call := range c.Calls {
+		id := strings.TrimSpace(call.CallID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func NewExecCell(call ExecCall, animationsEnabled bool) ExecCell {

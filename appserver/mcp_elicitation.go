@@ -131,11 +131,29 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 
 func (h *appserverMCPElicitationHandler) requestMCPElicitation(ctx context.Context, request *mcp.MCPElicitationRequest) (*mcp.MCPElicitationResponse, error) {
 	if h == nil || h.broker == nil {
+		if mcp.IsUserVerificationElicitation(request) {
+			return &mcp.MCPElicitationResponse{
+				Action: mcp.MCPElicitationActionCancel,
+				Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonApprovalUnavailable),
+			}, nil
+		}
 		return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 	}
 	params := appserverMCPElicitationParams(request)
 	var response MCPElicitationRequestResponse
 	if err := h.broker.Request(ctx, ServerRequestMCPElicitation, params, &response); err != nil {
+		if mcp.IsUserVerificationElicitation(request) {
+			reason := mcp.UserVerificationReasonResponseError
+			if errors.Is(err, ErrServerRequestConnectionClosed) {
+				reason = mcp.UserVerificationReasonResponseChannelClosed
+			} else if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				reason = mcp.UserVerificationReasonInterrupted
+			}
+			return &mcp.MCPElicitationResponse{
+				Action: mcp.MCPElicitationActionCancel,
+				Meta:   mcp.UserVerificationReasonMeta(reason),
+			}, nil
+		}
 		action := mcp.MCPElicitationActionDecline
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			action = mcp.MCPElicitationActionCancel

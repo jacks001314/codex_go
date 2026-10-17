@@ -86,6 +86,9 @@ func (m *Model) beginMainTranscriptFind() {
 		m.refreshTranscript()
 		return
 	}
+	m.activityFocus.active = false
+	m.activityFocus.focusedMessage = -1
+	m.activityFocus.focusedIDs = nil
 	m.mainFind.savedOffset = m.transcript.YOffset
 	m.mainFind.savedFollow = m.activityFollow
 	m.mainFind.editing = true
@@ -188,13 +191,19 @@ func (m *Model) renderMainTranscriptFindContent() (string, int) {
 		return m.transcriptRenderCached(m.State, m.transcript.Width), -1
 	}
 	width := firstPositive(m.transcript.Width, m.width)
-	content, ranges := renderTranscriptWithExpandedMessage(
+	expanded := m.expandedTranscriptActivityMessages()
+	if expanded == nil {
+		expanded = map[int]bool{}
+	}
+	expanded[match.message] = true
+	content, ranges := renderTranscriptWithExpandedMessages(
 		&m.transcriptMessages,
 		m.State,
 		m.rawOutput,
 		width,
 		m.activeTUITheme(),
-		match.message,
+		false,
+		expanded,
 		m.sessionCWD,
 		m.showRawReasoning,
 	)
@@ -321,6 +330,11 @@ func (m *Model) updateMainTranscriptFindKey(msg bubbletea.KeyMsg) (bool, bubblet
 		return true, nil
 	}
 	if !m.mainFind.editing {
+		if m.keyMatches("global", "focus_activity", keySpecFromKeyMsg(msg)) {
+			m.clearMainTranscriptFind(false)
+			m.focusTranscriptActivity()
+			return true, nil
+		}
 		if m.keyMatches("global", "find_transcript", keySpecFromKeyMsg(msg)) {
 			m.beginMainTranscriptFind()
 			return true, nil

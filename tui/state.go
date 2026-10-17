@@ -55,6 +55,10 @@ type Message struct {
 	// interleaves its reasoning blocks in place (Rust #46565). Empty means the
 	// entry renders RawText, which is the case for every non-group cell.
 	TranscriptText string
+	// ActivityIDs are the stable tool-call identities carried by an activity
+	// group. Disclosure focus/expansion follows these IDs across cell
+	// replacements and history regrouping (Rust #46734).
+	ActivityIDs []string
 }
 
 // MessageTextElement is a structured byte range inside a user prompt (a mention
@@ -871,8 +875,8 @@ func (s *State) RenderHelp() string {
 		"  /title [ITEMS]        configure which items appear in the terminal title",
 		"  /debug-config         show config layers and requirement sources for debugging",
 		"  /new                  start a fresh local thread",
-		"  /clear                clear the visible transcript",
-		"  /copy                 copy the last agent response as markdown",
+		"  /clear                clear the terminal and start a new chat",
+		"  /copy                 copy the last response or part of it",
 		"  /raw [on|off]         toggle raw scrollback mode for clean terminal selection",
 		"  /diff                 show git diff, including untracked files",
 		"  /ps                   list background terminals",
@@ -882,7 +886,7 @@ func (s *State) RenderHelp() string {
 		"  /approval [POLICY]    show or set approval policy: untrusted, on-request, never",
 		"  /sandbox [PROFILE]    show or set sandbox profile",
 		"  /experimental         toggle experimental features",
-		"  /mcp [verbose]        list configured MCP tools",
+		"  /mcp [verbose]        list MCP tools; use /mcp verbose or /mcp login <name>",
 		"  /skills               list or manage skills",
 		"  /plugins              browse plugins",
 		"  /apps                 manage apps",
@@ -900,11 +904,11 @@ func (s *State) RenderHelp() string {
 		"  /memories             configure memory use and generation",
 		"  /feedback             send logs to maintainers",
 		"  /setup-default-sandbox set up elevated agent sandbox",
-		"  /resume               choose a previous session to resume",
-		"  /fork                 choose a previous session to fork",
-		"  /archive              archive a previous session",
+		"  /resume               resume a saved chat",
+		"  /fork                 fork the current chat",
+		"  /archive              archive this session",
 		"  /unarchive            unarchive a previous session",
-		"  /delete               delete a previous session",
+		"  /delete               permanently delete this session",
 		"  /attach PATH          attach a file path to the next prompt",
 		"  /image PATH           attach a local image path to the next prompt",
 		"  /url-image URL        attach a remote image URL to the next prompt",

@@ -90,6 +90,35 @@ func TestAppLinkURLRequestRejectsUntrustedURLs(t *testing.T) {
 	}
 }
 
+func TestAppLinkToolSuggestionInvalidInstallURLDeclinesLikeRust(t *testing.T) {
+	target := appLinkSuggestionTarget()
+	base := ToolSuggestionRequest{
+		ToolType:      ToolSuggestionToolConnector,
+		SuggestType:   ToolSuggestionInstall,
+		SuggestReason: "Connect the calendar",
+		ToolID:        "connector_google_calendar",
+		ToolName:      "Google Calendar",
+	}
+	invalid := "http://chatgpt.com/apps/google-calendar/connector_google_calendar"
+	suggestion := base
+	suggestion.InstallURL = &invalid
+	if _, outcome := AppLinkParamsFromToolSuggestion(&suggestion, target); outcome != AppLinkToolSuggestionDecline {
+		t.Fatalf("invalid install URL outcome = %q, want decline", outcome)
+	}
+
+	suggestion = base
+	if _, outcome := AppLinkParamsFromToolSuggestion(&suggestion, target); outcome != AppLinkToolSuggestionForm {
+		t.Fatalf("missing install URL outcome = %q, want form", outcome)
+	}
+
+	valid := "https://chatgpt.com/apps/google-calendar/connector_google_calendar"
+	suggestion = base
+	suggestion.InstallURL = &valid
+	if _, outcome := AppLinkParamsFromToolSuggestion(&suggestion, target); outcome != AppLinkToolSuggestionAppLink {
+		t.Fatalf("valid install URL outcome = %q, want app link", outcome)
+	}
+}
+
 func TestAppLinkRowsInstallEnableAuthAndGenericMatchRust(t *testing.T) {
 	install := NewAppLinkView(appLinkInstallParams())
 	rows := install.Rows(72)

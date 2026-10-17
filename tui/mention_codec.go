@@ -96,9 +96,9 @@ func EncodeHistoryMentionsAtElements(text string, mentions []LinkedMention, elem
 			}
 			if sigil == ToolMentionSigil || startsPlaintextMention(text, index) {
 				nameStart := index + 1
-				if nameStart < len(bytes) && isMentionNameByte(bytes[nameStart]) {
+				if nameStart < len(bytes) && IsMentionNameByte(bytes[nameStart]) {
 					nameEnd := nameStart + 1
-					for nameEnd < len(bytes) && isMentionNameByte(bytes[nameEnd]) {
+					for nameEnd < len(bytes) && IsMentionNameByte(bytes[nameEnd]) {
 						nameEnd++
 					}
 					name := text[nameStart:nameEnd]
@@ -181,14 +181,14 @@ type mentionToken struct {
 }
 
 func parseHistoryLinkedMention(text string, textBytes []byte, start int, atMentionsEnabled bool) (rune, string, string, int, bool) {
-	if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, ToolMentionSigil); ok && !isCommonEnvVar(name) && isToolPath(path) {
+	if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, ToolMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
 		return ToolMentionSigil, name, path, end, true
 	}
 	if atMentionsEnabled {
-		if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !isCommonEnvVar(name) && isToolPath(path) {
+		if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && isToolPath(path) {
 			return PluginTextMentionSigil, name, path, end, true
 		}
-	} else if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !isCommonEnvVar(name) && strings.HasPrefix(path, "plugin://") {
+	} else if name, path, end, ok := parseLinkedToolMention(text, textBytes, start, PluginTextMentionSigil); ok && !IsCommonEnvVar(name) && strings.HasPrefix(path, "plugin://") {
 		return ToolMentionSigil, name, path, end, true
 	}
 	return 0, "", "", 0, false
@@ -200,11 +200,11 @@ func parseLinkedToolMention(text string, textBytes []byte, start int, sigil rune
 		return "", "", 0, false
 	}
 	nameStart := sigilIndex + 1
-	if nameStart >= len(textBytes) || !isMentionNameByte(textBytes[nameStart]) {
+	if nameStart >= len(textBytes) || !IsMentionNameByte(textBytes[nameStart]) {
 		return "", "", 0, false
 	}
 	nameEnd := nameStart + 1
-	for nameEnd < len(textBytes) && isMentionNameByte(textBytes[nameEnd]) {
+	for nameEnd < len(textBytes) && IsMentionNameByte(textBytes[nameEnd]) {
 		nameEnd++
 	}
 	if nameEnd >= len(textBytes) || textBytes[nameEnd] != ']' {
@@ -231,7 +231,8 @@ func parseLinkedToolMention(text string, textBytes []byte, start int, sigil rune
 	return text[nameStart:nameEnd], path, pathEnd + 1, true
 }
 
-func isMentionNameByte(b byte) bool {
+// IsMentionNameByte reports whether b can appear in a tool or plugin mention name.
+func IsMentionNameByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '-'
 }
 
@@ -254,16 +255,18 @@ func endsPlaintextMention(textBytes []byte, index int) bool {
 	}
 	if b == '.' {
 		nextIndex := index + 1
-		return nextIndex >= len(textBytes) || isASCIIWhitespace(textBytes[nextIndex]) || !isMentionNameByte(textBytes[nextIndex])
+		return nextIndex >= len(textBytes) || isASCIIWhitespace(textBytes[nextIndex]) || !IsMentionNameByte(textBytes[nextIndex])
 	}
-	return b != '.' && b != '/' && b != '\\' && !isMentionNameByte(b)
+	return b != '.' && b != '/' && b != '\\' && !IsMentionNameByte(b)
 }
 
 func isMentionNameRune(ch rune) bool {
 	return ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-'
 }
 
-func isCommonEnvVar(name string) bool {
+// IsCommonEnvVar reports whether name is a common environment variable that
+// must not be interpreted as a mention.
+func IsCommonEnvVar(name string) bool {
 	switch strings.ToUpper(name) {
 	case "PATH", "HOME", "USER", "SHELL", "PWD", "TMPDIR", "TEMP", "TMP", "LANG", "TERM", "XDG_CONFIG_HOME":
 		return true

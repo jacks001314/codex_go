@@ -56,27 +56,43 @@ func (f MCPElicitationHandlerFunc) HandleMCPElicitation(ctx context.Context, req
 }
 
 func mcpElicitationResult(ctx context.Context, serverName string, handler MCPElicitationHandler, method string, id json.RawMessage, params json.RawMessage) any {
+	request := parseMCPElicitationRequest(serverName, method, id, params)
+	userVerification := IsUserVerificationElicitation(request)
 	// A cancelled request answers `cancel` for every elicitation kind rather
 	// than waiting on a response that will never be used (Rust #44238).
 	if mcpContextCancelled(ctx) {
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonInterrupted)
+		}
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
-	request := parseMCPElicitationRequest(serverName, method, id, params)
 	request.ThreadID, request.TurnID = mcpElicitationContextFromContext(ctx)
 	if handler == nil {
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonApprovalUnavailable)
+		}
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
 	response, err := handler.HandleMCPElicitation(ctx, request)
 	if mcpContextCancelled(ctx) {
 		// The handler raced the cancellation; the caller no longer wants the
 		// answer, so report cancellation instead of a late accept/decline.
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonInterrupted)
+		}
 		return &MCPElicitationResponse{Action: MCPElicitationActionCancel}
 	}
 	if err != nil {
+		if userVerification {
+			return mcpUserVerificationCancel(UserVerificationReasonResponseError)
+		}
 		return &MCPElicitationResponse{
 			Action: MCPElicitationActionDecline,
 			Meta:   map[string]any{"message": err.Error()},
 		}
+	}
+	if userVerification {
+		return NormalizeUserVerificationResponse(response)
 	}
 	return normalizeMCPElicitationResponse(response)
 }
@@ -96,6 +112,9 @@ func parseMCPElicitationRequest(serverName string, method string, id json.RawMes
 	// The OpenAI elicitation arrives on the umbrella method
 	// `openai/elicitation/create` with its kind in the payload's mode.
 	request.Mode = stringFromAnyMap(raw, "mode")
+	if request.Mode == "" && request.Method == "openai/userVerification" {
+		request.Mode = request.Method
+	}
 	request.URL = stringFromAnyMap(raw, "url")
 	request.ElicitationID = stringFromAnyMap(raw, "elicitationId")
 	if request.ElicitationID == "" {

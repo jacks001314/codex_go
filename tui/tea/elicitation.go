@@ -14,6 +14,9 @@ import (
 type ElicitationRequestMsg struct {
 	ID              string
 	Title           string
+	Mode            string
+	Description     string
+	Challenge       string
 	ServerName      string
 	RequestID       string
 	ThreadID        string
@@ -62,6 +65,27 @@ func (m *Model) openElicitationModal(message ElicitationRequestMsg) bubbletea.Cm
 		if strings.TrimSpace(message.ServerName) != "" {
 			title = "MCP request from " + strings.TrimSpace(message.ServerName)
 		}
+	}
+	if strings.TrimSpace(message.Mode) == "openai/userVerification" {
+		body := strings.TrimSpace(message.Description)
+		if body == "" {
+			body = strings.TrimSpace(message.Message)
+		}
+		if body == "" {
+			body = "Complete verification on this device."
+		}
+		m.openModal(ModalRequestMsg{
+			ID:    firstNonEmpty(message.ID, message.RequestID),
+			Kind:  ModalKindElicitation,
+			Title: title,
+			Body:  body,
+			Options: []ModalOption{
+				{ID: "accept", Label: "Verify", Shortcut: "y"},
+				{ID: "decline", Label: "Decline", Shortcut: "n"},
+				{ID: "cancel", Label: "Cancel", Shortcut: "c"},
+			},
+		})
+		return m.queueNotification(chatwidget.ElicitationRequestedNotification(message.ServerName))
 	}
 	if strings.TrimSpace(message.URL) != "" {
 		m.openModal(ModalRequestMsg{

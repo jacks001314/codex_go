@@ -5210,6 +5210,26 @@ func TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents(t *testing.T) {
 				}
 			case string(appserver.MethodThreadLoadedList):
 				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": []string{"thread-main", "thread-worker"}, "nextCursor": nil}})
+			case string(appserver.MethodThreadList):
+				var params appserver.ThreadListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				if params.AncestorThreadID == nil || strings.TrimSpace(*params.AncestorThreadID) != "thread-main" {
+					remoteTUITestSendErr(serverErrs, fmt.Errorf("thread/list ancestor params = %#v", params))
+					return
+				}
+				parent := "thread-main"
+				data := []any{
+					remoteAgentTestThread("thread-worker", "Scout", "review", "subagent", "active", &parent, nil),
+				}
+				if params.Archived != nil && *params.Archived {
+					data = []any{
+						remoteAgentTestThread("thread-archived", "Archived", "review", "subagent", "notLoaded", &parent, nil),
+					}
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"data": data, "nextCursor": nil}})
 			default:
 				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
 				return
@@ -5223,7 +5243,7 @@ func TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("agent entries error = %v", err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != 3 {
 		t.Fatalf("entries = %#v", entries)
 	}
 	if !entries[0].IsPrimary || entries[0].ThreadID != "thread-main" {
@@ -5232,7 +5252,10 @@ func TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents(t *testing.T) {
 	if entries[1].ThreadID != "thread-worker" || entries[1].AgentNickname != "Scout" || entries[1].AgentRole != "review" || !entries[1].IsRunning {
 		t.Fatalf("worker entry = %#v", entries[1])
 	}
-	for _, method := range []appserver.Method{appserver.MethodInitialize, appserver.MethodThreadRead, appserver.MethodThreadLoadedList, appserver.MethodThreadRead} {
+	if entries[2].ThreadID != "thread-archived" || !entries[2].Archived {
+		t.Fatalf("archived descendant entry = %#v", entries[2])
+	}
+	for _, method := range []appserver.Method{appserver.MethodInitialize, appserver.MethodThreadRead, appserver.MethodThreadLoadedList, appserver.MethodThreadRead, appserver.MethodThreadList, appserver.MethodThreadList} {
 		if got := remoteTUITestReadCapturedRequest(t, requests); got.Method != string(method) {
 			t.Fatalf("method = %s, want %s", got.Method, method)
 		}

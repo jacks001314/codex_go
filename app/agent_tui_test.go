@@ -74,10 +74,10 @@ func TestInteractiveLocalAgentCallbacksReadLineageAndSwitchThread(t *testing.T) 
 	if entries[0].ThreadID != "thread-main" || !entries[0].IsPrimary {
 		t.Fatalf("primary entry = %#v", entries[0])
 	}
-	if entries[1].ThreadID != "thread-worker" || entries[1].AgentPath != "/root/scout" || !entries[1].IsRunning {
+	if entries[1].ThreadID != "thread-worker" || entries[1].ParentThreadID != "thread-main" || entries[1].AgentPath != "/root/scout" || !entries[1].IsRunning {
 		t.Fatalf("worker entry = %#v", entries[1])
 	}
-	if entries[2].ThreadID != "thread-nested" || entries[2].AgentPath != "/root/scout/explorer" {
+	if entries[2].ThreadID != "thread-nested" || entries[2].ParentThreadID != "thread-worker" || entries[2].AgentPath != "/root/scout/explorer" {
 		t.Fatalf("nested entry = %#v", entries[2])
 	}
 	if entries[3].ThreadID != "thread-side" || entries[3].IsPrimary {

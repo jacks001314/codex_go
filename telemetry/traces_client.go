@@ -293,6 +293,15 @@ func (t *Tracer) StartSpanWithParentAndKind(parent *Span, name string, kind int,
 	return t.startSpan(parent, name, attributes, kind)
 }
 
+// StartChildSpan starts an internal child of this span using the same tracer.
+// It returns nil when this span has no active tracing client.
+func (s *Span) StartChildSpan(name string, attributes map[string]string) *Span {
+	if s == nil || s.client == nil {
+		return nil
+	}
+	return (&Tracer{client: s.client}).StartSpanWithParent(s, name, attributes)
+}
+
 // tracerScopeName reports the instrumentation scope Rust would use for this
 // client: the configured service name, falling back to the Codex scope tag when
 // a caller leaves it unset.

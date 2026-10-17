@@ -2,6 +2,7 @@ package tea
 
 import (
 	"strings"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -435,6 +436,9 @@ func (m *Model) applyGoalUpdated(goal appserver.Goal, notify bool) {
 	}
 	m.currentGoal = cloneGoalTea(&goal)
 	m.goalObservedAt = m.currentTime()
+	if goal.Status != appserver.GoalActive {
+		m.goalStatusTickActive = false
+	}
 	if notify {
 		m.notice = "Goal updated: " + chatwidget.GoalStatusLabel(goal.Status)
 		m.refreshTranscript()
@@ -449,6 +453,7 @@ func (m *Model) applyGoalCleared(threadID string, notify bool) {
 	if threadID == "" || m.currentGoal == nil || m.currentGoal.ThreadID == "" || m.currentGoal.ThreadID == threadID {
 		m.currentGoal = nil
 		m.goalObservedAt = m.currentTime()
+		m.goalStatusTickActive = false
 	}
 	if notify {
 		m.notice = "Goal cleared"
@@ -476,11 +481,50 @@ func (m *Model) goalTaskProgress() string {
 	if m == nil || m.currentGoal == nil {
 		return ""
 	}
-	indicator, ok := chatwidget.NewGoalStatusState(*m.currentGoal, m.goalObservedAt).Indicator(m.currentTime(), nil)
+	var activeTurnStartedAt *time.Time
+	if m.isTaskRunning() {
+		if m.taskStartedAt.IsZero() {
+			m.taskStartedAt = m.currentTime()
+		}
+		activeTurnStartedAt = &m.taskStartedAt
+	}
+	indicator, ok := chatwidget.NewGoalStatusState(*m.currentGoal, m.goalObservedAt).Indicator(m.currentTime(), activeTurnStartedAt)
 	if !ok {
 		return ""
 	}
 	return "Goal " + chatwidget.FormatGoalStatusIndicator(indicator)
+}
+
+type goalTickMsg struct{}
+
+func goalStatusTickCmd() bubbletea.Cmd {
+	return bubbletea.Tick(time.Second, func(time.Time) bubbletea.Msg {
+		return goalTickMsg{}
+	})
+}
+
+// ensureGoalStatusTick keeps an active goal's elapsed-time indicator moving even
+// when no other event redraws the TUI (Rust #40622
+// refresh_goal_status_indicator_for_time_tick).
+func (m *Model) ensureGoalStatusTick() bubbletea.Cmd {
+	if m == nil || m.goalStatusTickActive || m.currentGoal == nil || m.currentGoal.Status != appserver.GoalActive {
+		return nil
+	}
+	m.goalStatusTickActive = true
+	return goalStatusTickCmd()
+}
+
+func (m *Model) updateGoalStatusTick() bubbletea.Cmd {
+	if m == nil {
+		return nil
+	}
+	m.goalStatusTickActive = false
+	if m.currentGoal == nil || m.currentGoal.Status != appserver.GoalActive {
+		return nil
+	}
+	m.goalStatusTickActive = true
+	m.refreshTranscript()
+	return goalStatusTickCmd()
 }
 
 func (m *Model) nextGoalRequest() uint64 {

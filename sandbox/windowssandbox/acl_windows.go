@@ -179,7 +179,7 @@ func validateACLRequest(req ACLRequest) (string, []byte, *windows.SID, error) {
 // runtime paths beyond the legacy Windows path limit stay readable (Rust
 // `acl::fetch_dacl_handle`, which opens the target with `OpenOptions`).
 func fileDACL(path string) (*windows.SECURITY_DESCRIPTOR, *windows.ACL, error) {
-	handle, err := openACLHandle(path, windows.READ_CONTROL, "open ACL target")
+	handle, err := openACLHandle(path, windows.READ_CONTROL, "open ACL target (READ_CONTROL)")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -203,7 +203,7 @@ func fileDACL(path string) (*windows.SECURITY_DESCRIPTOR, *windows.ACL, error) {
 // actually need to change the DACL reach this, which keeps no-op repairs
 // read-only (Rust `acl::ensure_allow_mask_aces_with_inheritance_impl`).
 func setDACL(path string, dacl *windows.ACL) error {
-	handle, err := openACLHandle(path, windows.READ_CONTROL|windows.WRITE_DAC, "open ACL target for update")
+	handle, err := openACLHandle(path, windows.READ_CONTROL|windows.WRITE_DAC, "open ACL target for update (READ_CONTROL | WRITE_DAC)")
 	if err != nil {
 		return err
 	}

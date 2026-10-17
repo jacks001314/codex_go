@@ -53,23 +53,28 @@ func (m *mcpElicitationCancellationMemory) remember(id json.RawMessage) {
 // take reports whether id was already cancelled and forgets it so a reused
 // request id starts fresh on the same connection.
 func (m *mcpElicitationCancellationMemory) take(id json.RawMessage) bool {
+	cancelled, _ := m.takeWithSaturation(id)
+	return cancelled
+}
+
+func (m *mcpElicitationCancellationMemory) takeWithSaturation(id json.RawMessage) (bool, bool) {
 	if m == nil {
-		return false
+		return false, false
 	}
 	key := mcpElicitationRequestIDKey(id)
 	if key == "" {
-		return false
+		return false, false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.saturated {
-		return true
+		return true, true
 	}
 	if _, ok := m.cancelledIDs[key]; ok {
 		delete(m.cancelledIDs, key)
-		return true
+		return true, false
 	}
-	return false
+	return false, false
 }
 
 // cancelled reports whether a cancellation for id is currently remembered

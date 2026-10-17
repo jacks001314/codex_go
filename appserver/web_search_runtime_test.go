@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,35 @@ import (
 	"codex_go/tool"
 	"codex_go/turn"
 )
+
+func TestStandaloneWebSearchHonorsSystemProxySettingLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	for _, testCase := range []struct {
+		name      string
+		enabled   bool
+		wantProxy bool
+	}{
+		{name: "enabled", enabled: true, wantProxy: true},
+		{name: "disabled", enabled: false, wantProxy: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := &config.Config{Values: map[string]any{
+				"features": map[string]any{"respect_system_proxy": testCase.enabled},
+			}}
+			client, ok := router.httpClientForConfig(cfg).(*http.Client)
+			if !ok || client == nil {
+				t.Fatalf("httpClientForConfig() type = %T", router.httpClientForConfig(cfg))
+			}
+			transport, ok := client.Transport.(*http.Transport)
+			if !ok || transport == nil {
+				t.Fatalf("transport type = %T", client.Transport)
+			}
+			if got := transport.Proxy != nil; got != testCase.wantProxy {
+				t.Fatalf("transport proxy enabled = %v, want %v", got, testCase.wantProxy)
+			}
+		})
+	}
+}
 
 func TestWebSearchRuntimeModeControlsExternalAccess(t *testing.T) {
 	for _, test := range []struct {

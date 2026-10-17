@@ -6,13 +6,16 @@ type AgentOption struct {
 }
 
 type AgentThreadEntry struct {
-	ThreadID      string
-	AgentNickname string
-	AgentRole     string
-	AgentPath     string
-	IsPrimary     bool
-	IsRunning     bool
-	IsClosed      bool
+	ThreadID string
+	// ParentThreadID is the spawn parent when this entry is a subagent. Archive
+	// visibility cascades through this chain (Rust #50345).
+	ParentThreadID string
+	AgentNickname  string
+	AgentRole      string
+	AgentPath      string
+	IsPrimary      bool
+	IsRunning      bool
+	IsClosed       bool
 	// Archived marks a thread hidden from agent-picker navigation until it is
 	// unarchived (Rust #50345 AgentPickerThreadVisibility::Hidden).
 	Archived bool

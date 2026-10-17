@@ -165,7 +165,36 @@ func PluginMentionName(pluginName string, displayName string) string {
 			return b.String()
 		}
 	}
+	if appID, ok := strings.CutPrefix(pluginName, "app-"); ok &&
+		isLowercaseHex32(appID) &&
+		isGeneratedAppMentionDisplayName(displayName) {
+		return displayName
+	}
 	return TitleCasePluginName(pluginName)
+}
+
+func isLowercaseHex32(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if !(value[i] >= '0' && value[i] <= '9' || value[i] >= 'a' && value[i] <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func isGeneratedAppMentionDisplayName(displayName string) bool {
+	if len(displayName) == 0 || len(displayName) > 64 {
+		return false
+	}
+	for i := 0; i < len(displayName); i++ {
+		if !tui.IsMentionNameByte(displayName[i]) {
+			return false
+		}
+	}
+	return !tui.IsCommonEnvVar(displayName)
 }
 
 type PluginNameSegment struct {

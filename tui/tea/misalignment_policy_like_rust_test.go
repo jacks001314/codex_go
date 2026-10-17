@@ -134,6 +134,36 @@ func TestMisalignmentPrecautionOffersRemoteAgentCommandCenterLikeRust(t *testing
 	}
 }
 
+func TestMisalignmentReviewLongFindingsScrollLikeRust(t *testing.T) {
+	state := codextui.NewState(nil)
+	state.ThreadID = "thread-1"
+	model := NewModel(state, Options{Width: 100, Height: 20})
+	long := strings.Repeat("finding line\\n", 100)
+	message := `{"error":{"turnId":"turn-1","codexErrorInfo":"misalignmentPolicyViolation","misalignment":{"detailedExplanation":"` + long + `","steer":{"message":"Continue safely."}}}}`
+	updated, cmd := model.Update(TurnCompletedMsg{Err: errors.New(message)})
+	runTeaCmd(t, model, cmd)
+	model = updated.(*Model)
+	model.modal.selected = modalOptionIndex(model.modal, "review")
+	runTeaCmd(t, model, model.respondModal(false))
+	if model.modal == nil || model.modal.id != misalignmentReviewID {
+		t.Fatalf("review modal = %#v", model.modal)
+	}
+	if model.modal.bodyOffset != 0 {
+		t.Fatalf("initial body offset = %d", model.modal.bodyOffset)
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgDown})
+	if model.modal.bodyOffset == 0 {
+		t.Fatal("PageDown did not scroll the review body")
+	}
+	if view := model.renderModal(); !strings.Contains(view, "newer findings") {
+		t.Fatalf("scroll indicator missing:\n%s", view)
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyPgUp})
+	if model.modal.bodyOffset != 0 {
+		t.Fatalf("PageUp did not return to the first page: offset=%d", model.modal.bodyOffset)
+	}
+}
+
 func modalOptionIndex(modal *modalState, id string) int {
 	if modal == nil {
 		return -1

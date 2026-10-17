@@ -34,6 +34,22 @@ type ComputerActivityCell struct {
 	Reasoning []tui.ActivityReasoning
 }
 
+// ActivityIDs returns the stable call identities of this computer-activity
+// group.
+func (c ComputerActivityCell) ActivityIDs() []string {
+	ids := make([]string, 0, len(c.Calls))
+	seen := map[string]bool{}
+	for _, call := range c.Calls {
+		id := strings.TrimSpace(call.CallID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Start appends a call once, keeping replay deduplication.
 func (c *ComputerActivityCell) Start(call McpToolCallCell) {
 	if c == nil {

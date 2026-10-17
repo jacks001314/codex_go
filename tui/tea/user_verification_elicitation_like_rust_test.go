@@ -1,0 +1,33 @@
+package tea
+
+import (
+	"strings"
+	"testing"
+
+	codextui "codex_go/tui"
+)
+
+func TestUserVerificationElicitationShowsExplicitDecisionLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{})
+	model.Update(ElicitationRequestMsg{
+		ID:          "verification-1",
+		ServerName:  "docs",
+		Title:       "Verify identity",
+		Mode:        "openai/userVerification",
+		Description: "Confirm this request on your device.",
+		Challenge:   "AQ",
+	})
+	if model.modal == nil || model.modal.kind != ModalKindElicitation {
+		t.Fatalf("modal = %#v, want user verification elicitation", model.modal)
+	}
+	if !strings.Contains(model.modal.body, "Confirm this request on your device.") {
+		t.Fatalf("body = %q", model.modal.body)
+	}
+	labels := make([]string, 0, len(model.modal.options))
+	for _, option := range model.modal.options {
+		labels = append(labels, option.Label)
+	}
+	if got := strings.Join(labels, ","); got != "Verify,Decline,Cancel" {
+		t.Fatalf("options = %q", got)
+	}
+}

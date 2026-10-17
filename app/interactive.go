@@ -600,6 +600,12 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		if b == nil || request == nil {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 		}
+		if mcp.IsUserVerificationElicitation(request) {
+			return &mcp.MCPElicitationResponse{
+				Action: mcp.MCPElicitationActionCancel,
+				Meta:   mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonProviderUnavailable),
+			}, nil
+		}
 		if send == nil {
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}, nil
 		}
@@ -615,6 +621,10 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 			RequestID:       requestID,
 			ThreadID:        request.ThreadID,
 			TurnID:          request.TurnID,
+			Title:           request.Title,
+			Mode:            request.Mode,
+			Description:     request.Description,
+			Challenge:       request.Challenge,
 			Message:         request.Message,
 			URL:             request.URL,
 			RequestedSchema: request.RequestedSchema,
@@ -628,7 +638,7 @@ func (b *interactiveElicitationBroker) mcpElicitationFunc(send func(bubbletea.Ms
 		}
 		select {
 		case response := <-responses:
-			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta)), nil
+			return b.elicitationResponse(response, mcpElicitationToolApproval(request.Meta), mcp.IsUserVerificationElicitation(request)), nil
 		case <-entry.abandoned:
 			return nil, ErrInteractiveElicitationAbandoned
 		case <-ctx.Done():
@@ -765,10 +775,12 @@ func (b *interactiveElicitationBroker) close() {
 // response. For a custom MCP tool call approval an explicit user cancellation
 // records the user as the cancellation source (Rust #54679), while a decline
 // keeps no provenance.
-func (b *interactiveElicitationBroker) elicitationResponse(response codextea.ModalResponse, toolApproval bool) *mcp.MCPElicitationResponse {
+func (b *interactiveElicitationBroker) elicitationResponse(response codextea.ModalResponse, toolApproval bool, userVerification bool) *mcp.MCPElicitationResponse {
 	if response.Cancelled || response.Elicitation == nil {
 		cancelled := &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionCancel}
-		if toolApproval {
+		if userVerification {
+			cancelled.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserCancelled)
+		} else if toolApproval {
 			cancelled.Meta = mcpUserCancellationMeta()
 		}
 		return cancelled
@@ -777,7 +789,15 @@ func (b *interactiveElicitationBroker) elicitationResponse(response codextea.Mod
 		Action:  mcpElicitationAction(response.Elicitation.Action),
 		Content: cloneAnyMapApp(response.Elicitation.Content),
 	}
-	if strings.TrimSpace(response.Elicitation.Persist) != "" {
+	if userVerification {
+		if result.Action == mcp.MCPElicitationActionDecline {
+			result.Content = nil
+			result.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserDeclined)
+		} else if result.Action == mcp.MCPElicitationActionCancel {
+			result.Content = nil
+			result.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserCancelled)
+		}
+	} else if strings.TrimSpace(response.Elicitation.Persist) != "" {
 		result.Meta = map[string]any{"persist": strings.TrimSpace(response.Elicitation.Persist)}
 	} else if toolApproval && result.Action == mcp.MCPElicitationActionCancel {
 		result.Meta = mcpUserCancellationMeta()
@@ -2095,6 +2115,7 @@ func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResul
 		return codextea.SettingsWriteResult{}, err
 	}
 	result := interactiveSettingsFromConfig(loaded)
+	result.PresetSetReadOnly, result.PresetClearReadOnly = interactivePresetLayerAccess(root)
 	// Rust #51253: the TUI bootstrap reads the server's configRequirements/read
 	// next to model/list and constrains the model catalog's service tiers with it
 	// (app_server_session bootstrap -> service_tier_resolution::
@@ -2103,6 +2124,18 @@ func interactiveLoadSettings(root *cli.RootOptions) (codextea.SettingsWriteResul
 	// runs here carries the requirements instead of issuing a second request.
 	result.ServiceTierRequirements = interactiveServiceTierRequirements()
 	return result, nil
+}
+
+// interactivePresetLayerAccess resolves #54380's config ownership guard. Set
+// checks the highest layer defining the slot; clear is blocked when any
+// non-user layer defines it because deleting the user value would reveal the
+// shadowed one.
+func interactivePresetLayerAccess(root *cli.RootOptions) (map[string]bool, map[string]bool) {
+	read, err := interactiveConfigService(root).Read(&config.ConfigReadParams{IncludeLayers: true})
+	if err != nil || read == nil {
+		return nil, nil
+	}
+	return config.TUIPresetLayerAccess(read.Layers, config.ConfigPath(auth.DefaultCodexHome()))
 }
 
 // interactiveServiceTierRequirements resolves the embedded app server's

@@ -40,3 +40,25 @@ func TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust(t *testing.T) {
 		t.Fatalf("append at line end = %q, want Zlpha!", got)
 	}
 }
+
+func TestAgentsOverviewRenameCursorStyleLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 120, Height: 36})
+	model.agentsOverview = agentsoverview.New([]agentsoverview.Row{{
+		ThreadID: "t-1",
+		Name:     "alpha",
+	}}, "t-1", false)
+	model.agentsOverview.State.VimEnabled = true
+	if !model.agentsOverview.BeginRename() {
+		t.Fatal("BeginRename returned false")
+	}
+	if got := model.agentsOverviewCursorStyleSequence(); got != "\x1b[6 q" {
+		t.Fatalf("Vim insert cursor sequence = %q, want steady bar", got)
+	}
+	if got := model.agentsOverviewCursorStyleSequence(); got != "" {
+		t.Fatalf("repeated cursor sequence = %q, want no duplicate", got)
+	}
+	model.updateAgentsOverviewKey(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
+	if got := model.agentsOverviewCursorStyleSequence(); got != "\x1b[0 q" {
+		t.Fatalf("normal-mode cursor sequence = %q, want default shape", got)
+	}
+}

@@ -25,7 +25,6 @@ import (
 	"codex_go/auth"
 	"codex_go/config"
 	"codex_go/eventmap"
-	"codex_go/features"
 	"codex_go/filesearch"
 	"codex_go/plugin"
 	"codex_go/protocol"
@@ -339,7 +338,12 @@ type SettingsWriteResult struct {
 	// QuickDials carries the configured `tui.presets` entries (Rust #54379),
 	// keyed by a single digit from 0 to 9. Nil keeps the current set; an empty
 	// non-nil map clears it.
-	QuickDials             map[string]config.TUIPreset
+	QuickDials map[string]config.TUIPreset
+	// PresetSetReadOnly / PresetClearReadOnly mark slots owned by a non-user
+	// config layer (Rust #54380). Set uses the highest layer; clear is blocked
+	// when any non-user layer defines the slot.
+	PresetSetReadOnly      map[string]bool
+	PresetClearReadOnly    map[string]bool
 	PluginUserMarketplaces map[string]bool
 	PluginGitMarketplaces  map[string]bool
 	// Rendering carries the resolved `tui.rendering` preferences so a settings
@@ -1131,6 +1135,9 @@ type Options struct {
 	// the session provider (implicit/OpenAI => true).
 	RequiresOpenAIAuth   *bool
 	OnWriteTerminalTitle TerminalTitleWriterFunc
+	// OnClearTerminal writes the terminal clear sequence used by `/clear`.
+	// It defaults to printing directly to the terminal output.
+	OnClearTerminal TerminalTitleWriterFunc
 	// OnWriteProgramStatus writes the OSC 7501/21337 lifecycle sequence
 	// (Rust #54114). Defaults to printing it to the terminal output.
 	OnWriteProgramStatus      TerminalTitleWriterFunc
@@ -1170,6 +1177,9 @@ type Options struct {
 	// QuickDials carries the configured `tui.presets` entries (Rust #54379),
 	// keyed by a single digit from 0 to 9.
 	QuickDials map[string]config.TUIPreset
+	// PresetSetReadOnly / PresetClearReadOnly carry config-layer ownership.
+	PresetSetReadOnly   map[string]bool
+	PresetClearReadOnly map[string]bool
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889): Escape returns from an async question to the composer while
 	// preserving the answer draft. Nil defaults to enabled.
@@ -1424,6 +1434,9 @@ type Model struct {
 	// dashboard opens (Rust #50786 AgentsOverviewState::grouping).
 	agentsOverviewGrouping agentsoverview.Grouping
 	agentsOverviewDrafts   map[string]string
+	// agentsOverviewCursorBar tracks the DECSCUSR steady-bar cursor used by the
+	// Vim-insert rename editor (Rust #50216 cursor_style).
+	agentsOverviewCursorBar bool
 	// agentsOverviewAttachments holds the pending image attachments for the
 	// dashboard's new-task prompt (Rust #44027).
 	agentsOverviewAttachments []bottompane.ComposerAttachment
@@ -1461,7 +1474,7 @@ type Model struct {
 	overlayMessages                   transcriptMessageCache
 	// mainFind is the owned transcript's in-place Find state (Rust #50045).
 	// The pager overlay keeps its own find state in chatwidget.TranscriptOverlay.
-	mainFind              mainTranscriptFind
+	mainFind mainTranscriptFind
 	// activityFocus is the owned transcript's activity-group disclosure state
 	// (Rust #46734). Expanded identities persist after focus is cleared.
 	activityFocus         transcriptActivityFocus
@@ -1482,6 +1495,8 @@ type Model struct {
 	// quickDials is the live reusable-preset set (Rust LocalSettings.tui
 	// quick_dials). quickDialMenu owns the passive HUD above the composer.
 	quickDials           map[string]config.TUIPreset
+	presetSetReadOnly    map[string]bool
+	presetClearReadOnly  map[string]bool
 	quickDialMenu        bool
 	quickDialWriteSlot   int
 	quickDialWriteDelete bool
@@ -1621,18 +1636,26 @@ type Model struct {
 	// runtime workspace roots (Rust #46494). Client config paths belong to the
 	// client host, so a Session-sourced fork must forward the roots the server
 	// already resolved for the active session instead of the local config.
-	sessionWorkspaceRoots           []string
-	sessionPickerDensity            codextui.SessionListDensity
-	skillsInventory                 *appserver.SkillsListResponse
-	skillsInventoryCWD              string
-	skillsInventoryErr              string
-	skillsInventoryLoading          bool
-	agentItems                      []codextui.AgentThreadEntry
-	archivedAgentThreads            map[string]bool
-	activeAgentLabel                string
-	nextAgentRefreshRequestID       uint64
-	pendingAgentRefreshRequestID    uint64
-	pendingAgentRefreshThreadID     string
+	sessionWorkspaceRoots        []string
+	sessionPickerDensity         codextui.SessionListDensity
+	skillsInventory              *appserver.SkillsListResponse
+	skillsInventoryCWD           string
+	skillsInventoryErr           string
+	skillsInventoryLoading       bool
+	agentItems                   []codextui.AgentThreadEntry
+	archivedAgentThreads         map[string]bool
+	activeAgentLabel             string
+	nextAgentRefreshRequestID    uint64
+	pendingAgentRefreshRequestID uint64
+	pendingAgentRefreshThreadID  string
+	// agentPickerVisibilityChanged records archive/unarchive changes that raced
+	// an in-flight picker refresh. The result is patched with these values and a
+	// follow-up refresh is queued (Rust #50345).
+	agentPickerVisibilityChanged map[string]bool
+	agentPickerRefreshFollowUp   bool
+	// agentThreadArchiveCause distinguishes a self-archive from an archive
+	// cascaded by an ancestor, so parent unarchive only restores its own subtree.
+	agentThreadArchiveCause         map[string]string
 	backgroundProcesses             []historycell.UnifiedExecProcessDetails
 	mcpServers                      []historycell.McpServerStatus
 	onReadMCPInventory              func(detail bool) ([]historycell.McpServerStatus, error)
@@ -1879,6 +1902,7 @@ type Model struct {
 	nextStatusRateLimitRequestID   uint64
 	pendingStatusRateLimitRequests map[uint64]pendingStatusRateLimitRequest
 	terminalTitleWriter            TerminalTitleWriterFunc
+	terminalClearWriter            TerminalTitleWriterFunc
 	// programStatusWriter writes OSC 7501/21337 lifecycle updates.
 	programStatusWriter TerminalTitleWriterFunc
 	// programStatusAfterTurn retains a completed or failed live turn until the
@@ -2004,6 +2028,7 @@ type Model struct {
 	experimentalFeatureUnconfirmed   []string
 	experimentalFeaturesSaving       bool
 	currentGoal                      *appserver.Goal
+	goalStatusTickActive             bool
 	goalObservedAt                   time.Time
 	pendingGoalObjective             string
 	hasChatGPTAccount                bool
@@ -2190,8 +2215,14 @@ func NewModel(state *codextui.State, options Options) *Model {
 		composer:                     composer,
 		noAltScreen:                  options.NoAltScreen,
 		quickDials:                   cloneTUIPresets(options.QuickDials),
+		presetSetReadOnly:            cloneBoolMapTea(options.PresetSetReadOnly),
+		presetClearReadOnly:          cloneBoolMapTea(options.PresetClearReadOnly),
 		localSettings: LocalSettings{
-			Tui:             SettingsWriteResult{QuickDials: cloneTUIPresets(options.QuickDials)},
+			Tui: SettingsWriteResult{
+				QuickDials:          cloneTUIPresets(options.QuickDials),
+				PresetSetReadOnly:   cloneBoolMapTea(options.PresetSetReadOnly),
+				PresetClearReadOnly: cloneBoolMapTea(options.PresetClearReadOnly),
+			},
 			AlternateScreen: options.NoAltScreen,
 		},
 		quickDialWriteSlot:              -1,
@@ -2214,7 +2245,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		mcpStartup:                      chatwidget.NewMcpStartupRoundState(options.MCPStartupExpectedServers),
 		initialMessages:                 options.InitialMessages,
 		featureSettings:                 cloneBoolMapTea(options.FeatureSettings),
-		daybreakEnabled:                 features.Enabled(options.FeatureSettings, "cli_daybreak") && options.DaybreakDefault,
+		daybreakEnabled:                 daybreakFeatureEnabledForAccount(options.FeatureSettings, options.HasChatGPTAccount, state.AccountDisplay) && options.DaybreakDefault,
 		disablePasteBurst:               options.DisablePasteBurst,
 		personality:                     initialPersonality(state, options.Personality),
 		tuiTheme:                        strings.TrimSpace(options.TUITheme),
@@ -2299,8 +2330,9 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onBackendBannerAction:           options.OnBackendBannerAction,
 		requiresOpenAIAuthOverride:      options.RequiresOpenAIAuth,
 		pendingStatusRateLimitRequests:  map[uint64]pendingStatusRateLimitRequest{},
-		terminalTitleWriter:             terminalTitleWriterOrDefault(options.OnWriteTerminalTitle),
-		programStatusWriter:             terminalTitleWriterOrDefault(options.OnWriteProgramStatus),
+		terminalTitleWriter:             terminalSequenceWriterOrDefault(options.OnWriteTerminalTitle),
+		terminalClearWriter:             terminalSequenceWriterOrDefault(options.OnClearTerminal),
+		programStatusWriter:             terminalSequenceWriterOrDefault(options.OnWriteProgramStatus),
 		notificationPost:                options.OnPostNotification,
 		notificationSettings:            notificationSettingsOrDefault(options.Notifications),
 		notificationMethod:              notificationMethodOrDefault(options.NotificationMethod),
@@ -2843,9 +2875,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyDebugConfigResult(msg)
 		return m, nil
 	case GoalResultMsg:
-		return m, bubbletea.Batch(m.applyGoalResult(msg), m.refreshStatusControlsCmd())
+		return m, bubbletea.Batch(m.applyGoalResult(msg), m.refreshStatusControlsCmd(), m.ensureGoalStatusTick())
 	case GoalEditTextMsg:
-		return m, bubbletea.Batch(m.applyGoalEditTextResult(msg), m.refreshStatusControlsCmd())
+		return m, bubbletea.Batch(m.applyGoalEditTextResult(msg), m.refreshStatusControlsCmd(), m.ensureGoalStatusTick())
 	case GoalDraftMaterializeMsg:
 		return m, bubbletea.Batch(m.applyGoalDraftMaterializeResult(msg), m.refreshStatusControlsCmd())
 	case ReviewStartResultMsg:
@@ -2868,10 +2900,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		return m, nil
 	case GoalUpdatedMsg:
 		m.applyGoalUpdated(msg.Goal, true)
-		return m, m.refreshStatusControlsCmd()
+		return m, bubbletea.Batch(m.refreshStatusControlsCmd(), m.ensureGoalStatusTick())
 	case GoalClearedMsg:
 		m.applyGoalCleared(msg.ThreadID, true)
+		m.goalStatusTickActive = false
 		return m, m.refreshStatusControlsCmd()
+	case goalTickMsg:
+		return m, m.updateGoalStatusTick()
 	case SettingsWriteResultMsg:
 		m.applySettingsWriteResult(msg)
 		return m, m.refreshStatusControlsCmd()
@@ -2939,11 +2974,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.applyAppListResult(msg)
 		return m, nil
 	case AgentListResultMsg:
-		m.applyAgentListResult(msg)
-		return m, nil
+		return m, m.applyAgentListResult(msg)
 	case AgentThreadVisibilityMsg:
-		m.setAgentPickerThreadVisibility(msg.ThreadID, msg.Archived)
-		return m, nil
+		return m, m.setAgentPickerThreadVisibility(msg.ThreadID, msg.Archived)
 	case agentsOverviewListMsg:
 		return m, m.applyAgentsOverviewList(msg)
 	case agentsOverviewUsageLoadedMsg:
@@ -3152,6 +3185,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, cmd
 			}
 		}
+		if m.activityFocus.active {
+			if handled, cmd := m.updateTranscriptActivityFocusKey(msg); handled {
+				return m, cmd
+			}
+		}
 		if cmd, handled := m.handleBackendBannerKey(msg); handled {
 			return m, cmd
 		}
@@ -3211,6 +3249,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Rust #46734 (app/input.rs:584-597): the global find-transcript
 			// shortcut opens the transcript and starts its search bar.
 			return m, m.openTranscriptFind()
+		}
+		if m.keyMatches("global", "focus_activity", keySpec) {
+			m.focusTranscriptActivity()
+			return m, nil
 		}
 		if m.keyMatches("global", "open_agents", keySpec) {
 			return m, m.applyAgentsCommand()
@@ -3372,7 +3414,7 @@ func (m *Model) View() string {
 		return m.overlay.View()
 	}
 	if m.agentsOverview != nil {
-		return m.renderAgentsOverview()
+		return m.renderAgentsOverview() + m.agentsOverviewCursorStyleSequence()
 	}
 	// Rust renders the session picker as a temporary full-screen surface. It
 	// must not be appended below the transcript, where the transcript viewport
@@ -3452,6 +3494,8 @@ func (m *Model) View() string {
 	footerLine := footerHelpText
 	if m.mainFind.active() {
 		footerLine = m.mainFind.barLine()
+	} else if m.activityFocus.active {
+		footerLine = m.activityFocusBarLine()
 	} else if m.escBacktrackHint {
 		// Rust show_esc_backtrack_hint replaces the composer footer with the
 		// second-Esc prompt once backtrack mode is primed.
@@ -3889,6 +3933,7 @@ func (m *Model) rerenderComputerActivityGroup() {
 		cell.DisplayLines(width),
 		cell.RawLines(),
 		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		cell.ActivityIDs(),
 	)
 }
 
@@ -5913,6 +5958,7 @@ func (m *Model) rerenderActiveExecCell() {
 		cell.DisplayLinesWithTheme(width, m.activeTUITheme()),
 		cell.RawLines(),
 		cell.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		cell.ActivityIDs(),
 	)
 }
 
@@ -6006,6 +6052,7 @@ func (m *Model) appendComputerActivityCall(item *protocol.ThreadItem) {
 		m.computerActivityGroup.DisplayLines(width),
 		m.computerActivityGroup.RawLines(),
 		m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+		m.computerActivityGroup.ActivityIDs(),
 	)
 }
 
@@ -6389,6 +6436,7 @@ func (m *Model) markActiveToolCallsFailed(message string) {
 				m.computerActivityGroup.DisplayLines(width),
 				m.computerActivityGroup.RawLines(),
 				m.computerActivityGroup.TranscriptLinesWithReasoning(width, m.renderActivityReasoning),
+				m.computerActivityGroup.ActivityIDs(),
 			)
 		}
 		m.flushComputerActivityGroup()
@@ -6463,7 +6511,7 @@ func (m *Model) upsertHistoryMessage(index int, displayLines []string, rawLines 
 // upsertHistoryMessageWithTranscript records a history entry whose expanded
 // transcript differs from its raw output (an activity group with interleaved
 // reasoning, Rust #46565). An empty transcript falls back to the raw text.
-func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []string, rawLines []string, transcriptLines []string) int {
+func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []string, rawLines []string, transcriptLines []string, activityIDs ...[]string) int {
 	if m == nil || m.State == nil {
 		return -1
 	}
@@ -6476,7 +6524,20 @@ func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []str
 	if strings.TrimSpace(transcript) == "" || transcript == raw {
 		transcript = ""
 	}
-	message := codextui.Message{Role: codextui.RoleHistory, Text: display, RawText: raw, TranscriptText: transcript}
+	ids := normalizeActivityIDs(nil)
+	if len(activityIDs) > 0 {
+		ids = normalizeActivityIDs(activityIDs[0])
+	}
+	if len(ids) == 0 && index >= 0 && index < len(m.State.Messages) {
+		ids = append([]string(nil), m.State.Messages[index].ActivityIDs...)
+	}
+	message := codextui.Message{
+		Role:           codextui.RoleHistory,
+		Text:           display,
+		RawText:        raw,
+		TranscriptText: transcript,
+		ActivityIDs:    ids,
+	}
 	if index >= 0 && index < len(m.State.Messages) && m.State.Messages[index].Role == codextui.RoleHistory {
 		m.State.Messages[index] = message
 		m.State.BumpMessagesRevision()
@@ -6485,6 +6546,23 @@ func (m *Model) upsertHistoryMessageWithTranscript(index int, displayLines []str
 	m.State.Messages = append(m.State.Messages, message)
 	m.State.BumpMessagesRevision()
 	return len(m.State.Messages) - 1
+}
+
+func normalizeActivityIDs(ids []string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(ids))
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // mergeStartupWarnings mirrors Rust's App::merge_startup_warnings: the incoming
@@ -7510,7 +7588,13 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	case codextui.CommandCompact:
 		return m.startCompaction()
 	case codextui.CommandClear:
+		if m.pendingServerProfile != "" {
+			m.addErrorHistoryMessage("Wait for permissions to update before switching tasks.")
+			return nil
+		}
+		clearCmd := m.clearTerminalForCommand()
 		m.startFreshNamedSession(invocation.Args, "Started a fresh session.")
+		return clearCmd
 	case codextui.CommandCopy:
 		m.copyLastAgentResponse()
 	case codextui.CommandExport:
@@ -8172,7 +8256,43 @@ func (m *Model) refreshTranscript() {
 		m.lastTranscriptHeight = m.transcript.Height
 		return
 	}
+	if m.activityFocus.active {
+		index := m.focusedTranscriptActivityIndex()
+		if index < 0 {
+			if len(m.activityFocus.focusedIDs) == 0 {
+				index = m.nearestTranscriptActivityIndex()
+				if index >= 0 {
+					m.setFocusedTranscriptActivity(index)
+				}
+			} else {
+				m.activityFocus.active = false
+			}
+		}
+		if index < 0 {
+			m.activityFocus.active = false
+		} else {
+			content, line := m.renderTranscriptActivityContent()
+			m.lastTranscriptContent = content
+			m.transcript.SetContent(content)
+			m.ensureTranscriptLineVisible(line)
+			m.lastTranscriptHeight = m.transcript.Height
+			return
+		}
+	}
 	content := m.transcriptRenderCached(m.State, m.transcript.Width)
+	if expanded := m.expandedTranscriptActivityMessages(); len(expanded) > 0 {
+		content, _ = renderTranscriptWithExpandedMessages(
+			&m.transcriptMessages,
+			m.State,
+			m.rawOutput,
+			m.transcript.Width,
+			m.activeTUITheme(),
+			false,
+			expanded,
+			m.sessionCWD,
+			m.showRawReasoning,
+		)
+	}
 	// Rust #48352: once a turn finished with a final answer and the cadence
 	// allows it, a completion tip renders in the transcript (four columns are
 	// reserved for its "  └ " prefix) until the next turn replaces it.
@@ -8897,17 +9017,6 @@ func renderTranscriptWithHistoryMode(state *codextui.State, raw bool, width int,
 func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) string {
 	content, _ := renderTranscriptMessagesWithRanges(cache, state, raw, width, themeID, expandedHistory, cwd, showRawReasoning)
 	return content
-}
-
-// renderTranscriptWithExpandedMessage renders the compact transcript while
-// temporarily expanding one message. Rust #50045 uses this for Find: the full
-// transcript remains searchable, but only the current match is revealed.
-func renderTranscriptWithExpandedMessage(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedMessage int, cwd string, showRawReasoning bool) (string, [][2]int) {
-	expanded := map[int]bool{}
-	if expandedMessage >= 0 {
-		expanded[expandedMessage] = true
-	}
-	return renderTranscriptWithExpandedMessages(cache, state, raw, width, themeID, false, expanded, cwd, showRawReasoning)
 }
 
 func renderTranscriptWithExpandedMessages(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {

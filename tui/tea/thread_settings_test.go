@@ -78,3 +78,37 @@ func TestApplyThreadSettingsUpdatedIgnoresOtherThreads(t *testing.T) {
 		t.Fatalf("state = (%q, %q), want it untouched", model.State.Model, model.State.Sandbox)
 	}
 }
+
+func TestApplyThreadSettingsPreservesNamedPermissionProfileLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:  120,
+		Height: 40,
+		OnUpdateThreadPermissions: func(string, string) error {
+			return nil
+		},
+	})
+	model.State.SetThreadID("thread-a")
+	model.State.Sandbox = "read-only"
+	profile := "custom-profile"
+	model.applyThreadSettingsUpdated(ThreadSettingsUpdatedMsg{
+		ThreadID: "thread-a",
+		Settings: appserver.Settings{
+			SandboxPolicy:           "workspace-write",
+			ActivePermissionProfile: &profile,
+		},
+	})
+	if model.State.Sandbox != "custom-profile" {
+		t.Fatalf("restored profile = %q, want custom-profile", model.State.Sandbox)
+	}
+	if !model.remoteNamedPermissionProfileActive() {
+		t.Fatal("restored named profile was not treated as active")
+	}
+
+	model.applyThreadSettingsUpdated(ThreadSettingsUpdatedMsg{
+		ThreadID: "thread-a",
+		Settings: appserver.Settings{SandboxPolicy: "read-only"},
+	})
+	if model.State.Sandbox != "read-only" {
+		t.Fatalf("legacy sandbox fallback = %q, want read-only", model.State.Sandbox)
+	}
+}

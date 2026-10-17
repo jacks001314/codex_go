@@ -8,7 +8,6 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
-	"codex_go/features"
 	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
@@ -417,7 +416,7 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	// next thread cannot inherit the previous one's Daybreak state.
 	m.daybreakEnabled = false
 	if response.Summary != nil && response.Summary.DaybreakEnabled {
-		m.daybreakEnabled = features.Enabled(m.featureSettings, "cli_daybreak")
+		m.daybreakEnabled = m.daybreakFeatureEnabled()
 	}
 	// Rust #43253/#43330: the resume response carries the thread's server-owned
 	// settings, and a read-only fallback replaces the composer with a notice.

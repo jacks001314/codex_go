@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -237,8 +238,9 @@ type FileReadStream struct {
 }
 
 type clientCallResult struct {
-	response clientResponse
-	err      error
+	response    clientResponse
+	err         error
+	completedAt time.Time
 }
 
 type clientTransportError struct {
@@ -1838,6 +1840,9 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 		c.cancelCall(id)
 		return err
 	}
+	emitExecServerTraceEvent(ctx, execServerRequestEnqueuedEvent, map[string]string{
+		"rpc.method": method,
+	})
 	var result clientCallResult
 	select {
 	case result = <-responseCh:
@@ -1850,6 +1855,21 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 		default:
 			return errors.New("exec-server client is closed")
 		}
+	}
+	if result.err == nil && !result.completedAt.IsZero() {
+		outcome := "success"
+		if result.response.Error != nil {
+			outcome = "error"
+		}
+		delay := time.Since(result.completedAt).Nanoseconds()
+		if delay < 0 {
+			delay = 0
+		}
+		emitExecServerTraceEvent(ctx, execServerResponseReceivedEvent, map[string]string{
+			"rpc.method":       method,
+			"outcome":          outcome,
+			"reader_to_caller_ns": strconv.FormatInt(delay, 10),
+		})
 	}
 	if result.err != nil {
 		return result.err
@@ -2102,7 +2122,7 @@ func (c *Client) readLoop(conn clientConnection) {
 		delete(c.pending, id)
 		c.mu.Unlock()
 		if responseCh != nil {
-			responseCh <- clientCallResult{response: response}
+			responseCh <- clientCallResult{response: response, completedAt: time.Now()}
 		}
 	}
 }

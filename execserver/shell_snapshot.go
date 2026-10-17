@@ -139,6 +139,14 @@ func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecPar
 	}
 	m.mu.Unlock()
 
+	ctx, captureSpan := startExecServerSpan(
+		ctx,
+		execServerCaptureSnapshotSpan,
+		execServerProcessSpanAttributes(params.ProcessID, nil),
+	)
+	if captureSpan != nil {
+		defer captureSpan.End()
+	}
 	captureScript, ok := shell.SnapshotCaptureScript(shellType, shell.SnapshotCaptureOptions{
 		Startup: shell.SnapshotStartupInteractive, Declarations: true,
 	})

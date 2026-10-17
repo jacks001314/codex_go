@@ -24,6 +24,7 @@ const keymapFeatureFastMode = "fast_mode"
 var keymapActionCatalog = []KeymapAction{
 	keymapAction("global", "Global", "open_transcript", "Open the transcript overlay.", []string{"ctrl-t"}),
 	keymapAction("global", "Global", "find_transcript", "Find text in the full transcript.", []string{"f3"}),
+	keymapAction("global", "Global", "focus_activity", "Focus transcript activity groups to expand or collapse their details.", []string{"f4"}),
 	keymapAction("global", "Global", "open_agents", "Open the shared agents overview.", []string{"alt-a"}),
 	keymapAction("global", "Global", "open_warnings", "Open the retained warnings viewer.", []string{"f2"}),
 	keymapAction("global", "Global", "open_external_editor", "Open the current draft in an external editor.", []string{"ctrl-g"}),

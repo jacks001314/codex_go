@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1378,6 +1379,7 @@ func (s *Server) handleLine(ctx context.Context, line []byte) (any, bool) {
 }
 
 func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectionLabel string) (any, bool) {
+	receivedAt := time.Now()
 	hasID, err := lineHasTopLevelID(line)
 	if err != nil {
 		return malformedRPCResponse(connectionLabel, err), true
@@ -1398,7 +1400,17 @@ func (s *Server) handleLineWithLabel(ctx context.Context, line []byte, connectio
 			trace = NewTraceContext()
 		}
 		requestCtx := withTraceContext(ctx, trace)
+		setExecServerSpanAttribute(requestCtx, "rpc.dispatch_offset_ns", execServerOffsetNanos(receivedAt))
 		result, err := s.handleRequest(requestCtx, &req)
+		setExecServerSpanAttribute(requestCtx, "rpc.response_enqueue_offset_ns", execServerOffsetNanos(receivedAt))
+		outcome := "success"
+		if err != nil {
+			outcome = "error"
+		}
+		emitExecServerTraceEvent(requestCtx, execServerResponseEnqueuedEvent, map[string]string{
+			"rpc.method": req.Method,
+			"outcome":    outcome,
+		})
 		if err != nil {
 			return errorResponseForRequest(req.ID, err), true
 		}
@@ -1694,6 +1706,14 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 	if params == nil {
 		return nil, errors.New("process/start params are required")
 	}
+	ctx, processSpan := startExecServerSpan(
+		ctx,
+		execServerProcessStartSpan,
+		execServerProcessSpanAttributes(params.ProcessID, nil),
+	)
+	if processSpan != nil {
+		defer processSpan.End()
+	}
 	if len(params.Argv) == 0 {
 		return nil, requestError(-32602, "argv must not be empty")
 	}
@@ -1726,7 +1746,17 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				captureEnv[key] = value
 			}
 		}
-		rewritten, rewriteErr := s.shellSnapshots.rewrite(ctx, params, captureEnv, credentialPairs)
+		snapshotCtx, snapshotSpan := startExecServerSpan(
+			ctx,
+			execServerPrepareSnapshotSpan,
+			execServerProcessSpanAttributes(params.ProcessID, map[string]string{
+				"snapshot_requested": strconv.FormatBool(params.ShellSnapshot != nil),
+			}),
+		)
+		rewritten, rewriteErr := s.shellSnapshots.rewrite(snapshotCtx, params, captureEnv, credentialPairs)
+		if snapshotSpan != nil {
+			snapshotSpan.End()
+		}
 		if rewriteErr != nil {
 			if policyCancel != nil {
 				policyCancel()
@@ -1822,7 +1852,15 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		}
 		s.releaseStartingProcess(params.ProcessID, state)
 	}
+	_, prepareSpan := startExecServerSpan(
+		ctx,
+		execServerPrepareSandboxSpan,
+		execServerProcessSpanAttributes(params.ProcessID, nil),
+	)
 	command, cwd, sandboxType, err := prepareExecProcess(params)
+	if prepareSpan != nil {
+		prepareSpan.End()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1943,7 +1981,16 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 		_ = stderrPipe.Close()
 		return nil, requestError(-32600, fmt.Sprintf("process %s start was cancelled", params.ProcessID))
 	}
-	if err := cmd.Start(); err != nil {
+	_, spawnSpan := startExecServerSpan(
+		ctx,
+		execServerProcessSpawnSpan,
+		execServerProcessSpanAttributes(params.ProcessID, nil),
+	)
+	err = cmd.Start()
+	if spawnSpan != nil {
+		spawnSpan.End()
+	}
+	if err != nil {
 		s.releaseStartingProcess(params.ProcessID, state)
 		if stdin != nil {
 			_ = stdin.Close()

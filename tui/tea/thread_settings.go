@@ -77,7 +77,11 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	if policy := strings.TrimSpace(settings.ApprovalPolicy); policy != "" {
 		m.State.ApprovalPolicy = policy
 	}
-	if sandbox := strings.TrimSpace(settings.SandboxPolicy); sandbox != "" {
+	if settings.ActivePermissionProfile != nil {
+		if profile := strings.TrimSpace(*settings.ActivePermissionProfile); profile != "" {
+			m.State.Sandbox = profile
+		}
+	} else if sandbox := strings.TrimSpace(settings.SandboxPolicy); sandbox != "" {
 		m.State.Sandbox = sandbox
 	}
 	personality := ""

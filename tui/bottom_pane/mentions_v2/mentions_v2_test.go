@@ -68,6 +68,41 @@ func TestSearchCatalogPluginAndSkillCandidatesMatchRust(t *testing.T) {
 	}
 }
 
+func TestGeneratedAppPluginMentionNameMatchesRust(t *testing.T) {
+	const pluginName = "app-6a6b12e06c5c8191ac5d5252fa5f92c8"
+	const fallback = "App-6a6b12e06c5c8191ac5d5252fa5f92c8"
+
+	for _, displayName := range []string{"Postman", "foo-bar_baz", strings.Repeat("a", 64)} {
+		if got := PluginMentionName(pluginName, displayName); got != displayName {
+			t.Errorf("PluginMentionName(%q, %q) = %q, want display name", pluginName, displayName, got)
+		}
+	}
+	for _, displayName := range []string{"", "Foo Bar", "Café", "PATH", "XDG_CONFIG_HOME", strings.Repeat("a", 65)} {
+		if got := PluginMentionName(pluginName, displayName); got != fallback {
+			t.Errorf("PluginMentionName(%q, %q) = %q, want %q", pluginName, displayName, got, fallback)
+		}
+	}
+	for _, name := range []string{
+		"1vault",
+		"app-short",
+		"app-6a6b12e06c5c8191ac5d5252fa5f92c8g",
+		"app-6A6B12E06C5C8191AC5D5252FA5F92C8",
+	} {
+		want := TitleCasePluginName(name)
+		if got := PluginMentionName(name, "Vault"); got != want {
+			t.Errorf("PluginMentionName(%q, %q) = %q, want fallback %q", name, "Vault", got, want)
+		}
+	}
+
+	candidate := PluginCandidate(PluginCapabilitySummary{
+		ConfigName:  pluginName + "@test",
+		DisplayName: "Postman",
+	})
+	if candidate.Selection.InsertText != "@Postman" || candidate.Selection.Path != "plugin://"+pluginName+"@test" {
+		t.Fatalf("generated app candidate selection = %#v", candidate.Selection)
+	}
+}
+
 func TestSearchCatalogCandidateEdgeCasesMatchRust(t *testing.T) {
 	skill := SkillCandidate(SkillMetadata{Name: "docs:review", Path: "skills/review/SKILL.md"})
 	if skill.DisplayName != "review (docs)" || !reflect.DeepEqual(skill.SearchTerms, []string{"docs:review", "review (docs)"}) {

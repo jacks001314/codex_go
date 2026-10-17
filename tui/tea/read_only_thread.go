@@ -116,6 +116,10 @@ func (m *Model) handleReadOnlyThreadKey(msg bubbletea.KeyMsg, keySpec string) bu
 		// find-transcript shortcut and opens the pager with its search bar.
 		return m.openTranscriptFind()
 	}
+	if m.keyMatches("global", "focus_activity", keySpec) {
+		m.focusTranscriptActivity()
+		return nil
+	}
 	if m.keyMatches("global", "toggle_raw_output", keySpec) {
 		return m.toggleRawOutputMode()
 	}

@@ -11,6 +11,7 @@ var ContextActions = map[string]map[string]struct{}{
 	"global": {
 		"open_transcript":          {},
 		"find_transcript":          {},
+		"focus_activity":           {},
 		"open_agents":              {},
 		"open_warnings":            {},
 		"open_external_editor":     {},

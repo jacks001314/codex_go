@@ -626,6 +626,11 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 	if m.sideThreadAbandoned(threadID) {
 		return nil
 	}
+	if m.agentThreadArchived(threadID) {
+		// Rust #50345: an archived picker thread is replay-only; late live
+		// notifications must not repopulate its buffer.
+		return nil
+	}
 	side := m.retainedSideConversationForThread(threadID)
 	if threadID == strings.TrimSpace(m.State.ThreadID) {
 		cmd := m.applyThreadEvent(msg.Event)

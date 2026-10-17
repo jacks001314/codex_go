@@ -171,14 +171,15 @@ func localAgentEntryFromRecord(record *session.Record, primaryThreadID string) c
 	}
 	closed := record.Archived
 	return codextui.AgentThreadEntry{
-		ThreadID:      strings.TrimSpace(string(record.ID)),
-		AgentNickname: strings.TrimSpace(record.Metadata.AgentNickname),
-		AgentRole:     strings.TrimSpace(record.Metadata.AgentRole),
-		AgentPath:     strings.TrimSpace(record.Metadata.AgentPath),
-		IsPrimary:     strings.TrimSpace(string(record.ID)) == strings.TrimSpace(primaryThreadID),
-		IsRunning:     !closed && localAgentRecordIsRunning(record),
-		IsClosed:      closed,
-		Archived:      closed,
+		ThreadID:       strings.TrimSpace(string(record.ID)),
+		ParentThreadID: strings.TrimSpace(string(record.ParentThreadID)),
+		AgentNickname:  strings.TrimSpace(record.Metadata.AgentNickname),
+		AgentRole:      strings.TrimSpace(record.Metadata.AgentRole),
+		AgentPath:      strings.TrimSpace(record.Metadata.AgentPath),
+		IsPrimary:      strings.TrimSpace(string(record.ID)) == strings.TrimSpace(primaryThreadID),
+		IsRunning:      !closed && localAgentRecordIsRunning(record),
+		IsClosed:       closed,
+		Archived:       closed,
 	}
 }
 

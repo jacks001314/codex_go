@@ -1,4 +1,4 @@
-# Rust/Go 功能对齐审计（最新：round 115，2026-10-17）
+# Rust/Go 功能对齐审计（最新：round 140，2026-10-17）
 
 > **当前状态只以本节为准。** 从 §2 开始的各节是历轮快照（round 91 起），其中的计数、上游 SHA 与
 > "冻结在 970b7f2ff4" 之类表述都是**当时**的事实，保留它们仅为追溯每轮证据，不应读作当前值。
@@ -8,23 +8,21 @@
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
 - **镜像工作树（round 115 修正）**：`D:\qax\reagent\dev\git\codex` 此前仍 checkout 在旧 pin `4eb4a65407`，而 parity 测试读取**工作树**文件，导致三项假红（feature key `mcp_tool_list_changed`/`multi_env_copy_file`、precomputed export、TUI snapshot 1432 vs 1433）。`git pull --ff-only origin main` fast-forward 到 `ce0323f2f2` 后 `go test ./parity -count=1` **ok**（27s）。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 431 条 + `blocked_precondition` 15 条（2695 条口径；`partial` 已在 round 115 清零，`#54776` 收口）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 338 条 + `blocked_precondition` 14 条 + `partial` 8 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。`partial` 中仍有多条是 Rust/Go 符号命名差异，功能判定应以 r90 账本为准。本文件不宣称逐提交认证。
 
 ### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`）
 
-Round 115 收口后（提交 `1b94cf05`）的已提交账本为 **231 数据行**：
-`landed` 107 / `complete` 28 / `not_applicable` 79 / `blocked_precondition` 17 / `partial` 0。
-工作区另有 in-flight 的 `#52184`（TUI 侧会话保留）`landed` 行尚未提交；两者合并后为 232 行
-（`landed` 108 / `complete` 28 / `not_applicable` 79 / `blocked_precondition` 17）。
+当前工作区账本共 **338 数据行**：
+`landed` 107 / `complete` 111 / `not_applicable` 101 / `blocked_precondition` 16 / `partial` 3。
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 107（+1 in-flight `#52184`） |
-| `complete` | 28 |
-| `not_applicable` | 79 |
-| `blocked_precondition` | 17 |
-| `partial` | 0 |
-| **合计** | **231（工作区 232）** |
+| `landed` | 107 |
+| `complete` | 111 |
+| `not_applicable` | 101 |
+| `blocked_precondition` | 16 |
+| `partial` | 3 |
+| **合计** | **338** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -32,12 +30,12 @@ Round 115 收口后（提交 `1b94cf05`）的已提交账本为 **231 数据行*
 
 | 状态 | 行数 |
 | --- | --- |
-| `complete` | 447 |
-| `not_applicable` | 1171 |
-| `audit_pending` | 630 |
-| `implementation_pending` | 431 |
-| `blocked_precondition` | 15 |
-| `partial` | 1 |
+| `complete` | 533 |
+| `not_applicable` | 1183 |
+| `audit_pending` | 619 |
+| `implementation_pending` | 338 |
+| `blocked_precondition` | 14 |
+| `partial` | 8 |
 
 ## 2. 方法与证据源
 
@@ -1202,13 +1200,11 @@ go build ./...               # exit 0
   `MessagesRevision` 重新扫描；新增 `TestOwnedTranscriptFindPicksUpLiveMessageUpdatesLikeRust`；
 - resize：宽度变化会重新扫描并保留当前 message/query；新增
   `TestOwnedTranscriptFindRetainsSelectionAcrossResizeLikeRust`；
-- reading mode 下的 Rust activity controls 依赖尚未实现的 `#46734
-  global.focus_activity` 载体，属于独立缺口；Go 当前没有 transcript activity-group
-  focus；
-- Rust 的手动 disclosure / retained selection 在 Go 当前主 transcript 没有对应载体，
-  记为 N/A，而不是本轮新增行为；
-- r109 仍按符号名记录为 `implementation_pending 0/7`，本轮在 r90 记为 `partial`，
-  不宣称 #50045 已完全对齐。
+- reading-mode activity controls 已由 `#46734` 的 F4 activity focus 补上；
+- 手动 disclosure 已有 activity focus 载体，retained text selection 在 Go 主
+  transcript 无对应载体，记为 N/A；
+- r90 已把 #50045 记为 `complete`（equivalent mechanism）；r109 仍按符号名
+  `implementation_pending 0/7`，属于命名差异。
 
 ## 34. Round 116（2026-10-17）：timeout-aware exec-server config reads（complete）
 
@@ -1237,3 +1233,747 @@ RC：移除 `reconnectDisabled` guard 后，超时会错误关闭 stdio 连接�
 `./execserver` 整包仍有两个已知 Windows 基线失败：
 `TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked` 与
 `TestWindowsSandboxPowerShellFallbackWithoutCompatibleShellLikeRust`。
+
+## 35. Round 118（2026-10-17）：TUI activity focus / disclosure（partial）
+
+### 35.1 落地
+
+Rust 参考 `df7f717c856e0634b04a12f7d4fc9e8ecb3e65be`（#46734）的 owned
+transcript activity controls：
+
+- `tui/keymap.go` / `keymapschema/keymapschema.go`
+  - 新增 `global.focus_activity`，默认 `f4`；keymap catalog 从 154 增至 155，
+    并同步 strict-config 可接受 action。
+- `tui/tea/transcript_activity_focus.go`
+  - F4 聚焦最近的可见 activity message（Go 以 history message index 作为稳定
+    identity）；
+  - Up/Down、PgUp/PgDn、Home/End 在 activity 之间移动；
+  - Enter 切换展开，Right 展开、Left 折叠；
+  - Esc 清除 focus，但手动展开的 activity 继续保留；
+  - 普通文本键清除 focus 并回到 composer；
+  - Find 会清除 focus，同时保留手动展开，并在 Find 渲染时把它们与当前命中
+    message 一起展开。
+- `tui/tea/model.go` / `transcript_find_main.go`
+  - 渲染管线改为接受 expanded-message 集合；
+  - activity focus 与 Find 使用同一套按 message 展开的渲染。
+- 测试：
+  - `TestFocusActivityKeymapLikeRust`；
+  - `TestTranscriptActivityFocusDisclosureLikeRust`；
+  - `TestTranscriptFindClearsActivityFocusLikeRust`。
+
+### 35.2 验证
+
+```text
+go test ./tui/... -count=1   # all ok
+go vet ./tui/...             # exit 0
+go build ./...               # exit 0
+```
+
+### 35.3 剩余
+
+- activity identity：已通过 `Message.ActivityIDs` 承载
+  `ExecCell.ActivityIDs()` / `ComputerActivityCell.ActivityIDs()` 的 call IDs；
+  disclosure 以稳定 ID 为键，message index 仅作无 ID 历史的 fallback；
+- 同 ID 替换保留 focus/展开，不同 ID 同位置不会继承，恢复 ID 后展开状态恢复；
+  测试见 `TestActivityFocusFollowsStableActivityIDsLikeRust` 及两个 cell 的
+  `ActivityIDs` 去重用例；
+- live-to-history migration 已由稳定 ID 覆盖：active exec/computer group 提交到
+  history 后 focus/展开仍跟随原 call ID，不会跳到后来的 live group；测试见
+  `TestActivityFocusMigratesLiveGroupToHistoryLikeRust`；
+- 剩余：mouse disclosure hit-testing 与列级 disclosure 样式、
+  `active_cell_hyperlink_lines_with` 等 active-cell 行构造、精确 selection/footer
+  状态和完整 52-symbol parity；
+- r109 仍为 `audit_pending`（10/52），r90 记为 `partial`。
+
+## 36. Round 119（2026-10-17）：Agent picker archived descendants（complete / equivalent mechanism）
+
+### 36.1 落地
+
+Rust 参考 `84d5437b6e`（#50345）的 descendant visibility 行为：
+
+- `tui/multi_agents.go`
+  - `AgentThreadEntry` 新增 `ParentThreadID`，作为 picker 的 spawn 父链。
+- `app/agent_tui.go` / `app/remote_tui.go`
+  - local session record 与 remote `Thread.ParentThreadID` 都映射到 picker entry；
+    `appendAgentEntryUnique` 在重复条目上补齐 parent。
+- `tui/tea/agent.go`
+  - `setAgentPickerThreadVisibility` 现在沿缓存的 parent 链计算
+    thread + descendants 闭包；archive 隐藏整棵子树，unarchive 恢复整棵子树，
+    并保持原有 selected thread 逻辑。
+- `app/remote_tui.go`
+  - 新增 `remoteTUIAgentDescendantThreads`：按 `ancestorThreadId` 分别翻页
+    `archived=false/true`，带 page/cursor 上限与循环保护；
+  - active descendants 合并进 picker，archived descendants 以 `Archived=true`
+    保留在缓存中（隐藏但可供 unarchive 恢复）。
+- `tui/tea/agent.go`
+  - 新增 `agentPickerVisibilityChanged` / `agentPickerRefreshFollowUp`：
+    in-flight refresh 期间的 archive/unarchive 会叠加到旧结果上，并串行发起
+    一次 follow-up refresh；override 保留到 follow-up 结果确认后才清除。
+- 测试：
+  - `TestAgentPickerArchiveCascadesToDescendantsLikeRust`：child/grandchild
+    archive/unarchive 级联、root 整体归档/恢复；
+  - `TestInteractiveLocalAgentCallbacksReadLineageAndSwitchThread` 增加 local
+    worker/nested entry 的 `ParentThreadID` 断言；
+  - `TestInteractiveRemoteAgentThreadEntriesLoadsLoadedSubagents` 增加真实
+    WebSocket 下的 active/archived `thread/list` 后代页面断言；
+  - `TestAgentPickerVisibilityChangeDuringRefreshQueuesFollowUp` 验证 stale
+    result 不会重新显示已归档行、follow-up 串行执行且 override 保持。
+
+### 36.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go test ./app -run 'TestInteractiveLocalAgentCallbacksReadLineageAndSwitchThread' -count=1  # ok
+go vet ./tui/... ./app      # exit 0
+go build ./...              # exit 0
+```
+
+### 36.3 剩余
+
+- 无行为缺口；Rust 的 `AgentPickerRefreshState` /
+  `AgentPickerThreadRefresh` / `AgentPickerThreadVisibility` 等符号在 Go 中由
+  Model 字段和 agent picker helper 等价承载；
+- r109 仍按符号名记为 `audit_pending 2/10`，属于命名/载体差异。
+
+`./app` 的 `TestAgentsDashboardSearchAndGrouping` 仍是既有基线失败，与本轮
+descendant refresh 无关；本轮新增的 remote agent 用例已通过。
+
+## 37. Round 120（2026-10-17）：Command Center rename cursor style（complete）
+
+### 37.1 落地
+
+Rust 参考 `37f53199a6`（#50216）的 `cursor_style`：
+
+- `tui/tea/agents_overview.go`
+  - `agentsOverviewCursorStyleSequence` 在 rename + Vim Insert 时发送
+    DECSCUSR steady bar（`\x1b[6 q`），normal mode 发送默认形状
+    （`\x1b[0 q`）；
+  - 相同状态不重复发送；dashboard close 时通过串行化的 pet output 主动 reset，
+    避免退出后终端继续显示 bar。
+- `tui/tea/model.go`
+  - full-screen dashboard 的 View 拼接 cursor-style 序列；
+  - 新增 `agentsOverviewCursorBar` 跟踪当前终端光标状态。
+- 测试：
+  - `TestAgentsOverviewRenameCursorStyleLikeRust`：Insert steady bar、重复帧去重、
+    Esc 恢复默认；
+  - 既有 `TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust` 继续覆盖
+    cursor-aware 编辑/Vim motions。
+
+### 37.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go vet ./tui/...            # exit 0
+go build ./...              # exit 0
+```
+
+### 37.3 结论
+
+#50216 行为已闭环；r90 记为 `complete`，r109 的 `new_single_line` 仅是 Rust
+构造函数命名差异。
+
+## 38. Round 121（2026-10-17）：Vim replace paste-burst review（complete）
+
+### 38.1 结论
+
+`#42194` 的剩余 `retract_paste_burst` 在 Go 没有对应状态：
+
+- 主 composer 的普通字符立即写入，`composerLastCharAt` /
+  `composerPasteEnterUntil` 只用于 Enter/Tab 的 burst 判定；
+- bracketed paste 走显式 `insertComposerPaste` 路径，不经过 retro-grab；
+- 因此不存在“已插入前缀需要撤回再缓存”的 Rust TextArea 场景；
+- `apply_vim_insert_action` 是 Rust 方法名，Go 对应
+  `replaceVimText` / `restoreVimReplacedCharacter` / `isVimReplaceMode`。
+
+现有测试覆盖 `R` 覆盖输入、replace-mode Backspace recovery、dot-repeat，以及
+paste-burst Enter/Tab 行为。r90 将 #42194 记为 `complete`（equivalent
+mechanism），r109 仍保留命名差异。
+
+## 39. Round 122（2026-10-17）：Misalignment review long findings（complete）
+
+### 39.1 落地
+
+Rust 参考 `fdf23b40`（#42410）的 review/continue 语义：
+
+- `tui/tea/modal.go`
+  - misalignment review body 限制在半屏高度，PgUp/PgDn 滚动，显示
+    older/newer findings 指示；
+  - 选项和 require-confirmation 始终保留，长 detailedExplanation 不会再把
+    Continue/Back 挤出屏幕。
+- `tui/tea/misalignment_policy.go`
+  - review modal footer 增加 `PgUp/PgDn scroll · Esc back | Enter choose`。
+- 既有同线程 review、steer 缺失禁用、override metadata、stale-turn 拒绝、
+  新 turn 清理、remote Agent command center 均保持通过。
+- 测试：`TestMisalignmentReviewLongFindingsScrollLikeRust`。
+
+### 39.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go vet ./tui/...            # exit 0
+go build ./...              # exit 0
+```
+
+### 39.3 结论
+
+#42410 行为已闭环；r90 记为 `complete`，r109 剩余
+`MisalignmentViolation` / `show_misalignment_review_confirmation` 仅是命名差异。
+
+## 40. Round 123（2026-10-17）：Presets config-layer ownership guard（complete）
+
+### 40.1 落地
+
+Rust 参考 `dcd9e95459`（#54380）的 `save_quick_dial` ownership guard：
+
+- `config/tui_presets_layers.go`
+  - `TUIPresetLayerAccess` 计算每个 slot 的 set/clear 只读状态；
+  - set 检查最高优先级定义层，clear 检查任意非 user 层，避免删除后
+    reveal managed 值。
+- `app/interactive.go`
+  - TUI bootstrap 读取 `config/read(includeLayers)`，把两份只读槽位集合送入
+    SettingsWriteResult。
+- `tui/tea/quick_dials.go`
+  - 写入前拒绝非 user-layer 槽位，显示 Rust 同义文案；
+  - set 失败恢复 preset 编辑器，clear 失败保留原值；
+  - 不会调用 `onWriteSettings`。
+- 测试：
+  - `TestTUIPresetLayerAccessDistinguishesSetAndClearLikeRust`；
+  - `TestTUIPresetLayerAccessUserWinsSetButManagedStillBlocksClear`；
+  - `TestQuickDialConfigLayerGuardLikeRust`；
+  - `TestQuickDialConfigLayerGuardAllowsUserOwnedSlot`。
+
+### 40.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go test ./config -count=1   # ok
+go test ./app -run 'TestInteractiveSessionSettings|TestInteractiveTUI|TestTUIPresets' -count=1  # ok
+go vet ./tui/... ./config ./app  # exit 0
+go build ./...              # exit 0
+```
+
+### 40.3 结论
+
+#54380 行为已闭环；`#54381` shortcut HUD 是独立 PR。
+`QuickDialEditorTarget` / `QuickDialPickerMode` 仍是 r109 的符号命名差异。
+
+## 41. Round 124（2026-10-17）：Active goal clock tick（complete）
+
+### 41.1 落地
+
+Rust 参考 `c395364915`（#40622）
+`refresh_goal_status_indicator_for_time_tick`：
+
+- `tui/tea/goal.go`
+  - active goal 启动 1 秒 tick，空闲时也持续刷新 elapsed-time 指示；
+  - running turn 使用 `taskStartedAt` 作为基线，不把 goal 创建前的空闲时间计入；
+  - tick 去重，goal complete/paused/cleared 时停止；
+  - Model Update 在 GoalResult/GoalUpdated/GoalEditText 后启动 tick，并在
+    `goalTickMsg` 中续约。
+- 测试：`TestActiveGoalClockTicksLikeRust`，覆盖 5s→6s、重复 tick 阻止和
+  complete 后停止。
+
+### 41.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go vet ./tui/...            # exit 0
+go build ./...              # exit 0
+```
+
+### 41.3 结论
+
+#40622 行为已闭环；r90 记为 `complete`。
+
+## 42. Round 125（2026-10-17）：Daybreak API-key feature gate（complete）
+
+### 42.1 落地
+
+Rust 参考 `5505a80f38`（#52228）`daybreak_account_eligible`：
+
+- `tui/tea/daybreak_eligibility.go`
+  - `daybreakFeatureEnabledForAccount`：`cli_daybreak` 必需；ChatGPT 放行；
+    API-key 账户要求 `api_key_cyber_access_programs`；账户状态未知时保留
+    resumed preference。
+  - `daybreakAccountEligible`：在 feature gate 之外要求 provider 为 openai，
+    且账户是 ChatGPT 或 API-key。
+- 新线程 Daybreak 默认与 resume 的持久化偏好都改用账户感知 gate。
+- 测试：`TestDaybreakAccountEligibilityLikeRust` 覆盖 feature off、ChatGPT、
+  API-key gate on/off、非 openai provider 和未知账户。
+
+### 42.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go vet ./tui/...            # exit 0
+go build ./...              # exit 0
+```
+
+### 42.3 结论
+
+#52228 行为已闭环；r90 记为 `complete`。
+
+## 43. Round 126（2026-10-17）：Markdown Unicode task lists（complete）
+
+### 43.1 落地
+
+Rust 参考 `5a11c45606`（#47322）`task_list_marker`：
+
+- `tui/markdown/render.go`
+  - 渲染前把 task-list source 的 `[x]` / `[ ]` 改写为 `☑` / `☐`；
+  - 保留 unordered 缩进/blockquote 前缀，去掉 glamour 插入的 `• `；
+  - ordered task list 保留 `1. ☑` 编号；
+  - 配置了 unordered marker 主题色时，checkbox 使用同一前景色。
+- 测试：`TestTaskListMarkersLikeRust` 覆盖 unordered、ordered、blockquote。
+
+### 43.2 验证
+
+```text
+go test ./tui/markdown -count=1  # ok
+go test ./tui/... -count=1       # all ok
+go vet ./tui/...                 # exit 0
+go build ./...                   # exit 0
+```
+
+### 43.3 结论
+
+#47322 行为已闭环；r90 记为 `complete`。
+
+## 44. Round 127（2026-10-17）：Restored permission profiles（complete）
+
+### 44.1 落地
+
+Rust 参考 `c29bc99949`（#41192）的 restored-profile preservation：
+
+- `tui/tea/thread_settings.go`
+  - `applyThreadSettingsValues` 优先采用
+    `settings.ActivePermissionProfile`，保留 named profile；
+  - 只有 active profile 缺失时才回退到 legacy `SandboxPolicy`；
+  - restored profile 会被 `remoteNamedPermissionProfileActive` 正确识别。
+- Go 对 `/cd` + active named profile 继续采用显式拒绝策略，和 Rust 的
+  safely-represented 分支是不同但已记录的策略。
+- 测试：`TestApplyThreadSettingsPreservesNamedPermissionProfileLikeRust`
+  覆盖 named-profile restore 和 legacy fallback。
+
+### 44.2 验证
+
+```text
+go test ./tui/... -count=1  # all ok
+go vet ./tui/...            # exit 0
+go build ./...              # exit 0
+```
+
+### 44.3 结论
+
+#41192 行为已闭环；r90 记为 `complete`。
+
+## 45. Round 128（2026-10-17）：obsolete version helper audit（not applicable）
+
+### 45.1 结论
+
+`#43619` 的 `is_official_server_older` 在提交 `c977cc0c19` 中加入
+`codex-rs/tui/src/update_versions.rs`，但该提交内没有任何调用方；当前
+`ce0323f2f2` 上游树中该函数已不存在，`update_versions.rs` 仅保留
+`is_newer` / `is_source_build_version`。因此这是历史遗留的未使用 helper，
+不是当前 Go TUI 的行为缺口，记为 `not_applicable`，不新增死代码。
+
+### 45.2 证据
+
+```text
+git -C ../git/codex grep -n "is_official_server_older" c977cc0c19 -- codex-rs
+# only definition + tests
+git -C ../git/codex grep -n "is_official_server_older" HEAD -- codex-rs
+# no hits
+```
+
+## 46. Round 129（2026-10-17）：Previous-session summary removal（not applicable）
+
+### 46.1 结论
+
+`#48626` 的 Rust 提交移除 fresh/resume 路径上的 previous-session token-usage
+与 resume-hint `SessionNotice`。Go 从未实现该摘要：
+
+- `startFreshNamedSession` 只 reset thread-scoped state 并设置新会话 notice；
+- `applyAgentSwitchResult` 用目标线程 snapshot 替换 `State.Messages`；
+- 两者都不会注入旧会话的 usage/resume hint。
+
+因此这是 Rust 删除既有行为的提交，在 Go 侧为 `not_applicable`，不需要删除代码。
+
+### 46.2 账本
+
+r90 记为 `not_applicable`（`449d42ced9`）。
+
+## 47. Round 130（2026-10-17）：App-link URL validation（complete）
+
+### 47.1 落地
+
+Rust 参考 `d0a64e91ae`（#48015）`validate_external_url`：
+
+- `tui/bottom_pane/app_link_view.go`
+  - `validateAppLinkExternalURL` 要求 HTTPS、有效 host、无嵌入凭据；
+  - Codex Apps auth URL 仅允许 `chatgpt.com` / `chatgpt-staging.com` 及其子域；
+  - URL-mode elicitation 与 tool suggestion 共用同一校验。
+- 无效 install URL 为 `decline`，缺失 install URL 回退普通 form，均不会进入
+  app-link view。
+- 测试：`TestAppLinkToolSuggestionInvalidInstallURLDeclinesLikeRust`，并保留已有
+  trusted/untrusted URL-request 测试。
+
+### 47.2 验证
+
+```text
+go test ./tui/bottom_pane -run 'TestAppLink' -count=1  # ok
+go test ./tui/... -count=1                             # all ok
+go vet ./tui/...                                       # exit 0
+go build ./...                                         # exit 0
+```
+
+### 47.3 结论
+
+#48015 行为已闭环；r90 记为 `complete`。
+
+## 48. Round 131（2026-10-17）：Pending preview hyperlinks（complete）
+
+### 48.1 结论
+
+`#51471` 在 Go 已由 `PendingInputPreview.pushPreview` 实现：
+
+- 对 pending steers、rejected steers 和 queued follow-ups 的每一条保留行调用
+  `tui.AnnotateCompleteWebURLsInLine`；
+- URL wrap 保持完整 destination，并输出 OSC 8 terminal hyperlink；
+- `TestPendingInputPreviewLinksURLsLikeRust` 断言三类预览均有完整链接且可见文本
+  不丢 URL。
+
+这是 r109 符号名 `HyperlinkRows` 与 Go helper 名称不同造成的 false pending；
+r90 记为 `complete`。
+
+## 49. Round 132（2026-10-17）：Readable plugin mentions（complete）
+
+### 49.1 落地
+
+Rust 参考 `746103b592`（#51865）：
+
+- `tui/bottom_pane/mentions_v2/search_catalog.go`
+  - 对 `app-` 加 32 位小写十六进制的生成型 plugin ID，接受长度为 1..64 字节、
+    仅含 mention 合法字符且不是常见环境变量的 display name；
+  - `app-6a6b...` + `Postman` 选择为 `@Postman`，binding 仍为
+    `plugin://app-6a6b...@test`；
+  - 空值、空格、Unicode、`PATH`、`XDG_CONFIG_HOME`、超长名称以及非法 app ID
+    继续回退到 title-case plugin name。
+- `tui/chatwidget/input_submission.go`
+  - binding 解析保留 `$` / `@` sigil；
+  - 只有 `$` binding 进入 `boundNames`，与 Rust 的全局过滤一致；
+  - `@foo` plugin 不再屏蔽同名的 `$foo` skill，也不再参与 app 自动 mention 的
+    同名屏蔽。
+
+### 49.2 验证
+
+```text
+go test ./tui/bottom_pane/mentions_v2 ./tui/chatwidget -count=1  # ok
+go test ./tui/... -count=1                                       # all ok
+go vet ./tui/...                                                 # exit 0
+go build ./...                                                   # exit 0
+```
+
+回归测试：
+
+- `TestGeneratedAppPluginMentionNameMatchesRust`
+- `TestInputSubmissionPluginMentionDoesNotSuppressSameNameSkillLikeRust`
+
+### 49.3 结论
+
+#51865 行为闭环；r90 记为 `complete`。r109 仍显示
+`test_plugin_summary` 未匹配，因为这是 Rust 测试 helper 名称，Go 使用行为测试
+覆盖同一契约，不代表功能缺口。
+
+## 50. Round 133（2026-10-17）：Selection row hyperlinks（complete）
+
+### 50.1 落地
+
+Rust 参考 `b0a5191bd6`（#51472）：
+
+- 选择列表的换行标签和描述继续通过 URL-preserving wrap 保留完整 URL，
+  再标注为 OSC 8 hyperlink；
+- 单行截断新增 `AnnotateTruncatedWebURLsInLine(line, source)`：从源行取得
+  完整 destination，把截断后仍可见的 URL 前缀链接到该 destination；
+- `…` 保持在 hyperlink 外，避免把省略号纳入可点击文本；
+- 覆盖普通标签、描述列、带 `1. ` 前缀的标签以及窄宽度截断。
+
+Go 的换行机制把过长 URL 作为完整 token 保留，不采用 Rust 的跨行拆分；链接目标和
+可见 URL 片段仍保持完整，属于等价机制。
+
+### 50.2 验证
+
+```text
+go test ./tui/bottom_pane -count=1                          # ok
+go test ./tui/... -count=1                                  # all ok
+go vet ./tui/...                                            # exit 0
+go build ./...                                              # exit 0
+```
+
+回归测试：
+
+- `TestGenericRowsLinkURLsLikeRust`
+- `TestGenericRowsKeepURLDestinationsWhenWrappedOrTruncatedLikeRust`
+
+### 50.3 结论
+
+#51472 行为闭环；r90 记为 `complete`。r109 的
+`full_hyperlink_row` / `wrap_row_lines` / `wrap_two_column_row` 对应 Go
+`AnnotateCompleteWebURLsInLine` / `AnnotateTruncatedWebURLsInLine` 与现有
+selection-row wrapping，属于符号命名差异。
+
+## 51. Round 134（2026-10-17）：Thread-list failure semantics + ACL diagnostics
+
+### 51.1 Thread-list failure semantics（complete）
+
+Rust 参考 `406eb53c07`（#51602）：
+
+- Go `handleThreadList` 在 `useStateDbOnly=true` 且 state database 查询失败时
+  返回 JSON-RPC `-32603`，覆盖 null 与显式空 `cwd`；
+- 健康的空数据库仍返回成功且 `nextCursor=null`；默认 scan-and-repair 继续保留
+  文件系统回退；
+- Go 在生成 cursor 前完成过滤、排序和切片，因此没有 Rust 的 page-refill 循环；
+  分页 cursor 始终向前并在耗尽时终止，重复 cursor guard 没有可达载体。
+
+现有契约测试：
+
+- `TestRouterThreadListStateDBOnlyQueryFailureIsNotExhaustedHistory`
+- `TestRouterThreadListExplicitEmptyCWDArrayMatchesNothing`
+- `TestRouterThreadListPaginationNeverRepeatsACursor`
+
+r90 记为 `complete`；r109 的 `repeat_list_threads_cursor_for_testing` 是 Rust
+测试 helper，不构成功能缺口。
+
+### 51.2 Windows sandbox ACL diagnostics（complete）
+
+Rust 参考 `dd178bb7ca`（#51896）：
+
+- `recordSetupACLFailure` 展开并去重完整错误链，先把 ACL 失败写入汇总，再尝试
+  写日志；日志失败会向上返回，但不会丢失已记录的失败；
+- check / grant / deny 三类汇总与日志文案与 Rust 对齐；
+- ACL target open 错误包含 `READ_CONTROL` / `READ_CONTROL | WRITE_DAC`，
+  sandbox bin 目录锁失败保留完整 native error chain。
+
+测试：
+
+- `TestRecordSetupACLFailurePreservesNativeErrorChain`
+- `TestRecordSetupACLFailureOperationMessages`
+- `TestRecordSetupACLFailureRetainsSummaryWhenLogWriteFails`
+
+```text
+go test ./sandbox/windowssandbox/... -count=1  # all ok
+go vet ./sandbox/windowssandbox/...            # exit 0
+go build ./...                                 # exit 0
+```
+
+r90 与 r109 均记为 `complete`。
+
+## 52. Round 135（2026-10-17）：TUI `/clear` terminal reset
+
+### 52.1 落地
+
+Rust `ClearUi` / `/clear` 路径由 `clear_terminal_ui`、`reset_app_ui_state_after_clear`
+和 fresh session 三部分组成。Go 新增：
+
+- `tui/tea/clear_terminal.go`：`clearTerminalForCommand` 通过新的
+  `Options.OnClearTerminal` 发射终端序列；
+- inline 主会话使用 `ESC[2J ESC[3J ESC[H`，同时清可见屏与 scrollback；
+- 临时 alt-screen overlay 只发 `ESC[2J ESC[H`，随后由 thread reset 关闭 overlay；
+- 存在 pending named-permission root switch 时，`/clear` 显示
+  "Wait for permissions to update before switching tasks." 并拒绝切换；
+- `/clear` 的命令描述与 help 文案统一为 Rust 的
+  "clear the terminal and start a new chat"。
+
+### 52.2 验证
+
+```text
+go test ./tui/tea -run 'TestClearCommand|TestNewCommandDoesNotClear' -count=1  # ok
+go test ./tui/... -count=1                                                     # all ok
+go vet ./tui/...                                                               # exit 0
+go build ./...                                                                 # exit 0
+```
+
+回归测试：
+
+- `TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust`
+- `TestClearCommandRejectsPendingPermissionRootSwitchLikeRust`
+- `TestNewCommandDoesNotClearTerminalLikeRust`
+
+### 52.3 结论
+
+`/clear` 的终端行为与新会话行为闭环；`tui-clear-ui-slash` 契约保持 `done`，
+backlog G5 已关闭。该条目不进入 r109 的 2,695 提交计数。
+
+## 53. Round 136（2026-10-17）：MCP user-verification reasons（partial）
+
+### 53.1 落地
+
+Rust 参考 `b38942ce7c`（#51808）：
+
+- `mcp/user_verification.go` 新增封闭的 `UserVerificationReason` 集合、
+  `openai/userVerificationReason` metadata 往返，以及响应规范化；
+- accept 只接受 `{credentialId, signature}` 两字段 proof，signature 必须是
+  1..128 字节的 base64url-no-pad；无效 proof 转为 cancel + `invalidProof`；
+- decline/cancel 清除 proof content，只保留识别出的 reason，未知 reason 和
+  无关 metadata 全部丢弃；未知 action 转为 `invalidResponse`；
+- MCP handler 错误映射为 `responseError`，context 取消映射为 `interrupted`，
+  handler 不可用映射为 `approvalUnavailable`；stdio 取消保留
+  `interrupted`，取消表饱和映射为 `approvalUnavailable`；
+- local/remote TUI elicitation cancel/decline 分别写入
+  `userCancelled` / `userDeclined`；app-server broker 失败按取消/响应错误
+  写入 `interrupted` / `responseError`。
+
+### 53.2 验证
+
+```text
+go test ./mcp ./appserver ./app -run 'UserVerification|Elicitation|MCP' -count=1  # ok
+go vet ./mcp ./appserver ./app                                                   # exit 0
+go build ./...                                                                   # exit 0
+```
+
+新增回归测试：
+
+- `TestNormalizeUserVerificationResponsePreservesOnlyClosedReasons`
+- `TestNormalizeUserVerificationResponseValidatesProof`
+- `TestMCPElicitationResultNormalizesUserVerificationLikeRust`
+- `TestAppserverUserVerificationFailureReasonsLikeRust`
+- `TestUserVerificationElicitationResponsesCarryOnlyBoundedReasonsLikeRust`
+
+### 53.3 剩余
+
+Go 尚未具备 Rust TUI 的完整本地 user-verification 控制器：
+`UserVerificationFailure` 与把 typed `userVerification/verify` 错误转换为
+reason 的 `verification_failure` 映射仍未实现；MCP response channel 也没有
+独立的 `responseChannelClosed` 错误载体。因此 r90/r109 均记为 `partial`。
+
+## 54. Round 137（2026-10-17）：Unified exec launch failure events（complete）
+
+Rust 参考 `a69d757cd8`（#47529）：
+
+- `emitUnifiedExecLaunchFailure` 在 local、Windows sandbox 和 remote 三种
+  process-creation 失败路径发出 begin + end 两个生命周期事件；
+- 失败 end 事件不报告 process ID，exit code 为 `-1`、duration 为 0，
+  aggregated output 携带 launch diagnostic，并保留 call ID、command、
+  hook command、cwd 和 tty；
+- approval rejection 在进入 unified-exec manager 前处理，不会误发 launch
+  failure；事件发布为同步路径，发布开始后不会因 caller cancellation 中断；
+- app-server 的 command execution item 在 process ID 非正数时省略
+  `processId` / `process_id`。
+
+验证：
+
+```text
+go test ./tool -run 'TestUnifiedExecLaunchFailure|TestUnifiedExecLifecycleEvents|TestUnifiedExecForegroundEnd' -count=1  # ok
+go test ./appserver -run TestUnifiedExecLaunchFailureItemOmitsProcessIDLikeRust -count=1                                  # ok
+go vet ./tool ./appserver                                                                                                # exit 0
+go build ./...                                                                                                          # exit 0
+```
+
+`./tool` 的 login-shell PATH 两个子用例仍为既有基线失败，不归因于本项。
+r90/r109 均记为 `complete`。
+
+## 55. Round 138（2026-10-17）：MCP user-verification reason closure（complete）
+
+### 55.1 追加落地
+
+在 Round 136 的 reason/proof 规范化基础上补齐剩余链路：
+
+- 远端 TUI 的 user-verification elicitation 现在显示明确的
+  `Verify / Decline / Cancel` 决策，并携带 title、description、challenge；
+- 用户确认后调用 app-server `userVerification/verify`，成功时把 proof
+  写入 accept content；
+- 新增 `UserVerificationFailure` 与 `verificationFailure`，把 typed
+  `userVerification/verify` 错误映射为 `invalidParams`、
+  `credentialMissing`、`biometricsUnavailable`、`providerUnavailable`、
+  `userCancelled`、`interrupted`、`authenticationFailed`、`timeout`、
+  `providerError` 或 `serviceError`；
+- app-server broker 新增共享的 `ErrServerRequestConnectionClosed`，
+  user-verification 响应可区分 `responseChannelClosed`；
+- 本地 interactive TUI 没有原生 provider 时直接返回
+  `providerUnavailable`，不再把“缺少 proof”误报为 `invalidProof`。
+
+### 55.2 验证
+
+```text
+go test ./mcp ./appserver ./app -run 'UserVerification|Elicitation|MCP' -count=1  # ok
+go test ./tui/tea -run 'UserVerification|Elicitation' -count=1                    # ok
+go vet ./mcp ./appserver ./app ./tui/tea                                          # exit 0
+go build ./...                                                                    # exit 0
+```
+
+新增测试：
+
+- `TestVerificationFailureMapsTypedReasonsLikeRust`
+- `TestUserVerificationElicitationShowsExplicitDecisionLikeRust`
+- 扩展 `TestAppserverUserVerificationFailureReasonsLikeRust` 覆盖
+  `responseChannelClosed`
+- 扩展本地/远端 elicitation reason 测试覆盖 accept proof 与本地 provider 不可用
+
+### 55.3 结论
+
+#51808 的可观察 reason/proof 契约闭环；r90/r109 均记为 `complete`。
+
+## 56. Round 139（2026-10-17）：TUI slash frame descriptions
+
+### 56.1 落地
+
+`tui/slash_command.go` 的 frame 描述统一到
+`tui/bottom_pane/slash_commands.go` 的 Rust override 表，包括：
+
+- vim、rename、archive、delete、resume、fork、app；
+- copy、debug-config、title、statusline、theme；
+- MCP、test-approval、debug-m-drop/debug-m-update。
+
+同步更新 `tui/state.go` 的 `/help` 文案，并重锚
+`TestSlashCommandFrameDescriptionsMatchRust`。自动比对 frame 描述与 override
+表得到 `diff_count=0`。
+
+### 56.2 验证
+
+```text
+go test ./tui -run 'SlashCommandFrameDescriptions|RenderHelp|Slash' -count=1  # ok
+go test ./tui/... -count=1                                                    # all ok
+go vet ./tui/...                                                              # exit 0
+go build ./...                                                                # exit 0
+```
+
+### 56.3 结论
+
+backlog G6 关闭。该条目不进入 r109 的 2,695 提交计数。
+
+## 57. Round 140（2026-10-17）：Proxy and detached-stdio equivalence
+
+### 57.1 Standalone web search（complete）
+
+Rust 参考 `b045757052`（#47142）。Go 的 standalone web search 使用
+`RuntimeRouter.httpClientForConfig`：
+
+- `features.respect_system_proxy=true` 时保留
+  `http.DefaultTransport` 的 `ProxyFromEnvironment`；
+- 关闭时显式清空 `Transport.Proxy`；
+- app-server 的应用网络策略仍包裹在该客户端外层。
+
+新增 `TestStandaloneWebSearchHonorsSystemProxySettingLikeRust`。r109 中
+`SEARCH_ENDPOINT` 是 Rust 私有符号，Go 用共享 HTTP client 路径等价承载。
+
+### 57.2 Windows daemon detached stdio（complete）
+
+Rust 参考 `dfdb40cd0b`（#48272）。Go 的 `startDetachedCommand` 通过
+`syscall.StartProcess` 的显式 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`，只把子进程
+配置的 stdio 和显式附加句柄传入 detached daemon，因此无需清理 launcher 自身
+句柄也能保证无关管道不会继承。
+
+`TestDaemonLaunchDoesNotRetainLauncherStdio` 已覆盖 launcher stdout/stderr
+及时 EOF、子进程继续存活并写入配置日志。r109 的
+`spawn_without_inheriting_stdio` 属于机制名差异。
+
+### 57.3 验证
+
+```text
+go test ./appserver -run TestStandaloneWebSearchHonorsSystemProxySettingLikeRust -count=1  # ok
+go test ./appserverdaemon -run TestDaemonLaunchDoesNotRetainLauncherStdio -count=1          # ok
+go vet ./appserver ./appserverdaemon                                                       # exit 0
+go build ./...                                                                             # exit 0
+```
+
+r90/r109 均将 #47142 与 #48272 记为 `complete`。

@@ -28,6 +28,7 @@ import (
 	"codex_go/codexuds"
 	"codex_go/config"
 	"codex_go/doctor"
+	"codex_go/mcp"
 	"codex_go/plugin"
 	"codex_go/prompt"
 	"codex_go/protocol"
@@ -1956,6 +1957,19 @@ func interactiveRemoteAgentThreadEntries(ctx context.Context, endpoint *appserve
 			threadsByID[threadID] = thread
 		}
 	}
+	activeDescendants, archivedDescendants, err := remoteTUIAgentDescendantThreads(ctx, client, primaryThreadID)
+	if err != nil {
+		return nil, err
+	}
+	for _, thread := range append(append([]*appserver.Thread(nil), activeDescendants...), archivedDescendants...) {
+		if thread == nil {
+			continue
+		}
+		threadID := strings.TrimSpace(thread.ID)
+		if threadID != "" && threadsByID[threadID] == nil {
+			threadsByID[threadID] = thread
+		}
+	}
 
 	entries := []codextui.AgentThreadEntry{}
 	if primary := threadsByID[primaryThreadID]; primary != nil {
@@ -1975,7 +1989,101 @@ func interactiveRemoteAgentThreadEntries(ctx context.Context, endpoint *appserve
 		}
 		entries = appendAgentEntryUnique(entries, remoteTUIAgentEntryFromThread(thread, primaryThreadID))
 	}
+	for _, thread := range activeDescendants {
+		if thread == nil {
+			continue
+		}
+		entries = appendAgentEntryUnique(entries, remoteTUIAgentEntryFromThread(thread, primaryThreadID))
+	}
+	archived := map[string]bool{}
+	for _, thread := range archivedDescendants {
+		if thread == nil {
+			continue
+		}
+		threadID := strings.TrimSpace(thread.ID)
+		if threadID != "" {
+			archived[threadID] = true
+		}
+		entry := remoteTUIAgentEntryFromThread(thread, primaryThreadID)
+		entry.Archived = true
+		entries = appendAgentEntryUnique(entries, entry)
+	}
+	for index := range entries {
+		if archived[entries[index].ThreadID] {
+			entries[index].Archived = true
+		}
+	}
 	return entries, nil
+}
+
+const (
+	remoteAgentDescendantPageSize = 100
+	remoteAgentDescendantMaxPages = 20
+)
+
+// remoteTUIAgentDescendantThreads mirrors Rust #50345's picker refresh: list
+// active and archived descendants of the root using ancestorThreadId, bounded by
+// cursor/pagination guards. Archived rows stay in the cache so unarchive can
+// reveal them without another discovery round.
+func remoteTUIAgentDescendantThreads(ctx context.Context, client *remoteAppServerTUIClient, primaryThreadID string) ([]*appserver.Thread, []*appserver.Thread, error) {
+	primaryThreadID = strings.TrimSpace(primaryThreadID)
+	if primaryThreadID == "" {
+		return nil, nil, nil
+	}
+	var active []*appserver.Thread
+	var archived []*appserver.Thread
+	limit := remoteAgentDescendantPageSize
+	for _, wantArchived := range []bool{false, true} {
+		var cursor *string
+		seenCursors := map[string]bool{}
+		for page := 0; page < remoteAgentDescendantMaxPages; page++ {
+			params := appserver.ThreadListParams{
+				Cursor:           cursor,
+				Limit:            &limit,
+				Archived:         &wantArchived,
+				AncestorThreadID: &primaryThreadID,
+				UseStateDBOnly:   true,
+				SortDirection:    appserver.SortDesc,
+			}
+			var response appserver.ThreadListResponse
+			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
+				if !wantArchived && page == 0 {
+					return nil, nil, err
+				}
+				break
+			}
+			for index := range response.Data {
+				thread := &response.Data[index]
+				if wantArchived {
+					archived = append(archived, thread)
+				} else {
+					active = append(active, thread)
+				}
+			}
+			if response.NextCursor == nil {
+				break
+			}
+			next := strings.TrimSpace(*response.NextCursor)
+			if next == "" || seenCursors[next] {
+				break
+			}
+			seenCursors[next] = true
+			cursor = response.NextCursor
+		}
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		if active[i].CreatedAt == active[j].CreatedAt {
+			return active[i].ID < active[j].ID
+		}
+		return active[i].CreatedAt < active[j].CreatedAt
+	})
+	sort.SliceStable(archived, func(i, j int) bool {
+		if archived[i].CreatedAt == archived[j].CreatedAt {
+			return archived[i].ID < archived[j].ID
+		}
+		return archived[i].CreatedAt < archived[j].CreatedAt
+	})
+	return active, archived, nil
 }
 
 func interactiveRemoteSwitchAgentThread(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, threadID string) (codextea.AgentThreadSwitchResponse, error) {
@@ -2110,12 +2218,13 @@ func remoteTUIAgentEntryFromThread(thread *appserver.Thread, primaryThreadID str
 		return codextui.AgentThreadEntry{}
 	}
 	return codextui.AgentThreadEntry{
-		ThreadID:      strings.TrimSpace(thread.ID),
-		AgentNickname: strings.TrimSpace(stringPtrValue(thread.AgentNickname)),
-		AgentRole:     strings.TrimSpace(stringPtrValue(thread.AgentRole)),
-		IsPrimary:     strings.TrimSpace(thread.ID) == strings.TrimSpace(primaryThreadID),
-		IsRunning:     strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active"),
-		IsClosed:      strings.EqualFold(strings.TrimSpace(thread.Status.Type), "notLoaded"),
+		ThreadID:       strings.TrimSpace(thread.ID),
+		ParentThreadID: strings.TrimSpace(stringPtrValue(thread.ParentThreadID)),
+		AgentNickname:  strings.TrimSpace(stringPtrValue(thread.AgentNickname)),
+		AgentRole:      strings.TrimSpace(stringPtrValue(thread.AgentRole)),
+		IsPrimary:      strings.TrimSpace(thread.ID) == strings.TrimSpace(primaryThreadID),
+		IsRunning:      strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active"),
+		IsClosed:       strings.EqualFold(strings.TrimSpace(thread.Status.Type), "notLoaded"),
 	}
 }
 
@@ -2126,6 +2235,9 @@ func appendAgentEntryUnique(entries []codextui.AgentThreadEntry, entry codextui.
 	}
 	for i := range entries {
 		if strings.TrimSpace(entries[i].ThreadID) == threadID {
+			if entries[i].ParentThreadID == "" {
+				entries[i].ParentThreadID = entry.ParentThreadID
+			}
 			if entries[i].AgentNickname == "" {
 				entries[i].AgentNickname = entry.AgentNickname
 			}
@@ -3170,6 +3282,7 @@ func (c *remoteAppServerTUIClient) sendRequest(ctx context.Context, method appse
 type remoteRPCError struct {
 	Code    int
 	Message string
+	Data    map[string]any
 }
 
 func (e *remoteRPCError) Error() string {
@@ -3195,7 +3308,11 @@ func (c *remoteAppServerTUIClient) waitResponse(ctx context.Context, id int64, t
 				continue
 			}
 			if message.Error != nil {
-				return &remoteRPCError{Code: message.Error.Code, Message: strings.TrimSpace(message.Error.Message)}
+				return &remoteRPCError{
+					Code:    message.Error.Code,
+					Message: strings.TrimSpace(message.Error.Message),
+					Data:    cloneAnyMapApp(message.Error.Data),
+				}
 			}
 			if target != nil && len(message.Result) > 0 {
 				if err := json.Unmarshal(message.Result, target); err != nil {
@@ -3569,6 +3686,10 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 		RequestID:       requestID,
 		ThreadID:        strings.TrimSpace(params.ThreadID),
 		TurnID:          turnID,
+		Title:           strings.TrimSpace(params.Title),
+		Mode:            strings.TrimSpace(params.Mode),
+		Description:     strings.TrimSpace(params.Description),
+		Challenge:       strings.TrimSpace(params.Challenge),
 		Message:         strings.TrimSpace(params.Message),
 		URL:             strings.TrimSpace(params.URL),
 		RequestedSchema: remoteMCPSchema(params),
@@ -3582,7 +3703,30 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 	}
 	select {
 	case response := <-responses:
-		return remoteMCPElicitationResponse(response, mcpElicitationToolApproval(params.Meta)), nil
+		if remoteMCPElicitationUserVerification(params) && response.Elicitation != nil &&
+			remoteMCPAction(response.Elicitation.Action) == appserver.MCPElicitationActionAccept {
+			proof, err := c.verifyUserVerification(ctx, params)
+			if err != nil {
+				reason := mcp.UserVerificationReasonServiceError
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					reason = mcp.UserVerificationReasonInterrupted
+				} else {
+					reason = userVerificationFailureReason(verificationFailure(err))
+				}
+				return &appserver.MCPElicitationRequestResponse{
+					Action: appserver.MCPElicitationActionCancel,
+					Meta:   mcp.UserVerificationReasonMeta(reason),
+				}, nil
+			}
+			return &appserver.MCPElicitationRequestResponse{
+				Action: appserver.MCPElicitationActionAccept,
+				Content: map[string]any{
+					"credentialId": proof.CredentialID,
+					"signature":    proof.Signature,
+				},
+			}, nil
+		}
+		return remoteMCPElicitationResponse(response, mcpElicitationToolApproval(params.Meta), remoteMCPElicitationUserVerification(params)), nil
 	case <-entry.abandoned:
 		return nil, ErrInteractiveElicitationAbandoned
 	case <-ctx.Done():
@@ -3592,6 +3736,21 @@ func (c *remoteAppServerTUIClient) mcpElicitation(ctx context.Context, params *a
 		c.brokers.elicitation.abandon(id)
 		return nil, ctx.Err()
 	}
+}
+
+func (c *remoteAppServerTUIClient) verifyUserVerification(ctx context.Context, params *appserver.MCPElicitationRequestParams) (appserver.UserVerificationProof, error) {
+	if params == nil {
+		return appserver.UserVerificationProof{}, errors.New("user verification request is unavailable")
+	}
+	var response appserver.UserVerificationVerifyResponse
+	if err := remoteSessionRequest(ctx, c, appserver.MethodUserVerificationVerify, appserver.UserVerificationVerifyParams{
+		Challenge:   strings.TrimSpace(params.Challenge),
+		Title:       strings.TrimSpace(params.Title),
+		Description: strings.TrimSpace(params.Description),
+	}, &response); err != nil {
+		return appserver.UserVerificationProof{}, err
+	}
+	return response.Proof, nil
 }
 
 func (c *remoteAppServerTUIClient) remoteApproval(ctx context.Context, message codextea.ApprovalRequestMsg) (codextea.ModalResponse, error) {
@@ -3913,10 +4072,12 @@ func remoteMCPSchema(params *appserver.MCPElicitationRequestParams) any {
 	return params.Schema
 }
 
-func remoteMCPElicitationResponse(response codextea.ModalResponse, toolApproval bool) *appserver.MCPElicitationRequestResponse {
+func remoteMCPElicitationResponse(response codextea.ModalResponse, toolApproval bool, userVerification bool) *appserver.MCPElicitationRequestResponse {
 	if response.Cancelled || response.Elicitation == nil {
 		cancelled := &appserver.MCPElicitationRequestResponse{Action: appserver.MCPElicitationActionCancel}
-		if toolApproval {
+		if userVerification {
+			cancelled.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserCancelled)
+		} else if toolApproval {
 			cancelled.Meta = mcpUserCancellationMeta()
 		}
 		return cancelled
@@ -3925,12 +4086,24 @@ func remoteMCPElicitationResponse(response codextea.ModalResponse, toolApproval 
 		Action:  remoteMCPAction(response.Elicitation.Action),
 		Content: cloneAnyMapApp(response.Elicitation.Content),
 	}
-	if persist := strings.TrimSpace(response.Elicitation.Persist); persist != "" {
+	if userVerification {
+		if result.Action == appserver.MCPElicitationActionDecline {
+			result.Content = nil
+			result.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserDeclined)
+		} else if result.Action == appserver.MCPElicitationActionCancel {
+			result.Content = nil
+			result.Meta = mcp.UserVerificationReasonMeta(mcp.UserVerificationReasonUserCancelled)
+		}
+	} else if persist := strings.TrimSpace(response.Elicitation.Persist); persist != "" {
 		result.Meta = map[string]any{"persist": persist}
 	} else if toolApproval && result.Action == appserver.MCPElicitationActionCancel {
 		result.Meta = mcpUserCancellationMeta()
 	}
 	return result
+}
+
+func remoteMCPElicitationUserVerification(params *appserver.MCPElicitationRequestParams) bool {
+	return params != nil && strings.TrimSpace(params.Mode) == "openai/userVerification"
 }
 
 func remoteMCPAction(action string) appserver.MCPElicitationAction {

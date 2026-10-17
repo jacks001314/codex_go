@@ -944,8 +944,9 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	}
 	// Rust #45255: a removed task drops its retained (unmaterialized) session.
 	m.clearAgentsOverviewBlankSession(msg.threadID)
+	var agentCmd bubbletea.Cmd
 	if msg.action == agentsOverviewActionArchive {
-		m.setAgentPickerThreadVisibility(msg.threadID, true)
+		agentCmd = m.setAgentPickerThreadVisibility(msg.threadID, true)
 	} else if msg.action == agentsOverviewActionDelete {
 		m.removeAgentEntry(msg.threadID)
 	}
@@ -957,7 +958,14 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	if m.agentsOverview != nil {
 		m.agentsOverview.UnhideThread(msg.threadID)
 	}
-	return m.refreshAgentsOverviewCmd()
+	refreshCmd := m.refreshAgentsOverviewCmd()
+	if agentCmd == nil {
+		return refreshCmd
+	}
+	if refreshCmd == nil {
+		return agentCmd
+	}
+	return bubbletea.Batch(agentCmd, refreshCmd)
 }
 
 // openAgentsOverviewThread closes the dashboard and attaches to the selected
@@ -1064,6 +1072,7 @@ func (m *Model) closeAgentsOverview() {
 	if m == nil {
 		return
 	}
+	m.resetAgentsOverviewCursorStyle()
 	if m.agentsOverview != nil {
 		m.agentsOverviewHidden = m.agentsOverview.HiddenThreads()
 	}
@@ -1076,6 +1085,39 @@ func (m *Model) closeAgentsOverview() {
 	m.agentsOverviewLifecycle = nil
 	m.agentsOverviewLifecycleProgress = ""
 	m.refreshTranscript()
+}
+
+// agentsOverviewCursorStyleSequence mirrors Rust #50216: the shared rename
+// editor uses a steady bar while Vim Insert is active and returns to the
+// terminal's default user shape otherwise.
+func (m *Model) agentsOverviewCursorStyleSequence() string {
+	if m == nil {
+		return ""
+	}
+	desired := m.agentsOverview != nil &&
+		m.agentsOverview.State.Renaming &&
+		m.agentsOverview.State.VimEnabled &&
+		m.agentsOverview.State.VimInsert
+	if desired == m.agentsOverviewCursorBar {
+		return ""
+	}
+	m.agentsOverviewCursorBar = desired
+	if desired {
+		return "\x1b[6 q"
+	}
+	return "\x1b[0 q"
+}
+
+func (m *Model) resetAgentsOverviewCursorStyle() {
+	if m == nil || !m.agentsOverviewCursorBar {
+		return
+	}
+	m.agentsOverviewCursorBar = false
+	if m.petRuntime != nil && m.petRuntime.out != nil {
+		m.petRuntime.mu.Lock()
+		_, _ = m.petRuntime.out.Write([]byte("\x1b[0 q"))
+		m.petRuntime.mu.Unlock()
+	}
 }
 
 // renderAgentsOverview renders the dashboard full-screen (Rust: full-screen

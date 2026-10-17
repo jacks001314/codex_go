@@ -112,6 +112,39 @@ func TestInputSubmissionSkillMentionAllowsPluginPrefixColonLikeRust(t *testing.T
 	}
 }
 
+func TestInputSubmissionPluginMentionDoesNotSuppressSameNameSkillLikeRust(t *testing.T) {
+	const pluginID = "app-0123456789abcdef0123456789abcdef@test"
+	message := UserMessage{
+		Text:            "@foo $foo",
+		MentionBindings: []string{"@foo|plugin://" + pluginID},
+	}
+	decision := DecideUserMessageSubmission(message, UserMessageTextHistoryRecord(), SubmissionOptions{
+		SessionConfigured:     true,
+		CurrentModelHasImages: true,
+		MentionCatalog: SubmissionMentionCatalog{
+			Skills: []appserver.SkillsListEntry{{
+				Name:    "foo",
+				Path:    "skills/foo/SKILL.md",
+				Enabled: true,
+			}},
+			Plugins: []pluginapi.PluginSummary{{
+				ID:          pluginID,
+				Name:        "foo",
+				DisplayName: "foo",
+			}},
+		},
+	})
+
+	want := []SubmittedInputItem{
+		{Kind: SubmittedInputText, Text: "@foo $foo"},
+		{Kind: SubmittedInputSkill, Name: "foo", Path: "skills/foo/SKILL.md"},
+		{Kind: SubmittedInputPlugin, Name: "foo", Path: "plugin://" + pluginID},
+	}
+	if !decision.Accepted || !reflect.DeepEqual(decision.Items, want) {
+		t.Fatalf("decision items = %#v, want %#v", decision.Items, want)
+	}
+}
+
 func TestInputSubmissionAgentTurnCreatesPendingSteerCompareKeyMatchRust(t *testing.T) {
 	message := UserMessage{
 		Text:            "please inspect $writer",

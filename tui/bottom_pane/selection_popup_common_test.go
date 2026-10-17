@@ -155,3 +155,36 @@ func TestGenericRowsLinkURLsLikeRust(t *testing.T) {
 		t.Fatalf("visible text lost the URL:\n%s", joined)
 	}
 }
+
+func TestGenericRowsKeepURLDestinationsWhenWrappedOrTruncatedLikeRust(t *testing.T) {
+	const url = "https://example.com/releases/review/complete-destination"
+	rows := []GenericDisplayRow{
+		{Name: "read " + url},
+		{Name: "open docs", Description: "read " + url},
+		{NamePrefix: "1. ", Name: "read " + url},
+	}
+	for _, row := range rows {
+		wrapped := RenderGenericRows([]GenericDisplayRow{row}, ScrollState{}, 1, "", 40, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil))
+		if joined := strings.Join(wrapped, "\n"); !strings.Contains(joined, tui.OSC8Hyperlink(url, url)) {
+			t.Errorf("wrapped row %q missing complete hyperlink:\n%s", row.Name, joined)
+		}
+
+		single := RenderGenericRowsSingleLine([]GenericDisplayRow{row}, ScrollState{}, 1, "", 40, NewColumnWidthConfig(ColumnWidthAutoAllRows, nil))
+		if len(single) != 1 {
+			t.Fatalf("single-line row %q rendered %d lines", row.Name, len(single))
+		}
+		line := single[0]
+		if !strings.Contains(line, "\x1b]8;;"+url+"\x07") {
+			t.Errorf("truncated row %q missing full hyperlink destination: %q", row.Name, line)
+		}
+		if strings.Contains(line, "…\x1b]8;;\x07") {
+			t.Errorf("truncated row %q linked the ellipsis: %q", row.Name, line)
+		}
+		if !strings.Contains(line, "\x1b]8;;\x07…") {
+			t.Errorf("truncated row %q did not leave the ellipsis outside the link: %q", row.Name, line)
+		}
+		if visible := tui.StripOSC8(line); !strings.HasSuffix(visible, "…") || tui.DisplayWidth(visible) > 40 {
+			t.Errorf("truncated row %q visible text = %q width=%d", row.Name, visible, tui.DisplayWidth(visible))
+		}
+	}
+}

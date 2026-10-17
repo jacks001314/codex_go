@@ -33,6 +33,56 @@ func AnnotateCompleteWebURLsInLine(line string) string {
 	return annotateWebURLsInLine(line, false)
 }
 
+// AnnotateTruncatedWebURLsInLine links visible URL fragments in a clipped line
+// to the complete destination found in the source line. Truncation ellipses
+// remain outside the hyperlink.
+func AnnotateTruncatedWebURLsInLine(line string, source string) string {
+	if !strings.Contains(line, "http") {
+		return line
+	}
+	sourceLinks := WebLinksInText(source)
+	if len(sourceLinks) == 0 {
+		return line
+	}
+	locations := webURLPattern.FindAllStringIndex(line, -1)
+	if len(locations) == 0 {
+		return line
+	}
+	var sb strings.Builder
+	cursor := 0
+	for _, loc := range locations {
+		raw := line[loc[0]:loc[1]]
+		visible, trimStart := trimWebToken(raw)
+		ellipsis := strings.Contains(raw, "…")
+		visible = strings.TrimSuffix(visible, "…")
+		if visible == "" {
+			continue
+		}
+		destination := ""
+		if ellipsis {
+			for _, link := range sourceLinks {
+				if visible != link.Destination && strings.HasPrefix(link.Destination, visible) {
+					destination = link.Destination
+					break
+				}
+			}
+		}
+		if destination == "" {
+			var ok bool
+			destination, ok = WebDestination(visible)
+			if !ok {
+				continue
+			}
+		}
+		start := loc[0] + trimStart
+		sb.WriteString(line[cursor:start])
+		sb.WriteString(OSC8Hyperlink(destination, visible))
+		cursor = start + len(visible)
+	}
+	sb.WriteString(line[cursor:])
+	return sb.String()
+}
+
 func annotateWebURLsInLine(line string, skipFragmentsAtLineEnd bool) string {
 	if !strings.Contains(line, "http") {
 		return line

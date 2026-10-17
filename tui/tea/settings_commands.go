@@ -595,6 +595,12 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 	if result.QuickDials != nil {
 		m.quickDials = cloneTUIPresets(result.QuickDials)
 	}
+	if result.PresetSetReadOnly != nil {
+		m.presetSetReadOnly = cloneBoolMapTea(result.PresetSetReadOnly)
+	}
+	if result.PresetClearReadOnly != nil {
+		m.presetClearReadOnly = cloneBoolMapTea(result.PresetClearReadOnly)
+	}
 }
 
 func cloneBoolMapTea(values map[string]bool) map[string]bool {

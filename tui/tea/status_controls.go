@@ -24,7 +24,7 @@ type terminalTitleSetupModal struct {
 	selected map[string]bool
 }
 
-func terminalTitleWriterOrDefault(writer TerminalTitleWriterFunc) TerminalTitleWriterFunc {
+func terminalSequenceWriterOrDefault(writer TerminalTitleWriterFunc) TerminalTitleWriterFunc {
 	if writer != nil {
 		return writer
 	}

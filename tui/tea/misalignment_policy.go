@@ -152,11 +152,12 @@ func (m *Model) openMisalignmentReview() bubbletea.Cmd {
 		{ID: "back", Label: "Back"},
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      misalignmentReviewID,
-		Kind:    ModalKindMisalignment,
-		Title:   "What we detected",
-		Body:    strings.Join(lines, "\n"),
-		Options: options,
+		ID:         misalignmentReviewID,
+		Kind:       ModalKindMisalignment,
+		Title:      "What we detected",
+		Body:       strings.Join(lines, "\n"),
+		FooterHint: "PgUp/PgDn scroll · Esc back | Enter choose",
+		Options:    options,
 	})
 	return nil
 }

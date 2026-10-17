@@ -86,6 +86,10 @@ func routeKeyMsg(m *Model, msg bubbletea.KeyMsg) bubbletea.Cmd {
 		m.openTranscriptFind()
 		return nil
 	}
+	if m.keyMatches("global", "focus_activity", keySpec) {
+		m.focusTranscriptActivity()
+		return nil
+	}
 	if m.keyMatches("global", "copy", keySpec) {
 		m.copyLastAgentResponse()
 		return nil

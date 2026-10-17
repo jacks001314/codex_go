@@ -6914,9 +6914,8 @@ func TestModelGoalContinuationSkippedWhileTurnRunning(t *testing.T) {
 		t.Fatal("/goal objective did not return set command")
 	}
 	_, cmd = model.Update(cmd())
-	if cmd != nil {
-		t.Fatal("running turn should not start a continuation command")
-	}
+	// An active goal may still schedule its clock tick; the continuation
+	// callback count is the assertion that matters here.
 	if continuationCalls != 0 {
 		t.Fatalf("goal continuation calls while running = %d, want 0", continuationCalls)
 	}
