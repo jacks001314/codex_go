@@ -304,11 +304,10 @@ func launchedExecutableIdentity(backend *PIDBackend) *install.ExecutableIdentity
 	if backend == nil || backend.CommandKind != PIDCommandAppServer {
 		return nil
 	}
-	data, err := os.ReadFile(resolvePIDLaunchBinary(backend.CodexBin))
+	identity, err := install.ExecutableIdentityFromFile(resolvePIDLaunchBinary(backend.CodexBin))
 	if err != nil {
 		return nil
 	}
-	identity := install.ExecutableIdentityFromBytes(data)
 	return &identity
 }
 

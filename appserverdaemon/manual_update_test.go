@@ -440,3 +440,61 @@ func TestExchangeManualUpdateDecodesUpdaterErrorsLikeRust(t *testing.T) {
 }
 
 var _ = install.ExecutableIdentity{}
+
+// TestRunManualUpdateResourceOnlyReleaseIsUpdated pins #50559's manual report:
+// a release that ships identical executable bytes still counts as updated,
+// because the release selection changed.
+func TestRunManualUpdateResourceOnlyReleaseIsUpdated(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	stub.appRunning = true
+	stub.socketReady = true
+	stubStrictManagedVersion(t, "1.0.0")
+	home := t.TempDir()
+	root, _ := publishStableSelection(t, home, "1.0.0")
+	daemon := NewDaemonForCodexHome(home, "")
+	runner := NewLifecycleRunner(daemon)
+	runner.Now = func() time.Time { return fixedDaemonTime() }
+	previousIdentity, err := install.ExecutableIdentityFromFile(daemon.Paths.ManagedCodexBin)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile(first) error = %v", err)
+	}
+	contents, err := os.ReadFile(daemon.Paths.ManagedCodexBin)
+	if err != nil {
+		t.Fatalf("ReadFile(first) error = %v", err)
+	}
+	options := &UpdateLoopOptions{
+		Install: func(context.Context, installerMode, string) error {
+			nextName := "1.0.1-" + platformTarget()
+			next := filepath.Join(root, releasesDirName, nextName)
+			if err := os.MkdirAll(filepath.Join(next, "bin"), 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(next, "bin", managedCodexFileName()), contents, 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(root, autoUpdateVersionFileName), []byte(nextName), 0o600); err != nil {
+				return err
+			}
+			return selectDaemonRelease(root, next)
+		},
+		ReadFile:      os.ReadFile,
+		ReexecUpdater: func(string) error { return nil },
+	}
+	output, _, err := runManualUpdate(context.Background(), runner, options, &previousIdentity, UpdateTrigger{Kind: UpdateTriggerManual})
+	if err != nil {
+		t.Fatalf("runManualUpdate error = %v", err)
+	}
+	if output == nil || output.Status != UpdateUpdated {
+		t.Fatalf("output = %#v, want updated", output)
+	}
+	currentIdentity, err := install.ExecutableIdentityFromFile(ManagedCodexBin(home))
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile(second) error = %v", err)
+	}
+	if !previousIdentity.SameContents(currentIdentity) {
+		t.Fatal("the resource-only release should ship identical executable bytes")
+	}
+	if previousIdentity == currentIdentity {
+		t.Fatal("the release identity should include the resolved path")
+	}
+}

@@ -217,8 +217,14 @@ func TestExecutableIdentityFromFileMatchesBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExecutableIdentityFromFile() error = %v", err)
 	}
-	if fromFile != ExecutableIdentityFromBytes(content) {
-		t.Fatalf("ExecutableIdentityFromFile() = %+v, want %+v", fromFile, ExecutableIdentityFromBytes(content))
+	fromMemory := ExecutableIdentityFromBytes(content)
+	if fromFile.Digest != fromMemory.Digest {
+		t.Fatalf("ExecutableIdentityFromFile() digest = %q, want %q", fromFile.Digest, fromMemory.Digest)
+	}
+	// #50559: file identities also carry the resolved path digest while
+	// in-memory ones keep `path_digest: None`.
+	if fromFile.PathDigest == "" || fromMemory.PathDigest != "" {
+		t.Fatalf("path digests = %q / %q, want non-empty / empty", fromFile.PathDigest, fromMemory.PathDigest)
 	}
 	if _, err := ExecutableIdentityFromFile(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("ExecutableIdentityFromFile( missing ) error = nil")
@@ -363,6 +369,40 @@ func TestParseCodexVersion(t *testing.T) {
 	}
 	if _, err := ParseCodexVersion("codex\n"); err == nil {
 		t.Fatal("ParseCodexVersion malformed output returned nil error")
+	}
+}
+
+// TestExecutableIdentitySeparatesContentsFromPath pins Rust #50559: a release
+// that ships the same bytes from a different directory is a different identity
+// but still the same contents.
+func TestExecutableIdentitySeparatesContentsFromPath(t *testing.T) {
+	content := []byte("same release binary")
+	firstPath := filepath.Join(t.TempDir(), "codex.exe")
+	secondPath := filepath.Join(t.TempDir(), "codex.exe")
+	for _, path := range []string{firstPath, secondPath} {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+	first, err := ExecutableIdentityFromFile(firstPath)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile(first) error = %v", err)
+	}
+	second, err := ExecutableIdentityFromFile(secondPath)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile(second) error = %v", err)
+	}
+	if first.Digest != second.Digest {
+		t.Fatalf("digests = %q / %q, want equal", first.Digest, second.Digest)
+	}
+	if first == second {
+		t.Fatal("identities from different paths compare equal")
+	}
+	if !first.SameContents(second) {
+		t.Fatal("SameContents() = false for identical bytes")
+	}
+	if got := ExecutableIdentityFromBytes(content); got.PathDigest != "" || !first.SameContents(got) {
+		t.Fatalf("in-memory identity = %+v, want no path digest and equal contents", got)
 	}
 }
 

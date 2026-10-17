@@ -281,7 +281,7 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 		// latest-channel marker; retry after the interval instead of exiting.
 		return UpdateLoopContinue, nil, "", nil
 	}
-	root, previousRelease, previousName, err := selectedRelease(daemon)
+	root, _, previousName, err := selectedRelease(daemon)
 	if err != nil {
 		return UpdateLoopContinue, nil, "", err
 	}
@@ -314,12 +314,8 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 		return UpdateLoopContinue, nil, "", err
 	}
 	restartMode, updaterRefreshMode := UpdateModesForIdentities(runningIdentity, managedIdentity)
-	releaseChanged := false
-	if _, currentRelease, _, err := selectedRelease(daemon); err == nil {
-		releaseChanged = currentRelease != previousRelease
-	}
 	if runningIdentity != nil && managedIdentity != nil {
-		restartMode = restartModeForTrigger(trigger, releaseChanged, *managedIdentity, *runningIdentity)
+		restartMode = restartModeForTrigger(trigger, *managedIdentity, *runningIdentity)
 	}
 	for {
 		if ctx.Err() != nil {
@@ -338,21 +334,29 @@ func updateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *i
 		case RestartRestarted, RestartNotRunning:
 			return UpdateLoopContinue, &outcome, "", nil
 		case RestartAlreadyCurrent:
-			if trigger.Kind == UpdateTriggerScheduled {
-				return updateLoopSelectionOutcome(daemon), nil, "", nil
+			// Rust #50559: with binary-or-version mode the selected release must
+			// still be the stable managed binary before reporting it current, and
+			// that check applies to scheduled updates too.
+			if restartMode == RestartIfBinaryOrVersionChanged {
+				managedNow := ManagedCodexBin(daemonCodexHome(daemon))
+				if !isStableStandaloneRelease(daemonCodexHome(daemon), managedNow) ||
+					canonicalPath(managedNow) != canonicalPath(managedBin) {
+					return UpdateLoopContinue, nil, "", errors.New("managed daemon changed during the update; retry")
+				}
+				return UpdateLoopContinue, &outcome, "", nil
 			}
-			if restartMode != RestartIfBinaryOrVersionChanged {
+			if trigger.Kind != UpdateTriggerScheduled {
 				return UpdateLoopContinue, nil, "", errors.New("managed daemon could not restart; retry when it is ready")
 			}
-			managedNow := ManagedCodexBin(daemonCodexHome(daemon))
-			if !isStableStandaloneRelease(daemonCodexHome(daemon), managedNow) ||
-				canonicalPath(managedNow) != canonicalPath(managedBin) {
-				return UpdateLoopContinue, nil, "", errors.New("managed daemon changed during the update; retry")
-			}
-			return UpdateLoopContinue, &outcome, "", nil
+			return updateLoopSelectionOutcome(daemon), nil, "", nil
 		case RestartNotReady:
 			if trigger.Kind != UpdateTriggerScheduled {
 				return UpdateLoopContinue, nil, "", errors.New("managed daemon could not restart; retry when it is ready")
+			}
+			// Rust #50559: a scheduled run whose updater was adopted keeps
+			// retrying (and reports NotReady) instead of following the selection.
+			if restartMode == RestartIfBinaryOrVersionChanged {
+				return UpdateLoopContinue, &outcome, "", nil
 			}
 			return updateLoopSelectionOutcome(daemon), nil, "", nil
 		default:
@@ -387,7 +391,7 @@ func ManagedExecutableIdentity(path string, options *UpdateLoopOptions) (*instal
 	if err != nil {
 		return nil, fmt.Errorf("failed to read executable identity for %s: %w", path, err)
 	}
-	identity := install.ExecutableIdentityFromBytes(data)
+	identity := install.ExecutableIdentityFromDataAndPath(path, data)
 	return &identity, nil
 }
 

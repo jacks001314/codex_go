@@ -551,7 +551,7 @@ func ensurePackageUnchanged(source, stage string, manifestBytes []byte, runningI
 	}
 	if sourceDigest != stagedDigest ||
 		string(stagedManifest) != string(manifestBytes) ||
-		stagedIdentity != runningIdentity {
+		!stagedIdentity.SameContents(runningIdentity) {
 		return errors.New("the CLI package changed while preparing the daemon or differs from the running executable")
 	}
 	return nil

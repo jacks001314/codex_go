@@ -154,18 +154,17 @@ func nextUpdateDelay(daemon *Daemon) (time.Duration, bool) {
 }
 
 // restartModeForTrigger mirrors Rust update_once's restart-mode selection.
-func restartModeForTrigger(trigger UpdateTrigger, releaseChanged bool, managedIdentity install.ExecutableIdentity, runningUpdaterIdentity install.ExecutableIdentity) RestartMode {
+func restartModeForTrigger(trigger UpdateTrigger, managedIdentity install.ExecutableIdentity, runningUpdaterIdentity install.ExecutableIdentity) RestartMode {
 	switch trigger.Kind {
 	case UpdateTriggerManual, UpdateTriggerRestoreProduction:
-		if releaseChanged {
-			// A package can carry different resources even when the CLI binary is
-			// identical, so a release change always replaces the running process.
-			return RestartAlways
-		}
+		// Rust #50559: release changes are detected through the path-sensitive
+		// identity, so a manual update or production restore always decides by
+		// binary or version instead of forcing a restart.
 		return RestartIfBinaryOrVersionChanged
 	default:
+		// Updater adoption does not imply daemon replacement.
 		if managedIdentity != runningUpdaterIdentity {
-			return RestartAlways
+			return RestartIfBinaryOrVersionChanged
 		}
 		return RestartIfVersionChanged
 	}

@@ -197,11 +197,11 @@ func pruneDaemonReleases(daemon *Daemon, root string, settings *DaemonSettings) 
 		}
 	}
 	// Rust identifies each worker's package by the path digest of its running
-	// executable (`managed_install::path_digest`). Go's persisted identity carries
-	// only the byte digest, so this check stays conservative: a release whose
-	// entrypoint hashes to a running image is retained even when it is a different
-	// directory. Nothing in use is ever deleted; at worst a duplicate survives.
-	var runningDigests []string
+	// executable (`managed_install::path_digest`), so a different directory that
+	// ships identical bytes is still prunable. Records written before the path
+	// digest existed fall back to the content digest, which only keeps more.
+	var runningPaths []string
+	var runningContents []string
 	for _, worker := range []*PIDBackend{server, updater} {
 		running, err := worker.IsStartingOrRunning()
 		if err != nil {
@@ -217,7 +217,11 @@ func pruneDaemonReleases(daemon *Daemon, root string, settings *DaemonSettings) 
 		if workerIdentity == nil || strings.TrimSpace(workerIdentity.Digest) == "" {
 			return errUnknownRunningPackage
 		}
-		runningDigests = append(runningDigests, workerIdentity.Digest)
+		if strings.TrimSpace(workerIdentity.PathDigest) != "" {
+			runningPaths = append(runningPaths, workerIdentity.PathDigest)
+		} else {
+			runningContents = append(runningContents, workerIdentity.Digest)
+		}
 	}
 	caller, err := os.Executable()
 	if err != nil {
@@ -249,7 +253,8 @@ func pruneDaemonReleases(daemon *Daemon, root string, settings *DaemonSettings) 
 			continue
 		}
 		if digest, err := install.ExecutableIdentityFromFile(entrypoint); err == nil &&
-			containsString(runningDigests, digest.Digest) {
+			(strings.TrimSpace(digest.PathDigest) != "" && containsString(runningPaths, digest.PathDigest) ||
+				containsString(runningContents, digest.Digest)) {
 			continue
 		}
 		owned, err := releaseOwnedByMount(path, mount)

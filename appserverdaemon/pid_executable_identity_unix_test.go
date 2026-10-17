@@ -39,7 +39,12 @@ func TestPIDRecordRecordsLaunchedExecutableIdentityLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadPIDRecord error = %v", err)
 	}
-	want := install.ExecutableIdentityFromBytes(contents)
+	// #50559: the launch identity resolves the selected symlink and records the
+	// path digest of the real executable alongside its bytes.
+	want, err := install.ExecutableIdentityFromFile(binary)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile() error = %v", err)
+	}
 	if record.ExecutableIdentity == nil || *record.ExecutableIdentity != want {
 		t.Fatalf("executable identity = %#v, want %#v", record.ExecutableIdentity, want)
 	}
@@ -64,7 +69,11 @@ func TestPIDRecordRecordsLaunchedExecutableIdentityLikeRust(t *testing.T) {
 	if record.ExecutableIdentity == nil || *record.ExecutableIdentity != want {
 		t.Fatalf("identity after retarget = %#v, want %#v", record.ExecutableIdentity, want)
 	}
-	if retargeted := install.ExecutableIdentityFromBytes(otherContents); *record.ExecutableIdentity == retargeted {
+	retargeted, err := install.ExecutableIdentityFromFile(otherBinary)
+	if err != nil {
+		t.Fatalf("ExecutableIdentityFromFile(other) error = %v", err)
+	}
+	if *record.ExecutableIdentity == retargeted {
 		t.Fatal("recorded identity followed the retargeted symlink")
 	}
 

@@ -79,6 +79,39 @@ type InstallContext struct {
 
 type ExecutableIdentity struct {
 	Digest string `json:"digest"`
+	// PathDigest digests the resolved executable path so two release
+	// generations that ship identical executable bytes are still
+	// distinguishable (Rust `ExecutableIdentity::path_digest`, #50559).
+	// An empty value means the identity came from bytes alone, matching
+	// Rust's `path_digest: None` from `executable_identity_from_reader`.
+	PathDigest string `json:"pathDigest,omitempty"`
+}
+
+// SameContents mirrors Rust `ExecutableIdentity::same_contents`: package
+// preparation and manual-update reporting compare executable contents only,
+// while restart and handoff decisions compare the whole identity.
+func (i ExecutableIdentity) SameContents(other ExecutableIdentity) bool {
+	return i.Digest == other.Digest
+}
+
+// CanonicalExecutablePath mirrors Rust's `std::fs::canonicalize(&path)` with the
+// original path as the fallback when resolution fails.
+func CanonicalExecutablePath(path string) string {
+	if resolved, err := resolveFinalPath(path); err == nil && strings.TrimSpace(resolved) != "" {
+		return resolved
+	}
+	return path
+}
+
+// ExecutableIdentityFromDataAndPath combines already-read executable bytes with
+// the digest of the resolved path. Callers that inject their own reader use this
+// so their identity matches `ExecutableIdentityFromFile`.
+func ExecutableIdentityFromDataAndPath(path string, data []byte) ExecutableIdentity {
+	sum := sha256.Sum256(data)
+	executable := CanonicalExecutablePath(path)
+	pathSum := sha256.Sum256([]byte(executable))
+	pathDigest := hex.EncodeToString(pathSum[:])
+	return ExecutableIdentity{Digest: hex.EncodeToString(sum[:]), PathDigest: pathDigest}
 }
 
 type DaemonSettings struct {
@@ -351,7 +384,8 @@ func packageLayoutFromRootMetadata(canonicalExe string, exeDir string) *CodexPac
 // without holding it in memory, so debug builds of a few hundred megabytes can
 // be hashed without a matching allocation.
 func ExecutableIdentityFromFile(path string) (ExecutableIdentity, error) {
-	file, err := os.Open(path)
+	executable := CanonicalExecutablePath(path)
+	file, err := os.Open(executable)
 	if err != nil {
 		return ExecutableIdentity{}, err
 	}
@@ -360,7 +394,9 @@ func ExecutableIdentityFromFile(path string) (ExecutableIdentity, error) {
 	if _, err := io.Copy(sum, file); err != nil {
 		return ExecutableIdentity{}, err
 	}
-	return ExecutableIdentity{Digest: hex.EncodeToString(sum.Sum(nil))}, nil
+	pathSum := sha256.Sum256([]byte(executable))
+	pathDigest := hex.EncodeToString(pathSum[:])
+	return ExecutableIdentity{Digest: hex.EncodeToString(sum.Sum(nil)), PathDigest: pathDigest}, nil
 }
 
 func PackageLayoutFromExe(exePath string) *CodexPackageLayout {

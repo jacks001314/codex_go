@@ -353,7 +353,9 @@ func runManualUpdate(ctx context.Context, runner *LifecycleRunner, options *Upda
 	if err != nil {
 		return nil, "", err
 	}
-	updated := previousRelease != currentRelease || previousIdentity != currentIdentity
+	// Rust #50559: the manual report compares executable contents only, so a
+	// resource-only release that ships the same binary is not "updated".
+	updated := previousRelease != currentRelease || !previousIdentity.SameContents(currentIdentity)
 	message := manualUpdateMessage(outcome)
 	status := UpdateNoUpdate
 	if updated {
