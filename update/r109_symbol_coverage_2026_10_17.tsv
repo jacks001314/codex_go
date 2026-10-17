@@ -1339,7 +1339,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7f83d4922d7e92a36c1c1e4f61159a5815d45360	45806	Restrict plugin install requests to the root thread (#45806)	2026-09-15	plugins	0	0		0	0	not_applicable	
 7f892275e31002f0422477c6219189284560e689	50977	Isolate tracing in the strict third-party tool deferral test (#50977)	2026-10-04	core	0	0		0	0	not_applicable	
 7f9832d0d08c0e2fd56a02421477756474fec95d	39935	Enforce issuer binding for MCP OAuth endpoints (#39935)	2026-08-21	appserver	1	1	1.00	0	0	complete	
-7fb599de8c218e8d6f6781d239313f6985567afc	46513	Rename `AgentControl` to `LocalAgentControl` (#46513)	2026-09-18	guardian	2	1	0.50	0	0	audit_pending	LocalAgentControl
+7fb599de8c218e8d6f6781d239313f6985567afc	46513	Rename `AgentControl` to `LocalAgentControl` (#46513)	2026-09-18	guardian	2	0	0.00	0	0	not_applicable	
 8003609cc703dbf014159055e63a684901855edc	46507	Run Windows sandbox tests exclusively when local (#46507)	2026-09-18	sandbox	0	0		0	0	not_applicable	
 800d183e2d0a3275c1b440992f4b11abbf425711	46075	Use captured step settings when spawning subagents (#46075)	2026-09-17	config	1	1	1.00	0	0	complete	
 801ca0d0d1206a5886048a01262584c79bf33d60	42606	Support trusted headers for remote exec WebSockets (#42606)	2026-09-03	execserver	4	2	0.50	0	0	audit_pending	connect_loopback_direct,upsert_environment_with_options
@@ -2379,7 +2379,7 @@ df7f717c856e0634b04a12f7d4fc9e8ecb3e65be	46734	Add transcript search and per-act
 df8990e2614c8834ae9dc0327eb4834c821e34cc	54761	Upgrade `zip` to 9.0.0 and update plugin archive extraction (#54761)	2026-10-17	plugins	0	0		0	0	not_applicable	
 df9f537a6e105ac7e457f2e4ebc7431d8614393e	41150	Remove locking from trusted skill collection (#41150)	2026-08-27	guardian	3	1	0.33	0	0	audit_pending	TrustedSkillInvocations,into_paths
 dfaf451426868c22e6859f5494150fd6338c3257	45169	Extract Windows sandbox setup and installation storage into the library (#45169)	2026-09-13	sandbox	6	3	0.50	0	0	audit_pending	ClientIdentity,DesktopInstallation,InstallationRecord
-dfb265764d39c982b47def8bb9f5c0ae6a8db846	46510	Avoid cloning active turn items for metadata-only thread resumes (#46510)	2026-09-18	appserver	2	1	0.50	0	0	audit_pending	ThreadHistoryTurnMetadata
+dfb265764d39c982b47def8bb9f5c0ae6a8db846	46510	Avoid cloning active turn items for metadata-only thread resumes (#46510)	2026-09-18	appserver	2	1	0.50	0	0	not_applicable	
 dfdb40cd0b72dfba3293db5c7c441232e8ef1a60	48272	Prevent Windows daemon launches from retaining launcher stdio (#48272)	2026-09-25	appserver	1	0	0.00	0	0	complete	spawn_without_inheriting_stdio
 dfea98597619c9060ad7169e9ed5e6ba076864ad	43070	Clarify comments in CI setup and the Rust workflow (#43070)	2026-09-05	core	0	0		0	0	not_applicable	
 dff5270b298b7ee5fb1c47460a3d6e0d89985cad	50416	Clarify Git worktree choices for new and forked conversations (#50416)	2026-10-02	tui	0	0		0	0	not_applicable	
