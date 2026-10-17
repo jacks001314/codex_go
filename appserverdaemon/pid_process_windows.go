@@ -39,7 +39,7 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 		return 0, "", fmt.Errorf("failed to create daemon working directory %s: %w", workingDir, err)
 	}
 	command.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_BREAKAWAY_FROM_JOB,
+		CreationFlags: windows.CREATE_NO_WINDOW | windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_BREAKAWAY_FROM_JOB,
 	}
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {

@@ -18,7 +18,6 @@ const (
 	StderrLogTailBytes          int64 = 4096
 	RemoteControlDisabledEnvVar       = "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED"
 	PIDStartPollInterval              = 50 * time.Millisecond
-	PIDStartTimeout                   = 10 * time.Second
 	PIDStopPollInterval               = 50 * time.Millisecond
 	// PIDStopForceTimeout is how long stop waits after the grace period for the
 	// forced termination to take effect (Rust #43572).
