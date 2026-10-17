@@ -10887,9 +10887,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: daemon_recovery_candidates"
+        "Round 260 (audit): DaemonRecoverySink merges per-connection routers into loaded-threads.json after the server loop returns; candidates are persisted root threads only (ephemeral/child/subagent excluded), interrupted turns travel in the versioned metadata entry, and unmanaged servers write nothing. daemonrecovery.WriteSnapshot is atomic; stop/fresh-start/migration discard stale snapshots. Tests: go test ./appserver -run 'DaemonRecovery|Recovery' -count=1; go test ./daemonrecovery -count=1"
       ]
     },
     {
@@ -18965,9 +18965,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: resume_multi_agent_version"
+        "Round 260 (audit): compacted rollouts carry window_number plus resume metadata; cold resume selects the newest checkpoint naming a window, restores last_started_turn_id/previous-turn settings, lets newer completed turns override saved settings, and falls back to full replay when companion state is missing. runtimeMultiAgentVersionForTurn restores the persisted version and subagent migration uses the same boundary. Tests: go test ./appserver -run 'CompactionResume|Resume.*Compact|MultiAgentVersion' -count=1"
       ]
     },
     {

@@ -1296,7 +1296,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7c6eb0eef113ddc16ae5b207ac9add364b489798	40587	Scope stop hooks for memory consolidation (#40587)	2026-08-25	core	0	0		0	0	not_applicable	
 7c709f0ffd5c7eea752737bad397a1585c2176a1	45817	Add a bounded Mermaid text renderer (#45817)	2026-09-16	core	13	13	1.00	0	0	complete	
 7c73903be2b5d810224c3d0ec1778281e3e2268c	45518	Route Guardian reviewers through ThreadManager for inline parents (#45518)	2026-09-14	guardian	4	1	0.25	0	0	audit_pending	InternalSessionParent,PreparedGuardianContext,to_builder
-7c88f037d935b4e78311027c32da4f046fd84058	44299	Record thread recovery candidates on managed daemon shutdown (#44299)	2026-09-09	appserver	6	5	0.83	0	0	audit_pending	daemon_recovery_candidates
+7c88f037d935b4e78311027c32da4f046fd84058	44299	Record thread recovery candidates on managed daemon shutdown (#44299)	2026-09-09	appserver	6	5	0.83	0	0	complete	daemon_recovery_candidates
 7c9bfb910ef65c8f4a957c53affbd43d5fac2882	53150	Restore thread-owned permissions on cold resume (#53150)	2026-10-11	guardian	0	0		0	0	not_applicable	
 7cec3e110ce6dc5c14704dfa06f6db9c23a530fc	47079	Mask daemon socket paths exposed through ancestor bind mounts (#47079)	2026-09-21	sandbox	1	0	0.00	0	0	implementation_pending	daemon_socket_mask_paths
 7d0b91d5d686688893fecb356e27fdebaad66ee1	53709	Separate MCP sandbox policy from launcher metadata (#53709)	2026-10-13	mcp	6	6	1.00	0	0	complete	
@@ -2463,7 +2463,7 @@ e7798c99444cfde9dbf2230f7e7699b920d757d5	49805	Add capability-gated writable fil
 e77c2a90af99086c336b4ab69b9317497533e24f	40007	Implement Amazon Bedrock setup in the app server (#40007)	2026-08-21	appserver	9	6	0.67	0	0	audit_pending	configure_bedrock_for_managed_auth,load_profile,profile_credentials_provider
 e790ce271749ce431e446a9e2cc66485fe60f931	54475	Use a synchronous mutex for remote metadata request tracking (#54475)	2026-10-16	execserver	0	0		0	0	not_applicable	
 e79c498b5e44352eb1543d5631bdaec0a57bae58	51480	Preserve tool declaration mode across resumed context windows (#51480)	2026-10-06	guardian	4	4	1.00	0	0	complete	
-e7bbc79f482acf285e50a09a9f898aeb2ce3881c	47365	Resume model context from the latest compaction boundary (#47365)	2026-09-22	guardian	2	1	0.50	0	0	audit_pending	resume_multi_agent_version
+e7bbc79f482acf285e50a09a9f898aeb2ce3881c	47365	Resume model context from the latest compaction boundary (#47365)	2026-09-22	guardian	2	1	0.50	0	0	complete	resume_multi_agent_version
 e7de1f444089c29ac002e3df08d940f6de8a2613	54674	Add an opt-in tool for copying files between environments (#54674)	2026-10-16	sandbox	2	2	1.00	0	0	complete	
 e7ea5f4a8658ebe49e879be933effed2340fa276	50148	Add managed worktree tools to the TUI (#50148)	2026-10-02	tui	7	4	0.57	0	0	audit_pending	ManagedWorktreeTools,ToolServices,with_source_config_builder
 e7f119819ab29ba99a377a436453d0fef83f8a5d	47851	Preserve human overrides across repeated heartbeat instructions (#47851)	2026-09-24	guardian	8	8	1.00	0	0	complete	
