@@ -17897,9 +17897,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: GOALS_MIGRATOR, LOGS_MIGRATOR, MEMORIES_MIGRATOR, QUEUE_MIGRATOR, STATE_MIGRATOR"
+        "Round 280 (audit): N/A - this is a Rust Cargo/SQLx build configuration change for macro derives and migration embedding. Go uses database/sql plus embedded migration SQL (state/migrations.go) and has no SQLx host-driver feature to remove."
       ]
     },
     {

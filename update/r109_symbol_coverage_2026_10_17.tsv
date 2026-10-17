@@ -538,7 +538,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 35b746a3e3fb54f612e38bfef314b496bfde5b5e	46493	Allow `/review` during MCP startup (#46493)	2026-09-18	tui	1	0	0.00	0	0	implementation_pending	requires_dispatch_validation
 35d9e4bc4d7a44dc84d86a54f4e815ea5cad6986	43796	Preserve reasoning effort through compaction and reset it on success (#43796)	2026-09-08	persistence	1	1	1.00	0	0	complete	
 3620b2caf8afecfcedd5c5c9520c0d239c880f26	49701	Detect SQLite corruption during startup and preserve recovery backups (#49701)	2026-09-30	tui	8	7	0.88	0	0	audit_pending	open_read_write_pool
-3627bb91b2f14f47c1a415412ec2f1e132e50647	47084	Avoid building a host SQLite driver for SQLx macros (#47084)	2026-09-21	persistence	6	0	0.00	0	0	implementation_pending	GOALS_MIGRATOR,LOGS_MIGRATOR,MEMORIES_MIGRATOR,QUEUE_MIGRATOR,STATE_MIGRATOR,THREAD_HISTORY_MIGRATOR
+3627bb91b2f14f47c1a415412ec2f1e132e50647	47084	Avoid building a host SQLite driver for SQLx macros (#47084)	2026-09-21	persistence	6	0	0.00	0	0	not_applicable	GOALS_MIGRATOR,LOGS_MIGRATOR,MEMORIES_MIGRATOR,QUEUE_MIGRATOR,STATE_MIGRATOR,THREAD_HISTORY_MIGRATOR
 3629508849fe7679ae6362ffa1541fb0ab9fb0cb	50442	Preserve native USD amounts in thread usage responses (#50442)	2026-10-02	tui	0	0		0	0	not_applicable	
 36430b36881cf5c289cb48e671cfc9e8b542ae7b	46509	Flush completed Guardian reviews before delivering decisions (#46509)	2026-09-18	guardian	1	0	0.00	0	0	not_applicable	is_private_guardian_reviewer
 364b511dcd60bcde3849bde4e579a5c7cad1e96a	45554	Use shared Bazel cache preparation in SDK CI (#45554)	2026-09-15	core	0	0		0	0	not_applicable	
