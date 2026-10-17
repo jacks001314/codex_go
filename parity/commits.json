@@ -10431,9 +10431,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: BindingCatalogRevision, current_revision"
+        "Round 115 (lead): N/A (performance-only carrier absent) - #44121 extends Rust's cached MCP binding reuse to dormant servers by tracking a dormant catalog revision. Go has no production binding-reuse cache: MCPService.CaptureBinding and Binding are used only by tests, tool catalogs are read from current server status per turn, and service generation invalidation already prevents stale catalogs. There is no dormant cached binding/revision carrier to extend or reuse. Introducing a new unused cache would not align a modeled Go path. go build ./mcp ./appserver green."
       ]
     },
     {
