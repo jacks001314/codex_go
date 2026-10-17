@@ -1459,8 +1459,14 @@ type Model struct {
 	agentsOverviewUsageNextRequest    uint64
 	transcriptMessages                transcriptMessageCache
 	overlayMessages                   transcriptMessageCache
-	lastTranscriptContent             string
-	lastTranscriptHeight              int
+	// mainFind is the owned transcript's in-place Find state (Rust #50045).
+	// The pager overlay keeps its own find state in chatwidget.TranscriptOverlay.
+	mainFind              mainTranscriptFind
+	// activityFocus is the owned transcript's activity-group disclosure state
+	// (Rust #46734). Expanded identities persist after focus is cleared.
+	activityFocus         transcriptActivityFocus
+	lastTranscriptContent string
+	lastTranscriptHeight  int
 
 	width       int
 	height      int
@@ -3048,6 +3054,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// Terminal commonly delivers Ctrl+V/right-click paste through this
 			// path rather than as KeyCtrlV.
 			if pasted := string(msg.Runes); pasted != "" && m.modal == nil {
+				if m.mainFind.active() && m.overlay == nil {
+					m.editMainTranscriptFindQuery(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: msg.Runes})
+					return m, nil
+				}
 				// Rust #44027: the dashboard composer owns typing/paste while
 				// the overview is open.
 				if m.agentsOverview != nil {
@@ -3136,6 +3146,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.windowsSandboxSetupActive {
 			return m, nil
+		}
+		if m.mainFind.active() {
+			if handled, cmd := m.updateMainTranscriptFindKey(msg); handled {
+				return m, cmd
+			}
 		}
 		if cmd, handled := m.handleBackendBannerKey(msg); handled {
 			return m, cmd
@@ -3435,7 +3450,9 @@ func (m *Model) View() string {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
 	footerLine := footerHelpText
-	if m.escBacktrackHint {
+	if m.mainFind.active() {
+		footerLine = m.mainFind.barLine()
+	} else if m.escBacktrackHint {
 		// Rust show_esc_backtrack_hint replaces the composer footer with the
 		// second-Esc prompt once backtrack mode is primed.
 		footerLine = bottompane.EscHintLine(true)
@@ -8144,6 +8161,17 @@ func (m *Model) refreshTranscript() {
 		return
 	}
 	m.transcript.Height = m.transcriptHeightForLayout()
+	if m.mainFind.active() {
+		m.refreshMainTranscriptFindIfNeeded()
+		content, line := m.renderMainTranscriptFindContent()
+		m.lastTranscriptContent = content
+		m.transcript.SetContent(content)
+		if line >= 0 {
+			m.scrollTranscriptToLine(line)
+		}
+		m.lastTranscriptHeight = m.transcript.Height
+		return
+	}
 	content := m.transcriptRenderCached(m.State, m.transcript.Width)
 	// Rust #48352: once a turn finished with a final answer and the cadence
 	// allows it, a completion tip renders in the transcript (four columns are
@@ -8189,19 +8217,16 @@ func (m *Model) openTranscriptOverlay() bubbletea.Cmd {
 	return m.openPagerTerminalMode()
 }
 
-// openTranscriptFind opens the transcript pager and starts its find bar. Rust
-// #46734 `global.find_transcript` (keymap.rs:1678, app/input.rs:584-597) reaches
-// the overlay the same way: the shortcut opens the transcript overlay and calls
-// `begin_search` on it, so the search bar owns the keyboard from the first frame.
+// openTranscriptFind starts Find in the owned transcript. Rust #50045 searches
+// the full sources while keeping the transcript compact and temporarily
+// expanding only the selected message. The pager overlay keeps its own find bar
+// when it is already open.
 func (m *Model) openTranscriptFind() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	command := m.openTranscriptOverlay()
-	if m.overlay != nil && m.overlayTranscript {
-		m.overlay.BeginFind()
-	}
-	return command
+	m.beginMainTranscriptFind()
+	return nil
 }
 func (m *Model) closeTranscriptOverlay() bubbletea.Cmd {
 	if m == nil || m.overlay == nil {
@@ -8874,12 +8899,31 @@ func renderTranscriptWithCache(cache *transcriptMessageCache, state *codextui.St
 	return content
 }
 
+// renderTranscriptWithExpandedMessage renders the compact transcript while
+// temporarily expanding one message. Rust #50045 uses this for Find: the full
+// transcript remains searchable, but only the current match is revealed.
+func renderTranscriptWithExpandedMessage(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedMessage int, cwd string, showRawReasoning bool) (string, [][2]int) {
+	expanded := map[int]bool{}
+	if expandedMessage >= 0 {
+		expanded[expandedMessage] = true
+	}
+	return renderTranscriptWithExpandedMessages(cache, state, raw, width, themeID, false, expanded, cwd, showRawReasoning)
+}
+
+func renderTranscriptWithExpandedMessages(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
+	return renderTranscriptMessagesWithRangesAndExpansion(cache, state, raw, width, themeID, expandedHistory, expandedMessages, cwd, showRawReasoning)
+}
+
 // renderTranscriptMessagesWithRanges renders the transcript into display lines
 // (reusing the per-message cache) and reports each message's 0-based content
 // line range. The ranges index the rendered content the transcript overlay
 // shows, so a caller can highlight a message in place (Rust pager overlay
 // cells).
 func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) (string, [][2]int) {
+	return renderTranscriptMessagesWithRangesAndExpansion(cache, state, raw, width, themeID, expandedHistory, nil, cwd, showRawReasoning)
+}
+
+func renderTranscriptMessagesWithRangesAndExpansion(cache *transcriptMessageCache, state *codextui.State, raw bool, width int, themeID string, expandedHistory bool, expandedMessages map[int]bool, cwd string, showRawReasoning bool) (string, [][2]int) {
 	if state == nil || len(state.Messages) == 0 {
 		return "No messages yet.", nil
 	}
@@ -8894,6 +8938,7 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 	line := 0
 	first := true
 	for i, message := range state.Messages {
+		expanded := expandedHistory || expandedMessages[i]
 		key := transcriptMessageKey{
 			role:           message.Role,
 			text:           message.Text,
@@ -8902,7 +8947,7 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 			width:          width,
 			themeID:        themeID,
 			raw:            raw,
-			expanded:       expandedHistory,
+			expanded:       expanded,
 			transcriptOnly: message.TranscriptOnly,
 			rawReasoning:   showRawReasoning,
 		}
@@ -8910,7 +8955,8 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 		if cache != nil && i < len(cache.messages) && cache.messages[i].key == key {
 			lines = cache.messages[i].lines
 		} else {
-			lines = transcriptMessageDisplayLines(message, width, themeID, expandedHistory, cwd, showRawReasoning)
+			lines = transcriptMessageDisplayLines(message, width, themeID, expanded, cwd, showRawReasoning)
+			lines = flattenTranscriptDisplayLines(lines)
 			if cache != nil {
 				entry := transcriptMessageCacheEntry{key: key, lines: lines}
 				if i < len(cache.messages) {
@@ -8939,6 +8985,20 @@ func renderTranscriptMessagesWithRanges(cache *transcriptMessageCache, state *co
 		return "No messages yet.", nil
 	}
 	return builder.String(), ranges
+}
+
+// flattenTranscriptDisplayLines turns embedded newlines into separate display
+// rows. Some rich cells intentionally return a multi-line string as one slice
+// element; ranges and Find anchors must still count those visual rows.
+func flattenTranscriptDisplayLines(lines []string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, strings.Split(line, "\n")...)
+	}
+	return out
 }
 
 func transcriptMessageDisplayLines(message codextui.Message, width int, themeID string, expandedHistory bool, cwd string, showRawReasoning bool) []string {

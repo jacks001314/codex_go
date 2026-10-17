@@ -1156,3 +1156,56 @@ RC：
 
 `go vet ./model` 仍有既有的 `model/responses_agent.go:1509` mutex-copy 告警；
 `go vet ./turn` 无告警。
+
+## 33. Round 117（2026-10-17）：owned transcript Find 选择性展开（partial）
+
+### 33.1 落地
+
+Rust 参考 `1cc9917508`（#50045）与
+`codex-rs/tui/src/transcript_view/search_presentation.rs`：
+
+- `tui/tea/transcript_find_main.go`
+  - 新增 `mainTranscriptFind`：`F3` 在主 transcript 内直接进入 Find，不再先切到
+    detailed pager overlay；
+  - 搜索完整消息源：折叠命令的 `RawText`/`TranscriptText`、transcript-only reasoning
+    block 都参与匹配；
+  - 只把当前命中的 message 临时展开，其他 message 保持 compact；`Ctrl+P` older、
+    `Ctrl+N` newer，不 wrap；`Enter` 接受，`Esc` 编辑态取消、阅读态回最新；
+  - 重新打开 Find 保留 query 和当前命中；线程切换清空 Find 状态。
+- `tui/tea/model.go`
+  - 渲染管线新增 `renderTranscriptMessagesWithRangesAndExpansion`，允许按 message
+    index 单独展开；
+  - `flattenTranscriptDisplayLines` 修正富 cell 内嵌换行导致的 range/高亮行偏移；
+  - compact transcript 的 footer 在 Find 活动时显示 `Find: ...` 状态行。
+- `tui/tea/thread_reset.go`
+  - thread-scoped reset 清空 owned Find，避免切线程后保留旧 query/命中。
+- 测试：
+  - `TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust`：两个隐藏命令输出，
+    验证只展开当前命中、移动后面板转移、exhaustion、accept/cancel、重开保留 query；
+  - `TestOwnedTranscriptFindRevealsTranscriptOnlyMatchLikeRust`：transcript-only
+    reasoning block 可被搜索并在取消后恢复隐藏；
+  - 更新 `TestGlobalFindTranscriptStartsOwnedFindLikeRust`，固定 F3 的 owned
+    transcript 语义；现有 pager `/` find 用例保持通过。
+
+### 33.2 验证
+
+```text
+go test ./tui/... -count=1   # all ok
+go vet ./tui/...             # exit 0
+go build ./...               # exit 0
+```
+
+### 33.3 剩余
+
+- live tail：已确认 Go 的 active exec cell / computer-activity group 在运行中通过
+  `upsertHistoryMessageWithTranscript` 写入 `State.Messages`，打开 Find 后会按
+  `MessagesRevision` 重新扫描；新增 `TestOwnedTranscriptFindPicksUpLiveMessageUpdatesLikeRust`；
+- resize：宽度变化会重新扫描并保留当前 message/query；新增
+  `TestOwnedTranscriptFindRetainsSelectionAcrossResizeLikeRust`；
+- reading mode 下的 Rust activity controls 依赖尚未实现的 `#46734
+  global.focus_activity` 载体，属于独立缺口；Go 当前没有 transcript activity-group
+  focus；
+- Rust 的手动 disclosure / retained selection 在 Go 当前主 transcript 没有对应载体，
+  记为 N/A，而不是本轮新增行为；
+- r109 仍按符号名记录为 `implementation_pending 0/7`，本轮在 r90 记为 `partial`，
+  不宣称 #50045 已完全对齐。

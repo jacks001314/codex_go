@@ -58,6 +58,8 @@ func (m *Model) resetThreadScopedState() {
 	m.resetReviewModeState()
 	m.pendingSteers = nil
 	m.rejectedSteers = nil
+	m.mainFind = mainTranscriptFind{}
+	m.activityFollow = true
 	// The transcript overlay is a snapshot of the previous thread; leaving it
 	// open would keep stale content on screen (Rust clears the overlay too).
 	if m.overlay != nil || m.overlayAltScreen {

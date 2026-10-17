@@ -16,43 +16,38 @@ func newTranscriptFindFixture(t *testing.T) *Model {
 	return NewModel(state, Options{Width: 60, Height: 10})
 }
 
-// TestGlobalFindTranscriptOpensPagerFindLikeRust covers Rust #46734: the global
-// find-transcript shortcut (f3, keymap.rs:1678) opens the transcript overlay and
-// starts its search bar in the same keypress (app/input.rs:584-597). Removing the
-// dispatch leaves `global.find_transcript` as a config-only entry, which this
-// test rejects.
-func TestGlobalFindTranscriptOpensPagerFindLikeRust(t *testing.T) {
+// TestGlobalFindTranscriptStartsOwnedFindLikeRust covers the owned-screen half
+// of Rust's find behavior (#50045): f3 starts Find in the compact transcript
+// instead of switching to the detailed pager overlay. The overlay keeps its own
+// find bar when it is already open (covered by TestTranscriptFindKeyWiringLikeRust).
+func TestGlobalFindTranscriptStartsOwnedFindLikeRust(t *testing.T) {
 	model := newTranscriptFindFixture(t)
 	if model.overlay != nil {
 		t.Fatalf("fixture already has an overlay open")
 	}
 
 	model.Update(agentsF3Event())
-	if model.overlay == nil || !model.overlayTranscript {
-		t.Fatal("f3 did not open the transcript overlay")
+	if model.overlay != nil {
+		t.Fatal("f3 switched to the detailed transcript pager; owned Find should stay in place")
 	}
-	if !model.overlay.FindEditing() {
-		t.Fatal("f3 opened the transcript without starting its find bar (Rust begin_search)")
+	if !model.mainFind.editing {
+		t.Fatal("f3 did not start the owned transcript find editor")
 	}
 
 	for _, r := range "needle" {
 		model.Update(findKeyRunes(string(r)))
 	}
-	if got := model.overlay.FindQuery(); got != "needle" {
+	if got := model.mainFind.query; got != "needle" {
 		t.Fatalf("query = %q, want needle", got)
 	}
-	if got := model.overlay.FindMatchCount(); got != 1 {
+	if got := len(model.mainFind.matches); got != 1 {
 		t.Fatalf("match count = %d, want 1", got)
 	}
 
-	// Esc leaves the pager open with the bar closed, so the search shortcut is a
-	// find bar and not a close key.
+	// Esc cancels an editing Find and restores the compact transcript.
 	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyEsc})
-	if model.overlay == nil {
-		t.Fatal("Esc closed the whole transcript overlay")
-	}
-	if model.overlay.FindActive() || model.overlay.FindEditing() {
-		t.Fatalf("Esc left the find bar active (active=%v editing=%v)", model.overlay.FindActive(), model.overlay.FindEditing())
+	if model.mainFind.active() {
+		t.Fatalf("Esc left owned Find active")
 	}
 }
 
