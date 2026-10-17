@@ -19037,9 +19037,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: effective_local_windows_sandbox_type, environment_windows_sandbox_types, inferred_environment_config_for, network_config_allows_mxc, resolve_windows_sandbox_type"
+        "Round 293 (audit): N/A - the feature and preference plumbing exist, but Go has no native MXC launcher and reports availability=false. The upstream rule therefore retains the configured legacy backend; explicit mxc remains strict/fail-closed."
       ]
     },
     {
