@@ -3,6 +3,7 @@ package sandbox
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"codex_go/utils"
@@ -92,7 +93,15 @@ func resolveRequestedPermissionAccess(entries []FileSystemSandboxEntry, target, 
 		matches := entryPath != "" && sameOrWithin(target, entryPath)
 		if entry.Path.Type == "glob_pattern" {
 			pattern := materializePermissionGlob(entry.Path.Pattern, cwd)
-			matched, err := doublestar.Match(filepath.ToSlash(pattern), filepath.ToSlash(filepath.Clean(target)))
+			patternSlash := filepath.ToSlash(pattern)
+			targetSlash := filepath.ToSlash(filepath.Clean(target))
+			if runtime.GOOS == "windows" {
+				// Rust #41209: Windows glob matching folds case and uses
+				// normalized separators; POSIX matching stays byte-oriented.
+				patternSlash = strings.ToLower(patternSlash)
+				targetSlash = strings.ToLower(targetSlash)
+			}
+			matched, err := doublestar.Match(patternSlash, targetSlash)
 			matches = err == nil && matched
 			entryPath = permissionGlobStaticPrefix(pattern)
 		}

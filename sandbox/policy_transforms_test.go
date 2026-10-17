@@ -25,6 +25,24 @@ func TestIntersectPermissionProfilesRejectsSymbolicSlashTmpGrantsOnWindowsLikeRu
 	}
 }
 
+// Mirrors Rust #41209: Windows exact-path and glob matching fold case and
+// normalize separators, so a deny rule cannot be bypassed by casing.
+func TestPermissionPathAndGlobMatchingFoldsCaseOnWindowsLikeRust(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows case-insensitive path identity")
+	}
+	root := `C:\Repo`
+	entries := []FileSystemSandboxEntry{
+		{Path: FileSystemPath{Type: "path", Path: root}, Access: FileSystemAccessDeny},
+		{Path: FileSystemPath{Type: "glob_pattern", Pattern: `C:\Repo\**\*.KEY`}, Access: FileSystemAccessDeny},
+	}
+	for _, target := range []string{`c:\repo\secret.txt`, `C:\REPO\keys\server.key`} {
+		if got := ResolveFileSystemEntryAccess(entries, target, root); got != FileSystemAccessDeny {
+			t.Fatalf("ResolveFileSystemEntryAccess(%q) = %q, want deny", target, got)
+		}
+	}
+}
+
 func TestIntersectPermissionProfilesMaterializesCWDAndRestrictsNetworkLikeRust(t *testing.T) {
 	cwd := t.TempDir()
 	requestedNetwork := true

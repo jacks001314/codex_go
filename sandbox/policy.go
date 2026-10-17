@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"codex_go/sandbox/sandboxpath"
@@ -350,6 +351,11 @@ func cleanAbs(path string) string {
 func sameOrWithin(path, root string) bool {
 	if path == "" || root == "" {
 		return false
+	}
+	if runtime.GOOS == "windows" {
+		// Rust #41209: Windows path identity is case-insensitive.
+		path = strings.ToLower(path)
+		root = strings.ToLower(root)
 	}
 	if path == root {
 		return true

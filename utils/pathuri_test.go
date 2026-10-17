@@ -558,3 +558,16 @@ func mustInferredPathURI(t *testing.T, native string) *PathURI {
 	}
 	return uri
 }
+
+// Mirrors Rust PathUri::decoded_path_bytes (#41209): the helper is
+// byte-oriented and keeps percent-decoded POSIX bytes that are not valid UTF-8.
+func TestPathURIDecodedPathBytesLikeRust(t *testing.T) {
+	uri, err := Parse("file:///tmp/a%20b/%FF")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := append([]byte("/tmp/a b/"), 0xff)
+	if got := uri.DecodedPathBytes(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DecodedPathBytes() = %v, want %v", got, want)
+	}
+}

@@ -161,6 +161,21 @@ func (u *PathURI) EncodedPath() string {
 	return u.url.EscapedPath()
 }
 
+// DecodedPathBytes returns the percent-decoded URI path bytes without the
+// authority. Mirrors Rust PathUri::decoded_path_bytes (#41209): the result is
+// byte-oriented, so a POSIX path that is not valid UTF-8 keeps its original
+// bytes. A malformed escape fails closed with nil.
+func (u *PathURI) DecodedPathBytes() []byte {
+	if u == nil || u.url == nil {
+		return nil
+	}
+	decoded, err := url.PathUnescape(u.EncodedPath())
+	if err != nil {
+		return nil
+	}
+	return []byte(decoded)
+}
+
 func (u *PathURI) Host() string {
 	if u == nil || u.url == nil {
 		return ""
@@ -192,11 +207,11 @@ func (u *PathURI) windowsIdentityPathBytes() ([]byte, bool) {
 			return nil, false
 		}
 	}
-	decoded, err := url.PathUnescape(u.url.Path)
-	if err != nil {
+	decoded := u.DecodedPathBytes()
+	if decoded == nil {
 		return nil, false
 	}
-	return []byte(decoded), true
+	return decoded, true
 }
 
 // Equal reports URI equality. Windows paths compare ASCII-case-insensitively

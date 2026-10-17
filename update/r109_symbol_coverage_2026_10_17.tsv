@@ -530,7 +530,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 348f49b292e7882fa84830565be219c5d3139d9b	40544	Include transparent background in image generation analytics (#40544)	2026-08-25	telemetry	0	0		0	0	not_applicable	
 34c4f7e72dd11a5b5a1f767fe2bc5036bd0c91f5	41923	Allow per-call sideband endpoints for existing realtime calls (#41923)	2026-08-31	appserver	0	0		0	0	not_applicable	
 34c5303f49d08a5a41294e2531d1e64b40c0302d	40625	Ignore closed agents when changing directories (#40625)	2026-08-25	tui	0	0		0	0	not_applicable	
-34e74fda0eb05ce918b6ce8778857807bc9b4a6a	41209	Align deny-read matching with executor path semantics (#41209)	2026-08-27	sandbox	1	0	0.00	0	0	implementation_pending	decoded_path_bytes
+34e74fda0eb05ce918b6ce8778857807bc9b4a6a	41209	Align deny-read matching with executor path semantics (#41209)	2026-08-27	sandbox	1	1	1.00	0	0	partial	
 34f33e4ada8f417203d87f3b5858c97add8dad6b	52968	Keep startup modals protected when terminal input draining times out (#52968)	2026-10-10	tui	1	0	0.00	0	0	implementation_pending	discard_startup_modal_input
 3517671c6061e1704cf1c0df4a5039de23514df8	53753	Extend copy-on-select to composer text (#53753)	2026-10-13	tui	12	1	0.08	0	0	audit_pending	SelectionCopy,cancel_composer_primary,cancel_primary,clear_selection,copies_clipboard,copy_composer_selection_on_release,copy_selection,copy_selection_on_release,on_select,publishes_primary
 3525845978210579572bd8ec4fe8c8296445fb8f	43069	Support managed worktrees for interactive sessions and forks (#43069)	2026-09-05	tui	6	2	0.33	0	0	audit_pending	ManagedTuiWorktree,check_source_policy,fork_source,report_startup_failure

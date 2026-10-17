@@ -3,6 +3,7 @@ package integrity
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -78,9 +79,15 @@ func PreparePolicy(entries []sandbox.FileSystemSandboxEntry, cwd string) (*Prepa
 		}
 		pattern := entry.Path.Pattern
 		if strings.HasPrefix(pattern, "~/") || strings.HasPrefix(pattern, `~\`) {
-			// Upstream resolves `~` against the executor home and fails closed
-			// when it cannot (permissions.rs:1194-1210).
-			return nil, fmt.Errorf("%w: unable to resolve deny-read glob pattern %q without executor home", ErrInvalidPolicy, pattern)
+			// Rust #41209 resolves `~` against the executor home and fails
+			// closed when it cannot (permissions.rs:1194-1210). Local integrity
+			// checks run with the executor's own home.
+			home, err := os.UserHomeDir()
+			if err != nil || strings.TrimSpace(home) == "" {
+				return nil, fmt.Errorf("%w: unable to resolve deny-read glob pattern %q without executor home", ErrInvalidPolicy, pattern)
+			}
+			entry.Path.Pattern = filepath.Join(home, pattern[2:])
+			pattern = entry.Path.Pattern
 		}
 		materialized := materializeGlobPattern(pattern, cwd)
 		if materialized == "" || !doublestar.ValidatePattern(filepath.ToSlash(materialized)) {
