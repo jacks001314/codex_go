@@ -544,3 +544,21 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go build ./...` | exit 0 |
 | `go test ./appserver -run "Compact|compact"` | ok |
 | `go test ./appserver -run "TestForegroundIncompleteCompaction|TestBackgroundIncompleteCompaction|TestIncompleteCompactionWithoutUsage"` | ok |
+
+
+# Round 104 增量（2026-10-17，lead）
+
+## 20.1 已落地
+
+### #52215 独立 MCP 命令的应用网络策略（`79773e8826`）— landed（复核后 already-implemented）
+
+- **命令路径**：`app/mcp.go` 的 `mcpCLIStore.Load` / `LoadManaged` / `LoadWithCloudConfig` 每条路径都调用 `publishApplicationNetworkPolicy` 并用 `policyHTTPClient` 构造客户端（`:868-927`）。既有 `app/application_network_test.go::TestMCPCLIStoreBindsApplicationNetworkPolicyLikeRust` 断言传输层是 `*network.PolicyRoundTripper`，被拒目的地返回 `network.ErrNetworkPolicyDestination`。
+- **Rust `bind_bootstrap_auth` 的对应语义**：Rust 把本地策略绑定到 cloud config bootstrap 的 `AuthConfig`，并把 auth-route factory 限制到 config bundle 端点。Go 没有 `AuthRouteConfig`，cloud bootstrap 期间唯一的网络请求就是 bundle GET：`config.scopeCloudConfigFetchOptions` 会把 `HTTPClient` / `FallbackHTTPClient` 包成 `RestrictToEndpoints([bundleURL])` 的 `network.PolicyHTTPDoer`，授权只添加静态 header 或本地签名，不发起 auth-route 网络调用。因此不存在未绑定策略的 bootstrap 认证客户端，覆盖由 `config/cloud_config_storage_test.go::TestCloudConfigFetchIsScopedToBundleEndpointLikeRust` 固定。
+- **结论**：功能已对齐，残余项是载体名差异（Rust `AuthRouteConfig` vs Go 端点级 policy doer），不是缺口。
+
+## 20.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go test ./app -run "TestMCPCLIStoreBindsApplicationNetworkPolicyLikeRust|TestMCP"` | ok |
+| `go test ./config -run "CloudConfig"` | ok |
