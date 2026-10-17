@@ -23275,8 +23275,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete (equivalent mechanism) - sandbox/windowssandbox/elevated/runner_client_windows.go captures the launch failure in `err` from createProcessWithLogon (lines 88-95) before restoring SetErrorMode at line 89, then maps the embedded errno through classifyRunnerLogonError; createProcessWithLogon returns the error reported by the syscall Call itself (line 184-194), i.e. GetLastError at call time, so restoring the error mode cannot overwrite it. RunnerLogonError keeps the native code and the classification tests pin logon-failure/expired/must-change and non-credential codes. go test ./sandbox/windowssandbox/elevated green.",
         "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
       ]
     },
