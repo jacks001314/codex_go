@@ -1438,10 +1438,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/6; needs review: brokered_credential_binding_env_keys, credential_binding_env_keys, discover_parent_credentials, virtualize_brokered_text, virtualize_text"
-      ]
+        "status": "complete",
+        "evidence": [
+          "The credential broker virtualizes complete provider tokens embedded in arbitrary child environment values, binds them to authorized destinations, rejects dummy/provider-token collisions, and keeps re-virtualization idempotent."
+        ]
     },
     {
       "sha": "49880081fe9d6cf89ec86e3d31c99bbe26a736c4",

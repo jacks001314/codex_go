@@ -17,7 +17,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 023d81b057dec77fc5c6ffa0ec646d29bef10782	47108	Preserve required Windows runtime variables for filesystem helpers (#47108)	2026-09-21	execserver	0	0		0	0	not_applicable	
 0265dd7b4547fd6a88c6458f359b3c20731421c4	45677	Move Guardian review reporting and denial accounting into the extension (#45677)	2026-09-15	guardian	2	2	1.00	0	0	complete	
 0276f2ee551f2cedf03f54ddab7fbc63a7579e94	42123	Preserve descriptive labels on local file links (#42123)	2026-09-01	tui	3	2	0.67	0	0	audit_pending	should_render_local_link_label
-0280d73c1e86365847c83dfe719f7eeba1c8f8a8	40484	Broker credential aliases in child environments (#40484)	2026-08-24	core	6	1	0.17	0	0	audit_pending	brokered_credential_binding_env_keys,credential_binding_env_keys,discover_parent_credentials,virtualize_brokered_text,virtualize_text
+0280d73c1e86365847c83dfe719f7eeba1c8f8a8	40484	Broker credential aliases in child environments (#40484)	2026-08-24	core	6	1	0.17	0	0	complete	brokered_credential_binding_env_keys,credential_binding_env_keys,discover_parent_credentials,virtualize_brokered_text,virtualize_text
 02a8f038b87ad34d4a1dc5058eda26972ed7aa6c	44755	Check folder consent before creating or resuming TUI tasks (#44755)	2026-09-11	tui	2	2	1.00	0	0	complete	
 02c9f83f74af393fa6565baf3721b0581be1cd4c	40735	Use the model info accessor for skill telemetry (#40735)	2026-08-25	core	0	0		0	0	not_applicable	
 02d4529f55342dee025a5c13f612b72488dfa627	43315	Resolve session labels uniquely before acting on them (#43315)	2026-09-07	tui	2	2	1.00	0	0	complete	
