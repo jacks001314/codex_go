@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"codex_go/metrics"
 )
 
 // Rust parity: codex-rs/otel/src/metrics/client.rs. The client records
@@ -460,6 +462,7 @@ func (c *MetricsClient) Shutdown(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
+	metrics.SuspendGlobal(c)
 	c.mu.Lock()
 	if c.cancel != nil {
 		c.cancel()

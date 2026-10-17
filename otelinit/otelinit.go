@@ -84,8 +84,12 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	// Rust OtelProvider::try_new installs the built metrics client as the
 	// process-global client, which library code such as the model catalog
 	// manager uses for its global timers.
-	if !options.SkipGlobalMetricsInstall && provider != nil && provider.Metrics() != nil {
-		telemetry.InstallGlobalMetrics(provider.Metrics())
+	if !options.SkipGlobalMetricsInstall {
+		if provider != nil && provider.Metrics() != nil {
+			telemetry.InstallGlobalMetrics(provider.Metrics())
+		} else {
+			telemetry.InstallGlobalMetrics(nil)
+		}
 	}
 	// Rust's MCP catalog telemetry reports its per-server trace event through the
 	// process-global tracing subscriber. Go installs the adapter at this same

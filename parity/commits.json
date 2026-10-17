@@ -19638,9 +19638,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/6; needs review: BufferedMetrics, record_global_operation"
+        "RecordGlobalOperation buffers bounded whole operation pairs until a provider is installed, validates names and tags, discards on disable, drains on install, and resumes buffering only when the matching MetricsClient shuts down."
       ]
     },
     {

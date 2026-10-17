@@ -22,9 +22,11 @@ var global atomic.Value // stores Recorder
 // InstallGlobal installs the process-global recorder. A nil recorder clears it.
 func InstallGlobal(recorder Recorder) Recorder {
 	if recorder == nil {
+		globalOperationBuffer.disable()
 		global.Store(recorderBox{})
 		return nil
 	}
+	globalOperationBuffer.enable(recorder)
 	global.Store(recorderBox{recorder: recorder})
 	return recorder
 }
