@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -469,6 +470,57 @@ type MCPResourceReadParams struct {
 	// ConnectorID restricts hosted app resource reads to the connector that
 	// produced them (Rust #39244).
 	ConnectorID string `json:"connectorId,omitempty"`
+	// Target selects a hosted app and account directly, without tool discovery
+	// (Rust #47248). The backend supports it only for `codex_apps`; omitting it
+	// keeps the legacy discovery behavior.
+	Target *MCPResourceReadTarget `json:"target,omitempty"`
+}
+
+// MCPResourceReadTarget is a direct hosted app/account resource target
+// (Rust #47248). LinkID is required on the wire but nullable: a string selects
+// an account, while null requests no-auth access under the backend's policy.
+// LinkIDSet records presence so a missing linkId is rejected instead of being
+// treated as an explicit no-auth request.
+type MCPResourceReadTarget struct {
+	ConnectorID string
+	LinkID      *string
+	LinkIDSet   bool
+}
+
+func (t MCPResourceReadTarget) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ConnectorID string  `json:"connectorId"`
+		LinkID      *string `json:"linkId"`
+	}{ConnectorID: strings.TrimSpace(t.ConnectorID), LinkID: cloneStringPtr(t.LinkID)})
+}
+
+func (t *MCPResourceReadTarget) UnmarshalJSON(data []byte) error {
+	if t == nil {
+		return errors.New("resource read target is nil")
+	}
+	var wire struct {
+		ConnectorID string          `json:"connectorId"`
+		LinkID      json.RawMessage `json:"linkId"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	t.ConnectorID = strings.TrimSpace(wire.ConnectorID)
+	t.LinkID = nil
+	t.LinkIDSet = false
+	if len(wire.LinkID) == 0 {
+		return nil
+	}
+	t.LinkIDSet = true
+	if bytes.Equal(bytes.TrimSpace(wire.LinkID), []byte("null")) {
+		return nil
+	}
+	var linkID string
+	if err := json.Unmarshal(wire.LinkID, &linkID); err != nil {
+		return err
+	}
+	t.LinkID = &linkID
+	return nil
 }
 
 func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
@@ -478,6 +530,7 @@ func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 		URI          string  `json:"uri"`
 		OriginCallID string  `json:"originCallId,omitempty"`
 		ConnectorID  string  `json:"connectorId,omitempty"`
+		Target       *MCPResourceReadTarget `json:"target,omitempty"`
 	}
 	return json.Marshal(payload{
 		ThreadID:     cloneStringPtr(p.ThreadID),
@@ -485,6 +538,7 @@ func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 		URI:          p.URI,
 		OriginCallID: strings.TrimSpace(p.OriginCallID),
 		ConnectorID:  strings.TrimSpace(p.ConnectorID),
+		Target:       p.Target,
 	})
 }
 
@@ -2320,12 +2374,22 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 	if err := validateMCPResourceOrigin(params); err != nil {
 		return nil, err
 	}
+	if err := validateMCPResourceTarget(params, server); err != nil {
+		return nil, err
+	}
 	if err := s.requiredServerAvailable(server); err != nil {
 		return nil, err
 	}
 	threadID := threadIDFromResourceReadParams(params)
 	roots := s.rootsForThread(threadID)
-	cacheKey := &MCPResourceCacheKey{Server: server, URI: uri, ThreadID: threadID, RootsKey: mcpRootsCacheKey(roots)}
+	cacheKey := &MCPResourceCacheKey{
+		Server:   server,
+		URI:      uri,
+		ThreadID: threadID,
+		RootsKey: mcpRootsCacheKey(roots),
+		Scope:    resourceReadScopeKey(params),
+		Target:   resourceReadTargetKey(params),
+	}
 	if cached, ok := s.readCachedResource(cacheKey); ok {
 		return cached, nil
 	}
@@ -2385,6 +2449,49 @@ func validateMCPResourceOrigin(params *MCPResourceReadParams) error {
 		return invalidMCPRequest("originCallId must be a single call id")
 	}
 	return nil
+}
+
+// validateMCPResourceTarget mirrors Rust #47248: a direct target is valid only
+// for codex_apps, needs a non-empty connector id, and needs an explicit linkId
+// that is either a real account string or null. An originCallId scope wins, so
+// a target supplied alongside one is ignored rather than rejected.
+func validateMCPResourceTarget(params *MCPResourceReadParams, server string) error {
+	if params == nil || params.Target == nil || strings.TrimSpace(params.OriginCallID) != "" {
+		return nil
+	}
+	target := params.Target
+	invalidLink := !target.LinkIDSet
+	if !invalidLink && target.LinkID != nil {
+		link := strings.TrimSpace(*target.LinkID)
+		invalidLink = link == "" || strings.HasPrefix(link, "synthetic_link::")
+	}
+	if !IsCodexAppsMCPServerName(server) || strings.TrimSpace(target.ConnectorID) == "" || invalidLink {
+		return invalidMCPRequest("target requires codex_apps, a connectorId, and a real linkId or null")
+	}
+	return nil
+}
+
+// resourceReadScopeKey distinguishes cached reads by originating call scope so
+// a resource fetched for one app call is never served for another.
+func resourceReadScopeKey(params *MCPResourceReadParams) string {
+	if params == nil {
+		return ""
+	}
+	return strings.TrimSpace(params.OriginCallID)
+}
+
+// resourceReadTargetKey distinguishes cached reads by direct app/account target
+// (Rust #47248): the same URI under two accounts must not share contents.
+func resourceReadTargetKey(params *MCPResourceReadParams) string {
+	if params == nil || params.Target == nil || strings.TrimSpace(params.OriginCallID) != "" {
+		return ""
+	}
+	target := params.Target
+	link := "null"
+	if target.LinkID != nil {
+		link = "link:" + strings.TrimSpace(*target.LinkID)
+	}
+	return "connector:" + strings.TrimSpace(target.ConnectorID) + "|" + link
 }
 
 func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, error) {

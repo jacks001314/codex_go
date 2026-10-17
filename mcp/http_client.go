@@ -350,7 +350,7 @@ func readMCPHTTPResourceWithClient(client *httpClient, serverName string, roots 
 		Roots:       roots,
 		Elicitation: elicitation,
 		Progress:    progress,
-	}, "resources/read", map[string]any{"uri": strings.TrimSpace(params.URI)}, &response); err != nil {
+	}, "resources/read", mcpResourceReadRequestParams(params), &response); err != nil {
 		return nil, err
 	}
 	return &response, nil

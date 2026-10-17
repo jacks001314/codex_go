@@ -587,7 +587,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3ae4225b1761c135c6d3bbc1ea0cfcfc95752cdc	41403	Restrict cloud task credentials to trusted origins (#41403)	2026-08-28	core	2	0	0.00	0	0	complete	new_without_redirects,validate_chatgpt_base_url
 3b16b5a5b03aba9a960b5dedde48fb687863c6e9	49702	Rename exec-server file handle management identifiers (#49702)	2026-09-30	execserver	1	0	0.00	0	0	not_applicable	FileHandleManager
 3b2d9a69e62745d4e1ebfda84cfc6134c529b7c4	42870	Avoid redundant filesystem sandbox path resolution (#42870)	2026-09-04	execserver	0	0		0	0	not_applicable	
-3b50349e1a80930e6e9dcf6d9377d65ef55ef052	47248	Add explicit app and account targets to MCP resource reads (#47248)	2026-09-22	appserver	1	0	0.00	0	0	implementation_pending	McpResourceReadTarget
+3b50349e1a80930e6e9dcf6d9377d65ef55ef052	47248	Add explicit app and account targets to MCP resource reads (#47248)	2026-09-22	appserver	1	0	0.00	0	0	complete	McpResourceReadTarget
 3b6ab3471a2d4d994c9fad322fca749564bc05e0	52256	Normalize formatting in docs, web assets, and sample scripts (#52256)	2026-10-08	tui	0	0		0	0	not_applicable	
 3b7a8520efdee155234919fcf1f44f05a303df68	47330	Identify failed SQLite databases in `codex doctor` output (#47330)	2026-09-22	core	0	0		0	0	not_applicable	
 3b8f43a06bb3105e81406b35ff69f94977d18ae4	54766	Defer unknown TUI config fields to the shared strict-config policy (#54766)	2026-10-17	config	0	0		0	0	complete	

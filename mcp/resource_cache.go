@@ -25,6 +25,11 @@ type MCPResourceCacheKey struct {
 	URI      string
 	ThreadID string
 	RootsKey string
+	// Scope is the originating app-call scope, and Target the direct
+	// app/account target (Rust #47248). Both keep cached contents from crossing
+	// account or call boundaries.
+	Scope  string
+	Target string
 }
 
 type MCPResourceCache struct {
@@ -149,6 +154,8 @@ func normalizeMCPResourceCacheKey(key *MCPResourceCacheKey) MCPResourceCacheKey 
 		URI:      strings.TrimSpace(key.URI),
 		ThreadID: strings.TrimSpace(key.ThreadID),
 		RootsKey: strings.TrimSpace(key.RootsKey),
+		Scope:    strings.TrimSpace(key.Scope),
+		Target:   strings.TrimSpace(key.Target),
 	}
 }
 

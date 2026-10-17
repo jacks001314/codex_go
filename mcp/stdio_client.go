@@ -247,7 +247,7 @@ func readMCPStdioResourceWithClient(client *stdioClient, serverName string, root
 		threadID = strings.TrimSpace(*params.ThreadID)
 	}
 	var response MCPResourceReadResponse
-	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots, Elicitation: elicitation, Progress: progress}, "resources/read", map[string]any{"uri": strings.TrimSpace(params.URI)}, &response); err != nil {
+	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots, Elicitation: elicitation, Progress: progress}, "resources/read", mcpResourceReadRequestParams(params), &response); err != nil {
 		return nil, err
 	}
 	return &response, nil
