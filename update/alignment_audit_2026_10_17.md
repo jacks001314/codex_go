@@ -316,3 +316,28 @@ landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 
 | `go build ./...` | exit 0 |
 | `go test ./appserver -run "TestGuardianSession"` | ok |
 | `go test ./appserver -run "Guardian|guardian"` | ok |
+
+# Round 96 增量（2026-10-17，lead）
+
+## 12.1 验证与判定
+
+### #53879 设置更新保留运行中 turn 的恢复血统（`7eed30ad1b`）— 已实现，补回归测试
+
+- Rust 只在没有注册 task 时清空 `SessionState::last_started_turn_id`；Go 没有这个字段，daemon 恢复候选来自 `threads.ActiveTurn` + 已记录的输入（`daemonRecoveryInterruptedTurn`），`ThreadExtraService.UpdateSettings` 不触碰 turn 状态。
+- 新增 `appserver/thread_settings_recovery_like_rust_test.go`：运行中 turn 在 settings 更新后仍是恢复候选、turn 的冻结参数不变、线程级 settings 已更新；`ConsumeTurn` 之后同一更新不再留下候选（对应 Rust 的 idle 分支）。
+
+### #54135 direct exec-server 大文件写入（`4ca84a1069`）— 已实现，补回归测试
+
+- Rust 的问题是 direct 连接沿用了客户端 8 KiB inbound request 上限。Go 的 `DialClient` 从不存在该上限，读上限为 transport 的 16 MiB（`execserver/client.go`）；256 KiB 上限只出现在 Noise harness/relay。
+- 新增 `execserver/direct_websocket_write_test.go`：经 `DialClient` 发送 512 KiB `fs/writeFile`，脚本执行器完整收到并逐字节一致。
+
+### #54059 store-owned resume preparation（`b7ba02f880`）— N/A
+
+- Go 没有 `ThreadStore` trait、`ThreadStoreResumePreparation` 或 `StartThreadOptions`（grep 均 0 命中）；`session.Store` 是具体实现，`Load` 是 resume 的唯一读取点。Rust 该 PR 是给外部 store 的扩展点（默认 unsupported），Go 没有第二个 store 实现，也就不存在可省去的二次加载或消费者。无 CLI 可观察行为。
+
+## 12.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go test ./appserver -run TestThreadSettingsUpdatePreservesRunningTurnRecoveryLikeRust` | ok |
+| `go test ./execserver -run TestDirectWebSocketWritesAboveClientRequestLimitLikeRust` | ok（512 KiB） |
