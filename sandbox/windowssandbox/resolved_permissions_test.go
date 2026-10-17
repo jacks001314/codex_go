@@ -115,3 +115,44 @@ func TestWritableTempRootsMatchTheWorkloadEnvironmentLikeRust(t *testing.T) {
 		t.Fatalf("roots = %#v, want cwd only without a workload temp", roots)
 	}
 }
+
+// Mirrors Rust #44327: the elevated sandbox requires effective :root read
+// access, so root paths and root-denying globs are rejected before expansion
+// while narrower deny-read rules remain valid.
+func TestValidateElevatedFilesystemPolicyRejectsRootDeniesLikeRust(t *testing.T) {
+	base := &ResolvedWindowsSandboxPermissions{
+		FileSystem: &coresandbox.SandboxPolicy{Kind: coresandbox.SandboxReadOnly},
+	}
+	if err := base.ValidateElevatedFilesystemPolicy(); err != nil {
+		t.Fatalf("no deny entries: %v", err)
+	}
+	for _, path := range []coresandbox.FileSystemPath{
+		{Type: "path", Path: "/"},
+		{Type: "path", Path: `C:\`},
+		{Type: "special", Value: &coresandbox.FileSystemSpecialPath{Kind: "root"}},
+		{Type: "glob_pattern", Pattern: "/**"},
+		{Type: "glob_pattern", Pattern: `C:\**`},
+	} {
+		profile := &ResolvedWindowsSandboxPermissions{
+			FileSystem:        &coresandbox.SandboxPolicy{Kind: coresandbox.SandboxReadOnly},
+			DeniedReadEntries: []coresandbox.FileSystemSandboxEntry{{Path: path, Access: coresandbox.FileSystemAccessDeny}},
+		}
+		if err := profile.ValidateElevatedFilesystemPolicy(); err == nil ||
+			!strings.Contains(err.Error(), "requires effective `:root` read access") {
+			t.Fatalf("path %#v error = %v, want root-read rejection", path, err)
+		}
+	}
+	for _, path := range []coresandbox.FileSystemPath{
+		{Type: "path", Path: `/tmp/secret`},
+		{Type: "path", Path: `C:\repo\.git`},
+		{Type: "glob_pattern", Pattern: "/tmp/**"},
+	} {
+		profile := &ResolvedWindowsSandboxPermissions{
+			FileSystem:        &coresandbox.SandboxPolicy{Kind: coresandbox.SandboxReadOnly},
+			DeniedReadEntries: []coresandbox.FileSystemSandboxEntry{{Path: path, Access: coresandbox.FileSystemAccessDeny}},
+		}
+		if err := profile.ValidateElevatedFilesystemPolicy(); err != nil {
+			t.Fatalf("narrow deny %#v error = %v", path, err)
+		}
+	}
+}

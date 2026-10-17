@@ -25,10 +25,11 @@ type WindowsWritableRoot struct {
 }
 
 type ResolvedWindowsSandboxPermissions struct {
-	ProfileID      string
-	FileSystem     *coresandbox.SandboxPolicy
-	NetworkEnabled bool
-	WorkspaceRoots []string
+	ProfileID         string
+	FileSystem        *coresandbox.SandboxPolicy
+	NetworkEnabled    bool
+	WorkspaceRoots    []string
+	DeniedReadEntries []coresandbox.FileSystemSandboxEntry
 }
 
 func TokenModeForPermissionProfile(profile *coresandbox.PermissionProfile, workspaceRoots []string, cwd string, envMap map[string]string) (WindowsSandboxTokenMode, error) {
@@ -63,10 +64,88 @@ func ResolvePermissions(profile *coresandbox.PermissionProfile, workspaceRoots [
 		return nil, fmt.Errorf("only restricted managed filesystem permissions can be enforced by the Windows sandbox")
 	}
 	return &ResolvedWindowsSandboxPermissions{
-		FileSystem:     profile.SandboxPolicy,
-		NetworkEnabled: profile.AllowsNetwork(),
-		WorkspaceRoots: cloneStrings(workspaceRoots),
+		FileSystem:        profile.SandboxPolicy,
+		NetworkEnabled:    profile.AllowsNetwork(),
+		WorkspaceRoots:    cloneStrings(workspaceRoots),
+		DeniedReadEntries: append([]coresandbox.FileSystemSandboxEntry(nil), profile.DeniedReadEntries...),
 	}, nil
+}
+
+// ValidateElevatedFilesystemPolicy rejects policies that deny reads at a
+// filesystem root. The elevated Windows sandbox requires effective root read
+// access and cannot safely enforce those policies (Rust #44327).
+func (p *ResolvedWindowsSandboxPermissions) ValidateElevatedFilesystemPolicy() error {
+	if p == nil || p.FileSystem == nil {
+		return fmt.Errorf("elevated Windows sandbox requires an enforceable filesystem policy")
+	}
+	for _, entry := range p.DeniedReadEntries {
+		if filesystemEntryDeniesRoot(entry.Path) {
+			return fmt.Errorf("elevated Windows sandbox requires effective `:root` read access")
+		}
+	}
+	return nil
+}
+
+func filesystemEntryDeniesRoot(path coresandbox.FileSystemPath) bool {
+	switch path.Type {
+	case "special":
+		if path.Value == nil || !strings.EqualFold(path.Value.Kind, "root") {
+			return false
+		}
+		subpath := ""
+		if path.Value.Subpath != nil {
+			subpath = strings.TrimSpace(*path.Value.Subpath)
+		}
+		return subpath == "" || subpath == "*" || subpath == "**"
+	case "glob_pattern":
+		return staticGlobPrefixIsRoot(path.Pattern)
+	default:
+		return isWindowsFilesystemRoot(path.Path)
+	}
+}
+
+func staticGlobPrefixIsRoot(pattern string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return true
+	}
+	index := strings.IndexAny(pattern, "*?[")
+	prefix := pattern
+	if index >= 0 {
+		prefix = pattern[:index]
+	}
+	prefix = strings.TrimRight(prefix, `/\`)
+	if prefix == "" {
+		return true
+	}
+	if len(prefix) == 2 && prefix[1] == ':' {
+		return true
+	}
+	return isWindowsFilesystemRoot(prefix)
+}
+
+func isWindowsFilesystemRoot(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	cleaned := filepath.Clean(path)
+	if cleaned == string(filepath.Separator) {
+		return true
+	}
+	if len(cleaned) == 3 && cleaned[1] == ':' && (cleaned[2] == '\\' || cleaned[2] == '/') {
+		return true
+	}
+	if len(cleaned) == 2 && cleaned[1] == ':' {
+		return true
+	}
+	volume := filepath.VolumeName(cleaned)
+	if volume == "" {
+		return false
+	}
+	return strings.EqualFold(cleaned, volume) ||
+		strings.EqualFold(cleaned, volume+`\`) ||
+		strings.EqualFold(cleaned, volume+`/`)
 }
 
 func (p *ResolvedWindowsSandboxPermissions) ShouldApplyNetworkBlock() bool {

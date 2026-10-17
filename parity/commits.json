@@ -10971,9 +10971,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: validate_elevated_filesystem_policy"
+        "Round 263: ResolvedWindowsSandboxPermissions retains deny-read entries and ValidateElevatedFilesystemPolicy rejects root literal paths, :root special entries (including */** subpaths), and root-denying globs before expansion; narrower deny rules remain valid. Elevated setup, provisioning setup, and setup refresh call validation before spawning the helper. Tests: go test ./sandbox/windowssandbox -run 'ValidateElevated|PermissionProfile|WritableTemp' -count=1; go test ./sandbox/windowssandbox -count=1; go build ./..."
       ]
     },
     {

@@ -25,8 +25,8 @@ const (
 	seeMaskNoCloseProcess               = 0x00000040
 	// seeMaskNoAsync mirrors Rust #39971: sandbox setup runs on a thread without
 	// a Windows message loop, so ShellExecuteExW requires synchronous activation.
-	seeMaskNoAsync        = 0x00000001
-	shellExecuteShowHide                = 0
+	seeMaskNoAsync       = 0x00000001
+	shellExecuteShowHide = 0
 )
 
 var (
@@ -89,6 +89,9 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 	if req.Permissions == nil || !req.Permissions.IsEnforceableByWindowsSandbox() {
 		return fmt.Errorf("unsupported filesystem permissions for Windows sandbox setup")
 	}
+	if err := req.Permissions.ValidateElevatedFilesystemPolicy(); err != nil {
+		return err
+	}
 	sbxDir := SandboxDir(req.CodexHome)
 	if err := os.MkdirAll(sbxDir, 0o700); err != nil {
 		return setupFailuref(
@@ -124,6 +127,11 @@ func runElevatedSetup(req *SandboxSetupRequest) error {
 func runElevatedProvisioningSetup(req *SandboxSetupRequest) error {
 	if req.CodexHome == "" {
 		return ErrInvalidRequest
+	}
+	if req.Permissions != nil {
+		if err := req.Permissions.ValidateElevatedFilesystemPolicy(); err != nil {
+			return err
+		}
 	}
 	sbxDir := SandboxDir(req.CodexHome)
 	if err := os.MkdirAll(sbxDir, 0o700); err != nil {
@@ -191,6 +199,9 @@ func runSetupRefresh(codexHome string) error {
 func runSetupRefreshForRequest(req *SandboxSetupRequest) error {
 	if req.CodexHome == "" || req.Permissions == nil || !req.Permissions.IsEnforceableByWindowsSandbox() {
 		return ErrInvalidRequest
+	}
+	if err := req.Permissions.ValidateElevatedFilesystemPolicy(); err != nil {
+		return err
 	}
 	sbxDir := SandboxDir(req.CodexHome)
 	if err := os.MkdirAll(sbxDir, 0o700); err != nil {
