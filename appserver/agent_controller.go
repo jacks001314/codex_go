@@ -1231,6 +1231,7 @@ func retainForkedDeveloperMessage(item *session.Item) bool {
 var forkExcludedContentItemKinds = map[string]struct{}{
 	"multi_agent.role_instructions": {},
 	"multi_agent.usage_hint":        {},
+	"persistent_mode.instructions":  {},
 }
 
 func forkExcludedContentItemKind(kinds []string, index int) bool {
@@ -1350,6 +1351,7 @@ func isForkExcludedDeveloperText(text string) bool {
 	return strings.Contains(text, "<multi_agent_role>") ||
 		strings.Contains(text, "<multi_agent_mode>") ||
 		strings.Contains(text, "<multi_agent_usage_hint>") ||
+		strings.Contains(text, "<persistent_mode>") ||
 		strings.Contains(text, "<current_time_reminder>") ||
 		// Rust #46006: the nonfatal clock-failure notice is fork-excluded too.
 		strings.Contains(text, "<current_time_unavailable>")

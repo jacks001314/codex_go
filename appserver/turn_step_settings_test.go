@@ -334,7 +334,7 @@ func TestTurnStepInputItemsResolveTokenBudgetFromEachActiveModelLikeRust(t *test
 		UseModelTokenBudgetDefaults: useModelDefaults,
 		TokenBudgetFeatureEnabled:   true,
 	}
-	provider := router.turnStepInputItemsProvider(string(threadID), runConfig)
+	provider := router.turnStepInputItemsProvider(string(threadID), "turn-step-token-budget", runConfig)
 	if provider == nil {
 		t.Fatal("step input provider is nil")
 	}
@@ -408,7 +408,7 @@ func TestTurnStepInputItemsPreserveExplicitTokenBudgetSettingsLikeRust(t *testin
 	}
 	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store)})
 	t.Cleanup(func() { _ = router.Close() })
-	provider := router.turnStepInputItemsProvider(string(threadID), &appTurnRunConfig{
+	provider := router.turnStepInputItemsProvider(string(threadID), "turn-step-explicit-token-budget", &appTurnRunConfig{
 		Config:                    cfg,
 		ConfiguredTokenBudget:     configured,
 		TokenBudgetFeatureEnabled: true,

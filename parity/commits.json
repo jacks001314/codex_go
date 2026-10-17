@@ -3312,9 +3312,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: PersistentModeSnapshot"
+        "Round 256: persistent mode is a full world-state section. session.WorldState persists a PersistentMode snapshot object (instruction hash or disabled); persistentModeWorldStateInputItem emits on first use, deduplicates unchanged guidance, prefixes replacements, emits a removal notice when effort leaves persistent mode, and treats unknown/legacy retained <persistent_mode> fragments as previous instructions. The per-step provider recomputes from the step's model/effort and catalog persistent_instructions (missing uses the bundled template, explicit empty disables), tailors the approval channel to send_user_message_async, excludes Guardian sessions, and fork sanitization drops the tag and content kind. Tests: go test ./appserver -run 'PersistentMode|TurnStep|CollaborationMode|WorldState|TurnStart' -count=1; go test ./context ./session -count=1; go build ./..."
       ]
     },
     {

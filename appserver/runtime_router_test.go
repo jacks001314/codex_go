@@ -37,6 +37,7 @@ import (
 	"codex_go/codexapi"
 	"codex_go/compact"
 	"codex_go/config"
+	contextfrag "codex_go/context"
 	"codex_go/execserver"
 	"codex_go/features"
 	"codex_go/mcp"
@@ -28381,34 +28382,17 @@ func TestWriteStdinApprovalRunsHooksAndGuardianLikeRust(t *testing.T) {
 }
 
 func TestPersistentModeInstructionsFragmentLikeRust(t *testing.T) {
-	home := t.TempDir()
-	if err := os.WriteFile(config.ConfigPath(home), []byte("[model]\nreasoning_effort = \"persistent\"\n"), 0o600); err != nil {
-		t.Fatalf("write config error = %v", err)
-	}
-	store := session.NewStore(t.TempDir())
-	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Config: config.NewConfigService(home)})
-	defer router.Close()
-	threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{CWD: t.TempDir()}))
-	if threadStart.Error != nil {
-		t.Fatalf("thread start error: %+v", threadStart.Error)
-	}
-	threadID := threadStart.Result.(*ThreadStartResponse).Thread.ID
-	cfg, err := router.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
-	if err != nil || cfg == nil {
-		t.Fatalf("effective config error = %v", err)
-	}
 	// Persistent effort -> fragment.
-	frag := router.persistentModeInstructionsFragment(cfg, &turn.TurnStartParams{CWD: t.TempDir(), Effort: stringPtrAppserver("persistent")}, nil, threadID)
+	frag := contextfrag.PersistentModeInstructions(true, nil, false, false)
 	if frag == nil || frag.ContentKind() != "persistent_mode.instructions" {
 		t.Fatalf("persistent fragment = %#v", frag)
 	}
 	// Ordinary effort -> nil.
-	if frag := router.persistentModeInstructionsFragment(cfg, &turn.TurnStartParams{CWD: t.TempDir(), Effort: stringPtrAppserver("medium")}, nil, threadID); frag != nil {
+	if frag := contextfrag.PersistentModeInstructions(false, nil, false, false); frag != nil {
 		t.Fatalf("ordinary effort produced fragment")
 	}
 	// Guardian session -> nil.
-	guardian := &turn.TurnStartParams{CWD: t.TempDir(), Effort: stringPtrAppserver("persistent"), Originator: "guardian"}
-	if frag := router.persistentModeInstructionsFragment(cfg, guardian, nil, threadID); frag != nil {
+	if frag := contextfrag.PersistentModeInstructions(true, nil, false, true); frag != nil {
 		t.Fatalf("guardian session produced fragment")
 	}
 }

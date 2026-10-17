@@ -324,11 +324,11 @@ func TestPersistentModeInstructionsLikeRust(t *testing.T) {
 	}
 
 	// Rust distinguishes a missing catalog value (bundled default) from an
-	// explicit empty string (section disabled), so the bundled default must not
-	// leak into the explicit-empty case.
+	// explicit empty string (section disabled), so an absent previous section
+	// emits no fragment and the bundled default must not leak into this case.
 	empty := ""
 	fragEmpty := PersistentModeInstructions(true, &empty, true, false)
-	if fragEmpty == nil || strings.Contains(fragEmpty.Body(), "## Proactivity") {
+	if fragEmpty != nil {
 		t.Fatalf("explicit empty catalog instructions = %#v", fragEmpty)
 	}
 

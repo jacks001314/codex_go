@@ -7,6 +7,7 @@ type WorldState struct {
 	Personality            json.RawMessage `json:"personality,omitempty"`
 	ContextWindowGuidance  json.RawMessage `json:"contextWindowGuidance,omitempty"`
 	CollaborationMode      json.RawMessage `json:"collaborationMode,omitempty"`
+	PersistentMode         json.RawMessage `json:"persistentMode,omitempty"`
 	PermissionInstructions json.RawMessage `json:"permissionInstructions,omitempty"`
 	// ApprovedCommandPrefixes carries the compact permissions world-state
 	// section (Rust CompactPermissionsState, section id
@@ -38,6 +39,7 @@ func DecodeWorldState(raw json.RawMessage) (*WorldState, error) {
 	state.Personality = append(json.RawMessage(nil), state.Personality...)
 	state.ContextWindowGuidance = append(json.RawMessage(nil), state.ContextWindowGuidance...)
 	state.CollaborationMode = append(json.RawMessage(nil), state.CollaborationMode...)
+	state.PersistentMode = append(json.RawMessage(nil), state.PersistentMode...)
 	state.PermissionInstructions = append(json.RawMessage(nil), state.PermissionInstructions...)
 	state.ApprovedCommandPrefixes = append(json.RawMessage(nil), state.ApprovedCommandPrefixes...)
 	state.RealtimeConversation = append(json.RawMessage(nil), state.RealtimeConversation...)

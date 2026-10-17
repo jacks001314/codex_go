@@ -450,32 +450,6 @@ func decideClockToolEnablement(cfg *config.Config, params *turn.TurnStartParams,
 	return enableCurrentTimeTool, enableSleepTool
 }
 
-// persistentModeInstructionsFragment builds the persistent-mode developer
-// guidance fragment when the turn is not a Guardian session (Rust #41050).
-// Enablement comes from the centralized features.PersistentModeEnabled check
-// (Rust #48611), which rendering no longer re-derives from the reasoning effort.
-// The approval-request channel is tailored to send_user_message_async
-// availability.
-func (r *RuntimeRouter) persistentModeInstructionsFragment(cfg *config.Config, params *turn.TurnStartParams, modelInfo *model.ModelInfo, threadID string) *contextfrag.SimpleFragment {
-	if cfg == nil || params == nil || r == nil || guardianTurnStart(params) {
-		return nil
-	}
-	enabled := features.PersistentModeEnabled(appReasoningEffortForTurn(cfg, params))
-	asyncAvailable := false
-	if modelInfo != nil {
-		rootAgent := !r.turnThreadIsSubagent(threadID)
-		asyncAvailable = requestUserInputAsyncAvailable(rootAgent, cfg.ExperimentalRequestUserInputEnabled(), modelInfo.ExperimentalSupportedTools) ||
-			freeformAsyncToolAvailable(rootAgent, modelInfo.ExperimentalSupportedTools, features.Enabled(cfg.FeatureSettings(), "send_message_to_user_async"))
-	}
-	// Rust uses the model catalog's persistent_instructions (missing uses the
-	// bundled default, an explicit empty string disables the section).
-	var catalogInstructions *string
-	if modelInfo != nil && modelInfo.ModelMessages != nil {
-		catalogInstructions = modelInfo.ModelMessages.PersistentInstructions
-	}
-	return contextfrag.PersistentModeInstructions(enabled, catalogInstructions, asyncAvailable, false)
-}
-
 func activeTurnDiffKey(threadID string, turnID string) string {
 	return strings.TrimSpace(threadID) + "\x00" + strings.TrimSpace(turnID)
 }
@@ -1744,7 +1718,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
 		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
-		StepInputItems:               r.turnStepInputItemsProvider(threadID, runConfig),
+		StepInputItems:               r.turnStepInputItemsProvider(threadID, turnID, runConfig),
 		AttestationProvider:          runConfig.AttestationProvider,
 		OutputSchema:                 params.OutputSchema,
 		PostToolInputItems:           runConfig.PostToolInputItems,
@@ -7623,6 +7597,22 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			collaborationModeSessionItems = append(collaborationModeSessionItems, persisted)
 		}
 	}
+	persistentModeSessionItems := []session.Item{}
+	if item, err := r.persistentModeWorldStateInputItem(
+		threadID,
+		params,
+		turnID,
+		appReasoningEffortForTurn(cfg, params),
+		modelInfo,
+		cfg,
+	); err != nil {
+		return nil, err
+	} else if item != nil {
+		inputItems = append(inputItems, item)
+		if persisted, ok := persistentModeWorldStateSessionItemForTurn(turnID, item, time.UnixMilli(startedAtMS).UTC()); ok {
+			persistentModeSessionItems = append(persistentModeSessionItems, persisted)
+		}
+	}
 	if item, err := r.multiAgentModeInputItem(threadID, params); err != nil {
 		return nil, err
 	} else if item != nil {
@@ -7650,13 +7640,6 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		return nil, err
 	}
 	inputItems = append(inputItems, currentTimeInputItems...)
-	// Rust #41050: persistent-reasoning turns get bundled proactivity/follow-up
-	// developer guidance (tailored to send_user_message_async availability).
-	if fragment := r.persistentModeInstructionsFragment(cfg, params, modelInfo, threadID); fragment != nil {
-		if rendered := contextfrag.Render(fragment); rendered != nil {
-			instructions = strings.Join(nonEmpty([]string{instructions, rendered.Content}), "\n\n")
-		}
-	}
 	stepInstructionBase := instructions
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
@@ -7671,6 +7654,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	sessionItems = append(sessionItems, permissionsSessionItems...)
 	sessionItems = append(sessionItems, clockNoticeSessionItems...)
 	sessionItems = append(sessionItems, collaborationModeSessionItems...)
+	sessionItems = append(sessionItems, persistentModeSessionItems...)
 	sessionItems = append(sessionItems, skillInstructionSessionItemsForTurn(turnID, skillInputItems, time.UnixMilli(startedAtMS).UTC())...)
 	var extraSessionItemsMu sync.Mutex
 	extraSessionItems := []session.Item{}
@@ -8646,12 +8630,13 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 // sections from the model captured for each sampling step. The turn-start
 // token-budget preferences stay fixed, while model-owned defaults are resolved
 // again against the step's model (Rust #41162).
-func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, runConfig *appTurnRunConfig) turn.StepInputItemsProvider {
+func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, turnID string, runConfig *appTurnRunConfig) turn.StepInputItemsProvider {
 	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
 	if r == nil || runConfig == nil {
 		return nil
 	}
-	return func(_ context.Context, _ int, modelID string, _ string) ([]any, error) {
+	return func(_ context.Context, _ int, modelID string, reasoningEffort string) ([]any, error) {
 		modelID = strings.TrimSpace(modelID)
 		if modelID == "" {
 			return nil, nil
@@ -8675,6 +8660,23 @@ func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, runConfig *a
 		}
 		if item, guidanceErr := r.contextWindowGuidanceWorldStateInputItem(threadID, guidance != "", guidance); guidanceErr != nil {
 			return nil, guidanceErr
+		} else if item != nil {
+			items = append(items, item)
+		}
+		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+		var params *turn.TurnStartParams
+		if active != nil {
+			params = active.Params
+		}
+		if item, persistentErr := r.persistentModeWorldStateInputItem(
+			threadID,
+			params,
+			turnID,
+			reasoningEffort,
+			info,
+			runConfig.Config,
+		); persistentErr != nil {
+			return nil, persistentErr
 		} else if item != nil {
 			items = append(items, item)
 		}

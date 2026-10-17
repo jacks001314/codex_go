@@ -2554,7 +2554,7 @@ f0c5077c34ec7a76b4ad9134835925e6ae3d72ec	54316	Centralize context fragment kind 
 f0f38b68f7287dc7c1b966a459711b3b9ea08172	47904	Support nested canonical paths in config key aliases (#47904)	2026-09-24	config	0	0		0	0	not_applicable	
 f10ec115b73ef7d153deb986b347f6ab4a170241	54097	Show Daybreak notices after the session header (#54097)	2026-10-14	tui	0	0		0	0	complete	
 f11d0dd0120ed936629acb57385090e5317e3903	44327	Prevent filesystem-root read denies in the Windows sandbox (#44327)	2026-09-09	appserver	2	1	0.50	0	0	audit_pending	validate_elevated_filesystem_policy
-f1433fc71f2062ae3c007a03d7ff549bc582d386	41050	Add developer instructions for persistent mode (#41050)	2026-08-27	guardian	2	1	0.50	0	0	audit_pending	PersistentModeSnapshot
+f1433fc71f2062ae3c007a03d7ff549bc582d386	41050	Add developer instructions for persistent mode (#41050)	2026-08-27	guardian	2	2	1.00	0	0	complete
 f151a0f5c20e50055957b79d50e16834e00e32e1	49714	Decouple API-key cyber access programs from model discovery (#49714)	2026-09-30	appserver	0	0		0	0	not_applicable	
 f16c2237a561c008375f10e3ae64600654ebd758	45089	Delay automatic recaps and compact their TUI layout (#45089)	2026-09-12	tui	1	1	1.00	0	0	complete	
 f1a6f7c9b3de46202e0d7529828176dab27146bd	40679	Add Amazon Bedrock setup to TUI onboarding (#40679)	2026-08-25	tui	9	1	0.11	0	0	audit_pending	BedrockState,SELECT_FOURTH,handle_bedrock_key_event,handle_bedrock_paste,is_text_entry_active,onboarding_request_id,should_suppress_printable_quit,start_bedrock_discovery
