@@ -124,7 +124,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0d0979f4576638c7b7bae7a9b2b4469c2f4664cc	45766	Add gated plan usage history to TUI analytics (#45766)	2026-09-15	tui	15	5	0.33	0	0	audit_pending	PlanLimitBreakdown,PlanLimitDimension,PlanLimitHistory,PlanLimitPeriod,PlanLimitValue,SectionStates,get_plan_limit_history,plan_action,plan_history,plan_lines
 0d226929622ce177b56e35d09cf39dd001721466	41429	Retain the last selected step context for each turn (#41429)	2026-08-28	persistence	1	0	0.00	0	0	not_applicable	set_last_known_step_context
 0d3868a30c37d3fd90bdc64730fa93de01907739	51192	Wait for SIGCONT when resuming the TUI (#51192)	2026-10-05	tui	0	0		0	0	not_applicable	
-0d46c252b3f29f10bacf0ef58a17a1aa5d17ead3	44002	Encapsulate executed tool call metadata recording (#44002)	2026-09-09	mcp	4	3	0.75	0	0	audit_pending	attach_to_prompt
+0d46c252b3f29f10bacf0ef58a17a1aa5d17ead3	44002	Encapsulate executed tool call metadata recording (#44002)	2026-09-09	mcp	4	3	0.75	0	0	complete	attach_to_prompt
 0d502a423031396a8d11c096e5b9f1cb0d30b3d0	42328	Support durable reasoning configuration updates (#42328)	2026-09-02	guardian	1	1	1.00	0	0	complete	
 0d58012ec20d0f42ea1c11056815e4a0c5122e99	53963	Test memory extraction budgets with excluded items and ciphertext (#53963)	2026-10-14	core	0	0		0	0	complete	
 0d654e653614b0f99b8da3e4a74aa2558ee61752	40987	Track window and fork positions in turn metadata (#40987)	2026-08-26	appserver	5	5	1.00	0	0	complete	
@@ -133,7 +133,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0df1daf5269b51c768c428e6bfded32210cc8cc9	44175	Attach compressed rollouts to diagnostic reports as JSONL (#44175)	2026-09-09	appserver	1	0	0.00	0	0	complete	read_rollout_prefix
 0df39752cbc4b88d0194ec62bdb0d56fbda4b014	43428	Notify opted-in stdio MCP servers of auth changes (#43428)	2026-09-07	mcp	5	5	1.00	0	0	complete	
 0df4aa67781ae45a3c97befa4db48b734afe46d9	54656	Honor MCP tool-list changes within a turn (#54656)	2026-10-16	mcp	6	4	0.67	0	0	complete	notifications_current,track_tool_list_changes
-0df6366a87dbadf5376cdd26b7675935ef76f893	44336	Add bounded tool-result metadata support to executed tool calls (#44336)	2026-09-09	mcp	6	5	0.83	0	0	audit_pending	history_with_tool_call_metadata
+0df6366a87dbadf5376cdd26b7675935ef76f893	44336	Add bounded tool-result metadata support to executed tool calls (#44336)	2026-09-09	mcp	6	5	0.83	0	0	complete	history_with_tool_call_metadata
 0df76892b13277eca943a6507c7964e4b0f99a5b	50441	Support ordered response items in world-state context updates (#50441)	2026-10-02	guardian	16	16	1.00	0	0	complete	
 0dfb28edb9305fcae4ab006fb6b7b196cbdbac28	45831	Allow session-only model and reasoning selection in the TUI (#45831)	2026-09-16	tui	3	1	0.33	0	0	audit_pending	SelectionSecondaryAction,session_model_selection_action
 0e03f88a30bbce4638aeabc62557dda90612d32c	41938	Clarify resume guidance in exit summaries (#41938)	2026-08-31	tui	1	0	0.00	0	0	implementation_pending	ResumableThread
@@ -153,7 +153,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0f64d7080864d22610731935cdc203bd2b3c5d93	42823	Expose managed WebMCP policy through the app server (#42823)	2026-09-04	appserver	0	0		0	0	not_applicable	
 0f7c8608bdce4874acba3f3a4467f1bf8275fecc	46512	Capture Guardian review checkpoints from live context (#46512)	2026-09-18	guardian	2	0	0.00	0	0	implementation_pending	guardian_fork_history,world_state_checkpoint
 0f8df3d2140a0e120361eb4f0f806ce930b8a312	49812	Move shadow skill ranking off the turn preparation path (#49812)	2026-09-30	core	2	2	1.00	0	0	complete	
-0f9a731adeb4ccc75a7a417945ec01ee98e997d7	48574	Preserve deferred tool namespace names before descriptions (#48574)	2026-09-26	persistence	2	1	0.50	0	0	audit_pending	DESCRIPTION_TRUNCATION_SUFFIX
+0f9a731adeb4ccc75a7a417945ec01ee98e997d7	48574	Preserve deferred tool namespace names before descriptions (#48574)	2026-09-26	persistence	2	1	0.50	0	0	complete	DESCRIPTION_TRUNCATION_SUFFIX
 0fbf0bedc25d0effec4b758030772468339d315c	48502	Fix ChatGPT browser sign-in for local app servers (#48502)	2026-09-26	tui	0	0		0	0	not_applicable	
 0fd1cd8d99b6ef3636ebf5d5e1501101372f69e4	46288	Add opt-in overhead timing to code-mode responses (#46288)	2026-09-17	appserver	1	1	1.00	0	0	complete	
 0fd85b075288c4fee50f0df3e4e4f98f80c693fe	54069	Fix Windows environment handling for remote MCP servers (#54069)	2026-10-14	mcp	0	0		0	0	complete	
@@ -177,7 +177,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 11da6b9edcbbf1cffdb9b7686970b5b4d5af9c83	51828	Add policy-based file contents integrity checks (#51828)	2026-10-07	sandbox	6	6	1.00	0	0	complete	
 121f91fd5d9dc66017866ce9bdc49f1e182721df	43340	Enable remote named permission profile selection in the TUI (#43340)	2026-09-07	tui	4	1	0.25	0	0	audit_pending	confirmed_server_profile,reject_pending_permission_change,retain_input_after_failed_permission_selection
 122d55cba84993fb21af3f9cc342e099b8f690a4	44867	Preserve originating budgets for code mode notifications (#44867)	2026-09-11	core	1	1	1.00	0	0	complete	
-124e560b9357746b6a7e2bba1fd244115fd9cc5a	41199	Make the optional MCP startup grace configurable (#41199)	2026-08-27	mcp	2	1	0.50	0	0	audit_pending	optional_startup_deadline
+124e560b9357746b6a7e2bba1fd244115fd9cc5a	41199	Make the optional MCP startup grace configurable (#41199)	2026-08-27	mcp	2	1	0.50	0	0	complete	optional_startup_deadline
 12607163938054d7e90fa1d2a1c63772dece6689	49099	Cache parsed plugin manifests across plugin workflows (#49099)	2026-09-28	appserver	6	4	0.67	0	0	audit_pending	list_marketplaces_with_cache,plugin_capability_summary_from_root
 1281778e3273ab8e28c700ba84f5f12115e0ddc0	42403	Expose the last accepted environment ready report (#42403)	2026-09-02	execserver	1	1	1.00	0	0	complete	
 129fd21687fbd4ac48133b7abfdcaf52cb6cb01f	44070	Reject empty audio payloads in data URLs (#44070)	2026-09-09	core	0	0		0	0	not_applicable	

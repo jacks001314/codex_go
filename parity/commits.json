@@ -3648,9 +3648,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: optional_startup_deadline"
+        "MCP optional startup grace is configurable with a 1s default, explicit zero disables the shared grace, runtime refreshes apply the new value, and catalog capture shares one deadline for the same server identity."
       ]
     },
     {
@@ -10119,9 +10119,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: attach_to_prompt"
+        "turn.ExecutedToolCallRecorder centralizes recording, accepted result sources, request-local prompt attachment, retry snapshots, completeness, and metadata budgeting; AttachPendingToPrompt is the attach_to_prompt equivalent."
       ]
     },
     {
@@ -11031,9 +11031,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: history_with_tool_call_metadata"
+        "Tool-result metadata is host-only, bounded and redacted, survives retries and late Code Mode results, is shed before source/call/completion evidence, and is destination-filtered for HTTP and WebSocket requests."
       ]
     },
     {
@@ -22136,9 +22136,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: DESCRIPTION_TRUNCATION_SUFFIX"
+        "Deferred tool namespace summaries reserve all names before sharing the 4 KiB description budget, preserve UTF-8 boundaries with an ellipsis, and retain omission notices only when names overflow."
       ]
     },
     {
