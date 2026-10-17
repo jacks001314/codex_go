@@ -82,6 +82,14 @@ type skillsToolExecutor struct {
 	catalog    *orchestratorSkillCatalogCache
 	providers  *skillprovider.Registry
 	executor   *executorSkillCatalogCache
+	readMu     sync.Mutex
+	read       *executorReadSnapshot
+}
+
+type executorReadSnapshot struct {
+	authority skillsToolAuthority
+	pkg       string
+	result    skillprovider.ReadResult
 }
 
 type OrchestratorSkillMetadata struct {
@@ -216,6 +224,7 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	if err := decodeStrictToolArgs(invocation, &args); err != nil {
 		return nil, tool.RespondToModel(err.Error())
 	}
+	responseByteBudget := invocation.ResponseByteBudget(maxSkillToolResponseBytes)
 	authority := args.Authority
 	if err := validateSkillsToolReadAuthority(authority); err != nil {
 		return nil, err
@@ -241,18 +250,32 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 	}
 	var result skillprovider.ReadResult
 	var err error
-	if authority.Kind == "orchestrator" {
-		var contents string
-		contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, resource)
-		result = skillprovider.ReadResult{Resource: resource, Contents: contents}
-	} else if e.providers != nil {
-		result, err = e.providers.Read(ctx, skillprovider.ReadRequest{
-			Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: authority.ID},
-			PackageID: entry.Package,
-			Resource:  resource,
-		})
-	} else {
-		err = errors.New("executor skill provider is not configured")
+	cached := false
+	if authority.Kind == "executor" && args.Cursor != nil {
+		e.readMu.Lock()
+		if e.read != nil && e.read.authority == authority && e.read.pkg == args.Package && e.read.result.Resource == resource {
+			result = e.read.result
+			cached = true
+		}
+		e.readMu.Unlock()
+	}
+	if !cached {
+		// A cached continuation reuses the retained executor snapshot instead
+		// of rereading the whole resource for every page.
+		switch {
+		case authority.Kind == "orchestrator":
+			var contents string
+			contents, err = ReadOrchestratorSkillResource(e.mcpService, e.threadID, args.Package, resource)
+			result = skillprovider.ReadResult{Resource: resource, Contents: contents}
+		case e.providers != nil:
+			result, err = e.providers.Read(ctx, skillprovider.ReadRequest{
+				Authority: skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: authority.ID},
+				PackageID: entry.Package,
+				Resource:  resource,
+			})
+		default:
+			err = errors.New("executor skill provider is not configured")
+		}
 	}
 	if err != nil {
 		return nil, tool.RespondToModel("failed to read skill resource")
@@ -273,9 +296,18 @@ func (e *skillsToolExecutor) executeRead(ctx context.Context, invocation *tool.I
 			skillRoot = stringPtrIfNotEmpty(root)
 		}
 	}
-	response, pageErr := skillReadPage(result.Resource, result.Contents, skillRoot, start)
+	response, pageErr := skillReadPage(result.Resource, result.Contents, skillRoot, start, responseByteBudget)
 	if pageErr != nil {
 		return nil, pageErr
+	}
+	if authority.Kind == "executor" && response.NextCursor != nil {
+		e.readMu.Lock()
+		e.read = &executorReadSnapshot{
+			authority: authority,
+			pkg:       args.Package,
+			result:    result,
+		}
+		e.readMu.Unlock()
 	}
 	return skillsToolJSONOutput(invocation, response)
 }
@@ -736,24 +768,38 @@ func skillToolSerializedLen(value any) int {
 	return len(encoded)
 }
 
-func skillReadPage(resource string, contents string, skillRoot *string, start int) (skillsReadResponse, error) {
+func skillReadPage(resource string, contents string, skillRoot *string, start int, maxResponseBytes int) (skillsReadResponse, error) {
 	complete := skillsReadResponse{Resource: resource, Contents: contents[start:], SkillRoot: cloneStringPtr(skillRoot)}
-	if skillToolSerializedLen(complete) <= maxSkillToolResponseBytes {
+	if skillToolSerializedLen(complete) <= maxResponseBytes {
 		return complete, nil
 	}
-	end := len(contents)
-	for end > start {
-		end = start + (end-start)/2
-		for end > start && !isUTF8Boundary(contents, end) {
+	lower := start
+	upper := len(contents)
+	var best *skillsReadResponse
+	for lower < upper {
+		end := lower + (upper-lower+1)/2
+		for end > lower && !isUTF8Boundary(contents, end) {
 			end--
+		}
+		if end == lower {
+			break
 		}
 		cursor := skillToolCursor(contents, end)
 		candidate := skillsReadResponse{Resource: resource, Contents: contents[start:end], SkillRoot: cloneStringPtr(skillRoot), NextCursor: &cursor}
-		if skillToolSerializedLen(candidate) <= maxSkillToolResponseBytes {
-			return candidate, nil
+		if skillToolSerializedLen(candidate) <= maxResponseBytes {
+			lower = end
+			best = &candidate
+		} else {
+			upper = end - 1
+			for upper > lower && !isUTF8Boundary(contents, upper) {
+				upper--
+			}
 		}
 	}
-	return skillsReadResponse{}, tool.Fatal("skill resource handle leaves no room for contents")
+	if best != nil {
+		return *best, nil
+	}
+	return skillsReadResponse{}, tool.RespondToModel("skills.read response budget leaves no room for contents")
 }
 
 func isUTF8Boundary(value string, offset int) bool {

@@ -1510,9 +1510,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ExecutorReadSnapshot"
+        "Round 115 (lead): landed in turn/skills_tools.go - skills.read now sizes each page to invocation.ResponseByteBudget(maxSkillToolResponseBytes), binary-searches the largest valid UTF-8 page after JSON escaping, and rejects an insufficient budget with `skills.read response budget leaves no room for contents`. Executor cursor continuations reuse a retained read snapshot keyed by authority/package/resource instead of rereading the resource; another paged resource replaces it, and a cursor miss rereads and validates against current contents. Tests: TestSkillsReadHonorsResponseBudgetAndReusesExecutorSnapshotLikeRust, TestSkillReadPageHonorsEscapedAndMultibyteBudgetsLikeRust, TestExecutorSkillsToolsListReadPaginateAndValidateAuthorityLikeRust. RC: fixed 512 KiB budget completes the first page without a cursor; disabling the snapshot path performs a second provider read. go test ./turn -count=1 + go vet ./turn + go build ./turn ./tool ./appserver ./model green."
       ]
     },
     {

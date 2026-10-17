@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"codex_go/agent"
 	"codex_go/mcp"
@@ -18,6 +20,7 @@ import (
 	"codex_go/plugin"
 	"codex_go/skillprovider"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 func TestDynamicToolPreservesInlineAudioContent(t *testing.T) {
@@ -613,6 +616,131 @@ func TestExecutorSkillsToolsListReadPaginateAndValidateAuthorityLikeRust(t *test
 			var callErr *tool.FunctionCallError
 			if !errors.As(err, &callErr) || !callErr.RespondsToModel() {
 				t.Fatalf("error = %#v", err)
+			}
+		})
+	}
+}
+
+func TestSkillsReadHonorsResponseBudgetAndReusesExecutorSnapshotLikeRust(t *testing.T) {
+	entry := skillprovider.CatalogEntry{
+		PackageID:    "skill://budget@1/plugin/skills/budget",
+		Authority:    skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: "budget@1"},
+		Name:         "budget:skill",
+		Description:  "Budget test skill.",
+		MainResource: "skill://budget@1/plugin/skills/budget/SKILL.md",
+		Enabled:      true, PromptVisible: true,
+	}
+	contents := "BUDGET_MARKER\n" + strings.Repeat("x", 5000)
+	var reads atomic.Int64
+	provider := skillprovider.ProviderFuncs{
+		ListFunc: func(context.Context, skillprovider.ListQuery) (skillprovider.Catalog, error) {
+			return skillprovider.Catalog{Entries: []skillprovider.CatalogEntry{entry}}, nil
+		},
+		ReadFunc: func(_ context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
+			reads.Add(1)
+			return skillprovider.ReadResult{Resource: request.Resource, Contents: contents}, nil
+		},
+	}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.SkillProviders = skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	budget := utils.BytesPolicy(500)
+	firstOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:     "first",
+		ToolName:   tool.NamespacedName("skills", "read"),
+		Truncation: &budget,
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"budget@1"},"package":"` +
+			entry.PackageID + `","resource":"` + entry.MainResource + `"}`},
+	})
+	if err != nil {
+		t.Fatalf("first skills.read error = %v", err)
+	}
+	var first skillsReadResponse
+	if err := json.Unmarshal([]byte(firstOutput.Body), &first); err != nil {
+		t.Fatalf("first skills.read JSON = %v", err)
+	}
+	if first.NextCursor == nil || len(firstOutput.Body) > 600 || !strings.HasPrefix(contents, first.Contents) {
+		t.Fatalf("first page len=%d response=%#v", len(firstOutput.Body), first)
+	}
+	secondOutput, err := router.Dispatch(context.Background(), &tool.Invocation{
+		CallID:     "second",
+		ToolName:   tool.NamespacedName("skills", "read"),
+		Truncation: &budget,
+		Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"budget@1"},"package":"` +
+			entry.PackageID + `","resource":"` + entry.MainResource + `","cursor":"` + *first.NextCursor + `"}`},
+	})
+	if err != nil {
+		t.Fatalf("second skills.read error = %v", err)
+	}
+	if reads.Load() != 1 {
+		t.Fatalf("executor reads = %d, want one retained snapshot", reads.Load())
+	}
+	var second skillsReadResponse
+	if err := json.Unmarshal([]byte(secondOutput.Body), &second); err != nil {
+		t.Fatalf("second skills.read JSON = %v", err)
+	}
+	if len(secondOutput.Body) > 600 || !strings.HasPrefix(contents[len(first.Contents):], second.Contents) {
+		t.Fatalf("second page len=%d response=%#v", len(secondOutput.Body), second)
+	}
+
+	for _, limit := range []int{0, 1} {
+		tiny := utils.BytesPolicy(limit)
+		_, err = router.Dispatch(context.Background(), &tool.Invocation{
+			CallID:     "tiny",
+			ToolName:   tool.NamespacedName("skills", "read"),
+			Truncation: &tiny,
+			Payload: tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor","id":"budget@1"},"package":"` +
+				entry.PackageID + `","resource":"` + entry.MainResource + `"}`},
+		})
+		var callErr *tool.FunctionCallError
+		if !errors.As(err, &callErr) || !strings.Contains(callErr.ModelMessage(), "response budget leaves no room for contents") {
+			t.Fatalf("budget %d error = %#v", limit, err)
+		}
+	}
+}
+
+func TestSkillReadPageHonorsEscapedAndMultibyteBudgetsLikeRust(t *testing.T) {
+	contents := strings.Repeat("quote \" slash \\ newline\n emoji 😀 ", 40)
+	for _, budget := range []int{180, 300, 1024} {
+		t.Run(strconv.Itoa(budget), func(t *testing.T) {
+			start := 0
+			var reconstructed strings.Builder
+			for {
+				response, err := skillReadPage("skill://budget/SKILL.md", contents, nil, start, budget)
+				if err != nil {
+					t.Fatalf("skillReadPage(start=%d) error = %v", start, err)
+				}
+				if serialized := skillToolSerializedLen(response); serialized > budget {
+					t.Fatalf("page size = %d, want <= %d", serialized, budget)
+				}
+				if response.Contents == "" || !utf8.ValidString(response.Contents) {
+					t.Fatalf("page contents are not valid UTF-8: %q", response.Contents)
+				}
+				reconstructed.WriteString(response.Contents)
+				if response.NextCursor == nil {
+					break
+				}
+				next, err := parseSkillToolCursor(response.NextCursor, contents, "skills.read")
+				if err != nil {
+					t.Fatalf("parseSkillToolCursor() error = %v", err)
+				}
+				if next <= start {
+					t.Fatalf("cursor advanced %d -> %d", start, next)
+				}
+				start = next
+			}
+			if reconstructed.String() != contents {
+				t.Fatalf("reconstructed %d bytes, want %d", reconstructed.Len(), len(contents))
 			}
 		})
 	}
