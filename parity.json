@@ -1614,6 +1614,14 @@
             "reason": "Aligned upstream e7f119819a (#47851 Preserve human overrides across repeated heartbeat instructions): Go derives heartbeat origin from the exact user.heartbeat kind, parses bounded scheduler envelopes, and coalesces only unchanged instructions per automation after acceptance ordering. Changed heartbeat versions and all ordinary user messages remain, so later human authorization overrides are preserved. UserInputOrigin and RetainedUserMessage metadata cover Rust's UserInputMetadata carrier.",
             "userImpact": "Repeated scheduler heartbeats no longer hide a later human instruction from retained context or Guardian authorization evidence.",
             "test": "go test ./retainedctx ./appserver -run 'Heartbeat|Retained' -count=1"
+        },
+        {
+            "id": "required-environment-skills",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 42312d4ff4 (#51157 Enforce required environment skills before model inference): Go accepts per-environment skills.required through environment/add and environments.toml, projects requirements from captured selections including pending or failed environments, removes them after deselection, exempts isolated Guardian reviewers, and fails before every model request unless an enabled catalog entry is supplied by the exact environment. Cloud/orchestrator entries cannot satisfy environment-scoped requirements and therefore need no separate cloud-catalog lock accessor.",
+            "userImpact": "A selected executor's declared skill contract is enforced before inference without leaking requirements to other environments or retained after deselection.",
+            "test": "go test ./mcp ./appserver ./turn -run 'Required.*Skill|RequiredSkills' -count=1"
         }
     ]
 }
