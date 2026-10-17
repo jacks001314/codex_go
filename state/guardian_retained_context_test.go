@@ -363,7 +363,7 @@ func TestGuardianPromptIncludesRetainedInstructionsLikeRust(t *testing.T) {
 	})
 
 	prompt, err := BuildPromptWithOptions(Action{Type: "network_access", Host: "example.com", Port: 443, Protocol: "https"}, []string{"caller requested the host"}, BuildPromptOptions{
-		RootUserAuthorization: []string{"Do not publish."},
+		RootUserAuthorization: []RootMessage{{Kind: RootMessageUser, Text: "Do not publish."}},
 		RetainedContext:       context,
 	})
 	if err != nil {
@@ -407,7 +407,7 @@ func TestGuardianPromptIncludesRetainedInstructionsLikeRust(t *testing.T) {
 
 	// A review without a retained snapshot is unchanged.
 	withoutRetained, err := BuildPromptWithOptions(Action{Type: "network_access", Host: "example.com", Port: 443, Protocol: "https"}, []string{"caller requested the host"}, BuildPromptOptions{
-		RootUserAuthorization: []string{"Do not publish."},
+		RootUserAuthorization: []RootMessage{{Kind: RootMessageUser, Text: "Do not publish."}},
 	})
 	if err != nil {
 		t.Fatalf("BuildPromptWithOptions() error = %v", err)

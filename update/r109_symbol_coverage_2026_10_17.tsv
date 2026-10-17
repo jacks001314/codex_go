@@ -2214,7 +2214,7 @@ d0a64e91ae6b64550ca8bed14f1e7248f3e3d972	48015	Validate tool suggestion install 
 d0a8dcd15721adb02a3227d08d3cde888e5546e5	43494	Limit archive rollout reads to requested threads (#43494)	2026-09-07	persistence	1	0	0.00	0	0	implementation_pending	scan_unarchived_threads
 d1092865f8ec63735006211f65ee109ce91c30b9	47185	Allow forking conversations locked by another app in the TUI (#47185)	2026-09-22	tui	0	0		0	0	not_applicable	
 d117c2eb02bb808cddc13f0a44767549b5577853	44289	Expand MXC volume grants and resolve deny globs (#44289)	2026-09-09	sandbox	0	0		0	0	not_applicable	
-d12a7f3fd8a3f0dcffc665d515b9ee0dd3714315	39975	Preserve root user authorization in subagent Guardian reviews (#39975)	2026-08-21	guardian	4	3	0.75	0	0	audit_pending	guardian_root_conversation
+d12a7f3fd8a3f0dcffc665d515b9ee0dd3714315	39975	Preserve root user authorization in subagent Guardian reviews (#39975)	2026-08-21	guardian	4	4	1.00	0	0	complete
 d132b692199c53c085c7b2cbec3c44e2dc5cf277	40676	Deprecate full-history hydration for paginated threads (#40676)	2026-08-25	tui	0	0		0	0	not_applicable	
 d13aeb77ea0eb72a994324143e6cdffcba650963	42716	Allow trusted symlinks beneath CODEX_HOME on macOS (#42716)	2026-09-04	tui	3	0	0.00	0	0	implementation_pending	ToolOrchestrator,allowed_symlinked_codex_home,with_allowed_symlinked_codex_home
 d13db678cb5390f77d7fa6ba762f85b787fedcec	54763	Stop applying macOS background priority to managed daemons (#54763)	2026-10-17	appserver	0	0		0	0	not_applicable	

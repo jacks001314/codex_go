@@ -97,7 +97,7 @@ type modelGuardianReviewer struct {
 	// review request's `parent_response_id` client metadata (Rust #45441).
 	latestResponseID      func(threadID, turnID string) string
 	nodeReplEvidence      func(threadID string, reviewedSequence uint64) *codexctx.NodeReplReviewEvidenceFragment
-	rootUserAuthorization func(threadID, turnID string) []string
+	rootUserAuthorization func(threadID, turnID string) []state.RootMessage
 	// retainedContext resolves the thread's retained evidence, which the review
 	// prompt renders as the retained user-instruction section (Rust's
 	// SectionHistory::retained_context and the RetainedUserInstructionsSection).
@@ -761,7 +761,7 @@ reviewAttempt:
 	} else {
 		prompt, err = state.BuildPromptWithOptions(action, transcript, buildOptions)
 	}
-	var rootAuthorization []string
+	var rootAuthorization []state.RootMessage
 	if err == nil && r.rootUserAuthorization != nil {
 		rootAuthorization = r.rootUserAuthorization(threadID, turnID)
 		if len(rootAuthorization) > 0 {
@@ -2124,7 +2124,7 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
 // predicate: local or root review evidence that changed while the reviewer was
 // running makes the assessment stale and triggers a fresh attempt.
-func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []string) bool {
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, omissionNote string, rootAuthorization []state.RootMessage) bool {
 	if r == nil {
 		return false
 	}

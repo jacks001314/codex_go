@@ -355,7 +355,7 @@ func TestBuildPromptAppendsGuardianToolDescriptionsLikeRust(t *testing.T) {
 // first and the planned action (with its tool descriptions) is last, so changing
 // the reviewed action never invalidates the evidence prefix.
 func TestBuildPromptKeepsEvidenceBeforeTheActionLikeRust(t *testing.T) {
-	options := BuildPromptOptions{RootUserAuthorization: []string{"Summarize the release notes."}}
+	options := BuildPromptOptions{RootUserAuthorization: []RootMessage{{Kind: RootMessageUser, Text: "Summarize the release notes."}}}
 	transcript := []string{"shell ls", "agent read the changelog"}
 	first, err := BuildPromptWithOptions(Action{Type: "command", Command: "rm -rf build", CWD: "/repo"}, transcript, options)
 	if err != nil {

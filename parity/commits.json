@@ -274,9 +274,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: guardian_root_conversation"
+        "Round 251: guardianRootConversation walks the worker's ParentThreadID chain to the root, requires MultiAgent V2, and returns the last eight root user/final-assistant messages each bounded to 900 tokens. Compaction summaries, <user_action> review artifacts, contextual user fragments, and assistant commentary are filtered; roles are preserved through state.RootMessage so BuildPromptOptions labels assistant text as untrusted context and only user messages as authorization evidence. Tests: go test ./appserver -run 'GuardianRoot|Guardian' -count=1; go test ./state -run Guardian -count=1; go build ./..."
       ]
     },
     {

@@ -597,12 +597,12 @@ type BuildPromptOptions struct {
 	// NodeReplEvidence includes bounded node_repl results as untrusted
 	// evidence in the review prompt (Rust #38397).
 	NodeReplEvidence *context.NodeReplReviewEvidenceFragment
-	// RootUserAuthorization carries bounded root-conversation evidence for
-	// subagent (MultiAgent V2) reviews so late root-user authorization is not
-	// lost when the worker's own transcript lacks it (#39975). Only root user
-	// messages are treated as authorization evidence; agent claims and
-	// assistant commentary are excluded.
-	RootUserAuthorization []string
+	// RootUserAuthorization carries bounded, role-preserving root-conversation
+	// evidence for subagent (MultiAgent V2) reviews so late root-user
+	// authorization is not lost when the worker's own transcript lacks it
+	// (#39975). Only root user messages are treated as authorization evidence;
+	// assistant messages remain labeled untrusted context.
+	RootUserAuthorization []RootMessage
 	// RetainedContext carries the host-owned retained snapshot so the review
 	// prompt includes the retained user-instruction section: bounded original
 	// instructions in acceptance order, with assistant text as untrusted
@@ -692,13 +692,13 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 	}
 	if len(options.RootUserAuthorization) > 0 {
 		messages := make([]RootMessage, 0, len(options.RootUserAuthorization))
-		for _, line := range options.RootUserAuthorization {
-			if strings.TrimSpace(line) == "" {
+		for _, message := range options.RootUserAuthorization {
+			if strings.TrimSpace(message.Text) == "" {
 				continue
 			}
-			// Rust's root conversation section renders every retained line as
-			// role-labeled evidence inside its START/END markers.
-			messages = append(messages, RootMessage{Kind: RootMessageUser, Text: strings.TrimSpace(line)})
+			// The host resolves roles before composition so assistant context
+			// cannot be mistaken for user authorization.
+			messages = append(messages, message)
 		}
 		if items := RootConversationSectionItems(messages); len(items) > 0 {
 			addSection(strings.Join(items, ""))

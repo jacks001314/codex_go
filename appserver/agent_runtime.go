@@ -6,8 +6,12 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/agent"
 	"codex_go/auth"
+	"codex_go/compact"
 	"codex_go/config"
+	codexctx "codex_go/context"
+	"codex_go/eventmap"
 	"codex_go/features"
 	"codex_go/install"
 	"codex_go/model"
@@ -254,12 +258,10 @@ func (r *RuntimeRouter) guardianRetainedContextForTurn(threadID, turnID string) 
 	return r.retainedContextForThread(threadID)
 }
 
-// guardianRootUserAuthorizationForTurn returns bounded root-conversation user
-// message evidence for a subagent (MultiAgent V2) review so late root-user
-// authorization is not lost when the worker transcript lacks it (#39975). The
-// real root-thread backfill is a best-effort read from the active worker's root
-// thread; when unavailable, the reviewer falls back to the worker transcript.
-func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID string) []string {
+// guardianRootUserAuthorizationForTurn returns bounded, role-preserving root
+// conversation evidence for a MultiAgent V2 worker review so late root-user
+// authorization is not lost when the worker transcript lacks it (#39975).
+func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID string) []state.RootMessage {
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
 	if active == nil || active.Params == nil {
 		return nil
@@ -268,52 +270,140 @@ func (r *RuntimeRouter) guardianRootUserAuthorizationForTurn(threadID, turnID st
 	if err != nil || cfg == nil {
 		return nil
 	}
-	return r.runtimeRootUserEvidence(threadID)
+	worker, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, false)
+	if err != nil || worker == nil || worker.ParentThreadID == "" {
+		return nil
+	}
+	if knownRuntimeMultiAgentVersion(worker.Metadata.MultiAgentVersion) != agent.VersionV2 {
+		agentsConfig, agentsErr := cfg.AgentsConfig(r.configBaseDirForAgents())
+		if agentsErr != nil {
+			agentsConfig = nil
+		}
+		if r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig) != agent.VersionV2 {
+			return nil
+		}
+	}
+	return r.guardianRootConversation(threadID)
 }
 
-// runtimeRootUserEvidence is a best-effort read of the worker's root user
-// message text. It returns nil when no root evidence is accessible.
-func (r *RuntimeRouter) runtimeRootUserEvidence(workerThreadID string) []string {
+// guardianRootConversation returns the last eight root user/final-assistant
+// messages, each bounded to 900 tokens. User summaries, synthetic user-action
+// wrappers, contextual user fragments, and assistant commentary are excluded.
+func (r *RuntimeRouter) guardianRootConversation(workerThreadID string) []state.RootMessage {
 	if r == nil || strings.TrimSpace(workerThreadID) == "" {
 		return nil
 	}
-	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(workerThreadID)), true, true)
-	if err != nil || record == nil {
+	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(workerThreadID)), true, false)
+	if err != nil || record == nil || record.ParentThreadID == "" {
 		return nil
 	}
-	const maxRootUserEvidenceChars = 3600
-	total := 0
-	var out []string
-	for i := len(record.Items) - 1; i >= 0 && total < maxRootUserEvidenceChars; i-- {
+	seen := map[session.ThreadID]bool{record.ID: true}
+	for record.ParentThreadID != "" {
+		if seen[record.ParentThreadID] {
+			return nil
+		}
+		seen[record.ParentThreadID] = true
+		parent, parentErr := r.threadRecord(record.ParentThreadID, true, true)
+		if parentErr != nil || parent == nil {
+			return nil
+		}
+		record = parent
+	}
+	if record.ID == session.ThreadID(strings.TrimSpace(workerThreadID)) ||
+		knownRuntimeMultiAgentVersion(record.Metadata.MultiAgentVersion) == agent.VersionV1 {
+		return nil
+	}
+
+	messages := make([]state.RootMessage, 0, guardianMaxRootMessages)
+	for i := range record.Items {
 		item := record.Items[i]
-		if !sessionItemIsUserMessage(&item) {
+		if guardianRootItemIsSummary(&item) {
 			continue
 		}
-		text := strings.TrimSpace(firstNonEmpty(item.Text, stringValueFromMap(item.Data, "text")))
-		if text == "" {
-			continue
-		}
-		chars := len([]rune(text))
-		remaining := maxRootUserEvidenceChars - total
-		if chars > remaining {
-			runes := []rune(text)
-			if remaining > 0 {
-				text = string(runes[:remaining])
-			} else {
-				text = ""
+		switch {
+		case guardianRootItemIsUserMessage(&item):
+			text := guardianRootMessageText(&item)
+			if text == "" ||
+				strings.HasPrefix(strings.TrimSpace(text), "<user_action>") ||
+				guardianRootContextualUserText(text) {
+				continue
 			}
-			chars = remaining
+			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+			messages = append(messages, state.RootMessage{Kind: state.RootMessageUser, Text: text})
+		case guardianRootItemIsAgentMessage(&item):
+			if phase := strings.ToLower(strings.TrimSpace(stringValueFromMap(item.Data, "phase"))); phase != "" && phase != "final_answer" {
+				continue
+			}
+			text := guardianRootMessageText(&item)
+			if text == "" {
+				continue
+			}
+			text, _ = codexctx.GuardianTruncateText(text, guardianMaxRootMessageTokens)
+			messages = append(messages, state.RootMessage{Kind: state.RootMessageAssistant, Text: text})
 		}
-		if text == "" {
+	}
+	if len(messages) > guardianMaxRootMessages {
+		messages = messages[len(messages)-guardianMaxRootMessages:]
+	}
+	return messages
+}
+
+const (
+	guardianMaxRootMessages = 8
+)
+
+func guardianRootItemIsUserMessage(item *session.Item) bool {
+	if !sessionItemIsUserMessage(item) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(item.Role), "user") ||
+		strings.EqualFold(strings.TrimSpace(item.Type), "user_message")
+}
+
+func guardianRootItemIsAgentMessage(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "agent_message", "assistant_message":
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(item.Role), "assistant")
+}
+
+func guardianRootItemIsSummary(item *session.Item) bool {
+	if item == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(stringValueFromMap(item.Data, "kind")), "compaction_summary") ||
+		guardianTranscriptIsCompactionSummary(item) {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(guardianRootMessageText(item)), compact.SummaryPrefix+"\n")
+}
+
+func guardianRootMessageText(item *session.Item) string {
+	if item == nil {
+		return ""
+	}
+	if text := strings.TrimSpace(item.Text); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(stringValueFromMap(item.Data, "text")); text != "" {
+		return text
+	}
+	var builder strings.Builder
+	for _, part := range item.Content {
+		if strings.TrimSpace(part.Text) == "" {
 			continue
 		}
-		out = append(out, text)
-		total += chars
+		builder.WriteString(part.Text)
 	}
-	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
-		out[left], out[right] = out[right], out[left]
-	}
-	return out
+	return strings.TrimSpace(builder.String())
+}
+
+func guardianRootContextualUserText(text string) bool {
+	return eventmap.IsContextualUserMessageContent([]eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: text}})
 }
 
 func sessionItemIsUserMessage(item *session.Item) bool {
