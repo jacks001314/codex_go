@@ -7,6 +7,7 @@ import (
 
 	"codex_go/config"
 	contextfrag "codex_go/context"
+	execserverclient "codex_go/execserver"
 	"codex_go/execpolicy"
 	"codex_go/features"
 	"codex_go/model"
@@ -76,6 +77,7 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 		ApprovalsReviewer:              turnApprovalsReviewerForTurn(cfg, params),
 		ExecPermissionApprovalsEnabled: features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
 		RequestPermissionsToolEnabled:  features.Enabled(cfg.FeatureSettings(), "request_permissions_tool"),
+		ExecutorContext:                r.permissionPromptExecutorContextForTurn(params),
 	}
 	if approvalPolicy == sandbox.ApprovalGranular {
 		options.Granular = granularApprovalConfigForTurn(cfg, params)
@@ -101,6 +103,46 @@ func (r *RuntimeRouter) permissionPromptOptionsForTurn(
 		}
 	}
 	return options
+}
+
+// permissionPromptExecutorContextForTurn returns the primary selected
+// environment's filesystem facts when it is an executor. Rust #47867 renders
+// remote permission paths in that environment's native form; a nil context
+// keeps local filesystem resolution. Cached info is used so building
+// instructions never opens a new connection.
+func (r *RuntimeRouter) permissionPromptExecutorContextForTurn(params *turn.TurnStartParams) *sandbox.PermissionPromptExecutorContext {
+	if r == nil || r.services.Environment == nil || params == nil {
+		return nil
+	}
+	selections := params.Environments
+	if len(selections) == 0 {
+		defaultID, ok := r.services.Environment.DefaultEnvironmentID()
+		if !ok {
+			return nil
+		}
+		selections = []map[string]any{{"environmentId": defaultID}}
+	}
+	selected := selections[0]
+	environmentID := strings.TrimSpace(selectionEnvironmentID(selected))
+	if environmentID == "" || environmentID == execserverclient.LocalEnvironmentID {
+		return nil
+	}
+	state, _ := resolveEnvironmentConfig(selected, r.threadEnvironmentConfigForTurn(params))
+	if state.Kind == EnvironmentConfigPending || state.Kind == EnvironmentConfigFailed {
+		return nil
+	}
+	context := &sandbox.PermissionPromptExecutorContext{
+		CWD: firstNonEmpty(
+			threadItemStringFromAnyMap(selected, "cwd"),
+			threadItemStringFromAnyMap(selected, "CWD"),
+		),
+	}
+	if info, ok := r.services.Environment.CachedInfo(environmentID); ok && info != nil {
+		context.CWD = firstNonEmpty(context.CWD, ptrStringValue(info.CWD))
+		context.UserHomeDir = strings.TrimSpace(info.UserHomeDir)
+		context.PlatformOS = strings.TrimSpace(info.PlatformOS)
+	}
+	return context
 }
 
 // granularApprovalConfigForTurn reads the granular approval categories from the

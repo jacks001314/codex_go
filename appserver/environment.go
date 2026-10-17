@@ -560,6 +560,9 @@ type EnvironmentManager struct {
 	// connectionObservers holds the one-shot initial connection observers,
 	// registered through ObserveConnectionAttempts (Rust #52724).
 	connectionObservers map[string]*connectionAttemptObserver
+	// infoCache keeps the most recent successful environment/info response so
+	// prompt rendering can use executor facts without opening a connection.
+	infoCache map[string]*EnvironmentInfoResponse
 }
 
 func NewEnvironmentManager(defaultShell EnvironmentShellInfo, defaultCWD string) *EnvironmentManager {
@@ -573,6 +576,7 @@ func NewEnvironmentManagerWithHTTPClient(defaultShell EnvironmentShellInfo, defa
 		records:             map[string]EnvironmentRecord{},
 		httpClient:          httpClient,
 		connectionObservers: map[string]*connectionAttemptObserver{},
+		infoCache:           map[string]*EnvironmentInfoResponse{},
 	}
 }
 
@@ -705,12 +709,53 @@ func (m *EnvironmentManager) cancelConnectionAttempts(environmentID string) {
 	if m == nil {
 		return
 	}
+	// Replacing or removing an environment also invalidates its cached executor
+	// facts; the next successful info read repopulates them.
+	delete(m.infoCache, environmentID)
 	slot := m.connectionObservers[environmentID]
 	if slot == nil {
 		return
 	}
 	delete(m.connectionObservers, environmentID)
 	slot.cancelActive()
+}
+
+// cacheEnvironmentInfo stores a successful environment/info snapshot for
+// prompt rendering. The snapshot never triggers a connection of its own.
+func (m *EnvironmentManager) cacheEnvironmentInfo(environmentID string, info *EnvironmentInfoResponse) {
+	if m == nil || info == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.infoCache == nil {
+		m.infoCache = map[string]*EnvironmentInfoResponse{}
+	}
+	m.infoCache[strings.TrimSpace(environmentID)] = cloneEnvironmentInfoResponse(info)
+}
+
+// CachedInfo returns the most recent successful environment/info snapshot for
+// an environment without connecting (Rust Environment::environment_info).
+func (m *EnvironmentManager) CachedInfo(environmentID string) (*EnvironmentInfoResponse, bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, ok := m.infoCache[strings.TrimSpace(environmentID)]
+	if !ok || info == nil {
+		return nil, false
+	}
+	return cloneEnvironmentInfoResponse(info), true
+}
+
+func cloneEnvironmentInfoResponse(info *EnvironmentInfoResponse) *EnvironmentInfoResponse {
+	if info == nil {
+		return nil
+	}
+	clone := *info
+	clone.CWD = cloneString(info.CWD)
+	return &clone
 }
 
 func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverclient.NoiseRendezvousConnectProvider) error {
@@ -1120,6 +1165,7 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 		if err != nil {
 			return nil, fmt.Errorf("failed to get info for environment `%s`: %w", params.EnvironmentID, err)
 		}
+		m.cacheEnvironmentInfo(params.EnvironmentID, info)
 		return info, nil
 	}
 	shell := record.Shell
@@ -1134,7 +1180,9 @@ func (m *EnvironmentManager) InfoContext(ctx context.Context, params *Environmen
 	if home, err := os.UserHomeDir(); err == nil {
 		userHomeDir = home
 	}
-	return &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS, UserHomeDir: userHomeDir}, nil
+	info := &EnvironmentInfoResponse{Shell: shell, CWD: cloneString(cwd), PlatformOS: runtime.GOOS, UserHomeDir: userHomeDir}
+	m.cacheEnvironmentInfo(params.EnvironmentID, info)
+	return info, nil
 }
 
 func (m *EnvironmentManager) Status(params *EnvironmentStatusParams) (*EnvironmentStatusResponse, error) {

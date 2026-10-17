@@ -76,6 +76,10 @@ type PermissionPromptProfileOptions struct {
 	ApprovedCommandPrefixes        [][]string
 	ExecPermissionApprovalsEnabled bool
 	RequestPermissionsToolEnabled  bool
+	// ExecutorContext swaps host-filesystem path resolution for the selected
+	// remote environment's native cwd/home/platform facts (Rust #47867). A nil
+	// context keeps local resolution.
+	ExecutorContext *PermissionPromptExecutorContext
 	// PermissionMessages / ApprovalMessages carry the model catalog's
 	// per-mode and per-policy text overrides (Rust PermissionMessages /
 	// ApprovalMessages); nil falls back to the built-in templates.
@@ -94,6 +98,10 @@ func BuildPermissionPromptForProfile(
 ) string {
 	mode, writableRoots := permissionPromptSandboxModeForProfile(profile, cwd)
 	deniedPaths, deniedGlobs := permissionPromptDeniedReads(profile, cwd)
+	if options.ExecutorContext != nil {
+		mode, writableRoots = permissionPromptSandboxModeForExecutorContext(profile, options.ExecutorContext)
+		deniedPaths, deniedGlobs = permissionPromptDeniedReadsForExecutorContext(profile, options.ExecutorContext)
+	}
 	config := PermissionPromptConfig{
 		SandboxMode:                    mode,
 		NetworkAccess:                  permissionPromptNetworkAccess(profile),

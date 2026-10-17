@@ -87,21 +87,58 @@ func BuildPermissionPrompt(config *PermissionPromptConfig) string {
 	if config == nil {
 		config = &PermissionPromptConfig{}
 	}
+	writableRoots, deniedReadPaths, deniedReadGlobs, pathsOmitted := boundPermissionPromptPaths(
+		config.WritableRoots,
+		config.DeniedReadPaths,
+		config.DeniedReadGlobs,
+	)
 	text := ""
 	if sandbox := sandboxPromptText(config.SandboxMode, config.NetworkAccess, config.PermissionMessages); sandbox != "" {
 		text = appendPermissionSection(text, sandbox)
 	}
 	text = appendPermissionSection(text, approvalPromptText(config))
-	if roots := writableRootsText(config.WritableRoots); roots != "" {
+	if roots := writableRootsText(writableRoots); roots != "" {
 		text = appendPermissionSection(text, roots)
 	}
-	if denied := deniedReadsText(config.DeniedReadPaths, config.DeniedReadGlobs); denied != "" {
+	if denied := deniedReadsText(deniedReadPaths, deniedReadGlobs); denied != "" {
 		text = appendPermissionSection(text, denied)
+	}
+	if pathsOmitted {
+		text = appendPermissionSection(text, permissionPromptOmittedPathsText)
 	}
 	if !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
 	return text
+}
+
+const (
+	// maxPermissionPromptPathBytes bounds the displayed writable roots and
+	// deny entries together (Rust MAX_PERMISSION_PATH_BYTES, #47867).
+	maxPermissionPromptPathBytes = 32 * 1024
+	// permissionPromptOmittedPathsText is Rust's OMITTED_PERMISSION_PATHS.
+	permissionPromptOmittedPathsText = "Additional permission paths/globs are omitted. All restrictions still apply; do not use escalation or additional permissions to bypass omitted read denials."
+)
+
+// boundPermissionPromptPaths applies the shared display budget, omitting whole
+// entries only. Each entry reserves ten bytes for its label, quoting and
+// separator (Rust #47867).
+func boundPermissionPromptPaths(writableRoots []string, deniedReadPaths []string, deniedReadGlobs []string) ([]string, []string, []string, bool) {
+	remaining := maxPermissionPromptPathBytes - len(permissionPromptOmittedPathsText) - 1
+	omitted := false
+	take := func(values []string) []string {
+		bounded := make([]string, 0, len(values))
+		for _, value := range values {
+			if remaining >= len(value)+10 {
+				remaining -= len(value) + 10
+				bounded = append(bounded, value)
+				continue
+			}
+			omitted = true
+		}
+		return bounded
+	}
+	return take(writableRoots), take(deniedReadPaths), take(deniedReadGlobs), omitted
 }
 
 // appendPermissionSection ports Rust append_section: a newline is inserted
