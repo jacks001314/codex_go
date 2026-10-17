@@ -193,6 +193,9 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if req.Exec.Subcommand != "" && req.Exec.Subcommand != "review" && req.Exec.Subcommand != "resume" && req.Exec.Subcommand != "fork" {
 		return nil, fmt.Errorf("unknown exec subcommand %s", req.Exec.Subcommand)
 	}
+	if err := validateExecCyberAccessProgram(req); err != nil {
+		return nil, err
+	}
 	if err := validateExecWorkingDirectory(requestCWD(req)); err != nil {
 		return nil, err
 	}
@@ -321,6 +324,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	if err != nil {
 		return nil, err
 	}
+	cyberAccessProgram := execCyberAccessProgramForTurn(req.Exec.CyberAccessProgram, providerID)
 	permissionProfile, err := resolveExecSandboxPermissionProfile(cfg, req)
 	if err != nil {
 		return nil, err
@@ -377,7 +381,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	}
 	if resumeContext != nil && resumeContext.Record != nil {
 		var err error
-		compactedThisTurn, err = r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cfg, agent, eventSink)
+		compactedThisTurn, err = r.compactResumeBeforeTurn(ctx, resumeContext, threadID, turnID, modelID, providerID, cyberAccessProgram, cfg, agent, eventSink)
 		if err != nil {
 			_ = eventSink.Emit(protocol.ErrorEvent(err.Error()))
 			_ = eventSink.Emit(protocol.TurnFailed(err.Error()))
@@ -516,6 +520,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		CodeModeDefaultExecYieldTime:   cfg.CodeModeDefaultExecYieldTime(),
 		CodeModeShowCellOverhead:       cfg.CodeModeExperimentalShowCellOverhead(),
 		ProviderID:                     providerID,
+		CyberAccessProgram:             cyberAccessProgram,
 		TaskKind:                       taskKind,
 		ThreadID:                       threadID,
 		TurnID:                         turnID,
@@ -569,7 +574,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		SteerMailbox:                   firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
 		OnSteerCommitted:               req.OnSteerCommitted,
 		SamplingFollowUp:               r.execAutoCompactFallbackFollowUp(cfg, modelID),
-		SamplingCompaction:             r.execMidTurnSamplingCompaction(cfg, modelID, providerID, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
+		SamplingCompaction:             r.execMidTurnSamplingCompaction(cfg, modelID, providerID, cyberAccessProgram, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
 	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, runConfig)
 	if err != nil {
@@ -646,6 +651,41 @@ func validateExecWorkingDirectory(cwd string) error {
 	return nil
 }
 
+func validateExecCyberAccessProgram(req *Request) error {
+	if req == nil {
+		return nil
+	}
+	program := strings.TrimSpace(req.Exec.CyberAccessProgram)
+	if program == "" {
+		return nil
+	}
+	switch model.CyberAccessProgram(program) {
+	case model.CyberAccessProgramStandard, model.CyberAccessProgramDaybreakBlue, model.CyberAccessProgramDaybreakRed:
+	default:
+		return errors.New("--cyber-access-program must be one of standard, daybreak_blue, daybreak_red")
+	}
+	if req.Exec.Subcommand == "review" {
+		return errors.New("--cyber-access-program is not supported with `codex exec review`")
+	}
+	if execForkOnlyRequest(req) {
+		return errors.New("Forking with --cyber-access-program requires a prompt")
+	}
+	return nil
+}
+
+func execCyberAccessProgramForTurn(program string, providerID string) string {
+	program = strings.TrimSpace(program)
+	if providerID != model.OpenAIProviderID {
+		return ""
+	}
+	switch model.CyberAccessProgram(program) {
+	case model.CyberAccessProgramStandard, model.CyberAccessProgramDaybreakBlue, model.CyberAccessProgramDaybreakRed:
+		return program
+	default:
+		return ""
+	}
+}
+
 // validateExecWorktreeRequest enforces the CLI restrictions for the
 // experimental managed-worktree flag before any worktree is allocated
 // (Rust #42652).
@@ -710,6 +750,7 @@ type agentRunConfig struct {
 	CodeModeProvider               tool.CodeModeRemoteProvider
 	CodeModeRuntime                *tool.CodeModeRuntime
 	ProviderID                     string
+	CyberAccessProgram             string
 	TaskKind                       model.AgentTaskKind
 	ThreadID                       string
 	TurnID                         string
@@ -1258,6 +1299,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 		ToolMode:                run.ToolMode,
 		DisableCodeModeFallback: run.DisableCodeModeFallback,
 		ProviderID:              run.ProviderID,
+		CyberAccessProgram:      run.CyberAccessProgram,
 		TaskKind:                run.TaskKind,
 		ThreadID:                run.ThreadID,
 		TurnID:                  run.TurnID,
@@ -4745,7 +4787,7 @@ func (r *Runner) execAutoCompactFallbackFollowUp(cfg *config.Config, modelID str
 // pending tool calls. The active context is measured from the last sampled
 // response (Rust's context_window_token_status), not the accumulated turn
 // usage.
-func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID string, providerID string, agent model.AgentRunner, req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, eventSink *execEventSink, startupItems []any, additionalInputItems []any) turn.SamplingCompaction {
+func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID string, providerID string, cyberAccessProgram string, agent model.AgentRunner, req *Request, threadID string, turnID string, userPrompt string, userInputs []turn.TurnUserInput, resumeContext *execResumeContext, eventSink *execEventSink, startupItems []any, additionalInputItems []any) turn.SamplingCompaction {
 	if r == nil || req == nil || req.Exec.Ephemeral || cfg == nil || strings.TrimSpace(threadID) == "" {
 		return nil
 	}
@@ -4800,7 +4842,7 @@ func (r *Runner) execMidTurnSamplingCompaction(cfg *config.Config, modelID strin
 		}
 		var remoteRunner compact.RemoteRunner
 		if execProviderSupportsRemoteCompaction(cfg, providerID) {
-			remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID}
+			remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID, cyberAccessProgram: cyberAccessProgram}
 		}
 		eventSink.EmitInternal(protocol.Compacting())
 		defer func() { eventSink.EmitInternal(protocol.Compacted()) }()
@@ -5008,7 +5050,7 @@ func cloneExecAnyMap(values map[string]any) map[string]any {
 	return out
 }
 
-func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *execResumeContext, threadID string, turnID string, modelID string, providerID string, cfg *config.Config, agent model.AgentRunner, sink *execEventSink) (bool, error) {
+func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *execResumeContext, threadID string, turnID string, modelID string, providerID string, cyberAccessProgram string, cfg *config.Config, agent model.AgentRunner, sink *execEventSink) (bool, error) {
 	if resumeContext == nil || resumeContext.Record == nil {
 		return false, nil
 	}
@@ -5038,7 +5080,7 @@ func (r *Runner) compactResumeBeforeTurn(ctx context.Context, resumeContext *exe
 	}
 	var remoteRunner compact.RemoteRunner
 	if execProviderSupportsRemoteCompaction(cfg, providerID) {
-		remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID}
+		remoteRunner = &execAgentCompactRunner{agent: agent, model: modelID, providerID: providerID, cyberAccessProgram: cyberAccessProgram}
 	}
 	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
 		Runner:          remoteRunner,
@@ -5208,9 +5250,10 @@ func (r *Runner) persistExecContextWindowExceeded(record *session.Record) error 
 }
 
 type execAgentCompactRunner struct {
-	agent      model.AgentRunner
-	model      string
-	providerID string
+	agent              model.AgentRunner
+	model              string
+	providerID         string
+	cyberAccessProgram string
 }
 
 func (r *execAgentCompactRunner) Compact(ctx context.Context, request *compact.Request) (*compact.Result, error) {
@@ -5218,15 +5261,16 @@ func (r *execAgentCompactRunner) Compact(ctx context.Context, request *compact.R
 		return nil, nil
 	}
 	response, err := r.agent.Run(ctx, &model.AgentRequest{
-		Prompt:       strings.TrimSpace(request.Prompt),
-		Instructions: execRemoteCompactInstructions(),
-		InputItems:   session.InputItemsFromItems(execSessionItemsFromCompact(request.History, time.Now().UTC()), &session.HistoryBuildOptions{IncludeToolOutputs: true}),
-		Model:        r.model,
-		ProviderID:   r.providerID,
-		TaskKind:     model.AgentTaskRegular,
-		ThreadID:     request.ThreadID,
-		TurnID:       request.TurnID,
-		Store:        false,
+		Prompt:             strings.TrimSpace(request.Prompt),
+		Instructions:       execRemoteCompactInstructions(),
+		InputItems:         session.InputItemsFromItems(execSessionItemsFromCompact(request.History, time.Now().UTC()), &session.HistoryBuildOptions{IncludeToolOutputs: true}),
+		Model:              r.model,
+		ProviderID:         r.providerID,
+		CyberAccessProgram: r.cyberAccessProgram,
+		TaskKind:           model.AgentTaskRegular,
+		ThreadID:           request.ThreadID,
+		TurnID:             request.TurnID,
+		Store:              false,
 	})
 	if err != nil {
 		return nil, err

@@ -1115,7 +1115,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6af89155d040dde270374671ac5a366ac0a0c807	48827	Show a hand pointer over transcript links in Ghostty and Kitty (#48827)	2026-09-28	tui	8	3	0.38	0	0	audit_pending	LinkHover,LinkPointer,link_at,refresh_link_hover,set_link_pointer
 6b0a1a8325640767b46f41525561f4f16b59abfd	46751	Add a warning footer and dedicated warnings viewer to the TUI (#46751)	2026-09-20	tui	15	7	0.47	0	0	audit_pending	handle_warning_event,has_active_modal,keymap_contexts,record_composer_activity_at,set_keymap,show_warnings,warning_notice_contains,warnings_active
 6b43e6fe1fca7c03f0b0689074cbf51100a7f9d2	50555	Skip daemon auto-start for Windows-mounted WSL homes (#50555)	2026-10-03	tui	2	2	1.00	0	0	complete	
-6b4daafdb445340e5af66f067ad4057e6ed9fd81	49939	Add per-turn Cyber access program selection to exec and the SDK (#49939)	2026-10-01	core	2	1	0.50	0	0	audit_pending	CyberAccessProgramCliArg
+6b4daafdb445340e5af66f067ad4057e6ed9fd81	49939	Add per-turn Cyber access program selection to exec and the SDK (#49939)	2026-10-01	core	2	1	0.50	0	0	complete	CyberAccessProgramCliArg
 6b59cefcbb35951c197a235dc94dbe700f2fbc7c	42150	Support remote marketplaces in the plugin CLI (#42150)	2026-09-01	appserver	1	0	0.00	0	0	implementation_pending	RemoteMarketplaceFetchOutcome
 6b6fdc3572c328e0ba7d67a5eca9e558738d22c7	43699	Preserve split-flap animation state when voice transcripts scroll (#43699)	2026-09-08	tui	0	0		0	0	not_applicable	
 6b78e825aeac93fa361c976a718f5cf0595840ad	46579	Limit the agent command center to 10 recent sessions on startup (#46579)	2026-09-19	tui	0	0		0	0	not_applicable	

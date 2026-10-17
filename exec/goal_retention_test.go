@@ -154,7 +154,7 @@ func TestExecCompactResumeBeforeTurnRetainsGoalEditsPublishedAfterSnapshotLikeRu
 	cfg, _ := config.Load("")
 	cfg.Values["model_auto_compact_token_limit_scope"] = "body_after_prefix"
 	agent := &recordingAgent{message: "compacted summary"}
-	compacted, err := runner.compactResumeBeforeTurn(context.Background(), &execResumeContext{Record: snapshot}, threadID, "turn-compact", "gpt-5.4", model.OpenAIProviderID, cfg, agent, nil)
+	compacted, err := runner.compactResumeBeforeTurn(context.Background(), &execResumeContext{Record: snapshot}, threadID, "turn-compact", "gpt-5.4", model.OpenAIProviderID, "", cfg, agent, nil)
 	if err != nil {
 		t.Fatalf("compactResumeBeforeTurn error = %v", err)
 	}

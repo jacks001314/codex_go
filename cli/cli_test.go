@@ -420,6 +420,64 @@ func TestParseExecOutputFlags(t *testing.T) {
 	}
 }
 
+func TestParseExecCyberAccessProgram(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "new turn",
+			args: []string{"exec", "--cyber-access-program", "daybreak_blue", "hello"},
+			want: "daybreak_blue",
+		},
+		{
+			name: "new turn equals",
+			args: []string{"exec", "--cyber-access-program=daybreak_red", "hello"},
+			want: "daybreak_red",
+		},
+		{
+			name: "flag before resume",
+			args: []string{"exec", "--cyber-access-program", "standard", "resume", "thread-1", "continue"},
+			want: "standard",
+		},
+		{
+			name: "resume",
+			args: []string{"exec", "resume", "thread-1", "--cyber-access-program", "daybreak_blue", "continue"},
+			want: "daybreak_blue",
+		},
+		{
+			name: "fork",
+			args: []string{"exec", "fork", "thread-1", "--cyber-access-program=daybreak_red", "continue"},
+			want: "daybreak_red",
+		},
+		{
+			name: "review reaches exec validation",
+			args: []string{"exec", "review", "--cyber-access-program", "daybreak_blue", "--uncommitted"},
+			want: "daybreak_blue",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := Parse(tc.args)
+			if err != nil {
+				t.Fatalf("Parse(%v) returned error: %v", tc.args, err)
+			}
+			if parsed.Exec.CyberAccessProgram != tc.want {
+				t.Fatalf("CyberAccessProgram = %q, want %q", parsed.Exec.CyberAccessProgram, tc.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"future_program", "Daybreak_Blue", ""} {
+		args := []string{"exec", "--cyber-access-program", value, "hello"}
+		_, err := Parse(args)
+		if err == nil || !strings.Contains(err.Error(), "--cyber-access-program must be one of standard, daybreak_blue, daybreak_red") {
+			t.Fatalf("Parse(%v) error = %v", args, err)
+		}
+	}
+}
+
 func TestParseExecColorFlag(t *testing.T) {
 	for _, tc := range []struct {
 		value string

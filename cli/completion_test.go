@@ -29,7 +29,7 @@ func TestCompletionSpecMatchesRustVisibleSurface(t *testing.T) {
 		"completion", "update", "doctor", "sandbox", "apply", "a", "resume",
 		"archive", "delete", "unarchive", "fork", "cloud", "exec-server",
 		"features", "generate-json-schema", "enable-remote-control",
-		"--ws-shared-secret-file", "--sandbox-state-readable-root",
+		"--ws-shared-secret-file", "--sandbox-state-readable-root", "--cyber-access-program",
 	} {
 		if !hasCompletionWord(words, want) {
 			t.Fatalf("completion words missing %q in %#v", want, words)

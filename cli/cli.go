@@ -122,6 +122,7 @@ type ExecOptions struct {
 	StrictConfig          bool
 	Shared                SharedOptions
 	ThreadSource          string
+	CyberAccessProgram    string
 	SkipGitRepoCheck      bool
 	Ephemeral             bool
 	IgnoreUserConfig      bool
@@ -664,7 +665,7 @@ func parseSubcommand(p *Parsed, args []string) (*Parsed, error) {
 	case CommandReview:
 		p.Command = CommandReview
 		p.Exec.Subcommand = "review"
-		return p, parseReview(args, &p.Exec.Review)
+		return p, parseReview(args, &p.Exec.Review, nil)
 	case CommandLogin:
 		return p, parseLogin(args, &p.Login)
 	case CommandLogout:
@@ -904,7 +905,7 @@ func parseExec(args []string, exec *ExecOptions) error {
 			return parseExecFork(args[i+1:], exec)
 		case arg == "review":
 			exec.Subcommand = arg
-			return parseReview(args[i+1:], &exec.Review)
+			return parseReview(args[i+1:], &exec.Review, exec)
 		case arg == "--strict-config":
 			exec.StrictConfig = true
 		case arg == "--thread-source":
@@ -914,6 +915,19 @@ func parseExec(args []string, exec *ExecOptions) error {
 			}
 			exec.ThreadSource = value
 			return parseExec(args[next:], exec)
+		case arg == "--cyber-access-program":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := setExecCyberAccessProgram(exec, value); err != nil {
+				return err
+			}
+			i = next
+		case strings.HasPrefix(arg, "--cyber-access-program="):
+			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
+				return err
+			}
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
 		case arg == "--ephemeral":
@@ -998,6 +1012,19 @@ func parseExecResume(args []string, exec *ExecOptions) error {
 			exec.JSON = true
 		case arg == "--strict-config":
 			exec.StrictConfig = true
+		case arg == "--cyber-access-program":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := setExecCyberAccessProgram(exec, value); err != nil {
+				return err
+			}
+			i = next
+		case strings.HasPrefix(arg, "--cyber-access-program="):
+			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
+				return err
+			}
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
 		case arg == "--ephemeral":
@@ -1106,6 +1133,19 @@ func parseExecFork(args []string, exec *ExecOptions) error {
 			positionals = append(positionals, arg)
 		case arg == "--strict-config":
 			exec.StrictConfig = true
+		case arg == "--cyber-access-program":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := setExecCyberAccessProgram(exec, value); err != nil {
+				return err
+			}
+			i = next
+		case strings.HasPrefix(arg, "--cyber-access-program="):
+			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
+				return err
+			}
 		case arg == "--skip-git-repo-check":
 			exec.SkipGitRepoCheck = true
 		case arg == "--ephemeral":
@@ -1234,10 +1274,23 @@ func parseLogin(args []string, login *LoginOptions) error {
 	return nil
 }
 
-func parseReview(args []string, review *ReviewOptions) error {
+func parseReview(args []string, review *ReviewOptions, exec *ExecOptions) error {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
+		case exec != nil && arg == "--cyber-access-program":
+			value, next, err := requireValue(args, i, arg)
+			if err != nil {
+				return err
+			}
+			if err := setExecCyberAccessProgram(exec, value); err != nil {
+				return err
+			}
+			i = next
+		case exec != nil && strings.HasPrefix(arg, "--cyber-access-program="):
+			if err := setExecCyberAccessProgram(exec, strings.TrimPrefix(arg, "--cyber-access-program=")); err != nil {
+				return err
+			}
 		case arg == "--uncommitted":
 			if review.Base != "" || review.Commit != "" || review.Prompt != "" {
 				return errors.New("--uncommitted conflicts with --base, --commit, and PROMPT")
@@ -3671,6 +3724,17 @@ func setExecColor(exec *ExecOptions, value string) error {
 		return nil
 	default:
 		return errors.New("--color must be one of always, never, auto")
+	}
+}
+
+func setExecCyberAccessProgram(exec *ExecOptions, value string) error {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "standard", "daybreak_blue", "daybreak_red":
+		exec.CyberAccessProgram = value
+		return nil
+	default:
+		return errors.New("--cyber-access-program must be one of standard, daybreak_blue, daybreak_red")
 	}
 }
 

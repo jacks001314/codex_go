@@ -24983,9 +24983,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: CyberAccessProgramCliArg"
+        "codex exec parses --cyber-access-program for new, resumed, and prompted fork turns, rejects review and promptless forks, filters the selection to the OpenAI provider, and forwards it to turn and remote-compaction requests."
       ]
     },
     {

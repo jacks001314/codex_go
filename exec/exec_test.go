@@ -802,6 +802,65 @@ func TestNewRunnerDefaultsToResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestRunExecForwardsCyberAccessProgramOnResponsesWireLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	seen := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll request body returned error: %v", err)
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("Unmarshal request body returned error: %v", err)
+			return
+		}
+		seen <- payload
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeExecResponseSSE(w, `{"type":"response.created","response":{"id":"resp-cyber"}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.added","item":{"id":"msg-cyber","type":"message","role":"assistant","content":[{"type":"output_text","text":""}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.output_text.delta","item_id":"msg-cyber","delta":"program selected"}`)
+		writeExecResponseSSE(w, `{"type":"response.output_item.done","item":{"id":"msg-cyber","type":"message","role":"assistant","content":[{"type":"output_text","text":"program selected"}]}}`)
+		writeExecResponseSSE(w, `{"type":"response.completed","response":{"id":"resp-cyber","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`)
+	}))
+	defer server.Close()
+	configBody := `openai_base_url = "` + server.URL + `/v1"
+
+[features]
+api_key_cyber_access_programs = true
+`
+	if err := os.WriteFile(config.ConfigPath(home), []byte(configBody), 0o600); err != nil {
+		t.Fatalf("WriteFile config returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	result, err := NewRunner(home).Run(Request{Exec: cli.ExecOptions{
+		Prompt:             "select blue",
+		JSON:               true,
+		Ephemeral:          true,
+		CyberAccessProgram: "daybreak_blue",
+	}}, strings.NewReader(""), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("Run returned error: %v stderr=%q stdout=%q", err, stderr.String(), stdout.String())
+	}
+	if result.LastMessage != "program selected" {
+		t.Fatalf("LastMessage = %q", result.LastMessage)
+	}
+	select {
+	case payload := <-seen:
+		programs, ok := payload["access_programs"].(map[string]any)
+		if !ok || programs["cyber"] != "daybreak_blue" {
+			t.Fatalf("access_programs = %#v", payload["access_programs"])
+		}
+	default:
+		t.Fatal("Responses API server did not receive a request")
+	}
+}
+
 func TestNewRunnerReadsRustAuthModeAliasAndConfiguredProvider(t *testing.T) {
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"apikey","OPENAI_API_KEY":"sk-rust"}`), 0o600); err != nil {
@@ -2534,6 +2593,7 @@ func TestRunExecPromptlessForkRejectsTurnOnlyOptions(t *testing.T) {
 		{name: "output schema", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, OutputSchema: "unused.json"}, want: "Forking with output options requires a prompt"},
 		{name: "last message", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, LastMessageFile: "unused.md"}, want: "Forking with output options requires a prompt"},
 		{name: "ephemeral", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, Ephemeral: true}, want: "Ephemeral forks require a prompt"},
+		{name: "cyber access program", exec: cli.ExecOptions{Fork: cli.ExecForkOptions{SessionID: "source"}, CyberAccessProgram: "daybreak_blue"}, want: "Forking with --cyber-access-program requires a prompt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2543,6 +2603,133 @@ func TestRunExecPromptlessForkRejectsTurnOnlyOptions(t *testing.T) {
 				t.Fatalf("Run error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunExecCyberAccessProgramPerTurnLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	now := fixedExecTime()
+	store := session.NewStore(filepath.Join(home, "sessions"))
+	if err := store.Save(&session.Record{
+		ID:        "cyber-source",
+		SessionID: "cyber-source",
+		CreatedAt: now,
+		UpdatedAt: now,
+		RecencyAt: now,
+		Metadata: session.Metadata{
+			CWD:           t.TempDir(),
+			Model:         "gpt-5.4",
+			ModelProvider: model.OpenAIProviderID,
+			Source:        "exec",
+			ThreadSource:  "user",
+		},
+		Items: []session.Item{
+			{ID: "source-user", Type: "message", Role: "user", Text: "source prompt", CreatedAt: now},
+			{ID: "source-assistant", Type: "agent_message", Role: "assistant", Text: "source answer", CreatedAt: now},
+		},
+	}); err != nil {
+		t.Fatalf("Save source returned error: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		exec    cli.ExecOptions
+		program string
+	}{
+		{
+			name:    "new turn",
+			exec:    cli.ExecOptions{Prompt: "hello", CyberAccessProgram: "daybreak_blue"},
+			program: "daybreak_blue",
+		},
+		{
+			name: "resume",
+			exec: cli.ExecOptions{
+				Subcommand:         "resume",
+				Resume:             cli.ExecResumeOptions{SessionID: "cyber-source", Prompt: "continue"},
+				CyberAccessProgram: "daybreak_red",
+			},
+			program: "daybreak_red",
+		},
+		{
+			name: "prompted fork",
+			exec: cli.ExecOptions{
+				Subcommand:         "fork",
+				Fork:               cli.ExecForkOptions{SessionID: "cyber-source", Prompt: "continue"},
+				CyberAccessProgram: "standard",
+			},
+			program: "standard",
+		},
+		{
+			name: "omitted selection",
+			exec: cli.ExecOptions{Prompt: "use automatic selection"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &recordingAgent{message: "ok"}
+			runner := NewRunner(home)
+			runner.Agent = agent
+			runner.Now = func() time.Time { return now.Add(time.Minute) }
+			_, err := runner.Run(Request{Exec: tc.exec}, strings.NewReader(""), io.Discard, io.Discard)
+			if err != nil {
+				t.Fatalf("Run returned error: %v", err)
+			}
+			if agent.request == nil {
+				t.Fatal("agent request was not captured")
+			}
+			if agent.request.CyberAccessProgram != tc.program {
+				t.Fatalf("CyberAccessProgram = %q, want %q", agent.request.CyberAccessProgram, tc.program)
+			}
+		})
+	}
+}
+
+func TestRunExecCyberAccessProgramRequiresSupportedTurn(t *testing.T) {
+	home := t.TempDir()
+	if err := auth.NewStore(home).Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatalf("Save auth returned error: %v", err)
+	}
+	tests := []struct {
+		name string
+		exec cli.ExecOptions
+		want string
+	}{
+		{
+			name: "invalid value",
+			exec: cli.ExecOptions{Prompt: "hello", CyberAccessProgram: "future_program"},
+			want: "--cyber-access-program must be one of standard, daybreak_blue, daybreak_red",
+		},
+		{
+			name: "review",
+			exec: cli.ExecOptions{
+				Subcommand:         "review",
+				Review:             cli.ReviewOptions{Uncommitted: true},
+				CyberAccessProgram: "daybreak_blue",
+			},
+			want: "--cyber-access-program is not supported with `codex exec review`",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewLocalRunner(home).Run(Request{Exec: tc.exec}, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil || err.Error() != tc.want {
+				t.Fatalf("Run error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestExecCyberAccessProgramFiltersProviderLikeRust(t *testing.T) {
+	for _, program := range []string{"standard", "daybreak_blue", "daybreak_red"} {
+		if got := execCyberAccessProgramForTurn(program, model.OpenAIProviderID); got != program {
+			t.Fatalf("OpenAI provider program = %q, want %q", got, program)
+		}
+		if got := execCyberAccessProgramForTurn(program, "bedrock"); got != "" {
+			t.Fatalf("bedrock provider program = %q, want empty", got)
+		}
 	}
 }
 
@@ -6411,6 +6598,30 @@ type recordingAgent struct {
 	request *model.AgentRequest
 }
 
+func TestExecAgentCompactRunnerForwardsCyberAccessProgramLikeRust(t *testing.T) {
+	agent := &recordingAgent{message: "compacted summary"}
+	runner := &execAgentCompactRunner{
+		agent:              agent,
+		model:              "gpt-5.4",
+		providerID:         model.OpenAIProviderID,
+		cyberAccessProgram: "daybreak_blue",
+	}
+	result, err := runner.Compact(context.Background(), &compact.Request{
+		ThreadID: "thread-compact-program",
+		TurnID:   "turn-compact-program",
+		Prompt:   "summarize",
+	})
+	if err != nil {
+		t.Fatalf("Compact returned error: %v", err)
+	}
+	if result == nil || result.Summary != "compacted summary" {
+		t.Fatalf("Compact result = %#v", result)
+	}
+	if agent.request == nil || agent.request.CyberAccessProgram != "daybreak_blue" {
+		t.Fatalf("compaction request = %#v", agent.request)
+	}
+}
+
 func TestExecCompactResumeBeforeTurnIgnoresPersistedPrefill(t *testing.T) {
 	home := t.TempDir()
 	now := fixedExecTime()
@@ -6464,7 +6675,7 @@ func TestExecCompactResumeBeforeTurnIgnoresPersistedPrefill(t *testing.T) {
 	if got, want := before.AutoCompactScopeTokens, int(before.ActiveContextTokens)-estimateBefore; got != want {
 		t.Fatalf("scope tokens before compact = %d, want %d (active minus history estimate)", got, want)
 	}
-	compacted, err := runner.compactResumeBeforeTurn(context.Background(), &execResumeContext{Record: loaded}, "thread-exec-compact-marker", "turn-compact", "gpt-5.4", model.OpenAIProviderID, cfg, agent, nil)
+	compacted, err := runner.compactResumeBeforeTurn(context.Background(), &execResumeContext{Record: loaded}, "thread-exec-compact-marker", "turn-compact", "gpt-5.4", model.OpenAIProviderID, "", cfg, agent, nil)
 	if err != nil {
 		t.Fatalf("compactResumeBeforeTurn error = %v", err)
 	}

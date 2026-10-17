@@ -198,6 +198,7 @@ func execCompletionOptions() []string {
 			"--ignore-user-config",
 			"--ignore-rules",
 			"--output-schema",
+			"--cyber-access-program",
 			"--color",
 			"--json",
 			"--experimental-json",
