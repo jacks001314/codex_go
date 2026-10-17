@@ -683,10 +683,12 @@ func TestFeaturesEnablePersists(t *testing.T) {
 func TestFeaturesEnableUnderDevelopmentWarnsLikeRust(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), []string{"features", "enable", "shell_zsh_fork"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+	// Rust moved shell_zsh_fork to Stage::Removed; shell_snapshot_v2 is the
+	// current under-development fixture for this warning path.
+	if err := Run(context.Background(), []string{"features", "enable", "shell_snapshot_v2"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("features enable returned error: %v", err)
 	}
-	if !strings.Contains(stderr.String(), "Under-development features enabled: shell_zsh_fork") {
+	if !strings.Contains(stderr.String(), "Under-development features enabled: shell_snapshot_v2") {
 		t.Fatalf("stderr = %q, want under-development warning", stderr.String())
 	}
 }
@@ -701,7 +703,7 @@ func TestFeaturesEnableUnderDevelopmentWarningSuppressed(t *testing.T) {
 		t.Fatalf("write config.toml: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), []string{"features", "enable", "shell_zsh_fork"}, strings.NewReader(""), &stdout, &stderr); err != nil {
+	if err := Run(context.Background(), []string{"features", "enable", "shell_snapshot_v2"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("features enable returned error: %v", err)
 	}
 	if strings.Contains(stderr.String(), "Under-development features enabled") {
