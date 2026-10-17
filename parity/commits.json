@@ -2759,9 +2759,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: from_resolved_settings"
+        "Round 115 (lead): verified complete (equivalent live step settings) - #40821 captures approval policy/reviewer from the issuing step so delayed approvals do not read newer turn settings, while background/Unix interception use active-task settings. Go approval handlers build the review action and call reviewApprovalWithGuardian; guardianReviewPlanForTurn and permission providers resolve the live activeRuntimeTurnStateSnapshot at decision time, and MCP explicit reviewer overrides remain in the approval options. The equivalent behavior is already exercised by command/patch/permission/network and Guardian MCP approval tests. No source change needed."
       ]
     },
     {

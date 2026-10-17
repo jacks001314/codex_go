@@ -1717,7 +1717,7 @@ a1f40f3f1326eff7c81b860a4f4e27c1be186e10	47263	Expose hosted plugin extensions i
 a20092a7a22cead38b46f31de07ee87705cb9b4e	45495	Expose effective login methods in config requirements (#45495)	2026-09-14	appserver	1	1	1.00	0	0	complete	
 a20fe6335f960a350483d0079db2ec281c68202c	50189	Replace the Figma OAuth exception with Mercado Pago (#50189)	2026-10-02	mcp	0	0		0	0	not_applicable	
 a25e986323931ec54909b0cd936b612f30c8ce46	40413	Honor response budgets when listing skills (#40413)	2026-08-24	core	0	0		0	0	not_applicable	
-a26f1806a4f4b8cfec2ea1be129963815a61e58c	40821	Use issuing step settings for approval decisions (#40821)	2026-08-26	guardian	1	0	0.00	0	0	implementation_pending	from_resolved_settings
+a26f1806a4f4b8cfec2ea1be129963815a61e58c	40821	Use issuing step settings for approval decisions (#40821)	2026-08-26	guardian	1	1	1.00	0	0	complete	
 a285066737c28399b83a0e6b0884c777059fb701	47886	Preserve diagnostic logs when SQLite logging fails (#47886)	2026-09-24	tui	8	3	0.38	0	0	audit_pending	LogWriteFailureReporter,SharedWriter,SharedWriterGuard,has_write_failure,refresh_logs
 a28aab7587a302b09e74efdb0c46ef44aa899ab9	42383	Update rmcp to 3.2.0 (#42383)	2026-09-02	core	0	0		0	0	not_applicable	
 a2a9a434764b9ff875022c028f636a77656d1abc	42366	List managed worktrees for a repository (#42366)	2026-09-02	core	1	1	1.00	0	0	complete	
