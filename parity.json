@@ -1231,6 +1231,14 @@
             "reason": "Aligned upstream 13d75cd1c3 (#41936 Attach failed Guardian reviews to diagnostic reports): a bounded process-local store (64 records, 8 per thread, 8 MiB) captures denied, invalid_decision, failed, timed_out and aborted reviews with the reviewed thread/turn, model, raw decision, formatted action and truncation flag, reviewer instructions and submitted history. Records over 4 MiB keep the action and decision while dropping reviewer context and setting context_omitted. Approvals, ephemeral threads and feedback.enabled=false retain nothing. Feedback uploads that include logs attach recent records for the reported thread and its descendants as auto-review-failures.jsonl; plain uploads do not.",
             "userImpact": "Bug reports can include recent failed Guardian reviews for the affected task tree without exposing unrelated threads or changing normal feedback uploads.",
             "test": "go test ./appserver -run 'TestGuardianReviewFeedbackRecordsFailuresLikeRust|TestGuardianReviewFeedbackOversizeOmitsContextLikeRust|TestGuardianFeedbackStoreLimitsLikeRust|TestGuardianReviewCapturesFailureEvidenceLikeRust|TestFeedbackUploadIncludesGuardianFailuresLikeRust' -count=1"
+        },
+        {
+            "id": "guardian-retained-omission-deduplication",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 5ca55db09c (#49796 Deduplicate Guardian retained-context omission notices): the reviewer records host-scoped delivered omission states for retained user instructions and assistant context. Missing metadata is unknown and redelivers; an unchanged state suppresses a section left with only host notices and markers; a cleared omission emits the availability-change notice after START, creating the section when no retained originals remain. Only exact host notices count, so matching text inside coalesced tool output cannot prove delivery.",
+            "userImpact": "Guardian continuations no longer repeat the same retained-context omission notice, and recovered availability is stated explicitly once.",
+            "test": "go test ./state -run RetainedOmission -count=1; go test ./appserver -run TestGuardianReviewDeduplicatesRetainedOmissionNoticesLikeRust -count=1"
         }
     ]
 }

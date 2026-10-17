@@ -601,6 +601,11 @@ type BuildPromptOptions struct {
 	// context (Rust's RetainedUserInstructionsSection). A nil context renders no
 	// section.
 	RetainedContext *retainedctx.RetainedContext
+	// PreviousRetainedOmissions is the omission availability the reviewer
+	// conversation already received (#49796). Missing (nil) means unknown, so
+	// every notice is delivered; unchanged notice-only sections are suppressed
+	// and a cleared omission emits an availability-change notice.
+	PreviousRetainedOmissions *GuardianRetainedOmissions
 	// PermissionContext carries the reviewed environment's active-policy
 	// evidence: denied read paths and globs the reviewer must not approve an
 	// escalation to read (Rust's PermissionContextSection). A nil or empty
@@ -699,6 +704,7 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 	// transcript, while the asynchronous independent snapshot keeps the
 	// instruction prefix there and moves the assistant context behind it.
 	retainedSections := RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
+	retainedSections = ApplyRetainedOmissionDeduplication(retainedSections, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
 	if len(retainedSections.Instructions) > 0 {
 		addSection(strings.Join(retainedSections.Instructions, ""))
 	}

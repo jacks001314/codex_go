@@ -966,7 +966,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5c8fc15cc99241d3a1a415a629841540cdff4b28	47908	Alias `tui.whimsy` to `tui.effects.starfield` (#47908)	2026-09-24	tui	0	0		0	0	not_applicable	
 5c94936b56efc1392fc5f4660001a022b72dae77	44654	Preserve missing environment variable diagnostics in Codex Doctor (#44654)	2026-09-10	core	0	0		0	0	not_applicable	
 5ca4175295220d2c5e9494b16e47e4be7720d6b5	40709	Rename host instruction payload to `Instructions` (#40709)	2026-08-25	guardian	2	2	1.00	0	0	complete	
-5ca55db09cc9c88165c94063275f619f228556a0	49796	Deduplicate Guardian retained-context omission notices (#49796)	2026-09-30	guardian	2	0	0.00	0	0	implementation_pending	GuardianRetainedOmissions,omission_state
+5ca55db09cc9c88165c94063275f619f228556a0	49796	Deduplicate Guardian retained-context omission notices (#49796)	2026-09-30	guardian	2	2	1.00	0	0	complete	
 5cb7a35de938e2475e5c1c088f111915008fd100	40673	Promote paginated thread history APIs (#40673)	2026-08-25	appserver	0	0		0	0	not_applicable	
 5cbcf810e5f4e77a34989075f99721d1028ce492	51186	Prevent stable release pointers from moving backward (#51186)	2026-10-05	core	0	0		0	0	not_applicable	
 5ce04789fbbd4b12c80340a8246cfb00d0a330d5	40640	Honor managed plugin disablement for executor capabilities (#40640)	2026-08-25	appserver	0	0		0	0	not_applicable	

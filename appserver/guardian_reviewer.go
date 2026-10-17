@@ -69,6 +69,10 @@ type modelGuardianReviewer struct {
 	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
 	// feedback collection retain nothing.
 	feedbackCaptureEnabled func(threadID string) bool
+	// retainedOmissions is the host-scoped record of the retained-section
+	// omission notices the reviewer conversation already received (#49796).
+	retainedOmissionsMu sync.Mutex
+	retainedOmissions   map[string]state.GuardianRetainedOmissions
 	// reviewModel resolves the catalog-backed reviewer selection for the
 	// reviewed turn: the model, its request-level reasoning effort, and the
 	// reviewer's policy instructions (Rust's resolve_review_model /
@@ -654,16 +658,19 @@ reviewAttempt:
 	if r.retainedContext != nil {
 		retainedContext = r.retainedContext(threadID, turnID)
 	}
+	previousOmissions := r.retainedOmissionDelivery(threadID)
+	pendingOmissions := state.CurrentRetainedOmissions(retainedContext, state.ActionPresentationSyncFull)
 	// The approval reviewer is the synchronous, stateful consumer, so it renders
 	// the retained snapshot in Rust's synchronous layout (#51627): one retained
 	// section ahead of the transcript, with the assistant context inside it. The
 	// asynchronous independent snapshot's split belongs to ActionPresentationAsync.
 	buildOptions := state.BuildPromptOptions{
-		Presentation:      state.ActionPresentationSyncFull,
-		TranscriptFormat:  transcriptFormat,
-		NodeReplEvidence:  promptNodeReplEvidence,
-		PermissionContext: permissionContext,
-		RetainedContext:   retainedContext,
+		Presentation:              state.ActionPresentationSyncFull,
+		TranscriptFormat:          transcriptFormat,
+		NodeReplEvidence:          promptNodeReplEvidence,
+		PermissionContext:         permissionContext,
+		RetainedContext:           retainedContext,
+		PreviousRetainedOmissions: previousOmissions,
 	}
 	var prompt string
 	var promptParts []state.GuardianPromptPart
@@ -784,6 +791,11 @@ reviewAttempt:
 		runner.SeedForReview(reviewRequest)
 	}
 	response, err = r.agent.Run(reviewCtx, reviewRequest)
+	if err == nil {
+		// The review request reached the session, so the retained-section
+		// omission state is delivered; a later composition may suppress it.
+		r.markRetainedOmissionsDelivered(threadID, pendingOmissions)
+	}
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		// Rust records the reviewed-transcript cursor once a review ran in the
 		// guardian session.
@@ -920,6 +932,34 @@ reviewAttempt:
 		rationale = guardianRejectionMessage(plan.AutoReview, rationale)
 	}
 	return decision, rationale, nil
+}
+
+// retainedOmissionDelivery returns the omission state the thread's reviewer
+// conversation already received. A missing entry is unknown, so the first
+// review always delivers the notices.
+func (r *modelGuardianReviewer) retainedOmissionDelivery(threadID string) *state.GuardianRetainedOmissions {
+	if r == nil {
+		return nil
+	}
+	r.retainedOmissionsMu.Lock()
+	defer r.retainedOmissionsMu.Unlock()
+	if value, ok := r.retainedOmissions[threadID]; ok {
+		delivered := value
+		return &delivered
+	}
+	return nil
+}
+
+func (r *modelGuardianReviewer) markRetainedOmissionsDelivered(threadID string, value state.GuardianRetainedOmissions) {
+	if r == nil {
+		return
+	}
+	r.retainedOmissionsMu.Lock()
+	defer r.retainedOmissionsMu.Unlock()
+	if r.retainedOmissions == nil {
+		r.retainedOmissions = map[string]state.GuardianRetainedOmissions{}
+	}
+	r.retainedOmissions[threadID] = value
 }
 
 // reviewClientMetadata builds the guardian review request's client metadata.
