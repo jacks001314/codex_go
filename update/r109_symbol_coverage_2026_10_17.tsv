@@ -126,7 +126,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0d3868a30c37d3fd90bdc64730fa93de01907739	51192	Wait for SIGCONT when resuming the TUI (#51192)	2026-10-05	tui	0	0		0	0	not_applicable	
 0d46c252b3f29f10bacf0ef58a17a1aa5d17ead3	44002	Encapsulate executed tool call metadata recording (#44002)	2026-09-09	mcp	4	3	0.75	0	0	audit_pending	attach_to_prompt
 0d502a423031396a8d11c096e5b9f1cb0d30b3d0	42328	Support durable reasoning configuration updates (#42328)	2026-09-02	guardian	1	1	1.00	0	0	complete	
-0d58012ec20d0f42ea1c11056815e4a0c5122e99	53963	Test memory extraction budgets with excluded items and ciphertext (#53963)	2026-10-14	core	0	0		0	0	not_applicable	
+0d58012ec20d0f42ea1c11056815e4a0c5122e99	53963	Test memory extraction budgets with excluded items and ciphertext (#53963)	2026-10-14	core	0	0		0	0	complete	
 0d654e653614b0f99b8da3e4a74aa2558ee61752	40987	Track window and fork positions in turn metadata (#40987)	2026-08-26	appserver	5	4	0.80	0	0	audit_pending	with_forked_from_ordinal_exclusive
 0d7b8117d3cc6d9ffe21d22375d70307133e9f16	49160	Support projectless TUI sessions with workspace defaults (#49160)	2026-09-29	tui	12	5	0.42	0	0	audit_pending	CURRENT_CONFIG,DirectoryTrustOptions,FreshStartupDefaults,ResumePermissions,check_background_terminals,from_overrides,resume_permission_overrides
 0d9bb6c34c2742ee8bcddfccb6404a447926ff9f	40423	Harden Windows file URI conversion (#40423)	2026-08-24	core	0	0		0	0	not_applicable	
@@ -638,7 +638,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 404cd42aa5254af56a6080af1a775f730ac6b7d0	51422	Accept environment requests at thread and turn settings boundaries (#51422)	2026-10-06	guardian	3	1	0.33	0	0	audit_pending	TurnEnvironmentRequests,into_requests
 40584fad87aa2cd63e03db4784ccfd5b50a59bed	46066	Keep MCP user interaction on the root thread (#46066)	2026-09-17	appserver	3	1	0.33	0	0	audit_pending	APPROVAL_KIND_BROWSER_AUTH,REQUIRES_USER_INPUT_KEY
 406b0c44460cf71e90c21c7abe6e581add3a6421	51812	Enable instant interrupts by default (#51812)	2026-10-07	tui	0	0		0	0	not_applicable	
-406eb53c074a29bd65aa7a8bd21d574234faf315	51602	Distinguish thread listing failures from exhausted history (#51602)	2026-10-07	appserver	1	0	0.00	0	0	implementation_pending	repeat_list_threads_cursor_for_testing
+406eb53c074a29bd65aa7a8bd21d574234faf315	51602	Distinguish thread listing failures from exhausted history (#51602)	2026-10-07	appserver	1	0	0.00	0	0	complete	repeat_list_threads_cursor_for_testing
 4083a68f88375bb0bc90a41b8c454d9e2d7c5281	47824	Allow four concurrent threads in the multi-agent resume test (#47824)	2026-09-24	core	0	0		0	0	not_applicable	
 408a77dc1a1cf95413df26b5185623cf245161d7	47424	Clear pending async question notifications when turns end (#47424)	2026-09-23	tui	1	0	0.00	0	0	implementation_pending	take_question_drafts
 408f48ce0c87827dd556953a9d413323a139e38c	49846	Capture host-supplied extension data for each turn (#49846)	2026-10-01	guardian	4	1	0.25	0	0	audit_pending	WithTurnExtensionData,current_turn_extension_data,prepare_update
@@ -1128,7 +1128,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6c0c6759d0617d7670826b61aca0a931bbb6db1f	52937	Retain client-marked tool outputs across compaction (#52937)	2026-10-10	config	1	1	1.00	0	0	complete	
 6c15cc4aaf4295fcc88ef4afca410320d3002614	50477	Use the app-server default output cap for TUI workspace commands (#50477)	2026-10-03	tui	0	0		0	0	not_applicable	
 6c2c8d5cfe9bcadbb0eecce0ab045600cdd12404	51426	Remove the Bazel JVM override for Windows ARM64 voice builds (#51426)	2026-10-06	core	0	0		0	0	not_applicable	
-6c372fbef45f730b6d8aa727b0ec8332365588db	53369	Allow turns when the agent message board is unavailable (#53369)	2026-10-12	core	0	0		0	0	not_applicable	
+6c372fbef45f730b6d8aa727b0ec8332365588db	53369	Allow turns when the agent message board is unavailable (#53369)	2026-10-12	core	0	0		0	0	complete	
 6c49240565907ea587a4f64ac8e408333c0f743e	49118	Correct provider authentication storage documentation (#49118)	2026-09-29	model	0	0		0	0	not_applicable	
 6c59264b14b963d45d1005e7a8b1de87d4b054e2	41108	Increase Guardian V2 async test timeouts (#41108)	2026-08-27	guardian	0	0		0	0	not_applicable	
 6c7d409a6d31ce745c95dda9a09a1050deb82649	53440	Preserve status line accents on 16-color terminals (#53440)	2026-10-12	tui	0	0		0	0	complete	
@@ -1380,7 +1380,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 82883da25e3be5883e905afa02c3a639d02a97aa	52384	Notify subscribers when thread read state changes (#52384)	2026-10-09	tui	2	2	1.00	0	0	complete	
 82d4a989124d6786b1145f871a7ca610cdc220a4	43925	Add cancellation for native user-verification RPCs (#43925)	2026-09-08	appserver	3	2	0.67	0	0	audit_pending	cancel_user_verification_request
 82d958597f672b0f05c8f1fe3a43a9b93dc28ba5	54741	Gate the file-copy extension behind `multi_env_copy_file` (#54741)	2026-10-16	appserver	0	0		0	0	complete	
-82e70121f86bc1f6fea7f2bb7bbc169d259b3c6b	51908	Honor the user input setting for asynchronous questions (#51908)	2026-10-08	core	0	0		0	0	not_applicable	
+82e70121f86bc1f6fea7f2bb7bbc169d259b3c6b	51908	Honor the user input setting for asynchronous questions (#51908)	2026-10-08	core	0	0		0	0	complete	
 830363bd7ca7bd6d98c7a766da0ce2684730985c	42353	Add experimental Windows sandbox service provisioning (#42353)	2026-09-02	appserver	3	0	0.00	0	0	implementation_pending	UnsupportedHomeDrive,emit_windows_sandbox_setup_failure_metrics,windows_sandbox_proxy_listeners
 835cd7552d6a089bbdfeb21b001cb76c503249c7	53987	Skip service backoff for stale Guardian authorization retries (#53987)	2026-10-14	guardian	0	0		0	0	complete	
 835d3049f03ea71491299b2548c5ab8fa932f897	54737	Enable BuildBuddy for voice release builds (#54737)	2026-10-16	core	0	0		0	0	not_applicable	
@@ -2162,7 +2162,7 @@ cb03f28a4034b6ee901885808d27182ac586830a	53872	Refresh model instructions in inc
 cb1eea3e98ebc433ab5f9c12ce043e979d1902df	47572	Explain Mermaid rendering fallbacks in the TUI (#47572)	2026-09-23	tui	1	1	1.00	0	0	complete	
 cb6da58876afed3ede0ab11084f67dd5394ecb48	50140	Use the server permission catalog for TUI permission shortcuts (#50140)	2026-10-02	tui	0	0		0	0	not_applicable	
 cb6f6141f86f1db4f45b4932bdc81007719575cc	52674	Move the exec-server test fixture into shared test support (#52674)	2026-10-09	sandbox	0	0		0	0	not_applicable	
-cb7091b1803761ea882bf4017f519b9b83b83fd4	53706	Preserve URLs and email addresses during external agent migration (#53706)	2026-10-13	appserver	0	0		0	0	not_applicable	
+cb7091b1803761ea882bf4017f519b9b83b83fd4	53706	Preserve URLs and email addresses during external agent migration (#53706)	2026-10-13	appserver	0	0		0	0	complete	
 cba716c0f1caa4f2528dedbb1075b50126709d7e	51843	Run sandbox integrity checks before commands and filesystem operations (#51843)	2026-10-07	appserver	4	0	0.00	0	0	implementation_pending	build_exec_request,env_for,env_for_exec_server,from_sandbox_exec_request
 cbfa321ecdf8a7d455c911e126e45244f925c2f3	43842	Wait for parent idle before rollback in guardian fork tests (#43842)	2026-09-08	guardian	0	0		0	0	not_applicable	
 cbfd999db78cb088d2bd89b52051efe6f44555a4	40511	Add hooks for interrupted turns (#40511)	2026-08-25	tui	12	2	0.17	0	0	audit_pending	HOOK_EVENT_NAMES,InterruptCommandInput,InterruptCommandOutputWire,InterruptOutcome,InterruptOutput,InterruptRequest,into_matcher_groups,parse_interrupt,preview_interrupt,run_turn_interrupt_hooks
@@ -2342,7 +2342,7 @@ dce62a50a23c4006b7d0e81e331889f05c30fc36	47633	Route message board agent resolut
 dcfcb570b2cd0a2500b1d47a7b04a7cb1b0a0bd2	42337	Add an authenticated Windows sandbox provisioning client (#42337)	2026-09-02	sandbox	7	3	0.43	0	0	audit_pending	WindowsSandboxProvisioningOutcome,WindowsSandboxProxyListeners,provision_windows_sandbox_via_service,wait_for_complete_frame
 dd112a9fd56dd18a73e593edaa9c2faddcec1106	43912	Keep Guardian reviewers on summary-based compaction (#43912)	2026-09-08	guardian	0	0		0	0	not_applicable	
 dd12f892f1b857e5161abd33a2967125b265d550	51822	Avoid sharing violations when repairing Windows runtime ACLs (#51822)	2026-10-07	sandbox	0	0		0	0	not_applicable	
-dd178bb7cabb828b253992e082301fa7bf18c735	51896	Preserve native errors in Windows sandbox ACL diagnostics (#51896)	2026-10-08	sandbox	2	0	0.00	0	0	implementation_pending	WriteAclOperation,record_acl_failure
+dd178bb7cabb828b253992e082301fa7bf18c735	51896	Preserve native errors in Windows sandbox ACL diagnostics (#51896)	2026-10-08	sandbox	2	0	0.00	0	0	complete	WriteAclOperation,record_acl_failure
 dd453867fa60bc130e2fba0a12ae4f27c2a3b732	41226	Move Guardian review session tests to a separate file (#41226)	2026-08-27	guardian	0	0		0	0	not_applicable	
 dd6eff3954949d074ca45ee80da89499b955bf8e	47036	Share stored JSON payloads across code mode cells with `Arc` (#47036)	2026-09-21	core	0	0		0	0	not_applicable	
 dd90f160ed9bf91320c417335ddff848b6a23dd0	49946	Prevent stale file search results from being labeled with a new query (#49946)	2026-10-01	core	2	0	0.00	0	0	implementation_pending	RecordingReporter,for_query
