@@ -20359,10 +20359,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 4/5; needs review: is_guardian_context_message"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Explicit goal set/clear mutations are persisted as host-annotated user.goal context, replayed through resume, and recognized as user authorization instead of untrusted context."
+        ]
     },
     {
       "sha": "8ac495b79988995cae163d5a67ecd72b78f73629",

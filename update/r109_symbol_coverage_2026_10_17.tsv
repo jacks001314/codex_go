@@ -296,7 +296,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1cc7e2361237ce7244430ee1d581c77f95c57ac8	48830	Show a short, neutral TUI interruption notice (#48830)	2026-09-28	tui	0	0		0	0	not_applicable	
 1cc81ca89a0b7660bcb332da09d1c3e966cf0298	41357	Support compression for shared rollout lineages (#41357)	2026-08-28	persistence	5	3	0.60	0	0	audit_pending	RolloutCompressionMode,rollout_contains_prefix
 1cc9917508ab791e0bf996e6ada8d91eb3edfe33	50045	Keep transcript Find expansion scoped to the current match (#50045)	2026-10-01	tui	7	0	0.00	0	0	implementation_pending	base_layout,entry_layout,install_search_match,is_search_expanded,match_anchor,search_layout,sync_search_live_tail
-1cd253c98750c257b7601a7362f260bc715fc9e3	47811	Preserve explicit user goal updates in Guardian authorization (#47811)	2026-09-24	guardian	5	4	0.80	0	0	audit_pending	is_guardian_context_message
+1cd253c98750c257b7601a7362f260bc715fc9e3	47811	Preserve explicit user goal updates in Guardian authorization (#47811)	2026-09-24	guardian	5	4	0.80	0	0	complete	is_guardian_context_message
 1cd78651e24016236b7e35c4ca77b9e34f58f9f5	42752	Preserve response IDs for fast collaborator tool events (#42752)	2026-09-04	telemetry	0	0		0	0	not_applicable	
 1d516d8b3d3b581e6d4c403792982862fdb16840	47688	Remove legacy Guardian authorization evidence paths (#47688)	2026-09-23	guardian	0	0		0	0	not_applicable	
 1d64085e67adec1506665e6861c03c1a78b947bb	40647	Validate step settings against proposed permissions (#40647)	2026-08-25	mcp	8	4	0.50	0	0	audit_pending	ModelInfoOverrides,StepSettingsConstraints,StepSettingsUpdate,step_settings_constraints
