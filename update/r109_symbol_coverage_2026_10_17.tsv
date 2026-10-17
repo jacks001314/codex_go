@@ -2299,7 +2299,7 @@ d838c2346d05f4feb7928ea92e13e83dd479ba10	47701	Allow idle threads to prewarm and
 d83bb540ec64bf6b009bca0283b0be91ea33f26a	51678	Move Windows sandbox tests into a dedicated integration binary (#51678)	2026-10-07	sandbox	0	0		0	0	not_applicable	
 d84ebff59295a5fc897bd7b703ade933c5312198	46571	Preserve macOS Seatbelt exclusions in scratch directories (#46571)	2026-09-18	sandbox	2	0	0.00	0	0	implementation_pending	protection_policy,scratch_access_roots
 d8ec479c34895214b44c062f060d97224c191a50	48643	Set the provisioned macOS CLI bundle name to ChatGPT (#48643)	2026-09-27	core	0	0		0	0	not_applicable	
-d8f69ea8bc998a33c19a08176cfc22fd4352c592	49432	Preserve bootstrap discovery across authentication changes (#49432)	2026-09-30	appserver	2	1	0.50	0	0	audit_pending	with_application_network_policy
+d8f69ea8bc998a33c19a08176cfc22fd4352c592	49432	Preserve bootstrap discovery across authentication changes (#49432)	2026-09-30	appserver	2	2	1.00	0	0	complete	
 d8fc718809a4bafb97820e827622eb10fa890feb	49031	Clarify ChatGPT sign-in success copy (#49031)	2026-09-28	tui	0	0		0	0	not_applicable	
 d91294c39edb93d204926b33f21310dc968edc34	50066	Add a bounded Decisions transport for Guardian comparison classification (#50066)	2026-10-01	guardian	5	2	0.40	0	0	audit_pending	DecisionsError,DecisionsSampler,DecisionsTask
 d9275a63ed1c4ff6ed6b56db8669453ad678b6cf	48132	Allow Left to open the command center from read-only conversations (#48132)	2026-09-25	tui	2	1	0.50	0	0	audit_pending	agents_navigation_available

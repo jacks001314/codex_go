@@ -23849,8 +23849,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - appserver/application_network.go keeps the effective application policy and the separate local endpoint-restricted bootstrap policy (bootstrapAuthHTTPClient mirrors bind_bootstrap_auth), and noteAuthChanged invalidates the account-owned policy on an owner/workspace change so previous content clients and permits revoke while the local bootstrap policy stays usable. appserver/application_network_auth_test.go covers initial login, same-owner refresh, owner change revocation, bootstrap discovery survival, local denied-host enforcement, and (new) sign-out: account content acquire returns ErrNetworkPolicyRevoked while bootstrap discovery still works. go test ./appserver -run TestRuntimeRouterAuthOwnerChangeRevokesApplicationNetworkPolicyLikeRust green.",
         "Partial symbol coverage 1/2; needs review: with_application_network_policy"
       ]
     },

@@ -97,4 +97,15 @@ func TestRuntimeRouterAuthOwnerChangeRevokesApplicationNetworkPolicyLikeRust(t *
 	if _, err := localBootstrap.Acquire(appServerTestURL(t, "https://denied.example/backend-api/wham/config")); !errors.Is(err, network.ErrNetworkPolicyDestination) {
 		t.Fatalf("local bootstrap acquire of a denied host = %v, want %v", err, network.ErrNetworkPolicyDestination)
 	}
+
+	// Signing out revokes the previous account's content access, while bootstrap
+	// discovery keeps working through the local endpoint-restricted policy.
+	router.requireAccount().ApplyAuthSnapshot(nil)
+	router.noteAuthChanged()
+	if _, err := content.Acquire(contentURL); !errors.Is(err, network.ErrNetworkPolicyRevoked) {
+		t.Fatalf("account content acquire after sign-out = %v, want %v", err, network.ErrNetworkPolicyRevoked)
+	}
+	if _, err := localBootstrap.Acquire(bootstrapURL); err != nil {
+		t.Fatalf("bootstrap discovery after sign-out: %v", err)
+	}
 }
