@@ -226,6 +226,24 @@ func TestBuildResponsesClientMetadataForwardsHistoryIngest(t *testing.T) {
 	}
 }
 
+func TestBuildResponsesClientMetadataForwardsHistoryInitialization(t *testing.T) {
+	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{
+		ThreadID:              "thread-1",
+		HistoryInitialization: "cold_resume",
+		Extra: map[string]string{
+			codexapi.HistoryInitializationKey: "client-spoof",
+		},
+	})
+	raw := client[codexapi.TurnMetadataHeader]
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata[codexapi.HistoryInitializationKey] != "cold_resume" {
+		t.Fatalf("history initialization metadata = %#v", metadata)
+	}
+}
+
 func TestBuildResponsesClientMetadataIncludesAnalyticsEnabled(t *testing.T) {
 	enabled := true
 	client := BuildResponsesClientMetadata(&ResponsesClientMetadataOptions{

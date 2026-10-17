@@ -1446,6 +1446,14 @@
             "reason": "Aligned upstream a6c5f3a9fa (#51194 Add browser extension request headers to config requirements): Go parses browser_use.extension.request_headers as strict name/value pairs, preserves template strings and explicit-empty lists, rejects unknown/malformed fields, and exposes cloned camelCase requestHeaders through config requirements and API serialization.",
             "userImpact": "Managed browser-extension request headers can be supplied and inspected without ambiguity while malformed requirements fail validation.",
             "test": "go test ./config -run TestBrowserUseExtensionRequestHeadersRequirementLikeRust -count=1; go test ./appserver -run ConfigRequirements -count=1"
+        },
+        {
+            "id": "history-initialization-provenance",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 780d7ab097 (#52325 Track history initialization in Responses turn metadata): thread runtimes classify history as new, cleared, cold resume, warm/cold fork, or supplied history, preserving the value for live resumes while distinguishing forks from loaded and unloaded source runtimes. x-codex-turn-metadata carries the classification and the key is reserved against client overrides.",
+            "userImpact": "Backend diagnostics can distinguish reconstructed history paths without inferring provenance from missing tool metadata.",
+            "test": "go test ./codexapi ./turn ./session ./appserver -run 'HistoryInitialization|ThreadResume|ThreadFork|ResponsesClientMetadata' -count=1"
         }
     ]
 }

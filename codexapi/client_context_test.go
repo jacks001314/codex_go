@@ -306,6 +306,7 @@ func TestResponsesMetadataReservesTheWindowForkKeys(t *testing.T) {
 		ContextWindowIDKey,
 		ToolNamespacesInfoKey,
 		HistoryIngestRequestedKey,
+		HistoryInitializationKey,
 		ForkedFromOrdinalExclusiveKey,
 		GuardianCreditsRequestedKey,
 	} {
@@ -315,6 +316,21 @@ func TestResponsesMetadataReservesTheWindowForkKeys(t *testing.T) {
 		if err := ValidateResponsesAPIMetadata(map[string]string{key: "1"}); err == nil {
 			t.Fatalf("responses_api_metadata accepted the reserved key %q", key)
 		}
+	}
+}
+
+func TestClientMetadataHistoryInitializationLikeRust(t *testing.T) {
+	metadata := NewClientMetadata("install", "session", "thread", "window")
+	metadata.RequestKind = ClientRequestTurn
+	metadata.HistoryInitialization = "warm_fork"
+	metadata.Extra = map[string]string{HistoryInitializationKey: "client-spoof"}
+	value := metadata.TurnMetadataValue()
+	if value[HistoryInitializationKey] != "warm_fork" {
+		t.Fatalf("history initialization = %#v", value[HistoryInitializationKey])
+	}
+	if !ClientReservedMetadataKeys()[HistoryInitializationKey] ||
+		!reservedMetadataKeys[HistoryInitializationKey] {
+		t.Fatal("history initialization must be a reserved metadata key")
 	}
 }
 

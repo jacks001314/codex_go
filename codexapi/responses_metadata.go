@@ -26,6 +26,7 @@ const (
 	// the session's token-budget history-notes extension asks the backend to
 	// ingest the request.
 	HistoryIngestRequestedKey     = "history_ingest_requested"
+	HistoryInitializationKey      = "history_initialization"
 	WindowNumberKey               = "window_number"
 	ForkedFromThreadIDKey         = "forked_from_thread_id"
 	ForkedFromOrdinalExclusiveKey = "forked_from_ordinal_exclusive"
@@ -85,6 +86,7 @@ var reservedMetadataKeys = map[string]bool{
 	ToolNamespacesInfoKey:         true,
 	TurnStartedAtUnixMSKey:        true,
 	HistoryIngestRequestedKey:     true,
+	HistoryInitializationKey:      true,
 	AnalyticsEnabledKey:           true,
 	ForkedFromThreadIDKey:         true,
 	ForkedFromOrdinalExclusiveKey: true,

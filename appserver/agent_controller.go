@@ -182,6 +182,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	}
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
+	forkedHistory := false
 	if c.version == agent.VersionV2 && forkTurns != "none" {
 		// Rust #51329: partial-history forks are gone. `all` and the legacy
 		// positive-integer spellings both inherit the parent's full history, so the
@@ -202,6 +203,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, forkErr, tool.AgentErrorContextForkHistory, forkMode)
 		}
 		record = forked
+		forkedHistory = true
 		record.Items = filterInheritedCurrentTimeReminders(record.Items)
 		// Rust spawn.rs's forked-item provenance: persist the scope of every copied
 		// conversational message, so a resume cannot recapture the parent's
@@ -231,7 +233,15 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		record.Metadata.DynamicTools = cloneRawMessages(parentDynamicTools)
 	}
 	record.Metadata.SessionPrefix = session.PrefixForSessionID(string(threadID))
+	if forkedHistory {
+		extra[session.HistoryInitializationExtraKey] = string(session.HistoryInitializationWarmFork)
+	} else {
+		extra[session.HistoryInitializationExtraKey] = string(session.HistoryInitializationNew)
+	}
 	record.Metadata.Extra = extra
+	if c.router.services.ThreadRouter != nil {
+		c.router.services.ThreadRouter.setHistoryInitialization(threadID, session.HistoryInitializationFromExtra(extra))
+	}
 	if err := c.router.runtimeSaveThreadRecord(record); err != nil {
 		_ = c.router.services.ThreadRouter.store.Delete(threadID)
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)

@@ -460,6 +460,7 @@ type ResponsesClientMetadataOptions struct {
 	// session's token-budget history-notes extension asks the backend to ingest
 	// the request. Only the true value is serialized.
 	HistoryIngestRequested     bool
+	HistoryInitialization      string
 	AutoReviewEnabled          *bool
 	NodeReplAutoReviewRequired *bool
 	NodeReplDisabled           *bool
@@ -533,6 +534,7 @@ func BuildResponsesClientMetadata(options *ResponsesClientMetadataOptions) map[s
 		metadata.Compaction = &compaction
 	}
 	metadata.HistoryIngestRequested = options.HistoryIngestRequested
+	metadata.HistoryInitialization = strings.TrimSpace(options.HistoryInitialization)
 	metadata.AutoReviewEnabled = cloneBoolPtr(options.AutoReviewEnabled)
 	metadata.NodeReplAutoReviewRequired = cloneBoolPtr(options.NodeReplAutoReviewRequired)
 	metadata.NodeReplDisabled = cloneBoolPtr(options.NodeReplDisabled)

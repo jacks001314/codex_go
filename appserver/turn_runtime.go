@@ -7676,6 +7676,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	}
 	lineage := r.responsesMetadataLineage(threadID)
 	threadSnapshot := r.analyticsThreadSnapshot(threadID)
+	historyInitialization := r.threadHistoryInitialization(threadID)
 	unifiedExecEnabled := features.Enabled(cfg.FeatureSettings(), "unified_exec")
 	if permissionProfile != nil && permissionProfile.Profile != nil && !permissionProfile.Profile.Disabled && runtime.GOOS != "linux" {
 		unifiedExecEnabled = false
@@ -7828,6 +7829,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			// Rust with_window_and_fork_metadata: the history-notes extension
 			// asks the backend to ingest the request.
 			HistoryIngestRequested:     tokenBudget != nil && tokenBudget.UseHistoryNotesExtension,
+			HistoryInitialization:      historyInitialization,
 			AutoReviewEnabled:          autoReviewEnabledForTurn(cfg, params),
 			NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 			NodeReplDisabled:           &nodeReplDisabled,
@@ -8491,6 +8493,7 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 	if reasoningEffort == "" {
 		reasoningEffort = appReasoningEffortForTurn(cfg, active.Params)
 	}
+	historyInitialization := r.threadHistoryInitialization(threadID)
 	return turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 		InstallationID:             installationID,
 		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
@@ -8508,6 +8511,7 @@ func (r *RuntimeRouter) activeTurnClientMetadata(threadID string, turnID string,
 		Model:                      modelID,
 		ReasoningEffort:            reasoningEffort,
 		HistoryIngestRequested:     r.historyIngestRequestedForTurn(cfg, active.Params),
+		HistoryInitialization:      historyInitialization,
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
 		AnalyticsEnabled:           r.analyticsEnabledOptionForThread(threadID),
@@ -8709,6 +8713,25 @@ func (r *RuntimeRouter) responsesMetadataLineage(threadID string) responsesMetad
 	}
 	lineage.ForkedFromThreadID = strings.TrimSpace(string(record.ForkedFromID))
 	return lineage
+}
+
+func (r *RuntimeRouter) threadHistoryInitialization(threadID string) string {
+	if r == nil {
+		return ""
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+	if r.services.ThreadRouter != nil {
+		if initialization := r.services.ThreadRouter.historyInitializationForThread(session.ThreadID(threadID)); initialization != "" {
+			return string(initialization)
+		}
+	}
+	if record, err := r.threadRecord(session.ThreadID(threadID), true, false); err == nil && record != nil {
+		return string(session.HistoryInitializationFromExtra(record.Metadata.Extra))
+	}
+	return ""
 }
 
 func effectiveRootTurnID(rootTurnID string, turnID string, parentTurnID string, subagentHeader string) string {

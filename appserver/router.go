@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"codex_go/agent"
@@ -55,6 +56,11 @@ type Router struct {
 	// creatorIdentity captures the authenticated ChatGPT user/account when a
 	// thread or fork is created (Rust #47113). Nil leaves both fields absent.
 	creatorIdentity func() (userID string, accountID string)
+	historyInitMu   sync.RWMutex
+	// historyInitializations classifies the runtime that currently owns each
+	// loaded thread. Persisted records seed the value, while cold resumes and
+	// forks override it for this runtime without rewriting history metadata.
+	historyInitializations map[session.ThreadID]session.HistoryInitialization
 }
 
 // SetTracer installs the OTEL tracer used for request spans (Rust instruments
@@ -170,7 +176,12 @@ func markClientAuthoredDeveloperItem(item *session.Item) {
 
 func NewRouter(store *session.Store) *Router {
 	threads := NewThreadManager(nil)
-	router := &Router{store: store, now: time.Now, threads: threads}
+	router := &Router{
+		store:                  store,
+		now:                    time.Now,
+		threads:                threads,
+		historyInitializations: map[session.ThreadID]session.HistoryInitialization{},
+	}
 	if store != nil {
 		codexHome := codexHomeFromSessionStore(store)
 		store.SetPhysicalHistoryResolver(func(position session.HistoryPosition) (*session.ResolvedPhysicalHistory, error) {
@@ -184,6 +195,35 @@ func NewRouter(store *session.Store) *Router {
 		})
 	}
 	return router
+}
+
+func (r *Router) setHistoryInitialization(threadID session.ThreadID, initialization session.HistoryInitialization) {
+	if r == nil || strings.TrimSpace(string(threadID)) == "" || initialization == "" {
+		return
+	}
+	r.historyInitMu.Lock()
+	defer r.historyInitMu.Unlock()
+	if r.historyInitializations == nil {
+		r.historyInitializations = map[session.ThreadID]session.HistoryInitialization{}
+	}
+	r.historyInitializations[threadID] = initialization
+}
+
+func (r *Router) historyInitializationForThread(threadID session.ThreadID) session.HistoryInitialization {
+	if r == nil {
+		return ""
+	}
+	r.historyInitMu.RLock()
+	initialization := r.historyInitializations[threadID]
+	r.historyInitMu.RUnlock()
+	if initialization != "" {
+		return initialization
+	}
+	record, err := r.readThreadRecord(threadID, true, false)
+	if err != nil || record == nil {
+		return ""
+	}
+	return session.HistoryInitializationFromExtra(record.Metadata.Extra)
 }
 
 func (r *Router) Close() error {
@@ -1002,6 +1042,7 @@ func threadStartExtra(params *ThreadStartParams) map[string]any {
 	}
 	extra := map[string]any{}
 	extra[pendingSessionStartSourceExtraKey] = string(threadStartSessionStartSource(params))
+	extra[session.HistoryInitializationExtraKey] = string(session.HistoryInitializationNew)
 	if params.ExperimentalRawEvents {
 		extra[experimentalRawEventsExtraKey] = true
 	}
@@ -1276,6 +1317,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
+	r.setHistoryInitialization(record.ID, session.HistoryInitializationNew)
 	if err := r.retainLiveThread(record); err != nil {
 		_ = r.store.Delete(record.ID)
 		return nil, err
@@ -1411,8 +1453,14 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 			return nil, err
 		}
 	}
+	sourceWasLive := r.threadManager().LiveThread(record.ID) != nil
 	if err := r.retainLiveThread(record); err != nil {
 		return nil, err
+	}
+	if !sourceWasLive {
+		r.setHistoryInitialization(record.ID, session.HistoryInitializationColdResume)
+	} else if existing := r.historyInitializationForThread(record.ID); existing != "" {
+		r.setHistoryInitialization(record.ID, existing)
 	}
 	path := r.threadRolloutPath(record)
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
@@ -1594,7 +1642,10 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 	serviceTier := threadLifecycleServiceTierForModel(nil, params.ServiceTierSet, params.ServiceTier, modelID)
 	cwd := stringPtrValue(params.CWD)
 	runtimeWorkspaceRoots := threadRuntimeWorkspaceRoots(cwd, params.RuntimeWorkspaceRoots)
-	extra := map[string]any{"history_resume": true}
+	extra := map[string]any{
+		"history_resume":                      true,
+		session.HistoryInitializationExtraKey: string(session.HistoryInitializationSuppliedHistory),
+	}
 	if len(runtimeWorkspaceRoots) > 0 {
 		extra["runtime_workspace_roots"] = append([]string(nil), runtimeWorkspaceRoots...)
 	}
@@ -1620,6 +1671,7 @@ func (r *Router) handleThreadResumeHistory(request *Request, params *ThreadResum
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
+	r.setHistoryInitialization(record.ID, session.HistoryInitializationSuppliedHistory)
 	if err := r.createThreadRollout(record, now); err != nil {
 		return nil, err
 	}
@@ -1998,6 +2050,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		return nil, err
 	}
 	defer closeTemporaryWriters(sourceLocks)
+	sourceWasLive := r.threadManager().LiveThread(sourceID) != nil
 	var sourceRecord *session.Record
 	if params.Path != nil && strings.TrimSpace(*params.Path) != "" {
 		sourceRecord, err = r.readThreadRecordFromRolloutPath(*params.Path, true, true)
@@ -2041,6 +2094,13 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	if err != nil {
 		return nil, threadForkRecordError(err)
 	}
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	initialization := session.HistoryInitializationColdFork
+	if sourceWasLive {
+		initialization = session.HistoryInitializationWarmFork
+	}
+	record.Metadata.Extra[session.HistoryInitializationExtraKey] = string(initialization)
+	r.setHistoryInitialization(record.ID, initialization)
 	// Rust's app-server fork does not inherit the source thread's session
 	// source; the new thread is created under the app-server transport's
 	// default source (VSCode for the stdio transport).

@@ -1238,7 +1238,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 77b30a21e17d6ec6317f712ab6d044cb1bd152e7	40403	Prewarm more Guardian sampling WebSockets (#40403)	2026-08-24	guardian	1	0	0.00	0	0	implementation_pending	INITIAL_WEBSOCKET_CONNECTIONS
 77c01c1d37088f97cc9621c50c584f27214beb21	52288	Remove duplicate field initializers from extension registry tests (#52288)	2026-10-08	core	0	0		0	0	not_applicable	
 77c1feb00ed60a5540003dd48ce4df3598e13c9d	46107	Box app-server request handler futures to reduce stack usage (#46107)	2026-09-17	appserver	0	0		0	0	not_applicable	
-780d7ab09741241380586b07882c635037a6ba21	52325	Track history initialization in Responses turn metadata (#52325)	2026-10-08	guardian	3	1	0.33	0	0	audit_pending	HISTORY_INITIALIZATION_KEY,HistoryInitialization
+780d7ab09741241380586b07882c635037a6ba21	52325	Track history initialization in Responses turn metadata (#52325)	2026-10-08	guardian	3	3	1.00	0	0	complete
 781c183c3bf991ae938ffed7ac97d7c018c2d540	42623	Bound Noise handshakes by the exec server initialization timeout (#42623)	2026-09-03	execserver	5	0	0.00	0	0	implementation_pending	NoiseHarnessConnection,NoiseInitializeContext,call_untraced,connect_with_recovery_and_noise_context,noise_harness_connection_from_websocket_with_readiness
 78245b47af2a7aafcabe025828ceecca69db4df1	46583	Deny XPC service lookups in macOS Seatbelt profiles (#46583)	2026-09-19	sandbox	0	0		0	0	not_applicable	
 782826663df3e898d0c594a13f6f75cc2a498644	48190	Bound agent message board SSE frames before parsing (#48190)	2026-09-25	core	0	0		0	0	not_applicable	
