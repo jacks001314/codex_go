@@ -1299,12 +1299,19 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 // the shared synchronous profile's per-entry caps and aggregate retention, and
 // preserves original entry numbering for JSON records (#43806, #51465).
 func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guardianTranscriptSelection {
+	profile := state.SynchronousContextProfile()
+	profile.Transcript.EntryLimits.NodeReplOutputTokens = codexctx.GuardianMaxNodeReplToolResultTokens
+	return r.guardianReviewTranscriptSelectionWithProfile(threadID, profile)
+}
+
+// guardianReviewTranscriptSelectionWithProfile applies a caller-resolved
+// profile to one host snapshot, so synchronous and asynchronous consumers share
+// the same collection and retention path (#41422, #43806).
+func (r *RuntimeRouter) guardianReviewTranscriptSelectionWithProfile(threadID string, profile state.ContextProfile) guardianTranscriptSelection {
 	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
 	if err != nil || record == nil {
 		return guardianTranscriptSelection{}
 	}
-	profile := state.SynchronousContextProfile()
-	profile.Transcript.EntryLimits.NodeReplOutputTokens = codexctx.GuardianMaxNodeReplToolResultTokens
 	toolCalls := map[string]session.Item{}
 	for _, item := range record.Items {
 		switch strings.ToLower(strings.TrimSpace(item.Type)) {
@@ -1321,7 +1328,8 @@ func (r *RuntimeRouter) guardianReviewTranscriptSelection(threadID string) guard
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
 		// excluded from the transcript while the surrounding user messages
 		// survive, including a message whose text matches the summary.
-		if guardianTranscriptExcludedItem(&item) {
+		if guardianTranscriptExcludedItem(&item, profile.Transcript.Options.IncludeReasoning) ||
+			!guardianTranscriptOptionsIncludeItem(&item, profile.Transcript.Options) {
 			continue
 		}
 		// Rust #49038: encrypted agent messages carry evidence such as a
@@ -1530,21 +1538,39 @@ func guardianTranscriptLabel(role string) string {
 }
 
 // guardianTranscriptExcludedItem reports whether a session item is kept out of
-// the Guardian review transcript. Reasoning, context-compaction and
-// compaction-trigger items carry no guardrail evidence (Rust's TranscriptHistory
-// drops every non-message item), so they never reach the reviewer. A copied
-// manual approval is model context rather than the child's own trusted approval
-// evidence (Rust guardian-context/src/transcript.rs::is_inherited_manual_approval,
-// #52535), so it is dropped as well.
-func guardianTranscriptExcludedItem(item *session.Item) bool {
+// the Guardian review transcript. Reasoning is omitted unless the request
+// enables it, while context-compaction and compaction-trigger items never carry
+// guardrail evidence. A copied manual approval is model context rather than the
+// child's own trusted approval evidence (Rust
+// guardian-context/src/transcript.rs::is_inherited_manual_approval, #52535), so
+// it is dropped as well.
+func guardianTranscriptExcludedItem(item *session.Item, includeReasoning bool) bool {
 	if item == nil {
 		return false
 	}
 	switch strings.TrimSpace(item.Type) {
-	case "reasoning", "context_compaction", "compaction_trigger":
+	case "reasoning":
+		return !includeReasoning
+	case "context_compaction", "compaction_trigger":
 		return true
 	}
 	return guardianTranscriptIsInheritedManualApproval(item)
+}
+
+// guardianTranscriptOptionsIncludeItem applies the profile's independent source
+// flags for tool calls and tool outputs (#41422).
+func guardianTranscriptOptionsIncludeItem(item *session.Item, options state.ConversationTranscriptOptions) bool {
+	if item == nil {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(item.Type)) {
+	case "function_call", "custom_tool_call", "local_shell_call", "web_search_call":
+		return options.IncludeToolCalls
+	case "function_call_output", "custom_tool_call_output", "tool_output":
+		return options.IncludeToolOutputs
+	default:
+		return true
+	}
 }
 
 // sessionItemIsManualApprovalMessage mirrors the role/marker half of Rust's

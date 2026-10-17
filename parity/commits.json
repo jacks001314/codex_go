@@ -4284,9 +4284,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/9; needs review: ConversationTranscriptConfig, ConversationTranscriptOptions, ConversationTranscriptSection, MANUAL_APPROVAL_DEVELOPER_PREFIX, TranscriptEntryLimits"
+        "Round 250 (audit): the Guardian collector is a stateless request-scoped path that takes a caller-resolved ContextProfile, so synchronous and asynchronous consumers share collection and retention. ConversationTranscriptConfig/Options, TranscriptEntryLimits, TranscriptRetentionConfig, and state.ManualApprovalDeveloperPrefix cover the shared surface. Tool calls, tool outputs, and reasoning are independently configurable; per-entry caps for messages, ordinary tools, and node-repl outputs apply before retention while conversation order and host attribution are preserved. Rust's SectionRegistry/ConversationTranscriptSection has no Go carrier because the equivalent path retains no request state. Tests: go test ./state -run 'Guardian|ManualApprovalDeveloperPrefix' -count=1; go test ./appserver -run Guardian -count=1; go build ./..."
       ]
     },
     {

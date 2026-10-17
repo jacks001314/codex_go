@@ -23,7 +23,11 @@ const (
 	MaxRecentDenialsPerTurn           = 10
 	MaxRecentCyberDenialsPerTurn      = 1
 	AutoReviewDenialWindowSize        = 50
-	DeniedActionApprovalPrefix        = "The user has manually approved a specific action that was previously `Rejected`."
+	// ManualApprovalDeveloperPrefix mirrors Rust's
+	// MANUAL_APPROVAL_DEVELOPER_PREFIX: the trusted developer marker that
+	// preserves an explicit manual action approval.
+	ManualApprovalDeveloperPrefix = "The user has manually approved a specific action that was previously `Rejected`."
+	DeniedActionApprovalPrefix    = ManualApprovalDeveloperPrefix
 )
 
 var ErrInvalidGuardianRequest = errors.New("invalid guardian request")

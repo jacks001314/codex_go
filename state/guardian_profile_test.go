@@ -33,6 +33,16 @@ func TestGuardianContextProfileDefaultsLikeRust(t *testing.T) {
 	}
 }
 
+func TestManualApprovalDeveloperPrefixLikeRust(t *testing.T) {
+	const want = "The user has manually approved a specific action that was previously `Rejected`."
+	if ManualApprovalDeveloperPrefix != want {
+		t.Fatalf("ManualApprovalDeveloperPrefix = %q, want %q", ManualApprovalDeveloperPrefix, want)
+	}
+	if DeniedActionApprovalPrefix != ManualApprovalDeveloperPrefix {
+		t.Fatalf("DeniedActionApprovalPrefix = %q, want the shared marker", DeniedActionApprovalPrefix)
+	}
+}
+
 // Mirrors Rust guardian-context profile_tests.rs:
 // profiles_preserve_distinct_retention_and_original_numbering.
 func TestGuardianContextProfilesPreserveDistinctRetentionAndOriginalNumberingLikeRust(t *testing.T) {

@@ -139,3 +139,28 @@ func TestGuardianReviewPromptRendersTranscriptOmissionNoticeLikeRust(t *testing.
 		t.Fatalf("prompt missing transcript omission notice:\n%s", captured.Prompt)
 	}
 }
+
+// Mirrors Rust #41422's independent source flags: tool calls, tool outputs, and
+// reasoning are configurable per request without changing conversation order.
+func TestGuardianReviewTranscriptOptionalSourcesLikeRust(t *testing.T) {
+	now := fixedTime()
+	router := guardianProfileTestRouter(t, []session.Item{
+		{ID: "call", Type: "function_call", Role: "assistant", Name: "shell", CallID: "call-1", Text: `{"cmd":"ls"}`, CreatedAt: now},
+		{ID: "output", Type: "tool_output", CallID: "call-1", Text: "ok", CreatedAt: now},
+		{ID: "reasoning", Type: "reasoning", Role: "assistant", Text: "thinking", CreatedAt: now},
+	})
+
+	defaults := router.guardianReviewTranscriptSelection(guardianProfileTestThreadID)
+	if len(defaults.Entries) != 2 {
+		t.Fatalf("default entries = %#v, want tool call and output without reasoning", defaults.Entries)
+	}
+
+	profile := state.SynchronousContextProfile()
+	profile.Transcript.Options.IncludeToolCalls = false
+	profile.Transcript.Options.IncludeToolOutputs = false
+	profile.Transcript.Options.IncludeReasoning = true
+	optional := router.guardianReviewTranscriptSelectionWithProfile(guardianProfileTestThreadID, profile)
+	if len(optional.Entries) != 1 || optional.Entries[0].Text != "thinking" {
+		t.Fatalf("optional entries = %#v, want reasoning only", optional.Entries)
+	}
+}

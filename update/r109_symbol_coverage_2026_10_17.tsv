@@ -75,7 +75,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 08d3748cf015456b26875a704cf406339799fbb9	45502	Add managed thread lifetimes with cancellation-safe startup (#45502)	2026-09-14	guardian	3	2	0.67	0	0	complete	start_thread_until
 08e2b58b07b8a423d6577b66fb7756e980b53dbf	49835	Clarify service tier default save errors in the TUI (#49835)	2026-10-01	tui	0	0		0	0	not_applicable	
 08e49689b88cd9a6dd617967da1ff859fb17aaec	44711	Return to the command center after session cancellation or deletion (#44711)	2026-09-11	tui	1	0	0.00	0	0	implementation_pending	SessionStartOutcome
-0918cd2c08f6e3b1f2b1db593e632a2e092c1ea6	41422	Add shared Guardian transcript collection (#41422)	2026-08-28	guardian	9	2	0.22	0	0	audit_pending	ConversationTranscriptConfig,ConversationTranscriptOptions,ConversationTranscriptSection,MANUAL_APPROVAL_DEVELOPER_PREFIX,TranscriptEntryLimits,TranscriptRetentionConfig,default_registry
+0918cd2c08f6e3b1f2b1db593e632a2e092c1ea6	41422	Add shared Guardian transcript collection (#41422)	2026-08-28	guardian	9	7	0.78	0	0	complete	ConversationTranscriptSection,default_registry
 095ac4f131e759b204fa6368dc42d2feff6eb21a	42369	Keep SQLite history projection moving past invalid records (#42369)	2026-09-02	persistence	0	0		0	0	not_applicable	
 095da4b7e8b70b01afb5c6131ef926dcb8c0d85d	43889	Fix transcript viewer restoration and half-page scrolling (#43889)	2026-09-08	tui	1	0	0.00	0	0	implementation_pending	last_rendered_buffer
 09609ba4148ec85d758c65b11d969ff8e0661e37	40422	Harden Windows updater command execution (#40422)	2026-08-24	core	0	0		0	0	not_applicable	
