@@ -932,3 +932,49 @@ func TestAgentLoopRefreshesStepSettingsLikeRust(t *testing.T) {
 		t.Fatalf("step settings callbacks = %d, want 1 (only after the first step)", stepCalls)
 	}
 }
+
+// Rust builds request-scoped world state from the StepContext captured for each
+// sampling request. The Go loop must therefore resolve step input after the
+// step settings refresh and retain the resulting context for later requests.
+func TestAgentLoopBuildsStepInputItemsFromCapturedStepLikeRust(t *testing.T) {
+	agent := &failAfterToolLoopAgent{recover: true}
+	registry := tool.NewRegistry()
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	loop := NewAgentLoop(&AgentLoopOptions{
+		Agent:      agent,
+		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{Router: tool.NewRouter(registry)}),
+		MaxTurns:   3,
+	})
+
+	var stepModels []string
+	result, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo",
+		Model:  "gpt-initial",
+		StepSettings: func() *AgentStepSettings {
+			return &AgentStepSettings{Model: "gpt-updated"}
+		},
+		StepInputItems: func(_ context.Context, iteration int, modelID string, _ string) ([]any, error) {
+			stepModels = append(stepModels, modelID)
+			if iteration == 0 {
+				return nil, nil
+			}
+			return []any{model.DeveloperMessageInputItem("guidance for " + modelID)}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(stepModels) != 2 || stepModels[0] != "gpt-initial" || stepModels[1] != "gpt-updated" {
+		t.Fatalf("step models = %#v, want [gpt-initial gpt-updated]", stepModels)
+	}
+	if len(agent.requests) != 2 || !inputItemsContainText(agent.requests[1].InputItems, "guidance for gpt-updated") {
+		t.Fatalf("second request input = %#v", agent.requests[1].InputItems)
+	}
+	if !inputItemsContainText(result.InputItems, "guidance for gpt-updated") {
+		t.Fatalf("step input was not retained in the turn: %#v", result.InputItems)
+	}
+}

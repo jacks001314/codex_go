@@ -1371,7 +1371,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 820f85cf597b492adc6149759a22e71c72b01afa	50458	Truncate oversized MCP results in paginated thread history (#50458)	2026-10-02	mcp	1	1	1.00	0	0	complete	
 8215b81920d3fe5f414768f18efd6823a9c4f45e	47696	Avoid the shutdown timeout in the lagged-event test (#47696)	2026-09-23	appserver	0	0		0	0	not_applicable	
 821ad43f9d6ff68bffb938386137aec943d1a77f	46047	Tag rollout compression metrics by trigger (#46047)	2026-09-16	tui	9	7	0.78	0	0	audit_pending	file_duration,run_duration
-8228e9b867251f544a5e0c6c80bb5ebc9d5446a1	41162	Resolve token budgets from each step's active model (#41162)	2026-08-27	persistence	2	1	0.50	0	0	audit_pending	resolve_token_budget
+8228e9b867251f544a5e0c6c80bb5ebc9d5446a1	41162	Resolve token budgets from each step's active model (#41162)	2026-08-27	persistence	2	2	1.00	0	0	complete
 822e58cc3d666166c7446c5b1ea2e52f5d09594c	51260	Handle partial answers in realtime routing and thread search (#51260)	2026-10-06	appserver	0	0		0	0	not_applicable	
 823ea830c0fd418b09ff02d36cad9a1fff66465b	51070	Preserve trusted-tool context in Guardian Decisions requests (#51070)	2026-10-05	guardian	1	1	1.00	0	0	complete	
 82461c99903c473d6ba1be0791ae4fdd1b52b9a5	42069	Remove redundant test coverage (#42069)	2026-09-01	model	0	0		0	0	not_applicable	

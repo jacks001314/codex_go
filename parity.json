@@ -1350,6 +1350,14 @@
             "reason": "Aligned upstream 888be42a20 (#46561 Support explicit provider model catalog URLs): model_catalog_url is parsed and serialized, fetched as a full URL with provider auth/headers/client_version, bounded to 1 MiB, rejects redirects, scoped into cache identity, and gated by api_key_model_discovery. A custom inference base_url without an explicit catalog URL now disables remote API-key catalog discovery and cached-catalog reuse while preserving bundled models and inference routing.",
             "userImpact": "Providers can serve model metadata independently of their inference endpoint without accidentally opting custom base URLs into remote discovery.",
             "test": "go test ./model -run 'TestCustomBaseURLNeedsExplicitCatalogURLForDiscoveryLikeRust|TestAPIKeyModelDiscoveryGateAndAuthoritativeCatalog|TestConfiguredProviderRoutesAPIKeyModelDiscoveryToCodexBackend' -count=1"
+        },
+        {
+            "id": "step-token-budget-active-model",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 8228e9b867 (#41162 Resolve token budgets from each step's active model): a turn captures its original token-budget preferences and whether model-owned defaults apply, then every sampling step resolves those preferences against the model captured for that step. Context-window guidance is rebuilt from the step budget and model window, emitting one-time replacement or removal notices. Config reloads cannot change the captured preferences mid-turn, and explicit user settings remain unchanged across model switches.",
+            "userImpact": "Mid-turn model switches keep token-budget defaults and context-window guidance aligned with the model that is actually serving the request.",
+            "test": "go test ./config ./turn -run 'TokenBudget|StepInput|StepSettings' -count=1; go test ./appserver -run 'TurnStep|StepInput|TokenBudget|ContextWindowGuidance' -count=1"
         }
     ]
 }

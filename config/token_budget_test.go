@@ -181,3 +181,73 @@ func TestTokenBudgetConfigRejectsInvalidExplicitReminderAndGuidance(t *testing.T
 		})
 	}
 }
+
+func TestHasExplicitTokenBudgetSettingsIgnoresActivationGatesLikeRust(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		table map[string]any
+		want  bool
+	}{
+		{name: "missing", table: nil, want: false},
+		{name: "enabled", table: map[string]any{"enabled": true}, want: false},
+		{name: "history notes gate", table: map[string]any{"enabled": true, "use_history_notes_extension": true}, want: false},
+		{name: "guidance", table: map[string]any{"guidance_message": "user guidance"}, want: true},
+		{name: "threshold", table: map[string]any{"reminder_threshold_tokens": int64(12000)}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Values: map[string]any{"features": map[string]any{"token_budget": tc.table}}}
+			if got := cfg.HasExplicitTokenBudgetSettings(); got != tc.want {
+				t.Fatalf("HasExplicitTokenBudgetSettings() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveTokenBudgetConfigUsesEachModelsDefaultsAndPreservesPreferences(t *testing.T) {
+	configured := &TokenBudgetConfig{
+		Enabled:                  true,
+		UseHistoryNotesExtension: true,
+		ReminderThresholdTokens:  intPointer(500),
+		ReminderMessageTemplate:  "user reminder",
+		GuidanceMessage:          "user guidance",
+	}
+	modelDefaults := &TokenBudgetDefaults{
+		ReminderThresholdTokens:         2000,
+		ReminderMessageTemplate:         "model reminder",
+		GuidanceMessage:                 "model guidance",
+		AutoCompactFallbackPrompt:       "save state",
+		AutoCompactFallbackBufferTokens: 4000,
+	}
+	resolved := ResolveTokenBudgetConfig(configured, true, modelDefaults, true)
+	if resolved == configured || resolved.ReminderThresholdTokens == configured.ReminderThresholdTokens {
+		t.Fatal("resolved config must not alias captured preferences")
+	}
+	if !resolved.Enabled || !resolved.UseHistoryNotesExtension ||
+		resolved.ReminderThresholdTokens == nil || *resolved.ReminderThresholdTokens != 2000 ||
+		resolved.ReminderMessageTemplate != "model reminder" ||
+		resolved.GuidanceMessage != "model guidance" ||
+		resolved.AutoCompactFallbackBufferTokens == nil || *resolved.AutoCompactFallbackBufferTokens != 4000 {
+		t.Fatalf("resolved model defaults = %+v", resolved)
+	}
+
+	explicit := ResolveTokenBudgetConfig(configured, false, modelDefaults, true)
+	if explicit.ReminderThresholdTokens == nil || *explicit.ReminderThresholdTokens != 500 ||
+		explicit.ReminderMessageTemplate != "user reminder" ||
+		explicit.GuidanceMessage != "user guidance" ||
+		explicit.AutoCompactFallbackPrompt != "" {
+		t.Fatalf("explicit preferences = %+v", explicit)
+	}
+
+	// Invalid model defaults are ignored and the captured preferences survive.
+	invalid := ResolveTokenBudgetConfig(configured, true, &TokenBudgetDefaults{
+		ReminderMessageTemplate: "",
+	}, true)
+	if invalid.ReminderThresholdTokens == nil || *invalid.ReminderThresholdTokens != 500 ||
+		invalid.ReminderMessageTemplate != "user reminder" {
+		t.Fatalf("invalid model defaults replaced preferences: %+v", invalid)
+	}
+}
+
+func intPointer(value int) *int {
+	return &value
+}

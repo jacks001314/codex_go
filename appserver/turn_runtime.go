@@ -1735,6 +1735,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		CWD:                          firstNonEmpty(params.CWD, r.services.DefaultCWD),
 		Tracer:                       r.sessionTelemetryForThread(threadID),
 		StepSettings:                 r.turnStepSettingsProvider(threadID, turnID),
+		StepInputItems:               r.turnStepInputItemsProvider(threadID, runConfig),
 		AttestationProvider:          runConfig.AttestationProvider,
 		OutputSchema:                 params.OutputSchema,
 		PostToolInputItems:           runConfig.PostToolInputItems,
@@ -7381,6 +7382,17 @@ type appTurnRunConfig struct {
 	// MultiAgentVersion is the turn's resolved multi-agent version for turn
 	// analytics (Rust #51333, `turn_context.multi_agent_version`).
 	MultiAgentVersion string
+	// Config is the immutable effective configuration captured when the turn
+	// started. Later config reloads must not change the preferences of a
+	// step that is already running (Rust #41162).
+	Config *config.Config
+	// ConfiguredTokenBudget holds the turn-start preferences before model-owned
+	// defaults are applied. Each step resolves these against its own model.
+	ConfiguredTokenBudget *config.TokenBudgetConfig
+	// UseModelTokenBudgetDefaults is captured once so a config reload cannot
+	// change whether later steps use model-owned token-budget defaults.
+	UseModelTokenBudgetDefaults bool
+	TokenBudgetFeatureEnabled   bool
 }
 
 type responsesMetadataLineage struct {
@@ -7449,16 +7461,29 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	} else if item != nil {
 		inputItems = append(inputItems, item)
 	}
-	tokenBudget, err := cfg.TokenBudgetConfigWithDefaults(modelTokenBudgetDefaults(modelInfo))
+	configuredTokenBudget, err := cfg.TokenBudgetConfig()
 	if err != nil {
 		return nil, err
 	}
-	if r.experimentalContextManagementEligible(cfg, params) {
-		if tokenBudget == nil {
-			tokenBudget = &config.TokenBudgetConfig{}
+	experimentalContextEnabled := r.experimentalContextManagementEligible(cfg, params)
+	if experimentalContextEnabled {
+		if configuredTokenBudget == nil {
+			configuredTokenBudget = &config.TokenBudgetConfig{}
 		}
-		tokenBudget.Enabled = true
-		tokenBudget.UseHistoryNotesExtension = true
+		configuredTokenBudget.Enabled = true
+		configuredTokenBudget.UseHistoryNotesExtension = true
+	}
+	featureEnabled := configuredTokenBudget.Enabled || features.Enabled(cfg.FeatureSettings(), "token_budget")
+	modelDefaults := modelTokenBudgetDefaults(modelInfo)
+	useModelTokenBudgetDefaults := cfg.UseModelTokenBudgetDefaults(modelDefaults, featureEnabled)
+	tokenBudget := config.ResolveTokenBudgetConfig(
+		configuredTokenBudget,
+		useModelTokenBudgetDefaults,
+		modelDefaults,
+		featureEnabled,
+	)
+	if tokenBudget.Enabled {
+		featureEnabled = true
 	}
 	// Rust #44883: the explicit history-notes extension gate is only valid for a
 	// starting model that supports experimental context.
@@ -7751,6 +7776,10 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		UnifiedExecEnabled:              unifiedExecEnabled,
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
 		ImageResizeNoticeEnabled:        features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
+		Config:                          cfg,
+		ConfiguredTokenBudget:           configuredTokenBudget,
+		UseModelTokenBudgetDefaults:     useModelTokenBudgetDefaults,
+		TokenBudgetFeatureEnabled:       featureEnabled,
 		ClientMetadata: turn.BuildResponsesClientMetadata(&turn.ResponsesClientMetadataOptions{
 			InstallationID:     installationID,
 			SessionID:          firstNonEmpty(lineage.SessionID, threadID),
@@ -8492,6 +8521,46 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 			settings.Model = strings.TrimSpace(active.Params.Model)
 		}
 		return settings
+	}
+}
+
+// turnStepInputItemsProvider rebuilds the model and context-window world-state
+// sections from the model captured for each sampling step. The turn-start
+// token-budget preferences stay fixed, while model-owned defaults are resolved
+// again against the step's model (Rust #41162).
+func (r *RuntimeRouter) turnStepInputItemsProvider(threadID string, runConfig *appTurnRunConfig) turn.StepInputItemsProvider {
+	threadID = strings.TrimSpace(threadID)
+	if r == nil || runConfig == nil {
+		return nil
+	}
+	return func(_ context.Context, _ int, modelID string, _ string) ([]any, error) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			return nil, nil
+		}
+		info := r.modelInfoForRuntimeWithConfig(modelID, runConfig.Config)
+		items, err := r.modelWorldStateInputItems(threadID, info, runConfig.Instructions)
+		if err != nil {
+			return nil, err
+		}
+
+		budget := config.ResolveTokenBudgetConfig(
+			runConfig.ConfiguredTokenBudget,
+			runConfig.UseModelTokenBudgetDefaults,
+			modelTokenBudgetDefaults(info),
+			runConfig.TokenBudgetFeatureEnabled,
+		)
+		contextWindowAvailable := info != nil && (info.ContextWindow > 0 || info.MaxContextWindow > 0)
+		guidance := ""
+		if budget != nil && budget.Enabled && contextWindowAvailable {
+			guidance = budget.GuidanceMessage
+		}
+		if item, guidanceErr := r.contextWindowGuidanceWorldStateInputItem(threadID, guidance != "", guidance); guidanceErr != nil {
+			return nil, guidanceErr
+		} else if item != nil {
+			items = append(items, item)
+		}
+		return items, nil
 	}
 }
 

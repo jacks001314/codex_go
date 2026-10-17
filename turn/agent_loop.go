@@ -42,6 +42,12 @@ type SamplingFollowUpContext struct {
 
 type SamplingFollowUp func(*SamplingFollowUpContext) []any
 
+// StepInputItemsProvider supplies request-scoped context that must be rebuilt
+// from the model captured for each sampling step. The returned items join the
+// turn's input history so later steps continue to see the same world-state
+// transition exactly once.
+type StepInputItemsProvider func(ctx context.Context, iteration int, modelID string, reasoningEffort string) ([]any, error)
+
 // SamplingCompactionContext carries the state of an in-flight sampling
 // iteration to a mid-turn compaction callback.
 type SamplingCompactionContext struct {
@@ -173,7 +179,10 @@ type AgentLoopRequest struct {
 	// StepSettings, when set, refreshes the model, reasoning effort, and client
 	// metadata of every step after the first (Rust Session::update_step_settings
 	// reaching a later sampling step).
-	StepSettings                    func() *AgentStepSettings
+	StepSettings func() *AgentStepSettings
+	// StepInputItems, when set, rebuilds request-scoped context for the model
+	// selected for this step (Rust context/world_state built from StepContext).
+	StepInputItems                  StepInputItemsProvider
 	AttestationProvider             codexapi.AttestationProvider
 	OutputSchema                    any
 	DisableHostedImageGeneration    bool
@@ -342,6 +351,15 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			}
 			if len(steer.ClientMetadata) > 0 {
 				clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
+			}
+		}
+		if request.StepInputItems != nil {
+			items, err := request.StepInputItems(ctx, iteration, stepModel, stepReasoningEffort)
+			if err != nil {
+				return nil, err
+			}
+			if len(items) > 0 {
+				result.InputItems = append(result.InputItems, items...)
 			}
 		}
 		inputItems := append([]any(nil), result.InputItems...)
