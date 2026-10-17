@@ -1622,6 +1622,14 @@
             "reason": "Aligned upstream 42312d4ff4 (#51157 Enforce required environment skills before model inference): Go accepts per-environment skills.required through environment/add and environments.toml, projects requirements from captured selections including pending or failed environments, removes them after deselection, exempts isolated Guardian reviewers, and fails before every model request unless an enabled catalog entry is supplied by the exact environment. Cloud/orchestrator entries cannot satisfy environment-scoped requirements and therefore need no separate cloud-catalog lock accessor.",
             "userImpact": "A selected executor's declared skill contract is enforced before inference without leaking requirements to other environments or retained after deselection.",
             "test": "go test ./mcp ./appserver ./turn -run 'Required.*Skill|RequiredSkills' -count=1"
+        },
+        {
+            "id": "mcp-local-child-launch",
+            "status": "done",
+            "area": "mcp",
+            "reason": "Aligned upstream 3801fc8dea (#46660 Make local child process launch settings explicit): Go's local MCP launcher supplies an explicit environment and argv, owns piped stdio, creates a Unix process group, and uses Windows CREATE_SUSPENDED plus a kill-on-job-close Job Object before resume. Teardown reaches descendants. The Rust ChildKind/NativeChild backend-selection wrappers are represented by Go's platform-specific process files.",
+            "userImpact": "Local MCP children have one explicit launch and containment contract across Unix and Windows, preventing descendant leaks on shutdown.",
+            "test": "go test ./mcp -run 'StdioProcess|StdioCommand|TerminationReaches|Containment|ProcessGroup' -count=1"
         }
     ]
 }

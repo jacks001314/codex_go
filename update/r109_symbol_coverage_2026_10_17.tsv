@@ -559,7 +559,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 37eaae6eeb71c3bd3d165f52515086db8f5e7dee	51650	Require hostname authorization before proxy DNS lookups (#51650)	2026-10-07	sandbox	1	1	1.00	0	0	complete	
 37f4bb94c9f4e180535a12e3f2c2f93f4a773df0	40787	Respect paginated history when stopping background tasks (#40787)	2026-08-26	tui	1	0	0.00	0	0	implementation_pending	supports_paginated_history
 37f53199a6b2450b94bf4c7ea41c261bbdb39742	50216	Use the shared text editor for command-center task renaming (#50216)	2026-10-02	tui	6	0	0.00	0	0	partial	composer_is_vim_enabled,filter_line_breaks,new_single_line,rename_key,set_rename_input,single_line_viewport
-3801fc8deaaffab2a7a90c378a5db9b03b377f86	46660	Make local child process launch settings explicit (#46660)	2026-09-19	mcp	13	11	0.85	0	0	audit_pending	ChildKind,NativeChild
+3801fc8deaaffab2a7a90c378a5db9b03b377f86	46660	Make local child process launch settings explicit (#46660)	2026-09-19	mcp	13	13	1.00	0	0	complete	
 387bc6ba597fb38f73d8b1af73138c279e440c3c	42821	Report managed filesystem policy in `codex doctor` (#42821)	2026-09-04	sandbox	0	0		0	0	not_applicable	
 3882ced09c4917b0bb528f597abd87f3c905fe47	39957	Add in-memory shell snapshots to unified exec (#39957)	2026-08-21	execserver	1	1	1.00	0	0	complete	
 389dd5645944891b65e4ca584125bbb0c852d352	42290	Expand Guardian history coverage across resume and rollback (#42290)	2026-09-02	guardian	0	0		0	0	not_applicable	
