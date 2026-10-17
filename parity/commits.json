@@ -6277,9 +6277,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ConfigurationReasoning"
+        "Round 115 (lead): verified complete (equivalent mechanism) - Go already carries durable reasoning configuration_update items through trusted harness metadata: appserver persists/replays them, raw experimental events expose them, forks/resume preserve them, and client-supplied configuration_update turn/steer input is rejected. rollout/configuration_update.go redacts/relabels trusted payloads and model/responses_agent.go drops updates for models that do not advertise supports_reasoning_effort_updates. Tests: TestSessionItemsForTurnPersistsTrustedConfigurationUpdates, TestAppTurnConfigFiltersSavedConfigurationUpdatesWhenDisabledLikeRust, TestEffortForConfigurationUpdateGatingLikeRust, TestTurnInputRejectsConfigurationUpdate, TestPaginatedRolloutPersistsConfigurationUpdateLikeRust, TestResponsesInputItemsDropUnsupportedConfigurationUpdatesLikeRust; all focused runs green."
       ]
     },
     {
