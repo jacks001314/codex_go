@@ -11462,6 +11462,10 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	var logsOverride []byte
 	var rolloutPaths []string
 	var feedbackThreadIDs []string
+	var guardianFailures guardianReviewFailures
+	var threadIndex feedbackThreadIndex
+	includeThreadIndex := false
+	var rolloutThreadIDs []string
 	if params.IncludeLogs {
 		if r.services.LogDBHandler != nil {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -11489,14 +11493,27 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 				logsOverride = logs
 			}
 		}
+		rolloutThreadIDs = feedbackThreadIDs
+		if params.IncludeLogs && strings.TrimSpace(threadID) != "" {
+			failureThreadIDs := feedbackThreadIDs
+			if len(failureThreadIDs) == 0 {
+				failureThreadIDs = []string{threadID}
+			}
+			guardianFailures = guardianReviewFailuresSnapshot(failureThreadIDs)
+			rolloutThreadIDs, threadIndex = selectFeedbackTreeThreads(threadID, feedbackThreadIDs, guardianFailures)
+			includeThreadIndex = true
+		}
 		if r.services.ThreadRouter != nil {
-			for _, feedbackThreadID := range feedbackThreadIDs {
+			for _, feedbackThreadID := range rolloutThreadIDs {
 				path, err := r.services.ThreadRouter.findThreadRolloutPath(session.ThreadID(feedbackThreadID), false)
 				if err != nil {
 					path, err = r.services.ThreadRouter.findThreadRolloutPath(session.ThreadID(feedbackThreadID), true)
 				}
 				if err == nil && strings.TrimSpace(path) != "" {
 					rolloutPaths = append(rolloutPaths, path)
+					if includeThreadIndex {
+						threadIndex.setRolloutFilename(feedbackThreadID, path)
+					}
 				}
 			}
 		}
@@ -11509,12 +11526,13 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 		historyAttachments = FeedbackHistoryBaseAttachments(r.codexHomeForRollout(), attachmentPaths)
 		// Rust #41936: log-enabled reports carry recent failed Guardian reviews
 		// for the reported thread and its descendants.
-		guardianThreadIDs := feedbackThreadIDs
-		if len(guardianThreadIDs) == 0 && threadID != "" {
-			guardianThreadIDs = []string{threadID}
+		if guardianFailures.Attachment != nil {
+			historyAttachments = append(historyAttachments, *guardianFailures.Attachment)
 		}
-		if attachment := guardianReviewFailuresAttachment(guardianThreadIDs); attachment != nil {
-			historyAttachments = append(historyAttachments, *attachment)
+		if includeThreadIndex {
+			if attachment, err := threadIndex.attachment(); err == nil {
+				historyAttachments = append(historyAttachments, attachment)
+			}
 		}
 	}
 	snapshot := r.requireFeedback()

@@ -202,6 +202,10 @@ func TestFeedbackUploadIncludesGuardianFailuresLikeRust(t *testing.T) {
 	if attachment := feedbackAttachmentByName(snapshot.LastPrepared.Attachments, guardianFeedbackFilename); attachment == nil || !strings.Contains(string(attachment.Buffer), `"status":"denied"`) {
 		t.Fatalf("attachments = %#v, want the guardian failure attachment", snapshot.LastPrepared.Attachments)
 	}
+	if attachment := feedbackAttachmentByName(snapshot.LastPrepared.Attachments, feedbackThreadIndexFilename); attachment == nil ||
+		!strings.Contains(string(attachment.Buffer), `"thread_id":"feedback-guardian-thread"`) {
+		t.Fatalf("attachments = %#v, want the feedback thread index", snapshot.LastPrepared.Attachments)
+	}
 
 	plain := &FeedbackSnapshot{Diagnostics: NewFeedbackDiagnostics(nil)}
 	plainRouter := NewRuntimeRouter(RuntimeServices{ThreadRouter: NewRouter(store), Feedback: plain})
@@ -214,5 +218,8 @@ func TestFeedbackUploadIncludesGuardianFailuresLikeRust(t *testing.T) {
 	}
 	if attachment := feedbackAttachmentByName(plain.LastPrepared.Attachments, guardianFeedbackFilename); attachment != nil {
 		t.Fatalf("plain feedback upload carried the guardian attachment: %#v", attachment)
+	}
+	if attachment := feedbackAttachmentByName(plain.LastPrepared.Attachments, feedbackThreadIndexFilename); attachment != nil {
+		t.Fatalf("plain feedback upload carried the thread index: %#v", attachment)
 	}
 }

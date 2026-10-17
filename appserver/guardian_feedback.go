@@ -41,15 +41,25 @@ type guardianFeedbackStoredRecord struct {
 }
 
 type guardianFeedbackRecords struct {
-	mu      sync.Mutex
-	records []guardianFeedbackStoredRecord
-	bytes   int
+	mu        sync.Mutex
+	records   []guardianFeedbackStoredRecord
+	bytes     int
+	discarded int
+}
+
+type guardianReviewFailures struct {
+	Attachment              *FeedbackAttachment
+	ThreadIDs               []string
+	ProcessDiscardedRecords int
 }
 
 var globalGuardianFeedbackRecords guardianFeedbackRecords
 
 func (s *guardianFeedbackRecords) push(threadID string, record []byte) {
 	if len(record)+1 > guardianFeedbackMaxBytes {
+		s.mu.Lock()
+		s.discarded++
+		s.mu.Unlock()
 		return
 	}
 	s.mu.Lock()
@@ -68,6 +78,7 @@ func (s *guardianFeedbackRecords) push(threadID string, record []byte) {
 	if perThread >= guardianFeedbackMaxPerThread && oldestForThread >= 0 {
 		s.bytes -= len(s.records[oldestForThread].data) + 1
 		s.records = append(s.records[:oldestForThread], s.records[oldestForThread+1:]...)
+		s.discarded++
 	}
 	for len(s.records) >= guardianFeedbackMaxRecords || s.bytes+len(record)+1 > guardianFeedbackMaxBytes {
 		if len(s.records) == 0 {
@@ -75,14 +86,15 @@ func (s *guardianFeedbackRecords) push(threadID string, record []byte) {
 		}
 		s.bytes -= len(s.records[0].data) + 1
 		s.records = s.records[1:]
+		s.discarded++
 	}
 	s.bytes += len(record) + 1
 	s.records = append(s.records, guardianFeedbackStoredRecord{threadID: threadID, data: record})
 }
 
-func (s *guardianFeedbackRecords) attachment(threadIDs []string) *FeedbackAttachment {
+func (s *guardianFeedbackRecords) snapshot(threadIDs []string) guardianReviewFailures {
 	if len(threadIDs) == 0 {
-		return nil
+		return guardianReviewFailures{}
 	}
 	wanted := make(map[string]struct{}, len(threadIDs))
 	for _, threadID := range threadIDs {
@@ -101,12 +113,29 @@ func (s *guardianFeedbackRecords) attachment(threadIDs []string) *FeedbackAttach
 		buffer = append(buffer, '\n')
 	}
 	if len(buffer) == 0 {
-		return nil
+		return guardianReviewFailures{ProcessDiscardedRecords: s.discarded}
 	}
-	return &FeedbackAttachment{
-		Filename:    guardianFeedbackFilename,
-		ContentType: guardianFeedbackContentType,
-		Buffer:      buffer,
+	seen := map[string]struct{}{}
+	orderedThreads := make([]string, 0, len(wanted))
+	for i := len(s.records) - 1; i >= 0; i-- {
+		id := s.records[i].threadID
+		if _, ok := wanted[id]; !ok {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		orderedThreads = append(orderedThreads, id)
+	}
+	return guardianReviewFailures{
+		Attachment: &FeedbackAttachment{
+			Filename:    guardianFeedbackFilename,
+			ContentType: guardianFeedbackContentType,
+			Buffer:      buffer,
+		},
+		ThreadIDs:               orderedThreads,
+		ProcessDiscardedRecords: s.discarded,
 	}
 }
 
@@ -117,7 +146,11 @@ func recordGuardianReviewFailure(threadID string, record []byte) {
 // guardianReviewFailuresAttachment snapshots failures for the reported task
 // tree without including other tasks' records.
 func guardianReviewFailuresAttachment(threadIDs []string) *FeedbackAttachment {
-	return globalGuardianFeedbackRecords.attachment(threadIDs)
+	return guardianReviewFailuresSnapshot(threadIDs).Attachment
+}
+
+func guardianReviewFailuresSnapshot(threadIDs []string) guardianReviewFailures {
+	return globalGuardianFeedbackRecords.snapshot(threadIDs)
 }
 
 func resetGuardianFeedbackRecordsForTest() {
@@ -125,6 +158,7 @@ func resetGuardianFeedbackRecordsForTest() {
 	defer globalGuardianFeedbackRecords.mu.Unlock()
 	globalGuardianFeedbackRecords.records = nil
 	globalGuardianFeedbackRecords.bytes = 0
+	globalGuardianFeedbackRecords.discarded = 0
 }
 
 // guardianFeedbackCaptureEnabled mirrors Rust's review spawn guards (#41936):

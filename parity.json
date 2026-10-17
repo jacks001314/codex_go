@@ -1534,6 +1534,14 @@
             "reason": "Aligned upstream 287587c32c (#40275 Classify additional generated context fragments): compaction summaries carry compaction.summary metadata, Guardian denied-action approvals carry guardian.approved_action on persisted and steer items, and shared kind constants classify subagent notifications. Go currently has no runtime carrier for subagent notification text fragments, so that classification is available to future producers without duplicating the formatter.",
             "userImpact": "Harness consumers can identify generated summaries and manual approvals by stable content kinds rather than parsing message text.",
             "test": "go test ./compact ./appserver -run 'BuildCompactedHistory|GuardianApprovedActionItem' -count=1"
+        },
+        {
+            "id": "guardian-feedback-thread-index",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 2e5ee418ad (#42033 Improve Guardian report diagnostics): feedback uploads select at most eight tree rollouts, retain the reported thread, prioritize descendants with failed review records, and include a feedback-thread-index.json with selected rollout filenames, bounded omissions, retained failure threads, and process-wide discarded-record accounting. Failed-review snapshots now expose newest-first unique thread IDs.",
+            "userImpact": "Large agent trees keep the most diagnostic Guardian evidence while the report explicitly records what was omitted.",
+            "test": "go test ./appserver -run 'FeedbackThreadIndex|GuardianFeedback|FeedbackUpload' -count=1"
         }
     ]
 }
