@@ -15,7 +15,7 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 		ThreadSource:                    stringPtrTelemetry("user"),
 		Trigger:                         CompactionTriggerAuto,
 		Reason:                          CompactionReasonContextLimit,
-		Implementation:                  CompactionImplementationResponsesCompact,
+		Implementation:                  CompactionImplementationResponses,
 		Phase:                           CompactionPhaseMidTurn,
 		Strategy:                        CompactionStrategyMemento,
 		Status:                          CompactionStatusCompleted,
@@ -44,7 +44,7 @@ func TestCodexCompactionEventSerializesExpectedRustShape(t *testing.T) {
 		params["turn_id"] != "turn-1" ||
 		params["trigger"] != CompactionTriggerAuto ||
 		params["reason"] != CompactionReasonContextLimit ||
-		params["implementation"] != CompactionImplementationResponsesCompact ||
+		params["implementation"] != CompactionImplementationResponses ||
 		params["phase"] != CompactionPhaseMidTurn ||
 		params["strategy"] != CompactionStrategyMemento ||
 		params["status"] != CompactionStatusCompleted ||

@@ -10719,9 +10719,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: trim_function_call_history_to_fit_context_window"
+        "Round 115 (lead): landed the remaining removal - telemetry no longer defines CompactionImplementationResponsesCompact (`responses_compact`), and appserver compaction analytics always reports the normal `responses` implementation, including remote compaction. Go's remote compaction already uses the Responses API; no legacy endpoint runner/request type exists to remove. Tests: telemetry compaction event and appserver compaction suites. go vet ./telemetry ./appserver + go build ./telemetry ./appserver green."
       ]
     },
     {

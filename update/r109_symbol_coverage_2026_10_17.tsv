@@ -274,7 +274,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1aaa453ce2868e14c10089c226ebec265657cb27	44650	Enforce managed model provider selection and definitions (#44650)	2026-09-10	tui	5	1	0.20	0	0	audit_pending	origins_with_path_filter,required_model_provider,to_config,validate_bedrock_override
 1ab8c6ef28a8261aaddb528dd3875124acd1c91e	50380	Fix thread unloading after disconnect during MCP startup (#50380)	2026-10-02	appserver	0	0		0	0	not_applicable	
 1ac4b6973bca17804de30690cbe15f3e6324d472	46719	Extract the TUI transcript overlay into its own module (#46719)	2026-09-19	tui	14	6	0.43	0	0	audit_pending	consolidate_cells,insert_cell,is_scrolled_to_bottom,replace_cells,set_history_state,should_load_from_start,should_load_older,sync_live_tail
-1ac689cc7de0e637d35271edbbc132d1553d1767	44273	Remove the unused legacy remote compaction implementation (#44273)	2026-09-09	guardian	1	0	0.00	0	0	implementation_pending	trim_function_call_history_to_fit_context_window
+1ac689cc7de0e637d35271edbbc132d1553d1767	44273	Remove the unused legacy remote compaction implementation (#44273)	2026-09-09	guardian	1	1	1.00	0	0	complete	
 1afffeabb2aaaed78d209d23864265ab6a45cd06	44619	Allow discarded code mode tool responses to be garbage collected (#44619)	2026-09-10	core	0	0		0	0	not_applicable	
 1b1835f751ebdc0cfc50b3fe55d4571dbb294563	48973	Isolate realtime auth fallback test from startup prewarm (#48973)	2026-09-28	realtime	0	0		0	0	not_applicable	
 1b1b58f5a532286959592208216376f1123f8ff0	47338	Move the activity inspection hint into keyboard shortcut help (#47338)	2026-09-22	tui	0	0		0	0	not_applicable	

@@ -22,7 +22,6 @@ const (
 const (
 	CompactionImplementationResponses             = "responses"
 	CompactionImplementationResponsesCompactionV2 = "responses_compaction_v2"
-	CompactionImplementationResponsesCompact      = "responses_compact"
 )
 
 const (

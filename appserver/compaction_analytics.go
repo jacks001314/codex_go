@@ -121,10 +121,7 @@ func compactionAnalyticsReason(reason compact.Reason) string {
 	}
 }
 
-func compactionAnalyticsImplementation(result *compact.Result) string {
-	if result != nil && result.Source == compact.SourceRemote {
-		return telemetry.CompactionImplementationResponsesCompact
-	}
+func compactionAnalyticsImplementation(_ *compact.Result) string {
 	return telemetry.CompactionImplementationResponses
 }
 
