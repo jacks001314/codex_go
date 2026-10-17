@@ -1358,6 +1358,22 @@
             "reason": "Aligned upstream 8228e9b867 (#41162 Resolve token budgets from each step's active model): a turn captures its original token-budget preferences and whether model-owned defaults apply, then every sampling step resolves those preferences against the model captured for that step. Context-window guidance is rebuilt from the step budget and model window, emitting one-time replacement or removal notices. Config reloads cannot change the captured preferences mid-turn, and explicit user settings remain unchanged across model switches.",
             "userImpact": "Mid-turn model switches keep token-budget defaults and context-window guidance aligned with the model that is actually serving the request.",
             "test": "go test ./config ./turn -run 'TokenBudget|StepInput|StepSettings' -count=1; go test ./appserver -run 'TurnStep|StepInput|TokenBudget|ContextWindowGuidance' -count=1"
+        },
+        {
+            "id": "turn-settings-environment-requests",
+            "status": "done",
+            "area": "turn",
+            "reason": "Aligned upstream 404cd42aa5 (#51422 Accept environment requests at thread and turn settings boundaries): turn/settings/update accepts environment requests with the same shape as turn/start, distinguishes omission from an explicit empty list, validates request working directories, and applies the replacement only to the active turn. The next step resolves its capability snapshot from the new environment selection without changing future thread defaults.",
+            "userImpact": "A running turn can switch its environment selection for subsequent steps without leaking that selection into later turns.",
+            "test": "go test ./turn -run TestTurnSettingsUpdateParamsValidation -count=1; go test ./appserver -run 'TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust|TestStepCapabilitySnapshotKeepsSkillsScopedToEachStepLikeRust' -count=1"
+        },
+        {
+            "id": "step-plugin-skill-capability-snapshot",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 9561a34531 (#50050 Keep plugin and skill snapshots scoped to each step): each sampling step owns an immutable capability snapshot containing ready selected roots, disabled plugin IDs, plugin capabilities, and plugin skill roots. Model-visible plugin/skill instructions and executor skill tools use the same snapshot. Environment updates refresh the snapshot only at the next step boundary, and skills.list returns the current provider refresh while retaining per-root thread caches.",
+            "userImpact": "Concurrent refreshes and mid-turn environment changes can no longer make a step's model context disagree with the skills its tools expose.",
+            "test": "go test ./appserver -run 'TestStepCapabilitySnapshotKeepsSkillsScopedToEachStepLikeRust|TestRuntimeRouterTurnStartUsesRemoteEnvironmentSkillRoot' -count=1; go test ./turn -run TestExecutorSkillsListReturnsCurrentStepCatalogLikeRust -count=1"
         }
     ]
 }

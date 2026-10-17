@@ -65,6 +65,10 @@ type activeRuntimeTurn struct {
 	ConnectionID string
 	RunConfig    *appTurnRunConfig
 	SteerCount   int
+	// StepCapabilities is the capability snapshot used by the current sampling
+	// step. Mid-turn environment updates replace it only when the next step is
+	// captured, so an in-flight step's model context and skills tools agree.
+	StepCapabilities *runtimeStepCapabilitySnapshot
 	// UserInputRequested records that the model asked the user for input during
 	// this turn; the MCP request metadata reports it
 	// (Rust TurnMetadataState::mark_user_input_requested_during_turn). The
@@ -1691,12 +1695,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		}
 	}
 	samplingCompaction := r.midTurnSamplingCompaction(threadID, turnID, connectionID, params, runConfig, startedAt)
-	// Rust #44675: a caller-supplied override wins; otherwise an AGENTS.md-derived
-	// thread refreshes its global instructions for every model request.
-	var instructionsProvider func() string
-	if params.BaseInstructions == nil {
-		instructionsProvider = r.turnInstructionsProvider(threadID, runConfig.Instructions)
-	}
+	// Rust #44675/#50050: refresh AGENTS.md, plugin, and skill context from the
+	// capability snapshot captured for every model request.
+	instructionsProvider := r.turnStepInstructionsProvider(threadID, turnID, params, runConfig)
 	result, err := runtime.Run(ctx, &turn.AgentLoopRequest{
 		Prompt:                       agentPrompt,
 		Instructions:                 runConfig.Instructions,
@@ -7315,23 +7316,26 @@ type appTurnRunConfig struct {
 	DisableCodeModeFallback bool
 	ProviderID              string
 	Instructions            string
-	Originator              string
-	ClientMetadata          map[string]string
-	SessionID               string
-	ThreadSource            string
-	SubagentSource          string
-	ParentThreadID          string
-	ParentTurnID            string
-	RootTurnID              string
-	Ephemeral               bool
-	WorkspaceKind           string
-	NumInputImages          int
-	IsFirstTurn             bool
-	ApprovalPolicy          string
-	ApprovalsReviewer       string
-	GuardianV2Enabled       bool
-	SandboxPolicy           string
-	SandboxNetworkAccess    bool
+	// StepInstructionBase excludes plugin and skill catalogs, which are rebuilt
+	// from each step's capability snapshot.
+	StepInstructionBase  string
+	Originator           string
+	ClientMetadata       map[string]string
+	SessionID            string
+	ThreadSource         string
+	SubagentSource       string
+	ParentThreadID       string
+	ParentTurnID         string
+	RootTurnID           string
+	Ephemeral            bool
+	WorkspaceKind        string
+	NumInputImages       int
+	IsFirstTurn          bool
+	ApprovalPolicy       string
+	ApprovalsReviewer    string
+	GuardianV2Enabled    bool
+	SandboxPolicy        string
+	SandboxNetworkAccess bool
 	// ActivePluginIDsAtTurnStart is the turn-start plugin inventory captured for
 	// turn analytics (Rust #46323). nil means the inventory was not observed.
 	ActivePluginIDsAtTurnStart *[]string
@@ -7576,6 +7580,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 			instructions = strings.Join(nonEmpty([]string{instructions, rendered.Content}), "\n\n")
 		}
 	}
+	stepInstructionBase := instructions
 	instructions = r.instructionsWithPluginContext(threadID, cfg, params, instructions)
 	var skillInputItems []any
 	var postToolInputItems turn.ToolPostExecutionInputItems
@@ -7726,6 +7731,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		DisableCodeModeFallback: cfg.DisableCodeModeInProcessFallback(),
 		ProviderID:              modelProviderConfig.ProviderID,
 		Instructions:            instructions,
+		StepInstructionBase:     stepInstructionBase,
 		Originator:              strings.TrimSpace(params.Originator),
 		SessionID:               firstNonEmpty(lineage.SessionID, threadSnapshot.SessionID, threadID),
 		ThreadSource:            lineage.ThreadSource,
@@ -8510,6 +8516,9 @@ func (r *RuntimeRouter) turnStepSettingsProvider(threadID string, turnID string)
 		active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
 		if active == nil {
 			return nil
+		}
+		if active.StepCapabilities != nil {
+			active.StepCapabilities.refresh(r, threadID, active.Params)
 		}
 		settings := &turn.AgentStepSettings{}
 		if active.RunConfig != nil {
@@ -9845,7 +9854,11 @@ func (r *RuntimeRouter) pluginSkillEntriesAndErrorsForRuntime(threadID string) (
 	if r == nil || r.services.Plugins == nil {
 		return nil, nil, nil
 	}
-	roots := r.filterDisabledPluginSkillRoots(threadID, r.services.Plugins.EnabledSkillRoots())
+	roots := r.services.Plugins.EnabledSkillRoots()
+	if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
+		roots, _ = snapshot.enabledPluginSkillRoots()
+	}
+	roots = r.filterDisabledPluginSkillRoots(threadID, roots)
 	entries := make([]SkillsListEntry, 0)
 	errors := make([]SkillErrorInfo, 0)
 	for _, root := range roots {
@@ -9901,6 +9914,9 @@ func (r *RuntimeRouter) pluginCapabilitiesForThread(threadID string) []plugin.Ca
 	if r == nil || r.services.Plugins == nil {
 		return nil
 	}
+	if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
+		return snapshot.capabilities()
+	}
 	return filterDisabledPluginCapabilities(r.threadDisabledPluginIDs(threadID), r.services.Plugins.EnabledCapabilities())
 }
 
@@ -9938,6 +9954,10 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx context.Context, threadID string, sandboxContexts map[string]*execserver.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
+	return r.selectedCapabilitySkillEntriesForRuntimeSnapshotWithSandbox(ctx, threadID, r.activeStepCapabilitySnapshot(threadID), sandboxContexts)
+}
+
+func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSandbox(ctx context.Context, threadID string, snapshot *runtimeStepCapabilitySnapshot, sandboxContexts map[string]*execserver.FileSystemSandboxContext) ([]SkillsListEntry, []string, error) {
 	if r == nil || strings.TrimSpace(threadID) == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, nil, nil
 	}
@@ -9945,14 +9965,14 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 	if err != nil || record == nil {
 		return nil, nil, err
 	}
+	selectedRoots := threadSelectedCapabilityRoots(record)
+	if snapshot != nil {
+		selectedRoots = snapshot.selectedRoots()
+	}
 	entries := make([]SkillsListEntry, 0)
 	warnings := make([]string, 0)
-	rootPluginIDs := r.executorSkillRootPluginIDs(threadID)
-	for _, raw := range record.Metadata.SelectedCapabilityRoots {
-		var selected SelectedCapabilityRoot
-		if err := json.Unmarshal(raw, &selected); err != nil {
-			continue
-		}
+	rootPluginIDs := r.executorSkillRootPluginIDsForSnapshot(threadID, snapshot)
+	for _, selected := range selectedRoots {
 		if selected.Location.Type != CapabilityRootLocationEnvironment {
 			continue
 		}
@@ -9966,7 +9986,7 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 			warnings = append(warnings, "executor skills unavailable: "+sandboxErr.Error())
 			continue
 		}
-		cacheKey := string(raw) + "\x00" + executorSkillSandboxContextKey(sandboxContext)
+		cacheKey := executorSkillRootCacheKey(selected) + "\x00" + executorSkillSandboxContextKey(sandboxContext)
 		if environmentRecord, ok := r.selectedCapabilityEnvironmentRecord(&selected.Location); ok {
 			cached := r.selectedCapabilitySkillCatalog(threadID, cacheKey)
 			cached.once.Do(func() {
@@ -10020,21 +10040,32 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx 
 // A root is attributed to a plugin when the plugin's enabled capability
 // manifests under the same environment root path.
 func (r *RuntimeRouter) executorSkillRootPluginIDs(threadID string) map[string]string {
+	return r.executorSkillRootPluginIDsForSnapshot(threadID, nil)
+}
+
+func (r *RuntimeRouter) executorSkillRootPluginIDsForSnapshot(threadID string, snapshot *runtimeStepCapabilitySnapshot) map[string]string {
 	if r == nil || r.services.Plugins == nil || strings.TrimSpace(threadID) == "" {
 		return nil
 	}
-	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
-	if err != nil || record == nil {
-		return nil
+	var roots []SelectedCapabilityRoot
+	var capabilities []plugin.CapabilitySummary
+	if snapshot != nil {
+		roots = snapshot.selectedRoots()
+		capabilities = snapshot.capabilities()
+	} else {
+		record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil || record == nil {
+			return nil
+		}
+		roots = threadSelectedCapabilityRoots(record)
+		capabilities = r.pluginCapabilitiesForThread(threadID)
 	}
-	capabilities := r.pluginCapabilitiesForThread(threadID)
 	if len(capabilities) == 0 {
 		return nil
 	}
 	out := map[string]string{}
-	for _, raw := range record.Metadata.SelectedCapabilityRoots {
-		var selected SelectedCapabilityRoot
-		if err := json.Unmarshal(raw, &selected); err != nil || selected.ID == "" {
+	for _, selected := range roots {
+		if selected.ID == "" {
 			continue
 		}
 		if selected.Location.Type != CapabilityRootLocationEnvironment {
@@ -10052,6 +10083,14 @@ func (r *RuntimeRouter) executorSkillRootPluginIDs(threadID string) map[string]s
 		}
 	}
 	return out
+}
+
+func executorSkillRootCacheKey(root SelectedCapabilityRoot) string {
+	raw, err := json.Marshal(root)
+	if err != nil {
+		return root.ID + "\x00" + root.Location.EnvironmentID + "\x00" + root.Location.Path
+	}
+	return string(raw)
 }
 
 func executorSkillCapabilityMatchesRoot(capability plugin.CapabilitySummary, location CapabilityRootLocation, rootPath string) bool {

@@ -621,6 +621,65 @@ func TestExecutorSkillsToolsListReadPaginateAndValidateAuthorityLikeRust(t *test
 	}
 }
 
+// Rust #50050: overlapping step refreshes return their own executor catalogs
+// instead of reading whichever catalog another step published last.
+func TestExecutorSkillsListReturnsCurrentStepCatalogLikeRust(t *testing.T) {
+	entry := func(root string) skillprovider.CatalogEntry {
+		return skillprovider.CatalogEntry{
+			PackageID:     "skill://" + root + "/" + root,
+			Authority:     skillprovider.Authority{Kind: skillprovider.SourceExecutor, ID: root},
+			Name:          root,
+			Description:   root + " skill",
+			MainResource:  "skill://" + root + "/" + root + "/SKILL.md",
+			Enabled:       true,
+			PromptVisible: true,
+		}
+	}
+	var current atomic.Value
+	current.Store([]skillprovider.CatalogEntry{entry("first-root")})
+	provider := skillprovider.ProviderFuncs{
+		ListFunc: func(context.Context, skillprovider.ListQuery) (skillprovider.Catalog, error) {
+			return skillprovider.Catalog{Entries: current.Load().([]skillprovider.CatalogEntry)}, nil
+		},
+	}
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.EnableCore = false
+	options.EnableShell = false
+	options.EnableApplyPatch = false
+	options.EnableMCP = false
+	options.EnableAgents = false
+	options.EnableToolSearch = false
+	options.SkillProviders = skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	router := tool.NewRouter(registry)
+	list := func(callID string) skillsListResponse {
+		t.Helper()
+		output, err := router.Dispatch(context.Background(), &tool.Invocation{
+			CallID:   callID,
+			ToolName: tool.NamespacedName("skills", "list"),
+			Payload:  tool.Payload{Kind: tool.PayloadFunction, Arguments: `{"authority":{"kind":"executor"}}`},
+		})
+		if err != nil {
+			t.Fatalf("skills.list(%s) error = %v", callID, err)
+		}
+		var listed skillsListResponse
+		if err := json.Unmarshal([]byte(output.Body), &listed); err != nil {
+			t.Fatalf("skills.list(%s) JSON = %v", callID, err)
+		}
+		return listed
+	}
+	if listed := list("first"); len(listed.Skills) != 1 || listed.Skills[0].Name != "first-root" {
+		t.Fatalf("first step skills.list = %#v", listed)
+	}
+	current.Store([]skillprovider.CatalogEntry{entry("next-root")})
+	if listed := list("next"); len(listed.Skills) != 1 || listed.Skills[0].Name != "next-root" {
+		t.Fatalf("next step skills.list = %#v", listed)
+	}
+}
+
 func TestSkillsReadHonorsResponseBudgetAndReusesExecutorSnapshotLikeRust(t *testing.T) {
 	entry := skillprovider.CatalogEntry{
 		PackageID:    "skill://budget@1/plugin/skills/budget",

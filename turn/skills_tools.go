@@ -110,7 +110,7 @@ type orchestratorSkillCatalogCache struct {
 }
 
 type executorSkillCatalogCache struct {
-	once    sync.Once
+	mu      sync.Mutex
 	catalog skillprovider.Catalog
 }
 
@@ -391,10 +391,14 @@ func (e *skillsToolExecutor) executorSkillCatalog(ctx context.Context) skillprov
 	if e.executor == nil {
 		e.executor = &executorSkillCatalogCache{}
 	}
-	e.executor.once.Do(func() {
-		e.executor.catalog = e.providers.ListKind(ctx, skillprovider.SourceExecutor, skillprovider.ListQuery{})
-	})
-	return cloneSkillProviderCatalog(e.executor.catalog)
+	catalog := e.providers.ListKind(ctx, skillprovider.SourceExecutor, skillprovider.ListQuery{})
+	e.executor.mu.Lock()
+	e.executor.catalog = catalog
+	e.executor.mu.Unlock()
+	// The provider owns per-root caching. Returning this request's catalog keeps
+	// overlapping steps from reading a different step's selected roots (Rust
+	// #50050).
+	return cloneSkillProviderCatalog(catalog)
 }
 
 func cloneSkillProviderCatalog(catalog skillprovider.Catalog) skillprovider.Catalog {

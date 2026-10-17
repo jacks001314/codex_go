@@ -7951,6 +7951,11 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 	if err := params.Validate(); err != nil {
 		return nil, jsonRPCInvalidRequest(err.Error())
 	}
+	if params.Environments != nil {
+		if err := r.validateTurnEnvironmentSelections(params.Environments); err != nil {
+			return nil, jsonRPCInvalidRequest(err.Error())
+		}
+	}
 	if params.ApprovalsReviewer != nil {
 		r.updateActiveTurnApprovalsReviewer(&turn.TurnSteerParams{
 			ThreadID:          params.ThreadID,
@@ -7997,6 +8002,9 @@ func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSetting
 			if active.RunConfig != nil {
 				active.RunConfig.ServiceTier = strings.TrimSpace(*params.ServiceTier)
 			}
+		}
+		if params.Environments != nil {
+			active.Params.Environments = cloneMapSlice(params.Environments)
 		}
 	})
 }
@@ -14383,6 +14391,12 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
+	stepCapabilities := newRuntimeStepCapabilitySnapshot(r, threadID, params)
+	if threadID != "" && strings.TrimSpace(turnID) != "" {
+		r.threads.UpdateTurn(threadID, strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
+			active.StepCapabilities = stepCapabilities
+		})
+	}
 	// Rust restores a resumed thread's conversation window from its compacted
 	// rollout item before the turn reports any window metadata
 	// (`restore_auto_compact_window`).
@@ -14475,7 +14489,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
-	executorSkillProviders := r.executorSkillProviderForThreadWithSandbox(threadID, executorSandboxContexts)
+	executorSkillProviders := r.executorSkillProviderForThreadSnapshotWithSandbox(threadID, stepCapabilities, executorSandboxContexts)
 	goalToolExecutors := r.goalToolExecutorsForTurn(cfg, threadID, strings.TrimSpace(turnID))
 	if r != nil && r.services.ToolRouter != nil && viewImageOptions != nil {
 		if err := r.services.ToolRouter.RegisterIfAbsent(tool.NewViewImageHandler(*viewImageOptions)); err != nil {

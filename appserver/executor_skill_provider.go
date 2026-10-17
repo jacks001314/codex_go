@@ -2,7 +2,6 @@ package appserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -25,7 +24,22 @@ func (r *RuntimeRouter) executorSkillProviderForThread(threadID string) *skillpr
 }
 
 func (r *RuntimeRouter) executorSkillProviderForThreadWithSandbox(threadID string, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) *skillprovider.Registry {
-	if r == nil || !r.threadHasSelectedCapabilityRoots(threadID) {
+	var snapshot *runtimeStepCapabilitySnapshot
+	if r != nil {
+		snapshot = r.activeStepCapabilitySnapshot(threadID)
+	}
+	return r.executorSkillProviderForThreadSnapshotWithSandbox(threadID, snapshot, sandboxContexts)
+}
+
+func (r *RuntimeRouter) executorSkillProviderForThreadSnapshotWithSandbox(threadID string, snapshot *runtimeStepCapabilitySnapshot, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) *skillprovider.Registry {
+	if r == nil {
+		return nil
+	}
+	hasRoots := r.threadHasSelectedCapabilityRoots(threadID)
+	if snapshot != nil {
+		hasRoots = len(snapshot.selectedRoots()) > 0
+	}
+	if !hasRoots {
 		return nil
 	}
 	// Rust #40640: managed requirements may disable the `plugins` feature, in
@@ -35,10 +49,18 @@ func (r *RuntimeRouter) executorSkillProviderForThreadWithSandbox(threadID strin
 	}
 	provider := skillprovider.ProviderFuncs{
 		ListFunc: func(ctx context.Context, _ skillprovider.ListQuery) (skillprovider.Catalog, error) {
-			return r.executorSkillProviderCatalog(ctx, threadID, sandboxContexts)
+			contexts := sandboxContexts
+			if snapshot != nil {
+				contexts = snapshot.executorSandboxContexts()
+			}
+			return r.executorSkillProviderCatalogWithSnapshot(ctx, threadID, snapshot, contexts)
 		},
 		ReadFunc: func(ctx context.Context, request skillprovider.ReadRequest) (skillprovider.ReadResult, error) {
-			return r.readExecutorSkillProviderResource(ctx, threadID, request, sandboxContexts)
+			contexts := sandboxContexts
+			if snapshot != nil {
+				contexts = snapshot.executorSandboxContexts()
+			}
+			return r.readExecutorSkillProviderResourceWithSnapshot(ctx, threadID, snapshot, request, contexts)
 		},
 	}
 	return skillprovider.NewRegistry(skillprovider.Source{Kind: skillprovider.SourceExecutor, Label: "executor", Provider: provider})
@@ -68,13 +90,17 @@ func (r *RuntimeRouter) threadHasSelectedCapabilityRoots(threadID string) bool {
 }
 
 func (r *RuntimeRouter) executorSkillProviderCatalog(ctx context.Context, threadID string, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.Catalog, error) {
-	entries, warnings, err := r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx, threadID, sandboxContexts)
+	return r.executorSkillProviderCatalogWithSnapshot(ctx, threadID, nil, sandboxContexts)
+}
+
+func (r *RuntimeRouter) executorSkillProviderCatalogWithSnapshot(ctx context.Context, threadID string, snapshot *runtimeStepCapabilitySnapshot, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.Catalog, error) {
+	entries, warnings, err := r.selectedCapabilitySkillEntriesForRuntimeSnapshotWithSandbox(ctx, threadID, snapshot, sandboxContexts)
 	if err != nil {
 		return skillprovider.Catalog{}, err
 	}
 	catalog := skillprovider.Catalog{Warnings: append([]string(nil), warnings...)}
 	disabled := r.disabledExecutorSkillPaths()
-	rootEnvironments := r.executorSkillRootEnvironments(threadID)
+	rootEnvironments := r.executorSkillRootEnvironmentsForSnapshot(threadID, snapshot)
 	for _, entry := range entries {
 		if !entry.Enabled || entry.AuthorityKind != string(skillprovider.SourceExecutor) || entry.AuthorityID == "" || entry.PackageID == "" || entry.ResourceID == "" {
 			continue
@@ -113,17 +139,27 @@ func (r *RuntimeRouter) disabledExecutorSkillPaths() map[string][]string {
 // environment, Rust #46015) can be applied to an executor catalog entry whose
 // authority is the root id.
 func (r *RuntimeRouter) executorSkillRootEnvironments(threadID string) map[string]string {
-	if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
-		return nil
+	return r.executorSkillRootEnvironmentsForSnapshot(threadID, nil)
+}
+
+func (r *RuntimeRouter) executorSkillRootEnvironmentsForSnapshot(threadID string, snapshot *runtimeStepCapabilitySnapshot) map[string]string {
+	var roots []SelectedCapabilityRoot
+	if snapshot != nil {
+		roots = snapshot.selectedRoots()
 	}
-	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
-	if err != nil || record == nil {
-		return nil
+	if roots == nil {
+		if r == nil || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil || strings.TrimSpace(threadID) == "" {
+			return nil
+		}
+		record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+		if err != nil || record == nil {
+			return nil
+		}
+		roots = threadSelectedCapabilityRoots(record)
 	}
 	out := map[string]string{}
-	for _, raw := range record.Metadata.SelectedCapabilityRoots {
-		var selected SelectedCapabilityRoot
-		if err := json.Unmarshal(raw, &selected); err != nil || strings.TrimSpace(selected.ID) == "" {
+	for _, selected := range roots {
+		if strings.TrimSpace(selected.ID) == "" {
 			continue
 		}
 		if selected.Location.Type != CapabilityRootLocationEnvironment {
@@ -202,10 +238,14 @@ func executorSkillPathURI(value string) *utils.PathURI {
 }
 
 func (r *RuntimeRouter) readExecutorSkillProviderResource(ctx context.Context, threadID string, request skillprovider.ReadRequest, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.ReadResult, error) {
+	return r.readExecutorSkillProviderResourceWithSnapshot(ctx, threadID, nil, request, sandboxContexts)
+}
+
+func (r *RuntimeRouter) readExecutorSkillProviderResourceWithSnapshot(ctx context.Context, threadID string, snapshot *runtimeStepCapabilitySnapshot, request skillprovider.ReadRequest, sandboxContexts map[string]*execserverclient.FileSystemSandboxContext) (skillprovider.ReadResult, error) {
 	if request.Authority.Kind != skillprovider.SourceExecutor {
 		return skillprovider.ReadResult{}, fmt.Errorf("executor skill provider cannot read %s resources", request.Authority.Kind)
 	}
-	entries, _, err := r.selectedCapabilitySkillEntriesForRuntimeWithSandbox(ctx, threadID, sandboxContexts)
+	entries, _, err := r.selectedCapabilitySkillEntriesForRuntimeSnapshotWithSandbox(ctx, threadID, snapshot, sandboxContexts)
 	if err != nil {
 		return skillprovider.ReadResult{}, err
 	}

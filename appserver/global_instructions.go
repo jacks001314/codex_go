@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"strings"
 
 	"codex_go/config"
@@ -198,6 +199,38 @@ func (r *RuntimeRouter) turnInstructionsProvider(threadID string, fallback strin
 	}
 	return func() string {
 		return r.refreshedThreadInstructionText(threadID, fallback)
+	}
+}
+
+// turnStepInstructionsProvider rebuilds plugin and skill catalogs from the
+// active step's capability snapshot. AGENTS.md guidance still refreshes from
+// the thread record on every step, matching the existing long-turn behavior.
+func (r *RuntimeRouter) turnStepInstructionsProvider(threadID string, turnID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig) func() string {
+	if r == nil || runConfig == nil {
+		return nil
+	}
+	return func() string {
+		instructions := runConfig.StepInstructionBase
+		if params == nil || params.BaseInstructions == nil {
+			instructions = r.refreshedThreadInstructionText(threadID, instructions)
+		}
+		stepParams := cloneTurnStartParams(params)
+		if stepParams == nil {
+			stepParams = &turn.TurnStartParams{ThreadID: threadID}
+		}
+		if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
+			stepParams.Model = strings.TrimSpace(active.Params.Model)
+		}
+		instructions = r.instructionsWithPluginContext(threadID, runConfig.Config, stepParams, instructions)
+		refreshed, _, _, err := r.instructionsWithSkillsContextForTurn(context.Background(), threadID, turnID, runConfig.Config, stepParams, instructions)
+		if err != nil {
+			r.notify(NotificationWarning, &WarningNotification{
+				ThreadID: stringPtrIfNotEmpty(threadID),
+				Message:  "Step skill catalog refresh failed: " + err.Error(),
+			})
+			return runConfig.Instructions
+		}
+		return r.instructionsWithMemoryToolContext(runConfig.Config, refreshed)
 	}
 }
 

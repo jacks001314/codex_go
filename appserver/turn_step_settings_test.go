@@ -63,6 +63,17 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 	if !strings.Contains(metadata, `"codex_version":"1.2.3"`) || !strings.Contains(metadata, `"thread_id":"thread-1"`) {
 		t.Fatalf("step metadata lost entries: %q", metadata)
 	}
+	environments := []map[string]any{{"environmentId": "next", "cwd": t.TempDir()}}
+	router.updateActiveTurnRuntimeSettings(&turn.TurnSettingsUpdateParams{
+		ThreadID:     "thread-1",
+		TurnID:       "turn-1",
+		Environments: environments,
+	})
+	active := router.activeRuntimeTurnStateSnapshot("thread-1", "turn-1")
+	if active == nil || active.Params == nil || len(active.Params.Environments) != 1 ||
+		selectionEnvironmentID(active.Params.Environments[0]) != "next" {
+		t.Fatalf("active environments = %#v", active)
+	}
 
 	// Clearing the effort removes the key, like Rust's ExecutionMetadata.
 	cleared := ""

@@ -286,6 +286,16 @@ func TestTurnSettingsUpdateParamsValidation(t *testing.T) {
 	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Effort: &effort}).Validate(); err != nil {
 		t.Fatalf("Validate(effort) error = %v", err)
 	}
+	environments := []map[string]any{{"environmentId": "local", "cwd": t.TempDir()}}
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Environments: environments}).Validate(); err != nil {
+		t.Fatalf("Validate(environments) error = %v", err)
+	}
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Environments: []map[string]any{}}).Validate(); err != nil {
+		t.Fatalf("Validate(explicit empty environments) error = %v", err)
+	}
+	if err := (&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Environments: []map[string]any{{"cwd": strings.Repeat("x", maxTurnEnvironmentCWDBytes+1)}}}).Validate(); err == nil {
+		t.Fatal("Validate() accepted an oversized environment cwd")
+	}
 }
 
 func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
@@ -304,6 +314,20 @@ func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"model":"gpt-5"`) {
 		t.Fatalf("Marshal(model) = %s", data)
+	}
+	data, err = json.Marshal(&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Environments: []map[string]any{}})
+	if err != nil {
+		t.Fatalf("Marshal(empty environments) error = %v", err)
+	}
+	if !strings.Contains(string(data), `"environments":[]`) {
+		t.Fatalf("Marshal(empty environments) = %s", data)
+	}
+	data, err = json.Marshal(&TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &modelID})
+	if err != nil {
+		t.Fatalf("Marshal(omitted environments) error = %v", err)
+	}
+	if strings.Contains(string(data), "environments") {
+		t.Fatalf("Marshal(omitted environments) = %s", data)
 	}
 }
 

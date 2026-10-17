@@ -556,6 +556,27 @@ type TurnSettingsUpdateParams struct {
 	Effort            *string `json:"effort,omitempty"`
 	Summary           *string `json:"summary,omitempty"`
 	ServiceTier       *string `json:"serviceTier,omitempty"`
+	// Environments replaces the environment selection used by subsequent steps
+	// of the active turn without changing the thread's saved default selection.
+	// A non-nil empty slice explicitly selects no environments.
+	Environments []map[string]any `json:"environments,omitempty"`
+}
+
+func (p *TurnSettingsUpdateParams) MarshalJSON() ([]byte, error) {
+	if p == nil {
+		return []byte("null"), nil
+	}
+	type alias TurnSettingsUpdateParams
+	if p.Environments == nil {
+		return json.Marshal((*alias)(p))
+	}
+	return json.Marshal(struct {
+		*alias
+		Environments []map[string]any `json:"environments"`
+	}{
+		alias:        (*alias)(p),
+		Environments: p.Environments,
+	})
 }
 
 func (p *TurnSettingsUpdateParams) Validate() error {
@@ -565,8 +586,11 @@ func (p *TurnSettingsUpdateParams) Validate() error {
 	if strings.TrimSpace(p.TurnID) == "" {
 		return fmt.Errorf("%w: turnId is required", ErrInvalidTurnRequest)
 	}
-	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && p.ServiceTier == nil {
+	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && p.ServiceTier == nil && p.Environments == nil {
 		return fmt.Errorf("%w: at least one turn setting update is required", ErrInvalidTurnRequest)
+	}
+	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
+		return err
 	}
 	return nil
 }

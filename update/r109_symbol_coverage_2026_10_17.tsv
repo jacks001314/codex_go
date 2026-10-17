@@ -635,7 +635,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 400f2356d60c4663d46817a40b4d09c5c86f35ad	53932	Preserve conversation history when compaction fails (#53932)	2026-10-14	core	0	0		0	0	not_applicable	
 4021746a1568c764619e868c310a079d6c36079b	47873	Measure deferred tool namespace fragments before and after truncation (#47873)	2026-09-24	persistence	3	0	0.00	0	0	complete	CONTEXT_FRAGMENT_BYTES_BUCKETS,THREAD_TOOLS_FRAGMENT_BYTES_METRIC,THREAD_TOOLS_NAMESPACES_TOTAL_METRIC
 402f5b6fdf28a7a72c153dbe6fe01e252205d7d6	51119	Clarify incremental tool namespace updates in Responses Lite (#51119)	2026-10-05	persistence	0	0		0	0	not_applicable	
-404cd42aa5254af56a6080af1a775f730ac6b7d0	51422	Accept environment requests at thread and turn settings boundaries (#51422)	2026-10-06	guardian	3	1	0.33	0	0	audit_pending	TurnEnvironmentRequests,into_requests
+404cd42aa5254af56a6080af1a775f730ac6b7d0	51422	Accept environment requests at thread and turn settings boundaries (#51422)	2026-10-06	guardian	3	3	1.00	0	0	complete
 40584fad87aa2cd63e03db4784ccfd5b50a59bed	46066	Keep MCP user interaction on the root thread (#46066)	2026-09-17	appserver	3	1	0.33	0	0	audit_pending	APPROVAL_KIND_BROWSER_AUTH,REQUIRES_USER_INPUT_KEY
 406b0c44460cf71e90c21c7abe6e581add3a6421	51812	Enable instant interrupts by default (#51812)	2026-10-07	tui	0	0		0	0	not_applicable	
 406eb53c074a29bd65aa7a8bd21d574234faf315	51602	Distinguish thread listing failures from exhausted history (#51602)	2026-10-07	appserver	1	0	0.00	0	0	complete	repeat_list_threads_cursor_for_testing
@@ -1588,7 +1588,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 954750be9c4044e7ef2fea18e22648e8c6c4cb0f	53996	Bump `rustls` to `0.23.46` (#53996)	2026-10-14	core	0	0		0	0	not_applicable	
 954fa9057bf3a4521ea34dbd010ff291d5b39763	45680	Restrict guardian assessment parsing and circuit breaker visibility (#45680)	2026-09-15	guardian	8	5	0.62	0	0	audit_pending	GuardianRejectionCircuitBreaker,GuardianRejectionCircuitBreakerAction,parse_guardian_assessment
 9552906b2b8358121f71695e1e6602791cdcecc0	50019	Protect the guardian decisions API key from environment forwarding (#50019)	2026-10-01	execserver	0	0		0	0	not_applicable	
-9561a345310f74d4798d678109ccb4eb9d8cd984	50050	Keep plugin and skill snapshots scoped to each step (#50050)	2026-10-01	mcp	2	1	0.50	0	0	audit_pending	selected_plugins_for_step
+9561a345310f74d4798d678109ccb4eb9d8cd984	50050	Keep plugin and skill snapshots scoped to each step (#50050)	2026-10-01	mcp	2	2	1.00	0	0	complete
 9563713df2f748e7bd0792e96bbb2a49b916e66b	49097	Notify lifecycle extensions of compaction usage limits (#49097)	2026-09-28	core	0	0		0	0	not_applicable	
 956aa3f6372ffd73a0df639beff356b3b664b858	42641	Restore the inline TUI after full-screen overlays (#42641)	2026-09-04	tui	0	0		0	0	not_applicable	
 9587c9ef366bd678ea5e9310f59ec33fdc44df7e	43177	Use server model defaults for fresh TUI startup (#43177)	2026-09-06	tui	4	0	0.00	0	0	implementation_pending	overlay_new_session_defaults,prepare_fresh_startup_config,read_new_session_defaults,startup_model
