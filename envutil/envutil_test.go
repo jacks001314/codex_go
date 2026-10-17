@@ -2,11 +2,74 @@ package envutil
 
 import (
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
 	"codex_go/applypatch"
 )
+
+func TestSetExecutionMetadataEnvLikeRust(t *testing.T) {
+	empty := ""
+	for _, testCase := range []struct {
+		name          string
+		toolCallID    *string
+		wantValue     string
+		wantCanonical bool
+	}{
+		{name: "set", toolCallID: stringPointer("call-1"), wantValue: "call-1", wantCanonical: true},
+		{name: "empty ID is preserved", toolCallID: &empty, wantValue: "", wantCanonical: true},
+		{name: "missing ID removes stale value"},
+		{name: "NUL ID is omitted", toolCallID: stringPointer("call\x00bad")},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := map[string]string{
+				CodexToolCallIDEnvVar:                  "stale",
+				strings.ToLower(CodexToolCallIDEnvVar): "stale-lower",
+				"CODEX_THREAD_ID":                      "thread-1",
+				"UNCHANGED":                            "kept",
+			}
+			SetToolCallIDEnv(env, testCase.toolCallID)
+			value, ok := env[CodexToolCallIDEnvVar]
+			if ok != testCase.wantCanonical || value != testCase.wantValue {
+				t.Fatalf("tool call id = %q, present=%t; want %q, present=%t; env=%#v",
+					value, ok, testCase.wantValue, testCase.wantCanonical, env)
+			}
+			if runtime.GOOS == "windows" {
+				for key := range env {
+					if strings.EqualFold(key, CodexToolCallIDEnvVar) && (!ok || key != CodexToolCallIDEnvVar) {
+						t.Fatalf("case-variant tool call id survived on Windows: %#v", env)
+					}
+				}
+			} else if _, ok := env[strings.ToLower(CodexToolCallIDEnvVar)]; !ok {
+				t.Fatalf("Unix exact-name replacement removed a case-variant key: %#v", env)
+			}
+			if env["CODEX_THREAD_ID"] != "thread-1" || env["UNCHANGED"] != "kept" {
+				t.Fatalf("tool call metadata changed unrelated values: %#v", env)
+			}
+		})
+	}
+
+	threadID := "thread-2"
+	env := map[string]string{"CODEX_THREAD_ID": "stale", "Codex_Thread_Id": "mixed"}
+	SetThreadIDEnv(env, &threadID)
+	if env[CodexThreadIDEnvVar] != threadID {
+		t.Fatalf("thread id = %q", env[CodexThreadIDEnvVar])
+	}
+	if runtime.GOOS == "windows" {
+		if _, ok := env["Codex_Thread_Id"]; ok {
+			t.Fatalf("case-variant thread id survived on Windows: %#v", env)
+		}
+	}
+	SetThreadIDEnv(env, nil)
+	if _, ok := env[CodexThreadIDEnvVar]; ok {
+		t.Fatalf("nil thread id did not clear the label: %#v", env)
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
 
 func TestIsNonInheritableEnvVarCaseInsensitiveLikeRust(t *testing.T) {
 	for _, name := range []string{

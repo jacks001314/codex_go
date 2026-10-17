@@ -776,6 +776,7 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	openSession.processStartRequested(processID, remoteID)
 	startResponse, err := client.Start(startCtx, &execserver.ExecParams{
 		ProcessID:             remoteID,
+		Metadata:              unifiedExecWireMetadata(req, callID),
 		Argv:                  argv,
 		CWD:                   remoteCWD,
 		EnvPolicy:             envPolicy,
@@ -856,6 +857,18 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	}
 	yield := clampUnifiedExecInitialYield(req.YieldTimeMS)
 	return m.collect(ctx, process, yield, req.MaxOutputTokens)
+}
+
+// unifiedExecWireMetadata carries the originating launch labels to a remote
+// executor. The call ID pointer is always set so an empty ID stays empty rather
+// than becoming an omitted field that would preserve a stale value.
+func unifiedExecWireMetadata(req *ShellRequest, callID string) *execserver.ExecMetadata {
+	metadata := &execserver.ExecMetadata{ToolCallID: &callID}
+	if req != nil && strings.TrimSpace(req.UnifiedExecThreadID) != "" {
+		threadID := req.UnifiedExecThreadID
+		metadata.ThreadID = &threadID
+	}
+	return metadata
 }
 
 func unifiedExecManagedNetworkContext(value *network.ProxyManagedNetworkSandboxContext) *execserver.ManagedNetworkSandboxContext {

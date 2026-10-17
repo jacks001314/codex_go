@@ -90,6 +90,16 @@ func TestUnifiedExecHelperProcess(t *testing.T) {
 	case "immediate":
 		fmt.Fprint(os.Stdout, "DONE")
 		os.Exit(7)
+	case "metadata":
+		fmt.Fprintf(os.Stdout, "FIRST:%s|%s\n", os.Getenv("CODEX_THREAD_ID"), os.Getenv("CODEX_TOOL_CALL_ID"))
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			fmt.Fprintf(os.Stdout, "AFTER:%s|%s\n", os.Getenv("CODEX_THREAD_ID"), os.Getenv("CODEX_TOOL_CALL_ID"))
+		}
+		os.Exit(0)
+	case "env":
+		fmt.Fprintf(os.Stdout, "ENV:%s|%s\n", os.Getenv("CODEX_THREAD_ID"), os.Getenv("CODEX_TOOL_CALL_ID"))
+		os.Exit(0)
 	default:
 		os.Exit(2)
 	}
@@ -209,6 +219,47 @@ func TestUnifiedExecManagerReusesTTYSessionViaWriteStdinLikeRust(t *testing.T) {
 	}
 	if finished.ProcessID != nil || !finished.HasExitCode || finished.ExitCode != 7 || !strings.Contains(finished.Stdout, "DONE") {
 		t.Fatalf("finished = %#v", finished)
+	}
+}
+
+// TestUnifiedExecOriginatingToolCallIDSurvivesWriteStdinLikeRust pins #52119:
+// the launch environment carries the exec_command call ID, and later input does
+// not replace it with the write_stdin call ID.
+func TestUnifiedExecOriginatingToolCallIDSurvivesWriteStdinLikeRust(t *testing.T) {
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	callID := "exec-call-origin"
+	opened, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:             unifiedExecHelperCommand("metadata"),
+		CWD:                 t.TempDir(),
+		TTY:                 true,
+		YieldTimeMS:         250,
+		TimeoutMS:           15_000,
+		MaxOutputTokens:     intPtr(500),
+		ThreadID:            "thread-meta",
+		ToolCallID:          &callID,
+		UnifiedExecThreadID: "thread-meta",
+	}, callID)
+	if err != nil {
+		t.Fatalf("Exec() error = %v", err)
+	}
+	if opened.ProcessID == nil || !strings.Contains(opened.Stdout, "FIRST:thread-meta|exec-call-origin") {
+		t.Fatalf("opened metadata = %#v", opened)
+	}
+
+	write := NewWriteStdinExecutor(manager, intPtr(500))
+	completed, err := write.Execute(context.Background(), &Invocation{
+		CallID:   "write-call-later",
+		ToolName: PlainName(DefaultWriteStdinToolName),
+		Payload: Payload{Kind: PayloadFunction, Arguments: fmt.Sprintf(
+			`{"session_id":%d,"chars":"continue\n","yield_time_ms":2000}`, *opened.ProcessID,
+		)},
+	})
+	if err != nil {
+		t.Fatalf("write_stdin error = %v", err)
+	}
+	if completed.Data["process_id"] != nil || !strings.Contains(completed.Body, "AFTER:thread-meta|exec-call-origin") {
+		t.Fatalf("input changed execution metadata = %#v", completed)
 	}
 }
 
@@ -379,6 +430,48 @@ func TestUnifiedExecRemoteExecServerSessionReusesStdinLikeRust(t *testing.T) {
 	}, nil)
 	if err != nil || completed.ProcessID != nil || !completed.HasExitCode || completed.ExitCode != 0 || !strings.Contains(completed.Stdout, "ECHO:quit") {
 		t.Fatalf("remote write quit = %#v, %v", completed, err)
+	}
+
+	cancelServer()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("exec-server shutdown error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("exec-server did not stop")
+	}
+}
+
+func TestUnifiedExecRemoteExposesOriginatingToolCallIDLikeRust(t *testing.T) {
+	serverCtx, cancelServer := context.WithCancel(context.Background())
+	defer cancelServer()
+	var listenOutput lockedUnifiedExecBuffer
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- execserver.NewServer().ServeTransport(serverCtx, "ws://127.0.0.1:0", nil, &listenOutput)
+	}()
+	remoteURL := waitUnifiedExecServerURL(t, &listenOutput)
+
+	manager := NewUnifiedExecManagerWithOptions(1, unifiedExecMinEmptyPollYieldMS)
+	defer manager.Close()
+	callID := "remote-exec-call"
+	opened, err := manager.Exec(context.Background(), &ShellRequest{
+		Command:                  unifiedExecHelperCommand("env"),
+		CWD:                      t.TempDir(),
+		YieldTimeMS:              3_000,
+		TimeoutMS:                15_000,
+		UnifiedExecRemoteURL:     remoteURL,
+		UnifiedExecEnvironmentID: "remote",
+		UnifiedExecThreadID:      "thread-remote-meta",
+		ThreadID:                 "thread-remote-meta",
+		ToolCallID:               &callID,
+	}, callID)
+	if err != nil {
+		t.Fatalf("remote Exec() error = %v", err)
+	}
+	if opened.ProcessID != nil || !opened.HasExitCode || !strings.Contains(opened.Stdout, "ENV:thread-remote-meta|remote-exec-call") {
+		t.Fatalf("remote metadata = %#v", opened)
 	}
 
 	cancelServer()

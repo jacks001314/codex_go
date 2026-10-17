@@ -477,8 +477,17 @@ type ShellInfo struct {
 	Path string `json:"path"`
 }
 
+// ExecMetadata is optional tool attribution for executor telemetry and child
+// environments. It is not authorization. Older clients omit it and older
+// executors ignore it.
+type ExecMetadata struct {
+	ThreadID   *string `json:"threadId,omitempty"`
+	ToolCallID *string `json:"toolCallId,omitempty"`
+}
+
 type ExecParams struct {
 	ProcessID             string                          `json:"processId"`
+	Metadata              *ExecMetadata                   `json:"metadata,omitempty"`
 	Argv                  []string                        `json:"argv"`
 	CWD                   string                          `json:"cwd"`
 	EnvPolicy             *ExecEnvPolicy                  `json:"envPolicy,omitempty"`
@@ -3675,6 +3684,7 @@ func childEnv(params *ExecParams) map[string]string {
 	// Rust c4513cb982: model-reachable child processes must not inherit Codex
 	// launch context (OPENAI_FEDERATION_RULE_ID / OPENAI_IDENTITY_TOKEN_FILE).
 	envutil.ScrubMap(env)
+	applyExecMetadata(env, params.Metadata)
 	return env
 }
 
@@ -3684,6 +3694,21 @@ func deleteEnvKey(env map[string]string, key string) {
 			delete(env, existing)
 		}
 	}
+}
+
+// applyExecMetadata applies executor labels after the environment policy and
+// command overlay so runtime-selected values always win. Metadata presence
+// clears an omitted thread ID; without metadata the inherited thread context is
+// preserved while any stale originating tool call ID is removed.
+func applyExecMetadata(env map[string]string, metadata *ExecMetadata) {
+	if metadata != nil {
+		envutil.SetThreadIDEnv(env, metadata.ThreadID)
+	}
+	var toolCallID *string
+	if metadata != nil {
+		toolCallID = metadata.ToolCallID
+	}
+	envutil.SetToolCallIDEnv(env, toolCallID)
 }
 
 func populateEnv(policy *ExecEnvPolicy, environ []string) map[string]string {

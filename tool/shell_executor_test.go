@@ -25,8 +25,9 @@ func TestShellExecutorRunsCommandAndFormatsOutput(t *testing.T) {
 		Duration: 1500 * time.Millisecond,
 	}}
 	executor := NewShellExecutor(&ShellExecutorOptions{
-		Runner: runner,
-		Shell:  &Shell{Type: ShellBash, Path: "/bin/sh"},
+		Runner:              runner,
+		Shell:               &Shell{Type: ShellBash, Path: "/bin/sh"},
+		UnifiedExecThreadID: "thread-1",
 		Validation: ShellValidationOptions{
 			AdditionalPermissionsAllowed: true,
 			ApprovalPolicy:               sandbox.ApprovalOnRequest,
@@ -49,6 +50,9 @@ func TestShellExecutorRunsCommandAndFormatsOutput(t *testing.T) {
 	}
 	if runner.request == nil || runner.request.HookCommand != "printf hi" || runner.request.TimeoutMS != 5000 {
 		t.Fatalf("request = %#v", runner.request)
+	}
+	if runner.request.ThreadID != "thread-1" || runner.request.ToolCallID == nil || *runner.request.ToolCallID != "call-1" {
+		t.Fatalf("originating execution metadata = thread %q, call %v", runner.request.ThreadID, runner.request.ToolCallID)
 	}
 	if !strings.Contains(output.Body, "Process exited with code 7") || !strings.Contains(output.Body, "out\n\nstderr:\nerr\n") {
 		t.Fatalf("Body = %q", output.Body)

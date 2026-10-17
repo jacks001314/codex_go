@@ -198,6 +198,8 @@ func TestSnapshotBuilderFailsOpenLikeRust(t *testing.T) {
 // launch-context variables Rust scrubs.
 func TestSnapshotBuilderCaptureShapeLikeRust(t *testing.T) {
 	t.Setenv(envutil.CodexExecServerNoiseAuthTokenEnvVar, "noise-token")
+	t.Setenv(envutil.CodexThreadIDEnvVar, "capture-thread")
+	t.Setenv(envutil.CodexToolCallIDEnvVar, "capture-call")
 	for _, allowLogin := range []bool{true, false} {
 		runner := &snapshotBuilderRunner{capture: snapshotBashCaptureStream()}
 		builder := NewSnapshotBuilder(SnapshotBuilderOptions{
@@ -228,8 +230,16 @@ func TestSnapshotBuilderCaptureShapeLikeRust(t *testing.T) {
 		if allowLogin && !strings.Contains(runner.calls[0][2], "$HOME/.bashrc") {
 			t.Fatalf("login capture does not seed the user's startup:\n%s", runner.calls[0][2])
 		}
-		if env := runner.environments[0]; env[envutil.CodexExecServerNoiseAuthTokenEnvVar] != "" {
-			t.Fatalf("capture environment leaked a launch-context variable: %#v", env)
+		for _, env := range runner.environments {
+			if env[envutil.CodexExecServerNoiseAuthTokenEnvVar] != "" {
+				t.Fatalf("capture environment leaked a launch-context variable: %#v", env)
+			}
+			if _, ok := env[envutil.CodexThreadIDEnvVar]; ok {
+				t.Fatalf("capture environment leaked CODEX_THREAD_ID: %#v", env)
+			}
+			if _, ok := env[envutil.CodexToolCallIDEnvVar]; ok {
+				t.Fatalf("capture environment leaked CODEX_TOOL_CALL_ID: %#v", env)
+			}
 		}
 	}
 	if snapshotBuilder := NewSnapshotBuilder(SnapshotBuilderOptions{SessionID: "session-1"}); snapshotBuilder != nil {

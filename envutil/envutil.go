@@ -5,9 +5,19 @@ package envutil
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"codex_go/applypatch"
+)
+
+const (
+	// CodexThreadIDEnvVar labels commands with the thread that launched them.
+	// The value is informational for correlation, not an authorization token.
+	CodexThreadIDEnvVar = "CODEX_THREAD_ID"
+	// CodexToolCallIDEnvVar labels commands with the originating tool call.
+	// The value is informational for correlation, not an authorization token.
+	CodexToolCallIDEnvVar = "CODEX_TOOL_CALL_ID"
 )
 
 // CodexExecServerNoiseAuthTokenEnvVar is the execution-server credential that
@@ -76,6 +86,49 @@ func ScrubSlice(values []string) []string {
 		out = append(out, pair)
 	}
 	return out
+}
+
+// SetThreadIDEnv replaces the thread label in env. A nil threadID removes the
+// label. Windows environment names are case-insensitive, so every case variant
+// is removed before the canonical name is set.
+func SetThreadIDEnv(env map[string]string, threadID *string) {
+	if env == nil {
+		return
+	}
+	removeEnvVar(env, CodexThreadIDEnvVar)
+	if threadID != nil {
+		env[CodexThreadIDEnvVar] = *threadID
+	}
+}
+
+// SetToolCallIDEnv replaces the originating tool call label in env. A nil or
+// NUL-containing toolCallID removes the label; an empty string is a valid ID
+// and is preserved. Windows environment names are case-insensitive, so every
+// case variant is removed before the canonical name is set.
+func SetToolCallIDEnv(env map[string]string, toolCallID *string) {
+	if env == nil {
+		return
+	}
+	removeEnvVar(env, CodexToolCallIDEnvVar)
+	if toolCallID == nil || strings.Contains(*toolCallID, "\x00") {
+		return
+	}
+	env[CodexToolCallIDEnvVar] = *toolCallID
+}
+
+func removeEnvVar(env map[string]string, name string) {
+	if env == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		for key := range env {
+			if strings.EqualFold(key, name) {
+				delete(env, key)
+			}
+		}
+		return
+	}
+	delete(env, name)
 }
 
 // InjectApplyPatchEnv enables line-ending preservation for older standalone

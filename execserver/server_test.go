@@ -1613,6 +1613,143 @@ func TestChildEnvPolicy(t *testing.T) {
 	}
 }
 
+func TestChildEnvAppliesExecutionMetadataLikeRust(t *testing.T) {
+	threadID := "019d25f0-6728-7ce2-908f-c3c187323e5b"
+	empty := ""
+	for _, testCase := range []struct {
+		name          string
+		metadata      *ExecMetadata
+		wantThread    string
+		wantThreadSet bool
+		wantCallID    string
+		wantCallSet   bool
+	}{
+		{
+			name:          "metadata wins over policy and overlay",
+			metadata:      &ExecMetadata{ThreadID: &threadID, ToolCallID: execMetadataStringPtr("current-call")},
+			wantThread:    threadID,
+			wantThreadSet: true,
+			wantCallID:    "current-call",
+			wantCallSet:   true,
+		},
+		{
+			name:        "missing thread clears stale context",
+			metadata:    &ExecMetadata{ToolCallID: execMetadataStringPtr("call-only")},
+			wantCallID:  "call-only",
+			wantCallSet: true,
+		},
+		{
+			name:          "empty call ID is preserved",
+			metadata:      &ExecMetadata{ThreadID: &threadID, ToolCallID: &empty},
+			wantThread:    threadID,
+			wantThreadSet: true,
+			wantCallSet:   true,
+		},
+		{
+			name:          "NUL call ID is omitted",
+			metadata:      &ExecMetadata{ThreadID: &threadID, ToolCallID: execMetadataStringPtr("bad\x00call")},
+			wantThread:    threadID,
+			wantThreadSet: true,
+		},
+		{
+			name:          "no metadata preserves thread and removes call",
+			wantThread:    "overlay-thread",
+			wantThreadSet: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			params := &ExecParams{
+				Metadata: testCase.metadata,
+				EnvPolicy: &ExecEnvPolicy{
+					Inherit:               "none",
+					IgnoreDefaultExcludes: true,
+					Set: map[string]string{
+						"KEPT":               "policy",
+						"CODEX_THREAD_ID":    "policy-thread",
+						"CODEX_TOOL_CALL_ID": "policy-call",
+					},
+				},
+				Env: map[string]string{
+					"CODEX_THREAD_ID":    "overlay-thread",
+					"CODEX_TOOL_CALL_ID": "overlay-call",
+				},
+			}
+			env := childEnv(params)
+			thread, threadSet := env["CODEX_THREAD_ID"]
+			if thread != testCase.wantThread || threadSet != testCase.wantThreadSet {
+				t.Fatalf("thread = %q, present=%t; want %q, present=%t; env=%#v",
+					thread, threadSet, testCase.wantThread, testCase.wantThreadSet, env)
+			}
+			callID, callSet := env["CODEX_TOOL_CALL_ID"]
+			if callID != testCase.wantCallID || callSet != testCase.wantCallSet {
+				t.Fatalf("call id = %q, present=%t; want %q, present=%t; env=%#v",
+					callID, callSet, testCase.wantCallID, testCase.wantCallSet, env)
+			}
+			if env["KEPT"] != "policy" {
+				t.Fatalf("unrelated policy value changed: %#v", env)
+			}
+		})
+	}
+}
+
+func TestChildEnvWithoutMetadataRemovesCaseVariantCallIDLikeRust(t *testing.T) {
+	env := childEnv(&ExecParams{
+		Env: map[string]string{
+			"CODEX_THREAD_ID":    "prewarm-thread",
+			"Codex_Thread_Id":    "mixed-thread",
+			"CODEX_TOOL_CALL_ID": "stale-call",
+			"Codex_Tool_Call_Id": "mixed-call",
+			"codex_tool_call_id": "lower-call",
+			"UNRELATED":          "kept",
+		},
+	})
+	if env["CODEX_THREAD_ID"] != "prewarm-thread" || env["UNRELATED"] != "kept" {
+		t.Fatalf("thread context or unrelated value changed: %#v", env)
+	}
+	if env["Codex_Thread_Id"] != "mixed-thread" {
+		t.Fatalf("thread context was changed without metadata: %#v", env)
+	}
+	if runtime.GOOS == "windows" {
+		for key := range env {
+			if strings.EqualFold(key, "CODEX_TOOL_CALL_ID") {
+				t.Fatalf("case-variant call id survived on Windows: %#v", env)
+			}
+		}
+		return
+	}
+	if env["Codex_Tool_Call_Id"] != "mixed-call" || env["codex_tool_call_id"] != "lower-call" {
+		t.Fatalf("Unix exact-name metadata handling changed case variants: %#v", env)
+	}
+}
+
+func TestExecParamsMetadataWireShapeLikeRust(t *testing.T) {
+	threadID := "019d25f0-6728-7ce2-908f-c3c187323e5b"
+	callID := ""
+	encoded, err := json.Marshal(ExecParams{
+		ProcessID: "p1",
+		Metadata:  &ExecMetadata{ThreadID: &threadID, ToolCallID: &callID},
+		Argv:      []string{"echo"},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(encoded), `"metadata":{"threadId":"`+threadID+`","toolCallId":""}`) {
+		t.Fatalf("metadata wire shape = %s", encoded)
+	}
+	var decoded ExecParams
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.Metadata == nil || decoded.Metadata.ThreadID == nil || *decoded.Metadata.ThreadID != threadID ||
+		decoded.Metadata.ToolCallID == nil || *decoded.Metadata.ToolCallID != "" {
+		t.Fatalf("decoded metadata = %#v", decoded.Metadata)
+	}
+}
+
+func execMetadataStringPtr(value string) *string {
+	return &value
+}
+
 func TestChildEnvRemovesParentLifetimeControl(t *testing.T) {
 	for _, params := range []*ExecParams{
 		{Env: map[string]string{CodexExecServerExitOnStdinCloseEnvVar: "true", "KEEP": "yes"}},

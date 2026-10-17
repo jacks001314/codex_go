@@ -102,9 +102,14 @@ type ShellRequest struct {
 	// the parent environment through this policy, then req.Env overrides are
 	// applied on top.
 	EnvPolicy *execpolicy.EnvPolicy
-	// ThreadID is exposed to model-reachable commands as CODEX_THREAD_ID when
-	// an EnvPolicy builds the command environment.
-	ThreadID              string
+	// ThreadID labels model-reachable commands as CODEX_THREAD_ID. It is
+	// exported by executor metadata and by an EnvPolicy-built environment.
+	ThreadID string
+	// ToolCallID is the originating exec_command call ID exported as
+	// CODEX_TOOL_CALL_ID. A non-nil pointer marks executor metadata as present,
+	// so an omitted thread ID clears stale thread context. The pointer also
+	// distinguishes a deliberately empty call ID from no metadata at all.
+	ToolCallID            *string
 	TTY                   bool
 	SandboxPermissions    sandbox.SandboxPermissions
 	AdditionalPermissions *sandbox.AdditionalPermissionProfile

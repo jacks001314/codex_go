@@ -58,7 +58,9 @@ __CODEX_SNAPSHOT_OVERRIDE_0="${CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS-}"
 __CODEX_SNAPSHOT_OVERRIDE_SET_1="${CODEX_PERMISSION_PROFILE+x}"
 __CODEX_SNAPSHOT_OVERRIDE_1="${CODEX_PERMISSION_PROFILE-}"
 __CODEX_SNAPSHOT_OVERRIDE_SET_2="${CODEX_PLUGIN_METRICS_OUTPUT+x}"
-__CODEX_SNAPSHOT_OVERRIDE_2="${CODEX_PLUGIN_METRICS_OUTPUT-}"`
+__CODEX_SNAPSHOT_OVERRIDE_2="${CODEX_PLUGIN_METRICS_OUTPUT-}"
+__CODEX_SNAPSHOT_OVERRIDE_SET_3="${CODEX_TOOL_CALL_ID+x}"
+__CODEX_SNAPSHOT_OVERRIDE_3="${CODEX_TOOL_CALL_ID-}"`
 	if !strings.HasPrefix(rewritten[2], wantCaptures+"\n\n") {
 		t.Fatalf("override captures = \n%s\nwant \n%s", rewritten[2], wantCaptures)
 	}
@@ -95,6 +97,7 @@ func TestMaybeWrapShellLCWithSnapshotRestoresRuntimeEnvLikeRust(t *testing.T) {
 	snapshotPath := snapshotWrapFixture(t)
 	env := map[string]string{
 		"CODEX_THREAD_ID":             "thread-1",
+		"CODEX_TOOL_CALL_ID":          "call-1",
 		"CODEX_SESSION_ID":            "session-1",
 		"CODEX_VERSION":               "1.2.3",
 		"CODEX_PLUGIN_METRICS_OUTPUT": "/tmp/metrics.json",
@@ -118,17 +121,19 @@ __CODEX_SNAPSHOT_OVERRIDE_SET_3="${CODEX_SESSION_ID+x}"
 __CODEX_SNAPSHOT_OVERRIDE_3="${CODEX_SESSION_ID-}"
 __CODEX_SNAPSHOT_OVERRIDE_SET_4="${CODEX_THREAD_ID+x}"
 __CODEX_SNAPSHOT_OVERRIDE_4="${CODEX_THREAD_ID-}"
-__CODEX_SNAPSHOT_OVERRIDE_SET_5="${CODEX_VERSION+x}"
-__CODEX_SNAPSHOT_OVERRIDE_5="${CODEX_VERSION-}"
-__CODEX_SNAPSHOT_OVERRIDE_SET_6="${CUSTOM_OVERRIDE+x}"
-__CODEX_SNAPSHOT_OVERRIDE_6="${CUSTOM_OVERRIDE-}"`
+__CODEX_SNAPSHOT_OVERRIDE_SET_5="${CODEX_TOOL_CALL_ID+x}"
+__CODEX_SNAPSHOT_OVERRIDE_5="${CODEX_TOOL_CALL_ID-}"
+__CODEX_SNAPSHOT_OVERRIDE_SET_6="${CODEX_VERSION+x}"
+__CODEX_SNAPSHOT_OVERRIDE_6="${CODEX_VERSION-}"
+__CODEX_SNAPSHOT_OVERRIDE_SET_7="${CUSTOM_OVERRIDE+x}"
+__CODEX_SNAPSHOT_OVERRIDE_7="${CUSTOM_OVERRIDE-}"`
 	if !strings.HasPrefix(script, wantCaptures+"\n\n") {
 		t.Fatalf("override captures = \n%s\nwant \n%s", script, wantCaptures)
 	}
-	const wantRestore = `if [ -n "${__CODEX_SNAPSHOT_OVERRIDE_SET_6}" ]; then
-  if [ -z "${CUSTOM_OVERRIDE+x}" ] || [ "${CUSTOM_OVERRIDE-}" != "${__CODEX_SNAPSHOT_OVERRIDE_6}" ]; then export CUSTOM_OVERRIDE="${__CODEX_SNAPSHOT_OVERRIDE_6}"; else export CUSTOM_OVERRIDE; fi
+	const wantRestore = `if [ -n "${__CODEX_SNAPSHOT_OVERRIDE_SET_7}" ]; then
+  if [ -z "${CUSTOM_OVERRIDE+x}" ] || [ "${CUSTOM_OVERRIDE-}" != "${__CODEX_SNAPSHOT_OVERRIDE_7}" ]; then export CUSTOM_OVERRIDE="${__CODEX_SNAPSHOT_OVERRIDE_7}"; else export CUSTOM_OVERRIDE; fi
 else builtin unset CUSTOM_OVERRIDE 2>/dev/null || command unset CUSTOM_OVERRIDE; fi
-builtin unset __CODEX_SNAPSHOT_OVERRIDE_SET_6 __CODEX_SNAPSHOT_OVERRIDE_6 2>/dev/null || command unset __CODEX_SNAPSHOT_OVERRIDE_SET_6 __CODEX_SNAPSHOT_OVERRIDE_6`
+builtin unset __CODEX_SNAPSHOT_OVERRIDE_SET_7 __CODEX_SNAPSHOT_OVERRIDE_7 2>/dev/null || command unset __CODEX_SNAPSHOT_OVERRIDE_SET_7 __CODEX_SNAPSHOT_OVERRIDE_7`
 	if !strings.Contains(script, wantRestore) {
 		t.Fatalf("override restore is missing:\n%s", script)
 	}

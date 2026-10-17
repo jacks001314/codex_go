@@ -761,8 +761,14 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 	}
 	if len(policyTable) > 0 {
 		req.EnvPolicy = execpolicy.EnvPolicyFromShellEnvironmentPolicy(policyTable, req.CWD)
-		req.ThreadID = e.unifiedExecThreadID
 	}
+	// Rust #52119: every exec_command launch carries its originating call ID as
+	// executor metadata. The unified executor and exec-server apply it after all
+	// environment policies, overlays and snapshot replay. A later write_stdin
+	// keeps the launch's original ID because it does not restart the process.
+	req.ThreadID = e.unifiedExecThreadID
+	originatingCallID := invocation.CallID
+	req.ToolCallID = &originatingCallID
 	// Rust puts Codex's own PATH entries on every Unix launch, whether or not a
 	// snapshot is replayed, so commands resolve Codex's bundled shims.
 	zshForkShellPath := ""
@@ -811,7 +817,12 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		})
 		snapshotUsed := false
 		if snapshot.Path != "" {
-			wrapped := MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshot.Path, snapshotExplicitOverrides(req), req.Env, req.RuntimePathPrepends)
+			snapshotEnv := cloneEnv(req.Env)
+			if snapshotEnv == nil {
+				snapshotEnv = map[string]string{}
+			}
+			applyShellRequestExecutionMetadata(snapshotEnv, req)
+			wrapped := MaybeWrapShellLCWithSnapshot(req.Command, sessionShell, snapshot.Path, snapshotExplicitOverrides(req), snapshotEnv, req.RuntimePathPrepends)
 			// Rust #51347: `snapshot_used = wrapped != command` decides the
 			// command-level observation's outcome; it reports that the replay was
 			// selected, not that restoration or the command itself succeeded.

@@ -392,6 +392,8 @@ func boolKey(value bool) string {
 
 // snapshotCaptureEnv is the environment a capture starts from: the parent
 // process environment without the launch-context variables Rust scrubs.
+// Execution IDs are per launch and must never be captured or reused by a
+// snapshot.
 func snapshotCaptureEnv() map[string]string {
 	env := map[string]string{}
 	for _, entry := range os.Environ() {
@@ -401,6 +403,8 @@ func snapshotCaptureEnv() map[string]string {
 		}
 		env[key] = value
 	}
+	envutil.SetThreadIDEnv(env, nil)
+	envutil.SetToolCallIDEnv(env, nil)
 	return envutil.ScrubMap(env)
 }
 

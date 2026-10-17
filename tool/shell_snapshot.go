@@ -68,6 +68,7 @@ var snapshotReplayedEnvKeys = []string{
 	codexPermissionProfileVar,
 	applypatch.PreserveLineEndingsEnvVar,
 	plugin.PluginMetricsOutputEnvVar,
+	envutil.CodexToolCallIDEnvVar,
 }
 
 // snapshotWrapSupported mirrors Rust's `cfg!(windows)` guard, which leaves
@@ -135,6 +136,7 @@ func MaybeWrapShellLCWithSnapshot(
 	for _, key := range []string{
 		codexSessionIDEnvVar,
 		execpolicy.ThreadIDEnvVar,
+		envutil.CodexToolCallIDEnvVar,
 		codexVersionEnvVar,
 		codexPermissionProfileVar,
 		applypatch.PreserveLineEndingsEnvVar,
@@ -505,6 +507,7 @@ func brokeredSnapshotWrap(
 	for _, key := range []string{
 		codexSessionIDEnvVar,
 		execpolicy.ThreadIDEnvVar,
+		envutil.CodexToolCallIDEnvVar,
 		codexVersionEnvVar,
 		codexPermissionProfileVar,
 		applypatch.PreserveLineEndingsEnvVar,

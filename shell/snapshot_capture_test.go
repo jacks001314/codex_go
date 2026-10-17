@@ -177,6 +177,8 @@ func TestParseCapturedSnapshotDecodesRecords(t *testing.T) {
 		"export FOO='bar'\n",                           // aliases
 		"FOO", "declare -x FOO=\"bar\"",                // export record
 		"COUNT", "declare -x COUNT=\"1\"",
+		"CODEX_THREAD_ID", "declare -x CODEX_THREAD_ID=\"capture-thread\"",
+		"CODEX_TOOL_CALL_ID", "declare -x CODEX_TOOL_CALL_ID=\"capture-call\"",
 		"",           // end of exports
 		"A=1\x00B=2", // environment
 	}, "\x00")
@@ -197,6 +199,11 @@ func TestParseCapturedSnapshotDecodesRecords(t *testing.T) {
 		captured.Exports[0].Source != `declare -x FOO="bar"` || captured.Exports[1].Key != "COUNT" {
 		t.Fatalf("Exports = %#v", captured.Exports)
 	}
+	for _, export := range captured.Exports {
+		if export.Key == "CODEX_THREAD_ID" || export.Key == "CODEX_TOOL_CALL_ID" {
+			t.Fatalf("launch-specific execution ID was captured: %#v", captured.Exports)
+		}
+	}
 	if string(captured.Environment) != "A=1\x00B=2" {
 		t.Fatalf("Environment = %q", captured.Environment)
 	}
@@ -212,7 +219,7 @@ func TestParseCapturedSnapshotDecodesRecords(t *testing.T) {
 	// startup file it sourced.
 	shStream := snapshotStartupMarker + "/home/user/.profile\x00" + "PATH=/usr/bin\x00\x00" +
 		"# Snapshot file\nalias a=b\n\x00" + "alias a=b\n\x00" + "\x00" +
-		"FOO=bar\x00PWD=/tmp\x00BAD-NAME=x\x00\x00"
+		"FOO=bar\x00CODEX_THREAD_ID=thread\x00CODEX_TOOL_CALL_ID=call\x00PWD=/tmp\x00BAD-NAME=x\x00\x00"
 	shCaptured := ParseCapturedSnapshot(ShellSh, []byte(shStream))
 	if shCaptured == nil {
 		t.Fatalf("ParseCapturedSnapshot(sh) = nil for %q", shStream)

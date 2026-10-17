@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"codex_go/envutil"
 	"codex_go/execpolicy"
 )
 
@@ -251,6 +252,7 @@ func ParseCapturedSnapshot(shellType ShellType, captured []byte) *CapturedSnapsh
 				}
 				exports = append(exports, declared...)
 			}
+			exports = withoutSnapshotExecutionIDExports(exports)
 			return &CapturedSnapshot{
 				StartupEnvironment: startupEnvironment,
 				ShellType:          shellType,
@@ -266,6 +268,20 @@ func ParseCapturedSnapshot(shellType ShellType, captured []byte) *CapturedSnapsh
 		}
 		exports = append(exports, CapturedExport{Source: lossyUTF8(source), Key: string(key)})
 	}
+}
+
+// withoutSnapshotExecutionIDExports drops launch-specific correlation labels.
+// Each launch supplies its own thread and tool call IDs, so replaying values
+// captured from an earlier shell would expose stale metadata.
+func withoutSnapshotExecutionIDExports(exports []CapturedExport) []CapturedExport {
+	filtered := exports[:0]
+	for _, export := range exports {
+		if export.Key == envutil.CodexThreadIDEnvVar || export.Key == envutil.CodexToolCallIDEnvVar {
+			continue
+		}
+		filtered = append(filtered, export)
+	}
+	return filtered
 }
 
 // parseShDeclarationRecords turns POSIX sh's environment records into export

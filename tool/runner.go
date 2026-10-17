@@ -260,10 +260,31 @@ func shellRequestEnv(req *ShellRequest) map[string]string {
 		}
 		base[key] = value
 	}
+	// Rust #52119: executor metadata wins over environment policies, explicit
+	// overlays, and shell-snapshot replay.
+	applyShellRequestExecutionMetadata(base, req)
 	// Codex-owned PATH entries are applied last, on top of the policy and the
 	// launch's own overrides, exactly like Rust's apply_package_path_prepend.
 	applyRuntimePathPrepends(base, req.RuntimePathPrepends)
 	return base
+}
+
+// applyShellRequestExecutionMetadata applies the launch's execution labels as
+// the final environment step. Metadata presence clears an omitted thread ID;
+// without metadata the inherited thread context stays while a stale call ID is
+// removed.
+func applyShellRequestExecutionMetadata(env map[string]string, req *ShellRequest) {
+	if req == nil {
+		return
+	}
+	if req.ToolCallID != nil {
+		var threadID *string
+		if req.ThreadID != "" {
+			threadID = &req.ThreadID
+		}
+		envutil.SetThreadIDEnv(env, threadID)
+	}
+	envutil.SetToolCallIDEnv(env, req.ToolCallID)
 }
 
 func shellRunnerAbsPath(path string) (string, error) {

@@ -83,6 +83,95 @@ func TestShellRequestEnvWithoutPolicyKeepsParentEnv(t *testing.T) {
 	}
 }
 
+// TestShellRequestEnvAppliesExecutionMetadataLikeRust pins #52119 precedence:
+// executor metadata wins over shell environment policies and command overlays;
+// metadata presence clears an omitted thread ID; an empty call ID is preserved;
+// a NUL-containing call ID is omitted; and no metadata keeps thread context
+// while removing a stale call ID.
+func TestShellRequestEnvAppliesExecutionMetadataLikeRust(t *testing.T) {
+	t.Setenv("CODEX_THREAD_ID", "inherited-thread")
+	t.Setenv("CODEX_TOOL_CALL_ID", "inherited-call")
+	policy := &execpolicy.EnvPolicy{
+		Inherit: "all",
+		Set: map[string]string{
+			"CODEX_THREAD_ID":    "policy-thread",
+			"CODEX_TOOL_CALL_ID": "policy-call",
+		},
+	}
+	empty := ""
+	for _, testCase := range []struct {
+		name          string
+		threadID      string
+		toolCallID    *string
+		wantThread    string
+		wantThreadSet bool
+		wantCallID    string
+		wantCallSet   bool
+	}{
+		{
+			name:          "metadata wins",
+			threadID:      "current-thread",
+			toolCallID:    stringPointerForToolTest("current-call"),
+			wantThread:    "current-thread",
+			wantThreadSet: true,
+			wantCallID:    "current-call",
+			wantCallSet:   true,
+		},
+		{
+			name:        "missing thread clears stale context",
+			toolCallID:  stringPointerForToolTest("call-only"),
+			wantCallID:  "call-only",
+			wantCallSet: true,
+		},
+		{
+			name:          "empty call ID is preserved",
+			threadID:      "current-thread",
+			toolCallID:    &empty,
+			wantThread:    "current-thread",
+			wantThreadSet: true,
+			wantCallSet:   true,
+		},
+		{
+			name:          "NUL call ID is omitted",
+			threadID:      "current-thread",
+			toolCallID:    stringPointerForToolTest("bad\x00call"),
+			wantThread:    "current-thread",
+			wantThreadSet: true,
+		},
+		{
+			name:          "no metadata preserves thread and removes call",
+			wantThread:    "overlay-thread",
+			wantThreadSet: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			env := shellRequestEnv(&ShellRequest{
+				EnvPolicy:  policy,
+				ThreadID:   testCase.threadID,
+				ToolCallID: testCase.toolCallID,
+				Env: map[string]string{
+					"CODEX_THREAD_ID":    "overlay-thread",
+					"CODEX_TOOL_CALL_ID": "overlay-call",
+				},
+			})
+			thread, threadSet := env["CODEX_THREAD_ID"]
+			if thread != testCase.wantThread || threadSet != testCase.wantThreadSet {
+				t.Fatalf("thread = %q, present=%t; want %q, present=%t; env=%#v",
+					thread, threadSet, testCase.wantThread, testCase.wantThreadSet, env)
+			}
+			callID, callSet := env["CODEX_TOOL_CALL_ID"]
+			if callID != testCase.wantCallID || callSet != testCase.wantCallSet {
+				t.Fatalf("call id = %q, present=%t; want %q, present=%t; env=%#v",
+					callID, callSet, testCase.wantCallID, testCase.wantCallSet, env)
+			}
+		})
+	}
+}
+
+func stringPointerForToolTest(value string) *string {
+	return &value
+}
+
 func TestLocalShellRunnerRunsCommand(t *testing.T) {
 	shell := &Shell{Type: ShellBash, Path: "/bin/sh"}
 	if runtime.GOOS == "windows" {
