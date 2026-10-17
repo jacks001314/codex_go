@@ -10515,9 +10515,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: REQUEST_TOKENS_BOUNDARIES, SECTION_COST_BOUNDARIES"
+        "Round 285: shared Guardian request-token and section-cost bucket families are exported; synchronous reviews emit per-section text/token/byte/count measurements and complete request-token totals with explicit bounds. Go has no asynchronous scorer carrier."
       ]
     },
     {

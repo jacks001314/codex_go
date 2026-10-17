@@ -42,6 +42,8 @@ const (
 	GuardianReviewDurationMetric                = "codex.guardian.review.duration_ms"
 	GuardianReviewTTFTDurationMetric            = "codex.guardian.review.ttft.duration_ms"
 	GuardianReviewTokenUsageMetric              = "codex.guardian.review.token_usage"
+	GuardianContextRequestTokensMetric          = "codex.guardian.context.request_tokens"
+	GuardianContextSectionCostMetric            = "codex.guardian.context.section_cost"
 	GoalCreatedMetric                           = "codex.goal.created"
 	GoalResumedMetric                           = "codex.goal.resumed"
 	GoalCompletedMetric                         = "codex.goal.completed"

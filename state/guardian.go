@@ -629,6 +629,43 @@ type GuardianPromptPart struct {
 	Native json.RawMessage
 }
 
+// GuardianPromptSectionCost is payload-free accounting for one composed
+// Guardian prompt section.
+type GuardianPromptSectionCost struct {
+	Section    string
+	TextBytes  int
+	ImageBytes int
+	ImageCount int
+}
+
+// GuardianPromptMeasurement is one numeric section-cost measurement.
+type GuardianPromptMeasurement struct {
+	Measurement string
+	Value       int
+}
+
+// Measurements returns Rust SectionCost::measurements for this section.
+func (c GuardianPromptSectionCost) Measurements() []GuardianPromptMeasurement {
+	return []GuardianPromptMeasurement{
+		{Measurement: "text_bytes", Value: c.TextBytes},
+		{Measurement: "estimated_text_tokens", Value: approximateTokensFromBytes(c.TextBytes)},
+		{Measurement: "image_bytes", Value: c.ImageBytes},
+		{Measurement: "image_count", Value: c.ImageCount},
+	}
+}
+
+func approximateTokensFromBytes(bytes int) int {
+	if bytes <= 0 {
+		return 0
+	}
+	return (bytes + 3) / 4
+}
+
+type guardianPromptSection struct {
+	id   string
+	text string
+}
+
 // BuildPromptWithOptions renders the Guardian review prompt in the order Rust's
 // composed context uses: the stable evidence first and the planned action last,
 // so the evidence stays a reusable history prefix across approval requests
@@ -643,15 +680,26 @@ type GuardianPromptPart struct {
 // transcript, so growing assistant evidence cannot invalidate the instruction
 // prefix for independent snapshots.
 func BuildPromptWithOptions(action Action, transcript []string, options BuildPromptOptions) (string, error) {
+	prompt, _, err := BuildPromptWithSectionCosts(action, transcript, options)
+	return prompt, err
+}
+
+// BuildPromptWithSectionCosts renders the concatenated prompt and returns its
+// section cost measurements.
+func BuildPromptWithSectionCosts(
+	action Action,
+	transcript []string,
+	options BuildPromptOptions,
+) (string, []GuardianPromptSectionCost, error) {
 	entries := make([]GuardianTranscriptEntry, 0, len(transcript))
 	for _, line := range transcript {
 		// A pre-rendered line keeps its exact text: Author and LineRole stay
 		// empty so Render returns the line unchanged.
 		entries = append(entries, GuardianTranscriptEntry{Text: line})
 	}
-	parts, err := BuildPromptPartsWithOptions(action, entries, options)
+	parts, costs, err := BuildPromptPartsWithSectionCosts(action, entries, options)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	var builder strings.Builder
 	for _, part := range parts {
@@ -660,7 +708,7 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 		}
 		writeGuardianPromptSection(&builder, part.Text)
 	}
-	return builder.String(), nil
+	return builder.String(), costs, nil
 }
 
 // BuildPromptPartsWithOptions renders the review input in Rust's ordered
@@ -668,20 +716,50 @@ func BuildPromptWithOptions(action Action, transcript []string, options BuildPro
 // text block, so the caller can deliver the first block as the prompt and the
 // remaining text blocks and native items in order.
 func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptEntry, options BuildPromptOptions) ([]GuardianPromptPart, error) {
+	parts, _, err := BuildPromptPartsWithSectionCosts(action, transcript, options)
+	return parts, err
+}
+
+// BuildPromptPartsWithSectionCosts renders the same ordered prompt and returns
+// stable section IDs with payload-free size measurements.
+func BuildPromptPartsWithSectionCosts(
+	action Action,
+	transcript []GuardianTranscriptEntry,
+	options BuildPromptOptions,
+) ([]GuardianPromptPart, []GuardianPromptSectionCost, error) {
 	if err := action.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var textSections []string
+	var textSections []guardianPromptSection
 	var parts []GuardianPromptPart
-	addSection := func(section string) {
-		textSections = append(textSections, section)
+	var costs []GuardianPromptSectionCost
+	recordCost := func(section string, textBytes int, imageBytes int, imageCount int) {
+		if textBytes == 0 && imageBytes == 0 && imageCount == 0 {
+			return
+		}
+		if len(costs) > 0 && costs[len(costs)-1].Section == section {
+			costs[len(costs)-1].TextBytes += textBytes
+			costs[len(costs)-1].ImageBytes += imageBytes
+			costs[len(costs)-1].ImageCount += imageCount
+			return
+		}
+		costs = append(costs, GuardianPromptSectionCost{
+			Section:    section,
+			TextBytes:  textBytes,
+			ImageBytes: imageBytes,
+			ImageCount: imageCount,
+		})
+	}
+	addSection := func(sectionID string, section string) {
+		textSections = append(textSections, guardianPromptSection{id: sectionID, text: section})
 	}
 	flushSections := func() {
 		for _, section := range textSections {
-			trimmed := strings.TrimRight(section, "\n")
+			trimmed := strings.TrimRight(section.text, "\n")
 			if strings.TrimSpace(trimmed) == "" {
 				continue
 			}
+			recordCost(section.id, len(trimmed), 0, 0)
 			if len(parts) > 0 && len(parts[len(parts)-1].Native) == 0 {
 				parts[len(parts)-1].Text += "\n\n" + trimmed
 				continue
@@ -701,11 +779,11 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 			messages = append(messages, message)
 		}
 		if items := RootConversationSectionItems(messages); len(items) > 0 {
-			addSection(strings.Join(items, ""))
+			addSection("root_conversation", strings.Join(items, ""))
 		}
 	}
 	if items := SenderUserMessagesSectionItems(options.RetainedContext); len(items) > 0 {
-		addSection(strings.Join(items, ""))
+		addSection("sender_user_messages", strings.Join(items, ""))
 	}
 	// The retained snapshot layout follows the reviewed consumer's framing
 	// (#51627): the stateful synchronous reviewer renders one section ahead of the
@@ -714,13 +792,13 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 	retainedSections := RenderRetainedInstructionSectionsForPresentation(options.RetainedContext, options.Presentation)
 	retainedSections = ApplyRetainedOmissionDeduplication(retainedSections, options.PreviousRetainedOmissions, HasLegacyRetainedOrder(options.RetainedContext))
 	if len(retainedSections.Instructions) > 0 {
-		addSection(strings.Join(retainedSections.Instructions, ""))
+		addSection("retained_user_instructions", strings.Join(retainedSections.Instructions, ""))
 	}
 	// Rust feeds the review's selected-answer evidence into the composer as
 	// `trusted_user_answers` (guardian/prompt.rs's `user_input_snapshot`), which
 	// the TrustedUserAnswers section renders.
 	if items := TrustedUserAnswersSectionItems(RenderVerifiedAnswers(options.RetainedContext).Fragments); len(items) > 0 {
-		addSection(strings.Join(items, ""))
+		addSection("trusted_user_answers", strings.Join(items, ""))
 	}
 	if len(transcript) > 0 || options.TranscriptOmissionNote != "" {
 		var run strings.Builder
@@ -729,9 +807,10 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 			if len(entry.Native) > 0 {
 				// Rust flushes the accumulated transcript text before the
 				// native message and continues the section after it.
-				addSection(run.String())
+				addSection("conversation_transcript", run.String())
 				flushSections()
 				parts = append(parts, GuardianPromptPart{Native: append(json.RawMessage(nil), entry.Native...)})
+				recordCost("conversation_transcript", len(entry.Native), 0, 0)
 				run.Reset()
 				continue
 			}
@@ -747,31 +826,31 @@ func BuildPromptPartsWithOptions(action Action, transcript []GuardianTranscriptE
 			run.WriteString(options.TranscriptOmissionNote)
 			run.WriteByte('\n')
 		}
-		addSection(run.String())
+		addSection("conversation_transcript", run.String())
 	}
 	if len(retainedSections.AssistantContext) > 0 {
-		addSection(strings.Join(retainedSections.AssistantContext, ""))
+		addSection("retained_assistant_context", strings.Join(retainedSections.AssistantContext, ""))
 	}
 	if options.NodeReplEvidence != nil {
 		if rendered := context.Render(options.NodeReplEvidence); rendered != nil && strings.TrimSpace(rendered.Content) != "" {
-			addSection(rendered.Content)
+			addSection("node_repl_evidence", rendered.Content)
 		}
 	}
 	if items := PermissionContextSectionItems(options.PermissionContext); len(items) > 0 {
 		// Rust's marker opens with its own newline inside the message that carries
 		// it; the block separator already supplies that paragraph break here.
-		addSection(strings.TrimLeft(strings.Join(items, ""), "\n"))
+		addSection("permissions", strings.TrimLeft(strings.Join(items, ""), "\n"))
 	}
 	actionPrompt, err := joinPlannedAction(action, options.Presentation)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	addSection(actionPrompt)
+	addSection("planned_action", actionPrompt)
 	if descriptions := renderGuardianToolDescriptions(action); descriptions != "" {
-		addSection(descriptions)
+		addSection("planned_action", descriptions)
 	}
 	flushSections()
-	return parts, nil
+	return parts, costs, nil
 }
 
 // writeGuardianPromptSection appends one prompt block, separated from the

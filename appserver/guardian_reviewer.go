@@ -756,21 +756,24 @@ reviewAttempt:
 	}
 	var prompt string
 	var promptParts []state.GuardianPromptPart
-	if transcriptEntries != nil {
-		promptParts, err = state.BuildPromptPartsWithOptions(action, transcriptEntries, buildOptions)
-	} else {
-		prompt, err = state.BuildPromptWithOptions(action, transcript, buildOptions)
+	var promptCosts []state.GuardianPromptSectionCost
+	buildPrompt := func() error {
+		if transcriptEntries != nil {
+			var buildErr error
+			promptParts, promptCosts, buildErr = state.BuildPromptPartsWithSectionCosts(action, transcriptEntries, buildOptions)
+			return buildErr
+		}
+		var buildErr error
+		prompt, promptCosts, buildErr = state.BuildPromptWithSectionCosts(action, transcript, buildOptions)
+		return buildErr
 	}
+	err = buildPrompt()
 	var rootAuthorization []state.RootMessage
 	if err == nil && r.rootUserAuthorization != nil {
 		rootAuthorization = r.rootUserAuthorization(threadID, turnID)
 		if len(rootAuthorization) > 0 {
 			buildOptions.RootUserAuthorization = rootAuthorization
-			if transcriptEntries != nil {
-				promptParts, err = state.BuildPromptPartsWithOptions(action, transcriptEntries, buildOptions)
-			} else {
-				prompt, err = state.BuildPromptWithOptions(action, transcript, buildOptions)
-			}
+			err = buildPrompt()
 		}
 	}
 	if err != nil {
@@ -848,6 +851,7 @@ reviewAttempt:
 			}
 		}
 	}
+	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{
 		Prompt:          prompt,
 		Instructions:    plan.Instructions,

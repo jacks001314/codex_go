@@ -425,7 +425,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2b59d92dbdd69fc600ed95250867d305942912e1	46008	Route built-in permission selections through the app server (#46008)	2026-09-16	tui	1	0	0.00	0	0	implementation_pending	reject_pending_permission_root_switch
 2b7c279735d0d096cf7b34fe98938f46792f4d4f	42003	Report turn trigger and source in turn analytics (#42003)	2026-09-01	appserver	1	1	1.00	0	0	complete	
 2b842962883f2e01526b9c64e383cb2375123a5d	46508	Refresh the model catalog before turns after auth changes (#46508)	2026-09-18	model	0	0		0	0	not_applicable	
-2bba3a29a0537a1869d76ec2982b8d5e8d02ee9f	44181	Use explicit histogram buckets for Guardian context metrics (#44181)	2026-09-09	guardian	3	1	0.33	0	0	audit_pending	REQUEST_TOKENS_BOUNDARIES,SECTION_COST_BOUNDARIES
+2bba3a29a0537a1869d76ec2982b8d5e8d02ee9f	44181	Use explicit histogram buckets for Guardian context metrics (#44181)	2026-09-09	guardian	3	3	1.00	0	0	complete	none
 2bd71f96d41809b95ea881429a1b68eb48d089b6	42990	Refresh session hooks after external plugin updates (#42990)	2026-09-05	appserver	3	0	0.00	0	0	not_applicable	iter_effective_plugin_hook_sources,iter_effective_plugin_hook_warnings,matches_plugin_hooks
 2bf2bdf82c33f4c66ba3f0767b8e4b6a933aac40	54619	Bind plugin hook approval to plugin contents (#54619)	2026-10-16	appserver	6	5	0.83	0	0	complete	DiscoveryMode
 2c087a0cc2ef1d731086a1d0cb0081bdd792cc4d	47320	Fix Escape navigation in read-only agent sessions (#47320)	2026-09-22	tui	0	0		0	0	not_applicable	

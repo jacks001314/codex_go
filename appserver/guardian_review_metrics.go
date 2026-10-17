@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -125,6 +126,66 @@ func guardianReviewMetricTags(attribution guardianReviewMetricAttribution) map[s
 		"guardian_reasoning_effort": "none",
 		"guardian_model":            guardianModel,
 	}
+}
+
+// emitGuardianContextMetrics exports the complete synchronous request estimate
+// and payload-free section costs using the shared bucket families from Rust
+// #44181.
+func (r *modelGuardianReviewer) emitGuardianContextMetrics(
+	costs []state.GuardianPromptSectionCost,
+	prompt string,
+	instructions string,
+	inputItems []any,
+) {
+	if r == nil || r.metrics == nil {
+		return
+	}
+	for _, cost := range costs {
+		for _, measurement := range cost.Measurements() {
+			r.metrics.HistogramWithBounds(
+				telemetry.GuardianContextSectionCostMetric,
+				measurement.Value,
+				telemetry.GuardianContextSectionCostBoundaries,
+				map[string]string{
+					"target":      "sync",
+					"section":     cost.Section,
+					"measurement": measurement.Measurement,
+				},
+			)
+		}
+	}
+	r.metrics.HistogramWithBounds(
+		telemetry.GuardianContextRequestTokensMetric,
+		guardianContextRequestTokenEstimate(prompt, instructions, inputItems),
+		telemetry.GuardianContextRequestTokensBoundaries,
+		map[string]string{"target": "sync", "component": "total"},
+	)
+}
+
+// guardianContextRequestTokenEstimate conservatively mirrors the Rust sync
+// request budget: serialized text is four bytes per token and each image
+// reserves the fixed original-image token allowance.
+func guardianContextRequestTokenEstimate(prompt string, instructions string, inputItems []any) int {
+	textBytes := len(prompt) + len(instructions)
+	imageTokens := 0
+	for _, item := range inputItems {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			continue
+		}
+		imageCount := strings.Count(string(encoded), `"input_image"`)
+		if imageCount > 0 {
+			imageTokens += imageCount * 10_000
+			if len(encoded) > 512 {
+				textBytes += 512
+			} else {
+				textBytes += len(encoded)
+			}
+			continue
+		}
+		textBytes += len(encoded)
+	}
+	return (textBytes+3)/4 + imageTokens
 }
 
 func guardianReviewDecisionTag(decision state.ReviewDecision) string {

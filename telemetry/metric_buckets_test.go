@@ -139,3 +139,28 @@ func TestContextLogBoundariesMatchRust(t *testing.T) {
 		t.Fatalf("context log boundaries drifted from Rust: sha256 = %s, want %s", got, rustDigest)
 	}
 }
+
+// Mirrors Rust #44181: both Guardian reviewers share one request-token bucket
+// family and one section-cost family for every measurement tag.
+func TestGuardianContextHistogramBoundariesLikeRust(t *testing.T) {
+	if len(RequestTokensBoundaries) != 11 ||
+		RequestTokensBoundaries[0] != 1_000 ||
+		RequestTokensBoundaries[len(RequestTokensBoundaries)-1] != 2_000_000 {
+		t.Fatalf("request token boundaries = %#v", RequestTokensBoundaries)
+	}
+	if len(SectionCostBoundaries) != 17 ||
+		SectionCostBoundaries[0] != 0 ||
+		SectionCostBoundaries[len(SectionCostBoundaries)-1] != 16_777_216 {
+		t.Fatalf("section cost boundaries = %#v", SectionCostBoundaries)
+	}
+	for index := 1; index < len(RequestTokensBoundaries); index++ {
+		if RequestTokensBoundaries[index] <= RequestTokensBoundaries[index-1] {
+			t.Fatalf("request token boundaries are not increasing: %#v", RequestTokensBoundaries)
+		}
+	}
+	for index := 1; index < len(SectionCostBoundaries); index++ {
+		if SectionCostBoundaries[index] <= SectionCostBoundaries[index-1] {
+			t.Fatalf("section cost boundaries are not increasing: %#v", SectionCostBoundaries)
+		}
+	}
+}

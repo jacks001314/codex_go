@@ -32,6 +32,54 @@ var ThreadSkillsTruncatedBoundaries = []float64{0, 1}
 // `THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_BUCKETS`, `context_log_buckets(17.0)`).
 var ThreadSkillsDescriptionTruncatedCharsBoundaries = contextLogBuckets(17)
 
+// GuardianContextRequestTokensBoundaries are shared by synchronous and
+// asynchronous reviewers so complete-request distributions align
+// (Rust REQUEST_TOKENS_BOUNDARIES, #44181).
+var GuardianContextRequestTokensBoundaries = []float64{
+	1_000,
+	4_000,
+	16_000,
+	32_000,
+	64_000,
+	128_000,
+	256_000,
+	400_000,
+	512_000,
+	1_000_000,
+	2_000_000,
+}
+
+// GuardianContextSectionCostBoundaries are one shared bucket scale for the
+// section metric's count, token, and byte measurements
+// (Rust SECTION_COST_BOUNDARIES, #44181).
+var GuardianContextSectionCostBoundaries = []float64{
+	0,
+	1,
+	2,
+	4,
+	8,
+	16,
+	64,
+	256,
+	1_024,
+	4_096,
+	16_384,
+	65_536,
+	262_144,
+	1_048_576,
+	4_194_304,
+	8_388_608,
+	16_777_216,
+}
+
+// RequestTokensBoundaries aliases the Guardian request-token buckets for
+// callers mirroring the upstream guardian-context constant names.
+var RequestTokensBoundaries = GuardianContextRequestTokensBoundaries
+
+// SectionCostBoundaries aliases the Guardian section-cost buckets for callers
+// mirroring the upstream guardian-context constant names.
+var SectionCostBoundaries = GuardianContextSectionCostBoundaries
+
 // integerCountBoundaries builds the integer boundary family Rust expresses with
 // `std::array::from_fn`, so index 0 is the zero bucket.
 func integerCountBoundaries(maximum int) []float64 {

@@ -112,6 +112,47 @@ func TestGuardianReviewMetricTagsLikeRust(t *testing.T) {
 	}
 }
 
+func TestGuardianContextMetricsUseExplicitSharedBoundariesLikeRust(t *testing.T) {
+	metrics := state.NewTaskMetrics()
+	reviewer := &modelGuardianReviewer{metrics: metrics}
+	reviewer.emitGuardianContextMetrics(
+		[]state.GuardianPromptSectionCost{
+			{Section: "conversation_transcript", TextBytes: 2_000_000},
+			{Section: "permissions", TextBytes: 64},
+		},
+		"review prompt",
+		"review instructions",
+		[]any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "input_text", "text": "evidence"}}}},
+	)
+
+	sectionRecords := guardianMetricRecords(metrics, telemetry.GuardianContextSectionCostMetric)
+	if len(sectionRecords) != 8 {
+		t.Fatalf("section metric records = %d, want 8: %#v", len(sectionRecords), sectionRecords)
+	}
+	for _, record := range sectionRecords {
+		if record.Tags["target"] != "sync" {
+			t.Fatalf("section target = %q", record.Tags["target"])
+		}
+		if len(record.Boundaries) != len(telemetry.GuardianContextSectionCostBoundaries) ||
+			record.Boundaries[len(record.Boundaries)-1] != 16_777_216 {
+			t.Fatalf("section boundaries = %#v", record.Boundaries)
+		}
+	}
+
+	requestRecords := guardianMetricRecords(metrics, telemetry.GuardianContextRequestTokensMetric)
+	if len(requestRecords) != 1 {
+		t.Fatalf("request metric records = %d, want 1: %#v", len(requestRecords), requestRecords)
+	}
+	request := requestRecords[0]
+	if request.Tags["target"] != "sync" || request.Tags["component"] != "total" {
+		t.Fatalf("request tags = %#v", request.Tags)
+	}
+	if len(request.Boundaries) != len(telemetry.GuardianContextRequestTokensBoundaries) ||
+		request.Boundaries[len(request.Boundaries)-1] != 2_000_000 {
+		t.Fatalf("request boundaries = %#v", request.Boundaries)
+	}
+}
+
 // A completed review emits the counter, duration, and the seven token-usage
 // histograms, with the optional tool tag only for a codex_apps MCP tool.
 func TestModelGuardianReviewerEmitsMetricsLikeRust(t *testing.T) {
