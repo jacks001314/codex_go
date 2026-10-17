@@ -341,3 +341,34 @@ landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 
 | --- | --- |
 | `go test ./appserver -run TestThreadSettingsUpdatePreservesRunningTurnRecoveryLikeRust` | ok |
 | `go test ./execserver -run TestDirectWebSocketWritesAboveClientRequestLimitLikeRust` | ok（512 KiB） |
+
+# Round 97 增量（2026-10-17，lead）
+
+## 13.1 已落地
+
+### #52164 `include_environment_context_time=false` 跳过时钟读取（`8c818cbed4`）
+
+- 渲染层门禁此前已存在；本轮补上 Rust `core/src/session/world_state.rs` 的另一半语义：关闭时间字段时**根本不读取时钟**。
+- `appserver/turn_runtime.go::environmentClockForTurn` 在 `IncludeEnvironmentContextTime()==false` 时直接返回 `(nil, false, nil)`，per-turn 与 compaction 两个调用点同时受益：外部时钟停摆既不会让上下文构建失败，也不会产生 `CurrentTimeUnavailable` 提示。
+- 测试 `appserver/environment_context_time_clock_like_rust_test.go`：flag 关闭 + 未配置的外部时钟 ⇒ 无错误、只有环境上下文、无提示；flag 打开 ⇒ 同一配置立即返回时钟读取错误，证明前一次确实跳过了读取。
+
+## 13.2 阻塞判定
+
+### #54216 全屏 transcript 图片预览（`dffa0deb69`）— blocked_precondition
+
+Go 侧前置条件缺失（均已用可复现检索确认）：
+
+1. `tui/state.go` 的 `Message` 只携带 `UserPromptLocalImages` / `UserPromptRemoteImages`（用户附件），没有 Rust 预览所需的“查看过的图片 / 生成图片产物”字段——数据未进入 transcript。
+2. `tui/chatwidget/transcript_overlay.go` 是纯字符串 viewport（`SetContent` + viewport），没有可挂 `ImagePlacement` 的行布局模型。
+3. Kitty/Sixel 编码只存在于 `tui/pets`（`image_protocol.go`、`sixel.go`），分页器渲染路径不可达。
+4. Go 无 `transcript_view` / `custom_terminal` 对应物（检索仅命中 `parity/rust_tui_snapshot_manifest_test.go`），而 Rust 该 PR 跨 30 个文件，含 `custom_terminal` 图形保留（+128 行）与布局/文本行改动。
+
+结论：忠实移植需要先建立“富 transcript 条目模型 + 终端图形层”，不是现有分页器上的局部改动。
+
+## 13.3 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./appserver` | exit 0 |
+| `go test ./appserver -run "TestEnvironmentContextTime"` | ok（4 例） |
+| `go test ./appserver -run TestCompactEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust` | ok |
