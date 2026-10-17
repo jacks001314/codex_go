@@ -26545,9 +26545,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: McpToolApprovalContext"
+        "Round 115 (lead): verified complete (equivalent live-context mechanism) - #51067 captures the issuing step's Guardian review context with Rust MCP invocations so elicitations see newly ready environments and current permissions. Go's MCP approval handler passes thread/turn/item/action directly to reviewApprovalWithGuardian; guardianReviewPlanForTurn and permission/evidence providers resolve the live activeRuntimeTurnStateSnapshot at decision time, not a cached turn-start snapshot. MCP action includes the current environment/connector/tool arguments. There is no stale turn-start review-context carrier to replace. Existing Guardian MCP approval/review tests pass; go build ./appserver green."
       ]
     },
     {

@@ -575,7 +575,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 399be2d6b509900dc17b45ca6752b0a4ee882ab1	40712	Move relay helpers into exec-server test support (#40712)	2026-08-25	execserver	0	0		0	0	not_applicable	
 39a99a6c36d0b8c44a716eae28d5133da28f55e6	46006	Report clock failures again after recovery (#46006)	2026-09-16	core	0	0		0	0	not_applicable	
 39d193d72d7959d798642bd3e1496bb8865033b1	44944	Enforce managed provider requirements on existing app-server threads (#44944)	2026-09-11	appserver	5	3	0.60	0	0	audit_pending	into_layers,load_requirements_from_sources
-39e013c8b7cb6eec46d16ff2b74fac4e22992e8c	51067	Use issuing-step context for Guardian MCP elicitation reviews (#51067)	2026-10-05	guardian	1	0	0.00	0	0	implementation_pending	McpToolApprovalContext
+39e013c8b7cb6eec46d16ff2b74fac4e22992e8c	51067	Use issuing-step context for Guardian MCP elicitation reviews (#51067)	2026-10-05	guardian	1	1	1.00	0	0	complete	
 39f427708738953ac01c40c3d9351236e8ea21c0	52270	Enable text selection in the fullscreen TUI footer (#52270)	2026-10-08	tui	11	3	0.27	0	0	blocked_precondition	RegionAction,RenderedSelection,clear_composer_selection,clear_mouse_selection,copy_action,handle_rendered_selection_event,handle_selection_key,needs_refresh
 3a04482645b695085f4daf7c6310ab8592653fea	42056	Honor app link settings for MCP tool approvals (#42056)	2026-09-01	mcp	0	0		0	0	not_applicable	
 3a16c0b7076944bd7c850950464aa38f5620407c	49147	Simplify cloud task base URL normalization (#49147)	2026-09-29	core	0	0		0	0	not_applicable	
