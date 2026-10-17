@@ -22952,10 +22952,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 4/6; needs review: list_marketplaces_with_cache, plugin_capability_summary_from_root"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Plugin stores and service workflows share a bounded manifest cache keyed by manifest and overlay revisions; unchanged revisions reuse parsed data, edits invalidate, failures/oversized inputs bypass, and marketplace discovery uses the cached path."
+        ]
     },
     {
       "sha": "bfdb1571780b326ce978696de12b1d81b5e978f2",

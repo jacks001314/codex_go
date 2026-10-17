@@ -178,7 +178,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 121f91fd5d9dc66017866ce9bdc49f1e182721df	43340	Enable remote named permission profile selection in the TUI (#43340)	2026-09-07	tui	4	1	0.25	0	0	audit_pending	confirmed_server_profile,reject_pending_permission_change,retain_input_after_failed_permission_selection
 122d55cba84993fb21af3f9cc342e099b8f690a4	44867	Preserve originating budgets for code mode notifications (#44867)	2026-09-11	core	1	1	1.00	0	0	complete	
 124e560b9357746b6a7e2bba1fd244115fd9cc5a	41199	Make the optional MCP startup grace configurable (#41199)	2026-08-27	mcp	2	1	0.50	0	0	complete	optional_startup_deadline
-12607163938054d7e90fa1d2a1c63772dece6689	49099	Cache parsed plugin manifests across plugin workflows (#49099)	2026-09-28	appserver	6	4	0.67	0	0	audit_pending	list_marketplaces_with_cache,plugin_capability_summary_from_root
+12607163938054d7e90fa1d2a1c63772dece6689	49099	Cache parsed plugin manifests across plugin workflows (#49099)	2026-09-28	appserver	6	4	0.67	0	0	complete	list_marketplaces_with_cache,plugin_capability_summary_from_root
 1281778e3273ab8e28c700ba84f5f12115e0ddc0	42403	Expose the last accepted environment ready report (#42403)	2026-09-02	execserver	1	1	1.00	0	0	complete	
 129fd21687fbd4ac48133b7abfdcaf52cb6cb01f	44070	Reject empty audio payloads in data URLs (#44070)	2026-09-09	core	0	0		0	0	not_applicable	
 12a30d4e6dbd7e527898142b6f4f65fd8070a3b5	50437	Add a CLI command to uninstall the legacy Windows sandbox (#50437)	2026-10-02	sandbox	3	3	1.00	0	0	complete	
