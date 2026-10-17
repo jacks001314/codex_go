@@ -328,7 +328,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2008d27e98d7b46170d2d464b36dbf97008611b8	41427	Filter media from function call output notifications (#41427)	2026-08-28	appserver	0	0		0	0	not_applicable	
 202d61c629894311433289d0e0bcc1b9b76c9bf2	44932	Unify context snapshots and group requests into windows (#44932)	2026-09-11	guardian	0	0		0	0	not_applicable	
 205f3671e14e8306919501cdef36ca2e5d360f5a	44242	Use captured step settings for tool planning and execution (#44242)	2026-09-09	mcp	0	0		0	0	not_applicable	
-20b4ff2f35f2193608385e4caa8da8ceee45a3cf	53763	Enrich V2 capability discovery with resolved plugin and skill metadata (#53763)	2026-10-13	execserver	3	0	0.00	0	0	implementation_pending	ParsedSkillMetadata,SkillDiscoveryRoot,parse_skill_metadata
+20b4ff2f35f2193608385e4caa8da8ceee45a3cf	53763	Enrich V2 capability discovery with resolved plugin and skill metadata (#53763)	2026-10-13	execserver	3	0	0.00	0	0	not_applicable	ParsedSkillMetadata,SkillDiscoveryRoot,parse_skill_metadata
 20c3f9733f7d7ee51e0eb26d82265db78c648335	40636	Restart pending MCP connections when startup timeout changes (#40636)	2026-08-25	mcp	0	0		0	0	not_applicable	
 20cdcb0156254cfcd1dc5f2e10f68345c6e47c40	47073	Wait for thread idle in Guardian context budget tests (#47073)	2026-09-21	guardian	0	0		0	0	not_applicable	
 20f109eadb9b45360e6ca4f1dee2e82c83a48f7a	44121	Reuse MCP bindings while cached servers remain dormant (#44121)	2026-09-09	mcp	2	0	0.00	0	0	not_applicable	BindingCatalogRevision,current_revision

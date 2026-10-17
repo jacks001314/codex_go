@@ -30630,9 +30630,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ParsedSkillMetadata, SkillDiscoveryRoot, parse_skill_metadata"
+        "Round 115 (lead): N/A (verified V1 carrier) - #53763 changes codex-exec-server's V2 capabilities/discoverV2 response: qualified skill names, parsed dependencies/policy, standalone discoveryRoot, plugin displayName and inline MCP materialization. Go's execserver exposes only the V1 raw-file contract (`capabilityRoots/discoverV1`; CapabilityDiscovery* are compatibility aliases), returning manifest/skill text for appserver-side parsing. There is no V2 enriched response struct or method in Go to extend. No source change needed."
       ]
     },
     {
