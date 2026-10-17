@@ -2987,9 +2987,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: build_review_prompt, review_inputs"
+        "Round 278 (audit): Go's modelGuardianReviewer builds the synchronous review prompt from root authorization, trusted answers, retained transcript/profile evidence, node-repl evidence, permission context, and the planned action; reviewer plan resolution supplies the review model/instructions, image evidence is filtered by modality/admission, and action/reason strings stay bounded. Tests: go test ./appserver ./state -run 'Guardian.*Prompt|Guardian.*Section|Guardian.*Action' -count=1"
       ]
     },
     {

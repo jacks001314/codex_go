@@ -2628,7 +2628,7 @@ f71935b7f00c82811658e88ee988dcbfd6bbc2f6	51425	Skip stable installer alias publi
 f73a478c87a78a553f8009e6b26b44cc700c7f35	51872	Keep global app-server config independent of the launch directory (#51872)	2026-10-07	appserver	2	2	1.00	0	0	complete
 f742dabc6f9c575ca43428a84b66fb42a7f3e4b2	41421	Support per-tool MCP output limits (#41421)	2026-08-28	appserver	6	2	0.33	0	0	audit_pending	into_response,serialize_mcp_server,serialize_mcp_server_inline,truncate_function_output_payload
 f747d23d4bc8a167207fb1c411e221022391fdbb	46993	Clarify Bazel lockfile verification failures (#46993)	2026-09-21	core	0	0		0	0	not_applicable	
-f74bcd281196a752521717757f39d6c7b26affae	40964	Build Guardian V2 synchronous review prompts (#40964)	2026-08-26	guardian	4	2	0.50	0	0	audit_pending	build_review_prompt,review_inputs
+f74bcd281196a752521717757f39d6c7b26affae	40964	Build Guardian V2 synchronous review prompts (#40964)	2026-08-26	guardian	4	2	0.50	0	0	complete	build_review_prompt,review_inputs
 f817e1690570aac60480babbd2243cc991ba2118	49028	Use the numeric ioctl value in the macOS sandbox policy (#49028)	2026-09-28	sandbox	0	0		0	0	not_applicable	
 f81a6331b4fc904447b784185e2289625b86d81a	46569	Set explicit turn triggers for exec and TUI requests (#46569)	2026-09-18	tui	0	0		0	0	not_applicable	
 f82e36592278a0a782fb0d0fc97e5fa10e832ac2	53556	Deduplicate TUI modifier handling and terminal color caching (#53556)	2026-10-13	tui	2	1	0.50	0	0	not_applicable	ModifierDiff
