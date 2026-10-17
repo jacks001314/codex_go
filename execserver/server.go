@@ -1795,6 +1795,9 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			return nil, startErr
 		}
 		if supported {
+			// Rust #41436: answer blocking terminal queries from the PTY and
+			// remove them from the output the client sees.
+			queryReader := newTerminalQueryReader(startedTTY.reader, startedTTY.stdin)
 			state.mu.Lock()
 			state.sandboxType = sandboxType
 			state.mu.Unlock()
@@ -1814,7 +1817,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				if startedTTY.closePTY != nil {
 					_ = startedTTY.closePTY()
 				}
-				_ = startedTTY.reader.Close()
+				_ = queryReader.Close()
 				if startedTTY.cleanup != nil {
 					_ = startedTTY.cleanup()
 				}
@@ -1830,8 +1833,8 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 			captureDone := make(chan struct{})
 			go func() {
 				defer close(captureDone)
-				state.capture("pty", startedTTY.reader)
-				_ = startedTTY.reader.Close()
+				state.capture("pty", queryReader)
+				_ = queryReader.Close()
 			}()
 			go func() {
 				code, waitErr := startedTTY.wait()
@@ -1841,7 +1844,7 @@ func (s *Server) startProcess(ctx context.Context, params *ExecParams) (*ExecRes
 				select {
 				case <-captureDone:
 				case <-time.After(2 * time.Second):
-					_ = startedTTY.reader.Close()
+					_ = queryReader.Close()
 					<-captureDone
 				}
 				if startedTTY.cleanup != nil {

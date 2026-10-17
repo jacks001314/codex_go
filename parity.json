@@ -1255,6 +1255,14 @@
             "reason": "Aligned upstream 4210c08def (#41562 Preserve turn lineage across goal continuations): the router keeps a per-thread goal lineage whose root comes from the creating turn and whose parent advances on each goal-accounted turn completion. Automatic continuations start with that RootTurnID/ParentTurnID. External objective edits, goal clears, and thread/injectItems reaching an active turn invalidate the lineage so stale attribution cannot survive; Go drains async hook results per thread for the receiving turn, so no extra source-turn guard is needed.",
             "userImpact": "Automatic goal continuations remain attributable to the turn that created the goal, while external edits or injected context correctly start a fresh lineage.",
             "test": "go test ./appserver -run 'TestGoalTurnLineageAnchorsAndInvalidatesLikeRust|TestGoalContinuationCarriesTurnLineageLikeRust|TestExternalInjectInvalidatesGoalTurnLineageLikeRust|Goal' -count=1"
+        },
+        {
+            "id": "tty-terminal-query-responses",
+            "status": "done",
+            "area": "execserver",
+            "reason": "Aligned upstream 0ae94fdd49 (#41436 Respond to terminal queries from TTY subprocesses): PTY output is wrapped by a chunk-aware state machine that answers device-status, window-size, cursor-position and well-formed DEC private-mode queries, writes bounded responses to the process input, and removes handled queries from client output while preserving unrelated and incomplete escape sequences (incomplete bytes flush at EOF). Wired into the shared Unix/Windows PTY spawn path.",
+            "userImpact": "TTY programs that wait for terminal replies no longer block; the client sees clean output without the internal queries.",
+            "test": "go test ./execserver -run 'TestTerminalQuer|TestTTYRespondsToCursorPositionQueryLikeRust' -count=1"
         }
     ]
 }
