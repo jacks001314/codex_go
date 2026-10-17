@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -60,6 +61,10 @@ type modelGuardianReviewer struct {
 	notify            func(threadID string, event *state.Event)
 	interrupt         func(threadID, turnID, reason string)
 	transcript        func(threadID string) []string
+	// transcriptEntries carries host-attributed entries, including native
+	// encrypted agent messages that cannot be rendered as text (#49038).
+	transcriptEntries func(threadID string) []state.GuardianTranscriptEntry
+	transcriptFormat  func(threadID string) state.GuardianTranscriptFormat
 	// reviewModel resolves the catalog-backed reviewer selection for the
 	// reviewed turn: the model, its request-level reasoning effort, and the
 	// reviewer's policy instructions (Rust's resolve_review_model /
@@ -589,7 +594,15 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 reviewAttempt:
 	attempts++
 	var transcript []string
-	if r.transcript != nil {
+	var transcriptEntries []state.GuardianTranscriptEntry
+	transcriptFormat := state.GuardianTranscriptFormatLine
+	if r.transcriptFormat != nil {
+		transcriptFormat = r.transcriptFormat(threadID)
+	}
+	if r.transcriptEntries != nil {
+		transcriptEntries = r.transcriptEntries(threadID)
+		transcript = state.RenderGuardianTranscript(transcriptEntries, transcriptFormat)
+	} else if r.transcript != nil {
 		transcript = r.transcript(threadID)
 	}
 	nodeReplAutoReviewRequired := false
@@ -632,23 +645,30 @@ reviewAttempt:
 	// the retained snapshot in Rust's synchronous layout (#51627): one retained
 	// section ahead of the transcript, with the assistant context inside it. The
 	// asynchronous independent snapshot's split belongs to ActionPresentationAsync.
-	prompt, err := state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
+	buildOptions := state.BuildPromptOptions{
 		Presentation:      state.ActionPresentationSyncFull,
+		TranscriptFormat:  transcriptFormat,
 		NodeReplEvidence:  promptNodeReplEvidence,
 		PermissionContext: permissionContext,
 		RetainedContext:   retainedContext,
-	})
+	}
+	var prompt string
+	var promptParts []state.GuardianPromptPart
+	if transcriptEntries != nil {
+		promptParts, err = state.BuildPromptPartsWithOptions(action, transcriptEntries, buildOptions)
+	} else {
+		prompt, err = state.BuildPromptWithOptions(action, transcript, buildOptions)
+	}
 	var rootAuthorization []string
 	if err == nil && r.rootUserAuthorization != nil {
 		rootAuthorization = r.rootUserAuthorization(threadID, turnID)
 		if len(rootAuthorization) > 0 {
-			prompt, err = state.BuildPromptWithOptions(action, transcript, state.BuildPromptOptions{
-				Presentation:          state.ActionPresentationSyncFull,
-				NodeReplEvidence:      promptNodeReplEvidence,
-				RootUserAuthorization: rootAuthorization,
-				PermissionContext:     permissionContext,
-				RetainedContext:       retainedContext,
-			})
+			buildOptions.RootUserAuthorization = rootAuthorization
+			if transcriptEntries != nil {
+				promptParts, err = state.BuildPromptPartsWithOptions(action, transcriptEntries, buildOptions)
+			} else {
+				prompt, err = state.BuildPromptWithOptions(action, transcript, buildOptions)
+			}
 		}
 	}
 	if err != nil {
@@ -661,9 +681,14 @@ reviewAttempt:
 		r.emitWarning(threadID, rationale)
 		return state.DecisionDenied, message, nil
 	}
-	var inputItems []any
+	var promptInputItems []any
+	if promptParts != nil {
+		prompt, promptInputItems = guardianPromptDelivery(promptParts)
+	}
+	inputItems := append([]any(nil), promptInputItems...)
 	if r.environment != nil {
-		inputItems, err = r.environment(reviewCtx, threadID, turnID)
+		environmentItems, environmentErr := r.environment(reviewCtx, threadID, turnID)
+		err = environmentErr
 		if err != nil {
 			rationale := guardianReviewFailureRationale(err.Error())
 			message := guardianReviewFailureMessage(err.Error())
@@ -677,6 +702,7 @@ reviewAttempt:
 			r.emitWarning(threadID, rationale)
 			return state.DecisionDenied, message, nil
 		}
+		inputItems = append(inputItems, environmentItems...)
 	}
 	var (
 		admittedLedger      *codexctx.GuardianAdmittedImages
@@ -749,7 +775,7 @@ reviewAttempt:
 		// guardian session.
 		runner.markPriorReview()
 	}
-	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, rootAuthorization) {
+	if err == nil && r.guardianReviewContextChanged(threadID, turnID, transcript, transcriptEntries, rootAuthorization) {
 		// Rust #53797 widens the invalidation predicate to local or root
 		// review context. Rust #53987 treats it as stale authorization, a local
 		// evidence refresh rather than a failed service request: yield, check
@@ -1028,12 +1054,62 @@ func guardianAssessmentOutputSchema() any {
 func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 	format := state.GuardianTranscriptFormatLine
 	if r != nil {
-		if cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}); err == nil && cfg != nil {
-			format = state.ParseGuardianTranscriptFormat(cfg.GuardianV2TranscriptFormat())
-		}
+		format = r.guardianTranscriptFormatForThread(threadID)
 	}
 	return state.RenderGuardianTranscript(r.guardianReviewTranscriptEntries(threadID), format)
 }
+
+// guardianTranscriptFormatForThread resolves the configured transcript
+// rendering for a thread (#51465).
+func (r *RuntimeRouter) guardianTranscriptFormatForThread(threadID string) state.GuardianTranscriptFormat {
+	if r == nil {
+		return state.GuardianTranscriptFormatLine
+	}
+	if cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}); err == nil && cfg != nil {
+		return state.ParseGuardianTranscriptFormat(cfg.GuardianV2TranscriptFormat())
+	}
+	return state.GuardianTranscriptFormatLine
+}
+
+// guardianPromptDelivery splits ordered prompt parts into the request prompt
+// and the input items that follow it. Native encrypted agent messages stay
+// native response items so their ciphertext reaches the reviewer unchanged
+// (#49038).
+func guardianPromptDelivery(parts []state.GuardianPromptPart) (string, []any) {
+	prompt := ""
+	start := 0
+	if len(parts) > 0 && len(parts[0].Native) == 0 {
+		prompt = parts[0].Text
+		start = 1
+	}
+	items := make([]any, 0, len(parts)-start)
+	for _, part := range parts[start:] {
+		if len(part.Native) > 0 {
+			items = append(items, json.RawMessage(part.Native))
+			continue
+		}
+		if strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		items = append(items, map[string]any{
+			"type": "message",
+			"role": "user",
+			"content": []any{
+				map[string]any{"type": "input_text", "text": part.Text},
+			},
+		})
+	}
+	return prompt, items
+}
+
+const (
+	// guardianNativeAgentMessageMaxBytes mirrors Rust's sync transcript
+	// native-message budget (#49038): the serialized item must fit
+	// TruncationPolicy::Tokens(message_tokens=5_000).byte_budget(), otherwise
+	// the whole message becomes an omission notice at the same position.
+	guardianNativeAgentMessageMaxBytes = 5_000 * 4
+	guardianTranscriptOmissionNotice   = "Some conversation entries were omitted."
+)
 
 // guardianReviewTranscriptEntries collects the bounded transcript with the
 // host-assigned attribution both formats share: author, label and position come
@@ -1052,6 +1128,21 @@ func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state
 		// excluded from the transcript while the surrounding user messages
 		// survive, including a message whose text matches the summary.
 		if guardianTranscriptExcludedItem(&item) {
+			continue
+		}
+		// Rust #49038: encrypted agent messages carry evidence such as a
+		// parent reply. They cannot be truncated, so the complete native item
+		// is delivered in order, or replaced whole by an omission notice.
+		if native, ok := guardianNativeAgentMessage(&item); ok {
+			if len(native) > guardianNativeAgentMessageMaxBytes {
+				entries = append(entries, state.GuardianTranscriptEntry{
+					Author:   "assistant",
+					LineRole: "assistant",
+					Text:     guardianTranscriptOmissionNotice,
+				})
+			} else {
+				entries = append(entries, state.GuardianTranscriptEntry{Author: "assistant", Native: native})
+			}
 			continue
 		}
 		// Rust #39791: standalone function_call_output items (no call id) are
@@ -1693,11 +1784,15 @@ func waitGuardianReviewRetry(ctx context.Context, delay time.Duration) error {
 // guardianReviewContextChanged mirrors Rust #53797's widened invalidation
 // predicate: local or root review evidence that changed while the reviewer was
 // running makes the assessment stale and triggers a fresh attempt.
-func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript, rootAuthorization []string) bool {
+func (r *modelGuardianReviewer) guardianReviewContextChanged(threadID, turnID string, transcript []string, entries []state.GuardianTranscriptEntry, rootAuthorization []string) bool {
 	if r == nil {
 		return false
 	}
-	if r.transcript != nil && !slices.Equal(transcript, r.transcript(threadID)) {
+	if r.transcriptEntries != nil {
+		if !reflect.DeepEqual(entries, r.transcriptEntries(threadID)) {
+			return true
+		}
+	} else if r.transcript != nil && !slices.Equal(transcript, r.transcript(threadID)) {
 		return true
 	}
 	if r.rootUserAuthorization != nil && !slices.Equal(rootAuthorization, r.rootUserAuthorization(threadID, turnID)) {

@@ -48,10 +48,18 @@ type GuardianTranscriptEntry struct {
 	// RetainedSourceOrder mirrors Rust's optional retained section label.
 	RetainedSourceOrder string
 	Text                string
+	// Native carries a complete encrypted agent-message item. Rust delivers
+	// these as native response items (ciphertext cannot be truncated or
+	// rendered as text), so they are excluded from the text rendering and
+	// emitted in order by BuildPromptPartsWithOptions (#49038).
+	Native json.RawMessage
 }
 
 // Render returns the entry in the configured format.
 func (e GuardianTranscriptEntry) Render(format GuardianTranscriptFormat) string {
+	if len(e.Native) > 0 {
+		return ""
+	}
 	if format == GuardianTranscriptFormatJSON {
 		record := struct {
 			Author              string `json:"author"`
@@ -111,7 +119,9 @@ func RenderGuardianTranscript(entries []GuardianTranscriptEntry, format Guardian
 	}
 	rendered := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		rendered = append(rendered, entry.Render(format))
+		if text := entry.Render(format); text != "" {
+			rendered = append(rendered, text)
+		}
 	}
 	return rendered
 }

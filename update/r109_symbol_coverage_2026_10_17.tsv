@@ -543,7 +543,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 36430b36881cf5c289cb48e671cfc9e8b542ae7b	46509	Flush completed Guardian reviews before delivering decisions (#46509)	2026-09-18	guardian	1	0	0.00	0	0	not_applicable	is_private_guardian_reviewer
 364b511dcd60bcde3849bde4e579a5c7cad1e96a	45554	Use shared Bazel cache preparation in SDK CI (#45554)	2026-09-15	core	0	0		0	0	not_applicable	
 36803b180a50e611331b75ff2b4c475c02846b53	54385	Allow saving current permission settings as presets (#54385)	2026-10-15	tui	5	4	0.80	0	0	complete	open_quick_dial_prefills
-368e5eae2f006a70a91dddfdc96e6b2d11498f81	49038	Preserve encrypted agent messages in Guardian reviews (#49038)	2026-09-28	guardian	2	0	0.00	0	0	implementation_pending	TRANSCRIPT_OMISSION_NOTICE,TranscriptContent
+368e5eae2f006a70a91dddfdc96e6b2d11498f81	49038	Preserve encrypted agent messages in Guardian reviews (#49038)	2026-09-28	guardian	2	2	1.00	0	0	complete	
 36984da4424cb91b6bc88c6af8d73207930ac729	42445	Include originator in plugin measurement analytics (#42445)	2026-09-03	appserver	0	0		0	0	not_applicable	
 36ae1561b9324c93d5638b45eb19fe2cc070a581	52568	Expose message board permissions and structured denials (#52568)	2026-10-09	sandbox	6	1	0.17	0	0	audit_pending	BoardPermissions,ChannelPage,ChannelPermissions,PermissionDeniedDetails,model_response
 36b84c81ec0184db024cef38f1d6b55ecf276ef0	46070	Suppress warnings when skill descriptions are shortened (#46070)	2026-09-17	appserver	0	0		0	0	not_applicable	

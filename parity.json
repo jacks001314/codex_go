@@ -1215,6 +1215,14 @@
             "reason": "Aligned upstream 61969074a7 (#51465 Add an optional JSON transcript format for Guardian): [features.guardianv2].transcript_mode selects line (the default) or json. JSON records carry host-assigned author/index/label (and retained_source_order when present) while the entry text is escaped as a JSON string, keep serde_json's literal `<`, `>` and `&`, and cannot be spoofed by forged role headers or transcript boundaries inside the text. JSON mode prepends TRANSCRIPT_JSON_INSTRUCTIONS ahead of the reviewer policy instructions.",
             "userImpact": "Guardian reviewers can receive structured transcripts whose authorship metadata cannot be forged by message content; line mode remains the default.",
             "test": "go test ./state -run 'GuardianTranscript|ApplyGuardianTranscript' -count=1; go test ./config -run GuardianV2TranscriptFormat -count=1; go test ./appserver -run 'TestGuardianTranscriptJSONModeLikeRust|TestGuardianTranscriptDefaultLineModeLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "guardian-encrypted-agent-message-evidence",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 368e5eae2f (#49038 Preserve encrypted agent messages in Guardian reviews): stored agent_message items with a non-empty encrypted_content part are recovered whole and delivered to the reviewer as native input items in transcript order, preserving author, recipient and ciphertext; BuildPromptPartsWithOptions splits the transcript text around them so later evidence still follows the native message. Serialized messages above Rust's sync 20,000-byte native-message budget become the explicit host notice `Some conversation entries were omitted.` at their own position, and context-change detection compares entries including native bytes.",
+            "userImpact": "Guardian reviews can use encrypted parent replies as evidence without flattening or truncating ciphertext, while oversized messages are omitted explicitly instead of partially reviewed.",
+            "test": "go test ./state -run 'BuildPromptParts|GuardianTranscript' -count=1; go test ./appserver -run 'TestGuardianNativeAgentMessagePreservesCiphertextLikeRust|TestGuardianTranscriptCarriesEncryptedAgentMessagesLikeRust|TestGuardianReviewDeliversEncryptedAgentMessageLikeRust|Guardian' -count=1"
         }
     ]
 }

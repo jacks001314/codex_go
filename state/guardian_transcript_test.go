@@ -91,3 +91,33 @@ func TestApplyGuardianTranscriptInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("json instructions = %q, want the provenance grammar before the policy", jsonInstructions)
 	}
 }
+
+// Rust #49038: native encrypted agent messages are delivered between the text
+// runs in transcript order instead of being flattened into text.
+func TestBuildPromptPartsPreserveNativeAgentMessageOrderLikeRust(t *testing.T) {
+	native := json.RawMessage(`{"type":"agent_message","author":"/root","recipient":"/root/worker","content":[{"type":"input_text","text":"Reply:"},{"type":"encrypted_content","encrypted_content":"ciphertext-value"}]}`)
+	entries := []GuardianTranscriptEntry{
+		{Author: "user", LineRole: "user", Text: "Please check."},
+		{Author: "assistant", Native: native},
+		{Author: "user", LineRole: "user", Text: "Continue."},
+	}
+	parts, err := BuildPromptPartsWithOptions(Action{Type: "command", Command: "ls", CWD: "/repo"}, entries, BuildPromptOptions{})
+	if err != nil {
+		t.Fatalf("BuildPromptPartsWithOptions() error = %v", err)
+	}
+	if len(parts) != 3 {
+		t.Fatalf("parts = %#v, want text, native, text", parts)
+	}
+	if !strings.Contains(parts[0].Text, "Recent transcript:") || !strings.Contains(parts[0].Text, "Please check.") {
+		t.Fatalf("first text part = %q, want the transcript start and first entry", parts[0].Text)
+	}
+	if string(parts[1].Native) != string(native) {
+		t.Fatalf("native part = %s, want the complete agent message", parts[1].Native)
+	}
+	if strings.Contains(parts[0].Text, "ciphertext-value") || strings.Contains(parts[2].Text, "ciphertext-value") {
+		t.Fatal("ciphertext was rendered into a text part")
+	}
+	if !strings.Contains(parts[2].Text, "Continue.") || !strings.Contains(parts[2].Text, "Planned action JSON:") {
+		t.Fatalf("trailing text part = %q, want the remaining transcript and the planned action", parts[2].Text)
+	}
+}
