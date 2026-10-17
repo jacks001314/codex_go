@@ -1443,7 +1443,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 88f87d907a91aea5e9ea38a3e9a653bfedd71f9b	42767	Avoid port races in streamable HTTP tests (#42767)	2026-09-04	mcp	0	0		0	0	not_applicable	
 89208f09f819c0ff00c2608a33422a5f6b885c76	43043	Avoid filesystem scans when seeding the agents overview (#43043)	2026-09-05	tui	0	0		0	0	not_applicable	
 8933a816eb5a8cedd31716b2e778afcd4e4c33a3	46514	Replay guardian checkpoints into a fresh session in tests (#46514)	2026-09-18	guardian	0	0		0	0	not_applicable	
-8935ff19dbf30afd4c45579b39b2f7119059b0aa	41191	Stabilize Guardian WebSocket tests (#41191)	2026-08-27	guardian	1	0	0.00	0	0	implementation_pending	INITIAL_WEBSOCKET_CONNECTIONS
+8935ff19dbf30afd4c45579b39b2f7119059b0aa	41191	Stabilize Guardian WebSocket tests (#41191)	2026-08-27	guardian	1	0	0.00	0	0	not_applicable	INITIAL_WEBSOCKET_CONNECTIONS
 8953de1f1ac7420bfb19750786b4da60c2b779c2	49781	Include the environment's MXC backend in MCP sandbox metadata (#49781)	2026-09-30	mcp	0	0		0	0	not_applicable	
 89650c66f2f3ff0d028d3f5d6d0b187b2ed49be5	41094	Require synchronous review for sensitive MCP actions (#41094)	2026-08-27	guardian	1	0	0.00	0	0	implementation_pending	SENSITIVE_ACTION_KEY
 8971fc25a96c5368f6e7bd8e66799a2dec476f9a	42161	Split tool JSON Schema code into focused modules (#42161)	2026-09-02	core	19	14	0.74	0	0	audit_pending	JsonSchemaPrimitiveType,JsonSchemaType,for_each_schema_child_mut,string_enum,with_encrypted
