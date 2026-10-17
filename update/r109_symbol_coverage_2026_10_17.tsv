@@ -2158,7 +2158,7 @@ ca99b271d43036f6772ae57f21434c4e30ad2094	45830	Use app-server configuration for 
 cab328f2754e6ec53f6a61b1c58b51f15d7a4538	53393	Distinguish Guardian parent-compaction failure reasons (#53393)	2026-10-12	guardian	0	0		0	0	not_applicable	
 cac96cd7b1756ab42e8925d938817a2ac10ebb6e	42425	Discover TUI experimental features from the server (#42425)	2026-09-03	tui	1	1	1.00	0	0	complete	
 cacdc4661934c77142738722ffde215e0db3f46e	51063	Honor prior cancellation before starting Codex delegates (#51063)	2026-10-05	core	0	0		0	0	not_applicable	
-cb03f28a4034b6ee901885808d27182ac586830a	53872	Refresh model instructions in incremental-tool context windows (#53872)	2026-10-14	persistence	4	1	0.25	0	0	audit_pending	ModelInstructionsSnapshot,for_incremental_tools,text_from_item
+cb03f28a4034b6ee901885808d27182ac586830a	53872	Refresh model instructions in incremental-tool context windows (#53872)	2026-10-14	persistence	4	4	1.00	0	0	complete
 cb1eea3e98ebc433ab5f9c12ce043e979d1902df	47572	Explain Mermaid rendering fallbacks in the TUI (#47572)	2026-09-23	tui	1	1	1.00	0	0	complete	
 cb6da58876afed3ede0ab11084f67dd5394ecb48	50140	Use the server permission catalog for TUI permission shortcuts (#50140)	2026-10-02	tui	0	0		0	0	not_applicable	
 cb6f6141f86f1db4f45b4932bdc81007719575cc	52674	Move the exec-server test fixture into shared test support (#52674)	2026-10-09	sandbox	0	0		0	0	not_applicable	

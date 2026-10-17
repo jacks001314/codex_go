@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	contextfrag "codex_go/context"
 	"codex_go/eventmap"
 	"codex_go/metrics"
 )
@@ -93,6 +94,9 @@ type TopLevelToolsSnapshot struct {
 type BaseInstructionsSnapshot struct {
 	Window *uint64 `json:"window,omitempty"`
 	Hash   string  `json:"hash,omitempty"`
+	// Model records the independently tracked model identity for incremental
+	// tool windows (#53872). Older snapshots omit it and remain hash-only.
+	Model string `json:"model,omitempty"`
 }
 
 // DecodeTopLevelToolsSnapshot decodes a persisted catalog snapshot. ok is false
@@ -153,6 +157,16 @@ func BaseInstructionsSnapshotForWindow(raw json.RawMessage, window uint64) (stri
 	return snapshot.Hash, true
 }
 
+// ModelInstructionsSnapshotForWindow returns the recorded model identity and
+// base-instruction hash for a specific incremental-tool context window.
+func ModelInstructionsSnapshotForWindow(raw json.RawMessage, window uint64) (modelID string, hash string, ok bool) {
+	snapshot, ok := DecodeBaseInstructionsSnapshot(raw)
+	if !ok || snapshot.Window == nil || *snapshot.Window != window {
+		return "", "", false
+	}
+	return snapshot.Model, snapshot.Hash, true
+}
+
 // EncodeTopLevelToolsSnapshot serializes a catalog snapshot for the record.
 func EncodeTopLevelToolsSnapshot(window uint64, hashes map[string]string) (json.RawMessage, error) {
 	if hashes == nil {
@@ -164,6 +178,16 @@ func EncodeTopLevelToolsSnapshot(window uint64, hashes map[string]string) (json.
 // EncodeBaseInstructionsSnapshot serializes a base-instruction snapshot.
 func EncodeBaseInstructionsSnapshot(window uint64, hash string) (json.RawMessage, error) {
 	return json.Marshal(BaseInstructionsSnapshot{Window: &window, Hash: hash})
+}
+
+// EncodeModelInstructionsSnapshot serializes a model identity and
+// base-instruction hash for an incremental-tool window.
+func EncodeModelInstructionsSnapshot(window uint64, modelID string, hash string) (json.RawMessage, error) {
+	return json.Marshal(BaseInstructionsSnapshot{
+		Window: &window,
+		Hash:   hash,
+		Model:  strings.TrimSpace(modelID),
+	})
 }
 
 // TopLevelToolsHashes computes the stable per-declaration hashes of a serialized
@@ -435,6 +459,52 @@ func BaseInstructionsUpdate(text string, previousKnown bool) (string, []WorldSta
 		Role:      "developer",
 		Text:      text,
 		Kind:      BaseInstructionsContentKind,
+	}}
+}
+
+// ModelInstructionsUpdate returns the update for an incremental-tool window's
+// independently tracked model identity and base instructions (#53872). A new
+// window records the base instructions as a prefix; an existing window appends
+// a model-instructions notice only when the model or instruction hash changed.
+func ModelInstructionsUpdate(modelID string, text string, previousModel string, previousHash string, previousKnown bool) (string, []WorldStateUpdate) {
+	hash := BaseInstructionsHash(text)
+	if !previousKnown {
+		if strings.TrimSpace(text) == "" {
+			return hash, nil
+		}
+		return hash, []WorldStateUpdate{{
+			Placement: WorldStatePrefix,
+			Role:      "developer",
+			Text:      text,
+			Kind:      BaseInstructionsContentKind,
+		}}
+	}
+	modelID = strings.TrimSpace(modelID)
+	previousModel = strings.TrimSpace(previousModel)
+	modelChanged := previousModel != "" && modelID != "" && previousModel != modelID
+	instructionsChanged := hash != previousHash
+	if !modelChanged && !instructionsChanged {
+		return hash, nil
+	}
+	fragment := contextfrag.ModelInstructionsFragment{Model: modelID}
+	if modelChanged {
+		fragment.Model = modelID
+	} else {
+		fragment.Model = ""
+	}
+	if instructionsChanged {
+		instructions := text
+		fragment.Instructions = &instructions
+	}
+	rendered := contextfrag.Render(fragment)
+	if rendered == nil {
+		return hash, nil
+	}
+	return hash, []WorldStateUpdate{{
+		Placement: WorldStateStandalone,
+		Role:      rendered.Role,
+		Text:      rendered.Content,
+		Kind:      rendered.ContentKind,
 	}}
 }
 

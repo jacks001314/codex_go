@@ -83,12 +83,19 @@ func responsesLiteToolDeclarations(turnRuntime *turn.Runtime, toolMode string, d
 // (Rust legacy resume), or an existing window whose catalog was never
 // snapshotted. The caller then keeps the pre-existing declaration behavior.
 func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyItems []any, definitions []any, instructions string, turnID string, createdAt time.Time) (incrementalToolCatalogResult, error) {
+	return r.incrementalToolCatalogForTurnWithModel(threadID, historyItems, definitions, instructions, "", turnID, createdAt)
+}
+
+func (r *RuntimeRouter) incrementalToolCatalogForTurnWithModel(threadID string, historyItems []any, definitions []any, instructions string, modelID string, turnID string, createdAt time.Time) (incrementalToolCatalogResult, error) {
 	if r == nil || r.services.ThreadRouter == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
 		return incrementalToolCatalogResult{}, nil
 	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
 		return incrementalToolCatalogResult{}, err
+	}
+	if strings.TrimSpace(modelID) == "" {
+		modelID = strings.TrimSpace(record.Metadata.Model)
 	}
 	windowNumber := r.windowNumberForThread(threadID)
 	extra := cloneAnyMap(record.Metadata.Extra)
@@ -110,7 +117,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 		// keeps that shape: only a window boundary starts a recorded catalog.
 		return incrementalToolCatalogResult{}, nil
 	}
-	previousBaseHash, baseKnown := session.BaseInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber)
+	previousModel, previousBaseHash, baseKnown := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, windowNumber)
 
 	hashes, toolUpdates, err := session.TopLevelToolsUpdates(definitions, previousHashes, previousKnown)
 	if err != nil {
@@ -121,7 +128,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 	// (`record_changed_tool_metrics` sits in the same file as `render_diff`),
 	// so this is its single call site.
 	session.RecordChangedToolMetrics(definitions, previousHashes, previousKnown, hashes)
-	baseHash, baseUpdates := session.BaseInstructionsUpdate(instructions, baseKnown)
+	baseHash, baseUpdates := session.ModelInstructionsUpdate(modelID, instructions, previousModel, previousBaseHash, baseKnown)
 	items := session.MergeWorldStateUpdates(append(toolUpdates, baseUpdates...))
 	for i := range items {
 		if identified, ok := incrementalToolCatalogRequestItem(items[i], threadID); ok {
@@ -146,7 +153,7 @@ func (r *RuntimeRouter) incrementalToolCatalogForTurn(threadID string, historyIt
 		updated = true
 	}
 	if changed || !baseKnown || baseHash != previousBaseHash {
-		snapshot, encodeErr := session.EncodeBaseInstructionsSnapshot(windowNumber, baseHash)
+		snapshot, encodeErr := session.EncodeModelInstructionsSnapshot(windowNumber, modelID, baseHash)
 		if encodeErr != nil {
 			return incrementalToolCatalogResult{}, encodeErr
 		}

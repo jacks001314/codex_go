@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	contextfrag "codex_go/context"
 	"codex_go/model"
 	"codex_go/session"
 )
@@ -112,6 +113,87 @@ func TestIncrementalToolCatalogRecordsWindowStartLikeRust(t *testing.T) {
 	}
 	if !second.Active || second.Prefix || len(second.Items) != 0 || len(second.SessionItems) != 0 {
 		t.Fatalf("unchanged turn result = %#v, want no updates", second)
+	}
+}
+
+// Rust #53872: a same-model catalog refresh appends replacement instructions
+// once, model-only changes remain distinct, and empty instructions explicitly
+// remove the previous base without rewriting the window prefix.
+func TestIncrementalToolCatalogRefreshesModelInstructionsLikeRust(t *testing.T) {
+	router, _ := newResponsesLiteDeclarationRouter(t, "thread-incremental-instructions")
+	created := time.Now().UTC()
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	const (
+		initial   = "Help the user complete their task."
+		refreshed = "Check your work before responding."
+	)
+	if _, err := router.incrementalToolCatalogForTurnWithModel(
+		"thread-incremental-instructions", nil, definitions, initial, "gpt-test", "turn-1", created,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	history := incrementalHistoryItems(t, router, "thread-incremental-instructions")
+	changed, err := router.incrementalToolCatalogForTurnWithModel(
+		"thread-incremental-instructions", history, definitions, refreshed, "gpt-test", "turn-2", created.Add(time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed.Active || changed.Prefix || len(changed.Items) != 1 {
+		t.Fatalf("instruction refresh = %#v", changed)
+	}
+	item, _ := changed.Items[0].(map[string]any)
+	text := textFromInputItemContent(item["content"])
+	if !strings.Contains(text, "The following instructions replace the previous base instructions:") || !strings.Contains(text, refreshed) {
+		t.Fatalf("instruction refresh item = %#v", item)
+	}
+	metadata, _ := item["internal_chat_message_metadata_passthrough"].(map[string]any)
+	kinds, _ := metadata["content_item_kinds"].([]string)
+	if len(kinds) != 1 || kinds[0] != contextfrag.ModelInstructionsContentKind {
+		t.Fatalf("instruction refresh content kind = %#v", item)
+	}
+
+	history = incrementalHistoryItems(t, router, "thread-incremental-instructions")
+	unchanged, err := router.incrementalToolCatalogForTurnWithModel(
+		"thread-incremental-instructions", history, definitions, refreshed, "gpt-test", "turn-3", created.Add(2*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unchanged.Items) != 0 {
+		t.Fatalf("unchanged instructions = %#v", unchanged.Items)
+	}
+
+	history = incrementalHistoryItems(t, router, "thread-incremental-instructions")
+	switched, err := router.incrementalToolCatalogForTurnWithModel(
+		"thread-incremental-instructions", history, definitions, refreshed, "gpt-next", "turn-4", created.Add(3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(switched.Items) != 1 {
+		t.Fatalf("model switch = %#v", switched.Items)
+	}
+	item, _ = switched.Items[0].(map[string]any)
+	text = textFromInputItemContent(item["content"])
+	if !strings.Contains(text, "The current model is gpt-next.") || strings.Contains(text, "replace the previous base instructions") {
+		t.Fatalf("model-only instruction item = %#v", item)
+	}
+
+	history = incrementalHistoryItems(t, router, "thread-incremental-instructions")
+	removed, err := router.incrementalToolCatalogForTurnWithModel(
+		"thread-incremental-instructions", history, definitions, "", "gpt-next", "turn-5", created.Add(4*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed.Items) != 1 {
+		t.Fatalf("instruction removal = %#v", removed.Items)
+	}
+	item, _ = removed.Items[0].(map[string]any)
+	if text := textFromInputItemContent(item["content"]); !strings.Contains(text, "The previous base instructions no longer apply. No replacement base instructions are active.") {
+		t.Fatalf("instruction removal item = %#v", item)
 	}
 }
 

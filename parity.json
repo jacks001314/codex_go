@@ -1374,6 +1374,14 @@
             "reason": "Aligned upstream 9561a34531 (#50050 Keep plugin and skill snapshots scoped to each step): each sampling step owns an immutable capability snapshot containing ready selected roots, disabled plugin IDs, plugin capabilities, and plugin skill roots. Model-visible plugin/skill instructions and executor skill tools use the same snapshot. Environment updates refresh the snapshot only at the next step boundary, and skills.list returns the current provider refresh while retaining per-root thread caches.",
             "userImpact": "Concurrent refreshes and mid-turn environment changes can no longer make a step's model context disagree with the skills its tools expose.",
             "test": "go test ./appserver -run 'TestStepCapabilitySnapshotKeepsSkillsScopedToEachStepLikeRust|TestRuntimeRouterTurnStartUsesRemoteEnvironmentSkillRoot' -count=1; go test ./turn -run TestExecutorSkillsListReturnsCurrentStepCatalogLikeRust -count=1"
+        },
+        {
+            "id": "incremental-model-instruction-refresh",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream cb03f28a40 (#53872 Refresh model instructions in incremental-tool context windows): incremental windows persist model identity and base-instruction hash independently. A same-model catalog refresh appends one replacement model_instructions message, model-only changes remain distinct, empty instructions explicitly remove the prior base, and unchanged updates are silent. Compaction replacement windows install the latest base instructions and model identity while preserving known-empty snapshots and legacy hash-only compatibility.",
+            "userImpact": "Model instruction changes reach incremental-tool sessions without rewriting the existing history prefix or carrying stale instructions across compaction.",
+            "test": "go test ./session -run TestModelInstructionsUpdateLikeRust -count=1; go test ./appserver -run 'TestIncrementalToolCatalogRefreshesModelInstructionsLikeRust|TestCompactionInstallsLatestIncrementalInstructionsLikeRust' -count=1"
         }
     ]
 }

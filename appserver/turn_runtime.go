@@ -140,6 +140,8 @@ func (r *RuntimeRouter) postTurnCompact(ctx context.Context, threadID string, tu
 		Phase:                     compact.PhasePostTurn,
 		ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 		CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+		BaseInstructions:          appStringPointer(runConfig.Instructions),
+		WindowModel:               runConfig.Model,
 		// Rust #49097: Rust runs the post-turn compaction with
 		// `fallback_step_context = None` (core/src/session/turn.rs), and
 		// compact_remote_v2 returns the attempt error when no fallback step
@@ -1613,6 +1615,8 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
 			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 			CyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			BaseInstructions:   appStringPointer(runConfig.Instructions),
+			WindowModel:        runConfig.Model,
 		})
 		if compactErr != nil {
 			r.clearActiveRuntimeTurn(threadID, turnID)
@@ -2173,6 +2177,8 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			ActiveContextTokensBefore: int64(status.ActiveContextTokens),
 			History:                   history,
 			CyberAccessProgram:        appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
+			BaseInstructions:          appStringPointer(runConfig.Instructions),
+			WindowModel:               runConfig.Model,
 		}, nil)
 		if err != nil {
 			return nil, err
@@ -6037,6 +6043,10 @@ type runtimeCompactRequest struct {
 	// compaction, which must include the items accumulated by the current
 	// turn before they are persisted.
 	History []compact.Item
+	// BaseInstructions and WindowModel carry the active step's latest model
+	// context into the replacement incremental-tools window (#53872).
+	BaseInstructions *string
+	WindowModel      string
 }
 
 func (r *RuntimeRouter) compactThread(ctx context.Context, params *runtimeCompactRequest) (*ContextCompactedNotification, error) {
@@ -6230,7 +6240,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// the tool catalog before the compaction summary. The same call records the
 	// new window's catalog baseline, so the window's first turn replays the
 	// recorded declarations instead of re-declaring them.
-	if placeErr := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, r.windowNumberForThread(request.ThreadID)); placeErr != nil {
+	if placeErr := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, r.windowNumberForThread(request.ThreadID), params.WindowModel, params.BaseInstructions); placeErr != nil {
 		return nil, nil, placeErr
 	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
@@ -7695,11 +7705,12 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	declarationItems := []any{}
 	incrementalActive := false
 	if incrementalToolsEnabledForTurn(cfg, modelInfo) {
-		incremental, incrementalErr := r.incrementalToolCatalogForTurn(
+		incremental, incrementalErr := r.incrementalToolCatalogForTurnWithModel(
 			threadID,
 			historyItems,
 			responsesLiteToolDeclarations(turnRuntime, toolMode, cfg.DisableCodeModeInProcessFallback(), hostedTools),
 			instructions,
+			modelProviderConfig.Model,
 			turnID,
 			time.UnixMilli(startedAtMS).UTC(),
 		)

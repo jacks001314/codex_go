@@ -124,13 +124,20 @@ func incrementalDeclarationItemObject(item *session.Item) map[string]any {
 // prefix, so the first turn of the new window diffs against declarations that
 // are already in history instead of re-deriving and duplicating them, while a
 // later declaration change still travels as an incremental update.
-func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefix []session.Item, windowNumber uint64) error {
+func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefix []session.Item, windowNumber uint64, modelID string, instructions *string) error {
 	if record == nil || len(prefix) == 0 {
 		return nil
 	}
-	definitions, instructions, ok := incrementalDeclarationPrefixParts(prefix)
+	definitions, recordedInstructions, ok := incrementalDeclarationPrefixParts(prefix)
 	if !ok {
 		return nil
+	}
+	if instructions != nil {
+		recordedInstructions = *instructions
+		prefix = incrementalPrefixWithInstructions(prefix, recordedInstructions)
+	}
+	if strings.TrimSpace(modelID) == "" {
+		modelID = strings.TrimSpace(record.Metadata.Model)
 	}
 	record.Items = append(append([]session.Item(nil), prefix...), record.Items...)
 	state, err := session.DecodeWorldState(record.Metadata.WorldState)
@@ -146,8 +153,8 @@ func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefi
 		return err
 	}
 	state.TopLevelTools = toolsSnapshot
-	if strings.TrimSpace(instructions) != "" {
-		baseSnapshot, err := session.EncodeBaseInstructionsSnapshot(windowNumber, session.BaseInstructionsHash(instructions))
+	if instructions != nil || strings.TrimSpace(recordedInstructions) != "" {
+		baseSnapshot, err := session.EncodeModelInstructionsSnapshot(windowNumber, modelID, session.BaseInstructionsHash(recordedInstructions))
 		if err != nil {
 			return err
 		}
@@ -164,4 +171,42 @@ func placeIncrementalCatalogBeforeCompactedHistory(record *session.Record, prefi
 	delete(extra, model.ToolDeclarationItemsKey)
 	record.Metadata.Extra = extra
 	return nil
+}
+
+func incrementalPrefixWithInstructions(prefix []session.Item, instructions string) []session.Item {
+	out := make([]session.Item, 0, len(prefix))
+	replaced := false
+	for i := range prefix {
+		item := prefix[i]
+		if item.Type != "message" {
+			out = append(out, item)
+			continue
+		}
+		if replaced {
+			out = append(out, item)
+			continue
+		}
+		replaced = true
+		if strings.TrimSpace(instructions) == "" {
+			continue
+		}
+		object := incrementalDeclarationItemObject(&item)
+		if object == nil {
+			object = map[string]any{
+				"type":    "message",
+				"role":    "developer",
+				"content": []any{},
+			}
+		}
+		object["type"] = "message"
+		object["role"] = "developer"
+		object["content"] = []any{map[string]any{"type": "input_text", "text": instructions}}
+		raw, err := json.Marshal(object)
+		if err == nil {
+			item.Raw = raw
+		}
+		item.Text = instructions
+		out = append(out, item)
+	}
+	return out
 }

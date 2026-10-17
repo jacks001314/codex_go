@@ -2932,7 +2932,7 @@ func (r *Router) handleThreadCompactStart(request *Request) (*ThreadCompactStart
 	// intercepts `thread/compact/start` in production; the two must not drift.
 	// `TestRouterThreadCompactStartPlacesToolCatalogBeforeSummaryLikeRust` keeps
 	// this call honest (it is otherwise production-unreachable).
-	if err := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, windowNumber); err != nil {
+	if err := placeIncrementalCatalogBeforeCompactedHistory(record, declarationPrefix, windowNumber, "", nil); err != nil {
 		return nil, err
 	}
 	if err := r.saveThreadRecord(record); err != nil {

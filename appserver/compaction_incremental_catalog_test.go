@@ -140,6 +140,54 @@ func TestCompactionPlacesToolCatalogBeforeSummaryLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #53872: a replacement window installs the latest model instructions
+// instead of carrying the previous window's base, including an explicit empty
+// base and the current model identity.
+func TestCompactionInstallsLatestIncrementalInstructionsLikeRust(t *testing.T) {
+	created := time.Now().UTC()
+	definitions := incrementalCatalogLikeRust("Run a command.", incrementalToolSearchLikeRust())
+	prefix := declarationPrefixSessionItemsLikeRust(t, definitions, "Old instructions.", "thread", created)
+	record := &session.Record{
+		ID: "thread", Metadata: session.Metadata{Model: "gpt-next", Extra: map[string]any{}},
+		Items: []session.Item{{ID: "summary", Type: "message", Role: "user", Text: "summary", CreatedAt: created}},
+	}
+	latest := "Latest instructions."
+	if err := placeIncrementalCatalogBeforeCompactedHistory(record, prefix, 1, "gpt-next", &latest); err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Items) < 3 || record.Items[0].Type != "additional_tools" || record.Items[1].Text != latest {
+		t.Fatalf("replacement items = %#v", record.Items)
+	}
+	state, err := session.DecodeWorldState(record.Metadata.WorldState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelID, hash, ok := session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, 1)
+	if !ok || modelID != "gpt-next" || hash != session.BaseInstructionsHash(latest) {
+		t.Fatalf("model instruction snapshot = %q/%q/%v", modelID, hash, ok)
+	}
+
+	empty := ""
+	emptyRecord := &session.Record{
+		ID: "thread-empty", Metadata: session.Metadata{Model: "gpt-next", Extra: map[string]any{}},
+		Items: []session.Item{{ID: "summary", Type: "message", Role: "user", Text: "summary", CreatedAt: created}},
+	}
+	if err := placeIncrementalCatalogBeforeCompactedHistory(emptyRecord, prefix, 1, "gpt-next", &empty); err != nil {
+		t.Fatal(err)
+	}
+	if len(emptyRecord.Items) < 2 || emptyRecord.Items[0].Type != "additional_tools" || emptyRecord.Items[1].Text != "summary" {
+		t.Fatalf("empty-instruction replacement items = %#v", emptyRecord.Items)
+	}
+	state, err = session.DecodeWorldState(emptyRecord.Metadata.WorldState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelID, hash, ok = session.ModelInstructionsSnapshotForWindow(state.BaseInstructions, 1)
+	if !ok || modelID != "gpt-next" || hash != session.BaseInstructionsHash("") {
+		t.Fatalf("empty model instruction snapshot = %q/%q/%v", modelID, hash, ok)
+	}
+}
+
 func declarationPrefixSessionItemsLikeRust(t *testing.T, tools []any, instructions string, threadID string, createdAt time.Time) []session.Item {
 	t.Helper()
 	items := []any{
