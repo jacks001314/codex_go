@@ -11432,6 +11432,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	}
 	var logsOverride []byte
 	var rolloutPaths []string
+	var feedbackThreadIDs []string
 	if params.IncludeLogs {
 		if r.services.LogDBHandler != nil {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -11440,7 +11441,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 			}
 			cancel()
 		}
-		feedbackThreadIDs := make([]string, 0)
+		feedbackThreadIDs = make([]string, 0)
 		if params.ThreadID != nil && strings.TrimSpace(*params.ThreadID) != "" {
 			descendants := []string(nil)
 			if r.services.SpawnGraph != nil {
@@ -11477,6 +11478,15 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 	var historyAttachments []FeedbackAttachment
 	if params.IncludeLogs {
 		historyAttachments = FeedbackHistoryBaseAttachments(r.codexHomeForRollout(), attachmentPaths)
+		// Rust #41936: log-enabled reports carry recent failed Guardian reviews
+		// for the reported thread and its descendants.
+		guardianThreadIDs := feedbackThreadIDs
+		if len(guardianThreadIDs) == 0 && threadID != "" {
+			guardianThreadIDs = []string{threadID}
+		}
+		if attachment := guardianReviewFailuresAttachment(guardianThreadIDs); attachment != nil {
+			historyAttachments = append(historyAttachments, *attachment)
+		}
 	}
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID

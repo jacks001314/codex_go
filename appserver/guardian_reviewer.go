@@ -65,6 +65,10 @@ type modelGuardianReviewer struct {
 	// encrypted agent messages that cannot be rendered as text (#49038).
 	transcriptEntries func(threadID string) []state.GuardianTranscriptEntry
 	transcriptFormat  func(threadID string) state.GuardianTranscriptFormat
+	// feedbackCaptureEnabled gates the bounded failed-review records exported
+	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
+	// feedback collection retain nothing.
+	feedbackCaptureEnabled func(threadID string) bool
 	// reviewModel resolves the catalog-backed reviewer selection for the
 	// reviewed turn: the model, its request-level reasoning effort, and the
 	// reviewer's policy instructions (Rust's resolve_review_model /
@@ -529,6 +533,13 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// the prompt, and the metrics duration is measured from that point.
 	reviewStartedAt := time.Now().UTC()
 	attribution := r.newGuardianReviewAttribution(threadID, turnID, action)
+	feedbackCapture := &guardianReviewFeedbackCapture{}
+	defer func() {
+		if r.feedbackCaptureEnabled != nil && !r.feedbackCaptureEnabled(threadID) {
+			return
+		}
+		feedbackCapture.record(threadID, turnID, attribution, action)
+	}()
 	contextChanged := false
 	emitReviewMetrics := func() {
 		attribution.ContextChanged = contextChanged
@@ -554,6 +565,8 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	plan := r.planForTurn(threadID, turnID)
+	feedbackCapture.model = plan.Selection.Model
+	feedbackCapture.instructions = plan.Instructions
 	// Rust #53987/#53797: retries share one attempt budget and deadline. A
 	// changed local review context is stale authorization, refreshed without
 	// the service backoff; parse failures keep Rust's exponential backoff.
@@ -766,6 +779,7 @@ reviewAttempt:
 	if r.permissionProfile != nil {
 		reviewRequest.PermissionProfile = r.permissionProfile(threadID, turnID)
 	}
+	feedbackCapture.history = guardianFeedbackHistoryInput(prompt, inputItems)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.SeedForReview(reviewRequest)
 	}
@@ -851,6 +865,7 @@ reviewAttempt:
 		goto reviewAttempt
 	}
 	if err != nil {
+		feedbackCapture.decisionText = guardianAssessmentText(response)
 		rationale := guardianReviewFailureRationale(err.Error())
 		message := guardianReviewFailureMessage(err.Error())
 		failedClosed, _ := store.FailClosed(event.ID, rationale)
@@ -901,6 +916,7 @@ reviewAttempt:
 	emitReviewMetrics()
 	rationale := assessment.Rationale
 	if decision == state.DecisionDenied {
+		feedbackCapture.decisionText = guardianAssessmentText(response)
 		rationale = guardianRejectionMessage(plan.AutoReview, rationale)
 	}
 	return decision, rationale, nil

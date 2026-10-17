@@ -1223,6 +1223,14 @@
             "reason": "Aligned upstream 368e5eae2f (#49038 Preserve encrypted agent messages in Guardian reviews): stored agent_message items with a non-empty encrypted_content part are recovered whole and delivered to the reviewer as native input items in transcript order, preserving author, recipient and ciphertext; BuildPromptPartsWithOptions splits the transcript text around them so later evidence still follows the native message. Serialized messages above Rust's sync 20,000-byte native-message budget become the explicit host notice `Some conversation entries were omitted.` at their own position, and context-change detection compares entries including native bytes.",
             "userImpact": "Guardian reviews can use encrypted parent replies as evidence without flattening or truncating ciphertext, while oversized messages are omitted explicitly instead of partially reviewed.",
             "test": "go test ./state -run 'BuildPromptParts|GuardianTranscript' -count=1; go test ./appserver -run 'TestGuardianNativeAgentMessagePreservesCiphertextLikeRust|TestGuardianTranscriptCarriesEncryptedAgentMessagesLikeRust|TestGuardianReviewDeliversEncryptedAgentMessageLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "guardian-failure-feedback-attachment",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 13d75cd1c3 (#41936 Attach failed Guardian reviews to diagnostic reports): a bounded process-local store (64 records, 8 per thread, 8 MiB) captures denied, invalid_decision, failed, timed_out and aborted reviews with the reviewed thread/turn, model, raw decision, formatted action and truncation flag, reviewer instructions and submitted history. Records over 4 MiB keep the action and decision while dropping reviewer context and setting context_omitted. Approvals, ephemeral threads and feedback.enabled=false retain nothing. Feedback uploads that include logs attach recent records for the reported thread and its descendants as auto-review-failures.jsonl; plain uploads do not.",
+            "userImpact": "Bug reports can include recent failed Guardian reviews for the affected task tree without exposing unrelated threads or changing normal feedback uploads.",
+            "test": "go test ./appserver -run 'TestGuardianReviewFeedbackRecordsFailuresLikeRust|TestGuardianReviewFeedbackOversizeOmitsContextLikeRust|TestGuardianFeedbackStoreLimitsLikeRust|TestGuardianReviewCapturesFailureEvidenceLikeRust|TestFeedbackUploadIncludesGuardianFailuresLikeRust' -count=1"
         }
     ]
 }
