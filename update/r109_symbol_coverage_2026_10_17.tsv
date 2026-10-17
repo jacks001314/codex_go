@@ -390,7 +390,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 279ba894152b2c01c5294cc0723b463b209bdca4	47275	Enable Guardian thread context by default (#47275)	2026-09-22	guardian	0	0		0	0	not_applicable	
 27bf160f7909704fb7e23d508f31900d90479699	42207	Retry TUI reconnects while threads are closing (#42207)	2026-09-02	tui	0	0		0	0	not_applicable	
 27c05a52e0cdf93ef7db5a96ccaf88d6b9095472	39847	Include context window IDs in response metadata (#39847)	2026-08-21	appserver	3	3	1.00	0	0	complete	
-27e6192e84fa8a2969d9d56c2fbe05754205958b	53389	Use cached login credentials for Guardian decisions (#53389)	2026-10-12	guardian	1	0	0.00	0	0	implementation_pending	decisions_api_key
+27e6192e84fa8a2969d9d56c2fbe05754205958b	53389	Use cached login credentials for Guardian decisions (#53389)	2026-10-12	guardian	1	0	0.00	0	0	not_applicable	decisions_api_key
 2808a9c348ee90a6fc94aee1570dd3fdf2c0b021	44328	Clear pending TUI questions when accepting a new prompt (#44328)	2026-09-09	tui	7	3	0.43	0	0	audit_pending	UserMessageSource,clear_pending_questions,on_review_started,queue_user_message_with_options_and_source
 28097e98ebcb5e7eaa2e14534e60337f209a8a80	42065	Preserve Guardian history across thread reconstruction (#42065)	2026-09-01	tui	4	0	0.00	0	0	implementation_pending	GuardianHistoryCheckpoint,guardian_history_checkpoint,restore_guardian_history,truncate_before
 280ae8b9fcd35a54704dc2c78027b89bd51369fd	42624	Centralize prompt image detail modes (#42624)	2026-09-03	core	2	2	1.00	0	0	complete	

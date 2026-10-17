@@ -29933,9 +29933,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: decisions_api_key"
+        "Round 115 (lead): N/A (verified carrier absence) - #53389 changes credential selection for Rust's guardian-v2 async decisions-comparison sampler: CODEX_GUARDIAN_DECISIONS_API_KEY remains the override, otherwise it uses AuthManager's cached API key for the OpenAI provider without a custom base URL. Go has no guardian-v2 decisions sampler/comparison feature, DecisionsSampler, or decisions_api_key path; only the environment-key scrubbing list mentions the env var. There is no sampler startup point to change. No source change needed."
       ]
     },
     {
