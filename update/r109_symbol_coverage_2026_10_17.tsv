@@ -517,7 +517,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 33aea33b39a5e35c78de75c332106479b16c6994	49801	Update the Rust toolchain action for argument-comment linting (#49801)	2026-09-30	core	0	0		0	0	not_applicable	
 33bdf976ccd1130823d4fe041e4d5075ab511d67	44879	Fade Astra composer stars and stabilize cursor redraws (#44879)	2026-09-11	tui	4	0	0.00	0	0	implementation_pending	interact_with_astra_sparkle,invalidate_cursor_state,render_sparkle,set_sparkle_terminal_focus
 341de32c33fb00b88b5dd50be70610dc59dad045	54414	Allow root turn suspension with live descendants (#54414)	2026-10-15	core	0	0		0	0	not_applicable	
-3421c660d043e39d1bff8cee136c0ceeb006177c	51683	Roll back stale Guardian reviews before reusing reviewer history (#51683)	2026-10-07	guardian	4	1	0.25	0	0	audit_pending	ReviewAuthorization,parse_guardian_assessment,project_snapshot
+3421c660d043e39d1bff8cee136c0ceeb006177c	51683	Roll back stale Guardian reviews before reusing reviewer history (#51683)	2026-10-07	guardian	4	4	1.00	0	0	complete	
 3422443ec4afa238336b910e665781f1c5e986c7	44615	Treat non-interactive dumb terminals as warnings in `codex doctor` (#44615)	2026-09-10	core	0	0		0	0	not_applicable	
 343074d4207d572809bd8cea15f4be1d09d98e0b	40068	Report runtime MCP connection status (#40068)	2026-08-22	tui	6	2	0.33	0	0	audit_pending	McpServerConnectionStatus,StatusTone,connection_statuses,mcp_connection_statuses
 3432d3f2c9cb09f5ce5c110674d993874120d44b	39967	Upgrade pnpm to 10.34.5 (#39967)	2026-08-21	core	0	0		0	0	not_applicable	

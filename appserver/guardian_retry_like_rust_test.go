@@ -131,6 +131,51 @@ func TestGuardianReviewDenySkipsStaleRetryLikeRust(t *testing.T) {
 	}
 }
 
+// Rust #51683: a stale allow is rolled back to the last committed reviewer
+// checkpoint before retrying. The invalidated response id must never become the
+// parent of the refreshed review, while earlier valid context remains reusable.
+func TestGuardianStaleAllowRollsBackReviewerHistoryLikeRust(t *testing.T) {
+	transcript := []string{"user: initial request"}
+	var previousIDs []string
+	calls := 0
+	agent := guardianAgentFunc(func(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+		calls++
+		previousIDs = append(previousIDs, request.PreviousResponseID)
+		if calls == 1 {
+			transcript = append(transcript, "user: changed while reviewing")
+		}
+		responseID := "fresh-review-response"
+		if calls == 1 {
+			responseID = "stale-review-response"
+		}
+		return &model.AgentResponse{Message: guardianDecisionDurationAssessment, ResponseID: responseID}, nil
+	})
+	session := &guardianSessionRunner{agent: agent, previous: "committed-review-response"}
+	reviewer := &modelGuardianReviewer{
+		agent: session,
+		store: state.NewReviewStore(),
+		transcript: func(string) []string {
+			return append([]string(nil), transcript...)
+		},
+	}
+	decision, _, err := reviewer.Review(context.Background(), "thread-stale-history", "turn", "call", state.Action{Type: "command", Command: "ls", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision != state.DecisionApproved {
+		t.Fatalf("decision = %q, want approved", decision)
+	}
+	if calls != 2 {
+		t.Fatalf("agent calls = %d, want 2", calls)
+	}
+	if len(previousIDs) != 2 || previousIDs[0] != "committed-review-response" || previousIDs[1] != "committed-review-response" {
+		t.Fatalf("review parent ids = %#v, want the committed checkpoint for both attempts", previousIDs)
+	}
+	if got := session.reviewHistoryCheckpoint().previous; got != "fresh-review-response" {
+		t.Fatalf("committed reviewer checkpoint = %q, want fresh-review-response", got)
+	}
+}
+
 // Rust retry.rs should_retry_guardian_review: Parse failures are recoverable
 // within the same attempt budget, so a later valid assessment still decides.
 func TestGuardianReviewRetriesParseFailureLikeRust(t *testing.T) {

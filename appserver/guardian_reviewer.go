@@ -330,6 +330,33 @@ type guardianSessionRunner struct {
 	completedReviews int
 }
 
+type guardianReviewHistoryCheckpoint struct {
+	previous string
+	seeded   string
+}
+
+func (r *guardianSessionRunner) reviewHistoryCheckpoint() guardianReviewHistoryCheckpoint {
+	if r == nil {
+		return guardianReviewHistoryCheckpoint{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return guardianReviewHistoryCheckpoint{previous: r.previous, seeded: r.seeded}
+}
+
+// rollbackReviewHistory restores the last committed reviewer checkpoint after a
+// stale allow. The invalidated attempt's response id must not become the next
+// attempt's parent, while earlier valid reviewer context stays reusable.
+func (r *guardianSessionRunner) rollbackReviewHistory(checkpoint guardianReviewHistoryCheckpoint) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.previous = checkpoint.previous
+	r.seeded = checkpoint.seeded
+	r.mu.Unlock()
+}
+
 // EnsureReviewPolicy invalidates the cached reviewer session when the
 // effective Node REPL policy changes (#41919). An explicitly empty policy is
 // distinct from an unset one: it suppresses policy injection and must not reuse
@@ -839,6 +866,10 @@ reviewAttempt:
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.SeedForReview(reviewRequest)
 	}
+	historyCheckpoint := guardianReviewHistoryCheckpoint{}
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		historyCheckpoint = runner.reviewHistoryCheckpoint()
+	}
 	response, err = r.agent.Run(reviewCtx, reviewRequest)
 	if err == nil {
 		// The review request reached the session, so the retained-section
@@ -865,12 +896,18 @@ reviewAttempt:
 				if waitErr := reviewCtx.Err(); waitErr != nil {
 					err = waitErr
 				} else {
+					if runner, ok := r.agent.(*guardianSessionRunner); ok {
+						runner.rollbackReviewHistory(historyCheckpoint)
+					}
 					goto reviewAttempt
 				}
 			}
 		}
 	}
 	if err == nil && staleAuthorization && attempts >= guardianMaxReviewAttempts {
+		if runner, ok := r.agent.(*guardianSessionRunner); ok {
+			runner.rollbackReviewHistory(historyCheckpoint)
+		}
 		// Rust #47819: exhausting the retry budget on changed authorization is a
 		// failed-closed denial, never a stale approval.
 		message := "authorization changed before approval could be applied"
