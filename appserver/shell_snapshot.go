@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"codex_go/config"
+	execserverclient "codex_go/execserver"
 	"codex_go/features"
 	"codex_go/session"
 	"codex_go/shell"
@@ -78,6 +79,17 @@ func (r *RuntimeRouter) shellSnapshotProviderForTurn(threadID string, cfg *confi
 	return func(ctx context.Context, request tool.SnapshotProviderRequest) tool.SnapshotProviderResult {
 		if !shellSnapshotLaunchEligible(request) {
 			return tool.SnapshotProviderResult{}
+		}
+		if request.Remote {
+			return tool.SnapshotProviderResult{
+				Remote: &execserverclient.ShellSnapshotRequest{
+					ScopeID: strings.TrimSpace(threadID),
+					Shell: execserverclient.ShellInfo{
+						Name: string(request.ShellType),
+						Path: strings.TrimSpace(request.ShellPath),
+					},
+				},
+			}
 		}
 		// Rust only replays the session's snapshot for the session's own
 		// directory; another directory has no captured state to restore. A
@@ -286,7 +298,7 @@ func (r *RuntimeRouter) recordShellSnapshotCommand(wait time.Duration, state str
 // and a login command (Rust allows a bare `-c` only for brokered captures, which
 // Go does not have yet).
 func shellSnapshotLaunchEligible(request tool.SnapshotProviderRequest) bool {
-	if request.Remote || !request.AllowLoginShell {
+	if !request.AllowLoginShell {
 		return false
 	}
 	return shellSnapshotShellSupported(request.ShellType)

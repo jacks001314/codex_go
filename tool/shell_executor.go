@@ -829,6 +829,10 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 			snapshotUsed = !slices.Equal(wrapped, req.Command)
 			req.Command = wrapped
 		}
+		if snapshot.Remote != nil {
+			req.RemoteShellSnapshot = snapshot.Remote
+			snapshotUsed = true
+		}
 		// Emit after the decision so `used` is final, exactly like Rust
 		// recording at the end of `UnifiedExecRuntime::prepare`.
 		if snapshot.ObserveCommandOutcome != nil {

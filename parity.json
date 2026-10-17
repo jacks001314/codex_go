@@ -1555,8 +1555,8 @@
             "id": "remote-shell-snapshot-credential-masking",
             "status": "partial",
             "area": "execserver",
-            "reason": "Upstream 1c5ca2a979 (#54432 Support remote credential masking with Zsh shell snapshots) has its protocol and executor-side replay foundation: shellSnapshotV2 capability, process/start.shellSnapshot, per-scope cached POSIX snapshot capture, safe file materialization, -c/-lc command wrapping, and shutdown cleanup. Remaining work is wiring remote unified exec to send the attachment scope/shell, binding the credential broker destination context during capture, generating masked value/unset copies for replay, and restore-and-disable fallback behavior.",
-            "userImpact": "Remote executors can now capture and replay a shell snapshot, but credential masking is not yet active end-to-end.",
+            "reason": "Upstream 1c5ca2a979 (#54432 Support remote credential masking with Zsh shell snapshots) now has protocol, executor-side replay, and remote unified-exec wiring: shellSnapshotV2 capability, process/start.shellSnapshot, per-scope cached POSIX snapshot capture, safe file materialization, -c/-lc command wrapping, shutdown cleanup, and SnapshotProviderResult -> ShellRequest -> ExecParams propagation. Remaining work is binding the credential broker destination context during capture, generating masked value/unset copies for replay, and restore-and-disable fallback behavior.",
+            "userImpact": "Remote executors can capture, cache, and replay their own shell snapshot through real process starts, but credential masking is not yet active end-to-end.",
             "test": "go test ./execserver -run ShellSnapshot -count=1; go build ./..."
         }
     ]

@@ -134,8 +134,8 @@ func TestShellSnapshotProviderCapturesAndReleasesLikeRust(t *testing.T) {
 }
 
 // TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust pins the
-// gates: the feature must be on, and a remote environment, a non-POSIX shell or
-// a non-login launch gets no snapshot.
+// gates: the feature must be on, and a non-POSIX shell or non-login launch gets
+// no snapshot. Remote environments return an executor-owned snapshot request.
 func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing.T) {
 	stubShellSnapshotRunner(t)
 	router, threadID, cwd := newShellSnapshotRouter(t, "sandbox_mode = \"workspace-write\"\n[features]\nshell_snapshot = false\n")
@@ -161,12 +161,18 @@ func TestShellSnapshotProviderFollowsTheFeatureAndLaunchShapeLikeRust(t *testing
 		CWD:             cwd,
 		AllowLoginShell: true,
 	}
+	remoteRequest := base
+	remoteRequest.Remote = true
+	remoteSnapshot := enabled(context.Background(), remoteRequest)
+	if remoteSnapshot.Remote == nil || remoteSnapshot.Remote.ScopeID != threadID ||
+		remoteSnapshot.Remote.Shell.Path != "/bin/bash" || remoteSnapshot.Path != "" {
+		t.Fatalf("remote snapshot request = %#v", remoteSnapshot)
+	}
 	cases := []struct {
 		name    string
 		mutate  func(request *tool.SnapshotProviderRequest)
 		wantGap string
 	}{
-		{"remote environment", func(request *tool.SnapshotProviderRequest) { request.Remote = true }, "remote"},
 		{"PowerShell", func(request *tool.SnapshotProviderRequest) { request.ShellType = tool.ShellPowerShell }, "shell"},
 		{"non-login launch", func(request *tool.SnapshotProviderRequest) { request.AllowLoginShell = false }, "login"},
 	}

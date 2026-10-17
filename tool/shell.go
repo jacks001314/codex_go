@@ -162,6 +162,7 @@ type ShellRequest struct {
 	EnforceManagedNetwork        bool
 	ManagedNetwork               *network.ProxyManagedNetworkSandboxContext
 	RemoteNetworkProxy           *execserver.RemoteNetworkProxyLaunchConfig
+	RemoteShellSnapshot          *execserver.ShellSnapshotRequest
 	NetworkPolicyDecider         network.ProxyPolicyDecider
 	NetworkPolicyDecisionTimeout time.Duration
 }

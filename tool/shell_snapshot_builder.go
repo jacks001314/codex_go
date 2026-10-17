@@ -21,6 +21,7 @@ import (
 
 	"codex_go/envutil"
 	"codex_go/execpolicy"
+	execserverclient "codex_go/execserver"
 	"codex_go/sandbox"
 	"codex_go/shell"
 )
@@ -113,6 +114,9 @@ type SnapshotProviderRequest struct {
 type SnapshotProviderResult struct {
 	// Path is the snapshot to replay in front of the launch's command, or "".
 	Path string
+	// Remote asks the selected executor to capture and replay its own shell
+	// snapshot. Path is used for local environments.
+	Remote *execserverclient.ShellSnapshotRequest
 	// ObserveCommandOutcome, when non-nil, is called exactly once after the
 	// launch decides whether it replayed the snapshot. used is Rust's
 	// `snapshot_used = wrapped != command`: true when the command was rewritten
