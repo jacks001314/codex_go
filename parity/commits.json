@@ -13107,10 +13107,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/3; needs review: start_thread_until"
-      ]
+        "status": "complete",
+        "evidence": [
+          "ThreadManager owns managed live-thread lifetimes, closes admission atomically on shutdown, cancels tracked turns, and waits for workers without racing thread startup."
+        ]
     },
     {
       "sha": "973ec2942c33159a188ea056b1cb1b5ec3d31ed6",
