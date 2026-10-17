@@ -2272,6 +2272,7 @@ func (r *RuntimeRouter) close() error {
 	}
 	r.threads.ClearSubscriptions()
 	r.threads.ClearEphemeralRecords()
+	r.discardAllRuntimeAgentMessages()
 	// Every live session's `session_loop` span closes with the router (Rust ends
 	// them when the sessions' submission loops terminate).
 	r.endAllThreadSessionSpans()
@@ -4680,6 +4681,7 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		}
 	case MethodThreadDelete:
 		for _, threadID := range session.DeleteOrderForSubtree(lifecycleIDsWithFallback(request, lifecycleIDs)) {
+			r.discardRuntimeAgentMessages(string(threadID))
 			r.deleteExecutedToolCallRecorder(string(threadID))
 			r.runSessionEndHookOnce(lifecycleRecords[string(threadID)], "delete")
 			r.markThreadUnloaded(string(threadID))

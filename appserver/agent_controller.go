@@ -704,6 +704,7 @@ func (c *runtimeAgentController) closeAgentThread(state *agent.AgentTreeShutdown
 			}
 		}
 	}
+	c.router.discardRuntimeAgentMessages(threadID)
 }
 
 func (c *runtimeAgentController) status(threadID string) agent.AgentMessageStatus {
@@ -888,6 +889,24 @@ func (r *RuntimeRouter) drainRuntimeAgentMessages(threadID string) []any {
 	items := append([]any(nil), r.agentMessages[threadID]...)
 	delete(r.agentMessages, threadID)
 	return items
+}
+
+func (r *RuntimeRouter) discardRuntimeAgentMessages(threadID string) {
+	if r == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	r.agentMessagesMu.Lock()
+	delete(r.agentMessages, threadID)
+	r.agentMessagesMu.Unlock()
+}
+
+func (r *RuntimeRouter) discardAllRuntimeAgentMessages() {
+	if r == nil {
+		return
+	}
+	r.agentMessagesMu.Lock()
+	r.agentMessages = map[string][]any{}
+	r.agentMessagesMu.Unlock()
 }
 
 func (r *RuntimeRouter) runtimeAgentIdentity(threadID string) (string, string) {

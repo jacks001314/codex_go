@@ -1594,7 +1594,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9587c9ef366bd678ea5e9310f59ec33fdc44df7e	43177	Use server model defaults for fresh TUI startup (#43177)	2026-09-06	tui	4	0	0.00	0	0	implementation_pending	overlay_new_session_defaults,prepare_fresh_startup_config,read_new_session_defaults,startup_model
 95db2cd5d5f37f80affb9b50ce1de70ebb4513ff	53155	Keep remote app-server events deliverable during shutdown (#53155)	2026-10-11	appserver	0	0		0	0	not_applicable	
 95ec468619386ebb93506ac2091a48e5a558d25c	51690	Add a feature flag for Code Mode tool description ordering (#51690)	2026-10-07	config	0	0		0	0	not_applicable	
-960e878df4bf87b9d7fa0849f14561d7cdcca942	50087	Preserve queued agent mail across session eviction (#50087)	2026-10-01	core	12	7	0.58	0	0	audit_pending	PENDING_MAILBOX_MESSAGES,PendingMailboxCommunication,drain_mailbox,mailbox_updates,with_controller
+960e878df4bf87b9d7fa0849f14561d7cdcca942	50087	Preserve queued agent mail across session eviction (#50087)	2026-10-01	core	12	12	1.00	0	0	complete	
 9671d20fc82ea269d49ecc70b29a8630b29c1a32	54050	Scope TUI skill refreshes and workspace commands to explicit directories (#54050)	2026-10-14	tui	0	0		0	0	not_applicable	
 968835997714baaff199cfed5f89a2c65d8ca77d	44493	Bound MCP descriptions separately from Guardian action JSON (#44493)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 9695e7151981a9a64830ea7c47282323f93dcc45	40656	Add turn-scoped settings updates to the app server (#40656)	2026-08-25	appserver	4	3	0.75	0	0	audit_pending	TurnSettingsUpdateStatus
