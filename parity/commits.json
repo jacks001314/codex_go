@@ -14727,9 +14727,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: McpResourceServerCacheKey, invalidate_resource_caches, resource_cache_key, server_cache_key"
+        "Round 115 (lead): landed equivalent cache identity/invalidation - MCPService tracks a resourceCacheGeneration separate from the broader runtime generation; InvalidateResourceCaches rotates it and clears the MCP resource cache, while Refresh advances it. Orchestrator skill caches are keyed by thread, service connection identity and that resource generation, so approval-policy/runtime-config updates that reuse the service preserve skill resources, while explicit runtime refresh/invalidate and service replacement rotate the cache. Tests: TestOrchestratorSkillCacheResourceGenerationLikeRust and TestOrchestratorSkillCacheSurvivesApprovalPolicyRefreshLikeRust. RC: dropping resource generation reuses stale cache after invalidation; unconditionally invalidating on service reuse drops the cache on approval-policy refresh. go test ./mcp -count=1 + focused appserver OrchestratorSkill/MCPRuntime + go vet ./mcp ./appserver + go build ./mcp ./appserver ./turn green."
       ]
     },
     {

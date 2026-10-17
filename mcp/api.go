@@ -699,6 +699,9 @@ type MCPService struct {
 	oauthComplete MCPOAuthLoginCompletionHandler
 	openAIForm    bool
 	generation    uint64
+	// resourceGeneration advances when resource catalogs and contents must be
+	// refreshed even if the connection set is reused (Rust #46033).
+	resourceGeneration uint64
 	// authChangeSource, when set, lets opted-in stdio servers receive auth
 	// change notifications (Rust #43428).
 	authChangeSource    MCPAuthChangeSource
@@ -2255,6 +2258,7 @@ func (s *MCPService) Refresh() *MCPServerRefreshResponse {
 	if s != nil {
 		s.mu.Lock()
 		s.generation++
+		s.resourceGeneration++
 		s.mu.Unlock()
 		s.clearResourceCache()
 		s.clearHTTPClients()
@@ -2270,6 +2274,29 @@ func (s *MCPService) Generation() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.generation
+}
+
+// ResourceCacheGeneration identifies the current orchestrator resource cache
+// generation without treating unrelated catalog/runtime updates as a refresh.
+func (s *MCPService) ResourceCacheGeneration() uint64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resourceGeneration
+}
+
+// InvalidateResourceCaches forces resource catalogs and contents to be fetched
+// again while allowing the underlying MCP connections to be reused.
+func (s *MCPService) InvalidateResourceCaches() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.resourceGeneration++
+	s.mu.Unlock()
+	s.clearResourceCache()
 }
 
 func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceReadResponse, error) {

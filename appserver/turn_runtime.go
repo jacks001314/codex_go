@@ -10148,15 +10148,11 @@ func (r *RuntimeRouter) orchestratorSkillMetadataForRuntime(threadID string) ([]
 }
 
 func (r *RuntimeRouter) orchestratorSkillCacheForRuntime(threadID string, service *mcp.MCPService) (string, *runtimeOrchestratorSkillCatalog) {
-	bindingRevision := uint64(0)
-	if r != nil && r.mcpRuntimes != nil {
-		bindingRevision = r.mcpRuntimes.bindingRevision(threadID, service)
-	}
-	generation := uint64(0)
+	resourceGeneration := uint64(0)
 	if service != nil {
-		generation = service.Generation()
+		resourceGeneration = service.ResourceCacheGeneration()
 	}
-	cacheKey := fmt.Sprintf("%s\x00%d\x00%d", strings.TrimSpace(threadID), bindingRevision, generation)
+	cacheKey := fmt.Sprintf("%s\x00%p\x00%d", strings.TrimSpace(threadID), service, resourceGeneration)
 	r.orchestratorSkillMu.Lock()
 	defer r.orchestratorSkillMu.Unlock()
 	if r.orchestratorSkills == nil {

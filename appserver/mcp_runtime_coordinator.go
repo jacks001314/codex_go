@@ -256,12 +256,19 @@ func (c *mcpRuntimeCoordinator) invalidateAll() {
 	}
 	c.mu.Lock()
 	c.globalEpoch++
+	services := make([]*mcp.MCPService, 0, len(c.bindings))
 	for _, binding := range c.bindings {
 		if binding != nil {
 			binding.dirty = true
+			if binding.service != nil {
+				services = append(services, binding.service)
+			}
 		}
 	}
 	c.mu.Unlock()
+	for _, service := range services {
+		service.InvalidateResourceCaches()
+	}
 }
 
 func (c *mcpRuntimeCoordinator) invalidateThread(threadID string) {
@@ -271,10 +278,15 @@ func (c *mcpRuntimeCoordinator) invalidateThread(threadID string) {
 	}
 	c.mu.Lock()
 	c.threadEpoch[threadID]++
+	var service *mcp.MCPService
 	if binding := c.bindings[threadID]; binding != nil {
 		binding.dirty = true
+		service = binding.service
 	}
 	c.mu.Unlock()
+	if service != nil {
+		service.InvalidateResourceCaches()
+	}
 }
 
 func (c *mcpRuntimeCoordinator) closeThread(threadID string) error {
