@@ -13647,9 +13647,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: AgentInterruptError, AgentInterruptOutcome, interrupt_spawned_agent"
+        "Round 291 (audit): RuntimeRouter.InterruptAgent centralizes spawned-agent interruption validation/dispatch, rejects root and self targets, preserves prior status, avoids reloading inactive agents, and notifies parent activity; the tool controller delegates to this carrier."
       ]
     },
     {

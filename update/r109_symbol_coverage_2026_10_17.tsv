@@ -649,7 +649,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 40e13e6281e4725b0e81c8488ada69747be89cb7	47954	Move fullscreen startup tips into the transcript (#47954)	2026-09-24	tui	1	0	0.00	0	0	implementation_pending	composer_hint
 40eac3ce8a0c10cbcb9db910d529355eb2f8fc09	47484	Add explicit background control to image generation (#47484)	2026-09-23	appserver	0	0		0	0	not_applicable	
 40eeb6e8a89ef421c25d4c40e06fa1d40ce66b4f	47042	Recover corrupt message-board storage during thread deletion (#47042)	2026-09-21	appserver	0	0		0	0	not_applicable	
-40f01fbe08694bbca9814e87dd04febce77b5a61	45676	Move spawned-agent interruption rules into `AgentControl` (#45676)	2026-09-15	core	3	0	0.00	0	0	implementation_pending	AgentInterruptError,AgentInterruptOutcome,interrupt_spawned_agent
+40f01fbe08694bbca9814e87dd04febce77b5a61	45676	Move spawned-agent interruption rules into `AgentControl` (#45676)	2026-09-15	core	3	0	0.00	0	0	complete	AgentInterruptError,AgentInterruptOutcome,interrupt_spawned_agent
 4110342321bb19b0053190750a0a8b76427b13ad	43576	Group adjacent computer actions in the TUI (#43576)	2026-09-07	tui	6	6	1.00	0	0	complete	
 414d165b47a90d44a231d62a6c2cf2f876306c1a	51459	Preserve wrapped help links in Windows sandbox prompts (#51459)	2026-10-06	tui	0	0		0	0	not_applicable	
 4150a2c2054a15c8763a143e98a2c44e0dea3db5	44626	Add bounded environment transport for MXC launch requests (#44626)	2026-09-10	sandbox	2	2	1.00	0	0	complete	
