@@ -562,9 +562,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/12; needs review: BrowserUseConfig, BrowserUseOriginPolicyConfig, BrowserUseOriginPolicyConfigToml, ComputerUseConfig, ComputerUseMacosConfig"
+        "Round 269 (audit): Go validates and round-trips browser_use/computer_use config maps, including origin policies/access modes, computer-use default app access, macOS bundle IDs, Windows AUMIDs/executable identities, and managed requirements; ConfigRead exposes both keys (null when absent) and batch writes validate them. Tests: go test ./config -run 'BrowserComputerUse|ComputerUse|BrowserUse' -count=1"
       ]
     },
     {
@@ -2327,9 +2327,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/7; needs review: append_callback_id_to_redirect_uri, callback_id_from_server_url, resolve_oauth_callback"
+        "Round 269 (audit): Go derives stable server callback IDs, appends them to loopback redirects, discovers issuer-bound callback mode only when advertised with a metadata issuer, validates the returned issuer before code exchange, retains server-specific IDs for providers without issuer support, persists registered callback URLs for MCP servers/plugins, and inserts the active listener port into portless loopback redirects. Tests: go test ./mcp ./appserver -run 'OAuth|Callback' -count=1"
       ]
     },
     {
@@ -2939,9 +2939,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: load_non_project_config, policy_filtered_plugin_config"
+        "Round 269 (audit): plugin activation, MCP server policy, and marketplace definitions resolve from the effective configuration stack (system plus trusted project overrides), skills/plugin catalogs are per working directory, project config is excluded when cwds are omitted, and loaded plugin configurations are LRU-bounded. Tests: go test ./appserver ./plugin ./config -run 'Plugin|Marketplace|Skills.*Catalog' -count=1"
       ]
     },
     {
