@@ -1634,7 +1634,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 99784bd09b234ce11d8e91041d445e3eb49a609a	47272	Allow Guardian sync review across compaction hash differences (#47272)	2026-09-22	guardian	0	0		0	0	not_applicable	
 99914f49504532f551ff6cdceca4318afdbd3d9c	45534	Honor explicit Unix socket grants in the Linux managed sandbox (#45534)	2026-09-14	execserver	0	0		0	0	not_applicable	
 99aa05341d1564cf4ca2b463c83b607ea5d1bb3e	52304	Persist remote-control RPC preferences in managed daemon settings (#52304)	2026-10-08	appserver	0	0		0	0	complete	
-99b3ab2131a8672089fd7d78da62483187ba1122	45463	Allow dedicated listeners for managed network proxies (#45463)	2026-09-14	core	2	0	0.00	0	0	implementation_pending	ManagedProxyRouting,managed_proxy_routing
+99b3ab2131a8672089fd7d78da62483187ba1122	45463	Allow dedicated listeners for managed network proxies (#45463)	2026-09-14	core	2	0	0.00	0	0	not_applicable	
 99cda7a9a5997c36aff413d42a222bdb5f95c434	45413	Invalidate Guardian review sessions after parent history resets (#45413)	2026-09-14	guardian	0	0		0	0	not_applicable	
 99d66aa1c5f8394729a97a6eea91880fa420352b	42770	Preserve acceptance order in retained thread context (#42770)	2026-09-04	guardian	7	4	0.57	0	0	audit_pending	AcceptedUserInputResponse,reserve_input_order,reserve_user_input_order
 99f7758a577740f32df3aad53502e948142758a4	48807	Show short turn durations in TUI completion footers (#48807)	2026-09-27	tui	0	0		0	0	not_applicable	
