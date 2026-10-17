@@ -270,7 +270,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1a4096e273e80da30947e57fdfa45be92858ca91	44086	Add untrusted external messages to the Python SDK (#44086)	2026-09-09	core	0	0		0	0	not_applicable	
 1a69ad3237fc485273ccfa9731239fdf789b43e4	53614	Add infrastructure for speculative remote V2 compaction (#53614)	2026-10-13	persistence	10	10	1.00	0	0	complete	
 1a89aec960cd92e2c59ce49b7f3c3347a915e4a9	48483	Prevent console windows for piped Windows child processes (#48483)	2026-09-26	core	0	0		0	0	not_applicable	
-1a913493dcc48018637f7efa7066a78cbea40511	49782	Clean up process groups for failed shell snapshot captures (#49782)	2026-09-30	execserver	4	3	0.75	0	0	audit_pending	wait_for_exit
+1a913493dcc48018637f7efa7066a78cbea40511	49782	Clean up process groups for failed shell snapshot captures (#49782)	2026-09-30	execserver	4	4	1.00	0	0	complete	
 1aaa453ce2868e14c10089c226ebec265657cb27	44650	Enforce managed model provider selection and definitions (#44650)	2026-09-10	tui	5	1	0.20	0	0	audit_pending	origins_with_path_filter,required_model_provider,to_config,validate_bedrock_override
 1ab8c6ef28a8261aaddb528dd3875124acd1c91e	50380	Fix thread unloading after disconnect during MCP startup (#50380)	2026-10-02	appserver	0	0		0	0	not_applicable	
 1ac4b6973bca17804de30690cbe15f3e6324d472	46719	Extract the TUI transcript overlay into its own module (#46719)	2026-09-19	tui	14	6	0.43	0	0	audit_pending	consolidate_cells,insert_cell,is_scrolled_to_bottom,replace_cells,set_history_state,should_load_from_start,should_load_older,sync_live_tail
@@ -1326,7 +1326,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7ef70f95d5c07976f3c992e413a02a6db238b0d0	44924	Refresh the speaker format when restarting voice output (#44924)	2026-09-11	realtime	1	0	0.00	0	0	implementation_pending	set_render_rate
 7efa9d96fb34c3cafe108a3c870bfc33e5635772	45137	Remove Astra sparkle animation from the TUI composer (#45137)	2026-09-12	tui	0	0		0	0	not_applicable	
 7efb0262d6cb62abd059835453d118255da25620	44969	Open tasks managed elsewhere as read-only history in the command center (#44969)	2026-09-12	tui	0	0		0	0	not_applicable	
-7efc49b258587fbe872c7897e90ffa6144bea2a0	51512	Align Windows sandbox temp permissions with the child environment (#51512)	2026-10-06	execserver	2	1	0.50	0	0	audit_pending	ordered_env_entries
+7efc49b258587fbe872c7897e90ffa6144bea2a0	51512	Align Windows sandbox temp permissions with the child environment (#51512)	2026-10-06	execserver	2	2	1.00	0	0	complete	
 7efd184c2410c02a9d0feb4896855f0f18a8f47e	52724	Add observers for initial exec-server connection attempts (#52724)	2026-10-09	execserver	3	0	0.00	0	0	complete	ConnectionAttemptOutcome,ConnectionObserver,observe_connection_attempts
 7f01a84effccef40d4726c3ca12e6c839ec98d7a	45693	Move Guardian approval routing into the reviewer extension (#45693)	2026-09-15	guardian	3	3	1.00	0	0	complete	
 7f0ab958275e5a3ec40eff993aa077b3f0636abf	46009	Centralize compaction checkpoint selection and validation (#46009)	2026-09-16	guardian	5	1	0.20	0	0	audit_pending	CompactionCheckpoint,from_item,is_compatible_with,is_usable
@@ -2089,7 +2089,7 @@ c3d3b142d10f4316b46e35aad7e5317e7e506cb7	52778	Make pinned transcript prompts cl
 c3d5e4418f05908ffeb68f6257fbacbb1e65e607	40466	Add credential brokering to network proxy feature config (#40466)	2026-08-24	appserver	2	1	0.50	0	0	audit_pending	credential_broker_provider_context_env_keys
 c3eeaae9a3d401f7e7ade0817b7b27299af7d2a1	43959	Gate new app-server work during graceful shutdown (#43959)	2026-09-09	appserver	5	2	0.40	0	0	audit_pending	TurnPermit,begin_drain,subscribe_active
 c4017a87aacc7558002b7cb510025e967c1d765e	44976	Make context snapshot text rendering consistent (#44976)	2026-09-12	guardian	0	0		0	0	not_applicable	
-c41a72cd3f5886a6b367e93e28c4ef0662a54500	49856	Support Daybreak selection in `codex exec` (#49856)	2026-10-01	model	3	2	0.67	0	0	audit_pending	program_for_turn
+c41a72cd3f5886a6b367e93e28c4ef0662a54500	49856	Support Daybreak selection in `codex exec` (#49856)	2026-10-01	model	3	3	1.00	0	0	complete	
 c4350b4ca2a5af7dced6784e8c36f2f2cdab2dd6	41928	Use executor path context for permission preapproval (#41928)	2026-08-31	sandbox	1	0	0.00	0	0	implementation_pending	file_system_sandbox_policy_context_for_cwd
 c44deff7b1083e9660ac55d02122481f1cdf139b	47447	Extract WebSocket authentication into `codex-websocket-auth` (#47447)	2026-09-23	appserver	11	7	0.64	0	0	audit_pending	WebsocketAuthConfig,WebsocketCapabilityTokenSource,authorize_upgrade,policy_from_settings
 c45ea25ffb72d5f7324489d824d0c677283aa0b4	46877	Allow subagents to request MCP elicitation input (#46877)	2026-09-20	appserver	0	0		0	0	not_applicable	

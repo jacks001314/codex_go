@@ -70,6 +70,26 @@ const (
 )
 
 func MakeEnvBlock(env map[string]string) []uint16 {
+	keys := orderedEnvEntries(env)
+	var out []uint16
+	for _, key := range keys {
+		item := ToWide(key + "=" + env[key])
+		if len(item) > 0 {
+			item = item[:len(item)-1]
+		}
+		out = append(out, item...)
+		out = append(out, 0)
+	}
+	out = append(out, 0)
+	return out
+}
+
+// orderedEnvEntries mirrors Rust #51512 ordered_env_entries: keys are sorted
+// case-insensitively with the original spelling as a tie-break, then duplicate
+// Windows spellings collapse so the first entry is the one the child receives.
+// Permission resolution and the serialized environment must select the same
+// TEMP/TMP value.
+func orderedEnvEntries(env map[string]string) []string {
 	keys := make([]string, 0, len(env))
 	for key := range env {
 		keys = append(keys, key)
@@ -82,16 +102,16 @@ func MakeEnvBlock(env map[string]string) []uint16 {
 		}
 		return upperI < upperJ
 	})
-	var out []uint16
+	out := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
 	for _, key := range keys {
-		item := ToWide(key + "=" + env[key])
-		if len(item) > 0 {
-			item = item[:len(item)-1]
+		upper := upperASCII(key)
+		if _, ok := seen[upper]; ok {
+			continue
 		}
-		out = append(out, item...)
-		out = append(out, 0)
+		seen[upper] = struct{}{}
+		out = append(out, key)
 	}
-	out = append(out, 0)
 	return out
 }
 
