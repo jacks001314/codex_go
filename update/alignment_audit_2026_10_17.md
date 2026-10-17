@@ -372,3 +372,32 @@ Go 侧前置条件缺失（均已用可复现检索确认）：
 | `go build ./appserver` | exit 0 |
 | `go test ./appserver -run "TestEnvironmentContextTime"` | ok（4 例） |
 | `go test ./appserver -run TestCompactEnvironmentContextHonorsIncludeEnvironmentContextTimeLikeRust` | ok |
+
+# Round 98 增量（2026-10-17，lead）
+
+## 14.1 已落地
+
+### #53991 app 侧 ChatGPT refresh reason 接线（`f87ba04ec3`）
+
+- `model/responses_agent.go::refreshManagedChatGPTAuth`（对应 Rust 的 managed `UnauthorizedRecoveryStepRefreshToken`）现在传 `RefreshReasonUnauthorizedRecovery`，401 恢复触发的刷新在 wire 上报 `refresh_reason=unauthorized_recovery`，而不是默认的 `forced`。
+- `app/remote_tui.go::chatGPTAuthTokensRefresh`（TUI 代 app server 处理未授权刷新）同样传 `unauthorized_recovery`。
+- 测试：`model/auth_refresh_reason_test.go`、`app/remote_tui_auth_refresh_test.go` 都直接断言请求体里的 `refresh_reason`。
+- 剩余结构差异：Go 没有 AuthManager 的 proactive-expiry / scheduled 主动刷新决策（相关检索 0 命中），这两个 reason 值在 Go 不可达；gateway 刷新仍不带该字段（与 Rust 一致）。
+
+### #54316 回归测试确认（`f0c5077c34`）
+
+- round-91 评审要求的回归已在 `c289c53d` 落地：`TestGuardianReviewTranscriptExcludesCompactionSummaryLikeRust` 断言 compaction summary 被排除/归到 assistant，而同文本的用户消息仍保留。
+
+## 14.2 判定
+
+### #53795 bundled model catalog test（`8af93416dd`）— N/A
+
+- Rust 该 PR 仅改测试：把 `config.model_catalog` 固定为 bundled catalog，让模型在 MCP 生命周期钩子前本地解析。Go 对应的启动测试（`interactiveMCPStartupMessages`）不解析模型目录，不存在远端目录依赖，无需移植。
+
+## 14.3 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./model ./app` | exit 0 |
+| `go test ./model -run TestManagedAuthRecoveryReportsUnauthorizedRefreshReasonLikeRust` | ok |
+| `go test ./app -run TestRemoteTUIAuthRefreshReportsUnauthorizedReasonLikeRust` | ok |
