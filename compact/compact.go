@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -187,6 +188,13 @@ type Item struct {
 	Data      map[string]any
 	Raw       json.RawMessage
 	Created   time.Time
+}
+
+// CompactionPrefix identifies the history snapshot a speculative compaction
+// will replace. Later items survive when the candidate is installed.
+type CompactionPrefix struct {
+	Len                 int
+	AuthOwnerGeneration *uint64
 }
 
 type ContentPart struct {
@@ -474,17 +482,14 @@ func InsertInitialContextBeforeLastUserOrSummary(history []Item, initialContext 
 		item := history[i]
 		// Rust compact.rs:657-663 (#52937): a retained standalone output forms the
 		// same insertion boundary as the last real user or agent message.
-		if IsRetainedToolOutput(item) {
+		if IsRetainedToolOutput(item) || IsRealUserOrAgentMessage(item) {
 			insertAt = i
 			break
 		}
-		if isStructuredAgentMessage(&item) && !isAgentCompletionMessage(&item) {
-			insertAt = i
-			break
-		}
-		if item.Role == "user" && item.Kind != "compaction_summary" {
-			insertAt = i
-			break
+		if item.Role == "user" || item.Type == "user_message" {
+			// Compaction summaries are encoded as user messages, so retain a
+			// fallback insertion point when no real user or agent message exists.
+			continue
 		}
 	}
 	if insertAt == len(history) {
@@ -500,6 +505,86 @@ func InsertInitialContextBeforeLastUserOrSummary(history []Item, initialContext 
 	result = append(result, cloneItems(initialContext)...)
 	result = append(result, history[insertAt:]...)
 	return result
+}
+
+// IsRealUserOrAgentMessage reports whether an item is a real user turn or a
+// non-final agent message (Rust `compact::is_real_user_or_agent_message`).
+func IsRealUserOrAgentMessage(item Item) bool {
+	if item.Type == "agent_message" {
+		return !isAgentCompletionMessage(&item)
+	}
+	if item.Role != "user" && item.Type != "user_message" {
+		return false
+	}
+	return item.Kind != "compaction_summary" &&
+		!strings.HasPrefix(strings.TrimSpace(item.Text), SummaryPrefix+"\n")
+}
+
+// InstallCompactedHistoryPrefix replaces only the captured history prefix and
+// preserves items appended while speculative compaction was running. Initial
+// context follows real later user/agent messages; otherwise it is inserted at
+// the compacted history's user/summary boundary.
+func InstallCompactedHistoryPrefix(history []Item, replacement []Item, prefix CompactionPrefix, prefixContext []Item, initialContext []Item) []Item {
+	prefixLen := prefix.Len
+	if prefixLen < 0 {
+		prefixLen = 0
+	}
+	if prefixLen > len(history) {
+		prefixLen = len(history)
+	}
+	suffix := cloneItems(history[prefixLen:])
+	installed := cloneItems(replacement)
+	if historyContainsRealUserOrAgentMessage(suffix) {
+		installed = append(installed, cloneItems(initialContext)...)
+	} else {
+		installed = InsertInitialContextBeforeLastUserOrSummary(installed, initialContext)
+	}
+	out := make([]Item, 0, len(prefixContext)+len(installed)+len(suffix))
+	out = append(out, cloneItems(prefixContext)...)
+	out = append(out, installed...)
+	out = append(out, suffix...)
+	return out
+}
+
+func historyContainsRealUserOrAgentMessage(items []Item) bool {
+	for _, item := range items {
+		if IsRealUserOrAgentMessage(item) {
+			return true
+		}
+	}
+	return false
+}
+
+// TrimHistoryToContextWindow applies an explicit context window rather than
+// reading configuration at request time, so speculative requests keep the
+// window captured by their model step.
+func TrimHistoryToContextWindow(items []Item, contextWindow int, baseInstructions string) []Item {
+	if contextWindow <= 0 {
+		return cloneItems(items)
+	}
+	used := EstimateTextTokens(baseInstructions)
+	for i := range items {
+		used += max(1, EstimateItemTokens(&items[i]))
+	}
+	if used <= contextWindow {
+		return cloneItems(items)
+	}
+	return TrimHistoryToTokenBudget(items, max(0, contextWindow-EstimateTextTokens(baseInstructions)))
+}
+
+// HistoryVersion returns a stable fingerprint used to deduplicate speculative
+// compaction attempts for the same captured history.
+func HistoryVersion(items []Item) uint64 {
+	hasher := fnv.New64a()
+	for i := range items {
+		encoded, err := json.Marshal(items[i])
+		if err != nil {
+			encoded = []byte(ItemText(&items[i]))
+		}
+		_, _ = hasher.Write([]byte(fmt.Sprintf("%d:", len(encoded))))
+		_, _ = hasher.Write(encoded)
+	}
+	return hasher.Sum64()
 }
 
 func ProcessRemoteHistory(remote []Item, initialContext []Item, injectBeforeLastUser bool) []Item {

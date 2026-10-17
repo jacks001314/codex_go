@@ -2022,7 +2022,7 @@ be2684ede0c3aa3e7789c4d83ad6a98ff5fe5b87	42903	Preserve TUI question state and i
 be2e129ecd67d900c016eda12d5d193e33d9c3da	52065	Require assessment text in the Guardian parser (#52065)	2026-10-08	guardian	1	0	0.00	0	0	complete	parse_guardian_assessment
 be3a6661439ed958700799f6ef1da6a638de3911	40496	Track history, notes, and async messages as control tools (#40496)	2026-08-24	appserver	0	0		0	0	not_applicable	
 be48ae396e57621cee374423a19c2f427e1b4373	50470	Account for JSON overhead when truncating MCP tool results (#50470)	2026-10-03	core	0	0		0	0	not_applicable	
-be5296d4672f59205c1b8a76f46e74eae4f10d51	53606	Prepare compaction helpers for background requests (#53606)	2026-10-13	core	10	1	0.10	0	0	audit_pending	CompactedHistoryInstallation,CompactionPrefix,ResponsesHttpExecutor,auth_owner_generation,compaction_responses_metadata_for_window,current_window_from_state,is_real_user_or_agent_message,stream_responses_http,turn_state_with_auth_owner
+be5296d4672f59205c1b8a76f46e74eae4f10d51	53606	Prepare compaction helpers for background requests (#53606)	2026-10-13	core	10	10	1.00	0	0	complete	
 be6ebb1f6d4cf3bcd70c5c20be2677bb38dec860	40017	Trace turn context creation and realtime state checks (#40017)	2026-08-21	realtime	0	0		0	0	not_applicable	
 be9060ff9620e170a05a6353ab293efb7c704248	52923	Stabilize the realtime steering timeline test (#52923)	2026-10-10	appserver	0	0		0	0	not_applicable	
 beae473be8564d884a8cfe9704194a5c803d2ac1	54654	Allow dynamic tool calls to execute in parallel (#54654)	2026-10-16	core	0	0		0	0	complete	

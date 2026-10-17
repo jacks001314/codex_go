@@ -17,6 +17,20 @@ import (
 
 const defaultRemoteCompactModel = "gpt-5.4-mini"
 
+type compactionResponseWindow struct {
+	WindowID        string
+	WindowNumber    uint64
+	ContextWindowID string
+}
+
+func (r *RuntimeRouter) compactionWindowForThread(threadID string) compactionResponseWindow {
+	return compactionResponseWindow{
+		WindowID:        r.windowIDForThread(threadID),
+		WindowNumber:    r.windowNumberForThread(threadID),
+		ContextWindowID: r.contextWindowIDForThread(threadID),
+	}
+}
+
 // compactionImplementationResponses is Rust's
 // CompactionImplementation::Responses wire value: Go's remote compaction sends
 // the compaction prompt through the Responses path (the v2 implementation,
@@ -34,6 +48,19 @@ const compactionImplementationResponses = "responses"
 // `ExecutionMetadata` only on the sampling and MCP paths, so a compaction
 // document carries those keys only when the client configured them.
 func (r *RuntimeRouter) compactResponsesClientMetadata(record *session.Record, request *compact.Request, compactModel string) map[string]string {
+	threadID := ""
+	if record != nil {
+		threadID = strings.TrimSpace(string(record.ID))
+	}
+	if request != nil {
+		threadID = firstNonEmpty(strings.TrimSpace(request.ThreadID), threadID)
+	}
+	return r.compactResponsesClientMetadataForWindow(record, request, compactModel, r.compactionWindowForThread(threadID))
+}
+
+// compactResponsesClientMetadataForWindow builds compaction metadata from the
+// window captured with the request rather than the thread's current window.
+func (r *RuntimeRouter) compactResponsesClientMetadataForWindow(record *session.Record, request *compact.Request, compactModel string, window compactionResponseWindow) map[string]string {
 	if r == nil {
 		return nil
 	}
@@ -115,9 +142,9 @@ func (r *RuntimeRouter) compactResponsesClientMetadata(record *session.Record, r
 		SessionID:                  firstNonEmpty(lineage.SessionID, threadID),
 		ThreadID:                   threadID,
 		TurnID:                     turnID,
-		WindowID:                   r.windowIDForThread(threadID),
-		ContextWindowID:            r.contextWindowIDForThread(threadID),
-		WindowNumber:               uint64PtrAppserver(r.windowNumberForThread(threadID)),
+		WindowID:                   window.WindowID,
+		ContextWindowID:            window.ContextWindowID,
+		WindowNumber:               uint64PtrAppserver(window.WindowNumber),
 		RequestKind:                codexapi.ClientRequestCompaction,
 		Compaction:                 compaction,
 		ForkedFromThreadID:         lineage.ForkedFromThreadID,

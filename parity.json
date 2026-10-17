@@ -1478,6 +1478,14 @@
             "reason": "Aligned upstream cf0ed4c600 (#53736 Acquire and cache opt-in executor capability inventories via V2): the disabled-by-default feature acquires capabilityDiscoveryV2 inventories from selected remote executors using each environment's cwd and sandbox. Inventories are cached by environment instance, executor session, cwd, and sandbox with concurrent coalescing, FIFO eviction, retryable failure exclusion, and recovery reporting. The cache refreshes at turn start and remains available to idle callers, snapshots are exposed through the step capability state without activating plugins or publishing skills, and executor discovery now includes the system skills root.",
             "userImpact": "Opted-in remote environment inventories can be acquired and reused consistently across model steps while unsupported executors and the default feature-off configuration keep existing behavior.",
             "test": "go test -race ./execserver -run ExecutorCapabilityDiscoveryV2Cache -count=1; go test ./appserver -run ExecutorCapabilityDiscoveryV2 -count=1; go vet ./execserver ./appserver"
+        },
+        {
+            "id": "background-compaction-preparation",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream be5296d467 (#53606 Prepare compaction helpers for background requests): compaction prefixes can install a summarized history while preserving later items, initial context is placed after real later user/agent messages or at the summary boundary, real-user/agent classification excludes final answers and summaries, history trimming accepts a captured context window, and compaction metadata accepts a captured window identity. Go's agent runner is already a stateless HTTP executor and the router exposes credential-owner revisions for future background requests.",
+            "userImpact": "Speculative compaction can preserve history appended while a request is in flight and keep the request metadata tied to the window it actually captured.",
+            "test": "go test ./compact -count=1; go test ./appserver -run 'CompactResponsesClientMetadata|AsyncCompaction' -count=1"
         }
     ]
 }

@@ -87,6 +87,30 @@ func TestCompactResponsesClientMetadataCarriesTheTurnDocument(t *testing.T) {
 	}
 }
 
+func TestCompactResponsesClientMetadataUsesCapturedWindowLikeRust(t *testing.T) {
+	router := &RuntimeRouter{}
+	record := &session.Record{ID: "thread-1", SessionID: "session-1"}
+	request := &compact.Request{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Trigger:  compact.TriggerAuto,
+		Reason:   compact.ReasonTokenLimit,
+		Phase:    compact.PhaseMidTurn,
+	}
+	metadata := router.compactResponsesClientMetadataForWindow(record, request, "gpt-5", compactionResponseWindow{
+		WindowID:        "thread-1:4",
+		WindowNumber:    4,
+		ContextWindowID: "context-window-4",
+	})
+	document := decodeCompactionTurnMetadata(t, metadata[codexapi.ClientCodexTurnMetadataHeader])
+	if document["window_id"] != "thread-1:4" || document["context_window_id"] != "context-window-4" {
+		t.Fatalf("captured window metadata = %#v", document)
+	}
+	if number, ok := document["window_number"].(float64); !ok || number != 4 {
+		t.Fatalf("window_number = %#v, want 4", document["window_number"])
+	}
+}
+
 // TestAgentCompactRunnerSendsTheCompactionTurnDocument mirrors the request a
 // remote compaction runner issues: the turn-metadata document carries the
 // compaction request kind, and no flat request-kind key is added to the client
