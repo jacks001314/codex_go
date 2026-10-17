@@ -17837,9 +17837,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: test_environment_config"
+        "Round 115 (lead): N/A (verified carrier absence) - #47077 replaces Rust's ArcSwap environment list with a mutex and copies only selection metadata/resolution futures into snapshots so removed pending senders cannot keep work alive. Go stores runtime environment selections as thread metadata maps updated through the router's mutex-protected thread state and resolves inheritance from those persisted maps; it has no ArcSwap TurnEnvironments list, pending completion sender, or unpolled resolution-future snapshot carrier. There is no concurrent stale-list overwrite path of the Rust shape to patch. go build ./appserver green."
       ]
     },
     {

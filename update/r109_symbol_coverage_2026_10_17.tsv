@@ -1032,7 +1032,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 62aacbb2c9a784a4ac62aa8957a5ac6ebc211dfa	40736	Run exec-server compatibility tests under Bazel (#40736)	2026-08-25	execserver	0	0		0	0	not_applicable	
 62b458c93151595cdf2b5ef5e37aa3d8b5613aeb	41454	Block goals after repeated execution host failures (#41454)	2026-08-29	appserver	3	2	0.67	0	0	audit_pending	current_active_goal_id_for_turn
 62bfa41a837a3c402ee1888ac0e25ea479083723	40723	Update the biology Trusted Access link (#40723)	2026-08-25	tui	0	0		0	0	not_applicable	
-62ea6d41e85d0c75181f2794d0f2dc40e55fce3c	47077	Serialize environment updates and cancel removed pending attachments (#47077)	2026-09-21	core	1	0	0.00	0	0	implementation_pending	test_environment_config
+62ea6d41e85d0c75181f2794d0f2dc40e55fce3c	47077	Serialize environment updates and cancel removed pending attachments (#47077)	2026-09-21	core	1	0	0.00	0	0	not_applicable	test_environment_config
 62f553bfd02cdc1206931b99d0083fd9619d7688	42428	Use the shared composer in the agent command center (#42428)	2026-09-03	tui	10	1	0.10	0	0	audit_pending	AgentsOverviewFocus,composer_is_vim_enabled,focus_composer,handle_composer_key,handle_paste_enter,layout_areas,restore_agents_overview_prompt,set_app_event_sender,sync_agents_overview_composer
 62fb56ee569e8ed6a9ad7ec575b0e78c25df4b17	40892	Route Guardian inference through dedicated endpoints (#40892)	2026-08-26	guardian	5	2	0.40	0	0	audit_pending	free_guardian_enabled,with_endpoint,with_free_guardian_enabled
 6326163b9abd7802c0e57be4e326e5f898bbba75	50540	Send incremental tool catalog updates in Responses Lite (#50540)	2026-10-03	persistence	4	2	0.50	0	0	audit_pending	prefix_item,uses_incremental_tools
