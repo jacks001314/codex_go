@@ -216,9 +216,8 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	managedWorktreeRoot := ""
 	managedWorktreeBound := false
 	if req.Exec.Shared.Worktree {
-		if !features.Enabled(cfg.FeatureSettings(), "worktrees") {
-			return nil, errors.New("--worktree requires the worktrees feature; enable it with --enable worktrees")
-		}
+		// Rust #54175: `--worktree` no longer requires the retired `worktrees`
+		// feature flag; only the local workspace and trust checks remain.
 		desktop, _ := cfg.Values["desktop"].(map[string]any)
 		settings, err := worktree.FromDesktopConfig(r.CodexHome, desktop)
 		if err != nil {

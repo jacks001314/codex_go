@@ -101,8 +101,9 @@ func interactiveExternalEditorDirectoryHandler(root *cli.RootOptions, codexHome 
 // conversation history), patch the fork's cwd, archive the old thread, and
 // return the replacement session summary for the TUI to attach.
 // interactiveWorktreeSettings resolves the managed-worktree configuration for
-// the local session: the `worktrees` feature flag plus the desktop worktree
-// pool settings (Rust #43120).
+// the local session. Rust #54175 retired the `worktrees` feature flag, so
+// managed worktrees are always available locally and only the desktop worktree
+// pool settings are resolved (Rust #43120).
 // interactiveStartupConfigWarnings reports the app-server config warnings known
 // when the local TUI starts - the requirement-driven startup warnings plus the
 // ignored-configuration notice - which the TUI coalesces into its startup
@@ -125,9 +126,6 @@ func interactiveStartupConfigWarnings(codexHome string, cwd string, theme string
 func interactiveWorktreeSettings(root *cli.RootOptions) (worktree.WorktreeSettings, bool) {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
 	if err != nil {
-		return worktree.WorktreeSettings{}, false
-	}
-	if !features.Enabled(loaded.FeatureSettings(), "worktrees") {
 		return worktree.WorktreeSettings{}, false
 	}
 	desktop, _ := loaded.Values["desktop"].(map[string]any)
@@ -3010,11 +3008,12 @@ func interactiveKeymapEditMessage(edit codextui.KeymapEdit) string {
 }
 
 func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSummary {
-	settings := interactiveTUISettings(root)
 	items, err := codextui.LoadSessionSummariesFromStore(newSessionStore(), codextui.SessionSourceOptions{
-		CWD:              interactiveSessionPickerCWD(root),
-		IncludeArchived:  true,
-		WorktreesEnabled: features.Enabled(settings.FeatureSettings, "worktrees"),
+		CWD:             interactiveSessionPickerCWD(root),
+		IncludeArchived: true,
+		// Rust #54175: local session discovery always groups linked checkouts;
+		// the retired `worktrees` flag no longer gates it.
+		WorktreesEnabled: true,
 	})
 	if err != nil {
 		return nil

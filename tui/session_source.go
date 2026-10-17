@@ -20,20 +20,25 @@ type SessionSourceOptions struct {
 	Search                string
 	ModelProvider         string
 	// WorktreesEnabled expands the directory filter to the corresponding
-	// directories of the repository's linked worktrees (Rust #43279).
+	// directories of the repository's linked worktrees (Rust #43279). Rust
+	// #54175 retired the `worktrees` feature flag, so callers set this from the
+	// session's filesystem scope instead: true for local sessions, false for
+	// remote ones.
 	WorktreesEnabled bool
 }
 
 // SessionPickerWorktreeCWDs returns the picker's directory filter: the
-// requested directory, plus its linked worktrees' corresponding directories
-// when the `worktrees` feature is enabled. It falls back to the requested
-// directory alone when the checkout identity cannot be validated.
-func SessionPickerWorktreeCWDs(cwd string, worktreesEnabled bool) []string {
+// requested directory, plus its linked worktrees' corresponding directories for
+// a local session. Rust #54175 retired the `worktrees` feature flag, so the
+// expandLinkedWorktrees argument now reflects the session's filesystem scope
+// (false for remote sessions) rather than a feature toggle. It falls back to the
+// requested directory alone when the checkout identity cannot be validated.
+func SessionPickerWorktreeCWDs(cwd string, expandLinkedWorktrees bool) []string {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
 		return nil
 	}
-	if !worktreesEnabled {
+	if !expandLinkedWorktrees {
 		return []string{cwd}
 	}
 	cwds, ok := gitutil.LinkedWorktreeCWDs(cwd)

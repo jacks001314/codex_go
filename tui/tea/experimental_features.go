@@ -40,6 +40,14 @@ type ExperimentalFeaturesResultMsg struct {
 // Rust ExperimentalFeatureStage wire value for the only stage the popup lists.
 const experimentalFeatureStageBeta = "beta"
 
+// retiredExperimentalFeatureKeys are the compatibility flags that are always
+// available and therefore stay hidden from /experimental, even when an older
+// app server still reports them as beta (Rust #54175).
+var retiredExperimentalFeatureKeys = map[string]bool{
+	"worktrees":             true,
+	"realtime_conversation": true,
+}
+
 const (
 	// Rust experimental_features_view discovery_status strings.
 	experimentalFeaturesLoadingStatus = "Loading server experiments…"
@@ -66,7 +74,7 @@ func experimentalFeatureOptionsFromCatalog(entries []ExperimentalFeatureEntry) [
 	out := make([]chatwidget.ExperimentalFeatureOption, 0, len(entries))
 	for _, entry := range entries {
 		name := strings.TrimSpace(entry.Name)
-		if name == "" || entry.Stage != experimentalFeatureStageBeta {
+		if name == "" || entry.Stage != experimentalFeatureStageBeta || retiredExperimentalFeatureKeys[name] {
 			continue
 		}
 		out = append(out, chatwidget.ExperimentalFeatureOption{

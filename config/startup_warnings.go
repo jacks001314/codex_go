@@ -144,6 +144,15 @@ func requirementStartupWarnings(values map[string]any, requirements *ConfigRequi
 		if key == "auto_review" {
 			continue
 		}
+		if featureflags.RetiredRequirementKey(key) {
+			// Rust #54175: managed requirements that still reference the
+			// retired `worktrees` / `realtime_conversation` flags are ignored
+			// with an explicit startup warning.
+			warnings = append(warnings, fmt.Sprintf(
+				"Ignoring removed `features` requirement `%s` from %s; availability no longer depends on this feature flag.",
+				key, managedRequirementSource))
+			continue
+		}
 		canonical, legacy, known := featureflags.RequirementKey(key)
 		switch {
 		case !known:
@@ -289,4 +298,3 @@ func requiredEnumValue[T ~string](value *T) string {
 	}
 	return string(*value)
 }
-

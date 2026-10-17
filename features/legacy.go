@@ -68,6 +68,19 @@ func CanonicalKey(key string) (string, bool) {
 	return canonical, ok
 }
 
+// RetiredRequirementKey reports whether a managed `features` requirement names
+// one of the retired compatibility flags whose availability no longer depends on
+// the feature system (Rust #54175). Such requirements are ignored with a
+// startup warning.
+func RetiredRequirementKey(key string) bool {
+	switch strings.TrimSpace(key) {
+	case "worktrees", "realtime_conversation":
+		return true
+	default:
+		return false
+	}
+}
+
 // RequirementKey mirrors Rust's canonical_feature_for_key / feature_for_key
 // lookup used when a managed `features` requirement table is parsed: it reports
 // the canonical key and whether the given key was a legacy alias. Unknown keys

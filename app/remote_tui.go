@@ -28,7 +28,6 @@ import (
 	"codex_go/codexuds"
 	"codex_go/config"
 	"codex_go/doctor"
-	"codex_go/features"
 	"codex_go/plugin"
 	"codex_go/prompt"
 	"codex_go/protocol"
@@ -461,9 +460,9 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		MouseScrollSpeed:             settings.MouseScrollSpeed,
 		RightClickPaste:              interactiveRightClickPasteValue(settings.RightClickPaste),
 		ShowRawReasoning:             showRawReasoning,
-		// Remote sessions only see the worktrees feature flag; managed worktree
-		// operations stay local (Rust #43120/#43286).
-		WorktreesEnabled: interactiveRemoteWorktreesEnabled(root),
+		// Managed worktree operations stay local, so a remote session never
+		// enables them (Rust #43120/#43286, #54175).
+		WorktreesEnabled: false,
 		// Rust #43340: the connected server owns named permission profiles.
 		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
@@ -1851,9 +1850,10 @@ func remoteTUIThreadListParams(root *cli.RootOptions, archived bool) appserver.T
 		},
 	}
 	if cwd := interactiveSessionPickerCWD(root); cwd != "" {
-		settings := interactiveTUISettings(root)
+		// Rust #54175: repository-aware discovery follows the local filesystem,
+		// so a remote session filters on the requested directory alone.
 		params.CWD = &appserver.ThreadListCwdFilter{
-			Values: codextui.SessionPickerWorktreeCWDs(cwd, features.Enabled(settings.FeatureSettings, "worktrees")),
+			Values: codextui.SessionPickerWorktreeCWDs(cwd, false),
 		}
 	}
 	return params
@@ -4424,7 +4424,7 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			}
 			if payload.Error.AdditionalDetails != nil {
 				if details := strings.TrimSpace(*payload.Error.AdditionalDetails); details != "" {
-					text += "\n└ " + details
+					text += "\n鈹?" + details
 				}
 			}
 			c.send(codextea.ModelRetryStatusMsg{Message: text, Active: true})
@@ -4896,17 +4896,6 @@ func remoteTurnSteerParams(threadID string, turnID string, clientID string, requ
 		Input:               inputs,
 		ClientUserMessageID: strings.TrimSpace(clientID),
 	}, nil
-}
-
-// interactiveRemoteWorktreesEnabled reports whether the `worktrees` feature is
-// enabled for a remote session. Managed worktree operations stay local, so only
-// the flag itself reaches the remote TUI (Rust #43120/#43286).
-func interactiveRemoteWorktreesEnabled(root *cli.RootOptions) bool {
-	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
-	if err != nil {
-		return false
-	}
-	return features.Enabled(loaded.FeatureSettings(), "worktrees")
 }
 
 // interactiveShowRawAgentReasoning reports the configured

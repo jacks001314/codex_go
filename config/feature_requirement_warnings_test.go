@@ -65,3 +65,26 @@ func TestFeatureRequirementWarningsThroughRequirementsFile(t *testing.T) {
 		t.Fatalf("config warnings = %#v, want the collab alias notice", service.Warnings())
 	}
 }
+
+// TestRemovedFeatureRequirementWarningsLikeRust mirrors Rust #54175
+// (managed_features::parse_feature_requirements): a managed requirement that
+// still references the retired `worktrees` / `realtime_conversation` flags is
+// ignored with an explicit warning, in sorted key order.
+func TestRemovedFeatureRequirementWarningsLikeRust(t *testing.T) {
+	warnings := StartupWarnings(map[string]any{}, &ConfigRequirements{FeatureRequirements: map[string]bool{
+		"worktrees":             true,
+		"realtime_conversation": false,
+	}})
+	want := []string{
+		"Ignoring removed `features` requirement `realtime_conversation` from managed requirements; availability no longer depends on this feature flag.",
+		"Ignoring removed `features` requirement `worktrees` from managed requirements; availability no longer depends on this feature flag.",
+	}
+	if len(warnings) != len(want) {
+		t.Fatalf("StartupWarnings() = %#v, want %#v", warnings, want)
+	}
+	for index, warning := range warnings {
+		if warning != want[index] {
+			t.Fatalf("warning[%d] = %q, want %q", index, warning, want[index])
+		}
+	}
+}

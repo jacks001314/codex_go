@@ -401,3 +401,36 @@ Go 侧前置条件缺失（均已用可复现检索确认）：
 | `go build ./model ./app` | exit 0 |
 | `go test ./model -run TestManagedAuthRecoveryReportsUnauthorizedRefreshReasonLikeRust` | ok |
 | `go test ./app -run TestRemoteTUIAuthRefreshReportsUnauthorizedReasonLikeRust` | ok |
+
+# Round 99 增量（2026-10-17，lead）
+
+## 15.1 已落地
+
+### #54175 退役 worktree / voice 特性开关（`bb64b894fd`）— landed
+
+Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（features 面此前已落地），本轮补齐其余三面：
+
+- **managed worktree 创建**：`exec/exec.go` 删除 `--worktree requires the worktrees feature` 的报错分支；`app/interactive.go::interactiveWorktreeSettings` 不再因 `features.worktrees=false` 返回未启用，仍保留本地工作区与 trust 检查。
+- **repository-aware session discovery**：`app/agents.go` 的本地 agents dashboard 直接按仓库分组（删除 `localAgentsWorktreesEnabled`）；`app/interactive.go::interactiveSessionPickerItems` 固定展开 linked checkouts；`tui/tea/session_picker.go` 改用模型的本地/远端作用域（`m.worktreesEnabled`）而不是读特性开关；`tui/tea/agents_overview.go` 只看 `localSession`。
+- **remote 语义**：`app/remote_tui.go` 的远端会话列表固定单目录（`SessionPickerWorktreeCWDs(cwd, false)`），`WorktreesEnabled` 固定为 `false`，与 Rust `repository_cwd_filter(cwd, uses_remote_filesystem=true)` 一致。
+- **/experimental 隐藏**：`tui/tea/experimental_features.go` 即便旧 server 仍把两个 key 报成 beta，也从目录中过滤掉。
+- **managed requirements 警告**：`config/startup_warnings.go` + `features/legacy.go::RetiredRequirementKey`，对引用这两个 key 的 managed 要求输出 `Ignoring removed `features` requirement `<key>` from managed requirements; availability no longer depends on this feature flag.`，按 key 排序。
+- **voice 可用性**：Go 侧 `/voice` 与 TUI 语音入口已只看平台支持（`voicehost.IsSupported()`，`FeatureEnabled: true`），无需再改。
+
+测试：
+
+- `tui/tea/experimental_features_retired_test.go`：两个退役 key 即使 stage=beta 也不出现，其他 beta 仍列出。
+- `tui/tea/agents_overview_retired_test.go`：本地即使 `features.worktrees=false` 仍分组，远端不分组。
+- `config/feature_requirement_warnings_test.go::TestRemovedFeatureRequirementWarningsLikeRust`：两条 removed 警告按字典序输出。
+- 既有 `features/features_test.go::TestRetiredWorktreeAndVoiceConfigOverridesAreIgnoredLikeRust` 覆盖配置覆盖被忽略。
+
+## 15.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./config -run "TestRemovedFeatureRequirementWarningsLikeRust|TestManagedFeatureRequirementWarningsLikeRust|TestFeatureRequirementWarningsThroughRequirementsFile"` | ok |
+| `go test ./tui/tea -run "TestRetiredWorktreeAndVoiceCatalogEntriesAreHiddenLikeRust|TestAgentsOverviewWorktreesEnabledFollowsLocalScopeLikeRust"` | ok |
+| `go test ./tui -run "Worktree|SessionPicker"` | ok |
+| `go test ./features` | ok |
+| `go test ./exec` | FAIL（既有 `TestRunExecReviewUsesRustReviewRubricInstructions`，与本轮改动无关） |

@@ -6,7 +6,6 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
-	"codex_go/features"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
 	"codex_go/tui/markdown"
@@ -155,12 +154,13 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 }
 
 // agentsOverviewWorktreesEnabled groups linked checkouts in the dashboard when
-// the worktrees feature is on and the session is local (Rust #43279).
+// the session is local. Rust #54175 retired the `worktrees` feature flag, so
+// availability no longer depends on it (Rust #43279).
 func (m *Model) agentsOverviewWorktreesEnabled() bool {
 	if m == nil {
 		return false
 	}
-	return m.localSession && features.Enabled(m.featureSettings, "worktrees")
+	return m.localSession
 }
 
 // applyAgentsOverviewKeymapHints resolves the agents-dashboard shortcuts from

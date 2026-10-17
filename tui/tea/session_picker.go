@@ -131,7 +131,9 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 		action,
 		m.sessionItems,
 		m.sessionCWD,
-		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, features.Enabled(m.featureSettings, "worktrees"))...,
+		// Rust #54175: the retired `worktrees` flag no longer gates linked
+		// checkout discovery; the model's local/remote scope decides instead.
+		codextui.SessionPickerWorktreeCWDs(m.sessionCWD, m.worktreesEnabled)...,
 	)
 	if picker == nil {
 		m.notice = "No sessions available."
