@@ -35,7 +35,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 039eb58a0ba6647fb8f29fdd35341f3f1b153728	40848	Give Guardian reviewers read-only access to parent history (#40848)	2026-08-26	appserver	1	0	0.00	0	0	implementation_pending	GuardianReadOnlyHistoryTools
 03b761dca9b04f47e166494232d70b3fe7c6738a	52363	Expand realtime v3 voice support (#52363)	2026-10-09	appserver	0	0		0	0	not_applicable	
 03f014564deef528c25e80fe67ec51871cb6ee51	44472	Harden Code Mode tool-call completeness tracking (#44472)	2026-09-10	mcp	8	8	1.00	0	0	complete	
-0447e4a1fd2ceedfd50e3781adafc03f1cf2f46c	44352	Remove path-bearing fields from Guardian review analytics (#44352)	2026-09-10	guardian	1	0	0.00	0	0	implementation_pending	GuardianAdditionalPermissions
+0447e4a1fd2ceedfd50e3781adafc03f1cf2f46c	44352	Remove path-bearing fields from Guardian review analytics (#44352)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 044da98b4a7ff2dd0079f706280e0a6934048222	51503	Expose selected environments to MCP contributors (#51503)	2026-10-06	mcp	2	2	1.00	0	0	complete	
 044e74fef3d1af2b01f4375158ac1e7ad4ae17ea	53678	Preserve inherited context in prediction forks (#53678)	2026-10-13	appserver	1	0	0.00	0	0	implementation_pending	AutoCompactionDisabled
 04581f96044a9fe6062593c4d557036477aee961	45854	Add `/daemon` menu for local background server updates (#45854)	2026-09-16	tui	4	4	1.00	0	0	complete	

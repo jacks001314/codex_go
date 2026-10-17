@@ -11115,9 +11115,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: GuardianAdditionalPermissions"
+        "Round 115 (lead): verified complete (privacy-equivalent mechanism) - #44352 replaces path-bearing Guardian analytics permission profiles with network-only metadata and removes execve.program. Go's Guardian analytics never serializes those fields: review_analytics.go emits bounded subject kind/name/trigger plus requested-permission booleans, guardianReviewRequestedAdditionalPermissions reduces permissions to a bool, and execve maps to command_execution without program, argv, CWD, or filesystem paths. The richer Guardian approval notification action remains protocol data, not analytics payload. No source change needed."
       ]
     },
     {
