@@ -393,7 +393,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 27e6192e84fa8a2969d9d56c2fbe05754205958b	53389	Use cached login credentials for Guardian decisions (#53389)	2026-10-12	guardian	1	0	0.00	0	0	implementation_pending	decisions_api_key
 2808a9c348ee90a6fc94aee1570dd3fdf2c0b021	44328	Clear pending TUI questions when accepting a new prompt (#44328)	2026-09-09	tui	7	3	0.43	0	0	audit_pending	UserMessageSource,clear_pending_questions,on_review_started,queue_user_message_with_options_and_source
 28097e98ebcb5e7eaa2e14534e60337f209a8a80	42065	Preserve Guardian history across thread reconstruction (#42065)	2026-09-01	tui	4	0	0.00	0	0	implementation_pending	GuardianHistoryCheckpoint,guardian_history_checkpoint,restore_guardian_history,truncate_before
-280ae8b9fcd35a54704dc2c78027b89bd51369fd	42624	Centralize prompt image detail modes (#42624)	2026-09-03	core	2	0	0.00	0	0	implementation_pending	HIGH_DETAIL,ORIGINAL_DETAIL
+280ae8b9fcd35a54704dc2c78027b89bd51369fd	42624	Centralize prompt image detail modes (#42624)	2026-09-03	core	2	2	1.00	0	0	complete	
 280c7e1e5649cd79ddab629fbc4db37422a4bbb1	45517	Use a dedicated mock server in the provider enforcement test (#45517)	2026-09-14	appserver	0	0		0	0	not_applicable	
 282cd7b019378746cb87bd91a95d8b4bcae12aa3	47832	Stabilize Rosetta test timing and retry delay telemetry (#47832)	2026-09-24	core	0	0		0	0	not_applicable	
 282d655defa03bbad7925785e9e059a7d5c871bb	46880	Preserve voice playback across pauses and packet bursts (#46880)	2026-09-20	realtime	1	1	1.00	0	0	complete	
