@@ -52,7 +52,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 05de93520542d5d1a3f3af76ad446607a12d98fd	46544	Expose declared onboarding skills in plugin details (#46544)	2026-09-18	tui	0	0		0	0	not_applicable	
 05ea5f757e2d696b13a2da0f660c694e381a1a8d	49392	Add attributed MCP OAuth credential storage telemetry (#49392)	2026-09-29	appserver	9	6	0.67	0	0	audit_pending	ResolvedOAuthCredentialStore,record_secure_error,save_with_refresh_telemetry
 05f39d7346e6b6e1f9c7908ebf96a4353dea87a6	46929	Remove the `Error` prefix from TUI `config.toml` load errors (#46929)	2026-09-21	tui	0	0		0	0	not_applicable	
-062439b2f855e7c41e2dfbfe370ccc966f095263	51188	Record base instructions in incremental tool history (#51188)	2026-10-05	guardian	5	2	0.40	0	0	audit_pending	build_compaction_replacement_history,matches_item,optional_prefix_boxed_fragment
+062439b2f855e7c41e2dfbfe370ccc966f095263	51188	Record base instructions in incremental tool history (#51188)	2026-10-05	guardian	5	5	1.00	0	0	complete	
 064e701b0fa4f5c0dcaf195a565d088f99bb6af8	47207	Add explicit gateway OAuth sign-in to app-server (#47207)	2026-09-22	tui	13	8	0.62	0	0	audit_pending	cancel_gateway_login,gateway_oauth_cancel,gateway_oauth_login,gateway_oauth_read,status_fields
 0650d6d1ca451b67009b3969a82b87e76979975f	42552	Preserve MCP authentication challenges on tool calls (#42552)	2026-09-03	mcp	0	0		0	0	not_applicable	
 0666c12e785930e361d09289acf46f1d20cabbb2	45983	Show a loading message when opening tasks from the agents overview (#45983)	2026-09-16	tui	1	1	1.00	0	0	complete	
