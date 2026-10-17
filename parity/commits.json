@@ -826,10 +826,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 2/3; needs review: content_mut"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Remote-compaction history trimming keeps message content and content_item_kinds aligned, retains non-text parts and passthrough metadata, and classifies legacy unannotated content as unknown."
+        ]
     },
     {
       "sha": "184ff338ad7d737b0bd6d5e913a070cfd5c666bd",

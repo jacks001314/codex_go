@@ -256,6 +256,64 @@ func TestTrimHistoryToTokenBudgetKeepsRecentItems(t *testing.T) {
 	}
 }
 
+func TestTrimHistoryToTokenBudgetPreservesMessageMetadataLikeRust(t *testing.T) {
+	image := ContentPart{Type: "input_image", ImageURL: "data:image/png;base64,AAAA"}
+	longText := strings.Repeat("a", 40)
+	item := Item{
+		ID:   "message-1",
+		Type: "message",
+		Role: "user",
+		Text: longText,
+		Content: []ContentPart{
+			{Type: "input_text", Text: longText},
+			image,
+		},
+		Data: map[string]any{
+			"turn_id":            "turn-1",
+			"content_item_kinds": []string{"user.text", "user.image"},
+		},
+		Raw: json.RawMessage(`{"type":"message","role":"user","content":[]}`),
+	}
+	trimmed := TrimHistoryToTokenBudget([]Item{item}, 1)
+	if len(trimmed) != 1 {
+		t.Fatalf("trimmed = %#v", trimmed)
+	}
+	got := trimmed[0]
+	if got.Data["turn_id"] != "turn-1" {
+		t.Fatalf("passthrough metadata = %#v", got.Data)
+	}
+	if len(got.Raw) != 0 {
+		t.Fatalf("stale raw message survived truncation: %q", got.Raw)
+	}
+	if len(got.Content) < 2 || got.Content[len(got.Content)-1] != image {
+		t.Fatalf("content = %#v, want the image retained", got.Content)
+	}
+	kinds, _ := got.Data["content_item_kinds"].([]string)
+	if len(kinds) != len(got.Content) {
+		t.Fatalf("kinds = %#v, content = %#v", kinds, got.Content)
+	}
+	if kinds[0] != "user.text" || kinds[1] != unknownContentKind || kinds[len(kinds)-1] != "user.image" {
+		t.Fatalf("kinds = %#v, want source/unknown/source image classifications", kinds)
+	}
+	if got.Text == item.Text || !strings.Contains(got.Text, "tokens truncated") {
+		t.Fatalf("text = %q, want a truncation notice", got.Text)
+	}
+
+	legacy := TrimHistoryToTokenBudget([]Item{{
+		ID:   "legacy",
+		Type: "message",
+		Role: "user",
+		Text: "one two three",
+	}}, 1)
+	if len(legacy) != 1 {
+		t.Fatalf("legacy trimmed = %#v", legacy)
+	}
+	legacyKinds, _ := legacy[0].Data["content_item_kinds"].([]string)
+	if len(legacyKinds) != 1 || legacyKinds[0] != unknownContentKind {
+		t.Fatalf("legacy kinds = %#v, want [unknown]", legacyKinds)
+	}
+}
+
 func TestCompactLocallyHonorsHistoryTokenBudget(t *testing.T) {
 	request := &Request{
 		ThreadID:         "thread-a",

@@ -1377,10 +1377,10 @@ func TrimHistoryToTokenBudget(items []Item, maxTokens int) []Item {
 			if isStructuredAgentMessage(&items[i]) {
 				continue
 			}
-			item := items[i]
-			item.Text = truncateTextToTokens(ItemText(&items[i]), maxTokens-used)
-			item.Content = nil
-			item.Data = nil
+			item, ok := trimItemToTokenBudget(items[i], maxTokens-used)
+			if !ok {
+				break
+			}
 			selected = append(selected, item)
 			break
 		}
@@ -1391,6 +1391,65 @@ func TrimHistoryToTokenBudget(items []Item, maxTokens int) []Item {
 		selected[i], selected[j] = selected[j], selected[i]
 	}
 	return cloneItems(selected)
+}
+
+// trimItemToTokenBudget mirrors Rust's truncate_message_text_to_token_budget:
+// content parts and their positional classifications are truncated together,
+// non-text parts remain available, and the surrounding passthrough metadata is
+// left intact. Legacy messages without classifications are annotated unknown.
+func trimItemToTokenBudget(item Item, maxTokens int) (Item, bool) {
+	trimmed := item
+	trimmed.Raw = nil
+	trimmed.Data = cloneItemData(item.Data)
+	if trimmed.Data == nil {
+		trimmed.Data = map[string]any{}
+	}
+	if len(item.Content) == 0 {
+		trimmed.Text = truncateTextToTokens(ItemText(&item), maxTokens)
+		if trimmed.Text == "" {
+			return Item{}, false
+		}
+		trimmed.Data["content_item_kinds"] = []string{unknownContentKind}
+		return trimmed, true
+	}
+
+	kinds := contentItemKinds(item.Data)
+	retained := make([]ContentPart, 0, len(item.Content))
+	retainedKinds := make([]string, 0, len(item.Content))
+	remaining := maxTokens
+	for index, part := range item.Content {
+		kind := kindAt(kinds, index)
+		if !contentPartIsText(part) && !isRetainedImagePart(part) {
+			retained = append(retained, part)
+			retainedKinds = append(retainedKinds, kind)
+			continue
+		}
+		if !contentPartIsText(part) || remaining == 0 {
+			if !contentPartIsText(part) {
+				retained = append(retained, part)
+				retainedKinds = append(retainedKinds, kind)
+			}
+			continue
+		}
+		tokens := EstimateTextTokens(part.Text)
+		if tokens <= remaining {
+			retained = append(retained, part)
+			retainedKinds = append(retainedKinds, kind)
+			remaining -= tokens
+			continue
+		}
+		parts, partKinds := truncateUserTextParts([]ContentPart{part}, []string{kind}, remaining)
+		retained = append(retained, parts...)
+		retainedKinds = append(retainedKinds, partKinds...)
+		remaining = 0
+	}
+	trimmed.Content = retained
+	trimmed.Text = retainedMessageText(retained)
+	trimmed.Data["content_item_kinds"] = retainedKinds
+	if len(retained) == 0 {
+		return Item{}, false
+	}
+	return trimmed, true
 }
 
 type WindowIDs struct {
