@@ -90,7 +90,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0a2eb4696c26ac33204bcd255721ab30220a4774	47458	Parallelize instruction refresh and tool preparation (#47458)	2026-09-23	core	0	0		0	0	not_applicable	
 0a5b9991698e8e3c126da6101aa9e4da421f7ddd	46281	Connect app-server workspace discovery to model request routing (#46281)	2026-09-17	tui	10	5	0.50	0	0	audit_pending	AccountRead,AccountReadError,CachedWorkspaceRouting,WorkspaceRoutingFetches,load_retained_session_config
 0a73d55b80afd2aa88051848bd28524d132fd01e	47331	Avoid redundant spacing above the transcript composer (#47331)	2026-09-22	tui	2	0	0.00	0	0	implementation_pending	composer_gap_has_content,follow_control_label
-0a76a2520f45af68b7a5386688a9714af0a3ccd2	49689	Export skill invocation events through OpenTelemetry (#49689)	2026-09-30	telemetry	4	2	0.50	0	0	audit_pending	SkillInvocationType,with_user_id
+0a76a2520f45af68b7a5386688a9714af0a3ccd2	49689	Export skill invocation events through OpenTelemetry (#49689)	2026-09-30	telemetry	4	4	1.00	0	0	complete	
 0a80fab240ddf27aa9e1d4dd76748b7f44923f76	40264	Preserve content metadata when truncating messages (#40264)	2026-08-23	core	3	2	0.67	0	0	audit_pending	content_mut
 0ad18769ad8dfb7a6cf16b1bdd26b6e5f8773f64	46962	Avoid exposing config values in `codex doctor` errors (#46962)	2026-09-21	config	0	0		0	0	not_applicable	
 0ada5d8806cdad498230d5b1b2924091e04c8feb	52350	Expose experimental durable thread read state in the app server (#52350)	2026-10-09	tui	4	4	1.00	0	0	blocked_precondition	

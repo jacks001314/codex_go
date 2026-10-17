@@ -24150,8 +24150,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - telemetry/session_telemetry_skill.go emits the codex.skill_invocation log record with turn/skill/scope/plugin/invocation type and no contents, paths or payloads; appserver.trackSkillInvocationEvent emits it for explicit injection and for implicit detection, including successful skills.read resource reads (implicitSkillInvocationEventProvider defers resource reads until the main resource is read), independent of the analytics exporter. Tests: telemetry/session_telemetry_skill_test.go and appserver implicit/explicit/resource-backed skill invocation cases; go test ./telemetry ./appserver -run 'SkillInvocation|ImplicitSkill' green.",
         "Partial symbol coverage 2/4; needs review: SkillInvocationType, with_user_id"
       ]
     },
