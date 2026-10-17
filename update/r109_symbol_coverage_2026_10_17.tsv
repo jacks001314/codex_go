@@ -168,7 +168,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 10aca93f18cc7cec42ed63e4913e4f94cb531d62	42364	Support graceful daemon shutdown on Windows (#42364)	2026-09-02	appserver	2	2	1.00	0	0	complete	
 10d5a603aecbd73a38f3a6576cce69a78f8d6f1d	40884	Persist Guardian V2 risk scores without restoring them (#40884)	2026-08-26	guardian	0	0		0	0	not_applicable	
 10da569252004863c8256eb6bdabee3a8fc73042	52689	Forward per-turn Cyber access programs to Guardian (#52689)	2026-10-09	guardian	4	4	1.00	0	0	complete	
-10fd75bba78c7bbc59826ef1fa69df9c67615bd0	48229	Extract Responses failure parsing into a dedicated module (#48229)	2026-09-25	core	1	0	0.00	0	0	implementation_pending	parse_failed_response
+10fd75bba78c7bbc59826ef1fa69df9c67615bd0	48229	Extract Responses failure parsing into a dedicated module (#48229)	2026-09-25	core	1	1	1.00	0	0	complete	
 111362a6a0a92d08885b1ae62d3760714907ad94	54381	Add a keyboard shortcut menu for presets (#54381)	2026-10-15	tui	8	2	0.25	0	0	blocked_precondition	ShortcutHud,cancel_quick_dial_menu,flush_pending_composer_input,handle_quick_dial_menu,open_quick_dial_menu,quick_dial_hud
 112be0bd74ce327788613f4f8f92e8b7c92447c7	43325	Sort JSON schema object keys for consistent Cargo and Bazel output (#43325)	2026-09-07	appserver	0	0		0	0	not_applicable	
 115ffaf8bf1eda460526605cf44d9a96d88f4371	41937	Limit background terminal input previews (#41937)	2026-08-31	tui	0	0		0	0	not_applicable	

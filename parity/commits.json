@@ -21836,9 +21836,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: parse_failed_response"
+        "Round 115 (lead): verified complete (equivalent mechanism) - #48229 only moves the already-existing response.failed classification into responses_error.rs. model/responses_stream.go's responseFailedError implements the same strict responsesFailedErrorBody decoding, Flex-first handling, policy mappings and fallback messages, retry-delay parsing, and stream-error fallback; model/responses_failed_error_test.go and responses_failed_retry_after_test.go pin malformed envelopes, invalid unused fields, policy fallbacks, rate limits and Retry-After precedence. go test ./model -run 'TestResponseFailed|TestResponsesRetryAfterFromHeaderValueLikeRust' -count=1 green."
       ]
     },
     {
