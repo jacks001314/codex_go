@@ -843,6 +843,13 @@ go test ./config -run MultiAgentV2Config -count=1                  # ok
 - Go：`model.McpResourceToolMessages` + `ToolMessages.McpResources` + `ModelMessages.MCPResources()`，`turn.registerMCPResourceHandlers` 接收并按工具应用覆盖（`applyMCPResourceCatalogMessage`），appserver 路由接线；direct 与 CodeModeOnly 两条注册路径共用。
 - 测试：`model/catalog_test.go` `TestModelMessagesMCPResourcesLikeRust`、`turn/tools_test.go` `TestBuildToolRegistrySourcesMCPResourceCatalogEntriesLikeRust`。
 
+### 26.2b #52696 marketplace 路径归一化匹配（landed）
+
+- Rust：本地 marketplace 源在文件系统归一化后比较；已添加源的请求路径优先（junction 重定向不改返回根）；Windows 托管根同时接受配置根与规范目标。
+- Go：`plugin/marketplace_source.go` 新增 `pathsMatchAfterNormalization`（`filepath.Abs` + `EvalSymlinks` + Windows 大小写折叠，失败时退回直接相等，对应 `codex_utils_path`）；`plugin/api.go` 新增 `marketplaceForSourceLocked`，按「源类型 + 归一化路径（git 用 URL+ref）+ sparse paths」定位已添加 marketplace，`AddMarketplace` 命中时返回既有根而不是重复注册。
+- 测试：`plugin/api_test.go` `TestAddMarketplaceMatchesEquivalentLocalSourceLikeRust`、`TestAddMarketplaceJunctionSourceKeepsRecordedRootLikeRust`、`TestPathsMatchAfterNormalizationLikeRust`。
+- 未覆盖：Windows 托管根 canonical target 分支（Go 无 managed marketplace root 概念）。
+
 ### 26.3 账本口径收敛
 
 - 新增可复现脚本 `update/r110_recompute_status_2026_10_17.py`：从 `update/r90_commit_ledger_2026_10_16.tsv` 的 evidence 状态重新推导 `update/r109_symbol_coverage_2026_10_17.tsv` 的 verdict（120 行被纠正，例如 #47540 / #52065 / #52302 / #54135 / #54686 由 pending 变为 complete）。
