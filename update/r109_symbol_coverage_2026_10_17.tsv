@@ -641,7 +641,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 406eb53c074a29bd65aa7a8bd21d574234faf315	51602	Distinguish thread listing failures from exhausted history (#51602)	2026-10-07	appserver	1	0	0.00	0	0	complete	repeat_list_threads_cursor_for_testing
 4083a68f88375bb0bc90a41b8c454d9e2d7c5281	47824	Allow four concurrent threads in the multi-agent resume test (#47824)	2026-09-24	core	0	0		0	0	not_applicable	
 408a77dc1a1cf95413df26b5185623cf245161d7	47424	Clear pending async question notifications when turns end (#47424)	2026-09-23	tui	1	0	0.00	0	0	implementation_pending	take_question_drafts
-408f48ce0c87827dd556953a9d413323a139e38c	49846	Capture host-supplied extension data for each turn (#49846)	2026-10-01	guardian	4	1	0.25	0	0	audit_pending	WithTurnExtensionData,current_turn_extension_data,prepare_update
+408f48ce0c87827dd556953a9d413323a139e38c	49846	Capture host-supplied extension data for each turn (#49846)	2026-10-01	guardian	4	1	0.25	0	0	not_applicable	WithTurnExtensionData,current_turn_extension_data,prepare_update
 40b0409aa1816d2a99935cbe77da66505c05c2a0	44732	Clarify folder trust prompts and add restricted widget support (#44732)	2026-09-11	tui	0	0		0	0	not_applicable	
 40b7560169c7274147a47f9b0c75db89fe016d34	40363	Forward local env vars to Agent Plugin MCP servers (#40363)	2026-08-24	mcp	1	1	1.00	0	0	complete	
 40ba7da7b41f0d76070121f4531f8f565e3c6260	40697	Prepare automatic TUI recap generation (#40697)	2026-08-25	tui	9	6	0.67	0	0	audit_pending	RecapRequest,handle_recap_started,schedule_check
