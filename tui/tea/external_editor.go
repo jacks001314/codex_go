@@ -31,7 +31,7 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 	}
 	m.editorActive = true
 	m.notice = ""
-	seed := m.composer.Value()
+	seed := m.composerText()
 	cmd := runner(seed)
 	if cmd == nil {
 		m.editorActive = false
@@ -45,7 +45,7 @@ func (m *Model) openExternalEditor() bubbletea.Cmd {
 func (m *Model) defaultExternalEditor() bubbletea.Cmd {
 	m.editorActive = true
 	m.notice = ""
-	seed := m.composer.Value()
+	seed := m.composerText()
 	editorDir := ""
 	if m.externalEditorDirectory != nil {
 		dir, err := m.externalEditorDirectory(m.sessionCWD)
@@ -89,7 +89,7 @@ func (m *Model) applyExternalEditorFinished(message ExternalEditorFinishedMsg) {
 		m.refreshTranscript()
 		return
 	}
-	m.composer.SetValue(strings.TrimRightFunc(message.Text, unicode.IsSpace))
+	m.setComposerPrompt(strings.TrimRightFunc(message.Text, unicode.IsSpace))
 	m.notice = ""
 }
 

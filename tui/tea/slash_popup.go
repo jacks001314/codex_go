@@ -35,7 +35,7 @@ func (m *Model) refreshSlashPopup() {
 	if m == nil {
 		return
 	}
-	query, ok := slashPopupQuery(m.composer.Value())
+	query, ok := slashPopupQuery(m.composerText())
 	if !ok {
 		m.slashPopup = slashCommandPopup{}
 		return
@@ -273,7 +273,7 @@ func (m *Model) completeSelectedSlashCommand() {
 	if !ok {
 		return
 	}
-	m.composer.SetValue("/" + item.Name + " ")
+	m.setComposerPrompt("/" + item.Name + " ")
 	m.slashPopup = slashCommandPopup{}
 }
 
@@ -285,7 +285,7 @@ func (m *Model) dispatchSelectedSlashCommand() (bubbletea.Cmd, bool) {
 	if !ok {
 		return nil, false
 	}
-	m.composer.Reset()
+	m.resetComposer()
 	// Rust #41921: slash-command dispatch returns the composer to Vim Insert.
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}

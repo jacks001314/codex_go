@@ -423,7 +423,7 @@ func (m *Model) vimEmptyNormalSlashOpensCommands(msg bubbletea.KeyMsg) bool {
 	if m.mentionPopup != nil {
 		return false
 	}
-	if m.composer.Value() != "" {
+	if !m.composerIsEmpty() {
 		return false
 	}
 	return msg.Type == bubbletea.KeyRunes && !msg.Alt && len(msg.Runes) == 1 && msg.Runes[0] == '/'

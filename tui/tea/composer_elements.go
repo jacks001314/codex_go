@@ -101,7 +101,7 @@ func (m *Model) syncComposerElements(before string) {
 	if m == nil {
 		return
 	}
-	after := m.composer.Value()
+	after := m.composerText()
 	if after == before {
 		return
 	}
@@ -114,7 +114,7 @@ func (m *Model) currentComposerTextElements() []ComposerTextElement {
 	if m == nil {
 		return nil
 	}
-	elements := composerTextElements(m.composer.Value(), m.composerElements)
+	elements := composerTextElements(m.composerText(), m.composerElements)
 	m.composerElements = elements
 	return append([]ComposerTextElement(nil), elements...)
 }

@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gofrs/flock"
 )
 
 func TestDispatchKind(t *testing.T) {
@@ -118,6 +120,149 @@ func TestCleanupStaleDirs(t *testing.T) {
 	}
 	if _, err := os.Stat(active); err != nil {
 		t.Fatalf("active dir should remain: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(root) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("cleanup left %d entries, want only the lock-less dir", len(entries))
+	}
+}
+
+// TestCleanupStaleDirsSkipsHeldLock pins Rust's try_lock_dir behavior: a
+// directory whose lock is still held belongs to a live session and must not be
+// reclaimed. Once the lock is released the next janitor pass removes it and
+// leaves the temp root empty.
+func TestCleanupStaleDirsSkipsHeldLock(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "live")
+	if err := os.Mkdir(live, 0o700); err != nil {
+		t.Fatalf("mkdir live: %v", err)
+	}
+	lockPath := filepath.Join(live, DispatchLockFilename)
+	if err := os.WriteFile(lockPath, nil, 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+	lock := flock.New(lockPath)
+	locked, err := lock.TryLock()
+	if err != nil {
+		t.Fatalf("TryLock() error = %v", err)
+	}
+	if !locked {
+		t.Fatalf("TryLock() = false, want true for a fresh lock file")
+	}
+
+	if err := CleanupStaleDirs(root); err != nil {
+		t.Fatalf("CleanupStaleDirs() error = %v", err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("dir with held lock must survive: %v", err)
+	}
+
+	if err := lock.Unlock(); err != nil {
+		t.Fatalf("Unlock() error = %v", err)
+	}
+	if err := CleanupStaleDirs(root); err != nil {
+		t.Fatalf("CleanupStaleDirs() after unlock error = %v", err)
+	}
+	if _, err := os.Stat(live); !os.IsNotExist(err) {
+		t.Fatalf("dir should be reclaimed after unlock, stat err = %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatalf("ReadDir(root) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cleanup left %d entries in the temp root, want 0", len(entries))
+	}
+}
+
+func TestArg0TempRootIsolatedPerOS(t *testing.T) {
+	home := t.TempDir()
+	want := filepath.Join(home, "tmp", "arg0-"+runtime.GOOS)
+	if got := arg0TempRoot(home); got != want {
+		t.Fatalf("arg0TempRoot() = %q, want %q", got, want)
+	}
+}
+
+// TestPrepareArg0AliasesKeepsLiveSessionDirs covers the combination of the
+// startup janitor and the session lock: creating a second guard on the same
+// home must not delete the first, still-running session's aliases.
+func TestPrepareArg0AliasesKeepsLiveSessionDirs(t *testing.T) {
+	home := t.TempDir()
+	exe := filepath.Join(home, "codex")
+	if err := os.WriteFile(exe, []byte(""), 0o700); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	// A stale session directory left behind by a crashed process must be
+	// reclaimed by the janitor that runs before the new session dir is created.
+	stale := filepath.Join(arg0TempRoot(home), "stale")
+	if err := os.MkdirAll(stale, 0o700); err != nil {
+		t.Fatalf("MkdirAll(stale) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stale, DispatchLockFilename), nil, 0o600); err != nil {
+		t.Fatalf("WriteFile(stale lock) error = %v", err)
+	}
+	first, err := PrepareArg0Aliases(home, exe, "")
+	if err != nil {
+		t.Fatalf("PrepareArg0Aliases(first) error = %v", err)
+	}
+	defer first.Cleanup()
+	second, err := PrepareArg0Aliases(home, exe, "")
+	if err != nil {
+		t.Fatalf("PrepareArg0Aliases(second) error = %v", err)
+	}
+	defer second.Cleanup()
+	if first.TempDir == second.TempDir {
+		t.Fatalf("both guards share temp dir %q", first.TempDir)
+	}
+	if filepath.Dir(first.TempDir) != arg0TempRoot(home) {
+		t.Fatalf("first temp dir %q is not under %q", first.TempDir, arg0TempRoot(home))
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale dir should be reclaimed by PrepareArg0Aliases, stat err = %v", err)
+	}
+	for _, alias := range dispatchAliasNames(runtime.GOOS) {
+		if _, err := os.Lstat(filepath.Join(first.TempDir, alias)); err != nil {
+			t.Fatalf("live session alias %s was removed: %v", alias, err)
+		}
+	}
+}
+
+// TestDispatchAliasGuardHoldsSessionLock asserts the guard owns the advisory
+// lock for its lifetime and that Cleanup closes it before removing the dir.
+func TestDispatchAliasGuardHoldsSessionLock(t *testing.T) {
+	home := t.TempDir()
+	exe := filepath.Join(home, "codex")
+	if err := os.WriteFile(exe, []byte(""), 0o700); err != nil {
+		t.Fatalf("WriteFile(exe) error = %v", err)
+	}
+	guard, err := PrepareArg0Aliases(home, exe, "")
+	if err != nil {
+		t.Fatalf("PrepareArg0Aliases() error = %v", err)
+	}
+	probe := flock.New(filepath.Join(guard.TempDir, DispatchLockFilename))
+	locked, err := probe.TryLock()
+	if err != nil {
+		t.Fatalf("probe TryLock() error = %v", err)
+	}
+	if locked {
+		_ = probe.Unlock()
+		t.Fatalf("guard did not hold the session lock")
+	}
+	if err := guard.Cleanup(); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if _, err := os.Stat(guard.TempDir); !os.IsNotExist(err) {
+		t.Fatalf("temp dir survived Cleanup, stat err = %v", err)
+	}
+	entries, err := os.ReadDir(arg0TempRoot(home))
+	if err != nil {
+		t.Fatalf("ReadDir(arg0TempRoot) error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("Cleanup left %d entries in the temp root, want 0", len(entries))
 	}
 }
 

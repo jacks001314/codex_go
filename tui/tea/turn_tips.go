@@ -286,7 +286,7 @@ func (m *Model) turnTipsSurfacesAllowed() bool {
 	if m.modal != nil || m.overlay != nil {
 		return false
 	}
-	if strings.TrimSpace(m.composer.Value()) != "" || len(m.composerElements) > 0 {
+	if !m.composerIsEmpty() || len(m.composerElements) > 0 {
 		return false
 	}
 	if len(m.queued) > 0 {

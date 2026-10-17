@@ -25,7 +25,7 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 	}
 	// Block input while preserving the transcript; drafts and queued messages
 	// survive for a successful retry.
-	m.composer.Reset()
+	m.resetComposer()
 	m.attachments = nil
 	m.composerMentionBindings = nil
 	m.composerPasteEnterUntil = nil

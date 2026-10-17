@@ -940,7 +940,7 @@ func (m *Model) captureAgentsOverviewDraft(threadID string) {
 	if m.agentsOverviewDrafts == nil {
 		m.agentsOverviewDrafts = map[string]string{}
 	}
-	draft := m.composer.Value()
+	draft := m.composerText()
 	if strings.TrimSpace(draft) == "" {
 		delete(m.agentsOverviewDrafts, threadID)
 		return
@@ -957,7 +957,7 @@ func (m *Model) restorePendingAgentsOverviewDraft() {
 	}
 	draft := *m.agentsOverviewPendingDraft
 	m.agentsOverviewPendingDraft = nil
-	m.composer.SetValue(draft)
+	m.setComposerPrompt(draft)
 }
 
 // discardPendingAgentsOverviewDraft drops a pending draft after a failed

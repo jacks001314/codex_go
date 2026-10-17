@@ -144,8 +144,11 @@ func TestVimEmptyNormalSlashOpensCommandsLikeRust(t *testing.T) {
 	if m.vimPendingOp != "" {
 		t.Fatalf("pending operator = %q, want none", m.vimPendingOp)
 	}
-	if got := m.composer.Value(); got != "/" {
+	if got := m.ComposerValue(); got != "/" {
 		t.Fatalf("draft after slash = %q, want /", got)
+	}
+	if got := m.composer.Value(); got != "" {
+		t.Fatalf("slash should live in the prompt marker, body = %q", got)
 	}
 	if !m.slashPopup.Active || len(m.slashPopup.Items) == 0 {
 		t.Fatalf("slash command popup not open: active=%v items=%d", m.slashPopup.Active, len(m.slashPopup.Items))
@@ -153,7 +156,7 @@ func TestVimEmptyNormalSlashOpensCommandsLikeRust(t *testing.T) {
 	// Insert mode keeps typing, narrowing the command completion (Rust's
 	// snapshot shows `/model` selected with the picker open).
 	m = vimKeyPress(m, 'm')
-	if got := m.composer.Value(); got != "/m" {
+	if got := m.ComposerValue(); got != "/m" {
 		t.Fatalf("draft after /m = %q, want /m", got)
 	}
 	if !m.vimInsert {

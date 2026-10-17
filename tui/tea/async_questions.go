@@ -213,7 +213,7 @@ func asyncQuestionDigitIndex(r rune, choiceCount int) (int, bool) {
 // navigateAsyncQuestions moves between questions, restoring each question's
 // draft; backward navigation at the first question collapses the editor.
 func (m *Model) navigateAsyncQuestions(forward bool) {
-	draft, moved := m.asyncQuestions.Navigate(forward, m.composer.Value())
+	draft, moved := m.asyncQuestions.Navigate(forward, m.composerText())
 	if moved {
 		m.composer.SetValue(draft)
 		m.resetVimEditHistory()
@@ -251,7 +251,7 @@ func (m *Model) resolveAsyncQuestionsFromReplyText(text string) bool {
 	// Only an answered focused question re-syncs the composer (Rust flushes the
 	// pending input there), so an unstored draft for another question survives.
 	if currentAnswered && m.asyncQuestions.UnansweredCount() > 0 {
-		m.composer.SetValue(m.asyncQuestions.CurrentDraft())
+		m.setComposerPrompt(m.asyncQuestions.CurrentDraft())
 	}
 	return true
 }
@@ -261,7 +261,7 @@ func (m *Model) resolveAsyncQuestionsFromReplyText(text string) bool {
 // queued-message edit so the latest queued message becomes the main draft. It
 // reports whether the key was consumed.
 func (m *Model) advanceAsyncQuestionsOrRestoreQueued() bool {
-	draft, moved := m.asyncQuestions.Navigate(true, m.composer.Value())
+	draft, moved := m.asyncQuestions.Navigate(true, m.composerText())
 	if moved {
 		m.composer.SetValue(draft)
 		m.resetVimEditHistory()
@@ -281,9 +281,9 @@ func (m *Model) expandAsyncQuestions() {
 	if m == nil || m.asyncQuestions.UnansweredCount() == 0 || m.asyncQuestions.Expanded() {
 		return
 	}
-	m.asyncQuestionMainDraft = m.composer.Value()
+	m.asyncQuestionMainDraft = m.composerText()
 	m.asyncQuestions.SetExpanded(true, "")
-	m.composer.SetValue(m.asyncQuestions.CurrentDraft())
+	m.setComposerPrompt(m.asyncQuestions.CurrentDraft())
 	m.resetVimEditHistory()
 	m.clearComposerPasteWindow()
 }
@@ -294,8 +294,8 @@ func (m *Model) collapseAsyncQuestions() {
 	if m == nil || !m.asyncQuestions.Expanded() {
 		return
 	}
-	m.asyncQuestions.SetExpanded(false, m.composer.Value())
-	m.composer.SetValue(m.asyncQuestionMainDraft)
+	m.asyncQuestions.SetExpanded(false, m.composerText())
+	m.setComposerPrompt(m.asyncQuestionMainDraft)
 	m.asyncQuestionMainDraft = ""
 	m.resetVimEditHistory()
 }
@@ -310,7 +310,7 @@ func (m *Model) acceptAsyncQuestion() {
 	draft := m.asyncQuestions.AcceptAnswer()
 	if m.asyncQuestions.UnansweredCount() == 0 {
 		m.asyncQuestions.SetExpanded(false, draft)
-		m.composer.SetValue(m.asyncQuestionMainDraft)
+		m.setComposerPrompt(m.asyncQuestionMainDraft)
 		m.asyncQuestionMainDraft = ""
 	} else {
 		m.composer.SetValue(draft)
@@ -337,7 +337,7 @@ func (m *Model) submitAsyncQuestionAnswer(queue bool) bubbletea.Cmd {
 		return nil
 	}
 	questionID := m.asyncQuestions.CurrentQuestionID()
-	text, ready := m.asyncQuestions.AnswerText(m.composer.Value())
+	text, ready := m.asyncQuestions.AnswerText(m.composerText())
 	if !ready {
 		return nil
 	}

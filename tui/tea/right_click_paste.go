@@ -63,7 +63,7 @@ func (m *Model) rightClickPasteTargetFor() (tuiapp.RightClickPasteTarget, bool) 
 		OverlayActive:    m.overlay != nil || m.modal != nil || m.agentsOverview != nil || m.readOnlyThread,
 		ComposerEditable: m.composerCanPasteOnRightClick(),
 		Thread:           m.currentThreadID(),
-		Draft:            m.composer.Value(),
+		Draft:            m.composerText(),
 		Cursor:           m.composer.LineInfo().StartColumn,
 	}, m.rightClickPasteEnv, m.rightClickPasteMode)
 }

@@ -95,5 +95,5 @@ func (m *Model) isBangShellCommand() bool {
 	if m == nil {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(m.composer.Value()), "!")
+	return strings.HasPrefix(strings.TrimSpace(m.composerText()), "!")
 }

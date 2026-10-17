@@ -1338,8 +1338,11 @@ type Model struct {
 	// Overlay stack (new architecture)
 	overlays *overlay.Overlay
 
-	transcript     viewport.Model
-	composer       textarea.Model
+	transcript viewport.Model
+	composer   textarea.Model
+	// composerPrefix holds the leading `!`/`/` marker that is rendered as the
+	// prompt instead of living in the editable text (#54742).
+	composerPrefix composerPrefix
 	activityFollow bool
 	// mouseScroll is the live `tui.mouse_scroll_speed` accumulator for the main
 	// transcript viewport (Rust #50209 `TranscriptView::pending_mouse_scroll`).
@@ -2936,7 +2939,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 				return m, m.respondModal(true)
 			}
 			if m.isTaskRunning() {
-				if m.localDaemonSession && m.composer.Value() == "" && !m.inSideConversation() {
+				if m.localDaemonSession && m.composerIsEmpty() && !m.inSideConversation() {
 					m.openRunningTaskExitMenu()
 					return m, nil
 				}
@@ -3007,7 +3010,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		if cmd, handled := m.updateSlashPopupKey(msg); handled {
 			return m, cmd
 		}
-		if msg.Alt && m.composer.Value() == "" && len(m.attachments) == 0 {
+		if msg.Alt && m.composerIsEmpty() && len(m.attachments) == 0 {
 			switch msg.Type {
 			case bubbletea.KeyLeft:
 				return m, m.navigateAgent(-1)
@@ -3174,8 +3177,15 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		m.activityFollow = m.transcript.AtBottom()
 	}
 	var composerCmd bubbletea.Cmd
-	composerBefore := m.composer.Value()
+	composerBefore := m.composerText()
+	if handled, prefixCmd := m.handleComposerPrefixKey(message); handled {
+		composerCmd = prefixCmd
+		m.syncComposerElements(composerBefore)
+		m.refreshSlashPopup()
+		return m, bubbletea.Batch(cmd, composerCmd)
+	}
 	m.composer, composerCmd = m.composer.Update(message)
+	m.syncComposerPrefixFromText()
 	m.syncComposerElements(composerBefore)
 	m.refreshSlashPopup()
 	skillPopupCmd := m.refreshSkillPopup()
@@ -3305,7 +3315,7 @@ func (m *Model) passiveWarningNoticeApplies() bool {
 	if m.vimSearchMode {
 		return false
 	}
-	if strings.TrimSpace(m.composer.Value()) == "" {
+	if m.composerIsEmpty() {
 		return true
 	}
 	return !m.isTaskRunning()
@@ -3969,7 +3979,7 @@ func (m *Model) ComposerValue() string {
 	if m == nil {
 		return ""
 	}
-	return m.composer.Value()
+	return m.composerText()
 }
 
 func (m *Model) insertComposerNewline() bubbletea.Cmd {
@@ -4067,7 +4077,7 @@ func (m *Model) composerStartsSlashContext() bool {
 	if m == nil {
 		return false
 	}
-	input := m.composer.Value()
+	input := m.composerText()
 	if newline := strings.IndexByte(input, '\n'); newline >= 0 {
 		input = input[:newline]
 	}
@@ -4093,9 +4103,9 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		// Rust #43253: a conversation owned by another app accepts no input.
 		return nil
 	}
-	input := strings.TrimSpace(m.composer.Value())
-	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
-	m.composer.Reset()
+	input := strings.TrimSpace(m.composerText())
+	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
@@ -4135,7 +4145,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 	if m == nil {
 		return nil, false
 	}
-	input := strings.TrimSpace(m.composer.Value())
+	input := strings.TrimSpace(m.composerText())
 	if input == "" {
 		return nil, false
 	}
@@ -4151,7 +4161,7 @@ func (m *Model) submitRunningSlashCommand() (bubbletea.Cmd, bool) {
 			m.pendingGoalDraft = draft
 		}
 	}
-	m.composer.Reset()
+	m.resetComposer()
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
 	m.slashPopup = slashCommandPopup{}
@@ -4284,9 +4294,9 @@ func (m *Model) queueComposer(parseCommand bool) bubbletea.Cmd {
 	if m.readOnlyThread {
 		return nil
 	}
-	input := strings.TrimSpace(m.composer.Value())
-	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
-	m.composer.Reset()
+	input := strings.TrimSpace(m.composerText())
+	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
@@ -4325,9 +4335,9 @@ func (m *Model) steerComposer() bubbletea.Cmd {
 	if m.readOnlyThread {
 		return nil
 	}
-	input := strings.TrimSpace(m.composer.Value())
-	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
-	m.composer.Reset()
+	input := strings.TrimSpace(m.composerText())
+	textElements := m.composerTextElementsForPromptValue(m.composerText(), input)
+	m.resetComposer()
 	m.composerElements = nil
 	m.resetVimEditHistory()
 	m.enterVimInsertAfterSubmission()
@@ -4855,7 +4865,7 @@ func (m *Model) shouldSubmitOnTab() bool {
 	if m == nil {
 		return false
 	}
-	input := strings.TrimSpace(m.composer.Value())
+	input := strings.TrimSpace(m.composerText())
 	if input == "" && len(m.attachments) == 0 {
 		return false
 	}
@@ -5313,7 +5323,7 @@ func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
 	m.deferPendingSteers()
 	m.queued = nil
 	m.rejectedSteers = nil
-	m.composer.SetValue("")
+	m.resetComposer()
 	m.composer.Blur()
 	m.misalignmentPolicyStopped = true
 	m.refreshTranscript()
@@ -8521,14 +8531,14 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 	switch msg.Type {
 	case bubbletea.KeyUp:
 		if !m.inputHistoryActive {
-			m.inputHistoryDraft = m.composer.Value()
+			m.inputHistoryDraft = m.composerText()
 			m.inputHistoryIndex = len(m.inputHistory)
 			m.inputHistoryActive = true
 		}
 		if m.inputHistoryIndex > 0 {
 			m.inputHistoryIndex--
 		}
-		m.composer.SetValue(m.inputHistory[m.inputHistoryIndex])
+		m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
 		m.composer.SetCursor(len(m.composer.Value()))
 		return true
 	case bubbletea.KeyDown:
@@ -8537,9 +8547,9 @@ func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
 		}
 		if m.inputHistoryIndex < len(m.inputHistory)-1 {
 			m.inputHistoryIndex++
-			m.composer.SetValue(m.inputHistory[m.inputHistoryIndex])
+			m.setComposerPrompt(m.inputHistory[m.inputHistoryIndex])
 		} else {
-			m.composer.SetValue(m.inputHistoryDraft)
+			m.setComposerPrompt(m.inputHistoryDraft)
 			m.resetInputHistoryNavigation()
 		}
 		m.composer.SetCursor(len(m.composer.Value()))
@@ -8572,14 +8582,14 @@ func (m *Model) applyEditQueuedMessageKey(msg bubbletea.KeyMsg, keySpec string) 
 		return false
 	}
 	editQueued := m.keyMatches("chat", "edit_queued_message", keySpec)
-	vimHistoryUp := m.vimMode && !m.vimInsert && m.composer.Value() == "" && m.keyMatches("vim_normal", "move_up", keySpec)
+	vimHistoryUp := m.vimMode && !m.vimInsert && m.composerIsEmpty() && m.keyMatches("vim_normal", "move_up", keySpec)
 	if !editQueued && !vimHistoryUp {
 		return false
 	}
 	last := m.queued[len(m.queued)-1]
 	m.queued = m.queued[:len(m.queued)-1]
-	m.composer.SetValue(last.Request.Prompt)
-	m.composer.SetCursor(len(last.Request.Prompt))
+	m.setComposerPrompt(last.Request.Prompt)
+	m.composer.SetCursor(len(m.composer.Value()))
 	m.attachments = cloneComposerAttachments(last.Request.Attachments)
 	m.composerMentionBindings = append([]string(nil), last.Request.MentionBindings...)
 	m.slashPopup = slashCommandPopup{}

@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/gofrs/flock"
+
 	"codex_go/install"
 	"codex_go/utils"
 )
@@ -38,6 +40,11 @@ type DispatchAliasGuard struct {
 	TempDir     string
 	UpdatedPATH string
 	Paths       DispatchPaths
+
+	// lock is the advisory lock on TempDir/DispatchLockFilename. It is held for
+	// as long as the guard is alive so the janitor can tell a live session's
+	// directory from a stale one.
+	lock *flock.Flock
 }
 
 func DispatchKind(argv0 string, argv1 string) string {
@@ -80,22 +87,42 @@ func PrepareArg0Aliases(codexHome string, currentExe string, existingPATH string
 	if abs, err := filepath.Abs(currentExe); err == nil {
 		currentExe = abs
 	}
-	tempRoot := filepath.Join(codexHome, "tmp", "arg0")
+	tempRoot := arg0TempRoot(codexHome)
 	if err := os.MkdirAll(tempRoot, 0o700); err != nil {
 		return nil, err
+	}
+	// Best-effort cleanup of stale per-session dirs; failures must not block
+	// startup (Rust prints the same warning from prepare_aliases_in_home).
+	if err := CleanupStaleDirs(tempRoot); err != nil {
+		fmt.Fprintln(os.Stderr, "WARNING: failed to clean up stale arg0 temp dirs:", err)
 	}
 	tempDir, err := os.MkdirTemp(tempRoot, "codex-arg0")
 	if err != nil {
 		return nil, err
 	}
 	cleanupOnError := true
+	var lock *flock.Flock
 	defer func() {
 		if cleanupOnError {
+			if lock != nil {
+				_ = lock.Unlock()
+			}
 			_ = os.RemoveAll(tempDir)
 		}
 	}()
-	if err := os.WriteFile(filepath.Join(tempDir, DispatchLockFilename), []byte{}, 0o600); err != nil {
+	lockPath := filepath.Join(tempDir, DispatchLockFilename)
+	if err := os.WriteFile(lockPath, []byte{}, 0o600); err != nil {
 		return nil, err
+	}
+	// Claim the session directory with an advisory lock held for the life of the
+	// guard; the janitor only reclaims directories whose lock is free.
+	lock = flock.New(lockPath)
+	locked, err := lock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, fmt.Errorf("arg0 temp dir lock is already held: %s", tempDir)
 	}
 	for _, alias := range dispatchAliasNames(runtime.GOOS) {
 		if err := createDispatchAlias(tempDir, alias, currentExe); err != nil {
@@ -117,7 +144,15 @@ func PrepareArg0Aliases(codexHome string, currentExe string, existingPATH string
 		TempDir:     tempDir,
 		UpdatedPATH: arg0UpdatedPATH(tempDir, currentExe, existingPATH),
 		Paths:       paths,
+		lock:        lock,
 	}, nil
+}
+
+// arg0TempRoot isolates helper directories by operating system: Windows and WSL
+// can share CODEX_HOME without sharing a lock namespace, so the legacy
+// `tmp/arg0` root must not be reused (Rust #53412).
+func arg0TempRoot(codexHome string) string {
+	return filepath.Join(codexHome, "tmp", "arg0-"+runtime.GOOS)
 }
 
 // arg0UpdatedPATH puts the alias directory in front of the PATH the process
@@ -157,7 +192,22 @@ func (g *DispatchAliasGuard) Cleanup() error {
 	if g == nil || strings.TrimSpace(g.TempDir) == "" {
 		return nil
 	}
-	return os.RemoveAll(g.TempDir)
+	// Remove the directory only after the lock file is closed so NFS does not
+	// retain the open lock as a `.nfs*` entry (Rust #54739).
+	err := removeArg0DirLocked(g.TempDir, g.releaseLock)
+	if releaseErr := g.releaseLock(); err == nil {
+		err = releaseErr
+	}
+	return err
+}
+
+func (g *DispatchAliasGuard) releaseLock() error {
+	if g == nil || g.lock == nil {
+		return nil
+	}
+	lock := g.lock
+	g.lock = nil
+	return lock.Unlock()
 }
 
 func PathEnvWithEntry(pathEntry string, existing string) string {
@@ -202,10 +252,27 @@ func CleanupStaleDirs(root string) error {
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		if _, err := os.Stat(filepath.Join(path, DispatchLockFilename)); err != nil {
+		lockPath := filepath.Join(path, DispatchLockFilename)
+		if _, err := os.Stat(lockPath); err != nil {
 			continue
 		}
-		if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		// Skip the directory when its lock cannot be taken: the owning process
+		// is still running (Rust try_lock_dir).
+		lock := flock.New(lockPath)
+		locked, err := lock.TryLock()
+		if err != nil {
+			return err
+		}
+		if !locked {
+			continue
+		}
+		err = removeArg0DirLocked(path, lock.Unlock)
+		_ = lock.Unlock()
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Expected TOCTOU race: directory can disappear after read_dir/lock checks.
+				continue
+			}
 			return err
 		}
 	}

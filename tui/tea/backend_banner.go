@@ -452,7 +452,7 @@ func (m *Model) backendBannerAcceptsKeys() bool {
 	if m.windowsSandboxSetupActive || m.isTaskRunning() {
 		return false
 	}
-	if len(m.attachments) > 0 || m.composer.Value() != "" {
+	if len(m.attachments) > 0 || !m.composerIsEmpty() {
 		return false
 	}
 	if m.slashPopupVisible() || m.skillPopupVisible() {

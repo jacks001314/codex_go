@@ -31,7 +31,7 @@ func (m *Model) backtrackComposerEmpty() bool {
 	if m == nil {
 		return true
 	}
-	if strings.TrimSpace(m.composer.Value()) != "" {
+	if !m.composerIsEmpty() {
 		return false
 	}
 	return len(m.attachments) == 0
@@ -274,7 +274,7 @@ func (m *Model) restoreComposerPrompt(prompt chatwidget.ThreadComposerState) {
 		return
 	}
 	m.clearComposerPasteWindow()
-	m.composer.SetValue(prompt.Text)
+	m.setComposerPrompt(prompt.Text)
 	m.attachments = nil
 	for _, path := range prompt.LocalImages {
 		if strings.TrimSpace(path) == "" {
