@@ -935,7 +935,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 596ae94fb00f8325d6bf835a9ebdc90baab4ad33	49710	Classify SQLite corruption using typed error codes (#49710)	2026-09-30	tui	1	1	1.00	0	0	complete	
 596f8c5c3c855b78eae3222c5ee0aad3a91f4b43	48775	Match pinned transcript headers to the original prompt style (#48775)	2026-09-27	tui	0	0		0	0	not_applicable	
 5971d42847aae04db0e3c70146e0b189fc9a6803	42293	Preserve verified answers across history compaction (#42293)	2026-09-02	tui	13	11	0.85	0	0	audit_pending	remove_turns,restore_retained_context
-59f18e8133f2c1d3427677658752ac46697d41b7	50099	Add opt-in Decisions comparison for Guardian V2 (#50099)	2026-10-01	guardian	5	1	0.20	0	0	audit_pending	decisions_failure_reason,decisions_sampler,finish_and_record_outcome,record_decisions_comparison_outcome
+59f18e8133f2c1d3427677658752ac46697d41b7	50099	Add opt-in Decisions comparison for Guardian V2 (#50099)	2026-10-01	guardian	5	1	0.20	0	0	not_applicable	decisions_failure_reason,decisions_sampler,finish_and_record_outcome,record_decisions_comparison_outcome
 5a0419edb5ad720ae31fa1adf8b3b24c8f0c52c5	42194	Add Vim replace mode to the TUI composer (#42194)	2026-09-02	tui	6	0	0.00	0	0	partial	apply_vim_insert_action,clear_vim_replace_recovery,is_vim_replace_mode,replace_vim_text,restore_vim_replaced_character,retract_paste_burst
 5a11c456060c2ce131de1ba195fc7729f7d7db66	47322	Render TUI Markdown lists with Unicode bullets and checkboxes (#47322)	2026-09-22	tui	1	0	0.00	0	0	implementation_pending	task_list_marker
 5a3140176e668a2f72f3c098490eb7f7052d9d85	51575	Expose package assembly helpers and support gzip DotSlash artifacts (#51575)	2026-10-07	core	0	0		0	0	not_applicable	
@@ -989,7 +989,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5eea8d0dd3f6b38b0e457d266fd7c918eb189bb6	41328	Review terminal input against retained permissions (#41328)	2026-08-28	guardian	4	2	0.50	0	0	audit_pending	TerminalSandboxSource,for_launch
 5ef96ab2785f3ecddf279639eff7b1b42c906fa4	52742	Add opt-in output token replay for OpenAI requests (#52742)	2026-10-10	tui	1	0	0.00	0	0	implementation_pending	clear_encrypted_content
 5f2ce5e02c56905cebcb5781ec198b676f32f27c	47741	Attribute tool telemetry to the invoking turn's product SKU (#47741)	2026-09-24	telemetry	1	1	1.00	0	0	complete	
-5f300d3f74eb48e30a42128c8e8ec34efcfc697d	49792	Add retained conversation support to Guardian async sampling (#49792)	2026-09-30	guardian	13	4	0.31	0	0	audit_pending	CollectedTranscript,PreparedRequest,RetainedCompletion,SamplingMode,collect_context,prepare_input,prepare_retained,sample_retained,take_history
+5f300d3f74eb48e30a42128c8e8ec34efcfc697d	49792	Add retained conversation support to Guardian async sampling (#49792)	2026-09-30	guardian	13	4	0.31	0	0	not_applicable	CollectedTranscript,PreparedRequest,RetainedCompletion,SamplingMode,collect_context,prepare_input,prepare_retained,sample_retained,take_history
 5f3180c79374bd9440db733e23ead8bc9f62d64b	48224	Preserve model and access program pairs during compaction (#48224)	2026-09-25	appserver	0	0		0	0	not_applicable	
 5f371ba30ae4a4bf4527eb0729ab6b36e3a0c123	47672	Fix no-reparse directory opens on Windows 10 (#47672)	2026-09-23	sandbox	0	0		0	0	not_applicable	
 5f49aba876922d6f2f55caa153bbb0ed1b46feba	41165	Require explicit requests for spawn model overrides (#41165)	2026-08-27	core	0	0		0	0	not_applicable	
@@ -1178,7 +1178,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 72348693eca4599ee3657dc2c039335256f4ccde	44293	Enforce the async Guardian classifier's complete input budget (#44293)	2026-09-09	guardian	1	0	0.00	0	0	implementation_pending	sampler_config
 724cdfbd32d35fde9e0da1f1e141b836836f9a65	46840	Simplify agent command center hints and back navigation (#46840)	2026-09-20	tui	2	0	0.00	0	0	implementation_pending	center_footer_hints,center_task_hints
 725b3a44f8d13c8d2f019e1ecbc8ab686466b950	40692	Remove WebSocket transport from code-mode hosts (#40692)	2026-08-25	appserver	0	0		0	0	not_applicable	
-726f1492db90501746639e8c61cd3c674735a1a7	49793	Add conversation mode to Guardian v2 async classification (#49793)	2026-09-30	guardian	11	4	0.36	0	0	audit_pending	AsyncClassifierMode,ConversationBackend,ConversationRequest,classifier_mode,max_input_tokens,record_request_tokens,record_section_costs
+726f1492db90501746639e8c61cd3c674735a1a7	49793	Add conversation mode to Guardian v2 async classification (#49793)	2026-09-30	guardian	11	4	0.36	0	0	not_applicable	AsyncClassifierMode,ConversationBackend,ConversationRequest,classifier_mode,max_input_tokens,record_request_tokens,record_section_costs
 7275afc5c7fd2c01e0a3442ead09f44bad52422a	45957	Centralize Guardian policy resolution in config and protocol (#45957)	2026-09-16	guardian	8	1	0.12	0	0	audit_pending	GuardianPolicyLoader,GuardianUnscoredAction,allows_initial_cua_call,constrain_guardian_policy,disable_scoring,scores_tool,scoring_enabled
 7276d67081dd4149a15c72972e639b0d707915a4	40952	Expose resumable misalignment details through app server (#40952)	2026-08-26	tui	2	2	1.00	0	0	complete	
 727e48697d8e89a88c024cc6831bd4816ffd3b3e	45035	Run DotSlash publishing directly on Ubuntu runners (#45035)	2026-09-12	core	0	0		0	0	not_applicable	
@@ -2150,7 +2150,7 @@ c9fac4dd5a06f29b9a6525b025a92c0bc367ae40	42773	Avoid holding metadata permit dur
 c9fecd3fa06af28011166207c596ad547e37abab	42453	Discover permission profiles from the app server (#42453)	2026-09-03	tui	11	8	0.73	0	0	audit_pending	invalidate_permission_discovery,permission_popup_request_is_current,request_permission_profiles
 ca2b076fffbc24ad5fa57258ece8a8277b326138	53805	Add safe diagnostics to workspace routing configuration errors (#53805)	2026-10-13	appserver	0	0		0	0	complete	
 ca41ed337fde50dce0b9fee4cd894d93699b3175	48352	Show turn tips while working and after completion in the TUI (#48352)	2026-09-26	tui	12	10	0.83	0	0	audit_pending	render_with_turn_tip_space,with_leading_spacer
-ca466061d64f0b44f416135c7fd06aa7af850bbc	50273	Record Guardian V2 Decisions agreement and latency metrics (#50273)	2026-10-02	guardian	2	1	0.50	0	0	audit_pending	record_decisions_comparison
+ca466061d64f0b44f416135c7fd06aa7af850bbc	50273	Record Guardian V2 Decisions agreement and latency metrics (#50273)	2026-10-02	guardian	2	1	0.50	0	0	not_applicable	record_decisions_comparison
 ca53e19c757a5b0b4b1fa4627f0780c76062be63	45764	Add an account analytics dashboard to `/usage` (#45764)	2026-09-15	tui	38	19	0.50	0	0	audit_pending	AnalyticsView,END_DATE,RangeGroup,SectionState,SectionStates,TOOL_DAILY,cancel_loads,change_range,dashboard_lines,day_has_details
 ca60d6fa72aa060eed4b841c6a7b231b57f15dbe	48072	Skip message-board notification previews when there are no recipients (#48072)	2026-09-25	core	0	0		0	0	not_applicable	
 ca6fb194b695dda38d8ccfcb5871b4dbd334b960	43568	Wire app-server user verification RPCs to the native provider (#43568)	2026-09-07	appserver	15	9	0.60	0	0	audit_pending	BlockingProvider,GuardedResponse,into_parts,send_response_as_checked,start_verify,write_auth
@@ -2301,7 +2301,7 @@ d84ebff59295a5fc897bd7b703ade933c5312198	46571	Preserve macOS Seatbelt exclusion
 d8ec479c34895214b44c062f060d97224c191a50	48643	Set the provisioned macOS CLI bundle name to ChatGPT (#48643)	2026-09-27	core	0	0		0	0	not_applicable	
 d8f69ea8bc998a33c19a08176cfc22fd4352c592	49432	Preserve bootstrap discovery across authentication changes (#49432)	2026-09-30	appserver	2	2	1.00	0	0	complete	
 d8fc718809a4bafb97820e827622eb10fa890feb	49031	Clarify ChatGPT sign-in success copy (#49031)	2026-09-28	tui	0	0		0	0	not_applicable	
-d91294c39edb93d204926b33f21310dc968edc34	50066	Add a bounded Decisions transport for Guardian comparison classification (#50066)	2026-10-01	guardian	5	2	0.40	0	0	audit_pending	DecisionsError,DecisionsSampler,DecisionsTask
+d91294c39edb93d204926b33f21310dc968edc34	50066	Add a bounded Decisions transport for Guardian comparison classification (#50066)	2026-10-01	guardian	5	2	0.40	0	0	not_applicable	DecisionsError,DecisionsSampler,DecisionsTask
 d9275a63ed1c4ff6ed6b56db8669453ad678b6cf	48132	Allow Left to open the command center from read-only conversations (#48132)	2026-09-25	tui	2	1	0.50	0	0	audit_pending	agents_navigation_available
 d93909a939e40c3c1031f5a713bacad8c0d9afe6	47342	Skip stored title lookups for ephemeral forks (#47342)	2026-09-22	core	0	0		0	0	not_applicable	
 d940fb21f35ef32a736016a4c196150c6380bdb3	49415	Truncate input text in protocol debug output (#49415)	2026-09-30	model	0	0		0	0	not_applicable	
