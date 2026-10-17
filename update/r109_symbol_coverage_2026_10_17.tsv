@@ -913,7 +913,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 57a38c1bebc77a04565b5a8ff08110f62f9f6e5d	50052	Preserve question context in recovered TUI answer drafts (#50052)	2026-10-01	tui	0	0		0	0	not_applicable	
 57ac6f51639f7cad705a48ac4bd8073034a2f150	49993	Preserve the async Guardian history prefix as retained context changes (#49993)	2026-10-01	guardian	0	0		0	0	not_applicable	
 57b5e89be8efbf72bdf9f4502d1d046e369cd85d	54080	Extract TUI user-turn submission into a dedicated module (#54080)	2026-10-14	tui	1	0	0.00	0	0	not_applicable	try_submit_user_turn
-57d57df60845f6f59e1c30c71210c8af5246b32d	51396	Let late low-risk scores complete pending Guardian reviews (#51396)	2026-10-06	guardian	1	0	0.00	0	0	implementation_pending	cached_approval
+57d57df60845f6f59e1c30c71210c8af5246b32d	51396	Let late low-risk scores complete pending Guardian reviews (#51396)	2026-10-06	guardian	1	0	0.00	0	0	not_applicable	cached_approval
 57e2edc6e97474448f1fb634224471448bc09d40	41041	Encrypt sensitive history and notes tool arguments (#41041)	2026-08-27	appserver	0	0		0	0	not_applicable	
 580b18cb7488a76096238820f779b417510441d0	51256	Start the Windows sandbox service during registered Core setup (#51256)	2026-10-06	appserver	1	0	0.00	0	0	implementation_pending	start_windows_sandbox_service_for_setup
 58670eeac4b0bdb9fcb86929d8631c14aee0d9f6	48213	Isolate executable fixture copies in CLI tests on Linux (#48213)	2026-09-25	core	0	0		0	0	not_applicable	
