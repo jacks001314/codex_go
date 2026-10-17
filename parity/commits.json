@@ -7575,10 +7575,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 1/7; needs review: ApprovalDecisionInput, GuardianReviewReason, ReviewRuntime, SynchronousApprovalReviewer, decide_approval"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Guardian decisions are request-scoped through the synchronous review action and assessment mapping, covering network/apply-patch approvals, decision duration, and absence of async approval races."
+        ]
     },
     {
       "sha": "86b1b359cf89b65c136eda8c84e5ee544a6c2cf2",
