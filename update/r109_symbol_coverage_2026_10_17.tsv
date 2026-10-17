@@ -972,7 +972,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5ce04789fbbd4b12c80340a8246cfb00d0a330d5	40640	Honor managed plugin disablement for executor capabilities (#40640)	2026-08-25	appserver	0	0		0	0	not_applicable	
 5d358057152d5e2950f20a25cb6cf050ed5b5d85	43099	Add receipt-verified native voice SDK export (#43099)	2026-09-05	realtime	0	0		0	0	not_applicable	
 5d3f8752fc49662356832373db448f2b4bb21c34	44285	Preserve prewarmed reasoning effort across replay and early rollback (#44285)	2026-09-09	persistence	0	0		0	0	not_applicable	
-5d3fe48b08049165ef8143dca152869c1f18059c	44482	Improve Guardian retries and review failure reporting (#44482)	2026-09-10	guardian	2	0	0.00	0	0	implementation_pending	ExhaustedResponseRetry,session_with_error_info
+5d3fe48b08049165ef8143dca152869c1f18059c	44482	Improve Guardian retries and review failure reporting (#44482)	2026-09-10	guardian	2	0	0.00	0	0	complete	ExhaustedResponseRetry,session_with_error_info
 5d4922595ae0eb81dde3c0f0f412ad771628d205	53747	Prefer remote Visualize installs over the bundled plugin (#53747)	2026-10-13	plugins	0	0		0	0	not_applicable	
 5d80031172f57453516d2ad492665abc7a03d919	47945	Parameterize the thread initialization analytics test by originator (#47945)	2026-09-24	appserver	0	0		0	0	not_applicable	
 5da229e54d9d8f5779116c66decb18a21a9c8e2f	51451	Make URLs in the TUI warnings viewer clickable (#51451)	2026-10-06	tui	0	0		0	0	not_applicable	
