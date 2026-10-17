@@ -1382,6 +1382,30 @@
             "reason": "Aligned upstream cb03f28a40 (#53872 Refresh model instructions in incremental-tool context windows): incremental windows persist model identity and base-instruction hash independently. A same-model catalog refresh appends one replacement model_instructions message, model-only changes remain distinct, empty instructions explicitly remove the prior base, and unchanged updates are silent. Compaction replacement windows install the latest base instructions and model identity while preserving known-empty snapshots and legacy hash-only compatibility.",
             "userImpact": "Model instruction changes reach incremental-tool sessions without rewriting the existing history prefix or carrying stale instructions across compaction.",
             "test": "go test ./session -run TestModelInstructionsUpdateLikeRust -count=1; go test ./appserver -run 'TestIncrementalToolCatalogRefreshesModelInstructionsLikeRust|TestCompactionInstallsLatestIncrementalInstructionsLikeRust' -count=1"
+        },
+        {
+            "id": "agent-tree-shutdown-reports",
+            "status": "done",
+            "area": "agent",
+            "reason": "Aligned upstream 24edd7b890 (#51515 Expose detailed agent tree shutdown failure reports): Go exposes structured, payload-free shutdown reports with operation, phase, thread ID, stable error kind and abandoned-guard reasons; retention is bounded at 64 with an omitted count, repeated reports are stable, and shutdown details propagate through agent tool results while the legacy error remains generic.",
+            "userImpact": "Agent-tree cleanup failures identify the failed operation and thread without leaking underlying error payloads.",
+            "test": "go test ./agent -run 'TestAgentTreeShutdownReport' -count=1; go test ./appserver -run 'TestRuntimeAgentControllerShutdownReportLikeRust' -count=1"
+        },
+        {
+            "id": "environment-capability-root-selection",
+            "status": "done",
+            "area": "mcp",
+            "reason": "Aligned upstream 9479e1fdb7 (#51493 Bind capability roots to environment selections): EnvironmentCapabilityRoots retains original root indexes across environment splits, selection restriction follows captured environments, deselection and reselection restore retained roots, and per-step capability snapshots capture the ready roots for model context and skill tools. Workspace identity ignores capability-root metadata when matching inherited environment configuration.",
+            "userImpact": "Capability roots and executor skill aliases remain stable across environment ordering, deselection, and shared-executor threads.",
+            "test": "go test ./appserver -run 'EnvironmentCapabilityRoots|RestrictCapabilityRoots|InspectSelectedCapabilityRoots|StepCapability' -count=1"
+        },
+        {
+            "id": "executor-plugin-root-ownership",
+            "status": "done",
+            "area": "plugins",
+            "reason": "Aligned upstream b3b83ace17 (#51491 Classify executor capability root ownership independently of parsing): Go classifies plugin-owned versus standalone executor roots before capability parsing, preserves plugin ownership for malformed ancestor manifests, rejects nested manifests as parent ownership, and treats discovery or metadata failures as errors rather than standalone evidence.",
+            "userImpact": "Malformed or unreadable plugin metadata cannot silently reclassify plugin capabilities as standalone.",
+            "test": "go test ./appserver -run 'TestExecutorPluginRootOwnership' -count=1"
         }
     ]
 }

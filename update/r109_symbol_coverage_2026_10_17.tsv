@@ -369,7 +369,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 24462234b2aeeb27373e17bbe226baf9c0e97d3b	47397	Refresh bundled model metadata and instructions (#47397)	2026-09-22	plugins	0	0		0	0	not_applicable	
 2457571e4cd109e602d3ac278d93ec24f1f2e483	47898	Preserve local-binding inheritance in environment network policies (#47898)	2026-09-24	config	0	0		0	0	not_applicable	
 2497518490a4cfc67a0c7a5c099ef632fdc2ed78	40488	Export turn cost as an OTEL metric (#40488)	2026-08-24	appserver	1	1	1.00	0	0	complete	
-24edd7b89026865149d58d0a090694a2146b6d3c	51515	Expose detailed agent tree shutdown failure reports (#51515)	2026-10-06	core	12	7	0.58	0	0	audit_pending	clone_for_teardown,into_teardown_guard,record_shutdown_failure,session_teardown,wait_detailed
+24edd7b89026865149d58d0a090694a2146b6d3c	51515	Expose detailed agent tree shutdown failure reports (#51515)	2026-10-06	core	12	12	1.00	0	0	complete
 25270df2615eb4da5b9d4a9a392226933fb096c5	48318	Keep TUI reconnect attempts running until the shared deadline (#48318)	2026-09-26	tui	0	0		0	0	not_applicable	
 255423956117c82ca558b87173eb76379c7b0664	43597	Move trusted tool metadata into shared Guardian context (#43597)	2026-09-07	guardian	3	0	0.00	0	0	implementation_pending	ContextInput,TrustedTool,TrustedToolSection
 25a6e316c81fb7600d1d75f3e63ffe26be10b7c8	40775	Make history and notes tools Bridge-compatible (#40775)	2026-08-26	appserver	0	0		0	0	not_applicable	
@@ -447,7 +447,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2d929eb7c39a612b84e0987f2af4a4c2282249e2	41221	Honor turn token budgets in Guardian review rollover (#41221)	2026-08-27	guardian	0	0		0	0	not_applicable	
 2dae757b8713d3317e8da58828bdac821386982c	51734	Load persisted sender context for Guardian reviews (#51734)	2026-10-07	guardian	2	1	0.50	0	0	complete	reconstruct_rollout
 2db0ab7af1d9d7e6f0545b2778b9ac8fd789008a	46895	Add right-click copying for transcript and composer selections (#46895)	2026-09-20	tui	3	0	0.00	0	0	implementation_pending	contains_mouse,copy_composer_selection,copy_selection
-2dbcab90e24bbe3c710ad41ffab7bb372256827b	51221	Separate environment requests from runtime selections (#51221)	2026-10-06	guardian	7	2	0.29	0	0	audit_pending	TurnEnvironmentRequest,default_environment_requests,default_thread_environment_requests,into_request,validate_environment_ids_and_cwds
+2dbcab90e24bbe3c710ad41ffab7bb372256827b	51221	Separate environment requests from runtime selections (#51221)	2026-10-06	guardian	7	7	1.00	0	0	complete
 2dc0791c7d2cb4decda6b8ebd8b54d38d7411f64	52723	Add opt-in gRPC over stdio for the code-mode host (#52723)	2026-10-09	config	2	2	1.00	0	0	complete	
 2deb542491ab25d5dede8c1b288e2818a127985b	47867	Render remote permission paths using executor context (#47867)	2026-09-24	sandbox	1	0	0.00	0	0	complete	resolved_entries
 2df0b747ba49c187223824dd84aaf2749d866066	44350	Add thread attachment operations with coordinated deletion (#44350)	2026-09-10	appserver	7	3	0.43	0	0	audit_pending	AddThreadAttachmentParams,ListThreadAttachmentsParams,RemoveThreadAttachmentParams,with_state_db
@@ -1573,7 +1573,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 94697375cb9d2aa8ae74d61957c6b396819bec94	44548	Add MIME-filtered resource listing for Codex Apps (#44548)	2026-09-10	mcp	3	0	0.00	0	0	implementation_pending	CodexAppsResourceListParams,latest_host_owned_codex_apps_connections,list_codex_apps_resources
 946bb6c58398bdb4d688725dcdedf3a318457418	51420	Finish idle thread unloads after slow shutdown (#51420)	2026-10-06	appserver	0	0		0	0	not_applicable	
 9477081ccd334537072d7f3dffe5e05be0f73146	47678	Support quoted labels and ampersands in Mermaid flowcharts (#47678)	2026-09-23	tui	0	0		0	0	not_applicable	
-9479e1fdb7396c3e3254f5e123489af829186893	51493	Bind capability roots to environment selections (#51493)	2026-10-06	mcp	6	5	0.83	0	0	audit_pending	has_same_workspace
+9479e1fdb7396c3e3254f5e123489af829186893	51493	Bind capability roots to environment selections (#51493)	2026-10-06	mcp	6	6	1.00	0	0	complete
 94967e03e58463434eb8987a29dca5c15908e33b	40687	Add per-turn cyber access program selection (#40687)	2026-08-25	tui	6	3	0.50	0	0	audit_pending	NewTurnContextOptions,drain_mailbox_input_items,new_turn_with_default_settings
 94cbbddafc1776d5e377bca1b05932c697e82238	41700	Support package-style MCP server names (#41700)	2026-08-30	mcp	0	0		0	0	not_applicable	
 94d642d8b40e45e2e544770f0d1f28df9a717f06	49361	Clarify credential storage wording across authentication UI and docs (#49361)	2026-09-29	tui	0	0		0	0	not_applicable	
@@ -1917,7 +1917,7 @@ b334d5b3f2d9441b95286a8c2af8c2152737d977	48469	Default to copying transcript sel
 b348fc26674189f758d5941cdab3f78f258b2aa7	44433	Add archive and delete actions to the agents overview (#44433)	2026-09-10	tui	3	0	0.00	0	0	implementation_pending	AgentsOverviewAction,confirm_agents_overview_action,run_agents_overview_action
 b35a7afbe83d72af4607c67732ab4dade38bacb7	48098	Preserve recent authorization context for Guardian reviews (#48098)	2026-09-25	guardian	0	0		0	0	not_applicable	
 b38942ce7ce73a5cee7981f1f1b6f1a3d2c5a5c0	51808	Preserve diagnostic reasons for MCP user verification failures (#51808)	2026-10-07	tui	5	0	0.00	0	0	complete	UserVerificationFailure,UserVerificationReason,from_meta,into_meta,verification_failure
-b3b83ace1705ec093738ed8fb9cb7e468b2c9346	51491	Classify executor capability root ownership independently of parsing (#51491)	2026-10-06	plugins	2	1	0.50	0	0	audit_pending	root_ownership
+b3b83ace1705ec093738ed8fb9cb7e468b2c9346	51491	Classify executor capability root ownership independently of parsing (#51491)	2026-10-06	plugins	2	2	1.00	0	0	complete
 b3c3bad9760fc2214fab2e93659c240d147e6168	53429	Apply configuration toggles live and improve settings navigation (#53429)	2026-10-12	tui	8	1	0.12	0	0	audit_pending	EFFECTS_VIEW_ID,apply_config_preference,set_animations_enabled,set_motion_preferences,should_hide_column,should_show_selected_below,should_show_selected_description_below
 b3c7e1a47f01fe3ed8f0b912f33b5911270e984d	40492	Generate descriptive TUI thread titles (#40492)	2026-08-24	tui	15	4	0.27	0	0	audit_pending	THREAD_TITLE_MAX_CHARS,THREAD_TITLE_PROMPT_MAX_BYTES,ThreadTitleDestination,expect_automatic_thread_name,expect_manual_thread_name,generate_thread_title,on_thread_title_started,parse_thread_title,run_temporary_structured_turn,thread_title_output_schema
 b3cc59afcf28bf8f8cc35023be67b9e2f62fc066	54641	Retry npm release publishing and match macOS verification runners (#54641)	2026-10-16	core	0	0		0	0	complete	
