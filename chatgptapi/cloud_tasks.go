@@ -172,6 +172,55 @@ func NewCloudClient(options *CloudClientOptions) *CloudClient {
 	}
 }
 
+// NewCloudClientWithoutRedirects creates a cloud task client that never
+// forwards its credentials to a redirect destination (Rust
+// backend_client::Client::new_without_redirects, #41403).
+func NewCloudClientWithoutRedirects(options *CloudClientOptions) *CloudClient {
+	client := NewCloudClient(options)
+	client.httpClient = cloudHTTPClientWithoutRedirects(client.httpClient)
+	return client
+}
+
+// cloudHTTPClientWithoutRedirects disables redirect following on the standard
+// HTTP client while leaving caller-supplied custom doers unchanged.
+func cloudHTTPClientWithoutRedirects(doer HTTPDoer) HTTPDoer {
+	standard, ok := doer.(*http.Client)
+	if !ok || standard == nil {
+		return doer
+	}
+	clone := *standard
+	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &clone
+}
+
+// ValidateChatGPTBaseURL validates the cloud task backend before saved ChatGPT
+// credentials are loaded or any request is made (Rust
+// cloud_tasks::util::validate_chatgpt_base_url, #41403): the destination must be
+// a trusted HTTPS origin on port 443 without user information, a query, or a
+// fragment.
+func ValidateChatGPTBaseURL(input string) (string, error) {
+	invalid := func() (string, error) {
+		return "", errors.New("CODEX_CLOUD_TASKS_BASE_URL must use a trusted HTTPS origin on port 443, without user information, a query, or a fragment; custom backends cannot use saved ChatGPT credentials")
+	}
+	trimmed := strings.TrimSpace(input)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil ||
+		parsed.RawQuery != "" || strings.Contains(trimmed, "#") {
+		return invalid()
+	}
+	authority := strings.ToLower(parsed.Host)
+	switch authority {
+	case "chatgpt.com", "chatgpt.com:443",
+		"chat.openai.com", "chat.openai.com:443",
+		"chatgpt-staging.com", "chatgpt-staging.com:443":
+	default:
+		return invalid()
+	}
+	return NormalizeCloudBaseURL("https://" + authority + parsed.Path), nil
+}
+
 func NormalizeCloudBaseURL(input string) string {
 	value := strings.TrimRight(strings.TrimSpace(input), "/")
 	if value == "" {
