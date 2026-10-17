@@ -810,7 +810,7 @@ func mergeManagedDenyRead(profile *sandbox.PermissionProfile, managedDenyRead []
 	if profile.Disabled || (profile.SandboxPolicy != nil && profile.SandboxPolicy.Kind == sandbox.SandboxDangerFullAccess) {
 		return fmt.Errorf("sandbox policy grants full access and conflicts with managed deny_read rules")
 	}
-	profile.DeniedReadEntries = append(profile.DeniedReadEntries, managedDenyRead...)
+	profile.DeniedReadEntries = config.AppendFilesystemDenyReadEntries(profile.DeniedReadEntries, managedDenyRead)
 	return nil
 }
 

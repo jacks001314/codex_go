@@ -10910,7 +10910,11 @@ func (r *RuntimeRouter) permissionProfileServiceForRequest(params *sandbox.Permi
 	if err != nil {
 		return nil, err
 	}
-	summaries, err := config.PermissionProfileSummariesFromValues(read.Config)
+	cwd := r.services.DefaultCWD
+	if params != nil && params.CWD != nil {
+		cwd = *params.CWD
+	}
+	summaries, err := config.PermissionProfileSummariesFromValuesForCWD(read.Config, cwd)
 	if err != nil {
 		return nil, err
 	}
@@ -12952,30 +12956,7 @@ func (r *RuntimeRouter) commandExecManagedDenyReadEntries() ([]sandbox.FileSyste
 }
 
 func managedDenyReadEntriesFromPerms(perms map[string]any) ([]sandbox.FileSystemSandboxEntry, error) {
-	filesystem, ok := perms["filesystem"].(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-	raw, ok := filesystem["deny_read"]
-	if !ok {
-		return nil, nil
-	}
-	patterns, err := config.FilesystemDenyReadPatterns(raw)
-	if err != nil {
-		return nil, err
-	}
-	out := []sandbox.FileSystemSandboxEntry(nil)
-	for _, pattern := range patterns {
-		path, err := sandbox.ParseDenyReadPath(pattern)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, sandbox.FileSystemSandboxEntry{
-			Path:   path,
-			Access: sandbox.FileSystemAccessDeny,
-		})
-	}
-	return out, nil
+	return config.FilesystemDenyReadEntriesFromPermissions(perms, utils.NativePathConvention())
 }
 
 func (r *RuntimeRouter) commandExecPermissionProfileResolver() CommandExecPermissionProfileResolver {

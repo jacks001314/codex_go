@@ -68,6 +68,9 @@ func TestMergeManagedDenyReadPreservesRulesAndRejectsConflicts(t *testing.T) {
 	if err := mergeManagedDenyRead(profile2, managed); err != nil {
 		t.Fatalf("repeat merge should be allowed: %v", err)
 	}
+	if len(profile2.DeniedReadEntries) != 1 {
+		t.Fatalf("repeat merge duplicated deny_read entries: %+v", profile2.DeniedReadEntries)
+	}
 
 	// A full-access profile conflicts with managed deny_read.
 	fullAccess := &sandbox.PermissionProfile{Disabled: true}

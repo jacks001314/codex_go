@@ -2,13 +2,13 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 
 	"codex_go/sandbox"
+	"codex_go/utils"
 
 	json "github.com/goccy/go-json"
 	"github.com/mitchellh/go-homedir"
@@ -270,6 +270,7 @@ type runtimeFilesystemWire struct {
 type permissionProfileBuilder struct {
 	entries                []sandbox.FileSystemSandboxEntry
 	entryIndex             map[string]int
+	pathContext            *ConfigPathContext
 	globScanMaxDepth       *int
 	network                sandbox.NetworkAccess
 	disabled               bool
@@ -336,6 +337,10 @@ func (c *Config) ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID str
 	if c == nil {
 		c = &Config{Values: map[string]any{}}
 	}
+	pathContext, err := NewNativeConfigPathContext(cwd)
+	if err != nil {
+		return nil, err
+	}
 	profiles, err := mergePermissionProfiles(permissionProfilesFromConfig(c.Values["permissions"]), c.Requirements)
 	if err != nil {
 		return nil, err
@@ -370,7 +375,7 @@ func (c *Config) ResolveSandboxPermissionProfileWithWorkspaceRoots(profileID str
 	}
 	if !strings.HasPrefix(profileID, ":") {
 		if _, ok := profiles[profileID]; ok {
-			builder, err := compileConfigPermissionProfile(profiles, profileID, map[string]bool{})
+			builder, err := compileConfigPermissionProfile(profiles, profileID, map[string]bool{}, pathContext)
 			if err != nil {
 				return nil, err
 			}
@@ -403,11 +408,23 @@ func (c *Config) PermissionProfileSummaries() ([]sandbox.PermissionProfileSummar
 }
 
 func PermissionProfileSummariesFromValues(values map[string]any) ([]sandbox.PermissionProfileSummary, error) {
+	return PermissionProfileSummariesFromValuesForCWD(values, "")
+}
+
+// PermissionProfileSummariesFromValuesForCWD builds the profile catalog using
+// the requested execution cwd. A custom profile whose configured roots or
+// filesystem paths cannot be compiled safely is reported as unavailable rather
+// than being offered to clients.
+func PermissionProfileSummariesFromValuesForCWD(values map[string]any, cwd string) ([]sandbox.PermissionProfileSummary, error) {
 	if values == nil {
 		values = map[string]any{}
 	}
 	profiles := permissionProfilesFromConfig(values["permissions"])
 	if err := validateConfigPermissionProfileNames(profiles); err != nil {
+		return nil, err
+	}
+	pathContext, err := NewNativeConfigPathContext(cwd)
+	if err != nil {
 		return nil, err
 	}
 	summaries := sandbox.BuiltinPermissionProfileSummaries()
@@ -421,10 +438,14 @@ func PermissionProfileSummariesFromValues(values map[string]any) ([]sandbox.Perm
 		if profile, ok := profiles[name].(map[string]any); ok {
 			description = stringFromConfigValue(profile["description"])
 		}
+		builder, compileErr := compileConfigPermissionProfile(profiles, name, map[string]bool{}, pathContext)
+		if compileErr == nil {
+			_, compileErr = runtimeResolutionFromBuilderWithWorkspaceRoots(name, builder, cwd, nil)
+		}
 		summaries = append(summaries, sandbox.PermissionProfileSummary{
 			ID:          name,
 			Description: description,
-			Allowed:     true,
+			Allowed:     compileErr == nil,
 		})
 	}
 	return summaries, nil
@@ -509,10 +530,20 @@ func validateConfigPermissionProfileNames(profiles map[string]any) error {
 	return nil
 }
 
-func compileConfigPermissionProfile(profiles map[string]any, profileID string, stack map[string]bool) (*permissionProfileBuilder, error) {
+func compileConfigPermissionProfile(
+	profiles map[string]any,
+	profileID string,
+	stack map[string]bool,
+	pathContext *ConfigPathContext,
+) (*permissionProfileBuilder, error) {
 	if strings.HasPrefix(profileID, ":") {
 		if isRuntimeBuiltinPermissionProfile(profileID) {
-			return builtinPermissionProfileBuilder(profileID)
+			builder, err := builtinPermissionProfileBuilder(profileID)
+			if err != nil {
+				return nil, err
+			}
+			builder.pathContext = pathContext
+			return builder, nil
 		}
 		return nil, fmt.Errorf("default_permissions refers to unknown built-in profile `%s`", profileID)
 	}
@@ -528,9 +559,9 @@ func compileConfigPermissionProfile(profiles map[string]any, profileID string, s
 		return nil, fmt.Errorf("permissions profile %q is not a table", profileID)
 	}
 	stack[profileID] = true
-	builder := newPermissionProfileBuilder()
+	builder := newPermissionProfileBuilder(pathContext)
 	if parent := stringFromConfigValue(profile["extends"]); parent != "" {
-		parentBuilder, err := compileConfigPermissionProfile(profiles, parent, stack)
+		parentBuilder, err := compileConfigPermissionProfile(profiles, parent, stack, pathContext)
 		if err != nil {
 			return nil, err
 		}
@@ -557,16 +588,17 @@ func compileConfigPermissionProfile(profiles map[string]any, profileID string, s
 	return builder, nil
 }
 
-func newPermissionProfileBuilder() *permissionProfileBuilder {
+func newPermissionProfileBuilder(pathContext *ConfigPathContext) *permissionProfileBuilder {
 	return &permissionProfileBuilder{
 		entryIndex:           map[string]int{},
+		pathContext:          pathContext,
 		network:              sandbox.NetworkRestricted,
 		workspaceRootEnabled: map[string]bool{},
 	}
 }
 
 func builtinPermissionProfileBuilder(profileID string) (*permissionProfileBuilder, error) {
-	builder := newPermissionProfileBuilder()
+	builder := newPermissionProfileBuilder(nil)
 	switch profileID {
 	case ":danger-full-access", sandbox.BuiltInPermissionProfileDangerFullAccess:
 		builder.disabled = true
@@ -593,7 +625,7 @@ func builtinPermissionProfileBuilder(profileID string) (*permissionProfileBuilde
 }
 
 func (b *permissionProfileBuilder) clone() *permissionProfileBuilder {
-	clone := newPermissionProfileBuilder()
+	clone := newPermissionProfileBuilder(b.pathContext)
 	clone.entries = append([]sandbox.FileSystemSandboxEntry(nil), b.entries...)
 	clone.entryIndex = make(map[string]int, len(b.entryIndex))
 	for key, value := range b.entryIndex {
@@ -615,7 +647,13 @@ func (b *permissionProfileBuilder) clone() *permissionProfileBuilder {
 }
 
 func (b *permissionProfileBuilder) applyWorkspaceRoots(values map[string]any) {
-	for rawPath, rawEnabled := range values {
+	paths := make([]string, 0, len(values))
+	for rawPath := range values {
+		paths = append(paths, rawPath)
+	}
+	sort.Strings(paths)
+	for _, rawPath := range paths {
+		rawEnabled := values[rawPath]
 		enabled, ok := rawEnabled.(bool)
 		if !ok {
 			continue
@@ -631,7 +669,13 @@ func (b *permissionProfileBuilder) applyFilesystem(values map[string]any) error 
 	if depth := positiveIntFromConfigValue(values["glob_scan_max_depth"]); depth != nil {
 		b.globScanMaxDepth = depth
 	}
-	for pathKey, rawPermission := range values {
+	pathKeys := make([]string, 0, len(values))
+	for pathKey := range values {
+		pathKeys = append(pathKeys, pathKey)
+	}
+	sort.Strings(pathKeys)
+	for _, pathKey := range pathKeys {
+		rawPermission := values[pathKey]
 		if pathKey == "glob_scan_max_depth" {
 			continue
 		}
@@ -641,7 +685,7 @@ func (b *permissionProfileBuilder) applyFilesystem(values map[string]any) error 
 			if err != nil {
 				return err
 			}
-			entries, err := compileFilesystemAccess(pathKey, access)
+			entries, err := compileFilesystemAccess(pathKey, access, b.pathContext)
 			if err != nil {
 				return err
 			}
@@ -649,12 +693,18 @@ func (b *permissionProfileBuilder) applyFilesystem(values map[string]any) error 
 				b.addEntry(entry)
 			}
 		case map[string]any:
-			for subpath, rawAccess := range permission {
+			subpaths := make([]string, 0, len(permission))
+			for subpath := range permission {
+				subpaths = append(subpaths, subpath)
+			}
+			sort.Strings(subpaths)
+			for _, subpath := range subpaths {
+				rawAccess := permission[subpath]
 				access, err := parseFilesystemAccess(stringFromConfigValue(rawAccess))
 				if err != nil {
 					return err
 				}
-				entries, err := compileScopedFilesystemAccess(pathKey, subpath, access)
+				entries, err := compileScopedFilesystemAccess(pathKey, subpath, access, b.pathContext)
 				if err != nil {
 					return err
 				}
@@ -735,27 +785,53 @@ func (b *permissionProfileBuilder) materializedEntries(cwd string) ([]sandbox.Fi
 
 func (b *permissionProfileBuilder) materializedEntriesForWorkspaceRoots(roots []string) ([]sandbox.FileSystemSandboxEntry, error) {
 	var out []sandbox.FileSystemSandboxEntry
+	context := b.pathContext
+	if context == nil {
+		return nil, fmt.Errorf("permission profile path context is required")
+	}
 	for _, entry := range b.entries {
 		if entry.Path.Type == "special" && entry.Path.Value != nil && entry.Path.Value.Kind == "project_roots" {
 			for _, root := range roots {
-				path := root
-				if entry.Path.Value.Subpath != nil && *entry.Path.Value.Subpath != "" {
-					path = filepath.Join(root, *entry.Path.Value.Subpath)
+				subpath := ""
+				if entry.Path.Value.Subpath != nil {
+					subpath = *entry.Path.Value.Subpath
 				}
-				out = append(out, runtimePathEntry(path, entry.Access))
+				if _, homeRelative := context.Convention().HomeRelativeSuffix(subpath); homeRelative &&
+					context.userHomeDir == nil {
+					// A legacy home-relative workspace denial has no safe workspace
+					// target without the owning executor's home. Clear grants.
+					return []sandbox.FileSystemSandboxEntry{}, nil
+				}
+				path, err := resolveWorkspaceScopedPath(root, subpath, context)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, runtimePathEntryForConvention(path, entry.Access, context.Convention()))
 			}
 			continue
 		}
 		if entry.Path.Type == "glob_pattern" && strings.HasPrefix(entry.Path.Pattern, projectRootsPatternPrefix) {
 			subpath := strings.TrimPrefix(entry.Path.Pattern, projectRootsPatternPrefix)
 			for _, root := range roots {
-				out = append(out, runtimeGlobEntry(filepath.Join(root, subpath), entry.Access))
+				if _, homeRelative := context.Convention().HomeRelativeSuffix(subpath); homeRelative &&
+					context.userHomeDir == nil {
+					return []sandbox.FileSystemSandboxEntry{}, nil
+				}
+				if err := validateWorkspaceGlobRoot(root, context); err != nil {
+					out = append(out, runtimePathEntryForConvention(root, sandbox.FileSystemAccessDeny, context.Convention()))
+					continue
+				}
+				path, err := resolveWorkspaceScopedPath(root, subpath, context)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, runtimeGlobEntryForConvention(path, entry.Access, context.Convention()))
 			}
 			continue
 		}
 		out = append(out, entry)
 	}
-	return out, nil
+	return AppendFilesystemDenyReadEntries(nil, out), nil
 }
 
 func (b *permissionProfileBuilder) effectiveWorkspaceRoots(cwd string) ([]string, error) {
@@ -768,34 +844,52 @@ func (b *permissionProfileBuilder) effectiveWorkspaceRoots(cwd string) ([]string
 // are given. Configured `[permissions.<profile>.workspace_roots]` keys are
 // appended in both cases.
 func (b *permissionProfileBuilder) effectiveWorkspaceRootsFor(workspaceRoots []string, cwd string) ([]string, error) {
+	context := b.pathContext
+	if context == nil {
+		var err error
+		context, err = NewNativeConfigPathContext(cwd)
+		if err != nil {
+			return nil, err
+		}
+	}
 	seen := map[string]bool{}
 	roots := []string{}
-	add := func(path string) {
-		if path == "" || seen[path] {
-			return
+	add := func(path string) error {
+		resolved, err := resolveWorkspaceRoot(path, context)
+		if err != nil {
+			return err
 		}
-		seen[path] = true
-		roots = append(roots, path)
+		if resolved == "" {
+			return nil
+		}
+		key := resolved
+		if uri, ok := utils.InferredPathURI(resolved); ok {
+			key = uri.IdentityKey()
+		}
+		if seen[key] {
+			return nil
+		}
+		seen[key] = true
+		roots = append(roots, resolved)
+		return nil
 	}
 	for _, rawRoot := range workspaceRoots {
-		add(resolveConfigPath(strings.TrimSpace(rawRoot), cwd))
+		if err := add(strings.TrimSpace(rawRoot)); err != nil {
+			return nil, err
+		}
 	}
 	if len(roots) == 0 {
-		root := resolveConfigPath(".", cwd)
-		if root == "" {
-			workingDir, err := os.Getwd()
-			if err != nil {
-				return nil, err
-			}
-			root = filepath.Clean(workingDir)
+		if err := add("."); err != nil {
+			return nil, err
 		}
-		add(root)
 	}
 	for _, rawRoot := range b.workspaceRoots {
 		if !b.workspaceRootEnabled[rawRoot] {
 			continue
 		}
-		add(resolveConfigPath(rawRoot, cwd))
+		if err := add(rawRoot); err != nil {
+			return nil, err
+		}
 	}
 	return roots, nil
 }
@@ -810,7 +904,14 @@ func turnWorkspaceRootOrCWD(workspaceRoots []string, cwd string) string {
 	return cwd
 }
 
-func compileFilesystemAccess(pathKey string, access sandbox.FileSystemAccessMode) ([]sandbox.FileSystemSandboxEntry, error) {
+func compileFilesystemAccess(
+	pathKey string,
+	access sandbox.FileSystemAccessMode,
+	context *ConfigPathContext,
+) ([]sandbox.FileSystemSandboxEntry, error) {
+	if context == nil {
+		return nil, fmt.Errorf("permission profile path context is required")
+	}
 	if special, known := specialFilesystemPath(pathKey, ""); strings.HasPrefix(pathKey, ":") {
 		if !known {
 			return nil, nil
@@ -818,12 +919,15 @@ func compileFilesystemAccess(pathKey string, access sandbox.FileSystemAccessMode
 		return []sandbox.FileSystemSandboxEntry{{Path: special, Access: access}}, nil
 	}
 	path := pathKey
-	if containsGlobChars(path) {
+	if containsGlobCharsForPlatform(path, context.Convention()) {
 		if access == sandbox.FileSystemAccessDeny {
-			if !filepath.IsAbs(path) {
-				return nil, fmt.Errorf("filesystem glob path `%s` must be absolute", pathKey)
+			resolved, err := resolveConfigGlobPattern(path, context)
+			if err != nil {
+				return nil, fmt.Errorf("filesystem glob path `%s`: %w", pathKey, err)
 			}
-			return []sandbox.FileSystemSandboxEntry{runtimeGlobEntry(filepath.Clean(path), access)}, nil
+			return []sandbox.FileSystemSandboxEntry{
+				runtimeGlobEntryForConvention(resolved, access, context.Convention()),
+			}, nil
 		}
 		trimmed, ok := trimTrailingGlobSubtree(path)
 		if !ok {
@@ -831,20 +935,43 @@ func compileFilesystemAccess(pathKey string, access sandbox.FileSystemAccessMode
 		}
 		path = trimmed
 	}
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("filesystem path `%s` must be absolute or a recognized special path", pathKey)
+	resolved, err := resolveAbsoluteFilesystemPath(path, context)
+	if err != nil {
+		return nil, fmt.Errorf("filesystem path `%s`: %w", pathKey, err)
 	}
-	return []sandbox.FileSystemSandboxEntry{runtimePathEntry(filepath.Clean(path), access)}, nil
+	return []sandbox.FileSystemSandboxEntry{
+		runtimePathEntryForConvention(resolved, access, context.Convention()),
+	}, nil
 }
 
-func compileScopedFilesystemAccess(pathKey string, subpath string, access sandbox.FileSystemAccessMode) ([]sandbox.FileSystemSandboxEntry, error) {
-	if subpath == "." {
-		return compileFilesystemAccess(pathKey, access)
+func compileScopedFilesystemAccess(
+	pathKey string,
+	subpath string,
+	access sandbox.FileSystemAccessMode,
+	context *ConfigPathContext,
+) ([]sandbox.FileSystemSandboxEntry, error) {
+	if context == nil {
+		return nil, fmt.Errorf("permission profile path context is required")
 	}
-	if err := validateRelativeSubpath(subpath); err != nil {
+	if subpath == "." {
+		return compileFilesystemAccess(pathKey, access, context)
+	}
+	if err := validateRelativeSubpathForConvention(subpath, context.Convention()); err != nil {
 		return nil, err
 	}
-	if containsGlobChars(subpath) && access == sandbox.FileSystemAccessDeny {
+	if _, homeRelative := context.Convention().HomeRelativeSuffix(subpath); homeRelative {
+		if special, known := specialFilesystemPath(pathKey, subpath); known &&
+			special.Value != nil && special.Value.Kind == "project_roots" {
+			resolved, err := resolveAbsoluteFilesystemPath(subpath, context)
+			if err != nil {
+				return nil, err
+			}
+			return []sandbox.FileSystemSandboxEntry{
+				runtimePathEntryForConvention(resolved, access, context.Convention()),
+			}, nil
+		}
+	}
+	if containsGlobCharsForPlatform(subpath, context.Convention()) && access == sandbox.FileSystemAccessDeny {
 		if special, known := specialFilesystemPath(pathKey, subpath); strings.HasPrefix(pathKey, ":") {
 			if !known {
 				return nil, nil
@@ -852,14 +979,23 @@ func compileScopedFilesystemAccess(pathKey string, subpath string, access sandbo
 			if special.Value == nil || special.Value.Kind != "project_roots" {
 				return nil, fmt.Errorf("filesystem path `%s` does not support nested entries", pathKey)
 			}
-			return []sandbox.FileSystemSandboxEntry{runtimeGlobEntry(projectRootsPatternPrefix+subpath, access)}, nil
+			return []sandbox.FileSystemSandboxEntry{
+				runtimeGlobEntryForConvention(projectRootsPatternPrefix+subpath, access, context.Convention()),
+			}, nil
 		}
-		if !filepath.IsAbs(pathKey) {
-			return nil, fmt.Errorf("filesystem path `%s` must be absolute or a recognized special path", pathKey)
+		base, err := resolveAbsoluteFilesystemPath(pathKey, context)
+		if err != nil {
+			return nil, err
 		}
-		return []sandbox.FileSystemSandboxEntry{runtimeGlobEntry(filepath.Join(pathKey, subpath), access)}, nil
+		resolved, err := resolveRelativeAgainst(base, subpath, context)
+		if err != nil {
+			return nil, err
+		}
+		return []sandbox.FileSystemSandboxEntry{
+			runtimeGlobEntryForConvention(resolved, access, context.Convention()),
+		}, nil
 	}
-	if containsGlobChars(subpath) {
+	if containsGlobCharsForPlatform(subpath, context.Convention()) {
 		trimmed, ok := trimTrailingGlobSubtree(subpath)
 		if !ok {
 			return nil, fmt.Errorf("filesystem glob subpath `%s` only supports `deny` access", subpath)
@@ -875,10 +1011,84 @@ func compileScopedFilesystemAccess(pathKey string, subpath string, access sandbo
 		}
 		return []sandbox.FileSystemSandboxEntry{{Path: special, Access: access}}, nil
 	}
-	if !filepath.IsAbs(pathKey) {
-		return nil, fmt.Errorf("filesystem path `%s` must be absolute or a recognized special path", pathKey)
+	base, err := resolveAbsoluteFilesystemPath(pathKey, context)
+	if err != nil {
+		return nil, err
 	}
-	return []sandbox.FileSystemSandboxEntry{runtimePathEntry(filepath.Join(pathKey, subpath), access)}, nil
+	resolved, err := resolveRelativeAgainst(base, subpath, context)
+	if err != nil {
+		return nil, err
+	}
+	return []sandbox.FileSystemSandboxEntry{
+		runtimePathEntryForConvention(resolved, access, context.Convention()),
+	}, nil
+}
+
+func resolveAbsoluteFilesystemPath(path string, context *ConfigPathContext) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("path must not be empty")
+	}
+	if _, homeRelative := context.Convention().HomeRelativeSuffix(path); !homeRelative {
+		legacy := utils.NewLegacyAppPathString(path)
+		inferred, absolute := legacy.InferAbsolutePathConvention()
+		if !absolute ||
+			inferred != context.Convention() &&
+				!(context.Convention() == utils.ConventionWindows &&
+					inferred == utils.ConventionPosix && strings.HasPrefix(path, "/")) {
+			return "", fmt.Errorf("path `%s` must be absolute, use `~/...`, or start with `:`", path)
+		}
+	}
+	return context.ResolvePathString(path)
+}
+
+func resolveConfigGlobPattern(pattern string, context *ConfigPathContext) (string, error) {
+	return resolveDenyReadPatternWithContext(pattern, context)
+}
+
+func resolveRelativeAgainst(base string, subpath string, context *ConfigPathContext) (string, error) {
+	baseURI, ok := utils.InferredPathURI(base)
+	if !ok {
+		return "", fmt.Errorf("filesystem base path `%s` is not absolute", base)
+	}
+	resolved, err := context.ResolveAgainst(subpath, baseURI)
+	if err != nil {
+		return "", err
+	}
+	return resolved.ToConfigPathString(context.Convention())
+}
+
+func resolveWorkspaceRoot(rawRoot string, context *ConfigPathContext) (string, error) {
+	rawRoot = strings.TrimSpace(rawRoot)
+	if rawRoot == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(strings.ToLower(rawRoot), "file:") {
+		uri, err := utils.Parse(rawRoot)
+		if err != nil {
+			return "", err
+		}
+		if err := uri.ValidateConfigPath(context.Convention()); err != nil {
+			return "", err
+		}
+		return uri.ToConfigPathString(context.Convention())
+	}
+	return context.ResolvePathString(rawRoot)
+}
+
+func resolveWorkspaceScopedPath(root string, subpath string, context *ConfigPathContext) (string, error) {
+	if subpath == "" {
+		return root, nil
+	}
+	return resolveRelativeAgainst(root, subpath, context)
+}
+
+func validateWorkspaceGlobRoot(root string, context *ConfigPathContext) error {
+	uri, ok := utils.InferredPathURI(root)
+	if !ok {
+		return fmt.Errorf("workspace root `%s` is not an absolute path", root)
+	}
+	return uri.ValidateGlobDirectory(context.Convention())
 }
 
 func specialFilesystemPath(pathKey string, subpath string) (sandbox.FileSystemPath, bool) {
@@ -898,13 +1108,24 @@ func specialFilesystemPath(pathKey string, subpath string) (sandbox.FileSystemPa
 	}
 }
 
-func runtimePathEntry(path string, access sandbox.FileSystemAccessMode) sandbox.FileSystemSandboxEntry {
-	return sandbox.FileSystemSandboxEntry{Path: sandbox.FileSystemPath{Type: "path", Path: filepath.Clean(path)}, Access: access}
+func runtimePathEntryForConvention(
+	path string,
+	access sandbox.FileSystemAccessMode,
+	convention utils.PathConvention,
+) sandbox.FileSystemSandboxEntry {
+	return sandbox.FileSystemSandboxEntry{
+		Path:   sandbox.FileSystemPath{Type: "path", Path: utils.LexicalClean(path, convention)},
+		Access: access,
+	}
 }
 
-func runtimeGlobEntry(pattern string, access sandbox.FileSystemAccessMode) sandbox.FileSystemSandboxEntry {
+func runtimeGlobEntryForConvention(
+	pattern string,
+	access sandbox.FileSystemAccessMode,
+	convention utils.PathConvention,
+) sandbox.FileSystemSandboxEntry {
 	if !strings.HasPrefix(pattern, projectRootsPatternPrefix) {
-		pattern = filepath.Clean(pattern)
+		pattern = utils.LexicalClean(pattern, convention)
 	}
 	return sandbox.FileSystemSandboxEntry{Path: sandbox.FileSystemPath{Type: "glob_pattern", Pattern: pattern}, Access: access}
 }
@@ -926,23 +1147,10 @@ func runtimeSpecialPath(kind string, subpath string) sandbox.FileSystemPath {
 }
 
 func runtimeEntryKey(entry sandbox.FileSystemSandboxEntry) string {
-	switch entry.Path.Type {
-	case "path":
-		return "path:" + filepath.Clean(entry.Path.Path)
-	case "glob_pattern":
-		return "glob:" + filepath.Clean(entry.Path.Pattern)
-	case "special":
-		if entry.Path.Value == nil {
-			return ""
-		}
-		subpath := ""
-		if entry.Path.Value.Subpath != nil {
-			subpath = *entry.Path.Value.Subpath
-		}
-		return "special:" + entry.Path.Value.Kind + ":" + subpath
-	default:
+	if entry.Path.Type == "special" && entry.Path.Value == nil {
 		return ""
 	}
+	return filesystemPathKey(entry.Path)
 }
 
 func parseFilesystemAccess(raw string) (sandbox.FileSystemAccessMode, error) {
@@ -984,8 +1192,13 @@ func resolveConfigPath(path string, cwd string) string {
 	return filepath.Clean(path)
 }
 
-func containsGlobChars(path string) bool {
-	return strings.ContainsAny(path, "*?[")
+func containsGlobCharsForPlatform(path string, convention utils.PathConvention) bool {
+	if convention == utils.ConventionWindows {
+		if normalized, ok := utils.NormalizeWindowsDevicePath(path); ok {
+			path = normalized
+		}
+	}
+	return strings.ContainsAny(path, "*?[]")
 }
 
 func trimTrailingGlobSubtree(path string) (string, bool) {
@@ -998,15 +1211,23 @@ func trimTrailingGlobSubtree(path string) (string, bool) {
 	return "", false
 }
 
-func validateRelativeSubpath(path string) error {
-	if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
+func validateRelativeSubpathForConvention(path string, convention utils.PathConvention) error {
+	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("filesystem subpath `%s` must be a descendant path without `.` or `..` components", path)
 	}
 	if path == "." {
 		return nil
 	}
-	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if part == "" || part == "." || part == ".." {
+	segments := utils.PathSegments(convention, path)
+	if len(segments) == 0 || segments[0] == "" || segments[0] == "." || segments[0] == ".." {
+		return fmt.Errorf("filesystem subpath `%s` must be a descendant path without `.` or `..` components", path)
+	}
+	if convention == utils.ConventionWindows && len(segments[0]) >= 2 &&
+		segments[0][1] == ':' {
+		return fmt.Errorf("filesystem subpath `%s` must be a descendant path without `.` or `..` components", path)
+	}
+	for _, segment := range segments[1:] {
+		if segment == ".." {
 			return fmt.Errorf("filesystem subpath `%s` must be a descendant path without `.` or `..` components", path)
 		}
 	}

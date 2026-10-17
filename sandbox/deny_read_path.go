@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"codex_go/utils"
 )
 
 // denyReadGlobMetacharacters are the characters that classify a filesystem
@@ -14,15 +16,33 @@ const denyReadGlobMetacharacters = "*?["
 // a glob pattern, preserving the pattern shape (Rust #44669). Invalid spellings
 // are rejected so a managed denial cannot be silently dropped.
 func ParseDenyReadPath(pattern string) (FileSystemPath, error) {
+	return ParseDenyReadPathForConvention(pattern, utils.NativePathConvention())
+}
+
+// ParseDenyReadPathForConvention classifies a denial using the owning
+// executor's path grammar. Literal paths are validated as lossless native
+// paths, while glob patterns retain their spelling after text validation.
+func ParseDenyReadPathForConvention(pattern string, convention utils.PathConvention) (FileSystemPath, error) {
 	trimmed := strings.TrimSpace(pattern)
 	if trimmed == "" {
 		return FileSystemPath{}, errors.New("filesystem deny_read path must not be empty")
 	}
-	if strings.ContainsRune(trimmed, 0) {
-		return FileSystemPath{}, fmt.Errorf("filesystem deny_read path must not contain NUL bytes: %q", trimmed)
+	if err := utils.ValidateConfigPathText(trimmed, convention); err != nil {
+		return FileSystemPath{}, fmt.Errorf("filesystem deny_read path is invalid: %w", err)
 	}
 	if strings.ContainsAny(trimmed, denyReadGlobMetacharacters) {
 		return FileSystemPath{Type: "glob_pattern", Pattern: trimmed}, nil
 	}
-	return FileSystemPath{Type: "path", Path: trimmed}, nil
+	uri, ok := utils.InferredPathURI(trimmed)
+	if !ok {
+		return FileSystemPath{}, fmt.Errorf("filesystem deny_read path must be absolute: %q", trimmed)
+	}
+	if err := uri.ValidateConfigPath(convention); err != nil {
+		return FileSystemPath{}, fmt.Errorf("filesystem deny_read path is invalid: %w", err)
+	}
+	rendered, err := uri.ToConfigPathString(convention)
+	if err != nil {
+		return FileSystemPath{}, fmt.Errorf("filesystem deny_read path is invalid: %w", err)
+	}
+	return FileSystemPath{Type: "path", Path: rendered}, nil
 }

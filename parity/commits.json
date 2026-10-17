@@ -11751,9 +11751,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/13; needs review: ConfigPathContext, PathContextGuard, apply_to_policy, deserialization_base, home_directory"
+        "Round 283: ConfigPathContext resolves deny_read using supplied convention/base/home; validation rejects lossy Windows spellings and unsafe UNC facts; policy conversion preserves globs, validates atomically and deduplicates."
       ]
     },
     {
@@ -11799,9 +11799,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/13; needs review: CompiledPermissionProfile, WorkspaceWriteSettings, absolute_path, contains_glob, contains_glob_chars_for_platform"
+        "Round 283: profile compilation and permissionProfile/list use explicit cwd path facts, resolve/home-expand configured roots, fail closed on unsafe workspace globs, and deduplicate roots by PathURI identity."
       ]
     },
     {

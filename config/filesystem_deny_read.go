@@ -2,10 +2,10 @@ package config
 
 import (
 	"fmt"
-	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
+
+	"codex_go/utils"
 )
 
 // denyReadGlobMetacharacters are the characters that make a filesystem denial a
@@ -14,13 +14,24 @@ import (
 const denyReadGlobMetacharacters = "*?["
 
 // resolveFilesystemDenyReadPaths mirrors Rust's filesystem denial resolution
-// (Rust #44669): relative literals and relative glob prefixes resolve against
-// the owning requirements layer's base directory, the pattern shape is
-// preserved, entries are deduplicated in declaration order, and invalid
-// spellings fail configuration loading instead of being silently skipped.
+// (#44669): relative literals and relative glob prefixes resolve against the
+// owning requirements layer's base directory, the pattern shape is preserved,
+// entries are deduplicated in declaration order, and invalid spellings fail
+// configuration loading instead of being silently skipped.
 func resolveFilesystemDenyReadPaths(permissions map[string]any, baseDir string) error {
+	context, err := NewHostConfigPathContext(baseDir)
+	if err != nil {
+		return err
+	}
+	return resolveFilesystemDenyReadPathsWithContext(permissions, context)
+}
+
+func resolveFilesystemDenyReadPathsWithContext(permissions map[string]any, context *ConfigPathContext) error {
 	if len(permissions) == 0 {
 		return nil
+	}
+	if context == nil {
+		return fmt.Errorf("permissions.filesystem.deny_read requires a path context")
 	}
 	filesystem, ok := permissions["filesystem"].(map[string]any)
 	if !ok {
@@ -37,7 +48,7 @@ func resolveFilesystemDenyReadPaths(permissions map[string]any, baseDir string) 
 	resolved := make([]any, 0, len(patterns))
 	seen := make(map[string]struct{}, len(patterns))
 	for _, pattern := range patterns {
-		value, err := resolveDenyReadPattern(pattern, baseDir)
+		value, err := resolveDenyReadPatternWithContext(pattern, context)
 		if err != nil {
 			return err
 		}
@@ -87,43 +98,84 @@ func FilesystemDenyReadPatterns(raw any) ([]string, error) {
 }
 
 func resolveDenyReadPattern(pattern string, baseDir string) (string, error) {
+	context, err := NewHostConfigPathContext(baseDir)
+	if err != nil {
+		return "", err
+	}
+	return resolveDenyReadPatternWithContext(pattern, context)
+}
+
+func resolveDenyReadPatternWithContext(pattern string, context *ConfigPathContext) (string, error) {
 	trimmed := strings.TrimSpace(pattern)
 	if trimmed == "" {
 		return "", fmt.Errorf("permissions.filesystem.deny_read path must not be empty")
 	}
-	if strings.ContainsRune(trimmed, 0) {
-		return "", fmt.Errorf("permissions.filesystem.deny_read path must not contain NUL bytes")
+	convention := context.Convention()
+	if err := utils.ValidateConfigPathText(trimmed, convention); err != nil {
+		return "", err
 	}
-	prefix, suffix := splitDenyReadGlob(trimmed)
-	resolvedPrefix := prefix
-	if !filepath.IsAbs(prefix) {
-		// An empty prefix (a bare glob such as `**/*.key`) resolves against the
-		// layer base as well.
-		if strings.TrimSpace(baseDir) == "" {
-			return "", fmt.Errorf("permissions.filesystem.deny_read path must be absolute: %q", trimmed)
-		}
-		resolvedPrefix = filepath.Join(baseDir, prefix)
+	prefix, suffix := splitDenyReadGlobForConvention(trimmed, convention)
+	if convention == utils.ConventionWindows &&
+		startsWithTwoSeparators(trimmed) &&
+		!startsWithTwoSeparators(prefix) {
+		return "", fmt.Errorf("filesystem denial glob requires a literal UNC server and share")
+	}
+	if prefix == "" {
+		prefix = "."
+	}
+	resolvedPrefix, err := context.ResolvePathString(prefix)
+	if err != nil {
+		return "", err
+	}
+	prefixURI, ok := utils.InferredPathURI(resolvedPrefix)
+	if !ok {
+		return "", fmt.Errorf("permissions.filesystem.deny_read path must resolve to an absolute path: %q", prefix)
+	}
+	if err := prefixURI.ValidateGlobDirectory(convention); err != nil {
+		return "", err
 	}
 	if suffix == "" {
-		return filepath.Clean(resolvedPrefix), nil
+		return resolvedPrefix, nil
 	}
-	return filepath.Clean(resolvedPrefix + string(filepath.Separator) + suffix), nil
+	separator := "/"
+	if convention == utils.ConventionWindows {
+		separator = `\`
+	}
+	normalized := resolvedPrefix
+	if !strings.HasSuffix(normalized, "/") && !strings.HasSuffix(normalized, `\`) {
+		normalized += separator
+	}
+	normalized += suffix
+	if err := utils.ValidateConfigPathText(normalized, convention); err != nil {
+		return "", err
+	}
+	return normalized, nil
 }
 
-// splitDenyReadGlob splits a denial pattern into its literal directory prefix and
-// the remaining pattern text, mirroring Rust's split_glob_pattern. The returned
-// prefix never carries a trailing separator, so the pieces rejoin with one.
-func splitDenyReadGlob(pattern string) (string, string) {
+// splitDenyReadGlobForConvention splits a denial pattern into its literal
+// directory prefix and remaining pattern text. The returned prefix never has a
+// trailing separator, so the pieces rejoin with one. The owning convention,
+// rather than the host OS, decides which separators and drive roots apply.
+func splitDenyReadGlobForConvention(pattern string, convention utils.PathConvention) (string, string) {
 	index := strings.IndexAny(pattern, denyReadGlobMetacharacters)
 	if index < 0 {
 		return pattern, ""
 	}
 	literal := pattern[:index]
-	separator := strings.LastIndexAny(literal, `/\`)
+	separator := -1
+	for i := len(literal) - 1; i >= 0; i-- {
+		if literal[i] == '/' || convention == utils.ConventionWindows && literal[i] == '\\' {
+			separator = i
+			break
+		}
+	}
 	switch {
 	case separator == 0:
-		return string(filepath.Separator), pattern[1:]
-	case runtime.GOOS == "windows" && separator == 2 && len(pattern) > 2 && pattern[1] == ':':
+		if pattern[0] == '/' || convention == utils.ConventionWindows {
+			return string(pattern[0]), pattern[1:]
+		}
+		return "", pattern
+	case convention == utils.ConventionWindows && separator == 2 && len(pattern) > 2 && pattern[1] == ':':
 		// A drive root such as `C:\*.key` keeps its root as the prefix.
 		return pattern[:3], pattern[3:]
 	case separator > 0:
@@ -131,4 +183,15 @@ func splitDenyReadGlob(pattern string) (string, string) {
 	default:
 		return "", pattern
 	}
+}
+
+func splitDenyReadGlob(pattern string) (string, string) {
+	return splitDenyReadGlobForConvention(pattern, utils.NativePathConvention())
+}
+
+func startsWithTwoSeparators(value string) bool {
+	if len(value) < 2 {
+		return false
+	}
+	return (value[0] == '/' || value[0] == '\\') && (value[1] == '/' || value[1] == '\\')
 }

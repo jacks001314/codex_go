@@ -32,12 +32,22 @@ func ParseRequirementsTOML(data []byte) (*ConfigRequirements, error) {
 // ParseRequirementsTOMLWithBaseDir parses a requirements document, resolving
 // filesystem denials against the directory that owns the document (Rust #44669).
 func ParseRequirementsTOMLWithBaseDir(data []byte, baseDir string) (*ConfigRequirements, error) {
+	context, err := NewHostConfigPathContext(baseDir)
+	if err != nil {
+		return nil, err
+	}
+	return ParseRequirementsTOMLWithPathContext(data, context)
+}
+
+// ParseRequirementsTOMLWithPathContext parses requirements using explicit path
+// facts for relative and home-relative filesystem denials.
+func ParseRequirementsTOMLWithPathContext(data []byte, context *ConfigPathContext) (*ConfigRequirements, error) {
 	values, err := parseRequirementsTOMLValues(data)
 	if err != nil {
 		return nil, err
 	}
 	if permissions, ok := values["permissions"].(map[string]any); ok {
-		if err := resolveFilesystemDenyReadPaths(permissions, baseDir); err != nil {
+		if err := resolveFilesystemDenyReadPathsWithContext(permissions, context); err != nil {
 			return nil, err
 		}
 	}

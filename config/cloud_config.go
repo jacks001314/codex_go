@@ -52,10 +52,11 @@ type CloudConfigLayer struct {
 }
 
 type CloudConfigRequirementsLayer struct {
-	Source  CloudConfigLayerSource `json:"source"`
-	Values  map[string]string      `json:"values"`
-	RawTOML string                 `json:"rawToml"`
-	BaseDir string                 `json:"baseDir"`
+	Source      CloudConfigLayerSource `json:"source"`
+	Values      map[string]string      `json:"values"`
+	RawTOML     string                 `json:"rawToml"`
+	BaseDir     string                 `json:"baseDir"`
+	PathContext *ConfigPathContext     `json:"-"`
 }
 
 type CloudConfigTOMLBundle struct {
@@ -107,6 +108,10 @@ func CloudConfigLayersFromBundle(bundle CloudConfigBundle, baseDir string) (*Clo
 		return nil, err
 	}
 	requirements := make([]CloudConfigRequirementsLayer, 0, len(bundle.RequirementsTOML.EnterpriseManaged))
+	pathContext, err := NewHostConfigPathContext(baseDir)
+	if err != nil {
+		return nil, err
+	}
 	for _, fragment := range bundle.RequirementsTOML.EnterpriseManaged {
 		values, err := ParseCloudConfigFlatTOML(fragment.Contents)
 		if err != nil {
@@ -114,10 +119,11 @@ func CloudConfigLayersFromBundle(bundle CloudConfigBundle, baseDir string) (*Clo
 			return nil, fmt.Errorf("%w: failed to parse cloud requirements fragment %s: %s", ErrInvalidCloudConfig, source.String(), err)
 		}
 		requirements = append(requirements, CloudConfigRequirementsLayer{
-			Source:  CloudConfigLayerSource{Type: CloudConfigLayerEnterpriseManaged, ID: fragment.ID, Name: fragment.Name},
-			Values:  values,
-			RawTOML: fragment.Contents,
-			BaseDir: baseDir,
+			Source:      CloudConfigLayerSource{Type: CloudConfigLayerEnterpriseManaged, ID: fragment.ID, Name: fragment.Name},
+			Values:      values,
+			RawTOML:     fragment.Contents,
+			BaseDir:     baseDir,
+			PathContext: pathContext,
 		})
 	}
 	reverseCloudConfigRequirements(requirements)
@@ -533,7 +539,14 @@ func applyCloudConfigBundle(values map[string]any, requirements *ConfigRequireme
 		}
 		normalizeFeatureRequirementAliases(parsed)
 		if permissions, ok := parsed["permissions"].(map[string]any); ok {
-			if err := resolveFilesystemDenyReadPaths(permissions, layer.BaseDir); err != nil {
+			pathContext := layer.PathContext
+			if pathContext == nil {
+				pathContext, err = NewHostConfigPathContext(layer.BaseDir)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
+				}
+			}
+			if err := resolveFilesystemDenyReadPathsWithContext(permissions, pathContext); err != nil {
 				return nil, fmt.Errorf("%w: invalid cloud requirements: %s", ErrInvalidCloudConfig, err)
 			}
 		}
