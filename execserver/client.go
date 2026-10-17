@@ -244,6 +244,20 @@ type clientTransportError struct {
 	err error
 }
 
+// RPCTimedOutError reports that an established exec-server call exceeded its
+// RPC deadline (Rust #52679 ExecServerError::RpcTimedOut).
+type RPCTimedOutError struct {
+	Method  string
+	Timeout time.Duration
+}
+
+func (e *RPCTimedOutError) Error() string {
+	if e == nil {
+		return "exec-server RPC timed out"
+	}
+	return fmt.Sprintf("exec-server protocol error: timed out waiting for exec-server `%s` response after %s", e.Method, e.Timeout)
+}
+
 // IsRetryableRecoveryError reports whether an exec-server error should be
 // retried after a transport disconnect and recovery (Rust #38420).
 func IsRetryableRecoveryError(err error) bool {
@@ -251,7 +265,8 @@ func IsRetryableRecoveryError(err error) bool {
 		return false
 	}
 	var transportErr *clientTransportError
-	return errors.As(err, &transportErr)
+	var timeoutErr *RPCTimedOutError
+	return errors.As(err, &transportErr) || errors.As(err, &timeoutErr)
 }
 
 func (e *clientTransportError) Error() string {
@@ -960,29 +975,11 @@ func (c *Client) Terminate(ctx context.Context, params *TerminateParams) (*Termi
 // caller waiting on a stuck transport learns the probe timed out instead of
 // blocking forever.
 func (c *Client) EnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, environmentInfoTimeout)
-	defer cancel()
 	var response EnvironmentInfo
-	err := c.call(probeCtx, MethodEnvironmentInfo, map[string]any{}, &response)
-	if err == nil {
-		return &response, nil
+	if err := c.callWithTimeoutRecovery(ctx, MethodEnvironmentInfo, map[string]any{}, &response, environmentInfoTimeout); err != nil {
+		return nil, err
 	}
-	if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-		// The probe's own deadline expired, so the connection is unusable even
-		// though it never reported a transport error. Retire that connection
-		// and let recovery resume the session.
-		timeoutErr := c.environmentInfoTimeoutError()
-		c.retireProbedConnection(timeoutErr)
-		return nil, timeoutErr
-	}
-	return nil, err
-}
-
-func (c *Client) environmentInfoTimeoutError() error {
-	return fmt.Errorf("exec-server client %s timed out after %s", MethodEnvironmentInfo, environmentInfoTimeout)
+	return &response, nil
 }
 
 // rememberEnvironmentInfo caches the executor metadata returned by the
@@ -1827,6 +1824,26 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 		return nil
 	}
 	return json.Unmarshal(response.Result, target)
+}
+
+func (c *Client) callWithTimeoutRecovery(ctx context.Context, method string, params any, target any, timeout time.Duration) error {
+	if c == nil {
+		return errors.New("exec-server client is closed")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	err := c.call(callCtx, method, params, target)
+	cancel()
+	if err == nil || ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	timeoutErr := &RPCTimedOutError{Method: method, Timeout: timeout}
+	if !c.reconnectDisabled {
+		c.retireProbedConnection(timeoutErr)
+	}
+	return timeoutErr
 }
 
 // clientRequestEnvelope builds the JSON-RPC envelope for an outbound

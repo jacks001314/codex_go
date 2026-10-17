@@ -1,6 +1,10 @@
 package execserver
 
-import "errors"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 // Rust parity: codex-rs/exec-server/src/environment_config.rs::
 // read_environment_config and
@@ -55,6 +59,27 @@ type EnvironmentConfigReadResponse struct {
 	Hostname     *string                     `json:"hostname"`
 	Config       EnvironmentConfigLayerStack `json:"config"`
 	Requirements EnvironmentConfigLayerStack `json:"requirements"`
+}
+
+// ReadEnvironmentConfig reads executor-local configuration without imposing an
+// additional RPC timeout.
+func (c *Client) ReadEnvironmentConfig(ctx context.Context, params *EnvironmentConfigReadParams) (*EnvironmentConfigReadResponse, error) {
+	var response EnvironmentConfigReadResponse
+	if err := c.call(ctx, MethodEnvironmentConfigRead, params, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+// ReadEnvironmentConfigWithTimeout bounds sending and receiving after the
+// connection is established. A timed-out reconnectable transport is retired;
+// non-reconnectable stdio keeps its connection open for valid in-flight work.
+func (c *Client) ReadEnvironmentConfigWithTimeout(ctx context.Context, params *EnvironmentConfigReadParams, timeout time.Duration) (*EnvironmentConfigReadResponse, error) {
+	var response EnvironmentConfigReadResponse
+	if err := c.callWithTimeoutRecovery(ctx, MethodEnvironmentConfigRead, params, &response, timeout); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // EnvironmentConfigReader serves `environmentConfig/read` for one executor.
