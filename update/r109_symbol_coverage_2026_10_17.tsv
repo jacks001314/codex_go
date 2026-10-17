@@ -906,7 +906,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 56a8470aa0b0c5b9f174f449a697fe6ccc6d9462	43110	Record reasoning effort changes in conversation history behind a flag (#43110)	2026-09-05	model	2	2	1.00	0	0	complete	
 56d3e8192f9dbe8741f739e2538c9d69c661480a	44077	Refactor credential-broker tunnel protocol detection (#44077)	2026-09-09	config	4	1	0.25	0	0	audit_pending	BrokeredProtocols,TunnelProtocol,peek_protocol
 5701a576ccc3eb93420334103a9ae66f4c096450	46524	Retry busy executable launches in packaged daemon tests (#46524)	2026-09-18	core	0	0		0	0	not_applicable	
-574a36ff99f0807a24f5b043f593122bf151908d	42883	Add client-side exec-server RPC attempt metrics (#42883)	2026-09-04	execserver	2	1	0.50	0	0	audit_pending	record_client_request
+574a36ff99f0807a24f5b043f593122bf151908d	42883	Add client-side exec-server RPC attempt metrics (#42883)	2026-09-04	execserver	2	2	1.00	0	0	complete
 57567b8d9e5a158ddce2a8bb5f75ac455b1e9b83	46931	Use shared, keymap-aware tips in the fullscreen composer (#46931)	2026-09-21	tui	10	5	0.50	0	0	audit_pending	AnnouncementTips,ComposerTips,composer_hint,preferred_tooltip,select_catalog_tip
 57611028684594a098edf15610daa47b27922cc7	45978	Keep selection adjacent when hiding tasks in the agents overview (#45978)	2026-09-16	tui	0	0		0	0	not_applicable	
 577a4fcd065e07fab24db2d208d825c67558b8a5	42358	Extend rate limit reads with usage capabilities (#42358)	2026-09-02	tui	3	1	0.33	0	0	audit_pending	NullableGetAccountRateLimitsParams,get_rate_limits_with_luna_reserve
@@ -2415,7 +2415,7 @@ e2a9ee05f4f6e805bf705131ddee87e9cc22e35d	44354	Extract shared footer hint wrappi
 e32365a2c61a78c8b4f00b15e3559e0391f4eb60	51350	Allow larger shell snapshots when replaying from a file (#51350)	2026-10-06	execserver	0	0		0	0	not_applicable	
 e325e3acd9ab64cd287a2c4d6cd7a7cebb639618	41219	Retry confirmed remote registration conflicts (#41219)	2026-08-27	execserver	1	1	1.00	0	0	complete	
 e342df7b668acea2a0417d56cf872dab837276ef	53853	Reuse staged file digests when preparing daemon installs (#53853)	2026-10-14	appserver	0	0		0	0	complete	
-e3609f2d02a5896c391fa4c07335165c9272b686	40382	Expose invocation sources to extension tools (#40382)	2026-08-24	core	3	2	0.67	0	0	audit_pending	extension_tool_call_source
+e3609f2d02a5896c391fa4c07335165c9272b686	40382	Expose invocation sources to extension tools (#40382)	2026-08-24	core	3	2	0.67	0	0	complete	extension_tool_call_source
 e39839509a2e1a14ede71d92d8c565c1979b8363	46858	Add mouse selection and editing to the fullscreen composer (#46858)	2026-09-20	tui	13	1	0.08	0	0	audit_pending	MouseSelection,composer_selection_for_copy,delete_mouse_selection,end_composer_drag,end_mouse_drag,handle_composer_copy_event,handle_composer_mouse,insert_str,mouse_selection_range,prepare_composer_mouse
 e39ab0c1854dbd567172fd5a79dbfff9067cb609	41944	Emit turn cost telemetry for ChatGPT sessions (#41944)	2026-08-31	appserver	3	0	0.00	0	0	implementation_pending	ChatgptThreadTurnCosts,ChatgptTurnCost,query_chatgpt_turn_costs
 e3a52b87b28760413eafa340e2ab23d653f0bbe7	44893	Expose available access programs in model discovery (#44893)	2026-09-11	tui	1	1	1.00	0	0	complete	

@@ -1102,9 +1102,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: extension_tool_call_source"
+        "Round 254 (audit): tool.Invocation.Source carries direct/code_mode provenance, with code-mode nested calls tagged code_mode and the runtime cell plus nested tool-call ids preserved. Invocation.ResponseByteBudget applies the host truncation allowance only to direct calls and leaves Code Mode responses to the tool's own limit. Tests: go test ./tool -run 'ResponseByteBudget|CodeMode' -count=1"
       ]
     },
     {
@@ -7839,9 +7839,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: record_client_request"
+        "Round 254: recordClientRequest increments exec_server_client_requests_total with the protocol method tag before local admission in Client.call, covering rejected, cancelled, timed-out, transport-failed, and successful RPC attempts; notify/response paths do not enter it. The metric name lives in the leaf metrics package with telemetry aliasing it, avoiding an import cycle while keeping one source of truth. Tests: go test ./execserver -run ExecServerClientRequestMetric -count=1; go build ./..."
       ]
     },
     {

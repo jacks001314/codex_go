@@ -1,5 +1,7 @@
 package telemetry
 
+import "codex_go/metrics"
+
 // Metric names emitted by Codex, mirroring codex-rs/otel/src/metrics/names.rs.
 // Keep the values byte-for-byte identical to Rust: they are the OTLP instrument
 // names and the Statsig-disabled list matches on exact strings.
@@ -12,7 +14,7 @@ const (
 	ProcessStartMetric                         = "codex.process.start"
 	// ExecServerClientRequestCountMetric counts caller-side exec-server RPC
 	// attempts, including local admission and transport failures.
-	ExecServerClientRequestCountMetric          = "exec_server_client_requests_total"
+	ExecServerClientRequestCountMetric          = metrics.ExecServerClientRequestCountMetric
 	APICallCountMetric                          = "codex.api_request"
 	APICallDurationMetric                       = "codex.api_request.duration_ms"
 	SSEEventCountMetric                         = "codex.sse_event"

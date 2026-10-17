@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/metrics"
 	"codex_go/network"
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -1811,6 +1812,9 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) call(ctx context.Context, method string, params any, target any) error {
+	// Record before local admission so rejected, cancelled, timed-out, and
+	// transport-failed RPCs still count as attempts (Rust #42883).
+	recordClientRequest(method)
 	if c == nil {
 		return errors.New("exec-server client is closed")
 	}
@@ -1861,6 +1865,12 @@ func (c *Client) call(ctx context.Context, method string, params any, target any
 		return nil
 	}
 	return json.Unmarshal(response.Result, target)
+}
+
+// recordClientRequest mirrors Rust's exec-server client_telemetry
+// record_client_request. Notifications and responses never enter this path.
+func recordClientRequest(method string) {
+	metrics.Counter(metrics.ExecServerClientRequestCountMetric, 1, map[string]string{"method": method})
 }
 
 func (c *Client) callWithTimeoutRecovery(ctx context.Context, method string, params any, target any, timeout time.Duration) error {
