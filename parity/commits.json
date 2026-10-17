@@ -27853,8 +27853,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - app/interactive.go's interactiveElicitationBroker signals abandonment for unanswered MCP elicitations exactly once (remove-from-pending plus release, late abandonment is a silent no-op), gates eligibility on markPublished (Rust #51611), and close() abandons every pending request synchronously before returning; the remote TUI client abandons the published prompt on context cancellation. Test: TestInteractiveElicitationAbandonmentIsOrderedAndExactlyOnceLikeRust; go test ./app -run ElicitationAbandon green.",
         "Partial symbol coverage 1/2; needs review: ElicitationAbandonedEvent"
       ]
     },

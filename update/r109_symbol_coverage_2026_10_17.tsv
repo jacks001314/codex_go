@@ -1764,7 +1764,7 @@ a63cb33e8deab97002c4ab6bb872183fbde99aa6	40629	Show reconnect guidance when disc
 a645742bb5615026ae673c9527f146ee551d4949	52213	Stop bundling patched zsh in Codex packages (#52213)	2026-10-08	config	0	0		0	0	not_applicable	
 a68a7a6ab05242735b816c71dfa4c3f794c6efd7	53668	Improve remote exec-server test startup diagnostics (#53668)	2026-10-13	core	0	0		0	0	not_applicable	
 a69d757cd8ef8310001186865911b69e4b4175e5	47529	Emit command lifecycle events for unified exec launch failures (#47529)	2026-09-23	appserver	1	0	0.00	0	0	implementation_pending	with_launch_failure_events
-a6baf8867cb4c9726213c0884a5c8b11f0cfd8bf	51611	Signal abandonment of unanswered MCP elicitations (#51611)	2026-10-07	appserver	2	1	0.50	0	0	audit_pending	ElicitationAbandonedEvent
+a6baf8867cb4c9726213c0884a5c8b11f0cfd8bf	51611	Signal abandonment of unanswered MCP elicitations (#51611)	2026-10-07	appserver	2	2	1.00	0	0	complete	
 a6bd19261c30ce0a0225fe90e646822d29916f11	48491	Fall back to embedded mode under restrictive Windows launchers (#48491)	2026-09-26	tui	1	1	1.00	0	0	complete	
 a6c5f3a9fa8e7ccfba7d53921d2f06d06d3b9f79	51194	Add browser extension request headers to config requirements (#51194)	2026-10-05	appserver	4	2	0.50	0	0	audit_pending	BrowserUseExtensionRequirementsToml,RequestHeaderToml
 a6d4741d3968ee0b9984e896db08d6fc4aef05e8	46035	Add per-app tool exposure configuration (#46035)	2026-09-16	appserver	0	0		0	0	not_applicable	
