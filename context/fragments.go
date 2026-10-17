@@ -62,9 +62,13 @@ func RenderItems(fragment Fragment) []eventmap.ContentItem {
 	out := make([]eventmap.ContentItem, 0, len(items))
 	for _, item := range items {
 		if item.Kind == eventmap.ContentInputText {
-			body := strings.Trim(item.Text, "\n")
+			body := item.Text
 			if open != "" || close != "" {
-				body = strings.Join(nonEmpty([]string{open, body, close}), "\n")
+				// Rust's ContextualUserFragment::render concatenates markers and
+				// the InputText body without inserting separators; bodies own
+				// their whitespace. An empty body therefore renders as
+				// `<open></close>`.
+				body = open + body + close
 			}
 			item.Text = body
 		}
@@ -165,10 +169,10 @@ func Render(fragment Fragment) *RenderedFragment {
 		return nil
 	}
 	open, close := fragment.Markers()
-	body := strings.Trim(fragment.Body(), "\n")
+	body := fragment.Body()
 	content := body
 	if open != "" || close != "" {
-		content = strings.Join(nonEmpty([]string{open, body, close}), "\n")
+		content = open + body + close
 	}
 	return &RenderedFragment{
 		Role:         fragment.Role(),

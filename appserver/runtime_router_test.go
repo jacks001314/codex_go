@@ -110,7 +110,7 @@ clock_source = "external"
 	turnID := turnStart.Result.(*turn.TurnStartResponse).Turn.ID
 	request := waitForRuntimeAgentRequest(t, agent)
 
-	noticeText := "<current_time_unavailable>\nfailed to read current time\n</current_time_unavailable>"
+	noticeText := "<current_time_unavailable>failed to read current time</current_time_unavailable>"
 	notices := 0
 	for _, text := range messageInputTextsForRole(request.InputItems, "developer") {
 		if strings.Contains(text, "<current_time_unavailable>") {
@@ -17842,7 +17842,7 @@ clock_source = "external"
 		t.Fatalf("instructions = %q", request.Instructions)
 	}
 	developerTexts := messageInputTextsForRole(request.InputItems, "developer")
-	if !slicesContainString(developerTexts, "<current_time_reminder>\nIt is 2026-06-17 17:34:15 UTC.\n</current_time_reminder>") {
+	if !slicesContainString(developerTexts, "<current_time_reminder>It is 2026-06-17 17:34:15 UTC.</current_time_reminder>") {
 		t.Fatalf("developer input texts = %#v", developerTexts)
 	}
 	if !agentRequestCodeModeHasTool(request, "clock", "curr_time") {
@@ -17944,7 +17944,7 @@ stream_max_retries = 0
 		t.Fatalf("recorded bodies = %#v", bodies)
 	}
 	developerTexts := messageInputTextsForRole(bodies[0], "developer")
-	if !slicesContainString(developerTexts, "<current_time_reminder>\nIt is 2026-06-17 17:34:15 UTC.\n</current_time_reminder>") {
+	if !slicesContainString(developerTexts, "<current_time_reminder>It is 2026-06-17 17:34:15 UTC.</current_time_reminder>") {
 		t.Fatalf("developer input texts = %#v; body=%#v", developerTexts, bodies[0])
 	}
 	if instructions, _ := bodies[0]["instructions"].(string); strings.Contains(instructions, "2026-06-17 17:34:15 UTC") {
@@ -26837,10 +26837,10 @@ func currentTimeReminderTextsFromBody(body map[string]any) []string {
 	texts := messageInputTextsForRole(body, "developer")
 	out := []string{}
 	for _, text := range texts {
-		const open = "<current_time_reminder>\n"
-		const close = "\n</current_time_reminder>"
+		const open = "<current_time_reminder>"
+		const close = "</current_time_reminder>"
 		if strings.HasPrefix(text, open) && strings.HasSuffix(text, close) {
-			text = strings.TrimSuffix(strings.TrimPrefix(text, open), close)
+			text = strings.Trim(strings.TrimSuffix(strings.TrimPrefix(text, open), close), "\n")
 		}
 		if strings.HasPrefix(text, "It is ") {
 			out = append(out, text)

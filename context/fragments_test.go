@@ -207,7 +207,7 @@ func TestCurrentTimeReminder(t *testing.T) {
 		t.Fatalf("CurrentTimeReminder markers = %q/%q", open, close)
 	}
 	rendered := Render(&CurrentTimeReminder{Now: now, Location: "UTC"})
-	if rendered == nil || rendered.Content != "<current_time_reminder>\nIt is 2026-06-29 12:00:00 UTC.\n</current_time_reminder>" {
+	if rendered == nil || rendered.Content != "<current_time_reminder>It is 2026-06-29 12:00:00 UTC.</current_time_reminder>" {
 		t.Fatalf("CurrentTimeReminder rendered = %#v", rendered)
 	}
 }
@@ -226,7 +226,7 @@ func TestCurrentTimeUnavailable(t *testing.T) {
 		t.Fatalf("CurrentTimeUnavailable body = %q", fragment.Body())
 	}
 	rendered := Render(fragment)
-	if rendered == nil || rendered.Content != "<current_time_unavailable>\nfailed to read current time\n</current_time_unavailable>" {
+	if rendered == nil || rendered.Content != "<current_time_unavailable>failed to read current time</current_time_unavailable>" {
 		t.Fatalf("CurrentTimeUnavailable rendered = %#v", rendered)
 	}
 }

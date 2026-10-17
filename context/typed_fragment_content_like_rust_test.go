@@ -34,7 +34,7 @@ func TestRenderAppliesMarkersOnlyToInputTextLikeRust(t *testing.T) {
 	if len(rendered.ContentItems) != 2 {
 		t.Fatalf("ContentItems = %#v, want 2", rendered.ContentItems)
 	}
-	if got := rendered.ContentItems[0]; got.Kind != eventmap.ContentInputText || got.Text != "<world_state>\nstate snapshot\n</world_state>" {
+	if got := rendered.ContentItems[0]; got.Kind != eventmap.ContentInputText || got.Text != "<world_state>state snapshot</world_state>" {
 		t.Fatalf("text item = %#v", got)
 	}
 	if got := rendered.ContentItems[1]; got != image {
