@@ -1122,7 +1122,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6b991972c5b539198dcea9bac4fc14e57559c3af	54445	Remove obsolete protected-path monitoring from the Linux sandbox (#54445)	2026-10-15	sandbox	0	0		0	0	not_applicable	
 6ba4bf9e647cf8bc17eb9005af5ca9498bd7e654	49441	Honor server retry advice across Responses retries and fallback (#49441)	2026-09-30	core	0	0		0	0	not_applicable	
 6ba6b73657d0590382fc2ae2ad2bad6ea268aff5	46731	Render dynamic tool activity and preserve TUI history ordering (#46731)	2026-09-19	tui	17	6	0.35	0	0	audit_pending	NativeHistory,absorb_activity_detail,cancel_older_history_page,finish_dynamic_activity,flush_native_history,handle_dynamic_tool_item_now,is_older_history_page_pending,is_pending,on_dynamic_tool_item,render_inserted_history_cell
-6baa076eb692b73ede097b4870dc45692c7556d9	44571	Allow extensions to select MCP protocol mode per HTTP server (#44571)	2026-09-10	mcp	2	1	0.50	0	0	audit_pending	with_protocol_mode
+6baa076eb692b73ede097b4870dc45692c7556d9	44571	Allow extensions to select MCP protocol mode per HTTP server (#44571)	2026-09-10	mcp	2	1	0.50	0	0	complete	with_protocol_mode
 6bb5be869fe9ed40079f155d16a26581e05e4114	44574	Use captured action settings for Guardian reviews (#44574)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 6be2a6ca952ac9f70676ce4dd07fda27175aa9dd	41260	Let the history backend enforce tool output budgets (#41260)	2026-08-28	core	0	0		0	0	not_applicable	
 6c0c6759d0617d7670826b61aca0a931bbb6db1f	52937	Retain client-marked tool outputs across compaction (#52937)	2026-10-10	config	1	1	1.00	0	0	complete	
@@ -2034,7 +2034,7 @@ bf5ebd98c567931d82e873a4afdac7548bd85979	44424	Add a hide shortcut to the agents
 bf7c87a7b7bdb1b65cbfdca06d15713d3aa20b01	47155	Ignore stale thread-close notifications after resuming a thread (#47155)	2026-09-22	tui	0	0		0	0	not_applicable	
 bf832f4678e18ae317fb82820367d39a5ea60c25	48116	Allow reasoning shortcuts to reach Max (#48116)	2026-09-25	tui	0	0		0	0	not_applicable	
 bf91058b81c50cc8488a26b67199493b5a6d3389	47112	Lowercase the retry hint for conversations open in another app (#47112)	2026-09-21	tui	0	0		0	0	not_applicable	
-bfa9646787cda93c8012532ea8fa44a74fc38bfc	41949	Add plugin reconciliation app-server API (#41949)	2026-09-01	appserver	5	4	0.80	0	0	audit_pending	trust_materialized_plugin_hooks
+bfa9646787cda93c8012532ea8fa44a74fc38bfc	41949	Add plugin reconciliation app-server API (#41949)	2026-09-01	appserver	5	4	0.80	0	0	complete	trust_materialized_plugin_hooks
 bfb8daa3c9520c95431f56242d056350aabcd654	46551	Add a composite action to build and smoke-test Codex packages (#46551)	2026-09-18	core	0	0		0	0	not_applicable	
 bfca0335fabd27b5f9907acc286349988473e309	44575	Tie network approval reviews to their originating execution (#44575)	2026-09-10	guardian	0	0		0	0	not_applicable	
 bfdb1571780b326ce978696de12b1d81b5e978f2	49100	Reuse the HTTP connection pool for remote plugin requests (#49100)	2026-09-28	plugins	0	0		0	0	not_applicable	
@@ -2262,7 +2262,7 @@ d583e73c4d1204f1e9f654ef87065e9f0dd07ac7	47055	Fetch local message board thread 
 d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budgeting by default (#41803)	2026-08-31	model	1	1	1.00	0	0	complete	
 d5afb62bb3d8f900530b49a1268cb110380bedfd	46574	Notify users when asynchronous questions arrive in the TUI (#46574)	2026-09-19	tui	0	0		0	0	not_applicable	
 d5b29951aca5205bc8415120b56dd4bc295f5c83	46540	Centralize retry decisions and delays in `CodexErr` (#46540)	2026-09-18	model	3	2	0.67	0	0	audit_pending	handle_response_stream_error
-d5caceccb1ee5bf94c081b995575ce4860e0912b	41058	Track Code Mode tool call metadata completeness (#41058)	2026-08-27	model	4	3	0.75	0	0	audit_pending	set_tool_call_cell_id
+d5caceccb1ee5bf94c081b995575ce4860e0912b	41058	Track Code Mode tool call metadata completeness (#41058)	2026-08-27	model	4	3	0.75	0	0	complete	set_tool_call_cell_id
 d5cbfe1455a325684b71b6eaf4078b685ea6bdce	48109	Deduplicate retained instructions against Guardian transcripts (#48109)	2026-09-25	guardian	5	3	0.60	0	0	audit_pending	MAX_INSTRUCTION_TOKENS,RetainedTranscriptSource
 d5e6526362f6efa322ca091b61eda495f16ffb30	49297	Scan the session index backwards for batch thread name lookups (#49297)	2026-09-29	persistence	0	0		0	0	not_applicable	
 d60560f14e6271da8ac8f680fcdfb9245d5b9413	41897	Add the voice helper lifecycle foundation (#41897)	2026-08-31	realtime	5	5	1.00	0	0	complete	

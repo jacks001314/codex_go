@@ -3324,9 +3324,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: set_tool_call_cell_id"
+        "Round 258 (audit): executed-tool metadata associates calls with the originating Code Mode cell via SetExecutedToolCallCell/cell_id, records a host-owned tool_calls_complete marker only when inventory recording finishes without dropped or truncated calls, preserves it through replay/pruning, and rejects input-forged markers. Tests: go test ./model ./tool -run 'ExecutedToolCall|CodeMode|ToolCallsComplete' -count=1"
       ]
     },
     {
@@ -5244,9 +5244,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: trust_materialized_plugin_hooks"
+        "Round 258 (audit): plugin/reconcile synchronizes installed remote bundles, diffs plugin details to return changed IDs with MCP/Apps/hooks/skills hints plus remote/materialization failures, and refreshes plugin hook runtimes when a changed plugin has hooks. Go derives hook runtimes per turn, so the refresh gate reconfigures discovery instead of invalidating a persistent Rust cache. Tests: go test ./appserver -run 'PluginReconcile|Plugin.*Hook' -count=1"
       ]
     },
     {
@@ -11391,9 +11391,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: with_protocol_mode"
+        "Round 258 (audit): extension/overlay contributions carry ProtocolModeOverride through ServerConfig; effectiveMCPProtocolMode applies the winning registration only to that HTTP server, preserving defaults for other servers and leaving host-owned Apps cache/environment authority unchanged. Tests: go test ./mcp -run 'ProtocolMode|Catalog|Cache' -count=1"
       ]
     },
     {
