@@ -1140,7 +1140,7 @@
       ],
       "status": "not_applicable",
       "evidence": [
-        "Round 115 (lead): N/A (test-infrastructure-only, carrier absent) - #41191 stabilizes Rust Guardian WebSocket tests by waiting for LunaSampler idle-pool prewarm, lowering INITIAL_WEBSOCKET_CONNECTIONS to 2 in test builds, and registering request-log notifications before inspection. Go has no LunaSampler idle-connection pool/prewarm carrier or matching shared request-log test waiter; the production Guardian path uses a different websocket agent interface. No runtime behavior to port. No source change needed."
+        "Round 275 (audit): N/A - INITIAL_WEBSOCKET_CONNECTIONS configures the Rust async Guardian sampler's prewarmed WebSocket pool (also used by #41191's test stabilization). Go has no LunaSampler or async sampling WebSocket pool; the synchronous Guardian path uses a different model agent interface."
       ]
     },
     {
@@ -1414,9 +1414,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: GuardianV2ReviewScope"
+        "Round 275 (audit): N/A - review_scope.computer_use_only gates asynchronous classification and fast approvals in the Guardian V2 extension. Go has no async classifier/fast-approval path; all approvals use the synchronous review route."
       ]
     },
     {
@@ -4704,9 +4704,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: THREAD_STACK_SIZE_BYTES"
+        "Round 275 (audit): N/A - THREAD_STACK_SIZE_BYTES controls Rust's dedicated async approval-review thread. Go runs reviews on goroutines with runtime-managed stacks and has no equivalent thread-stack configuration."
       ]
     },
     {
@@ -20239,9 +20239,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_websocket_prewarmed"
+        "Round 275 (audit): N/A - websocket prewarm readiness is part of the Rust async sampling client. Go's model client does not maintain a prewarmed sampling WebSocket connection."
       ]
     },
     {
