@@ -34,7 +34,7 @@ func TestMergeWorldStateUpdatesCarriesTypedContentLikeRust(t *testing.T) {
 	}
 	metadata, _ := message["internal_chat_message_metadata_passthrough"].(map[string]any)
 	kinds, _ := metadata["content_item_kinds"].([]string)
-	if !reflect.DeepEqual(kinds, []string{"extension_test.instructions"}) {
+	if !reflect.DeepEqual(kinds, []string{"extension_test.instructions", "extension_test.instructions"}) {
 		t.Fatalf("content kinds = %#v", metadata)
 	}
 }

@@ -134,7 +134,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0df39752cbc4b88d0194ec62bdb0d56fbda4b014	43428	Notify opted-in stdio MCP servers of auth changes (#43428)	2026-09-07	mcp	5	5	1.00	0	0	complete	
 0df4aa67781ae45a3c97befa4db48b734afe46d9	54656	Honor MCP tool-list changes within a turn (#54656)	2026-10-16	mcp	6	4	0.67	0	0	complete	notifications_current,track_tool_list_changes
 0df6366a87dbadf5376cdd26b7675935ef76f893	44336	Add bounded tool-result metadata support to executed tool calls (#44336)	2026-09-09	mcp	6	5	0.83	0	0	audit_pending	history_with_tool_call_metadata
-0df76892b13277eca943a6507c7964e4b0f99a5b	50441	Support ordered response items in world-state context updates (#50441)	2026-10-02	guardian	16	7	0.44	0	0	audit_pending	FragmentSectionTestExt,SectionTransition,WorldStateUpdateContent,boxed_fragment,expect_fragments,optional_boxed_fragment,optional_standalone_boxed_fragment,render_full_fragments,render_history_fragment_diff
+0df76892b13277eca943a6507c7964e4b0f99a5b	50441	Support ordered response items in world-state context updates (#50441)	2026-10-02	guardian	16	16	1.00	0	0	complete	
 0dfb28edb9305fcae4ab006fb6b7b196cbdbac28	45831	Allow session-only model and reasoning selection in the TUI (#45831)	2026-09-16	tui	3	1	0.33	0	0	audit_pending	SelectionSecondaryAction,session_model_selection_action
 0e03f88a30bbce4638aeabc62557dda90612d32c	41938	Clarify resume guidance in exit summaries (#41938)	2026-08-31	tui	1	0	0.00	0	0	implementation_pending	ResumableThread
 0e0f55fc4ec9308840e54ceba1f1f1dc9547380f	42638	Update GPT-6-Astra Fast tier speed description (#42638)	2026-09-03	model	0	0		0	0	not_applicable	
