@@ -242,6 +242,7 @@ type Server struct {
 	// (execserver/environment_config_read.go). It is nil on a bare stub, which
 	// is why the advertised capability follows this field.
 	environmentConfigReader EnvironmentConfigReader
+	v2Discovery             *v2DiscoveryManager
 }
 
 // SetPreferMXC records the startup CLI sandbox preference
@@ -959,6 +960,7 @@ func NewServerWithHTTPClient(httpClient *http.Client) *Server {
 		httpClient:         httpClient,
 		sessions:           map[string]*serverSessionEntry{},
 		detachedSessionTTL: 30 * time.Second,
+		v2Discovery:        newV2DiscoveryManager(),
 	}
 }
 
@@ -971,10 +973,11 @@ func newSessionServer(httpClient *http.Client) *Server {
 // handler, not on the session).
 func newSessionServerWithRuntimeOptions(httpClient *http.Client, parent *Server) *Server {
 	server := &Server{
-		processes:  map[string]*processState{},
-		handles:    map[string]*fileHandleEntry{},
-		fileSlots:  make(chan struct{}, maxOpenFiles),
-		httpClient: httpClient,
+		processes:   map[string]*processState{},
+		handles:     map[string]*fileHandleEntry{},
+		fileSlots:   make(chan struct{}, maxOpenFiles),
+		httpClient:  httpClient,
+		v2Discovery: newV2DiscoveryManager(),
 	}
 	if parent != nil {
 		server.SetPreferMXC(parent.preferMXCValue())
@@ -1477,7 +1480,7 @@ func (s *Server) handleRequest(ctx context.Context, req *request) (any, error) {
 		if err := decodeParams(req.Params, &params); err != nil {
 			return nil, err
 		}
-		return discoverCapabilitiesV2(&params)
+		return s.v2Discovery.Snapshot(&params)
 	case MethodProcessStart:
 		var params ExecParams
 		if err := decodeParams(req.Params, &params); err != nil {

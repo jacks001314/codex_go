@@ -17,13 +17,15 @@ Rust source: `703d253ed6`.
   filesystem operations.
 - The client retries V2 discovery once with the original request parameters
   after a recoverable executor disconnect.
+- A per-server `fsnotify` watcher caches successful inventories while all
+  required roots are watched. File events and watcher errors mark the cache
+  dirty; failed watch registration makes each request reload discovery rather
+  than serving a stale snapshot.
 
 ## Remaining for full parity
 
-- Startup/prewarmed location cache and on-demand retry after prewarm failure.
-- Prewarm/watch-backed replay and cache invalidation after recovery.
-- Filesystem watch registration success tracking and request-time reload when
-  registration fails.
+- Startup prewarm and on-demand retry after prewarm failure.
+- Recovery replay of a prewarmed location snapshot.
 
 The symbol ledger is therefore `partial`, not `complete`.
 

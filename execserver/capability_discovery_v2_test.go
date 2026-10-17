@@ -67,6 +67,37 @@ func TestEnvironmentInfoAdvertisesCapabilityDiscoveryV2(t *testing.T) {
 	}
 }
 
+func TestV2DiscoveryManagerCachesUntilDirtyLikeRust(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	writeV2File(t, filepath.Join(codexHome, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\n")
+	cwd, err := utils.FromHostNativePath(codexHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newV2DiscoveryManager()
+	params := &DiscoverV2CapabilitiesParams{CWD: cwd.String()}
+	first, err := manager.Snapshot(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := manager.Snapshot(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatal("clean V2 discovery cache was not reused")
+	}
+	manager.markDirty()
+	third, err := manager.Snapshot(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third == first {
+		t.Fatal("dirty V2 discovery cache was reused")
+	}
+}
+
 func writeV2File(t *testing.T, path string, contents string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
