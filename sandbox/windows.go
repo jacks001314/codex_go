@@ -178,6 +178,7 @@ func DetermineWindowsReadiness(level WindowsSandboxLevel, setupComplete bool) *W
 }
 
 func DetermineWindowsReadinessFromState(level WindowsSandboxLevel, setupComplete bool) *WindowsReadinessResponse {
+	recordMXCAvailabilityOnce()
 	status := WindowsReadinessNotConfigured
 	switch level {
 	case WindowsSandboxDisabled, "":

@@ -1856,7 +1856,7 @@ ad8ee16a5f4c7445253b57a10cb1f8489c8c3e6a	42588	Require Guardian review for incom
 ad931a45b201e3877d6ba542ba5dbbd85e7e31b4	43265	Add experimental user verification API contracts (#43265)	2026-09-06	appserver	16	15	0.94	0	0	complete	UserVerificationRpcError
 ad9e8097fd3d0d2f1c1166575d2c6cd8cb9e1833	40004	Preserve managed deny-read rules across permission updates (#40004)	2026-08-21	appserver	0	0		0	0	not_applicable	
 add870a4bf226d87e0201b4e28ee6a159a49aed1	42342	Harden Windows sandbox provisioning file handling (#42342)	2026-09-02	sandbox	16	2	0.12	0	0	audit_pending	DirectoryOpenDisposition,OwnedHandle,PreparedSetupMarker,ProvisioningRequest,create_directory_guard,create_temporary_file,open_directory_no_reparse,open_no_reparse,pin_existing_ancestors,prepare_codex_home
-ade0ccacf9182e665cf784de041c51a79e35bc31	42094	Record Windows MXC availability (#42094)	2026-09-01	sandbox	1	0	0.00	0	0	implementation_pending	record_availability_once
+ade0ccacf9182e665cf784de041c51a79e35bc31	42094	Record Windows MXC availability (#42094)	2026-09-01	sandbox	1	1	1.00	0	0	complete	
 ade12342e21c34a859d14cd5be47e7531fabb734	52203	Expose Codex lifecycle status in iTerm2 sessions (#52203)	2026-10-08	tui	6	0	0.00	0	0	implementation_pending	ItermSessionStatus,clear_iterm_session_status,desired_iterm_session_status,invalidate_iterm_session_status,refresh_iterm_session_status,set_iterm_session_status
 ade17c62b0caf6fb1354eb7f3bc25853f44656ab	51200	Upgrade Bazel to 9.2.0 and refresh the module lockfile (#51200)	2026-10-05	core	0	0		0	0	not_applicable	
 adee0b04fa27a8ba5d2e3612b900363cffe72930	43521	Preserve standalone release pins during daemon updates (#43521)	2026-09-07	appserver	2	2	1.00	0	0	complete	

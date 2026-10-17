@@ -5520,9 +5520,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: record_availability_once"
+        "Round 115 (lead): implemented the Windows MXC availability telemetry carrier: one process-global counter emission tagged available=false because Go has no native MXC launcher, invoked from Windows readiness selection. Nil-recorder calls do not consume the one-shot. Focused tests and the duplicate-emission RC pass."
       ]
     },
     {
