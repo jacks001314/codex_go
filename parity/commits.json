@@ -8859,9 +8859,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: fork_internal_session"
+        "Round 281 (audit): N/A - Go's guardian reviewer is a single guardianSessionRunner with checkpoint/seed/reset operations rather than a ThreadManager internal-session fork from caller-selected committed history."
       ]
     },
     {
@@ -20347,9 +20347,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: with_agent_control_factory"
+        "Round 281 (audit): N/A - Go's RuntimeRouter constructs per-turn runtime agent controllers and reuses live ThreadManager state; there is no Rust ThreadManager host-controller factory or controller identity validation surface."
       ]
     },
     {
