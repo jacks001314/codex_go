@@ -1894,9 +1894,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: shell_snapshot_captured"
+        "Round 115 (lead): shell snapshot capture now emits exec-server v2 duration and counter telemetry alongside core v1, including success and capture_failed tags on failures. Focused telemetry tests and the missing-v2 RC pass."
       ]
     },
     {

@@ -2395,7 +2395,7 @@ e0f05de6e02ff49f33850ff8300a5d84fed2ad7f	46499	Allow approved escalation with en
 e1522188e908c9fad0acb3edbff8834f06ed5837	49858	Add a persistent `/daybreak` toggle to the TUI (#49858)	2026-10-01	tui	7	2	0.29	0	0	audit_pending	daybreak_command_description,persist_daybreak_selection,program_for_turn,set_daybreak_command_description,set_daybreak_enabled
 e154f7b80789b742b162cf0e44de0bc021068a20	47929	Generate TUI prompt suggestions after successful turns (#47929)	2026-09-24	tui	7	0	0.00	0	0	implementation_pending	apply_prompt_suggestion,clear_prompt_suggestion,generate_prompt_suggestion,has_prompt_suggestion,on_prompt_suggestion_started,set_prompt_suggestion,suggest_next_prompt
 e16b631d08cdf82773831f9bbfb793da687d5299	54754	Reduce memory overhead in tool JSON schemas (#54754)	2026-10-17	core	0	0		0	0	not_applicable	
-e16d098c00e47aa45719e8afc8f6fe301424bcca	40620	Instrument exec-server shell snapshot capture (#40620)	2026-08-25	execserver	1	0	0.00	0	0	implementation_pending	shell_snapshot_captured
+e16d098c00e47aa45719e8afc8f6fe301424bcca	40620	Instrument exec-server shell snapshot capture (#40620)	2026-08-25	execserver	1	1	1.00	0	0	complete	
 e1b23086acbf905592036c587cb37a12d68c441e	44314	Restore saved threads when the managed daemon restarts (#44314)	2026-09-09	appserver	3	3	1.00	0	0	complete	
 e1b5b56a4fe62356f00a078679e31bd5339a066f	50536	Keep shared MCP types stable in Code Mode exec descriptions (#50536)	2026-10-03	guardian	0	0		0	0	not_applicable	
 e1d0ef995f07530d2063e0ce51259b8fce1a82bf	42377	Make app-server realtime sessions always available (#42377)	2026-09-02	appserver	0	0		0	0	not_applicable	

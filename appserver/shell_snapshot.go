@@ -233,6 +233,30 @@ func (r *RuntimeRouter) recordShellSnapshot(duration time.Duration, reason tool.
 		tags["failure_reason"] = string(reason)
 	}
 	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
+	r.shellSnapshotCaptured(duration, reason)
+}
+
+// shellSnapshotCaptured emits the exec-server v2 capture observation. Local
+// execution has no separate exec-server telemetry owner, so the host turn
+// metrics client observes the same capture attempt that produced the v1 core
+// signal (Rust exec-server telemetry, #40620).
+func (r *RuntimeRouter) shellSnapshotCaptured(duration time.Duration, reason tool.SnapshotFailureReason) {
+	if r == nil || r.services.TurnMetrics == nil {
+		return
+	}
+	if duration < 0 {
+		duration = 0
+	}
+	success := "true"
+	if reason != "" {
+		success = "false"
+	}
+	tags := map[string]string{"version": "v2", "success": success}
+	r.services.TurnMetrics.RecordDuration(telemetry.ShellSnapshotDurationMetric, duration, tags)
+	if reason != "" {
+		tags["failure_reason"] = "capture_failed"
+	}
+	r.services.TurnMetrics.Counter(telemetry.ShellSnapshotCountMetric, 1, tags)
 }
 
 // recordShellSnapshotCommand emits one command-level snapshot observation

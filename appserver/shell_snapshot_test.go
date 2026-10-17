@@ -433,18 +433,27 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 		t.Fatal("no snapshot for the session's directory")
 	}
 	durations := snapshotMetricRecords(metrics, telemetry.ShellSnapshotDurationMetric)
-	if len(durations) != 1 {
+	v1Durations := snapshotMetricVersion(durations, "v1")
+	v2Durations := snapshotMetricVersion(durations, "v2")
+	if len(v1Durations) != 1 || len(v2Durations) != 1 {
 		t.Fatalf("duration records = %#v", durations)
 	}
-	if durations[0].Kind != "duration" || durations[0].Tags["version"] != "v1" ||
-		durations[0].Tags["success"] != "true" || durations[0].DurationMS < 0 {
-		t.Fatalf("duration record = %#v", durations[0])
+	for _, duration := range []*state.TaskMetric{v1Durations[0], v2Durations[0]} {
+		if duration.Kind != "duration" || duration.Tags["success"] != "true" || duration.DurationMS < 0 {
+			t.Fatalf("duration record = %#v", duration)
+		}
 	}
 	counts := snapshotMetricRecords(metrics, telemetry.ShellSnapshotCountMetric)
-	if len(counts) != 1 || counts[0].Kind != "counter" || counts[0].Inc != 1 ||
-		counts[0].Tags["version"] != "v1" || counts[0].Tags["success"] != "true" ||
-		counts[0].Tags["failure_reason"] != "" {
+	v1Counts := snapshotMetricVersion(counts, "v1")
+	v2Counts := snapshotMetricVersion(counts, "v2")
+	if len(v1Counts) != 1 || len(v2Counts) != 1 {
 		t.Fatalf("count record = %#v", counts)
+	}
+	for _, count := range []*state.TaskMetric{v1Counts[0], v2Counts[0]} {
+		if count.Kind != "counter" || count.Inc != 1 || count.Tags["success"] != "true" ||
+			count.Tags["failure_reason"] != "" {
+			t.Fatalf("count record = %#v", count)
+		}
 	}
 
 	// A capture that cannot be sourced is reported with its reason.
@@ -471,12 +480,18 @@ func TestShellSnapshotRecordsMetricsLikeRust(t *testing.T) {
 		t.Fatalf("failing capture produced %q", path)
 	}
 	counts = snapshotMetricRecords(metrics, telemetry.ShellSnapshotCountMetric)
-	if len(counts) != 2 {
+	v1Counts = snapshotMetricVersion(counts, "v1")
+	v2Counts = snapshotMetricVersion(counts, "v2")
+	if len(v1Counts) != 2 || len(v2Counts) != 2 {
 		t.Fatalf("count records = %#v", counts)
 	}
-	failed := counts[1]
+	failed := v1Counts[1]
 	if failed.Tags["success"] != "false" || failed.Tags["failure_reason"] != "validation_failed" {
 		t.Fatalf("failure record = %#v", failed)
+	}
+	failedExecServer := v2Counts[1]
+	if failedExecServer.Tags["success"] != "false" || failedExecServer.Tags["failure_reason"] != "capture_failed" {
+		t.Fatalf("exec-server failure record = %#v", failedExecServer)
 	}
 }
 
@@ -485,6 +500,16 @@ func snapshotMetricRecords(metrics *state.TaskMetrics, name string) []*state.Tas
 	var out []*state.TaskMetric
 	for _, record := range metrics.Records() {
 		if record.Name == name {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func snapshotMetricVersion(records []*state.TaskMetric, version string) []*state.TaskMetric {
+	out := make([]*state.TaskMetric, 0, len(records))
+	for _, record := range records {
+		if record.Tags["version"] == version {
 			out = append(out, record)
 		}
 	}
