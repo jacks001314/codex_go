@@ -1030,7 +1030,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 624ccf794703e2d84e748fc3ef547d6191a8c0a4	44814	Test approved command execution with managed unified exec disabled (#44814)	2026-09-11	appserver	0	0		0	0	not_applicable	
 6288753b469615a0b62e8cf0dd65c6e893eb4849	49057	Add handoff-aware root context for Guardian reviews (#49057)	2026-09-28	guardian	1	0	0.00	0	0	implementation_pending	selected_message_indices
 62aacbb2c9a784a4ac62aa8957a5ac6ebc211dfa	40736	Run exec-server compatibility tests under Bazel (#40736)	2026-08-25	execserver	0	0		0	0	not_applicable	
-62b458c93151595cdf2b5ef5e37aa3d8b5613aeb	41454	Block goals after repeated execution host failures (#41454)	2026-08-29	appserver	3	2	0.67	0	0	audit_pending	current_active_goal_id_for_turn
+62b458c93151595cdf2b5ef5e37aa3d8b5613aeb	41454	Block goals after repeated execution host failures (#41454)	2026-08-29	appserver	3	2	0.67	0	0	complete	current_active_goal_id_for_turn
 62bfa41a837a3c402ee1888ac0e25ea479083723	40723	Update the biology Trusted Access link (#40723)	2026-08-25	tui	0	0		0	0	not_applicable	
 62ea6d41e85d0c75181f2794d0f2dc40e55fce3c	47077	Serialize environment updates and cancel removed pending attachments (#47077)	2026-09-21	core	1	0	0.00	0	0	not_applicable	test_environment_config
 62f553bfd02cdc1206931b99d0083fd9619d7688	42428	Use the shared composer in the agent command center (#42428)	2026-09-03	tui	10	1	0.10	0	0	audit_pending	AgentsOverviewFocus,composer_is_vim_enabled,focus_composer,handle_composer_key,handle_paste_enter,layout_areas,restore_agents_overview_prompt,set_app_event_sender,sync_agents_overview_composer
@@ -1744,7 +1744,7 @@ a4ebc509f4cdff88a8e58e175541970a30a2d385	51400	Prevent later Guardian scores fro
 a4ee536f0132092f20996c3810c14d090e4dded1	46122	Route filesystem reads and writes by their own sandbox permissions (#46122)	2026-09-17	execserver	4	0	0.00	0	0	implementation_pending	has_full_disk_read_access_for_convention,has_full_disk_write_access_for_convention,should_read_from_sandbox,should_write_into_sandbox
 a505c71490885a44979df056284badbfdd75b3fb	45262	Route pastes into the active history search query (#45262)	2026-09-13	tui	1	0	0.00	0	0	implementation_pending	update_history_search_query
 a5130128697b10022a88e8f5eae6dca77393b4b0	51642	Fix retained context handling for typed section content (#51642)	2026-10-07	guardian	0	0		0	0	not_applicable	
-a51608398d53b6d23ed98b8287de415b35f1eea5	43572	Make the managed app-server shutdown grace period configurable (#43572)	2026-09-07	appserver	4	3	0.75	0	0	audit_pending	load_for_stop
+a51608398d53b6d23ed98b8287de415b35f1eea5	43572	Make the managed app-server shutdown grace period configurable (#43572)	2026-09-07	appserver	4	3	0.75	0	0	complete	load_for_stop
 a51da75131d389c20f63e60fe408670000743fbf	43304	Isolate Bazel build commit metadata from Rust compilation inputs (#43304)	2026-09-06	tui	0	0		0	0	not_applicable	
 a526f54b005f0647dec041f26a67356be88b15fe	42319	Show live context compaction status in the TUI (#42319)	2026-09-02	tui	7	0	0.00	0	0	implementation_pending	ActiveCompaction,COMPACTION_DETAILS,COMPACTION_HEADER,clear_context_compaction,on_context_compaction_completed,on_context_compaction_started,set_status_timer_origin
 a5290028a2936b91ec9305f6de7780463620ca70	46673	Extend server version notices to prerelease and local clients (#46673)	2026-09-19	tui	2	2	1.00	0	0	complete	
