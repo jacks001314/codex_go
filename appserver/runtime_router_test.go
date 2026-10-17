@@ -15894,7 +15894,18 @@ func TestSkillMCPDependencyInstallDiscoversScopesRetriesAndCompletesOAuthLikeRus
 				"authorization_endpoint": issuer.URL + "/authorize",
 				"token_endpoint":         issuer.URL + "/token",
 				"registration_endpoint":  issuer.URL + "/register",
-				"scopes_supported":       []string{"read", "write"},
+				// Rust #54653: the authorization server's general scope list is
+				// no longer the discovered resource scopes.
+				"scopes_supported": []string{"profile"},
+			})
+		case "/mcp":
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+issuer.URL+`/resource-metadata"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/resource-metadata":
+			writeJSON(t, w, map[string]any{
+				"resource":              issuer.URL + "/mcp",
+				"authorization_servers": []string{issuer.URL + "/mcp"},
+				"scopes_supported":      []string{"read", "write"},
 			})
 		case "/register":
 			writeJSON(t, w, map[string]any{"client_id": "dynamic-client", "token_endpoint_auth_method": "none"})
