@@ -2017,7 +2017,7 @@ bd5564fec447bd42b4e60d051967670d2eaa2aa8	51768	Expand OpenAI Docs migration guid
 bd89ce67cca74783d8339aeeb842e9b673c7e2ed	42128	Prepare MCP connections for coordinated OAuth refresh (#42128)	2026-09-01	mcp	1	1	1.00	0	0	complete	
 bde9db1375667c50dcc0c2b52532a4e2672571c2	40906	Record actual Responses endpoints in tracing spans (#40906)	2026-08-26	core	0	0		0	0	not_applicable	
 bdfbab9f4fbd73180a280ff668248d662c156749	49874	Point usage and credit links to ChatGPT settings (#49874)	2026-10-01	tui	0	0		0	0	not_applicable	
-bdfd769640927a627dd48ab3fcc1ae8bc08bdd0a	42247	Track history notes thread hint outcomes (#42247)	2026-09-02	appserver	5	0	0.00	0	0	implementation_pending	ThreadHintStatus,ThreadHintStatusEvent,ThreadHintStatusEventParams,ThreadHintStatusEventRequest,track_thread_hint_status
+bdfd769640927a627dd48ab3fcc1ae8bc08bdd0a	42247	Track history notes thread hint outcomes (#42247)	2026-09-02	appserver	5	5	1.00	0	0	complete	
 be2684ede0c3aa3e7789c4d83ad6a98ff5fe5b87	42903	Preserve TUI question state and integrate history and queue navigation (#42903)	2026-09-05	tui	15	5	0.33	0	0	audit_pending	PendingInputPreviewContent,QuestionState,capture_thread_input_state,copy_history_for_key,event_survives_session_refresh,is_navigating,question_summary,record_recalled_text,restore_questions,test_pane
 be2e129ecd67d900c016eda12d5d193e33d9c3da	52065	Require assessment text in the Guardian parser (#52065)	2026-10-08	guardian	1	0	0.00	0	0	complete	parse_guardian_assessment
 be3a6661439ed958700799f6ef1da6a638de3911	40496	Track history, notes, and async messages as control tools (#40496)	2026-08-24	appserver	0	0		0	0	not_applicable	

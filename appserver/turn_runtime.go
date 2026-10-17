@@ -12707,6 +12707,7 @@ func (r *RuntimeRouter) historyNotesThreadHintInputItem(cfg *config.Config, para
 		return nil, false
 	}
 	text, ok := backend.ThreadHint(context.Background(), sessionID, agentName)
+	trackHistoryNotesThreadHintStatus(r.services.Analytics, threadID, sessionID, text, ok, time.Now().UTC())
 	if !ok || strings.TrimSpace(text) == "" {
 		return nil, false
 	}

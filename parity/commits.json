@@ -6058,8 +6058,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): telemetry/thread_hint_status.go adds ThreadHintStatus (succeeded/failed) plus ThreadHintStatusEvent (thread/session/status/occurred_at, never hint text) and the optional ThreadHintStatusEventSink; appserver/history_notes_hint_status.go reports one event per history-notes hint attempt (missing/empty/oversized => failed) at historyNotesThreadHintInputItem. Tests: appserver/history_notes_hint_status_test.go (two attempts, identity/timestamp, sink without the interface is a no-op). RC: defaulting the status to succeeded fails the test; go build ./... and the appserver history-notes tests are green.",
         "No new upstream public identifier found in Go (0/5); candidate gap: ThreadHintStatus, ThreadHintStatusEvent, ThreadHintStatusEventParams, ThreadHintStatusEventRequest, track_thread_hint_status"
       ]
     },
