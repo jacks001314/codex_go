@@ -1287,6 +1287,14 @@
             "reason": "Aligned upstream 96aca987f7 (#46258 Preserve uploaded image file IDs in user message display history): structured user images are prepared before the user message event, uploaded file_id references are preserved (rather than rewritten to an empty image_url), original text blocks are copied so text_elements survive, and the prepared content is cached per turn so the session item Content and thread item Data carry the same prepared file IDs the model received.",
             "userImpact": "Live and persisted user messages show the uploaded image reference instead of losing it or falling back to a local path.",
             "test": "go test ./appserver -run TestUploadedImageFileIDsReachUserMessageDisplayHistoryLikeRust -count=1"
+        },
+        {
+            "id": "conpty-output-eof-after-last-client",
+            "status": "done",
+            "area": "execserver",
+            "reason": "Aligned upstream 6ce16aadce (#45504 Allow ConPTY output to close after the last console client exits): the Windows exec-server drops the pseudoconsole creation handles with FinishSpawn immediately after CreateProcess, so the output reader reaches EOF when the last attached client exits even while the session object lives.",
+            "userImpact": "ConPTY sessions no longer leave a blocked output reader after the child exits, so callers do not have to close the PTY to stop reading.",
+            "test": "go test ./execserver -run TestExecServerTTYOutputReachesEOFWithoutClosingThePTY -count=1"
         }
     ]
 }

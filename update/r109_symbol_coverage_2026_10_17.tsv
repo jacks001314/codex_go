@@ -466,7 +466,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2f4b1055147d7601eb425da102c477f10e0e1b4c	40658	Prevent telemetry exporters from feeding back into themselves (#40658)	2026-08-25	persistence	0	0		0	0	not_applicable	
 2f522c5dc0a025ab998697e0604ad73bbbe7d9a4	46488	Split analytics tests into focused suites (#46488)	2026-09-18	telemetry	0	0		0	0	not_applicable	
 2f761ae8210082c21cdd471131fa2118680a6059	52696	Fix marketplace path matching for Windows junctions (#52696)	2026-10-09	plugins	1	0	0.00	0	0	complete	create_directory_junction
-2f8603f07547247e698748884542ba60a157621c	45420	Extract Guardian sampler execution into a dedicated module (#45420)	2026-09-14	guardian	1	0	0.00	0	0	implementation_pending	SamplingExecution
+2f8603f07547247e698748884542ba60a157621c	45420	Extract Guardian sampler execution into a dedicated module (#45420)	2026-09-14	guardian	1	0	0.00	0	0	not_applicable	
 2fc4bda3ca3e93b764dd3845cb8c1a15a10866e1	44866	Preserve originating context for yielded code-mode tool calls (#44866)	2026-09-11	guardian	6	2	0.33	0	0	audit_pending	CodeModeCellDelegate,as_legacy_begin_event,as_legacy_end_event,record_guardian_denial_for_test
 2fdcdeaf0e219eea34c710e01de2ee0571ddeeb5	45711	Add startup tool allowlists for threads (#45711)	2026-09-15	guardian	4	1	0.25	0	0	audit_pending	AllowedTools,reviewer_allowed_tools,with_allowed_tools
 2fde968de8bc9949f79d2f5565422f865b8f0fcc	49809	Preserve local launch permissions across TUI sessions and reconnects (#49809)	2026-09-30	tui	1	0	0.00	0	0	implementation_pending	remember_launch_permissions
@@ -1066,7 +1066,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6677fd827d2c34cd65edb240418f80b3f97d2cc0	40280	Budget retained images during remote compaction (#40280)	2026-08-23	config	3	0	0.00	0	0	complete	content_item_token_count,estimate_image_bytes,truncate_message_to_token_budget
 669449b02c4b58de4bcd22485eb60c98a6e38a54	53595	Add async compaction feature configuration (#53595)	2026-10-13	config	1	1	1.00	0	0	complete	
 66c4e5a20d211f329de32b0452b35a9aac66b3c5	48121	Keep startup drafts visible during command center session handoff (#48121)	2026-09-25	tui	3	0	0.00	0	0	implementation_pending	clear_for_thread_switch,defer_thread_switch_clear,has_deferred_thread_switch_clear
-66dfadbe6680a5aa2dad0dc80f3b1092d7a59258	45985	Replace guardian review result tuples with named structs (#45985)	2026-09-16	guardian	2	0	0.00	0	0	implementation_pending	ReviewSessionResult,ReviewTurnResult
+66dfadbe6680a5aa2dad0dc80f3b1092d7a59258	45985	Replace guardian review result tuples with named structs (#45985)	2026-09-16	guardian	2	0	0.00	0	0	not_applicable	
 671d5d1b3531d7251d6c59709b8d29fb7927e685	42173	Support header injections in network requirements (#42173)	2026-09-02	tui	1	0	0.00	0	0	implementation_pending	NetworkHeaderInjectionToml
 67352b5b4adc3d3e8865ac8bf343b952b8c040e7	49407	Recover exec-server sessions after environment info timeouts (#49407)	2026-09-30	appserver	0	0		0	0	not_applicable	
 6743672ad7be1956e7875b22111eeeb8c05f2802	47911	Add TUI composer support for prompt suggestions (#47911)	2026-09-24	tui	12	1	0.08	0	0	audit_pending	PromptSuggestion,SuggestionRequest,apply_prompt_suggestion,clear_prompt_suggestion,handle_prompt_suggestion_key,has_prompt_suggestion,parse_suggestion,prompt_suggestion_lines,set_keymap_bindings,set_prompt_suggestion
@@ -1133,7 +1133,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6c59264b14b963d45d1005e7a8b1de87d4b054e2	41108	Increase Guardian V2 async test timeouts (#41108)	2026-08-27	guardian	0	0		0	0	not_applicable	
 6c7d409a6d31ce745c95dda9a09a1050deb82649	53440	Preserve status line accents on 16-color terminals (#53440)	2026-10-12	tui	0	0		0	0	complete	
 6cc7d9cc5c702c0ca133f7ea48432166e0b880be	53717	Enable Cyber access programs for API-key sessions by default (#53717)	2026-10-13	tui	0	0		0	0	not_applicable	
-6ce16aadce5a0df847096826b159daf1d9a25c1b	45504	Allow ConPTY output to close after the last console client exits (#45504)	2026-09-14	core	1	0	0.00	0	0	implementation_pending	spawn_command
+6ce16aadce5a0df847096826b159daf1d9a25c1b	45504	Allow ConPTY output to close after the last console client exits (#45504)	2026-09-14	core	1	1	1.00	0	0	complete	
 6cf2ff11b391fdd83d688b1740623ce55acf1a85	46528	Bind executor plugin measurements to the trusted plugin version (#46528)	2026-09-18	plugins	6	3	0.50	0	0	audit_pending	PluginMeasurementTarget,resolve_executor_attribution,resolve_metrics_operation_in_filesystem
 6cfe29984965abfb5f7a5f86048f655d45d028a7	47327	Preserve image generation request IDs on failure (#47327)	2026-09-22	appserver	3	0	0.00	0	0	complete	ImageRequestError,imagegen_request_id,into_parts
 6d083e3bc4caabf547e0f492f0faa628f3210697	48100	Add an HTTP client for remote agent message boards (#48100)	2026-09-25	core	17	12	0.71	0	0	audit_pending	BoardNotifications,MAX_BODY,MAX_RESPONSE,RemoteAgentMessageBoard,with_clock
@@ -1244,7 +1244,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 782826663df3e898d0c594a13f6f75cc2a498644	48190	Bound agent message board SSE frames before parsing (#48190)	2026-09-25	core	0	0		0	0	not_applicable	
 78600239a116a97580389caed726c0edf05ebbfa	44666	Honor system reduced-motion preferences in the TUI (#44666)	2026-09-10	tui	2	2	1.00	0	0	complete	
 787823cf957709b314276646024ec54e1761c089	46088	Add `--no-daemon` to bypass the shared background server (#46088)	2026-09-17	tui	2	2	1.00	0	0	complete	
-78932f4493995cb1236bcad411c926a9f5c179b2	43918	Expose the queued event count on `CodexThread` (#43918)	2026-09-08	core	1	0	0.00	0	0	implementation_pending	queued_event_count
+78932f4493995cb1236bcad411c926a9f5c179b2	43918	Expose the queued event count on `CodexThread` (#43918)	2026-09-08	core	1	0	0.00	0	0	not_applicable	
 78a19f5ab563038142292857553b41be0f2348f2	52182	Expose a verified sandbox launcher to local MCP servers (#52182)	2026-10-08	mcp	2	2	1.00	0	0	complete	
 78d4d983d3380fa92aa17fbe9e4f9b737b6a5223	46530	Gate reasoning effort updates on explicit model support (#46530)	2026-09-18	appserver	1	1	1.00	0	0	complete	
 78dc2503840d05f4411ae184bb5560ef327fce3c	53947	Stop rollout reads when the calling task is cancelled (#53947)	2026-10-14	tui	2	1	0.50	0	0	complete	rollout_contains_prefix
@@ -1311,7 +1311,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7dae8c53d97e61cd774e4d6bcca5243c29ca615c	47717	Avoid recursive TUI event dispatch for model picker selections (#47717)	2026-09-24	tui	0	0		0	0	not_applicable	
 7db578fca663b3e0026996e9c50104784d420744	47360	Preserve user prompt URL destinations across terminal widths (#47360)	2026-09-22	tui	0	0		0	0	not_applicable	
 7dc7c7a7566a970f6d4d09e1384f854aebaf39e0	43090	Send processed microphone audio over RTP in voice-host (#43090)	2026-09-05	realtime	16	9	0.56	0	0	audit_pending	AudioTrack,CAPTURE_GAP_TOLERANCE,CaptureWorker,EncodedAudio,MAX_CALLBACK_FRAMES,MAX_PROCESSING_DELAY,validate_callback_timing
-7e0463b568f8506f61b58ca46dcb1846e06ba31c	46546	Skip skill discovery when injecting items into initialized threads (#46546)	2026-09-18	core	1	0	0.00	0	0	implementation_pending	new_inject_items_context
+7e0463b568f8506f61b58ca46dcb1846e06ba31c	46546	Skip skill discovery when injecting items into initialized threads (#46546)	2026-09-18	core	1	0	0.00	0	0	not_applicable	
 7e049b3eaa17cf01f726ee8ff70da4dcf7557f87	49103	Balance Windows Bazel test shards using duration estimates (#49103)	2026-09-28	core	0	0		0	0	not_applicable	
 7e1ee6df6c9d2b483ed627f50f5bd44608c00cd8	40672	Reuse private desktops across Windows sandbox commands (#40672)	2026-08-25	sandbox	10	6	0.60	0	0	audit_pending	DesktopPolicy,open_private,prepare_legacy,shared_private_desktop_for_user
 7e41be641ed1133711e4f75b2e142de7affaff7a	41365	Restrict async user messages to questions (#41365)	2026-08-28	core	0	0		0	0	not_applicable	
