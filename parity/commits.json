@@ -26785,9 +26785,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: acquire_removable_app_server_startup_lock, try_acquire_removable_app_server_startup_lock"
+        "Round 294 (audit): N/A - Go's Unix control-socket startup binds the selected private socket directly and never creates Rust's physical socket.lock startup lock, so it has no lock artifact or replace-lock race to clean up."
       ]
     },
     {
