@@ -179,8 +179,13 @@ type ToolRegistryOptions struct {
 	// description of the send_user_message_async tool with the model-catalog
 	// value (#41461). A non-nil pointer to an empty string keeps it empty.
 	SendUserMessageAsyncDescription *string
-	DisableWaitAgent                bool
-	DisableDirectMessage            bool
+	// RequestUserInputAsyncDescription/Parameters carry the model catalog's
+	// `send_user_message_async` entry into the request_user_input_async schema
+	// (Rust #47773).
+	RequestUserInputAsyncDescription *string
+	RequestUserInputAsyncParameters  *string
+	DisableWaitAgent                 bool
+	DisableDirectMessage             bool
 	// MessageBoard, when set, registers the shared discussion board's nine
 	// collaboration tools for this turn's caller (Rust
 	// `install_agent_message_board`). The host owns board selection, the tool
@@ -495,7 +500,10 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 				}
 			}
 			if supported == tool.DefaultRequestUserInputAsyncToolName {
-				if err := registry.Register(&tool.RequestUserInputAsyncHandler{}); err != nil {
+				if err := registry.Register(&tool.RequestUserInputAsyncHandler{
+					Description: options.RequestUserInputAsyncDescription,
+					Parameters:  options.RequestUserInputAsyncParameters,
+				}); err != nil {
 					return nil, err
 				}
 			}

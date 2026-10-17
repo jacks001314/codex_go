@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -32,6 +33,10 @@ type RequestUserInputAsyncHandler struct {
 	// Description overrides the built-in tool description from the model
 	// catalog. A non-nil value (including an empty string) replaces it.
 	Description *string
+	// Parameters carries the model catalog's `send_user_message_async.parameters`
+	// override for this tool's schema (#47773). An absent or invalid override
+	// falls back to the bundled schema while keeping the catalog description.
+	Parameters *string
 	// EmitAsyncQuestions, when set, lets the app-server runtime emit the
 	// structured message item. The tool surface stays testable without it.
 	EmitAsyncQuestions func(message string, questions []RequestUserInputAsyncQuestion)
@@ -45,36 +50,58 @@ func (h *RequestUserInputAsyncHandler) Spec() Spec {
 	return Spec{
 		Name:        PlainName(DefaultRequestUserInputAsyncToolName),
 		Description: requestUserInputAsyncDescription(h.Description),
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"questions": map[string]any{
-					"type":        "array",
-					"minItems":    1,
-					"description": "One or more self-contained questions to present together, in display order.",
-					"items": map[string]any{
-						"type": "object",
-						"properties": map[string]any{
-							"title": map[string]any{
-								"type":        "string",
-								"description": "The complete question shown to the user, including any context needed to answer it.",
-							},
-							"options": map[string]any{
-								"type":        "array",
-								"minItems":    1,
-								"description": requestUserInputAsyncOptionsDescription,
-								"items":       map[string]any{"type": "string"},
-							},
+		InputSchema: requestUserInputAsyncInputSchema(h.Parameters),
+		Exposure:    ExposureDirectModelOnly,
+	}
+}
+
+// requestUserInputAsyncInputSchema mirrors Rust #47773: the catalog override
+// replaces the bundled schema when it parses as a JSON object; any other value
+// keeps the bundled schema (Rust logs a warning and falls back).
+func requestUserInputAsyncInputSchema(override *string) map[string]any {
+	if override != nil {
+		schema, err := catalogParametersParse(*override)
+		if err == nil {
+			return schema
+		}
+		slog.Warn(
+			"Invalid catalog tool parameters; using bundled parameters",
+			"tool", DefaultRequestUserInputAsyncToolName,
+			"reason", err,
+		)
+	}
+	return requestUserInputAsyncBundledSchema()
+}
+
+func requestUserInputAsyncBundledSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"questions": map[string]any{
+				"type":        "array",
+				"minItems":    1,
+				"description": "One or more self-contained questions to present together, in display order.",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"title": map[string]any{
+							"type":        "string",
+							"description": "The complete question shown to the user, including any context needed to answer it.",
 						},
-						"required":             []string{"title"},
-						"additionalProperties": false,
+						"options": map[string]any{
+							"type":        "array",
+							"minItems":    1,
+							"description": requestUserInputAsyncOptionsDescription,
+							"items":       map[string]any{"type": "string"},
+						},
 					},
+					"required":             []string{"title"},
+					"additionalProperties": false,
 				},
 			},
-			"required":             []string{"questions"},
-			"additionalProperties": false,
 		},
-		Exposure: ExposureDirectModelOnly,
+		"required":             []string{"questions"},
+		"additionalProperties": false,
 	}
 }
 

@@ -14269,6 +14269,10 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			options.ModelConfirmationPolicies = turnModelInfo.ModelMessages.ConfirmationPolicies
 			if tools := turnModelInfo.ModelMessages.Tools; tools != nil && tools.SendUserMessageAsync != nil {
 				options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
+				// Rust #47773: request_user_input_async uses the same catalog
+				// entry's description and parameters override.
+				options.RequestUserInputAsyncDescription = tools.SendUserMessageAsync.Description
+				options.RequestUserInputAsyncParameters = tools.SendUserMessageAsync.Parameters
 			}
 		}
 	}

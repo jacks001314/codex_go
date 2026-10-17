@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1868,5 +1869,59 @@ func TestBuildToolRegistryBindsTheTurnWindowToCodeModeCellsLikeRust(t *testing.T
 	}
 	if origins[0][tool.OriginItemIDContextKey] != "fc-turn" || origins[0][tool.OriginWindowIDContextKey] != "thread-origin:0" {
 		t.Fatalf("nested origin = %#v/%#v", origins[0][tool.OriginItemIDContextKey], origins[0][tool.OriginWindowIDContextKey])
+	}
+}
+
+func TestBuildToolRegistrySourcesRequestUserInputAsyncCatalogEntry(t *testing.T) {
+	// Rust #47773: request_user_input_async reads the same catalog entry as
+	// send_user_message_async, so its description and parameters both come
+	// from that block; an invalid parameter override keeps the bundled schema.
+	options := DefaultToolRegistryOptions(t.TempDir())
+	options.ExperimentalSupportedTools = []string{tool.DefaultRequestUserInputAsyncToolName}
+	description := "Catalog async question description."
+	parameters := `{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}`
+	options.RequestUserInputAsyncDescription = &description
+	options.RequestUserInputAsyncParameters = &parameters
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(request_user_input_async) error = %v", err)
+	}
+	spec, ok := registry.Spec(tool.PlainName(tool.DefaultRequestUserInputAsyncToolName))
+	if !ok {
+		t.Fatal("request_user_input_async tool missing")
+	}
+	if spec.Description != description {
+		t.Fatalf("description = %q, want %q", spec.Description, description)
+	}
+	properties, _ := spec.InputSchema["properties"].(map[string]any)
+	if _, ok := properties["question"]; !ok {
+		t.Fatalf("catalog properties missing: %#v", spec.InputSchema)
+	}
+	if _, ok := properties["questions"]; ok {
+		t.Fatalf("bundled properties kept alongside catalog schema: %#v", spec.InputSchema)
+	}
+	if spec.Exposure != tool.ExposureDirectModelOnly {
+		t.Fatalf("exposure = %q, want direct_model_only", spec.Exposure)
+	}
+
+	invalid := "{not json"
+	options2 := DefaultToolRegistryOptions(t.TempDir())
+	options2.ExperimentalSupportedTools = []string{tool.DefaultRequestUserInputAsyncToolName}
+	options2.RequestUserInputAsyncDescription = &description
+	options2.RequestUserInputAsyncParameters = &invalid
+	registry2, err := BuildToolRegistry(options2)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry(invalid catalog parameters) error = %v", err)
+	}
+	spec2, ok := registry2.Spec(tool.PlainName(tool.DefaultRequestUserInputAsyncToolName))
+	if !ok {
+		t.Fatal("request_user_input_async tool missing with invalid parameters")
+	}
+	if spec2.Description != description {
+		t.Fatalf("fallback description = %q, want catalog description", spec2.Description)
+	}
+	bundled := (&tool.RequestUserInputAsyncHandler{}).Spec()
+	if !reflect.DeepEqual(spec2.InputSchema, bundled.InputSchema) {
+		t.Fatalf("fallback schema = %#v, want bundled %#v", spec2.InputSchema, bundled.InputSchema)
 	}
 }
