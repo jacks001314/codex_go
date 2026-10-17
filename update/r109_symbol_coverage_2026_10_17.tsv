@@ -594,7 +594,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3b8f43a06bb3105e81406b35ff69f94977d18ae4	54766	Defer unknown TUI config fields to the shared strict-config policy (#54766)	2026-10-17	config	0	0		0	0	complete	
 3ba7b6941d3caf6eec5b3c4e564988ee57d3f083	40760	Add OpenTelemetry tracing to the code-mode host (#40760)	2026-08-26	core	4	0	0.00	0	0	not_applicable	bind_otlp_trace_receiver,run_otel_trace_listener,run_otlp_trace_receiver,trace_batch_channel
 3bae578af33e43268e7bc2d6d5d0266f704bb554	54273	Protect metadata writes through macOS case aliases (#54273)	2026-10-15	sandbox	0	0		0	0	complete	
-3bb0a530d1cdabe1bbd35b3f44d72f851f0a93f4	46562	Add system proxy fallback for login and startup requests (#46562)	2026-09-18	appserver	5	0	0.00	0	0	implementation_pending	CLOUD_CONFIG_BUNDLE_TIMEOUT,allows_system_proxy_fallback,with_outbound_proxy_policy,with_redirect_tracking,with_system_proxy_fallback
+3bb0a530d1cdabe1bbd35b3f44d72f851f0a93f4	46562	Add system proxy fallback for login and startup requests (#46562)	2026-09-18	appserver	5	0	0.00	0	0	complete	CLOUD_CONFIG_BUNDLE_TIMEOUT,allows_system_proxy_fallback,with_outbound_proxy_policy,with_redirect_tracking,with_system_proxy_fallback
 3bbf8ec3a1e103c30d575f14f1827b193a8d415f	49784	Add a requirements feature gate for the browser annotation API (#49784)	2026-09-30	config	0	0		0	0	not_applicable	
 3c062df036070ad5819a9a74160a448b414e9b92	41461	Source async user message descriptions from the model catalog (#41461)	2026-08-29	guardian	3	3	1.00	0	0	complete	
 3c3a990da04e04a4db37f4c1fe3fc00cd934d6f5	50454	Measure rollout persistence size reductions (#50454)	2026-10-02	persistence	0	0		0	0	not_applicable	

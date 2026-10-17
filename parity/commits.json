@@ -16445,9 +16445,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: CLOUD_CONFIG_BUNDLE_TIMEOUT, allows_system_proxy_fallback, with_outbound_proxy_policy, with_redirect_tracking, with_system_proxy_fallback"
+        "Round 295 (audit): system_proxy_fallback is default-on, managed/project-layer constrained, and used by OAuth code exchange only for pre-redirect dial/DNS failures with a 10s connect bound. Bootstrap and workspace/cloud config requests use the route-aware fallback and bounded reads."
       ]
     },
     {
