@@ -12759,9 +12759,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: PreparedWindowsSandboxConfig, prepare_windows_sandbox_config"
+        "Round 115 (lead): landed in config/windows_sandbox_config.go - PreparedWindowsSandboxConfig separates the explicitly configured/requirement-constrained Mode from EffectiveMode and Go's sandbox Level, while prepareWindowsSandboxConfig preserves feature-only fallback without persisting it as configured mode. ResolveWindowsSandboxMode now delegates to the helper, preserving MXC bypass and allow-list fallback behavior. Test: TestPrepareWindowsSandboxConfigSeparatesConfiguredModeLikeRust covers feature-only, explicit-priority, constrained-fallback and MXC cases. RC: using the combined resolver for configured mode makes feature-only fallback appear configured; bypassing requirements loses elevated/unelevated fallback. go test ./config -count=1 + focused appserver WindowsSandbox/MXC + go vet ./config + go build ./config ./appserver ./sandbox green."
       ]
     },
     {

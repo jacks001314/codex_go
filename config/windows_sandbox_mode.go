@@ -42,7 +42,7 @@ func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxMode, bo
 	if featureSettings["elevated_windows_sandbox"] {
 		return WindowsSandboxModeElevated, true
 	}
-	if featureSettings["experimental_windows_sandbox"] {
+	if featureSettings["experimental_windows_sandbox"] || featureSettings["windows_sandbox"] {
 		return WindowsSandboxModeUnelevated, true
 	}
 	return "", false
@@ -59,27 +59,8 @@ func WindowsSandboxModeFromValues(values map[string]any) (WindowsSandboxMode, bo
 // The allow-list only covers the legacy elevated/unelevated backends: Rust
 // accepts mxc unconditionally (#46271), so a configured mxc is never replaced.
 func ResolveWindowsSandboxMode(values map[string]any, requirements *ConfigRequirements) (mode WindowsSandboxMode, fellBack bool, ok bool) {
-	configured, configuredOK := WindowsSandboxModeFromValues(values)
-	if configuredOK && configured == WindowsSandboxModeMxc {
-		return configured, false, true
-	}
-	if requirements == nil || len(requirements.AllowedWindowsSandboxImplementations) == 0 {
-		return configured, false, configuredOK
-	}
-	allowed := make(map[WindowsSandboxMode]bool, len(requirements.AllowedWindowsSandboxImplementations))
-	fallback := WindowsSandboxModeUnelevated
-	for _, entry := range requirements.AllowedWindowsSandboxImplementations {
-		normalized := WindowsSandboxMode(entry)
-		allowed[normalized] = true
-		if normalized == WindowsSandboxModeElevated {
-			// Prefer elevated when both implementations are allowed.
-			fallback = WindowsSandboxModeElevated
-		}
-	}
-	if configuredOK && allowed[configured] {
-		return configured, false, true
-	}
-	return fallback, true, true
+	prepared := prepareWindowsSandboxConfig(values, requirements)
+	return prepared.EffectiveMode, prepared.FellBack, prepared.Effective
 }
 
 func parseWindowsSandboxModeValue(value any) (WindowsSandboxMode, bool) {
