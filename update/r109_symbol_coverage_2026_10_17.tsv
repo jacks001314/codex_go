@@ -585,7 +585,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3a69ec3ef8fb87b41e99b8942af061ad58ae6732	50695	Preserve local Markdown link labels in the TUI (#50695)	2026-10-03	tui	0	0		0	0	not_applicable	
 3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8	45312	Extract Windows sandbox configuration preparation into a helper (#45312)	2026-09-14	sandbox	2	0	0.00	0	0	implementation_pending	PreparedWindowsSandboxConfig,prepare_windows_sandbox_config
 3ae4225b1761c135c6d3bbc1ea0cfcfc95752cdc	41403	Restrict cloud task credentials to trusted origins (#41403)	2026-08-28	core	2	0	0.00	0	0	implementation_pending	new_without_redirects,validate_chatgpt_base_url
-3b16b5a5b03aba9a960b5dedde48fb687863c6e9	49702	Rename exec-server file handle management identifiers (#49702)	2026-09-30	execserver	1	0	0.00	0	0	implementation_pending	FileHandleManager
+3b16b5a5b03aba9a960b5dedde48fb687863c6e9	49702	Rename exec-server file handle management identifiers (#49702)	2026-09-30	execserver	1	0	0.00	0	0	not_applicable	FileHandleManager
 3b2d9a69e62745d4e1ebfda84cfc6134c529b7c4	42870	Avoid redundant filesystem sandbox path resolution (#42870)	2026-09-04	execserver	0	0		0	0	not_applicable	
 3b50349e1a80930e6e9dcf6d9377d65ef55ef052	47248	Add explicit app and account targets to MCP resource reads (#47248)	2026-09-22	appserver	1	0	0.00	0	0	implementation_pending	McpResourceReadTarget
 3b6ab3471a2d4d994c9fad322fca749564bc05e0	52256	Normalize formatting in docs, web assets, and sample scripts (#52256)	2026-10-08	tui	0	0		0	0	not_applicable	

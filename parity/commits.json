@@ -24239,9 +24239,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: FileHandleManager"
+        "Round 115 (lead): N/A (rename-only, already aligned) - #49702 only renames Rust file_read/FileReadHandleManager/MAX_OPEN_FILE_READS to file-handle terminology without changing operations, limits, or errors. Go's execserver already uses file-handle terminology and carries the same behavior: maxOpenFiles=128, maxFileHandleIDBytes=32, validateFileHandleID, per-connection fileSlots, duplicate/overflow checks and slot release. Tests: TestSessionRegistryIsolatesFileHandlesLikeRust, TestFilesystemHandleAndReadLimitsMatchRust, TestFilesystemOpenCapacityBoundsInFlightOpensLikeRust, TestFilesystemConcurrentDuplicateHandleIDsLikeRust; go test ./execserver focused green."
       ]
     },
     {
