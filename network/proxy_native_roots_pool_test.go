@@ -112,3 +112,84 @@ func TestPlatformRootPoolCloneBypassesCoalescingForOverrides(t *testing.T) {
 		t.Fatalf("platform reads with SSL_CERT_FILE set = %d, want 2 independent reads", got)
 	}
 }
+
+// TestPlatformRootPoolCloneRecoversFromAPanickingLoadLikeRust mirrors
+// `http-client/src/native_roots_tests.rs::recovers_from_a_panicking_loader`:
+// the caller that runs the panicking read observes the panic, and a later
+// caller retries with a fresh read instead of blocking on a poisoned cell
+// (Rust's OnceLock stays uninitialized after a panic).
+func TestPlatformRootPoolCloneRecoversFromAPanickingLoadLikeRust(t *testing.T) {
+	var reads int32
+	original := loadPlatformRootPool
+	loadPlatformRootPool = func() *x509.CertPool {
+		if atomic.AddInt32(&reads, 1) == 1 {
+			panic("platform root loader failed")
+		}
+		return x509.NewCertPool()
+	}
+	t.Cleanup(func() { loadPlatformRootPool = original })
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("SSL_CERT_DIR", "")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("PlatformRootPoolClone() did not surface the loader panic")
+			}
+		}()
+		PlatformRootPoolClone()
+	}()
+
+	pool := PlatformRootPoolClone()
+	if pool == nil {
+		t.Fatal("PlatformRootPoolClone() = nil after the panicking read, want a retried pool")
+	}
+	if got := atomic.LoadInt32(&reads); got != 2 {
+		t.Fatalf("platform reads = %d, want a fresh retry after the panic (2)", got)
+	}
+}
+
+// TestPlatformRootPoolCloneUnblocksWaitersWhenTheSharedReadPanics pins the
+// concurrent half of the panic arm: a caller that joined the in-flight read
+// must fall through to a fresh read instead of waiting forever on a cell whose
+// loader panicked.
+func TestPlatformRootPoolCloneUnblocksWaitersWhenTheSharedReadPanics(t *testing.T) {
+	var reads int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	original := loadPlatformRootPool
+	loadPlatformRootPool = func() *x509.CertPool {
+		if atomic.AddInt32(&reads, 1) == 1 {
+			close(started)
+			<-release
+			panic("platform root loader failed")
+		}
+		return x509.NewCertPool()
+	}
+	t.Cleanup(func() { loadPlatformRootPool = original })
+	t.Setenv("SSL_CERT_FILE", "")
+	t.Setenv("SSL_CERT_DIR", "")
+
+	leader := make(chan any, 1)
+	go func() {
+		defer func() { leader <- recover() }()
+		PlatformRootPoolClone()
+	}()
+	<-started
+
+	waiter := make(chan *x509.CertPool, 1)
+	go func() { waiter <- PlatformRootPoolClone() }()
+	close(release)
+
+	if recovered := <-leader; recovered == nil {
+		t.Fatal("the initializing caller did not observe the loader panic")
+	}
+	select {
+	case pool := <-waiter:
+		if pool == nil {
+			t.Fatal("the waiting caller returned nil, want a retried pool")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting caller blocked on a panicking shared read")
+	}
+}

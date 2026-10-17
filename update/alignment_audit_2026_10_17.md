@@ -562,3 +562,28 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | --- | --- |
 | `go test ./app -run "TestMCPCLIStoreBindsApplicationNetworkPolicyLikeRust|TestMCP"` | ok |
 | `go test ./config -run "CloudConfig"` | ok |
+
+
+# Round 105 增量（2026-10-17，lead）
+
+## 21.1 已落地
+
+### #54056 原生根证书加载合并与自定义 CA 隔离（`80ad49e3b7`）— landed（RC 收口）
+
+- **Rust 语义**（`http-client/src/native_roots.rs`）：并发构建 TLS 客户端时共享一次进行中的平台根读取；完成的快照不保留，后来的调用重新读取；`SSL_CERT_FILE` / `SSL_CERT_DIR` 覆盖时绕过共享；自定义 CA bundle 每次构建独立读取，且 `(*load()).clone()` 保证叠加 CA 不会污染进程级根池。
+- **Go 现状核对**：`network/proxy_native_roots_pool.go` 已实现共享 in-flight 读取、完成后丢弃、override 绕过、每次返回独立 `CertPool`；`execserver/custom_ca.go:34` 在 clone 上 `AppendCertsFromPEM`，客户端之间不共享可变根池。Windows 上 `x509.SystemCertPool()` 每次返回新实例，execserver 的跨客户端泄漏在该平台结构上不可达。
+- **本轮修复的剩余缺口**：原实现用 `sync.Once` + 只在成功路径 `close(done)`，loader panic 时 `done` 永不关闭，等待者会永久阻塞（Rust 的 `OnceLock` 在初始化 panic 后保持未初始化）。现改为在 `platformRootsCell.load` 内 recover、记录 `panicValue` 并始终 `close(done)`；初始化调用者继续向外 panic，等待者检测失败后重新发起新读取。对应 Rust `native_roots_tests.rs::recovers_from_a_panicking_loader`。
+
+测试：
+
+- 新增 `TestPlatformRootPoolCloneRecoversFromAPanickingLoadLikeRust`：首次读取 panic 由调用者观察，第二次调用重新读取并成功。
+- 新增 `TestPlatformRootPoolCloneUnblocksWaitersWhenTheSharedReadPanics`：leader panic 时等待者不会卡死，能拿到重试后的池。
+- 既有 `CoalescesInFlightLoads` / `AlwaysReturnsAnIndependentPool` / `BypassesCoalescingForOverrides` 继续通过。
+
+## 21.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go test ./network -count=1` | ok |
+| `go test ./network -run "TestPlatformRootPoolClone"` | ok |
+| `go test ./execserver -run "CA|Cert"` | ok |

@@ -55,30 +55,45 @@ type platformRootsLoader struct {
 	inFlight *platformRootsCell
 }
 
-func (l *platformRootsLoader) load(load func() *x509.CertPool) *x509.CertPool {
-	l.mu.Lock()
-	cell := l.inFlight
-	if cell == nil || cell.complete() {
-		cell = &platformRootsCell{done: make(chan struct{})}
-		l.inFlight = cell
-	}
-	l.mu.Unlock()
+func (l *platformRootsLoader) load(loader func() *x509.CertPool) *x509.CertPool {
+	for {
+		l.mu.Lock()
+		cell := l.inFlight
+		leader := cell == nil || cell.complete()
+		if leader {
+			cell = &platformRootsCell{done: make(chan struct{})}
+			l.inFlight = cell
+		}
+		l.mu.Unlock()
 
-	pool := cell.load(load)
+		pool, ok := cell.load(loader)
 
-	// Retain no completed snapshot: the next caller starts a fresh read.
-	l.mu.Lock()
-	if l.inFlight == cell && cell.complete() {
-		l.inFlight = nil
+		// Retain no completed snapshot: the next caller starts a fresh read.
+		l.mu.Lock()
+		if l.inFlight == cell && cell.complete() {
+			l.inFlight = nil
+		}
+		l.mu.Unlock()
+
+		if ok {
+			return pool
+		}
+		if leader {
+			// Rust's `OnceLock::get_or_init` propagates a panicking
+			// initializer to the caller that ran it and leaves the cell
+			// uninitialized, so a later caller retries. Mirror that instead of
+			// leaving waiters blocked on a read that never finishes.
+			panic(cell.panicValue)
+		}
+		// A concurrent waiter retries with a fresh read.
 	}
-	l.mu.Unlock()
-	return pool
 }
 
 type platformRootsCell struct {
-	once sync.Once
-	done chan struct{}
-	pool *x509.CertPool
+	once       sync.Once
+	done       chan struct{}
+	pool       *x509.CertPool
+	panicValue any
 }
 
 // complete reports whether the shared read already finished. The check must not
@@ -95,12 +110,19 @@ func (c *platformRootsCell) complete() bool {
 }
 
 // load performs the shared read once. Overlapping callers block until the
-// first one finished and then observe the same pool.
-func (c *platformRootsCell) load(load func() *x509.CertPool) *x509.CertPool {
+// first one finished and then observe the same pool. A panicking loader is
+// recorded and the cell completes, so waiters can retry with a fresh read
+// (Rust `native_roots_tests.rs::recovers_from_a_panicking_loader`).
+func (c *platformRootsCell) load(loader func() *x509.CertPool) (*x509.CertPool, bool) {
 	c.once.Do(func() {
-		c.pool = load()
-		close(c.done)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				c.panicValue = recovered
+			}
+			close(c.done)
+		}()
+		c.pool = loader()
 	})
 	<-c.done
-	return c.pool
+	return c.pool, c.panicValue == nil
 }
