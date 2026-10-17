@@ -9747,9 +9747,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: with_live_scope"
+        "Round 261: force-refreshing app/installed without a thread bumps the shared codex_apps provider generation, and an already loaded thread's next MCP tool resolution reads the refreshed live catalog without another app/installed request. The extended regression covers initial v1 tools, thread-scoped refresh to v2, threadless refresh to v3, and failed-refresh fallback. Rust's with_live_scope helper is a carrier-specific scope wrapper; Go scopes through the shared MCP service generation and per-thread runtime resolution. Tests: go test ./appserver -run AppInstalledForceRefresh -count=1"
       ]
     },
     {

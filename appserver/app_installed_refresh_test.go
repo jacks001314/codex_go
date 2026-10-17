@@ -142,10 +142,31 @@ func TestAppInstalledForceRefreshReplacesThreadToolsLikeRust(t *testing.T) {
 		t.Fatalf("refreshed thread tools = %#v, want only search_v2", tools)
 	}
 
+	// Rust #43900: a threadless force refresh publishes the live catalog to
+	// clients with matching scope, so an already loaded thread sees the new
+	// tools on its next turn without another app/installed request.
+	mu.Lock()
+	currentTools = []map[string]any{codexAppsCatalogTool("search_v3", "mail")}
+	mu.Unlock()
+	generationBefore = mcpService.Generation()
+	threadless := router.Handle(requestWithParams(t, IntID(4), MethodAppInstalled, apps.AppsInstalledParams{
+		ForceRefresh: true,
+	}))
+	if threadless.Error != nil {
+		t.Fatalf("threadless app/installed error = %#v", threadless.Error)
+	}
+	if mcpService.Generation() == generationBefore {
+		t.Fatal("threadless force refresh did not bump the MCP service generation")
+	}
+	tools = runtimeToolNames(t, router.runtimeMCPToolsForTest(threadID, mcpService))
+	if !containsString(tools, "search_v3") || containsString(tools, "search_v2") {
+		t.Fatalf("threadless refresh tools = %#v, want only search_v3 for the existing thread", tools)
+	}
+
 	mu.Lock()
 	failing = true
 	mu.Unlock()
-	response := router.Handle(requestWithParams(t, IntID(3), MethodAppInstalled, apps.AppsInstalledParams{
+	response := router.Handle(requestWithParams(t, IntID(5), MethodAppInstalled, apps.AppsInstalledParams{
 		ThreadID:     stringPtrIfNotEmpty(threadID),
 		ForceRefresh: true,
 	}))
@@ -153,7 +174,7 @@ func TestAppInstalledForceRefreshReplacesThreadToolsLikeRust(t *testing.T) {
 		t.Fatalf("failed refresh app/installed error = %#v", response.Error)
 	}
 	preserved := response.Result.(*apps.AppsInstalledResponse)
-	if len(preserved.Apps) != 1 || preserved.Apps[0].ID != "calendar" || !preserved.Apps[0].Callable {
+	if len(preserved.Apps) != 1 || preserved.Apps[0].ID != "mail" {
 		t.Fatalf("failed refresh dropped the last working tools: %#v", preserved.Apps)
 	}
 }

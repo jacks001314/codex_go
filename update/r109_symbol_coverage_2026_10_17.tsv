@@ -1138,7 +1138,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6cfe29984965abfb5f7a5f86048f655d45d028a7	47327	Preserve image generation request IDs on failure (#47327)	2026-09-22	appserver	3	0	0.00	0	0	complete	ImageRequestError,imagegen_request_id,into_parts
 6d083e3bc4caabf547e0f492f0faa628f3210697	48100	Add an HTTP client for remote agent message boards (#48100)	2026-09-25	core	17	12	0.71	0	0	audit_pending	BoardNotifications,MAX_BODY,MAX_RESPONSE,RemoteAgentMessageBoard,with_clock
 6d29cc6bac4c3099d604cdc0d0dd96215d197974	46494	Keep remote workspace roots under server control (#46494)	2026-09-18	tui	0	0		0	0	not_applicable	
-6d377e96eb5e57504c8387ebbbbbac38825a1fa8	43900	Propagate Apps tool refreshes to existing threads (#43900)	2026-09-08	appserver	2	1	0.50	0	0	audit_pending	with_live_scope
+6d377e96eb5e57504c8387ebbbbbac38825a1fa8	43900	Propagate Apps tool refreshes to existing threads (#43900)	2026-09-08	appserver	2	1	0.50	0	0	complete	with_live_scope
 6d75b525eaf53a69521ff9041e9aed57c2059905	46019	Allow hosted Apps MCP contributions to override the protocol mode (#46019)	2026-09-16	appserver	0	0		0	0	not_applicable	
 6d7f6dcd2285de70a3892d4f05b2a8ff44aa3350	42529	Register the Guardian thread context feature flag (#42529)	2026-09-03	config	0	0		0	0	not_applicable	
 6e008417bb3e76fa715d3c8b22e8cc77ab0bb84c	40989	Expose permission profile resolution in the core API (#40989)	2026-08-26	sandbox	2	2	1.00	0	0	complete	
