@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -36,9 +37,26 @@ func v2DefaultCapabilityLocations() ([]v2CapabilityLocation, []string) {
 			id:   "user-agent-skills",
 		})
 	}
+	if systemRoot := v2SystemSkillsRoot(); systemRoot != "" {
+		locations = append(locations, v2CapabilityLocation{
+			root: systemRoot,
+			id:   "system-skills",
+		})
+	}
 	pluginRoots, warnings := discoverV2PluginRoots(filepath.Join(codexHome, "plugins", "cache"), nil)
 	locations = append(locations, pluginRoots...)
 	return locations, warnings
+}
+
+func v2SystemSkillsRoot() string {
+	if runtime.GOOS == "windows" {
+		programData := strings.TrimSpace(os.Getenv("ProgramData"))
+		if programData == "" {
+			return ""
+		}
+		return filepath.Join(programData, "OpenAI", "Codex", "skills")
+	}
+	return filepath.Join(string(filepath.Separator), "etc", "codex", "skills")
 }
 
 func discoverCapabilitiesV2WithLocations(params *DiscoverV2CapabilitiesParams, locations []v2CapabilityLocation, warnings []string) (*DiscoverV2CapabilitiesResponse, error) {

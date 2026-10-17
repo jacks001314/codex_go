@@ -2197,7 +2197,7 @@ ced02c5c3807db59d912733b09722bebceb9b785	45822	Add opt-in response body limits t
 ceea67163f93b4317c9352d1cd2af9fee32537b9	49395	Remove randomized greetings from TUI session headers (#49395)	2026-09-29	tui	0	0		0	0	not_applicable	
 cef2a64531430e96efd69ceed18b8c34dc2cb98f	51823	Share MCP binding tool metadata with prepared calls (#51823)	2026-10-07	mcp	2	0	0.00	0	0	implementation_pending	PreparedToolInfo,from_binding_catalog
 cefa060695594cdeebfb4306170cc27487c8a088	41666	Approve the first Node REPL execution without a Guardian wait (#41666)	2026-08-30	guardian	0	0		0	0	not_applicable	
-cf0ed4c600161fcaa18eeac02b5fc715e1076955	53736	Acquire and cache opt-in executor capability inventories via V2 (#53736)	2026-10-13	execserver	9	4	0.44	0	0	audit_pending	ExecutorCapabilityDiscoveryV2Cache,ExecutorCapabilityDiscoveryV2Snapshot,executor_capability_discovery_for_step_v2,executor_session_id,seed_capability_locations
+cf0ed4c600161fcaa18eeac02b5fc715e1076955	53736	Acquire and cache opt-in executor capability inventories via V2 (#53736)	2026-10-13	execserver	9	9	1.00	0	0	complete	
 cf12c86dc569e383c419e821046a8e59b4c8614a	49295	Simplify configuration fingerprint canonicalization (#49295)	2026-09-29	config	0	0		0	0	not_applicable	
 cf6754e6828db447c288d72ca188d3dbc46feb56	47130	Remove the `ultrafast` service tier from `gpt-5.6-sol` (#47130)	2026-09-21	mcp	0	0		0	0	not_applicable	
 cf792c3a257b85259b731cc1c1a2f6a7c550360d	47947	Expand root authorization context to 16 messages (#47947)	2026-09-24	guardian	0	0		0	0	not_applicable	

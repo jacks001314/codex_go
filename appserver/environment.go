@@ -19,6 +19,7 @@ import (
 	"codex_go/turn"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 )
 
 var ErrInvalidEnvironmentRequest = errors.New("invalid environment request")
@@ -200,6 +201,7 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 		}
 		record := EnvironmentRecord{
 			EnvironmentID: id,
+			InstanceID:    uuid.NewString(),
 			Shell:         m.defaultShell,
 			CWD:           cloneString(m.defaultCWD),
 			HTTPClient:    m.httpClient,
@@ -374,7 +376,10 @@ func (s *EnvironmentShellInfo) Validate() error {
 }
 
 type EnvironmentRecord struct {
-	EnvironmentID    string
+	EnvironmentID string
+	// InstanceID changes when an environment registration is replaced, so
+	// per-step capability caches do not reuse an old executor generation.
+	InstanceID       string
 	ExecServerURL    string
 	NoiseProvider    execserverclient.NoiseRendezvousConnectProvider
 	ConnectTimeoutMS *uint64
@@ -588,6 +593,7 @@ func (m *EnvironmentManager) Add(params *EnvironmentAddParams) (*EnvironmentAddR
 	defer m.mu.Unlock()
 	record := EnvironmentRecord{
 		EnvironmentID:     strings.TrimSpace(params.EnvironmentID),
+		InstanceID:        uuid.NewString(),
 		ExecServerURL:     strings.TrimSpace(params.ExecServerURL),
 		ConnectTimeoutMS:  cloneUint64Ptr(params.ConnectTimeoutMS),
 		ExecServerHeaders: executorHeadersForToken(environmentAuthBearerToken(params)),
@@ -771,6 +777,7 @@ func (m *EnvironmentManager) AddNoise(environmentID string, provider execserverc
 	m.cancelConnectionAttempts(environmentID)
 	m.records[environmentID] = EnvironmentRecord{
 		EnvironmentID: environmentID,
+		InstanceID:    uuid.NewString(),
 		NoiseProvider: provider,
 		Shell:         m.defaultShell,
 		CWD:           cloneString(m.defaultCWD),
@@ -845,6 +852,7 @@ func (m *EnvironmentManager) RegisterDeferredNoiseEnvironment(environmentID stri
 	state := newProvisioningState()
 	m.records[environmentID] = EnvironmentRecord{
 		EnvironmentID: environmentID,
+		InstanceID:    uuid.NewString(),
 		NoiseProvider: provider,
 		Shell:         m.defaultShell,
 		CWD:           cloneString(m.defaultCWD),
@@ -878,6 +886,7 @@ func (m *EnvironmentManager) MaterializePendingNoiseEnvironment(environmentID st
 	}
 	record := EnvironmentRecord{
 		EnvironmentID: environmentID,
+		InstanceID:    uuid.NewString(),
 		NoiseProvider: provider,
 		Shell:         m.defaultShell,
 		CWD:           cloneString(m.defaultCWD),
@@ -935,6 +944,7 @@ func (m *EnvironmentManager) ReportProvisioningStatus(environmentID string, read
 	}
 	record := EnvironmentRecord{
 		EnvironmentID: environmentID,
+		InstanceID:    uuid.NewString(),
 		NoiseProvider: providerIfMissing,
 		Shell:         m.defaultShell,
 		CWD:           cloneString(m.defaultCWD),
@@ -1124,6 +1134,9 @@ func (m *EnvironmentManager) SetInfo(environmentID string, shell EnvironmentShel
 	record := m.records[environmentID]
 	if record.EnvironmentID == "" {
 		record.EnvironmentID = environmentID
+	}
+	if record.InstanceID == "" {
+		record.InstanceID = uuid.NewString()
 	}
 	record.Shell = shell
 	record.CWD = pathURI(cwd)

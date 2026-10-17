@@ -14393,7 +14393,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if params != nil {
 		threadID = strings.TrimSpace(params.ThreadID)
 	}
-	stepCapabilities := newRuntimeStepCapabilitySnapshot(r, threadID, params)
+	stepCapabilities := newRuntimeStepCapabilitySnapshotContext(ctx, r, threadID, params)
 	if threadID != "" && strings.TrimSpace(turnID) != "" {
 		r.threads.UpdateTurn(threadID, strings.TrimSpace(turnID), func(active *activeRuntimeTurn) {
 			active.StepCapabilities = stepCapabilities

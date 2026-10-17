@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -95,6 +96,28 @@ func TestV2DiscoveryManagerCachesUntilDirtyLikeRust(t *testing.T) {
 	}
 	if third == first {
 		t.Fatal("dirty V2 discovery cache was reused")
+	}
+}
+
+func TestV2CapabilityLocationsIncludeSystemSkillsRootLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		programData := t.TempDir()
+		t.Setenv("ProgramData", programData)
+		if got, want := v2SystemSkillsRoot(), filepath.Join(programData, "OpenAI", "Codex", "skills"); got != want {
+			t.Fatalf("system skills root = %q, want %q", got, want)
+		}
+	} else if got, want := v2SystemSkillsRoot(), filepath.Join(string(filepath.Separator), "etc", "codex", "skills"); got != want {
+		t.Fatalf("system skills root = %q, want %q", got, want)
+	}
+	locations, _ := v2DefaultCapabilityLocations()
+	found := false
+	for _, location := range locations {
+		if location.id == "system-skills" {
+			found = location.root == v2SystemSkillsRoot()
+		}
+	}
+	if !found {
+		t.Fatalf("system-skills location missing: %#v", locations)
 	}
 }
 

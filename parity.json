@@ -1470,6 +1470,14 @@
             "reason": "Aligned upstream 0b755b1945 (#52295 Emit one developer notice per incremental namespace update batch): each changed or newly added namespace batch emits one developer notice before its additional_tools item, tagged with tools.incremental_update and using the Rust tools-update wording. Full-history forks retain the notice with its declarations, and compaction rebuilds keep only the initial catalog and base instructions instead of carrying notices from later batches.",
             "userImpact": "The model receives one batch-level explanation for incremental namespace updates without stale notices surviving a rebuilt context window.",
             "test": "go test ./session -run TopLevelTools -count=1; go test ./appserver -run 'IncrementalTool|LegacyCompactionDiscardsIncremental' -count=1"
+        },
+        {
+            "id": "executor-capability-discovery-v2",
+            "status": "done",
+            "area": "execserver",
+            "reason": "Aligned upstream cf0ed4c600 (#53736 Acquire and cache opt-in executor capability inventories via V2): the disabled-by-default feature acquires capabilityDiscoveryV2 inventories from selected remote executors using each environment's cwd and sandbox. Inventories are cached by environment instance, executor session, cwd, and sandbox with concurrent coalescing, FIFO eviction, retryable failure exclusion, and recovery reporting. The cache refreshes at turn start and remains available to idle callers, snapshots are exposed through the step capability state without activating plugins or publishing skills, and executor discovery now includes the system skills root.",
+            "userImpact": "Opted-in remote environment inventories can be acquired and reused consistently across model steps while unsupported executors and the default feature-off configuration keep existing behavior.",
+            "test": "go test -race ./execserver -run ExecutorCapabilityDiscoveryV2Cache -count=1; go test ./appserver -run ExecutorCapabilityDiscoveryV2 -count=1; go vet ./execserver ./appserver"
         }
     ]
 }

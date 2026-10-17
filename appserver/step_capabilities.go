@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -22,11 +23,20 @@ type runtimeStepCapabilitySnapshot struct {
 	pluginCapabilities []plugin.CapabilitySummary
 	pluginSkillRoots   []plugin.EnabledSkillRoot
 	sandboxContexts    map[string]*execserverclient.FileSystemSandboxContext
+	discoveryV2Cache   *runtimeCapabilityDiscoveryV2Cache
+	discoveryV2        *[]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
 }
 
 func newRuntimeStepCapabilitySnapshot(router *RuntimeRouter, threadID string, params *turn.TurnStartParams) *runtimeStepCapabilitySnapshot {
+	return newRuntimeStepCapabilitySnapshotContext(context.Background(), router, threadID, params)
+}
+
+func newRuntimeStepCapabilitySnapshotContext(ctx context.Context, router *RuntimeRouter, threadID string, params *turn.TurnStartParams) *runtimeStepCapabilitySnapshot {
 	snapshot := &runtimeStepCapabilitySnapshot{}
-	snapshot.refresh(router, threadID, params)
+	if router != nil && router.threads != nil {
+		snapshot.discoveryV2Cache = router.threads.capabilityDiscoveryV2Cache(threadID)
+	}
+	snapshot.refreshContext(ctx, router, threadID, params)
 	return snapshot
 }
 
@@ -42,6 +52,10 @@ func (r *RuntimeRouter) activeStepCapabilitySnapshot(threadID string) *runtimeSt
 }
 
 func (s *runtimeStepCapabilitySnapshot) refresh(router *RuntimeRouter, threadID string, params *turn.TurnStartParams) {
+	s.refreshContext(context.Background(), router, threadID, params)
+}
+
+func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, router *RuntimeRouter, threadID string, params *turn.TurnStartParams) {
 	if s == nil {
 		return
 	}
@@ -50,6 +64,7 @@ func (s *runtimeStepCapabilitySnapshot) refresh(router *RuntimeRouter, threadID 
 	var capabilities []plugin.CapabilitySummary
 	var skillRoots []plugin.EnabledSkillRoot
 	var sandboxContexts map[string]*execserverclient.FileSystemSandboxContext
+	var discoveryV2 *[]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
 	if router != nil && router.services.Plugins != nil {
 		capabilities = cloneRuntimePluginCapabilities(router.services.Plugins.EnabledCapabilities())
 		skillRoots = cloneRuntimeEnabledSkillRoots(router.services.Plugins.EnabledSkillRoots())
@@ -57,6 +72,7 @@ func (s *runtimeStepCapabilitySnapshot) refresh(router *RuntimeRouter, threadID 
 	if router != nil {
 		cfg, _ := router.effectiveConfigForTurn(params)
 		sandboxContexts, _ = router.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
+		discoveryV2 = router.executorCapabilityDiscoveryV2ForStep(ctx, threadID, params, cfg, sandboxContexts, s.discoveryV2Cache)
 	}
 
 	s.mu.Lock()
@@ -65,6 +81,7 @@ func (s *runtimeStepCapabilitySnapshot) refresh(router *RuntimeRouter, threadID 
 	s.pluginCapabilities = capabilities
 	s.pluginSkillRoots = skillRoots
 	s.sandboxContexts = sandboxContexts
+	s.discoveryV2 = discoveryV2
 	s.mu.Unlock()
 }
 
@@ -107,6 +124,27 @@ func (s *runtimeStepCapabilitySnapshot) executorSandboxContexts() map[string]*ex
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return cloneExecutorSkillSandboxContexts(s.sandboxContexts)
+}
+
+func (s *runtimeStepCapabilitySnapshot) executorCapabilityDiscoveryV2() []execserverclient.ExecutorCapabilityDiscoveryV2Snapshot {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.discoveryV2 == nil {
+		return nil
+	}
+	return execserverclient.CloneExecutorCapabilityDiscoveryV2Snapshots(*s.discoveryV2)
+}
+
+func (s *runtimeStepCapabilitySnapshot) executorCapabilityDiscoveryV2Enabled() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.discoveryV2 != nil
 }
 
 // readySelectedCapabilityRootsForStep resolves the roots visible to a sampling

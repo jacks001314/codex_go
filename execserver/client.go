@@ -982,6 +982,17 @@ func (c *Client) EnvironmentInfo(ctx context.Context) (*EnvironmentInfo, error) 
 	return &response, nil
 }
 
+// EnvironmentCapabilities returns the initialized session's capability bits,
+// reusing the handshake metadata instead of probing on every caller.
+func (c *Client) EnvironmentCapabilities(ctx context.Context) (*EnvironmentCapabilities, error) {
+	info, err := c.cachedEnvironmentInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	capabilities := info.Capabilities
+	return &capabilities, nil
+}
+
 // rememberEnvironmentInfo caches the executor metadata returned by the
 // initialize handshake. Rust sets its `environment_info` OnceCell from
 // `InitializeResponse::environment_info` and only probes when the handshake

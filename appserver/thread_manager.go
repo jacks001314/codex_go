@@ -22,8 +22,11 @@ type ThreadManager struct {
 	turnsMu sync.Mutex
 	active  map[string]*activeRuntimeTurn
 	diffs   map[string]*runtimeutil.DiffTracker
-	closing bool
-	turnWG  sync.WaitGroup
+	// capabilityDiscoveryV2 is retained for idle callers and replaced when a
+	// new turn starts (Rust #53736 thread extension data).
+	capabilityDiscoveryV2 map[string]*runtimeCapabilityDiscoveryV2Cache
+	closing               bool
+	turnWG                sync.WaitGroup
 
 	ephemeralMu sync.RWMutex
 	ephemeral   map[string]*session.Record
@@ -52,14 +55,15 @@ func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 		status = NewThreadStatusManager()
 	}
 	return &ThreadManager{
-		active:        map[string]*activeRuntimeTurn{},
-		diffs:         map[string]*runtimeutil.DiffTracker{},
-		ephemeral:     map[string]*session.Record{},
-		subscriptions: map[string]map[string]struct{}{},
-		liveThreads:   map[session.ThreadID]*managedLiveThread{},
-		providerRoutes: map[session.ThreadID]threadModelProviderRoute{},
-		terminals:     map[string]struct{}{},
-		status:        status,
+		active:                map[string]*activeRuntimeTurn{},
+		diffs:                 map[string]*runtimeutil.DiffTracker{},
+		capabilityDiscoveryV2: map[string]*runtimeCapabilityDiscoveryV2Cache{},
+		ephemeral:             map[string]*session.Record{},
+		subscriptions:         map[string]map[string]struct{}{},
+		liveThreads:           map[session.ThreadID]*managedLiveThread{},
+		providerRoutes:        map[session.ThreadID]threadModelProviderRoute{},
+		terminals:             map[string]struct{}{},
+		status:                status,
 	}
 }
 
@@ -125,6 +129,11 @@ func (m *ThreadManager) ReleaseLiveThreads(threadIDs []session.ThreadID) {
 	if m == nil {
 		return
 	}
+	m.turnsMu.Lock()
+	for _, threadID := range threadIDs {
+		delete(m.capabilityDiscoveryV2, string(threadID))
+	}
+	m.turnsMu.Unlock()
 	m.liveThreadsMu.Lock()
 	liveThreads := make([]*managedLiveThread, 0, len(threadIDs))
 	for _, threadID := range threadIDs {
@@ -156,6 +165,11 @@ func (m *ThreadManager) CloseLiveThreads() error {
 		delete(m.liveThreads, threadID)
 	}
 	m.liveThreadsMu.Unlock()
+	m.turnsMu.Lock()
+	for _, threadID := range threadIDs {
+		delete(m.capabilityDiscoveryV2, string(threadID))
+	}
+	m.turnsMu.Unlock()
 	m.clearModelProviderRoutes(threadIDs)
 	var closeErr error
 	for _, liveThread := range liveThreads {
@@ -321,6 +335,7 @@ func (m *ThreadManager) ReserveTurn(threadID string) error {
 	if active := m.active[threadID]; active != nil {
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
 	}
+	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
 	m.active[threadID] = &activeRuntimeTurn{ThreadID: threadID}
 	return nil
 }
@@ -365,6 +380,7 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 		}
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
 	}
+	m.replaceCapabilityDiscoveryV2CacheLocked(threadID)
 	m.active[threadID] = &activeRuntimeTurn{
 		ThreadID: threadID, TurnID: turnID, Cancel: cancel, StartedAtMS: startedAtMS,
 		Params: cloneTurnStartParams(params),
@@ -380,6 +396,31 @@ func (m *ThreadManager) TurnWorkerDone() {
 	if m != nil {
 		m.turnWG.Done()
 	}
+}
+
+func (m *ThreadManager) capabilityDiscoveryV2Cache(threadID string) *runtimeCapabilityDiscoveryV2Cache {
+	if m == nil || strings.TrimSpace(threadID) == "" {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	if m.capabilityDiscoveryV2 == nil {
+		m.capabilityDiscoveryV2 = map[string]*runtimeCapabilityDiscoveryV2Cache{}
+	}
+	cache := m.capabilityDiscoveryV2[threadID]
+	if cache == nil {
+		cache = newRuntimeCapabilityDiscoveryV2Cache()
+		m.capabilityDiscoveryV2[threadID] = cache
+	}
+	return cache
+}
+
+func (m *ThreadManager) replaceCapabilityDiscoveryV2CacheLocked(threadID string) {
+	if m.capabilityDiscoveryV2 == nil {
+		m.capabilityDiscoveryV2 = map[string]*runtimeCapabilityDiscoveryV2Cache{}
+	}
+	m.capabilityDiscoveryV2[threadID] = newRuntimeCapabilityDiscoveryV2Cache()
 }
 
 // BeginShutdown atomically prevents new turns and takes ownership of every

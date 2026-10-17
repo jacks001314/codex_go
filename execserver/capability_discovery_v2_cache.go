@@ -83,6 +83,9 @@ func (m *v2DiscoveryManager) ensureWatcherLocked() {
 	if home, err := os.UserHomeDir(); err == nil {
 		roots = append(roots, filepath.Join(home, ".agents", "skills"))
 	}
+	if systemRoot := v2SystemSkillsRoot(); systemRoot != "" {
+		roots = append(roots, systemRoot)
+	}
 	succeeded := true
 	for _, root := range roots {
 		if !watchExistingAncestor(watcher, root) {
