@@ -995,7 +995,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5f49aba876922d6f2f55caa153bbb0ed1b46feba	41165	Require explicit requests for spawn model overrides (#41165)	2026-08-27	core	0	0		0	0	not_applicable	
 5f79a92e3936274318d2122ae3244e5edd80dd1f	41912	Persist response token usage in rollout history (#41912)	2026-08-31	tui	4	0	0.00	0	0	implementation_pending	TokenUsageRecord,clear_pending_turn_start_options,record_observed_response_completed,record_token_usage
 5f7d5add2a51c41fadcac90e61409bb93a08f66f	49266	Remove the remote agent message board client README (#49266)	2026-09-29	core	0	0		0	0	not_applicable	
-5f8b37cc65965bb7b44f45d7e71741fb3a05f742	51137	Recover Guardian reviews from parent checkpoints (#51137)	2026-10-05	guardian	3	1	0.33	0	0	audit_pending	CheckpointRecovery,GuardianTranscriptHistory
+5f8b37cc65965bb7b44f45d7e71741fb3a05f742	51137	Recover Guardian reviews from parent checkpoints (#51137)	2026-10-05	guardian	3	3	1.00	0	0	complete	
 5fa5aaf0fffd6593ca60ed974af3e87e29f3be28	50046	Stabilize Windows voice build cache keys across tool reinstalls (#50046)	2026-10-01	realtime	0	0		0	0	not_applicable	
 5fb3b7e401cc7fa5b95549ee5b2ecfbcb755ba91	45475	Fix fuzzy match scoring within Unicode lowercase expansions (#45475)	2026-09-14	tui	0	0		0	0	not_applicable	
 5fc7840cf6d085a7a7b3438d69a2beb934a2a5f4	41467	Refresh the TUI model picker from the app server (#41467)	2026-08-29	tui	9	3	0.33	0	0	audit_pending	is_auto_model,model_popup_request_is_current,on_models_loaded,open_all_models_popup,set_available_models,show_model_selection_view
