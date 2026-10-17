@@ -2122,7 +2122,7 @@ c6bf330b42ed6fcbdcc902dc06ef38306b2e02f3	41435	Allow bundled browser cleanup hoo
 c6c09fe29fb0b926ced5146e6ed47b6ff756c1a4	47292	Consolidate agent operations in the `AgentControl` implementation (#47292)	2026-09-22	core	0	0		0	0	not_applicable	
 c6c7c8d2706981bfc2368bc896e4d07876300c3b	49153	Omit blockquote markers when copying quoted selections in the TUI (#49153)	2026-09-29	tui	0	0		0	0	not_applicable	
 c6f5d9e9b5d9ab8085ad5d3a7e28717d3a6a19dc	46553	Return `LiveAgent` records from agent listing (#46553)	2026-09-18	core	0	0		0	0	not_applicable	
-c73775f19ef05b40dcb17da4fc5506960c52fe7c	50360	Remove initial messages from session configuration events (#50360)	2026-10-02	appserver	1	0	0.00	0	0	implementation_pending	to_session_configured_event
+c73775f19ef05b40dcb17da4fc5506960c52fe7c	50360	Remove initial messages from session configuration events (#50360)	2026-10-02	appserver	1	0	0.00	0	0	not_applicable	to_session_configured_event
 c775dd3c332de1b69b25a4580f6c5bc44b94e284	46310	Defer environment selection changes until the next turn (#46310)	2026-09-17	mcp	4	1	0.25	0	0	audit_pending	activate_turn_environments,configured_environment_selections,primary_workspace_roots
 c77c34ed33877a6e5b3759703d01d3b223274cbf	44176	Reduce TUI stack usage during session transitions (#44176)	2026-09-09	tui	0	0		0	0	not_applicable	
 c7828dd0109c75bcb5b07dc2d95c68947e56239a	46556	Keep step settings and approval environments consistent (#46556)	2026-09-18	guardian	3	0	0.00	0	0	implementation_pending	StepInputs,background_environment_id,get_unreadable_roots_with_context

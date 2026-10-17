@@ -25643,9 +25643,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: to_session_configured_event"
+        "Round 115 (lead): N/A (verified carrier absence) - #50360 removes initial_messages and to_session_configured_event from Rust's core SessionConfiguredEvent/protocol. Go has no SessionConfiguredEvent or toSessionConfiguredEvent, no initial_messages field in the app-server protocol, and resume/rejoin history is returned through thread/turn read APIs. The TUI InitialMessages channels/replay kinds are local startup-stream plumbing and do not carry this event payload. No source change needed."
       ]
     },
     {
