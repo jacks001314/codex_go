@@ -1114,9 +1114,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: CLASSIFICATION_OUTPUT_INSTRUCTIONS"
+        "Round 274 (audit): N/A - single-token risk classification is an async classifier output contract. Go has no Guardian V2 async classifier; the synchronous reviewer returns the full structured assessment."
       ]
     },
     {
@@ -1210,9 +1210,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: GuardianReviewEvidence, GuardianReviewEvidenceFragment, GuardianReviewEvidenceRecord, render_review_evidence"
+        "Round 274 (audit): N/A - review-evidence fragment rendering is consumed by the async scorer. Go's synchronous reviewer retains transcript evidence through ContextProfile and does not build async review-evidence fragments."
       ]
     },
     {
@@ -1342,9 +1342,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/10; needs review: CLASSIFICATION_TRUNCATION_BYTES_METRIC, CLASSIFICATION_TRUNCATION_METRIC, ClassificationTruncations, RenderedImages, RenderedReviewEvidence"
+        "Round 274 (audit): N/A - these metrics describe async classifier input truncation. Go has no async classifier; synchronous transcript truncation observations are produced by ContextProfile/transcript selection."
       ]
     },
     {
@@ -8631,9 +8631,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 4/8; needs review: ConnectionLease, ConnectionPool, PooledConnection, replenish"
+        "Round 274 (audit): N/A - ConnectionLease/ConnectionPool are async LunaSampler WebSocket pool types. Go has no Guardian V2 async sampler or pooled WebSocket classifier transport."
       ]
     },
     {
@@ -10851,9 +10851,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: sampler_config"
+        "Round 274 (audit): N/A - this commit only changes the async Guardian classifier sampler configuration. Go has no Guardian V2 async scorer/LunaSampler/classifier budget; synchronous retention is governed by ContextProfile (#43806)."
       ]
     },
     {
@@ -13035,9 +13035,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: GuardianV2Extension, record_fail_closed_score, score_tool"
+        "Round 274 (audit): N/A - module split of the Rust Guardian V2 async scorer. Go has no async scorer module tree to split."
       ]
     },
     {
@@ -20455,9 +20455,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: environment_id_for_process"
+        "Round 274 (audit): N/A - the commit binds async score requests to the reviewed environment. Go has no Guardian V2 async score path; its synchronous review receives the reviewed action and permission evidence directly."
       ]
     },
     {
@@ -24467,9 +24467,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: PreviousReview, into_annotated_message, retain_new_reviews, try_from_fragments"
+        "Round 274 (audit): N/A - classifier continuations and their previous-review annotation live in the async scorer. Go has no Guardian V2 classifier continuation loop."
       ]
     },
     {

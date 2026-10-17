@@ -679,7 +679,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4347f94d5539880e8583028a50a19df5b202d9fa	40554	Register the transcript v2 feature flag (#40554)	2026-08-25	config	0	0		0	0	not_applicable	
 434efa95e62941640471d3bb75449d31ba18980b	44311	Honor shared Retry-After deadlines for remote control (#44311)	2026-09-09	appserver	7	3	0.43	0	0	audit_pending	remote_control_auth_dot_json,remote_control_retry_at,remote_control_retry_delay,retry_deferred
 435d1b3f19e20b96dc3a0eb63c73bb7f213d1e27	51061	Gate Guardian continuation tests on classifier request capture (#51061)	2026-10-05	guardian	0	0		0	0	not_applicable	
-43da1368500dc935a4f3eac4844187b677fac6d9	45492	Split Guardian V2 async scoring into focused modules (#45492)	2026-09-14	guardian	5	2	0.40	0	0	audit_pending	GuardianV2Extension,record_fail_closed_score,score_tool
+43da1368500dc935a4f3eac4844187b677fac6d9	45492	Split Guardian V2 async scoring into focused modules (#45492)	2026-09-14	guardian	5	2	0.40	0	0	not_applicable	GuardianV2Extension,record_fail_closed_score,score_tool
 440312f11396a58b312dd31798ec3393810d8ff8	54681	Keep TUI session selections bound to their backend (#54681)	2026-10-16	tui	3	3	1.00	0	0	complete	
 4415f985dc87bc20e4e4c518df4029a80de7e3a6	45670	Move V2 agent message delivery into `AgentControl` (#45670)	2026-09-15	core	5	1	0.20	0	0	audit_pending	MessageDeliveryError,MessageDeliveryMode,deliver_message,into_communication
 444da310e108da16aaeb18fd790b0ac464f08aca	49912	Respect approval policies in temporary structured threads (#49912)	2026-10-01	tui	0	0		0	0	not_applicable	
@@ -723,7 +723,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4773a132c3512cc9dcfff1e03bcf57bbbd490cf8	49290	Add `/mcp login <name>` to the TUI (#49290)	2026-09-29	tui	1	0	0.00	0	0	implementation_pending	start_mcp_login
 47915cee7af1bac2051cd86383745c1946fc16df	46291	Filter saved reasoning overrides from requests when disabled (#46291)	2026-09-17	core	0	0		0	0	not_applicable	
 479c8c8924eaafdeb56e86154cd19ff0805839e4	40281	Preserve content kinds during image preparation (#40281)	2026-08-23	persistence	0	0		0	0	not_applicable	
-47a8bd73219bcb0aa683a6312482e449d62c0c63	49795	Avoid duplicate sync reviews in Guardian classifier continuations (#49795)	2026-09-30	guardian	4	0	0.00	0	0	implementation_pending	PreviousReview,into_annotated_message,retain_new_reviews,try_from_fragments
+47a8bd73219bcb0aa683a6312482e449d62c0c63	49795	Avoid duplicate sync reviews in Guardian classifier continuations (#49795)	2026-09-30	guardian	4	0	0.00	0	0	not_applicable	PreviousReview,into_annotated_message,retain_new_reviews,try_from_fragments
 47b0f7d540e9abf932e9b518ab306e389744998e	42792	Extract the note input view into its own module (#42792)	2026-09-04	tui	1	1	1.00	0	0	complete	
 47b195de5c001299a2d9612b64fcb4e01eec9175	51856	Build Bazel release artifacts alongside Cargo artifacts (#51856)	2026-10-07	core	0	0		0	0	not_applicable	
 47b80571f0d6587060a580c47f6af0cfaefb0d5c	52621	Add template setup for local agent message boards (#52621)	2026-10-09	config	3	3	1.00	0	0	complete	
@@ -851,7 +851,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 51d8d12236f7ab91a885839c8755db2ea42a2b42	40006	Synchronize Git enrichment tests explicitly (#40006)	2026-08-21	core	1	0	0.00	0	0	not_applicable	wait_for_git_enrichment
 51ebf5b1842d44a8e2c955e8b5cd2a589d41e71e	39985	Truncate Guardian instructions after rendering the policy (#39985)	2026-08-21	guardian	0	0		0	0	not_applicable	
 520e13a4bccfad50edf652d8243b4f1e9e67d6ff	45516	Allow configuring the Guardian prompt template (#45516)	2026-09-14	guardian	0	0		0	0	not_applicable	
-523519d9747625dfd012a8336b1f52e7b4ec6c34	40431	Render Guardian review evidence with async scorer truncation (#40431)	2026-08-24	guardian	5	1	0.20	0	0	audit_pending	GuardianReviewEvidence,GuardianReviewEvidenceFragment,GuardianReviewEvidenceRecord,render_review_evidence
+523519d9747625dfd012a8336b1f52e7b4ec6c34	40431	Render Guardian review evidence with async scorer truncation (#40431)	2026-08-24	guardian	5	1	0.20	0	0	not_applicable	GuardianReviewEvidence,GuardianReviewEvidenceFragment,GuardianReviewEvidenceRecord,render_review_evidence
 527c5deb74e5cc390f8838ac361e340cb23c2234	54739	Close arg0 lock files before removing temporary directories (#54739)	2026-10-16	core	0	0		0	0	complete	
 528fd7ace5ec0a1c2a387dcb9c76a09f3fa011ee	40994	Enable retained-image budgeting by default (#40994)	2026-08-26	core	0	0		0	0	not_applicable	
 52950c592404f11cc245a83a27fb02f2c23bc0c1	52682	Validate Windows sandbox accounts before password repair (#52682)	2026-10-09	sandbox	3	0	0.00	0	0	implementation_pending	registered_packages,validate_record,validate_target
@@ -1022,7 +1022,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6149914a0e59363b6777080b3e953b05d592dbac	47017	Wire agent message boards into persistent multi-agent runtimes (#47017)	2026-09-21	appserver	3	3	1.00	0	0	complete	
 61969074a7c49fbd31467dc2e8c5ede0edfd3962	51465	Add an optional JSON transcript format for Guardian (#51465)	2026-10-06	guardian	3	3	1.00	0	0	complete	
 61b08f101142f02e0f79e62be601a3b96a3415d0	46533	Disable reasoning summaries by default for new TUI threads (#46533)	2026-09-18	tui	0	0		0	0	not_applicable	
-61e23bc6a1e9e5fc8ed6aefb3575c9d1fd077c22	47830	Bind Guardian async scores to target environment permissions (#47830)	2026-09-24	guardian	5	4	0.80	0	0	audit_pending	environment_id_for_process
+61e23bc6a1e9e5fc8ed6aefb3575c9d1fd077c22	47830	Bind Guardian async scores to target environment permissions (#47830)	2026-09-24	guardian	5	4	0.80	0	0	not_applicable	environment_id_for_process
 62197a65e52fe10495a75113cdb0bf03832bef2b	47899	Add diagnostic reasons to MCP attribution errors (#47899)	2026-09-24	appserver	1	1	1.00	0	0	complete	
 6221a217e2b24701ecbf05a239e4ca899ae3a359	51329	Remove partial-history subagent forks (#51329)	2026-10-06	guardian	0	0		0	0	not_applicable	
 622e9e36962105af50b9c250902e8b8c66a950d8	51786	Preserve sandbox overrides across execution requests (#51786)	2026-10-07	execserver	3	2	0.67	0	0	complete	ensure_native_sandbox
@@ -1175,7 +1175,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 721f46a07ab48f00b5e7cdbf2efb78b993d100de	43983	Bundle signed voice resources in macOS releases (#43983)	2026-09-09	realtime	0	0		0	0	not_applicable	
 7224096b852bd5b026543d87281efb950263f558	45741	Add token history and credit formatting helpers for analytics (#45741)	2026-09-15	tui	6	4	0.67	0	0	audit_pending	credit_amount,filtered_history
 722dae7afd75c21b60cd88e5edc8d0726b596603	47358	Color paths and URLs in `codex doctor` by check status (#47358)	2026-09-22	core	0	0		0	0	not_applicable	
-72348693eca4599ee3657dc2c039335256f4ccde	44293	Enforce the async Guardian classifier's complete input budget (#44293)	2026-09-09	guardian	1	0	0.00	0	0	implementation_pending	sampler_config
+72348693eca4599ee3657dc2c039335256f4ccde	44293	Enforce the async Guardian classifier's complete input budget (#44293)	2026-09-09	guardian	1	0	0.00	0	0	not_applicable	sampler_config
 724cdfbd32d35fde9e0da1f1e141b836836f9a65	46840	Simplify agent command center hints and back navigation (#46840)	2026-09-20	tui	2	0	0.00	0	0	implementation_pending	center_footer_hints,center_task_hints
 725b3a44f8d13c8d2f019e1ecbc8ab686466b950	40692	Remove WebSocket transport from code-mode hosts (#40692)	2026-08-25	appserver	0	0		0	0	not_applicable	
 726f1492db90501746639e8c61cd3c674735a1a7	49793	Add conversation mode to Guardian v2 async classification (#49793)	2026-09-30	guardian	11	4	0.36	0	0	not_applicable	AsyncClassifierMode,ConversationBackend,ConversationRequest,classifier_mode,max_input_tokens,record_request_tokens,record_section_costs
@@ -1232,7 +1232,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7730edf62c16906b4b009866f6b4f9ef03d32d3d	42126	Ignore non-JSON files in plugin catalog test helpers (#42126)	2026-09-01	appserver	0	0		0	0	not_applicable	
 773f0b081de689b0d54f2809e7b17bfdb4c9f341	42838	Preserve executor paths in Guardian approval reviews (#42838)	2026-09-04	tui	2	0	0.00	0	0	implementation_pending	GUARDIAN_MAX_ACTION_BYTES,format_guardian_action_compact
 774d64258260f94628cc9fc55cfabd59a668571c	46946	Populate the agents overview from background tool responses (#46946)	2026-09-21	tui	0	0		0	0	not_applicable	
-7769bccbb2b4e9469a36b12510e73594fa03c5d5	43408	Avoid WebSocket connection waits in Guardian v2 classification (#43408)	2026-09-07	guardian	8	4	0.50	0	0	audit_pending	ConnectionLease,ConnectionPool,PooledConnection,replenish
+7769bccbb2b4e9469a36b12510e73594fa03c5d5	43408	Avoid WebSocket connection waits in Guardian v2 classification (#43408)	2026-09-07	guardian	8	4	0.50	0	0	not_applicable	ConnectionLease,ConnectionPool,PooledConnection,replenish
 7781f0a5a80c29d23beccda7be027d6032bf31c8	40436	Add a managed gate for in-app local automation (#40436)	2026-08-24	config	0	0		0	0	not_applicable	
 7784318b5f7fa35728d41ffa13e2a5821ebb4d75	45716	Classify MCP auth and approval outcomes in analytics (#45716)	2026-09-15	mcp	0	0		0	0	not_applicable	
 77b30a21e17d6ec6317f712ab6d044cb1bd152e7	40403	Prewarm more Guardian sampling WebSockets (#40403)	2026-08-24	guardian	1	0	0.00	0	0	implementation_pending	INITIAL_WEBSOCKET_CONNECTIONS
@@ -1814,7 +1814,7 @@ a9b0815167c27ab13719dd12d13b63e02b70d221	53224	Support Windows clipboard text pa
 a9bc7bebfa439e608543f45e9fc3415895c39153	51499	Load rollout history on a single blocking worker (#51499)	2026-10-06	persistence	1	0	0.00	0	0	implementation_pending	read_rollout_lines
 a9d2564bcbe98dbc44e5395ca9f2f373265571bf	45729	Move Guardian reviewer configuration into the extension (#45729)	2026-09-15	guardian	3	0	0.00	0	0	implementation_pending	ReviewerConfig,build_reviewer_config,reviewer_permission_profile
 a9e447a69dee4f2789dd8d8c776e314772c1f049	40643	Migrate Claude commands without frontmatter (#40643)	2026-08-25	core	0	0		0	0	not_applicable	
-a9e7920da1019ad19e794aaa301af5a3070e8462	40393	Classify Guardian V2 risk with a single token (#40393)	2026-08-24	guardian	1	0	0.00	0	0	implementation_pending	CLASSIFICATION_OUTPUT_INSTRUCTIONS
+a9e7920da1019ad19e794aaa301af5a3070e8462	40393	Classify Guardian V2 risk with a single token (#40393)	2026-08-24	guardian	1	0	0.00	0	0	not_applicable	CLASSIFICATION_OUTPUT_INSTRUCTIONS
 a9ed4f154a4fad64acf538d6418d3ed012aeab86	40844	Refine Guardian predictive risk classification (#40844)	2026-08-26	guardian	0	0		0	0	not_applicable	
 aa12ab45df0af59423fe21d4b9064539a5bc2244	43472	Recover missing Guardian root instructions in acceptance order (#43472)	2026-09-07	guardian	4	4	1.00	0	0	complete	
 aa380897f67b91e1a47d530d7286d497b6726d3f	47989	Add startup-only PID namespace inheritance to exec-server (#47989)	2026-09-25	execserver	2	0	0.00	0	0	implementation_pending	LinuxSandboxPidNamespace,with_linux_sandbox_pid_namespace
@@ -2068,7 +2068,7 @@ c22a06c18070c3e33bd2648c7210a00a2a9f6f80	53859	Record bucketed terminal sizes in
 c248f6d48b97eb4a2aa56147a0b11b7d763278b9	49171	Fix model provider lookup for TUI history (#49171)	2026-09-29	tui	0	0		0	0	not_applicable	
 c2617273706f142ea1cc7196a2d423893b0767e4	52685	Preserve code mode cancellation during output serialization (#52685)	2026-10-09	core	0	0		0	0	not_applicable	
 c2837d8ecefacc1c1ad59039809ea42a3a976341	49305	Batch metadata reads when resolving thread names (#49305)	2026-09-29	persistence	1	0	0.00	0	0	implementation_pending	get_threads
-c2904b9c5afbf7c32b2219d92a0b03c60d80b014	40465	Record Guardian classifier input truncation metrics (#40465)	2026-08-24	guardian	10	2	0.20	0	0	audit_pending	CLASSIFICATION_TRUNCATION_BYTES_METRIC,CLASSIFICATION_TRUNCATION_METRIC,ClassificationTruncations,RenderedImages,RenderedReviewEvidence,RenderedTranscript,TruncationObservation,render_review_evidence
+c2904b9c5afbf7c32b2219d92a0b03c60d80b014	40465	Record Guardian classifier input truncation metrics (#40465)	2026-08-24	guardian	10	2	0.20	0	0	not_applicable	CLASSIFICATION_TRUNCATION_BYTES_METRIC,CLASSIFICATION_TRUNCATION_METRIC,ClassificationTruncations,RenderedImages,RenderedReviewEvidence,RenderedTranscript,TruncationObservation,render_review_evidence
 c29bc99949f90687171611bb845c4c289fa85dde	41192	Preserve restored permission profiles in TUI sessions (#41192)	2026-08-27	tui	1	0	0.00	0	0	implementation_pending	permission_profile_is_safely_represented_by_sandbox_mode
 c2a924fc4a3970198679d24c9fa5df5643af5041	46560	Fix stale environment config in the network approval test (#46560)	2026-09-18	core	0	0		0	0	not_applicable	
 c2abf869d539a6326a6e5a125dfdb8a5dc488ab4	41432	Run executor hooks for interrupted turns (#41432)	2026-08-28	plugins	3	0	0.00	0	0	implementation_pending	into_matcher_groups,matcher_groups_mut,run_turn_interrupt_hooks
