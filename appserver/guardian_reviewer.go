@@ -293,6 +293,10 @@ type guardianSessionRunner struct {
 	agent    model.AgentRunner
 	previous string
 	seeded   string
+	// policyInitialized/policy mirror Rust #41919: a changed effective Node
+	// REPL policy invalidates a cached reviewer session.
+	policyInitialized bool
+	policy            string
 	// priorReview mirrors Rust's ConversationState::cursor: set once review
 	// input was admitted by the guardian session, even if inference failed. The
 	// next review therefore reports had_prior_review_context = true.
@@ -300,6 +304,24 @@ type guardianSessionRunner struct {
 	// completedReviews mirrors Rust's ConversationState::completed_review_count.
 	// A failed review may admit its input without counting as completed (#54264).
 	completedReviews int
+}
+
+// EnsureReviewPolicy invalidates the cached reviewer session when the
+// effective Node REPL policy changes (#41919). An explicitly empty policy is
+// distinct from an unset one: it suppresses policy injection and must not reuse
+// a session created with the bundled policy.
+func (r *guardianSessionRunner) EnsureReviewPolicy(policy string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.policyInitialized && r.policy != policy {
+		r.previous = ""
+		r.seeded = ""
+	}
+	r.policyInitialized = true
+	r.policy = policy
 }
 
 // reviewSessionAttribution mirrors Rust's GuardianReviewSessionKind selection
@@ -569,6 +591,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	reviewCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	plan := r.planForTurn(threadID, turnID)
+	if runner, ok := r.agent.(*guardianSessionRunner); ok {
+		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
+	}
 	feedbackCapture.model = plan.Selection.Model
 	feedbackCapture.instructions = plan.Instructions
 	// Rust #53987/#53797: retries share one attempt budget and deadline. A

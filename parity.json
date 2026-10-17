@@ -1310,6 +1310,14 @@
             "area": "sandbox",
             "reason": "Aligned upstream 34e74fda0e (#41209 Align deny-read matching with executor path semantics): PathUri.DecodedPathBytes now exposes percent-decoded, byte-oriented path bytes and is used by Windows identity matching; Windows exact-path and glob permission matching fold case and normalize separators; sandbox/integrity.PreparePolicy expands `~` deny-read globs against the executor's local home. The integrity ReadDenyMatcher also checks the walker-provided canonical location together with the alias. The integrity matcher also infers the policy context's convention from cwd and fails closed on incompatible Windows/POSIX candidates. Exact roots remain enforced by sandbox.ResolveFileSystemEntryAccess/writable-root resolution while the integrity matcher owns the glob arm.",
             "test": "go test ./sandbox ./sandbox/integrity ./utils -run 'CaseOnWindows|HomeGlob|DecodedPathBytes' -count=1"
+        },
+        {
+            "id": "guardian-node-repl-policy-session-reuse",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 865bbf9a69 (#41919 Source Guardian REPL policy from model metadata): the effective auto_review.node_repl_policy comes from catalog metadata with the bundled fallback and explicit-empty suppression, and the guardian session runner now treats the effective policy as part of reuse: a changed policy clears the cached previous response and seed, an explicitly empty policy is distinct from unset, and an unchanged policy keeps the session reusable.",
+            "userImpact": "Changing the reviewer model's Node/CUA REPL policy cannot silently reuse a session created under a different policy.",
+            "test": "go test ./appserver -run 'TestGuardianSessionInvalidatesOnNodeReplPolicyChangeLikeRust|TestGuardianReviewReusesOrInvalidatesSessionByNodeReplPolicyLikeRust|Guardian' -count=1"
         }
     ]
 }

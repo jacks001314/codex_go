@@ -1410,7 +1410,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 85928697a46fe2500f5b9dfcc094af1e95d822f9	48110	Deduplicate retained instructions in async Guardian context (#48110)	2026-09-25	guardian	1	1	1.00	0	0	complete	
 859bbc87fc80c18a72e08b181e301ddb4f8dabea	54716	Keep prereleases in draft until release assets finish uploading (#54716)	2026-10-16	core	0	0		0	0	not_applicable	
 85c2d4d921688324334f2d91a62529c08d17d617	44062	Fix voice runtime release builds and packaging (#44062)	2026-09-09	realtime	0	0		0	0	not_applicable	
-865bbf9a69467e2321daa2252c775b0336e9d454	41919	Source Guardian REPL policy from model metadata (#41919)	2026-08-31	guardian	2	1	0.50	0	0	audit_pending	from_model_messages
+865bbf9a69467e2321daa2252c775b0336e9d454	41919	Source Guardian REPL policy from model metadata (#41919)	2026-08-31	guardian	2	2	1.00	0	0	complete	
 86661eb626a74d0201d12ffec5b83ace0f6dc3ce	44616	Simplify enterprise OAuth login helpers and expand callback tests (#44616)	2026-09-10	mcp	0	0		0	0	not_applicable	
 868c9edb0da913a5fc699a71664e65f44f6058b0	41349	Assign stable IDs to generated Responses input items (#41349)	2026-08-28	guardian	0	0		0	0	not_applicable	
 86966c3230053548bf3005cd59f4d80f6afdec3b	53631	Materialize the thread before testing a discovered daemon restart (#53631)	2026-10-13	core	0	0		0	0	not_applicable	
