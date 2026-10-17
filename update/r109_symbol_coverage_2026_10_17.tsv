@@ -1630,7 +1630,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9949c9eafae057110bbb23273b5b4be894ef7448	40013	Reuse Guardian reviews in async risk scoring (#40013)	2026-08-21	guardian	8	3	0.38	0	0	audit_pending	GuardianAuthorizationVersion,GuardianReviewEvidence,GuardianReviewEvidenceFragment,GuardianRootSnapshot,guardian_root_snapshot
 995138d71ac06b9df5996f049e69dea414ad9764	49360	Carry shell invocation metadata and report executor PATH directories (#49360)	2026-09-29	execserver	2	2	1.00	0	0	complete	
 99660ab3c7b861c916e467581fa9b8723504d66b	40169	Add regression coverage for patch approval paging (#40169)	2026-08-23	tui	0	0		0	0	not_applicable	
-9969043b95339ec008b2f2f317f664d763fa4825	42102	Extract OTEL trace WebSocket into a reusable crate (#42102)	2026-09-01	telemetry	5	2	0.40	0	0	audit_pending	TraceWebSocket,exporter_endpoint,wait_for_failure
+9969043b95339ec008b2f2f317f664d763fa4825	42102	Extract OTEL trace WebSocket into a reusable crate (#42102)	2026-09-01	telemetry	5	2	0.40	0	0	not_applicable	TraceWebSocket,exporter_endpoint,wait_for_failure
 99784bd09b234ce11d8e91041d445e3eb49a609a	47272	Allow Guardian sync review across compaction hash differences (#47272)	2026-09-22	guardian	0	0		0	0	not_applicable	
 99914f49504532f551ff6cdceca4318afdbd3d9c	45534	Honor explicit Unix socket grants in the Linux managed sandbox (#45534)	2026-09-14	execserver	0	0		0	0	not_applicable	
 99aa05341d1564cf4ca2b463c83b607ea5d1bb3e	52304	Persist remote-control RPC preferences in managed daemon settings (#52304)	2026-10-08	appserver	0	0		0	0	complete	
@@ -2091,7 +2091,7 @@ c3eeaae9a3d401f7e7ade0817b7b27299af7d2a1	43959	Gate new app-server work during g
 c4017a87aacc7558002b7cb510025e967c1d765e	44976	Make context snapshot text rendering consistent (#44976)	2026-09-12	guardian	0	0		0	0	not_applicable	
 c41a72cd3f5886a6b367e93e28c4ef0662a54500	49856	Support Daybreak selection in `codex exec` (#49856)	2026-10-01	model	3	3	1.00	0	0	complete	
 c4350b4ca2a5af7dced6784e8c36f2f2cdab2dd6	41928	Use executor path context for permission preapproval (#41928)	2026-08-31	sandbox	1	0	0.00	0	0	implementation_pending	file_system_sandbox_policy_context_for_cwd
-c44deff7b1083e9660ac55d02122481f1cdf139b	47447	Extract WebSocket authentication into `codex-websocket-auth` (#47447)	2026-09-23	appserver	11	7	0.64	0	0	audit_pending	WebsocketAuthConfig,WebsocketCapabilityTokenSource,authorize_upgrade,policy_from_settings
+c44deff7b1083e9660ac55d02122481f1cdf139b	47447	Extract WebSocket authentication into `codex-websocket-auth` (#47447)	2026-09-23	appserver	11	7	0.64	0	0	complete	WebsocketAuthConfig,WebsocketCapabilityTokenSource,authorize_upgrade,policy_from_settings
 c45ea25ffb72d5f7324489d824d0c677283aa0b4	46877	Allow subagents to request MCP elicitation input (#46877)	2026-09-20	appserver	0	0		0	0	not_applicable	
 c46aa58a7baaec125612523f27f931d1ad22f8cd	47244	Centralize agent resume handling in `LocalAgentControl` (#47244)	2026-09-22	core	1	1	1.00	0	0	complete	
 c4b434aae27d5e589c9129f0b7ea312ccc8cbacd	40184	Preserve context annotations in merged messages (#40184)	2026-08-23	persistence	1	1	1.00	0	0	complete	
@@ -2295,7 +2295,7 @@ d7b0d4aa663172876871b605d53283bc0120882b	49599	Return authoritative replay histo
 d7d9f2b9b53b53568b30c4dea7e095ec276ebe9c	46732	Add selection and copying to the transcript viewer (#46732)	2026-09-19	tui	106	31	0.29	0	0	audit_pending	CellPresentation,CopyStatus,JumpTarget,LogicalLine,OverlayInput,TabStops,TranscriptFooter,ViewAction,ViewSnapshot,absorb_tail_into_live
 d7f7fa410698fbbb75548cde553a4fbf43fc268e	49136	Remove the plus separator after Option symbols in TUI key hints (#49136)	2026-09-29	tui	0	0		0	0	not_applicable	
 d7f8e48d7d9211e169b5b4b438798e21caa923a4	46279	Preserve Guardian's reusable history prefix across approval requests (#46279)	2026-09-17	guardian	0	0		0	0	not_applicable	
-d838c2346d05f4feb7928ea92e13e83dd479ba10	47701	Allow idle threads to prewarm and repair WebSocket connections (#47701)	2026-09-24	guardian	4	2	0.50	0	0	audit_pending	active_turn_environment_selections,is_websocket_prewarmed
+d838c2346d05f4feb7928ea92e13e83dd479ba10	47701	Allow idle threads to prewarm and repair WebSocket connections (#47701)	2026-09-24	guardian	4	2	0.50	0	0	not_applicable	active_turn_environment_selections,is_websocket_prewarmed
 d83bb540ec64bf6b009bca0283b0be91ea33f26a	51678	Move Windows sandbox tests into a dedicated integration binary (#51678)	2026-10-07	sandbox	0	0		0	0	not_applicable	
 d84ebff59295a5fc897bd7b703ade933c5312198	46571	Preserve macOS Seatbelt exclusions in scratch directories (#46571)	2026-09-18	sandbox	2	0	0.00	0	0	implementation_pending	protection_policy,scratch_access_roots
 d8ec479c34895214b44c062f060d97224c191a50	48643	Set the provisioned macOS CLI bundle name to ChatGPT (#48643)	2026-09-27	core	0	0		0	0	not_applicable	

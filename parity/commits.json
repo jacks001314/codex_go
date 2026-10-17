@@ -5568,9 +5568,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: TraceWebSocket, exporter_endpoint, wait_for_failure"
+        "Round 276 (audit): N/A - Go's code-mode host is in-process and has no standalone OTLP trace WebSocket receiver/listener carrier; this matches the earlier #40760 N/A. Existing trace propagation remains at the MCP/unified-exec span boundaries."
       ]
     },
     {
@@ -19277,9 +19277,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/11; needs review: WebsocketAuthConfig, WebsocketCapabilityTokenSource, authorize_upgrade, policy_from_settings"
+        "Round 276 (audit): Go exposes the shared websocketauth package through appserver/websocket_auth.go (mode/settings/policy/error aliases and NewPolicy), and the WebSocket server consumes it for capability-token and signed-bearer upgrade authorization. Tests: go test ./appserver -run 'WebSocketAuth|WebsocketAuth' -count=1"
       ]
     },
     {
@@ -20119,9 +20119,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: active_turn_environment_selections, is_websocket_prewarmed"
+        "Round 276 (audit): N/A for the prewarm/repair half - Go's model client has no cached sampling WebSocket session or idle prewarm task. The environment-selection half is covered separately by currentTurnEnvironmentSelections (#47970)."
       ]
     },
     {
