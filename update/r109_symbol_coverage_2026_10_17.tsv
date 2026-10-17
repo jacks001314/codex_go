@@ -1861,7 +1861,7 @@ ade12342e21c34a859d14cd5be47e7531fabb734	52203	Expose Codex lifecycle status in 
 ade17c62b0caf6fb1354eb7f3bc25853f44656ab	51200	Upgrade Bazel to 9.2.0 and refresh the module lockfile (#51200)	2026-10-05	core	0	0		0	0	not_applicable	
 adee0b04fa27a8ba5d2e3612b900363cffe72930	43521	Preserve standalone release pins during daemon updates (#43521)	2026-09-07	appserver	2	2	1.00	0	0	complete	
 ae0ecd7484a2f9b5420a618e801d03c1f0aead2f	41906	Add a manager for MCP event streams (#41906)	2026-08-31	mcp	5	4	0.80	0	0	audit_pending	McpEventStreamUpdate
-ae110493973d5b72f60d42efe2fae91d51ca9c0e	54070	Expose gateway authentication as a reusable OAuth session API (#54070)	2026-10-14	core	12	2	0.17	0	0	audit_pending	OAuthLoginControl,OAuthSessionConfig,OAuthSessionError,OAuthSessionManager,OAuthSessionStatus,OAuthSessionStatusChange,OAuthSessionStatusSnapshot,OAuthSessionStorage,lock_cached_token,subscribe_oauth_session_status
+ae110493973d5b72f60d42efe2fae91d51ca9c0e	54070	Expose gateway authentication as a reusable OAuth session API (#54070)	2026-10-14	core	12	12	1.00	0	0	complete
 ae132dc50ab5d8214a8fe599c3c1cfbb5f2ef186	47590	Serialize numeric custom reasoning effort as JSON numbers (#47590)	2026-09-23	core	0	0		0	0	not_applicable	
 ae357e7250402af7c3bbede18a46cc565a7670d4	41005	Attach verified access context to eligible plugin MCP calls (#41005)	2026-08-26	appserver	4	1	0.25	0	0	audit_pending	add_trusted_access_context,from_runtime,local_http_client
 ae7aad586ea0769f329e214e9827c541823fd191	50059	Fix Linux sandbox startup with multiple denied files (#50059)	2026-10-01	sandbox	0	0		0	0	not_applicable	

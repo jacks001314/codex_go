@@ -1406,6 +1406,14 @@
             "reason": "Aligned upstream b3b83ace17 (#51491 Classify executor capability root ownership independently of parsing): Go classifies plugin-owned versus standalone executor roots before capability parsing, preserves plugin ownership for malformed ancestor manifests, rejects nested manifests as parent ownership, and treats discovery or metadata failures as errors rather than standalone evidence.",
             "userImpact": "Malformed or unreadable plugin metadata cannot silently reclassify plugin capabilities as standalone.",
             "test": "go test ./appserver -run 'TestExecutorPluginRootOwnership' -count=1"
+        },
+        {
+            "id": "reusable-oauth-session-api",
+            "status": "done",
+            "area": "auth",
+            "reason": "Aligned upstream ae11049397 (#54070 Expose gateway authentication as a reusable OAuth session API): the existing gateway credential manager is now exposed through OAuthSessionConfig, OAuthSessionManager, OAuthSessionStatus, OAuthSessionStatusChange, OAuthLoginControl and OAuthSessionStorage compatibility aliases, with a reusable constructor, status subscription, wrapped credential-state error and compatibility status constants. Existing gateway names, storage namespace, redirect policy and refresh behavior are unchanged.",
+            "userImpact": "Consumers can use the credential grant manager without depending on inference-gateway-specific naming, while existing gateway integrations remain compatible.",
+            "test": "go test ./auth -run TestOAuthSessionAliasesKeepGatewayBehaviorLikeRust -count=1"
         }
     ]
 }
