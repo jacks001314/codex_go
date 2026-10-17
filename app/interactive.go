@@ -1107,6 +1107,10 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 	// failed resolve would otherwise hand to the Model.
 	liveSettings := interactiveNewThreadLocalSettings(root)
 	settings := liveSettings.Tui
+	// Rust #53859: the embedded TUI records one codex.tui.start observation and
+	// keeps its size-free launch tags for later terminal-size observations.
+	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, nil, false), "in_process")
+	defer tuiTelemetry.close()
 	accountDisplay, hasChatGPTAccount := interactiveStatusAccount(root)
 	state.AccountDisplay = accountDisplay
 	state.HasChatGPTAccount = hasChatGPTAccount
@@ -1169,8 +1173,11 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		stopSession:      voiceStop,
 	})
 	options := codextea.Options{
-		NoAltScreen:  root != nil && root.Shared.NoAltScreen,
-		LocalSession: true,
+		NoAltScreen:                  root != nil && root.Shared.NoAltScreen,
+		LocalSession:                 true,
+		TerminalSizeContext:          tuiTelemetry.context,
+		TerminalSizeExporter:         tuiTelemetry.exporter,
+		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
 		// The embedded session is neither the local daemon nor an explicit
 		// remote, but /daemon still manages the local background server with
 		// this CLI (Rust App::open_daemon_menu with AppServerTarget::Embedded).

@@ -936,7 +936,23 @@ type Options struct {
 	// BackendID identifies the app-server backend that lists and owns the
 	// sessions this model can select (Rust #54681). A zero value binds the
 	// model to this process's embedded/daemon backend.
-	BackendID           codextui.BackendID
+	BackendID codextui.BackendID
+	// TerminalSizeContext is the launch context recorded with
+	// `codex.tui.start` and reused for `codex.tui.terminal_size` (Rust #53859).
+	// It never carries the terminal size buckets themselves.
+	TerminalSizeContext map[string]string
+	// TerminalSizeExporter is the resolved `[otel].metrics_exporter`, and
+	// TerminalSizeAnalyticsEnabled the raw `analytics.enabled` value. Together
+	// they decide whether terminal-size observations are eligible.
+	TerminalSizeExporter         config.OtelExporterKind
+	TerminalSizeAnalyticsEnabled *bool
+	// TerminalSizeReader probes the terminal geometry (tests override it).
+	TerminalSizeReader func() (int, int)
+	// TerminalSizeSettleDelay is how long a resize must stay stable before it
+	// is observed; zero uses Rust's 15 seconds.
+	TerminalSizeSettleDelay time.Duration
+	// OnTerminalSizeObservation overrides the metrics recorder (tests).
+	OnTerminalSizeObservation func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
 	Width               int
 	Height              int
 	NoAltScreen         bool
@@ -1279,6 +1295,24 @@ type Model struct {
 	// with (Rust #54681). It survives connection replacement: picker targets
 	// from another backend are rejected before resume/fork/unarchive.
 	backendID codextui.BackendID
+
+	// Terminal-size observations (Rust #53859): the launch context captured at
+	// startup, the eligibility inputs, and the resize settle state.
+	terminalSizeContext          map[string]string
+	terminalSizeExporter         config.OtelExporterKind
+	terminalSizeAnalyticsEnabled *bool
+	terminalSizeReader           func() (int, int)
+	terminalSizeSettleDelay      time.Duration
+	terminalSizeRecorder         func(context map[string]string, analyticsEnabled bool, reason string, width int, height int)
+	terminalSizeLastTurnID       string
+	terminalSizeSettledColumns   string
+	terminalSizeSettledRows      string
+	terminalSizeLastWidth        int
+	terminalSizeLastHeight       int
+	terminalSizeInitialized      bool
+	terminalSizePending          *terminalSizePendingSettle
+	terminalSizeGeneration       uint64
+	terminalSizeScheduled        uint64
 
 	// Styles is the centralized theme configuration.
 	Styles styles.Styles
@@ -2097,6 +2131,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 	model := &Model{
 		State:                           state,
 		backendID:                       options.BackendID,
+		terminalSizeContext:             cloneStringMapTea(options.TerminalSizeContext),
+		terminalSizeExporter:            options.TerminalSizeExporter,
+		terminalSizeAnalyticsEnabled:    cloneBoolPtrTea(options.TerminalSizeAnalyticsEnabled),
+		terminalSizeReader:              options.TerminalSizeReader,
+		terminalSizeSettleDelay:         options.TerminalSizeSettleDelay,
+		terminalSizeRecorder:            options.OnTerminalSizeObservation,
 		Styles:                          applyThemeAccent(resolveStyles(options.TUIThemeStyles), options.TUITheme),
 		Transcript:                      newTranscriptComponent(),
 		Composer:                        newComposerComponent(options.Placeholder),
@@ -2334,6 +2374,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 		model.statusControls.TerminalTitleIDs = append([]string(nil), options.TerminalTitleItems...)
 	}
 	model.resize(firstPositive(options.Width, defaultWidth), firstPositive(options.Height, defaultHeight))
+	// Rust #53859 seeds the settle state from the size sampled during init, so
+	// the first frame is not mistaken for a resize.
+	model.terminalSizeLastWidth = model.width
+	model.terminalSizeLastHeight = model.height
+	model.terminalSizeSettledColumns, model.terminalSizeSettledRows = terminalSizeTagPair(model.width, model.height)
+	model.terminalSizeInitialized = true
 	model.showTooltips = options.ShowTooltips != nil && *options.ShowTooltips
 	if options.ShowSessionHeader {
 		model.addStartupSessionHeader(options.SessionHeaderVersion)
@@ -2511,10 +2557,11 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return model, cmd
 	}
 	statusCmd := next.refreshTerminalProgramStatusCmd()
-	if statusCmd == nil {
+	settleCmd := next.terminalSizeSettleCmd()
+	if statusCmd == nil && settleCmd == nil {
 		return model, cmd
 	}
-	return model, bubbletea.Batch(cmd, statusCmd)
+	return model, bubbletea.Batch(cmd, statusCmd, settleCmd)
 }
 
 func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
@@ -2552,6 +2599,8 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ModelCatalogResultMsg:
 		m.applyModelCatalogResult(msg)
 		return m, m.applyBackendBannerFallbackCmd()
+	case terminalSizeSettleMsg:
+		return m, m.applyTerminalSizeSettle(msg.generation)
 	case bubbletea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 		return m, nil
@@ -5064,6 +5113,7 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// Rust #54114: a new turn clears the retained result before any work.
 		m.programStatusAfterTurn = codextui.ProgramStatus{}
 		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), m.currentTime())
+		m.observeTerminalSizeTurnStarted(event)
 		if m.showTooltips {
 			cmd = bubbletea.Batch(cmd, turnTipDelayCmd(turnTipWorkingDelay))
 		}
@@ -7962,6 +8012,7 @@ func (m *Model) ensureSize() {
 func (m *Model) resize(width int, height int) {
 	m.width = firstPositive(width, defaultWidth)
 	m.height = firstPositive(height, defaultHeight)
+	defer m.observeTerminalSizeForTelemetry()
 	m.transcript.Width = m.width
 	m.transcript.Height = m.transcriptHeightForLayout()
 	composerWidth := m.width

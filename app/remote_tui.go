@@ -338,6 +338,14 @@ func (t *remoteJSONLineTransport) close() {
 func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint, stdin io.Reader, stdout io.Writer, stderr io.Writer) error {
 	state := interactiveUIState(root)
 	settings := interactiveTUISettings(root)
+	// Rust #53859: a remote TUI records the same launch observation, tagged with
+	// the actual connection mode.
+	appServerMode := "remote"
+	if interactiveRemoteEndpointIsLocal(endpoint) {
+		appServerMode = "local_daemon"
+	}
+	tuiTelemetry := startInteractiveTUITelemetry(root, interactiveDaemonSelectionReason(root, endpoint, interactiveRemoteEndpointIsExplicitRemote(root)), appServerMode)
+	defer tuiTelemetry.close()
 	if remoteSettings, err := interactiveRemoteLoadSettings(ctx, endpoint); err == nil {
 		settings = remoteSettings
 	}
@@ -435,21 +443,24 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
 	options := codextea.Options{
-		NoAltScreen:         root != nil && root.Shared.NoAltScreen,
-		LocalDaemonSession:  interactiveRemoteEndpointIsLocal(endpoint),
-		LocalSession:        interactiveRemoteEndpointIsLocal(endpoint),
-		DaemonCLIExecutable: daemonCLIExecutable,
-		DaemonCLIVersion:    daemonCLIVersion,
-		DaemonCLIPackage:    daemonCLIPackage,
-		DaemonVersion:       interactiveDaemonVersionForEndpoint(endpoint),
-		RemoteAppServer:     interactiveRemoteEndpointIsExplicitRemote(root),
-		AnimationsEnabled:   settings.AnimationsEnabled,
-		Effects:             settings.Effects,
-		QuestionEscBack:     settings.QuestionEscBack,
-		AutoRecap:           settings.AutoRecap,
-		MouseScrollSpeed:    settings.MouseScrollSpeed,
-		RightClickPaste:     interactiveRightClickPasteValue(settings.RightClickPaste),
-		ShowRawReasoning:    showRawReasoning,
+		NoAltScreen:                  root != nil && root.Shared.NoAltScreen,
+		TerminalSizeContext:          tuiTelemetry.context,
+		TerminalSizeExporter:         tuiTelemetry.exporter,
+		TerminalSizeAnalyticsEnabled: tuiTelemetry.analyticsEnabled,
+		LocalDaemonSession:           interactiveRemoteEndpointIsLocal(endpoint),
+		LocalSession:                 interactiveRemoteEndpointIsLocal(endpoint),
+		DaemonCLIExecutable:          daemonCLIExecutable,
+		DaemonCLIVersion:             daemonCLIVersion,
+		DaemonCLIPackage:             daemonCLIPackage,
+		DaemonVersion:                interactiveDaemonVersionForEndpoint(endpoint),
+		RemoteAppServer:              interactiveRemoteEndpointIsExplicitRemote(root),
+		AnimationsEnabled:            settings.AnimationsEnabled,
+		Effects:                      settings.Effects,
+		QuestionEscBack:              settings.QuestionEscBack,
+		AutoRecap:                    settings.AutoRecap,
+		MouseScrollSpeed:             settings.MouseScrollSpeed,
+		RightClickPaste:              interactiveRightClickPasteValue(settings.RightClickPaste),
+		ShowRawReasoning:             showRawReasoning,
 		// Remote sessions only see the worktrees feature flag; managed worktree
 		// operations stay local (Rust #43120/#43286).
 		WorktreesEnabled: interactiveRemoteWorktreesEnabled(root),

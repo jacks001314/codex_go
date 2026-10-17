@@ -78,6 +78,10 @@ type MetricsClientOptions struct {
 	// Statsig marks the built-in metrics route: it resolves the Statsig endpoint
 	// when that build enables it and applies the Statsig-disabled metric list.
 	Statsig bool
+	// RequiresAnalyticsConsent marks the built-in exporter: counter observations
+	// recorded through CounterWithAnalyticsConsent are dropped while analytics is
+	// disabled. Explicit OTLP collectors are never gated (Rust #53859).
+	RequiresAnalyticsConsent bool
 	// StatsigEnabled mirrors Rust's `cfg!(debug_assertions)` guard for the
 	// built-in route: the Statsig default resolves to the OTLP endpoint only in
 	// builds that opt in.
@@ -105,6 +109,10 @@ type MetricsClient struct {
 	serviceName    string
 	defaultTags    map[string]string
 	disabled       map[string]bool
+	// requiresAnalyticsConsent mirrors Rust's MetricsClientInner field: the
+	// consent check applies to the active exporter even after a provider
+	// replacement.
+	requiresAnalyticsConsent bool
 	// temporality is the OTLP aggregation temporality this client exports sums
 	// and histograms with: delta unless a configured exporter requests otherwise
 	// through MetricsTemporalityPreferenceEnv (Rust #51220).
@@ -151,12 +159,13 @@ type histogramSeries struct {
 // exporter is configured, so callers can install it unconditionally.
 func NewMetricsClient(options MetricsClientOptions) *MetricsClient {
 	client := &MetricsClient{
-		counters:    map[instrumentKey]map[string]*counterSeries{},
-		gauges:      map[instrumentKey]map[string]*gaugeSeries{},
-		histograms:  map[instrumentKey]map[string]*histogramSeries{},
-		defaultTags: cloneMetricTagMap(options.DefaultTags),
-		scope:       OTLPScope{Name: MetricsMeterName},
-		now:         options.Now,
+		counters:                 map[instrumentKey]map[string]*counterSeries{},
+		gauges:                   map[instrumentKey]map[string]*gaugeSeries{},
+		histograms:               map[instrumentKey]map[string]*histogramSeries{},
+		defaultTags:              cloneMetricTagMap(options.DefaultTags),
+		requiresAnalyticsConsent: options.RequiresAnalyticsConsent,
+		scope:                    OTLPScope{Name: MetricsMeterName},
+		now:                      options.Now,
 	}
 	if client.now == nil {
 		client.now = time.Now
@@ -262,6 +271,20 @@ func (c *MetricsClient) Enabled() bool {
 // Counter records one counter increment.
 func (c *MetricsClient) Counter(name string, inc int, tags map[string]string) {
 	c.CounterWithDescription(name, "", inc, tags)
+}
+
+// CounterWithAnalyticsConsent records a counter while applying analytics
+// consent only to the built-in exporter (Rust #53859's
+// counter_with_analytics_consent). An explicit OTLP collector stays active even
+// when analytics is disabled.
+func (c *MetricsClient) CounterWithAnalyticsConsent(name string, inc int, tags map[string]string, analyticsEnabled bool) {
+	if c == nil {
+		return
+	}
+	if c.requiresAnalyticsConsent && !analyticsEnabled {
+		return
+	}
+	c.Counter(name, inc, tags)
 }
 
 // CounterWithDescription records one counter increment with an instrument

@@ -94,7 +94,7 @@ go test ./parity -count=1
 | `534c70863c` | #54048 | Defer folder trust checks until starting a task from agents overview (#54048) | TR-13 @5608e096: implementable (app face, small-medium, likely) - Rust resolves directory trust before loading defaults when a session is started f... |
 | `835cd7552d` | #53987 | Skip service backoff for stale Guardian authorization retries (#53987) | TR-13 @5608e096: implementable (appserver face, small-medium, likely) - Rust ext/guardian-reviewer/src/retry.rs treats GuardianReviewError::StaleAu... |
 | `7eed30ad1b` | #53879 | Preserve running turn recovery across thread settings updates (#53879) | TR-13 @5608e096: implementable (appserver face, medium, likely) - Rust core/src/session/thread_settings.rs only clears last_started_turn_id when no... |
-| `c22a06c180` | #53859 | Record bucketed terminal sizes in TUI telemetry (#53859) | TR-13 @5608e096: implementable (telemetry + TUI faces, medium, two halves) - Rust otel/src/metrics/client.rs adds requires_analytics_consent (only ... |
+| `c22a06c180` | #53859 | Record bucketed terminal sizes in TUI telemetry (#53859) | Round 93 landed（见 §9）；原 TR-13 评估：implementable (telemetry + TUI faces, medium, two halves) - Rust otel/src/metrics/client.rs adds requires_analytics_consent (only ... |
 | `2b2d792305` | #53797 | Refresh Guardian reviews when review context changes (#53797) | TR-13 @5608e096: implementable (appserver face, medium, likely) - Rust core/src/guardian/review_request.rs widens the invalidation predicate from a... |
 | `440312f113` | #54681 | Keep TUI session selections bound to their backend (#54681) | AC-b5 @791cca8d: 唯一落在已授权写面(tui/**)的可落地大项。Rust 新增 tui/src/backend_id.rs:5 BackendId(uuid)(进程内逻辑后端身份, 不上 wire) + resume_picker.rs(+92) + lib.rs(+117)... |
 
@@ -192,7 +192,7 @@ go test ./parity -count=1
 | 项 | 结论 | 证据 |
 | --- | --- | --- |
 | `#54048` `534c70863c` | 降级为 `blocked_precondition` | Go 没有交互式目录信任同意步骤：`tui/onboarding.NewTrustDirectoryPrompt` 只有测试调用，信任只经 config layer stack 解析；`codex agents` 独立 dashboard 不初始化 session |
-| `#53859` `c22a06c180` | 仍为 implementable，但需先建 `codex.tui.start` 启动遥测 | `git grep -n "codex\.tui"` 0 命中；otel 基础设施（`otelinit` / `metrics.Global` / `telemetry.InstallGlobalMetrics`）已就绪 |
+| `#53859` `c22a06c180` | Round 92 判定为 implementable；Round 93 已落地 | 补齐 `codex.tui.start`、尺寸桶、turn_start / 15s resize settle 与 consent 语义，见 §9 |
 
 ## 8.3 账本状态（round 92 更新后）
 
@@ -208,3 +208,42 @@ landed 80 / not_applicable 75 / blocked_precondition 21 / complete 15 / partial 
 | `go test ./app -run BackendOwnership` | ok |
 
 远端：`refs/heads/main` = `b72afee2`。
+
+---
+
+# Round 93 增量（2026-10-17，lead）
+
+## 9.1 已落地
+
+### #53859 终端尺寸分桶遥测（`c22a06c180`）
+
+- `telemetry/metrics_client.go`：新增 `MetricsClientOptions.RequiresAnalyticsConsent` 与 `CounterWithAnalyticsConsent`，与 Rust `counter_with_analytics_consent` 一致：consent 只作用于 built-in exporter，explicit OTLP 不受 analytics 开关影响。
+- `telemetry/otel_provider.go`：用未解析的 `settings.MetricsExporter` 判定是否 Statsig，把 `RequiresAnalyticsConsent` 带到 metrics client。
+- `otelinit/otelinit.go`：metrics exporter 仅在 `Statsig && !analyticsEnabled` 时置 None；显式 OTLP 在 analytics 关闭时仍构建 provider（与 Rust #53859 对齐）。原 `TestBuildProviderRequiresAnalytics` 的“OTLP 必须 analytics”期望已按上游改掉。
+- `tui/terminal_size_telemetry.go`：`TerminalSizeTags`（columns/rows 桶）、`TerminalSizeTelemetryEnabled`、`TerminalSizeRead`、`TerminalTelemetryName` / `TerminalMultiplexerTag`、`RecordTerminalSize`（追加 launch context + reason，走 consent-aware counter）。
+- `app/tui_telemetry.go`：TUI 自建 OTEL provider，记录一次 `codex.tui.start`，标签包含 daemon settings、`terminal_columns` / `terminal_rows`、`daemon_selection_reason`、`daemon_auto_start`、`app_server_mode`、`terminal_name`、`multiplexer`；返回的 launch context 只剥掉两个尺寸桶。
+- `app/interactive.go` / `app/remote_tui.go`：embedded / local daemon / explicit remote 三条启动路径都接入；mode 分别为 `in_process` / `local_daemon` / `remote`。
+- `tui/tea/model.go` + `tui/tea/terminal_size_telemetry.go`：`turn.started` 仅对当前 active thread 的新 turn id 记录 `turn_start`；resize 变化启动 15s settle，settle 时重新读取实际尺寸，桶变化才记录 `resize`，同桶只更新 settled 状态；未启用/无 launch context 时清空 pending 并同步 settled 桶。
+- 测试：
+  - `telemetry/metrics_test.go::TestCounterWithAnalyticsConsentOnlyGatesBuiltInExporter`
+  - `otelinit/otelinit_test.go::TestBuildProviderConsentOnlyGatesBuiltInExporter`
+  - `tui/terminal_size_telemetry_test.go`（4 例：桶边界、enabled 矩阵、记录标签、终端/复用器分类）
+  - `tui/tea/terminal_size_telemetry_like_rust_test.go`（3 例：turn_start 去重/线程过滤、resize settle/同桶静默/重新计时、exporter+consent 门禁）
+  - `app/tui_telemetry_like_rust_test.go`（start 标签与 context、selection_reason 全分支）
+
+### 结构差异（记录为适配，不改变可观察行为）
+
+- Rust 的 `enabled(&app.config)` 在每轮循环读取可热重载的 Config；Go 的 tea Model 没有同等的 live Config 句柄，`terminalSizeExporter` / `terminalSizeAnalyticsEnabled` 取启动时解析值。记录时仍通过 `CounterWithAnalyticsConsent` 读取当前全局 client 的 exporter 属性，因此 provider 替换不会绕过 consent。
+- Rust 的 `read_size()` Unix 用 `window_size()`、Windows 用 `size()`；Go 复用仓库既有的 `charmbracelet/x/term.GetSize(stdout)`，两侧都是“读取失败记 unknown 桶”。
+
+## 9.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./tui -run "TerminalSize|TerminalTelemetry"` | ok |
+| `go test ./tui/tea -run "TerminalSize"` | ok |
+| `go test ./otelinit -run BuildProvider` | ok |
+| `go test ./telemetry -run AnalyticsConsent` | ok |
+| `go test ./app -run "InteractiveTUIStartTelemetry|InteractiveDaemonSelectionReason"` | ok |
+| `go test ./tui ./tui/tea ./otelinit ./telemetry` | 仅既有环境失败 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` |

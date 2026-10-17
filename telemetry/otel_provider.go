@@ -117,6 +117,10 @@ func NewOtelProvider(settings OtelSettings) (*OtelProvider, error) {
 	var metrics *MetricsClient
 	if metricsExporter.Kind != OtelExporterNone {
 		if options, ok := metricsClientOptions(settings, metricsExporter); ok {
+			// Rust #53859: analytics consent gates only the built-in exporter.
+			// ResolveOtelExporter already mapped Statsig onto its OTLP endpoint,
+			// so the original settings kind records whether consent applies.
+			options.RequiresAnalyticsConsent = settings.MetricsExporter.Kind == OtelExporterStatsig
 			if client := NewMetricsClient(options); client.Enabled() {
 				metrics = client
 			}

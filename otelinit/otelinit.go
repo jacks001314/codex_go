@@ -36,9 +36,9 @@ type Options struct {
 }
 
 // BuildProvider mirrors otel_init::build_provider: resolve the effective
-// `otel` settings, disable the metrics exporter unless analytics is enabled
-// (the log exporter is not gated), and build the provider from the mapped
-// settings.
+// `otel` settings, disable the built-in metrics exporter unless analytics is
+// enabled (explicit OTLP collectors and the log exporter are not gated), and
+// build the provider from the mapped settings.
 func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 	resolved := config.DefaultOtelConfig()
 	analyticsEnabled := options.DefaultAnalyticsEnabled
@@ -46,8 +46,11 @@ func BuildProvider(options Options) (*telemetry.OtelProvider, error) {
 		resolved = options.Config.Otel()
 		analyticsEnabled = options.Config.AnalyticsEnabled(options.DefaultAnalyticsEnabled)
 	}
+	// Rust #53859: analytics consent controls the built-in exporter, not
+	// explicit OTLP collectors. A Statsig metrics exporter is inert without
+	// consent, while an explicitly configured OTLP endpoint keeps exporting.
 	metricsExporter := resolved.MetricsExporter
-	if !analyticsEnabled {
+	if metricsExporter.Kind == config.OtelExporterKindStatsig && !analyticsEnabled {
 		metricsExporter = config.OtelExporterKind{Kind: config.OtelExporterKindNone}
 	}
 	// Rust #47408: OTLP log, trace and metric exports are disabled while a

@@ -129,32 +129,48 @@ func TestBuildProviderStatsigRouteOptIn(t *testing.T) {
 	}
 }
 
-// The OTLP HTTP exporter requires analytics: with analytics disabled the
-// exporter resolves to none and no provider is built.
-func TestBuildProviderRequiresAnalytics(t *testing.T) {
-	provider, err := BuildProvider(Options{Config: otlpHTTPConfig(), ServiceName: "codex-app-server"})
+// Rust #53859: analytics consent controls the built-in Statsig exporter only.
+// An explicit OTLP collector keeps exporting even when analytics is disabled,
+// and without an `analytics` table the caller's default cannot gate OTLP.
+func TestBuildProviderConsentOnlyGatesBuiltInExporter(t *testing.T) {
+	disabled := otlpHTTPConfig()
+	disabled.Values["analytics"] = map[string]any{"enabled": false}
+	provider, err := BuildProvider(Options{Config: disabled, ServiceName: "codex-app-server"})
 	if err != nil || provider == nil || provider.Metrics() == nil || !provider.Metrics().Enabled() {
-		t.Fatalf("analytics-enabled provider = %#v err = %v", provider, err)
+		t.Fatalf("analytics-disabled OTLP provider = %#v err = %v", provider, err)
 	}
 	if err := provider.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
 
-	disabled := otlpHTTPConfig()
-	disabled.Values["analytics"] = map[string]any{"enabled": false}
-	if provider, err := BuildProvider(Options{Config: disabled, DefaultAnalyticsEnabled: true}); err != nil || provider != nil {
-		t.Fatalf("analytics-disabled provider = %#v err = %v", provider, err)
-	}
-
-	// Without an `analytics` table the caller's default decides.
+	// Without an `analytics` table the caller's default must not gate OTLP.
 	noAnalytics := otlpHTTPConfig()
 	delete(noAnalytics.Values, "analytics")
-	if provider, err := BuildProvider(Options{Config: noAnalytics, DefaultAnalyticsEnabled: false}); err != nil || provider != nil {
-		t.Fatalf("default-disabled provider = %#v err = %v", provider, err)
-	}
-	provider, err = BuildProvider(Options{Config: noAnalytics, DefaultAnalyticsEnabled: true, ServiceName: "codex-app-server"})
+	provider, err = BuildProvider(Options{Config: noAnalytics, DefaultAnalyticsEnabled: false, ServiceName: "codex-app-server"})
 	if err != nil || provider == nil || provider.Metrics() == nil || !provider.Metrics().Enabled() {
-		t.Fatalf("default-enabled provider = %#v err = %v", provider, err)
+		t.Fatalf("default-disabled OTLP provider = %#v err = %v", provider, err)
+	}
+	if err := provider.Shutdown(t.Context()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	// The built-in Statsig exporter is the one analytics consent gates.
+	previous := telemetry.StatsigMetricsRouteEnabled
+	defer func() { telemetry.StatsigMetricsRouteEnabled = previous }()
+	telemetry.StatsigMetricsRouteEnabled = "true"
+
+	statsigDisabled := &config.Config{Values: map[string]any{
+		"analytics": map[string]any{"enabled": false},
+	}}
+	if provider, err := BuildProvider(Options{Config: statsigDisabled, DefaultAnalyticsEnabled: true}); err != nil || provider != nil {
+		t.Fatalf("consentless Statsig provider = %#v err = %v", provider, err)
+	}
+	statsigEnabled := &config.Config{Values: map[string]any{
+		"analytics": map[string]any{"enabled": true},
+	}}
+	provider, err = BuildProvider(Options{Config: statsigEnabled, DefaultAnalyticsEnabled: false, ServiceName: "codex-app-server"})
+	if err != nil || provider == nil || provider.Metrics() == nil || !provider.Metrics().Enabled() {
+		t.Fatalf("consented Statsig provider = %#v err = %v", provider, err)
 	}
 	if err := provider.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)

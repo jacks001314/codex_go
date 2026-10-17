@@ -620,3 +620,37 @@ func metricsByName(t *testing.T, request recordedMetricsRequest) map[string]map[
 	}
 	return metrics
 }
+
+// Rust #53859: CounterWithAnalyticsConsent drops observations from the built-in
+// exporter while analytics consent is off, and keeps explicit OTLP collectors
+// exporting regardless of consent.
+func TestCounterWithAnalyticsConsentOnlyGatesBuiltInExporter(t *testing.T) {
+	buffered := &recordingHTTPDoer{}
+	builtIn := newTestMetricsClient(t, buffered, MetricsClientOptions{RequiresAnalyticsConsent: true})
+	builtIn.CounterWithAnalyticsConsent("codex.tui.terminal_size", 1, map[string]string{"observation_reason": "turn_start"}, false)
+	if err := builtIn.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if requests := buffered.snapshot(); len(requests) != 0 {
+		t.Fatalf("consent-disabled built-in exporter sent %d requests", len(requests))
+	}
+	builtIn.CounterWithAnalyticsConsent("codex.tui.terminal_size", 1, map[string]string{"observation_reason": "turn_start"}, true)
+	if err := builtIn.Flush(context.Background()); err != nil {
+		t.Fatalf("consented Flush() error = %v", err)
+	}
+	if requests := buffered.snapshot(); len(requests) != 1 {
+		t.Fatalf("consented built-in exporter sent %d requests, want 1", len(requests))
+	} else if _, ok := metricsByName(t, requests[0])["codex.tui.terminal_size"]; !ok {
+		t.Fatalf("consented request = %#v", requests[0].body)
+	}
+
+	explicit := &recordingHTTPDoer{}
+	custom := newTestMetricsClient(t, explicit, MetricsClientOptions{})
+	custom.CounterWithAnalyticsConsent("codex.tui.terminal_size", 1, map[string]string{"observation_reason": "resize"}, false)
+	if err := custom.Flush(context.Background()); err != nil {
+		t.Fatalf("explicit Flush() error = %v", err)
+	}
+	if requests := explicit.snapshot(); len(requests) != 1 {
+		t.Fatalf("explicit OTLP exporter sent %d requests, want 1", len(requests))
+	}
+}
