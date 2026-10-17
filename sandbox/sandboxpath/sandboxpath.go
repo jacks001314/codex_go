@@ -36,12 +36,20 @@ func (r *WritableRoot) IsPathWritable(path string) bool {
 	if !PathWithin(target, root) {
 		return false
 	}
+	normalizedTarget := target
+	if value, ok := metadataCaseAlias(target, root); ok {
+		normalizedTarget = value
+	}
 	for _, subpath := range r.ReadOnlySubpaths {
-		if PathWithin(target, cleanAbsolute(subpath)) {
+		normalizedSubpath := cleanAbsolute(subpath)
+		if value, ok := metadataCaseAlias(normalizedSubpath, root); ok {
+			normalizedSubpath = value
+		}
+		if PathWithin(normalizedTarget, normalizedSubpath) {
 			return false
 		}
 	}
-	if r.PathContainsProtectedMetadataName(target) {
+	if r.PathContainsProtectedMetadataName(normalizedTarget) {
 		return false
 	}
 	return true
