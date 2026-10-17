@@ -1558,6 +1558,28 @@ func (c *Config) GuardianV2MaxParentCompactionTokens() int {
 	return int(value)
 }
 
+// GuardianV2TranscriptFormat returns the configured
+// [features.guardianv2].transcript_mode value (#51465). Rust's TranscriptFormat
+// defaults to `line`; only `json` selects the structured records.
+func (c *Config) GuardianV2TranscriptFormat() string {
+	if c == nil || c.Values == nil {
+		return "line"
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return "line"
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return "line"
+	}
+	value, _ := guardianV2["transcript_mode"].(string)
+	if strings.EqualFold(strings.TrimSpace(value), "json") {
+		return "json"
+	}
+	return "line"
+}
+
 // GuardianPolicyConfig mirrors Rust Config::guardian_policy_config: the managed
 // `guardian_policy_config` requirement wins over the `[auto_review] policy`
 // config value, and a value that normalizes to empty is treated as unset so the

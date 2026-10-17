@@ -1207,6 +1207,14 @@
             "reason": "Aligned upstream 3d3df0a0ca (#44060 Raise Guardian's action review limit to 200,000 bytes): GUARDIAN_MAX_ACTION_BYTES is 200,000 bytes and each action string is first shortened at Rust's 16,000-token budget with the shared `<truncated omitted_approx_tokens=\"N\" />` marker; the pretty JSON formatter keeps `<`, `>` and `&` literal like serde_json and rejects aggregate documents beyond the limit with Rust's exact error, so oversized reviews fail closed. Terminal-input approval uses the separate 8,000-byte MAX_STDIN_APPROVAL_BYTES bound over the serialized action plus reason and records codex.unified_exec.stdin_review.size_check with result/input_kind before hooks or Guardian review.",
             "userImpact": "Guardian reviews accept MCP and patch payloads up to 200,000 bytes with per-string truncation markers, while oversized actions and terminal input fail closed instead of being reviewed partially.",
             "test": "go test ./state -run Guardian -count=1; go test ./appserver -run 'TestGuardianStdinReviewSizeLimitLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "guardian-json-transcript-format",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 61969074a7 (#51465 Add an optional JSON transcript format for Guardian): [features.guardianv2].transcript_mode selects line (the default) or json. JSON records carry host-assigned author/index/label (and retained_source_order when present) while the entry text is escaped as a JSON string, keep serde_json's literal `<`, `>` and `&`, and cannot be spoofed by forged role headers or transcript boundaries inside the text. JSON mode prepends TRANSCRIPT_JSON_INSTRUCTIONS ahead of the reviewer policy instructions.",
+            "userImpact": "Guardian reviewers can receive structured transcripts whose authorship metadata cannot be forged by message content; line mode remains the default.",
+            "test": "go test ./state -run 'GuardianTranscript|ApplyGuardianTranscript' -count=1; go test ./config -run GuardianV2TranscriptFormat -count=1; go test ./appserver -run 'TestGuardianTranscriptJSONModeLikeRust|TestGuardianTranscriptDefaultLineModeLikeRust|Guardian' -count=1"
         }
     ]
 }

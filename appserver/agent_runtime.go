@@ -432,7 +432,14 @@ func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReview
 			extraPolicy = value
 		}
 	}
-	return state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+	instructions := state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+	format := state.GuardianTranscriptFormatLine
+	if cfg != nil {
+		format = state.ParseGuardianTranscriptFormat(cfg.GuardianV2TranscriptFormat())
+	}
+	// Rust #51465 prepends the JSON provenance grammar outside the configured
+	// classifier prompt limit; the reviewer path carries no truncation here.
+	return state.ApplyGuardianTranscriptInstructions(instructions, format)
 }
 
 // guardianReviewModelForTurn keeps the model-only view used by the review

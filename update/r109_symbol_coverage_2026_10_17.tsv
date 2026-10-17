@@ -1020,7 +1020,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 612e6491d50ffb80ffc4330edc4024b86e51e4bf	42137	Prewarm shell snapshots for eligible turns (#42137)	2026-09-01	execserver	5	2	0.40	0	0	audit_pending	CapturePurpose,apply_unified_exec_env,prewarm_shell_snapshots
 6143217c6730e147f4a1a5a3405d10f580fe9244	40021	Cancel Guardian reviews with their tool calls (#40021)	2026-08-21	guardian	0	0		0	0	not_applicable	
 6149914a0e59363b6777080b3e953b05d592dbac	47017	Wire agent message boards into persistent multi-agent runtimes (#47017)	2026-09-21	appserver	3	3	1.00	0	0	complete	
-61969074a7c49fbd31467dc2e8c5ede0edfd3962	51465	Add an optional JSON transcript format for Guardian (#51465)	2026-10-06	guardian	3	0	0.00	0	0	implementation_pending	TRANSCRIPT_JSON_INSTRUCTIONS,TranscriptFormat,truncate_record
+61969074a7c49fbd31467dc2e8c5ede0edfd3962	51465	Add an optional JSON transcript format for Guardian (#51465)	2026-10-06	guardian	3	3	1.00	0	0	complete	
 61b08f101142f02e0f79e62be601a3b96a3415d0	46533	Disable reasoning summaries by default for new TUI threads (#46533)	2026-09-18	tui	0	0		0	0	not_applicable	
 61e23bc6a1e9e5fc8ed6aefb3575c9d1fd077c22	47830	Bind Guardian async scores to target environment permissions (#47830)	2026-09-24	guardian	5	4	0.80	0	0	audit_pending	environment_id_for_process
 62197a65e52fe10495a75113cdb0bf03832bef2b	47899	Add diagnostic reasons to MCP attribution errors (#47899)	2026-09-24	appserver	1	1	1.00	0	0	complete	

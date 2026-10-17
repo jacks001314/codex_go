@@ -1026,14 +1026,27 @@ func guardianAssessmentOutputSchema() any {
 }
 
 func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
+	format := state.GuardianTranscriptFormatLine
+	if r != nil {
+		if cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: strings.TrimSpace(threadID)}); err == nil && cfg != nil {
+			format = state.ParseGuardianTranscriptFormat(cfg.GuardianV2TranscriptFormat())
+		}
+	}
+	return state.RenderGuardianTranscript(r.guardianReviewTranscriptEntries(threadID), format)
+}
+
+// guardianReviewTranscriptEntries collects the bounded transcript with the
+// host-assigned attribution both formats share: author, label and position come
+// from the stored item, never from its text (#51465).
+func (r *RuntimeRouter) guardianReviewTranscriptEntries(threadID string) []state.GuardianTranscriptEntry {
 	record, err := r.threadRecord(session.ThreadID(strings.TrimSpace(threadID)), true, true)
 	if err != nil || record == nil {
 		return nil
 	}
 	const maxLines = 12
 	const maxChars = 4000
-	lines := make([]string, 0, maxLines)
-	for i := len(record.Items) - 1; i >= 0 && len(lines) < maxLines; i-- {
+	entries := make([]state.GuardianTranscriptEntry, 0, maxLines)
+	for i := len(record.Items) - 1; i >= 0 && len(entries) < maxLines; i-- {
 		item := record.Items[i]
 		// Rust #54316 (guardian-context/src/history.rs): compaction summaries are
 		// excluded from the transcript while the surrounding user messages
@@ -1056,7 +1069,12 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 			if text == "" {
 				text = "[non-text output]"
 			}
-			lines = append(lines, "tool "+name+" result: "+text)
+			entries = append(entries, state.GuardianTranscriptEntry{
+				Author:   "tool",
+				Label:    name,
+				LineRole: "tool " + name + " result",
+				Text:     text,
+			})
 			continue
 		}
 		text := strings.TrimSpace(item.Text)
@@ -1086,14 +1104,48 @@ func (r *RuntimeRouter) guardianReviewTranscript(threadID string) []string {
 			role = "assistant"
 		}
 		if role != "" {
-			text = role + ": " + text
+			entries = append(entries, state.GuardianTranscriptEntry{
+				Author:   guardianTranscriptAuthor(role),
+				Label:    guardianTranscriptLabel(role),
+				LineRole: role,
+				Text:     text,
+			})
+		} else {
+			entries = append(entries, state.GuardianTranscriptEntry{
+				Author: guardianTranscriptAuthor(role),
+				Text:   text,
+			})
 		}
-		lines = append(lines, text)
 	}
-	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
-		lines[i], lines[j] = lines[j], lines[i]
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
 	}
-	return lines
+	for index := range entries {
+		entries[index].Index = index
+	}
+	return entries
+}
+
+// guardianTranscriptAuthor mirrors Rust's ConversationTranscriptEntryKind
+// author mapping. Unknown roles stay assistant-authored with their role kept as
+// a descriptive label.
+func guardianTranscriptAuthor(role string) string {
+	switch strings.TrimSpace(role) {
+	case "user", "developer", "assistant", "tool":
+		return strings.TrimSpace(role)
+	default:
+		return "assistant"
+	}
+}
+
+// guardianTranscriptLabel keeps a role that differs from its author as the
+// descriptive label Rust renders in JSON records.
+func guardianTranscriptLabel(role string) string {
+	trimmed := strings.TrimSpace(role)
+	if trimmed == "" || trimmed == guardianTranscriptAuthor(trimmed) {
+		return ""
+	}
+	return trimmed
 }
 
 // guardianTranscriptExcludedItem reports whether a session item is kept out of
