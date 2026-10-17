@@ -264,6 +264,22 @@ func (r *LifecycleRunner) bootstrapLocked(options *BootstrapOptions) (*Bootstrap
 	if err != nil {
 		return nil, err
 	}
+	if autoUpdateEnabled && supportsDaemonCommand(ManagedCodexBin(daemonCodexHome(daemon)), []string{"update", "--help"}) {
+		// Rust #53845: a supported updater must publish its manual-request
+		// socket before bootstrap reports success. Older updaters omit the
+		// command and retain their previous compatibility behavior.
+		if err := waitForManagedUpdaterSocketReady(
+			r.updateLoopBackend(settings),
+			manualUpdateSocketPath(daemon),
+			pidBackendIsStartingOrRunning,
+		); err != nil {
+			context := err.Error()
+			if tail, tailErr := ReadStderrLogTail(daemon.Paths.UpdatePIDFile); tailErr == nil && tail != nil {
+				tail.AppendToContext(&context)
+			}
+			return nil, errors.New(context)
+		}
+	}
 	appServerVersion, err := r.waitUntilReady()
 	if err != nil {
 		return nil, err

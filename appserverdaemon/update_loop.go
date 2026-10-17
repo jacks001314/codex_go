@@ -7,11 +7,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"codex_go/codexuds"
 	"codex_go/envutil"
 	"codex_go/install"
 )
@@ -101,15 +99,21 @@ func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *Upd
 		// Only a CLI launch under the operation lock hands this authority over.
 		trigger = UpdateTrigger{Kind: UpdateTriggerRestoreProduction, Release: restoreRelease}
 	}
-	listener, socketPath, err := listenManualUpdateSocket(daemon)
+	socket, err := listenManualUpdateSocket(daemon)
 	if err != nil {
 		return err
+	}
+	if socket != nil {
+		defer socket.Close()
 	}
 	if err := MarkUpdaterReady(ownershipBackend); err != nil {
 		return err
 	}
-	if listener != nil {
-		defer listener.Close()
+	listener := net.Listener(nil)
+	socketPath := ""
+	if socket != nil {
+		listener = socket.Listener
+		socketPath = socket.Path
 	}
 	requests := make(chan net.Conn, 1)
 	acceptFailures := make(chan error, 1)
@@ -217,26 +221,39 @@ func autoUpdateEnabled(daemon *Daemon) bool {
 	return enabled
 }
 
+type manualUpdateSocket struct {
+	Listener net.Listener
+	Path     string
+	cleanup  func() error
+}
+
+func (s *manualUpdateSocket) Close() error {
+	if s == nil {
+		return nil
+	}
+	var errs []error
+	if s.Listener != nil {
+		errs = append(errs, s.Listener.Close())
+	}
+	if s.cleanup != nil {
+		errs = append(errs, s.cleanup())
+	}
+	return errors.Join(errs...)
+}
+
 // listenManualUpdateSocket binds the private request socket manual updates are
-// served on (Rust update_loop::run_with_http).
-func listenManualUpdateSocket(daemon *Daemon) (net.Listener, string, error) {
+// served on (Rust update_loop::run_with_http). Platform-specific binding keeps
+// Unix's advertised rendezvous path separate from the kernel socket path.
+func listenManualUpdateSocket(daemon *Daemon) (*manualUpdateSocket, error) {
 	socketPath := manualUpdateSocketPath(daemon)
 	if socketPath == "" {
-		return nil, "", nil
+		return nil, nil
 	}
-	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(socketPath)); err != nil {
-		return nil, socketPath, err
-	}
-	if _, err := os.Lstat(socketPath); err == nil {
-		if err := os.Remove(socketPath); err != nil {
-			return nil, socketPath, fmt.Errorf("failed to clear the stale updater socket %s: %w", socketPath, err)
-		}
-	}
-	listener, err := net.Listen("unix", socketPath)
+	socket, err := bindManualUpdaterSocket(socketPath)
 	if err != nil {
-		return nil, socketPath, fmt.Errorf("failed to bind the updater request socket %s: %w", socketPath, err)
+		return nil, err
 	}
-	return listener, socketPath, nil
+	return socket, nil
 }
 
 func UpdateOnce(ctx context.Context, runner *LifecycleRunner, runningIdentity *install.ExecutableIdentity, options *UpdateLoopOptions) (UpdateLoopControl, error) {
