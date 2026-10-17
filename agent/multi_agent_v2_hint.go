@@ -3,6 +3,8 @@ package agent
 import (
 	"fmt"
 	"strings"
+
+	"codex_go/prompt"
 )
 
 // Multi-agent V2 usage hints. The text mirrors Rust's
@@ -51,6 +53,10 @@ type MultiAgentV2UsageHintOptions struct {
 	ExposeSpawnAgentModelOverrides bool
 	RootUsageHintText              *string
 	SubagentUsageHintText          *string
+	// OmitUpdatePlanInstructions removes bundled planning-tool guidance from the
+	// resolved role text (Rust #41744). The caller sets it only when update_plan
+	// is disabled and no custom model catalog owns the instructions.
+	OmitUpdatePlanInstructions bool
 	// Catalog role instructions from the model's multi_agent messages
 	// (Rust #38619). Configured text takes precedence; catalog text is used
 	// only when no configuration override exists and is rendered with
@@ -78,6 +84,9 @@ func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 	} else if options.RootCatalogHintText != nil {
 		identity = strings.TrimSpace(*options.RootCatalogHintText)
 		identity = markMultiAgentRoleInstruction(identity)
+	}
+	if options.OmitUpdatePlanInstructions {
+		identity = prompt.WithoutUpdatePlanInstructions(identity)
 	}
 	parts := []string{identity, MultiAgentV2SharedUsageHint}
 	// Rust 92b83e226d (#37189): present wait_agent polling guidance in the

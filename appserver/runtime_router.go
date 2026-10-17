@@ -5001,6 +5001,9 @@ func (r *RuntimeRouter) applyThreadStartInstructionSources(response *ThreadStart
 		}
 		if info := r.modelInfoForRuntimeWithPersonality(modelID, cfg, personality); info != nil {
 			if generated := strings.TrimSpace(info.ModelInstructions(personality)); generated != "" {
+				if cfg != nil && !cfg.UpdatePlanEnabled() && modelUsesBundledInstructions(info) {
+					generated = promptctx.WithoutUpdatePlanInstructions(generated)
+				}
 				record.Metadata.BaseInstructions = generated
 				record.Metadata.BaseInstructionsProvenance = &session.BaseInstructionsProvenance{Type: session.BaseInstructionsProvenanceModel, Model: info.Slug}
 			}

@@ -1113,13 +1113,23 @@ func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
 		AdditionalContext: map[string]turn.AdditionalContextEntry{
 			"goal": {
 				Kind:  turn.AdditionalContextApplication,
-				Value: prompt.Continuation(promptGoal),
+				Value: prompt.ContinuationWithUpdatePlan(promptGoal, r.updatePlanEnabledForThread(threadID)),
 			},
 		},
 	}
 	if err := r.startGoalContinuationTurn(params); err != nil {
 		slog.Warn("failed to start automatic goal continuation", "thread_id", threadID, "error", err)
 	}
+}
+
+// updatePlanEnabledForThread resolves the thread's effective update_plan tool
+// setting for bundled prompt guidance (Rust #41744).
+func (r *RuntimeRouter) updatePlanEnabledForThread(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{ThreadID: threadID})
+	return err == nil && cfg != nil && cfg.UpdatePlanEnabled()
 }
 
 func goalContinuationPrompt(goal *state.ThreadGoal) *prompt.Goal {

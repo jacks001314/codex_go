@@ -16,6 +16,17 @@ func Continuation(goal *Goal) string {
 	return renderGoalTemplate(goalContinuationTemplate, goal)
 }
 
+// ContinuationWithUpdatePlan renders the automatic goal continuation with the
+// bundled planning-tool guidance omitted when update_plan is disabled (Rust
+// #41744). The user's objective and all other guidance are preserved.
+func ContinuationWithUpdatePlan(goal *Goal, updatePlanEnabled bool) string {
+	source := goalContinuationTemplate
+	if !updatePlanEnabled {
+		source = WithoutUpdatePlanInstructions(source)
+	}
+	return renderGoalTemplate(source, goal)
+}
+
 func BudgetLimit(goal *Goal) string {
 	return renderGoalTemplate(goalBudgetLimitTemplate, goal)
 }

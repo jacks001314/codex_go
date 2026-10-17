@@ -699,7 +699,7 @@ type collaborationModeWorldStateSnapshot struct {
 	Instructions string `json:"instructions,omitempty"`
 }
 
-func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo) (string, bool) {
+func collaborationModeInstructions(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool) (string, bool) {
 	if params == nil || params.CollaborationMode == nil {
 		return "", false
 	}
@@ -713,7 +713,13 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 			catalogValue = info.ModelMessages.CollaborationModes.Plan
 		}
 		if catalogValue != nil {
-			return *catalogValue, true
+			value := *catalogValue
+			// Rust #41744 omits bundled planning guidance from catalog
+			// collaboration instructions when update_plan is disabled.
+			if !updatePlanEnabled {
+				value = promptctx.WithoutUpdatePlanInstructions(value)
+			}
+			return value, true
 		}
 	}
 	if legacy := collaborationModeDeveloperInstructions(params); legacy != "" {
@@ -722,7 +728,7 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 	return "", false
 }
 
-func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelInfo) (collaborationModeWorldStateSnapshot, bool) {
+func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelInfo, updatePlanEnabled bool) (collaborationModeWorldStateSnapshot, bool) {
 	if params == nil || params.CollaborationMode == nil {
 		return collaborationModeWorldStateSnapshot{}, false
 	}
@@ -740,7 +746,7 @@ func collaborationModeSnapshot(params *turn.TurnStartParams, info *model.ModelIn
 	if modelID == "" {
 		modelID = strings.TrimSpace(stringFromAny(collaborationModeSettings(params.CollaborationMode)["model"]))
 	}
-	instructions, _ := collaborationModeInstructions(params, info)
+	instructions, _ := collaborationModeInstructions(params, info, updatePlanEnabled)
 	// Rust #39163: hash the rendered collaboration instructions so changed
 	// guidance (e.g. after a model catalog refresh) refreshes retained history
 	// even when the mode and model are unchanged. An empty-state hash makes
@@ -7319,6 +7325,11 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 	personality := appPersonalityForTurn(cfg, params)
 	if instructions == "" && !baseInstructionsExplicit {
 		instructions = modelInfo.ModelInstructions(personality)
+		// Rust #41744: bundled planning-tool guidance is omitted when
+		// update_plan is disabled; catalog instructions are model-owned and kept.
+		if instructions != "" && cfg != nil && !cfg.UpdatePlanEnabled() && modelUsesBundledInstructions(modelInfo) {
+			instructions = promptctx.WithoutUpdatePlanInstructions(instructions)
+		}
 	}
 	historyItems, previousResponseID := r.historyInputItemsForTurn(threadID)
 	// Rust #46291: disabling the override feature must also recover threads
@@ -11158,6 +11169,13 @@ func modelConfigForAppTurn(cfg *config.Config) *model.ModelsManagerConfig {
 	return out
 }
 
+// modelUsesBundledInstructions reports whether the model's instruction template
+// is the bundled prompt rather than a catalog-owned template. Rust #41744 only
+// strips planning guidance from Codex-owned text.
+func modelUsesBundledInstructions(info *model.ModelInfo) bool {
+	return info == nil || info.ModelMessages == nil || strings.TrimSpace(info.ModelMessages.InstructionsTemplate) == ""
+}
+
 func appPersonalityForTurn(cfg *config.Config, params *turn.TurnStartParams) string {
 	if params != nil && params.Personality != nil {
 		return strings.TrimSpace(*params.Personality)
@@ -12370,8 +12388,9 @@ func (r *RuntimeRouter) collaborationModeWorldStateInputItem(threadID string, pa
 	if err != nil {
 		return nil, err
 	}
-	current, currentValid := collaborationModeSnapshot(params, info)
-	instructions, hasInstructions := collaborationModeInstructions(params, info)
+	updatePlanEnabled := cfg != nil && cfg.UpdatePlanEnabled()
+	current, currentValid := collaborationModeSnapshot(params, info, updatePlanEnabled)
+	instructions, hasInstructions := collaborationModeInstructions(params, info, updatePlanEnabled)
 
 	previousKind := "absent"
 	previous := collaborationModeWorldStateSnapshot{}
@@ -12991,6 +13010,7 @@ func (r *RuntimeRouter) multiAgentUsageHintInputItem(threadID string, cfg *confi
 		SubagentUsageHintText:          v2Config.SubagentUsageHintText,
 		RootCatalogHintText:            rootCatalogHintText,
 		SubagentCatalogHintText:        subagentCatalogHintText,
+		OmitUpdatePlanInstructions:     !cfg.UpdatePlanEnabled() && rootCatalogHintText == nil && subagentCatalogHintText == nil,
 	})
 	if strings.TrimSpace(hint) == "" {
 		return nil, nil
