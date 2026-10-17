@@ -7,7 +7,31 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"codex_go/codexuds"
 )
+
+func privateDaemonTestDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := codexuds.PreparePrivateSocketDirectory(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// privateDaemonTestHome returns a codex home whose daemon state directory
+// already satisfies the Windows socket-directory contract. Production refuses
+// to widen or repair an existing directory, so tests exercising lifecycle and
+// updater paths must not reuse a broad t.TempDir() as the state directory.
+func privateDaemonTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Join(home, StateDirName)); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
 
 // TestDaemonSettingsFeatureOverridesAndUpdaterLikeRust mirrors Rust
 // settings.rs: the stored feature overrides round-trip, an empty set removes the
@@ -58,7 +82,7 @@ func TestDaemonSettingsFeatureOverridesAndUpdaterLikeRust(t *testing.T) {
 // override set removes the key instead of storing an empty map, keeps the
 // updater block, and leaves no temporary file behind.
 func TestDaemonSettingsSaveClearsFeatureOverridesLikeRust(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDaemonTestDir(t)
 	path := filepath.Join(dir, SettingsFileName)
 	if err := os.WriteFile(path, []byte(`{"featureOverrides":{"code_mode_host":true},"updater":{"updateIntervalMinutes":90}}`), 0o600); err != nil {
 		t.Fatalf("write settings: %v", err)
@@ -154,7 +178,7 @@ func TestDaemonSettingsLoadValidatesShutdownGrace(t *testing.T) {
 }
 
 func TestDaemonSettingsSavePreservesUnknownKeysLikeRust(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateDaemonTestDir(t)
 	path := filepath.Join(dir, SettingsFileName)
 	original := `{"remoteControlEnabled":false,"shutdownGraceSeconds":15,"updater":{"autoUpdateEnabled":false}}`
 	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {

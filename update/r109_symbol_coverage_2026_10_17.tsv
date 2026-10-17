@@ -1199,7 +1199,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 73bbb654b3b9796b11624914b3be908ab8a0551f	53660	Extract shared multi-agent v2 thread spawning (#53660)	2026-10-13	core	4	1	0.25	0	0	audit_pending	ThreadSpawnError,ThreadSpawnRequest,ThreadSpawnResult
 73bf1812722f9b6fdbfac4997b2d96d7b64ff7c3	46032	Require forced macOS preferences for managed configuration (#46032)	2026-09-16	config	0	0		0	0	not_applicable	
 73db60e71f7b29de2cdcbf66cb32dd5e83e155c2	45821	Use app-server state for TUI Windows sandbox decisions (#45821)	2026-09-16	tui	3	0	0.00	0	0	implementation_pending	refresh_windows_sandbox_config,refresh_windows_sandbox_for_thread,set_windows_sandbox_mode
-73e94ee7a60704d4094142c543958f6a794f78e9	42326	Harden Windows control socket rendezvous (#42326)	2026-09-02	appserver	6	5	0.83	0	0	audit_pending	token_user
+73e94ee7a60704d4094142c543958f6a794f78e9	42326	Harden Windows control socket rendezvous (#42326)	2026-09-02	appserver	6	6	1.00	0	0	complete	
 742472c52587a80576cf461b0a7dd484682a0750	44298	Set turn triggers for guardian and memory requests (#44298)	2026-09-09	guardian	0	0		0	0	not_applicable	
 745d86552113399ed90f2e4ee5d700f5c5c6f483	51848	Align Bazel release builds with Cargo and fix platform compatibility (#51848)	2026-10-07	tui	0	0		0	0	not_applicable	
 746103b592a381704b665d2431e8997b3a7d738e	51865	Use readable plugin mentions without suppressing same-name skills (#51865)	2026-10-07	tui	1	0	0.00	0	0	complete	test_plugin_summary

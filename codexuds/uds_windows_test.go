@@ -5,7 +5,9 @@ package codexuds
 import (
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -38,11 +40,10 @@ func unixPair(t *testing.T, listener net.Listener, path string) (net.Conn, net.C
 	return server, client
 }
 
-// TestPreparePrivateSocketDirectorySecuresAnInheritedDirectory covers the
-// upgrade path: a state directory an earlier build created with the default
-// DACL is secured in place instead of breaking the installation, and a directory
-// that does not meet the contract is still rejected for validation.
-func TestPreparePrivateSocketDirectorySecuresAnInheritedDirectory(t *testing.T) {
+// TestPreparePrivateSocketDirectoryRejectsInheritedDirectory covers the
+// rendezvous hardening contract: an existing directory with broad permissions is
+// rejected without attempting a DACL repair.
+func TestPreparePrivateSocketDirectoryRejectsInheritedDirectory(t *testing.T) {
 	root, err := os.MkdirTemp("", "cxuds")
 	if err != nil {
 		t.Fatalf("MkdirTemp error = %v", err)
@@ -52,22 +53,41 @@ func TestPreparePrivateSocketDirectorySecuresAnInheritedDirectory(t *testing.T) 
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
-	// Until the contract is applied, validation refuses the directory.
 	if _, guard, err := ValidatePrivateSocketPath(filepath.Join(directory, "daemon-updater.sock")); err == nil {
 		if guard != nil {
 			_ = guard.Close()
 		}
 		t.Fatal("validation accepted a directory without the private contract")
 	}
+	before, err := windows.GetNamedSecurityInfo(directory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PreparePrivateSocketDirectory(directory); err == nil {
+		t.Fatal("PreparePrivateSocketDirectory() repaired an existing broad ACL")
+	}
+	after, err := windows.GetNamedSecurityInfo(directory, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.String() != after.String() {
+		t.Fatalf("rejected directory ACL changed: before=%s after=%s", before.String(), after.String())
+	}
+}
+
+func TestPreparePrivateSocketDirectoryCreatesAndReusesPrivateDirectory(t *testing.T) {
+	root, err := os.MkdirTemp("", "cxuds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	directory := filepath.Join(root, "private")
 	if err := PreparePrivateSocketDirectory(directory); err != nil {
-		t.Fatalf("PreparePrivateSocketDirectory(inherited) error = %v", err)
+		t.Fatal(err)
 	}
-	if _, guard, err := ValidatePrivateSocketPath(filepath.Join(directory, "daemon-updater.sock")); err != nil {
-		t.Fatalf("validation after securing error = %v", err)
-	} else if guard != nil {
-		_ = guard.Close()
+	if err := PreparePrivateSocketDirectory(directory); err != nil {
+		t.Fatalf("reusing private directory: %v", err)
 	}
-	// A socket the secured directory owns can now be bound and dialed.
 	path := filepath.Join(directory, "daemon-updater.sock")
 	listener, err := netListen(path)
 	if err != nil {
@@ -79,6 +99,76 @@ func TestPreparePrivateSocketDirectorySecuresAnInheritedDirectory(t *testing.T) 
 	defer client.Close()
 	if _, err := client.Write([]byte("update\n")); err != nil {
 		t.Fatalf("write error = %v", err)
+	}
+}
+
+func TestPreparePrivateSocketDirectoryRejectsJunctionsAndVolumeRoots(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	junction := filepath.Join(root, "junction")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+		"$ErrorActionPreference = 'Stop'; New-Item -ItemType Junction -Path $env:CODEX_TEST_LINK -Target $env:CODEX_TEST_TARGET | Out-Null")
+	command.Env = append(os.Environ(), "CODEX_TEST_LINK="+junction, "CODEX_TEST_TARGET="+target)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("create junction: %v: %s", err, strings.TrimSpace(string(output)))
+	}
+	if err := PreparePrivateSocketDirectory(junction); err == nil {
+		t.Fatal("PreparePrivateSocketDirectory() accepted a junction")
+	}
+	if _, guard, err := ValidatePrivateSocketPath(filepath.Join(junction, "socket")); err == nil {
+		if guard != nil {
+			_ = guard.Close()
+		}
+		t.Fatal("ValidatePrivateSocketPath() accepted a junction")
+	}
+
+	volumeRoot := `\\?\Volume{00000000-0000-0000-0000-000000000000}\`
+	if err := PreparePrivateSocketDirectory(volumeRoot); err == nil {
+		t.Fatal("PreparePrivateSocketDirectory() accepted a volume root")
+	}
+}
+
+func TestPreparePrivateSocketDirectorySupportsExtendedLengthPaths(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, strings.Repeat("a", 150), strings.Repeat("b", 150))
+	if err := PreparePrivateSocketDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := PreparePrivateSocketDirectory(directory); err != nil {
+		t.Fatalf("reusing extended-length private directory: %v", err)
+	}
+}
+
+func TestValidatePrivateSocketPathPinsDirectoryWithoutCreatingPaths(t *testing.T) {
+	root, err := os.MkdirTemp("", "cxpin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	directory := filepath.Join(root, "private")
+	socketPath := filepath.Join(directory, "socket")
+	if _, guard, err := ValidatePrivateSocketPath(socketPath); err == nil {
+		if guard != nil {
+			_ = guard.Close()
+		}
+		t.Fatal("validation accepted a missing directory")
+	}
+	if pathExists(directory) {
+		t.Fatal("validation created the missing directory")
+	}
+	if err := PreparePrivateSocketDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	_, guard, err := ValidatePrivateSocketPath(socketPath)
+	if err != nil {
+		t.Fatalf("validation error = %v", err)
+	}
+	defer closeGuard(guard)
+	if err := os.Rename(directory, filepath.Join(root, "moved")); err == nil {
+		t.Fatal("validated socket directory was replaceable while pinned")
 	}
 }
 

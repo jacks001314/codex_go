@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -88,75 +87,13 @@ func preparePrivateSocketDirectory(socketDir string) error {
 		if _, guard, validateErr := validatePrivateDirectory(path); validateErr == nil {
 			closeGuard(guard)
 			return nil
+		} else {
+			// Changing a DACL cannot revoke handles another account may already
+			// hold. Existing directories must already satisfy the contract.
+			return fmt.Errorf("existing socket directory %s is not private to the current user: %w", socketDir, validateErr)
 		}
-		// An earlier build of this CLI created the directory with the default
-		// DACL inside the user's own CODEX_HOME. Rust rejects such a directory
-		// because another account could already hold handles to it; inside a
-		// user-owned profile only this user (and administrators) can reach it, so
-		// the private contract is applied instead of breaking the installation.
-		if err := repairPrivateDirectory(path, descriptor); err != nil {
-			return err
-		}
-		_, guard, validateErr := validatePrivateDirectory(path)
-		closeGuard(guard)
-		return validateErr
 	}
 	return nil
-}
-
-// repairPrivateDirectory applies the user-only DACL to an existing directory
-// that this user owns, leaving anything else unsafe untouched.
-func repairPrivateDirectory(path string, descriptor *windows.SECURITY_DESCRIPTOR) error {
-	current, err := currentUserSID()
-	if err != nil {
-		return err
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("failed to inspect the socket directory %s: %w", path, err)
-	}
-	if !info.IsDir() || info.Mode()&fs.ModeSymlink != 0 {
-		return errors.New("untrusted socket directory")
-	}
-	owner, err := directoryOwner(path)
-	if err != nil {
-		return err
-	}
-	if owner == nil || !windows.EqualSid(owner, current) {
-		return errors.New("socket directory is not private to the current user")
-	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return err
-	}
-	if err := windows.SetNamedSecurityInfo(
-		path,
-		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
-		nil,
-		dacl,
-		nil,
-	); err != nil {
-		return fmt.Errorf("failed to secure the socket directory %s: %w", path, err)
-	}
-	return nil
-}
-
-// directoryOwner reads the owner SID of a named directory.
-func directoryOwner(path string) (*windows.SID, error) {
-	descriptor, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
-	if err != nil {
-		return nil, err
-	}
-	if descriptor == nil {
-		return nil, nil
-	}
-	owner, _, err := descriptor.Owner()
-	if err != nil {
-		return nil, err
-	}
-	return owner, nil
 }
 
 // validatePrivateSocketPath validates the directory that holds socketPath
@@ -177,7 +114,7 @@ func validatePrivateSocketPath(socketPath string) (string, *os.File, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return filepath.Join(directory, filepath.Base(absolute)), guard, nil
+	return filepath.Join(stripExtendedPathPrefix(directory), filepath.Base(absolute)), guard, nil
 }
 
 // validatePrivateDirectory opens directory as a pinned handle and requires the
@@ -419,10 +356,17 @@ func resolveFinalPath(path string) (string, error) {
 			return "", err
 		}
 		if written < size {
-			return strings.TrimPrefix(windows.UTF16ToString(buffer[:written]), `\\?\`), nil
+			return windows.UTF16ToString(buffer[:written]), nil
 		}
 		size = written + 1
 	}
+}
+
+func stripExtendedPathPrefix(path string) string {
+	if strings.HasPrefix(path, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(path, `\\?\UNC\`)
+	}
+	return strings.TrimPrefix(path, `\\?\`)
 }
 
 func pathExists(path string) bool {

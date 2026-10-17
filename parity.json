@@ -13,8 +13,16 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-10-17T13:30:00+08:00",
+    "generatedAt": "2026-10-18T00:00:00+08:00",
     "items": [
+        {
+            "id": "windows-control-socket-rendezvous-hardening",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 73e94ee7a6 (#42326 Harden Windows control socket rendezvous): codexuds creates rendezvous directories with a protected, inheritable current-user-only DACL and now rejects an existing directory with broader permissions instead of repairing it, because another account may already hold a handle. Junction/reparse and volume-root targets are rejected, extended-length paths are resolved without following the leaf, and validation returns the AF_UNIX dial path while pinning the directory without FILE_SHARE_DELETE through connection setup. Peer checks still require the same non-elevated user. appserverdaemon keeps ordinary lock-directory creation for package roots and prepares the private contract explicitly at state-store operation-lock call sites.",
+            "userImpact": "Windows app-server and updater sockets cannot be hijacked through a permissive, junctioned, or swapped rendezvous directory, and an unsafe legacy directory fails closed instead of appearing repaired.",
+            "test": "go test ./codexuds ./appserverdaemon -count=1; go test ./appserver -run 'UnixSocket|ControlSocket|Daemon' -count=1; go vet ./codexuds ./appserverdaemon"
+        },
         {
             "id": "agent-message-board-in-memory",
             "status": "partial",
@@ -1561,7 +1569,7 @@
         },
         {
             "id": "guardian-context-composition",
-            "status": "not_applicable",
+            "status": "intentional_difference",
             "area": "guardian",
             "reason": "Audited upstream 0034ef93a7 (#43805 Centralize Guardian context composition): the upstream change removes duplicated composition between synchronous review and the Guardian V2 async scorer. Go has no async Guardian scorer, and its single reviewer path already composes bounded evidence through state.BuildPromptPartsWithOptions, preserving native encrypted transcript items through guardianPromptDelivery. There is no second composition path to merge; the Rust-only CollectedContext/SectionDelivery internals are not duplicated in Go.",
             "userImpact": "Guardian evidence keeps one tested ordering and delivery path without an unnecessary parallel composer abstraction.",
@@ -1577,7 +1585,7 @@
         },
         {
             "id": "guardian-context-section-collection",
-            "status": "not_applicable",
+            "status": "intentional_difference",
             "area": "guardian",
             "reason": "Audited upstream 2350823caa (#42076 Unify Guardian context section collection): Rust introduces typed sections and a shared registry for synchronous review and async Guardian V2 scoring. Go has no async scorer or second section consumer. Its single prompt composer already calls RootConversationSectionItems and TrustedUserAnswersSectionItems exactly once in source order, as user-role evidence, before the transcript, with existing Guardian and verified-answer coverage.",
             "userImpact": "Authorization evidence retains one ordered, user-role delivery path without a redundant registry abstraction.",
@@ -1585,7 +1593,7 @@
         },
         {
             "id": "tool-router-model-plan-isolation",
-            "status": "not_applicable",
+            "status": "intentional_difference",
             "area": "core",
             "reason": "Audited upstream 0182ff3480 (#41195 Finalize model-specific tool plans in ToolRouter): Go resolves the selected model before building the per-turn tool.Router and turn.Runtime, while candidate and previous-model compaction use a separate compact runner that does not construct or republish tool plans. The Rust-only capability getters are consumers for a later live tool-plan path that Go does not have.",
             "userImpact": "Preparing a fallback or compaction candidate cannot overwrite the selected model's tool mode, visible specs, or Responses Lite inventory.",

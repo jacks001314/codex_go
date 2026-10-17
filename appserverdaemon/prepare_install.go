@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexuds"
 	"codex_go/install"
 )
 
@@ -207,6 +208,9 @@ func prepareDaemonPackage(daemon *Daemon, settings *DaemonSettings, mode daemonI
 		// Confirmation must not block lifecycle commands, so the replacement
 		// re-acquires the operation lock and re-reads the settings that a
 		// concurrent command may have changed (Rust prepare_from_package).
+		if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(daemon.Paths.OperationLockFile)); err != nil {
+			return err
+		}
 		operationLock, err := acquireExclusiveFileLock(daemon.Paths.OperationLockFile, OperationLockTimeout, OperationLockRetry, "daemon operation lock")
 		if err != nil {
 			return err

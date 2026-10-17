@@ -113,6 +113,9 @@ func RequestManualUpdate(ctx context.Context, codexHome string, options *ManualU
 
 	// No updater is running. Take the operation lock and re-check before
 	// deciding whether an installer run is even authorized.
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(daemon.Paths.OperationLockFile)); err != nil {
+		return nil, err
+	}
 	lock, err := acquireExclusiveFileLock(daemon.Paths.OperationLockFile, OperationLockTimeout, OperationLockRetry, "daemon operation lock")
 	if err != nil {
 		return nil, err

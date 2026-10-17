@@ -28,7 +28,7 @@ func TestLifecycleDiscardsPendingRecoveryLikeRust(t *testing.T) {
 			stub.appRunning = testCase.appRunning
 			stub.socketReady = testCase.socketReady
 			stub.updaterRunning = true
-			home := t.TempDir()
+			home := privateDaemonTestHome(t)
 			daemon := NewDaemonForCodexHome(home, "")
 			recovery := daemonrecovery.FilePath(home)
 			if err := os.MkdirAll(filepath.Dir(recovery), 0o700); err != nil {

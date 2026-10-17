@@ -7,7 +7,7 @@ import (
 )
 
 func TestClaimManagedUpdaterPIDWritesOwnRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "app-server-updater.pid")
+	path := filepath.Join(privateDaemonTestDir(t), "app-server-updater.pid")
 	t.Setenv(UpdaterPIDFileEnv, path)
 	if err := ClaimManagedUpdaterPID(); err != nil {
 		t.Fatalf("ClaimManagedUpdaterPID error = %v", err)

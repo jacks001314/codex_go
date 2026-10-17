@@ -21,7 +21,7 @@ func legacyReleasePath(home string) string {
 // artifact that selects that package root.
 func legacyStandaloneHome(t *testing.T) (home string, legacyRelease string) {
 	t.Helper()
-	home = t.TempDir()
+	home = privateDaemonTestHome(t)
 	root := filepath.Join(home, "packages", legacyPackagesDirname)
 	legacyRelease = legacyReleasePath(home)
 	if err := os.MkdirAll(filepath.Join(legacyRelease, "bin"), 0o700); err != nil {
@@ -35,9 +35,6 @@ func legacyStandaloneHome(t *testing.T) (home string, legacyRelease string) {
 	}
 	// A legacy stderr log is what makes PackageRoot pick the standalone package.
 	state := filepath.Join(home, StateDirName)
-	if err := os.MkdirAll(state, 0o700); err != nil {
-		t.Fatalf("MkdirAll state error = %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(state, legacyStderrLogName), nil, 0o600); err != nil {
 		t.Fatalf("WriteFile legacy log error = %v", err)
 	}

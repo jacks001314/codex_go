@@ -16,7 +16,7 @@ func testUpdaterBackend(t *testing.T) *PIDBackend {
 	t.Helper()
 	return NewPIDUpdateLoopBackend(BackendPaths{
 		CodexBin:      os.Args[0],
-		UpdatePIDFile: filepath.Join(t.TempDir(), "daemon-updater.pid"),
+		UpdatePIDFile: filepath.Join(privateDaemonTestDir(t), "daemon-updater.pid"),
 	})
 }
 

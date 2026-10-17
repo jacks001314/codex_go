@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/codexuds"
 	"codex_go/envutil"
 	"codex_go/features"
 	"codex_go/install"
@@ -762,11 +763,17 @@ func (r *LifecycleRunner) waitUntilReady() (string, error) {
 
 func (r *LifecycleRunner) acquireOperationLock() (*daemonFileLock, error) {
 	daemon := r.daemon()
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(daemon.Paths.OperationLockFile)); err != nil {
+		return nil, err
+	}
 	return acquireExclusiveFileLock(daemon.Paths.OperationLockFile, OperationLockTimeout, OperationLockRetry, "daemon operation lock")
 }
 
 func (r *LifecycleRunner) tryAcquireOperationLock() (*daemonFileLock, bool, error) {
 	daemon := r.daemon()
+	if err := codexuds.PreparePrivateSocketDirectory(filepath.Dir(daemon.Paths.OperationLockFile)); err != nil {
+		return nil, false, err
+	}
 	return tryAcquireExclusiveFileLock(daemon.Paths.OperationLockFile, "daemon operation lock")
 }
 

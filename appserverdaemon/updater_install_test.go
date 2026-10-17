@@ -50,7 +50,7 @@ func TestRequiredPackageArtifactsLikeRust(t *testing.T) {
 // a pinned local directory, and the latest-version marker is cleared so the
 // managed updater stops following production releases.
 func TestUpdateFromCLIPinsTheCLIPackage(t *testing.T) {
-	home := t.TempDir()
+	home := privateDaemonTestHome(t)
 	root := filepath.Join(home, "packages", daemonPackagesDirname)
 	existing := filepath.Join(root, releasesDirName, "1.0.0-"+platformTarget())
 	writeTestFile(t, filepath.Join(existing, "bin", managedCodexFileName()))
@@ -120,7 +120,7 @@ func TestUpdateFromCLIPinsTheCLIPackage(t *testing.T) {
 // TestUpdateFromCLICancellationChangesNothing mirrors Rust's `Ok(None)`: a
 // refused replacement leaves the selected package alone.
 func TestUpdateFromCLICancellationChangesNothing(t *testing.T) {
-	home := t.TempDir()
+	home := privateDaemonTestHome(t)
 	root := filepath.Join(home, "packages", daemonPackagesDirname)
 	existing := filepath.Join(root, releasesDirName, "1.0.0-"+platformTarget())
 	writeTestFile(t, filepath.Join(existing, "bin", managedCodexFileName()))
