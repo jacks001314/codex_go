@@ -14909,14 +14909,9 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
-	// Rust #47540: disabling direct messaging requires an available message-board
-	// post tool, except for internal worker sessions that never use the board.
-	if v2Config != nil && v2Config.DisableDirectMessage && options.EnableAgents && !runtimeThreadSourceIsInternal(threadRecord) {
-		postName := tool.ToolName{Namespace: v2Config.ToolNamespace, Name: "post"}
-		if _, ok := toolRouter.Executor(postName); !ok {
-			return nil, errors.New("disable_direct_message requires an available agent message board in this session")
-		}
-	}
+	// Rust #53369: an unavailable message board must not reject turn
+	// construction. Calls to the missing board tools reach the model as ordinary
+	// unsupported-call errors while the rest of the turn continues.
 	return toolRouter, nil
 }
 
