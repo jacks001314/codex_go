@@ -188,7 +188,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 12cca49c81c8aa6a37a5cc4e39964ee3b70f9458	53506	Reject duplicate Host headers in the network proxy (#53506)	2026-10-12	core	0	0		0	0	complete	
 12de0e395d3313bc564190d983cb4f5acf0be713	48508	Preserve WebSocket continuations when steering a turn (#48508)	2026-09-26	model	0	0		0	0	not_applicable	
 12e82f44f84cac8c07fbb7589eb3985d4a11c4b2	44935	Remove personality selection from the TUI (#44935)	2026-09-11	tui	0	0		0	0	not_applicable	
-12ed76b09bf311d8d9a6f25be2f9a8eb37daf879	42164	Record result sources in app tool analytics (#42164)	2026-09-02	mcp	9	7	0.78	0	0	audit_pending	AppToolResultSourceFormat,has_same_tool_calls
+12ed76b09bf311d8d9a6f25be2f9a8eb37daf879	42164	Record result sources in app tool analytics (#42164)	2026-09-02	mcp	9	7	0.78	0	0	complete	AppToolResultSourceFormat,has_same_tool_calls
 12fd621f6278f3ca97451718578c29385a884fe4	54094	Preserve specific MCP failure codes in metrics and spans (#54094)	2026-10-14	mcp	4	2	0.50	0	0	complete	record_mcp_call_outcome_span_telemetry,request_timeout_error
 12fd929f724371104a1dea7c14930b078d6b4a18	47847	Keep the TUI responsive during clipboard copies (#47847)	2026-09-24	tui	19	5	0.26	0	0	audit_pending	ClipboardWorker,CopyResult,KeyEventAction,PendingCopy,defer_copy,finish_clipboard,finish_composer_copy,finish_copy,follow_pending_copy,handle_clipboard_key_action
 12fe9f822c0b02a9a257e0a248b17f1a3ad7b941	42931	Update OpenAI Docs skill guidance for GPT-6 Astra (#42931)	2026-09-05	model	0	0		0	0	not_applicable	

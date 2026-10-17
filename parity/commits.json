@@ -5892,10 +5892,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 7/9; needs review: AppToolResultSourceFormat, has_same_tool_calls"
-      ]
+        "status": "complete",
+        "evidence": [
+          "App tool requirements parse analytics_result_source, and host-only ToolResultSources are bounded, deduplicated, attached for direct and Code Mode calls, preserved across retries, and shed before call/completion metadata."
+        ]
     },
     {
       "sha": "671d5d1b3531d7251d6c59709b8d29fb7927e685",
