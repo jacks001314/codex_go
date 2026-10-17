@@ -454,3 +454,44 @@ WHERE id = 'memory-v2-thread'`, updated.Unix(), updated.UnixMilli()); err != nil
 		t.Fatalf("v2 must not write raw_memories.md: %v", err)
 	}
 }
+
+func TestSanitizeMemoryResponseItemDropsCiphertextLikeRust(t *testing.T) {
+	ciphertext := strings.Repeat("c", 512*1024)
+	item := map[string]any{
+		"type":              "message",
+		"role":              "assistant",
+		"encrypted_content": ciphertext,
+		"content": []any{
+			map[string]any{"type": "output_text", "text": "readable evidence"},
+		},
+	}
+	sanitized, ok := sanitizeMemoryResponseItem(item)
+	if !ok {
+		t.Fatal("assistant message with ciphertext was dropped")
+	}
+	if _, present := sanitized["encrypted_content"]; present {
+		t.Fatalf("sanitized item retained ciphertext: %#v", sanitized)
+	}
+	encoded, err := json.Marshal(sanitized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), "readable evidence") || len(encoded) >= len(ciphertext) {
+		t.Fatalf("sanitized item = %s", encoded)
+	}
+
+	for _, itemType := range []string{"function_call", "web_search_call"} {
+		item := map[string]any{"type": itemType, "encrypted_content": ciphertext}
+		if sanitized, ok := sanitizeMemoryResponseItem(item); !ok || sanitized["encrypted_content"] != nil {
+			t.Fatalf("%s sanitized = %#v, ok=%t", itemType, sanitized, ok)
+		}
+	}
+
+	developer := map[string]any{
+		"type": "message", "role": "developer", "encrypted_content": ciphertext,
+		"content": []any{map[string]any{"type": "input_text", "text": "developer"}},
+	}
+	if _, ok := sanitizeMemoryResponseItem(developer); ok {
+		t.Fatal("developer message was retained")
+	}
+}

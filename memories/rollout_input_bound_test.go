@@ -340,6 +340,49 @@ func TestBoundedRolloutInputKeepsSmallRolloutsByteIdentical(t *testing.T) {
 	}
 }
 
+// Rust #53963: large assistant ciphertext is stripped before the reader budget
+// is charged, so unreadable ciphertext cannot displace earlier readable evidence.
+func TestBoundedRolloutInputDropsCiphertextWithoutDisplacingEvidence(t *testing.T) {
+	threadID := "ciphertext-thread"
+	records := []string{
+		rolloutSessionMetaLine(t, threadID, "legacy"),
+		rolloutMessageLine(t, "user", "earlier extraction evidence"),
+	}
+	for i := 0; i < 20; i++ {
+		records = append(records, rolloutItemLine(t, map[string]any{
+			"type":              "message",
+			"role":              "assistant",
+			"encrypted_content": strings.Repeat("a", 512*1024),
+			"content": []any{
+				map[string]any{"type": "output_text", "text": fmt.Sprintf("assistant evidence %d", i)},
+			},
+		}))
+	}
+	records = append(records, rolloutMessageLine(t, "user", "newest correction"))
+	path := writeBoundRollout(t, t.TempDir(), threadID, records)
+
+	items, err := readRecentRolloutItems(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized, err := json.Marshal(items)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(serialized)
+	if strings.Contains(text, "encrypted_content") {
+		t.Fatal("bounded rollout retained assistant ciphertext")
+	}
+	for _, evidence := range []string{"earlier extraction evidence", "assistant evidence 19", "newest correction"} {
+		if !strings.Contains(text, evidence) {
+			t.Fatalf("bounded rollout dropped %q: %s", evidence, text)
+		}
+	}
+	if len(text) >= 2*1024*1024 {
+		t.Fatalf("bounded rollout retained %d bytes of ciphertext-era evidence", len(text))
+	}
+}
+
 // Compressed rollouts take the seekable-reader path (seekable_reader.rs:74-103):
 // the bytes are decoded into an anonymous snapshot so the bound, the record limit
 // and the header check all still apply.

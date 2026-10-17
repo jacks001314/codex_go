@@ -586,6 +586,10 @@ func SerializeFilteredRolloutForMemory(path string) (string, error) {
 }
 
 func sanitizeMemoryResponseItem(item map[string]any) (map[string]any, bool) {
+	// Rust clears encrypted reasoning/ciphertext before deciding whether the
+	// item carries memory evidence. Ciphertext is neither readable evidence nor
+	// part of the extraction byte budget (#53963).
+	delete(item, "encrypted_content")
 	itemType, _ := item["type"].(string)
 	switch itemType {
 	case "message":

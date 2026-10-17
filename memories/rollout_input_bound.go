@@ -151,6 +151,9 @@ func decodeMemoryRolloutLine(raw []byte) (rollout.Line, bool) {
 		if len(line.Item) == 0 {
 			line.Item = line.Payload
 		}
+		// Keep the legacy wire payload from retaining the unsanitized ciphertext
+		// after the item has been normalized.
+		line.Payload = nil
 		line.Type = "item"
 	}
 	return line, true
