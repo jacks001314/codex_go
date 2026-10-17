@@ -9,10 +9,37 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/attachmentstore"
 	"codex_go/rollout"
 	"codex_go/session"
 	"codex_go/turn"
 )
+
+type threadManagerAttachmentStore struct{}
+
+func (*threadManagerAttachmentStore) Upload(attachmentstore.UploadRequest) (attachmentstore.UploadResult, error) {
+	return attachmentstore.FileUploadResult("thread-file"), nil
+}
+
+func (*threadManagerAttachmentStore) Resolve(attachmentstore.ResolveRequest) (attachmentstore.AttachmentMetadata, error) {
+	return attachmentstore.AttachmentMetadata{}, attachmentstore.NewStoreError(attachmentstore.ErrorKindNotFound, "not found")
+}
+
+func TestThreadManagerInjectsAttachmentStoreLikeRust(t *testing.T) {
+	manager := NewThreadManager(nil)
+	if _, ok := manager.AttachmentStore().(attachmentstore.InlineStore); !ok {
+		t.Fatalf("default attachment store = %T, want InlineStore", manager.AttachmentStore())
+	}
+	injected := &threadManagerAttachmentStore{}
+	manager.SetAttachmentStore(injected)
+	if manager.AttachmentStore() != injected {
+		t.Fatalf("attachment store = %T, want the injected store", manager.AttachmentStore())
+	}
+	manager.SetAttachmentStore(nil)
+	if _, ok := manager.AttachmentStore().(attachmentstore.InlineStore); !ok {
+		t.Fatalf("cleared attachment store = %T, want InlineStore", manager.AttachmentStore())
+	}
+}
 
 func TestThreadManagerClaimTerminalIsAtomic(t *testing.T) {
 	manager := NewThreadManager(nil)

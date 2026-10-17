@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"codex_go/attachmentstore"
 	"codex_go/rollout"
 	"codex_go/runtimeutil"
 	"codex_go/session"
@@ -49,6 +50,9 @@ type ThreadManager struct {
 
 	statusMu sync.Mutex
 	status   *ThreadStatusManager
+
+	attachmentStoreMu sync.RWMutex
+	attachmentStore   attachmentstore.Store
 }
 
 func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
@@ -66,7 +70,31 @@ func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 		providerRoutes:        map[session.ThreadID]threadModelProviderRoute{},
 		terminals:             map[string]struct{}{},
 		status:                status,
+		attachmentStore:       attachmentstore.InlineStore{},
 	}
+}
+
+// SetAttachmentStore injects the storage-neutral attachment backend used by
+// this thread manager. A nil store restores the inline passthrough default.
+func (m *ThreadManager) SetAttachmentStore(store attachmentstore.Store) {
+	if m == nil {
+		return
+	}
+	m.attachmentStoreMu.Lock()
+	m.attachmentStore = attachmentstore.StoreOrDefault(store)
+	m.attachmentStoreMu.Unlock()
+}
+
+// AttachmentStore returns the injected attachment backend, or the inline
+// passthrough store when no backend was configured.
+func (m *ThreadManager) AttachmentStore() attachmentstore.Store {
+	if m == nil {
+		return attachmentstore.InlineStore{}
+	}
+	m.attachmentStoreMu.RLock()
+	store := m.attachmentStore
+	m.attachmentStoreMu.RUnlock()
+	return attachmentstore.StoreOrDefault(store)
 }
 
 func (m *ThreadManager) SetStatusManager(status *ThreadStatusManager) {

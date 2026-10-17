@@ -29,7 +29,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0337192dfd10e12ac633dcd159fa6d6120dbfe11	43806	Centralize Guardian transcript policy in context profiles (#43806)	2026-09-08	guardian	7	1	0.14	0	0	audit_pending	ContextProfile,MAX_MESSAGE_ENTRY_TOKENS,MAX_MESSAGE_TRANSCRIPT_TOKENS,MAX_RECENT_NON_USER_ENTRIES,MAX_TOOL_ENTRY_TOKENS,MAX_TOOL_TRANSCRIPT_TOKENS
 0340e12f5dc468f35ff922065ac1800459939b08	40993	Allow bundled browser plugins to run executor cleanup hooks (#40993)	2026-08-26	plugins	0	0		0	0	not_applicable	
 0344625ccf4ae0ab6472c6c1e7b4ace6af14661e	41921	Start fresh Vim drafts in Insert mode (#41921)	2026-08-31	tui	0	0		0	0	not_applicable	
-03467026f2426fafd3d33bbdfc78ec5f9d79f6f0	42634	Add an injectable attachment store to ThreadManager (#42634)	2026-09-03	appserver	9	6	0.67	0	0	audit_pending	AttachmentRef,AttachmentStoreFuture,AttachmentStoreResult
+03467026f2426fafd3d33bbdfc78ec5f9d79f6f0	42634	Add an injectable attachment store to ThreadManager (#42634)	2026-09-03	appserver	9	6	0.67	0	0	complete	AttachmentRef,AttachmentStoreFuture,AttachmentStoreResult
 035295b46ee4a5962d0e01a66a888d5bf5da4de4	41196	Improve sandboxing, MCP errors, and cached approvals (#41196)	2026-08-27	guardian	7	1	0.14	0	0	audit_pending	DirectoryScanMode,ScoreAuthorization,collect_existing_glob_directory_matches,guardian_authorization_version,is_read_denied_with_canonical_path,mcp_error
 03861e69ef549717c0fc7045abad56321d4a082b	41457	Source proactive multi-agent instructions from the model catalog (#41457)	2026-08-29	model	0	0		0	0	not_applicable	
 039eb58a0ba6647fb8f29fdd35341f3f1b153728	40848	Give Guardian reviewers read-only access to parent history (#40848)	2026-08-26	appserver	1	0	0.00	0	0	not_applicable	GuardianReadOnlyHistoryTools

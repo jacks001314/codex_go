@@ -7167,10 +7167,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 6/9; needs review: AttachmentRef, AttachmentStoreFuture, AttachmentStoreResult"
-      ]
+        "status": "complete",
+        "evidence": [
+          "ThreadManager now carries an injectable storage-neutral attachment store with an inline passthrough default, exposes it to consumers, and accepts a host-provided backend."
+        ]
     },
     {
       "sha": "0e0f55fc4ec9308840e54ceba1f1f1dc9547380f",
