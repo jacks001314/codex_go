@@ -70,7 +70,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 08663cc91b0bdc4a2f6f3660da089c61d21a7652	46064	Consolidate Guardian tests at shared policy and context boundaries (#46064)	2026-09-17	guardian	0	0		0	0	not_applicable	
 0884c8047af8b02df31da8c622110a724c6b3cbc	54378	Support inline model, reasoning, and speed selection in `/model` (#54378)	2026-10-15	tui	2	1	0.50	0	0	complete	send_model_settings_update
 088c7a1e75462caec9ec87e93caa8c4616a0c447	54672	Use shared Bazel CI preparation for lint and V8 jobs (#54672)	2026-10-16	core	0	0		0	0	not_applicable	
-08a7031b6acb4a8e00372be0e83e21cbab0db49d	49894	Return world-state snapshots and context updates together (#49894)	2026-10-01	sandbox	1	0	0.00	0	0	implementation_pending	SectionTransition
+08a7031b6acb4a8e00372be0e83e21cbab0db49d	49894	Return world-state snapshots and context updates together (#49894)	2026-10-01	sandbox	1	0	0.00	0	0	not_applicable	SectionTransition
 08b07eef1261b49b1071a8a4f60ed4d529d86a0d	49843	Preserve daemon diagnostics and include updater logs in reports (#49843)	2026-10-01	appserver	3	2	0.67	0	0	audit_pending	daemon_log_attachments
 08d3748cf015456b26875a704cf406339799fbb9	45502	Add managed thread lifetimes with cancellation-safe startup (#45502)	2026-09-14	guardian	3	2	0.67	0	0	audit_pending	start_thread_until
 08e2b58b07b8a423d6577b66fb7756e980b53dbf	49835	Clarify service tier default save errors in the TUI (#49835)	2026-10-01	tui	0	0		0	0	not_applicable	
