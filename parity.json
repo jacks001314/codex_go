@@ -1582,6 +1582,14 @@
             "reason": "Audited upstream 2350823caa (#42076 Unify Guardian context section collection): Rust introduces typed sections and a shared registry for synchronous review and async Guardian V2 scoring. Go has no async scorer or second section consumer. Its single prompt composer already calls RootConversationSectionItems and TrustedUserAnswersSectionItems exactly once in source order, as user-role evidence, before the transcript, with existing Guardian and verified-answer coverage.",
             "userImpact": "Authorization evidence retains one ordered, user-role delivery path without a redundant registry abstraction.",
             "test": "go test ./state ./appserver -run 'Guardian|VerifiedAnswer' -count=1"
+        },
+        {
+            "id": "tool-router-model-plan-isolation",
+            "status": "not_applicable",
+            "area": "core",
+            "reason": "Audited upstream 0182ff3480 (#41195 Finalize model-specific tool plans in ToolRouter): Go resolves the selected model before building the per-turn tool.Router and turn.Runtime, while candidate and previous-model compaction use a separate compact runner that does not construct or republish tool plans. The Rust-only capability getters are consumers for a later live tool-plan path that Go does not have.",
+            "userImpact": "Preparing a fallback or compaction candidate cannot overwrite the selected model's tool mode, visible specs, or Responses Lite inventory.",
+            "test": "go test ./appserver -run 'PreviousModelCompact|CompactionIncrementalCatalog|ToolInventory|ToolNamespace' -count=1; go test ./turn -run 'ToolMode|ToolNamespaces|ModelVisible|CodeModeOnly' -count=1"
         }
     ]
 }

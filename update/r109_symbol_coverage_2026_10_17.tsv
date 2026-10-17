@@ -8,7 +8,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 00d92ad3ee7f29142bca187a3391b8f38064baf0	47329	Standardize TUI menu description wording and punctuation (#47329)	2026-09-22	tui	1	0	0.00	0	0	implementation_pending	permission_preset_description
 011f803f3cd44802354873de259778913c56ef94	49076	Avoid collecting unused Git metadata in skill analytics (#49076)	2026-09-28	telemetry	1	1	1.00	0	0	complete	
 0160eb3497bc2640c461c7cc5af65836491ded8e	47257	Preserve explicit message-board unsubscribes when posting (#47257)	2026-09-22	core	0	0		0	0	not_applicable	
-0182ff34802c068815d5e0990ee94ec2d080b4fe	41195	Finalize model-specific tool plans in `ToolRouter` (#41195)	2026-08-27	core	10	7	0.70	0	0	audit_pending	can_manage_children,has_terminal_controls,requires_code_mode_worker
+0182ff34802c068815d5e0990ee94ec2d080b4fe	41195	Finalize model-specific tool plans in `ToolRouter` (#41195)	2026-08-27	core	10	7	0.70	0	0	not_applicable	can_manage_children,has_terminal_controls,requires_code_mode_worker
 018687bd8cf859241ab08cbf9ccc405adbd1d74f	46692	Unify TUI picker styling and improve compact layouts (#46692)	2026-09-19	tui	4	2	0.50	0	0	audit_pending	measure_rows_height,render_rows_single_line
 01964952881af1c1e68c8d02d16d373e1b33a6e2	49112	Add X11 primary selection and middle-click paste support (#49112)	2026-09-29	tui	13	5	0.38	0	0	audit_pending	CopyDestination,PasteSource,cancel_primary,copy_selected_text,finish_clipboard,native_result,publish_primary,read_text
 01f92c57802a743b5d3893abc9df7670eef8cfe9	46532	Remove `com.apple.runningboard` from Seatbelt platform defaults (#46532)	2026-09-18	sandbox	0	0		0	0	not_applicable	
