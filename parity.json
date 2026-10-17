@@ -1654,6 +1654,14 @@
             "reason": "Aligned upstream 23cedf4802 (#40716 Add thread ownership metadata for managed worktrees): Go validates the managed four-hex bucket layout, repository-root identity, and linked-worktree git metadata before reading or writing codex-thread.json. Binding uses atomic hard-link no-clobber publication, is idempotent for the same thread, and rejects conflicting owners plus primary/nested/unmanaged checkouts. Git probes use repository-selecting env scrubbing and disabled hooks/fsmonitor/attributes/LFS behavior; managed creation uses the same bucket layout.",
             "userImpact": "Managed worktrees cannot have ownership metadata written into a primary or unmanaged checkout, and concurrent thread bindings cannot clobber another owner.",
             "test": "go test ./worktree -count=1; go test ./app -run Worktree -count=1; go test ./tui ./tui/tea -run Worktree -count=1"
+        },
+        {
+            "id": "attachment-owned-mcp-permissions",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 4213b38f3c (#40728 Honor attachment-owned permissions for MCP servers): Go publishes per-server permission profiles from selected environment configuration, fails closed for servers absent from a published authority, and applies that authority to calls, approvals, roots, and elicitations. Captured environment selections and runtime fingerprints replace Rust's standalone current_environments_match check.",
+            "userImpact": "An attached MCP server can only act under the permission profile owned by its selected environment, rather than inheriting an unrelated environment or stale runtime profile.",
+            "test": "go test ./mcp ./appserver -run 'PermissionAuthority|MCPElicitation|ServerPermission|Attachment.*Permission' -count=1"
         }
     ]
 }

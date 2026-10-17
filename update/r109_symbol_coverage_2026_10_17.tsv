@@ -666,7 +666,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 41fd60f5618dc4e1d7d2730e956fe791006e66be	53152	Allow selecting and copying TUI turn tips (#53152)	2026-10-11	tui	0	0		0	0	not_applicable	
 421082e79d3186b0077bccbbbe2c77c0b1a26520	47852	Avoid blocking async proxy resolution on the system proxy cache (#47852)	2026-09-24	core	0	0		0	0	not_applicable	
 4210c08defe92fe8828f789b6f9fda287ad3709e	41562	Preserve turn lineage across goal continuations (#41562)	2026-08-29	appserver	3	3	1.00	0	0	complete	
-4213b38f3c555049bf6f494065698a3dfe587c16	40728	Honor attachment-owned permissions for MCP servers (#40728)	2026-08-25	appserver	6	5	0.83	0	0	audit_pending	current_environments_match
+4213b38f3c555049bf6f494065698a3dfe587c16	40728	Honor attachment-owned permissions for MCP servers (#40728)	2026-08-25	appserver	6	6	1.00	0	0	complete	
 422239eb4b1e0d0f85fac7256a079a1befe78472	40180	Classify contextual fragments with content kinds (#40180)	2026-08-23	guardian	8	8	1.00	0	0	complete	
 42266240fde628ef74c2b4e2a54d9bde059cd3e6	47871	Fix PID reservation test race and update guardian heartbeat snapshot (#47871)	2026-09-24	guardian	0	0		0	0	not_applicable	
 42312d4ff4e258c1dfa43db9a9c59eed943c98de	51157	Enforce required environment skills before model inference (#51157)	2026-10-05	guardian	7	7	1.00	0	0	complete	
