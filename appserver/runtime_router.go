@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"codex_go/agent"
 	"codex_go/agentboard"
@@ -34,6 +35,7 @@ import (
 	"codex_go/historynotes"
 	"codex_go/install"
 	"codex_go/mcp"
+	"codex_go/metrics"
 	"codex_go/model"
 	"codex_go/network"
 	"codex_go/otelinit"
@@ -502,12 +504,12 @@ type RuntimeRouter struct {
 	// out of item data and rollout records (Rust #47327 `#[serde(skip)]`).
 	imageGenerationRequestIDsMu sync.Mutex
 	imageGenerationRequestIDs   map[string]string
-	agentActivityMu       sync.Mutex
-	agentActivity         map[string]chan string
-	agentMessagesMu       sync.Mutex
-	agentMessages         map[string][]any
-	nodeReplEvidenceMu    sync.Mutex
-	nodeReplEvidence      map[string]*codexctx.NodeReplReviewEvidence
+	agentActivityMu             sync.Mutex
+	agentActivity               map[string]chan string
+	agentMessagesMu             sync.Mutex
+	agentMessages               map[string][]any
+	nodeReplEvidenceMu          sync.Mutex
+	nodeReplEvidence            map[string]*codexctx.NodeReplReviewEvidence
 	// retainedContexts is the thread-owned retained evidence the Guardian review
 	// prompt renders (Rust's session-owned `RetainedContext`). It is seeded from
 	// the thread's newest compaction checkpoint and then kept current from the
@@ -15498,6 +15500,9 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	}
 	action := terminalWriteApprovalAction(request, permissions)
 	reason := terminalWriteApprovalReason(request, permissions)
+	if err := guardStdinReviewSize(action, reason); err != nil {
+		return err
+	}
 	// Rust Session::request_approval: hooks decide first, before Guardian and
 	// the user approval request.
 	if verdict, ok := r.permissionRequestHookVerdict(ctx, threadID, turnID, strings.TrimSpace(request.CallID), "write_stdin", nil, terminalWriteHookToolInput(request)); ok && verdict != nil {
@@ -15555,6 +15560,46 @@ func (r *RuntimeRouter) writeStdinApproval(ctx context.Context, request *tool.Wr
 	default:
 		return errors.New("Approval denied before writing terminal input.")
 	}
+}
+
+const (
+	// maxStdinApprovalBytes mirrors Rust's MAX_STDIN_APPROVAL_BYTES (#44060):
+	// terminal input reviews stay bounded even though the general Guardian
+	// action limit is 200,000 bytes.
+	maxStdinApprovalBytes = 8_000
+	// stdinReviewSizeCheckMetric mirrors Rust's
+	// `codex.unified_exec.stdin_review.size_check` counter.
+	stdinReviewSizeCheckMetric = "codex.unified_exec.stdin_review.size_check"
+)
+
+// guardStdinReviewSize mirrors Rust's unified-exec stdin approval size gate: the
+// serialized action plus its review reason must fit maxStdinApprovalBytes, and
+// a truncated action is never reviewed or executed. A formatter failure (the
+// general Guardian action limit) is unreviewable as well.
+func guardStdinReviewSize(action state.Action, reason string) error {
+	text, truncated, err := state.FormatGuardianActionPretty(action)
+	if err != nil {
+		return errors.New("terminal input and permission details are too large to review safely; use a smaller input or start a new terminal with fewer grants")
+	}
+	result := "within_limit"
+	switch {
+	case truncated:
+		result = "formatter_truncated"
+	case len(text)+len(reason) > maxStdinApprovalBytes:
+		result = "over_limit"
+	}
+	inputKind := "control"
+	for _, char := range action.Chars {
+		if !unicode.IsControl(char) {
+			inputKind = "text"
+			break
+		}
+	}
+	metrics.Counter(stdinReviewSizeCheckMetric, 1, map[string]string{"result": result, "input_kind": inputKind})
+	if result != "within_limit" {
+		return errors.New("terminal input and permission details are too large to review safely; use a smaller input or start a new terminal with fewer grants")
+	}
+	return nil
 }
 
 // effectiveWriteStdinConfig resolves the config the terminal's thread runs

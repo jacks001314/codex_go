@@ -426,8 +426,8 @@
             "id": "tui-clear-ui-slash",
             "status": "done",
             "area": "tui",
-            "reason": "Rust /clear dispatches ClearUi, which starts a fresh session while keeping the previous rollout resumable. Go TUI and interactive command paths now reset thread identity, transcript, and idle status instead of only clearing visible messages.",
-            "test": "go test ./tui/tea ./app -run 'SlashCommands|InteractiveSlashCommands' -count=1"
+            "reason": "Rust /clear dispatches ClearUi, which clears pending history, the visible screen and scrollback, resets app UI state, and starts a fresh session while keeping the previous rollout resumable. The Go TUI now emits a real terminal clear through OnClearTerminal (visible-screen-only while a temporary alt-screen overlay is active), rejects the switch while a permission profile update is pending, then resets thread identity, transcript and idle status and starts a fresh session. The command description and help text match Rust's 'clear the terminal and start a new chat'.",
+            "test": "go test ./tui/tea -run 'TestClearCommand|TestNewCommandDoesNotClear' -count=1; go test ./tui/... -count=1"
         },
         {
             "id": "tui-slash-runtime-backed",
@@ -1199,6 +1199,14 @@
             "reason": "Aligned upstream's executor environment configuration layer and its host wiring: execserver parses and validates environments.toml (default/include_local, per-environment id plus exactly one of url or program, auth_bearer_token, args/env/cwd, connect/initialize timeouts), rejecting unknown fields without echoing values, with Rust's validation messages verbatim; the provider snapshot covers id validation, duplicates, config-dir-relative stdio cwd, default selection (including `none` and the disabled-local rejection) and the CODEX_EXEC_SERVER_URL fallback; the stdio client transport spawns the program and speaks line-delimited JSON-RPC with no reconnect strategy, mirroring Rust. The app-server now loads the provider at startup (a malformed file fails startup), pre-registers remote entries with their bearer headers and stdio entries with their commands, reaches stdio records from every executor path (environment info/status, remote skills, the OpenAI-file client, unified exec) and applies the provider default to turns that select no environment. Remaining: Rust builds the same manager from CODEX_HOME in codex exec, the TUI and the worktree paths, while Go's non-app-server hosts still run locally.",
             "userImpact": "environments.toml is fully honored by the app server: configured remote (optionally bearer-authenticated) and stdio executors are addressable, selectable by turns and used as the default environment. The codex exec and TUI hosts still run locally.",
             "test": "go test ./execserver -run 'Environment|TestStdioClient|TestLoadEnvironmentsTOML' -count=1; go test ./appserver -run 'Environment|TestUnifiedExecEnvironments' -count=1; go test ./app -run EnvironmentsTOML -count=1"
+        },
+        {
+            "id": "guardian-action-review-byte-limit",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 3d3df0a0ca (#44060 Raise Guardian's action review limit to 200,000 bytes): GUARDIAN_MAX_ACTION_BYTES is 200,000 bytes and each action string is first shortened at Rust's 16,000-token budget with the shared `<truncated omitted_approx_tokens=\"N\" />` marker; the pretty JSON formatter keeps `<`, `>` and `&` literal like serde_json and rejects aggregate documents beyond the limit with Rust's exact error, so oversized reviews fail closed. Terminal-input approval uses the separate 8,000-byte MAX_STDIN_APPROVAL_BYTES bound over the serialized action plus reason and records codex.unified_exec.stdin_review.size_check with result/input_kind before hooks or Guardian review.",
+            "userImpact": "Guardian reviews accept MCP and patch payloads up to 200,000 bytes with per-string truncation markers, while oversized actions and terminal input fail closed instead of being reviewed partially.",
+            "test": "go test ./state -run Guardian -count=1; go test ./appserver -run 'TestGuardianStdinReviewSizeLimitLikeRust|Guardian' -count=1"
         }
     ]
 }

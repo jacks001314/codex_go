@@ -2,9 +2,23 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"codex_go/context"
+)
+
+const (
+	// GuardianMaxActionBytes is Rust's GUARDIAN_MAX_ACTION_BYTES (#44060): the
+	// serialized review action, including the review reason and JSON escaping,
+	// must fit this bound. A larger action fails closed instead of being
+	// reviewed partially.
+	GuardianMaxActionBytes = 50_000 * 4
+
+	// GuardianMaxActionStringTokens is Rust's GUARDIAN_MAX_ACTION_STRING_TOKENS:
+	// individual strings are shortened with the shared Guardian truncation
+	// marker before the aggregate byte limit is checked.
+	GuardianMaxActionStringTokens = 16_000
 )
 
 // renderGuardianToolDescriptions mirrors Rust's planned-action composition: the
@@ -22,13 +36,75 @@ func renderGuardianToolDescriptions(action Action) string {
 	return rendered.Content
 }
 
+// FormatGuardianActionPretty renders the exact action JSON the reviewer sees
+// (Rust's format_guardian_action_pretty). Oversized string fields are
+// truncated with the shared Guardian marker first; the resulting document must
+// then fit GuardianMaxActionBytes or the review fails closed. The boolean
+// reports whether any field was truncated, which the terminal-input approval
+// path treats as unreviewable.
+func FormatGuardianActionPretty(action Action) (string, bool, error) {
+	value, truncated := truncateGuardianActionValue(guardianActionJSONValue(action))
+	// serde_json leaves `<`, `>` and `&` literal; encoding/json's default HTML
+	// escaping would rewrite the Guardian omission marker the reviewer sees.
+	var builder strings.Builder
+	encoder := json.NewEncoder(&builder)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return "", truncated, err
+	}
+	text := strings.TrimSuffix(builder.String(), "\n")
+	if len(text) > GuardianMaxActionBytes {
+		return "", truncated, fmt.Errorf("Guardian action exceeds the %d-byte review limit", GuardianMaxActionBytes)
+	}
+	return text, truncated, nil
+}
+
 // marshalGuardianPromptAction renders the exact action JSON the reviewer sees.
 func marshalGuardianPromptAction(action Action) (string, error) {
-	data, err := json.MarshalIndent(guardianActionJSONValue(action), "", "  ")
-	if err != nil {
-		return "", err
+	text, _, err := FormatGuardianActionPretty(action)
+	return text, err
+}
+
+// truncateGuardianActionValue mirrors Rust's truncate_guardian_action_value:
+// strings are shortened independently and containers recurse, so one oversized
+// argument cannot hide the rest of the reviewed action. Inputs are copied
+// rather than mutated.
+func truncateGuardianActionValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case string:
+		text, truncated := context.GuardianTruncateText(typed, GuardianMaxActionStringTokens)
+		return text, truncated
+	case []string:
+		truncated := false
+		values := make([]any, len(typed))
+		for index, item := range typed {
+			var itemTruncated bool
+			values[index], itemTruncated = truncateGuardianActionValue(item)
+			truncated = truncated || itemTruncated
+		}
+		return values, truncated
+	case []any:
+		truncated := false
+		values := make([]any, len(typed))
+		for index, item := range typed {
+			var itemTruncated bool
+			values[index], itemTruncated = truncateGuardianActionValue(item)
+			truncated = truncated || itemTruncated
+		}
+		return values, truncated
+	case map[string]any:
+		truncated := false
+		values := make(map[string]any, len(typed))
+		for key, item := range typed {
+			var itemTruncated bool
+			values[key], itemTruncated = truncateGuardianActionValue(item)
+			truncated = truncated || itemTruncated
+		}
+		return values, truncated
+	default:
+		return value, false
 	}
-	return string(data), nil
 }
 
 // normalizeRequestPermissions mirrors Rust's typed RequestPermissionProfile

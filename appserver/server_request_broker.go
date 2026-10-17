@@ -3,6 +3,7 @@ package appserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +14,10 @@ import (
 )
 
 var ErrServerRequestNotFound = fmt.Errorf("%w: server request not found", ErrInvalidRequest)
+
+// ErrServerRequestConnectionClosed marks requests rejected because their
+// client connection disappeared before replying.
+var ErrServerRequestConnectionClosed = errors.New("server request failed: connection closed")
 
 type ServerRequestSink interface {
 	SendServerRequest(request *ServerRequest)

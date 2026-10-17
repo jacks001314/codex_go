@@ -87,7 +87,7 @@ func (e *NodeReplReviewEvidence) RecordMultimodal(toolName, cellID, callID strin
 		return
 	}
 	escaped := strings.ReplaceAll(strings.Join(textBlocks, "\n"), "</", "<\\/")
-	text, _ := guardianTruncateText(escaped, GuardianMaxNodeReplToolResultTokens)
+	text, _ := GuardianTruncateText(escaped, GuardianMaxNodeReplToolResultTokens)
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -297,10 +297,10 @@ func takeBytesAtCharBoundary(value string, max int) string {
 	return value[:max]
 }
 
-// guardianTruncateText mirrors Rust guardian_truncate_text: it keeps the full
+// GuardianTruncateText mirrors Rust guardian_truncate_text: it keeps the full
 // text when it fits the token budget, otherwise keeps a prefix and suffix with
 // a `<truncated omitted_approx_tokens="N" />` marker in between.
-func guardianTruncateText(content string, tokenCap int) (string, bool) {
+func GuardianTruncateText(content string, tokenCap int) (string, bool) {
 	if content == "" {
 		return "", false
 	}
