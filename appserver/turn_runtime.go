@@ -1609,11 +1609,15 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 			}
 		}
 	}
-	if status := r.compactTokenStatusForTurn(threadID, runConfig.Model, params); status.ShouldCompact {
+	preTurnStatus := r.compactTokenStatusForTurn(threadID, runConfig.Model, params)
+	if preTurnRecord, preTurnErr := r.threadRecord(session.ThreadID(threadID), true, false); preTurnErr == nil && preTurnRecord != nil {
+		r.maybeStartBackgroundCompaction(ctx, threadID, turnID, params, runConfig, compactItemsFromSessionItems(preTurnRecord.Items), compact.PhasePreTurn, &preTurnStatus)
+	}
+	if preTurnStatus.ShouldCompact {
 		_, compactErr := r.compactThread(ctx, &runtimeCompactRequest{
 			ThreadID: threadID, TurnID: turnID, ConnectionID: connectionID,
 			Trigger: compact.TriggerAuto, Reason: compact.ReasonContextWindowExceeded,
-			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(status.ActiveContextTokens),
+			Phase: compact.PhasePreTurn, ActiveContextTokensBefore: int64(preTurnStatus.ActiveContextTokens),
 			CyberAccessProgram: appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID),
 			BaseInstructions:   appStringPointer(runConfig.Instructions),
 			WindowModel:        runConfig.Model,
@@ -1897,6 +1901,9 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 				// summarized only once. It runs before the turn completes so an
 				// interrupted or aborted compaction still fails the turn, while
 				// other failures leave the completed turn intact.
+				if postTurnRecord, postTurnRecordErr := r.threadRecord(session.ThreadID(threadID), true, false); postTurnRecordErr == nil && postTurnRecord != nil {
+					r.maybeStartBackgroundCompaction(ctx, threadID, turnID, params, runConfig, compactItemsFromSessionItems(postTurnRecord.Items), compact.PhasePostTurn, status)
+				}
 				postTurnRan, compactErr := r.postTurnCompact(ctx, threadID, turnID, connectionID, params, runConfig, status)
 				if compactErr != nil {
 					r.persistCompactionFailure(threadID, compactErr)
@@ -2130,6 +2137,36 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 			policy.PrefillTokens = compact.EstimateTokens(compactItemsFromSessionItems(record.Items))
 		}
 		status := compact.Evaluate(policy, int(model.AgentUsageTotalTokens(ctx.Response.Usage)))
+		var historyItems []any
+		var history []compact.Item
+		historyBuilt := false
+		buildHistory := func() {
+			if historyBuilt {
+				return
+			}
+			historyBuilt = true
+			historyItems, _ = r.historyInputItemsForTurn(threadID)
+			history = compactItemsFromSessionItems(record.Items)
+			seen := make(map[string]struct{}, len(history))
+			for i := range history {
+				if history[i].ID != "" {
+					seen[history[i].ID] = struct{}{}
+				}
+			}
+			for _, item := range compactItemsFromSessionItems(r.sessionItemsForTurn(turnID, params, ctx.Result, startedAt)) {
+				if item.ID != "" {
+					if _, ok := seen[item.ID]; ok {
+						continue
+					}
+					seen[item.ID] = struct{}{}
+				}
+				history = append(history, item)
+			}
+		}
+		if _, asyncEnabled := asyncCompactionThresholdPercent(runConfig.Config); asyncEnabled {
+			buildHistory()
+			r.maybeStartBackgroundCompaction(ctx.Context, threadID, turnID, params, runConfig, history, compact.PhaseMidTurn, &status)
+		}
 		newContextWindowRequested := r.takeNewContextWindowRequest(threadID)
 		if !status.ShouldCompact && !newContextWindowRequested {
 			return nil, nil
@@ -2145,28 +2182,7 @@ func (r *RuntimeRouter) midTurnSamplingCompaction(threadID string, turnID string
 				ResetWindow: true,
 			}, nil
 		}
-		// The number of conversation input items is captured before the
-		// compaction replaces the persisted history, so the world-state
-		// prefix can be split from the original conversation items.
-		historyItems, _ := r.historyInputItemsForTurn(threadID)
-		// The conversation to compact is the persisted thread history plus
-		// the items the current turn accumulated before they are persisted.
-		history := compactItemsFromSessionItems(record.Items)
-		seen := make(map[string]struct{}, len(history))
-		for i := range history {
-			if history[i].ID != "" {
-				seen[history[i].ID] = struct{}{}
-			}
-		}
-		for _, item := range compactItemsFromSessionItems(r.sessionItemsForTurn(turnID, params, ctx.Result, startedAt)) {
-			if item.ID != "" {
-				if _, ok := seen[item.ID]; ok {
-					continue
-				}
-				seen[item.ID] = struct{}{}
-			}
-			history = append(history, item)
-		}
+		buildHistory()
 		_, compactedItems, err := r.compactThreadWithHistory(context.Background(), &runtimeCompactRequest{
 			ThreadID:                  threadID,
 			TurnID:                    turnID,

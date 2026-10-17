@@ -2,6 +2,8 @@ package appserver
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -10,6 +12,8 @@ import (
 	"codex_go/config"
 	"codex_go/features"
 	"codex_go/model"
+	"codex_go/session"
+	"codex_go/turn"
 )
 
 // asyncCompactionThresholdPercent is Rust's
@@ -256,6 +260,87 @@ func installBackgroundCompactionCandidate(currentHistory []compact.Item, candida
 	return compact.InstallCompactedHistoryPrefix(currentHistory, candidate.Result.NewHistory, prefix, nil, initialContext), true
 }
 
+func (r *RuntimeRouter) maybeStartBackgroundCompaction(ctx context.Context, threadID string, turnID string, params *turn.TurnStartParams, runConfig *appTurnRunConfig, history []compact.Item, phase compact.Phase, status *compact.TokenStatus) bool {
+	if r == nil || r.threads == nil || runConfig == nil || runConfig.Config == nil || status == nil || len(history) == 0 {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	support := model.RemoteCompactionUnsupported
+	if providerID := strings.TrimSpace(runConfig.ProviderID); r.providerSupportsRemoteCompact(providerID) {
+		support = model.RemoteCompactionV2
+	}
+	info := r.modelInfoForRuntimeWithConfig(runConfig.Model, runConfig.Config)
+	if info == nil {
+		return false
+	}
+	usableWindow, ok := info.UsableContextWindow()
+	if !ok || !asyncCompactionEligible(runConfig.Config, support, phase, status, usableWindow, true) {
+		return false
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return false
+	}
+	authOwner := r.authOwnerRevisionSnapshot()
+	input := captureBackgroundCompactionInput(
+		history,
+		len(history),
+		"", // Go's HTTP runner has no turn WebSocket routing token to replay.
+		r.compactionWindowForThread(threadID),
+		runConfig.Instructions,
+		strings.TrimSpace(runConfig.Model),
+		r.modelCompHash(runConfig.Model),
+		authOwner,
+		usableWindow,
+	)
+	state := r.threads.asyncCompactionState(threadID)
+	return state.MaybeStart(ctx, input, func() uint64 { return r.authOwnerRevisionSnapshot() }, func(runCtx context.Context, captured backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
+		request := &compact.Request{
+			ThreadID:     threadID,
+			TurnID:       turnID,
+			Trigger:      compact.TriggerAuto,
+			Reason:       compactReasonFromStatus(status),
+			Phase:        phase,
+			History:      append([]compact.Item(nil), captured.History...),
+			StartedAt:    time.Now().UTC(),
+			WindowNumber: captured.Window.WindowNumber,
+		}
+		if strings.TrimSpace(request.Prompt) == "" {
+			prompt, promptErr := r.compactPromptForRecord(record)
+			if promptErr != nil {
+				return nil, promptErr
+			}
+			request.Prompt = prompt
+		}
+		cyberProgram := ""
+		if program := appCyberAccessProgramForTurnPointer(params, runConfig.ProviderID); program != nil {
+			cyberProgram = *program
+		}
+		baseRunner := r.compactRunnerForRecord(record, request, runConfig.Model, cyberProgram)
+		if baseRunner == nil {
+			return nil, errors.New("background compaction runner is unavailable")
+		}
+		runner := baseRunner
+		if agentRunner, ok := baseRunner.(*agentCompactRunner); ok {
+			clone := *agentRunner
+			clone.clientMetadata = r.compactResponsesClientMetadataForWindow(record, request, runConfig.Model, captured.Window)
+			runner = &clone
+		}
+		result, err := compact.CompactRemotely(runCtx, request, &compact.RemoteOptions{
+			Runner:          runner,
+			MaxSummaryChars: 4000,
+			FallbackToLocal: false,
+		})
+		if err != nil || result == nil || !result.Succeeded() {
+			slog.Warn("background compaction failed", "thread_id", threadID, "phase", phase, "error", err)
+			return nil, err
+		}
+		return &backgroundCompactionCandidate{Result: result}, nil
+	})
+}
+
 // TakeCandidate returns and clears the newest completed candidate.
 func (s *asyncCompactionState) TakeCandidate() *backgroundCompactionCandidate {
 	if s == nil {
@@ -281,6 +366,27 @@ func (s *asyncCompactionState) Shutdown(ctx context.Context) error {
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		s.tasks.Wait()
+		close(done)
+	}()
+	if ctx == nil {
+		<-done
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *asyncCompactionState) waitForBackgroundCompactionForTest(ctx context.Context) error {
+	if s == nil {
+		return nil
 	}
 	done := make(chan struct{})
 	go func() {

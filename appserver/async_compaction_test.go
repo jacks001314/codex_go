@@ -10,6 +10,7 @@ import (
 	"codex_go/compact"
 	"codex_go/config"
 	"codex_go/model"
+	"codex_go/session"
 )
 
 func asyncCompactionTestConfig(threshold int, tokenBudget bool, postTurnThreshold int) *config.Config {
@@ -241,5 +242,50 @@ func TestAsyncCompactionWaitForPendingSharesOneResultLikeRust(t *testing.T) {
 	}
 	if second := state.WaitForPending(ctx, history, "gpt-test", "hash", 1); second != nil {
 		t.Fatalf("pending result was shared twice: %#v", second)
+	}
+}
+
+func TestBackgroundCompactionLaunchesFromTurnCheckpointLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := time.Now().UTC()
+	record := &session.Record{
+		ID: "thread-background", SessionID: "thread-background",
+		CreatedAt: now, UpdatedAt: now, RecencyAt: now,
+		Metadata: session.Metadata{CWD: t.TempDir(), Model: "gpt-5.4"},
+	}
+	if err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recordingCompactRunner{summary: "background summary"}
+	router := NewRuntimeRouter(RuntimeServices{
+		ThreadRouter:  NewRouter(store),
+		Config:        config.NewConfigService(t.TempDir()),
+		CompactRunner: runner,
+	})
+	cfg := asyncCompactionTestConfig(65, false, 0)
+	runConfig := &appTurnRunConfig{Model: "gpt-5.4", ProviderID: model.OpenAIProviderID, Config: cfg, Instructions: "instructions"}
+	history := []compact.Item{{ID: "user", Type: "message", Role: "user", Kind: "user_message", Text: "hello"}}
+	if !router.maybeStartBackgroundCompaction(context.Background(), "thread-background", "turn-background", nil, runConfig, history, compact.PhaseMidTurn, &compact.TokenStatus{ActiveContextTokens: 200_000}) {
+		t.Fatal("eligible background compaction did not start")
+	}
+	state := router.threads.asyncCompactionState("thread-background")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer waitCancel()
+	if err := state.waitForBackgroundCompactionForTest(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	candidate := state.TakeReady(history, "gpt-5.4", router.modelCompHash("gpt-5.4"), router.authOwnerRevisionSnapshot())
+	if candidate == nil || candidate.Result == nil || candidate.Result.Summary != "background summary" {
+		t.Fatalf("background candidate = %#v request=%#v", candidate, runner.request)
+	}
+	if runner.request == nil || runner.request.Phase != compact.PhaseMidTurn || runner.request.Trigger != compact.TriggerAuto {
+		t.Fatalf("background request = %#v", runner.request)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	changed := []compact.Item{{ID: "other", Type: "message", Role: "user", Text: "other"}}
+	if router.maybeStartBackgroundCompaction(canceled, "thread-background", "turn-background", nil, runConfig, changed, compact.PhaseMidTurn, &compact.TokenStatus{ActiveContextTokens: 200_000}) {
+		t.Fatal("cancelled turn launched background compaction")
 	}
 }

@@ -1680,7 +1680,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9db8162d658100bbf0a5a151996f9c3396ff1791	48604	Remove the bundled `plugin-creator` skill (#48604)	2026-09-27	appserver	0	0		0	0	not_applicable	
 9dd798805fdf9dd0f836f35ccc9480cb0af17784	51775	Prevent recursive Tokio tracing in telemetry and SQLite logs (#51775)	2026-10-07	mcp	0	0		0	0	not_applicable	
 9dea1f709ffe94d74563b4d2c9f147b0eb5c9601	40846	Default Guardian v2 to computer-use reviews with images (#40846)	2026-08-26	guardian	0	0		0	0	not_applicable	
-9e03960cf8807c37fc987bf17b4e745b8b3339d2	53800	Wire background compaction into the turn lifecycle (#53800)	2026-10-13	core	1	0	0.00	0	0	implementation_pending	wait_for_background_compaction_for_test
+9e03960cf8807c37fc987bf17b4e745b8b3339d2	53800	Wire background compaction into the turn lifecycle (#53800)	2026-10-13	core	1	1	1.00	0	0	complete	
 9e22e74e8dcab53f8bf1799c0eed1f9834c32f1a	44676	Resolve permission profiles with explicit execution-host path context (#44676)	2026-09-10	appserver	13	3	0.23	0	0	audit_pending	CompiledPermissionProfile,WorkspaceWriteSettings,absolute_path,contains_glob,contains_glob_chars_for_platform,relative_subpath,resolve_against,resolve_config_path_uri,to_config_path_string,validate_glob_directory
 9e7b2a577f4ab1a098194126555e82869e9bb473	54058	Forward turn metadata to image generation and edit requests (#54058)	2026-10-14	appserver	1	0	0.00	0	0	not_applicable	current_meta_value_for_extension_request
 9e868bd9dc007c05e84a98e0b1f4e31dc98c5e6a	44101	Handle empty voice arguments in macOS release packaging (#44101)	2026-09-09	core	0	0		0	0	not_applicable	

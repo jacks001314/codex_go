@@ -51,6 +51,9 @@ type StepInputItemsProvider func(ctx context.Context, iteration int, modelID str
 // SamplingCompactionContext carries the state of an in-flight sampling
 // iteration to a mid-turn compaction callback.
 type SamplingCompactionContext struct {
+	// Context is the sampling loop context; cancelled turns must not launch new
+	// speculative work.
+	Context      context.Context
 	Response     *model.AgentResponse
 	Usage        model.AgentUsage
 	Iteration    int
@@ -602,6 +605,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			// `codex.compaction` phase span.
 			compactionSpan := startTurnPhaseSpan(ctx, request, samplingSpan, CompactionPhaseSpanName, TurnPhaseCompaction, request.ThreadID, request.TurnID)
 			compacted, err := request.SamplingCompaction(&SamplingCompactionContext{
+				Context:      ctx,
 				Response:     response,
 				Usage:        result.Usage,
 				Iteration:    iteration,

@@ -1502,6 +1502,14 @@
             "reason": "Aligned upstream 9167a0b2d4 (#53620 Reuse background results for remote V2 compaction): foreground compaction polls and awaits matching speculative candidates, validates captured history generation, prefix length, model, compaction hash, and auth owner, and installs only the captured prefix while preserving later history. Stale or incompatible candidates fall back to foreground compaction, and installed results share the existing hook, catalog, window, persistence, and completion-notification path.",
             "userImpact": "Completed speculative remote compaction can be reused instead of paid for twice, without dropping messages or edits that arrived after the captured prefix.",
             "test": "go test -race ./appserver -run 'AsyncCompaction|CaptureBackgroundCompaction' -count=1"
+        },
+        {
+            "id": "background-compaction-turn-lifecycle",
+            "status": "done",
+            "area": "persistence",
+            "reason": "Aligned upstream 9e03960cf8 (#53800 Wire background compaction into the turn lifecycle): eligible pre-turn, mid-turn, and post-turn checkpoints launch speculative compaction with captured history, window, model/hash, auth owner, and step context. Foreground checkpoints reuse matching ready or pending candidates, cancelled sampling contexts stop new launches while already-running work remains session-owned, and installed results continue through compaction notifications, window advancement, persistence, and usage accounting.",
+            "userImpact": "Async compaction can prepare context in parallel with normal work and be adopted at the next foreground checkpoint without duplicating model spend.",
+            "test": "go test -race ./appserver -run 'AsyncCompaction|BackgroundCompaction|MidTurn' -count=1; go test ./turn -run 'AgentLoopMidTurnCompaction|BuildsStepInputItems' -count=1"
         }
     ]
 }
