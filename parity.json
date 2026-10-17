@@ -1510,6 +1510,14 @@
             "reason": "Aligned upstream 9e03960cf8 (#53800 Wire background compaction into the turn lifecycle): eligible pre-turn, mid-turn, and post-turn checkpoints launch speculative compaction with captured history, window, model/hash, auth owner, and step context. Foreground checkpoints reuse matching ready or pending candidates, cancelled sampling contexts stop new launches while already-running work remains session-owned, and installed results continue through compaction notifications, window advancement, persistence, and usage accounting.",
             "userImpact": "Async compaction can prepare context in parallel with normal work and be adopted at the next foreground checkpoint without duplicating model spend.",
             "test": "go test -race ./appserver -run 'AsyncCompaction|BackgroundCompaction|MidTurn' -count=1; go test ./turn -run 'AgentLoopMidTurnCompaction|BuildsStepInputItems' -count=1"
+        },
+        {
+            "id": "guardian-assessment-otlp-logging",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 30758e5c77 (#47870 Add opt-in OTLP logging for Guardian assessments): otel.log_guardian_assessments requires an explicit opt-in and OTLP HTTP or gRPC log exporter. Completed synchronous model assessments emit a log-only codex.guardian_assessment record with review/turn/item identity, status, model outcome, risk, authorization, timestamps, and rationale metadata; rationale text is capped at 64 KiB on a UTF-8 boundary. Fail-closed, timeout and in-progress records omit the model outcome.",
+            "userImpact": "Operators can opt in to bounded Guardian assessment diagnostics without leaking the payload into traces, local state logs, or feedback buffers.",
+            "test": "go test ./config ./telemetry -run 'GuardianAssessment|Otel' -count=1; go test ./appserver -run Guardian -count=1"
         }
     ]
 }

@@ -287,3 +287,38 @@ func TestResolveOtelConfigIgnoresMalformedExporters(t *testing.T) {
 		}
 	}
 }
+
+func TestGuardianAssessmentLoggingRequiresOptInAndOtlpLogExporter(t *testing.T) {
+	values := map[string]any{"otel": map[string]any{
+		"log_guardian_assessments": true,
+		"exporter": map[string]any{"otlp-http": map[string]any{
+			"endpoint": "https://logs.example/v1/logs",
+			"protocol": "json",
+		}},
+	}}
+	resolved, warnings := ResolveOtelConfig(values)
+	if len(warnings) != 0 || !resolved.GuardianAssessmentLoggingEnabled() {
+		t.Fatalf("enabled logging = %#v warnings=%v", resolved, warnings)
+	}
+	withoutOptIn := map[string]any{"otel": map[string]any{
+		"exporter": map[string]any{"otlp-http": map[string]any{
+			"endpoint": "https://logs.example/v1/logs",
+			"protocol": "json",
+		}},
+	}}
+	resolved, _ = ResolveOtelConfig(withoutOptIn)
+	if resolved.GuardianAssessmentLoggingEnabled() {
+		t.Fatal("assessment logging enabled without opt-in")
+	}
+	withoutOtlp := map[string]any{"otel": map[string]any{
+		"log_guardian_assessments": true,
+		"exporter":                 "none",
+	}}
+	resolved, _ = ResolveOtelConfig(withoutOtlp)
+	if resolved.GuardianAssessmentLoggingEnabled() {
+		t.Fatal("assessment logging enabled without an OTLP log exporter")
+	}
+	if err := ValidateOtelConfigValues(map[string]any{"otel": map[string]any{"log_guardian_assessments": "yes"}}); err == nil {
+		t.Fatal("non-boolean guardian assessment logging was accepted")
+	}
+}

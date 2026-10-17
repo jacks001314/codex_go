@@ -59,6 +59,7 @@ type modelGuardianReviewer struct {
 	// (configured value -> model catalog default -> Rust's default).
 	maxToolCallLagFor func(threadID, turnID string) int
 	notify            func(threadID string, event *state.Event)
+	logAssessment     func(threadID string, event *state.Event)
 	interrupt         func(threadID, turnID, reason string)
 	transcript        func(threadID string) []string
 	// transcriptEntries carries host-attributed entries, including native
@@ -942,6 +943,9 @@ reviewAttempt:
 		attribution.FailureReason = "session_error"
 		emitReviewMetrics()
 		return state.DecisionAborted, "", err
+	}
+	if r.logAssessment != nil {
+		r.logAssessment(threadID, completed)
 	}
 	r.emit(threadID, completed)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {

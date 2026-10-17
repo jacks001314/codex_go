@@ -115,6 +115,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 	reviewer := newModelGuardianReviewer(agent)
 	if modelReviewer, ok := reviewer.(*modelGuardianReviewer); ok {
 		modelReviewer.notify = r.notifyGuardianReviewEvent
+		modelReviewer.logAssessment = r.logGuardianAssessmentForThread
 		modelReviewer.interrupt = r.interruptTurnForGuardianCircuitBreaker
 		modelReviewer.transcript = r.guardianReviewTranscript
 		modelReviewer.transcriptEntries = r.guardianReviewTranscriptEntries

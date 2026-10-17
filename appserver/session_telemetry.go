@@ -10,10 +10,51 @@ import (
 	"codex_go/model"
 	"codex_go/protocol"
 	"codex_go/sandbox"
+	"codex_go/state"
 	"codex_go/telemetry"
 	"codex_go/tool"
 	"codex_go/turn"
 )
+
+func (r *RuntimeRouter) logGuardianAssessmentForThread(threadID string, event *state.Event) {
+	if r == nil || event == nil || event.Status == state.StatusInProgress {
+		return
+	}
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(event.TurnID))
+	if active == nil || active.Params == nil {
+		return
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil || !cfg.Otel().GuardianAssessmentLoggingEnabled() {
+		return
+	}
+	record := telemetry.GuardianAssessmentRecord{
+		ID:           event.ID,
+		TurnID:       event.TurnID,
+		TargetItemID: event.TargetItemID,
+		Status:       string(event.Status),
+		Rationale:    event.Rationale,
+		StartedAtMS:  event.StartedAtMS,
+	}
+	if event.CompletedAtMS != nil {
+		record.CompletedAtMS = *event.CompletedAtMS
+	}
+	if event.RiskLevel != nil {
+		record.RiskLevel = string(*event.RiskLevel)
+	}
+	if event.UserAuthorization != nil {
+		record.UserAuthorization = string(*event.UserAuthorization)
+	}
+	if event.DecisionSource != nil && *event.DecisionSource == state.DecisionSourceAgent {
+		switch event.Status {
+		case state.StatusApproved:
+			record.Outcome = "allow"
+		case state.StatusDenied:
+			record.Outcome = "deny"
+		}
+	}
+	r.sessionTelemetryForThread(threadID).GuardianAssessment(context.Background(), record)
+}
 
 // Rust parity: the app-server's SessionTelemetry wiring - the per-session
 // metadata (codex-otel's SessionTelemetryMetadata) and the record emitters the

@@ -60,14 +60,15 @@ type OtelExporterKind struct {
 // OtelConfig mirrors codex_config::types::OtelConfig: the effective settings
 // after defaults are applied.
 type OtelConfig struct {
-	ToolResult      protocol.ToolResultLogConfig
-	LogUserPrompt   bool
-	Environment     string
-	Exporter        OtelExporterKind
-	TraceExporter   OtelExporterKind
-	MetricsExporter OtelExporterKind
-	SpanAttributes  map[string]string
-	Tracestate      map[string]map[string]string
+	ToolResult             protocol.ToolResultLogConfig
+	LogUserPrompt          bool
+	LogGuardianAssessments bool
+	Environment            string
+	Exporter               OtelExporterKind
+	TraceExporter          OtelExporterKind
+	MetricsExporter        OtelExporterKind
+	SpanAttributes         map[string]string
+	Tracestate             map[string]map[string]string
 }
 
 // DefaultOtelConfig mirrors OtelConfig::default: no log/trace exporter, the
@@ -99,6 +100,9 @@ func ResolveOtelConfig(values map[string]any) (OtelConfig, []string) {
 	}
 	if logUserPrompt, ok := otel["log_user_prompt"].(bool); ok {
 		resolved.LogUserPrompt = logUserPrompt
+	}
+	if logGuardian, ok := otel["log_guardian_assessments"].(bool); ok {
+		resolved.LogGuardianAssessments = logGuardian
 	}
 	if environment, ok := otel["environment"].(string); ok && environment != "" {
 		resolved.Environment = environment
@@ -138,6 +142,11 @@ func ValidateOtelConfigValues(values map[string]any) error {
 	if value, ok := otel["log_user_prompt"]; ok && value != nil {
 		if _, isBool := value.(bool); !isBool {
 			return errors.New("otel.log_user_prompt must be a boolean")
+		}
+	}
+	if value, ok := otel["log_guardian_assessments"]; ok && value != nil {
+		if _, isBool := value.(bool); !isBool {
+			return errors.New("otel.log_guardian_assessments must be a boolean")
 		}
 	}
 	if value, ok := otel["environment"]; ok && value != nil {
@@ -194,6 +203,13 @@ func ValidateOtelConfigValues(values map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// GuardianAssessmentLoggingEnabled reports whether terminal Guardian assessment
+// payloads may go to an explicit OTLP log exporter.
+func (c OtelConfig) GuardianAssessmentLoggingEnabled() bool {
+	return c.LogGuardianAssessments &&
+		(c.Exporter.Kind == OtelExporterKindOtlpHTTP || c.Exporter.Kind == OtelExporterKindOtlpGRPC)
 }
 
 // validateOtelExporterKind mirrors serde's externally tagged OtelExporterKind:
