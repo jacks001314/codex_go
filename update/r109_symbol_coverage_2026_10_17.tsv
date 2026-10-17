@@ -984,7 +984,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5e96aabd68dc6194f5ad928cb7f5d0bc71b72df9	49712	Avoid full-string scans in token-budget truncation (#49712)	2026-09-30	core	0	0		0	0	not_applicable	
 5ecb3afd1bf405149e2159bfda50093b0c1b5fab	43376	Defer resume picker and directory changes to a fresh TUI stack (#43376)	2026-09-07	tui	2	0	0.00	0	0	implementation_pending	PendingWorkingDirectoryChange,finish_working_directory_change
 5ed294d49d64f79b25ae63cd1cdaf54db7a797fd	41368	Match Windows shell guidance to the executor platform (#41368)	2026-08-28	core	0	0		0	0	not_applicable	
-5ed334a29f5895243115b8247098cb44b81b6ccd	41151	Extract Guardian action rendering into its own module (#41151)	2026-08-27	guardian	3	2	0.67	0	0	audit_pending	RenderedAction
+5ed334a29f5895243115b8247098cb44b81b6ccd	41151	Extract Guardian action rendering into its own module (#41151)	2026-08-27	guardian	3	2	0.67	0	0	complete	RenderedAction
 5ee2bdf1e0e04064bc427ae31a49a01e8f7064df	46697	Unify TUI picker styling and improve compact session layouts (#46697)	2026-09-19	tui	4	3	0.75	0	0	audit_pending	PickerAreas
 5eea8d0dd3f6b38b0e457d266fd7c918eb189bb6	41328	Review terminal input against retained permissions (#41328)	2026-08-28	guardian	4	2	0.50	0	0	audit_pending	TerminalSandboxSource,for_launch
 5ef96ab2785f3ecddf279639eff7b1b42c906fa4	52742	Add opt-in output token replay for OpenAI requests (#52742)	2026-10-10	tui	1	0	0.00	0	0	implementation_pending	clear_encrypted_content
@@ -1016,7 +1016,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 60e35765c3e43e152bf5b382a38a0628efd70842	45524	Enable MXC TTY launches and managed networking in the exec server (#45524)	2026-09-14	execserver	0	0		0	0	not_applicable	
 60f0ab6cbfe464dd6fc2603e53604995423714db	47611	Use the shared process launcher for Unix shell snapshots (#47611)	2026-09-23	core	0	0		0	0	not_applicable	
 60fc6995608e8188c0c9f8407d6cd98676efa247	41385	Give Guardian classifications distinct turn identities (#41385)	2026-08-28	guardian	0	0		0	0	not_applicable	
-6127478086e611323e3bff40c943588606c1c571	42085	Centralize Guardian context composition (#42085)	2026-09-01	guardian	3	2	0.67	0	0	audit_pending	collect_guardian_context
+6127478086e611323e3bff40c943588606c1c571	42085	Centralize Guardian context composition (#42085)	2026-09-01	guardian	3	2	0.67	0	0	complete	collect_guardian_context
 612e6491d50ffb80ffc4330edc4024b86e51e4bf	42137	Prewarm shell snapshots for eligible turns (#42137)	2026-09-01	execserver	5	2	0.40	0	0	audit_pending	CapturePurpose,apply_unified_exec_env,prewarm_shell_snapshots
 6143217c6730e147f4a1a5a3405d10f580fe9244	40021	Cancel Guardian reviews with their tool calls (#40021)	2026-08-21	guardian	0	0		0	0	not_applicable	
 6149914a0e59363b6777080b3e953b05d592dbac	47017	Wire agent message boards into persistent multi-agent runtimes (#47017)	2026-09-21	appserver	3	3	1.00	0	0	complete	
@@ -1946,7 +1946,7 @@ b592a0bfed439386fadc69327bd49eccb074cdc6	41072	Forward model confirmation polici
 b5c37c35fd517bf6d1d1515a5f7552c221d2ffe3	51841	Add a macOS Seatbelt backend for sandbox integrity (#51841)	2026-10-07	execserver	4	3	0.75	0	0	blocked_precondition	critical_dependencies
 b6130e72f3e4b360f7a3bf97ea62d0eeeb39ffca	52299	Make Bazel release jobs advisory (#52299)	2026-10-08	core	0	0		0	0	not_applicable	
 b62fcd3c4b4126e8dc619ab5334f5658c4d84657	47935	Allow cached catalogs to satisfy MCP startup readiness (#47935)	2026-09-24	mcp	3	0	0.00	0	0	implementation_pending	McpStartupReadiness,current_revision_if,record_startup_readiness
-b6333bb1bb7d9dd7aa9c5c6a7b6936041bacc144	40464	Enforce subagent ownership across app-server inputs (#40464)	2026-08-24	appserver	3	2	0.67	0	0	audit_pending	DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR
+b6333bb1bb7d9dd7aa9c5c6a7b6936041bacc144	40464	Enforce subagent ownership across app-server inputs (#40464)	2026-08-24	appserver	3	3	1.00	0	0	complete
 b63a296775ec51368352c251c182edf0ab71c0fd	48099	Honor shell environment policy in legacy snapshots (#48099)	2026-09-25	core	1	1	1.00	0	0	complete	
 b64de2f3ad718ebee731aa8a5e1d4ace0594efc5	44243	Use the originating model when recording conversation history (#44243)	2026-09-09	guardian	1	0	0.00	0	0	implementation_pending	capture_current_model_info
 b65ab465cefa7b89c68317366b67e44431b90af4	50525	Reject unknown TUI keys in strict config validation (#50525)	2026-10-03	config	4	4	1.00	0	0	complete	

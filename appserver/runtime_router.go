@@ -4364,6 +4364,10 @@ func runtimeRecordIsThreadSpawn(record *session.Record) bool {
 // app-server input (turn start, steer, queued input, settings updates) is
 // rejected for multi-agent V2 thread-spawn subagents unless the request is
 // internal. The same policy drives thread CanAcceptDirectInput reporting.
+// directInputToMultiAgentV2SubagentError mirrors Rust's
+// DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR.
+const directInputToMultiAgentV2SubagentError = "direct app-server input is not allowed for multi-agent v2 sub-agents"
+
 func (r *RuntimeRouter) ensureDirectInputAllowed(request *Request, threadID string) error {
 	if r == nil || request == nil || request.Internal {
 		return nil
@@ -4373,7 +4377,7 @@ func (r *RuntimeRouter) ensureDirectInputAllowed(request *Request, threadID stri
 		return nil
 	}
 	if strings.EqualFold(strings.TrimSpace(record.Metadata.MultiAgentVersion), string(agent.VersionV2)) {
-		return jsonRPCInvalidRequest("direct app-server input is not allowed for multi-agent v2 sub-agents")
+		return jsonRPCInvalidRequest(directInputToMultiAgentV2SubagentError)
 	}
 	return nil
 }

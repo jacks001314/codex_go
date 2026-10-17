@@ -1330,9 +1330,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR"
+        "Round 252 (audit): ensureDirectInputAllowed centralizes the parent-owned MultiAgent V2 subagent rejection across turn input, MCP calls, reviews, compaction, rollback/revert, shell and Guardian actions, realtime requests, and goal mutations; reads and turn interruption stay available. directInputToMultiAgentV2SubagentError mirrors the Rust error constant. Tests: go test ./appserver -run 'DirectInput|Goal.*Subagent|RuntimeRouterThreadListAndSearch' -count=1"
       ]
     },
     {
@@ -3480,9 +3480,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: RenderedAction"
+        "Round 252 (audit): bounded planned-action rendering already lives in the dedicated state/guardian_action_prompt.go module, including action JSON size/token limits, sync/delta/async presentation framing, network/apply-patch/MCP request projections, and focused tests. Rust's RenderedAction wrapper adds no observable behavior beyond that module boundary. Tests: go test ./state -run 'GuardianAction|Guardian' -count=1"
       ]
     },
     {
@@ -5496,9 +5496,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: collect_guardian_context"
+        "Round 252 (audit): BuildPromptPartsWithOptions is the single composition carrier. It groups root-conversation and trusted-answer authorization fragments in registration order, keeps structured transcript entries for caller rendering/retention, preserves native message boundaries, and returns no partial prompt on invalid actions. Rust's separate collect_guardian_context/SectionRegistry::compose type adds no observable behavior beyond this grouping. Tests: go test ./state -run Guardian -count=1; go test ./appserver -run Guardian -count=1"
       ]
     },
     {
