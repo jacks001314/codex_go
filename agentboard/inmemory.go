@@ -594,7 +594,7 @@ func (b *InMemoryBoard) ReadPost(ctx context.Context, caller string, request Rea
 
 // ListChannels lists or searches channels, most recently active first by
 // default.
-func (b *InMemoryBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*Page[ChannelSummary], error) {
+func (b *InMemoryBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*ChannelPage, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -641,7 +641,7 @@ func (b *InMemoryBoard) ListChannels(ctx context.Context, caller string, query C
 	for _, channel := range page.Results {
 		results = append(results, channel.summary)
 	}
-	return &Page[ChannelSummary]{Results: results, NextCursor: page.NextCursor}, nil
+	return &ChannelPage{Page: Page[ChannelSummary]{Results: results, NextCursor: page.NextCursor}}, nil
 }
 
 // ListThreads lists a channel's threads.

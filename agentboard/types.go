@@ -50,7 +50,10 @@ type ThreadSummary struct {
 
 // ChannelSummary describes one channel.
 type ChannelSummary struct {
-	ChannelName string `json:"channel_name"`
+	// Permissions is the service-computed effective access. It is absent on
+	// boards without ACL metadata so the legacy response shape is preserved.
+	Permissions *ChannelPermissions `json:"permissions,omitempty"`
+	ChannelName string              `json:"channel_name"`
 	// Description is the channel purpose when the board was initialized from a
 	// template (Rust #52621; absent on boards without template metadata).
 	Description   *string         `json:"description,omitempty"`
@@ -58,6 +61,50 @@ type ChannelSummary struct {
 	CreatedBy     agent.AgentPath `json:"created_by"`
 	MessageCount  int             `json:"message_count"`
 	LastMessageID *string         `json:"last_message_id"`
+}
+
+// ChannelPage is channel discovery plus the caller's effective board actions.
+// The channel page is flattened to preserve Page's legacy wire shape.
+type ChannelPage struct {
+	Page[ChannelSummary]
+	BoardPermissions *BoardPermissions
+}
+
+func (p ChannelPage) MarshalJSON() ([]byte, error) {
+	results := append([]ChannelSummary(nil), p.Page.Results...)
+	if results == nil {
+		results = []ChannelSummary{}
+	}
+	return json.Marshal(struct {
+		Results          []ChannelSummary  `json:"results"`
+		NReturned        int               `json:"n_returned"`
+		HasMore          bool              `json:"has_more"`
+		NextCursor       *string           `json:"next_cursor"`
+		BoardPermissions *BoardPermissions `json:"board_permissions,omitempty"`
+	}{
+		Results:          results,
+		NReturned:        len(results),
+		HasMore:          p.Page.NextCursor != nil,
+		NextCursor:       p.Page.NextCursor,
+		BoardPermissions: p.BoardPermissions,
+	})
+}
+
+func (p *ChannelPage) UnmarshalJSON(data []byte) error {
+	if p == nil {
+		return errors.New("channel page target is nil")
+	}
+	var payload struct {
+		Results          []ChannelSummary  `json:"results"`
+		NextCursor       *string           `json:"next_cursor"`
+		BoardPermissions *BoardPermissions `json:"board_permissions"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	p.Page = Page[ChannelSummary]{Results: payload.Results, NextCursor: payload.NextCursor}
+	p.BoardPermissions = payload.BoardPermissions
+	return nil
 }
 
 // SubscriptionState is the resulting subscription after a change.

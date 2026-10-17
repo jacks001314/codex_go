@@ -28,7 +28,7 @@ type Board interface {
 	Identity() string
 
 	CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error)
-	ListChannels(ctx context.Context, caller string, query ChannelQuery) (*Page[ChannelSummary], error)
+	ListChannels(ctx context.Context, caller string, query ChannelQuery) (*ChannelPage, error)
 	// Post creates a post or reply. The request ID identifies a logical call
 	// across retries: a retry with different input is an error, a successful
 	// retry returns the same metadata.

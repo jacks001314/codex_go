@@ -8,6 +8,7 @@ package agentboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -244,6 +245,20 @@ func (t *messageBoardTool) Execute(ctx context.Context, invocation *tool.Invocat
 	budget := invocation.ResponseByteBudget(maxMessageBoardResponseBytes)
 	result, err := t.execute(ctx, invocation.Payload.Arguments, invocation, budget)
 	if err != nil {
+		var denied *PermissionDenied
+		if errors.As(err, &denied) {
+			payload, responseErr := denied.ModelResponse(budget)
+			if responseErr != nil {
+				return nil, modelError(responseErr.Error())
+			}
+			serialized, marshalErr := json.Marshal(payload)
+			if marshalErr != nil {
+				return nil, modelError(marshalErr.Error())
+			}
+			output := messageBoardJSONOutput(invocation, serialized)
+			output.Success = false
+			return output, nil
+		}
 		return nil, err
 	}
 	serialized, err := json.Marshal(result)
@@ -471,6 +486,10 @@ func (t *messageBoardTool) execute(ctx context.Context, raw string, invocation *
 // error Rust's encode() uses.
 func messageBoardResult(result any, err error) (any, error) {
 	if err != nil {
+		var denied *PermissionDenied
+		if errors.As(err, &denied) {
+			return nil, denied
+		}
 		return nil, modelError(err.Error())
 	}
 	return result, nil

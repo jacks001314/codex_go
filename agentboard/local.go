@@ -90,6 +90,7 @@ type LocalAgentMessageBoard struct {
 	poolPath string
 	db       *sql.DB
 	host     Host
+	access   accessMode
 }
 
 // storedPost mirrors Rust's StoredPost payload.
@@ -363,6 +364,9 @@ func (w *localBoardWrite) rollback(ctx context.Context) {
 
 // CreateChannel creates a channel and optionally subscribes the caller.
 func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller string, request CreateChannelRequest) (*ChannelSummary, error) {
+	if err := b.access.requireWrite(b.identity, "board.create_channel"); err != nil {
+		return nil, err
+	}
 	if err := validateChannelName(request.ChannelName); err != nil {
 		return nil, err
 	}
@@ -401,6 +405,13 @@ func (b *LocalAgentMessageBoard) CreateChannel(ctx context.Context, caller strin
 // fanout finish even if the tool caller disconnects; delivery is attempted once
 // and a failed notice never fails the committed post.
 func (b *LocalAgentMessageBoard) Post(ctx context.Context, caller string, request PostRequest) (*PostMetadata, error) {
+	action := "channel.post"
+	if request.Destination.Kind == "thread" {
+		action = "channel.reply"
+	}
+	if err := b.access.requireWrite(b.identity, action); err != nil {
+		return nil, err
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -543,6 +554,11 @@ func (b *LocalAgentMessageBoard) SetSubscription(ctx context.Context, caller str
 	if err != nil {
 		return nil, err
 	}
+	if targetAgent != caller {
+		if err := b.access.requireWrite(b.identity, "board.manage_subscriptions"); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := b.beginWrite(ctx)
 	if err != nil {
 		return nil, err
@@ -646,7 +662,7 @@ func (b *LocalAgentMessageBoard) ReadPost(ctx context.Context, caller string, re
 	}, nil
 }
 
-func (b *LocalAgentMessageBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*Page[ChannelSummary], error) {
+func (b *LocalAgentMessageBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*ChannelPage, error) {
 	if _, err := b.host.AgentPath(ctx, caller); err != nil {
 		return nil, err
 	}
@@ -689,7 +705,11 @@ func (b *LocalAgentMessageBoard) ListChannels(ctx context.Context, caller string
 		}
 		channels = append(channels, *summary)
 	}
-	return finishBoardPage(offset, limit, channels)
+	page, err := finishBoardPage(offset, limit, channels)
+	if err != nil {
+		return nil, err
+	}
+	return &ChannelPage{Page: *page, BoardPermissions: b.access.boardPermissions()}, nil
 }
 
 func (b *LocalAgentMessageBoard) ListThreads(ctx context.Context, caller string, query ThreadQuery) (*Page[ThreadSummary], error) {
@@ -1026,11 +1046,19 @@ func (b *LocalAgentMessageBoard) existingPost(ctx context.Context, querier query
 }
 
 func (b *LocalAgentMessageBoard) channelSummary(ctx context.Context, tx *localBoardWrite, name string) (*ChannelSummary, error) {
-	return channelSummaryIn(ctx, tx.conn, b.identity, name)
+	summary, err := channelSummaryIn(ctx, tx.conn, b.identity, name)
+	if err == nil && summary != nil {
+		summary.Permissions = b.access.channelPermissions()
+	}
+	return summary, err
 }
 
 func (b *LocalAgentMessageBoard) channelSummaryByName(ctx context.Context, name string) (*ChannelSummary, error) {
-	return channelSummaryIn(ctx, b.db, b.identity, name)
+	summary, err := channelSummaryIn(ctx, b.db, b.identity, name)
+	if err == nil && summary != nil {
+		summary.Permissions = b.access.channelPermissions()
+	}
+	return summary, err
 }
 
 func channelSummaryIn(ctx context.Context, querier queryRower, identity string, name string) (*ChannelSummary, error) {

@@ -16,6 +16,14 @@
     "generatedAt": "2026-10-18T00:00:00+08:00",
     "items": [
         {
+            "id": "agent-board-permissions-and-connections",
+            "status": "done",
+            "area": "sandbox",
+            "reason": "Aligned upstream 36ae1561b9 (#52568) and 97239fd052 (#53400): channel discovery returns optional board/channel permissions with the legacy shape preserved, remote 403 permission denials become bounded structured tool errors, and LocalBoard connections grant fixed read-only/read-write access with canonical same-board checks and independent caller paths. Read-only connections can manage only their own subscriptions and cannot create channels, post, reply, or edit another agent's subscription.",
+            "userImpact": "Independent runtimes can safely share one local discussion board with different access levels, and agents receive actionable permission diagnostics instead of generic failures.",
+            "test": "go test ./agentboard -run 'Permission|ChannelDiscovery|LocalBoardConnection|LegacyLocalBoard|RemoteBoard' -count=1"
+        },
+        {
             "id": "durable-thread-read-state",
             "status": "done",
             "area": "appserver",

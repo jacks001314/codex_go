@@ -521,3 +521,34 @@ func TestRemoteBoardServiceErrorsLikeRust(t *testing.T) {
 		t.Fatalf("ListChannels() = %#v/%v", page, err)
 	}
 }
+
+func TestRemoteBoardPermissionDeniedAndChannelPermissionsLikeRust(t *testing.T) {
+	status := http.StatusForbidden
+	payload := `{"code":"permission_denied","message":"reply only","action":"channel.post","resource":"channel:support"}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(status)
+		_, _ = writer.Write([]byte(payload))
+	}))
+	defer server.Close()
+	board := newTestRemoteBoard(t, server.URL, nil)
+	_, err := board.Post(context.Background(), "thread-1", PostRequest{
+		RequestID: "denied", Destination: PostDestination{Kind: "channel", Name: "support"}, Text: "hello",
+	})
+	var denied *PermissionDenied
+	if !errors.As(err, &denied) || denied.Message != "reply only" ||
+		denied.Action == nil || *denied.Action != "channel.post" ||
+		denied.Resource == nil || *denied.Resource != "channel:support" {
+		t.Fatalf("permission denial = %#v (%v)", denied, err)
+	}
+
+	status = http.StatusOK
+	payload = `{"results":[{"permissions":{"read":true,"post":false,"reply":true,"edit_metadata":false},"channel_name":"support"}],"n_returned":1,"has_more":false,"next_cursor":null,"board_permissions":{"create_channel":false,"edit_metadata":false,"manage_permissions":false}}`
+	page, err := board.ListChannels(context.Background(), "thread-1", ChannelQuery{})
+	if err != nil || page == nil || page.BoardPermissions == nil || page.BoardPermissions.CreateChannel {
+		t.Fatalf("channel page = %#v, %v", page, err)
+	}
+	if len(page.Results) != 1 || page.Results[0].Permissions == nil ||
+		!page.Results[0].Permissions.Read || !page.Results[0].Permissions.Reply || page.Results[0].Permissions.Post {
+		t.Fatalf("channel permissions = %#v", page.Results)
+	}
+}

@@ -545,7 +545,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 36803b180a50e611331b75ff2b4c475c02846b53	54385	Allow saving current permission settings as presets (#54385)	2026-10-15	tui	5	4	0.80	0	0	complete	open_quick_dial_prefills
 368e5eae2f006a70a91dddfdc96e6b2d11498f81	49038	Preserve encrypted agent messages in Guardian reviews (#49038)	2026-09-28	guardian	2	2	1.00	0	0	complete	
 36984da4424cb91b6bc88c6af8d73207930ac729	42445	Include originator in plugin measurement analytics (#42445)	2026-09-03	appserver	0	0		0	0	not_applicable	
-36ae1561b9324c93d5638b45eb19fe2cc070a581	52568	Expose message board permissions and structured denials (#52568)	2026-10-09	sandbox	6	1	0.17	0	0	audit_pending	BoardPermissions,ChannelPage,ChannelPermissions,PermissionDeniedDetails,model_response
+36ae1561b9324c93d5638b45eb19fe2cc070a581	52568	Expose message board permissions and structured denials (#52568)	2026-10-09	sandbox	6	6	1.00	0	0	complete	
 36b84c81ec0184db024cef38f1d6b55ecf276ef0	46070	Suppress warnings when skill descriptions are shortened (#46070)	2026-09-17	appserver	0	0		0	0	not_applicable	
 36df9544a3a77508da9d3f89528854883b826187	51191	Clean up Unix app-server control-socket startup lock files (#51191)	2026-10-05	appserver	2	0	0.00	0	0	implementation_pending	acquire_removable_app_server_startup_lock,try_acquire_removable_app_server_startup_lock
 36f0dbe796d9bb1a18a0fc0640ed08b3e1d54564	45224	Register Windows desktop uninstall ownership before sandbox setup (#45224)	2026-09-13	appserver	8	1	0.12	0	0	audit_pending	ProvisioningRequest,ServiceRequest,ServiceUnavailable,pin_directory,register_authenticated_user,register_desktop_installation,validate_request
@@ -1604,7 +1604,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 96d238d0b95096c3dce32b31ebaef4650bcae1fc	52226	Include foreground activity in iTerm2 session status (#52226)	2026-10-08	tui	4	3	0.75	0	0	audit_pending	set_iterm_session_status
 96eb400d1231f0199e96f640c740096087cf3e9b	54664	Distinguish retryable thread-store errors from unknown write outcomes (#54664)	2026-10-16	appserver	0	0		0	0	complete	
 970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2	40031	Preserve strict MCP auto-review outcomes (#40031)	2026-08-21	appserver	0	0		0	0	not_applicable	
-97239fd052db455bd08c41afcdab738e0fe83b87	53400	Add explicit local board connections with fixed runtime access (#53400)	2026-10-12	sandbox	11	6	0.55	0	0	audit_pending	LocalBoardConnection,get_thread_for_board,read_write,require_write,same_board
+97239fd052db455bd08c41afcdab738e0fe83b87	53400	Add explicit local board connections with fixed runtime access (#53400)	2026-10-12	sandbox	11	11	1.00	0	0	complete	
 973dcd80fcbe2864ab2229d67f10180ded2e2bc7	43942	Show worktree owner details and add confirmed deletion (#43942)	2026-09-08	tui	6	6	1.00	0	0	complete	
 973ec2942c33159a188ea056b1cb1b5ec3d31ed6	45503	Add revocable network policy primitives to the HTTP client (#45503)	2026-09-14	core	20	19	0.95	0	0	complete	with_network_policy
 975d30c043cdd03607859503473e045f6a5b476b	47902	Avoid repeated table clones during config merging (#47902)	2026-09-24	config	0	0		0	0	not_applicable	

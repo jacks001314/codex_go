@@ -189,13 +189,13 @@ func (b *RemoteBoard) CreateChannel(ctx context.Context, caller string, request 
 }
 
 // ListChannels lists or searches a board's channels.
-func (b *RemoteBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*Page[ChannelSummary], error) {
+func (b *RemoteBoard) ListChannels(ctx context.Context, caller string, query ChannelQuery) (*ChannelPage, error) {
 	params := struct {
 		Query     *string           `json:"query"`
 		Direction string            `json:"direction"`
 		Page      remotePageRequest `json:"page"`
 	}{Query: cloneStringPointer(query.Query), Direction: remoteDirection(query.Direction), Page: remotePage(query.Page)}
-	var out Page[ChannelSummary]
+	var out ChannelPage
 	if err := b.call(ctx, caller, "list_channels", params, &out); err != nil {
 		return nil, err
 	}
@@ -416,13 +416,25 @@ func (b *RemoteBoard) decode(response *http.Response) ([]byte, error) {
 		return nil, fmt.Errorf("board transport error: %w", err)
 	}
 	var failure struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
+		Code     string  `json:"code"`
+		Message  string  `json:"message"`
+		Action   *string `json:"action"`
+		Resource *string `json:"resource"`
 	}
 	if err := json.Unmarshal(payload, &failure); err != nil {
 		return nil, fmt.Errorf("invalid board error response (HTTP %d)", response.StatusCode)
 	}
 	message := failure.Code + ": " + failure.Message
+	if response.StatusCode == http.StatusForbidden || failure.Code == "permission_denied" {
+		action, resource := "", ""
+		if failure.Action != nil {
+			action = *failure.Action
+		}
+		if failure.Resource != nil {
+			resource = *failure.Resource
+		}
+		return nil, permissionDenied(failure.Message, action, resource)
+	}
 	if response.StatusCode >= 500 {
 		return nil, errors.New(message)
 	}
