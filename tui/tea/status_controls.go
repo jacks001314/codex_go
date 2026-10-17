@@ -83,20 +83,10 @@ func statusSurfaceUnknownItemNotice(surface string, command string, token string
 
 // applyStatusLineThemeColors mirrors Rust #54387's `colors` boolean setting: a
 // colour-only update keeps the selected items and only flips the preference.
-// statusSurfaceOverrides mirrors Rust #54387's session-only status-surface
-// selections (codex-rs/tui/src/chatwidget/status_surface_commands.rs:11-21).
-// `/title` and `/statusline` record what the user asked for in this process
-// without changing saved defaults, and the record is re-applied when the thread's
-// state is restored (chatwidget/input_restore.rs:601,621 restores the per-thread
-// input state, overrides included). Saving through the status editors supersedes
-// the override (chatwidget/status_controls.rs:136-137,180) and a saved settings
-// write clears the colour override (chatwidget/config_panel.rs:103).
-//
-// Go keeps a single in-process slot keyed by thread id: the overrides follow the
-// thread they were recorded on, but switching away and back loses them, because
-// the per-thread input state lives in the app layer (see the lane contract).
-type statusSurfaceOverrides struct {
-	threadID            string
+// statusSurfaceOverrideRecord mirrors Rust #54387's StatusSurfaceOverrides
+// (codex-rs/tui/src/chatwidget/status_surface_commands.rs:11-21): the
+// session-only selections recorded for one thread.
+type statusSurfaceOverrideRecord struct {
 	terminalTitle       []string
 	terminalTitleSet    bool
 	statusLine          []string
@@ -104,76 +94,128 @@ type statusSurfaceOverrides struct {
 	statusLineUseColors *bool
 }
 
-func (o *statusSurfaceOverrides) recordTerminalTitle(threadID string, ids []string) {
+func (r *statusSurfaceOverrideRecord) empty() bool {
+	if r == nil {
+		return true
+	}
+	return !r.terminalTitleSet && !r.statusLineSet && r.statusLineUseColors == nil
+}
+
+// statusSurfaceOverrides keeps the session-only selections for every thread,
+// exactly where Rust carries them: inside the per-thread ThreadInputState
+// (chatwidget/input_restore.rs:601 captures, :621 replays). A single slot would
+// forget thread A's selection as soon as thread B set its own, so switching
+// away and back must find each thread's record intact.
+//
+// Saving through the status editors supersedes the current thread's override
+// (chatwidget/status_controls.rs:136-137,180) and a saved settings write clears
+// the current thread's colour override (chatwidget/config_panel.rs:103).
+type statusSurfaceOverrides struct {
+	byThread map[string]*statusSurfaceOverrideRecord
+}
+
+// existing returns the thread's record without creating one.
+func (o *statusSurfaceOverrides) existing(threadID string) *statusSurfaceOverrideRecord {
 	if o == nil {
+		return nil
+	}
+	return o.byThread[strings.TrimSpace(threadID)]
+}
+
+// record returns the thread's record, creating it when needed. An empty thread
+// id has no thread-scoped state to attach to.
+func (o *statusSurfaceOverrides) record(threadID string) *statusSurfaceOverrideRecord {
+	threadID = strings.TrimSpace(threadID)
+	if o == nil || threadID == "" {
+		return nil
+	}
+	if o.byThread == nil {
+		o.byThread = map[string]*statusSurfaceOverrideRecord{}
+	}
+	record := o.byThread[threadID]
+	if record == nil {
+		record = &statusSurfaceOverrideRecord{}
+		o.byThread[threadID] = record
+	}
+	return record
+}
+
+// lookup returns the thread's non-empty record, if it has one.
+func (o *statusSurfaceOverrides) lookup(threadID string) *statusSurfaceOverrideRecord {
+	record := o.existing(threadID)
+	if record == nil || record.empty() {
+		return nil
+	}
+	return record
+}
+
+func (o *statusSurfaceOverrides) recordTerminalTitle(threadID string, ids []string) {
+	record := o.record(threadID)
+	if record == nil {
 		return
 	}
-	o.threadID = strings.TrimSpace(threadID)
-	o.terminalTitle = append([]string(nil), ids...)
-	o.terminalTitleSet = true
+	record.terminalTitle = append([]string(nil), ids...)
+	record.terminalTitleSet = true
 }
 
 func (o *statusSurfaceOverrides) recordStatusLine(threadID string, ids []string) {
-	if o == nil {
+	record := o.record(threadID)
+	if record == nil {
 		return
 	}
-	o.threadID = strings.TrimSpace(threadID)
-	o.statusLine = append([]string(nil), ids...)
-	o.statusLineSet = true
+	record.statusLine = append([]string(nil), ids...)
+	record.statusLineSet = true
 }
 
 func (o *statusSurfaceOverrides) recordStatusLineUseColors(threadID string, value bool) {
-	if o == nil {
+	record := o.record(threadID)
+	if record == nil {
 		return
 	}
-	o.threadID = strings.TrimSpace(threadID)
-	o.statusLineUseColors = &value
+	record.statusLineUseColors = &value
 }
 
 // clearStatusLine records that a saved status-line selection supersedes the
-// session override.
-func (o *statusSurfaceOverrides) clearStatusLine() {
-	if o == nil {
-		return
+// thread's session override.
+func (o *statusSurfaceOverrides) clearStatusLine(threadID string) {
+	if record := o.existing(threadID); record != nil {
+		record.statusLine = nil
+		record.statusLineSet = false
 	}
-	o.statusLine = nil
-	o.statusLineSet = false
 }
 
 // clearTerminalTitle records that a saved terminal-title selection supersedes
-// the session override.
-func (o *statusSurfaceOverrides) clearTerminalTitle() {
-	if o == nil {
-		return
+// the thread's session override.
+func (o *statusSurfaceOverrides) clearTerminalTitle(threadID string) {
+	if record := o.existing(threadID); record != nil {
+		record.terminalTitle = nil
+		record.terminalTitleSet = false
 	}
-	o.terminalTitle = nil
-	o.terminalTitleSet = false
 }
 
-// clearStatusLineUseColors records that a saved colour preference supersedes the
-// session override.
-func (o *statusSurfaceOverrides) clearStatusLineUseColors() {
-	if o == nil {
-		return
+// clearStatusLineUseColors records that a saved colour preference supersedes
+// the thread's session override.
+func (o *statusSurfaceOverrides) clearStatusLineUseColors(threadID string) {
+	if record := o.existing(threadID); record != nil {
+		record.statusLineUseColors = nil
 	}
-	o.statusLineUseColors = nil
 }
 
 func (o *statusSurfaceOverrides) empty() bool {
 	if o == nil {
 		return true
 	}
-	return !o.terminalTitleSet && !o.statusLineSet && o.statusLineUseColors == nil
+	for _, record := range o.byThread {
+		if !record.empty() {
+			return false
+		}
+	}
+	return true
 }
 
-// matchesThread reports whether the recorded overrides belong to threadID. An
-// empty record or an empty thread id never matches.
+// matchesThread reports whether threadID has a non-empty record.
 func (o *statusSurfaceOverrides) matchesThread(threadID string) bool {
-	if o == nil || o.empty() {
-		return false
-	}
-	threadID = strings.TrimSpace(threadID)
-	return threadID != "" && threadID == o.threadID
+	return o.lookup(threadID) != nil
 }
 
 // restoreStatusSurfaceOverrides re-applies the session-only selections recorded
@@ -184,10 +226,13 @@ func (o *statusSurfaceOverrides) matchesThread(threadID string) bool {
 // restored without re-emitting the OSC here: `applyResumeResponse` has no command
 // outlet, and the next status refresh writes the restored title.
 func (m *Model) restoreStatusSurfaceOverrides(threadID string) {
-	if m == nil || !m.statusSurfaceOverrides.matchesThread(threadID) {
+	if m == nil {
 		return
 	}
-	overrides := m.statusSurfaceOverrides
+	overrides := m.statusSurfaceOverrides.lookup(threadID)
+	if overrides == nil {
+		return
+	}
 	if overrides.statusLineUseColors != nil {
 		m.applyStatusLineThemeColors(*overrides.statusLineUseColors)
 	}
@@ -454,7 +499,7 @@ func (m *Model) commitStatusLineSetup(setup *statusLineSetupModal) bubbletea.Cmd
 	m.statusLineConfiguredByUser = true
 	// Rust #54387 (chatwidget/status_controls.rs:136-137): a saved editor
 	// selection supersedes the session-only override.
-	m.statusSurfaceOverrides.clearStatusLine()
+	m.statusSurfaceOverrides.clearStatusLine(m.currentThreadID())
 	m.notice = "Status line: " + firstNonEmpty(result.StatusLineText, "disabled")
 	m.refreshTranscript()
 	return nil
@@ -468,7 +513,7 @@ func (m *Model) commitTerminalTitleSetup(setup *terminalTitleSetupModal) bubblet
 	result := m.statusControls.SetupTerminalTitle(selectedTerminalTitleItems(setup))
 	// Rust #54387 (chatwidget/status_controls.rs:180): a saved editor selection
 	// supersedes the session-only override.
-	m.statusSurfaceOverrides.clearTerminalTitle()
+	m.statusSurfaceOverrides.clearTerminalTitle(m.currentThreadID())
 	m.notice = "Terminal title: " + firstNonEmpty(result.TerminalTitleText, "disabled")
 	m.refreshTranscript()
 	return m.applyTerminalTitleResult(result)

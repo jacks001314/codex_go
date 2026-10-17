@@ -492,3 +492,27 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go test ./tui/markdown ./tui/history_cell` | ok |
 | `go test ./tui` | ok |
 | `go test ./tui/tea` | 仅既有 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 失败（本机无剪贴板，copied=""），与本轮改动无关 |
+
+
+# Round 102 增量（2026-10-17，lead）
+
+## 18.1 已落地
+
+### #54387 状态面命令的会话级 override 改为按线程保存（`141bf7680d`）— landed
+
+- **漂移点**：round 691 已落地 `/title`、`/statusline` 的内联 items、`--clear`、`colors` 布尔设置与错误提示，但 override 只有“一个进程级槽位 + threadID 标记”。Rust 把 `StatusSurfaceOverrides` 放进每个线程的 `ThreadInputState`（`chatwidget/input_restore.rs:601` 捕获、`:621` 回放），因此 A 线程设置后切到 B 再设置，A 的记录会被覆盖丢失。
+- **实现**：`tui/tea/status_controls.go` 的 `statusSurfaceOverrides` 改为 `byThread map[string]*statusSurfaceOverrideRecord`；每条记录独立保存 `terminalTitle`、`statusLine`、`statusLineUseColors`，`record` / `lookup` / `existing` 按线程 id 读写，`restoreStatusSurfaceOverrides` 只回放被恢复线程自己的记录。编辑器保存与保存设置写回时，`clearStatusLine` / `clearTerminalTitle` / `clearStatusLineUseColors` 都作用于当前线程（Rust `status_controls.rs:136-137,180`、`config_panel.rs:103`）。
+- **保留行为**：内联参数解析、`--clear` 与 items 互斥、未知/歧义 item 提示、`slash_dispatch` 与 `bottom_pane/slash_commands` 接线均未改动。
+
+测试：
+
+- 新增 `tui/tea/status_surface_overrides_like_rust_test.go::TestStatusSurfaceOverridesKeepEveryThreadLikeRust`：A 设 `model` / `project-name` → 切 B 时保存布局不受影响，B 设 `hostname` / `status` → 回 A 得到 `model` / `project-name` → 再回 B 得到 `hostname` / `run-state`。
+- 既有四个用例继续通过：恢复线程回放、其他线程隔离、编辑器保存覆盖 override、保存的颜色偏好覆盖 override。
+
+## 18.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./tui/tea -run "TestStatusSurfaceOverrides|TestSavedStatusLineSetup|TestSavedColorPreference|TestStatusLineHostname"` | ok |
+| `go test ./tui/tea` | 仅既有 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 失败（本机无剪贴板，copied=""），与本轮改动无关 |

@@ -516,7 +516,7 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		}
 		// Rust #54387 (chatwidget/config_panel.rs:103): a saved preference
 		// supersedes the session-only colour override.
-		m.statusSurfaceOverrides.clearStatusLineUseColors()
+		m.statusSurfaceOverrides.clearStatusLineUseColors(m.currentThreadID())
 	}
 	if result.QuestionEscBack != nil {
 		m.questionEscBack = *result.QuestionEscBack

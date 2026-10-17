@@ -176,7 +176,7 @@ func TestStatusLineHostnameItemKeepsItsIDLikeRust(t *testing.T) {
 	seedSavedStatusSurfaces(t, model, []string{"current-dir"}, []string{"project-name"})
 
 	model.applyStatusLineCommand("hostname")
-	if got := strings.Join(model.statusSurfaceOverrides.statusLine, " "); got != "hostname" {
+	if got := strings.Join(model.statusSurfaceOverrides.lookup(statusOverridesThreadA).statusLine, " "); got != "hostname" {
 		t.Fatalf("recorded status-line override = %q, want %q", got, "hostname")
 	}
 
@@ -184,5 +184,47 @@ func TestStatusLineHostnameItemKeepsItsIDLikeRust(t *testing.T) {
 	model.applyResumeResponse(statusOverridesThreadA, SessionResumeResponse{})
 	if got := strings.Join(model.statusControls.StatusLineIDs, " "); got != "hostname" {
 		t.Fatalf("resumed status line = %q, want %q", got, "hostname")
+	}
+}
+
+// TestStatusSurfaceOverridesKeepEveryThreadLikeRust pins the per-thread
+// carrier: Rust stores StatusSurfaceOverrides inside each thread's
+// ThreadInputState (chatwidget/input_restore.rs:601,621), so two threads can
+// each keep their own /statusline and /title selection. A single process-wide
+// slot would forget thread A's selection as soon as thread B recorded one.
+func TestStatusSurfaceOverridesKeepEveryThreadLikeRust(t *testing.T) {
+	model := statusOverridesTestModel(t)
+	seedSavedStatusSurfaces(t, model, []string{"current-dir"}, []string{"project-name"})
+
+	model.applyStatusLineCommand("model")
+	model.applyTerminalTitleCommand("project-name")
+
+	// Thread B starts from its saved layout and records its own selection.
+	seedSavedStatusSurfaces(t, model, []string{"current-dir"}, []string{"project-name"})
+	model.applyResumeResponse(statusOverridesThreadB, SessionResumeResponse{})
+	if got := strings.Join(model.statusControls.StatusLineIDs, " "); got != "current-dir" {
+		t.Fatalf("thread B resumed with %q, want the saved layout untouched by thread A", got)
+	}
+	model.applyStatusLineCommand("hostname")
+	model.applyTerminalTitleCommand("status")
+
+	// Back to A: its own selection must return.
+	seedSavedStatusSurfaces(t, model, []string{"current-dir"}, []string{"project-name"})
+	model.applyResumeResponse(statusOverridesThreadA, SessionResumeResponse{})
+	if got := strings.Join(model.statusControls.StatusLineIDs, " "); got != "model" {
+		t.Fatalf("thread A status line = %q, want its own override model", got)
+	}
+	if got := strings.Join(model.statusControls.TerminalTitleIDs, " "); got != "project-name" {
+		t.Fatalf("thread A terminal title = %q, want project-name", got)
+	}
+
+	// And B still holds its own record.
+	seedSavedStatusSurfaces(t, model, []string{"current-dir"}, []string{"project-name"})
+	model.applyResumeResponse(statusOverridesThreadB, SessionResumeResponse{})
+	if got := strings.Join(model.statusControls.StatusLineIDs, " "); got != "hostname" {
+		t.Fatalf("thread B status line = %q, want its own override hostname", got)
+	}
+	if got := strings.Join(model.statusControls.TerminalTitleIDs, " "); got != "run-state" {
+		t.Fatalf("thread B terminal title = %q, want run-state", got)
 	}
 }
