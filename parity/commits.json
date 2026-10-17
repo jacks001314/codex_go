@@ -16409,9 +16409,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: PluginAppProvider, PluginAppProviderError, PluginContributor, PluginContributorState, PluginMcpProvider"
+        "Round 115 (lead): N/A (rename-only, existing terminology aligned) - #46564 renames Rust extension-provider/contributor classes and modules from executor-plugin names to PluginAppProvider/PluginMcpProvider/PluginContributor/install_plugins; behavior is unchanged. Go does not mirror that extension registry class hierarchy, and its plugin/MCP APIs already use plugin terminology (PluginProvider, PluginService, plugin hooks/contributors). There is no executor_plugin-named Go API to rename and no behavior change to port."
       ]
     },
     {
