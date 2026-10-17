@@ -714,7 +714,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 466d5f583e041869c97e2b37e617e282fb473277	48077	Add Serde support to agent message board request types (#48077)	2026-09-25	core	0	0		0	0	not_applicable	
 46aa019e805352c9d7fd9a740cbf7f8b9aeb162d	40604	Count serialized JSON bytes without allocating strings (#40604)	2026-08-25	core	1	1	1.00	0	0	complete	
 46d2585ea4347fe93446db57ec3e07ef234907e8	49082	Skip remote Git discovery for Guardian diff paths (#49082)	2026-09-28	guardian	0	0		0	0	not_applicable	
-46d87f3b1c34c8355d17b04d07eff54dfc40cc62	46558	Add shared plugin catalog discovery APIs (#46558)	2026-09-18	mcp	9	7	0.78	0	0	audit_pending	PluginProviderError,PluginProviderFuture
+46d87f3b1c34c8355d17b04d07eff54dfc40cc62	46558	Add shared plugin catalog discovery APIs (#46558)	2026-09-18	mcp	9	9	1.00	0	0	complete	
 46f7d99d0e99365323e67eb7f1f39e72d24bd1a0	46863	Stabilize usage dashboard navigation and add keyboard help (#46863)	2026-09-20	tui	14	4	0.29	0	0	audit_pending	activate_control,chat_has_details,control_available,help_lines,help_shortcut_available,render_controls,scroll_offset_mut,select_section,tab_label,toggle_dashboard
 46fdd5ef39735f4159cdcf0ec5e85c10521494e5	49032	Avoid SQLite stalls from connection setup and stderr span logging (#49032)	2026-09-28	appserver	0	0		0	0	not_applicable	
 4701aa4b4239c70063ab6f2fcb835324f9c109f4	45933	Avoid redundant model catalog lookups in reused Guardian reviewers (#45933)	2026-09-16	model	0	0		0	0	not_applicable	

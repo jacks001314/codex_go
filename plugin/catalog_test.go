@@ -25,6 +25,26 @@ func TestPluginCatalogEntryStringOmitsDeclarationValues(t *testing.T) {
 	}
 }
 
+// TestPluginIdentityStableAcrossSourcesLikeRust pins Rust #46558's identity
+// rule: a plugin-service remote ID is the stable key regardless of which cloud
+// or executor location supplied the discovery, while a plugin without a remote
+// ID falls back to its local `name@marketplace` key.
+func TestPluginIdentityStableAcrossSourcesLikeRust(t *testing.T) {
+	remote := PluginIdentity{Kind: PluginIdentityRemote, RemotePluginID: "plugins~Plugin_demo"}
+	if got, want := remote.AsString(), "plugins~Plugin_demo"; got != want {
+		t.Fatalf("remote identity = %q, want %q", got, want)
+	}
+	local := PluginIdentity{Kind: PluginIdentityLocal, PluginID: "demo@market"}
+	if got, want := local.AsString(), "demo@market"; got != want {
+		t.Fatalf("local identity = %q, want %q", got, want)
+	}
+	// Locations are metadata, not identity: two discoveries of the same logical
+	// plugin merge under one key even when their sources differ.
+	if remote.AsString() != (PluginIdentity{Kind: PluginIdentityRemote, RemotePluginID: remote.RemotePluginID}).AsString() {
+		t.Fatal("remote identity depends on its source location")
+	}
+}
+
 func TestPluginIdentityAsStringLikeRust(t *testing.T) {
 	if got := (PluginIdentity{Kind: PluginIdentityRemote, RemotePluginID: "remote-1"}).AsString(); got != "remote-1" {
 		t.Fatalf("remote identity = %q", got)

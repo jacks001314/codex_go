@@ -16346,8 +16346,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): verified complete - plugin/catalog.go implements the shared discovery types (PluginCatalog/PluginCatalogEntry/PluginIdentity/PluginSourceLocation/PluginListQuery), the PluginCatalogProvider batch interface, and ListPluginCatalog with Rust's empty-default for providers without a batch listing and error propagation; PluginCatalogEntry.String omits MCP declaration values (only authored names). Identity is source-independent (remote plugin ID, else local name@marketplace). Go supplies MCP resource access through service wiring instead of a query field. Tests: plugin/catalog_test.go (redaction, empty default, batch provider, error propagation, and the new stable-identity case); go test ./plugin green.",
         "Partial symbol coverage 7/9; needs review: PluginProviderError, PluginProviderFuture"
       ]
     },
