@@ -84,53 +84,11 @@ func ResolveWindowsDenyReadPolicyPaths(policy DenyReadPolicy, cwd string) ([]str
 }
 
 func GlobScanPlanForPattern(pattern string, configuredMaxDepth *int) GlobScanPlan {
-	firstGlob := len(pattern)
-	for index, ch := range pattern {
-		if ch == '*' || ch == '?' || ch == '[' {
-			firstGlob = index
-			break
-		}
-	}
-	literalPrefix := pattern[:firstGlob]
-	separatorIndex := strings.LastIndexAny(literalPrefix, `/\`)
-	if separatorIndex < 0 {
-		return GlobScanPlan{Root: ".", MaxDepth: effectiveGlobScanMaxDepth(pattern, configuredMaxDepth)}
-	}
-	patternSuffix := pattern[separatorIndex+1:]
-	isDriveRootSeparator := separatorIndex > 0 && literalPrefix[separatorIndex-1] == ':'
-	if separatorIndex == 0 || isDriveRootSeparator {
-		return GlobScanPlan{Root: literalPrefix[:separatorIndex+1], MaxDepth: effectiveGlobScanMaxDepth(patternSuffix, configuredMaxDepth)}
-	}
-	return GlobScanPlan{Root: literalPrefix[:separatorIndex], MaxDepth: effectiveGlobScanMaxDepth(patternSuffix, configuredMaxDepth)}
-}
-
-func effectiveGlobScanMaxDepth(patternSuffix string, configuredMaxDepth *int) *int {
-	components := splitGlobComponents(patternSuffix)
-	for _, component := range components {
-		if component == "**" {
-			if configuredMaxDepth == nil {
-				return nil
-			}
-			value := *configuredMaxDepth
-			return &value
-		}
-	}
-	value := len(components)
-	if configuredMaxDepth != nil && *configuredMaxDepth < value {
-		value = *configuredMaxDepth
-	}
-	return &value
-}
-
-func splitGlobComponents(pattern string) []string {
-	raw := strings.FieldsFunc(pattern, func(r rune) bool { return r == '/' || r == '\\' })
-	out := raw[:0]
-	for _, component := range raw {
-		if component != "" {
-			out = append(out, component)
-		}
-	}
-	return out
+	// Rust #43903 keeps the lexical scan bound in the shared permission
+	// protocol so policy validation and ACL expansion agree without filesystem
+	// access.
+	scan := coresandbox.WindowsDenyReadGlobScanForPattern(pattern, configuredMaxDepth)
+	return GlobScanPlan{Root: scan.Root, MaxDepth: scan.MaxDepth}
 }
 
 func collectExistingGlobMatches(path string, matcher func(string) bool, paths *[]string, seenPaths map[string]bool, seenScanDirs map[string]bool, maxDepth *int, depth int) error {
