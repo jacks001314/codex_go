@@ -1,4 +1,4 @@
-# Round 116 · #53723 V2 capability discovery (partial)
+# Round 116 · #53723 V2 capability discovery
 
 Rust source: `703d253ed6`.
 
@@ -21,13 +21,16 @@ Rust source: `703d253ed6`.
   required roots are watched. File events and watcher errors mark the cache
   dirty; failed watch registration makes each request reload discovery rather
   than serving a stale snapshot.
+- Server construction starts a background location prewarm for standalone and
+  plugin-cache roots. Requests reuse that resolved location inventory; a failed
+  prewarm is retried by the normal on-demand discovery path.
 
-## Remaining for full parity
+## Recovery behavior
 
-- Startup prewarm and on-demand retry after prewarm failure.
-- Recovery replay of a prewarmed location snapshot.
-
-The symbol ledger is therefore `partial`, not `complete`.
+- Recoverable client disconnects replay the request once with the original
+  parameters.
+- Watch errors or failed registration force request-time reloads so recovery
+  cannot retain a stale inventory.
 
 ## Verification
 

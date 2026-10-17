@@ -20,12 +20,11 @@ type v2CapabilityLocation struct {
 }
 
 func discoverCapabilitiesV2(params *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
-	if params == nil || strings.TrimSpace(params.CWD) == "" {
-		return nil, requestError(-32602, "capabilities/discoverV2 cwd is required")
-	}
-	if err := validateWirePathURI(params.CWD); err != nil {
-		return nil, requestError(-32602, "capabilities/discoverV2 cwd must be an absolute file URI: "+err.Error())
-	}
+	locations, warnings := v2DefaultCapabilityLocations()
+	return discoverCapabilitiesV2WithLocations(params, locations, warnings)
+}
+
+func v2DefaultCapabilityLocations() ([]v2CapabilityLocation, []string) {
 	codexHome := fsHelperCodexHome()
 	userHome, _ := os.UserHomeDir()
 	locations := []v2CapabilityLocation{
@@ -37,9 +36,18 @@ func discoverCapabilitiesV2(params *DiscoverV2CapabilitiesParams) (*DiscoverV2Ca
 			id:   "user-agent-skills",
 		})
 	}
-	pluginRoots, warnings := discoverV2PluginRoots(filepath.Join(codexHome, "plugins", "cache"), params.Sandbox)
+	pluginRoots, warnings := discoverV2PluginRoots(filepath.Join(codexHome, "plugins", "cache"), nil)
 	locations = append(locations, pluginRoots...)
+	return locations, warnings
+}
 
+func discoverCapabilitiesV2WithLocations(params *DiscoverV2CapabilitiesParams, locations []v2CapabilityLocation, warnings []string) (*DiscoverV2CapabilitiesResponse, error) {
+	if params == nil || strings.TrimSpace(params.CWD) == "" {
+		return nil, requestError(-32602, "capabilities/discoverV2 cwd is required")
+	}
+	if err := validateWirePathURI(params.CWD); err != nil {
+		return nil, requestError(-32602, "capabilities/discoverV2 cwd must be an absolute file URI: "+err.Error())
+	}
 	response := &DiscoverV2CapabilitiesResponse{
 		Plugins: []ExecutorPlugin{}, Skills: []ExecutorSkill{}, Warnings: warnings,
 	}

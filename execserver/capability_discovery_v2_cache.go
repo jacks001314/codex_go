@@ -20,18 +20,28 @@ type v2DiscoveryManager struct {
 	registrationSucceeded bool
 	dirty                 bool
 	entries               map[string]cachedV2Discovery
+	prewarmDone           chan struct{}
+	prewarmed             []v2CapabilityLocation
+	prewarmWarnings       []string
 }
 
 func newV2DiscoveryManager() *v2DiscoveryManager {
-	return &v2DiscoveryManager{entries: map[string]cachedV2Discovery{}}
+	m := &v2DiscoveryManager{
+		entries: map[string]cachedV2Discovery{}, prewarmDone: make(chan struct{}),
+	}
+	go m.prewarmLocations()
+	return m
 }
 
 func (m *v2DiscoveryManager) Snapshot(params *DiscoverV2CapabilitiesParams) (*DiscoverV2CapabilitiesResponse, error) {
 	if m == nil {
 		return discoverCapabilitiesV2(params)
 	}
+	<-m.prewarmDone
 	m.mu.Lock()
 	m.ensureWatcherLocked()
+	locations := append([]v2CapabilityLocation(nil), m.prewarmed...)
+	warnings := append([]string(nil), m.prewarmWarnings...)
 	key := v2DiscoveryCacheKey(params)
 	if m.registrationSucceeded && !m.dirty {
 		if cached, ok := m.entries[key]; ok {
@@ -41,7 +51,7 @@ func (m *v2DiscoveryManager) Snapshot(params *DiscoverV2CapabilitiesParams) (*Di
 	}
 	m.mu.Unlock()
 
-	response, err := discoverCapabilitiesV2(params)
+	response, err := discoverCapabilitiesV2WithLocations(params, locations, warnings)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +60,15 @@ func (m *v2DiscoveryManager) Snapshot(params *DiscoverV2CapabilitiesParams) (*Di
 	m.dirty = false
 	m.mu.Unlock()
 	return response, nil
+}
+
+func (m *v2DiscoveryManager) prewarmLocations() {
+	locations, warnings := v2DefaultCapabilityLocations()
+	m.mu.Lock()
+	m.prewarmed = locations
+	m.prewarmWarnings = warnings
+	m.mu.Unlock()
+	close(m.prewarmDone)
 }
 
 func (m *v2DiscoveryManager) ensureWatcherLocked() {
