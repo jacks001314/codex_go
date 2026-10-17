@@ -1926,7 +1926,7 @@ b3ea9fa632793eb3fcc33d7a9210afe400a44cff	47889	Include TUI client logs in diagno
 b3f5e45cc1de8bcb09d320f3211378db285aa201	42781	Add direct SigV4 transport to exec-server (#42781)	2026-09-04	execserver	7	1	0.14	0	0	audit_pending	RemoteEnvironmentTransport,authenticate_websocket_request,aws_sigv4_auth_provider,connect_websocket_request,new_with_transport,run_direct_environment
 b4373e53ab79df7baadc6805dea54a060b820307	43601	Move Guardian image selection into shared context sections (#43601)	2026-09-07	guardian	4	2	0.50	0	0	audit_pending	TranscriptImageInput,TranscriptImagesSection
 b44af92ca0eeeb030736094ab11951c1dc645de4	45528	Compress larger Windows release artifacts first (#45528)	2026-09-14	core	0	0		0	0	not_applicable	
-b44ca872b1059c65f0eb6a7534e9e8ae55df54a8	49847	Persist world-state snapshots alongside rendered context (#49847)	2026-10-01	sandbox	2	1	0.50	0	0	audit_pending	render_step_world_state
+b44ca872b1059c65f0eb6a7534e9e8ae55df54a8	49847	Persist world-state snapshots alongside rendered context (#49847)	2026-10-01	sandbox	2	2	1.00	0	0	complete	
 b4507997e0bbbaab718bd5e30df1ea3d8ce85893	44200	Use captured step settings when building model context (#44200)	2026-09-09	persistence	2	2	1.00	0	0	complete	
 b48232f975dde694e34c77b3d616376124aaf160	46866	Enable mouse navigation in the TUI usage view (#46866)	2026-09-20	tui	2	1	0.50	0	0	audit_pending	invalidate_mouse_targets
 b49e2211a579553d235c88f9c19eb988331cd159	52660	Handle completion events in either order in shell snapshot tests (#52660)	2026-10-09	core	0	0		0	0	not_applicable	
