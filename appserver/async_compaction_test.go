@@ -176,3 +176,70 @@ func TestAsyncCompactionAuthOwnerDeduplicatesAttemptsLikeRust(t *testing.T) {
 		t.Fatal("runner called with a stale auth owner")
 	}
 }
+
+func TestAsyncCompactionTakeReadyValidatesCapturedAttemptLikeRust(t *testing.T) {
+	state := newAsyncCompactionState()
+	history := []compact.Item{
+		{ID: "one", Type: "message", Role: "user", Text: "first"},
+		{ID: "two", Type: "message", Role: "assistant", Text: "second"},
+	}
+	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "instructions", "gpt-test", "hash", 3, 1000)
+	done := make(chan struct{})
+	if !state.MaybeStart(context.Background(), input, func() uint64 { return 3 }, func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
+		close(done)
+		return &backgroundCompactionCandidate{
+			Result: &compact.Result{
+				Status:     compact.StatusCompleted,
+				Summary:    "summary",
+				NewHistory: []compact.Item{{ID: "summary", Type: "message", Role: "user", Kind: "compaction_summary", Text: compact.SummaryPrefix + "\nsummary"}},
+			},
+		}, nil
+	}) {
+		t.Fatal("attempt did not start")
+	}
+	<-done
+	deadline := time.Now().Add(2 * time.Second)
+	var candidate *backgroundCompactionCandidate
+	for candidate == nil && time.Now().Before(deadline) {
+		candidate = state.TakeReady(history, "gpt-test", "hash", 3)
+		if candidate == nil {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if candidate == nil {
+		t.Fatal("ready candidate was not returned")
+	}
+	installed, ok := installBackgroundCompactionCandidate(history, candidate, []compact.Item{{ID: "world", Type: "message", Role: "developer", Text: "state"}}, 3)
+	if !ok || len(installed) != 3 || installed[0].ID != "world" || installed[1].ID != "summary" || installed[2].ID != "two" {
+		t.Fatalf("installed candidate = %#v, ok=%t", installed, ok)
+	}
+	if _, ok := installBackgroundCompactionCandidate(history, candidate, nil, 4); ok {
+		t.Fatal("candidate installed under a different auth owner")
+	}
+	if _, ok := installBackgroundCompactionCandidate(history[:1], candidate, nil, 3); ok {
+		t.Fatal("candidate installed against a different history generation")
+	}
+}
+
+func TestAsyncCompactionWaitForPendingSharesOneResultLikeRust(t *testing.T) {
+	state := newAsyncCompactionState()
+	history := []compact.Item{{ID: "one", Type: "message", Role: "user", Text: "first"}}
+	input := captureBackgroundCompactionInput(history, 1, "", compactionResponseWindow{}, "", "gpt-test", "hash", 1, 1000)
+	release := make(chan struct{})
+	if !state.MaybeStart(context.Background(), input, func() uint64 { return 1 }, func(context.Context, backgroundCompactionInput) (*backgroundCompactionCandidate, error) {
+		<-release
+		return &backgroundCompactionCandidate{Result: &compact.Result{Status: compact.StatusCompleted, Summary: "shared", NewHistory: []compact.Item{{ID: "summary", Type: "message", Role: "user", Kind: "compaction_summary"}}}}, nil
+	}) {
+		t.Fatal("attempt did not start")
+	}
+	close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	candidate := state.WaitForPending(ctx, history, "gpt-test", "hash", 1)
+	if candidate == nil || candidate.Result == nil || candidate.Result.Summary != "shared" {
+		t.Fatalf("pending candidate = %#v", candidate)
+	}
+	if second := state.WaitForPending(ctx, history, "gpt-test", "hash", 1); second != nil {
+		t.Fatalf("pending result was shared twice: %#v", second)
+	}
+}

@@ -6129,13 +6129,33 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 		}),
 	}
 	r.notifyContextCompactionItemStarted(request.ThreadID, request.TurnID, compactionItem)
-	compacted, err := compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
-		Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record)),
-		MaxSummaryChars:      4000,
-		InitialContext:       initialContext,
-		InjectBeforeLastUser: true,
-		FallbackToLocal:      !params.RemoteOnly,
-	})
+	var backgroundCompacted *compact.Result
+	var backgroundHistory []compact.Item
+	if r.threads != nil {
+		if state := r.threads.existingAsyncCompactionState(request.ThreadID); state != nil {
+			modelSlug := firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model))
+			compactionHash := r.modelCompHash(modelSlug)
+			authOwner := r.authOwnerRevisionSnapshot()
+			candidate := state.TakeReady(history, modelSlug, compactionHash, authOwner)
+			if candidate == nil && ctx.Err() == nil {
+				candidate = state.WaitForPending(ctx, history, modelSlug, compactionHash, authOwner)
+			}
+			if installed, ok := installBackgroundCompactionCandidate(history, candidate, initialContext, authOwner); ok {
+				backgroundCompacted = candidate.Result
+				backgroundHistory = installed
+			}
+		}
+	}
+	compacted := backgroundCompacted
+	if compacted == nil {
+		compacted, err = compact.CompactRemotely(ctx, request, &compact.RemoteOptions{
+			Runner:               r.compactRunnerForRecord(record, request, params.Model, r.compactProgramForAttempt(params, record)),
+			MaxSummaryChars:      4000,
+			InitialContext:       initialContext,
+			InjectBeforeLastUser: true,
+			FallbackToLocal:      !params.RemoteOnly,
+		})
+	}
 	if err != nil {
 		// Rust #53670: a terminal response.incomplete from the compaction
 		// request still reports usage. Charge it (budget-only for background
@@ -6159,13 +6179,18 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	// from the history being replaced before the replacement overwrites it.
 	declarationPrefix := incrementalDeclarationPrefixItems(record.Items)
 	compactedItems := sessionItemsFromCompactItems(compacted.NewHistory, now)
+	if backgroundHistory != nil {
+		compactedItems = sessionItemsFromCompactItems(backgroundHistory, now)
+	}
 	// Rust #49598 (`Session::replace_compacted_history`): goal edits are
 	// published outside the running compaction task, so an edit accepted after
 	// the compaction input snapshot is neither summarized nor part of the
 	// replacement. Re-read the live history and keep those edits, in their
 	// original order, after it.
-	if latest, latestErr := r.threadRecord(session.ThreadID(request.ThreadID), true, true); latestErr == nil && latest != nil {
-		compactedItems = retainGoalInstructionsAcrossCompaction(compactedItems, latest.Items, userGoalInstructionIDs(history))
+	if backgroundHistory == nil {
+		if latest, latestErr := r.threadRecord(session.ThreadID(request.ThreadID), true, true); latestErr == nil && latest != nil {
+			compactedItems = retainGoalInstructionsAcrossCompaction(compactedItems, latest.Items, userGoalInstructionIDs(history))
+		}
 	}
 	record.Items = compactedItems
 	compactionItem.CreatedAt = now

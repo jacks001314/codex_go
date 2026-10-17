@@ -193,6 +193,8 @@ type Item struct {
 // CompactionPrefix identifies the history snapshot a speculative compaction
 // will replace. Later items survive when the candidate is installed.
 type CompactionPrefix struct {
+	// Generation is the HistoryVersion captured with the request.
+	Generation          uint64
 	Len                 int
 	AuthOwnerGeneration *uint64
 }

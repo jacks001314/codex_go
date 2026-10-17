@@ -2,6 +2,7 @@ package appserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,11 +80,13 @@ type backgroundCompactionCandidate struct {
 // will summarize. Later history items remain in place when the candidate is
 // installed.
 func captureBackgroundCompactionInput(history []compact.Item, prefixLen int, turnState string, window compactionResponseWindow, baseInstructions string, modelSlug string, compactionHash string, authOwnerGeneration uint64, usableWindow int64) backgroundCompactionInput {
+	generation := compact.HistoryVersion(history)
 	prefixLen = max(0, min(prefixLen, len(history)))
 	history = compact.TrimHistoryToContextWindow(history, int(usableWindow), baseInstructions)
 	authOwner := authOwnerGeneration
 	return backgroundCompactionInput{
 		Prefix: compact.CompactionPrefix{
+			Generation:          generation,
 			Len:                 prefixLen,
 			AuthOwnerGeneration: &authOwner,
 		},
@@ -106,6 +109,7 @@ type asyncCompactionState struct {
 	mu           sync.Mutex
 	lastAttempt  *compactionAttemptKey
 	candidate    *backgroundCompactionCandidate
+	resultCh     chan *backgroundCompactionCandidate
 	taskCtx      context.Context
 	cancel       context.CancelFunc
 	tasks        sync.WaitGroup
@@ -145,6 +149,8 @@ func (s *asyncCompactionState) MaybeStart(ctx context.Context, input backgroundC
 	taskCtx := s.taskCtx
 	s.lastAttempt = &key
 	s.candidate = nil
+	s.resultCh = make(chan *backgroundCompactionCandidate, 1)
+	resultCh := s.resultCh
 	s.tasks.Add(1)
 	s.mu.Unlock()
 
@@ -155,14 +161,99 @@ func (s *asyncCompactionState) MaybeStart(ctx context.Context, input backgroundC
 			return
 		}
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		if s.shuttingDown || s.lastAttempt == nil || *s.lastAttempt != key {
+			s.mu.Unlock()
 			return
 		}
 		candidate.Key = key
+		candidate.Prefix = input.Prefix
+		candidate.Input = input
 		s.candidate = candidate
+		s.mu.Unlock()
+		resultCh <- candidate
 	}()
 	return true
+}
+
+// TakeReady returns a completed candidate only when the captured history,
+// model, compaction hash, and auth owner still match the foreground step.
+func (s *asyncCompactionState) TakeReady(currentHistory []compact.Item, modelSlug string, compactionHash string, authOwnerGeneration uint64) *backgroundCompactionCandidate {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastAttempt == nil || s.resultCh == nil ||
+		s.lastAttempt.HistoryVersion != compact.HistoryVersion(currentHistory) ||
+		s.lastAttempt.ModelSlug != strings.TrimSpace(modelSlug) ||
+		s.lastAttempt.CompactionHash != strings.TrimSpace(compactionHash) ||
+		s.lastAttempt.AuthOwnerGeneration != authOwnerGeneration {
+		return nil
+	}
+	select {
+	case candidate := <-s.resultCh:
+		if candidate == nil || candidate.Prefix.Generation != s.lastAttempt.HistoryVersion {
+			return nil
+		}
+		s.resultCh = nil
+		s.candidate = nil
+		return candidate
+	default:
+		return nil
+	}
+}
+
+// WaitForPending awaits the current speculative request when foreground
+// compaction is due. It returns nil when the request no longer matches the
+// foreground history/model/hash/auth owner.
+func (s *asyncCompactionState) WaitForPending(ctx context.Context, currentHistory []compact.Item, modelSlug string, compactionHash string, authOwnerGeneration uint64) *backgroundCompactionCandidate {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.lastAttempt == nil || s.resultCh == nil ||
+		s.lastAttempt.HistoryVersion != compact.HistoryVersion(currentHistory) ||
+		s.lastAttempt.ModelSlug != strings.TrimSpace(modelSlug) ||
+		s.lastAttempt.CompactionHash != strings.TrimSpace(compactionHash) ||
+		s.lastAttempt.AuthOwnerGeneration != authOwnerGeneration {
+		s.mu.Unlock()
+		return nil
+	}
+	resultCh := s.resultCh
+	s.resultCh = nil
+	s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case candidate := <-resultCh:
+		if candidate == nil || candidate.Prefix.Generation != compact.HistoryVersion(currentHistory) {
+			return nil
+		}
+		s.mu.Lock()
+		s.candidate = nil
+		s.mu.Unlock()
+		return candidate
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// installBackgroundCompactionCandidate validates the captured prefix and
+// installs the prepared replacement while preserving later history edits.
+func installBackgroundCompactionCandidate(currentHistory []compact.Item, candidate *backgroundCompactionCandidate, initialContext []compact.Item, currentAuthOwnerGeneration uint64) ([]compact.Item, bool) {
+	if candidate == nil || candidate.Result == nil || candidate.Result.NewHistory == nil {
+		return nil, false
+	}
+	prefix := candidate.Prefix
+	if prefix.Generation == 0 || prefix.Generation != compact.HistoryVersion(currentHistory) ||
+		prefix.Len < 0 || prefix.Len > len(currentHistory) {
+		return nil, false
+	}
+	if prefix.AuthOwnerGeneration != nil && *prefix.AuthOwnerGeneration != currentAuthOwnerGeneration {
+		return nil, false
+	}
+	return compact.InstallCompactedHistoryPrefix(currentHistory, candidate.Result.NewHistory, prefix, nil, initialContext), true
 }
 
 // TakeCandidate returns and clears the newest completed candidate.
@@ -223,6 +314,15 @@ func (m *ThreadManager) asyncCompactionState(threadID string) *asyncCompactionSt
 		m.asyncCompaction[threadID] = state
 	}
 	return state
+}
+
+func (m *ThreadManager) existingAsyncCompactionState(threadID string) *asyncCompactionState {
+	if m == nil || threadID == "" {
+		return nil
+	}
+	m.turnsMu.Lock()
+	defer m.turnsMu.Unlock()
+	return m.asyncCompaction[threadID]
 }
 
 func (m *ThreadManager) shutdownAsyncCompaction(threadID string) {

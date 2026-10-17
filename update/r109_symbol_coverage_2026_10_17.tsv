@@ -1545,7 +1545,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9124e23e2cd5411fcd996724f37cb66ea074c17d	47349	Move plugin recommendations into developer context (#47349)	2026-09-22	appserver	0	0		0	0	not_applicable	
 9127f21890265323701ea080b6f0fe0a164bcb54	41925	Test repository-wide Rust formatter discovery (#41925)	2026-08-31	tui	0	0		0	0	not_applicable	
 91608236ea27a4f8de26a6ccfcd5e7f08a895887	42392	Support managed daemon updates on Windows (#42392)	2026-09-02	appserver	6	4	0.67	0	0	audit_pending	replace_current_updater,updater_job
-9167a0b2d4a74d44a4d388057d304682e47313c6	53620	Reuse background results for remote V2 compaction (#53620)	2026-10-13	core	4	0	0.00	0	0	implementation_pending	CompactionFallback,run_compaction,take_ready,wait_for_pending
+9167a0b2d4a74d44a4d388057d304682e47313c6	53620	Reuse background results for remote V2 compaction (#53620)	2026-10-13	core	4	4	1.00	0	0	complete	
 91c66024c7784f8de2d8c8355bcccad40ab3c44d	41231	Instrument the loaded plugin cache (#41231)	2026-08-28	plugins	7	3	0.43	0	0	audit_pending	LOAD_DURATION,WAIT_DURATION,plugins_for_config,record_event
 91d54f1667e627538db9d44d2ce88a260b4213b0	45519	Restore collaboration mode when resuming threads (#45519)	2026-09-14	tui	1	1	1.00	0	0	complete	
 920e1a34dc67b70974e7ed557a9a36b23948ec26	47689	Make Guardian thread context capture unconditional (#47689)	2026-09-23	guardian	0	0		0	0	not_applicable	

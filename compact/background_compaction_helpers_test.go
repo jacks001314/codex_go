@@ -17,7 +17,7 @@ func TestInstallCompactedHistoryPrefixPreservesLaterItemsLikeRust(t *testing.T) 
 		{ID: "summary", Type: "message", Role: "user", Kind: "compaction_summary", Text: SummaryPrefix + "\nsummary"},
 	}
 	initialContext := []Item{{ID: "world-state", Type: "message", Role: "developer", Text: "current state"}}
-	installed := InstallCompactedHistoryPrefix(history, replacement, CompactionPrefix{Len: 2}, nil, initialContext)
+	installed := InstallCompactedHistoryPrefix(history, replacement, CompactionPrefix{Generation: HistoryVersion(history), Len: 2}, nil, initialContext)
 	if len(installed) != 4 {
 		t.Fatalf("installed history = %#v", installed)
 	}
@@ -26,14 +26,14 @@ func TestInstallCompactedHistoryPrefixPreservesLaterItemsLikeRust(t *testing.T) 
 		t.Fatalf("installed order = %#v", installed)
 	}
 
-	noRealLaterMessage := InstallCompactedHistoryPrefix(history[:2], replacement, CompactionPrefix{Len: 1}, nil, initialContext)
+	noRealLaterMessage := InstallCompactedHistoryPrefix(history[:2], replacement, CompactionPrefix{Generation: HistoryVersion(history[:2]), Len: 1}, nil, initialContext)
 	if len(noRealLaterMessage) != 3 || noRealLaterMessage[0].ID != "summary" ||
 		noRealLaterMessage[1].ID != "world-state" || noRealLaterMessage[2].ID != "agent-1" {
 		t.Fatalf("summary boundary installation = %#v", noRealLaterMessage)
 	}
 
 	prefixContext := []Item{{ID: "catalog", Type: "additional_tools"}}
-	withPrefix := InstallCompactedHistoryPrefix(history, replacement, CompactionPrefix{Len: 4}, prefixContext, initialContext)
+	withPrefix := InstallCompactedHistoryPrefix(history, replacement, CompactionPrefix{Generation: HistoryVersion(history), Len: 4}, prefixContext, initialContext)
 	if len(withPrefix) != 3 || withPrefix[0].ID != "catalog" || withPrefix[1].ID != "world-state" || withPrefix[2].ID != "summary" {
 		t.Fatalf("prefix context installation = %#v", withPrefix)
 	}
