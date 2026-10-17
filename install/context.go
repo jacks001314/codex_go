@@ -351,6 +351,19 @@ func ExecutableIdentityFromBytes(data []byte) ExecutableIdentity {
 	return ExecutableIdentity{Digest: hex.EncodeToString(sum[:])}
 }
 
+// ExecutableIdentityFromReader mirrors Rust #47591's
+// `executable_identity_from_reader`: hash the executable in a stream so debug
+// builds of a few hundred megabytes do not need a whole-file allocation. The
+// digest format is unchanged, so identities recorded by whole-file hashing stay
+// valid.
+func ExecutableIdentityFromReader(reader io.Reader) (ExecutableIdentity, error) {
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, reader); err != nil {
+		return ExecutableIdentity{}, err
+	}
+	return ExecutableIdentity{Digest: hex.EncodeToString(hasher.Sum(nil))}, nil
+}
+
 // packageLayoutFromRootMetadata resolves an executable that sits at the package
 // root, which is the layout a locally built or WinGet-installed CLI uses. Only
 // metadata that names this exact executable proves the layout.
@@ -390,13 +403,14 @@ func ExecutableIdentityFromFile(path string) (ExecutableIdentity, error) {
 		return ExecutableIdentity{}, err
 	}
 	defer file.Close()
-	sum := sha256.New()
-	if _, err := io.Copy(sum, file); err != nil {
+	identity, err := ExecutableIdentityFromReader(file)
+	if err != nil {
 		return ExecutableIdentity{}, err
 	}
 	pathSum := sha256.Sum256([]byte(executable))
 	pathDigest := hex.EncodeToString(pathSum[:])
-	return ExecutableIdentity{Digest: hex.EncodeToString(sum.Sum(nil)), PathDigest: pathDigest}, nil
+	identity.PathDigest = pathDigest
+	return identity, nil
 }
 
 func PackageLayoutFromExe(exePath string) *CodexPackageLayout {

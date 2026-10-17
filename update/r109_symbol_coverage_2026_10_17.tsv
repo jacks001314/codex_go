@@ -1513,7 +1513,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8f0b05910efb6f290dc8a31afc1c3f250f0baf99	48187	Fix zsh alias quoting in sourced shell snapshots (#48187)	2026-09-25	execserver	0	0		0	0	not_applicable	
 8f0d2459ac753e22cf0cf09999c3feac7b80b589	45768	Add consumer Top chats usage analytics (#45768)	2026-09-15	tui	20	10	0.50	0	0	audit_pending	TaskCredits,TaskUsage,TaskUsageAmounts,TaskUsageGroup,TaskUsageResponse,TaskUsageStatus,TaskUsageThread,get_task_usage,task_lines,task_rows
 8f103417ef3e63193561d7b3d8ff4cf9b91335de	47964	Preserve the client-agent header for Amazon Bedrock Runtime (#47964)	2026-09-24	model	0	0		0	0	not_applicable	
-8f1490eabe3ec27e92c46fd1b10400be3c910581	47591	Stream daemon executable hashing off the async runtime (#47591)	2026-09-23	appserver	1	0	0.00	0	0	implementation_pending	executable_identity_from_reader
+8f1490eabe3ec27e92c46fd1b10400be3c910581	47591	Stream daemon executable hashing off the async runtime (#47591)	2026-09-23	appserver	1	1	1.00	0	0	complete	
 8f195c93d7e7acfef95acf273f0e49cce917e291	48628	Preserve blank TUI sessions when switching tasks (#48628)	2026-09-27	tui	0	0		0	0	not_applicable	
 8f21b7fffbefe77529325fc86c95289371841c6c	51800	Remove duplicate field initializers in extension registry tests (#51800)	2026-10-07	core	0	0		0	0	not_applicable	
 8f2c15c39871c0698cd76a22ae239d36f7e8c9b8	46978	Implement paginated queries for the local agent message board (#46978)	2026-09-21	core	6	5	0.83	0	0	audit_pending	decode_posts

@@ -19474,8 +19474,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): install/context.go adds ExecutableIdentityFromReader and routes ExecutableIdentityFromFile through it (#47591), so the digest is streamed with the unchanged format; tests cover multi-read/empty/byte-change compatibility and the path digest. RC: one-byte hashing fails; go test ./install green.",
         "No new upstream public identifier found in Go (0/1); candidate gap: executable_identity_from_reader"
       ]
     },
