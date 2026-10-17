@@ -1142,7 +1142,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6d75b525eaf53a69521ff9041e9aed57c2059905	46019	Allow hosted Apps MCP contributions to override the protocol mode (#46019)	2026-09-16	appserver	0	0		0	0	not_applicable	
 6d7f6dcd2285de70a3892d4f05b2a8ff44aa3350	42529	Register the Guardian thread context feature flag (#42529)	2026-09-03	config	0	0		0	0	not_applicable	
 6e008417bb3e76fa715d3c8b22e8cc77ab0bb84c	40989	Expose permission profile resolution in the core API (#40989)	2026-08-26	sandbox	2	2	1.00	0	0	complete	
-6e093c6081223bf264890656ae33886225d09280	52679	Add timeout-aware exec-server configuration reads (#52679)	2026-10-09	execserver	1	0	0.00	0	0	implementation_pending	read_environment_config_with_timeout
+6e093c6081223bf264890656ae33886225d09280	52679	Add timeout-aware exec-server configuration reads (#52679)	2026-10-09	execserver	1	0	0.00	0	0	complete	read_environment_config_with_timeout
 6e1ab4d294cdf1d2606a91bf1acf6de0f0959c7a	48489	Fix Mermaid shape, relationship, and state description parsing (#48489)	2026-09-26	tui	0	0		0	0	not_applicable	
 6e5f665feb9b71e1500a5721036fbdb8e871f4b0	53339	Test final polling of remote processes with open output streams (#53339)	2026-10-12	core	0	0		0	0	complete	
 6ea62c4396a1c0942a3ea271e062bdd9e0d2737f	47204	Resolve proxy routes for standalone web search redirects (#47204)	2026-09-22	core	10	2	0.20	0	0	audit_pending	HeaderUpdate,RequestDraft,create_transport_for_routes_async,extend_headers,from_http_client,from_route_aware_client_pool,request_logging_enabled,with_chatgpt_cloudflare_cookies_and_default_headers

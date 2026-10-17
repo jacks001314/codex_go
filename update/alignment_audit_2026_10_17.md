@@ -1209,3 +1209,31 @@ go build ./...               # exit 0
   记为 N/A，而不是本轮新增行为；
 - r109 仍按符号名记录为 `implementation_pending 0/7`，本轮在 r90 记为 `partial`，
   不宣称 #50045 已完全对齐。
+
+## 34. Round 116（2026-10-17）：timeout-aware exec-server config reads（complete）
+
+### 34.1 落地
+
+- Rust 参考：`6e093c6081`（`#52679`）。
+- `execserver/environment_config_read.go` 新增 `Client.ReadEnvironmentConfig` 与
+  `ReadEnvironmentConfigWithTimeout`；后者在连接建立后同时约束发送和接收。
+- `execserver/client.go` 抽出 `callWithTimeoutRecovery`，由
+  `environment/info` 与 `environmentConfig/read` 共用。
+- 新增类型化 `RPCTimedOutError`，并纳入 read-only preparation 的 retryable
+  分类。可重连 transport 超时会 retire 当前连接；不可重连的 stdio 保持连接，
+  合法 in-flight 工作与后续读取继续使用同一连接。
+
+### 34.2 验证
+
+```text
+go test ./execserver -run 'EnvironmentConfigReadTimeout|EnvironmentInfoTimeout|EnvironmentInfoKeepsCaller' -count=1  # ok
+go vet ./execserver  # ok
+go build ./...       # ok
+```
+
+RC：移除 `reconnectDisabled` guard 后，超时会错误关闭 stdio 连接，
+`TestEnvironmentConfigReadTimeoutKeepsStdioConnectionUsableLikeRust` 立即失败。
+
+`./execserver` 整包仍有两个已知 Windows 基线失败：
+`TestDriveLetterPathsAreNotReparseRejectedAndJunctionsStayBlocked` 与
+`TestWindowsSandboxPowerShellFallbackWithoutCompatibleShellLikeRust`。
