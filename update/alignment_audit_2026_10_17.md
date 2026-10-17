@@ -770,3 +770,13 @@ go test ./appserver -run 'CollabToolsGate|DisableNativeToolsKeepsV2' # ok
 - 真实功能缺口仍以账本形式显式存在：**2295 条 audit_pending + 15 条 implementation_pending**，本轮新增 #54776 为 implementable（Go 侧 fragment body 仍返回 string，缺少 ContentItem 返回路径）。
 - 该数量就是「功能对齐」尚未达成的量化证据，不再用抽样账本掩盖。
 
+## 24.7 #54776 typed content（部分落地）
+
+- Rust：`ContextualUserFragment::body()` / `render()` 返回 `ContentItem`；`render()` 只对 `InputText` 套 marker，其它内容原样透传；扩展 prompt / world-state 贡献可带类型内容；非文本 world-state 用序列化内容+role 做哈希；共享 content→tool-output 转换保留图片引用/细节与音频。
+- Go 本轮落地（`context/fragments.go`）：
+  - `BodyItemProvider`（`BodyItems() []eventmap.ContentItem`）让片段输出类型化内容；
+  - `RenderedFragment.ContentItems`、`RenderItems()`：marker 只包裹 `InputText`，图片/音频原样透传；
+  - `ToolOutputParts()`：把类型化内容转成 `input_text` / `input_image`（含 `detail`）/ `input_audio` 载荷；
+  - 测试：`context/typed_fragment_content_like_rust_test.go` 三例（marker 只作用于文本、纯字符串片段仍为单个 InputText、音频转换）。
+- 未完成：`appserver/turn_runtime.go` 的 world-state 贡献仍以字符串拼接与文本哈希为主，extension prompt 贡献也还是纯文本；code-mode 输出尚未复用 `ToolOutputParts`。账本记为 `partial`。
+

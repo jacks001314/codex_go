@@ -1,6 +1,7 @@
 package context
 
 import (
+	"codex_go/eventmap"
 	"reflect"
 	"strings"
 	"testing"
@@ -83,7 +84,13 @@ func TestRenderManySkipsNilAndEmpty(t *testing.T) {
 		NewSimpleFragment(RoleUser, "", "", " "),
 		NewSimpleFragment(RoleUser, "", "", "hello"),
 	})
-	if !reflect.DeepEqual(rendered, []RenderedFragment{{Role: RoleUser, Content: "hello", ContentKind: "generic"}}) {
+	want := []RenderedFragment{{
+		Role:         RoleUser,
+		Content:      "hello",
+		ContentKind:  "generic",
+		ContentItems: []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: "hello"}},
+	}}
+	if !reflect.DeepEqual(rendered, want) {
 		t.Fatalf("RenderMany() = %#v", rendered)
 	}
 }

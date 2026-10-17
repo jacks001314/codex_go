@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"codex_go/eventmap"
 )
 
 const (
@@ -27,6 +29,73 @@ type RenderedFragment struct {
 	Role        string
 	Content     string
 	ContentKind string
+	// ContentItems mirrors Rust #54776 `ContextualUserFragment::render()`
+	// returning a typed `ContentItem`: the first text item carries the
+	// fragment markers, every non-text item passes through unchanged.
+	ContentItems []eventmap.ContentItem
+}
+
+// BodyItemProvider lets a fragment emit typed content instead of a plain
+// string (Rust #54776). Fragments that do not implement it keep rendering as a
+// single InputText item built from Body().
+type BodyItemProvider interface {
+	BodyItems() []eventmap.ContentItem
+}
+
+func fragmentBodyItems(fragment Fragment) []eventmap.ContentItem {
+	if provider, ok := fragment.(BodyItemProvider); ok {
+		if items := provider.BodyItems(); len(items) > 0 {
+			return items
+		}
+	}
+	return []eventmap.ContentItem{{Kind: eventmap.ContentInputText, Text: fragment.Body()}}
+}
+
+// RenderItems applies the Rust #54776 rule: markers wrap only InputText; every
+// other content item is forwarded verbatim.
+func RenderItems(fragment Fragment) []eventmap.ContentItem {
+	if fragment == nil {
+		return nil
+	}
+	open, close := fragment.Markers()
+	items := fragmentBodyItems(fragment)
+	out := make([]eventmap.ContentItem, 0, len(items))
+	for _, item := range items {
+		if item.Kind == eventmap.ContentInputText {
+			body := strings.Trim(item.Text, "\n")
+			if open != "" || close != "" {
+				body = strings.Join(nonEmpty([]string{open, body, close}), "\n")
+			}
+			item.Text = body
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// ToolOutputParts converts typed fragment content into model tool-output parts,
+// preserving image URLs, image detail and audio references (Rust #54776's
+// shared content-to-tool-output conversion).
+func ToolOutputParts(items []eventmap.ContentItem) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		switch item.Kind {
+		case eventmap.ContentInputImage:
+			part := map[string]any{"type": "input_image"}
+			if item.ImageURL != "" {
+				part["image_url"] = item.ImageURL
+			}
+			if item.Detail != "" {
+				part["detail"] = item.Detail
+			}
+			out = append(out, part)
+		case eventmap.ContentInputAudio:
+			out = append(out, map[string]any{"type": "input_audio", "text": item.Text, "audio_url": item.ImageURL})
+		default:
+			out = append(out, map[string]any{"type": "input_text", "text": item.Text})
+		}
+	}
+	return out
 }
 
 type SimpleFragment struct {
@@ -79,9 +148,10 @@ func Render(fragment Fragment) *RenderedFragment {
 		content = strings.Join(nonEmpty([]string{open, body, close}), "\n")
 	}
 	return &RenderedFragment{
-		Role:        fragment.Role(),
-		Content:     content,
-		ContentKind: fragment.ContentKind(),
+		Role:         fragment.Role(),
+		Content:      content,
+		ContentKind:  fragment.ContentKind(),
+		ContentItems: RenderItems(fragment),
 	}
 }
 
@@ -91,9 +161,10 @@ func RenderStandalone(fragment Fragment) *RenderedFragment {
 	}
 	open, close := fragment.Markers()
 	return &RenderedFragment{
-		Role:        fragment.Role(),
-		Content:     open + fragment.Body() + close,
-		ContentKind: fragment.ContentKind(),
+		Role:         fragment.Role(),
+		Content:      open + fragment.Body() + close,
+		ContentKind:  fragment.ContentKind(),
+		ContentItems: RenderItems(fragment),
 	}
 }
 
