@@ -1766,7 +1766,7 @@ a68a7a6ab05242735b816c71dfa4c3f794c6efd7	53668	Improve remote exec-server test s
 a69d757cd8ef8310001186865911b69e4b4175e5	47529	Emit command lifecycle events for unified exec launch failures (#47529)	2026-09-23	appserver	1	0	0.00	0	0	complete	with_launch_failure_events
 a6baf8867cb4c9726213c0884a5c8b11f0cfd8bf	51611	Signal abandonment of unanswered MCP elicitations (#51611)	2026-10-07	appserver	2	2	1.00	0	0	complete	
 a6bd19261c30ce0a0225fe90e646822d29916f11	48491	Fall back to embedded mode under restrictive Windows launchers (#48491)	2026-09-26	tui	1	1	1.00	0	0	complete	
-a6c5f3a9fa8e7ccfba7d53921d2f06d06d3b9f79	51194	Add browser extension request headers to config requirements (#51194)	2026-10-05	appserver	4	2	0.50	0	0	audit_pending	BrowserUseExtensionRequirementsToml,RequestHeaderToml
+a6c5f3a9fa8e7ccfba7d53921d2f06d06d3b9f79	51194	Add browser extension request headers to config requirements (#51194)	2026-10-05	appserver	4	4	1.00	0	0	complete
 a6d4741d3968ee0b9984e896db08d6fc4aef05e8	46035	Add per-app tool exposure configuration (#46035)	2026-09-16	appserver	0	0		0	0	not_applicable	
 a6df7385e60c04af108ab0cb262ad38e984c4e67	47686	Make thread-owned Guardian context always enabled (#47686)	2026-09-23	guardian	4	1	0.25	0	0	audit_pending	guardian_history_items,has_legacy_user_messages,legacy_user_messages
 a6e63f9f32525d171676ac49c4e87ab00d76f0ce	40683	Respect config layers when removing plugin marketplaces (#40683)	2026-08-25	appserver	0	0		0	0	not_applicable	
@@ -2625,7 +2625,7 @@ f6fd7f17ed2ef4bf28e5b320789d764350ce4529	47894	Clean up temporary Codex homes af
 f70810bcd210ed780a3da5940e9e60f74ac8ee60	49951	Include preceding assistant context in Guardian sender reviews (#49951)	2026-10-01	guardian	1	1	1.00	0	0	complete	
 f71543813fc0fbf652a6efd86f65c8d723eef7db	44286	Block WSL interop escapes from restricted filesystem sandboxes (#44286)	2026-09-09	sandbox	1	0	0.00	0	0	implementation_pending	WSL_INTEROP_DIR
 f71935b7f00c82811658e88ee988dcbfd6bbc2f6	51425	Skip stable installer alias publishing for prereleases (#51425)	2026-10-06	core	0	0		0	0	not_applicable	
-f73a478c87a78a553f8009e6b26b44cc700c7f35	51872	Keep global app-server config independent of the launch directory (#51872)	2026-10-07	appserver	2	1	0.50	0	0	audit_pending	without_project_context
+f73a478c87a78a553f8009e6b26b44cc700c7f35	51872	Keep global app-server config independent of the launch directory (#51872)	2026-10-07	appserver	2	2	1.00	0	0	complete
 f742dabc6f9c575ca43428a84b66fb42a7f3e4b2	41421	Support per-tool MCP output limits (#41421)	2026-08-28	appserver	6	2	0.33	0	0	audit_pending	into_response,serialize_mcp_server,serialize_mcp_server_inline,truncate_function_output_payload
 f747d23d4bc8a167207fb1c411e221022391fdbb	46993	Clarify Bazel lockfile verification failures (#46993)	2026-09-21	core	0	0		0	0	not_applicable	
 f74bcd281196a752521717757f39d6c7b26affae	40964	Build Guardian V2 synchronous review prompts (#40964)	2026-08-26	guardian	4	2	0.50	0	0	audit_pending	build_review_prompt,review_inputs
@@ -2693,4 +2693,4 @@ ff73d63e64e2d4c728cf9d17ce0fc1366f72e865	46330	Move retry backoff into `codex-as
 ff9ab4aed96aa2e105f78b9521dbbd3a6b329dc8	51411	Suppress repeated image paste presses in legacy terminals (#51411)	2026-10-06	tui	1	1	1.00	0	0	complete	
 ffae979216bfbe94070bd21868d1695277105a63	45845	Revert the current thread when editing an earlier TUI prompt (#45845)	2026-09-16	tui	5	0	0.00	0	0	implementation_pending	HistoryHydrationScope,backtrack_revert_before_turn_id,reset_after_prompt_revert,restore_backtrack_prompt_after_revert_error,revert_thread
 ffbd30aeb71a669045a70e5ff74ed4aa116f79af	46981	Canonicalize the workspace trust key in the doctor config test (#46981)	2026-09-21	core	0	0		0	0	not_applicable	
-ffc14026337b3637cb2b61b9adee55aa4dcba2e6	53698	Interrupt and drain canceled classifier responses before socket reuse (#53698)	2026-10-13	guardian	5	3	0.60	0	0	audit_pending	ResponseInterrupt,record_token_usage
+ffc14026337b3637cb2b61b9adee55aa4dcba2e6	53698	Interrupt and drain canceled classifier responses before socket reuse (#53698)	2026-10-13	guardian	5	3	0.60	0	0	not_applicable

@@ -1430,6 +1430,22 @@
             "reason": "Aligned upstream e974aad3b1 (#51930 Support model-specific function description prefixes): model tool messages parse per-function guidance for the default functions namespace. The turn registry applies trimmed prefixes only to available plain/freeform tools, enforces the 256-byte combined limit, leaves namespaced/unavailable tools and search ranking text unchanged, and therefore exposes the same prefixed descriptions through direct declarations, Code Mode, and tool-search definitions without changing execution.",
             "userImpact": "A model catalog can guide individual built-in or dynamic functions through direct, Code Mode, and deferred tool-search surfaces consistently.",
             "test": "go test ./model ./tool ./turn -run 'FunctionDescriptionPrefixes|ToolMessagesRoundTrip' -count=1"
+        },
+        {
+            "id": "global-app-server-config-scope",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream f73a478c87 (#51872 Keep global app-server config independent of the launch directory): ConfigService reads without a CWD omit project layers, so global experimental-feature, marketplace, and MCP requests cannot inherit settings from the app-server launch directory. Thread-scoped feature reads continue to pass the thread CWD explicitly.",
+            "userImpact": "Global app-server operations remain stable and project-independent even when the launch directory contains project configuration or is later removed.",
+            "test": "go test ./config -run 'Projectless|IgnoreProjectConfig' -count=1; go test ./appserver -run 'ExperimentalFeatureList|MarketplaceRemove' -count=1"
+        },
+        {
+            "id": "browser-extension-request-header-requirements",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream a6c5f3a9fa (#51194 Add browser extension request headers to config requirements): Go parses browser_use.extension.request_headers as strict name/value pairs, preserves template strings and explicit-empty lists, rejects unknown/malformed fields, and exposes cloned camelCase requestHeaders through config requirements and API serialization.",
+            "userImpact": "Managed browser-extension request headers can be supplied and inspected without ambiguity while malformed requirements fail validation.",
+            "test": "go test ./config -run TestBrowserUseExtensionRequestHeadersRequirementLikeRust -count=1; go test ./appserver -run ConfigRequirements -count=1"
         }
     ]
 }
