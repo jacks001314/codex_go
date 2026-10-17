@@ -47,11 +47,9 @@ def main():
             continue
         fields = line.split("\t")
         ledger[fields[1]] = fields[4]
-    rows = [
-        line.split("\t")
-        for line in io.open(TSV, encoding="utf-8", newline="").read().split("\r\n")[1:]
-        if line
-    ]
+    lines = io.open(TSV, encoding="utf-8", newline="").read().split("\r\n")
+    header, rest = lines[0], [line for line in lines[1:] if line]
+    rows = [line.split("\t") for line in rest]
     before = collections.Counter(row[10] for row in rows)
     changed = 0
     for row in rows:
@@ -72,7 +70,7 @@ def main():
     print("after: ", dict(sorted(after.items())))
     print("changed:", changed)
     io.open(TSV, "w", encoding="utf-8", newline="").write(
-        "\r\n".join("\t".join(row) for row in rows) + "\r\n"
+        "\r\n".join([header] + ["\t".join(row) for row in rows]) + "\r\n"
     )
 
 if __name__ == "__main__":
