@@ -187,6 +187,8 @@ type MultiAgentModeMessages struct {
 // ModelTokenBudgetConfig contains model-owned defaults for the context-window
 // token-budget feature.
 type ModelTokenBudgetConfig struct {
+	Enabled                         bool   `json:"enabled"`
+	UseHistoryNotesExtension        bool   `json:"use_history_notes_extension"`
 	ReminderThresholdTokens         int    `json:"reminder_threshold_tokens"`
 	ReminderMessageTemplate         string `json:"reminder_message_template"`
 	GuidanceMessage                 string `json:"guidance_message"`

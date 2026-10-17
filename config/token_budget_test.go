@@ -87,6 +87,46 @@ func TestTokenBudgetConfigAppliesValidModelDefaults(t *testing.T) {
 	}
 }
 
+func TestTokenBudgetConfigModelDefaultsActivateWithoutExplicitConfigLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{}}
+	got, err := cfg.TokenBudgetConfigWithDefaults(&TokenBudgetDefaults{
+		Enabled:                         true,
+		UseHistoryNotesExtension:        true,
+		ReminderThresholdTokens:         12000,
+		ReminderMessageTemplate:         "remaining: {n_remaining}",
+		GuidanceMessage:                 "keep notes",
+		AutoCompactFallbackPrompt:       "summarize",
+		AutoCompactFallbackBufferTokens: 8000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || !got.UseHistoryNotesExtension || got.ReminderThresholdTokens == nil ||
+		*got.ReminderThresholdTokens != 12000 || got.GuidanceMessage != "keep notes" {
+		t.Fatalf("config = %+v", got)
+	}
+}
+
+func TestTokenBudgetConfigExplicitConfigDisablesModelDefaultActivationLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"token_budget": false}}}
+	got, err := cfg.TokenBudgetConfigWithDefaults(&TokenBudgetDefaults{
+		Enabled:                  true,
+		UseHistoryNotesExtension: true,
+		ReminderThresholdTokens:  12000,
+		ReminderMessageTemplate:  "remaining: {n_remaining}",
+		GuidanceMessage:          "keep notes",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled || got.UseHistoryNotesExtension || got.ReminderThresholdTokens != nil || got.GuidanceMessage != "" {
+		t.Fatalf("explicit disabled config was overridden: %+v", got)
+	}
+	if !cfg.HasExplicitTokenBudgetConfig() {
+		t.Fatal("explicit token-budget config was not detected")
+	}
+}
+
 func TestTokenBudgetConfigExplicitSettingsOverrideModelDefaults(t *testing.T) {
 	cfg := &Config{Values: map[string]any{"features": map[string]any{"token_budget": map[string]any{
 		"enabled": true, "guidance_message": "user guidance",

@@ -12657,12 +12657,43 @@ func modelTokenBudgetDefaults(info *model.ModelInfo) *config.TokenBudgetDefaults
 	}
 	defaults := info.ModelMessages.TokenBudget
 	return &config.TokenBudgetDefaults{
+		Enabled:                         defaults.Enabled,
+		UseHistoryNotesExtension:        defaults.UseHistoryNotesExtension,
 		ReminderThresholdTokens:         defaults.ReminderThresholdTokens,
 		ReminderMessageTemplate:         defaults.ReminderMessageTemplate,
 		GuidanceMessage:                 defaults.GuidanceMessage,
 		AutoCompactFallbackPrompt:       defaults.AutoCompactFallbackPrompt,
 		AutoCompactFallbackBufferTokens: defaults.AutoCompactFallbackBufferTokens,
 	}
+}
+
+// applyModelTokenBudgetThreadDefaults snapshots model-owned activation into the
+// thread configuration at startup. Rust applies these defaults once per thread;
+// later model changes keep the activated feature and history-notes gate while
+// resolving their own prompts and thresholds (#41803).
+func applyModelTokenBudgetThreadDefaults(sessionDefaults map[string]any, cfg *config.Config, info *model.ModelInfo) {
+	if sessionDefaults == nil || cfg == nil || cfg.HasExplicitTokenBudgetConfig() {
+		return
+	}
+	if cfg.Requirements != nil {
+		if enabled, pinned := cfg.Requirements.FeatureRequirements["token_budget"]; pinned && !enabled {
+			return
+		}
+	}
+	tokenBudget, err := cfg.TokenBudgetConfigWithDefaults(modelTokenBudgetDefaults(info))
+	if err != nil || tokenBudget == nil || !tokenBudget.Enabled {
+		return
+	}
+	featureDefaults, _ := sessionDefaults["features"].(map[string]any)
+	featureDefaults = cloneAnyMap(featureDefaults)
+	if featureDefaults == nil {
+		featureDefaults = map[string]any{}
+	}
+	featureDefaults["token_budget"] = map[string]any{
+		"enabled":                     true,
+		"use_history_notes_extension": tokenBudget.UseHistoryNotesExtension,
+	}
+	sessionDefaults["features"] = featureDefaults
 }
 
 func (r *RuntimeRouter) contextWindowGuidanceWorldStateInputItem(threadID string, enabled bool, message string) (any, error) {

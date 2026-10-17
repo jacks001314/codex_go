@@ -25,7 +25,7 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 		"collaboration_modes": {"default": "cm", "plan": "pm"},
 		"auto_review": {"policy": "policy"},
 		"multi_agent": {"role": {"root": "r", "subagent": "s"}},
-		"token_budget": {"reminder_threshold_tokens": 1, "reminder_message_template": "m"},
+		"token_budget": {"enabled": true, "use_history_notes_extension": true, "reminder_threshold_tokens": 1, "reminder_message_template": "m"},
 		"confirmation_policies": {"browser_use": "b"},
 		"tools": {"send_user_message_async": {"description": "d"}}
 	}`)
@@ -48,6 +48,9 @@ func TestModelMessagesParseRustWireNames(t *testing.T) {
 	}
 	if messages.PersistentInstructions == nil || *messages.PersistentInstructions != "persist" {
 		t.Fatalf("persistent_instructions = %#v", messages.PersistentInstructions)
+	}
+	if messages.TokenBudget == nil || !messages.TokenBudget.Enabled || !messages.TokenBudget.UseHistoryNotesExtension {
+		t.Fatalf("token_budget activation = %#v", messages.TokenBudget)
 	}
 	// The legacy singular key must not silently populate the field: Rust only
 	// reads `approvals`.

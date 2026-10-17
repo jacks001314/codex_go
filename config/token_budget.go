@@ -13,6 +13,8 @@ const (
 )
 
 type TokenBudgetDefaults struct {
+	Enabled                         bool
+	UseHistoryNotesExtension        bool
 	ReminderThresholdTokens         int
 	ReminderMessageTemplate         string
 	GuidanceMessage                 string
@@ -41,6 +43,19 @@ func (c *Config) TokenBudgetConfigWithDefaults(defaults *TokenBudgetDefaults) (*
 	}
 	features, _ := c.Values["features"].(map[string]any)
 	raw := features["token_budget"]
+	if _, configured := features["token_budget"]; !configured {
+		if defaults == nil || !defaults.Enabled {
+			return out, nil
+		}
+		out.Enabled = true
+		out.UseHistoryNotesExtension = defaults.UseHistoryNotesExtension
+		candidate := *out
+		applyTokenBudgetDefaults(&candidate, defaults)
+		if validateTokenBudgetConfig(&candidate) == nil {
+			return &candidate, nil
+		}
+		return out, nil
+	}
 	if enabled, ok := raw.(bool); ok {
 		out.Enabled = enabled
 		if enabled && defaults != nil {
@@ -103,6 +118,18 @@ func (c *Config) TokenBudgetConfigWithDefaults(defaults *TokenBudgetDefaults) (*
 		return nil, err
 	}
 	return out, nil
+}
+
+// HasExplicitTokenBudgetConfig reports whether the user or a config layer
+// supplied features.token_budget. Model defaults may activate the feature only
+// when this is false (Rust token_budget::apply_model_defaults, #41803).
+func (c *Config) HasExplicitTokenBudgetConfig() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	features, _ := c.Values["features"].(map[string]any)
+	_, configured := features["token_budget"]
+	return configured
 }
 
 func applyTokenBudgetDefaults(out *TokenBudgetConfig, defaults *TokenBudgetDefaults) {

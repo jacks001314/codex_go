@@ -2259,7 +2259,7 @@ d52478c52ef09f001142a4b82339467c3880877f	40570	Preserve Unicode paths in Windows
 d5355e95ef24de93ef4b3c070c7fc221a71a4e93	48211	Keep Codex visible during external editor handoff (#48211)	2026-09-25	tui	6	1	0.17	0	0	audit_pending	DisableModifyOtherKeys,TerminalHandoff,previous_buffer,release_input,with_restored
 d570b3632b100e36f931797cdbdb8906d0fcafa8	52223	Enforce application network policy for daemon updates (#52223)	2026-10-08	core	0	0		0	0	not_applicable	
 d583e73c4d1204f1e9f654ef87065e9f0dd07ac7	47055	Fetch local message board thread summaries in one query (#47055)	2026-09-21	core	0	0		0	0	not_applicable	
-d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budgeting by default (#41803)	2026-08-31	model	1	0	0.00	0	0	implementation_pending	apply_model_defaults
+d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budgeting by default (#41803)	2026-08-31	model	1	1	1.00	0	0	complete	
 d5afb62bb3d8f900530b49a1268cb110380bedfd	46574	Notify users when asynchronous questions arrive in the TUI (#46574)	2026-09-19	tui	0	0		0	0	not_applicable	
 d5b29951aca5205bc8415120b56dd4bc295f5c83	46540	Centralize retry decisions and delays in `CodexErr` (#46540)	2026-09-18	model	3	2	0.67	0	0	audit_pending	handle_response_stream_error
 d5caceccb1ee5bf94c081b995575ce4860e0912b	41058	Track Code Mode tool call metadata completeness (#41058)	2026-08-27	model	4	3	0.75	0	0	audit_pending	set_tool_call_cell_id

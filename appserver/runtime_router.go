@@ -5063,6 +5063,8 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if sessionDefaults == nil {
 		sessionDefaults = map[string]any{}
 	}
+	modelInfo := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	applyModelTokenBudgetThreadDefaults(sessionDefaults, cfg, modelInfo)
 	for key, value := range map[string]string{
 		"model":                      modelID,
 		"model_reasoning_effort":     reasoningEffort,
@@ -5092,7 +5094,7 @@ func (r *RuntimeRouter) applyThreadStartConfigSnapshot(response *ThreadStartResp
 	if len(sessionDefaults) > 0 {
 		record.Metadata.Extra["config"] = sessionDefaults
 	}
-	if tokenBudget, tokenBudgetErr := cfg.TokenBudgetConfig(); tokenBudgetErr == nil && tokenBudget != nil {
+	if tokenBudget, tokenBudgetErr := cfg.TokenBudgetConfigWithDefaults(modelTokenBudgetDefaults(modelInfo)); tokenBudgetErr == nil && tokenBudget != nil {
 		record.Metadata.Extra["token_budget_enabled"] = tokenBudget.Enabled
 		if tokenBudget.AutoCompactFallbackPrompt != "" {
 			record.Metadata.Extra["auto_compact_fallback_prompt"] = tokenBudget.AutoCompactFallbackPrompt

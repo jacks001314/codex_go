@@ -4692,9 +4692,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: apply_model_defaults"
+        "Round 115 (lead): model token-budget defaults can now enable the feature at thread startup without an explicit features.token_budget setting. Activation and history-notes usage are parsed from the catalog, resolved once into the thread config snapshot, and later model switches retain activation while resolving their own prompt defaults. Explicit config and managed feature pins override activation; two reverse probes and focused tests pass."
       ]
     },
     {
