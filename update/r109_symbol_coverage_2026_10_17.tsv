@@ -861,7 +861,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 52e73e3a548ae5310c7765995b9803dd538b82b0	43055	Allow `/copy` to copy status output and individual fields (#43055)	2026-09-05	tui	2	1	0.50	0	0	audit_pending	StatusCopySource
 530383e36de9c74cd79177a0c31d35609019134f	43622	Warn when the connected Codex service is older than the CLI (#43622)	2026-09-07	tui	8	4	0.50	0	0	audit_pending	add_server_version_warning,new_server_version_warning,server_codex_home,update_server_version_overview_notice
 531f3836a1e38ea61eaaba3dccda6711eb6c0dca	42993	Remove the deprecated `codex mcp-server` command (#42993)	2026-09-05	appserver	0	0		0	0	not_applicable	
-53401a28086afa11cefcbe058022cc7a31c26153	45982	Use native DNS resolution for the network proxy on macOS (#45982)	2026-09-16	core	1	0	0.00	0	0	implementation_pending	SystemDnsResolver
+53401a28086afa11cefcbe058022cc7a31c26153	45982	Use native DNS resolution for the network proxy on macOS (#45982)	2026-09-16	core	1	0	0.00	0	0	complete	SystemDnsResolver
 53446f90a56692dede3c8f413e8d486a6adb77b5	47758	Preserve more tool metadata within outgoing message budgets (#47758)	2026-09-24	model	8	4	0.50	0	0	audit_pending	bound_prompt_metadata,omit_tool_result_metadata,record_shedding,retain_tool_resource_access_or_omit_metadata
 53486e5bdc50f17ed334226502fd3cdc5ee083e6	47413	Cache decrypted gateway OAuth secrets per backend (#47413)	2026-09-23	core	0	0		0	0	not_applicable	
 534c70863c107e2bdedfa25b72bc1b035cb3208f	54048	Defer folder trust checks until starting a task from agents overview (#54048)	2026-10-14	tui	0	0		0	0	blocked_precondition	
