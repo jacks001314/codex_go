@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"codex_go/envutil"
+	"codex_go/features"
 	"codex_go/install"
 )
 
@@ -201,6 +202,46 @@ func (r *LifecycleRunner) RestartWithFeatures(features map[string]bool) (*Lifecy
 	}
 	if FeatureOverridesEqual(previous, merged) {
 		return r.startWithFeatureOverrides(settings, previous)
+	}
+	settings.FeatureOverrides = CloneFeatureOverrides(merged)
+	backendKind := BackendPID
+	return r.restart(settings, &backendKind)
+}
+
+// RestartApplyingFeatures applies an explicit restart's confirmed feature
+// toggles, replaces saved alias spellings, and always restarts the managed
+// backend. Rust #53751 uses the same path for running and stopped daemons.
+func (r *LifecycleRunner) RestartApplyingFeatures(featureOverrides map[string]bool) (*LifecycleOutput, error) {
+	if err := EnsureNonElevated(); err != nil {
+		return nil, err
+	}
+	daemon := r.daemon()
+	lock, err := r.acquireOperationLock()
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	daemon.refreshInstallation()
+	settings, err := daemon.LoadSettings()
+	if err != nil {
+		return nil, err
+	}
+	merged := CloneFeatureOverrides(settings.FeatureOverrides)
+	if merged == nil {
+		merged = map[string]bool{}
+	}
+	for name, enabled := range featureOverrides {
+		canonical, ok := features.CanonicalKey(name)
+		if !ok {
+			return nil, fmt.Errorf("daemon restart requires a boolean feature toggle: %s", name)
+		}
+		for saved := range merged {
+			savedCanonical, ok := features.CanonicalKey(saved)
+			if ok && savedCanonical == canonical {
+				delete(merged, saved)
+			}
+		}
+		merged[canonical] = enabled
 	}
 	settings.FeatureOverrides = CloneFeatureOverrides(merged)
 	backendKind := BackendPID

@@ -583,3 +583,51 @@ func TestLifecycleRunnerRestartWithFeaturesLikeRust(t *testing.T) {
 		t.Fatalf("restarts = %d, want %d (unchanged features must not restart)", stub.appStops, stopsBefore)
 	}
 }
+
+func TestLifecycleRunnerRestartApplyingFeaturesLikeRust(t *testing.T) {
+	stub := stubLifecycleManagedDaemon(t)
+	home := t.TempDir()
+	daemon := NewDaemonForCodexHome(home, "codex-go-test")
+	runner := NewLifecycleRunner(daemon)
+	runner.Now = func() time.Time { return fixedDaemonTime() }
+	if err := SaveSettings(daemon.Paths.SettingsFile, &DaemonSettings{FeatureOverrides: map[string]bool{
+		"connectors":              true,
+		"apps":                    true,
+		"auth_elicitation":        true,
+		"api_key_model_discovery": false,
+	}}); err != nil {
+		t.Fatalf("SaveSettings() error = %v", err)
+	}
+	stub.appRunning = false
+	stub.socketReady = false
+
+	if _, err := runner.RestartApplyingFeatures(map[string]bool{
+		"apps":                    false,
+		"api_key_model_discovery": true,
+	}); err != nil {
+		t.Fatalf("RestartApplyingFeatures() error = %v", err)
+	}
+	if !stub.appRunning {
+		t.Fatal("explicit restart did not start the managed backend")
+	}
+	settings, err := LoadSettings(daemon.Paths.SettingsFile)
+	if err != nil {
+		t.Fatalf("LoadSettings() error = %v", err)
+	}
+	want := map[string]bool{
+		"apps":                    false,
+		"auth_elicitation":        true,
+		"api_key_model_discovery": true,
+	}
+	if !FeatureOverridesEqual(settings.FeatureOverrides, want) {
+		t.Fatalf("stored overrides = %#v, want %#v", settings.FeatureOverrides, want)
+	}
+
+	stopsBefore := stub.appStops
+	if _, err := runner.RestartApplyingFeatures(map[string]bool{"apps": false}); err != nil {
+		t.Fatalf("unchanged RestartApplyingFeatures() error = %v", err)
+	}
+	if stub.appStops <= stopsBefore {
+		t.Fatalf("explicit restart reused the daemon: stops = %d, want more than %d", stub.appStops, stopsBefore)
+	}
+}

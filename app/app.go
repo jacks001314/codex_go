@@ -1579,7 +1579,15 @@ func runAppServerDaemon(ctx context.Context, opts cli.AppServerDaemonOptions, an
 	case "start":
 		output, err = runner.Run(appserverdaemon.LifecycleStart)
 	case "restart":
-		output, err = runner.Run(appserverdaemon.LifecycleRestart)
+		featureOverrides, overrideErr := daemonRestartFeatureOverrides(root)
+		if overrideErr != nil {
+			return overrideErr
+		}
+		if len(featureOverrides) == 0 {
+			output, err = runner.Run(appserverdaemon.LifecycleRestart)
+		} else {
+			output, err = runner.RestartApplyingFeatures(featureOverrides)
+		}
 	case "enable-remote-control":
 		output, err = runner.SetRemoteControl(appserverdaemon.RemoteControlEnabled)
 	case "disable-remote-control":
