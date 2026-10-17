@@ -708,7 +708,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 459a79eb85400af759e9220c7bafb4429ae07516	42904	Use static instructions for the Default collaboration mode (#42904)	2026-09-05	model	0	0		0	0	not_applicable	
 45a3edc02a59d845eba30794796c44e5f2377408	39992	Keep keymap action descriptions stable while navigating (#39992)	2026-08-21	tui	0	0		0	0	not_applicable	
 45eec73b115f3a281eeb5c7df3d1e698105c3e79	44307	Add opt-in provisioned macOS CLI release candidates (#44307)	2026-09-09	core	0	0		0	0	not_applicable	
-460b63e5f43cb1cc8e992ae9c3235ec22d918613	42406	Honor explicit plugin mentions during MCP startup (#42406)	2026-09-03	appserver	3	1	0.33	0	0	audit_pending	McpStartupRequirements,current_binding_with_requirements
+460b63e5f43cb1cc8e992ae9c3235ec22d918613	42406	Honor explicit plugin mentions during MCP startup (#42406)	2026-09-03	appserver	3	1	0.33	0	0	complete	McpStartupRequirements,current_binding_with_requirements
 4636819a352bfd4271c669c568a92f1bccfcd7e0	42852	Harden Guardian reviews after context compaction (#42852)	2026-09-04	guardian	3	2	0.67	0	0	audit_pending	restore_review_context
 465eafacbc2db4ff828cd6d18ed8f25d22e48f53	40499	Harden startup rollout migration against concurrent updates (#40499)	2026-08-24	persistence	0	0		0	0	not_applicable	
 466d5f583e041869c97e2b37e617e282fb473277	48077	Add Serde support to agent message board request types (#48077)	2026-09-25	core	0	0		0	0	not_applicable	

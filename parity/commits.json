@@ -6759,9 +6759,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: McpStartupRequirements, current_binding_with_requirements"
+        "Round 279 (audit): requiredPluginsForTurn collects exact plugin:// IDs from turn input (ignoring display names and query targeting parameters), and the turn MCP catalog waits for matching selected-plugin servers while leaving unmentioned servers optional; the requirement set is recomputed from current turn params for later samples/steering. Tests: go test ./plugin ./appserver -run 'ExplicitPlugin|SelectedCapability|MCP.*Startup' -count=1"
       ]
     },
     {
