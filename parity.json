@@ -1638,6 +1638,14 @@
             "reason": "Aligned upstream 68301fa45f (#40651 Snapshot resolved settings for each model step): turn.AgentStepSettings captures model, reasoning effort, reasoning summary, service tier, and client metadata, and AgentLoop applies that immutable snapshot to the following request. App-server step resolution preserves config/model defaults, observes mid-turn summary updates, re-filters service tiers for the updated model, and uses the per-turn model catalog during filtering.",
             "userImpact": "Mid-turn model/settings changes affect only subsequent model steps and use options valid for the newly selected model.",
             "test": "go test ./turn -count=1; go test ./appserver -run 'StepSettings|RefreshesStep|ServiceTier' -count=1"
+        },
+        {
+            "id": "direct-tool-call-metadata-binding",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 1715e55076 (#45185 Bind direct tool-call metadata to invocation outputs): Go reserves a direct-call record before dispatch, binds it to the exact output, marks complete inventory, enforces the retained metadata budget, strips metadata when disabled, observes non-dispatched calls, and attaches records to compaction prompts. Rust Arc strong_count staleness checks are represented by permit/lifetime identity validation.",
+            "userImpact": "Tool-call metadata follows the exact invocation output and cannot be reattached after recorder lifetime changes or leak into Code Mode cell metadata.",
+            "test": "go test ./turn -run 'ExecutedToolCall|DirectCall|ToolResultMetadata' -count=1"
         }
     ]
 }

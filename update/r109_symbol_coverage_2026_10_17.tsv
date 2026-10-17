@@ -235,7 +235,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 16f59db96eaa260eb2863974e4e6dea6bcca6bb3	46104	Pause TUI events in the agents overview regression test (#46104)	2026-09-17	tui	0	0		0	0	not_applicable	
 16ff14c266179e6a762dc8081e9dab73a96683e0	43478	Retain inherited Guardian instructions in standalone forks (#43478)	2026-09-07	guardian	8	4	0.50	0	0	audit_pending	UserMessageSource,record_user_authorization,restore_retained_context,with_guardian_context_mode
 170da98842877c730a1d8ec9ee7421e54c06bb6d	41413	Optimize history item lookups (#41413)	2026-08-28	tui	0	0		0	0	not_applicable	
-1715e55076737158ba61d43158ede504de6d4ce1	45185	Bind direct tool-call metadata to invocation outputs (#45185)	2026-09-13	guardian	6	5	0.83	0	0	audit_pending	strong_count
+1715e55076737158ba61d43158ede504de6d4ce1	45185	Bind direct tool-call metadata to invocation outputs (#45185)	2026-09-13	guardian	6	6	1.00	0	0	complete	
 171dd0d39c4b5fffc3e27c870f77c47670951f09	47122	Increase OpenAI file blob upload timeout from 60 seconds to 5 minutes (#47122)	2026-09-21	core	0	0		0	0	not_applicable	
 172f8a2901119ceab4d8552e906ea65d98626076	46069	Use syntax theme colors for inline code and file paths (#46069)	2026-09-17	tui	0	0		0	0	not_applicable	
 17a9df60e420b58e3edc55efb1bb052e39492bbc	49403	Add an experimental flag for bundled tools in login shells (#49403)	2026-09-29	tui	0	0		0	0	not_applicable	
