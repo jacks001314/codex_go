@@ -1326,6 +1326,14 @@
             "reason": "Aligned upstream 876ce590e1 (#47584 Preserve streamed assistant message order in retained context): the live thread-owned retained context reserves an assistant message's acceptance order when its source stream starts, keyed by message ID and idempotent per ID. Recording the completed message consumes that reservation, so a user reply accepted before the streamed question completes remains ordered after it.",
             "userImpact": "Guardian retained context keeps question-before-reply ordering when users answer a streamed question early.",
             "test": "go test ./retainedctx -run TestReserveAssistantMessageOrderLikeRust -count=1; go test ./appserver -run TestRetainedAssistantOrderReservedAtStreamStartLikeRust -count=1"
+        },
+        {
+            "id": "execserver-shared-output-chunks",
+            "status": "done",
+            "area": "execserver",
+            "reason": "Aligned upstream a933dd77db (#49972 Share byte buffers across exec-server output chunks): retained process output now stores raw []byte chunks instead of base64 strings. Retention accounting, read byte selection and sandbox aggregated output use the shared bytes directly, while encoding/json serializes []byte as base64 so the process/read and recovered-process wire contracts are unchanged.",
+            "userImpact": "Exec-server output handling avoids decoding retained chunks and keeps the wire format compatible.",
+            "test": "go test ./execserver -run 'TestOutputChunkSharesBytesAndSerializesBase64LikeRust|ProcessRead' -count=1"
         }
     ]
 }

@@ -1035,7 +1035,7 @@ func TestProcessWriteIDCacheIsBoundedLikeRust(t *testing.T) {
 
 func TestProcessReadMaxBytesIncludesFirstOversizedChunkAndNormalExitHasNoFailureLikeRust(t *testing.T) {
 	state := &processState{
-		chunks:  []outputChunk{{Seq: 1, Stream: "stdout", Chunk: base64.StdEncoding.EncodeToString([]byte("oversized"))}},
+		chunks:  []outputChunk{{Seq: 1, Stream: "stdout", Chunk: []byte("oversized")}},
 		nextSeq: 2,
 	}
 	zero := 0
@@ -1931,10 +1931,33 @@ func decodedChunks(chunks []outputChunk, stream string) string {
 		if chunk.Stream != stream {
 			continue
 		}
-		data, _ := base64.StdEncoding.DecodeString(chunk.Chunk)
-		out.Write(data)
+		out.Write(chunk.Chunk)
 	}
 	return out.String()
+}
+
+// Mirrors Rust #49972: retained output keeps raw shared bytes while the wire
+// still carries base64, and decoding returns independent owned bytes.
+func TestOutputChunkSharesBytesAndSerializesBase64LikeRust(t *testing.T) {
+	chunk := outputChunk{Seq: 1, Stream: "stdout", Chunk: []byte("hello")}
+	encoded, err := json.Marshal(chunk)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatalf("wire JSON error = %v", err)
+	}
+	if wire["chunk"] != base64.StdEncoding.EncodeToString([]byte("hello")) {
+		t.Fatalf("wire chunk = %#v, want base64 hello", wire["chunk"])
+	}
+	var restored outputChunk
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if string(restored.Chunk) != "hello" {
+		t.Fatalf("restored chunk = %q, want hello", restored.Chunk)
+	}
 }
 
 func waitOutputCommand() (string, []string) {

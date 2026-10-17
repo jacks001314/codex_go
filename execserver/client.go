@@ -2480,7 +2480,7 @@ func publishRecoveredProcessResponse(processID string, session *clientProcessSes
 			ProcessID: processID,
 			Seq:       chunk.Seq,
 			Stream:    chunk.Stream,
-			Chunk:     chunk.Chunk,
+			Chunk:     base64.StdEncoding.EncodeToString(chunk.Chunk),
 		})
 		expected++
 	}

@@ -1799,7 +1799,7 @@ a8a4f14087fd4922cf827049f9fce22cbbc6fb7c	47912	Fix attestation routing during th
 a8c36ca6d265800c1b2c67d19d3583e23dee8382	46026	Centralize model-message resolution and rendering in `codex-prompts` (#46026)	2026-09-16	guardian	35	20	0.57	0	0	audit_pending	DANGER_FULL_ACCESS_TEMPLATE,GuardianClassifierInstructions,MultiAgentRoleInstructions,READ_ONLY_TEMPLATE,ResolvedApprovalMessages,ResolvedCollaborationModeMessages,ResolvedMessage,ResolvedMultiAgentMessages,ResolvedPermissionMessages,WORKSPACE_WRITE_TEMPLATE
 a9118edae8b77bf23b7182fd071a7b6251898bed	49130	Move content-filter guidance into the shared Responses retry handler (#49130)	2026-09-29	core	0	0		0	0	not_applicable	
 a92ccbde5328697894d09935a656f7c5f07a7d3f	47974	Preserve Git directory protections across writable roots (#47974)	2026-09-25	sandbox	0	0		0	0	not_applicable	
-a933dd77dbe101d7bd746ea3c7d1f8174eca4a05	49972	Share byte buffers across exec-server output chunks (#49972)	2026-10-01	execserver	2	1	0.50	0	0	audit_pending	ByteChunk
+a933dd77dbe101d7bd746ea3c7d1f8174eca4a05	49972	Share byte buffers across exec-server output chunks (#49972)	2026-10-01	execserver	2	2	1.00	0	0	complete	
 a947db131b62ab04a265d120b5d2dfd01dbcb414	43114	Add Bazel preparation for native voice runtimes (#43114)	2026-09-05	realtime	0	0		0	0	not_applicable	
 a94a5db6295a3c5b4e3e18da58a2f6b774900d0e	42318	Support packaged managed Codex binary paths (#42318)	2026-09-02	appserver	0	0		0	0	not_applicable	
 a9519cbcdd2d664530edb2469224ee03c1056799	41744	Make the update_plan tool opt-in (#41744)	2026-08-31	persistence	3	0	0.00	0	0	complete	continuation_steering_item,get_prompt_base_instructions,without_update_plan_instructions

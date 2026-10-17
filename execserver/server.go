@@ -431,7 +431,10 @@ type startedExecServerSandboxProcess struct {
 type outputChunk struct {
 	Seq    uint64 `json:"seq"`
 	Stream string `json:"stream"`
-	Chunk  string `json:"chunk"`
+	// Chunk holds the raw output bytes; encoding/json serializes []byte as
+	// base64, so the wire contract is unchanged while retained output, events
+	// and reads share the buffer (Rust #49972).
+	Chunk []byte `json:"chunk"`
 }
 
 type ProcessOutputNotification struct {
@@ -3201,7 +3204,7 @@ func (p *processState) capture(stream string, reader io.Reader) {
 			notify := p.notify
 			p.mu.Unlock()
 			if notify != nil {
-				notify(MethodProcessOutput, ProcessOutputNotification{ProcessID: p.id, Seq: chunk.Seq, Stream: chunk.Stream, Chunk: chunk.Chunk})
+				notify(MethodProcessOutput, ProcessOutputNotification{ProcessID: p.id, Seq: chunk.Seq, Stream: chunk.Stream, Chunk: base64.StdEncoding.EncodeToString(chunk.Chunk)})
 			}
 		}
 		if err != nil {
@@ -3304,13 +3307,12 @@ func (p *processState) appendLocked(stream string, data []byte) outputChunk {
 	chunk := outputChunk{
 		Seq:    seq,
 		Stream: stream,
-		Chunk:  base64.StdEncoding.EncodeToString(data),
+		Chunk:  data,
 	}
 	p.chunks = append(p.chunks, chunk)
 	p.retainedBytes += len(data)
 	for p.retainedBytes > retainedOutputBytesPerProcess && len(p.chunks) > 0 {
-		decoded, _ := base64.StdEncoding.DecodeString(p.chunks[0].Chunk)
-		p.retainedBytes -= len(decoded)
+		p.retainedBytes -= len(p.chunks[0].Chunk)
 		p.chunks = p.chunks[1:]
 	}
 	p.cond.Broadcast()
@@ -3322,16 +3324,12 @@ func (p *processState) sandboxExecOutputLocked(exitCode int) sandbox.SandboxExec
 	var stderr strings.Builder
 	var aggregated strings.Builder
 	for _, chunk := range p.chunks {
-		decoded, err := base64.StdEncoding.DecodeString(chunk.Chunk)
-		if err != nil {
-			continue
-		}
-		aggregated.Write(decoded)
+		aggregated.Write(chunk.Chunk)
 		switch chunk.Stream {
 		case "stderr":
-			stderr.Write(decoded)
+			stderr.Write(chunk.Chunk)
 		case "stdout":
-			stdout.Write(decoded)
+			stdout.Write(chunk.Chunk)
 		}
 	}
 	return sandbox.SandboxExecOutput{
@@ -3401,14 +3399,13 @@ func (p *processState) readLocked(after uint64, maxBytes *int) *ReadResponse {
 		if chunk.Seq <= after {
 			continue
 		}
-		decoded, _ := base64.StdEncoding.DecodeString(chunk.Chunk)
 		if maxBytes != nil {
-			if len(chunks) > 0 && totalBytes+len(decoded) > *maxBytes {
+			if len(chunks) > 0 && totalBytes+len(chunk.Chunk) > *maxBytes {
 				break
 			}
 		}
 		chunks = append(chunks, chunk)
-		totalBytes += len(decoded)
+		totalBytes += len(chunk.Chunk)
 		if maxBytes != nil && totalBytes >= *maxBytes {
 			break
 		}
