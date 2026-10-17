@@ -1949,7 +1949,7 @@ b62fcd3c4b4126e8dc619ab5334f5658c4d84657	47935	Allow cached catalogs to satisfy 
 b6333bb1bb7d9dd7aa9c5c6a7b6936041bacc144	40464	Enforce subagent ownership across app-server inputs (#40464)	2026-08-24	appserver	3	2	0.67	0	0	audit_pending	DIRECT_INPUT_TO_MULTI_AGENT_V2_SUBAGENT_ERROR
 b63a296775ec51368352c251c182edf0ab71c0fd	48099	Honor shell environment policy in legacy snapshots (#48099)	2026-09-25	core	1	1	1.00	0	0	complete	
 b64de2f3ad718ebee731aa8a5e1d4ace0594efc5	44243	Use the originating model when recording conversation history (#44243)	2026-09-09	guardian	1	0	0.00	0	0	implementation_pending	capture_current_model_info
-b65ab465cefa7b89c68317366b67e44431b90af4	50525	Reject unknown TUI keys in strict config validation (#50525)	2026-10-03	config	4	1	0.25	0	0	audit_pending	config_error_from_ignored_toml_fields,config_error_from_ignored_toml_value_fields,config_error_from_ignored_toml_value_fields_for_source_name
+b65ab465cefa7b89c68317366b67e44431b90af4	50525	Reject unknown TUI keys in strict config validation (#50525)	2026-10-03	config	4	4	1.00	0	0	complete	
 b687844674bdd8c800f342089c0fae2ae2a96447	54264	Track Guardian transcript admission across failed reviews (#54264)	2026-10-15	guardian	1	1	1.00	0	0	complete	
 b68acc4d4b56fdfa1d5b6a2c36102c66876e0c46	41006	Trust invoked user skills in Guardian reviews (#41006)	2026-08-26	guardian	10	3	0.30	0	0	audit_pending	GuardianTrustedSkillsFragment,TrustedSkillInvocations,TrustedSkillRoots,emit_explicit_skill_invocations,insert_superseded_path,is_superseded_path,trusted_skill_path
 b6903c0669df044e4a089dab949fd44d54aa9355	50431	Preserve terminal hyperlinks in agents overview previews (#50431)	2026-10-02	tui	0	0		0	0	not_applicable	
