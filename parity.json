@@ -1574,6 +1574,14 @@
             "reason": "Aligned upstream 00a7b888b2 (#39941 Discover HTTP MCP servers from selected executors): selected remote environments are queried through environmentConfig/read for projected mcp_servers config and requirements. Eligible streamable HTTP servers are merged into the thread runtime, bound to their concrete executor, kept best-effort, disabled by executor or host requirements when mismatched, and excluded when they use stdio, foreign environments, environment-provided headers, header helpers, or executor-bound bearer env tokens. A per-server HTTP client routes MCP HTTP requests through exec-server http/request so streaming, headers, TLS, proxy behavior, and network egress remain executor-owned.",
             "userImpact": "A selected executor can advertise and use its own authenticated HTTP MCP tools without copying executor-only credentials into the host runtime.",
             "test": "go test ./mcp -run 'PerServerHTTPClient|MCP|Credential|Runtime' -count=1; go test ./appserver -run 'MCP|Mcp|ExecutorHTTPMCP|ExecutorHTTPDoer|ExecutorMCPProjection' -count=1"
+        },
+        {
+            "id": "guardian-context-section-collection",
+            "status": "not_applicable",
+            "area": "guardian",
+            "reason": "Audited upstream 2350823caa (#42076 Unify Guardian context section collection): Rust introduces typed sections and a shared registry for synchronous review and async Guardian V2 scoring. Go has no async scorer or second section consumer. Its single prompt composer already calls RootConversationSectionItems and TrustedUserAnswersSectionItems exactly once in source order, as user-role evidence, before the transcript, with existing Guardian and verified-answer coverage.",
+            "userImpact": "Authorization evidence retains one ordered, user-role delivery path without a redundant registry abstraction.",
+            "test": "go test ./state ./appserver -run 'Guardian|VerifiedAnswer' -count=1"
         }
     ]
 }
