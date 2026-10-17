@@ -13515,9 +13515,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: confirm_install"
+        "Round 268 (audit): daemon update --from-cli resolves the invoking CLI package, stages and validates it before stopping the daemon, requires interactive confirmation or --yes, rechecks selection/running state after confirmation, pins the selected package, migrates legacy installs, and restarts only a previously running daemon. Tests: go test ./appserverdaemon -run 'UpdateFromCLI|PrepareInstall|Replacement|Confirm' -count=1"
       ]
     },
     {
