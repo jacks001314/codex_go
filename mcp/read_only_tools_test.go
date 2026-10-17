@@ -85,7 +85,7 @@ func TestMCPReadOnlyToolsRequestMetadataLikeRust(t *testing.T) {
 				client := newMCPHTTPClient(config)
 				defer client.Close()
 
-				if _, err := listMCPHTTPTools(client, &httpClientCallOptions{}); err != nil {
+				if _, _, err := listMCPHTTPTools(client, &httpClientCallOptions{}); err != nil {
 					t.Fatalf("listMCPHTTPTools() error = %v", err)
 				}
 				if _, err := listMCPHTTPResources(client, &httpClientCallOptions{}); err != nil {

@@ -243,7 +243,7 @@ func listMCPHTTPInventoryWithClient(client *httpClient) (*stdioInventory, error)
 func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, threadID string, roots []MCPRoot) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &httpClientCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
-	tools, err := listMCPHTTPTools(client, options)
+	tools, toolListMeta, err := listMCPHTTPTools(client, options)
 	// Capabilities are captured during the initialization that the tools call
 	// triggers, so read them after the attempt even when discovery failed.
 	if client != nil {
@@ -253,6 +253,8 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 		return result, err
 	}
 	result.Tools = tools
+	// Only a successful listing carries catalog metadata (Rust #54686).
+	result.ToolListMeta = toolListMeta
 	if resources, err := listMCPHTTPResources(client, options); err == nil {
 		result.Resources = resources
 	}
@@ -262,16 +264,17 @@ func listMCPHTTPInventoryWithOptions(client *httpClient, serverName string, thre
 	return result, nil
 }
 
-func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, error) {
-	return collectMCPPaginatedWithLimit(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
+func listMCPHTTPTools(client *httpClient, options *httpClientCallOptions) ([]MCPToolInfo, json.RawMessage, error) {
+	return collectMCPPaginatedWithLimitAndMeta(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, json.RawMessage, *string, error) {
 		var response struct {
-			Tools      []MCPToolInfo `json:"tools"`
-			NextCursor *string       `json:"nextCursor,omitempty"`
+			Tools      []MCPToolInfo   `json:"tools"`
+			NextCursor *string         `json:"nextCursor,omitempty"`
+			Meta       json.RawMessage `json:"_meta,omitempty"`
 		}
 		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursorWithConfig(client.config, cursor), &response); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return response.Tools, response.NextCursor, nil
+		return response.Tools, response.Meta, response.NextCursor, nil
 	})
 }
 

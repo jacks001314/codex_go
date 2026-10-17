@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -18,6 +19,12 @@ const (
 
 type mcpPaginationFetch[T any] func(context.Context, *string) ([]T, *string, error)
 
+// mcpPaginationMetaFetch is the tools/list shape of mcpPaginationFetch: the
+// response-level `_meta` of a page is reported next to that page's items so the
+// caller can retain the catalog metadata the server attached to the listing
+// (Rust #54686).
+type mcpPaginationMetaFetch[T any] func(context.Context, *string) ([]T, json.RawMessage, *string, error)
+
 func collectMCPPaginated[T any](ctx context.Context, method string, timeout time.Duration, fetch mcpPaginationFetch[T]) ([]T, error) {
 	return collectMCPPaginatedWithLimit(ctx, method, timeout, defaultMCPCatalogItemLimit, fetch)
 }
@@ -27,6 +34,19 @@ func collectMCPPaginated[T any](ctx context.Context, method string, timeout time
 // (maxCodexAppsCatalogItems) while every other MCP server keeps the standard
 // maxMCPCatalogItems limit.
 func collectMCPPaginatedWithLimit[T any](ctx context.Context, method string, timeout time.Duration, itemLimit int, fetch mcpPaginationFetch[T]) ([]T, error) {
+	items, _, err := collectMCPPaginatedWithLimitAndMeta(ctx, method, timeout, itemLimit, func(ctx context.Context, cursor *string) ([]T, json.RawMessage, *string, error) {
+		pageItems, nextCursor, err := fetch(ctx, cursor)
+		return pageItems, nil, nextCursor, err
+	})
+	return items, err
+}
+
+// collectMCPPaginatedWithLimitAndMeta mirrors Rust's collect_paginated: the
+// response-level `_meta` of the first page rides along with the collected items
+// so a caller can preserve the metadata the server attached to the start of the
+// catalog. Later pages never replace it, and a failed listing reports no
+// metadata at all (Rust #54686).
+func collectMCPPaginatedWithLimitAndMeta[T any](ctx context.Context, method string, timeout time.Duration, itemLimit int, fetch mcpPaginationMetaFetch[T]) ([]T, json.RawMessage, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -39,31 +59,35 @@ func collectMCPPaginatedWithLimit[T any](ctx context.Context, method string, tim
 	overallCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	items := make([]T, 0)
+	var meta json.RawMessage
 	seenCursors := map[string]struct{}{}
 	var cursor *string
 	for page := 0; ; page++ {
 		if page == maxMCPCatalogPages {
-			return nil, fmt.Errorf("%s exceeded the pagination limit of %d pages", method, maxMCPCatalogPages)
+			return nil, nil, fmt.Errorf("%s exceeded the pagination limit of %d pages", method, maxMCPCatalogPages)
 		}
-		pageItems, nextCursor, err := fetch(overallCtx, cloneMCPPaginationCursor(cursor))
+		pageItems, pageMeta, nextCursor, err := fetch(overallCtx, cloneMCPPaginationCursor(cursor))
 		if err != nil {
 			if errors.Is(overallCtx.Err(), context.DeadlineExceeded) {
-				return nil, fmt.Errorf("%s pagination timed out after %s", method, timeout)
+				return nil, nil, fmt.Errorf("%s pagination timed out after %s", method, timeout)
 			}
-			return nil, err
+			return nil, nil, err
+		}
+		if page == 0 {
+			meta = cloneMCPRawMessage(pageMeta)
 		}
 		if len(pageItems) > itemLimit-len(items) {
-			return nil, fmt.Errorf("%s exceeded the catalog limit of %d items", method, itemLimit)
+			return nil, nil, fmt.Errorf("%s exceeded the catalog limit of %d items", method, itemLimit)
 		}
 		items = append(items, pageItems...)
 		if nextCursor == nil {
-			return items, nil
+			return items, meta, nil
 		}
 		if len(*nextCursor) > maxMCPPaginationCursorBytes {
-			return nil, fmt.Errorf("%s returned a pagination cursor exceeding %d bytes", method, maxMCPPaginationCursorBytes)
+			return nil, nil, fmt.Errorf("%s returned a pagination cursor exceeding %d bytes", method, maxMCPPaginationCursorBytes)
 		}
 		if _, repeated := seenCursors[*nextCursor]; repeated {
-			return nil, fmt.Errorf("%s returned a repeated pagination cursor", method)
+			return nil, nil, fmt.Errorf("%s returned a repeated pagination cursor", method)
 		}
 		seenCursors[*nextCursor] = struct{}{}
 		cursor = cloneMCPPaginationCursor(nextCursor)

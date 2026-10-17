@@ -642,7 +642,7 @@ func TestHTTPMCPCatalogPaginationUsesOneConfiguredTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	client := newMCPHTTPClient(&ServerConfig{URL: server.URL, Enabled: true, ToolTimeout: 70 * time.Millisecond})
-	_, err := listMCPHTTPTools(client, nil)
+	_, _, err := listMCPHTTPTools(client, nil)
 	if err == nil || err.Error() != "tools/list pagination timed out after 70ms" {
 		t.Fatalf("listMCPHTTPTools() error = %v", err)
 	}

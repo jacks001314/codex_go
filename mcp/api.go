@@ -276,16 +276,20 @@ type MCPServerStatus struct {
 	ServerInfo *MCPServerInfo `json:"serverInfo,omitempty"`
 	// ServerCapabilities carries the initialized server's advertised
 	// capabilities object, or null when unavailable (Rust #44826).
-	ServerCapabilities json.RawMessage       `json:"serverCapabilities,omitempty"`
-	Tools              []MCPToolInfo         `json:"tools,omitempty"`
-	ToolsError         *string               `json:"toolsError,omitempty"`
-	Resources          []MCPResource         `json:"resources,omitempty"`
-	ResourceTemplates  []MCPResourceTemplate `json:"resourceTemplates,omitempty"`
-	AuthStatus         MCPAuthStatus         `json:"authStatus,omitempty"`
-	Server             MCPServerInfo         `json:"server"`
-	State              MCPServerStartupState `json:"state"`
-	Error              *string               `json:"error,omitempty"`
-	FailureReason      *string               `json:"failureReason,omitempty"`
+	ServerCapabilities json.RawMessage `json:"serverCapabilities,omitempty"`
+	// ToolListMeta carries the opaque `_meta` of the first page of the tool
+	// catalog this status was built from, or null when unavailable
+	// (Rust #54686).
+	ToolListMeta      json.RawMessage       `json:"toolListMeta,omitempty"`
+	Tools             []MCPToolInfo         `json:"tools,omitempty"`
+	ToolsError        *string               `json:"toolsError,omitempty"`
+	Resources         []MCPResource         `json:"resources,omitempty"`
+	ResourceTemplates []MCPResourceTemplate `json:"resourceTemplates,omitempty"`
+	AuthStatus        MCPAuthStatus         `json:"authStatus,omitempty"`
+	Server            MCPServerInfo         `json:"server"`
+	State             MCPServerStartupState `json:"state"`
+	Error             *string               `json:"error,omitempty"`
+	FailureReason     *string               `json:"failureReason,omitempty"`
 }
 
 func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
@@ -312,6 +316,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		PluginID           *string                           `json:"pluginId"`
 		ServerInfo         *MCPServerInfo                    `json:"serverInfo"`
 		ServerCapabilities json.RawMessage                   `json:"serverCapabilities"`
+		ToolListMeta       json.RawMessage                   `json:"toolListMeta"`
 		Tools              map[string]MCPToolInfo            `json:"tools"`
 		ToolsError         *string                           `json:"toolsError"`
 		Resources          []mcpServerStatusResource         `json:"resources"`
@@ -326,6 +331,7 @@ func (s *MCPServerStatus) MarshalJSON() ([]byte, error) {
 		PluginID:           cloneStringPtr(s.PluginID),
 		ServerInfo:         serverInfo,
 		ServerCapabilities: cloneMCPRawMessage(s.ServerCapabilities),
+		ToolListMeta:       cloneMCPRawMessage(s.ToolListMeta),
 		Tools:              toolMapFromList(s.Tools),
 		ToolsError:         cloneStringPtr(s.ToolsError),
 		Resources:          mcpServerStatusResources(s.Resources),
@@ -1586,11 +1592,17 @@ func (s *MCPService) inventoryStatusForConfig(index int, name string, config *Se
 	status.catalogSource = BindingCatalogSourceLive
 	inventory, err := s.listInventoryForConfig(name, config, threadID)
 	status.ServerCapabilities = nil
+	// A failed discovery reports no catalog metadata either, so the wire field
+	// stays null (Rust #54686).
+	status.ToolListMeta = nil
 	if inventory != nil {
 		status.ServerCapabilities = cloneMCPRawMessage(inventory.ServerCapabilities)
 	}
 	if err == nil {
 		status.Tools = inventory.Tools
+		// The catalog metadata is published with the catalog it came from
+		// (Rust #54686).
+		status.ToolListMeta = cloneMCPRawMessage(inventory.ToolListMeta)
 		if includeInventory {
 			status.Resources = inventory.Resources
 			status.ResourceTemplates = inventory.ResourceTemplates
@@ -1682,6 +1694,9 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	// Capabilities come from the latest connection attempt; a failed
 	// initialization clears them (Rust #44826).
 	current.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
+	// The catalog metadata is retained next to the retained tool catalog, so a
+	// later cached read reports it too (Rust #54686).
+	current.ToolListMeta = cloneMCPRawMessage(status.ToolListMeta)
 	if includeTools {
 		current.Tools = append([]MCPToolInfo(nil), status.Tools...)
 	}
@@ -2916,6 +2931,7 @@ func cloneMCPServerStatus(status MCPServerStatus) MCPServerStatus {
 	status.RuntimeStatus = cloneMCPConnectionStatus(status.RuntimeStatus)
 	status.PluginID = cloneStringPtr(status.PluginID)
 	status.ServerCapabilities = cloneMCPRawMessage(status.ServerCapabilities)
+	status.ToolListMeta = cloneMCPRawMessage(status.ToolListMeta)
 	status.FailureReason = cloneStringPtr(status.FailureReason)
 	status.Server.Args = append([]string(nil), status.Server.Args...)
 	status.Server.Icons = append([]any(nil), status.Server.Icons...)

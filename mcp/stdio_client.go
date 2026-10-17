@@ -25,6 +25,10 @@ type stdioInventory struct {
 	// ServerCapabilities is the initialized server's advertised capabilities
 	// object (Rust #44826), independent of tool discovery success.
 	ServerCapabilities json.RawMessage
+	// ToolListMeta is the response-level `_meta` of the first `tools/list` page
+	// that produced Tools (Rust #54686); nil when tool discovery failed, so the
+	// status wire field serializes as null.
+	ToolListMeta json.RawMessage
 }
 
 // mcpStdioStderrDrainGrace bounds how long teardown waits for queued stderr
@@ -149,7 +153,7 @@ func listMCPStdioInventoryWithClient(client *stdioClient) (*stdioInventory, erro
 func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, threadID string, roots []MCPRoot) (*stdioInventory, error) {
 	result := &stdioInventory{}
 	options := &stdioCallOptions{ServerName: serverName, ThreadID: threadID, Roots: roots}
-	tools, err := listMCPStdioTools(client, options)
+	tools, toolListMeta, err := listMCPStdioTools(client, options)
 	// Capabilities are captured during the initialization that the tools call
 	// triggers, so read them after the attempt even when discovery failed.
 	if client != nil {
@@ -159,6 +163,8 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 		return result, err
 	}
 	result.Tools = tools
+	// Only a successful listing carries catalog metadata (Rust #54686).
+	result.ToolListMeta = toolListMeta
 	if resources, err := listMCPStdioResources(client, options); err == nil {
 		result.Resources = resources
 	}
@@ -168,16 +174,17 @@ func listMCPStdioInventoryWithOptions(client *stdioClient, serverName string, th
 	return result, nil
 }
 
-func listMCPStdioTools(client *stdioClient, options *stdioCallOptions) ([]MCPToolInfo, error) {
-	return collectMCPPaginatedWithLimit(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, *string, error) {
+func listMCPStdioTools(client *stdioClient, options *stdioCallOptions) ([]MCPToolInfo, json.RawMessage, error) {
+	return collectMCPPaginatedWithLimitAndMeta(context.Background(), "tools/list", mcpPaginationTimeout(client.config), mcpCatalogItemLimit(client.config), func(ctx context.Context, cursor *string) ([]MCPToolInfo, json.RawMessage, *string, error) {
 		var response struct {
-			Tools      []MCPToolInfo `json:"tools"`
-			NextCursor *string       `json:"nextCursor,omitempty"`
+			Tools      []MCPToolInfo   `json:"tools"`
+			NextCursor *string         `json:"nextCursor,omitempty"`
+			Meta       json.RawMessage `json:"_meta,omitempty"`
 		}
 		if err := client.CallWithOptionsContext(ctx, options, "tools/list", mcpListParamsForCursorWithConfig(client.config, cursor), &response); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return response.Tools, response.NextCursor, nil
+		return response.Tools, response.Meta, response.NextCursor, nil
 	})
 }
 
