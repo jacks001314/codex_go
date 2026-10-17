@@ -20046,9 +20046,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: for_session, reserve_user_input_order"
+        "Round 115 (lead): N/A (obsolete capture-mode carrier absent) - #47690 removes Rust's session-level GuardianContextMode capture branches and makes thread-owned retained context unconditional across history, compaction, forks and approval freshness, while retaining checkpoint compatibility review. Go never modeled a session capture-mode flag: retained context is already host-owned/unconditional and reviewer checkpoint compatibility is handled separately. There is no for_session capture branch or capture-mode toggle to delete. No source change needed."
       ]
     },
     {
