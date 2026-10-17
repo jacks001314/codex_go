@@ -241,7 +241,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 17a9df60e420b58e3edc55efb1bb052e39492bbc	49403	Add an experimental flag for bundled tools in login shells (#49403)	2026-09-29	tui	0	0		0	0	not_applicable	
 17baabd01b3131a8d07327185a00cb2a771ff1a7	46294	Separate thread startup metadata from replay history (#46294)	2026-09-17	guardian	3	0	0.00	0	0	implementation_pending	ThreadStartupMetadata,startup_metadata,to_session_configured_event
 17c4c47dfa87ea4a6cb6d0f1630f32abffc2cbb2	40677	Default durable threads to paginated history (#40677)	2026-08-25	guardian	0	0		0	0	not_applicable	
-17cd2834e3d38706cead62cb97b8b403d3b8a4ec	47695	Repair rejected Windows sandbox credentials during provisioning (#47695)	2026-09-23	sandbox	1	0	0.00	0	0	implementation_pending	SandboxAccountCredentialMismatch
+17cd2834e3d38706cead62cb97b8b403d3b8a4ec	47695	Repair rejected Windows sandbox credentials during provisioning (#47695)	2026-09-23	sandbox	1	1	0.50	0	0	partial	provisioning-side completed-setup credential probe (no Go carrier)
 17e5a4dbcb4106955dad3e6a661459c77193ea1d	49706	Upgrade the argument comment lint toolchain and Dylint (#49706)	2026-09-30	core	0	0		0	0	not_applicable	
 17e64839eb1e30632eef4a0147862345fccb61cc	44166	Add aggregate budget enforcement for Guardian context (#44166)	2026-09-09	guardian	9	4	0.44	0	0	audit_pending	BudgetPriority,GuardianBudgetOmission,content_framing_tokens,enforce_budget,retain_images
 17e8101699c5062117d0d37f504313e8af53b043	41913	Preserve TUI status timing when the status row is hidden (#41913)	2026-08-31	tui	8	3	0.38	0	0	audit_pending	StatusTimer,elapsed_at,reset_status_timer,status_elapsed,with_timer

@@ -92,7 +92,7 @@ func spawnRunnerTransport(codexHome string, cwd string, creds *SandboxCredential
 		_ = pipeOut.Close()
 		var errno syscall.Errno
 		if errorsAsErrno(err, &errno) {
-			return nil, &RunnerLogonError{Code: uint32(errno)}
+			return nil, classifyRunnerLogonError(uint32(errno))
 		}
 		return nil, err
 	}

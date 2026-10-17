@@ -20077,8 +20077,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
+        "Round 115 (lead): partial - sandbox/windowssandbox/elevated/runner_client.go adds SandboxAccountCredentialMismatch and classifyRunnerLogonError (Rust #47695): native logon failure (1326), expired password (1330) and password-must-change (1907) are classified as credential mismatches while the underlying RunnerLogonError stays reachable via errors.As; the CreateProcessWithLogonW failure path now returns the classified error. Tests: runner_logon_classification_test.go (3 positive / 4 negative codes, underlying code preserved); RC: dropping 1330/1907 from the classified set fails. Remaining: Go has no Rust-style completed-setup credential probe/reuse path (no require-sandbox-account / logon-before-reuse flow), so the provisioning-side rotation trigger still needs that subsystem.",
         "No new upstream public identifier found in Go (0/1); candidate gap: SandboxAccountCredentialMismatch"
       ]
     },

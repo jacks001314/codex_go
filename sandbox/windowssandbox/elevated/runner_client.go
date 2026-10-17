@@ -14,8 +14,13 @@ const (
 	RunnerPipeConnectTimeout            = 15 * time.Second
 	RunnerSpawnReadyPollInterval        = 50 * time.Millisecond
 	errorLogonFailure            uint32 = 1326
-	errorNoSuchLogonSession      uint32 = 1312
-	errorNotFound                uint32 = 1168
+	// errorPasswordExpired is ERROR_PASSWORD_EXPIRED and
+	// errorPasswordMustChange is ERROR_PASSWORD_MUST_CHANGE: both mean Windows
+	// rejected the stored sandbox password (Rust #47695).
+	errorPasswordExpired    uint32 = 1330
+	errorPasswordMustChange uint32 = 1907
+	errorNoSuchLogonSession uint32 = 1312
+	errorNotFound           uint32 = 1168
 	// errorServiceAlreadyRunning is ERROR_SERVICE_ALREADY_RUNNING. Rust #49325
 	// (upstream 26dd19ef47) retries a runner logon that fails with this code once
 	// using the unchanged credentials: no runner - and therefore no user command -
@@ -32,6 +37,39 @@ func (e *RunnerLogonError) Error() string {
 		return "CreateProcessWithLogonW failed"
 	}
 	return fmt.Sprintf("CreateProcessWithLogonW failed: %d", e.Code)
+}
+
+// SandboxAccountCredentialMismatch reports that Windows rejected the stored
+// sandbox account password (Rust #47695's SandboxAccountCredentialMismatch).
+// Credential-file and policy failures are not classified this way. The
+// underlying RunnerLogonError stays available through errors.As.
+type SandboxAccountCredentialMismatch struct {
+	Underlying error
+}
+
+func (e *SandboxAccountCredentialMismatch) Error() string {
+	return "Windows rejected the stored sandbox account password"
+}
+
+func (e *SandboxAccountCredentialMismatch) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Underlying
+}
+
+// classifyRunnerLogonError ports Rust's `account_logon_error`: native logon
+// failure, expired password and password-change-required errors mean the stored
+// credentials were rejected, while every other code stays an ordinary runner
+// logon error.
+func classifyRunnerLogonError(code uint32) error {
+	logonError := &RunnerLogonError{Code: code}
+	switch code {
+	case errorLogonFailure, errorPasswordExpired, errorPasswordMustChange:
+		return &SandboxAccountCredentialMismatch{Underlying: logonError}
+	default:
+		return logonError
+	}
 }
 
 type RunnerStartupError struct {
