@@ -6975,10 +6975,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 5/11; needs review: GuardianReviewEvidence, GuardianUserInputSnapshot, authorization_version, from_features, record_user_input"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Accepted request_user_input answers are persisted in retained thread context, replayed after restart, rendered as Guardian trusted-user-answer evidence, and gated by the Guardian approval feature."
+        ]
     },
     {
       "sha": "1d6727c0b52316515bfbf5dea578374bafb4d898",

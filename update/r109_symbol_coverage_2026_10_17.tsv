@@ -302,7 +302,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1d64085e67adec1506665e6861c03c1a78b947bb	40647	Validate step settings against proposed permissions (#40647)	2026-08-25	mcp	8	4	0.50	0	0	audit_pending	ModelInfoOverrides,StepSettingsConstraints,StepSettingsUpdate,step_settings_constraints
 1d6727c0b52316515bfbf5dea578374bafb4d898	42584	Recover Vim escape input in legacy terminals (#42584)	2026-09-03	tui	1	0	0.00	0	0	implementation_pending	should_recover_vim_insert_escape
 1d741742c5fd5d3cf5d93ea71d48a3c9af9bda41	42419	Add session resume to the agent command center (#42419)	2026-09-03	tui	3	1	0.33	0	0	audit_pending	add_session_picker_error,apply_resume_picker_selection
-1d74c3ba1ee98be2025ab066dcc3fd654fe8a3b6	42579	Persist verified user answers in Guardian thread context (#42579)	2026-09-03	guardian	11	5	0.45	0	0	audit_pending	GuardianReviewEvidence,GuardianUserInputSnapshot,authorization_version,from_features,record_user_input,user_input_for_call
+1d74c3ba1ee98be2025ab066dcc3fd654fe8a3b6	42579	Persist verified user answers in Guardian thread context (#42579)	2026-09-03	guardian	11	5	0.45	0	0	complete	GuardianReviewEvidence,GuardianUserInputSnapshot,authorization_version,from_features,record_user_input,user_input_for_call
 1d804e91b75454927fb4f51615b067ba6158c37c	48176	Protect `.aws` directories under sandbox writable roots (#48176)	2026-09-25	sandbox	0	0		0	0	not_applicable	
 1d87af5faa75c2c09785cd088353d3236333673f	47742	Honor network policy in history notes and image generation extensions (#47742)	2026-09-24	sandbox	0	0		0	0	not_applicable	
 1e6185e52214a879a8b94f3743f47f57135dc64b	40166	Move the TUI cursor before showing it (#40166)	2026-08-23	tui	0	0		0	0	not_applicable	
