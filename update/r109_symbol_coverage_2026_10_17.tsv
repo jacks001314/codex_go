@@ -1047,7 +1047,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 64335d1afd83f3aaabd6a3a58ebbdf0bf7b994ff	52608	Upgrade `hyper` to 1.11.1 and test connection closure (#52608)	2026-10-09	core	0	0		0	0	not_applicable	
 645b683a9e712ae6d90a364e3cf597466e4146d0	48155	Preserve filesystem denials when preparing approved commands (#48155)	2026-09-25	execserver	3	1	0.33	0	0	audit_pending	for_approved_command,get_unreadable_roots_with_cwd_preserving_symlinks
 6478a751fde8884b2fdc76486fe23175a8e795d4	41477	Organize bundled Rust resources under asset directories (#41477)	2026-08-29	tui	2	2	1.00	0	0	complete	
-64b482500d00b331189beefd173a5e08b4060ff2	43100	Add bounded incoming Opus RTP handling to the voice host (#43100)	2026-09-05	realtime	6	5	0.83	0	0	audit_pending	ReceivedRtp
+64b482500d00b331189beefd173a5e08b4060ff2	43100	Add bounded incoming Opus RTP handling to the voice host (#43100)	2026-09-05	realtime	6	5	0.83	0	0	complete	ReceivedRtp
 64bf4e7e629b0243f483db3e5cecd8e451707007	49037	Show the Plan mode cycling hint in the fullscreen status line (#49037)	2026-09-28	tui	1	0	0.00	0	0	implementation_pending	render_status_surface
 64c9cde458b6b1c1d332577425b927f0436ab40b	41924	Record realtime conversation history in Core (#41924)	2026-08-31	appserver	5	3	0.60	0	0	audit_pending	observe_item,send_realtime_history_effects
 64e9a68987b198c17d9c53e3117e96b459adebf1	43097	Add a helper-backed realtime WebRTC session API (#43097)	2026-09-05	tui	18	14	0.78	0	0	audit_pending	RealtimeWebrtcSession,RealtimeWebrtcSessionHandle,StartedRealtimeWebrtcSession,begin_audio_controls
@@ -1088,7 +1088,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 68e1a421f55ec8a0e900c5a250aa83c13727b671	49267	Support remote agent message boards in multi-agent sessions (#49267)	2026-09-29	config	1	1	1.00	0	0	complete	
 68e9c4a31a4a947d43b3af18561e5ee4c8597c5c	42639	Warn when saved model defaults are overridden (#42639)	2026-09-04	tui	1	1	1.00	0	0	complete	
 69043f05c4c5e2afd0cec7aaf0dbc8166f7d63b5	49114	Point remote compaction tests at the mock ChatGPT server (#49114)	2026-09-29	core	0	0		0	0	not_applicable	
-6924ce636b2186948f2332ac9460b5871b50aa2f	43799	Prioritize human evidence in memory v2 extraction (#43799)	2026-09-08	persistence	5	4	0.80	0	0	audit_pending	rollout_token_limit
+6924ce636b2186948f2332ac9460b5871b50aa2f	43799	Prioritize human evidence in memory v2 extraction (#43799)	2026-09-08	persistence	5	4	0.80	0	0	complete	rollout_token_limit
 694b6319d3ad2399f6e435760a22d9b9357f0697	43360	Use app-server metadata for TUI session restoration (#43360)	2026-09-07	tui	1	0	0.00	0	0	implementation_pending	read_session_cwd
 694d8d45bd3d440fa4f4cbf22667ac6c17a13758	47932	Remove GPT-5.4 from bundled catalogs and preserve migration prompts (#47932)	2026-09-24	tui	0	0		0	0	not_applicable	
 694edc23b22b4696400dc47663ecacd437623870	41118	Propagate trusted root skills to delegated workers (#41118)	2026-08-27	guardian	2	0	0.00	0	0	implementation_pending	record_trusted_skill,trusted_skill_paths
@@ -1516,7 +1516,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8f1490eabe3ec27e92c46fd1b10400be3c910581	47591	Stream daemon executable hashing off the async runtime (#47591)	2026-09-23	appserver	1	1	1.00	0	0	complete	
 8f195c93d7e7acfef95acf273f0e49cce917e291	48628	Preserve blank TUI sessions when switching tasks (#48628)	2026-09-27	tui	0	0		0	0	not_applicable	
 8f21b7fffbefe77529325fc86c95289371841c6c	51800	Remove duplicate field initializers in extension registry tests (#51800)	2026-10-07	core	0	0		0	0	not_applicable	
-8f2c15c39871c0698cd76a22ae239d36f7e8c9b8	46978	Implement paginated queries for the local agent message board (#46978)	2026-09-21	core	6	5	0.83	0	0	audit_pending	decode_posts
+8f2c15c39871c0698cd76a22ae239d36f7e8c9b8	46978	Implement paginated queries for the local agent message board (#46978)	2026-09-21	core	6	5	0.83	0	0	complete	decode_posts
 8f31b64c7f9ef67d8f966bff5ddf9e08eafe0b4d	42598	Report MCP tool discovery errors in server status (#42598)	2026-09-03	tui	2	0	0.00	0	0	implementation_pending	list_tools_with_errors,listed_tools
 8f38d5a877da8c5c2c0b5158e72bb5f2290a3157	45915	Make Code Mode wrappers transparent to Guardian model policies (#45915)	2026-09-16	guardian	0	0		0	0	not_applicable	
 8f5387d104534d280a3c2b15ef9f5dbb3aa3a758	48198	Honor execution environment proxy requirements (#48198)	2026-09-25	config	0	0		0	0	not_applicable	

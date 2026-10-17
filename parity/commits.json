@@ -8163,9 +8163,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: ReceivedRtp"
+        "Round 265 (audit): voiceIncoming admits inbound Opus RTP with 64 packets/2MiB/64KiB-per-packet bounds, keeps arrival timestamps, rejects unexpected payload types/SSRC changes/oversized packets/exhausted budgets, reports packets older than one second, and discards packets from earlier suppression epochs. mediaSession.handleRTP drains admitted packets without a second queued copy. Tests: go test ./voicehost -run 'RTP|Incoming|Media' -count=1"
       ]
     },
     {
@@ -9507,9 +9507,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: rollout_token_limit"
+        "Round 265 (audit): SerializeTieredRolloutForMemory selects v2 evidence by human/final/other-agent/commentary/context/tool tiers, budgets newest-first within each tier, emits chronological rows with omission markers, pairs request_user_input questions with human replies, replaces media with placeholders, bounds tool rows, and redacts secrets. Tests: go test ./memories -run 'Rollout|Tier|Memory' -count=1"
       ]
     },
     {
@@ -17489,9 +17489,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: decode_posts"
+        "Round 265 (audit): agentboard local queries support channel/thread listing, Unicode case-insensitive post search, channel/author/after-message filters, activity or creation sorting with reply counts/previews, 50-result pages, a shared 20,000-character preview budget, and opaque offset cursors; non-root thread IDs and unknown callers are rejected. Tests: go test ./agentboard -run 'Page|Search|Thread|Channel' -count=1"
       ]
     },
     {
