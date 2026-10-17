@@ -1042,9 +1042,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: force_environment_info, force_info"
+        "Round 115 (lead): verified complete (equivalent mechanism) - execserver InitializeResponse already carries EnvironmentInfo, the server populates it, and Client.rememberEnvironmentInfo seeds a lifetime environmentInfoCache from initialization (or accepted replacement). Client.cachedEnvironmentInfo performs the lazy legacy-server fallback, while Client.EnvironmentInfo remains the uncached probe used by app-server environment/info. Added TestEnvironmentInfoCacheUsesInitializationMetadataLikeRust, which also proves a cancelled uncached probe cannot read the cache. Existing TestStdioInitializeAndEnvironmentInfo passes; go vet ./execserver + go build ./execserver ./appserver green."
       ]
     },
     {
