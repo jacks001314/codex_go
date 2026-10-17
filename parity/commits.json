@@ -3516,9 +3516,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: into_guardian_request"
+        "Round 272 (audit): writeStdin approval formats the reviewed action and rejects it when any field was truncated or the formatted action plus the terminal approval reason exceeds 8,000 bytes; rejection happens before approval or any terminal write. Tests: go test ./appserver -run 'GuardStdinReviewSize|WriteStdin|Terminal.*Approval' -count=1"
       ]
     },
     {
@@ -6409,9 +6409,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SendMessageToUserAsyncHandler"
+        "Round 272 (audit): Go provides SendUserMessageAsyncHandler for the free-form send_message_to_user_async tool, with the Rust description, root/turn/feature gating, immediate return without ending the turn, and asynchronous reply delivery as a new user message; subagents never receive the tool. Tests: go test ./tool ./appserver -run 'SendMessageToUserAsync|SendUserMessageAsync' -count=1"
       ]
     },
     {
@@ -13047,9 +13047,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: run_before_review_deadline_with_cancel"
+        "Round 272 (audit): Go's waitGuardianReviewRetry is the review-deadline cancellation helper; it selects on the shared review context and the backoff timer, returning ctx.Err on cancellation/deadline. The Rust commit only changes helper visibility. Tests: go test ./appserver -run 'Guardian.*Retry|Guardian.*Deadline' -count=1"
       ]
     },
     {

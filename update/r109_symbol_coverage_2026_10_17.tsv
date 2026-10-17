@@ -2007,7 +2007,7 @@ bc3ebcb77d189f92572a6ed2f358dfbad81edf7a	51439	Preserve clickable URLs in TUI ap
 bc5957eac9e89e66f990ed490d11e625a4a3b02c	44862	Preserve parent cache affinity for ephemeral forks (#44862)	2026-09-11	core	1	0	0.00	0	0	implementation_pending	tools_available
 bc9cad3473d4092d34d11a8d050c2dc199a74959	53451	Treat incomplete responses as terminal errors (#53451)	2026-10-12	guardian	0	0		0	0	complete	
 bcd6d9ab6b9f26f85d76d0c680b3f88b367bffa0	49489	Add regression coverage for account switches between analytics batches (#49489)	2026-09-30	telemetry	0	0		0	0	not_applicable	
-bce96bcb43c1aeea69fa0aa230809fa9e4eba80e	41159	Reject oversized reviewed terminal input (#41159)	2026-08-27	guardian	1	0	0.00	0	0	implementation_pending	into_guardian_request
+bce96bcb43c1aeea69fa0aa230809fa9e4eba80e	41159	Reject oversized reviewed terminal input (#41159)	2026-08-27	guardian	1	0	0.00	0	0	complete	into_guardian_request
 bd0d4a23e3d276d6c4addcf12da40042b9c0b4df	40271	Preserve content annotations when rolling back model switches (#40271)	2026-08-23	model	0	0		0	0	not_applicable	
 bd274564e1b1b3febb3886d274e6d97c2a3d275e	52302	Add opt-in credential masking for proxied sandboxed sessions (#52302)	2026-10-08	config	1	0	0.00	0	0	complete	credential_masking_warning
 bd3d4d1436bb41b94fd38ba9bdd34d74524e7a9f	48115	Preserve user text parts during local compaction (#48115)	2026-09-25	core	2	0	0.00	0	0	implementation_pending	CompactedUserMessage,collect_user_messages
@@ -2233,7 +2233,7 @@ d2d5b70241fb448044c1c088a977cc720d70443a	42863	Preserve precedence across featur
 d2f2c400958336950acdbeca9118ae06a03f54e8	49804	Use platform-specific modifier labels in TUI shortcut hints (#49804)	2026-09-30	tui	1	1	1.00	0	0	complete	
 d30f9cc72a25d4f3d59f50a7766b6b032e3c7329	43279	Include linked worktrees in TUI session discovery (#43279)	2026-09-06	tui	12	5	0.42	0	0	audit_pending	ManagedWorktreeCreated,PageCwdFilter,finish_managed_worktree,for_request,repository_cwd_filter,working_directory_error,write_session_rollout
 d374a93b41426cfe7fef1d069d6f327e7195e814	46516	Handle completion timing in the multi-agent resume test (#46516)	2026-09-18	core	0	0		0	0	not_applicable	
-d3812ddbb3b62f46fd9b70fdb96af04d45556e78	45493	Make the Guardian deadline cancellation helper crate-private (#45493)	2026-09-14	guardian	1	0	0.00	0	0	implementation_pending	run_before_review_deadline_with_cancel
+d3812ddbb3b62f46fd9b70fdb96af04d45556e78	45493	Make the Guardian deadline cancellation helper crate-private (#45493)	2026-09-14	guardian	1	0	0.00	0	0	complete	run_before_review_deadline_with_cancel
 d38b5260a1b8af0884bfe1abdfd66c92c60ff510	45499	Send local TUI images as portable attachments to remote app servers (#45499)	2026-09-14	tui	6	0	0.00	0	0	implementation_pending	PendingImageSubmission,cancel_image_submission,on_images_prepared,prepare_image_submission,requeue_image_submission,submit_user_message_with_prepared_images
 d390f0a09cac7834d54b723c1f3ffcdf9641f31e	44337	Return to the agent command center after archiving on shared servers (#44337)	2026-09-09	tui	0	0		0	0	not_applicable	
 d39cfa8a2de2ba6eb57828cd272ec0b7c794d194	45533	Harden and share Windows sandbox identity helpers (#45533)	2026-09-14	sandbox	4	1	0.25	0	0	audit_pending	account_name_from_sid,process_package_family,with_owner_impersonation
@@ -2270,7 +2270,7 @@ d6093d32287bdcfed2b7f2bbc866ad4b544f8dff	47318	Offer explicit recovery for incom
 d6174a8798828a41380527ca24b898a4ce47f862	40720	Preserve composer hyperlinks across wrapped lines (#40720)	2026-08-25	tui	2	1	0.50	0	0	audit_pending	HyperlinkCache
 d61ba72f2f8af9adb694b8701aa64ed96cd80760	40982	Give Guardian trusted context for configured MCP tools (#40982)	2026-08-26	guardian	2	0	0.00	0	0	implementation_pending	GuardianTrustedToolFragment,trusted_tool_context
 d61c7a824f951abfb2133ed8aebefaed651156d4	50396	Honor pager bindings for transcript page keys (#50396)	2026-10-02	tui	0	0		0	0	not_applicable	
-d6350e24be4d8151a090dd74811774618fe9ecd7	42354	Add free-form asynchronous user messages (#42354)	2026-09-02	core	1	0	0.00	0	0	implementation_pending	SendMessageToUserAsyncHandler
+d6350e24be4d8151a090dd74811774618fe9ecd7	42354	Add free-form asynchronous user messages (#42354)	2026-09-02	core	1	0	0.00	0	0	complete	SendMessageToUserAsyncHandler
 d63a9b8344cfe58bc78bbe319b560378fc8756ef	51223	Remove legacy personality template metadata (#51223)	2026-10-06	tui	0	0		0	0	not_applicable	
 d64360f6281df5c062b86715c5c49a9dce03edfb	50215	Support Ctrl+Insert for copying TUI selections (#50215)	2026-10-02	tui	0	0		0	0	not_applicable	
 d6489472f3c15e87d2d7763a5fde033545c530f8	43715	Enable user verification for the bundled TUI on supported devices (#43715)	2026-09-08	appserver	0	0		0	0	not_applicable	
