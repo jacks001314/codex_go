@@ -434,3 +434,32 @@ Rust 把 `worktrees` / `realtime_conversation` 从可用性门里彻底移除（
 | `go test ./tui -run "Worktree|SessionPicker"` | ok |
 | `go test ./features` | ok |
 | `go test ./exec` | FAIL（既有 `TestRunExecReviewUsesRustReviewRubricInstructions`，与本轮改动无关） |
+
+# Round 100 增量（2026-10-17，lead）
+
+## 16.1 已落地
+
+### #54094 在指标与 span 中保留具体 MCP 失败码（`12fd621f62`）— landed
+
+- **请求失败分类（rmcp `ServiceError` 对应物）**：新增 `mcp/request_error.go`。`mcpRequestErrorCode` 不解析错误文本，只按类型判定：`context.DeadlineExceeded` / `net.Error.Timeout()` ⇒ `request_timeout`；`io.ErrClosedPipe` / `net.ErrClosed` ⇒ `transport_closed`；`*MCPRemoteError` ⇒ `protocol_error`；`io.ErrUnexpectedEOF` / `io.EOF` ⇒ `unexpected_response`；其它 net 错误 ⇒ `transport_error`；未知错误保持无码（与 Rust 的 `_ => None` 一致）。`requestError` 包装保留原始 `Error()` 与 `Unwrap()` 链。
+- **调用边界**：`mcp/stdio_client.go`、`mcp/http_client.go` 的 `tools/call` 失败统一经 `withMCPRequestErrorCode` 包装。
+- **进入遥测前不丢类型**：`tool` 新增 `RequestErrorCoder` 与 `RequestErrorCodeTelemetryTag`；`turn/tool_dispatcher.go` 在错误被压平成模型文本之前把分类码写入 `ToolExecutionResult.TelemetryTags`。同时按 Rust `CallToolResult::from_result(Err(..))` 的语义，把带分类码的 MCP 请求失败作为模型可见的工具失败返回（非致命 turn 错误）；turn 级 deadline/cancel 仍走 `context.Cause` 的致命路径，不受影响。
+- **指标与 span**：`telemetry/mcp_call_metrics.go::MCPCallOutcomeForExecution` 读取该 tag 并 `WithRequestErrorCode`，`codex.mcp.call.error` 与 `MCPCallSpanAttributes` 因此得到 `request_timeout` / `transport_closed` / … 而不是 `unknown`。
+- **`codex/telemetry` meta 回退**：Go 已在 round-90 实现 `codexTelemetryErrorCode` + 16 项允许列表（结构化内容 → connector auth → telemetry meta 的优先级），本轮复核未改动，由既有 `telemetry/mcp_call_metrics_test.go` 覆盖。
+- **trusted-access 超时**：Go 的 `TrustedAccessContext.fetchStatus` 在超时时按 Rust 语义回退为 `unknown` 状态并继续调用，不产生错误，因此不存在“保留类型化超时”的载体。
+
+测试：
+
+- `mcp/request_error_test.go`：9 种错误分类 + `%w` 包装后的 deadline 仍可识别 + 包装后消息/错误链不变。
+- `turn/tool_request_error_code_test.go`：executor 返回带码错误 ⇒ `TelemetryTags[request_error_code]=request_timeout`，模型输出为原始消息且 turn 不失败。
+- `telemetry/mcp_request_error_code_test.go`：`MCPCallOutcomeForExecution` 采用该码并写入 span 属性；tool-result 结果的码不被覆盖。
+
+## 16.2 验证
+
+| 命令 | 结果 |
+| --- | --- |
+| `go build ./...` | exit 0 |
+| `go test ./mcp` | ok |
+| `go test ./turn` | ok |
+| `go test ./telemetry` | ok |
+| `go test ./appserver -run "MCP"` | ok |

@@ -227,7 +227,7 @@ func callMCPStdioToolWithClient(client *stdioClient, serverName string, threadID
 	params := mcpToolCallParams(client.config, tool, arguments, meta)
 	var response MCPToolCallResponse
 	if err := client.CallWithOptions(&stdioCallOptions{ServerName: serverName, ThreadID: threadID, TurnID: turnID, ItemID: itemID, Roots: roots, Elicitation: elicitation, Progress: progress}, "tools/call", params, &response); err != nil {
-		return nil, err
+		return nil, withMCPRequestErrorCode(err)
 	}
 	return &response, nil
 }

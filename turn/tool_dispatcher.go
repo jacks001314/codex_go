@@ -668,6 +668,16 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 			return nil, dispatchErr
 		}
 		handlerExecuted = handlerReached
+		// Rust #54094: preserve a caller-side request-failure category (for
+		// example `request_timeout` or `transport_closed`) from the executor
+		// error before it becomes a model-facing string, so MCP call metrics
+		// and spans do not collapse it to `unknown`.
+		if code := toolRequestErrorCode(dispatchErr); code != "" {
+			if telemetryTags == nil {
+				telemetryTags = map[string]string{}
+			}
+			telemetryTags[tool.RequestErrorCodeTelemetryTag] = code
+		}
 		message := callErr.ModelMessage()
 		body := message
 		if d.router.DeclaresOutputSchema(invocation.ToolName) {
@@ -753,6 +763,16 @@ func (d *ToolDispatcher) executeToolInvocation(ctx context.Context, invocation *
 	return result, nil
 }
 
+// toolRequestErrorCode reports the bounded request-failure category an executor
+// error carries, if any (Rust `request_error_code`).
+func toolRequestErrorCode(err error) string {
+	var coder tool.RequestErrorCoder
+	if err != nil && errors.As(err, &coder) {
+		return strings.TrimSpace(coder.RequestErrorCode())
+	}
+	return ""
+}
+
 func toolCallErrorForModel(err error) *tool.FunctionCallError {
 	if err == nil {
 		return nil
@@ -761,7 +781,19 @@ func toolCallErrorForModel(err error) *tool.FunctionCallError {
 	if errors.As(err, &callErr) {
 		return callErr
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, tool.ErrToolCancelled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, tool.ErrToolCancelled) {
+		return tool.Fatal(err.Error())
+	}
+	var requestCoder tool.RequestErrorCoder
+	if errors.As(err, &requestCoder) {
+		// Rust #54094: an MCP request failure is returned to the model as a
+		// failed tool result (`CallToolResult::from_result(Err(..))`), not as a
+		// fatal turn error; its bounded code rides on the execution's telemetry
+		// tags. A turn-level deadline or cancellation is replaced by
+		// context.Cause above and therefore never reaches this branch.
+		return tool.RespondToModel(err.Error())
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
 		return tool.Fatal(err.Error())
 	}
 	if errors.Is(err, tool.ErrToolNotFound) || errors.Is(err, tool.ErrToolInvalidCall) {

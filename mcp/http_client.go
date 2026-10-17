@@ -325,7 +325,7 @@ func callMCPHTTPToolWithClient(client *httpClient, serverName string, threadID s
 		Elicitation: elicitation,
 		Progress:    progress,
 	}, "tools/call", params, &response); err != nil {
-		return nil, err
+		return nil, withMCPRequestErrorCode(err)
 	}
 	return &response, nil
 }

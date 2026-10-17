@@ -215,6 +215,18 @@ type TelemetryTagProvider interface {
 	TelemetryTags(invocation *Invocation) map[string]string
 }
 
+// RequestErrorCodeTelemetryTag carries a bounded caller-side request-failure
+// category from a tool executor to the telemetry layer (Rust #54094:
+// `rmcp_client::request_error_code`). It is never model-visible output.
+const RequestErrorCodeTelemetryTag = "request_error_code"
+
+// RequestErrorCoder lets an executor error report that bounded failure category
+// before the error is flattened to a model-facing string. The dispatcher copies
+// it onto the execution's telemetry tags.
+type RequestErrorCoder interface {
+	RequestErrorCode() string
+}
+
 // ReadinessWaiter lets an exact tool runtime wait for external readiness before
 // it enters the response's parallel/serial execution gate.
 type ReadinessWaiter interface {

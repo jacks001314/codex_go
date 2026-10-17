@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"codex_go/tool"
 	"codex_go/turn"
 )
 
@@ -342,7 +343,12 @@ func MCPCallOutcomeForExecution(execution *turn.ToolExecutionResult) (MCPCallOut
 		isError, _ = data["isError"].(bool)
 		structuredContent, _ = data["structuredContent"].(map[string]any)
 	}
-	return MCPCallOutcomeForResult(hasResult, isError, structuredContent, MCPExecutionResultMeta(execution)), true
+	outcome := MCPCallOutcomeForResult(hasResult, isError, structuredContent, MCPExecutionResultMeta(execution))
+	// Rust #54094: a request failure classified by the transport layer keeps
+	// its bounded code (`request_timeout`, `transport_closed`, ...) instead of
+	// the `unknown` fallback.
+	outcome = outcome.WithRequestErrorCode(execution.TelemetryTags[tool.RequestErrorCodeTelemetryTag])
+	return outcome, true
 }
 
 // MCPExecutionOutputData reports a tool execution's output data, or nil when the
