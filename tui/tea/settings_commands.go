@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"strconv"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -21,6 +22,7 @@ const (
 	settingsWriteKindServiceTier            = "service_tier"
 	settingsWriteKindApprovalsReviewer      = "approvals_reviewer"
 	settingsWriteKindAgentsOverviewGrouping = "agents_overview_grouping"
+	settingsWriteKindQuickDial              = "quick_dial"
 )
 
 // initialPersonality carries the configured personality into the model's
@@ -382,6 +384,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 			// how to retry saving the default without interrupting the task.
 			m.notice = "Failed to save default service tier: " + msg.Err.Error() +
 				"\nYou can continue this task. To save the default, resolve the error above, then switch to a different tier and back to the desired tier."
+		} else if msg.Kind == settingsWriteKindQuickDial {
+			m.notice = "Failed to save preset " + strconv.Itoa(m.quickDialWriteSlot) + ": " + msg.Err.Error()
+			m.quickDialWriteSlot = -1
 		} else if msg.Kind == settingsWriteKindMemories {
 			if strings.HasPrefix(msg.Err.Error(), "Saved memory settings,") {
 				m.notice = msg.Err.Error()
@@ -453,6 +458,15 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 	}
 	if experimentalOverridden {
 		m.notice = "Changes were saved, but the configured values differ from your selections. A higher-priority setting may override them."
+	}
+	if msg.Kind == settingsWriteKindQuickDial && m.quickDialWriteSlot >= 0 {
+		if m.quickDialWriteDelete {
+			m.notice = "Deleted preset " + strconv.Itoa(m.quickDialWriteSlot) + "."
+		} else {
+			m.notice = "Saved preset " + strconv.Itoa(m.quickDialWriteSlot) + "."
+		}
+		m.quickDialWriteSlot = -1
+		m.quickDialWriteDelete = false
 	}
 	if msg.Kind == settingsWriteKindExperimental {
 		m.applyExperimentalWriteReadback(experimentalOverridden)
@@ -577,6 +591,9 @@ func (m *Model) applyLocalSettingsValues(result SettingsWriteResult) {
 		if m.agentsOverview != nil {
 			m.agentsOverview.State.Grouping = m.agentsOverviewGrouping
 		}
+	}
+	if result.QuickDials != nil {
+		m.quickDials = cloneTUIPresets(result.QuickDials)
 	}
 }
 

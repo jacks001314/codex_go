@@ -3404,14 +3404,65 @@ func TestInteractiveExternalAgentMigrationHandlersUseEmbeddedAppServer(t *testin
 	}
 }
 
-func TestInteractiveRemoteExternalAgentImportMatchesRustAvailabilityErrors(t *testing.T) {
-	localEndpoint := appserverdaemon.NewWebSocketEndpoint("ws://127.0.0.1:1", nil)
-	if _, err := interactiveRemoteExternalAgentDetectHandler(localEndpoint)(`D:\repo`, "claude-code"); err == nil || err.Error() != interactiveExternalAgentImportDaemonUnavailable {
-		t.Fatalf("local daemon import error = %v", err)
+func TestInteractiveRemoteExternalAgentImportUsesConnectedServer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodExternalAgentConfigDetect):
+				var params config.ExternalAgentConfigDetectParams
+				if err := json.Unmarshal(req.Params, &params); err != nil || len(params.CWDs) != 1 || params.CWDs[0] != `D:\repo` {
+					t.Errorf("detect params = %#v err=%v", params, err)
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": config.ExternalAgentConfigDetectResponse{}})
+			case string(appserver.MethodExternalAgentConfigImport):
+				var params config.ExternalAgentConfigImportParams
+				if err := json.Unmarshal(req.Params, &params); err != nil || params.Source == nil || *params.Source != "cli" {
+					t.Errorf("import params = %#v err=%v", params, err)
+					return
+				}
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  config.ExternalAgentConfigImportResponse{ImportID: "import-1"},
+				})
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"method":  string(appserver.NotificationExternalAgentConfigImportCompleted),
+					"params":  config.ExternalAgentConfigImportCompletedNotification{ImportID: "import-1"},
+				})
+				return
+			default:
+				t.Errorf("unexpected method %s", req.Method)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if _, err := interactiveRemoteExternalAgentDetectHandler(endpoint)(`D:\repo`, "claude-code"); err != nil {
+		t.Fatalf("remote detect error = %v", err)
 	}
-	remoteEndpoint := appserverdaemon.NewWebSocketEndpoint("wss://codex.example.test", nil)
-	if _, err := interactiveRemoteExternalAgentDetectHandler(remoteEndpoint)(`D:\repo`, "cursor"); err == nil || err.Error() != interactiveExternalAgentImportRemoteUnavailable {
+	response, completion, err := interactiveRemoteExternalAgentImportHandler(endpoint)(nil, "claude-code")
+	if err != nil {
 		t.Fatalf("remote import error = %v", err)
+	}
+	completed := <-completion
+	if completed.Err != nil || response.ImportID != "import-1" || completed.Completed.ImportID != "import-1" {
+		t.Fatalf("remote import response=%#v completion=%#v", response, completed)
 	}
 }
 

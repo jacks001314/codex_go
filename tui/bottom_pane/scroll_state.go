@@ -1,6 +1,41 @@
 package bottompane
 
+import "strings"
+
 // Rust parity: codex-rs/tui/src/bottom_pane/scroll_state.rs.
+
+// ListAction is the vertical navigation action resolved from a list key.
+type ListAction string
+
+const (
+	ListActionMoveUp     ListAction = "move_up"
+	ListActionMoveDown   ListAction = "move_down"
+	ListActionPageUp     ListAction = "page_up"
+	ListActionPageDown   ListAction = "page_down"
+	ListActionJumpTop    ListAction = "jump_top"
+	ListActionJumpBottom ListAction = "jump_bottom"
+)
+
+// VerticalActionFor centralizes list navigation bindings shared by the bottom
+// pane views (Rust #54081 ListKeymap::vertical_action_for).
+func VerticalActionFor(key string) (ListAction, bool) {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "up", "ctrl+p":
+		return ListActionMoveUp, true
+	case "down", "ctrl+n":
+		return ListActionMoveDown, true
+	case "pageup", "pgup", "ctrl+u":
+		return ListActionPageUp, true
+	case "pagedown", "pgdown", "ctrl+d":
+		return ListActionPageDown, true
+	case "home", "ctrl+a":
+		return ListActionJumpTop, true
+	case "end", "ctrl+e":
+		return ListActionJumpBottom, true
+	default:
+		return "", false
+	}
+}
 
 type ScrollState struct {
 	SelectedIdx  int
@@ -10,6 +45,27 @@ type ScrollState struct {
 
 func NewScrollState() ScrollState {
 	return ScrollState{}
+}
+
+// ApplyVerticalAction applies a shared vertical list action and keeps the
+// resulting selection visible (Rust #54081 ScrollState::apply_vertical_action).
+func (s *ScrollState) ApplyVerticalAction(action ListAction, length int, visibleRows int) {
+	switch action {
+	case ListActionMoveUp:
+		s.MoveUpWrap(length)
+		s.EnsureVisible(length, visibleRows)
+	case ListActionMoveDown:
+		s.MoveDownWrap(length)
+		s.EnsureVisible(length, visibleRows)
+	case ListActionPageUp:
+		s.PageUpClamped(length, visibleRows)
+	case ListActionPageDown:
+		s.PageDownClamped(length, visibleRows)
+	case ListActionJumpTop:
+		s.JumpTop(length, visibleRows)
+	case ListActionJumpBottom:
+		s.JumpBottom(length, visibleRows)
+	}
 }
 
 func (s *ScrollState) Reset() {

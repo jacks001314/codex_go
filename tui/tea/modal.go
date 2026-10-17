@@ -44,6 +44,8 @@ const (
 	ModalKindFeedback        ModalKind = "feedback"
 	ModalKindAutoReview      ModalKind = "auto_review_denials"
 	ModalKindGoal            ModalKind = "goal"
+	ModalKindPresets         ModalKind = "presets"
+	ModalKindMisalignment    ModalKind = "misalignment"
 	ModalKindWindowsSandbox  ModalKind = "windows_sandbox"
 	ModalKindRunningTaskExit ModalKind = "running_task_exit"
 	ModalKindWorktree        ModalKind = "worktree"
@@ -236,6 +238,7 @@ func (m *Model) openModal(message ModalRequestMsg) {
 		columnWidth:       message.ColumnWidth,
 		descriptionLayout: message.DescriptionLayout,
 	}
+	m.quickDialMenu = false
 	m.notice = ""
 }
 
@@ -840,6 +843,23 @@ func (m *Model) respondModal(cancelled bool) bubbletea.Cmd {
 			return nil
 		}
 		return m.applyGoalModalOption(response.OptionID, modal.goalObjective)
+	}
+	if modal.kind == ModalKindPresets {
+		m.modal = nil
+		if cancelled {
+			m.quickDialPending = nil
+			m.quickDialPrefills = nil
+			m.notice = "Cancelled"
+			return nil
+		}
+		return m.applyQuickDialModalOption(modal.id, response.OptionID)
+	}
+	if modal.kind == ModalKindMisalignment {
+		m.modal = nil
+		if cancelled {
+			return m.showMisalignmentPrecaution()
+		}
+		return m.applyMisalignmentModalOption(modal.id, response.OptionID)
 	}
 	if modal.kind == ModalKindStatusLine && modal.statusLineSetup != nil {
 		m.modal = nil

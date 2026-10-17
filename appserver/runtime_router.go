@@ -14085,6 +14085,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
+		ToolRegistrationMetrics:      r.services.TurnMetrics,
 		Hooks:                        hooks,
 		SteerMailbox:                 r.requireSteerMailbox(),
 		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),

@@ -4708,11 +4708,11 @@ func TestModelSlashCommandPopupFiltersCompletesAndDispatches(t *testing.T) {
 	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})
 	typeText(t, model, "/")
 	model.Update(key(bubbletea.KeyDown))
-	if got := model.selectedSlashPopupName(); got != "ide" {
-		t.Fatalf("selected after Down = %q, want ide", got)
+	if got := model.selectedSlashPopupName(); got != "presets" {
+		t.Fatalf("selected after Down = %q, want presets", got)
 	}
-	if view := model.View(); !strings.Contains(view, codextui.SelectionPrefix(true)+"/ide") {
-		t.Fatalf("slash popup should render selected color row for /ide:\n%s", view)
+	if view := model.View(); !strings.Contains(view, codextui.SelectionPrefix(true)+"/presets") {
+		t.Fatalf("slash popup should render selected color row for /presets:\n%s", view)
 	}
 
 	model = NewModel(codextui.NewState(nil), Options{Width: 100, Height: 24})

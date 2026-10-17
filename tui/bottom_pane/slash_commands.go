@@ -418,7 +418,6 @@ var rustSlashCommandOrder = []string{
 // exists. They are new subsystems, tracked as round-90 立项 candidates and not
 // started, so adding a frame is what removes an entry here.
 var rustSlashCommandsWithoutFrame = map[string]bool{
-	"presets":  true, // SlashCommand::Presets, upstream #54380 (/presets)
 	"daybreak": true, // SlashCommand::Daybreak
 	"config":   true, // SlashCommand::Config
 	"tui":      true, // SlashCommand::Tui
@@ -426,6 +425,7 @@ var rustSlashCommandsWithoutFrame = map[string]bool{
 
 var rustSlashCommandDescriptions = map[string]string{
 	"model":                 "choose what model and reasoning effort to use",
+	"presets":               "run or save reusable prompts and slash commands",
 	"ide":                   "include current selection, open files, and other context from your IDE",
 	"permissions":           "choose what Codex is allowed to do",
 	"keymap":                "remap TUI shortcuts",

@@ -491,6 +491,15 @@ func (r *Router) ModelVisibleSpecs() []Spec {
 	return r.registry.ModelVisibleSpecs()
 }
 
+// RegistrationCounts returns the router's finalized inventory grouped by
+// exposure (Rust #51868 record_registration_metrics).
+func (r *Router) RegistrationCounts() RegistrationCounts {
+	if r == nil || r.registry == nil {
+		return RegistrationCounts{}
+	}
+	return r.registry.RegistrationCounts()
+}
+
 func (r *Router) Executor(name ToolName) (Executor, bool) {
 	if r == nil || r.registry == nil {
 		return nil, false

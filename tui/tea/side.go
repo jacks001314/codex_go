@@ -112,11 +112,9 @@ type SideCloseParams struct {
 type SideCloseResponse struct{}
 
 type SideStartResultMsg struct {
-	Params                 SideStartParams
-	Response               SideStartResponse
-	Err                    error
-	replacedSide           *activeSideConversation
-	replacementCloseFailed bool
+	Params   SideStartParams
+	Response SideStartResponse
+	Err      error
 }
 
 type SideCloseResultMsg struct {
@@ -161,6 +159,129 @@ type activeSideConversation struct {
 	SideStatus        string
 	SidePlaceholder   string
 	ShowingSide       bool
+}
+
+func (m *Model) retainSideConversation(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	parentThreadID := strings.TrimSpace(side.ParentThreadID)
+	sideThreadID := strings.TrimSpace(side.SideThreadID)
+	if parentThreadID == "" || sideThreadID == "" {
+		return
+	}
+	if m.sideConversations == nil {
+		m.sideConversations = map[string]*activeSideConversation{}
+	}
+	m.sideConversations[parentThreadID] = side
+}
+
+func (m *Model) retainedSideConversationForParent(parentThreadID string) *activeSideConversation {
+	if m == nil {
+		return nil
+	}
+	return m.sideConversations[strings.TrimSpace(parentThreadID)]
+}
+
+func (m *Model) retainedSideConversationForThread(threadID string) *activeSideConversation {
+	if m == nil {
+		return nil
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return nil
+	}
+	if side := m.sideConversations[threadID]; side != nil {
+		return side
+	}
+	for _, side := range m.sideConversations {
+		if side != nil && strings.TrimSpace(side.SideThreadID) == threadID {
+			return side
+		}
+	}
+	return nil
+}
+
+// captureActiveSideConversationState records the visible side or parent
+// transcript before a thread switch hides the side conversation.
+func (m *Model) captureActiveSideConversationState() {
+	if m == nil || m.State == nil || m.activeSide == nil {
+		return
+	}
+	side := m.activeSide
+	threadID := strings.TrimSpace(m.State.ThreadID)
+	switch threadID {
+	case strings.TrimSpace(side.ParentThreadID):
+		side.ParentMessages = cloneSideMessages(m.State.Messages)
+		side.ParentStatus = strings.TrimSpace(m.State.Status)
+		side.ParentPlaceholder = m.composer.Placeholder
+	case strings.TrimSpace(side.SideThreadID):
+		side.SideMessages = cloneSideMessages(m.State.Messages)
+		side.SideStatus = strings.TrimSpace(m.State.Status)
+		side.SidePlaceholder = m.composer.Placeholder
+	}
+	m.retainSideConversation(side)
+}
+
+func (m *Model) deactivateSideConversation() {
+	if m == nil || m.activeSide == nil {
+		return
+	}
+	m.captureActiveSideConversationState()
+	m.activeSide = nil
+}
+
+func (m *Model) forgetRetainedSideConversation(side *activeSideConversation) {
+	if m == nil || side == nil {
+		return
+	}
+	parentThreadID := strings.TrimSpace(side.ParentThreadID)
+	if stored := m.sideConversations[parentThreadID]; stored == side {
+		delete(m.sideConversations, parentThreadID)
+	}
+}
+
+// activateRetainedSideConversation hides the current parent transcript and
+// reopens an existing side thread. Rust #52184 uses the same side listener,
+// channel, and thread state when /side reopens a retained conversation.
+func (m *Model) activateRetainedSideConversation(side *activeSideConversation, userMessage string) bubbletea.Cmd {
+	if m == nil || m.State == nil || side == nil {
+		return nil
+	}
+	currentThreadID := strings.TrimSpace(m.State.ThreadID)
+	if currentThreadID == strings.TrimSpace(side.SideThreadID) {
+		m.captureActiveSideConversationState()
+	}
+	m.retainSideConversation(side)
+	m.activeSide = side
+	side.ShowingSide = true
+	m.sideStartPending = false
+	m.State.SetThreadID(side.SideThreadID)
+	m.State.Messages = cloneSideMessages(side.SideMessages)
+	m.State.BumpMessagesRevision()
+	m.setStatus(firstNonEmpty(strings.TrimSpace(side.SideStatus), "idle"))
+	m.composer.Placeholder = firstNonEmpty(strings.TrimSpace(side.SidePlaceholder), "Ask gcode in side conversation")
+	m.notice = m.sideContextLabel()
+	m.refreshTranscript()
+	m.transcript.GotoBottom()
+
+	var commands []bubbletea.Cmd
+	if cmd := m.refreshStatusControlsCmd(); cmd != nil {
+		commands = append(commands, cmd)
+	}
+	if prompt := strings.TrimSpace(userMessage); prompt != "" {
+		if cmd := m.submitRequest(SubmitRequest{Prompt: prompt}, false); cmd != nil {
+			commands = append(commands, cmd)
+		}
+	}
+	switch len(commands) {
+	case 0:
+		return nil
+	case 1:
+		return commands[0]
+	default:
+		return bubbletea.Batch(commands...)
+	}
 }
 
 func SideDeveloperInstructions(existingInstructions string) string {
@@ -248,6 +369,12 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		m.showSideCommandMessage(commandName, userMessage, "Wait for permissions to update before forking.")
 		return nil
 	}
+	// Rust #52184: navigating to another thread retains the side conversation.
+	// Returning to the parent and invoking /side reopens that same thread rather
+	// than forking a replacement.
+	if existing := m.retainedSideConversationForParent(parentThreadID); existing != nil {
+		return m.activateRetainedSideConversation(existing, userMessage)
+	}
 	if m.onStartSide == nil {
 		m.showSideCommandMessage(commandName, userMessage, "Side conversation requests require app-server thread routing.")
 		return nil
@@ -269,24 +396,13 @@ func (m *Model) startSideConversation(commandName string, userMessage string) bu
 		// (a fork with a CWD override would otherwise drop them).
 		RuntimeWorkspaceRoots: append([]string(nil), m.sessionWorkspaceRoots...),
 	}
-	replacedSide := m.activeSide
-	if replacedSide != nil {
-		m.activeSide = nil
-	}
 	m.sideStartPending = true
 	m.notice = "Starting side conversation..."
 	m.refreshTranscript()
 	starter := m.onStartSide
-	closer := m.onCloseSide
 	return func() bubbletea.Msg {
-		if replacedSide != nil && closer != nil {
-			_, err := closer(SideCloseParams{ParentThreadID: replacedSide.ParentThreadID, SideThreadID: replacedSide.SideThreadID})
-			if err != nil {
-				return SideStartResultMsg{Params: params, Err: err, replacedSide: replacedSide, replacementCloseFailed: true}
-			}
-		}
 		response, err := starter(params)
-		return SideStartResultMsg{Params: params, Response: response, Err: err, replacedSide: replacedSide}
+		return SideStartResultMsg{Params: params, Response: response, Err: err}
 	}
 }
 
@@ -296,13 +412,6 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 	}
 	m.sideStartPending = false
 	if msg.Err != nil {
-		if msg.replacementCloseFailed && msg.replacedSide != nil {
-			m.activeSide = msg.replacedSide
-			m.notice = SideCloseErrorMessage(msg.replacedSide.SideThreadID, msg.Err)
-			m.State.AddMessage(codextui.RoleSystem, m.notice)
-			m.refreshTranscript()
-			return nil
-		}
 		m.notice = SideStartErrorMessage(msg.Err)
 		m.State.AddMessage(codextui.RoleSystem, m.notice)
 		m.refreshTranscript()
@@ -334,6 +443,7 @@ func (m *Model) applySideStartResult(msg SideStartResultMsg) bubbletea.Cmd {
 		SidePlaceholder:   "Ask gcode in side conversation",
 		ShowingSide:       true,
 	}
+	m.retainSideConversation(m.activeSide)
 	m.State.SetThreadID(sideThreadID)
 	m.State.Messages = nil
 	m.State.BumpMessagesRevision()
@@ -418,6 +528,7 @@ func (m *Model) finishReturnFromSideConversation(side *activeSideConversation, n
 	if m == nil || m.State == nil || side == nil {
 		return nil
 	}
+	m.forgetRetainedSideConversation(side)
 	m.activeSide = nil
 	m.sideStartPending = false
 	m.State.SetThreadID(side.ParentThreadID)
@@ -481,24 +592,27 @@ func cloneSideMessages(messages []codextui.Message) []codextui.Message {
 }
 
 func (m *Model) applySideParentStatusChange(msg SideParentStatusChangeMsg) {
-	if m == nil || m.activeSide == nil {
+	if m == nil {
 		return
 	}
-	if strings.TrimSpace(msg.ParentThreadID) == "" || strings.TrimSpace(msg.ParentThreadID) != strings.TrimSpace(m.activeSide.ParentThreadID) {
+	side := m.retainedSideConversationForParent(msg.ParentThreadID)
+	if side == nil {
 		return
 	}
 	switch msg.Kind {
 	case SideParentStatusChangeSet:
-		m.activeSide.ParentSideStatus = msg.Status
+		side.ParentSideStatus = msg.Status
 	case SideParentStatusChangeClear:
-		m.activeSide.ParentSideStatus = ""
+		side.ParentSideStatus = ""
 	case SideParentStatusChangeClearActionable:
-		if m.activeSide.ParentSideStatus.actionable() {
-			m.activeSide.ParentSideStatus = ""
+		if side.ParentSideStatus.actionable() {
+			side.ParentSideStatus = ""
 		}
 	}
-	m.notice = m.sideContextLabel()
-	m.refreshTranscript()
+	if m.activeSide == side {
+		m.notice = m.sideContextLabel()
+		m.refreshTranscript()
+	}
 }
 
 func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
@@ -512,43 +626,44 @@ func (m *Model) applyThreadScopedEvent(msg ThreadScopedEventMsg) bubbletea.Cmd {
 	if m.sideThreadAbandoned(threadID) {
 		return nil
 	}
+	side := m.retainedSideConversationForThread(threadID)
 	if threadID == strings.TrimSpace(m.State.ThreadID) {
 		cmd := m.applyThreadEvent(msg.Event)
-		if m.activeSide != nil {
-			if threadID == strings.TrimSpace(m.activeSide.ParentThreadID) {
-				m.activeSide.ParentMessages = cloneSideMessages(m.State.Messages)
-				m.activeSide.ParentStatus = strings.TrimSpace(m.State.Status)
-			} else if threadID == strings.TrimSpace(m.activeSide.SideThreadID) {
-				m.activeSide.SideMessages = cloneSideMessages(m.State.Messages)
-				m.activeSide.SideStatus = strings.TrimSpace(m.State.Status)
+		if side != nil {
+			if threadID == strings.TrimSpace(side.ParentThreadID) {
+				side.ParentMessages = cloneSideMessages(m.State.Messages)
+				side.ParentStatus = strings.TrimSpace(m.State.Status)
+			} else if threadID == strings.TrimSpace(side.SideThreadID) {
+				side.SideMessages = cloneSideMessages(m.State.Messages)
+				side.SideStatus = strings.TrimSpace(m.State.Status)
 			}
 		}
 		return cmd
 	}
-	if m.activeSide != nil && threadID == strings.TrimSpace(m.activeSide.ParentThreadID) {
-		m.activeSide.ParentMessages = applyThreadEventToSideSnapshot(m.activeSide.ParentMessages, msg.Event)
+	if side != nil && threadID == strings.TrimSpace(side.ParentThreadID) {
+		side.ParentMessages = applyThreadEventToSideSnapshot(side.ParentMessages, msg.Event)
 		switch msg.Event.Type {
 		case "turn.started":
-			m.activeSide.ParentStatus = "running"
-			m.activeSide.ParentSideStatus = ""
+			side.ParentStatus = "running"
+			side.ParentSideStatus = ""
 		case "turn.completed":
-			m.activeSide.ParentStatus = "idle"
-			m.activeSide.ParentSideStatus = SideParentStatusFinished
+			side.ParentStatus = "idle"
+			side.ParentSideStatus = SideParentStatusFinished
 		case "turn.failed", "error":
-			m.activeSide.ParentStatus = "error"
-			m.activeSide.ParentSideStatus = SideParentStatusFailed
+			side.ParentStatus = "error"
+			side.ParentSideStatus = SideParentStatusFailed
 		}
 		return nil
 	}
-	if m.activeSide != nil && threadID == strings.TrimSpace(m.activeSide.SideThreadID) {
-		m.activeSide.SideMessages = applyThreadEventToSideSnapshot(m.activeSide.SideMessages, msg.Event)
+	if side != nil && threadID == strings.TrimSpace(side.SideThreadID) {
+		side.SideMessages = applyThreadEventToSideSnapshot(side.SideMessages, msg.Event)
 		switch msg.Event.Type {
 		case "turn.started":
-			m.activeSide.SideStatus = "running"
+			side.SideStatus = "running"
 		case "turn.completed":
-			m.activeSide.SideStatus = "idle"
+			side.SideStatus = "idle"
 		case "turn.failed", "error":
-			m.activeSide.SideStatus = "error"
+			side.SideStatus = "error"
 		}
 		return nil
 	}
@@ -597,33 +712,36 @@ func (m *Model) applyInactiveThreadTurnCompleted(msg TurnCompletedMsg) bool {
 	if threadID == "" || currentThreadID == "" || threadID == currentThreadID {
 		return false
 	}
-	if m.activeSide == nil {
+	side := m.retainedSideConversationForThread(threadID)
+	if side == nil {
 		return true
 	}
-	if threadID == strings.TrimSpace(m.activeSide.ParentThreadID) {
+	if threadID == strings.TrimSpace(side.ParentThreadID) {
 		if msg.Err != nil {
-			m.activeSide.ParentStatus = "error"
-			m.activeSide.ParentSideStatus = SideParentStatusFailed
-			m.activeSide.ParentMessages = append(m.activeSide.ParentMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
+			side.ParentStatus = "error"
+			side.ParentSideStatus = SideParentStatusFailed
+			side.ParentMessages = append(side.ParentMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
 		} else {
-			m.activeSide.ParentStatus = "idle"
-			m.activeSide.ParentSideStatus = SideParentStatusFinished
+			side.ParentStatus = "idle"
+			side.ParentSideStatus = SideParentStatusFinished
 			if strings.TrimSpace(msg.AssistantMessage) != "" {
-				m.activeSide.ParentMessages = mergeAssistantFinalToMessages(m.activeSide.ParentMessages, msg.AssistantMessage)
+				side.ParentMessages = mergeAssistantFinalToMessages(side.ParentMessages, msg.AssistantMessage)
 			}
 		}
-		m.notice = m.sideContextLabel()
-		m.refreshTranscript()
+		if m.activeSide == side {
+			m.notice = m.sideContextLabel()
+			m.refreshTranscript()
+		}
 		return true
 	}
-	if threadID == strings.TrimSpace(m.activeSide.SideThreadID) {
+	if threadID == strings.TrimSpace(side.SideThreadID) {
 		if msg.Err != nil {
-			m.activeSide.SideStatus = "error"
-			m.activeSide.SideMessages = append(m.activeSide.SideMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
+			side.SideStatus = "error"
+			side.SideMessages = append(side.SideMessages, codextui.Message{Role: codextui.RoleSystem, Text: "Error: " + msg.Err.Error()})
 		} else {
-			m.activeSide.SideStatus = "idle"
+			side.SideStatus = "idle"
 			if strings.TrimSpace(msg.AssistantMessage) != "" {
-				m.activeSide.SideMessages = mergeAssistantFinalToMessages(m.activeSide.SideMessages, msg.AssistantMessage)
+				side.SideMessages = mergeAssistantFinalToMessages(side.SideMessages, msg.AssistantMessage)
 			}
 		}
 		return true
@@ -643,13 +761,16 @@ func (m *Model) applyInactiveThreadTurnInterrupted(msg TurnInterruptedMsg) bool 
 	if threadID == "" || currentThreadID == "" || threadID == currentThreadID {
 		return false
 	}
-	if m.activeSide != nil && threadID == strings.TrimSpace(m.activeSide.ParentThreadID) {
-		m.activeSide.ParentStatus = "idle"
-		m.activeSide.ParentSideStatus = SideParentStatusInterrupted
-		m.notice = m.sideContextLabel()
-		m.refreshTranscript()
-	} else if m.activeSide != nil && threadID == strings.TrimSpace(m.activeSide.SideThreadID) {
-		m.activeSide.SideStatus = "idle"
+	side := m.retainedSideConversationForThread(threadID)
+	if side != nil && threadID == strings.TrimSpace(side.ParentThreadID) {
+		side.ParentStatus = "idle"
+		side.ParentSideStatus = SideParentStatusInterrupted
+		if m.activeSide == side {
+			m.notice = m.sideContextLabel()
+			m.refreshTranscript()
+		}
+	} else if side != nil && threadID == strings.TrimSpace(side.SideThreadID) {
+		side.SideStatus = "idle"
 	}
 	return true
 }

@@ -178,6 +178,7 @@ func localAgentEntryFromRecord(record *session.Record, primaryThreadID string) c
 		IsPrimary:     strings.TrimSpace(string(record.ID)) == strings.TrimSpace(primaryThreadID),
 		IsRunning:     !closed && localAgentRecordIsRunning(record),
 		IsClosed:      closed,
+		Archived:      closed,
 	}
 }
 

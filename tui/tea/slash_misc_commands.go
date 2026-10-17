@@ -107,6 +107,7 @@ func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
 	if m == nil || m.State == nil {
 		return
 	}
+	m.clearMisalignmentState()
 	name := strings.TrimSpace(args)
 	m.resetAgentPickerRefresh(true)
 	// Rust #43994: a fresh chat must not inherit the previous thread's

@@ -38,6 +38,21 @@ func TestCustomPromptPasteBurstNewlineDoesNotSubmitShortFirstLine(t *testing.T) 
 	}
 }
 
+func TestCustomPromptPreserveWhitespaceLikeRust(t *testing.T) {
+	trimmed := NewCustomPromptView("Prompt", "Type", "  padded  ", "")
+	trimmed.Submit()
+	if got, ok := trimmed.LastSubmitted(); !ok || got != "padded" {
+		t.Fatalf("default submit = %q ok=%v, want trimmed text", got, ok)
+	}
+
+	preserved := NewCustomPromptView("Preset", "Type", "  padded  ", "")
+	preserved.PreserveWhitespace()
+	preserved.Submit()
+	if got, ok := preserved.LastSubmitted(); !ok || got != "  padded  " {
+		t.Fatalf("preserved submit = %q ok=%v, want byte-for-byte text", got, ok)
+	}
+}
+
 func TestCustomPromptPasteBurstNewlineAfterTabDoesNotSubmit(t *testing.T) {
 	view := NewCustomPromptView("Edit goal", "Type a goal objective and press Enter", "", "")
 	now := time.Now()

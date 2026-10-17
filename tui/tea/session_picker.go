@@ -312,6 +312,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 			}
 			m.applyResumeResponse(threadID, response)
 		} else if m.State != nil {
+			m.deactivateSideConversation()
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
@@ -341,6 +342,7 @@ func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*Pic
 				}
 			}
 			m.upsertSessionItem(*summary)
+			m.deactivateSideConversation()
 			m.State.SetThreadID(summary.ThreadID)
 			m.inheritTaskToolCapability(threadID, summary.ThreadID)
 			decision.Value = summary.ThreadID
@@ -446,7 +448,6 @@ func (m *Model) applyResumeResponse(threadID string, response SessionResumeRespo
 	// reconciles the stream (Rust #43921 restore_active_reasoning_item).
 	m.reasoningRecoveredAfterRefresh = strings.TrimSpace(response.WorkingReasoningItemID) != "" ||
 		strings.TrimSpace(response.WorkingStatusHeader) != ""
-	m.activeSide = nil
 	m.activeAgentLabel = ""
 	if m.statusControls != nil {
 		m.statusControls.SetActiveAgentLabel("", false)
@@ -493,6 +494,7 @@ func (m *Model) setSessionArchived(threadID string, archived bool) {
 	if m == nil || strings.TrimSpace(threadID) == "" {
 		return
 	}
+	m.setAgentPickerThreadVisibility(threadID, archived)
 	for i := range m.sessionItems {
 		if m.sessionItems[i].ThreadID == threadID {
 			m.sessionItems[i].Archived = archived

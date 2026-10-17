@@ -9,7 +9,7 @@ import (
 
 func TestRustSlashCommandOrderBaseline20260728(t *testing.T) {
 	// Upstream SlashCommand enum order (codex-rs/tui/src/slash_command.rs:12-89),
-	// re-anchored to head 4eb4a65407 (round-90). The four names without a Go
+	// re-anchored to head 4eb4a65407 (round-90). The names without a Go
 	// carrier yet are inert and recorded in rustSlashCommandsWithoutFrame;
 	// D-1 closed: the Agents slot now carries the upstream "agents" spelling.
 	want := []string{

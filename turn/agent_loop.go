@@ -16,12 +16,14 @@ import (
 )
 
 type AgentLoopOptions struct {
-	Agent             model.AgentRunner
-	Dispatcher        *ToolDispatcher
-	SteerMailbox      *SteerMailbox
-	MaxTurns          int
-	Now               func() time.Time
-	ExecutedToolCalls *ExecutedToolCallRecorder
+	Agent                   model.AgentRunner
+	Dispatcher              *ToolDispatcher
+	SteerMailbox            *SteerMailbox
+	MaxTurns                int
+	Now                     func() time.Time
+	ExecutedToolCalls       *ExecutedToolCallRecorder
+	ToolRegistrationMetrics ToolRegistrationMetricSink
+	ToolRegistrationCounts  func() tool.RegistrationCounts
 	// DeferMailboxPreemption mirrors the `features.defer_mailbox_preemption`
 	// gate (#47913, UnderDevelopment, default off): when set, a response keeps
 	// its remaining tool calls even after a commentary/partial-answer boundary
@@ -87,12 +89,14 @@ type TokenUsageCallback func(usage model.AgentUsage)
 type IncompleteResponseUsageCallback func(usage model.AgentUsage)
 
 type AgentLoop struct {
-	agent                  model.AgentRunner
-	dispatcher             *ToolDispatcher
-	steerMailbox           *SteerMailbox
-	now                    func() time.Time
-	executedToolCalls      *ExecutedToolCallRecorder
-	deferMailboxPreemption bool
+	agent                   model.AgentRunner
+	dispatcher              *ToolDispatcher
+	steerMailbox            *SteerMailbox
+	now                     func() time.Time
+	executedToolCalls       *ExecutedToolCallRecorder
+	toolRegistrationMetrics ToolRegistrationMetricSink
+	toolRegistrationCounts  func() tool.RegistrationCounts
+	deferMailboxPreemption  bool
 }
 
 // AgentStepSettings are the execution settings that issue one sampling step
@@ -267,12 +271,14 @@ func NewAgentLoop(options *AgentLoopOptions) *AgentLoop {
 		now = time.Now
 	}
 	return &AgentLoop{
-		agent:                  options.Agent,
-		dispatcher:             options.Dispatcher,
-		steerMailbox:           options.SteerMailbox,
-		now:                    now,
-		executedToolCalls:      options.ExecutedToolCalls,
-		deferMailboxPreemption: options.DeferMailboxPreemption,
+		agent:                   options.Agent,
+		dispatcher:              options.Dispatcher,
+		steerMailbox:            options.SteerMailbox,
+		now:                     now,
+		executedToolCalls:       options.ExecutedToolCalls,
+		toolRegistrationMetrics: options.ToolRegistrationMetrics,
+		toolRegistrationCounts:  options.ToolRegistrationCounts,
+		deferMailboxPreemption:  options.DeferMailboxPreemption,
 	}
 }
 
@@ -427,6 +433,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			ctx = withSpanTraceContext(ctx, samplingSpan)
 			stepCtx = withSpanTraceContext(stepCtx, samplingSpan)
 		}
+		var toolRegistrationCounts tool.RegistrationCounts
+		if l.toolRegistrationCounts != nil {
+			toolRegistrationCounts = l.toolRegistrationCounts()
+		}
+		recordToolRegistrationMetrics(l.toolRegistrationMetrics, toolRegistrationCounts, request.ToolMode)
 		response, err := l.agent.Run(stepCtx, &model.AgentRequest{
 			Prompt:                       prompt,
 			Instructions:                 instructions,

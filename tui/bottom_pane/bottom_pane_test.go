@@ -63,6 +63,57 @@ func TestScrollStatePageAndJumpNavigationClamp(t *testing.T) {
 	}
 }
 
+func TestVerticalActionForAndApplySharedLikeRust(t *testing.T) {
+	cases := map[string]ListAction{
+		"up":       ListActionMoveUp,
+		"ctrl+p":   ListActionMoveUp,
+		"down":     ListActionMoveDown,
+		"ctrl+n":   ListActionMoveDown,
+		"pageup":   ListActionPageUp,
+		"pagedown": ListActionPageDown,
+		"home":     ListActionJumpTop,
+		"end":      ListActionJumpBottom,
+	}
+	for key, want := range cases {
+		got, ok := VerticalActionFor(key)
+		if !ok || got != want {
+			t.Fatalf("VerticalActionFor(%q) = %q ok=%v, want %q", key, got, ok, want)
+		}
+	}
+	if _, ok := VerticalActionFor("space"); ok {
+		t.Fatal("space resolved as a vertical action")
+	}
+
+	state := NewScrollState()
+	state.ApplyVerticalAction(ListActionMoveDown, 5, 3)
+	state.ApplyVerticalAction(ListActionMoveDown, 5, 3)
+	if state.SelectedIdx != 1 || !state.HasSelection {
+		t.Fatalf("move down = %#v", state)
+	}
+	state.ApplyVerticalAction(ListActionJumpBottom, 5, 3)
+	if state.SelectedIdx != 4 || state.ScrollTop != 2 {
+		t.Fatalf("jump bottom = %#v", state)
+	}
+	state.ApplyVerticalAction(ListActionPageUp, 5, 3)
+	if state.SelectedIdx != 1 || state.ScrollTop != 1 {
+		t.Fatalf("page up = %#v", state)
+	}
+
+	view := NewExperimentalFeaturesView([]ExperimentalFeatureItem{
+		{Feature: "a", Name: "Alpha"},
+		{Feature: "b", Name: "Beta"},
+		{Feature: "c", Name: "Gamma"},
+	})
+	view.HandleKey("end")
+	if !view.State.HasSelection || view.State.SelectedIdx != 2 {
+		t.Fatalf("shared end action = %#v", view.State)
+	}
+	view.HandleKey("up")
+	if view.State.SelectedIdx != 1 {
+		t.Fatalf("shared up action = %#v", view.State)
+	}
+}
+
 func TestPendingInputPreviewRendersQueues(t *testing.T) {
 	preview := NewPendingInputPreview()
 	if preview.DesiredHeight(40) != 0 {

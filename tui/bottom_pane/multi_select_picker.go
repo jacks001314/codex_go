@@ -174,6 +174,13 @@ func (p *MultiSelectPicker) JumpBottom() {
 	p.State.JumpBottom(len(p.FilteredIndices), p.maxRows())
 }
 
+func (p *MultiSelectPicker) ApplyVerticalAction(action ListAction) {
+	if p == nil {
+		return
+	}
+	p.State.ApplyVerticalAction(action, len(p.FilteredIndices), p.maxRows())
+}
+
 func (p *MultiSelectPicker) ToggleSelected() bool {
 	actual := p.SelectedActualIndex()
 	if actual < 0 || actual >= len(p.Items) {
@@ -258,6 +265,10 @@ func (p *MultiSelectPicker) HandleKey(key string) {
 		return
 	}
 	normalized := strings.ToLower(strings.TrimSpace(key))
+	if action, ok := VerticalActionFor(normalized); ok {
+		p.ApplyVerticalAction(action)
+		return
+	}
 	switch normalized {
 	case "up", "ctrl+p":
 		p.MoveUp()

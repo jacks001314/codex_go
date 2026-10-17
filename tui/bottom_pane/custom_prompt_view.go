@@ -38,6 +38,9 @@ type CustomPromptView struct {
 	vimEnabled   bool
 	vimInsert    bool
 	vimPendingOp string
+	// preserveWhitespace keeps leading/trailing spaces in the submitted value
+	// (Rust CustomPromptView::preserve_whitespace).
+	preserveWhitespace bool
 }
 
 func NewCustomPromptView(title string, placeholder string, initialText string, contextLabel string) *CustomPromptView {
@@ -70,6 +73,15 @@ func (v *CustomPromptView) VimEnabled() bool {
 
 func (v *CustomPromptView) VimInsert() bool {
 	return v != nil && (!v.vimEnabled || v.vimInsert)
+}
+
+// PreserveWhitespace keeps the submitted text byte-for-byte, including leading
+// and trailing whitespace. The default remains trimmed.
+func (v *CustomPromptView) PreserveWhitespace() {
+	if v == nil {
+		return
+	}
+	v.preserveWhitespace = true
 }
 
 func (v *CustomPromptView) HandleKey(key string) {
@@ -266,7 +278,10 @@ func (v *CustomPromptView) Submit() bool {
 	if v == nil || v.IsComplete() {
 		return false
 	}
-	text := strings.TrimSpace(v.Text)
+	text := v.Text
+	if !v.preserveWhitespace {
+		text = strings.TrimSpace(text)
+	}
 	if text == "" {
 		return false
 	}

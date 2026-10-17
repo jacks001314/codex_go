@@ -80,6 +80,11 @@ func (v *View) renderLines(termWidth, termHeight int, styled bool) []string {
 	// (Rust agents_overview_render.rs after #45255)
 	label, input, placeholder := v.Prompt()
 	if label != "" || input != "" || placeholder != "" {
+		if v.State.Renaming && input != "" {
+			if available := bodyWidth - runewidth.StringWidth(label); available > 0 {
+				input = v.singleLineViewport(available)
+			}
+		}
 		prompt := []span{{text: label, style: spanCyanBold}, {text: input, style: spanPlain}}
 		if placeholder != "" {
 			available := bodyWidth - runewidth.StringWidth(label) - 1

@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"bytes"
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -116,6 +117,54 @@ func TestProgramStatusEmitsThroughTerminalLikeRust(t *testing.T) {
 	}
 	if writes[len(writes)-1] != "\x1b]7501;state=working:app=codex\x1b\\" {
 		t.Fatalf("writes = %#v", writes)
+	}
+}
+
+func TestProgramStatusClearsOnExitLikeRust(t *testing.T) {
+	restore := codextui.SetTerminalProgramStatusSupportForTest(true, true)
+	defer restore()
+	if sequence := codextui.SetTerminalProgramStatus(codextui.ProgramStatus{State: codextui.ProgramStatusWorking}, ""); sequence == "" {
+		t.Fatal("initial program status was suppressed")
+	}
+	var output bytes.Buffer
+	clearTerminalProgramStatusOnExit(&output)
+	want := "\x1b]21337;status=;indicator=;status-color=;detail=\x07\x1b]7501;state=clear\x1b\\"
+	if got := output.String(); got != want {
+		t.Fatalf("exit clear = %q, want %q", got, want)
+	}
+	output.Reset()
+	clearTerminalProgramStatusOnExit(&output)
+	if output.Len() != 0 {
+		t.Fatalf("second exit clear emitted %q", output.String())
+	}
+}
+
+func TestProgramStatusReemitsAfterFocusAndResizeLikeRust(t *testing.T) {
+	restore := codextui.SetTerminalProgramStatusSupportForTest(true, false)
+	defer restore()
+	var writes []string
+	model := NewModel(nil, Options{
+		OnWriteProgramStatus: func(sequence string) bubbletea.Cmd {
+			return func() bubbletea.Msg {
+				writes = append(writes, sequence)
+				return nil
+			}
+		},
+	})
+	_, cmd := model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started"}})
+	runTeaCmd(t, model, cmd)
+	if len(writes) != 1 {
+		t.Fatalf("initial writes = %#v", writes)
+	}
+	_, cmd = model.Update(bubbletea.FocusMsg{})
+	runTeaCmd(t, model, cmd)
+	if len(writes) != 2 {
+		t.Fatalf("focus did not re-emit the status: %#v", writes)
+	}
+	_, cmd = model.Update(bubbletea.WindowSizeMsg{Width: 90, Height: 30})
+	runTeaCmd(t, model, cmd)
+	if len(writes) != 3 {
+		t.Fatalf("resize did not re-emit the status: %#v", writes)
 	}
 }
 

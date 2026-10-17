@@ -13,6 +13,15 @@ func (m *Model) resetThreadScopedState() {
 	if m == nil {
 		return
 	}
+	// Rust #52184: navigation hides the current side conversation but keeps its
+	// listener, snapshots, and pending state so /side can reopen it later.
+	m.deactivateSideConversation()
+	m.currentTurnID = ""
+	m.misalignmentPolicyStopped = false
+	m.misalignmentReview = nil
+	if m.modal != nil && m.modal.kind == ModalKindMisalignment {
+		m.modal = nil
+	}
 	// The model carries its own tool-call display maps (shadowing the embedded
 	// TranscriptComponent's copies), so clear both.
 	m.toolCalls = map[string]*toolCallDisplayState{}

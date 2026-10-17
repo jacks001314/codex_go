@@ -88,6 +88,13 @@ func (v *ExperimentalFeaturesView) JumpBottom() {
 	v.State.JumpBottom(v.VisibleLen(), min(MaxPopupRows, v.VisibleLen()))
 }
 
+func (v *ExperimentalFeaturesView) ApplyVerticalAction(action ListAction) {
+	if v == nil {
+		return
+	}
+	v.State.ApplyVerticalAction(action, v.VisibleLen(), min(MaxPopupRows, v.VisibleLen()))
+}
+
 func (v *ExperimentalFeaturesView) ToggleSelected() {
 	if v == nil || !v.State.HasSelection || v.State.SelectedIdx < 0 || v.State.SelectedIdx >= len(v.Features) {
 		return
@@ -111,6 +118,10 @@ func (v *ExperimentalFeaturesView) SaveAndClose() {
 
 func (v *ExperimentalFeaturesView) HandleKey(key string) {
 	if v == nil {
+		return
+	}
+	if action, ok := VerticalActionFor(key); ok {
+		v.ApplyVerticalAction(action)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(key)) {

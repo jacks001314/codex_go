@@ -63,6 +63,9 @@ func TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge(t *testing.T) {
 		copied = text
 		return nil
 	}
+	// NewModel installs a rich clipboard fallback when no writer is supplied;
+	// this test drives the plain writer it replaces after construction.
+	model.clipboardWriteRich = nil
 	typeText(t, model, "/copy")
 	model.Update(key(bubbletea.KeyEnter))
 	model.Update(key(bubbletea.KeyEnter))

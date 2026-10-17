@@ -7,8 +7,25 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	"codex_go/utils"
 )
+
+func TestAgentsOverviewLifecycleProgressKeepsBackdropLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{Width: 80, Height: 20})
+	model.agentsOverview = agentsoverview.New([]agentsoverview.Row{{
+		ThreadID: "t-1",
+		Name:     "Selected task",
+	}}, "t-1", false)
+	model.agentsOverviewLifecycleProgress = "Archiving task\u2026"
+	rendered := utils.StripANSI(model.renderAgentsOverview())
+	for _, want := range []string{"Selected task", "Archiving task", "\u256d", "Please wait"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("lifecycle progress missing %q:\n%s", want, rendered)
+		}
+	}
+}
 
 type agentsLifecycleCalls struct {
 	archived []string

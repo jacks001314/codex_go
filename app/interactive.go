@@ -1198,6 +1198,7 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
 		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
+		QuickDials:                  settings.QuickDials,
 		ShowSessionHeader:           true,
 		ShowTooltips:                settings.ShowTooltips,
 		SessionHeaderVersion:        doctor.Version(),
@@ -2119,6 +2120,13 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		featureSettings = loaded.FeatureSettings()
 	}
 	userMarketplaces, gitMarketplaces := interactivePluginMarketplacesFromConfig(values)
+	// A missing `tui.presets` table is a real empty set, not "keep the live
+	// presets". SettingsWriteResult uses nil for the latter, so normalize the
+	// loaded value to an empty map and let deleting the last preset clear it.
+	quickDials := loaded.TUIPresets()
+	if quickDials == nil {
+		quickDials = map[string]config.TUIPreset{}
+	}
 	// Rust seeds the Markdown rendering preferences from the effective config
 	// before the first preview and refreshes them when resolved session settings
 	// activate (markdown_render::preferences::init).
@@ -2154,7 +2162,7 @@ func interactiveSettingsFromConfig(loaded *config.Config) codextea.SettingsWrite
 		// Rust #50786: remember the Command Center grouping across launches.
 		AgentsOverviewGrouping: interactiveTUIStringFromConfig(values, "agents_overview_grouping"),
 		// Rust #54379: `tui.presets` ride along in the TUI local settings.
-		QuickDials:             loaded.TUIPresets(),
+		QuickDials:             quickDials,
 		PluginUserMarketplaces: userMarketplaces,
 		PluginGitMarketplaces:  gitMarketplaces,
 	}
@@ -3975,14 +3983,15 @@ func runInteractiveTurn(ctx context.Context, root *cli.RootOptions, runner inter
 		internalEventHandler = streamWriter.HandleEvent
 	}
 	execRequest := &codexexec.Request{
-		Root:                   turnRoot,
-		Exec:                   execOpts,
-		Input:                  inputs,
-		CollaborationMode:      interactiveCollaborationModePayload(request.CollaborationMode),
-		AdditionalInstructions: additionalInstructions,
-		AdditionalInputItems:   additionalInputItems,
-		InternalEventHandler:   internalEventHandler,
-		TurnTrigger:            interactiveTurnTrigger(request),
+		Root:                       turnRoot,
+		Exec:                       execOpts,
+		Input:                      inputs,
+		CollaborationMode:          interactiveCollaborationModePayload(request.CollaborationMode),
+		AdditionalInstructions:     additionalInstructions,
+		AdditionalInputItems:       additionalInputItems,
+		InternalEventHandler:       internalEventHandler,
+		TurnTrigger:                interactiveTurnTrigger(request),
+		ResponsesAPIClientMetadata: cloneStringMapApp(request.ResponsesAPIClientMetadata),
 		// Rust's embedded TUI registers its app-server connection as
 		// "codex-tui", which becomes the process originator, so TUI model
 		// traffic is attributed to the TUI and not to the standalone CLI

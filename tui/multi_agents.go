@@ -13,6 +13,9 @@ type AgentThreadEntry struct {
 	IsPrimary     bool
 	IsRunning     bool
 	IsClosed      bool
+	// Archived marks a thread hidden from agent-picker navigation until it is
+	// unarchived (Rust #50345 AgentPickerThreadVisibility::Hidden).
+	Archived bool
 }
 
 func (e AgentThreadEntry) DisplayLabel() string {

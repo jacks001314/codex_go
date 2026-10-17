@@ -100,6 +100,50 @@ func TestTUIPresetsRejectInvalidEntriesLikeRust(t *testing.T) {
 	}
 }
 
+// TestConfigServiceWritesAndDeletesTUIPresetLikeRust pins the persistence path
+// used by the TUI's preset editor: a slot is a nested table with input/label,
+// and deleting it removes the table rather than leaving an empty entry.
+func TestConfigServiceWritesAndDeletesTUIPresetLikeRust(t *testing.T) {
+	home := t.TempDir()
+	service := NewConfigService(home)
+	if _, err := service.BatchWrite(&ConfigBatchWriteParams{Edits: []ConfigEdit{{
+		KeyPath:       "tui.presets.1",
+		Value:         map[string]any{"input": "hello from preset", "label": ""},
+		MergeStrategy: MergeReplace,
+	}}}); err != nil {
+		t.Fatalf("BatchWrite() error = %v", err)
+	}
+	loaded, err := service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read(after write) error = %v", err)
+	}
+	presets, err := ParseTUIPresets(loaded.Config)
+	if err != nil {
+		t.Fatalf("ParseTUIPresets(after write) error = %v", err)
+	}
+	if preset, ok := presets["1"]; !ok || preset.Input != "hello from preset" {
+		t.Fatalf("presets after write = %#v", presets)
+	}
+
+	if _, err := service.WriteValue(&ConfigValueWriteParams{
+		KeyPath: "tui.presets.1",
+		Value:   nil,
+	}); err != nil {
+		t.Fatalf("WriteValue(delete) error = %v", err)
+	}
+	loaded, err = service.Read(&ConfigReadParams{})
+	if err != nil {
+		t.Fatalf("Read(after delete) error = %v", err)
+	}
+	presets, err = ParseTUIPresets(loaded.Config)
+	if err != nil {
+		t.Fatalf("ParseTUIPresets(after delete) error = %v", err)
+	}
+	if _, ok := presets["1"]; ok {
+		t.Fatalf("deleted preset still present: %#v", presets)
+	}
+}
+
 // TestTUIPresetValidateMatchesRust checks the QuickDial limits directly,
 // including the byte (not rune) length rule.
 func TestTUIPresetValidateMatchesRust(t *testing.T) {

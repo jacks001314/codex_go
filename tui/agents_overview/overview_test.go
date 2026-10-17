@@ -322,6 +322,31 @@ func TestRenameFlowLikeRust(t *testing.T) {
 	}
 }
 
+func TestSingleLineRenameEditorLikeRust(t *testing.T) {
+	view := New(sampleRows(), "", false)
+	if !view.BeginRename() {
+		t.Fatal("BeginRename returned false")
+	}
+	if view.State.Input != "alpha" || view.State.InputCursor != len([]rune("alpha")) || !view.State.VimInsert {
+		t.Fatalf("begin rename state = %#v", view.State)
+	}
+	view.SetInputCursor(2)
+	view.TypeChar('X')
+	if view.State.Input != "alXpha" || view.State.InputCursor != 3 {
+		t.Fatalf("rename insert = %q cursor=%d", view.State.Input, view.State.InputCursor)
+	}
+	view.Paste("\r\nbe\nta\r")
+	if strings.ContainsAny(view.State.Input, "\r\n") {
+		t.Fatalf("paste kept line breaks: %q", view.State.Input)
+	}
+	view.MoveInputCursor(-1)
+	view.Backspace()
+	view.DeleteInputAtCursor()
+	if strings.ContainsAny(view.State.Input, "\r\n") {
+		t.Fatalf("single-line editor produced line breaks: %q", view.State.Input)
+	}
+}
+
 func TestStopOnlyWhenActiveLikeRust(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	view.Selected = 0 // t-1 working/active

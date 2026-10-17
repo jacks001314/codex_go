@@ -945,6 +945,7 @@ const (
 	CommandPs               Command = "ps"
 	CommandStop             Command = "stop"
 	CommandModel            Command = "model"
+	CommandPresets          Command = "presets"
 	CommandFast             Command = "fast"
 	CommandPlan             Command = "plan"
 	CommandAgent            Command = "agent"
@@ -1067,6 +1068,8 @@ func ParseCommand(input string) (*CommandInvocation, bool) {
 		return &CommandInvocation{Command: CommandStop, Args: args, Name: name}, true
 	case "/model":
 		return &CommandInvocation{Command: CommandModel, Args: args, Name: name}, true
+	case "/presets":
+		return &CommandInvocation{Command: CommandPresets, Args: args, Name: name}, true
 	case "/fast":
 		return &CommandInvocation{Command: CommandFast, Args: args, Name: name}, true
 	case "/plan":

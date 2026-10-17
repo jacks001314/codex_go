@@ -99,6 +99,9 @@ type SubmitRequest struct {
 	// prompt reaches the model through this map instead, without being rendered
 	// as a user message.
 	AdditionalContext map[string]any
+	// ResponsesAPIClientMetadata adds per-turn Responses client metadata.
+	// Misalignment continuation uses it for `misalignment_override`.
+	ResponsesAPIClientMetadata map[string]string
 	// LiteralInput marks queued input whose leading `!` was revealed only by
 	// paste expansion. It must be submitted as literal model input with shell
 	// escapes disabled (Rust #39604 QueuedInputAction::Literal).
@@ -334,7 +337,8 @@ type SettingsWriteResult struct {
 	// Command Center grouping.
 	AgentsOverviewGrouping string
 	// QuickDials carries the configured `tui.presets` entries (Rust #54379),
-	// keyed by a single digit from 0 to 9. Nil keeps the current set.
+	// keyed by a single digit from 0 to 9. Nil keeps the current set; an empty
+	// non-nil map clears it.
 	QuickDials             map[string]config.TUIPreset
 	PluginUserMarketplaces map[string]bool
 	PluginGitMarketplaces  map[string]bool
@@ -835,11 +839,17 @@ type AgentListResultMsg struct {
 	Err             error
 }
 
+// AgentThreadVisibilityMsg carries a thread archive/unarchive notification into
+// the agent picker's visibility state (Rust #50345).
+type AgentThreadVisibilityMsg struct {
+	ThreadID string
+	Archived bool
+}
+
 type AgentSwitchResultMsg struct {
-	ThreadID   string
-	Response   AgentThreadSwitchResponse
-	Err        error
-	closedSide *activeSideConversation
+	ThreadID string
+	Response AgentThreadSwitchResponse
+	Err      error
 }
 
 type AgentNavigateResultMsg struct {
@@ -1157,6 +1167,9 @@ type Options struct {
 	// StatusLineUseColors is the configured `tui.status_line_use_colors` value
 	// (Rust #44857). Nil defaults to enabled.
 	StatusLineUseColors *bool
+	// QuickDials carries the configured `tui.presets` entries (Rust #54379),
+	// keyed by a single digit from 0 to 9.
+	QuickDials map[string]config.TUIPreset
 	// QuestionEscBack is the configured `tui.question_esc_back` value (Rust
 	// #42889): Escape returns from an async question to the composer while
 	// preserving the answer draft. Nil defaults to enabled.
@@ -1460,6 +1473,14 @@ type Model struct {
 	overlayAltScreen       bool
 	sessionPickerAltScreen bool
 	overlayTranscript      bool
+	// quickDials is the live reusable-preset set (Rust LocalSettings.tui
+	// quick_dials). quickDialMenu owns the passive HUD above the composer.
+	quickDials           map[string]config.TUIPreset
+	quickDialMenu        bool
+	quickDialWriteSlot   int
+	quickDialWriteDelete bool
+	quickDialPending     *config.TUIPreset
+	quickDialPrefills    map[string]config.TUIPreset
 	// backtrack tracks the Esc-to-edit-prompt state machine (Rust
 	// app_backtrack::BacktrackState) and escBacktrackHint advertises the second
 	// Esc in the composer footer once it is primed.
@@ -1559,6 +1580,9 @@ type Model struct {
 	// text_elements (Rust textarea::text_elements).
 	composerElements            []ComposerTextElement
 	misalignmentPolicyStopped   bool
+	misalignmentReview          *misalignmentReview
+	misalignmentReviewSerial    uint64
+	currentTurnID               string
 	modal                       *modalState
 	skillPopup                  skillPopupState
 	mentionPopup                *mentionsv2.Popup
@@ -1598,6 +1622,7 @@ type Model struct {
 	skillsInventoryErr              string
 	skillsInventoryLoading          bool
 	agentItems                      []codextui.AgentThreadEntry
+	archivedAgentThreads            map[string]bool
 	activeAgentLabel                string
 	nextAgentRefreshRequestID       uint64
 	pendingAgentRefreshRequestID    uint64
@@ -1643,7 +1668,8 @@ type Model struct {
 	vimPendingReplace bool
 	// vimReplaceMode tracks Vim replace mode (R): typed characters overwrite
 	// the draft under the cursor until Esc returns to normal mode (Rust #42194).
-	vimReplaceMode bool
+	vimReplaceMode     bool
+	vimReplaceRecovery []vimReplaceRecoveryEntry
 	// vimUndoStack/vimRedoStack store bounded composer draft snapshots for Vim
 	// undo (u) and redo (ctrl-r), mirroring Rust vim_history.rs (#41941/#42140).
 	vimUndoStack    []vimDraftSnapshot
@@ -1685,6 +1711,8 @@ type Model struct {
 	// VimCommandState::last_change word-delete edit (#40521).
 	vimHasLastDelete      bool
 	vimLastDeleteWord     bool
+	vimHasLastReplace     bool
+	vimLastReplaceText    []rune
 	petRuntime            *petRuntime
 	petCodexHome          string
 	petEnv                map[string]string
@@ -1932,17 +1960,22 @@ type Model struct {
 	onReadReviewBranches              ReviewBranchesReaderFunc
 	onReadReviewCommits               ReviewCommitsReaderFunc
 	activeSide                        *activeSideConversation
-	abandonedSideThreads              map[string]struct{}
-	sideStartPending                  bool
-	statusControls                    *chatwidget.StatusControlsState
-	statusLineConfiguredByUser        bool
-	statusSurfaceOverrides            statusSurfaceOverrides
-	lastTerminalTitleSequence         string
-	rateLimitSnapshots                map[string]chatwidget.RateLimitSnapshot
-	approvalsReviewer                 chatwidget.ApprovalsReviewer
-	permissionRequirements            chatwidget.PermissionRequirements
-	permissionItems                   []chatwidget.PermissionMenuItem
-	pendingPermissionItem             *chatwidget.PermissionMenuItem
+	// sideConversations retains every side conversation, keyed by its parent
+	// thread. Thread navigation hides the active side instead of deleting it
+	// (Rust #52184), so returning to a parent can reopen the existing side with
+	// /side.
+	sideConversations          map[string]*activeSideConversation
+	abandonedSideThreads       map[string]struct{}
+	sideStartPending           bool
+	statusControls             *chatwidget.StatusControlsState
+	statusLineConfiguredByUser bool
+	statusSurfaceOverrides     statusSurfaceOverrides
+	lastTerminalTitleSequence  string
+	rateLimitSnapshots         map[string]chatwidget.RateLimitSnapshot
+	approvalsReviewer          chatwidget.ApprovalsReviewer
+	permissionRequirements     chatwidget.PermissionRequirements
+	permissionItems            []chatwidget.PermissionMenuItem
+	pendingPermissionItem      *chatwidget.PermissionMenuItem
 	// pendingPermissionProfileArgs is the inline `/permissions` request waiting
 	// for the server catalog (Rust InlinePermissionProfileSelection::Discovering).
 	pendingPermissionProfileArgs string
@@ -2129,28 +2162,33 @@ func NewModel(state *codextui.State, options Options) *Model {
 	}
 
 	model := &Model{
-		State:                           state,
-		backendID:                       options.BackendID,
-		terminalSizeContext:             cloneStringMapTea(options.TerminalSizeContext),
-		terminalSizeExporter:            options.TerminalSizeExporter,
-		terminalSizeAnalyticsEnabled:    cloneBoolPtrTea(options.TerminalSizeAnalyticsEnabled),
-		terminalSizeReader:              options.TerminalSizeReader,
-		terminalSizeSettleDelay:         options.TerminalSizeSettleDelay,
-		terminalSizeRecorder:            options.OnTerminalSizeObservation,
-		Styles:                          applyThemeAccent(resolveStyles(options.TUIThemeStyles), options.TUITheme),
-		Transcript:                      newTranscriptComponent(),
-		Composer:                        newComposerComponent(options.Placeholder),
-		StatusBar:                       newStatusBarComponent(),
-		transcript:                      transcript,
-		activityFollow:                  true,
-		mouseScroll:                     codextui.NewMouseScrollAccumulator(options.MouseScrollSpeed),
-		mouseScrollSpeed:                codextui.NormalizeMouseScrollSpeed(options.MouseScrollSpeed),
-		retryMessageIndex:               -1,
-		startupWarningsIndex:            -1,
-		skillLoadWarnings:               chatwidget.NewSkillLoadWarningState(),
-		composer:                        composer,
-		noAltScreen:                     options.NoAltScreen,
-		localSettings:                   LocalSettings{AlternateScreen: options.NoAltScreen},
+		State:                        state,
+		backendID:                    options.BackendID,
+		terminalSizeContext:          cloneStringMapTea(options.TerminalSizeContext),
+		terminalSizeExporter:         options.TerminalSizeExporter,
+		terminalSizeAnalyticsEnabled: cloneBoolPtrTea(options.TerminalSizeAnalyticsEnabled),
+		terminalSizeReader:           options.TerminalSizeReader,
+		terminalSizeSettleDelay:      options.TerminalSizeSettleDelay,
+		terminalSizeRecorder:         options.OnTerminalSizeObservation,
+		Styles:                       applyThemeAccent(resolveStyles(options.TUIThemeStyles), options.TUITheme),
+		Transcript:                   newTranscriptComponent(),
+		Composer:                     newComposerComponent(options.Placeholder),
+		StatusBar:                    newStatusBarComponent(),
+		transcript:                   transcript,
+		activityFollow:               true,
+		mouseScroll:                  codextui.NewMouseScrollAccumulator(options.MouseScrollSpeed),
+		mouseScrollSpeed:             codextui.NormalizeMouseScrollSpeed(options.MouseScrollSpeed),
+		retryMessageIndex:            -1,
+		startupWarningsIndex:         -1,
+		skillLoadWarnings:            chatwidget.NewSkillLoadWarningState(),
+		composer:                     composer,
+		noAltScreen:                  options.NoAltScreen,
+		quickDials:                   cloneTUIPresets(options.QuickDials),
+		localSettings: LocalSettings{
+			Tui:             SettingsWriteResult{QuickDials: cloneTUIPresets(options.QuickDials)},
+			AlternateScreen: options.NoAltScreen,
+		},
+		quickDialWriteSlot:              -1,
 		terminalFocused:                 true,
 		statusStyle:                     lipgloss.NewStyle().Bold(true),
 		footerStyle:                     lipgloss.NewStyle().Foreground(lipgloss.Color("8")),
@@ -2233,6 +2271,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onReadAgents:                    options.OnReadAgents,
 		onSwitchAgent:                   options.OnSwitchAgent,
 		backgroundThreadEvents:          map[string][]protocol.ThreadEvent{},
+		sideConversations:               map[string]*activeSideConversation{},
 		clipboardWrite:                  clipboardWrite,
 		clipboardWriteRich:              clipboardWriteRich,
 		clipboardRead:                   clipboardRead,
@@ -2481,6 +2520,7 @@ func detectTerminalSize(input io.Reader, output io.Writer) (int, int, bool) {
 }
 
 func Run(ctx context.Context, state *codextui.State, options Options, input io.Reader, output io.Writer) (*Model, error) {
+	defer clearTerminalProgramStatusOnExit(output)
 	// Install the terminal's OSC 10/11 default colors before the input loop
 	// starts so the summary shimmer can blend against the real palette
 	// (Rust terminal_probe::default_colors at TUI startup).
@@ -2602,9 +2642,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case terminalSizeSettleMsg:
 		return m, m.applyTerminalSizeSettle(msg.generation)
 	case bubbletea.WindowSizeMsg:
+		codextui.InvalidateTerminalProgramStatus()
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case bubbletea.FocusMsg:
+		codextui.InvalidateTerminalProgramStatus()
 		m.terminalFocused = true
 		m.noteRecapFocusGained()
 		return m, nil
@@ -2893,6 +2935,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case AgentListResultMsg:
 		m.applyAgentListResult(msg)
 		return m, nil
+	case AgentThreadVisibilityMsg:
+		m.setAgentPickerThreadVisibility(msg.ThreadID, msg.Archived)
+		return m, nil
 	case agentsOverviewListMsg:
 		return m, m.applyAgentsOverviewList(msg)
 	case agentsOverviewUsageLoadedMsg:
@@ -2992,6 +3037,11 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// no key is forwarded to the draft.
 		if m.warningsView != nil {
 			return m, m.updateWarningsViewKey(msg)
+		}
+		if m.quickDialMenu {
+			if cmd, handled := m.updateQuickDialMenuKey(msg); handled {
+				return m, cmd
+			}
 		}
 		if msg.Type == bubbletea.KeyRunes && msg.Paste {
 			// Handle bracketed paste before overlays, popups and keymaps. Windows
@@ -3349,6 +3399,9 @@ func (m *Model) View() string {
 		}
 		if working := m.renderWorkingIndicator(); working != "" {
 			sections = append(sections, m.bottomStyle.Render(working))
+		}
+		if hud := m.renderQuickDialHUD(); hud != "" {
+			sections = append(sections, m.bottomStyle.Render(hud))
 		}
 		composer := m.composer.View()
 		composer = annotateComposerHyperlinks(composer)
@@ -5109,7 +5162,9 @@ func (m *Model) applyThreadEvent(event protocol.ThreadEvent) bubbletea.Cmd {
 		// Rust #48352: the working tip's clock starts with the turn, and the
 		// frame that paints it must be requested up front (Rust's
 		// `frame_requester.schedule_frame_in(remaining)`).
+		m.currentTurnID = strings.TrimSpace(event.TurnID)
 		m.turnFinalAnswerSeen = false
+		m.clearMisalignmentForNewTurn(event.TurnID)
 		// Rust #54114: a new turn clears the retained result before any work.
 		m.programStatusAfterTurn = codextui.ProgramStatus{}
 		m.turnTips.observeTurnStarted(firstNonEmpty(event.ThreadID, m.State.ThreadID), strings.TrimSpace(event.TurnID), m.currentTime())
@@ -5422,10 +5477,12 @@ func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
-	m.clearCurrentThreadAfterFailure(message)
-	m.Transcript.clearCurrentThreadAfterFailure(m.State, message)
-	m.addTurnErrorHistoryMessage(message)
-	m.notice = "Chat stopped as a precaution"
+	m.onMisalignmentError(message)
+	notice := "Chat stopped as a precaution"
+	m.clearCurrentThreadAfterFailure(notice)
+	m.Transcript.clearCurrentThreadAfterFailure(m.State, notice)
+	m.addTurnErrorHistoryMessage(notice)
+	m.notice = notice
 	m.deferPendingSteers()
 	m.queued = nil
 	m.rejectedSteers = nil
@@ -5433,7 +5490,7 @@ func (m *Model) applyMisalignmentPolicyViolation(message string) bubbletea.Cmd {
 	m.composer.Blur()
 	m.misalignmentPolicyStopped = true
 	m.refreshTranscript()
-	return nil
+	return m.showMisalignmentPrecaution()
 }
 
 func (m *Model) renderCollabAgentToolCall(item *protocol.ThreadItem, completed bool) {
@@ -7453,6 +7510,8 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 		return m.applyStopCommand()
 	case codextui.CommandModel:
 		return m.applyModelSetting(invocation.Args)
+	case codextui.CommandPresets:
+		return m.openQuickDialMenu()
 	case codextui.CommandFast:
 		return m.applyFastServiceTier()
 	case codextui.CommandPlan:

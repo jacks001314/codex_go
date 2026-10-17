@@ -114,6 +114,18 @@ func (v *MemoriesSettingsView) JumpBottom() {
 	}
 }
 
+func (v *MemoriesSettingsView) ApplyVerticalAction(action ListAction) {
+	if v == nil {
+		return
+	}
+	state := v.activeState()
+	if state == nil {
+		return
+	}
+	length := v.visibleLen()
+	state.ApplyVerticalAction(action, length, min(MaxPopupRows, length))
+}
+
 func (v *MemoriesSettingsView) ToggleSelected() {
 	if v == nil || v.ResetState != nil || !v.State.HasSelection {
 		return
@@ -186,6 +198,10 @@ func (v *MemoriesSettingsView) CloseResetConfirmation() {
 
 func (v *MemoriesSettingsView) HandleKey(key string) {
 	if v == nil {
+		return
+	}
+	if action, ok := VerticalActionFor(key); ok {
+		v.ApplyVerticalAction(action)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(key)) {

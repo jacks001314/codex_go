@@ -186,20 +186,21 @@ func pluralS(count int) string {
 
 func cloneSubmitRequest(request SubmitRequest) SubmitRequest {
 	return SubmitRequest{
-		Prompt:                 request.Prompt,
-		Model:                  request.Model,
-		ServiceTier:            request.ServiceTier,
-		AdditionalInstructions: request.AdditionalInstructions,
-		Attachments:            cloneComposerAttachments(request.Attachments),
-		MentionBindings:        append([]string(nil), request.MentionBindings...),
-		MentionCatalog:         cloneSubmissionMentionCatalog(request.MentionCatalog),
-		TextElements:           cloneComposerTextElements(request.TextElements),
-		IDEContext:             cloneIDEContext(request.IDEContext),
-		CollaborationMode:      cloneCollaborationMode(request.CollaborationMode),
-		InternalInputItems:     cloneAnySlice(request.InternalInputItems),
-		TurnTrigger:            request.TurnTrigger,
-		AdditionalContext:      cloneAnyMap(request.AdditionalContext),
-		LiteralInput:           request.LiteralInput,
+		Prompt:                     request.Prompt,
+		Model:                      request.Model,
+		ServiceTier:                request.ServiceTier,
+		AdditionalInstructions:     request.AdditionalInstructions,
+		Attachments:                cloneComposerAttachments(request.Attachments),
+		MentionBindings:            append([]string(nil), request.MentionBindings...),
+		MentionCatalog:             cloneSubmissionMentionCatalog(request.MentionCatalog),
+		TextElements:               cloneComposerTextElements(request.TextElements),
+		IDEContext:                 cloneIDEContext(request.IDEContext),
+		CollaborationMode:          cloneCollaborationMode(request.CollaborationMode),
+		InternalInputItems:         cloneAnySlice(request.InternalInputItems),
+		TurnTrigger:                request.TurnTrigger,
+		AdditionalContext:          cloneAnyMap(request.AdditionalContext),
+		ResponsesAPIClientMetadata: cloneStringMapTea(request.ResponsesAPIClientMetadata),
+		LiteralInput:               request.LiteralInput,
 	}
 }
 

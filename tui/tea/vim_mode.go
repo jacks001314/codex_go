@@ -14,6 +14,15 @@ type vimDraftSnapshot struct {
 	value string
 }
 
+// vimReplaceRecoveryEntry records one replace-mode keystroke so Backspace can
+// restore the overwritten rune (or remove an appended rune), mirroring Rust
+// #42194 replace recovery.
+type vimReplaceRecoveryEntry struct {
+	replacement rune
+	original    rune
+	appended    bool
+}
+
 const maxVimUndoSteps = 64
 
 // vimSearchRange is a byte-offset match range in the composer draft.
@@ -202,16 +211,20 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	}
 	// Vim replace mode (R, Rust #42194): typed characters overwrite the draft
 	// under the cursor and advance; Esc returns to normal mode.
-	if m.vimReplaceMode {
+	if m.isVimReplaceMode() {
 		switch {
 		case keySpec == "esc" || keySpec == "escape":
+			m.recordVimReplaceChange()
 			m.vimCommitEdit()
 			m.vimReplaceMode = false
+			m.clearVimReplaceRecovery()
 		case msg.Type == bubbletea.KeyRunes && len(msg.Runes) == 1:
 			m.replaceVimCharAdvancing(msg.Runes[0])
 		case keySpec == "enter":
 			m.replaceVimCharAdvancing('\n')
-		case keySpec == "backspace" || keySpec == "left":
+		case keySpec == "backspace":
+			m.restoreVimReplacedCharacter()
+		case keySpec == "left":
 			m.vimCursorLeft()
 		}
 		return true
@@ -346,6 +359,7 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 	case m.keyMatches("vim_normal", "replace_mode", keySpec):
 		m.vimBeginEdit()
 		m.vimReplaceMode = true
+		m.clearVimReplaceRecovery()
 	case m.keyMatches("vim_normal", "delete_to_line_end", keySpec):
 		m.deleteVimToLineEnd()
 	case m.keyMatches("vim_normal", "move_left", keySpec):
@@ -506,13 +520,26 @@ func (m *Model) deleteVimCharAtCursor() {
 func (m *Model) recordVimDelete(deleted string) {
 	m.vimHasLastDelete = true
 	m.vimLastDeleteWord = utf8.RuneCountInString(deleted) > 1 || strings.ContainsAny(deleted, " \t")
+	m.vimHasLastReplace = false
+	m.vimLastReplaceText = nil
 }
 
 // applyVimDotRepeat replays the last completed Vim delete (`.`), mirroring Rust
 // vim_normal.repeat_last_change (#40521). When no complete edit is recorded the
 // key is a no-op.
 func (m *Model) applyVimDotRepeat() bool {
-	if m == nil || !m.vimHasLastDelete {
+	if m == nil {
+		return false
+	}
+	if m.vimHasLastReplace && len(m.vimLastReplaceText) > 0 {
+		startedEdit := m.vimBeginEdit()
+		for _, ch := range m.vimLastReplaceText {
+			m.replaceVimCharAdvancing(ch)
+		}
+		m.vimFinishEdit(startedEdit)
+		return true
+	}
+	if !m.vimHasLastDelete {
 		return false
 	}
 	if m.vimLastDeleteWord {
@@ -521,6 +548,23 @@ func (m *Model) applyVimDotRepeat() bool {
 		m.deleteVimCharAtCursor()
 	}
 	return true
+}
+
+// recordVimReplaceChange captures the final overwrite sequence for dot-repeat.
+// Backspaces remove entries from the recovery stack, so only characters still
+// present in the replace edit are replayed.
+func (m *Model) recordVimReplaceChange() {
+	if m == nil || len(m.vimReplaceRecovery) == 0 {
+		return
+	}
+	text := make([]rune, 0, len(m.vimReplaceRecovery))
+	for _, entry := range m.vimReplaceRecovery {
+		text = append(text, entry.replacement)
+	}
+	m.vimHasLastDelete = false
+	m.vimLastDeleteWord = false
+	m.vimHasLastReplace = true
+	m.vimLastReplaceText = text
 }
 
 // deleteVimWordAtCursor deletes the word under/after the cursor (the `dw` word
@@ -578,14 +622,71 @@ func (m *Model) replaceVimCharAdvancing(ch rune) {
 	offset := m.vimValueByteOffset()
 	replacement := string(ch)
 	if offset >= len(value) {
-		m.composer.SetValue(value + replacement)
+		m.replaceVimText(len(value), len(value), replacement)
 		m.vimSetCursorAtByteOffset(len(value) + len(replacement))
+		m.vimReplaceRecovery = append(m.vimReplaceRecovery, vimReplaceRecoveryEntry{
+			replacement: ch,
+			appended:    true,
+		})
 		return
 	}
-	_, size := utf8.DecodeRuneInString(value[offset:])
-	next := value[:offset] + replacement + value[offset+size:]
-	m.composer.SetValue(next)
+	original, size := utf8.DecodeRuneInString(value[offset:])
+	m.replaceVimText(offset, offset+size, replacement)
 	m.vimSetCursorAtByteOffset(offset + len(replacement))
+	m.vimReplaceRecovery = append(m.vimReplaceRecovery, vimReplaceRecoveryEntry{
+		replacement: ch,
+		original:    original,
+	})
+}
+
+func (m *Model) isVimReplaceMode() bool {
+	return m != nil && m.vimReplaceMode
+}
+
+func (m *Model) clearVimReplaceRecovery() {
+	if m != nil {
+		m.vimReplaceRecovery = nil
+	}
+}
+
+// replaceVimText replaces a byte range with text. Callers own cursor placement
+// and the surrounding edit transaction.
+func (m *Model) replaceVimText(start, end int, text string) {
+	if m == nil {
+		return
+	}
+	value := m.composer.Value()
+	if start < 0 || end < start || end > len(value) {
+		return
+	}
+	m.composer.SetValue(value[:start] + text + value[end:])
+}
+
+// restoreVimReplacedCharacter implements replace-mode Backspace recovery: the
+// most recent overwritten rune is restored, or the most recent appended rune
+// is removed. With no recovery entry it falls back to ordinary cursor motion.
+func (m *Model) restoreVimReplacedCharacter() {
+	if m == nil || len(m.vimReplaceRecovery) == 0 {
+		m.vimCursorLeft()
+		return
+	}
+	entry := m.vimReplaceRecovery[len(m.vimReplaceRecovery)-1]
+	m.vimReplaceRecovery = m.vimReplaceRecovery[:len(m.vimReplaceRecovery)-1]
+	value := m.composer.Value()
+	offset := m.vimValueByteOffset()
+	replacement := string(entry.replacement)
+	start := offset - len(replacement)
+	if start < 0 || start > len(value) || !strings.HasPrefix(value[start:], replacement) {
+		m.vimCursorLeft()
+		return
+	}
+	if entry.appended {
+		value = value[:start] + value[start+len(replacement):]
+	} else {
+		value = value[:start] + string(entry.original) + value[start+len(replacement):]
+	}
+	m.composer.SetValue(value)
+	m.vimSetCursorAtByteOffset(start)
 }
 
 // deleteVimToLineEnd removes the text from the cursor to the end of the

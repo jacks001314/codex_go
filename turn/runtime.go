@@ -17,6 +17,10 @@ import (
 type RuntimeOptions struct {
 	Agent  model.AgentRunner
 	Router *tool.Router
+	// ToolRegistrationMetrics receives the finalized registration histogram
+	// before each sampling request (Rust #51868). Transport retries inside the
+	// model client do not produce another sample.
+	ToolRegistrationMetrics ToolRegistrationMetricSink
 	// TurnMetadataIncludesToolInfo mirrors the
 	// features.tool_registry.turn_metadata_includes_tool_info gate: when set,
 	// a Responses Lite request's turn metadata carries the model-visible tool
@@ -51,6 +55,7 @@ type RuntimeOptions struct {
 type Runtime struct {
 	agent                        model.AgentRunner
 	router                       *tool.Router
+	toolRegistrationMetrics      ToolRegistrationMetricSink
 	turnMetadataIncludesToolInfo bool
 	hooks                        tool.HookRunner
 	steerMailbox                 *SteerMailbox
@@ -79,6 +84,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 	return &Runtime{
 		agent:                        options.Agent,
 		router:                       options.Router,
+		toolRegistrationMetrics:      options.ToolRegistrationMetrics,
 		turnMetadataIncludesToolInfo: options.TurnMetadataIncludesToolInfo,
 		hooks:                        options.Hooks,
 		steerMailbox:                 options.SteerMailbox,
@@ -193,6 +199,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		if request.InstructionsProvider != nil {
 			instructions = request.InstructionsProvider()
 		}
+		recordToolRegistrationMetrics(r.toolRegistrationMetrics, tool.RegistrationCounts{}, request.ToolMode)
 		response, err := r.agent.Run(ctx, &model.AgentRequest{
 			Prompt:                       request.Prompt,
 			Instructions:                 instructions,
@@ -274,9 +281,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 	}
 	loopRequest.Tools = MergeHostedTools(MergeHostedTools(loopRequest.Tools, r.hostedTools), request.HostedTools)
 	return NewAgentLoop(&AgentLoopOptions{
-		Agent:             r.agent,
-		SteerMailbox:      r.steerMailbox,
-		ExecutedToolCalls: executedToolCalls,
+		Agent:                   r.agent,
+		SteerMailbox:            r.steerMailbox,
+		ExecutedToolCalls:       executedToolCalls,
+		ToolRegistrationMetrics: r.toolRegistrationMetrics,
+		ToolRegistrationCounts:  r.toolRegistrationCounts,
 		Dispatcher: NewToolDispatcher(&ToolDispatcherOptions{
 			Router:                      r.router,
 			Hooks:                       r.hooks,
@@ -298,6 +307,13 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 		Now:                    r.now,
 		DeferMailboxPreemption: r.deferMailboxPreemption,
 	}).Run(ctx, &loopRequest)
+}
+
+func (r *Runtime) toolRegistrationCounts() tool.RegistrationCounts {
+	if r == nil || r.router == nil {
+		return tool.RegistrationCounts{}
+	}
+	return r.router.RegistrationCounts()
 }
 
 // modelVisibleSpecsForRequest resolves the model-visible tool specs a request

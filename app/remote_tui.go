@@ -645,6 +645,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 			return *thread.Path, nil
 		},
 		OnDetectExternalAgent: interactiveRemoteExternalAgentDetectHandler(endpoint),
+		OnImportExternalAgent: interactiveRemoteExternalAgentImportHandler(endpoint),
 		OnReadHooks: func(cwd string) (appserver.HookListResponse, error) {
 			hooksCWD := strings.TrimSpace(cwd)
 			if hooksCWD == "" {
@@ -4140,6 +4141,20 @@ func sideParentStatusForTurnStatus(status appserver.TurnStatus) (codextea.SidePa
 func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMessage) error {
 	method := appserver.NotificationMethod(strings.TrimSpace(message.Method))
 	switch method {
+	case appserver.NotificationThreadArchived:
+		var payload appserver.ThreadArchivedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		c.send(codextea.AgentThreadVisibilityMsg{ThreadID: payload.ThreadID, Archived: true})
+		return nil
+	case appserver.NotificationThreadUnarchived:
+		var payload appserver.ThreadUnarchivedNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		c.send(codextea.AgentThreadVisibilityMsg{ThreadID: payload.ThreadID, Archived: false})
+		return nil
 	case appserver.NotificationThreadStarted:
 		var payload appserver.ThreadStartedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

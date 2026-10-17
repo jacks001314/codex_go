@@ -268,7 +268,14 @@ type State struct {
 	// Input is the rename editor's contents (Rust editing_metadata input). The
 	// command center no longer composes tasks, so it is only written while
 	// renaming.
-	Input     string
+	Input string
+	// InputCursor is the rune index of the rename cursor. It is kept visible
+	// across refreshes and is used by the single-line editor.
+	InputCursor int
+	// VimEnabled mirrors the composer's /vim setting for the rename editor.
+	VimEnabled bool
+	// VimInsert starts true when a rename begins in insert mode.
+	VimInsert bool
 	Search    string
 	Searching bool
 	Grouping  Grouping
@@ -1019,11 +1026,48 @@ func (v *View) BeginRename() bool {
 	if v == nil || v.State.Input != "" || row == nil {
 		return false
 	}
-	v.State.Input = row.Title()
+	v.setRenameInput(row.Title())
+	v.State.VimInsert = true
 	v.State.Search = ""
 	v.State.Searching = false
 	v.State.Renaming = true
 	return true
+}
+
+func (v *View) setRenameInput(text string) {
+	if v == nil {
+		return
+	}
+	v.State.Input = filterLineBreaks(text)
+	v.State.InputCursor = len([]rune(v.State.Input))
+}
+
+// singleLineViewport returns the visible rune window that keeps the rename
+// cursor in view (Rust #50216 TextArea::single_line_viewport).
+func (v *View) singleLineViewport(width int) string {
+	if v == nil || width <= 0 {
+		return ""
+	}
+	runes := []rune(v.State.Input)
+	if len(runes) <= width {
+		return v.State.Input
+	}
+	cursor := v.State.InputCursor
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	start := cursor - width + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + width
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return string(runes[start:end])
 }
 
 // CanOpenWithRight reports whether Right should open the selected task
@@ -1048,10 +1092,12 @@ func (v *View) Activate() Action {
 		if row := v.SelectedRow(); row != nil {
 			v.State.Renaming = false
 			v.State.Input = ""
+			v.State.InputCursor = 0
 			return ActionRenameThread
 		}
 		v.State.Renaming = false
 		v.State.Input = ""
+		v.State.InputCursor = 0
 		return ActionNone
 	}
 	if row := v.SelectedRow(); row != nil && !v.State.Renaming {
@@ -1079,6 +1125,7 @@ func (v *View) Cancel() Action {
 	}
 	if v.State.Input != "" || v.State.Renaming {
 		v.State.Input = ""
+		v.State.InputCursor = 0
 		v.State.Renaming = false
 		return ActionNone
 	}
@@ -1206,7 +1253,11 @@ func (v *View) TypeChar(character rune) {
 	if !v.editingMetadata() {
 		return
 	}
-	v.editInput(func(current string) string { return current + string(character) })
+	if v.State.Searching {
+		v.editInput(func(current string) string { return current + string(character) })
+		return
+	}
+	v.insertRenameText(string(character))
 }
 
 // Backspace pops the last rune of the search or rename field (Rust
@@ -1215,24 +1266,120 @@ func (v *View) Backspace() {
 	if !v.editingMetadata() {
 		return
 	}
-	v.editInput(func(current string) string {
-		runes := []rune(current)
-		if len(runes) == 0 {
-			return current
-		}
-		return string(runes[:len(runes)-1])
-	})
+	if v.State.Searching {
+		v.editInput(func(current string) string {
+			runes := []rune(current)
+			if len(runes) == 0 {
+				return current
+			}
+			return string(runes[:len(runes)-1])
+		})
+		return
+	}
+	runes := []rune(v.State.Input)
+	if v.State.InputCursor <= 0 || len(runes) == 0 {
+		return
+	}
+	cursor := min(v.State.InputCursor, len(runes))
+	runes = append(runes[:cursor-1], runes[cursor:]...)
+	v.State.Input = string(runes)
+	v.State.InputCursor = cursor - 1
 }
 
-// Paste appends sanitized pasted text to the search or rename field (Rust
+// MoveInputCursor moves the rename cursor by delta runes.
+func (v *View) MoveInputCursor(delta int) {
+	if v == nil || !v.State.Renaming {
+		return
+	}
+	runes := []rune(v.State.Input)
+	cursor := v.State.InputCursor + delta
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	v.State.InputCursor = cursor
+}
+
+// SetInputCursor moves the rename cursor to a rune index.
+func (v *View) SetInputCursor(index int) {
+	if v == nil || !v.State.Renaming {
+		return
+	}
+	runes := []rune(v.State.Input)
+	if index < 0 {
+		index = 0
+	}
+	if index > len(runes) {
+		index = len(runes)
+	}
+	v.State.InputCursor = index
+}
+
+// DeleteInputAtCursor removes the rune under the rename cursor.
+func (v *View) DeleteInputAtCursor() {
+	if v == nil || !v.State.Renaming {
+		return
+	}
+	runes := []rune(v.State.Input)
+	cursor := v.State.InputCursor
+	if cursor < 0 || cursor >= len(runes) {
+		return
+	}
+	v.State.Input = string(append(runes[:cursor], runes[cursor+1:]...))
+}
+
+func (v *View) insertRenameText(text string) {
+	if v == nil || !v.State.Renaming {
+		return
+	}
+	text = filterLineBreaks(text)
+	runes := []rune(v.State.Input)
+	cursor := v.State.InputCursor
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	insert := []rune(text)
+	next := make([]rune, 0, len(runes)+len(insert))
+	next = append(next, runes[:cursor]...)
+	next = append(next, insert...)
+	next = append(next, runes[cursor:]...)
+	v.State.Input = string(next)
+	v.State.InputCursor = cursor + len(insert)
+}
+
+// filterLineBreaks keeps the single-line rename editor free of carriage
+// returns and newlines (Rust #50216 TextArea::filter_line_breaks).
+func filterLineBreaks(text string) string {
+	text = strings.ReplaceAll(text, "\r", "")
+	return strings.ReplaceAll(text, "\n", "")
+}
+
+func (v *View) clearRenameInput() {
+	if v == nil {
+		return
+	}
+	v.State.Input = ""
+	v.State.InputCursor = 0
+}
+
+// Paste inserts sanitized pasted text at the active editor cursor (Rust
 // handle_paste; the task composer that owned pasted images is gone).
 func (v *View) Paste(text string) {
 	if !v.editingMetadata() {
 		return
 	}
 	text = strings.ReplaceAll(text, "\r", "")
-	text = strings.ReplaceAll(text, "\n", " ")
-	v.editInput(func(current string) string { return current + text })
+	if v.State.Searching {
+		text = strings.ReplaceAll(text, "\n", " ")
+		v.editInput(func(current string) string { return current + text })
+		return
+	}
+	v.insertRenameText(text)
 }
 
 // editInput applies an edit to the search field while searching and to the
@@ -1288,6 +1435,7 @@ func (v *View) ApplyRefresh(rows []Row, selectedThreadID string) {
 	if selected != "" && !containsThreadID(view.Rows, selected) && view.State.Renaming {
 		view.State.Renaming = false
 		view.State.Input = ""
+		view.State.InputCursor = 0
 	}
 	*v = *view
 }

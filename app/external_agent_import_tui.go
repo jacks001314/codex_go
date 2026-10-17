@@ -1,8 +1,10 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"codex_go/appserver"
@@ -88,11 +90,121 @@ func interactiveExternalAgentImportHandler(root *cli.RootOptions) codextea.Exter
 }
 
 func interactiveRemoteExternalAgentDetectHandler(endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ExternalAgentDetectFunc {
-	message := interactiveExternalAgentImportRemoteUnavailable
-	if interactiveRemoteEndpointIsLocal(endpoint) {
-		message = interactiveExternalAgentImportDaemonUnavailable
+	return func(cwd string, migrationSource string) (config.ExternalAgentConfigDetectResponse, error) {
+		migrationSource = strings.TrimSpace(migrationSource)
+		params := &config.ExternalAgentConfigDetectParams{IncludeHome: true}
+		if migrationSource != "" {
+			params.MigrationSource = &migrationSource
+		}
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			params.CWDs = []string{cwd}
+		}
+		return interactiveRemotePluginCall[config.ExternalAgentConfigDetectResponse](
+			context.Background(),
+			endpoint,
+			appserver.MethodExternalAgentConfigDetect,
+			params,
+		)
 	}
-	return func(string, string) (config.ExternalAgentConfigDetectResponse, error) {
-		return config.ExternalAgentConfigDetectResponse{}, errors.New(message)
+}
+
+func interactiveRemoteExternalAgentImportHandler(endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.ExternalAgentImportFunc {
+	return func(items []config.ExternalAgentConfigMigrationItem, migrationSource string) (config.ExternalAgentConfigImportResponse, <-chan codextea.ExternalAgentImportCompletion, error) {
+		ctx := context.Background()
+		client, err := openRemoteSessionClient(ctx, endpoint)
+		if err != nil {
+			return config.ExternalAgentConfigImportResponse{}, nil, err
+		}
+		migrationSource = strings.TrimSpace(migrationSource)
+		source := "cli"
+		params := config.ExternalAgentConfigImportParams{
+			MigrationItems: append([]config.ExternalAgentConfigMigrationItem(nil), items...),
+			Source:         &source,
+		}
+		if migrationSource != "" {
+			params.ProviderID = &migrationSource
+			params.MigrationSource = &migrationSource
+		}
+		requestID, err := client.sendRequest(ctx, appserver.MethodExternalAgentConfigImport, params)
+		if err != nil {
+			client.close()
+			return config.ExternalAgentConfigImportResponse{}, nil, err
+		}
+		var response config.ExternalAgentConfigImportResponse
+		earlyCompletion := make(chan config.ExternalAgentConfigImportCompletedNotification, 1)
+		if err := waitRemoteExternalAgentImportResponse(ctx, client, requestID, &response, earlyCompletion); err != nil {
+			client.close()
+			return config.ExternalAgentConfigImportResponse{}, nil, err
+		}
+		completion := make(chan codextea.ExternalAgentImportCompletion, 1)
+		go func() {
+			defer close(completion)
+			defer client.close()
+			select {
+			case completed := <-earlyCompletion:
+				if strings.TrimSpace(completed.ImportID) == strings.TrimSpace(response.ImportID) {
+					completion <- codextea.ExternalAgentImportCompletion{Completed: completed}
+					return
+				}
+			default:
+			}
+			for {
+				message, readErr := client.readRemoteMessage(ctx)
+				if readErr != nil {
+					completion <- codextea.ExternalAgentImportCompletion{Err: readErr}
+					return
+				}
+				if appserver.NotificationMethod(strings.TrimSpace(message.Method)) != appserver.NotificationExternalAgentConfigImportCompleted {
+					continue
+				}
+				var completed config.ExternalAgentConfigImportCompletedNotification
+				if err := json.Unmarshal(message.Params, &completed); err != nil {
+					completion <- codextea.ExternalAgentImportCompletion{Err: err}
+					return
+				}
+				if strings.TrimSpace(completed.ImportID) != strings.TrimSpace(response.ImportID) {
+					continue
+				}
+				completion <- codextea.ExternalAgentImportCompletion{Completed: completed}
+				return
+			}
+		}()
+		return response, completion, nil
+	}
+}
+
+func waitRemoteExternalAgentImportResponse(ctx context.Context, client *remoteAppServerTUIClient, requestID int64, response *config.ExternalAgentConfigImportResponse, completion chan<- config.ExternalAgentConfigImportCompletedNotification) error {
+	want := fmt.Sprint(requestID)
+	for {
+		message, err := client.readRemoteMessage(ctx)
+		if err != nil {
+			return err
+		}
+		if len(message.ID) > 0 && strings.TrimSpace(message.Method) == "" {
+			got, err := remoteRequestIDString(message.ID)
+			if err != nil {
+				return err
+			}
+			if got != want {
+				continue
+			}
+			if message.Error != nil {
+				return &remoteRPCError{Code: message.Error.Code, Message: strings.TrimSpace(message.Error.Message)}
+			}
+			if len(message.Result) > 0 {
+				return json.Unmarshal(message.Result, response)
+			}
+			return nil
+		}
+		if appserver.NotificationMethod(strings.TrimSpace(message.Method)) != appserver.NotificationExternalAgentConfigImportCompleted {
+			continue
+		}
+		var completed config.ExternalAgentConfigImportCompletedNotification
+		if err := json.Unmarshal(message.Params, &completed); err == nil {
+			select {
+			case completion <- completed:
+			default:
+			}
+		}
 	}
 }

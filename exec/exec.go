@@ -70,6 +70,9 @@ type Request struct {
 	// "exec"; the embedded TUI overrides it with "user" and the goal runtime
 	// with "goal". Empty keeps the exec default.
 	TurnTrigger string
+	// ResponsesAPIClientMetadata adds per-turn Responses client metadata on top
+	// of the configured metadata (for example misalignment_override).
+	ResponsesAPIClientMetadata map[string]string
 	// Originator overrides the process originator for this run. Rust resolves
 	// the originator process-wide (codex_login::default_client::originator):
 	// the embedded TUI's app-server initialize handshake registers
@@ -490,7 +493,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		ReasoningEffort:            reasoningEffort,
 		NodeReplAutoReviewRequired: &nodeReplAutoReviewRequired,
 		NodeReplDisabled:           &nodeReplDisabled,
-		Extra:                      cfg.ResponsesAPIClientMetadata(),
+		Extra:                      turn.MergeClientMetadata(cfg.ResponsesAPIClientMetadata(), req.ResponsesAPIClientMetadata),
 		UseResponsesLite:           useResponsesLite,
 	})
 	originator := execAgentOriginator(req)
@@ -1227,6 +1230,7 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
+		ToolRegistrationMetrics:      r.otelMetricsSink(),
 		Hooks:                        r.Hooks,
 		SteerMailbox:                 run.SteerMailbox,
 		Now:                          r.now,

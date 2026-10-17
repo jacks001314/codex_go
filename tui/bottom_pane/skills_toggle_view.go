@@ -168,6 +168,14 @@ func (v *SkillsToggleView) JumpBottom() {
 	v.State.JumpBottom(length, skillsMaxVisibleRows(length))
 }
 
+func (v *SkillsToggleView) ApplyVerticalAction(action ListAction) {
+	if v == nil {
+		return
+	}
+	length := len(v.FilteredIndices)
+	v.State.ApplyVerticalAction(action, length, skillsMaxVisibleRows(length))
+}
+
 func (v *SkillsToggleView) InsertSearchRune(r rune) {
 	if v == nil {
 		return
@@ -215,6 +223,10 @@ func (v *SkillsToggleView) Close() {
 
 func (v *SkillsToggleView) HandleKey(key string) {
 	if v == nil {
+		return
+	}
+	if action, ok := VerticalActionFor(key); ok {
+		v.ApplyVerticalAction(action)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(key)) {

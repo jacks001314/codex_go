@@ -23,16 +23,18 @@ func (m *Model) applyAgentCommand() bubbletea.Cmd {
 	selectedThreadID := m.agentPickerSelectedThreadID()
 	if reader == nil {
 		entries := normalizeAgentEntries(m.agentItems, currentThreadID)
-		if len(entries) > 0 {
-			m.showAgentPicker(entries, currentThreadID, selectedThreadID)
+		visible := m.visibleAgentEntries(entries)
+		if len(visible) > 0 {
+			m.showAgentPicker(visible, currentThreadID, selectedThreadID)
 		} else {
 			m.showAgentInfo("No agents available yet.")
 		}
 		return nil
 	}
 	entries := normalizeAgentEntries(m.agentItems, currentThreadID)
-	if len(entries) > 0 {
-		m.showAgentPicker(entries, currentThreadID, selectedThreadID)
+	visible := m.visibleAgentEntries(entries)
+	if len(visible) > 0 {
+		m.showAgentPicker(visible, currentThreadID, selectedThreadID)
 	} else {
 		m.openModal(ModalRequestMsg{
 			ID:    "agent-picker-loading",
@@ -71,7 +73,9 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 		m.pendingAgentRefreshThreadID = ""
 	}
 	currentThreadID := currentAgentThreadID(m, message.CurrentThreadID)
-	if currentThreadID != strings.TrimSpace(message.CurrentThreadID) && !agentEntriesContainThread(message.Entries, currentThreadID) {
+	if currentThreadID != strings.TrimSpace(message.CurrentThreadID) &&
+		!agentEntriesContainThread(message.Entries, currentThreadID) &&
+		!m.agentThreadArchived(currentThreadID) {
 		return
 	}
 	if message.Err != nil {
@@ -83,8 +87,11 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 		return
 	}
 	entries := normalizeAgentEntries(message.Entries, message.CurrentThreadID)
-	if len(entries) == 0 {
-		if len(m.agentItems) == 0 {
+	m.updateAgentArchivedVisibility(entries)
+	visible := m.visibleAgentEntries(entries)
+	if len(visible) == 0 {
+		m.agentItems = append([]codextui.AgentThreadEntry(nil), entries...)
+		if m.modal != nil && (m.modal.id == "agent-picker" || m.modal.id == "agent-picker-loading") {
 			m.modal = nil
 			m.showAgentInfo("No agents available yet.")
 		}
@@ -100,7 +107,7 @@ func (m *Model) applyAgentListResult(message AgentListResultMsg) {
 		}
 	}
 	if showPicker {
-		m.showAgentPicker(entries, currentThreadID, selectedID)
+		m.showAgentPicker(visible, currentThreadID, selectedID)
 	}
 }
 
@@ -185,6 +192,10 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 		m.notice = "Subagents"
 		return nil
 	}
+	if m.agentThreadArchived(threadID) {
+		m.notice = "This agent is archived. Unarchive it before switching."
+		return nil
+	}
 	entry, ok := m.agentEntry(threadID)
 	if !ok {
 		entry = codextui.AgentThreadEntry{ThreadID: threadID}
@@ -198,29 +209,21 @@ func (m *Model) applyAgentModalOption(optionID string) bubbletea.Cmd {
 	if switcher == nil {
 		if m.State != nil {
 			m.invalidateAppsScope()
+			m.deactivateSideConversation()
 			m.State.SetThreadID(threadID)
 			m.State.Messages = nil
 			m.State.BumpMessagesRevision()
 			m.setStatus("idle")
 		}
-		m.activeSide = nil
 		m.setActiveAgentLabel(entry)
 		m.notice = entry.DisplayLabel()
 		m.refreshTranscript()
 		return m.refreshStatusControlsCmd()
 	}
 	m.notice = "Switching to " + entry.DisplayLabel() + "..."
-	activeSide := m.activeSide
-	closer := m.onCloseSide
 	return func() bubbletea.Msg {
-		if activeSide != nil && closer != nil {
-			_, err := closer(SideCloseParams{ParentThreadID: activeSide.ParentThreadID, SideThreadID: activeSide.SideThreadID})
-			if err != nil {
-				return AgentSwitchResultMsg{ThreadID: threadID, Err: err}
-			}
-		}
 		response, err := switcher(threadID)
-		return AgentSwitchResultMsg{ThreadID: threadID, Response: response, Err: err, closedSide: activeSide}
+		return AgentSwitchResultMsg{ThreadID: threadID, Response: response, Err: err}
 	}
 }
 
@@ -230,16 +233,6 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 	}
 	if message.Err != nil {
 		m.discardPendingAgentsOverviewDraft()
-		if message.closedSide != nil {
-			side := message.closedSide
-			m.activeSide = nil
-			if m.State != nil {
-				m.State.SetThreadID(side.ParentThreadID)
-				m.State.Messages = cloneSideMessages(side.ParentMessages)
-				m.State.BumpMessagesRevision()
-				m.setStatus(firstNonEmpty(side.ParentStatus, "idle"))
-			}
-		}
 		text := strings.TrimSpace(message.Err.Error())
 		if text == "" {
 			text = "unknown error"
@@ -317,7 +310,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 			m.replayBufferedReasoning(buffered)
 		}
 	}
-	m.activeSide = nil
+	m.deactivateSideConversation()
 	m.upsertAgentEntry(entry)
 	m.setActiveAgentLabel(entry)
 	m.notice = entry.DisplayLabel()
@@ -472,6 +465,7 @@ func (m *Model) applyAgentNavigateResult(message AgentNavigateResultMsg) bubblet
 }
 
 func (m *Model) switchAdjacentAgent(entries []codextui.AgentThreadEntry, currentThreadID string, direction int) bubbletea.Cmd {
+	entries = m.visibleAgentEntries(entries)
 	if m == nil || len(entries) <= 1 || direction == 0 {
 		return nil
 	}
@@ -576,6 +570,124 @@ func (m *Model) agentEntry(threadID string) (codextui.AgentThreadEntry, bool) {
 		}
 	}
 	return codextui.AgentThreadEntry{}, false
+}
+
+func (m *Model) visibleAgentEntries(entries []codextui.AgentThreadEntry) []codextui.AgentThreadEntry {
+	if m == nil {
+		return entries
+	}
+	out := make([]codextui.AgentThreadEntry, 0, len(entries))
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.ThreadID) == "" {
+			continue
+		}
+		if entry.Archived || m.archivedAgentThreads[strings.TrimSpace(entry.ThreadID)] {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func (m *Model) updateAgentArchivedVisibility(entries []codextui.AgentThreadEntry) {
+	if m == nil {
+		return
+	}
+	archived := map[string]bool{}
+	for _, entry := range entries {
+		threadID := strings.TrimSpace(entry.ThreadID)
+		if threadID != "" && entry.Archived {
+			archived[threadID] = true
+		}
+	}
+	m.archivedAgentThreads = archived
+}
+
+func (m *Model) agentThreadArchived(threadID string) bool {
+	if m == nil {
+		return false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return false
+	}
+	return m.archivedAgentThreads[threadID]
+}
+
+// setAgentPickerThreadVisibility updates picker visibility after a local archive or
+// unarchive, preserving the selected thread id while rows change.
+func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) {
+	if m == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	if m.archivedAgentThreads == nil {
+		m.archivedAgentThreads = map[string]bool{}
+	}
+	if archived {
+		m.archivedAgentThreads[threadID] = true
+	} else {
+		delete(m.archivedAgentThreads, threadID)
+	}
+	for i := range m.agentItems {
+		if strings.TrimSpace(m.agentItems[i].ThreadID) == threadID {
+			m.agentItems[i].Archived = archived
+		}
+	}
+	m.refreshAgentPickerAfterVisibilityChange()
+}
+
+func (m *Model) visibleThreads() []codextui.AgentThreadEntry {
+	if m == nil {
+		return nil
+	}
+	return m.visibleAgentEntries(m.agentItems)
+}
+
+func (m *Model) refreshAgentPickerAfterVisibilityChange() {
+	if m == nil || m.modal == nil || m.modal.id != "agent-picker" {
+		return
+	}
+	selectedID := m.agentPickerSelectedThreadID()
+	previousIndex := m.modal.selected
+	visible := m.visibleThreads()
+	if len(visible) == 0 {
+		m.modal = nil
+		m.showAgentInfo("No agents available yet.")
+		return
+	}
+	if selectedID != "" && !agentEntriesContainThread(visible, selectedID) {
+		if previousIndex < 0 {
+			previousIndex = 0
+		}
+		if previousIndex >= len(visible) {
+			previousIndex = len(visible) - 1
+		}
+		selectedID = strings.TrimSpace(visible[previousIndex].ThreadID)
+	}
+	m.showAgentPicker(visible, currentAgentThreadID(m, ""), selectedID)
+}
+
+func (m *Model) removeAgentEntry(threadID string) {
+	if m == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	items := m.agentItems[:0]
+	for _, entry := range m.agentItems {
+		if strings.TrimSpace(entry.ThreadID) != threadID {
+			items = append(items, entry)
+		}
+	}
+	m.agentItems = items
+	delete(m.archivedAgentThreads, threadID)
+	m.refreshAgentPickerAfterVisibilityChange()
 }
 
 func (m *Model) upsertAgentEntry(entry codextui.AgentThreadEntry) {

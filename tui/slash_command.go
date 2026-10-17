@@ -20,6 +20,7 @@ func SlashCommandFrames() []SlashCommandFrame {
 	return []SlashCommandFrame{
 		{Name: "help", Command: CommandHelp, Aliases: []string{"?"}, Description: "show this command list"},
 		{Name: "keymap", Command: CommandKeymap, Aliases: []string{"keys"}, Description: "remap TUI shortcuts"},
+		{Name: "presets", Command: CommandPresets, Description: "run or save reusable prompts and slash commands"},
 		{Name: "status", Command: CommandStatus, Description: "show current session configuration and token usage"},
 		{Name: "daemon", Command: CommandDaemon, Description: "Manage the local background server"},
 		{Name: "warnings", Command: CommandWarnings, Description: "view retained warnings and diagnostic details"},

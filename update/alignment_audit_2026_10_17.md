@@ -1036,3 +1036,87 @@ go build ./...    # exit 0
 powershell -File scripts/build.ps1  # bin/codex.exe rebuilt
 go test -p 1 ./tui/tea -count=1  # only existing clipboard baseline TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge FAIL
 ```
+
+## 30. Round 116（2026-10-17）：TUI `/presets` quick dials（partial）
+
+### 30.1 落地
+
+- Rust 参考：`codex-rs/tui/src/chatwidget/quick_dials.rs`、`codex-rs/tui/src/app/quick_dials.rs`。
+- 命令面：新增 `CommandPresets`，`/presets` 进入 `SlashCommandFrames` 和 upstream popup 顺序；从 `rustSlashCommandsWithoutFrame` 移除 `presets`。
+- 可用性：side conversation/read-only 下拒绝，session 尚未配置时报告 “Presets are available after startup completes.”。
+- HUD：`tui/tea/quick_dials.go` 渲染 `1..9,0` 槽位，数字直接 recall，`n/e/d/esc` 分别新建、编辑、删除、关闭；多条目时按宽度切两列。
+- recall：保留 composer 草稿，按普通 command 解析逻辑分发 slash command，否则作为普通 prompt 提交；附件/mention 不复制进 preset，并给出 Rust 同义提示。
+- 持久化：新建时打开 “Save preset to slot” 选择器；空槽直接写 `tui.presets.<slot>`，已占用槽位进入 replace 二次确认；编辑/删除各自走配置写入和确认。
+- 编辑器：复用 `bottom_pane.CustomPromptView`，新增 `PreserveWhitespace`，保持 preset input 的前后空白；加载端把缺失的 `tui.presets` 归一为空 map，确保删除最后一个 preset 后 live 状态被清空。
+- `s` from current settings：列出 current model / permissions / terminal title / status line 的目标命令，选择后进入 preset 编辑器；不可回放的设置显示 Rust 同义错误。
+- `#54388` 状态面布局：`/title` 与 `/statusline` prefill 保留 item 顺序和重复项、规范化别名（如 `model-name → model`、`project-root → project-name`），空布局使用 `--clear`，status line 保留 colors 设置；不可用 item 按 Rust 文案禁用。
+- `#52203` 行为已由现有 `program_status.go` 覆盖：OSC 21337/7501 的 Idle/Working/Waiting 映射、直接 iTerm2/multiplexer gating、去重、focus/resize 后重发，以及退出时 clear；r109 仍按 Rust 符号名列 implementation_pending，属于命名差异而非功能缺口。
+- `#42410` misalignment review/continue（partial）：新增同线程 review 载体，解析 `detailedExplanation`/`steer.message`，并在停止态显示 Review findings / Agent command center（remote）/ New chat / Resume；review 确认后以 `misalignment_override` client metadata 提交 continuation。新 turn（不同 turn id）会清除过期 review，当前 turn id 不匹配时拒绝旧 review 的 continue；剩余只是 `MisalignmentViolation` 独立类型和 review/confirmation 合并命名差异。
+- `#42194` Vim replace mode（partial）：Go 已有 `R` 覆盖输入，本轮补齐 replace-mode Backspace recovery（恢复被覆盖字符/删除末尾追加字符）和 replace 编辑的 dot-repeat，抽出 `replaceVimText`/`clearVimReplaceRecovery`/`isVimReplaceMode`；剩余 `apply_vim_insert_action` 命名和粘贴 burst retract 对齐。
+- `#50216` Command Center rename（partial）：rename 改为 cursor-aware 单行编辑，支持在光标处插入/删除、过滤 CR/LF、水平 viewport，并接入 composer 的 /vim 设置（insert→normal、h/l/0/$、x、i/a/I/A、Esc recovery）；剩余只是 Rust `new_single_line` 构造函数命名差异。
+- `#50345` subagent picker archive visibility（partial）：本地 archive/unarchive 现在会隐藏/恢复 agent picker 行，按 thread id 保留选择，并在成功刷新时用最新列表替换 stale cache；remote TUI 也把 `thread/archived` / `thread/unarchived` 映射到 picker visibility。剩余是 archived descendants 的双向刷新队列和完整 visibility refresh state。
+- `#54081` shared vertical navigation（complete）：新增 `VerticalActionFor` 和 `ScrollState.ApplyVerticalAction`，experimental features、hooks、memories、multi-select、skills 五个列表视图统一使用同一套 up/down/page/home/end 解析与 selection/visibility 更新。
+- `#53804` Command Center lifecycle progress（complete）：archive/delete 进度改为居中对话框覆盖层，保留完整 dashboard backdrop、选中行与筛选/滚动状态；Go 的扁平 render 模型用 `centerAgentsOverviewDialog` 等价实现 Rust `CenteredView`。
+- `#47317` remote `/import`（complete）：remote/local-daemon TUI 现在通过 connected app server 执行 externalAgentConfig/detect 和 import，使用当前 thread cwd（或 remote override）检测，按响应 import_id 匹配 completion，并保留 TUI 侧 pending-import/overlap 防护；已用真实 WebSocket fake server 覆盖。
+
+### 30.2 剩余
+
+- Rust 的 read-only config-layer ownership guard 未实现；Go 当前直接写用户配置。
+- `chat.open_presets` keymap action 与独立 `ShortcutHud` 载体仍属于 #54381。
+
+### 30.3 验证
+
+```text
+go test ./tui/tea -run 'QuickDial|Presets|PreserveWhitespace' -count=1  # ok
+go test ./tui/bottom_pane ./tui/tea ./tui ./config -count=1              # ok
+go test ./app -run 'TUIPresets|QuickDial|Presets' -count=1                # ok
+go vet ./tui/... ./app ./config                                          # exit 0
+go build ./...                                                           # exit 0
+```
+
+另外修正了 `TestSlashCopyPreservesHardBreakAfterAssistantMessageMerge` 的测试夹具：`NewModel` 会安装 rich clipboard fallback，测试替换 plain writer 时需同时清空 rich writer。
+
+## 31. Round 116（2026-10-17）：`#51868` tool registration metrics（complete）
+
+### 31.1 落地
+
+- Rust 参考：`core/src/tools/router.rs::record_registration_metrics`、`core/src/session/turn.rs`
+  的 pre-sampling 调用点、`otel/src/metrics/names.rs`。
+- `metrics/tool_registration_metrics.go`：新增 `codex.tools.registered` 与 Rust 的 20 个显式
+  bucket（`0..20000`）。
+- `tool/registration_counts.go`：按最终 registry entries 统计
+  `direct` / `direct_model_only` / `deferred` / `deferred_model_only` /
+  `code_mode_only` / `hidden`；Go 的默认空 exposure 与 `model_visible` 映射到 Rust
+  `Direct`，`discoverable` 映射到 Rust `Deferred`。
+- `turn/tool_registration_metrics.go`：每次 sampling request 在进入模型 runner 前记录全部六类
+  histogram，空分类记录 0。模型客户端内部 transport retry 不经过 sampling-loop 调用点，
+  因此不会重复。
+- `turn.RuntimeOptions.ToolRegistrationMetrics` 接入 app-server 的 `TurnMetrics` 与 `exec`
+  的 OTEL metrics client。Hosted tools 不进入 registry，因此不会计数；tags 固定为
+  `exposure` 与 `tool_mode`，不含工具名/描述。
+
+### 31.2 验证
+
+```text
+go test ./metrics -run ToolRegistration -count=1                         # ok
+go test ./tool -run RegistrationCounts -count=1                          # ok
+go test ./turn -run 'ToolRegistration|SamplingRecordsToolRegistrations' # ok
+go test ./appserver -run 'ToolRegistration|ToolMetric|TurnMetric|Metric' # ok
+go test ./exec -run 'Metric|Telemetry|Turn'                              # ok
+go test ./turn -count=1                                                  # ok
+go build ./...                                                           # exit 0
+go vet ./metrics ./tool ./turn ./appserver                               # exit 0
+```
+
+集成用例使用真实 `ResponsesAgentRunner`：第一次 stream 返回可重试失败、第二次成功，断言
+两次 HTTP attempt 只产生一组六条 histogram；同一请求携带 hosted web-search，但注册计数不变。
+
+`./tool` 整包仍有既有的两个 login-shell PATH 基线失败：
+`TestUnifiedExecRestoresExecutorPathDirsForLoginShellLikeRust`、
+`TestLocalShellLaunchRestoresExecutorPathDirsLikeRust`。`go vet ./exec` 仍只有既有的
+`exec/agent_controller.go:909` lock-copy 告警。
+
+`./appserver` 整包另有 5 条 newline fixture 基线失败
+（3 条 `TestCollaborationModeWorldState*`、2 条
+`TestRuntimeRouterContextWindowGuidance*`）；已在 detached `e2ff1fa7` 干净 worktree
+逐条复现，新增失败为空。`./tui/...` 全绿。

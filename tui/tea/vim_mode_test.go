@@ -714,6 +714,50 @@ func TestVimReplaceModeOverwritesUntilEscape(t *testing.T) {
 	}
 }
 
+func TestVimReplaceModeBackspaceRestoresCharactersLikeRust(t *testing.T) {
+	m := vimTestModel("abcde")
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, 'X')
+	m = vimKeyPress(m, 'Y')
+	if got := m.composer.Value(); got != "XYcde" {
+		t.Fatalf("replace value = %q, want XYcde", got)
+	}
+	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	if got := m.composer.Value(); got != "Xbcde" {
+		t.Fatalf("first replace backspace = %q, want Xbcde", got)
+	}
+	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	if got := m.composer.Value(); got != "abcde" {
+		t.Fatalf("second replace backspace = %q, want abcde", got)
+	}
+
+	m = vimTestModel("ab")
+	m.composer.SetCursor(len("ab"))
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, 'c')
+	if got := m.composer.Value(); got != "abc" {
+		t.Fatalf("append replace value = %q, want abc", got)
+	}
+	m = vimKeyMsg(m, bubbletea.KeyBackspace)
+	if got := m.composer.Value(); got != "ab" {
+		t.Fatalf("append replace backspace = %q, want ab", got)
+	}
+}
+
+func TestVimReplaceModeDotRepeatLikeRust(t *testing.T) {
+	m := vimTestModel("abc")
+	m = vimKeyPress(m, 'R')
+	m = vimKeyPress(m, 'X')
+	m = vimEscape(m)
+	if !m.vimHasLastReplace || len(m.vimLastReplaceText) != 1 || m.vimLastReplaceText[0] != 'X' {
+		t.Fatalf("replace dot-repeat state = has=%v text=%q", m.vimHasLastReplace, string(m.vimLastReplaceText))
+	}
+	m = vimKeyPress(m, '.')
+	if got := m.composer.Value(); got != "XXc" {
+		t.Fatalf("replace dot-repeat value = %q, want XXc", got)
+	}
+}
+
 func vimKeyMsg(m *Model, key bubbletea.KeyType) *Model {
 	updated, _ := m.Update(bubbletea.KeyMsg{Type: key})
 	return updated.(*Model)

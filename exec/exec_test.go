@@ -1734,6 +1734,9 @@ too_long = "` + strings.Repeat("x", 513) + `"
 	var stdout, stderr bytes.Buffer
 	result, err := runner.Run(Request{
 		Exec: cli.ExecOptions{Prompt: "hello"},
+		ResponsesAPIClientMetadata: map[string]string{
+			"misalignment_override": `{"timestamp":1}`,
+		},
 	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -1750,6 +1753,9 @@ too_long = "` + strings.Repeat("x", 513) + `"
 	}
 	if turnMetadata["workspace_kind"] != "git" || turnMetadata["thread_id"] == "" || turnMetadata["turn_id"] == "" {
 		t.Fatalf("turn metadata = %#v client=%#v", turnMetadata, agent.request.ClientMetadata)
+	}
+	if turnMetadata["misalignment_override"] != `{"timestamp":1}` {
+		t.Fatalf("per-turn metadata = %#v", turnMetadata)
 	}
 	if agent.request.ClientMetadata["workspace_kind"] != "" {
 		t.Fatalf("workspace_kind should not be top-level client metadata: %#v", agent.request.ClientMetadata)

@@ -219,6 +219,13 @@ func (v *HooksBrowserView) JumpBottom() {
 	v.State.JumpBottom(v.PageLen(), v.maxVisibleRows())
 }
 
+func (v *HooksBrowserView) ApplyVerticalAction(action ListAction) {
+	if v == nil {
+		return
+	}
+	v.State.ApplyVerticalAction(action, v.PageLen(), v.maxVisibleRows())
+}
+
 func (v *HooksBrowserView) OpenSelectedEvent() {
 	event, ok := v.SelectedEvent()
 	if !ok {
@@ -318,6 +325,10 @@ func (v *HooksBrowserView) Close() {
 
 func (v *HooksBrowserView) HandleKey(key string) {
 	if v == nil {
+		return
+	}
+	if action, ok := VerticalActionFor(key); ok {
+		v.ApplyVerticalAction(action)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(key)) {

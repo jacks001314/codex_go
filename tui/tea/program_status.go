@@ -1,6 +1,7 @@
 package tea
 
 import (
+	"io"
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -144,4 +145,15 @@ func (m *Model) refreshTerminalProgramStatusCmd() bubbletea.Cmd {
 		return nil
 	}
 	return m.programStatusWriter(sequence)
+}
+
+// clearTerminalProgramStatusOnExit releases the terminal's lifecycle indicator
+// when the TUI exits (Rust #52203/#54114 clear-on-exit behavior).
+func clearTerminalProgramStatusOnExit(output io.Writer) {
+	if output == nil {
+		return
+	}
+	if sequence := codextui.ClearTerminalProgramStatus(); sequence != "" {
+		_, _ = io.WriteString(output, sequence)
+	}
 }

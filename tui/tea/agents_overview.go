@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
@@ -135,6 +136,7 @@ func (m *Model) applyAgentsCommand() bubbletea.Cmd {
 	}
 	m.agentsOverviewPendingDraft = nil
 	m.agentsOverview = agentsoverview.New(nil, "", false)
+	m.agentsOverview.State.VimEnabled = m.composerIsVimEnabled()
 	// Rust #50786: a reopened Command Center restores the grouping remembered for
 	// this session (App::agents_overview holds the state across opens).
 	m.agentsOverview.State.Grouping = m.agentsOverviewGrouping
@@ -381,6 +383,11 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	}
 	selectedBefore := m.agentsOverview.Selected
 	keySpec := keySpecFromKeyMsg(msg)
+	if m.agentsOverview.State.Renaming {
+		if m.renameKey(msg, keySpec) {
+			return nil
+		}
+	}
 	switch msg.String() {
 	case "up", "k":
 		m.agentsOverview.MoveSelection(false)
@@ -466,6 +473,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.forkAgentsOverviewSelection()
 	}
 	if m.keyMatches("agents", "rename", keySpec) {
+		m.agentsOverview.State.VimEnabled = m.composerIsVimEnabled()
 		m.agentsOverview.BeginRename()
 	}
 	if m.keyMatches("agents", "stop", keySpec) {
@@ -497,6 +505,85 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
+}
+
+func (m *Model) composerIsVimEnabled() bool {
+	return m != nil && m.vimMode
+}
+
+// updateAgentsOverviewRenameEditorKey routes keys to the single-line rename
+// editor. Vim normal mode is intentionally small but honors the composer's
+// /vim setting: insert entry, h/l/0/$, x/delete, and Esc recovery.
+func (m *Model) renameKey(msg bubbletea.KeyMsg, keySpec string) bool {
+	if m == nil || m.agentsOverview == nil || !m.agentsOverview.State.Renaming {
+		return false
+	}
+	state := &m.agentsOverview.State
+	if keySpec == "enter" {
+		return false
+	}
+	if state.VimEnabled {
+		if keySpec == "esc" {
+			if state.VimInsert {
+				state.VimInsert = false
+				return true
+			}
+			m.agentsOverview.Cancel()
+			return true
+		}
+		if !state.VimInsert {
+			switch keySpec {
+			case "i":
+				state.VimInsert = true
+			case "a":
+				m.agentsOverview.MoveInputCursor(1)
+				state.VimInsert = true
+			case "shift-i":
+				m.agentsOverview.SetInputCursor(0)
+				state.VimInsert = true
+			case "shift-a":
+				m.agentsOverview.SetInputCursor(len([]rune(state.Input)))
+				state.VimInsert = true
+			case "h", "left":
+				m.agentsOverview.MoveInputCursor(-1)
+			case "l", "right":
+				m.agentsOverview.MoveInputCursor(1)
+			case "0", "home":
+				m.agentsOverview.SetInputCursor(0)
+			case "$", "end":
+				m.agentsOverview.SetInputCursor(len([]rune(state.Input)))
+			case "x", "delete":
+				m.agentsOverview.DeleteInputAtCursor()
+			}
+			return true
+		}
+	}
+	switch keySpec {
+	case "esc":
+		m.agentsOverview.Cancel()
+		return true
+	case "backspace":
+		m.agentsOverview.Backspace()
+		return true
+	case "left":
+		m.agentsOverview.MoveInputCursor(-1)
+		return true
+	case "right":
+		m.agentsOverview.MoveInputCursor(1)
+		return true
+	case "home":
+		m.agentsOverview.SetInputCursor(0)
+		return true
+	case "end":
+		m.agentsOverview.SetInputCursor(len([]rune(state.Input)))
+		return true
+	}
+	if msg.Type == bubbletea.KeyRunes && !msg.Alt {
+		for _, r := range msg.Runes {
+			m.agentsOverview.TypeChar(r)
+		}
+	}
+	return true
 }
 
 // forkAgentsOverviewSelection forks the selected conversation and opens the new
@@ -857,6 +944,11 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 	}
 	// Rust #45255: a removed task drops its retained (unmaterialized) session.
 	m.clearAgentsOverviewBlankSession(msg.threadID)
+	if msg.action == agentsOverviewActionArchive {
+		m.setAgentPickerThreadVisibility(msg.threadID, true)
+	} else if msg.action == agentsOverviewActionDelete {
+		m.removeAgentEntry(msg.threadID)
+	}
 	// Removing the current task leaves the dashboard open but unattached.
 	if m.State != nil && strings.TrimSpace(m.State.ThreadID) == strings.TrimSpace(msg.threadID) {
 		m.State.SetThreadID("")
@@ -997,9 +1089,69 @@ func (m *Model) renderAgentsOverview() string {
 		lines = append(lines, "  "+m.agentsOverviewNotice)
 	}
 	if m.agentsOverviewLifecycleProgress != "" {
-		lines = append(lines, "  "+m.agentsOverviewLifecycleProgress)
+		lines = centerAgentsOverviewDialog(lines, m.agentsOverviewLifecycleProgress, m.width, m.height)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// centerAgentsOverviewDialog renders lifecycle progress as a centered dialog
+// over the retained Command Center backdrop (Rust #53804).
+func centerAgentsOverviewDialog(backdrop []string, progress string, width, height int) []string {
+	progress = strings.TrimSpace(progress)
+	if progress == "" {
+		return backdrop
+	}
+	if width < 24 {
+		return append(backdrop, progress)
+	}
+	dialogWidth := min(width-4, max(42, len([]rune(progress))+8))
+	contentWidth := max(dialogWidth-4, 1)
+	progress = truncateDisplayWidth(progress, contentWidth)
+	hint := truncateDisplayWidth("Please wait. Task switching is unavailable.", contentWidth)
+	dialog := []string{
+		"\u256d" + strings.Repeat("\u2500", dialogWidth-2) + "\u256e",
+		"\u2502 " + padDisplayWidth(progress, contentWidth) + " \u2502",
+		"\u2502 " + padDisplayWidth(hint, contentWidth) + " \u2502",
+		"\u2570" + strings.Repeat("\u2500", dialogWidth-2) + "\u256f",
+	}
+	for len(backdrop) < height {
+		backdrop = append(backdrop, "")
+	}
+	startRow := max(0, (height-len(dialog))/2)
+	if startRow+len(dialog) > len(backdrop) {
+		startRow = max(0, len(backdrop)-len(dialog))
+	}
+	left := max(0, (width-dialogWidth)/2)
+	for i, line := range dialog {
+		backdrop[startRow+i] = strings.Repeat(" ", left) + line
+	}
+	return backdrop
+}
+
+func padDisplayWidth(value string, width int) string {
+	value = truncateDisplayWidth(value, width)
+	padding := width - runewidth.StringWidth(value)
+	if padding <= 0 {
+		return value
+	}
+	return value + strings.Repeat(" ", padding)
+}
+
+func truncateDisplayWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	used := 0
+	for _, r := range value {
+		cell := runewidth.RuneWidth(r)
+		if used+cell > width {
+			break
+		}
+		out.WriteRune(r)
+		used += cell
+	}
+	return out.String()
 }
 
 // applyThreadScopedSettingsUpdated patches a listed task's model from a
