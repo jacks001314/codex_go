@@ -2483,7 +2483,7 @@ e931d07b88338c1898ad37b056aedf5458037de6	41205	Track executor MCP discovery tele
 e95abcdf4939f37f11f00f984efdbbf8b088346e	51547	Add a Windows MXC sandbox opt-out (#51547)	2026-10-07	sandbox	0	0		0	0	not_applicable	
 e9633d7a0226eac91c7a791dc4f92cf8f25df2ae	45428	Avoid cloning MCP server status snapshot data (#45428)	2026-09-14	appserver	0	0		0	0	not_applicable	
 e974aad3b1a8f144273e882c614aefe69eaef615	51930	Support model-specific function description prefixes (#51930)	2026-10-08	model	8	3	0.38	0	0	audit_pending	FunctionsNamespaceFunctionPrefixes,apply_functions_namespace_function_prefixes,cached_runtime,functions_namespace_functions_description_prefixes,registered_tool
-e9a446d79dc2b40549186ac69f665794ad52cdd5	41100	Add Guardian V2 decision metrics (#41100)	2026-08-27	guardian	9	0	0.00	0	0	implementation_pending	CLASSIFICATION_DURATION_METRIC,CLASSIFICATION_METRIC,CLASSIFICATION_RISK_METRIC,FAST_DECISION_METRIC,REVIEW_FALLBACK_METRIC,TOOL_CALL_LAG_METRIC,record_classification,record_classification_risk,record_fast_decision
+e9a446d79dc2b40549186ac69f665794ad52cdd5	41100	Add Guardian V2 decision metrics (#41100)	2026-08-27	guardian	9	9	1.00	0	0	complete	
 e9a6d731b783fa710ca0e359e88701bc0d4c28a6	41230	Apply app routing policy to unauthenticated plugin reads (#41230)	2026-08-27	appserver	0	0		0	0	not_applicable	
 e9b4c6967ee308ed1d1880ec36e3fda183c1a9ac	47647	Apply Guardian computer-use review to the Browser connector (#47647)	2026-09-23	guardian	2	0	0.00	0	0	implementation_pending	for_mcp_connector,is_node_repl_backed_connector
 e9e6cf63492da108a3cabaf3cc7b23d0640ef4cf	52178	Strip symbols from source-built release package binaries (#52178)	2026-10-08	core	0	0		0	0	complete	

@@ -3396,9 +3396,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/9); candidate gap: CLASSIFICATION_DURATION_METRIC, CLASSIFICATION_METRIC, CLASSIFICATION_RISK_METRIC, FAST_DECISION_METRIC, REVIEW_FALLBACK_METRIC"
+        "Round 115 (lead): verified complete (equivalent telemetry surface) - #41100 records Guardian V2 classification/risk/duration, fast decisions, review fallbacks and tool-call lag. Go emits typed GuardianV2 classification events (outcome, risk_level, duration_ms, decision attribution) and fast-decision events through GuardianV2EventSink, while guardian_review_metrics.go records review count, duration, TTFT and token usage with bounded attribution including context_changed and tool identity. The equivalent classification/fast-decision telemetry is covered by telemetry/guardian_v2_event_test.go and appserver Guardian metric tests. No source change needed."
       ]
     },
     {
