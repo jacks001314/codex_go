@@ -11264,6 +11264,13 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 			}
 		}
 	}
+	attachmentPaths := FeedbackAttachmentPaths(rolloutPaths, nil, threadID, nil, params.ExtraLogFiles)
+	// Rust #47653: when logs are included the report also carries the inherited
+	// history_base prefixes of the selected rollouts.
+	var historyAttachments []FeedbackAttachment
+	if params.IncludeLogs {
+		historyAttachments = FeedbackHistoryBaseAttachments(r.codexHomeForRollout(), attachmentPaths)
+	}
 	snapshot := r.requireFeedback()
 	snapshot.ThreadID = threadID
 	snapshot.PrepareUpload(&FeedbackUploadOptions{
@@ -11272,7 +11279,8 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 		ClientTags:          clientTags,
 		IncludeLogs:         params.IncludeLogs,
 		LogsOverride:        logsOverride,
-		ExtraAttachmentPath: FeedbackAttachmentPaths(rolloutPaths, nil, threadID, nil, params.ExtraLogFiles),
+		ExtraAttachments:    historyAttachments,
+		ExtraAttachmentPath: attachmentPaths,
 	})
 	return &FeedbackUploadResponse{ThreadID: threadID, PromptHash: promptHash}, nil
 }

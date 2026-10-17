@@ -2447,6 +2447,38 @@ func FindThreadPath(codexHome string, threadID string, archived bool) (string, e
 	return "", fmt.Errorf("rollout thread not found: %s", threadID)
 }
 
+// FindRolloutPathByRolloutID mirrors Rust `find_rollout_path_by_rollout_id`
+// (codex-rs/rollout/src/list.rs, Rust #47653): locate one immutable rollout file
+// by its rollout id across the unarchived and archived trees. Unlike
+// FindThreadPath it never consults the state DB and never picks among several
+// rollouts of one thread - the first canonical filename match wins, with a
+// plain sibling preferred over its compressed copy.
+func FindRolloutPathByRolloutID(codexHome string, rolloutID string) (string, bool, error) {
+	rolloutID = strings.TrimSpace(rolloutID)
+	if rolloutID == "" {
+		return "", false, nil
+	}
+	for _, subdir := range []string{SessionsSubdir, ArchivedSessionsSubdir} {
+		paths, err := collectRolloutPaths(filepath.Join(codexHome, subdir))
+		if err != nil {
+			return "", false, err
+		}
+		// Sort so a filesystem-order change cannot make the answer nondeterministic.
+		sort.Strings(paths)
+		for _, path := range paths {
+			parsed, ok := ParseRolloutFileName(filepath.Base(path))
+			if !ok || parsed.RolloutID != rolloutID {
+				continue
+			}
+			if existing, ok := ExistingRolloutPath(PlainRolloutPath(path)); ok {
+				path = existing
+			}
+			return path, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // RolloutFileName is the parsed canonical basename of a rollout file. Ordinary
 // rollouts encode one id that is both the thread id and the immutable rollout id;
 // reverted rollouts append "_<rollout id>" after the stable thread id. Mirrors

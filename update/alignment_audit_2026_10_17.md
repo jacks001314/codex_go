@@ -1,4 +1,4 @@
-# Rust/Go 功能对齐审计（最新：round 113，2026-10-17）
+# Rust/Go 功能对齐审计（最新：round 114，2026-10-17）
 
 > **当前状态只以本节为准。** 从 §2 开始的各节是历轮快照（round 91 起），其中的计数、上游 SHA 与
 > "冻结在 970b7f2ff4" 之类表述都是**当时**的事实，保留它们仅为追溯每轮证据，不应读作当前值。
@@ -7,18 +7,18 @@
 
 - **Rust 上游目标**：`D:\qax\reagent\dev\git\codex` 的 `origin/main` = `ce0323f2f2`（`git fetch origin main` 后确认；`3b8f43a06b` 是它的前两个提交，`e16b631d08` 更早）。
 - **parity 锚点**：`parity/baseline.json` 的 `verified.rustCommit` 与 `target.rustCommit` 都是 `ce0323f2f2d3b25e82806cd555237da3db4e1897`；`parity.json.rustBaseline` = `ce0323f2f2`；`parity/alignment_control_test.go` 的 `candidateRustTo` 同值；`parity/commits.json` 覆盖 `bd19459358..ce0323f2f2` 共 2695 条。
-- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 433 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
+- **结论**：功能**尚未全部对齐**。当前量化缺口是 `implementation_pending` 432 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 条口径）；按面以 TUI 最大，其次 Guardian / appserver / core。本文件不宣称逐提交认证。
 
-### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，230 数据行）
+### 1.1 当前账本状态分布（`update/r90_commit_ledger_2026_10_16.tsv`，231 数据行）
 
 | 状态 | 行数 |
 | --- | --- |
-| `landed` | 106 |
+| `landed` | 107 |
 | `complete` | 27 |
 | `not_applicable` | 79 |
 | `blocked_precondition` | 17 |
 | `partial` | 1 |
-| **合计** | **230** |
+| **合计** | **231** |
 
 不存在 `implementable` / `AlreadyImplemented` / `unverified` 行：12 条 `AlreadyImplemented` 已在 round 112 统一改记为 `complete`（证据文本保留原始判定）。
 
@@ -26,10 +26,10 @@
 
 | 状态 | 行数 |
 | --- | --- |
-| `complete` | 445 |
+| `complete` | 446 |
 | `not_applicable` | 1171 |
 | `audit_pending` | 630 |
-| `implementation_pending` | 433 |
+| `implementation_pending` | 432 |
 | `blocked_precondition` | 15 |
 | `partial` | 1 |
 
@@ -954,4 +954,46 @@ go test ./appserver -count=1                                          # 仅 3 �
 ### 27.4 剩余（目标未完成）
 
 `implementation_pending` 433 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
+继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。
+
+## 28. Round 114（2026-10-17）：诊断报告附带继承的 history_base 历史
+
+### 28.1 #47653 跟随 history_base 附带祖先前缀（landed）
+
+- Rust（`5bfb04b247`）：`feedback_rollout_history::history_base_attachments` 在被选中的 rollout 上读取
+  `SessionMeta.history_base`，用 `find_rollout_path_by_rollout_id` 按**不可变 rollout id** 定位祖先，
+  按 rollout id 去重（保留最大 `end_byte_offset`）、跳过已选中的 rollout，深度上限 64、查找超时 5s，
+  单前缀 ≤ `MAX_ATTACHMENT_BYTES`(64MiB)、合计 ≤ `MAX_ATTACHMENTS_BYTES`(126MiB)，
+  读取到 `end_byte_offset` 的精确前缀后以 `application/jsonl` 附上；缺失/不完整一律 best effort。
+  仅在 `include_logs` 打开时执行。
+- Go：
+  - `rollout.FindRolloutPathByRolloutID`：按 `RolloutID` 在 `sessions` → `archived_sessions` 中定位，
+    plain 兄弟优先，不查 state DB、不按线程挑选。
+  - `appserver/feedback_rollout_history.go` 新增 `FeedbackHistoryBaseAttachments`：嵌套遍历
+    `HistoryBase`、按 rollout id 去重、跳过已选中项、64/5s/64MiB/126MiB 上限、
+    `rollout.ReadRolloutPrefix` 精确读取前缀并以 `application/jsonl` 返回（`Filename` 用 plain basename）。
+  - `runtime_router.go` 的 `handleFeedbackUpload` 在 `include_logs` 时把结果放进 `ExtraAttachments`，
+    随其它 rollout 一起进入 `rollouts.tar.gz`。
+- 测试：
+  - `rollout/find_rollout_path_like_rust_test.go` `TestFindRolloutPathByRolloutIDLikeRust`
+    （active / archived / plain 兄弟优先 / 缺失 id）。
+  - `appserver/feedback_rollout_history_like_rust_test.go`
+    `TestFeedbackHistoryBaseAttachmentsIncludesNestedBasesLikeRust`（对齐 Rust
+    `includes_nested_history_bases`：父 + 祖父两层前缀与文件名）、
+    `TestFeedbackHistoryBaseAttachmentsSkipsSelectedRolloutsLikeRust`、
+    `TestRuntimeRouterFeedbackAttachesInheritedHistoryLikeRust`（走 feedback/upload RPC，断言归档里
+    同时有选中 rollout 与祖先 rollout）。
+  - 队长 RC：把 history 接线置空 ⇒ RPC 级用例 FAIL（归档只剩 1 个条目）。
+
+### 28.2 验证
+
+```
+go build ./...                                                        # exit 0
+go test ./rollout -count=1                                            # ok
+go test ./appserver -run "Feedback|RolloutArchive|Archive" -count=1   # ok
+```
+
+### 28.3 剩余（目标未完成）
+
+`implementation_pending` 432 条 + `blocked_precondition` 15 条 + `partial` 1 条（2695 提交口径）。
 继续按 appserver → core → sandbox → mcp → execserver → persistence → TUI 推进。

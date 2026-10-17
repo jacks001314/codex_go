@@ -959,7 +959,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5bae5b563e1b59bdd5ccfd5d69128f0b0f73223c	47657	Restrict the default Bedrock GovCloud model catalog (#47657)	2026-09-23	tui	1	1	1.00	0	0	complete	
 5bf0ba3dd65952f8e37abbb7b535ee88841e2793	41202	Let extensions process MCP tool results (#41202)	2026-08-27	mcp	2	0	0.00	0	0	implementation_pending	McpToolResultInput,process_mcp_tool_result
 5bf132cd527311eb61bbec46562e3890eb49df80	45825	Add opt-in nonfatal handling for clock read failures (#45825)	2026-09-16	appserver	3	3	1.00	0	0	complete	
-5bfb04b247672223743ff7a1900f55b98d4a3a31	47653	Attach inherited rollout history to diagnostic reports (#47653)	2026-09-23	appserver	1	0	0.00	0	0	implementation_pending	history_base_attachments
+5bfb04b247672223743ff7a1900f55b98d4a3a31	47653	Attach inherited rollout history to diagnostic reports (#47653)	2026-09-23	appserver	1	0	0.00	0	0	complete	history_base_attachments
 5c013177d85b72d61dc35e0634511c6d55af5cc5	44620	Support temporary and minimal filesystem grants in MXC (#44620)	2026-09-10	sandbox	0	0		0	0	not_applicable	
 5c07856e25b565c86c6266ff51edff58299fd4e6	47301	Separate local agent runtime state from controller handles (#47301)	2026-09-22	guardian	3	2	0.67	0	0	audit_pending	forget_v2_residency
 5c5308fc9a9ee789049d646ef11e5400384b9c6f	46752	Add an animated Codex logo to fresh conversations and onboarding (#46752)	2026-09-20	tui	39	15	0.38	0	0	audit_pending	AnimationEnd,COMPLETION_FADE,ComposerState,EXTENT,EmptyStateAnimation,FRAME_INTERVAL,LOOP_SECONDS,Lighting,MAX_COLUMNS,SPIN_DURATION

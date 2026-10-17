@@ -19822,9 +19822,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: history_base_attachments"
+        "Landed: rollout.FindRolloutPathByRolloutID (immutable rollout-id lookup across sessions then archived_sessions, plain sibling preferred) and appserver FeedbackHistoryBaseAttachments (nested history_base walk, dedupe by rollout id keeping the largest prefix, selected rollouts skipped, 64-ancestor / 5s / 64MiB / 126MiB bounds, decoded JSONL prefixes attached as application/jsonl, best effort on missing or incomplete ancestors). Wired into handleFeedbackUpload when include_logs is set. Tests: rollout TestFindRolloutPathByRolloutIDLikeRust; appserver TestFeedbackHistoryBaseAttachmentsIncludesNestedBasesLikeRust, TestFeedbackHistoryBaseAttachmentsSkipsSelectedRolloutsLikeRust, TestRuntimeRouterFeedbackAttachesInheritedHistoryLikeRust. Leader RC (history wiring disabled) => router-level test FAILs with a one-entry archive."
       ]
     },
     {
