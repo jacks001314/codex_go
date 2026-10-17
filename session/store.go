@@ -239,6 +239,8 @@ type Metadata struct {
 	Source                     string                      `json:"source,omitempty"`
 	ThreadSource               string                      `json:"thread_source,omitempty"`
 	Originator                 string                      `json:"originator,omitempty"`
+	CreatorUserID              string                      `json:"creator_user_id,omitempty"`
+	CreatorAccountID           string                      `json:"creator_account_id,omitempty"`
 	DaybreakEnabled            *bool                       `json:"daybreak_enabled,omitempty"`
 	HistoryMode                string                      `json:"history_mode,omitempty"`
 	MemoryMode                 string                      `json:"memory_mode,omitempty"`

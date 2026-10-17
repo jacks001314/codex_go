@@ -329,6 +329,7 @@ type rolloutThreadMetadata struct {
 	cliVersion, title, preview, firstUserMessage string
 	sandboxPolicy, approvalMode, memoryMode      string
 	gitSHA, gitBranch, gitOriginURL              string
+	creatorUserID, creatorAccountID              string
 	createdAt, updatedAt, recencyAt              time.Time
 	tokensUsed                                   int64
 	archived                                     bool
@@ -405,6 +406,12 @@ func applySessionMetaToBackfill(metadata *rolloutThreadMetadata, meta *rollout.S
 	assignNonEmpty(&metadata.cwd, meta.CWD)
 	assignNonEmpty(&metadata.cliVersion, meta.CLIVersion)
 	assignNonEmpty(&metadata.memoryMode, meta.MemoryMode)
+	if metadata.creatorUserID == "" {
+		metadata.creatorUserID = strings.TrimSpace(meta.CreatorUserID)
+	}
+	if metadata.creatorAccountID == "" {
+		metadata.creatorAccountID = strings.TrimSpace(meta.CreatorAccountID)
+	}
 	applyGitToBackfill(metadata, meta.Git)
 }
 
@@ -577,8 +584,9 @@ INSERT INTO threads (
     model_provider, model, reasoning_effort, cwd, cli_version, title, name, preview,
     sandbox_policy, approval_mode, tokens_used, first_user_message,
     archived, archived_at, thread_section_id, section_position, section_entered_at_ms,
-    git_sha, git_branch, git_origin_url, memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+    git_sha, git_branch, git_origin_url, memory_mode,
+    creator_user_id, creator_account_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -608,7 +616,9 @@ ON CONFLICT(id) DO UPDATE SET
     archived_at = excluded.archived_at,
     git_sha = COALESCE(threads.git_sha, excluded.git_sha),
     git_branch = COALESCE(threads.git_branch, excluded.git_branch),
-    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url)`,
+    git_origin_url = COALESCE(threads.git_origin_url, excluded.git_origin_url),
+    creator_user_id = COALESCE(threads.creator_user_id, excluded.creator_user_id),
+    creator_account_id = COALESCE(threads.creator_account_id, excluded.creator_account_id)`,
 		metadata.id, metadata.path,
 		metadata.createdAt.Unix(), metadata.updatedAt.Unix(), metadata.recencyAt.Unix(),
 		createdMillis, updatedMillis, recencyMillis,
@@ -618,7 +628,8 @@ ON CONFLICT(id) DO UPDATE SET
 		metadata.cwd, metadata.cliVersion, metadata.title, metadata.preview,
 		metadata.sandboxPolicy, metadata.approvalMode, metadata.tokensUsed, metadata.firstUserMessage,
 		metadata.archived, archivedAt,
-		nullableString(metadata.gitSHA), nullableString(metadata.gitBranch), nullableString(metadata.gitOriginURL), metadata.memoryMode)
+		nullableString(metadata.gitSHA), nullableString(metadata.gitBranch), nullableString(metadata.gitOriginURL), metadata.memoryMode,
+		nullableString(metadata.creatorUserID), nullableString(metadata.creatorAccountID))
 	if err != nil {
 		return fmt.Errorf("upsert rollout thread %s: %w", metadata.id, err)
 	}
@@ -777,6 +788,7 @@ type storedRolloutThreadRow struct {
 	cliVersion, title, name, preview, sandboxPolicy sql.NullString
 	approvalMode, memoryMode, firstUserMessage      sql.NullString
 	gitSHA, gitBranch, gitOriginURL                 sql.NullString
+	creatorUserID, creatorAccountID                 sql.NullString
 	createdAt, updatedAt, recencyAt                 sql.NullInt64
 	createdAtMs, updatedAtMs, recencyAtMs           sql.NullInt64
 	tokensUsed, archived, archivedAt                sql.NullInt64
@@ -790,6 +802,7 @@ SELECT rollout_path, source, history_mode, thread_source,
        model_provider, model, reasoning_effort, cwd, cli_version,
        title, name, preview, sandbox_policy, approval_mode, memory_mode,
        first_user_message, git_sha, git_branch, git_origin_url,
+       creator_user_id, creator_account_id,
        created_at, created_at_ms, updated_at, updated_at_ms, recency_at, recency_at_ms,
        tokens_used, archived, archived_at
 FROM threads WHERE id = ?`, threadID).Scan(
@@ -798,6 +811,7 @@ FROM threads WHERE id = ?`, threadID).Scan(
 		&row.modelProvider, &row.model, &row.reasoningEffort, &row.cwd, &row.cliVersion,
 		&row.title, &row.name, &row.preview, &row.sandboxPolicy, &row.approvalMode, &row.memoryMode,
 		&row.firstUserMessage, &row.gitSHA, &row.gitBranch, &row.gitOriginURL,
+		&row.creatorUserID, &row.creatorAccountID,
 		&row.createdAt, &row.createdAtMs, &row.updatedAt, &row.updatedAtMs, &row.recencyAt, &row.recencyAtMs,
 		&row.tokensUsed, &row.archived, &row.archivedAt,
 	)
@@ -859,6 +873,12 @@ func intendedRolloutThreadRow(metadata rolloutThreadMetadata, existing storedRol
 	}
 	if !existing.gitOriginURL.Valid {
 		row.gitOriginURL = nullThreadText(metadata.gitOriginURL)
+	}
+	if !existing.creatorUserID.Valid {
+		row.creatorUserID = nullThreadText(metadata.creatorUserID)
+	}
+	if !existing.creatorAccountID.Valid {
+		row.creatorAccountID = nullThreadText(metadata.creatorAccountID)
 	}
 	// The follow-up repair names a paginated thread only while its name is blank.
 	if metadata.historyMode == "paginated" && !rolloutThreadNamePresent(existing.name) {

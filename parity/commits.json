@@ -18053,9 +18053,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: with_creator"
+        "Round 115 (lead): landed creator identity persistence - session.Metadata and rollout.SessionMeta carry creator_user_id/creator_account_id; Router captures the authenticated ChatGPT user/account on create and refreshes them on fork while resume preserves recorded values. state backfill extracts creator fields, upserts them using the existing migration columns with COALESCE preservation, reads them for stored-row comparisons, and thread queries expose them. Test: TestThreadCreatorIdentityCreateForkResumeLikeRust. RC: removing create-time capture leaves both IDs empty and fails. go test ./appserver focused + ./rollout -count=1 + go vet/build affected packages green. ./state full run retains known baseline migration-count/OpenRuntimeDB failures unrelated to this change."
       ]
     },
     {

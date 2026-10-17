@@ -52,6 +52,9 @@ type Router struct {
 	// Rust's local thread store `thread_data_cleanup` callback, which runs
 	// regardless of whether the message-board feature is currently enabled.
 	messageBoardCleanup func(threadIDs []session.ThreadID) error
+	// creatorIdentity captures the authenticated ChatGPT user/account when a
+	// thread or fork is created (Rust #47113). Nil leaves both fields absent.
+	creatorIdentity func() (userID string, accountID string)
 }
 
 // SetTracer installs the OTEL tracer used for request spans (Rust instruments
@@ -72,6 +75,13 @@ func (r *Router) SetMessageBoardCleanup(cleanup func(threadIDs []session.ThreadI
 		return
 	}
 	r.messageBoardCleanup = cleanup
+}
+
+func (r *Router) SetCreatorIdentity(identity func() (string, string)) {
+	if r == nil {
+		return
+	}
+	r.creatorIdentity = identity
 }
 
 // SetRequestTransport stamps the transport name the request span reports. The
@@ -1262,6 +1272,7 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 			Extra:                   extra,
 		},
 	}
+	record.Metadata.CreatorUserID, record.Metadata.CreatorAccountID = r.creatorIdentityForThread()
 	if err := r.store.Create(record); err != nil {
 		return nil, err
 	}
@@ -1289,6 +1300,14 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 		ServiceTier:             stringPtrIfNotEmpty(serviceTier),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, nil
+}
+
+func (r *Router) creatorIdentityForThread() (string, string) {
+	if r == nil || r.creatorIdentity == nil {
+		return "", ""
+	}
+	userID, accountID := r.creatorIdentity()
+	return strings.TrimSpace(userID), strings.TrimSpace(accountID)
 }
 
 func newThreadID() session.ThreadID {
@@ -2026,6 +2045,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 	// source; the new thread is created under the app-server transport's
 	// default source (VSCode for the stdio transport).
 	record.Metadata.Source = string(SessionSourceVsCode)
+	record.Metadata.CreatorUserID, record.Metadata.CreatorAccountID = r.creatorIdentityForThread()
 	if !params.Ephemeral {
 		if err := r.retainLiveThread(record); err != nil {
 			_ = r.store.Delete(record.ID)

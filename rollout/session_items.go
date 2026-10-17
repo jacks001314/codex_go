@@ -451,6 +451,8 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 			Source:                     meta.Source,
 			ThreadSource:               meta.ThreadSource,
 			Originator:                 meta.Originator,
+			CreatorUserID:              meta.CreatorUserID,
+			CreatorAccountID:           meta.CreatorAccountID,
 			HistoryMode:                meta.HistoryMode,
 			MemoryMode:                 meta.MemoryMode,
 			BaseInstructions:           meta.BaseInstructions,

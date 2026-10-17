@@ -106,6 +106,8 @@ type SessionMeta struct {
 	Source                      string                              `json:"source,omitempty"`
 	ThreadSource                string                              `json:"thread_source,omitempty"`
 	Originator                  string                              `json:"originator"`
+	CreatorUserID               string                              `json:"creator_user_id,omitempty"`
+	CreatorAccountID            string                              `json:"creator_account_id,omitempty"`
 	Model                       string                              `json:"model,omitempty"`
 	ModelProvider               string                              `json:"model_provider,omitempty"`
 	HistoryMode                 string                              `json:"history_mode,omitempty"`

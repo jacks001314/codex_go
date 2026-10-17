@@ -12,6 +12,7 @@ type ThreadListRow struct {
 	ID, RolloutPath                                   string
 	CreatedAtMS, UpdatedAtMS, RecencyAtMS             int64
 	Source, HistoryMode                               string
+	CreatorUserID, CreatorAccountID                   sql.NullString
 	ThreadSource, AgentNickname, AgentRole, AgentPath sql.NullString
 	ModelProvider, Model, ReasoningEffort             sql.NullString
 	CWD, CLIVersion, Title, Name, Preview             sql.NullString
@@ -82,6 +83,8 @@ SELECT
     COALESCE(threads.updated_at_ms, threads.updated_at * 1000),
     COALESCE(NULLIF(threads.recency_at_ms, 0), threads.updated_at_ms, threads.updated_at * 1000),
     threads.source,
+    threads.creator_user_id,
+    threads.creator_account_id,
     threads.history_mode,
     threads.thread_source,
     threads.agent_nickname,
@@ -125,7 +128,7 @@ LEFT JOIN thread_spawn_edges ON thread_spawn_edges.child_thread_id = threads.id
 		var item ThreadListRow
 		if err := rows.Scan(
 			&item.ID, &item.RolloutPath, &item.CreatedAtMS, &item.UpdatedAtMS, &item.RecencyAtMS,
-			&item.Source, &item.HistoryMode, &item.ThreadSource, &item.AgentNickname, &item.AgentRole, &item.AgentPath,
+			&item.Source, &item.CreatorUserID, &item.CreatorAccountID, &item.HistoryMode, &item.ThreadSource, &item.AgentNickname, &item.AgentRole, &item.AgentPath,
 			&item.ModelProvider, &item.Model, &item.ReasoningEffort, &item.CWD, &item.CLIVersion,
 			&item.Title, &item.Name, &item.Preview, &item.SandboxPolicy, &item.ApprovalMode,
 			&item.TokensUsed, &item.FirstUserMessage, &item.MemoryMode, &item.Archived, &item.ArchivedAt,

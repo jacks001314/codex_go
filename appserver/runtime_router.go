@@ -720,6 +720,9 @@ func NewRuntimeRouter(services RuntimeServices) *RuntimeRouter {
 		localNetworkPolicy:      network.NewNetworkPolicyController(),
 		messageBoardHandles:     map[string]agentboard.Board{},
 	}
+	if router.services.ThreadRouter != nil {
+		router.services.ThreadRouter.SetCreatorIdentity(router.threadCreatorIdentity)
+	}
 	if router.services.ServerRequests == nil {
 		router.services.ServerRequests = NewServerRequestBroker()
 	}
@@ -1223,6 +1226,16 @@ func (r *RuntimeRouter) resolveAuthWithLoginRestrictions(codexHome string) (*aut
 	}
 	r.requireAccount().Logout()
 	return nil, nil
+}
+
+// threadCreatorIdentity captures the ChatGPT user/account at thread creation
+// (Rust #47113). API-key and unavailable auth leave both values absent.
+func (r *RuntimeRouter) threadCreatorIdentity() (string, string) {
+	resolved, err := r.resolveAuthWithLoginRestrictions(r.codexHomeForRollout())
+	if err != nil || resolved == nil {
+		return "", ""
+	}
+	return auth.ChatGPTUserIDFromAuth(&resolved.Auth), auth.AccountIDFromAuthForRestrictions(&resolved.Auth)
 }
 
 func (r *RuntimeRouter) loginRestrictionViolation(snapshot *auth.AuthDotJSON) (string, error) {
