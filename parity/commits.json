@@ -2134,9 +2134,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: TurnSettingsUpdateStatus"
+        "Round 253: turn/settings/update returns TurnSettingsUpdateResponse.Status (applied or targetUnavailable), rejects parent-owned MultiAgent V2 subagents through ensureDirectInputAllowed, and requires features.step_model_switching for model/effort/summary/service-tier changes. serviceTier distinguishes omission from explicit null via ServiceTierSet and double-option serialization, so null clears the turn tier. Model-owned defaults are re-resolved by the next step capture. Tests: go test ./appserver -run 'TurnSettingsUpdate|TurnStepSettings|DirectInput' -count=1; go test ./turn -count=1; go build ./..."
       ]
     },
     {

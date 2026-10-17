@@ -594,6 +594,7 @@ func TestRuntimeRouterThreadListAndSearchReportSubagentDirectInputCapability(t *
 		{"turn start", MethodTurnStart, turn.TurnStartParams{ThreadID: "spawn-v2"}},
 		{"steer", MethodTurnSteer, turn.TurnSteerParams{ThreadID: "spawn-v2", ExpectedTurnID: "turn-1"}},
 		{"settings update", MethodThreadSettingsUpdate, SettingsUpdateParams{ThreadID: "spawn-v2"}},
+		{"turn settings update", MethodTurnSettingsUpdate, turn.TurnSettingsUpdateParams{ThreadID: "spawn-v2", TurnID: "turn-1", Model: stringPtr("gpt-5")}},
 		{"queue add", MethodThreadQueueAdd, ThreadQueueAddParams{ThreadID: "spawn-v2", Input: []any{"hello"}}},
 		{"queue update", MethodThreadQueueUpdate, ThreadQueueUpdateParams{ThreadID: "spawn-v2", QueuedSubmissionID: "q-1"}},
 		{"queue start", MethodThreadQueueStart, ThreadQueueStartParams{ThreadID: "spawn-v2"}},

@@ -547,7 +547,8 @@ type TurnSteerResponse struct {
 }
 
 // TurnSettingsUpdateParams mirrors the Rust turn/settings/update request
-// (#42121). Only approvalsReviewer is currently applied by the Go runtime.
+// (#42121). It applies model, effort, summary, service tier, approvals reviewer,
+// and environment selections to one live turn without changing future turns.
 type TurnSettingsUpdateParams struct {
 	ThreadID          string  `json:"threadId"`
 	TurnID            string  `json:"turnId"`
@@ -556,6 +557,9 @@ type TurnSettingsUpdateParams struct {
 	Effort            *string `json:"effort,omitempty"`
 	Summary           *string `json:"summary,omitempty"`
 	ServiceTier       *string `json:"serviceTier,omitempty"`
+	// ServiceTierSet distinguishes an omitted field from an explicit null:
+	// null clears the requested tier, omission leaves it unchanged.
+	ServiceTierSet bool `json:"-"`
 	// Environments replaces the environment selection used by subsequent steps
 	// of the active turn without changing the thread's saved default selection.
 	// A non-nil empty slice explicitly selects no environments.
@@ -567,16 +571,51 @@ func (p *TurnSettingsUpdateParams) MarshalJSON() ([]byte, error) {
 		return []byte("null"), nil
 	}
 	type alias TurnSettingsUpdateParams
-	if p.Environments == nil {
-		return json.Marshal((*alias)(p))
+	data, err := json.Marshal((*alias)(p))
+	if err != nil {
+		return nil, err
 	}
-	return json.Marshal(struct {
-		*alias
-		Environments []map[string]any `json:"environments"`
-	}{
-		alias:        (*alias)(p),
-		Environments: p.Environments,
-	})
+	var value map[string]any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, err
+	}
+	if p.Environments != nil {
+		value["environments"] = p.Environments
+	}
+	if p.ServiceTierSet {
+		if p.ServiceTier == nil {
+			value["serviceTier"] = nil
+		} else {
+			value["serviceTier"] = *p.ServiceTier
+		}
+	}
+	return json.Marshal(value)
+}
+
+func (p *TurnSettingsUpdateParams) UnmarshalJSON(data []byte) error {
+	type alias TurnSettingsUpdateParams
+	var decoded alias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	if serviceTierRaw, ok := raw["serviceTier"]; ok {
+		decoded.ServiceTierSet = true
+		if strings.TrimSpace(string(serviceTierRaw)) == "null" {
+			decoded.ServiceTier = nil
+		} else {
+			var serviceTier string
+			if err := json.Unmarshal(serviceTierRaw, &serviceTier); err != nil {
+				return err
+			}
+			decoded.ServiceTier = &serviceTier
+		}
+	}
+	*p = TurnSettingsUpdateParams(decoded)
+	return nil
 }
 
 func (p *TurnSettingsUpdateParams) Validate() error {
@@ -586,7 +625,7 @@ func (p *TurnSettingsUpdateParams) Validate() error {
 	if strings.TrimSpace(p.TurnID) == "" {
 		return fmt.Errorf("%w: turnId is required", ErrInvalidTurnRequest)
 	}
-	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && p.ServiceTier == nil && p.Environments == nil {
+	if p.ApprovalsReviewer == nil && p.Model == nil && p.Effort == nil && p.Summary == nil && !p.ServiceTierSet && p.ServiceTier == nil && p.Environments == nil {
 		return fmt.Errorf("%w: at least one turn setting update is required", ErrInvalidTurnRequest)
 	}
 	if err := validateTurnEnvironmentCWDs(p.Environments); err != nil {
@@ -595,7 +634,23 @@ func (p *TurnSettingsUpdateParams) Validate() error {
 	return nil
 }
 
-type TurnSettingsUpdateResponse struct{}
+// TurnSettingsUpdateStatus reports whether the target live turn accepted the
+// update.
+type TurnSettingsUpdateStatus string
+
+const (
+	// TurnSettingsUpdateStatusApplied means the settings were published for
+	// subsequent captures.
+	TurnSettingsUpdateStatusApplied TurnSettingsUpdateStatus = "applied"
+	// TurnSettingsUpdateStatusTargetUnavailable means no matching live turn
+	// remained available.
+	TurnSettingsUpdateStatusTargetUnavailable TurnSettingsUpdateStatus = "targetUnavailable"
+)
+
+// TurnSettingsUpdateResponse mirrors Rust's TurnSettingsUpdateResponse.
+type TurnSettingsUpdateResponse struct {
+	Status TurnSettingsUpdateStatus `json:"status"`
+}
 
 type TurnInterruptResponse struct{}
 

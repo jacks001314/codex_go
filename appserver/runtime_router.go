@@ -7991,6 +7991,22 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 			return nil, jsonRPCInvalidRequest(err.Error())
 		}
 	}
+	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
+		return nil, err
+	}
+	if params.Model != nil || params.Effort != nil || params.Summary != nil || params.ServiceTierSet || params.ServiceTier != nil {
+		featureParams := &turn.TurnStartParams{ThreadID: params.ThreadID}
+		if active := r.activeRuntimeTurnStateSnapshot(params.ThreadID, params.TurnID); active != nil && active.Params != nil {
+			featureParams = active.Params
+		}
+		cfg, cfgErr := r.effectiveConfigForTurn(featureParams)
+		if cfgErr != nil {
+			return nil, jsonRPCInvalidRequest("failed to resolve turn settings configuration")
+		}
+		if cfg == nil || !features.Enabled(cfg.FeatureSettings(), "step_model_switching") {
+			return nil, jsonRPCInvalidRequest("turn settings updates require the step_model_switching feature")
+		}
+	}
 	if params.ApprovalsReviewer != nil {
 		r.updateActiveTurnApprovalsReviewer(&turn.TurnSteerParams{
 			ThreadID:          params.ThreadID,
@@ -7998,15 +8014,19 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 			ApprovalsReviewer: params.ApprovalsReviewer,
 		})
 	}
-	r.updateActiveTurnRuntimeSettings(&params)
-	return &turn.TurnSettingsUpdateResponse{}, nil
+	applied := r.updateActiveTurnRuntimeSettings(&params)
+	status := turn.TurnSettingsUpdateStatusTargetUnavailable
+	if applied {
+		status = turn.TurnSettingsUpdateStatusApplied
+	}
+	return &turn.TurnSettingsUpdateResponse{Status: status}, nil
 }
 
-func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSettingsUpdateParams) {
+func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSettingsUpdateParams) bool {
 	if r == nil || params == nil {
-		return
+		return false
 	}
-	r.threads.UpdateTurn(params.ThreadID, params.TurnID, func(active *activeRuntimeTurn) {
+	return r.threads.UpdateTurn(params.ThreadID, params.TurnID, func(active *activeRuntimeTurn) {
 		if active == nil {
 			return
 		}
@@ -8031,11 +8051,15 @@ func (r *RuntimeRouter) updateActiveTurnRuntimeSettings(params *turn.TurnSetting
 				active.RunConfig.ReasoningSummary = strings.TrimSpace(*params.Summary)
 			}
 		}
-		if params.ServiceTier != nil {
-			active.Params.ServiceTier = cloneString(params.ServiceTier)
+		if params.ServiceTierSet || params.ServiceTier != nil {
+			tier := ""
+			if params.ServiceTier != nil {
+				tier = strings.TrimSpace(*params.ServiceTier)
+			}
+			active.Params.ServiceTier = &tier
 			active.Params.ServiceTierSet = true
 			if active.RunConfig != nil {
-				active.RunConfig.ServiceTier = strings.TrimSpace(*params.ServiceTier)
+				active.RunConfig.ServiceTier = tier
 			}
 		}
 		if params.Environments != nil {

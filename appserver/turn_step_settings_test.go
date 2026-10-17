@@ -107,6 +107,75 @@ func TestTurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #40656: the response distinguishes an applied update from a
+// target turn that is no longer live.
+func TestTurnSettingsUpdateReportsAppliedOrUnavailableLikeRust(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[features]\nstep_model_switching = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := NewRuntimeRouter(RuntimeServices{Config: config.NewConfigService(home)})
+	model := "gpt-updated"
+	params := turn.TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &model}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &Request{
+		JSONRPC: "2.0",
+		ID:      IntID(1),
+		Method:  MethodTurnSettingsUpdate,
+		Params:  raw,
+	}
+	unavailable, err := router.handleTurnSettingsUpdate(request)
+	if err != nil {
+		t.Fatalf("unavailable update error = %v", err)
+	}
+	if unavailable.Status != turn.TurnSettingsUpdateStatusTargetUnavailable {
+		t.Fatalf("unavailable status = %q, want %q", unavailable.Status, turn.TurnSettingsUpdateStatusTargetUnavailable)
+	}
+
+	if err := router.threads.RegisterTurn("thread-1", "turn-1", nil, 0, &turn.TurnStartParams{ThreadID: "thread-1"}); err != nil {
+		t.Fatalf("RegisterTurn() error = %v", err)
+	}
+	applied, err := router.handleTurnSettingsUpdate(request)
+	if err != nil {
+		t.Fatalf("applied update error = %v", err)
+	}
+	if applied.Status != turn.TurnSettingsUpdateStatusApplied {
+		t.Fatalf("applied status = %q, want %q", applied.Status, turn.TurnSettingsUpdateStatusApplied)
+	}
+	encoded, err := json.Marshal(applied)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"status":"applied"}` {
+		t.Fatalf("applied response = %s, want the camelCase status", encoded)
+	}
+	active := router.activeRuntimeTurnStateSnapshot("thread-1", "turn-1")
+	if active == nil || active.Params == nil || active.Params.Model != model {
+		t.Fatalf("active turn settings = %#v, want model %q", active, model)
+	}
+}
+
+func TestTurnSettingsUpdateRequiresStepModelSwitchingLikeRust(t *testing.T) {
+	router := NewRuntimeRouter(RuntimeServices{})
+	model := "gpt-updated"
+	raw, err := json.Marshal(turn.TurnSettingsUpdateParams{ThreadID: "thread-1", TurnID: "turn-1", Model: &model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = router.handleTurnSettingsUpdate(&Request{
+		JSONRPC: "2.0",
+		ID:      IntID(1),
+		Method:  MethodTurnSettingsUpdate,
+		Params:  raw,
+	})
+	if err == nil || !strings.Contains(err.Error(), "step_model_switching") {
+		t.Fatalf("error = %v, want the step_model_switching feature rejection", err)
+	}
+}
+
 // Mirrors Rust #50128: current_turn_model returns the model selected for the
 // named running turn's next step, ignoring other turn ids and reporting nothing
 // once the turn stops running.

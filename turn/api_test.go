@@ -329,6 +329,38 @@ func TestTurnSettingsUpdateParamsSerialization(t *testing.T) {
 	if strings.Contains(string(data), "environments") {
 		t.Fatalf("Marshal(omitted environments) = %s", data)
 	}
+
+	var omitted TurnSettingsUpdateParams
+	if err := json.Unmarshal([]byte(`{"threadId":"thread-1","turnId":"turn-1","model":"gpt-5"}`), &omitted); err != nil {
+		t.Fatal(err)
+	}
+	if omitted.ServiceTierSet || omitted.ServiceTier != nil {
+		t.Fatalf("omitted service tier = %#v", omitted)
+	}
+	var cleared TurnSettingsUpdateParams
+	if err := json.Unmarshal([]byte(`{"threadId":"thread-1","turnId":"turn-1","serviceTier":null}`), &cleared); err != nil {
+		t.Fatal(err)
+	}
+	if !cleared.ServiceTierSet || cleared.ServiceTier != nil {
+		t.Fatalf("cleared service tier = %#v", cleared)
+	}
+	if err := cleared.Validate(); err != nil {
+		t.Fatalf("Validate(cleared service tier) = %v", err)
+	}
+	encoded, err := json.Marshal(&cleared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"serviceTier":null`) {
+		t.Fatalf("Marshal(cleared service tier) = %s", encoded)
+	}
+	var explicit TurnSettingsUpdateParams
+	if err := json.Unmarshal([]byte(`{"threadId":"thread-1","turnId":"turn-1","serviceTier":"priority"}`), &explicit); err != nil {
+		t.Fatal(err)
+	}
+	if !explicit.ServiceTierSet || explicit.ServiceTier == nil || *explicit.ServiceTier != "priority" {
+		t.Fatalf("explicit service tier = %#v", explicit)
+	}
 }
 
 func TestTurnStartAcceptsTextAtLimitWithMentionInput(t *testing.T) {
