@@ -868,11 +868,20 @@ func (s *ThreadExtraService) ClearGoal(params *GoalClearParams) (*GoalClearRespo
 }
 
 func (s *ThreadExtraService) UpdateSettings(params *SettingsUpdateParams) (*SettingsUpdateResponse, error) {
+	response, _, err := s.UpdateSettingsWithCommit(params)
+	return response, err
+}
+
+// UpdateSettingsWithCommit applies a settings update and returns the snapshot
+// committed by this call. Post-commit work must use that snapshot instead of
+// reading the thread again, which another write may already have changed
+// (Rust #40645 SessionSettingsCommit).
+func (s *ThreadExtraService) UpdateSettingsWithCommit(params *SettingsUpdateParams) (*SettingsUpdateResponse, *Settings, error) {
 	if err := params.Validate(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if s == nil {
-		return nil, fmt.Errorf("%w: service is nil", ErrInvalidThreadExtraRequest)
+		return nil, nil, fmt.Errorf("%w: service is nil", ErrInvalidThreadExtraRequest)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -927,7 +936,8 @@ func (s *ThreadExtraService) UpdateSettings(params *SettingsUpdateParams) (*Sett
 		settings.RuntimeWorkspaceRoots = append([]string(nil), params.RuntimeWorkspaceRoots...)
 	}
 	s.settings[params.ThreadID] = settings
-	return &SettingsUpdateResponse{}, nil
+	committed := cloneSettings(settings)
+	return &SettingsUpdateResponse{}, &committed, nil
 }
 
 func (s *ThreadExtraService) Settings(threadID string) *Settings {

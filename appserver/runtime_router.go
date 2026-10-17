@@ -7440,24 +7440,40 @@ func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParam
 	if r == nil || params == nil {
 		return
 	}
-	service := r.requireThreadExtras()
-	if _, err := service.UpdateSettings(params); err != nil {
-		return
+	// Rust #44905: a turn-start override is a saved thread setting. Rust #40645
+	// routes both standalone and turn-start writes through the same committed
+	// snapshot path.
+	_, _ = r.commitThreadSettingsUpdate(params, params.DisabledPluginIDs != nil)
+}
+
+// commitThreadSettingsUpdate commits one settings write and publishes the
+// snapshot that this write committed, rather than reading a state a concurrent
+// update may already have replaced (Rust #40645 SessionSettingsCommit).
+func (r *RuntimeRouter) commitThreadSettingsUpdate(params *SettingsUpdateParams, persist bool) (*SettingsUpdateResponse, error) {
+	if r == nil || params == nil {
+		return nil, nil
 	}
-	if params.DisabledPluginIDs != nil {
-		// Rust #44905: a turn-start override is a saved thread setting.
-		_ = r.persistThreadSettingsUpdate(params)
+	service := r.requireThreadExtras()
+	response, committed, err := service.UpdateSettingsWithCommit(params)
+	if err != nil {
+		return nil, err
+	}
+	if persist {
+		if err := r.persistThreadSettingsUpdate(params, committed); err != nil {
+			return nil, err
+		}
 	}
 	if r.mcpRuntimes != nil {
 		r.mcpRuntimes.invalidateThread(params.ThreadID)
 	}
 	r.prewarmMCPThread(params.ThreadID)
-	if settings := service.Settings(params.ThreadID); settings != nil {
+	if committed != nil {
 		r.notify(NotificationThreadSettingsUpdated, &SettingsUpdatedNotification{
 			ThreadID:       strings.TrimSpace(params.ThreadID),
-			ThreadSettings: *settings,
+			ThreadSettings: *committed,
 		})
 	}
+	return response, nil
 }
 
 func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) error {
@@ -8292,23 +8308,9 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 				return nil, err
 			}
 		}
-		service := r.requireThreadExtras()
-		response, err := service.UpdateSettings(&params)
+		response, err := r.commitThreadSettingsUpdate(&params, true)
 		if err != nil {
 			return nil, err
-		}
-		if err := r.persistThreadSettingsUpdate(&params); err != nil {
-			return nil, err
-		}
-		if r.mcpRuntimes != nil {
-			r.mcpRuntimes.invalidateThread(params.ThreadID)
-		}
-		r.prewarmMCPThread(params.ThreadID)
-		if settings := service.Settings(params.ThreadID); settings != nil {
-			r.notify(NotificationThreadSettingsUpdated, &SettingsUpdatedNotification{
-				ThreadID:       strings.TrimSpace(params.ThreadID),
-				ThreadSettings: *settings,
-			})
 		}
 		return response, nil
 	case MethodThreadShellCommand:
@@ -8358,7 +8360,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 	}
 }
 
-func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams) error {
+func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
 	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil) {
 		return nil
 	}
@@ -8392,20 +8394,21 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	// Rust #41567: persist the thread-owned cwd on the settings snapshot so a
 	// cold resume restores the thread's own working directory.
 	settingsCWD := ""
-	if r.services.ThreadExtras != nil {
-		if settings := r.services.ThreadExtras.Settings(strings.TrimSpace(params.ThreadID)); settings != nil {
-			settingsCWD = strings.TrimSpace(settings.CWD)
-		}
+	if committed != nil {
+		settingsCWD = strings.TrimSpace(committed.CWD)
 	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
 	}
 	appliedPolicy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
+	if committed != nil && strings.TrimSpace(committed.ApprovalPolicy) != "" {
+		appliedPolicy = strings.TrimSpace(committed.ApprovalPolicy)
+	}
 	return r.services.ThreadRouter.appendThreadSettingsAppliedWithSnapshot(
 		threadID,
 		appliedPolicy,
 		settingsCWD,
-		r.threadCollaborationModeSnapshot(params.ThreadID),
+		collaborationModeSnapshotFromSettings(committed),
 		runtimeRouterNow(r).UTC(),
 	)
 }
@@ -8414,7 +8417,10 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 // mode for the settings snapshot (Rust #45519: resume restores the saved mode
 // from the latest matching ThreadSettingsApplied event).
 func (r *RuntimeRouter) threadCollaborationModeSnapshot(threadID string) json.RawMessage {
-	settings := r.threadSettingsForTurn(threadID)
+	return collaborationModeSnapshotFromSettings(r.threadSettingsForTurn(threadID))
+}
+
+func collaborationModeSnapshotFromSettings(settings *Settings) json.RawMessage {
 	if settings == nil || settings.CollaborationMode == nil {
 		return nil
 	}
@@ -8477,10 +8483,11 @@ func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any, resumeCon
 	if restored == nil {
 		return
 	}
-	if _, err := r.requireThreadExtras().UpdateSettings(&SettingsUpdateParams{
+	_, committed, err := r.requireThreadExtras().UpdateSettingsWithCommit(&SettingsUpdateParams{
 		ThreadID:          threadID,
 		CollaborationMode: restored,
-	}); err != nil {
+	})
+	if err != nil {
 		return
 	}
 	// Rust persists the resumed settings snapshot, so the next resume restores
@@ -8488,7 +8495,7 @@ func (r *RuntimeRouter) applyThreadResumeCollaborationMode(result any, resumeCon
 	_ = r.persistThreadSettingsUpdate(&SettingsUpdateParams{
 		ThreadID:          threadID,
 		CollaborationMode: restored,
-	})
+	}, committed)
 }
 
 // resumeEffectiveModelAndEffort resolves the model and reasoning effort the

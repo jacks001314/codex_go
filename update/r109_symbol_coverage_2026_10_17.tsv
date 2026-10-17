@@ -803,7 +803,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4e6d5c0a96bdc8a8ef3b571bcf2c173141f5e7ee	44544	Move Guardian reporting and denial accounting into the extension (#44544)	2026-09-10	guardian	16	9	0.56	0	0	audit_pending	FailedReviewFeedback,ReviewFeedbackContext,ReviewFeedbackSettings,ReviewMetadata,for_outcome,for_thread,started_event
 4e6ef3b4181931e97aefea1f510ea821b2333a27	39958	Stop advertising shell snapshots from local exec servers (#39958)	2026-08-21	execserver	0	0		0	0	not_applicable	
 4e7ef7d19d59c51ac04e62d062664bfd012d76da	53654	Keep spawned children provisional until the spawn result returns (#53654)	2026-10-13	core	0	0		0	0	not_applicable	
-4e883ce36e4b69aabdc9d56bf19586d2e40a0756	40645	Keep settings operations bound to their committed snapshot (#40645)	2026-08-25	core	2	0	0.00	0	0	implementation_pending	SessionSettingsCommit,emit_applied
+4e883ce36e4b69aabdc9d56bf19586d2e40a0756	40645	Keep settings operations bound to their committed snapshot (#40645)	2026-08-25	core	2	0	0.00	0	0	complete	SessionSettingsCommit,emit_applied
 4e93cf9b4e4e86f49473478c8288426cb6d6b119	43656	Animate live voice transcripts with split-flap tiles (#43656)	2026-09-08	tui	1	1	1.00	0	0	complete	
 4eb4a65407d98cebc4c83bf13be440b9fbc78a7c	54590	Capture sender context for `codex_app.create_thread` deliveries (#54590)	2026-10-16	guardian	0	0		0	0	complete	
 4ee04c0aa5833ac39b1763f6ea44c7bc777c83dd	41380	Clarify proactive multi-agent delegation guidance (#41380)	2026-08-28	persistence	0	0		0	0	not_applicable	
