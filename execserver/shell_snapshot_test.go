@@ -66,7 +66,11 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 			ScopeID: "attachment-1",
 			Shell:   ShellInfo{Name: "zsh", Path: "/bin/zsh"},
 		},
-		Env: map[string]string{"PATH": "/bin"},
+		Env: map[string]string{
+			"PATH": "/bin", "HTTP_PROXY": "http://127.0.0.1:8080",
+			network.CredentialBrokerActiveEnvKey: "1", "TOKEN": "sk-dummy-value",
+			network.BrokeredCredentialsEnvKey: `[["TOKEN","sk-dummy-value"]]`,
+		},
 	}
 	pairs := []network.CredentialMaskPair{{Real: "sk-real-secret", Dummy: "sk-dummy-value"}}
 	rewritten, err := manager.rewrite(context.Background(), params, params.Env, pairs)
@@ -76,6 +80,11 @@ func TestShellSnapshotManagerRewritesAndCachesLikeRust(t *testing.T) {
 	script := rewritten.Argv[2]
 	if !strings.HasPrefix(script, ". '") || !strings.Contains(script, "|| exit 1\n") || !strings.HasSuffix(script, "echo ok") {
 		t.Fatalf("rewritten script = %q", script)
+	}
+	if !strings.Contains(script, "\\builtin export HTTP_PROXY='http://127.0.0.1:8080'") ||
+		!strings.Contains(script, "\\builtin export "+network.CredentialBrokerActiveEnvKey+"='1'") ||
+		!strings.Contains(script, "\\builtin export TOKEN='sk-dummy-value'") {
+		t.Fatalf("launch environment was not restored after snapshot: %q", script)
 	}
 	again, err := manager.rewrite(context.Background(), params, params.Env, pairs)
 	if err != nil {

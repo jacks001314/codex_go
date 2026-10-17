@@ -67,8 +67,61 @@ func (m *shellSnapshotManager) rewrite(ctx context.Context, params *ExecParams, 
 	}
 	rewritten := *params
 	rewritten.Argv = append([]string(nil), params.Argv...)
-	rewritten.Argv[scriptIndex] = ". " + shellSingleQuote(path) + " || exit 1\n" + params.Argv[scriptIndex]
+	rewritten.Argv[scriptIndex] = ". " + shellSingleQuote(path) + " || exit 1\n" +
+		shellSnapshotLaunchEnvExports(params.Env) +
+		params.Argv[scriptIndex]
 	return &rewritten, nil
+}
+
+func shellSnapshotLaunchEnvExports(env map[string]string) string {
+	keys := make([]string, 0, 32)
+	seen := map[string]struct{}{}
+	addKey := func(key string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		if _, ok := env[key]; !ok {
+			return
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	for _, key := range network.ProxyURLEnvKeys {
+		addKey(key)
+	}
+	for _, key := range network.NoProxyEnvKeys {
+		addKey(key)
+	}
+	addKey(network.ProxyActiveEnvKey)
+	addKey(network.ProxyAllowLocalBindingEnvKey)
+	addKey(network.CredentialBrokerActiveEnvKey)
+	addKey(network.BrokeredCredentialsEnvKey)
+	if raw := env[network.BrokeredCredentialsEnvKey]; raw != "" {
+		var entries [][]string
+		if json.Unmarshal([]byte(raw), &entries) == nil {
+			for _, entry := range entries {
+				if len(entry) > 0 {
+					addKey(entry[0])
+				}
+			}
+		}
+	}
+	for _, key := range network.ProxyCredentialBrokerEnvKeys() {
+		addKey(key)
+	}
+	var exports strings.Builder
+	for _, key := range keys {
+		exports.WriteString("\\builtin export ")
+		exports.WriteString(key)
+		exports.WriteString("=")
+		exports.WriteString(shellSingleQuote(env[key]))
+		exports.WriteString(" || exit 1\n")
+	}
+	return exports.String()
 }
 
 func (m *shellSnapshotManager) snapshotPath(ctx context.Context, params *ExecParams, shellType shell.ShellType, captureEnv map[string]string, credentialPairs []network.CredentialMaskPair) (string, error) {
