@@ -19337,9 +19337,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: format_legacy_environment_context_subagents"
+        "Round 115 (lead): verified complete (equivalent controller routing) - #47536 moves Rust agent target resolution/listing and V2 context onto AgentControl, including lazy root registration and controller-owned relative paths. Go's runtimeAgentController owns resolveTarget, SpawnAgent, SendInput/Message, WaitAgent, ListAgents and V2 tool interfaces; RoleAwareToolController delegates the V2 surface to it. Agent lookups and messaging therefore use the router-backed controller rather than a separate session-local registry. The unmatched Rust helper is a legacy formatting detail, not a missing controller route. Existing agent-controller resolution/list/messaging/V2 tests cover the equivalent path. No source change needed."
       ]
     },
     {
