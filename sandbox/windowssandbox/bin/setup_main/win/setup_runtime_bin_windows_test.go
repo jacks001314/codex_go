@@ -86,3 +86,39 @@ func TestEnsureCodexAppRuntimePathsReadableHandlesLongRuntimeRoots(t *testing.T)
 		}
 	}
 }
+
+func TestEnsureRuntimeTreeRepairsExistingChildren(t *testing.T) {
+	root := t.TempDir()
+	runtimeRoot := filepath.Join(root, "OpenAI", "Codex", "runtimes")
+	childDir := filepath.Join(runtimeRoot, "bin")
+	childFile := filepath.Join(childDir, "runtime.js")
+	if err := os.MkdirAll(childDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", childDir, err)
+	}
+	if err := os.WriteFile(childFile, []byte("runtime"), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", childFile, err)
+	}
+	t.Setenv("LOCALAPPDATA", root)
+	const sid = "S-1-1-0"
+	var refreshErrors []string
+	var log bytes.Buffer
+	if err := EnsureCodexAppRuntimePathsReadable(sid, &refreshErrors, &log); err != nil {
+		t.Fatalf("EnsureCodexAppRuntimePathsReadable() error = %v", err)
+	}
+	if len(refreshErrors) != 0 {
+		t.Fatalf("refreshErrors = %#v; log=%s", refreshErrors, log.String())
+	}
+	for _, path := range []string{childDir, childFile} {
+		allows, err := windowssandbox.PathMaskAllows(windowssandbox.ACLRequest{
+			Path: path,
+			SID:  sid,
+			Mask: uint32(RuntimeReadExecuteMask),
+		}, true)
+		if err != nil {
+			t.Fatalf("PathMaskAllows(%s) error = %v", path, err)
+		}
+		if !allows {
+			t.Fatalf("PathMaskAllows(%s) = false after runtime tree repair", path)
+		}
+	}
+}

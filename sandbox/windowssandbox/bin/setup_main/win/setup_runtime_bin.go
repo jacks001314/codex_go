@@ -49,7 +49,64 @@ func EnsureCodexAppRuntimePathsReadable(sandboxGroupSID string, refreshErrors *[
 			logLine(log, fmt.Sprintf("grant read/execute ACE failed on %s for sandbox_group: %v", runtimePath, err))
 		}
 	}
+	if strings.TrimSpace(localAppData) != "" {
+		runtimeRoot := filepath.Join(localAppData, "OpenAI", "Codex", "runtimes")
+		if err := ensureRuntimeTreeReadable(runtimeRoot, sandboxGroupSID); err != nil {
+			message := fmt.Sprintf("runtime read/execute validation failed: %v", err)
+			appendRefreshError(refreshErrors, message)
+			logLine(log, message)
+		}
+	}
 	return nil
+}
+
+func ensureRuntimeTreeReadable(root string, sandboxGroupSID string) error {
+	if !runtimeDirEligible(root) {
+		return nil
+	}
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if isReparsePoint(info) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		inheritance := uint32(0)
+		if info.IsDir() {
+			inheritance = RuntimeInheritance
+		}
+		req := windowssandbox.ACLRequest{Path: path, SID: sandboxGroupSID, Mask: RuntimeReadExecuteMask}
+		if err := windowssandbox.GrantReadExecuteACEs(req, inheritance); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		allowed, err := windowssandbox.PathMaskAllows(req, true)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if !allowed {
+			return fmt.Errorf("runtime read/execute access still missing on %s", path)
+		}
+		return nil
+	})
 }
 
 // runtimePaths mirrors Rust runtime_paths: the Codex app root under

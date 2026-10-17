@@ -60,6 +60,21 @@ func EnsureAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) erro
 	return err
 }
 
+// GrantAllowMaskACEsWithInheritance adds missing read/execute grants without
+// replacing existing ACEs. Any deny ACE for the same mask is preserved instead
+// of introducing an allow that could outrank an inherited deny.
+func GrantAllowMaskACEsWithInheritance(req ACLRequest, inheritance uint32) error {
+	_, err := grantAllowMaskACE(req, inheritance)
+	return err
+}
+
+// GrantReadExecuteACEs adds read/execute permissions without replacing existing
+// ACEs or overriding any deny ACE.
+func GrantReadExecuteACEs(req ACLRequest, inheritance uint32) error {
+	req.Mask = windows.FILE_GENERIC_READ | windows.FILE_GENERIC_EXECUTE
+	return GrantAllowMaskACEsWithInheritance(req, inheritance)
+}
+
 func PathMaskAllows(req ACLRequest, requireAllBits bool) (bool, error) {
 	path, sidBytes, sid, err := validateACLRequest(req)
 	if err != nil {
@@ -147,6 +162,41 @@ func addAllowMaskACE(req ACLRequest, inheritance uint32) (bool, error) {
 	}
 	runtime.KeepAlive(sidBytes)
 	runtime.KeepAlive(sd)
+	runtime.KeepAlive(newACL)
+	runtime.KeepAlive(entry)
+	return true, nil
+}
+
+func grantAllowMaskACE(req ACLRequest, inheritance uint32) (bool, error) {
+	if req.Mask == 0 {
+		return false, ErrInvalidRequest
+	}
+	path, sidBytes, sid, err := validateACLRequest(req)
+	if err != nil {
+		return false, err
+	}
+	sd, dacl, err := fileDACL(path)
+	if err != nil {
+		return false, err
+	}
+	defer runtime.KeepAlive(sidBytes)
+	defer runtime.KeepAlive(sd)
+	if daclAllowsMaskForSID(dacl, sid, req.Mask) {
+		return false, nil
+	}
+	if daclHasAnyDenyMask(dacl, req.Mask|windows.GENERIC_READ|windows.GENERIC_WRITE|windows.GENERIC_EXECUTE) {
+		return false, nil
+	}
+	entry := explicitGrantAccessForSID(sid, req.Mask, inheritance)
+	newACL, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, dacl)
+	if err != nil {
+		return false, err
+	}
+	if err := setDACL(path, newACL); err != nil {
+		runtime.KeepAlive(newACL)
+		runtime.KeepAlive(entry)
+		return false, err
+	}
 	runtime.KeepAlive(newACL)
 	runtime.KeepAlive(entry)
 	return true, nil
@@ -273,6 +323,12 @@ func explicitAllowAccessForSID(sid *windows.SID, mask uint32, inheritance uint32
 	}
 }
 
+func explicitGrantAccessForSID(sid *windows.SID, mask uint32, inheritance uint32) windows.EXPLICIT_ACCESS {
+	entry := explicitAllowAccessForSID(sid, mask, inheritance)
+	entry.AccessMode = windows.GRANT_ACCESS
+	return entry
+}
+
 func aclAlreadyHasACE(dacl *windows.ACL, sid *windows.SID, kind aclACEKind) bool {
 	if dacl == nil {
 		return false
@@ -325,6 +381,15 @@ func daclHasDeniedMaskForSID(dacl *windows.ACL, sid *windows.SID, desiredMask ui
 		}
 		mask := mapFileGenericMask(uint32(ace.Mask))
 		return mask&desiredMask != 0
+	})
+}
+
+func daclHasAnyDenyMask(dacl *windows.ACL, desiredMask uint32) bool {
+	return scanDACL(dacl, func(ace *windows.ACCESS_ALLOWED_ACE) bool {
+		if ace.Header.AceType != windows.ACCESS_DENIED_ACE_TYPE {
+			return false
+		}
+		return mapFileGenericMask(uint32(ace.Mask))&desiredMask != 0
 	})
 }
 

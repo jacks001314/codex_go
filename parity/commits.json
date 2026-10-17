@@ -15279,9 +15279,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: grant_read_execute_aces"
+        "Round 297: Windows runtime setup walks existing children, grants missing read/execute access with GRANT_ACCESS, preserves deny ACEs, skips reparse points and disappearing paths, and validates repaired access."
       ]
     },
     {
