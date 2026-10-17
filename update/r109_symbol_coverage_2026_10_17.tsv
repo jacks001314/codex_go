@@ -755,7 +755,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4a93bd249a4e73e24c3cc889053c947c6986362a	53485	Update `quinn-proto` to 0.11.18 (#53485)	2026-10-12	core	0	0		0	0	not_applicable	
 4aa52f2cb2cdffa9c826f9e4e421a5435a05af06	40450	Gate content item kinds behind a feature flag (#40450)	2026-08-24	model	1	1	1.00	0	0	complete	
 4aa94dce270de668eff6e2fa8585c82385e84455	52707	Migrate the Windows MXC sandbox to split MXC crates (#52707)	2026-10-09	sandbox	0	0		0	0	blocked_precondition	
-4aaee872e31abefe0d32e91faab23b09b6968824	51539	Add completion-aware realtime attachment and session-scoped detach (#51539)	2026-10-07	realtime	2	1	0.50	0	0	audit_pending	handle_attach
+4aaee872e31abefe0d32e91faab23b09b6968824	51539	Add completion-aware realtime attachment and session-scoped detach (#51539)	2026-10-07	realtime	2	2	1.00	0	0	complete	
 4abcb8d1dacc1343c7695acf815b096089e5fe9e	46710	Restore rich tool details in persisted TUI transcripts (#46710)	2026-09-19	tui	12	3	0.25	0	0	audit_pending	CommandHistory,DynamicToolCallCell,McpHistory,from_item,historical_tool_fallback,into_cell,mark_interrupted,update_from_item,with_activity_id
 4ac20a7f748a8a12cae0eb5019a26d13fdc2d456	41931	Increase Guardian message transcript limits (#41931)	2026-08-31	guardian	0	0		0	0	not_applicable	
 4ad985e2caaf877b96dafd8138dae2def467e01e	50964	Track inference tool changes in turn analytics (#50964)	2026-10-04	telemetry	2	2	1.00	0	0	complete	
