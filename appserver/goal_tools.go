@@ -117,6 +117,9 @@ func (r *RuntimeRouter) executeGoalToolCreate(ctx context.Context, invocation *t
 	}
 	r.resetGoalEmptyResponses(threadID)
 	r.markStateThreadGoalTurnActiveNow(threadID, turnID, goal.GoalID, goal.Status)
+	// Rust #41562: the creating turn owns the continuation lineage until an
+	// external edit, clear or injected context makes attribution ambiguous.
+	r.setGoalTurnLineage(threadID, r.activeTurnRootTurnID(threadID, turnID), turnID)
 	r.emitStateThreadGoalUpdate(goal, turnID, "", telemetry.GoalEventKindCreated)
 	r.recordGoalCreatedMetric()
 	r.recordGoalStatusTransitionForStateGoal(nil, goal)

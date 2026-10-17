@@ -20,6 +20,9 @@ import (
 
 type stateGoalTurnSnapshot struct {
 	GoalID string
+	// RootTurnID is the trusted root of the turn while it is accounted to the
+	// goal, so automatic continuations keep the creating turn's lineage.
+	RootTurnID string
 	// GoalStatus is the goal's status when the turn was anchored; the goal
 	// metrics use it as the previous status of an accounting transition (Rust's
 	// in-memory active_goal snapshot).
@@ -174,6 +177,11 @@ func (r *RuntimeRouter) setStateThreadGoal(params *GoalSetParams) (*GoalSetRespo
 	if persisted == nil {
 		return nil, existing, record, jsonRPCInvalidRequest(fmt.Sprintf("cannot update goal for thread %s: no goal exists", strings.TrimSpace(params.ThreadID)))
 	}
+	if params.Objective != nil {
+		// An external objective edit changes who created the goal, so the next
+		// automatic continuation must not inherit the old turn lineage.
+		r.invalidateGoalTurnLineage(params.ThreadID)
+	}
 	goal := apiGoalFromState(persisted)
 	if params.Objective != nil {
 		if previewUpdated, previewErr := r.services.StateRuntime.SetThreadPreviewIfEmpty(ctx, params.ThreadID, goal.Objective); previewErr != nil {
@@ -227,6 +235,7 @@ func (r *RuntimeRouter) clearStateThreadGoal(params *GoalClearParams) (*GoalClea
 	if err != nil {
 		return nil, nil, record, fmt.Errorf("failed to clear thread goal: %w", err)
 	}
+	r.invalidateGoalTurnLineage(params.ThreadID)
 	locked = false
 	r.goalStateMu.Unlock()
 	if deleted != nil {
@@ -408,6 +417,7 @@ func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID
 	currentUsage := r.goalTurnUsage[key]
 	r.goalAccountingTurns[key] = stateGoalTurnSnapshot{
 		GoalID:             goalID,
+		RootTurnID:         r.activeTurnRootTurnID(threadID, turnID),
 		StartedAtMS:        nowMS,
 		LastAccountedAtMS:  nowMS,
 		LastAccountedUsage: currentUsage,
@@ -415,6 +425,102 @@ func (r *RuntimeRouter) ensureStateThreadGoalTurnActive(threadID, turnID, goalID
 	}
 	r.goalAccountingMu.Unlock()
 	r.clearGoalIdleActive()
+}
+
+// goalTurnLineage is the trusted attribution carried from the turn that created
+// a goal through its automatic continuations (#41562).
+type goalTurnLineage struct {
+	RootTurnID   string
+	ParentTurnID string
+}
+
+// activeTurnRootTurnID resolves the root of the active turn, falling back to
+// the stored continuation lineage and finally to the turn itself.
+func (r *RuntimeRouter) activeTurnRootTurnID(threadID, turnID string) string {
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
+		if root := strings.TrimSpace(active.Params.RootTurnID); root != "" {
+			return root
+		}
+	}
+	if lineage, ok := r.goalTurnLineageFor(threadID); ok && lineage.RootTurnID != "" {
+		return lineage.RootTurnID
+	}
+	return turnID
+}
+
+func (r *RuntimeRouter) setGoalTurnLineage(threadID, rootTurnID, parentTurnID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.goalLineageMu.Lock()
+	defer r.goalLineageMu.Unlock()
+	if r.goalLineage == nil {
+		r.goalLineage = map[string]goalTurnLineage{}
+	}
+	r.goalLineage[threadID] = goalTurnLineage{
+		RootTurnID:   strings.TrimSpace(rootTurnID),
+		ParentTurnID: strings.TrimSpace(parentTurnID),
+	}
+}
+
+// extendGoalTurnLineage advances the previous parent turn after a goal turn
+// completes while keeping the original root.
+func (r *RuntimeRouter) extendGoalTurnLineage(threadID, rootTurnID, turnID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	turnID = strings.TrimSpace(turnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	r.goalLineageMu.Lock()
+	defer r.goalLineageMu.Unlock()
+	if r.goalLineage == nil {
+		r.goalLineage = map[string]goalTurnLineage{}
+	}
+	lineage := r.goalLineage[threadID]
+	if strings.TrimSpace(lineage.RootTurnID) == "" {
+		lineage.RootTurnID = firstNonEmpty(strings.TrimSpace(rootTurnID), turnID)
+	}
+	lineage.ParentTurnID = turnID
+	r.goalLineage[threadID] = lineage
+}
+
+func (r *RuntimeRouter) goalTurnLineageFor(threadID string) (goalTurnLineage, bool) {
+	if r == nil {
+		return goalTurnLineage{}, false
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return goalTurnLineage{}, false
+	}
+	r.goalLineageMu.Lock()
+	defer r.goalLineageMu.Unlock()
+	lineage, ok := r.goalLineage[threadID]
+	if !ok || (lineage.RootTurnID == "" && lineage.ParentTurnID == "") {
+		return goalTurnLineage{}, false
+	}
+	return lineage, true
+}
+
+func (r *RuntimeRouter) invalidateGoalTurnLineage(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.goalLineageMu.Lock()
+	defer r.goalLineageMu.Unlock()
+	delete(r.goalLineage, threadID)
 }
 
 func (r *RuntimeRouter) clearActiveGoalStateForThread(threadID string) {
@@ -909,6 +1015,7 @@ func (r *RuntimeRouter) finishStateThreadGoalTurn(threadID, turnID string, compl
 	if !ok || strings.TrimSpace(snapshot.GoalID) == "" {
 		return
 	}
+	r.extendGoalTurnLineage(threadID, snapshot.RootTurnID, turnID)
 	if completedAt.IsZero() {
 		completedAt = time.Now().UTC()
 	}
@@ -1116,6 +1223,10 @@ func (r *RuntimeRouter) continueThreadGoalIfIdle(threadID string) {
 				Value: prompt.ContinuationWithUpdatePlan(promptGoal, r.updatePlanEnabledForThread(threadID)),
 			},
 		},
+	}
+	if lineage, ok := r.goalTurnLineageFor(threadID); ok {
+		params.RootTurnID = lineage.RootTurnID
+		params.ParentTurnID = lineage.ParentTurnID
 	}
 	if err := r.startGoalContinuationTurn(params); err != nil {
 		slog.Warn("failed to start automatic goal continuation", "thread_id", threadID, "error", err)

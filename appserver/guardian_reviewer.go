@@ -1580,6 +1580,11 @@ func (r *RuntimeRouter) handleThreadInjectItemsRuntime(request *Request) (*Threa
 	// Ephemeral forks (used by TUI side conversations) live only in the
 	// runtime thread manager. They have no persisted store entry, so injected
 	// boundary items must be appended through the ephemeral runtime path.
+	if r.threads != nil && r.threads.ActiveTurn(strings.TrimSpace(params.ThreadID)) != nil {
+		// Rust #41562: external context reaching an active turn makes the goal
+		// continuation's root attribution ambiguous.
+		r.invalidateGoalTurnLineage(params.ThreadID)
+	}
 	now := runtimeRouterNow(r)
 	items := make([]session.Item, 0, len(params.Items))
 	for i, raw := range params.Items {

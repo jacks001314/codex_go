@@ -453,20 +453,25 @@ type RuntimeRouter struct {
 	goalIdleGoalID          string
 	goalIdleLastAccounted   time.Time
 	goalStateMu             sync.Mutex
-	externalSessionSyncMu   sync.Mutex
-	memoryStartupMu         sync.Mutex
-	memoryStartupClosing    bool
-	memoryStartupCtx        context.Context
-	memoryStartupCancel     context.CancelFunc
-	memoryStartupWG         sync.WaitGroup
-	realtimeOpsMu           sync.Mutex
-	realtimeOpsClosing      bool
-	realtimeOpsCtx          context.Context
-	realtimeOpsCancel       context.CancelFunc
-	realtimeOpsWG           sync.WaitGroup
-	realtimeOpsQueues       map[string]chan func(context.Context)
-	realtimeEventMu         sync.Mutex
-	realtimeEventLocks      map[string]*sync.Mutex
+	// goalLineage carries the trusted root and previous parent turn across
+	// automatic goal continuations (#41562). External input, goal edits or a
+	// clear drop it so a later continuation cannot inherit stale attribution.
+	goalLineageMu         sync.Mutex
+	goalLineage           map[string]goalTurnLineage
+	externalSessionSyncMu sync.Mutex
+	memoryStartupMu       sync.Mutex
+	memoryStartupClosing  bool
+	memoryStartupCtx      context.Context
+	memoryStartupCancel   context.CancelFunc
+	memoryStartupWG       sync.WaitGroup
+	realtimeOpsMu         sync.Mutex
+	realtimeOpsClosing    bool
+	realtimeOpsCtx        context.Context
+	realtimeOpsCancel     context.CancelFunc
+	realtimeOpsWG         sync.WaitGroup
+	realtimeOpsQueues     map[string]chan func(context.Context)
+	realtimeEventMu       sync.Mutex
+	realtimeEventLocks    map[string]*sync.Mutex
 	// voiceDurationRecorded deduplicates the voice session duration metric,
 	// which is recorded once per completed session.
 	voiceDurationRecorded map[string]bool

@@ -1247,6 +1247,14 @@
             "reason": "Aligned upstream 0265dd7b45 (#45677 Move Guardian review reporting and denial accounting into the extension) as an equivalent mechanism: the single modelGuardianReviewer owns assessment events, telemetry, warnings, decision recording and consecutive-denial accounting, so no separate extension/host split is needed. The behavioral half is verified: interrupting a still-active turn through the circuit breaker consumes and cancels it, runs the interrupted completion path, and emits the interrupted thread-idle lifecycle transition before any strict-mode parent warning.",
             "userImpact": "Guardian-requested interruptions leave the thread visibly idle instead of appearing active after the turn has been cancelled.",
             "test": "go test ./appserver -run 'TestGuardianCircuitBreakerInterruptionEmitsIdleStatusLikeRust|TestGuardianSubagentInterruptionNotifiesParentOnlyInStrictModeLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "goal-continuation-turn-lineage",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream 4210c08def (#41562 Preserve turn lineage across goal continuations): the router keeps a per-thread goal lineage whose root comes from the creating turn and whose parent advances on each goal-accounted turn completion. Automatic continuations start with that RootTurnID/ParentTurnID. External objective edits, goal clears, and thread/injectItems reaching an active turn invalidate the lineage so stale attribution cannot survive; Go drains async hook results per thread for the receiving turn, so no extra source-turn guard is needed.",
+            "userImpact": "Automatic goal continuations remain attributable to the turn that created the goal, while external edits or injected context correctly start a fresh lineage.",
+            "test": "go test ./appserver -run 'TestGoalTurnLineageAnchorsAndInvalidatesLikeRust|TestGoalContinuationCarriesTurnLineageLikeRust|TestExternalInjectInvalidatesGoalTurnLineageLikeRust|Goal' -count=1"
         }
     ]
 }
