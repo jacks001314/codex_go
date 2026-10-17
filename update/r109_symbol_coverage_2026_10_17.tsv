@@ -2190,7 +2190,7 @@ ce254df05a3162a93d8f3357ff4dd86582c534b7	43853	Add canonical permission translat
 ce2c2759ebee2d64565922f6f7365082284f9570	44183	Release persistent writers when session startup is cancelled (#44183)	2026-09-09	core	0	0		0	0	not_applicable	
 ce5c4133bd0494ca2c1bc8593e1be87787c293f4	43447	Route MCP elicitations through the shared approval decision path (#43447)	2026-09-07	guardian	0	0		0	0	not_applicable	
 ce7df362375772367bbba3deb9fb41632e96be1a	47635	Overlap startup WebSocket preconnect with tool discovery (#47635)	2026-09-23	guardian	2	2	1.00	0	0	complete	
-ce7fbb373b14b37a5d163735c395e355e272d618	44922	Bundle native voice runtimes in Windows releases (#44922)	2026-09-11	realtime	1	0	0.00	0	0	implementation_pending	build_windows_platform_tls_config
+ce7fbb373b14b37a5d163735c395e355e272d618	44922	Bundle native voice runtimes in Windows releases (#44922)	2026-09-11	realtime	1	0	0.00	0	0	not_applicable	build_windows_platform_tls_config
 cebdb732eacfeae9823be93aad273c242428b8a0	44945	Route TUI Windows sandbox setup through the app server (#44945)	2026-09-12	tui	4	0	0.00	0	0	implementation_pending	begin_windows_sandbox_setup,finish_windows_sandbox_setup_start,verify_windows_sandbox_mode_after_setup,windows_sandbox_blocks_thread_switch
 cec8c6fb876e90b20250ec740e970e3f33b7396f	54044	Keep fork lineage ahead of paginated transcript history (#54044)	2026-10-14	tui	2	0	0.00	0	0	not_applicable	ForkedThreadHistoryCell,is_session_history_prefix_cell
 ced02c5c3807db59d912733b09722bebceb9b785	45822	Add opt-in response body limits to the HTTP transport (#45822)	2026-09-16	guardian	1	0	0.00	0	0	implementation_pending	list_models_raw

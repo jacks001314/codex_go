@@ -12195,9 +12195,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: build_windows_platform_tls_config"
+        "Round 282 (audit): N/A - this is Windows release packaging for native voice runtimes and platform TLS configuration. Go's voicehost uses the Go runtime TLS stack and Go toolchain; there is no native voice runtime bundle or platform TLS config carrier."
       ]
     },
     {
