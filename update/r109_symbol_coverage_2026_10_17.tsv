@@ -93,7 +93,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 0a76a2520f45af68b7a5386688a9714af0a3ccd2	49689	Export skill invocation events through OpenTelemetry (#49689)	2026-09-30	telemetry	4	4	1.00	0	0	complete	
 0a80fab240ddf27aa9e1d4dd76748b7f44923f76	40264	Preserve content metadata when truncating messages (#40264)	2026-08-23	core	3	2	0.67	0	0	audit_pending	content_mut
 0ad18769ad8dfb7a6cf16b1bdd26b6e5f8773f64	46962	Avoid exposing config values in `codex doctor` errors (#46962)	2026-09-21	config	0	0		0	0	not_applicable	
-0ada5d8806cdad498230d5b1b2924091e04c8feb	52350	Expose experimental durable thread read state in the app server (#52350)	2026-10-09	tui	4	4	1.00	0	0	blocked_precondition	
+0ada5d8806cdad498230d5b1b2924091e04c8feb	52350	Expose experimental durable thread read state in the app server (#52350)	2026-10-09	tui	4	4	1.00	0	0	complete	
 0adfc1f2f2022b8c6fbc6526b953c4dd1865f7fa	44325	Return the prompt hash in upload responses (#44325)	2026-09-09	appserver	0	0		0	0	not_applicable	
 0ae02915bd1bfdd8207631f65aa31987368c7c8b	42807	Add request-scoped Guardian approval decisions (#42807)	2026-09-04	guardian	7	1	0.14	0	0	audit_pending	ApprovalDecisionInput,GuardianReviewReason,ReviewRuntime,SynchronousApprovalReviewer,decide_approval,run_synchronous_review
 0ae94fdd49b05ee7faa4d984d06a68492cb32b54	41436	Respond to terminal queries from TTY subprocesses (#41436)	2026-08-28	sandbox	1	1	1.00	0	0	complete	
@@ -1955,7 +1955,7 @@ b68acc4d4b56fdfa1d5b6a2c36102c66876e0c46	41006	Trust invoked user skills in Guar
 b6903c0669df044e4a089dab949fd44d54aa9355	50431	Preserve terminal hyperlinks in agents overview previews (#50431)	2026-10-02	tui	0	0		0	0	not_applicable	
 b6a5d5bb14d6c3d6a656ca8d2274d6d4259ac57d	45441	Preserve Guardian parent response IDs across sampling requests (#45441)	2026-09-14	guardian	0	0		0	0	not_applicable	
 b6ab99ed87844a357e24c281f092db2bf2b05b9f	42100	Prefer remote Sites over the bundled plugin (#42100)	2026-09-01	appserver	4	0	0.00	0	0	implementation_pending	bundled_sites_is_hidden,ensure_sites_migration_ready,excluded_bundled_plugin_ids,update_sites_exclusion
-b6e8a2e207e5591780061c62c50df417670f8d75	52337	Add durable thread read state with revision-checked updates (#52337)	2026-10-09	persistence	6	1	0.17	0	0	audit_pending	ReadStateOperation,ReadStateUpdate,publish_thread_attention,thread_read_states,update_thread_read_state
+b6e8a2e207e5591780061c62c50df417670f8d75	52337	Add durable thread read state with revision-checked updates (#52337)	2026-10-09	persistence	6	6	1.00	0	0	complete	
 b705b6b076c64e5d66d6b340a32b07ae32d20486	40437	Report completed sub-agent activity on parent turns (#40437)	2026-08-24	tui	2	2	1.00	0	0	complete	
 b707714ae4200db0a0385da24b3981d99139fa62	50113	Add a native gRPC client for cloud thread resume and attach (#50113)	2026-10-01	core	11	8	0.73	0	0	audit_pending	AttachRequest,AttachResponse,RpcStatus
 b71af39fe655331774844194b22d9d48dc49dc62	45805	Preserve MCP App UI metadata in tool-call events and history (#45805)	2026-09-15	tui	2	2	1.00	0	0	complete	
@@ -2426,7 +2426,7 @@ e444aa99d76beeb8b5b0610b793c0cdefe58da58	44349	Distinguish forked sessions in se
 e4490eff65d9f4dcd986f140e81927058bfa296d	52736	Allow model catalogs to override incremental tool notices (#52736)	2026-10-10	persistence	4	4	1.00	0	0	complete
 e44b9bb3da036320853abd032e2e2f065342b964	51457	Preserve status usage hyperlinks when the URL wraps (#51457)	2026-10-06	tui	0	0		0	0	not_applicable	
 e44bd9b64d8a1fa54da7f0d0c12881c61bb5da57	40637	Retry timed-out cloud config loads in the background (#40637)	2026-08-25	config	0	0		0	0	not_applicable	
-e45069d770c6d0b8984c58a6e7cbaf221ad37599	52395	Add experimental app-server thread read-state updates (#52395)	2026-10-09	appserver	7	2	0.29	0	0	complete	ThreadReadStateOperation,ThreadReadViewError,read_thread_view,thread_read_state_update,thread_read_view_error
+e45069d770c6d0b8984c58a6e7cbaf221ad37599	52395	Add experimental app-server thread read-state updates (#52395)	2026-10-09	appserver	7	7	1.00	0	0	complete	
 e45226e771add9f87a47b6d24c1ff61d62588846	41840	Use the async stack budget for approval reviews (#41840)	2026-08-31	guardian	1	0	0.00	0	0	implementation_pending	THREAD_STACK_SIZE_BYTES
 e482cc66aeeedcb9f333a1f5a0a554eb5aea4b36	39962	Keep Guardian reviews isolated from executor MCP servers (#39962)	2026-08-21	appserver	0	0		0	0	not_applicable	
 e49739355235bb1ac27df799327227be23e87e94	46498	Allow worktree sessions to use an existing local daemon (#46498)	2026-09-18	tui	0	0		0	0	not_applicable	

@@ -39,10 +39,10 @@ func TestStateRuntimeOwnsRustDatabaseLifecycle(t *testing.T) {
 		db   *sql.DB
 		want int
 	}{
-		{name: "state", db: runtime.StateDB(), want: 50},
+		{name: "state", db: runtime.StateDB(), want: 61},
 		{name: "logs", db: runtime.LogsDB(), want: 2},
 		{name: "goals", db: runtime.GoalsDB(), want: 2},
-		{name: "memories", db: runtime.MemoriesDB(), want: 1},
+		{name: "memories", db: runtime.MemoriesDB(), want: 2},
 	} {
 		var count int
 		if err := test.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM _sqlx_migrations`).Scan(&count); err != nil || count != test.want {
@@ -285,11 +285,11 @@ CREATE TABLE _sqlx_migrations (
 
 func TestRuntimeMigrationInventoryMatchesFrozenRustCounts(t *testing.T) {
 	want := map[RuntimeDBKind]int{
-		RuntimeDBState:         50,
+		RuntimeDBState:         61,
 		RuntimeDBLogs:          2,
 		RuntimeDBGoals:         2,
-		RuntimeDBMemories:      1,
-		RuntimeDBThreadHistory: 4,
+		RuntimeDBMemories:      2,
+		RuntimeDBThreadHistory: 8,
 	}
 	for kind, count := range want {
 		migrations, err := loadRuntimeMigrations(kind)

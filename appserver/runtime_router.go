@@ -868,6 +868,7 @@ func (r *RuntimeRouter) notifyTurnCompletedOnce(notification *TurnCompletedNotif
 	if !r.threads.ClaimTerminal(notification.ThreadID, notification.Turn.ID) {
 		return false
 	}
+	r.publishThreadReadAttention(notification)
 	r.requireRealtime().CompleteHandoff(notification.ThreadID)
 	r.notify(NotificationTurnCompleted, notification)
 	return true
@@ -3680,6 +3681,7 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 			return nil, fmt.Errorf("failed to interrupt active turn before revert: %w", err)
 		}
 	}
+	receiptRevision := r.threadReadStateRevisionToRetire(params.ThreadID, params.BeforeTurnID)
 	result, err := r.services.ThreadRouter.dispatch(request)
 	if err != nil {
 		return nil, err
@@ -3690,6 +3692,20 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	}
 	r.clearNodeReplReviewEvidence(params.ThreadID)
 	r.notify(NotificationThreadReverted, &ThreadIDNotification{ThreadID: params.ThreadID})
+	if receiptRevision != "" && r.services.StateRuntime != nil {
+		outcome, readStateErr := r.services.StateRuntime.UpdateThreadReadState(
+			context.Background(),
+			params.ThreadID,
+			receiptRevision,
+			state.ReadStateOperationRead,
+		)
+		switch {
+		case readStateErr != nil:
+			slog.Warn("reverted history but could not update unread position", "thread_id", params.ThreadID, "error", readStateErr)
+		case outcome.Kind == state.ReadStateUpdateApplied:
+			r.notifyThreadReadStateChanged(params.ThreadID, apiThreadReadState(outcome.State))
+		}
+	}
 	return response, nil
 }
 
@@ -4107,6 +4123,7 @@ func (r *RuntimeRouter) handleThreadReadRuntime(request *Request) (*ThreadReadRe
 	if params.IncludeTurns {
 		normalizeThreadTurnsStatus(response.Thread.Turns, loadedStatus, r.activeRuntimeTurnSnapshot(params.ThreadID) != nil)
 	}
+	attachThreadReadState(r.services.StateRuntime, response)
 	return response, nil
 }
 
@@ -4276,6 +4293,9 @@ func (r *RuntimeRouter) handleThreadListRuntime(request *Request) (any, error) {
 		return nil, err
 	}
 	r.applyRuntimeThreadStatuses(result)
+	if response, ok := result.(*ThreadListResponse); ok {
+		attachThreadListReadStates(r.services.StateRuntime, response)
+	}
 	return result, nil
 }
 
@@ -4668,6 +4688,13 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 	case MethodThreadSetName, MethodThreadNameSet:
 		if params, ok := lifecycleSetNameParams(request); ok {
 			r.notify(NotificationThreadNameUpdated, &ThreadNameUpdatedNotification{ThreadID: params.ThreadID, ThreadName: &params.Name})
+		}
+	case MethodThreadReadStateUpdate:
+		if response, ok := result.(*ThreadReadStateUpdateResponse); ok && response != nil {
+			var params ThreadReadStateUpdateParams
+			if request.DecodeParams(&params) == nil {
+				r.notifyThreadReadStateChanged(params.ThreadID, response.ReadState)
+			}
 		}
 	}
 	return result, nil

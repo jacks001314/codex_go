@@ -2577,9 +2577,10 @@ func (p *ThreadListParams) Validate() error {
 }
 
 type ThreadListResponse struct {
-	Data            []Thread `json:"data"`
-	NextCursor      *string  `json:"nextCursor"`
-	BackwardsCursor *string  `json:"backwardsCursor"`
+	Data            []Thread                   `json:"data"`
+	NextCursor      *string                    `json:"nextCursor"`
+	BackwardsCursor *string                    `json:"backwardsCursor"`
+	ReadStates      map[string]ThreadReadState `json:"readStates"`
 }
 
 func (r *ThreadListResponse) MarshalJSON() ([]byte, error) {
@@ -2588,11 +2589,13 @@ func (r *ThreadListResponse) MarshalJSON() ([]byte, error) {
 		data = []Thread{}
 	}
 	return json.Marshal(struct {
-		Data            []Thread `json:"data"`
-		NextCursor      *string  `json:"nextCursor"`
-		BackwardsCursor *string  `json:"backwardsCursor"`
+		Data            []Thread                   `json:"data"`
+		ReadStates      map[string]ThreadReadState `json:"readStates"`
+		NextCursor      *string                    `json:"nextCursor"`
+		BackwardsCursor *string                    `json:"backwardsCursor"`
 	}{
 		Data:            data,
+		ReadStates:      r.ReadStates,
 		NextCursor:      r.NextCursor,
 		BackwardsCursor: r.BackwardsCursor,
 	})
@@ -3026,7 +3029,8 @@ func (p *ThreadReadParams) Validate() error {
 }
 
 type ThreadReadResponse struct {
-	Thread *Thread `json:"thread"`
+	Thread    *Thread          `json:"thread"`
+	ReadState *ThreadReadState `json:"readState"`
 }
 
 type ThreadItemsListParams struct {
@@ -3329,6 +3333,34 @@ type ThreadUnreadPosition struct {
 type ThreadReadState struct {
 	FirstUnread *ThreadUnreadPosition `json:"firstUnread"`
 	Revision    string                `json:"revision"`
+}
+
+// ThreadReadStateOperation mirrors Rust's tagged read/unread operation
+// (`{"type":"read"}` or `{"type":"unread"}`).
+type ThreadReadStateOperation struct {
+	Type string `json:"type"`
+}
+
+type ThreadReadStateUpdateParams struct {
+	ThreadID         string                   `json:"threadId"`
+	Operation        ThreadReadStateOperation `json:"operation"`
+	ExpectedRevision string                   `json:"expectedRevision"`
+}
+
+func (p *ThreadReadStateUpdateParams) Validate() error {
+	if p == nil || strings.TrimSpace(p.ThreadID) == "" {
+		return fmt.Errorf("%w: threadId is required", ErrInvalidRequest)
+	}
+	switch p.Operation.Type {
+	case "read", "unread":
+		return nil
+	default:
+		return fmt.Errorf("%w: operation type must be read or unread", ErrInvalidRequest)
+	}
+}
+
+type ThreadReadStateUpdateResponse struct {
+	ReadState ThreadReadState `json:"readState"`
 }
 
 // ThreadReadStateChangedNotification mirrors Rust

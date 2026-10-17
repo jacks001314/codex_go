@@ -16,6 +16,14 @@
     "generatedAt": "2026-10-18T00:00:00+08:00",
     "items": [
         {
+            "id": "durable-thread-read-state",
+            "status": "done",
+            "area": "appserver",
+            "reason": "Aligned upstream b6e8a2e207 (#52337), 0ada5d8806 (#52350), 82883da25e (#52384) and e45069d770 (#52395): state receipts now expose revision-checked read/unread updates, initial thread-bound revisions, duplicate terminal publication suppression, terminal attention before turn/completed, revert-only cleanup, thread/read readState, thread/list readStates, and subscriber-targeted thread/readState/changed notifications. Receipts survive metadata rebuilds/restarts and are removed with the thread.",
+            "userImpact": "Unread positions survive restarts without being cleared by stale windows, and clients can safely mark threads read or unread with explicit conflicts instead of blind retries.",
+            "test": "go test ./state -run ThreadReadState -count=1; go test ./appserver -run 'ThreadReadState|TerminalAttention|RevertRetires' -count=1"
+        },
+        {
             "id": "windows-control-socket-rendezvous-hardening",
             "status": "done",
             "area": "appserver",

@@ -1168,6 +1168,8 @@ func (r *Router) dispatch(request *Request) (any, error) {
 		return r.handleThreadFork(request)
 	case MethodThreadArchive:
 		return r.handleThreadArchive(request)
+	case MethodThreadReadStateUpdate:
+		return r.handleThreadReadStateUpdate(request)
 	case MethodThreadUnarchive:
 		return r.handleThreadUnarchive(request)
 	case MethodThreadDelete:
@@ -2016,7 +2018,9 @@ func (r *Router) handleThreadRead(request *Request) (*ThreadReadResponse, error)
 		r.attachRolloutTurnSnapshots(record)
 	}
 	path := r.threadRolloutPath(record)
-	return &ThreadReadResponse{Thread: BuildThread(record, path, params.IncludeTurns)}, nil
+	response := &ThreadReadResponse{Thread: BuildThread(record, path, params.IncludeTurns)}
+	attachThreadReadState(r.state, response)
+	return response, nil
 }
 
 func threadReadError(threadID string, err error) error {
@@ -3286,7 +3290,12 @@ func (r *Router) handleThreadList(request *Request) (*ThreadListResponse, error)
 	if err != nil {
 		return nil, err
 	}
-	return BuildListResponse(page, r.store, false)
+	response, err := BuildListResponse(page, r.store, false)
+	if err != nil {
+		return nil, err
+	}
+	attachThreadListReadStates(r.state, response)
+	return response, nil
 }
 
 func (r *Router) repairStateThreadListing(fullReconcile bool) {
