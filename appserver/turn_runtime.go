@@ -8100,6 +8100,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		ThreadID:                             params.ThreadID,
 		SessionID:                            firstNonEmpty(runConfig.SessionID, params.ThreadID),
 		TurnID:                               record.ID,
+		RootTurnID:                           stringPtrIfNotEmpty(rootTurnIDForTurn(params, record.ID)),
 		TurnTrigger:                          params.TurnTrigger,
 		CodexTurnSource:                      runConfig.ClientMetadata["source"],
 		AppServerClient:                      client,

@@ -19306,6 +19306,10 @@ workspace_kind = "projectless"
 	if params.ThreadID != "thread-analytics" || params.SessionID != "session-analytics" || params.TurnID != turnID {
 		t.Fatalf("turn ids = %#v", params)
 	}
+	// Rust #40486: a top-level turn is its own analytics root.
+	if params.RootTurnID == nil || *params.RootTurnID != turnID {
+		t.Fatalf("root_turn_id = %#v, want %q", params.RootTurnID, turnID)
+	}
 	if params.AppServerClient.ProductClientID != "codex_vscode" {
 		t.Fatalf("product_client_id = %q", params.AppServerClient.ProductClientID)
 	}
