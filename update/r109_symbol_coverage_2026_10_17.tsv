@@ -581,7 +581,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3a16c0b7076944bd7c850950464aa38f5620407c	49147	Simplify cloud task base URL normalization (#49147)	2026-09-29	core	0	0		0	0	not_applicable	
 3a211471d2c3c39b2f3369e82b2df938db155798	40475	Request read control when updating Windows sandbox ACLs (#40475)	2026-08-24	sandbox	0	0		0	0	not_applicable	
 3a469a297daeab77a60c142669262366f344a830	40533	Route extension hints into context-window metadata (#40533)	2026-08-25	core	0	0		0	0	not_applicable	
-3a589370a49ddf197de8e5ae03a92615bcad58bf	46010	Enable app tool result metadata with analytics controls (#46010)	2026-09-16	appserver	1	0	0.00	0	0	implementation_pending	has_same_tool_result_metadata
+3a589370a49ddf197de8e5ae03a92615bcad58bf	46010	Enable app tool result metadata with analytics controls (#46010)	2026-09-16	appserver	1	0	0.00	0	0	complete	has_same_tool_result_metadata
 3a69ec3ef8fb87b41e99b8942af061ad58ae6732	50695	Preserve local Markdown link labels in the TUI (#50695)	2026-10-03	tui	0	0		0	0	not_applicable	
 3abbf9fe2c6b6910e9de61f6a0c5bb468f74b5c8	45312	Extract Windows sandbox configuration preparation into a helper (#45312)	2026-09-14	sandbox	2	2	1.00	0	0	complete	
 3ae4225b1761c135c6d3bbc1ea0cfcfc95752cdc	41403	Restrict cloud task credentials to trusted origins (#41403)	2026-08-28	core	2	0	0.00	0	0	complete	new_without_redirects,validate_chatgpt_base_url
