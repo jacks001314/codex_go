@@ -36,7 +36,10 @@ func noFollowSymlinkComponent(path string) (string, error) {
 			}
 			return "", err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
+		// Windows junctions are reparse points but not ModeSymlink; the
+		// platform helper checks the reparse attribute so a junction in any
+		// component is still rejected (Rust #51511).
+		if info.Mode()&os.ModeSymlink != 0 || noFollowComponentIsReparse(current, info) {
 			return current, nil
 		}
 	}
