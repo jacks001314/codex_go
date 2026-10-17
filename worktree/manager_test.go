@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -55,6 +56,21 @@ func TestWorktreeManagerCreateAndList(t *testing.T) {
 	if owner != "thread-1" {
 		t.Fatalf("Owner() = %q, want thread-1", owner)
 	}
+	metadataPath, err := worktreeMetadataPath(created.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record worktreeOwnerRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatal(err)
+	}
+	if record.Version != worktreeOwnerVersion || record.OwnerThreadID != "thread-1" {
+		t.Fatalf("owner metadata = %#v", record)
+	}
 	if err := manager.BindThread(created.Root, "thread-1"); err != nil {
 		t.Fatalf("rebind same owner error = %v", err)
 	}
@@ -74,17 +90,33 @@ func TestWorktreeOwnerRejectsInvalidRecord(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	root := t.TempDir()
-	runGit(t, root, "init")
-	metadataPath, err := worktreeMetadataPath(root)
+	source := t.TempDir()
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, source, "add", "file.txt")
+	runGit(t, source, "commit", "-m", "initial")
+	settings, err := FromDesktopConfig(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewWorktreeManager(settings)
+	created, err := manager.Create(source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Remove(created.Root) })
+	metadataPath, err := worktreeMetadataPath(created.Root)
 	if err != nil {
 		t.Fatalf("worktreeMetadataPath() error = %v", err)
 	}
 	if err := os.WriteFile(metadataPath, []byte(`{"version":99,"ownerThreadId":"thread"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile metadata: %v", err)
 	}
-	manager := NewWorktreeManager(WorktreeSettings{Root: root, AutoCleanupEnabled: true, KeepCount: 15})
-	if _, err := manager.Owner(root); err == nil {
+	if _, err := manager.Owner(created.Root); err == nil {
 		t.Fatal("Owner() should reject an invalid version record")
 	}
 }
@@ -93,15 +125,83 @@ func TestWorktreeOwnerReturnsEmptyWhenMissing(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
-	root := t.TempDir()
-	runGit(t, root, "init")
-	manager := NewWorktreeManager(WorktreeSettings{Root: root, AutoCleanupEnabled: true, KeepCount: 15})
-	owner, err := manager.Owner(root)
+	source := t.TempDir()
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, source, "add", "file.txt")
+	runGit(t, source, "commit", "-m", "initial")
+	settings, err := FromDesktopConfig(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewWorktreeManager(settings)
+	created, err := manager.Create(source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Remove(created.Root) })
+	owner, err := manager.Owner(created.Root)
 	if err != nil {
 		t.Fatalf("Owner() error = %v", err)
 	}
 	if owner != "" {
 		t.Fatalf("Owner() = %q, want empty", owner)
+	}
+}
+
+func TestWorktreeOwnerRejectsPrimaryNestedAndUnmanagedCheckouts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	source := t.TempDir()
+	runGit(t, source, "init")
+	runGit(t, source, "config", "user.email", "test@example.com")
+	runGit(t, source, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(source, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, source, "add", "file.txt")
+	runGit(t, source, "commit", "-m", "initial")
+	settings, err := FromDesktopConfig(t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewWorktreeManager(settings)
+	if err := manager.BindThread(source, "primary-thread"); err == nil {
+		t.Fatal("BindThread() accepted the primary checkout")
+	}
+	if _, err := os.Stat(filepath.Join(source, ".git", worktreeOwnerFilename)); !os.IsNotExist(err) {
+		t.Fatalf("primary checkout owner metadata exists: %v", err)
+	}
+
+	created, err := manager.Create(source, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Remove(created.Root) })
+	nested := filepath.Join(created.Root, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.BindThread(nested, "nested-thread"); err == nil {
+		t.Fatal("BindThread() accepted a nested checkout")
+	}
+
+	unmanaged := filepath.Join(settings.Root, "scratch", "project")
+	if err := os.MkdirAll(filepath.Dir(unmanaged), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, source, "worktree", "add", "--detach", unmanaged, "HEAD")
+	t.Cleanup(func() { _ = manager.Remove(unmanaged) })
+	if _, err := manager.Owner(unmanaged); err == nil {
+		t.Fatal("Owner() accepted an unmanaged layout")
+	}
+	if err := manager.BindThread(unmanaged, "unmanaged-thread"); err == nil {
+		t.Fatal("BindThread() accepted an unmanaged layout")
 	}
 }
 

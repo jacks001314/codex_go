@@ -1646,6 +1646,14 @@
             "reason": "Aligned upstream 1715e55076 (#45185 Bind direct tool-call metadata to invocation outputs): Go reserves a direct-call record before dispatch, binds it to the exact output, marks complete inventory, enforces the retained metadata budget, strips metadata when disabled, observes non-dispatched calls, and attaches records to compaction prompts. Rust Arc strong_count staleness checks are represented by permit/lifetime identity validation.",
             "userImpact": "Tool-call metadata follows the exact invocation output and cannot be reattached after recorder lifetime changes or leak into Code Mode cell metadata.",
             "test": "go test ./turn -run 'ExecutedToolCall|DirectCall|ToolResultMetadata' -count=1"
+        },
+        {
+            "id": "managed-worktree-thread-ownership",
+            "status": "done",
+            "area": "core",
+            "reason": "Aligned upstream 23cedf4802 (#40716 Add thread ownership metadata for managed worktrees): Go validates the managed four-hex bucket layout, repository-root identity, and linked-worktree git metadata before reading or writing codex-thread.json. Binding uses atomic hard-link no-clobber publication, is idempotent for the same thread, and rejects conflicting owners plus primary/nested/unmanaged checkouts. Git probes use repository-selecting env scrubbing and disabled hooks/fsmonitor/attributes/LFS behavior; managed creation uses the same bucket layout.",
+            "userImpact": "Managed worktrees cannot have ownership metadata written into a primary or unmanaged checkout, and concurrent thread bindings cannot clobber another owner.",
+            "test": "go test ./worktree -count=1; go test ./app -run Worktree -count=1; go test ./tui ./tui/tea -run Worktree -count=1"
         }
     ]
 }
