@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"sort"
+	"strings"
 )
 
 const (
@@ -438,6 +439,10 @@ type RetainedContext struct {
 	assistantMessagesIncomplete bool
 	nextOrder                   uint64
 	senderDeliveries            []orderedSenderUserMessages
+	// pendingAssistantOrders reserves an assistant message's acceptance order
+	// when its source stream starts (#47584), before the completed message is
+	// recorded. The reservation is consumed by the matching record.
+	pendingAssistantOrders map[string]uint64
 }
 
 // MarshalJSON keeps empty families as `[]` and always emits `next_order`.
@@ -525,6 +530,12 @@ func (c *RetainedContext) Clone() *RetainedContext {
 		if revision := cloned.senderDeliveries[i].Revision; revision != nil {
 			value := *revision
 			cloned.senderDeliveries[i].Revision = &value
+		}
+	}
+	if len(c.pendingAssistantOrders) > 0 {
+		cloned.pendingAssistantOrders = make(map[string]uint64, len(c.pendingAssistantOrders))
+		for messageID, order := range c.pendingAssistantOrders {
+			cloned.pendingAssistantOrders[messageID] = order
 		}
 	}
 	return &cloned
@@ -642,6 +653,46 @@ func (c *RetainedContext) ReserveOrder() uint64 {
 	order := c.nextOrder
 	c.nextOrder = saturatingAdd(c.nextOrder, 1)
 	return order
+}
+
+// ReserveAssistantMessageOrder reserves one source message's order once, so a
+// user reply accepted before the streamed message completes keeps the
+// question-before-reply ordering (#47584).
+func (c *RetainedContext) ReserveAssistantMessageOrder(messageID string) uint64 {
+	if c == nil {
+		return 0
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID != "" {
+		if order, ok := c.pendingAssistantOrders[messageID]; ok {
+			return order
+		}
+	}
+	order := c.ReserveOrder()
+	if messageID != "" {
+		if c.pendingAssistantOrders == nil {
+			c.pendingAssistantOrders = map[string]uint64{}
+		}
+		c.pendingAssistantOrders[messageID] = order
+	}
+	return order
+}
+
+// TakePendingAssistantMessageOrder consumes a reservation for a completed
+// assistant message.
+func (c *RetainedContext) TakePendingAssistantMessageOrder(messageID string) (uint64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	messageID = strings.TrimSpace(messageID)
+	if messageID == "" {
+		return 0, false
+	}
+	order, ok := c.pendingAssistantOrders[messageID]
+	if ok {
+		delete(c.pendingAssistantOrders, messageID)
+	}
+	return order, ok
 }
 
 func (c *RetainedContext) recordOrder(acceptanceOrder *uint64) uint64 {

@@ -920,6 +920,7 @@ func (r *RuntimeRouter) notifyResponsesStreamEvent(threadID string, turnID strin
 		if item.Type == "agent_message" {
 			phase := streamAgentMessagePhase(event.Item)
 			state.agentItemPhases[item.ID] = phase
+			r.reserveAssistantRetainedOrder(threadID, item.ID)
 			r.requireRealtime().BeginCodexOutput(threadID, item.ID, phase)
 			r.observeRealtimeAgentItem(threadID, turnID, item.ID, item.Text, false)
 		}

@@ -1318,6 +1318,14 @@
             "reason": "Aligned upstream 865bbf9a69 (#41919 Source Guardian REPL policy from model metadata): the effective auto_review.node_repl_policy comes from catalog metadata with the bundled fallback and explicit-empty suppression, and the guardian session runner now treats the effective policy as part of reuse: a changed policy clears the cached previous response and seed, an explicitly empty policy is distinct from unset, and an unchanged policy keeps the session reusable.",
             "userImpact": "Changing the reviewer model's Node/CUA REPL policy cannot silently reuse a session created under a different policy.",
             "test": "go test ./appserver -run 'TestGuardianSessionInvalidatesOnNodeReplPolicyChangeLikeRust|TestGuardianReviewReusesOrInvalidatesSessionByNodeReplPolicyLikeRust|Guardian' -count=1"
+        },
+        {
+            "id": "retained-streamed-assistant-order",
+            "status": "done",
+            "area": "guardian",
+            "reason": "Aligned upstream 876ce590e1 (#47584 Preserve streamed assistant message order in retained context): the live thread-owned retained context reserves an assistant message's acceptance order when its source stream starts, keyed by message ID and idempotent per ID. Recording the completed message consumes that reservation, so a user reply accepted before the streamed question completes remains ordered after it.",
+            "userImpact": "Guardian retained context keeps question-before-reply ordering when users answer a streamed question early.",
+            "test": "go test ./retainedctx -run TestReserveAssistantMessageOrderLikeRust -count=1; go test ./appserver -run TestRetainedAssistantOrderReservedAtStreamStartLikeRust -count=1"
         }
     ]
 }

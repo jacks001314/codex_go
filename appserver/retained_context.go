@@ -61,6 +61,24 @@ func (r *RuntimeRouter) retainedContextForThread(threadID string) *retainedctx.R
 	return context.Clone()
 }
 
+// reserveAssistantRetainedOrder mirrors Rust #47584: the source stream's order
+// is reserved as soon as the assistant message starts, so a user reply accepted
+// before completion cannot be ordered ahead of it.
+func (r *RuntimeRouter) reserveAssistantRetainedOrder(threadID, messageID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	messageID = strings.TrimSpace(messageID)
+	if threadID == "" || messageID == "" {
+		return
+	}
+	r.retainedContextsMu.Lock()
+	defer r.retainedContextsMu.Unlock()
+	context := r.retainedLiveContextLocked(threadID)
+	context.ReserveAssistantMessageOrder(messageID)
+}
+
 // retainedLiveContextLocked returns the thread's live retained evidence, seeded
 // from its newest checkpoint and the sparse facts recorded after it. The caller
 // must hold retainedContextsMu.
@@ -339,7 +357,13 @@ func recordRetainedSessionItem(context *retainedctx.RetainedContext, record reta
 		// advancing the thread's counter again.
 		order, recorded := context.AssistantMessageOrder(record.message.MessageID)
 		if !recorded {
-			order = context.ReserveOrder()
+			if pending, ok := context.TakePendingAssistantMessageOrder(retainedMessageID(record.message.MessageID)); ok {
+				// Rust #47584: reuse the order reserved when the source stream
+				// started instead of assigning a later completion order.
+				order = pending
+			} else {
+				order = context.ReserveOrder()
+			}
 		}
 		source = retainedctx.LocalInputSource(&order)
 	}
@@ -367,6 +391,13 @@ func recordRetainedSessionItem(context *retainedctx.RetainedContext, record reta
 		order, ok = context.UserMessageOrder(record.message.MessageID)
 	}
 	return captured, order, ok
+}
+
+func retainedMessageID(messageID *string) string {
+	if messageID == nil {
+		return ""
+	}
+	return strings.TrimSpace(*messageID)
 }
 
 // sessionItemIsCompactionOutput reports whether the history item is a compaction

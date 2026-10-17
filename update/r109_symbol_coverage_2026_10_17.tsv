@@ -1423,7 +1423,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 872fc22f9c41c3ba7f9fcc5dd8630b880ee713b8	45799	Complete Windows sandbox uninstall cleanup (#45799)	2026-09-15	sandbox	4	1	0.25	0	0	audit_pending	EVENT_CLEANUP_DETAIL,contains_sid,owner_allows_cleanup
 875bf9209bd9aeb0a5f102888ccd90b2b59cc3c9	49778	Define exec-server protocol types for streamed file writes (#49778)	2026-09-30	execserver	5	4	0.80	0	0	audit_pending	FS_WRITE_BLOCK_METHOD
 87628df77ab1a2622d1193ad835df02ced565bf2	42832	Preserve root authorization context in Guardian reviews (#42832)	2026-09-04	guardian	0	0		0	0	not_applicable	
-876ce590e179ba8b4adbf5e64b9954a67f6f2fac	47584	Preserve streamed assistant message order in retained context (#47584)	2026-09-23	guardian	2	1	0.50	0	0	audit_pending	PendingAssistantMessageOrders
+876ce590e179ba8b4adbf5e64b9954a67f6f2fac	47584	Preserve streamed assistant message order in retained context (#47584)	2026-09-23	guardian	2	2	1.00	0	0	complete	
 87bc50f9d423a62617addd5721f8bd7c54f26bc5	47038	Cache OS discovery for user agents and telemetry (#47038)	2026-09-21	telemetry	0	0		0	0	not_applicable	
 87be737b664508d48402f08f57d09aba48e5f17a	51794	Advertise Ultrafast for GPT-6.1 Sol on Amazon Bedrock (#51794)	2026-10-07	tui	0	0		0	0	not_applicable	
 87cf20ee491a035036f2d905926df4a0d35951cc	44297	Isolate the hook pipe I/O timeout test from shell startup files (#44297)	2026-09-09	core	0	0		0	0	not_applicable	
