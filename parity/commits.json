@@ -30154,8 +30154,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): config/async_compaction.go ports AsyncCompactionConfigToml (#53595): boolean or table form, default threshold 65, 1..100 validation even when disabled, threshold-only does not enable, unknown fields rejected. RC: dropping the range check fails the bounds test; go test ./config green.",
         "No new upstream public identifier found in Go (0/1); candidate gap: AsyncCompactionConfigToml"
       ]
     },

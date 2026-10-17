@@ -1281,6 +1281,16 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 			}
 		}
 	}
+	if asyncCompaction, ok := features["async_compaction"].(map[string]any); ok {
+		// Mirrors Rust AsyncCompactionConfigToml (serde deny_unknown_fields),
+		// #53595.
+		known := map[string]bool{"enabled": true, "model_async_compact_threshold_percent": true}
+		for key := range asyncCompaction {
+			if !known[key] {
+				return fmt.Errorf("unknown configuration field `%s.async_compaction.%s`", prefix, key)
+			}
+		}
+	}
 	return nil
 }
 
