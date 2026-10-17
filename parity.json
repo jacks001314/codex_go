@@ -1,8 +1,8 @@
 {
-    "rustBaseline": "970b7f2ff4",
+    "rustBaseline": "ce0323f2f2",
     "rustTag": "main@bd19459358",
-    "rustUpstreamHead": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
-    "rustUpstreamTag": "main@970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+    "rustUpstreamHead": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
+    "rustUpstreamTag": "main@ce0323f2f2d3b25e82806cd555237da3db4e1897",
     "rustE2EBinary": {
         "version": "codex-cli 0.0.0",
         "tag": "main@bbbf396839",
@@ -13,7 +13,7 @@
         "commit": "70d8f0bfbd2938132c48c347643c1e3de6761c7e+worktree",
         "sha256": "0ec56eed907aff3ff6d31e05466ab6e6e09b634aab19c1aa2117a89914d6abe6"
     },
-    "generatedAt": "2026-09-26T06:00:00+08:00",
+    "generatedAt": "2026-10-17T13:30:00+08:00",
     "items": [
         {
             "id": "agent-message-board-in-memory",

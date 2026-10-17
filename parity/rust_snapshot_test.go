@@ -225,6 +225,7 @@ func rustWorkspaceMembersSnapshot() []string {
 		"realtime-webrtc",
 		"voice-host",
 		"protocol",
+		"protocol/tests/support",
 		"prompts",
 		"rollout",
 		"rollout-trace",
@@ -316,7 +317,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// ext/multi-env-copy-file workspace member (#54674).
 		// Round-106 re-anchor to head 3b8f43a06b: the zip dependency moved to
 		// 9.0.0 (#54761); every other pin below is unchanged at that head.
-		{Path: "Cargo.toml", SHA256: "97f3323253c8f48adc234db8fc08e865550a4bfa54f075503304d6c9e574619f"},
+		// Round-108 re-anchor to head ce0323f2f2 (#54776): Cargo.toml gained the
+		// protocol/tests/support workspace member; every other pin is unchanged.
+		{Path: "Cargo.toml", SHA256: "05c9740164aa212e1719bae3ad2ec50320b14480ac4171e11cc4ba77782c4f9c"},
 		{Path: "cli/src/lib.rs", SHA256: "1558e2085a1226408fd42d5f9ffed634e9d37dacbfe70b3d6bbbbee7f8398f26"},
 		// Re-pinned to upstream 8ae55c863d (#47411): the shared network policy
 		// runs through embedded Codex startup.

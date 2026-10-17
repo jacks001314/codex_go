@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "frozenAt": "2026-08-21",
-  "plan": "update/plan_2026_08_21.md",
+  "frozenAt": "2026-10-17",
+  "plan": "update/plan_2026_10_17.md",
   "verified": {
-    "rustCommit": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+    "rustCommit": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
     "parityManifest": "parity.json"
   },
   "target": {
-    "rustCommit": "970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2",
+    "rustCommit": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
     "rustBranch": "main",
     "goStartCommit": "5c25a72b1cbd16b060b594f2ccb7c3243479eb87"
   },
@@ -37,8 +37,7 @@
     ]
   },
   "certificationBlockers": [
-    "SDK differential re-certification against Rust 970b7f2ff4f612b8e8cd340eb6b6d789d7141dd2 is pending"
+    "Per-commit certification of the 2643 upstream commits in 970b7f2ff4..ce0323f2f2 is in progress; parity/commits.json records every commit with its audit status"
   ],
-  "certificationReady": false,
-  "Plan": "update/plan_2026_08_22.md"
-}
+  "certificationReady": false
+}

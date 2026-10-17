@@ -27,8 +27,12 @@ type MultiAgentV2Config struct {
 	HideSpawnAgentMetadata         bool
 	ExposeSpawnAgentModelOverrides bool
 	WaitAgentEnabled               bool
-	NonCodeModeOnly                bool
-	SubagentDeveloperInstructions  *string
+	// DisableNativeTools mirrors `features.multi_agent_v2.disable_native_tools`
+	// (#53617): hide the native collaboration tools while keeping the V2 runtime
+	// and its instructions enabled for host-provided tools.
+	DisableNativeTools            bool
+	NonCodeModeOnly               bool
+	SubagentDeveloperInstructions *string
 	// MessageBoardInMemory mirrors `features.multi_agent_v2.message_board_in_memory`:
 	// keep the message board in memory for a training session, including
 	// ephemeral sessions.
@@ -137,6 +141,7 @@ func (c *Config) MultiAgentV2Config(agentsMax int) (*MultiAgentV2Config, error) 
 		"hide_spawn_agent_metadata":          &out.HideSpawnAgentMetadata,
 		"expose_spawn_agent_model_overrides": &out.ExposeSpawnAgentModelOverrides,
 		"wait_agent_enabled":                 &out.WaitAgentEnabled,
+		"disable_native_tools":               &out.DisableNativeTools,
 		"non_code_mode_only":                 &out.NonCodeModeOnly,
 		"message_board_in_memory":            &out.MessageBoardInMemory,
 	} {
@@ -204,3 +209,4 @@ func validateMultiAgentV2Namespace(value string) error {
 	}
 	return nil
 }
+

@@ -6086,6 +6086,22 @@ func runtimeV2SubagentToolsEnabled(r *RuntimeRouter, record *session.Record, cfg
 	return declared && modelVersion == agent.VersionV2
 }
 
+// runtimeCollabToolsEnabled mirrors Rust's `collab_tools_enabled`
+// (core/src/tools/spec_plan.rs): the V1 surface disappears past the depth
+// limit, V2 ignores max_depth but hides its native tools when
+// `features.multi_agent_v2.disable_native_tools` is set (#53617), and a V2
+// sub-agent additionally needs a model that declares multi_agent_version v2.
+func runtimeCollabToolsEnabled(version agent.MultiAgentVersion, depthLimited, disableNativeTools, subagentToolsEnabled bool) bool {
+	switch version {
+	case agent.VersionV1:
+		return !depthLimited
+	case agent.VersionV2:
+		return !disableNativeTools && subagentToolsEnabled
+	default:
+		return false
+	}
+}
+
 // runtimeModelMultiAgentVersion maps a model's declared multi-agent version to
 // the version used for tool exposure, mirroring Rust's model catalog handling:
 // unknown values fall back to the feature-derived version. The bool reports
@@ -14467,6 +14483,18 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			threadRecord = record
 		}
 		version := r.runtimeMultiAgentVersionForTurn(threadID, cfg, agentsConfig)
+		// Rust resolves MultiAgentV2Config while building the turn context, not
+		// only when the native tools are exposed: #53617 gates the tool surface
+		// on `disable_native_tools` while the V2 runtime and its instructions
+		// stay enabled for host-provided tools.
+		var v2Config *config.MultiAgentV2Config
+		if version == agent.VersionV2 {
+			resolved, configErr := cfg.MultiAgentV2Config(agentsConfig.MaxConcurrentThreadsPerSession)
+			if configErr != nil {
+				return nil, configErr
+			}
+			v2Config = resolved
+		}
 		if version != "" {
 			// Rust hides the V1 collab tool surface entirely for a thread whose
 			// next spawn depth would exceed max_depth ("Agent depth limit
@@ -14477,14 +14505,15 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 				currentDepth = threadRecord.Metadata.AgentDepth
 			}
 			depthLimited := agent.ExceedsThreadSpawnDepthLimit(currentDepth+1, maxDepth)
-			canEnable := version != agent.VersionV1 || !depthLimited
 			// Rust only exposes V2 collaboration tools to sub-agents whose
 			// current model declares multi_agent_version v2
 			// (collab_tools_enabled); root threads are always allowed.
-			if canEnable && version == agent.VersionV2 && threadRecord != nil && (strings.TrimSpace(threadRecord.Metadata.AgentPath) != "" || threadRecord.Metadata.AgentDepth > 0) {
-				canEnable = runtimeV2SubagentToolsEnabled(r, threadRecord, cfg)
+			subagentToolsEnabled := true
+			if threadRecord != nil && (strings.TrimSpace(threadRecord.Metadata.AgentPath) != "" || threadRecord.Metadata.AgentDepth > 0) {
+				subagentToolsEnabled = runtimeV2SubagentToolsEnabled(r, threadRecord, cfg)
 			}
-			if canEnable {
+			disableNativeTools := v2Config != nil && v2Config.DisableNativeTools
+			if runtimeCollabToolsEnabled(version, depthLimited, disableNativeTools, subagentToolsEnabled) {
 				options.EnableAgents = true
 			}
 		}
@@ -14492,9 +14521,8 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 			maxThreads := agentsConfig.MaxConcurrentThreadsPerSession
 			defaults := agent.SpawnDefaults{Model: agentsConfig.DefaultSubagentModel, ReasoningEffort: agentsConfig.DefaultSubagentReasoningEffort}
 			if version == agent.VersionV2 {
-				v2Config, configErr := cfg.MultiAgentV2Config(maxThreads)
-				if configErr != nil {
-					return nil, configErr
+				if v2Config == nil {
+					return nil, fmt.Errorf("multi-agent v2 config is unresolved for turn %s", turnID)
 				}
 				maxThreads = v2Config.MaxConcurrentThreadsPerSession
 				options.AgentNamespace = v2Config.ToolNamespace

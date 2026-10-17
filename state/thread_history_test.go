@@ -54,13 +54,19 @@ func TestThreadHistoryMigrationsUseSQLxChecksums(t *testing.T) {
 		2: "ae61dbc1a6422530aa93914dbcac363a0238b86ae1a9d77eb041c75330e1283a0fcf93a043deeefcd6fd2c4037694bc4",
 		3: "a51da2a11df7760d8f8cab221e82b36ce8c0a30f16d44f3602e7f0fbc622ca72f1c3e3ecf22a194e12c2222bdcb51afe",
 		4: "65f33b171bd3aafe9d24728b2ca6a5c720a3ab54aed472998f8acf7489f0d35b2dfd12258a2d17be993bf17098b5e50c",
+		// Upstream ce0323f2f2 (#54776): the realtime-item projection, turn-end
+		// paging index, item lifecycle timestamps and turn-root columns.
+		5: "2fdad8e361dc1f828afacf10bd2eb1f511b02deef7fa234a9c412d0211de126d1cfad54b175c9c3a9731548f9084b437",
+		6: "02ed82d375adb58b5c0c09e0154f3331d507cea7af446d12324e5653cdba9a91f84afd38cf2a29f33030614689deb9de",
+		7: "9334adb4cda792116a47b69a19e3840ae3806b08773ef1794043fe0aa72891360acb1a0a8431084d53c568482c5fdd20",
+		8: "94635cd58535adb1679f4ad07a9d14231b69004405fa88a22db1b6a7e5feac8b6b66ad97ea16fce464b99bff5b3548d3",
 	}
 	migrations, err := loadRuntimeMigrations(RuntimeDBThreadHistory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(migrations) != 4 {
-		t.Fatalf("thread history migration count = %d, want 4", len(migrations))
+	if len(migrations) != 8 {
+		t.Fatalf("thread history migration count = %d, want 8", len(migrations))
 	}
 	for _, migration := range migrations {
 		var description string

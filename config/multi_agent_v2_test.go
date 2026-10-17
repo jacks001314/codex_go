@@ -88,3 +88,37 @@ func TestMultiAgentV2ConfigRejectsInvalidBoundsAndNamespace(t *testing.T) {
 		}
 	}
 }
+
+// Rust parity (#53617): features.multi_agent_v2.disable_native_tools defaults
+// to false and keeps the V2 runtime enabled while hiding native tools.
+func TestMultiAgentV2ConfigDisableNativeToolsLikeRust(t *testing.T) {
+	defaults, err := (&Config{}).MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.DisableNativeTools {
+		t.Fatalf("default disable_native_tools = true, want false")
+	}
+	cfg := &Config{Values: map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{
+		"disable_native_tools": true,
+	}}}}
+	got, err := cfg.MultiAgentV2Config(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.DisableNativeTools {
+		t.Fatalf("disable_native_tools = false, want true")
+	}
+	// Hiding native tools must not disturb the rest of the V2 runtime surface.
+	if !got.WaitAgentEnabled || got.ToolNamespace != "collaboration" {
+		t.Fatalf("disable_native_tools changed unrelated v2 settings: %#v", got)
+	}
+	errCfg := &Config{Values: map[string]any{"features": map[string]any{"multi_agent_v2": map[string]any{
+		"disable_native_tools": true,
+		"min_wait_timeout_ms":  int64(2000),
+		"max_wait_timeout_ms":  int64(1000),
+	}}}}
+	if _, err := errCfg.MultiAgentV2Config(0); err == nil {
+		t.Fatalf("MultiAgentV2Config() accepted an inverted wait window")
+	}
+}

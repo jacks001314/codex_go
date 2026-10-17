@@ -24,7 +24,7 @@ func TestRustApplyPatchFreeformSpecMatchesGo(t *testing.T) {
 	root := rustSnapshotRoot(t)
 	rustRepo := filepath.Dir(root)
 
-	wantGrammar := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/core/src/tools/handlers/apply_patch.lark")
+	wantGrammar := gitOutput(t, rustRepo, "show", candidateRustTo+":codex-rs/core/assets/tools/apply_patch.lark")
 	if string(wantGrammar) != applypatch.LarkGrammar {
 		t.Fatalf("Go LarkGrammar differs from Rust apply_patch.lark blob:\n--- go ---\n%s\n--- rust ---\n%s", applypatch.LarkGrammar, wantGrammar)
 	}

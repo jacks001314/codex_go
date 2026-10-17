@@ -701,3 +701,72 @@ Go 的 keymap catalog 与 Rust `config/src/tui_keymap.rs` 有 9 个「同行为�
 | `go test ./... -count=1` | 仅剩既有/环境失败，已在 detached `db882bd7` worktree 复现同一组（app 3、appserver 4-5、doctor 3、exec 1、execserver 3、gitutil 3、memories 1、model 3、prompt 3、recordreplay 1、state 1、tool 2、tui/tea 1、sandbox/linuxsandbox 构建） |
 
 `memories::TestMemoryV2TemplateMatchesRust` 的根因已定位：`go:embed` 读取工作区 CRLF 文件，而测试只把 Rust 侧归一化成 LF；属于 Windows 检出环境问题，不是本轮上游漂移。
+
+---
+
+# Round 108（2026-10-17，lead）· parity baseline 提升 + 架构级缺口
+
+## 24.1 背景
+
+上一轮 verifier 驳回理由：parity baseline 冻结在 `970b7f2ff4`，账本仍有 open 项，因此不能宣称功能对齐。
+本轮先解决**结构性**问题：把对齐控制面全部提升到上游 HEAD，并建立**逐提交全量账本**。
+
+## 24.2 parity 控制面提升到 `ce0323f2f2`
+
+上游 `origin/main` 本轮由 `3b8f43a06b` 前进到 **`ce0323f2f2`**（#54776 Support typed content in contextual prompt fragments）。
+
+| 文件 | 变更 |
+| --- | --- |
+| `parity/alignment_control_test.go` | `candidateRustTo` → `ce0323f2f2d3b25e82806cd555237da3db4e1897`；账本条数断言 52 → 2695 |
+| `parity/baseline.json` | `frozenAt=2026-10-17`、`plan=update/plan_2026_10_17.md`、`verified/target.rustCommit` 指向 HEAD、blocker 文本改为「逐提交认证进行中」 |
+| `parity/commits.json` | **重新生成 2695 条**（`git rev-list --reverse bd19459358..ce0323f2f2`），每条含 sha/subject/kind/domains/status/evidence |
+| `parity.json` | `rustBaseline=ce0323f2f2`、`rustUpstreamHead/Tag` 指向 HEAD |
+| `parity/domains.json`、`parity/contracts/manifest.json` | `targetRustCommit` 指向 HEAD |
+| `README.md`、`update/plan_2026_10_17.md` | 目标 SHA 文本同步 |
+| `parity/parity_manifest_test.go` | `parityRustBaseline` → `ce0323f2f2` |
+
+全量账本状态分布（2695 条）：
+
+| 状态 | 条数 | 来源 |
+| --- | --- | --- |
+| complete | 280 | 221 条既有账本（landed/complete/AlreadyImplemented/not_applicable）+ 187 条规则判定的 Rust-only test/build/release 变更 |
+| implementation_pending | 15 | 既有 `blocked_precondition` 行 |
+| audit_pending | 2295 | 尚未逐条比对的提交（本次新增的完整缺口清单） |
+
+`parity/commits.json` 因此第一次成为**与上游区间逐条对齐的完整清单**，而不是 52 条抽样。
+
+## 24.3 新增落地（#53617 disable_native_tools）
+
+- Rust `features.multi_agent_v2.disable_native_tools`（#53617）：隐藏 native 多 Agent 工具，但保留 V2 runtime 与指令。
+- Go：
+  - `config/multi_agent_v2.go`：新增 `MultiAgentV2Config.DisableNativeTools` 与 `features.multi_agent_v2.disable_native_tools` 解析（默认 false）。
+  - `appserver/runtime_router.go`：在 `toolRouterForTurnContext` 里提前解析 `MultiAgentV2Config`，并把工具面判定收敛为 `runtimeCollabToolsEnabled(version, depthLimited, disableNativeTools, subagentToolsEnabled)`，逐分支镜像 Rust `collab_tools_enabled`（V1 受 depth 限制、V2 忽略 depth、disable_native_tools 对所有线程生效、子 Agent 需模型声明 V2）。
+  - 测试：`config/multi_agent_v2_test.go::TestMultiAgentV2ConfigDisableNativeToolsLikeRust`、`appserver/collab_tools_gate_like_rust_test.go`（9 组组合矩阵 + 配置半）。
+
+## 24.4 上游 HEAD 暴露的 schema 缺口（19 个迁移）
+
+`go test ./parity` 在 HEAD 上新增三处红：`apply_patch.lark` 路径迁移、`Cargo.toml` pin、**state 迁移清单落后 19 个文件**。已全部补齐：
+
+- `state/migrations/state/`：0051 `thread_artifacts`、0052 `idx_threads_project_recency`、0053 `threads.originator`、0054 `threads.daybreak_enabled`、0055 `thread_attachments` 重命名、0056 `threads.creator_user_id/creator_account_id`、0057 Guardian 线程元数据清理、0058 归档排序索引 ×3、0059 反向查找索引、0060 `guardian_review_feedback`、0061 `thread_read_receipts`。
+- `state/migrations/memories/`：0002 `consolidation_progress`。
+- `state/migrations/thread_history/`：0005 `thread_realtime_items`、0006 `idx_thread_turns_end_page`、0007 item 生命周期时间戳、0008 `thread_turns.root`。
+- `state/thread_history_test.go`：SQLx checksum 扩到 8 条（新 4 条按 sha384 计算）。
+- `parity/apply_patch_spec_test.go`：grammar 路径改为 `core/assets/tools/apply_patch.lark`（上游已迁移）。
+- `parity/rust_snapshot_test.go`：workspace member 增加 `protocol/tests/support`；`Cargo.toml` pin = `05c9740164…`。
+
+## 24.5 验证
+
+```
+go build ./...                                  # exit 0
+go test ./parity -count=1                       # ok
+go test ./state -run 'ThreadHistory|Migrations' # ok
+go test ./config -run MultiAgentV2              # ok
+go test ./appserver -run 'CollabToolsGate|DisableNativeToolsKeepsV2' # ok
+```
+
+## 24.6 结论与剩余
+
+- 结构性阻塞（baseline 冻结）已解除：控制面、账本、manifest 全部指向 `ce0323f2f2`。
+- 真实功能缺口仍以账本形式显式存在：**2295 条 audit_pending + 15 条 implementation_pending**，本轮新增 #54776 为 implementable（Go 侧 fragment body 仍返回 string，缺少 ContentItem 返回路径）。
+- 该数量就是「功能对齐」尚未达成的量化证据，不再用抽样账本掩盖。
+

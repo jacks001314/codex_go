@@ -211,7 +211,11 @@ func TestMemoryV2TemplateMatchesRust(t *testing.T) {
 			t.Skipf("Rust template %s unavailable: %v", tc.name, err)
 		}
 		want := strings.ReplaceAll(string(data), "\r\n", "\n")
-		if tc.got != want {
+		// The embedded copy is read from this checkout, so a Windows
+		// core.autocrlf tree hands us CRLF; the pin is about content, so
+		// normalize both sides before comparing.
+		got := strings.ReplaceAll(tc.got, "\r\n", "\n")
+		if got != want {
 			t.Fatalf("embedded %s differs from Rust:\n--- go ---\n%s\n--- rust ---\n%s", tc.name, tc.got, want)
 		}
 	}
