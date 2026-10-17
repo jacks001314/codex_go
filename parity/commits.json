@@ -22388,10 +22388,10 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "Partial symbol coverage 3/6; needs review: GuardianHistoryCheckpoint, for_session, truncate_before"
-      ]
+        "status": "complete",
+        "evidence": [
+          "Guardian reviewer sessions retain an independent history checkpoint across parent compaction, restore it on retry rollback, and reuse or drop parent compaction checkpoints without replacing committed reviewer context."
+        ]
     },
     {
       "sha": "ea647275560ffbcd4cf240d048eab44aa66ba9ae",
