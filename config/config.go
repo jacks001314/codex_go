@@ -3161,7 +3161,38 @@ func legacyProfileValues(values map[string]any, profile string) (map[string]any,
 }
 
 func mergeConfigMaps(dst map[string]any, src map[string]any) {
-	mergeConfigMapsAt(dst, src, nil)
+	if src == nil {
+		return
+	}
+	// Rust #47903: normalize the whole overlay before merging, then normalize
+	// base aliases only in tables the overlay reaches. Normalizing unrelated
+	// base tables in memory would desynchronize the returned config version from
+	// the file on disk.
+	overlay, _ := normalizeConfigKeyAliasesDeep(src, nil).(map[string]any)
+	mergeConfigMapsAt(dst, overlay, nil)
+}
+
+// normalizeConfigKeyAliasesDeep mirrors Rust `normalize_key_aliases`: it clones
+// the value and normalizes aliases in every table.
+func normalizeConfigKeyAliasesDeep(value any, path []string) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			childPath := append(append([]string(nil), path...), key)
+			out[key] = normalizeConfigKeyAliasesDeep(child, childPath)
+		}
+		normalizeConfigKeyAliases(path, out)
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, normalizeConfigKeyAliasesDeep(item, path))
+		}
+		return out
+	default:
+		return cloneConfigValue(value)
+	}
 }
 
 func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
@@ -3200,7 +3231,6 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 				displaceCredentialProvidersBySource(dstMap, srcMap)
 			}
 			normalizeConfigKeyAliases(childPath, dstMap)
-			normalizeConfigKeyAliases(childPath, srcMap)
 			if isPermissionNetworkDomainsPath(childPath) {
 				// Mirrors Rust merge_toml_values (config/src/merge.rs
 				// normalize_network_domain_keys): permission network domain
@@ -3214,9 +3244,6 @@ func mergeConfigMapsAt(dst map[string]any, src map[string]any, path []string) {
 			continue
 		}
 		if srcIsMap {
-			// Mirrors Rust normalized_with_key_aliases: a freshly inserted
-			// table still gets its aliases normalized at the target path.
-			normalizeConfigKeyAliases(childPath, srcMap)
 			if isPermissionNetworkDomainsPath(childPath) {
 				normalizeNetworkDomainKeys(srcMap)
 			}

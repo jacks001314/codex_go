@@ -20751,8 +20751,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
+        "Round 115 (lead): config/config.go now normalizes the whole overlay before merging (normalizeConfigKeyAliasesDeep) and normalizes base aliases only in tables the overlay reaches, mirroring Rust #47903; inline src-side normalization during the merge was removed and the overlay is deep-cloned so callers are not mutated. Tests: config/merge_alias_overlay_test.go (sparse agents overlay normalizes agents.max_threads while memories.no_memories_if_mcp_or_web_search stays raw; inserted subtree aliases are normalized recursively). RC: merging the raw overlay fails the inserted-subtree test; go test ./config and go build ./... green.",
         "Partial symbol coverage 1/2; needs review: normalize_base_key_aliases"
       ]
     },
