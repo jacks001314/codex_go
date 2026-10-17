@@ -152,7 +152,7 @@ func (m *Model) retryReadOnlyThread() bubbletea.Cmd {
 	}
 	response, err := m.onResumeSession(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: threadID},
+		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
 	})
 	if err != nil {
 		m.notice = "Retry failed: " + strings.TrimSpace(err.Error())

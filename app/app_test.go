@@ -3483,7 +3483,7 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 
 	if _, err := handler(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionArchive,
-		Target: codextui.SessionTarget{ThreadID: "thread-action"},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: "thread-action"},
 	}); err != nil {
 		t.Fatalf("archive action error = %v", err)
 	}
@@ -3494,7 +3494,7 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 
 	summary, err := handler(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionUnarchive,
-		Target: codextui.SessionTarget{ThreadID: "thread-action"},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: "thread-action"},
 	})
 	if err != nil {
 		t.Fatalf("unarchive action error = %v", err)
@@ -3505,7 +3505,7 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 
 	forked, err := handler(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionFork,
-		Target: codextui.SessionTarget{ThreadID: "thread-action"},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: "thread-action"},
 	})
 	if err != nil {
 		t.Fatalf("fork action error = %v", err)
@@ -3516,7 +3516,7 @@ func TestInteractiveSessionActionHandlerMutatesLocalStore(t *testing.T) {
 
 	if _, err := handler(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionDelete,
-		Target: codextui.SessionTarget{ThreadID: "thread-action"},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: "thread-action"},
 	}); err != nil {
 		t.Fatalf("delete action error = %v", err)
 	}
@@ -4711,7 +4711,7 @@ func TestInteractiveResumeSessionHandlerReadsHistoryFromStore(t *testing.T) {
 
 	response, err := interactiveResumeSessionHandler(nil)(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: "thread-resume"},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: "thread-resume"},
 	})
 	if err != nil {
 		t.Fatalf("resume handler error = %v", err)
@@ -4785,8 +4785,9 @@ func TestInteractiveRemoteSessionActionHandlerCallsAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	handler := interactiveRemoteSessionActionHandler(ctx, endpoint)
-	source := codextui.SessionTarget{ThreadID: "thread-source"}
+	backendID := codextui.NewBackendID()
+	handler := interactiveRemoteSessionActionHandler(ctx, endpoint, backendID)
+	source := codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-source"}
 	forked, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionFork, Target: source})
 	if err != nil || forked == nil || forked.ThreadID != "thread-forked" {
 		t.Fatalf("forked = %#v err=%v", forked, err)
@@ -5251,8 +5252,9 @@ func TestInteractiveRemoteResumeSessionForwardsCallerCWD(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}})
-	if _, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionResume, Target: codextui.SessionTarget{ThreadID: "thread-resume"}}); err != nil {
+	backendID := codextui.NewBackendID()
+	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, backendID)
+	if _, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionResume, Target: codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-resume"}}); err != nil {
 		t.Fatalf("resume session error = %v", err)
 	}
 	if initialize := remoteTUITestReadCapturedRequest(t, requests); initialize.Method != string(appserver.MethodInitialize) {

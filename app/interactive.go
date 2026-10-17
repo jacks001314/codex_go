@@ -3017,6 +3017,11 @@ func interactiveSessionPickerItems(root *cli.RootOptions) []codextui.SessionSumm
 
 func interactiveSessionActionHandler(root *cli.RootOptions) codextea.SessionActionFunc {
 	return func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
+		// Rust #54681: a thread id alone does not identify its backend. Reject
+		// a picker selection that belongs elsewhere before touching the store.
+		if err := selection.Target.EnsureBackend(codextui.ProcessBackendID()); err != nil {
+			return nil, err
+		}
 		store := newSessionStore()
 		threadID := session.ThreadID(strings.TrimSpace(selection.Target.ThreadID))
 		if threadID == "" {
@@ -3277,6 +3282,10 @@ func archivedSessionStartError(threadID session.ThreadID) error {
 
 func interactiveResumeSessionHandler(root *cli.RootOptions) codextea.SessionResumeFunc {
 	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
+		// Rust #54681: reject a foreign backend before changing session state.
+		if err := selection.Target.EnsureBackend(codextui.ProcessBackendID()); err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
 		store := newSessionStore()
 		threadID := session.ThreadID(strings.TrimSpace(selection.Target.ThreadID))
 		if threadID == "" {

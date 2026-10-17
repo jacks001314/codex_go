@@ -34,7 +34,7 @@ func TestInteractiveResumeAndForkRejectArchivedSessionsLikeRust(t *testing.T) {
 	} {
 		selection := codextui.SessionSelection{
 			Kind:   codextui.SessionSelectionResume,
-			Target: codextui.SessionTarget{ThreadID: string(id)},
+			Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(id)},
 		}
 		if name == "fork" {
 			selection.Kind = codextui.SessionSelectionFork
@@ -46,13 +46,13 @@ func TestInteractiveResumeAndForkRejectArchivedSessionsLikeRust(t *testing.T) {
 	}
 	if _, err := interactiveSessionActionHandler(nil)(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionUnarchive,
-		Target: codextui.SessionTarget{ThreadID: string(id)},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(id)},
 	}); err != nil {
 		t.Fatalf("unarchive error = %v", err)
 	}
 	if _, err := interactiveResumeSessionHandler(nil)(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: string(id)},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(id)},
 	}); err != nil {
 		t.Fatalf("resume after unarchive error = %v", err)
 	}

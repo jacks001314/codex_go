@@ -524,7 +524,7 @@ func (m *Model) forkAgentsOverviewSelection() bubbletea.Cmd {
 	}
 	selection := codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionFork,
-		Target: codextui.SessionTarget{ThreadID: threadID},
+		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
 	}
 	decision, notice, _ := m.applySessionSelection(selection)
 	if decision == nil {

@@ -41,7 +41,7 @@ func TestInteractiveResumeRejectsGuardianThreadLikeRust(t *testing.T) {
 	}
 	selection := codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: string(id)},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(id)},
 	}
 	_, err := interactiveResumeSessionHandler(nil)(selection)
 	want := "Cannot resume a Guardian review thread.\nResume its parent session instead: codex resume " + parent
@@ -61,7 +61,7 @@ func TestInteractiveResumeRejectsGuardianThreadLikeRust(t *testing.T) {
 	}
 	_, err = interactiveResumeSessionHandler(nil)(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: string(orphan)},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(orphan)},
 	})
 	if err == nil || err.Error() != "Cannot resume a Guardian review thread." {
 		t.Fatalf("orphan guardian resume error = %v", err)
@@ -83,7 +83,7 @@ func TestInteractiveResumeStillAllowsOtherSubagentsLikeRust(t *testing.T) {
 	}
 	if _, err := interactiveResumeSessionHandler(nil)(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionResume,
-		Target: codextui.SessionTarget{ThreadID: string(id)},
+		Target: codextui.SessionTarget{BackendID: codextui.ProcessBackendID(), ThreadID: string(id)},
 	}); err != nil {
 		t.Fatalf("non-guardian subagent resume error = %v", err)
 	}
@@ -145,8 +145,9 @@ func TestInteractiveRemoteResumeRejectsGuardianThreadLikeRust(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}})
-	_, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionResume, Target: codextui.SessionTarget{ThreadID: "thread-guardian"}})
+	backendID := codextui.NewBackendID()
+	handler := interactiveRemoteResumeSessionHandler(ctx, endpoint, &cli.RootOptions{Shared: cli.SharedOptions{CWD: remoteResumeTestCWD}}, backendID)
+	_, err := handler(codextui.SessionSelection{Kind: codextui.SessionSelectionResume, Target: codextui.SessionTarget{BackendID: backendID, ThreadID: "thread-guardian"}})
 	want := "Cannot resume a Guardian review thread.\nResume its parent session instead: codex resume " + parent
 	if err == nil || err.Error() != want {
 		t.Fatalf("remote guardian resume error = %v, want %q", err, want)

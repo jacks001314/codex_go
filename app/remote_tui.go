@@ -350,6 +350,10 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	state.HasChatGPTAccount = hasChatGPTAccount
 	daemonCLIExecutable, daemonCLIVersion, daemonCLIPackage := interactiveDaemonCLIIdentity()
 	showRawReasoning := interactiveShowRawAgentReasoning(root)
+	// Rust #54681: this TUI talks to a distinct backend even when the endpoint
+	// is the local daemon; every picker target it produces carries this
+	// identity so selections cannot leak into the embedded backend.
+	backendID := codextui.NewBackendID()
 	// Rust #39082: query remote project config layers before starting a thread
 	// and persist accepted trust through config/batchWrite on the remote server.
 	interactiveRemoteTrustCheck(ctx, endpoint, root, shouldRunInteractiveTUI(stdin, stdout))
@@ -461,8 +465,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		SessionHeaderVersion:        doctor.Version(),
 		InitialHistoryCells:         interactiveUpdateHistoryCells(root),
 		WindowsSandboxStartupPrompt: interactiveRemoteWindowsSandboxStartupPrompt(ctx, root, endpoint, settings.PermissionRequirements),
-		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint),
-		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root),
+		OnSessionAction:             interactiveRemoteSessionActionHandler(ctx, endpoint, backendID),
+		OnResumeSession:             interactiveRemoteResumeSessionHandler(ctx, endpoint, root, backendID),
 		OnPromptEdit:                interactiveRemotePromptEditHandler(ctx, endpoint, root, state, taskToolsHost),
 		OnExportTranscript:          interactiveRemoteTranscriptExportHandler(ctx, endpoint, showRawReasoning),
 		OnGenerateRecap:             interactiveRemoteRecapGenerateHandler(ctx, endpoint),
@@ -1522,8 +1526,13 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 	return items
 }
 
-func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) codextea.SessionActionFunc {
+func interactiveRemoteSessionActionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, backendID codextui.BackendID) codextea.SessionActionFunc {
 	return func(selection codextui.SessionSelection) (*codextui.SessionSummary, error) {
+		// Rust #54681: reject a selection listed by another backend before any
+		// request reaches this one.
+		if err := selection.Target.EnsureBackend(backendID); err != nil {
+			return nil, err
+		}
 		threadID := strings.TrimSpace(selection.Target.ThreadID)
 		if threadID == "" {
 			return nil, errors.New("remote session action requires a thread id")
@@ -1601,8 +1610,12 @@ func interactiveRemoteLogoutHandler(ctx context.Context, endpoint *appserverdaem
 	}
 }
 
-func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions) codextea.SessionResumeFunc {
+func interactiveRemoteResumeSessionHandler(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint, root *cli.RootOptions, backendID codextui.BackendID) codextea.SessionResumeFunc {
 	return func(selection codextui.SessionSelection) (codextea.SessionResumeResponse, error) {
+		// Rust #54681: a foreign selection is refused before the resume request.
+		if err := selection.Target.EnsureBackend(backendID); err != nil {
+			return codextea.SessionResumeResponse{}, err
+		}
 		threadID := strings.TrimSpace(selection.Target.ThreadID)
 		if threadID == "" {
 			return codextea.SessionResumeResponse{}, errors.New("remote resume requires a thread id")

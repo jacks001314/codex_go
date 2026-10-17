@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,8 +64,21 @@ const (
 )
 
 type SessionTarget struct {
-	Path     string
-	ThreadID string
+	// BackendID is the logical owner of ThreadID, retained across connection
+	// replacement (Rust #54681). A thread ID alone does not identify a backend.
+	BackendID BackendID
+	Path      string
+	ThreadID  string
+}
+
+// EnsureBackend rejects a selection that came from a different backend before
+// the caller mutates session state or sends resume/fork/unarchive requests.
+// Rust parity: resume_picker::SessionTarget::ensure_backend.
+func (t SessionTarget) EnsureBackend(backendID BackendID) error {
+	if t.BackendID != backendID {
+		return errors.New("This session belongs to a different backend. Open the session picker again.")
+	}
+	return nil
 }
 
 func (t SessionTarget) DisplayLabel() string {
@@ -177,6 +191,9 @@ type SessionSummary struct {
 }
 
 type SessionPickerState struct {
+	// BackendID stamps every selection this picker produces so a target can be
+	// traced back to the backend that listed it (Rust #54681).
+	BackendID  BackendID
 	Action     SessionPickerAction
 	Items      []SessionSummary
 	Selected   int
@@ -204,7 +221,15 @@ type SessionPickerState struct {
 }
 
 func NewSessionPickerState(action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
+	return NewSessionPickerStateForBackend(ProcessBackendID(), action, items, filterCWD, filterCWDs...)
+}
+
+// NewSessionPickerStateForBackend is NewSessionPickerState bound to an explicit
+// backend identity, used when the picker lists sessions from a backend other
+// than this process (Rust resume_picker::SessionPickerRunOptions::backend_id).
+func NewSessionPickerStateForBackend(backendID BackendID, action SessionPickerAction, items []SessionSummary, filterCWD string, filterCWDs ...string) *SessionPickerState {
 	state := &SessionPickerState{
+		BackendID:      backendID,
 		Action:         action,
 		Items:          append([]SessionSummary(nil), items...),
 		UseThemeColors: true,
@@ -430,7 +455,7 @@ func (s *SessionPickerState) Selection() (SessionSelection, bool) {
 		return SessionSelection{}, false
 	}
 	selection := SessionSelection{
-		Target: SessionTarget{Path: item.Path, ThreadID: item.ThreadID},
+		Target: SessionTarget{BackendID: s.BackendID, Path: item.Path, ThreadID: item.ThreadID},
 	}
 	switch s.Action {
 	case SessionPickerFork:

@@ -214,7 +214,7 @@ func (m *Model) updateUnarchivePromptModal(message bubbletea.KeyMsg) bubbletea.C
 	}
 	if _, err := m.runSessionAction(codextui.SessionSelection{
 		Kind:   codextui.SessionSelectionUnarchive,
-		Target: codextui.SessionTarget{ThreadID: threadID},
+		Target: codextui.SessionTarget{BackendID: m.backendID, ThreadID: threadID},
 	}); err != nil {
 		m.addErrorHistoryMessage(err.Error())
 		m.refreshTranscript()

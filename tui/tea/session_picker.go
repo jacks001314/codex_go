@@ -41,8 +41,9 @@ func (m *Model) applyResumeCommand(args string) bubbletea.Cmd {
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionResume,
 		Target: codextui.SessionTarget{
-			Path:     item.Path,
-			ThreadID: item.ThreadID,
+			BackendID: m.backendID,
+			Path:      item.Path,
+			ThreadID:  item.ThreadID,
 		},
 	}
 	decision, notice, _ := m.applySessionSelection(selection)
@@ -125,7 +126,8 @@ func sessionLookupFields(item codextui.SessionSummary) []string {
 }
 
 func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea.Cmd {
-	picker := codextui.NewSessionPickerState(
+	picker := codextui.NewSessionPickerStateForBackend(
+		m.backendID,
 		action,
 		m.sessionItems,
 		m.sessionCWD,
@@ -203,7 +205,8 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 	selection := codextui.SessionSelection{
 		Kind: kind,
 		Target: codextui.SessionTarget{
-			ThreadID: strings.TrimSpace(m.State.ThreadID),
+			BackendID: m.backendID,
+			ThreadID:  strings.TrimSpace(m.State.ThreadID),
 		},
 	}
 	title := "Archive this session?"
@@ -251,7 +254,8 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 	selection := codextui.SessionSelection{
 		Kind: codextui.SessionSelectionFork,
 		Target: codextui.SessionTarget{
-			ThreadID: strings.TrimSpace(m.State.ThreadID),
+			BackendID: m.backendID,
+			ThreadID:  strings.TrimSpace(m.State.ThreadID),
 		},
 		Name: strings.TrimSpace(name),
 	}

@@ -933,6 +933,10 @@ type streamEnvelopeMsg struct {
 }
 
 type Options struct {
+	// BackendID identifies the app-server backend that lists and owns the
+	// sessions this model can select (Rust #54681). A zero value binds the
+	// model to this process's embedded/daemon backend.
+	BackendID           codextui.BackendID
 	Width               int
 	Height              int
 	NoAltScreen         bool
@@ -1267,6 +1271,11 @@ type Options struct {
 
 type Model struct {
 	State *codextui.State
+
+	// backendID is the logical backend every session selection is stamped
+	// with (Rust #54681). It survives connection replacement: picker targets
+	// from another backend are rejected before resume/fork/unarchive.
+	backendID codextui.BackendID
 
 	// Styles is the centralized theme configuration.
 	Styles styles.Styles
@@ -2027,6 +2036,12 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if state == nil {
 		state = codextui.NewState(nil)
 	}
+	// Rust #54681: a picker and the session-start path must agree on the
+	// backend that owns a selected thread ID. Fresh startup keeps the
+	// launch-owner identity; a remote TUI passes its own.
+	if options.BackendID.IsZero() {
+		options.BackendID = codextui.ProcessBackendID()
+	}
 	// Rust #49145: the /status card drops the reasoning summaries setting while a
 	// server connection (remote server or local background daemon) owns the model
 	// settings; the app attaches that connection kind to the tea options
@@ -2073,6 +2088,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 
 	model := &Model{
 		State:                           state,
+		backendID:                       options.BackendID,
 		Styles:                          applyThemeAccent(resolveStyles(options.TUIThemeStyles), options.TUITheme),
 		Transcript:                      newTranscriptComponent(),
 		Composer:                        newComposerComponent(options.Placeholder),
