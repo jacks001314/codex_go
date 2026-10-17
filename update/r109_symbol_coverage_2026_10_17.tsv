@@ -306,7 +306,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1d804e91b75454927fb4f51615b067ba6158c37c	48176	Protect `.aws` directories under sandbox writable roots (#48176)	2026-09-25	sandbox	0	0		0	0	not_applicable	
 1d87af5faa75c2c09785cd088353d3236333673f	47742	Honor network policy in history notes and image generation extensions (#47742)	2026-09-24	sandbox	0	0		0	0	not_applicable	
 1e6185e52214a879a8b94f3743f47f57135dc64b	40166	Move the TUI cursor before showing it (#40166)	2026-08-23	tui	0	0		0	0	not_applicable	
-1e66885a16161048215a3782ecdd1739aab0aabf	43527	Discount an approval's own code-mode wrapper from Guardian score lag (#43527)	2026-09-07	guardian	3	1	0.33	0	0	audit_pending	WrapperLag,discount
+1e66885a16161048215a3782ecdd1739aab0aabf	43527	Discount an approval's own code-mode wrapper from Guardian score lag (#43527)	2026-09-07	guardian	3	3	1.00	0	0	complete	
 1e9564fb859c7543404ede96ba5d92f1ef7faefc	46077	Keep the composer responsive during Command Center session creation (#46077)	2026-09-17	tui	2	0	0.00	0	0	implementation_pending	run_with_optional_draft,take_draft
 1e9e916923d884bbab24a46f14d1f0a328cbd226	40489	Honor disabled managed network configuration (#40489)	2026-08-24	core	0	0		0	0	not_applicable	
 1ef30bcbe784f1006548adc1542985be32b05109	54389	Preserve existing SQLite journal modes on startup (#54389)	2026-10-15	persistence	0	0		0	0	complete	

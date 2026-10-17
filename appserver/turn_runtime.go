@@ -2700,6 +2700,7 @@ func (r *RuntimeRouter) runtimeToolStartedNotifier(threadID string, turnID strin
 		if r == nil || invocation == nil {
 			return
 		}
+		r.recordGuardianToolStart(threadID, invocation)
 		if r.networkApproval != nil {
 			r.networkApproval.registerActiveCall(threadID, turnID, invocation)
 		}

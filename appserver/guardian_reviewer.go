@@ -134,12 +134,15 @@ const defaultGuardianMaxToolCallLag = 2
 type guardianScoreProgress struct {
 	latestToolCall       int
 	latestScoredToolCall int
+	wrapperStarts        []guardianWrapperStart
 }
 
-func (r *modelGuardianReviewer) beginToolCall(threadID string) *guardianScoreProgress {
+func (r *modelGuardianReviewer) beginApprovalToolCall(threadID, toolCallID string) *guardianScoreProgress {
 	if r == nil || strings.TrimSpace(threadID) == "" {
 		return nil
 	}
+	threadID = strings.TrimSpace(threadID)
+	toolCallID = strings.TrimSpace(toolCallID)
 	r.scoreMu.Lock()
 	defer r.scoreMu.Unlock()
 	if r.scoreProgress == nil {
@@ -150,11 +153,23 @@ func (r *modelGuardianReviewer) beginToolCall(threadID string) *guardianScorePro
 		progress = &guardianScoreProgress{}
 		r.scoreProgress[threadID] = progress
 	}
+	// Tool lifecycle normally records the call before its executor requests an
+	// approval. Direct review callers without lifecycle metadata retain the old
+	// counting behavior instead of losing the current call from score lag.
+	if toolCallID != "" && progress.hasWrapperStartLocked(toolCallID) {
+		return progress
+	}
 	progress.latestToolCall++
+	if toolCallID != "" {
+		progress.appendWrapperStartLocked(guardianWrapperStart{
+			callID: toolCallID,
+			index:  progress.latestToolCall,
+		})
+	}
 	return progress
 }
 
-func (r *modelGuardianReviewer) scoreLag(threadID string) int {
+func (r *modelGuardianReviewer) scoreLag(threadID, toolCallID string) int {
 	if r == nil || strings.TrimSpace(threadID) == "" {
 		return 0
 	}
@@ -167,7 +182,15 @@ func (r *modelGuardianReviewer) scoreLag(threadID string) int {
 	if progress == nil {
 		return 0
 	}
-	return progress.latestToolCall - progress.latestScoredToolCall
+	lag := progress.latestToolCall - progress.latestScoredToolCall
+	if lag < 0 {
+		lag = 0
+	}
+	lag -= progress.wrapperDiscountLocked(toolCallID, progress.latestScoredToolCall)
+	if lag < 0 {
+		return 0
+	}
+	return lag
 }
 
 func (r *modelGuardianReviewer) markScored(threadID string) {
@@ -539,7 +562,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	// than max_tool_call_lag tool calls. The Go simplified reviewer fails closed
 	// (no stale-score auto-approval), mirroring the stale-data guard while
 	// keeping the established refuse-approval convention.
-	if lag := r.maxToolCallLagValue(threadID, turnID); lag > 0 && r.scoreLag(threadID) > lag {
+	if lag := r.maxToolCallLagValue(threadID, turnID); lag > 0 && r.scoreLag(threadID, targetItemID) > lag {
 		return state.DecisionDenied, "guardian review skipped: risk score lag exceeds max_tool_call_lag", nil
 	}
 	if r.fullAccess != nil && r.fullAccess(threadID, turnID) {
@@ -555,7 +578,7 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 		return state.DecisionApproved, "user approval mode", nil
 	}
-	r.beginToolCall(threadID)
+	r.beginApprovalToolCall(threadID, targetItemID)
 	// The review attempt starts here: Rust builds ReviewReport/tracking before
 	// the prompt, and the metrics duration is measured from that point.
 	reviewStartedAt := time.Now().UTC()

@@ -1042,8 +1042,8 @@
             "status": "done",
             "userImpact": "Stale Guardian risk scores no longer drive approval decisions.",
             "id": "guardian-max-tool-call-lag",
-            "reason": "Aligned upstream 8e89e98cf6 (#39001 Ignore stale Guardian tool risk scores): config.GuardianV2MaxToolCallLag reads [features.guardianv2].max_tool_call_lag (default 3); modelGuardianReviewer tracks per-thread latest_tool_call / latest_scored_tool_call (GuardianV2ScoreProgress analog), skipping the model sample and failing closed when the score lags by more than the bound, recovering once the scored call catches up (mirrors extension_tests.rs at/above/recovered lag). Registered as contract guardian-max-tool-call-lag.",
-            "test": "go test ./appserver -run TestModelGuardianReviewerSkipsStaleScores -count=1; go test ./config -run TestGuardianV2MaxToolCallLag -count=1"
+            "reason": "Aligned upstream 8e89e98cf6 (#39001 Ignore stale Guardian tool risk scores) and 1e66885a16 (#43527 Discount an approval's own code-mode wrapper from Guardian score lag): config.GuardianV2MaxToolCallLag reads [features.guardianv2].max_tool_call_lag; modelGuardianReviewer tracks per-thread latest_tool_call / latest_scored_tool_call, skipping the model sample and failing closed when the score lags by more than the bound. Tool lifecycle starts populate a bounded 256-entry provenance history that identifies direct custom exec wrappers and links nested code-mode calls through the inherited origin item id. A review discounts exactly one unscored wrapper belonging to its own call, while already-scored wrappers, other wrappers, missing provenance, and evicted provenance retain the full lag.",
+            "test": "go test ./appserver -run 'GuardianWrapperLag|GuardianReviewUsesOwnWrapperDiscount|ModelGuardianReviewerSkipsStaleScores' -count=1; go test ./appserver -run Guardian -count=1"
         },
         {
             "status": "done",
