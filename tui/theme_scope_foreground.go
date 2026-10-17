@@ -55,6 +55,29 @@ func ThemeScopeForegroundValue(themeID string, scopes ...string) string {
 	return ""
 }
 
+// ThemeScopeForegroundValueReadable is ThemeScopeForegroundValue with the
+// contrast adaptation Rust applies to every themed Markdown foreground
+// (`readable_color_on(color, None)`, #54315). The scope's colour is resolved
+// against the terminal's default background and re-encoded in the value form
+// glamour accepts.
+func ThemeScopeForegroundValueReadable(themeID string, level StdoutColorLevel, scopes ...string) string {
+	colour, ok := themeScopeForeground(themeID, scopes...)
+	if !ok {
+		return ""
+	}
+	adapted := ReadableColorOn(colour, nil, level)
+	if adapted.Index != nil {
+		return strconv.Itoa(int(*adapted.Index))
+	}
+	if adapted.RGB != nil {
+		return fmt.Sprintf("#%02x%02x%02x", adapted.RGB.R, adapted.RGB.G, adapted.RGB.B)
+	}
+	// A colour level that cannot express the adapted colour (or a terminal
+	// whose default background is unknown) keeps the theme's own value; the
+	// renderer's colour profile still quantizes it for the terminal.
+	return ThemeScopeForegroundValue(themeID, scopes...)
+}
+
 // themeScopeForeground resolves a theme's foreground colour for the first scope
 // it styles. A custom `.tmTheme` wins over the bundled asset, and a chroma-mapped
 // theme falls back to the resolved style's own token colour (skipping a token

@@ -52,14 +52,19 @@ func ReadableColorOn(preferred TerminalColor, background *RGB, level StdoutColor
 		return preferred
 	}
 	resolved, ok := terminalColorRGB(preferred)
+	defaultFG, defaultBG, known := defaultTerminalColorsRGB()
 	if !ok {
 		// Reset (or an indexed ANSI entry): the terminal's default foreground,
 		// or the terminal's own colour when it is unknown.
-		fg, _, known := defaultTerminalColorsRGB()
 		if !known {
 			return TerminalColor{}
 		}
-		resolved = fg
+		resolved = defaultFG
+	}
+	if background == nil && known {
+		// Rust's `background_rgb(None)` falls back to the terminal's default
+		// background, so a nil surface still yields a contrast-corrected colour.
+		background = &defaultBG
 	}
 	return ContrastForeground(resolved, background, level)
 }

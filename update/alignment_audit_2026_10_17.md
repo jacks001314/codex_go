@@ -16,8 +16,8 @@
 | `not_applicable` | 75 |
 | `blocked_precondition` | 20 |
 | `complete` | 15 |
-| `implementable` | 12 |
-| `partial` | 11 |
+| `implementable` | 11 |
+| `partial` | 12 |
 | `AlreadyImplemented` | 10 |
 | `unverified` | 1 |
 
@@ -70,13 +70,22 @@ go test ./parity -count=1
   - `tui/tea/model.go` + `app/interactive.go`: `QuickDials` 随 `SettingsWriteResult` 进入 TUI 本地设置，并在配置 reload 时被保留。
   - 测试：`config/tui_presets_test.go`（非法槽位/空输入/`!` 命令/超长/未知字段/缺失 input 六个拒绝用例 + 字节长度边界）。
 
+### 4.3 #54315 TUI Markdown 颜色可读性（`86ee40c380`，markdown 面）
+
+- Rust：`MarkdownStyles::for_theme` 对每个主题前景调用 `readable_color_on(fg, None)`；`readable_color_on` 在 background=None 时回退到终端默认背景。
+- Go：
+  - `tui/style.go`：`ReadableColorOn` 在 background 为 nil 时改用 `defaultTerminalColorsRGB()` 的默认背景（此前 nil 等于"不校正"，与 Rust 语义不符）。
+  - `tui/theme_scope_foreground.go`：新增 `ThemeScopeForegroundValueReadable`。
+  - `tui/markdown/render.go`：`applyThemeMarkupColors` 接收颜色层级并统一走可读化路径（内联代码仍保留原始语法色）。
+  - 测试：`tui/readable_color_like_rust_test.go`（默认背景校正、未知背景保持原色、ada 主题标题色被校正到 ≥4.5:1）。
+- **剩余 drift**：Go 的 `ProposedPlanCell` 直接渲染原始 Markdown、没有计划底纹（shaded plan surface）载体，因此 #54315 的"计划背景上的前景校正"这一半尚无落点；已在该行状态记为 `partial`。
+
 ## 5. 未落地缺口矩阵（本轮更新后）
 
 ### 5.1 implementable（可落地，尚未开工）
 
 | sha | PR | 标题 | 证据摘要 |
 | --- | --- | --- | --- |
-| `86ee40c380` | #54315 | Keep TUI Markdown colors readable against their backgrounds (#54315) | TR-13 @5608e096: implementable (TUI face, small) - Rust tui/src/markdown_render.rs wraps every markdown foreground in crate::style::readable_color_... |
 | `b687844674` | #54264 | Track Guardian transcript admission across failed reviews (#54264) | TR-13 @5608e096: implementable (appserver face, medium, likely) - Rust core/src/guardian/review_session.rs keeps pending review input when inferenc... |
 | `dffa0deb69` | #54216 | Show image previews in the fullscreen transcript (#54216) | TR-13 @5608e096: implementable (TUI face, large/R3) - Rust adds tui/src/transcript_image.rs (169 lines, ImagePlacement/FIRST_IMAGE_ID) and tui/src/... |
 | `4ca84a1069` | #54135 | Allow large file writes over direct exec-server WebSockets (#54135) | TR-13 @5608e096: implementable (execserver face, small-medium) - Rust exec-server/src/connection.rs adds from_direct_websocket() which deliberately... |
@@ -104,14 +113,15 @@ go test ./parity -count=1
 | `8c818cbed4` | #52164 | Make environment context date and timezone configurable | TR-12 (lane r90tri10 @ 3f3c44f7): the flag include_environment_context_time is registered and whitelisted (config/config.go:99-107, config_test.go:... |
 | `12fd621f62` | #54094 | Preserve specific MCP failure codes in metrics and spans | TR-12 (lane r90tri10 @ 3f3c44f7): the main half is already implemented - telemetry/mcp_call_metrics.go:89-124 has WithRequestErrorCode and the 16-c... |
 | `79773e8826` | #52215 | Enforce application network policy in standalone MCP commands | TR-12 (lane r90tri10 @ 3f3c44f7): already implemented for the command paths - app/mcp.go:868-927 publishes the application network policy per path ... |
+| `86ee40c380` | #54315 | Keep TUI Markdown colors readable against their backgrounds (#54315) | round-91 (markdown half landed): tui.ReadableColorOn now resolves a nil surface against the terminal default background like Rust (`background_rgb(... |
 
-### 5.4 unverified
+### 5.3 unverified（待验证）
 
 | sha | PR | 标题 | 证据摘要 |
 | --- | --- | --- | --- |
 | `8af93416dd` | #53795 | Use the bundled model catalog in the MCP startup invalidation test (#53795) | TR-13 @5608e096: unverified - Rust change is test-only (core/src/thread_manager_tests.rs +4) and pins config.model_catalog to codex_models_manager:... |
 
-### 5.3 blocked_precondition（存在前置阻塞）
+### 5.4 blocked_precondition（存在前置阻塞）
 
 | sha | PR | 标题 | 证据摘要 |
 | --- | --- | --- | --- |
@@ -146,8 +156,8 @@ go test ./parity -count=1
 
 ## 7. 风险与下一步
 
-1. **剩余 12 个 implementable**：优先处理协议/核心面（#54059 thread-store 恢复准备、#54135 exec-server 直连 WebSocket 大写入、#53987 Guardian 重试退避、#53797 Guardian 审查失效、#53879 running turn 恢复），再处理 TUI 面。
-2. **11 个 partial**：需要逐条收敛 drift，尤其是 #54316 Guardian transcript 排除、#54046 `context_changed`、#54175 retired feature overrides。
+1. **剩余 11 个 implementable**：优先处理协议/核心面（#54059 thread-store 恢复准备、#54135 exec-server 直连 WebSocket 大写入、#53987 Guardian 重试退避、#53797 Guardian 审查失效、#53879 running turn 恢复），再处理 TUI 面。
+2. **12 个 partial**：需要逐条收敛 drift，尤其是 #54316 Guardian transcript 排除、#54046 `context_changed`、#54175 retired feature overrides。
 3. **20 个 blocked_precondition**：需在报告中逐条给出可验证的 N/A 理由，而不是保持 "blocked"。
 4. **baseline 提升**：`parity/baseline.json` / `parity.json.rustBaseline` / `parity/domains.json.targetRustCommit` 仍指向 `970b7f2ff4`，待 open 项收敛后统一提升到 `e16b631d08`。
 5. **账本覆盖范围**：若要求"逐提交认证"，需为 2639 个提交建立全量分类（当前 222 行仅为筛选跟踪）。

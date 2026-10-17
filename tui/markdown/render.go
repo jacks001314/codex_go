@@ -101,7 +101,7 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
 	colorLevel := codextui.DetectStdoutColorLevel()
-	style = applyThemeMarkupColors(style, themeID)
+	style = applyThemeMarkupColors(style, themeID, colorLevel)
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
@@ -244,9 +244,14 @@ func repaintListMarkers(rendered string, marker *regexp.Regexp, markerSGR string
 // headings, emphasis, strong, links and blockquotes borrow the theme foreground
 // while keeping their existing modifiers. A scope the theme does not style keeps
 // the previous fallback (no change), matching Rust's `unwrap_or_default`.
-func applyThemeMarkupColors(style ansi.StyleConfig, themeID string) ansi.StyleConfig {
+// Rust #54315 contrasts every one of those foregrounds against the terminal
+// background before the renderer sees them.
+func applyThemeMarkupColors(style ansi.StyleConfig, themeID string, level codextui.StdoutColorLevel) ansi.StyleConfig {
 	foreground := func(scopes ...string) *string {
-		if value := codextui.ThemeScopeForegroundValue(themeID, scopes...); value != "" {
+		// Rust #54315: every themed Markdown foreground goes through
+		// `readable_color_on(fg, None)` so syntax colours stay legible on the
+		// terminal background. Inline code keeps its raw syntax colour.
+		if value := codextui.ThemeScopeForegroundValueReadable(themeID, level, scopes...); value != "" {
 			return styleString(value)
 		}
 		return nil

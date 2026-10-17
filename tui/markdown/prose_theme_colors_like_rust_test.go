@@ -124,7 +124,7 @@ func TestMarkdownProseKeepsFallbacksWithoutThemeColorsLikeRust(t *testing.T) {
 func TestApplyThemeMarkupColorsLeavesUnstyledScopesAlone(t *testing.T) {
 	// Rust patches only the scopes the theme actually styles.
 	base := codexMarkdownStyle()
-	style := applyThemeMarkupColors(base, "ada")
+	style := applyThemeMarkupColors(base, "ada", codextui.ColorTrue)
 	if style.Emph.Color != base.Emph.Color || style.Strong.Color != base.Strong.Color ||
 		style.Link.Color != base.Link.Color || style.BlockQuote.Color != base.BlockQuote.Color {
 		t.Fatalf("unstyled prose scopes were patched")
@@ -135,7 +135,7 @@ func TestApplyThemeMarkupColorsLeavesUnstyledScopesAlone(t *testing.T) {
 	if got := codextui.ThemeScopeForegroundValue("ada", "markup.heading.markdown"); got == "" || *style.H1.Color != got {
 		t.Fatalf("heading colour = %v, want the theme value %q", style.H1.Color, got)
 	}
-	empty := applyThemeMarkupColors(codexMarkdownStyle(), "")
+	empty := applyThemeMarkupColors(codexMarkdownStyle(), "", codextui.ColorTrue)
 	if empty.H1.Color != base.H1.Color {
 		t.Fatalf("an empty theme patched the heading colour: %q", *empty.H1.Color)
 	}
