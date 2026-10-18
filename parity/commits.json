@@ -11681,9 +11681,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ensure_offline_network_blocks"
+        "Round 671 (implementation): firewall block specs carry explicit direction; offline setup now installs both outbound and inbound non-loopback rules scoped to the offline SID, both with Any protocol/ports and the same non-loopback remote-address set. EnsureOfflineOutboundBlock delegates to EnsureOfflineNetworkBlocks; uninstall already reserved the inbound rule name. Tests validate names, directions, protocol, address filters, and SID scope. Tests: go test ./sandbox/windowssandbox/bin/setup_main/win -count=1; go test ./sandbox/windowssandbox -count=1"
       ]
     },
     {

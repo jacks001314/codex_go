@@ -33,6 +33,9 @@ func TestFirewallConstantsMatchRustRules(t *testing.T) {
 	if offlineBlockRuleName != "codex_sandbox_offline_block_outbound" {
 		t.Fatalf("offlineBlockRuleName = %q", offlineBlockRuleName)
 	}
+	if offlineBlockInboundRuleName != "codex_sandbox_offline_block_inbound" {
+		t.Fatalf("offlineBlockInboundRuleName = %q", offlineBlockInboundRuleName)
+	}
 	if offlineBlockLoopbackTCPRuleName != "codex_sandbox_offline_block_loopback_tcp" {
 		t.Fatalf("offlineBlockLoopbackTCPRuleName = %q", offlineBlockLoopbackTCPRuleName)
 	}
@@ -44,6 +47,26 @@ func TestFirewallConstantsMatchRustRules(t *testing.T) {
 	}
 	if netFwIPProtocolAny != 256 || netFwIPProtocolTCP != 6 || netFwIPProtocolUDP != 17 {
 		t.Fatalf("protocol constants = any:%d tcp:%d udp:%d", netFwIPProtocolAny, netFwIPProtocolTCP, netFwIPProtocolUDP)
+	}
+	if netFwRuleDirIn != 1 || netFwRuleDirOut != 2 {
+		t.Fatalf("direction constants = in:%d out:%d", netFwRuleDirIn, netFwRuleDirOut)
+	}
+}
+
+func TestOfflineNetworkBlockSpecsMatchRust(t *testing.T) {
+	specs := offlineNetworkBlockRuleSpecs(firewallLocalUserSpec("S-1-5-21"), "S-1-5-21")
+	if len(specs) != 2 {
+		t.Fatalf("network block specs = %#v", specs)
+	}
+	if specs[0].internalName != offlineBlockRuleName || specs[0].direction != netFwRuleDirOut ||
+		specs[1].internalName != offlineBlockInboundRuleName || specs[1].direction != netFwRuleDirIn {
+		t.Fatalf("network block directions = %#v", specs)
+	}
+	for _, spec := range specs {
+		if spec.protocol != netFwIPProtocolAny || !spec.remoteAddressIsSet ||
+			spec.remoteAddresses != nonLoopbackRemoteAddresses || spec.offlineSID != "S-1-5-21" {
+			t.Fatalf("network block spec = %#v", spec)
+		}
 	}
 }
 

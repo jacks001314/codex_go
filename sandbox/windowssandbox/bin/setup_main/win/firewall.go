@@ -10,11 +10,13 @@ import (
 
 const (
 	offlineBlockRuleName            = "codex_sandbox_offline_block_outbound"
+	offlineBlockInboundRuleName     = "codex_sandbox_offline_block_inbound"
 	offlineBlockLoopbackTCPRuleName = "codex_sandbox_offline_block_loopback_tcp"
 	offlineBlockLoopbackUDPRuleName = "codex_sandbox_offline_block_loopback_udp"
 	offlineProxyAllowRuleName       = "codex_sandbox_offline_allow_loopback_proxy"
 
 	offlineBlockRuleFriendly            = "Codex Sandbox Offline - Block Non-Loopback Outbound"
+	offlineBlockInboundRuleFriendly     = "Codex Sandbox Offline - Block Non-Loopback Inbound"
 	offlineBlockLoopbackTCPRuleFriendly = "Codex Sandbox Offline - Block Loopback TCP (Except Proxy)"
 	offlineBlockLoopbackUDPRuleFriendly = "Codex Sandbox Offline - Block Loopback UDP"
 
@@ -24,11 +26,14 @@ const (
 	netFwIPProtocolTCP = 6
 	netFwIPProtocolUDP = 17
 	netFwIPProtocolAny = 256
+	netFwRuleDirIn     = 1
+	netFwRuleDirOut    = 2
 )
 
 type firewallBlockRuleSpec struct {
 	internalName       string
 	friendlyDesc       string
+	direction          int
 	protocol           int
 	localUserSpec      string
 	offlineSID         string
@@ -44,6 +49,31 @@ func ConfigureFirewall() error {
 
 func firewallLocalUserSpec(offlineSID string) string {
 	return "O:LSD:(A;;CC;;;" + strings.TrimSpace(offlineSID) + ")"
+}
+
+func offlineNetworkBlockRuleSpecs(localUserSpec string, offlineSID string) []firewallBlockRuleSpec {
+	return []firewallBlockRuleSpec{
+		{
+			internalName:       offlineBlockRuleName,
+			friendlyDesc:       offlineBlockRuleFriendly,
+			direction:          netFwRuleDirOut,
+			protocol:           netFwIPProtocolAny,
+			localUserSpec:      localUserSpec,
+			offlineSID:         offlineSID,
+			remoteAddresses:    nonLoopbackRemoteAddresses,
+			remoteAddressIsSet: true,
+		},
+		{
+			internalName:       offlineBlockInboundRuleName,
+			friendlyDesc:       offlineBlockInboundRuleFriendly,
+			direction:          netFwRuleDirIn,
+			protocol:           netFwIPProtocolAny,
+			localUserSpec:      localUserSpec,
+			offlineSID:         offlineSID,
+			remoteAddresses:    nonLoopbackRemoteAddresses,
+			remoteAddressIsSet: true,
+		},
+	}
 }
 
 func BlockedLoopbackTCPRemotePorts(proxyPorts []uint16) (string, bool) {

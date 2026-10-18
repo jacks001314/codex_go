@@ -15,3 +15,7 @@ func EnsureOfflineProxyAllowlist(offlineSID string, proxyPorts []uint16, allowLo
 func EnsureOfflineOutboundBlock(offlineSID string, log io.Writer) error {
 	return windowssandbox.Unsupported("bin.setup_main.win.firewall.ensure_offline_outbound_block")
 }
+
+func EnsureOfflineNetworkBlocks(offlineSID string, log io.Writer) error {
+	return windowssandbox.Unsupported("bin.setup_main.win.firewall.ensure_offline_network_blocks")
+}

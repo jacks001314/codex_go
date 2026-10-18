@@ -426,11 +426,11 @@ func configureOfflineSandboxNetwork(payload *setupPayload, offlineSID string, lo
 		}
 		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline proxy allowlist failed: %v", err)
 	}
-	if err := EnsureOfflineOutboundBlock(offlineSID, log); err != nil {
+	if err := EnsureOfflineNetworkBlocks(offlineSID, log); err != nil {
 		if extractSetupFailure(err) != nil {
 			return err
 		}
-		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline outbound block failed: %v", err)
+		return setupFailuref(windowssandbox.SetupErrorHelperFirewallRuleCreateOrAddFailed, "ensure offline network blocks failed: %v", err)
 	}
 	windowssandbox.InstallWFPFilters(payload.CodexHome, payload.OfflineUsername, func(message string) {
 		setupLogLine(log, message)

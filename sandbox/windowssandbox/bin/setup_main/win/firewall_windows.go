@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	netFwRuleDirOut    = 2
 	netFwActionBlock   = 0
 	netFwProfile2All   = 0x7fffffff
 	netFwModifyStateOK = 0
@@ -39,6 +38,7 @@ func EnsureOfflineProxyAllowlist(offlineSID string, proxyPorts []uint16, allowLo
 		if err := ensureFirewallBlockRule(rules, firewallBlockRuleSpec{
 			internalName:       offlineBlockLoopbackUDPRuleName,
 			friendlyDesc:       offlineBlockLoopbackUDPRuleFriendly,
+			direction:          netFwRuleDirOut,
 			protocol:           netFwIPProtocolUDP,
 			localUserSpec:      localUserSpec,
 			offlineSID:         offlineSID,
@@ -50,6 +50,7 @@ func EnsureOfflineProxyAllowlist(offlineSID string, proxyPorts []uint16, allowLo
 		if err := ensureFirewallBlockRule(rules, firewallBlockRuleSpec{
 			internalName:       offlineBlockLoopbackTCPRuleName,
 			friendlyDesc:       offlineBlockLoopbackTCPRuleFriendly,
+			direction:          netFwRuleDirOut,
 			protocol:           netFwIPProtocolTCP,
 			localUserSpec:      localUserSpec,
 			offlineSID:         offlineSID,
@@ -65,6 +66,7 @@ func EnsureOfflineProxyAllowlist(offlineSID string, proxyPorts []uint16, allowLo
 			return ensureFirewallBlockRule(rules, firewallBlockRuleSpec{
 				internalName:       offlineBlockLoopbackTCPRuleName,
 				friendlyDesc:       offlineBlockLoopbackTCPRuleFriendly,
+				direction:          netFwRuleDirOut,
 				protocol:           netFwIPProtocolTCP,
 				localUserSpec:      localUserSpec,
 				offlineSID:         offlineSID,
@@ -79,21 +81,22 @@ func EnsureOfflineProxyAllowlist(offlineSID string, proxyPorts []uint16, allowLo
 }
 
 func EnsureOfflineOutboundBlock(offlineSID string, log io.Writer) error {
+	return EnsureOfflineNetworkBlocks(offlineSID, log)
+}
+
+func EnsureOfflineNetworkBlocks(offlineSID string, log io.Writer) error {
 	offlineSID = strings.TrimSpace(offlineSID)
 	if offlineSID == "" {
 		return windowssandbox.ErrInvalidRequest
 	}
 	localUserSpec := firewallLocalUserSpec(offlineSID)
 	return withFirewallRules(func(policy *ole.IDispatch, rules *ole.IDispatch) error {
-		return ensureFirewallBlockRule(rules, firewallBlockRuleSpec{
-			internalName:       offlineBlockRuleName,
-			friendlyDesc:       offlineBlockRuleFriendly,
-			protocol:           netFwIPProtocolAny,
-			localUserSpec:      localUserSpec,
-			offlineSID:         offlineSID,
-			remoteAddresses:    nonLoopbackRemoteAddresses,
-			remoteAddressIsSet: true,
-		}, log)
+		for _, spec := range offlineNetworkBlockRuleSpecs(localUserSpec, offlineSID) {
+			if err := ensureFirewallBlockRule(rules, spec, log); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -269,7 +272,7 @@ func configureFirewallRule(rule *ole.IDispatch, spec firewallBlockRuleSpec) erro
 		value interface{}
 	}{
 		{"Description", spec.friendlyDesc},
-		{"Direction", int32(netFwRuleDirOut)},
+		{"Direction", int32(spec.direction)},
 		{"Action", int32(netFwActionBlock)},
 		{"Enabled", true},
 		{"Profiles", int32(netFwProfile2All)},
