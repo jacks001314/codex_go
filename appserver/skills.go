@@ -59,7 +59,7 @@ type SkillsListEntry struct {
 	Interface        *SkillInterface     `json:"interface,omitempty"`
 	Dependencies     *SkillDependencies  `json:"dependencies,omitempty"`
 	Enabled          bool                `json:"enabled"`
-	PluginID         string              `json:"-"`
+	PluginID         string              `json:"pluginId,omitempty"`
 	RemotePluginID   string              `json:"-"`
 	Policy           *SkillPolicy        `json:"-"`
 	Contents         string              `json:"-"`

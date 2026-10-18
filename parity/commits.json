@@ -1488,9 +1488,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: managed-network constraint resolution checks both requirements and proxyConfig.Network.Enabled/profile allowance before enabling, so a disabled managed configuration neither starts nor advertises an active proxy; executor launch preparation clears proxy/managed-network fields when no sandbox or disabled settings apply. Tests: go test ./appserver -run ManagedNetwork -count=1; go test ./execserver -run 'ManagedNetwork|PrepareExecProcess' -count=1"
       ]
     },
     {
@@ -1500,9 +1500,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: config tracks CredentialBrokerProjectState (unconfigured/disabled/enabled), applies managed network requirements before sanitizing project layers, and ignores project shell/snapshot/profile settings plus provider env vars when brokering is active while preserving them when disabled. Tests: go test ./config -run CredentialBroker -count=1"
       ]
     },
     {
@@ -1524,9 +1524,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 4/15; needs review: THREAD_TITLE_MAX_CHARS, THREAD_TITLE_PROMPT_MAX_BYTES, ThreadTitleDestination, expect_automatic_thread_name, expect_manual_thread_name"
+        "Round 759: Go has provisional first-message thread titles and the bounded structured title helpers/schema/runtime added for /rename suggestions (#40495), but does not yet launch automatic background title generation after the first turn, apply it only while the provisional name is current, or suppress automatic rename notifications. These are the remaining #40492 pieces."
       ]
     },
     {
@@ -1584,9 +1584,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Go's model managers refresh on demand/TTL and there is no background model-refresh worker with a 3-minute/4m30s interval to change. Precondition: the app-server background catalog refresh worker."
       ]
     },
     {
@@ -1608,9 +1608,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: SkillsListEntry now serializes pluginId (omitempty) for clients, and unified mentions already use plugin ownership to suppress a plugin's owned skills while retaining standalone/unknown-owner skills and legacy behavior when mentions_v2 is disabled. Tests: go test ./appserver -run 'Skills|Plugin' -count=1; go test ./tui/app -run PluginMentions -count=1"
       ]
     },
     {
@@ -1668,9 +1668,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/12; needs review: HOOK_EVENT_NAMES, InterruptCommandInput, InterruptCommandOutputWire, InterruptOutcome, InterruptOutput"
+        "Round 759: HookEventInterrupt is wired through discovery, managed requirements, command/MCP handlers, output parsing, analytics, and TUI hook views. RuntimeRouter runs interrupt hooks for active top-level turns with bounded timeout and explicit input, and schedules executor cleanup hooks. Tests: go test ./appserver -run 'Interrupt|Hook' -count=1"
       ]
     },
     {
