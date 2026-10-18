@@ -12881,9 +12881,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: ConnectorRuntimePayload, run_with_snapshot, shared_tools, tools_version, without_live_scope"
+        "Go shares the Codex Apps catalog through its connection provider, preserves intentionally empty cached catalogs, bounds entries to the Apps limit, and rebuilds bindings from the shared provider without retaining per-turn unused snapshots. Tests: go test ./mcp -run 'Catalog|Binding|Apps' -count=1"
       ]
     },
     {
