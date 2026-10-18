@@ -112,3 +112,49 @@ func TestUsageNoticeReplacesPassiveFooterLikeRust(t *testing.T) {
 		t.Fatalf("popup footer = %q, want passive hints", footer)
 	}
 }
+
+// Rust UsageNoticeState rolling updates: sparse metadata carries forward, low
+// usage does not confirm recovery, and an advanced reset window may recover.
+func TestRollingUsageNoticeMergeLikeRust(t *testing.T) {
+	previousReset := int64(2_000)
+	nextReset := int64(3_000)
+	previous := chatwidget.RateLimitSnapshot{
+		LimitID:  "codex",
+		PlanType: "plus",
+		Primary:  usageNoticeWindowPtr(92, 300, &previousReset),
+		Credits:  &chatwidget.RateLimitCredits{Balance: usageStringPtr("0")},
+	}
+	merged := mergeRollingRateLimitSnapshot(previous, true, chatwidget.RateLimitSnapshot{
+		Primary: usageNoticeWindowPtr(94, 300, nil),
+	})
+	if merged.Primary == nil || merged.Primary.UsedPercent != 94 ||
+		merged.Primary.WindowDurationMins == nil || *merged.Primary.WindowDurationMins != 300 ||
+		merged.Primary.ResetsAt == nil || *merged.Primary.ResetsAt != previousReset {
+		t.Fatalf("sparse merged window = %#v", merged.Primary)
+	}
+	if merged.PlanType != "plus" || merged.Credits == nil {
+		t.Fatalf("sparse merged metadata = %#v", merged)
+	}
+
+	low := mergeRollingRateLimitSnapshot(merged, true, chatwidget.RateLimitSnapshot{
+		Primary: usageNoticeWindowPtr(10, 300, nil),
+	})
+	if low.Primary == nil || low.Primary.UsedPercent != 94 {
+		t.Fatalf("low rolling update cleared the notice: %#v", low.Primary)
+	}
+
+	recovered := mergeRollingRateLimitSnapshot(low, true, chatwidget.RateLimitSnapshot{
+		Primary: usageNoticeWindowPtr(10, 300, &nextReset),
+	})
+	if recovered.Primary == nil || recovered.Primary.UsedPercent != 10 ||
+		recovered.Primary.ResetsAt == nil || *recovered.Primary.ResetsAt != nextReset {
+		t.Fatalf("advanced reset window did not recover: %#v", recovered.Primary)
+	}
+
+	empty := mergeRollingRateLimitSnapshot(recovered, true, chatwidget.RateLimitSnapshot{})
+	if empty.Primary == nil || empty.Primary.UsedPercent != 10 {
+		t.Fatalf("nil rolling window dropped metadata: %#v", empty.Primary)
+	}
+}
+
+func usageStringPtr(value string) *string { return &value }

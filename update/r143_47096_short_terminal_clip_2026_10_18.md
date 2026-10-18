@@ -15,7 +15,9 @@
   `resets at ...` 文案。
 
 结论：`#47096` 的短终端裁剪与 usage notice 宽度策略均已落地。`#46912`
-仍保留 partial，剩余 rolling/stale-read 状态与 native-history 配额告警。
+仍保留 partial：rolling snapshot 已合并稀疏窗口、保留元数据，并只在 reset
+窗口前进时接受低用量恢复；剩余 app-server request-id 的 stale account-read
+拒绝与账户切换清理。
 
 验证：
 

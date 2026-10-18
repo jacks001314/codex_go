@@ -2008,9 +2008,10 @@ green.
   half-row/compact width policy, thresholds, credits suppression, and reset
   details.
 - `#46912` is partially complete: the quota notice is visible in the composer
-  gap and honors backend-banner/modal/following gates. Remaining: the dedicated
-  rolling-update merge and stale-read rejection state, plus native-history quota
-  warning cells.
+  gap and honors backend-banner/modal/following gates. Rolling snapshots merge
+  sparse windows and metadata, and lower usage only confirms recovery when the
+  reset window advances. Remaining: app-server request-id tracking for stale
+  account-read rejection and explicit account-change clearing.
 - `#41467` is complete: the model picker refreshes from the app server with
   stale-request rejection, catalog constraints, in-place picker/reasoning
   refresh, and fallback when the current model disappears.

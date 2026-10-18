@@ -8247,6 +8247,9 @@ func (m *Model) applyRateLimitSnapshot(snapshot chatwidget.RateLimitSnapshot) bu
 	if m.rateLimitSnapshots == nil {
 		m.rateLimitSnapshots = map[string]chatwidget.RateLimitSnapshot{}
 	}
+	if previous, ok := m.rateLimitSnapshots[limitID]; ok {
+		snapshot = mergeRollingRateLimitSnapshot(previous, true, snapshot)
+	}
 	if strings.TrimSpace(snapshot.PlanType) != "" {
 		// Rust #44970: an account/plan change invalidates cached dashboard usage
 		// and the disabled-capability state.

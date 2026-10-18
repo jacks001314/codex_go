@@ -17423,7 +17423,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 684 (progress): composer_hint now renders a quota usage notice from the latest codex rate-limit snapshot, hides it for modal/popup/selection/backtrack/non-following states or an applicable backend banner, selects the highest-used window above the Plus/Team 5h 50% or default 75% threshold, suppresses unlimited/credited accounts, and formats remaining capacity plus reset time within Rust's half-row/compact width policy. Remaining: the dedicated UsageNoticeState rolling-update merge and stale account-read rejection, plus native-history quota warning cells."
+        "Round 685 (progress): composer_hint renders a quota usage notice from the latest codex rate-limit snapshot, hides it for modal/popup/selection/backtrack/non-following states or an applicable backend banner, selects the highest-used window above the Plus/Team 5h 50% or default 75% threshold, suppresses unlimited/credited accounts, and formats remaining capacity plus reset time within Rust's half-row/compact width policy. Rolling snapshots now merge sparse windows, carry plan/credits/reset metadata forward, refuse lower usage as recovery unless the reset window advanced, and preserve the notice across thread switches. Go's warning history cells already remain visible in its transcript. Remaining: app-server request-id tracking for stale account-read rejection and explicit account-change clearing."
       ]
     },
     {
