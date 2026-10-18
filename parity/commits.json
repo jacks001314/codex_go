@@ -9579,9 +9579,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: StageOneOutput, build_stage_one_input_v2"
+        "Round 564 (audit): already implemented. Memory v2 selects the summary-only system prompt and cwd/branch-hint input template, filters rollout input for the extraction contract, and stores the raw-memory summary pipeline output. Tests: go test ./memories -run 'Summary|V2|Extraction|RolloutInput' -count=1"
       ]
     },
     {
@@ -21728,9 +21728,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 565 (audit): already implemented. .aws joins the protected read-only project metadata paths in config, sandbox policy, sandbox paths, and Windows resolved permissions. Tests: go test ./config ./sandbox ./sandbox/windowssandbox -run 'AWS|Aws|ProtectedReadOnly' -count=1"
       ]
     },
     {
@@ -27085,9 +27085,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 566 (audit): already implemented. V1 handoffs treat commentary and partial answers as nonterminal, and realtime/thread-search routing preserves them consistently. Tests: go test ./realtime -run 'Partial|Nonterminal|Handoff|Search' -count=1"
       ]
     },
     {
