@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -44,6 +45,23 @@ func logWindowsSandboxSelection(codexHome string, level sandbox.WindowsSandboxLe
 	_ = windowssandbox.LogNoteInDir(dir, "Windows sandbox selection: "+windowsSandboxBackendLabel(level))
 }
 
+// logWindowsSandboxAvailability records whether native MXC can run on this
+// host (Rust #51974 log_windows_sandbox_startup).
+func logWindowsSandboxAvailability(codexHome string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	codexHome = strings.TrimSpace(codexHome)
+	if codexHome == "" {
+		return
+	}
+	dir := windowssandbox.SandboxDir(codexHome)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	_ = windowssandbox.LogNoteInDir(dir, fmt.Sprintf("MXC availability: %t", sandbox.WindowsMXCAvailable()))
+}
+
 // logWindowsSandboxSelectionForConfig resolves the effective level from the
 // config service and records it. A missing or unreadable config leaves the
 // selection at "disabled", matching Rust's default level.
@@ -51,6 +69,7 @@ func logWindowsSandboxSelectionForConfig(configService *config.ConfigService) {
 	if configService == nil {
 		return
 	}
+	logWindowsSandboxAvailability(configService.CodexHome())
 	level := sandbox.WindowsSandboxDisabled
 	if read, err := configService.Read(&config.ConfigReadParams{}); err == nil && read != nil && read.Config != nil {
 		level = windowsSandboxLevelFromConfigValues(read.Config)
