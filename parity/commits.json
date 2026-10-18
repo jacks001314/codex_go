@@ -3085,9 +3085,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Guardian reviewer creation schedules WebSocket prewarm on a background goroutine, so thread/turn startup does not wait for the handshake. Prewarm runs once, its response seeds the first review, and handshake failure falls back to a lazy first review. Tests: go test ./appserver -run 'Guardian.*Prewarm|EnsureGuardianReviewerPrewarm|SessionStartupPrewarm' -count=1"
       ]
     },
     {
