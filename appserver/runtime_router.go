@@ -1406,8 +1406,11 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	var codexHomeScanCanceled int32
 	scanCancel := func() bool { return atomic.LoadInt32(&codexHomeScanCanceled) == 1 }
 	go recordCodexHomeMetrics(runtimeMetrics, codexHome, scanCancel)
+	threadRouter := NewRouter(store)
+	// Rust #47900: LocalThreadStore defaults new threads to paginated history.
+	threadRouter.SetDefaultHistoryMode(ThreadHistoryPaginated)
 	services := RuntimeServices{
-		ThreadRouter:           NewRouter(store),
+		ThreadRouter:           threadRouter,
 		StateRuntime:           stateRuntime,
 		CloseStateRuntime:      closeStateRuntime,
 		LogDBInstallation:      logDBInstallation,
@@ -3764,6 +3767,11 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 	// loading the thread.
 	if err := r.ensureDirectInputAllowed(request, params.ThreadID); err != nil {
 		return nil, err
+	}
+	// Rust #47900: reverting durable history is unavailable for in-memory
+	// ephemeral threads; reject before touching history or read state.
+	if _, ok := r.ephemeralThreadRecord(session.ThreadID(params.ThreadID), false); ok {
+		return nil, jsonRPCInvalidRequest("ephemeral threads do not support thread/revert")
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
 	if err != nil {

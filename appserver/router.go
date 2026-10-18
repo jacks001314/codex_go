@@ -57,7 +57,12 @@ type Router struct {
 	// creatorIdentity captures the authenticated ChatGPT user/account when a
 	// thread or fork is created (Rust #47113). Nil leaves both fields absent.
 	creatorIdentity func() (userID string, accountID string)
-	historyInitMu   sync.RWMutex
+	// defaultHistoryMode is the store's history-mode default for a new
+	// non-ephemeral thread (Rust ThreadStore::default_history_mode). The bare
+	// Router keeps the compatibility default; the runtime installs Paginated
+	// for the local store (Rust #47900).
+	defaultHistoryMode ThreadHistoryMode
+	historyInitMu      sync.RWMutex
 	// historyInitializations classifies the runtime that currently owns each
 	// loaded thread. Persisted records seed the value, while cold resumes and
 	// forks override it for this runtime without rewriting history metadata.
@@ -181,6 +186,7 @@ func NewRouter(store *session.Store) *Router {
 		store:                  store,
 		now:                    time.Now,
 		threads:                threads,
+		defaultHistoryMode:     ThreadHistoryLegacy,
 		historyInitializations: map[session.ThreadID]session.HistoryInitialization{},
 	}
 	if store != nil {
@@ -196,6 +202,19 @@ func NewRouter(store *session.Store) *Router {
 		})
 	}
 	return router
+}
+
+// SetDefaultHistoryMode selects the history mode for thread/start requests
+// that omit historyMode. Rust #47900 gives the local store a paginated default
+// while preserving explicit legacy selection.
+func (r *Router) SetDefaultHistoryMode(mode ThreadHistoryMode) {
+	if r == nil {
+		return
+	}
+	switch mode {
+	case ThreadHistoryLegacy, ThreadHistoryPaginated:
+		r.defaultHistoryMode = mode
+	}
 }
 
 func (r *Router) setHistoryInitialization(threadID session.ThreadID, initialization session.HistoryInitialization) {
@@ -1276,7 +1295,10 @@ func (r *Router) handleThreadStart(request *Request) (*ThreadStartResponse, erro
 	}
 	historyMode := string(params.HistoryMode)
 	if historyMode == "" {
-		historyMode = string(ThreadHistoryLegacy)
+		historyMode = string(r.defaultHistoryMode)
+		if historyMode == "" {
+			historyMode = string(ThreadHistoryLegacy)
+		}
 	}
 	threadSource := ""
 	if params.ThreadSource != nil {
