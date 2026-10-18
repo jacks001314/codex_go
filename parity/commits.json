@@ -27697,9 +27697,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: read_rollout_lines"
+        "Round 307 (audit): already equivalent. Go's rollout Load performs the complete read and parse pass synchronously on the caller goroutine for both plain and zstd rollouts, so there is no separate blocking-task hand-off to unify. TestLoadMatchesAcrossPlainAndCompressedRepresentations covers Unicode, CRLF, blank lines, malformed records, and identical records/error counts across representations; line-reader cancellation tests cover stopped reads."
       ]
     },
     {
