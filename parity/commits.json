@@ -16541,9 +16541,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: protection_policy, scratch_access_roots"
+        "Round 326 (audit): already implemented. Seatbelt scratch grants share the writable-root exclusion set, apply exclusions after grants, protect logical and resolved writable-root ancestors from relocation, and apply daemon socket grants/protections after all filesystem grants. Tests cover scratch exclusions/order, protected ancestors and symlink targets, socket parameters, and policy generation. Tests: go test ./sandbox -run 'Seatbelt|Scratch|Socket' -count=1"
       ]
     },
     {
