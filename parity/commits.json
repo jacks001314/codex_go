@@ -30450,9 +30450,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: MAX_MODEL_CONTEXT_ITEM_TOKENS, estimate_compaction_content_length, estimate_input_tokens_from_serialized_len"
+        "Equivalent implementation present: encrypted compaction content is estimated from the replay-cache token length rather than the serialized ciphertext envelope, with Rust's bounded content-length conversion and serialized-length token approximation. Guardian parent-compaction reuse and encrypted agent-message budgets use the same estimate, preventing replay caches from appearing falsely oversized. Compact and Guardian budget regression tests pass."
       ]
     },
     {
