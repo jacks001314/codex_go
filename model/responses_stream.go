@@ -2183,6 +2183,16 @@ func agentItemFromResponseOutput(output *responsesAgentOutputItem, rawItem json.
 	if phase := strings.TrimSpace(output.Phase); phase != "" {
 		data["phase"] = phase
 	}
+	if status := strings.TrimSpace(output.Status); status != "" {
+		data["status"] = status
+	}
+	if output.EncryptedContent != nil {
+		data["encrypted_content"] = *output.EncryptedContent
+		data["encryptedContent"] = *output.EncryptedContent
+	}
+	if len(output.Content) > 0 {
+		data["outputContent"] = append([]responsesAgentContentBlock(nil), output.Content...)
+	}
 	return &AgentItem{ID: id, Type: "agent_message", Text: text, Data: data}, nil
 }
 

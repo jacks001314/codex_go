@@ -142,6 +142,8 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
 			ID                    string    `json:"id,omitempty"`
 			Type                  string    `json:"type"`
+			Status                string    `json:"status,omitempty"`
+			EncryptedContent      *string   `json:"encrypted_content,omitempty"`
 			Name                  string    `json:"name"`
 			Namespace             string    `json:"namespace,omitempty"`
 			Arguments             string    `json:"arguments"`
@@ -150,6 +152,8 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 		}{
 			ID:                    i.ID,
 			Type:                  i.Type,
+			Status:                firstAgentItemValue(i.Status, stringValueFromAgentItemMap(i.Data, "status")),
+			EncryptedContent:      agentItemEncryptedContent(i.Data),
 			Name:                  i.Name,
 			Namespace:             i.Namespace,
 			Arguments:             i.Arguments,
@@ -158,49 +162,55 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 		})
 	case "custom_tool_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID        string `json:"id,omitempty"`
-			Type      string `json:"type"`
-			Status    string `json:"status,omitempty"`
-			CallID    string `json:"call_id"`
-			Name      string `json:"name"`
-			Namespace string `json:"namespace,omitempty"`
-			Input     string `json:"input"`
+			ID               string  `json:"id,omitempty"`
+			Type             string  `json:"type"`
+			Status           string  `json:"status,omitempty"`
+			EncryptedContent *string `json:"encrypted_content,omitempty"`
+			CallID           string  `json:"call_id"`
+			Name             string  `json:"name"`
+			Namespace        string  `json:"namespace,omitempty"`
+			Input            string  `json:"input"`
 		}{
-			ID:        i.ID,
-			Type:      i.Type,
-			Status:    i.Status,
-			CallID:    firstAgentItemValue(i.CallID, i.ID),
-			Name:      i.Name,
-			Namespace: i.Namespace,
-			Input:     i.Input,
+			ID:               i.ID,
+			Type:             i.Type,
+			Status:           i.Status,
+			EncryptedContent: agentItemEncryptedContent(i.Data),
+			CallID:           firstAgentItemValue(i.CallID, i.ID),
+			Name:             i.Name,
+			Namespace:        i.Namespace,
+			Input:            i.Input,
 		})
 	case "tool_search_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID        string  `json:"id,omitempty"`
-			Type      string  `json:"type"`
-			CallID    *string `json:"call_id"`
-			Status    string  `json:"status,omitempty"`
-			Execution string  `json:"execution"`
-			Arguments any     `json:"arguments"`
+			ID               string  `json:"id,omitempty"`
+			Type             string  `json:"type"`
+			CallID           *string `json:"call_id"`
+			Status           string  `json:"status,omitempty"`
+			EncryptedContent *string `json:"encrypted_content,omitempty"`
+			Execution        string  `json:"execution"`
+			Arguments        any     `json:"arguments"`
 		}{
-			ID:        i.ID,
-			Type:      i.Type,
-			CallID:    optionalAgentItemString(firstAgentItemValue(i.CallID, i.ID)),
-			Status:    i.Status,
-			Execution: firstAgentItemValue(i.Execution, "client"),
-			Arguments: agentItemSearchArguments(i),
+			ID:               i.ID,
+			Type:             i.Type,
+			CallID:           optionalAgentItemString(firstAgentItemValue(i.CallID, i.ID)),
+			Status:           i.Status,
+			EncryptedContent: agentItemEncryptedContent(i.Data),
+			Execution:        firstAgentItemValue(i.Execution, "client"),
+			Arguments:        agentItemSearchArguments(i),
 		})
 	case "web_search_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID     string         `json:"id,omitempty"`
-			Type   string         `json:"type"`
-			Status string         `json:"status,omitempty"`
-			Action map[string]any `json:"action,omitempty"`
+			ID               string         `json:"id,omitempty"`
+			Type             string         `json:"type"`
+			Status           string         `json:"status,omitempty"`
+			EncryptedContent *string        `json:"encrypted_content,omitempty"`
+			Action           map[string]any `json:"action,omitempty"`
 		}{
-			ID:     i.ID,
-			Type:   i.Type,
-			Status: i.Status,
-			Action: cloneAgentItemMap(i.Search),
+			ID:               i.ID,
+			Type:             i.Type,
+			Status:           i.Status,
+			EncryptedContent: agentItemEncryptedContent(i.Data),
+			Action:           cloneAgentItemMap(i.Search),
 		})
 	case "reasoning":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
@@ -218,35 +228,38 @@ func (i *AgentItem) MarshalJSON() ([]byte, error) {
 		})
 	case "image_generation_call":
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID            string `json:"id,omitempty"`
-			Type          string `json:"type"`
-			Status        string `json:"status"`
-			RevisedPrompt string `json:"revised_prompt,omitempty"`
-			Result        string `json:"result"`
+			ID               string  `json:"id,omitempty"`
+			Type             string  `json:"type"`
+			Status           string  `json:"status"`
+			EncryptedContent *string `json:"encrypted_content,omitempty"`
+			RevisedPrompt    string  `json:"revised_prompt,omitempty"`
+			Result           string  `json:"result"`
 		}{
-			ID:            i.ID,
-			Type:          "image_generation_call",
-			Status:        firstAgentItemValue(i.Status, stringValueFromAgentItemMap(i.Data, "status")),
-			RevisedPrompt: stringValueFromAgentItemMap(i.Data, "revised_prompt", "revisedPrompt"),
-			Result:        firstAgentItemValue(stringValueFromAgentItemMap(i.Data, "result"), i.Text),
+			ID:               i.ID,
+			Type:             "image_generation_call",
+			Status:           firstAgentItemValue(i.Status, stringValueFromAgentItemMap(i.Data, "status")),
+			EncryptedContent: agentItemEncryptedContent(i.Data),
+			RevisedPrompt:    stringValueFromAgentItemMap(i.Data, "revised_prompt", "revisedPrompt"),
+			Result:           firstAgentItemValue(stringValueFromAgentItemMap(i.Data, "result"), i.Text),
 		})
 	case "", "agent_message":
 		phase := stringValueFromAgentItemMap(i.Data, "phase", "messagePhase", "message_phase")
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
-			ID      string                       `json:"id,omitempty"`
-			Type    string                       `json:"type"`
-			Role    string                       `json:"role"`
-			Phase   string                       `json:"phase,omitempty"`
-			Content []responsesAgentContentBlock `json:"content"`
+			ID               string                       `json:"id,omitempty"`
+			Type             string                       `json:"type"`
+			Role             string                       `json:"role"`
+			Phase            string                       `json:"phase,omitempty"`
+			Status           string                       `json:"status,omitempty"`
+			EncryptedContent *string                      `json:"encrypted_content,omitempty"`
+			Content          []responsesAgentContentBlock `json:"content"`
 		}{
-			ID:    i.ID,
-			Type:  "message",
-			Role:  "assistant",
-			Phase: phase,
-			Content: []responsesAgentContentBlock{{
-				Type: "output_text",
-				Text: i.Text,
-			}},
+			ID:               i.ID,
+			Type:             "message",
+			Role:             "assistant",
+			Phase:            phase,
+			Status:           firstAgentItemValue(i.Status, stringValueFromAgentItemMap(i.Data, "status")),
+			EncryptedContent: agentItemEncryptedContent(i.Data),
+			Content:          agentMessageContentBlocks(i),
 		})
 	default:
 		return marshalAgentItemWithExecutedToolCalls(i, struct {
@@ -263,6 +276,40 @@ func cloneAgentStringSlicePtr(value *[]string) *[]string {
 	}
 	cloned := append([]string{}, (*value)...)
 	return &cloned
+}
+
+func agentItemEncryptedContent(data map[string]any) *string {
+	for _, key := range []string{"encrypted_content", "encryptedContent"} {
+		if value, ok := data[key].(string); ok {
+			return &value
+		}
+	}
+	return nil
+}
+
+func agentMessageContentBlocks(item *AgentItem) []responsesAgentContentBlock {
+	if item != nil {
+		if blocks, ok := item.Data["outputContent"].([]responsesAgentContentBlock); ok {
+			return append([]responsesAgentContentBlock(nil), blocks...)
+		}
+		if raw, ok := item.Data["outputContent"]; ok {
+			switch values := raw.(type) {
+			case []any:
+				encoded, err := json.Marshal(values)
+				if err == nil {
+					var blocks []responsesAgentContentBlock
+					if json.Unmarshal(encoded, &blocks) == nil {
+						return blocks
+					}
+				}
+			}
+		}
+	}
+	text := ""
+	if item != nil {
+		text = item.Text
+	}
+	return []responsesAgentContentBlock{{Type: "output_text", Text: text}}
 }
 
 func marshalAgentItemWithExecutedToolCalls(item *AgentItem, value any) ([]byte, error) {

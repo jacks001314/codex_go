@@ -29621,9 +29621,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: clear_encrypted_content"
+        "Round 397 (implementation): output_token_replay adds output.encrypted_content only for OpenAI, preserves message/call ciphertext, status, annotations, and logprobs in history, and clears non-reasoning output ciphertext only from non-OpenAI request copies. Tests: go test ./model -count=1; go test -race ./model -run 'OutputTokenReplay|ResponsesIncludeOutputTokenReplay' -count=1; go test ./appserver -run 'ResponsesAgent|ContentItemKinds|Provider' -count=1"
       ]
     },
     {

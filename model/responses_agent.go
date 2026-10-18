@@ -137,6 +137,10 @@ type ResponsesAgentOptions struct {
 	// provider was rewritten to a discovered workspace backend so a redirect
 	// can never forward the credential to another origin.
 	RejectRedirects bool
+	// OutputTokenReplayEnabled mirrors Feature::OutputTokenReplay. It requests
+	// output.encrypted_content only from OpenAI providers so sampled output can
+	// be replayed without changing its tokenization.
+	OutputTokenReplayEnabled bool
 	// UnboundedConnectionRetries keeps active sampling turns alive until a
 	// failed network connection recovers (Rust Feature::UnboundedConnectionRetries,
 	// default enabled). nil means the feature default (enabled).
@@ -185,6 +189,7 @@ type ResponsesAgentRunner struct {
 	WebsocketConnectTimeout    time.Duration
 	RejectRedirects            bool
 	UnboundedConnectionRetries *bool
+	OutputTokenReplayEnabled   bool
 	// AWS carries the Amazon Bedrock SDK credential configuration (Rust
 	// #39410) so expired SDK credentials can be refreshed on 401 failures.
 	AWS *ProviderAWSAuthInfo
@@ -443,6 +448,7 @@ type responsesAgentOutputItem struct {
 	Name                  string                       `json:"name"`
 	Namespace             string                       `json:"namespace"`
 	CallID                string                       `json:"call_id"`
+	EncryptedContent      *string                      `json:"encrypted_content"`
 	Arguments             any                          `json:"arguments"`
 	EncryptedFunctionArgs *[]string                    `json:"encrypted_function_args"`
 	Input                 string                       `json:"input"`
@@ -455,8 +461,10 @@ type responsesAgentOutputItem struct {
 }
 
 type responsesAgentContentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type        string `json:"type"`
+	Text        string `json:"text"`
+	Annotations *[]any `json:"annotations,omitempty"`
+	Logprobs    *[]any `json:"logprobs,omitempty"`
 }
 
 type responsesAgentAPIUsage struct {
@@ -671,6 +679,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		SupportsWebsockets:         options.SupportsWebsockets,
 		WebsocketConnectTimeout:    options.WebsocketConnectTimeout,
 		RejectRedirects:            options.RejectRedirects,
+		OutputTokenReplayEnabled:   options.OutputTokenReplayEnabled,
 		UnboundedConnectionRetries: cloneBoolPtrModel(options.UnboundedConnectionRetries),
 		AWS:                        cloneProviderAWSAuthInfo(options.AWS),
 		Metrics:                    options.Metrics,
@@ -900,6 +909,8 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	}
 	if apiRequest.Reasoning != nil {
 		payload["reasoning"] = apiRequest.Reasoning
+	}
+	if len(apiRequest.Include) > 0 {
 		payload["include"] = apiRequest.Include
 	}
 	if apiRequest.StreamOptions != nil {
@@ -1091,8 +1102,8 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
-	if apiRequest.Reasoning != nil {
-		apiRequest.Include = []string{"reasoning.encrypted_content"}
+	if apiRequest.Reasoning != nil || r.outputTokenReplayForProvider() {
+		apiRequest.Include = r.responsesInclude()
 	}
 	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
@@ -1623,8 +1634,8 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	}
 	apiRequest.Reasoning = responsesReasoningParam(request, &modelInfo)
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
-	if apiRequest.Reasoning != nil {
-		apiRequest.Include = []string{"reasoning.encrypted_content"}
+	if apiRequest.Reasoning != nil || r.outputTokenReplayForProvider() {
+		apiRequest.Include = r.responsesInclude()
 	}
 	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
 	if apiRequest.Stream {
@@ -2662,20 +2673,49 @@ func responsesInputItemsForProviderWithStore(request *AgentRequest, providerName
 			}
 			clone := *typed
 			clone.EncryptedFunctionArgs = nil
+			clone.Data = cloneAgentItemMap(typed.Data)
+			clearAgentItemEncryptedContent(&clone)
 			out = append(out, &clone)
 		case AgentItem:
 			clone := typed
 			clone.EncryptedFunctionArgs = nil
+			clone.Data = cloneAgentItemMap(typed.Data)
+			clearAgentItemEncryptedContent(&clone)
 			out = append(out, clone)
 		case map[string]any:
 			clone := cloneMapAny(typed)
 			delete(clone, "encrypted_function_args")
+			if !agentItemTypeKeepsEncryptedContent(stringFromAny(clone, "type")) {
+				delete(clone, "encrypted_content")
+				delete(clone, "encryptedContent")
+			}
 			out = append(out, clone)
 		default:
 			out = append(out, item)
 		}
 	}
 	return out
+}
+
+func clearAgentItemEncryptedContent(item *AgentItem) {
+	if item == nil {
+		return
+	}
+	if agentItemTypeKeepsEncryptedContent(item.Type) {
+		return
+	}
+	delete(item.Data, "encrypted_content")
+	delete(item.Data, "encryptedContent")
+}
+
+func agentItemTypeKeepsEncryptedContent(itemType string) bool {
+	normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.TrimSpace(itemType)))
+	switch normalized {
+	case "reasoning", "compaction", "contextcompaction":
+		return true
+	default:
+		return false
+	}
 }
 
 func stripResponseInputItemIDs(items []any) []any {
@@ -3039,6 +3079,7 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		Execution:             output.Execution,
 		Search:                cloneResponseSearch(output.Search),
 		Status:                output.Status,
+		Data:                  responseItemEncryptedContentData(output.EncryptedContent),
 	}
 	if item.Type == "tool_search_call" && len(item.Search) == 0 {
 		item.Search = responseArgumentsMap(output.Arguments)
@@ -3047,6 +3088,16 @@ func toolCallAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem,
 		item.Search = cloneResponseSearch(output.Action)
 	}
 	return item, true
+}
+
+func responseItemEncryptedContentData(value *string) map[string]any {
+	if value == nil {
+		return nil
+	}
+	return map[string]any{
+		"encrypted_content": *value,
+		"encryptedContent":  *value,
+	}
 }
 
 func imageGenerationAgentItem(output *responsesAgentOutputItem, index int) (*AgentItem, bool) {
@@ -3061,6 +3112,10 @@ func imageGenerationAgentItem(output *responsesAgentOutputItem, index int) (*Age
 	data := map[string]any{
 		"status": status,
 		"result": output.Result,
+	}
+	if output.EncryptedContent != nil {
+		data["encrypted_content"] = *output.EncryptedContent
+		data["encryptedContent"] = *output.EncryptedContent
 	}
 	if strings.TrimSpace(output.Revised) != "" {
 		data["revisedPrompt"] = output.Revised
@@ -3362,6 +3417,18 @@ func (r *ResponsesAgentRunner) providerName() string {
 		return ""
 	}
 	return r.Provider.Name
+}
+
+func (r *ResponsesAgentRunner) responsesInclude() []string {
+	include := []string{"reasoning.encrypted_content"}
+	if r != nil && r.outputTokenReplayForProvider() {
+		include = append(include, "output.encrypted_content")
+	}
+	return include
+}
+
+func (r *ResponsesAgentRunner) outputTokenReplayForProvider() bool {
+	return r != nil && r.OutputTokenReplayEnabled && strings.EqualFold(strings.TrimSpace(r.providerName()), OpenAIProviderName)
 }
 
 // serviceTierForRequest mirrors Rust ModelClient #46230/#50472: a tier is sent

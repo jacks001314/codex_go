@@ -794,6 +794,7 @@ func (r *RuntimeRouter) responsesAgentForTurn(params *turn.TurnStartParams) (*mo
 	agent.StoreOptions = r.authStoreOptions()
 	agent.AgentIdentity = agentIdentityOptionsForAppTurn(cfg)
 	agent.EnableRequestCompression = features.Enabled(cfg.FeatureSettings(), "enable_request_compression")
+	agent.OutputTokenReplayEnabled = features.Enabled(cfg.FeatureSettings(), "output_token_replay")
 	contentItemKindsEnabled := features.Enabled(cfg.FeatureSettings(), "content_item_kinds")
 	agent.ContentItemKindsEnabled = &contentItemKindsEnabled
 	// Rust `ApiKeyCyberAccessPrograms::from_config` (#49714): the OpenAI provider
