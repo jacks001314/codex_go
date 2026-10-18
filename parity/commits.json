@@ -1584,9 +1584,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "blocked_precondition",
+      "status": "complete",
       "evidence": [
-        "Round 759: Go's model managers refresh on demand/TTL and there is no background model-refresh worker with a 3-minute/4m30s interval to change. Precondition: the app-server background catalog refresh worker."
+        "Round 555: appserver/models_refresh_worker.go mirrors Rust ModelsRefreshWorker: it refreshes the online catalog immediately and every 4m30s until router shutdown, logging only the bounded provider-requirements classification. NewDefaultRuntimeRouterWithOptions spawns it and Close cancels it. Tests: go test ./appserver -run ModelsRefreshWorker -count=1; go test ./appserver -count=1"
       ]
     },
     {

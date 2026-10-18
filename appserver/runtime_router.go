@@ -318,6 +318,9 @@ type RuntimeRouter struct {
 	// (Rust AccountRequestProcessor::workspace_routing).
 	workspaceRoutingOnce sync.Once
 	workspaceRouting     *workspaceRoutingState
+	// modelsRefreshWorker refreshes the online catalog in the background
+	// (Rust #40498's ModelsRefreshWorker).
+	modelsRefreshWorker *modelsRefreshWorker
 	// turnContexts holds each thread's most recent turn-context payload. Rust
 	// keeps the same value in session state (`PreviousTurnSettings`) and seeds it
 	// from rollout reconstruction on resume, so a previous-model compaction can
@@ -1530,6 +1533,7 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	// Mirrors Rust thread_manager.rs: local thread store compression starts its
 	// background pass on startup when the feature is enabled.
 	MaybeSpawnRolloutCompressionOnStartup(codexHome, configService)
+	router.modelsRefreshWorker = router.spawnModelsRefreshWorker(modelsRefreshInterval)
 	return router
 }
 
@@ -2252,6 +2256,7 @@ func (r *RuntimeRouter) Close() error {
 }
 
 func (r *RuntimeRouter) close() error {
+	r.modelsRefreshWorker.shutdown()
 	// A managed daemon's recovery snapshot must be taken while its turns are
 	// still live: BeginShutdown below cancels them, and the interrupted turns
 	// only exist before that (Rust app-server/src/lib.rs takes the snapshot on
