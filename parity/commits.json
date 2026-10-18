@@ -4428,9 +4428,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: OPENAI_ELICITATION_EXTENSION_ID"
+        "Round 454 (implementation): the MCP client already dispatched openai/elicitation/create form mode and app-server mapped form to openaiForm while preserving metadata/schema. Added the missing initialization capability: openai/elicitation.form is advertised alongside legacy openai/form when enabled. Tests: go test ./mcp -run 'OpenAIForm|Elicitation|Capabilities' -count=1; go test ./appserver -run 'MCPElicitation|Elicitation' -count=1"
       ]
     },
     {

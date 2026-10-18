@@ -118,7 +118,10 @@ func mcpClientCapabilitiesWithAuthChange(openAIForm bool, advertiseAuthChange bo
 	}
 	if openAIForm {
 		capabilities["extensions"] = map[string]any{
-			"openai/form": map[string]any{},
+			// Rust #41447 advertises the umbrella elicitation form capability
+			// alongside the legacy openai/form extension.
+			"openai/form":        map[string]any{},
+			"openai/elicitation": map[string]any{"form": map[string]any{}},
 		}
 	}
 	if advertiseAuthChange {

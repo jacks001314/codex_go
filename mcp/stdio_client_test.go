@@ -145,6 +145,18 @@ func TestMCPClientInitializeParamsAdvertisesOpenAIFormExtension(t *testing.T) {
 	if !ok || len(openAIForm) != 0 {
 		t.Fatalf("openai/form extension = %#v", extensions["openai/form"])
 	}
+	elicitation, ok := extensions["openai/elicitation"].(map[string]any)
+	if !ok {
+		t.Fatalf("openai/elicitation extension = %#v", extensions["openai/elicitation"])
+	}
+	form, ok := elicitation["form"].(map[string]any)
+	if !ok || len(form) != 0 {
+		t.Fatalf("openai/elicitation.form = %#v", elicitation["form"])
+	}
+	disabled := mcpClientInitializeParams(false)["capabilities"].(map[string]any)
+	if _, ok := disabled["extensions"]; ok {
+		t.Fatalf("disabled capabilities = %#v", disabled)
+	}
 }
 
 func TestReadMCPResultRespondsToServerRequests(t *testing.T) {
