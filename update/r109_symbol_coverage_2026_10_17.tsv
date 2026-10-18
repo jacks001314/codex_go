@@ -1494,7 +1494,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8d7cc24a87f4aa66aa434eb4f25f4f4bafc0e0a9	43282	Make Bazel binary stamping opt-in (#43282)	2026-09-06	tui	0	0		0	0	not_applicable	
 8d9f6466ff0294785d56f55b1fe363d132fe4133	54930	Add negotiated zstd compression to app-server WebSockets (#54930)	2026-10-17	appserver	5	5	1.00	0	0	complete	none
 8dd0a0816064a1cbc57caeb1cd957be8ebcce45b	47962	Request transparent huge pages for Cargo and eligible Bazel rustc jobs (#47962)	2026-09-24	config	0	0		0	0	not_applicable	
-8de2d336b880bed7e6135fedfc2e65e722a744b3	47679	Add extension hooks for model requests and response streams (#47679)	2026-09-23	model	9	1	0.11	0	0	audit_pending	ModelRequestContributor,ModelRequestInput,ModelRequestKind,ModelResponseInterceptor,ModelResponseStream,intercept_stream,model_request_contributor,model_request_contributors
+8de2d336b880bed7e6135fedfc2e65e722a744b3	47679	Add extension hooks for model requests and response streams (#47679)	2026-09-23	model	9	1	0.11	0	0	not_applicable	ModelRequestContributor,ModelRequestInput,ModelRequestKind,ModelResponseInterceptor,ModelResponseStream,intercept_stream,model_request_contributor,model_request_contributors
 8e17909b27875b76b1e9a883a604ed24e969d609	47663	Preserve managed network policy in route-aware transports (#47663)	2026-09-23	core	0	0		0	0	not_applicable	
 8e23d1836fd22d1c920533f39851db1c7d795744	51433	Show hook status messages as titles in the hooks browser (#51433)	2026-10-06	tui	0	0		0	0	not_applicable	
 8e2afc09126c0cea4c282725fe68af43adad73d7	44636	Recover OAuth metadata discovery from 503 responses via OIDC (#44636)	2026-09-10	mcp	0	0		0	0	not_applicable	
@@ -2113,7 +2113,7 @@ c55db1b8d9b876230f9fb22be78d77fc0b526d0c	44053	Test Python SDK against the built
 c56dda711cc13f94625734343cd95d4a4bf496ed	46051	Track WebSocket continuation modes and full-input send reasons (#46051)	2026-09-16	tui	2	0	0.00	0	0	implementation_pending	WEBSOCKET_CONTINUATION_COUNT_METRIC,with_restored_history
 c5a3700dd7ee73a07b30ce1516dae51a264bb8cf	41940	Preserve transcript layout caches during backtrack selection (#41940)	2026-08-31	tui	0	0		0	0	not_applicable	
 c5b5fa8089954219302092c03b8efc2024d33df6	42135	Support thread forks from symlinked session roots (#42135)	2026-09-01	appserver	0	0		0	0	not_applicable	
-c5d079470eeaf9502080faa0697aade481242081	46123	Allow model catalogs to override the V2 `spawn_agent` description (#46123)	2026-09-17	model	3	1	0.33	0	0	audit_pending	create_spawn_agent_tool_v2,spawn_agent_description_override
+c5d079470eeaf9502080faa0697aade481242081	46123	Allow model catalogs to override the V2 `spawn_agent` description (#46123)	2026-09-17	model	3	1	0.33	0	0	complete	create_spawn_agent_tool_v2,spawn_agent_description_override
 c5d242fa7907bff1b7a7e26e95febc548c0a6963	50402	Consolidate command execution output into `aggregated_output` (#50402)	2026-10-02	appserver	0	0		0	0	not_applicable	
 c6049ebd9694c941386d85fb3e09acab2af289cb	50459	Add capability overrides for custom model providers (#50459)	2026-10-02	appserver	4	4	1.00	0	0	complete	
 c62d191c4c8c0cab7045fca6efc399197334bb6c	44905	Expose disabled plugin settings in the app-server API (#44905)	2026-09-11	tui	0	0		0	0	complete
@@ -2316,7 +2316,7 @@ d9960e12bb178bae15d25bde5916642a94675466	51840	Add a bubblewrap backend for sand
 d996b4f02a204b36060de4711e106e8ecc7be9ac	44359	Report OAuth authentication failures in MCP status snapshots (#44359)	2026-09-10	mcp	0	0		0	0	not_applicable	
 d9ac1f02edd27c45bf955105389253f7bf3b9606	47287	Update the Guardian extra-policy snapshot for retained instructions (#47287)	2026-09-22	guardian	0	0		0	0	not_applicable	
 d9cf203890663ee27969b8e0735e08cf35010bbf	50054	Check token estimate filtering directly on the tracing subscriber (#50054)	2026-10-01	core	0	0		0	0	not_applicable	
-da18000cae9884ab45f83b2d07fbd5a220a1de39	45966	Measure rollout read and materialization durations (#45966)	2026-09-16	persistence	5	3	0.60	0	0	audit_pending	materialize_duration,open_once
+da18000cae9884ab45f83b2d07fbd5a220a1de39	45966	Measure rollout read and materialization durations (#45966)	2026-09-16	persistence	5	3	0.60	0	0	complete	materialize_duration,open_once
 da20788df913189878ebca7f4963d8a363ee6bf2	44714	Bundle Linux voice runtimes and improve audio reliability (#44714)	2026-09-11	tui	2	0	0.00	0	0	implementation_pending	PLUGIN_DIRECTORIES,plugin_directory
 da23e131e68b171909407f469da1b2f72d9c4f4a	41673	Repair cursor-style rendering on older JediTerm terminals (#41673)	2026-08-30	tui	1	0	0.00	0	0	implementation_pending	set_cursor_style_with_repair
 da2e174a66a6572204a91373321b7d22d87fb12e	49898	Scope extension filesystem access to callback permissions (#49898)	2026-10-01	core	3	1	0.33	0	0	audit_pending	SkillReadContext,fs_accessor
@@ -2491,7 +2491,7 @@ e9a6d731b783fa710ca0e359e88701bc0d4c28a6	41230	Apply app routing policy to unaut
 e9b4c6967ee308ed1d1880ec36e3fda183c1a9ac	47647	Apply Guardian computer-use review to the Browser connector (#47647)	2026-09-23	guardian	2	1	0.50	0	0	complete	for_mcp_connector
 e9e6cf63492da108a3cabaf3cc7b23d0640ef4cf	52178	Strip symbols from source-built release package binaries (#52178)	2026-10-08	core	0	0		0	0	complete	
 ea2046f36d5ee12d39c8e168fc3e5129301afa2b	42668	Cancel remote control enrollment on stdio shutdown (#42668)	2026-09-04	appserver	0	0		0	0	not_applicable	
-ea218f5cd8a536b6e89dbd7f2338c93e87bc5bbf	46302	Validate network socket policies using the executor OS (#46302)	2026-09-17	execserver	6	3	0.50	0	0	audit_pending	NetworkProxyExecutorOs,build_config_state_for_spec,from_platform_os
+ea218f5cd8a536b6e89dbd7f2338c93e87bc5bbf	46302	Validate network socket policies using the executor OS (#46302)	2026-09-17	execserver	6	3	0.50	0	0	complete	NetworkProxyExecutorOs,build_config_state_for_spec,from_platform_os
 ea27864f99f0b086cec2f9f0251b7190fb9844f1	51974	Log Windows sandbox availability and backend selection (#51974)	2026-10-08	appserver	2	1	0.50	0	0	complete	windows_mxc_available probe, settings-update re-log
 ea3c4848d8481aa741475a7e29304115c1adb8aa	45509	Share MCP tool specs until search results are selected (#45509)	2026-09-14	mcp	2	0	0.00	0	0	complete	from_shared_spec,to_loadable_spec
 ea53c8d4f78e3f2c9ae2bafcb387d677f33d8b6a	44392	Add opt-in model discovery for OpenAI API keys (#44392)	2026-09-10	appserver	0	0		0	0	complete

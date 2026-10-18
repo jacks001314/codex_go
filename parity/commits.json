@@ -1236,9 +1236,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Completed sub-agent activity is recorded on the parent/initiating turn with kind=completed, agent thread/path and a stable subagent-completed-<turn> ID; it is emitted through item/completed and analytics without being counted as another subagent tool call. Tests: go test ./appserver -run 'SubAgentActivity|SubagentCompleted|SubAgent' -count=1; go test ./agent -run 'SubAgentActivity' -count=1"
       ]
     },
     {
@@ -14429,9 +14429,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: materialize_duration, open_once"
+        "Rollout line readers record codex.rollout_compression.read.io_duration_ms, and compression records run/materialize/file durations with bounded outcome/trigger tags. Tests: go test ./rollout -run 'Compression|Duration|LineReader' -count=1"
       ]
     },
     {
@@ -15149,9 +15149,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: create_spawn_agent_tool_v2, spawn_agent_description_override"
+        "ModelMessages.MultiAgentToolDescriptionOverride resolves tools.multi_agent.<name>.description for spawn_agent and other V2 tools, preserves explicit empty overrides, falls back to bundled text when absent, and is clone-safe. Tests: go test ./model -run 'Catalog|MultiAgent' -count=1; go test ./turn -run 'MultiAgent|Spawn' -count=1"
       ]
     },
     {
@@ -15437,9 +15437,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: NetworkProxyExecutorOs, build_config_state_for_spec, from_platform_os"
+        "Proxy socket allowlists are validated against the executor platform path grammar via ResolveProxyRuntimeForPlatform and NewProxySpecForPlatform. Tests cover Windows/POSIX/unknown paths, deny entries, and managed requirements. Tests: go test ./network -run 'ExecutorOS|SocketPath|SocketAllowlist' -count=1; go test ./execserver -run 'NetworkPolicy|PlatformOS' -count=1"
       ]
     },
     {
@@ -19978,9 +19978,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/9; needs review: ModelRequestContributor, ModelRequestInput, ModelRequestKind, ModelResponseInterceptor, ModelResponseStream"
+        "N/A by architecture: Go has no extension runtime, extension registry, or model-request contributor/interceptor boundary. Requests and response streams are owned directly by model.ResponsesAgentRunner, so there is no extension hook carrier to add."
       ]
     },
     {
