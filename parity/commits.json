@@ -25043,9 +25043,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: RecordingReporter, for_query"
+        "Round 302 (audit): N/A - Go's filesearch.Run performs a synchronous WalkDir pass for the supplied pattern and returns the completed Results directly. There is no asynchronous matcher reporter, pending older-pattern state, or snapshot relabeling path that could attach stale results to a newer query."
       ]
     },
     {

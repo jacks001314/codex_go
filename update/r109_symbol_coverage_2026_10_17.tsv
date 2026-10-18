@@ -2348,7 +2348,7 @@ dd12f892f1b857e5161abd33a2967125b265d550	51822	Avoid sharing violations when rep
 dd178bb7cabb828b253992e082301fa7bf18c735	51896	Preserve native errors in Windows sandbox ACL diagnostics (#51896)	2026-10-08	sandbox	2	0	0.00	0	0	complete	WriteAclOperation,record_acl_failure
 dd453867fa60bc130e2fba0a12ae4f27c2a3b732	41226	Move Guardian review session tests to a separate file (#41226)	2026-08-27	guardian	0	0		0	0	not_applicable	
 dd6eff3954949d074ca45ee80da89499b955bf8e	47036	Share stored JSON payloads across code mode cells with `Arc` (#47036)	2026-09-21	core	0	0		0	0	not_applicable	
-dd90f160ed9bf91320c417335ddff848b6a23dd0	49946	Prevent stale file search results from being labeled with a new query (#49946)	2026-10-01	core	2	0	0.00	0	0	implementation_pending	RecordingReporter,for_query
+dd90f160ed9bf91320c417335ddff848b6a23dd0	49946	Prevent stale file search results from being labeled with a new query (#49946)	2026-10-01	core	2	0	0.00	0	0	not_applicable	RecordingReporter,for_query
 dd9512c0008859f6c95fb2dae2290a2cb94b38fb	43846	Include completed commentary in the `/copy` picker (#43846)	2026-09-08	tui	0	0		0	0	not_applicable	
 dd9a7101d9ddbaab68030e04d288d71bead68552	48200	Extract Responses header conversion into a shared module (#48200)	2026-09-25	core	1	1	1.00	0	0	complete	
 dda227891d27b6e0f3f244eda149a98d098969ad	47946	Add an in-memory agent message board for ephemeral sessions (#47946)	2026-09-24	config	3	2	0.67	0	0	complete	InMemoryAgentMessageBoard
