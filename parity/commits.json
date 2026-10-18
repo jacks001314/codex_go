@@ -29549,9 +29549,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: show_agents_overview_error"
+        "Graceful-shutdown admission now returns a dedicated draining error with Rust's exact message, JSON-RPC invalid-request code -32600, and data.reason=serverShuttingDown, while errors.Is still recognizes the underlying session conflict. Both turn reservation and tracked turn registration use it. The TUI lane already maps the exact draining message to the background-server shutdown guidance, including automatic reconnect wording for non-embedded sessions. Tests pin the draining code, message, structured data, error identity, and cancellation of rejected tracked registration."
       ]
     },
     {

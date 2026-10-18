@@ -17848,6 +17848,8 @@ func runtimeErrorCode(err error) int {
 		return JSONRPCInvalidParamsErrorCode
 	case errors.Is(err, session.ErrThreadNotFound):
 		return -32004
+	case errors.Is(err, ErrServerDraining):
+		return JSONRPCInvalidRequestErrorCode
 	case errors.Is(err, session.ErrConflict):
 		return -32009
 	default:

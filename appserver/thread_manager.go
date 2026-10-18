@@ -55,6 +55,25 @@ type ThreadManager struct {
 	attachmentStore   attachmentstore.Store
 }
 
+// ErrServerDraining is returned when graceful shutdown rejects new work. It
+// keeps JSON-RPC invalid-request code -32600 and exposes the structured reason
+// clients use to distinguish shutdown from ordinary invalid requests.
+var ErrServerDraining = serverDrainingError{}
+
+type serverDrainingError struct{}
+
+func (serverDrainingError) Error() string {
+	return "Server is draining; retry after reconnecting"
+}
+
+func (serverDrainingError) Unwrap() error {
+	return session.ErrConflict
+}
+
+func (serverDrainingError) JSONRPCErrorData() map[string]any {
+	return map[string]any{"reason": "serverShuttingDown"}
+}
+
 func NewThreadManager(status *ThreadStatusManager) *ThreadManager {
 	if status == nil {
 		status = NewThreadStatusManager()
@@ -366,7 +385,7 @@ func (m *ThreadManager) ReserveTurn(threadID string) error {
 	m.turnsMu.Lock()
 	defer m.turnsMu.Unlock()
 	if m.closing {
-		return fmt.Errorf("%w: thread manager is closing", session.ErrConflict)
+		return ErrServerDraining
 	}
 	if active := m.active[threadID]; active != nil {
 		return fmt.Errorf("%w: thread %s already has active turn %s", session.ErrConflict, threadID, active.TurnID)
@@ -397,7 +416,7 @@ func (m *ThreadManager) registerTurn(threadID string, turnID string, cancel cont
 		if cancel != nil {
 			cancel()
 		}
-		return fmt.Errorf("%w: thread manager is closing", session.ErrConflict)
+		return ErrServerDraining
 	}
 	if active := m.active[threadID]; active != nil {
 		if active.TurnID == "" {
