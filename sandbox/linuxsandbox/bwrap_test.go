@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -161,6 +162,9 @@ func TestBundledBwrapResourceFallsBackToTheExecutableDirectory(t *testing.T) {
 // own filesystem policy can replace must never be probed or launched, so the
 // packaged launcher wins. The control case proves the probe would otherwise run.
 func TestSelectBwrapLauncherForPolicySkipsWritableCandidateLikeRust(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bubblewrap launcher selection is Linux-specific")
+	}
 	workspace := t.TempDir()
 	bin := filepath.Join(workspace, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {

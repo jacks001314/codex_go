@@ -5,23 +5,12 @@ package linuxsandbox
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"codex_go/sandbox/sandboxpath"
 	"golang.org/x/sys/unix"
 )
-
-// probeBwrapHelp reads a launcher's `--help` output and reports which
-// capabilities it advertises (Rust system_bwrap_capabilities).
-func probeBwrapHelp(path string) (bwrapCapabilities, bool) {
-	output, err := exec.Command(path, "--help").CombinedOutput()
-	if err != nil && len(output) == 0 {
-		return bwrapCapabilities{}, false
-	}
-	return parseBwrapHelp(string(output))
-}
 
 // resolveBwrapLauncher picks the launcher the sandbox runs (Rust
 // preferred_bwrap_launcher). The system candidate must survive the command's own

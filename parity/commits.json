@@ -15363,9 +15363,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/8; needs review: WindowsSandboxImplementationToml, as_metric_tag, configured_windows_sandbox_selection, effective_windows_sandbox_type, windows_sandbox_level_for_legacy_checks"
+        "Round 558 (audit): already implemented. Go parses mxc in the Windows sandbox implementation list, treats it as ready without legacy setup, and selects it explicitly where supported while retaining legacy fallback rules elsewhere. Tests: go test ./config ./sandbox ./tool -run 'Mxc|MXC|WindowsSandboxMode' -count=1"
       ]
     },
     {
@@ -25511,9 +25511,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: open_sync"
+        "Round 559 (audit): already implemented. The exec-server advertises FileWriteStreaming, supports fs/open replacement mode with create/truncate semantics, and exposes positional writes for the streaming path. Tests: go test ./execserver -run 'FileWriteStreaming|Replace|Streaming' -count=1"
       ]
     },
     {
@@ -26929,9 +26929,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: initialize_bwrap_launcher"
+        "Round 560 (audit + fix): the effective filesystem policy filters bwrap candidates before probing/launching, so a replaceable launcher is skipped in favor of the packaged binary. Fixed a cross-platform test build bug by moving platform-neutral probeBwrapHelp into its own file and skipping the Linux shell-stub control case on Windows. Tests: go test ./sandbox/linuxsandbox -run 'Bwrap|Bubblewrap|Executable' -count=1; GOOS=linux GOARCH=amd64 go test -c ./sandbox/linuxsandbox"
       ]
     },
     {
