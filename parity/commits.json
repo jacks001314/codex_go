@@ -31615,9 +31615,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 398 (audit): Go's escalated retry is a new tool invocation, so the Guardian reviews it with require_escalated and its denial justification; the sandboxed approval and call ID cannot authorize the retry. Guardian verdicts save no reusable exec-policy prefix. Test: go test ./appserver -run 'GuardianSandboxRetry|Guardian.*Escalated|Escalated.*Guardian' -count=1"
       ]
     },
     {
