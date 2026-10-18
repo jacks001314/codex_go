@@ -60,6 +60,7 @@ func (r *RuntimeRouter) emitFileChangeAnalyticsEvent(ctx context.Context, connec
 		ThreadSource:                   stringPtrIfNotEmpty(lineage.ThreadSource),
 		SubagentSource:                 stringPtrIfNotEmpty(lineage.SubagentKind),
 		ParentThreadID:                 stringPtrIfNotEmpty(lineage.ParentThreadID),
+		RootTurnID:                     r.toolEventRootTurnID(threadID, turnID, runConfig),
 		ToolName:                       "apply_patch",
 		ToolEventType:                  r.toolEventTypeForCall(threadID, turnID, threadItemExternalID(item)),
 		StartedAtMS:                    startedAtMS,

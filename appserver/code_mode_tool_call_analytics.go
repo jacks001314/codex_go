@@ -48,6 +48,7 @@ func (r *RuntimeRouter) emitCodeModeToolCallEvent(threadID string, turnID string
 		ThreadSource:    stringPtrIfNotEmpty(lineage.ThreadSource),
 		SubagentSource:  stringPtrIfNotEmpty(lineage.SubagentKind),
 		ParentThreadID:  stringPtrIfNotEmpty(lineage.ParentThreadID),
+		RootTurnID:      r.toolEventRootTurnID(threadID, turnID, nil),
 		ToolName:        toolName,
 		ToolEventType:   r.toolEventTypeForCall(threadID, turnID, callID),
 		StartedAtMS:     observation.StartedAtMS,

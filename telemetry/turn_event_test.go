@@ -465,6 +465,7 @@ func TestCodexCommandExecutionEventSerializesExpectedRustShape(t *testing.T) {
 			"thread_id": "thread-1",
 			"session_id": "session-thread-1",
 			"turn_id": "turn-1",
+			"root_turn_id": null,
 			"item_id": "item-1",
 			"cell_id": null,
 			"parent_call_id": null,
@@ -558,6 +559,7 @@ func TestCodexFileChangeEventSerializesExpectedRustShape(t *testing.T) {
 			"thread_id": "thread-1",
 			"session_id": "session-thread-1",
 			"turn_id": "turn-1",
+			"root_turn_id": null,
 			"item_id": "item-1",
 			"cell_id": null,
 			"parent_call_id": null,
@@ -1060,5 +1062,13 @@ func TestCodexToolItemEventBaseRootTurnIDSerializes(t *testing.T) {
 	}
 	if got["root_turn_id"] != "root-turn-1" {
 		t.Fatalf("root_turn_id = %#v, want root-turn-1 (Rust #40486)", got["root_turn_id"])
+	}
+
+	base.RootTurnID = nil
+	if err := marshalUnmarshalTelemetry(base, &got); err != nil {
+		t.Fatalf("marshal unknown root error = %v", err)
+	}
+	if value, ok := got["root_turn_id"]; !ok || value != nil {
+		t.Fatalf("unknown root_turn_id = %#v (present %v), want explicit null", value, ok)
 	}
 }

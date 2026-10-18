@@ -82,9 +82,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "complete",
+      "status": "audit_pending",
       "evidence": [
-        "Unified-exec output deltas now preserve split UTF-8 scalars across producer chunks, pass malformed bytes through, retain an incomplete trailing scalar for finish, cap every emitted frame at 8 KiB, stop at the 10,000-delta per-call quota, and flush the final incomplete bytes before the end event. The transcript continues to receive every producer byte independently of delta emission. Direct boundary tests, frame/quota tests, transcript preservation, lifecycle events, and the reusable TTY session test pass."
+        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
       ]
     },
     {
@@ -178,9 +178,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Unified-exec output deltas now preserve split UTF-8 scalars across producer chunks, pass malformed bytes through, retain an incomplete trailing scalar for finish, cap every emitted frame at 8 KiB, stop at the 10,000-delta per-call quota, and flush the final incomplete bytes before the end event. The transcript continues to receive every producer byte independently of delta emission. Direct boundary tests, frame/quota tests, transcript preservation, lifecycle events, and the reusable TTY session test pass."
       ]
     },
     {
@@ -286,9 +286,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A - Go has no pnpm workspace, pnpm-workspace.yaml, pnpm lockfile, TypeScript SDK package manager pin, or npm proxy package using the upstream packageManager version. The repository builds and packages through Go tooling and the existing GitHub workflows, so there is no Go carrier for the pnpm 10.34.5 upgrade."
       ]
     },
     {
@@ -1042,9 +1042,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: synthetic_mount_registry_root"
+        "N/A by construction: Go never creates a filesystem synthetic-mount registry. Missing or denied read targets are backed directly by anonymous memfds through bubblewrap `--ro-bind-data` (sandbox/linuxsandbox/linux.go appendUnreadableRootBwrapArgs), so there is no registry temporary directory or symlink that a writable bind can expose. Existing deny-read masking and file-descriptor lifetime tests cover the Go carrier."
       ]
     },
     {
@@ -1498,9 +1498,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: TurnAnalyticsMetadata"
+        "Turn analytics and every Go-carried tool-item event now include root_turn_id. The root is the turn's own ID for a top-level turn and the inherited causal root for subagent turns. Event construction reads the live active-turn root, queued events refresh it before emission, an explicitly unknown/ambiguous root serializes as null, and a completed turn's later background tool event retains the root captured by its run configuration. Code Mode exec/wait and correlated dynamic events share the same live root. The Go port has no separate codex_control_tool_call_event carrier; built-in control tools are not emitted as dynamic events, so this commit's control-tool fact field has no Go event surface to extend."
       ]
     },
     {

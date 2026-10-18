@@ -65,6 +65,11 @@ type activeRuntimeTurn struct {
 	ConnectionID string
 	RunConfig    *appTurnRunConfig
 	SteerCount   int
+	// AnalyticsRootTurnID is the trusted root captured for this turn. A nil
+	// pointer with AnalyticsRootTurnIDCaptured set means the root is unknown or
+	// ambiguous. Events read this live state when they are emitted (Rust #40486).
+	AnalyticsRootTurnID         *string
+	AnalyticsRootTurnIDCaptured bool
 	// StepCapabilities is the capability snapshot used by the current sampling
 	// step. Mid-turn environment updates replace it only when the next step is
 	// captured, so an in-flight step's model context and skills tools agree.
@@ -3701,6 +3706,13 @@ func (r *RuntimeRouter) updateActiveRuntimeTurnAnalytics(threadID string, turnID
 			active.ConnectionID = normalizeConnectionID(connectionID)
 		}
 		active.RunConfig = runConfig
+		if runConfig != nil {
+			active.AnalyticsRootTurnID = stringPtrIfNotEmpty(strings.TrimSpace(runConfig.RootTurnID))
+			active.AnalyticsRootTurnIDCaptured = true
+		} else {
+			active.AnalyticsRootTurnID = nil
+			active.AnalyticsRootTurnIDCaptured = false
+		}
 	})
 }
 
@@ -3956,6 +3968,47 @@ func rootTurnIDForTurn(params *turn.TurnStartParams, turnID string) string {
 		}
 	}
 	return strings.TrimSpace(turnID)
+}
+
+// activeAnalyticsRootTurnID reads the turn's current trusted analytics root.
+// The second result distinguishes a turn whose root is explicitly unknown from
+// a turn that is no longer active.
+func (r *RuntimeRouter) activeAnalyticsRootTurnID(threadID string, turnID string) (*string, bool) {
+	active := r.activeRuntimeTurnStateSnapshot(threadID, turnID)
+	if active == nil {
+		return nil, false
+	}
+	if active.AnalyticsRootTurnIDCaptured {
+		root := ""
+		if active.AnalyticsRootTurnID != nil {
+			root = strings.TrimSpace(*active.AnalyticsRootTurnID)
+		}
+		return stringPtrIfNotEmpty(root), true
+	}
+	if active.RunConfig != nil {
+		return stringPtrIfNotEmpty(strings.TrimSpace(active.RunConfig.RootTurnID)), true
+	}
+	if active.Params != nil {
+		return stringPtrIfNotEmpty(rootTurnIDForTurn(active.Params, active.TurnID)), true
+	}
+	return nil, true
+}
+
+// analyticsRootTurnIDForEvent reads the live root when the turn is active and
+// otherwise falls back to the root captured by that turn's run configuration.
+func (r *RuntimeRouter) analyticsRootTurnIDForEvent(threadID string, turnID string, fallback string) *string {
+	if root, ok := r.activeAnalyticsRootTurnID(threadID, turnID); ok {
+		return root
+	}
+	return stringPtrIfNotEmpty(strings.TrimSpace(fallback))
+}
+
+func (r *RuntimeRouter) toolEventRootTurnID(threadID string, turnID string, runConfig *appTurnRunConfig) *string {
+	fallback := ""
+	if runConfig != nil {
+		fallback = runConfig.RootTurnID
+	}
+	return r.analyticsRootTurnIDForEvent(threadID, turnID, fallback)
 }
 
 // analyticsRootTurnID resolves the effective root turn id for a completion
@@ -8326,7 +8379,7 @@ func (r *RuntimeRouter) emitCodexTurnAnalyticsEvent(ctx context.Context, connect
 		ThreadID:                             params.ThreadID,
 		SessionID:                            firstNonEmpty(runConfig.SessionID, params.ThreadID),
 		TurnID:                               record.ID,
-		RootTurnID:                           stringPtrIfNotEmpty(rootTurnIDForTurn(params, record.ID)),
+		RootTurnID:                           r.analyticsRootTurnIDForEvent(params.ThreadID, record.ID, rootTurnIDForTurn(params, record.ID)),
 		TurnTrigger:                          params.TurnTrigger,
 		CodexTurnSource:                      runConfig.ClientMetadata["source"],
 		AppServerClient:                      client,

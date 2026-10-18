@@ -28,7 +28,7 @@ func (r *RuntimeRouter) emitCollabAgentToolCallAnalyticsEvent(ctx context.Contex
 	states := threadItemCollabAgentStates(item)
 	completedCount, failedCount := collabAgentAnalyticsStateCounts(states)
 	receiverThreadIDs := threadItemStringSliceFromData(item.Data, "receiverThreadIds", "receiver_thread_ids")
-	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, collabAgentToolAnalyticsName(threadItemCollabAgentTool(item)), terminalStatus, failureKind, nil)
+	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, collabAgentToolAnalyticsName(threadItemCollabAgentTool(item)), terminalStatus, failureKind, nil, runConfig)
 	if !ok {
 		return
 	}
@@ -62,7 +62,7 @@ func (r *RuntimeRouter) emitWebSearchAnalyticsEvent(ctx context.Context, connect
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, "web_search", telemetry.ToolItemTerminalStatusCompleted, nil, nil)
+	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, "web_search", telemetry.ToolItemTerminalStatusCompleted, nil, nil, runConfig)
 	if !ok {
 		return
 	}
@@ -94,7 +94,7 @@ func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, c
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, "image_generation", terminalStatus, failureKind, nil)
+	base, ok := r.toolItemAnalyticsBase(connectionID, threadID, turnID, item, "image_generation", terminalStatus, failureKind, nil, runConfig)
 	if !ok {
 		return
 	}
@@ -110,7 +110,7 @@ func (r *RuntimeRouter) emitImageGenerationAnalyticsEvent(ctx context.Context, c
 	})
 }
 
-func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID string, turnID string, item *ThreadItem, toolName string, terminalStatus string, failureKind *string, executionDurationMS *uint64) (telemetry.CodexToolItemEventBase, bool) {
+func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID string, turnID string, item *ThreadItem, toolName string, terminalStatus string, failureKind *string, executionDurationMS *uint64, runConfig *appTurnRunConfig) (telemetry.CodexToolItemEventBase, bool) {
 	client, ok := r.analyticsAppServerClient(connectionID)
 	if !ok {
 		return telemetry.CodexToolItemEventBase{}, false
@@ -121,10 +121,6 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		}
 	}
 	lineage := r.responsesMetadataLineage(threadID)
-	rootTurnID := ""
-	if active := r.activeRuntimeTurnStateSnapshot(threadID, turnID); active != nil && active.Params != nil {
-		rootTurnID = strings.TrimSpace(active.Params.RootTurnID)
-	}
 	startedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "startedAtMs", "started_at_ms"))
 	completedAtMS := uint64FromNonNegativeInt64(threadItemInt64FromData(item.Data, "completedAtMs", "completed_at_ms"))
 	if completedAtMS == 0 && item.CreatedAt > 0 {
@@ -148,7 +144,7 @@ func (r *RuntimeRouter) toolItemAnalyticsBase(connectionID string, threadID stri
 		ThreadSource:                   stringPtrIfNotEmpty(lineage.ThreadSource),
 		SubagentSource:                 stringPtrIfNotEmpty(lineage.SubagentKind),
 		ParentThreadID:                 stringPtrIfNotEmpty(lineage.ParentThreadID),
-		RootTurnID:                     stringPtrIfNotEmpty(rootTurnID),
+		RootTurnID:                     r.toolEventRootTurnID(threadID, turnID, runConfig),
 		ToolName:                       toolName,
 		ToolEventType:                  r.toolEventTypeForCall(threadID, turnID, item.ID),
 		StartedAtMS:                    startedAtMS,

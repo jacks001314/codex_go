@@ -103,7 +103,7 @@ type CodexToolItemEventBase struct {
 	ThreadSource         *string                      `json:"thread_source"`
 	SubagentSource       *string                      `json:"subagent_source"`
 	ParentThreadID       *string                      `json:"parent_thread_id"`
-	RootTurnID           *string                      `json:"root_turn_id,omitempty"`
+	RootTurnID           *string                      `json:"root_turn_id"`
 	ToolName             string                       `json:"tool_name"`
 	// ToolEventType names the immediate initiator of the tool request (Rust
 	// #45535): `model_tool_call` when the item id matches a tool call the model

@@ -121,6 +121,7 @@ func (r *RuntimeRouter) emitToolEvent(threadID string, turnID string, base *tele
 		return
 	}
 	if base == nil || (base.CellID == nil && base.OriginatingResponseID == nil) {
+		r.refreshToolEventRootTurnID(base, threadID, turnID)
 		emit()
 		return
 	}
@@ -139,6 +140,7 @@ func (r *RuntimeRouter) emitToolEvent(threadID string, turnID string, base *tele
 	r.pendingToolEvents[key] = pending
 	r.sampledToolCallsMu.Unlock()
 	if overflow != nil {
+		r.refreshToolEventRootTurnID(overflow.base, threadID, turnID)
 		overflow.emit()
 	}
 }
@@ -181,6 +183,7 @@ func (r *RuntimeRouter) releasePendingToolEvents(threadID string, turnID string,
 	r.pendingToolEvents[key] = remaining
 	r.sampledToolCallsMu.Unlock()
 	for _, event := range released {
+		r.refreshToolEventRootTurnID(event.base, threadID, turnID)
 		event.emit()
 	}
 }
@@ -197,6 +200,7 @@ func (r *RuntimeRouter) flushPendingToolEvents(threadID string, turnID string) {
 	delete(r.pendingToolEvents, key)
 	r.sampledToolCallsMu.Unlock()
 	for _, event := range pending {
+		r.refreshToolEventRootTurnID(event.base, threadID, turnID)
 		event.emit()
 	}
 }
@@ -208,16 +212,25 @@ func (r *RuntimeRouter) flushThreadPendingToolEvents(threadID string) {
 	}
 	prefix := strings.TrimSpace(threadID) + "\x00"
 	r.sampledToolCallsMu.Lock()
-	flushed := []pendingToolEvent{}
+	type pendingThreadToolEvent struct {
+		threadID string
+		turnID   string
+		event    pendingToolEvent
+	}
+	flushed := []pendingThreadToolEvent{}
 	for key, pending := range r.pendingToolEvents {
 		if strings.HasPrefix(key, prefix) {
-			flushed = append(flushed, pending...)
+			keyThreadID, keyTurnID, _ := strings.Cut(key, "\x00")
+			for _, event := range pending {
+				flushed = append(flushed, pendingThreadToolEvent{threadID: keyThreadID, turnID: keyTurnID, event: event})
+			}
 			delete(r.pendingToolEvents, key)
 		}
 	}
 	r.sampledToolCallsMu.Unlock()
-	for _, event := range flushed {
-		event.emit()
+	for _, pending := range flushed {
+		r.refreshToolEventRootTurnID(pending.event.base, pending.threadID, pending.turnID)
+		pending.event.emit()
 	}
 }
 
@@ -430,9 +443,24 @@ func (r *RuntimeRouter) enrichToolEventBase(base *telemetry.CodexToolItemEventBa
 		return
 	}
 	base.SessionID = firstNonEmpty(base.SessionID, r.responsesMetadataLineage(threadID).SessionID)
+	if root, ok := r.activeAnalyticsRootTurnID(threadID, turnID); ok {
+		base.RootTurnID = root
+	}
 	r.sampledToolCallsMu.Lock()
 	defer r.sampledToolCallsMu.Unlock()
 	r.enrichToolEventBaseLocked(base, threadID, turnID)
+}
+
+// refreshToolEventRootTurnID updates a queued event when its turn is still
+// active. When the turn has completed, the root captured when the event was
+// built is retained for background tool events.
+func (r *RuntimeRouter) refreshToolEventRootTurnID(base *telemetry.CodexToolItemEventBase, threadID string, turnID string) {
+	if r == nil || base == nil {
+		return
+	}
+	if root, ok := r.activeAnalyticsRootTurnID(threadID, turnID); ok {
+		base.RootTurnID = root
+	}
 }
 
 // enrichToolEventBaseLocked fills the correlation fields; the caller holds
