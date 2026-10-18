@@ -24950,9 +24950,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: SkillReadContext, fs_accessor"
+        "N/A by architecture: Go has no extension runtime or extension tool callback receiving a scoped SkillReadContext. Skill reads flow through app-server/turn handlers with the selected host/executor filesystem authority already applied, so there is no extension callback boundary to constrain."
       ]
     },
     {

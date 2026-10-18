@@ -2319,7 +2319,7 @@ d9cf203890663ee27969b8e0735e08cf35010bbf	50054	Check token estimate filtering di
 da18000cae9884ab45f83b2d07fbd5a220a1de39	45966	Measure rollout read and materialization durations (#45966)	2026-09-16	persistence	5	3	0.60	0	0	complete	materialize_duration,open_once
 da20788df913189878ebca7f4963d8a363ee6bf2	44714	Bundle Linux voice runtimes and improve audio reliability (#44714)	2026-09-11	tui	2	0	0.00	0	0	implementation_pending	PLUGIN_DIRECTORIES,plugin_directory
 da23e131e68b171909407f469da1b2f72d9c4f4a	41673	Repair cursor-style rendering on older JediTerm terminals (#41673)	2026-08-30	tui	1	0	0.00	0	0	implementation_pending	set_cursor_style_with_repair
-da2e174a66a6572204a91373321b7d22d87fb12e	49898	Scope extension filesystem access to callback permissions (#49898)	2026-10-01	core	3	1	0.33	0	0	audit_pending	SkillReadContext,fs_accessor
+da2e174a66a6572204a91373321b7d22d87fb12e	49898	Scope extension filesystem access to callback permissions (#49898)	2026-10-01	core	3	1	0.33	0	0	not_applicable	SkillReadContext,fs_accessor
 da4cf1cdeaf8fb44a18bb75fd8df0094097f90b8	40641	Preserve Windows proxy settings in Guardian sessions (#40641)	2026-08-25	core	0	0		0	0	not_applicable	
 daa3eaf10fda93ad8949b926c059dd8cc399f76a	40967	Allow Guardian scoring for required computer-use models (#40967)	2026-08-26	guardian	0	0		0	0	not_applicable	
 dab2cd60568dedac5b226e9fafdf1523474d5cb8	51335	Update collaboration snapshots for full-history fork instructions (#51335)	2026-10-06	core	0	0		0	0	not_applicable	
