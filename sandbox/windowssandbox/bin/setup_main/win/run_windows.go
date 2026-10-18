@@ -89,10 +89,21 @@ func run(args []string, stdout io.Writer, stderr io.Writer) error {
 }
 
 func payloadFromArgs(args []string) (*setupPayload, error) {
-	if len(args) != 1 {
+	payloadArg := ""
+	if len(args) == 1 && args[0] == windowssandbox.SandboxLaunchPayloadArg {
+		env := windowssandbox.SandboxLaunchEnvironmentFromEnviron(os.Environ())
+		payload, err := windowssandbox.DecodeAndScrubSandboxLaunchPayload(env)
+		if err != nil {
+			return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "failed to decode payload environment: %v", err)
+		}
+		payloadArg = payload
+	} else if len(args) == 1 {
+		payloadArg = args[0]
+	}
+	if payloadArg == "" {
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "expected payload argument")
 	}
-	payloadJSON, err := base64.StdEncoding.DecodeString(args[0])
+	payloadJSON, err := base64.StdEncoding.DecodeString(payloadArg)
 	if err != nil {
 		return nil, setupFailuref(windowssandbox.SetupErrorHelperRequestArgsFailed, "failed to decode payload b64: %v", err)
 	}
@@ -518,7 +529,19 @@ func spawnReadACLHelper(payload *setupPayload) error {
 	if err != nil {
 		return fmt.Errorf("locate setup helper: %w", err)
 	}
-	cmd := exec.Command(exe, encoded)
+	args := []string{encoded}
+	var launchEnv map[string]string
+	if windowssandbox.NeedsSandboxLaunchEnvironment(encoded) {
+		launchEnv = windowssandbox.SandboxLaunchEnvironmentFromEnviron(os.Environ())
+		if err := windowssandbox.EncodeSandboxLaunchPayload(encoded, launchEnv); err != nil {
+			return err
+		}
+		args = []string{windowssandbox.SandboxLaunchPayloadArg}
+	}
+	cmd := exec.Command(exe, args...)
+	if launchEnv != nil {
+		cmd.Env = windowssandbox.SandboxLaunchEnvironFromMap(launchEnv)
+	}
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

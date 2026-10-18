@@ -2137,7 +2137,7 @@ c84003c7e18dac40750ebb826a6c72e1c5493b9a	43454	Add diagnostic labels to shell sn
 c847294c60c77fe0215c6eeabd725684539ebb37	47638	Classify retryable exec-server preparation errors by type (#47638)	2026-09-23	execserver	1	0	0.00	0	0	complete	is_retryable_preparation_error
 c8949e55c28a97eb2770971eb3c6a918bdefd9af	51064	Ignore stale refresh responses in agents overview tests (#51064)	2026-10-05	tui	0	0		0	0	not_applicable	
 c8a8295e798af970ef5a2bcd9ce2229db87edb6b	44656	Attribute turn metrics to the models used during the turn (#44656)	2026-09-10	persistence	3	3	1.00	0	0	complete	
-c8c1ee5da8af5c79ec8433ee88d3d4ebdcfd80fd	47919	Transport large Windows sandbox launch payloads through the environment (#47919)	2026-09-24	sandbox	6	2	0.33	0	0	audit_pending	configure_command,decode_and_scrub,is_key,needs_environment
+c8c1ee5da8af5c79ec8433ee88d3d4ebdcfd80fd	47919	Transport large Windows sandbox launch payloads through the environment (#47919)	2026-09-24	sandbox	6	6	1.00	0	0	complete
 c9253c4977e485d6a098282ad583a6db9585d7ff	51156	Send base instructions as Responses input messages (#51156)	2026-10-05	tui	0	0		0	0	not_applicable	
 c941572917b9295c7318b28aab27709202a645c7	40491	Honor response budgets when reading skill resources (#40491)	2026-08-24	appserver	1	1	1.00	0	0	complete	
 c977cc0c19e704aa60e6c9b85107869f87b8b46f	43619	Add a stable TUI/app-server version comparison helper (#43619)	2026-09-07	tui	1	0	0.00	0	0	implementation_pending	is_official_server_older

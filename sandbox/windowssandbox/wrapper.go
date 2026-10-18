@@ -8,13 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	coresandbox "codex_go/sandbox"
 	"codex_go/envutil"
+	coresandbox "codex_go/sandbox"
 	json "github.com/goccy/go-json"
 )
 
 const (
 	CodexWindowsSandboxArg1 = "--run-as-windows-sandbox"
+	launchPayloadEnvFlag    = SandboxLaunchPayloadArg
 
 	commandCWDFlag                       = "--command-cwd"
 	codexHomeFlag                        = "--codex-home"
@@ -82,6 +83,11 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 	if err != nil {
 		return nil, err
 	}
+	for key := range req.Env {
+		if IsSandboxLaunchEnvKey(key) {
+			delete(req.Env, key)
+		}
+	}
 	envJSON, err := json.Marshal(req.Env)
 	if err != nil {
 		return nil, err
@@ -144,6 +150,19 @@ func CreateWindowsSandboxCommandArgsForPermissionProfile(req WindowsSandboxComma
 	}
 	args = append(args, "--")
 	args = append(args, cloneStrings(req.Command)...)
+	payload, err := json.Marshal(args[1:])
+	if err != nil {
+		return nil, err
+	}
+	if NeedsSandboxLaunchEnvironment(string(payload)) {
+		if req.Env == nil {
+			req.Env = map[string]string{}
+		}
+		if err := EncodeSandboxLaunchPayload(string(payload), req.Env); err != nil {
+			return nil, err
+		}
+		return []string{CodexWindowsSandboxArg1, launchPayloadEnvFlag}, nil
+	}
 	return args, nil
 }
 
@@ -303,6 +322,18 @@ func (e *WrapperExitError) Error() string {
 }
 
 func RunWindowsSandboxWrapperExitCode(args []string, stdin io.Reader, stdout io.Writer, stderr io.Writer) (int, error) {
+	if len(args) == 2 && args[0] == CodexWindowsSandboxArg1 && args[1] == launchPayloadEnvFlag {
+		env := SandboxLaunchEnvironmentFromEnviron(os.Environ())
+		payload, err := DecodeAndScrubSandboxLaunchPayload(env)
+		if err != nil {
+			return 1, err
+		}
+		var decoded []string
+		if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+			return 1, fmt.Errorf("failed to parse Windows sandbox launch arguments: %w", err)
+		}
+		args = append([]string{CodexWindowsSandboxArg1}, decoded...)
+	}
 	req, err := ParseWindowsSandboxWrapperArgs(args)
 	if err != nil {
 		return 1, err

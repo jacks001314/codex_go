@@ -238,6 +238,13 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 		return setupFailuref(SetupErrorOrchestratorPayloadSerializeFailed, "failed to serialize elevation payload: %v", err)
 	}
 	payloadB64 := base64.StdEncoding.EncodeToString(payloadJSON)
+	var launchEnv map[string]string
+	if NeedsSandboxLaunchEnvironment(payloadB64) {
+		launchEnv = SandboxLaunchEnvironmentFromEnviron(os.Environ())
+		if err := EncodeSandboxLaunchPayload(payloadB64, launchEnv); err != nil {
+			return setupFailuref(SetupErrorOrchestratorPayloadSerializeFailed, "failed to encode elevation payload environment: %v", err)
+		}
+	}
 	clearedReport := true
 	if err := ClearSetupErrorReport(codexHome); err != nil {
 		clearedReport = false
@@ -253,7 +260,7 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 		useDispatchFlag = false
 	}
 	if !needsElevation {
-		status, err := runSetupExeNonElevated(exe, payloadB64, useDispatchFlag)
+		status, err := runSetupExeNonElevated(exe, payloadB64, useDispatchFlag, launchEnv)
 		if err != nil {
 			return setupFailuref(SetupErrorOrchestratorHelperLaunchFailed, "failed to launch setup helper (non-elevated): %v", err)
 		}
@@ -288,8 +295,15 @@ func runSetupExe(payload *setupElevationPayload, needsElevation bool, codexHome 
 	return nil
 }
 
-func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool) (*os.ProcessState, error) {
-	cmd := exec.Command(exe, setupExecutableArgs(payloadB64, useDispatchFlag)...)
+func runSetupExeNonElevated(exe string, payloadB64 string, useDispatchFlag bool, launchEnv map[string]string) (*os.ProcessState, error) {
+	args := setupExecutableArgs(payloadB64, useDispatchFlag)
+	if launchEnv != nil {
+		args = []string{launchPayloadEnvFlag}
+	}
+	cmd := exec.Command(exe, args...)
+	if launchEnv != nil {
+		cmd.Env = SandboxLaunchEnvironFromMap(launchEnv)
+	}
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil

@@ -20900,9 +20900,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/6; needs review: configure_command, decode_and_scrub, is_key, needs_environment"
+        "Added a shared bounded Windows sandbox launch transport: 16 KiB UTF-8-safe chunks, 16 MiB maximum, 24,000 UTF-16-unit switch threshold, case-insensitive transport-key scrubbing, and malformed/duplicate validation. Wrapper argument generation, wrapper decoding, non-elevated setup launches, the setup helper, and its read-ACL child use the environment path for large payloads while keeping workload environments free of transport variables."
       ]
     },
     {
