@@ -30402,9 +30402,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: reconnect_in_background"
+        "Equivalent implementation present: a failed Codex Apps startup retains the previously published cached tool catalog and binding capture keeps those tool names available. An invocation uses the same cached HTTP/stdio client; initialization happens inside that client's mutex, so concurrent calls join one shared recovery rather than opening parallel startup attempts, and the discovery/status path remains nonblocking. Apps startup recovery tests verify cached tools survive failure and that ordinary servers still clear stale tools."
       ]
     },
     {
