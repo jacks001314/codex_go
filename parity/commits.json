@@ -19277,9 +19277,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: ThreadEnvironmentDefaults, for_selection, set_active_thread_defaults, set_snapshot_credential_broker, update_selections"
+        "Round 323 (audit): already equivalent. Each turn captures an ordered selected-environment snapshot and EnvironmentAuthority; later steps reuse that captured authority while settings updates are persisted and only affect the next turn. Owner MCP policy, selection workspace roots, and local Windows sandbox type remain in the selection/config path. Tests cover environment refresh/policy, session permission-profile updates, and next-turn permission/workspace-root inheritance. Tests: go test ./appserver -run 'Environment|PermissionProfile|NextTurn' -count=1"
       ]
     },
     {
