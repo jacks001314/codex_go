@@ -15315,9 +15315,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: prepare_annotated_conversation_items_for_history"
+        "Round 506 (audit): already implemented by equivalent behavior. TurnUserInput.FileID and session.ContentPart.FileID carry uploaded images; preparedUserMessageInputItem prepares structured user images before the user message event and caches the prepared blocks; runtimeUserPromptSessionItemWithPreparedContent reuses them for persisted session and display history while preserving detail and original text spans. TestUploadedImageFileIDsReachUserMessageDisplayHistoryLikeRust covers live input, session content, display fileId, and text spans. Tests: go test ./appserver -run 'UploadedImageFileIDs|UserInputImageReferences|SessionPartFileReference|TurnUserInputFileReference' -count=1"
       ]
     },
     {
