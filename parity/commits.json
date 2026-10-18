@@ -11945,9 +11945,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: anchor_realtime_transcripts_before_turn, finish_realtime_transcript_replay, prepare_realtime_transcript_replay, queue_realtime_transcripts_for_replay, restore_realtime_replay_state_after_replay"
+        "Aligned upstream ab95cd4dd9 (#44749): completed captions are retained per thread with their message position and restored at that position when the thread is selected again, so earlier speech stays before later typed turns and repeated switches do not duplicate it. Captions remain thread-scoped and the existing live rendering/dedup path is unchanged. Tests: TestRetainedVoiceCaptionsReplayBeforeLaterTurnsLikeRust and TestRetainedVoiceCaptionsRemainThreadScopedLikeRust."
       ]
     },
     {

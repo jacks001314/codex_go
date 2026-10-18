@@ -1528,6 +1528,9 @@ type Model struct {
 	// renderedVoiceTranscripts tracks captions already written to the
 	// transcript, so a re-render cannot duplicate them.
 	renderedVoiceTranscripts map[chatwidget.VoiceTranscriptRecord]bool
+	// retainedVoiceCaptions keeps completed captions per thread so a thread
+	// switch can restore them before later typed turns (Rust #44749).
+	retainedVoiceCaptions map[string][]retainedVoiceCaption
 	// voiceAttemptCounter identifies each local startup attempt so late async
 	// results can be discarded.
 	voiceAttemptCounter uint64
@@ -9112,8 +9115,74 @@ func (m *Model) refreshVoiceTranscript() {
 			continue
 		}
 		m.renderedVoiceTranscripts[record] = true
+		position := len(m.State.Messages)
 		m.applyHistoryCell(historycell.NewSpokenHistoryCell(string(record.Role), record.Text))
+		m.retainVoiceCaption(record, position)
 	}
+}
+
+type retainedVoiceCaption struct {
+	record   chatwidget.VoiceTranscriptRecord
+	position int
+}
+
+func (m *Model) retainVoiceCaption(record chatwidget.VoiceTranscriptRecord, position int) {
+	if m == nil || !record.Complete {
+		return
+	}
+	m.retainVoiceCaptionForThread(strings.TrimSpace(m.VoiceConversation.ThreadID), record, position)
+}
+
+func (m *Model) retainVoiceCaptionForThread(threadID string, record chatwidget.VoiceTranscriptRecord, position int) {
+	if m == nil || !record.Complete || strings.TrimSpace(threadID) == "" || strings.TrimSpace(record.Text) == "" {
+		return
+	}
+	if m.retainedVoiceCaptions == nil {
+		m.retainedVoiceCaptions = map[string][]retainedVoiceCaption{}
+	}
+	captions := append(m.retainedVoiceCaptions[threadID], retainedVoiceCaption{record: record, position: position})
+	if len(captions) > chatwidget.VoiceMaxReplayTranscripts {
+		captions = captions[len(captions)-chatwidget.VoiceMaxReplayTranscripts:]
+	}
+	m.retainedVoiceCaptions[threadID] = captions
+}
+
+// restoreRetainedVoiceCaptions inserts this thread's completed captions at
+// their recorded positions and avoids duplicating a caption already present in
+// the server replay.
+func (m *Model) restoreRetainedVoiceCaptions(threadID string, messages []codextui.Message) []codextui.Message {
+	if m == nil {
+		return messages
+	}
+	captions := m.retainedVoiceCaptions[strings.TrimSpace(threadID)]
+	inserted := 0
+	for _, caption := range captions {
+		text := strings.TrimSpace(caption.record.Text)
+		if text == "" || messagesContainVoiceCaption(messages, text) {
+			continue
+		}
+		position := caption.position + inserted
+		if position < 0 {
+			position = 0
+		}
+		if position > len(messages) {
+			position = len(messages)
+		}
+		messages = append(messages, codextui.Message{})
+		copy(messages[position+1:], messages[position:])
+		messages[position] = codextui.Message{Role: codextui.RoleHistory, Text: text, RawText: text}
+		inserted++
+	}
+	return messages
+}
+
+func messagesContainVoiceCaption(messages []codextui.Message, text string) bool {
+	for _, message := range messages {
+		if message.Role == codextui.RoleHistory && strings.TrimSpace(message.Text) == text {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) applyModelSetting(args string) bubbletea.Cmd {

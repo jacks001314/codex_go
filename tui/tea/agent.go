@@ -324,6 +324,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 			m.appendBufferedAsyncQuestions(buffered)
 		}
 		delete(m.backgroundThreadEvents, entry.ThreadID)
+		messages = m.restoreRetainedVoiceCaptions(entry.ThreadID, messages)
 		m.State.Messages = messages
 		m.State.BumpMessagesRevision()
 		m.insertSessionHeader()
