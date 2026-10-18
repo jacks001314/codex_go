@@ -18437,9 +18437,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: SpawnInitialInput, spawn_agent_internal"
+        "Equivalent mechanism: both V1 and V2 spawn handlers call the shared ToolController.SpawnAgent entry point with SpawnAgentArgs. The runtime controller centralizes canonical path validation, spawn message attribution, fork history, input admission, and the returned child settings. Go has no separate SpawnInitialInput/SpawnRequest type, but the two handlers no longer maintain independent spawn paths."
       ]
     },
     {
