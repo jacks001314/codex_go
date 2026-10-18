@@ -3686,9 +3686,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "discoverExecutorHTTPMCPServers now emits codex.mcp.executor_discovery with outcome success/error and codex.mcp.executor_discovery.server with server_name and found/unavailable before policy/startup projection. Test TestExecutorMCPDiscoveryEmitsOutcomeMetricsLikeRust covers the success plus found/unavailable path. Tests: go test ./appserver -run 'ExecutorMCPDiscoveryEmitsOutcomeMetrics' -count=1"
       ]
     },
     {

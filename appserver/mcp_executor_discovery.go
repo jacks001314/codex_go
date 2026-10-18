@@ -21,6 +21,11 @@ import (
 
 const executorMCPDiscoveryTimeout = 10 * time.Second
 
+const (
+	executorMCPDiscoveryMetric       = "codex.mcp.executor_discovery"
+	executorMCPDiscoveryServerMetric = "codex.mcp.executor_discovery.server"
+)
+
 type executorMCPDiscoveryResult struct {
 	key     string
 	servers []executorMCPServer
@@ -71,11 +76,16 @@ func (r *RuntimeRouter) discoverExecutorHTTPMCPServers(ctx context.Context, thre
 		}
 		client, err := cache.client(ctx, *record)
 		if err != nil {
+			r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryMetric, map[string]string{"outcome": "error"})
 			slog.Warn("failed to connect for executor MCP discovery", "environment_id", environmentID, "error", err)
 			continue
 		}
 		capabilities, err := client.EnvironmentCapabilities(ctx)
-		if err != nil || capabilities == nil || !capabilities.EnvironmentConfigRead {
+		if err != nil {
+			r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryMetric, map[string]string{"outcome": "error"})
+			continue
+		}
+		if capabilities == nil || !capabilities.EnvironmentConfigRead {
 			continue
 		}
 		response, err := client.ReadEnvironmentConfigWithTimeout(ctx, &execserverclient.EnvironmentConfigReadParams{
@@ -84,16 +94,36 @@ func (r *RuntimeRouter) discoverExecutorHTTPMCPServers(ctx context.Context, thre
 			RequirementsPaths: [][]string{{"mcp_servers"}},
 		}, executorMCPDiscoveryTimeout)
 		if err != nil {
+			r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryMetric, map[string]string{"outcome": "error"})
 			slog.Warn("failed to read executor-local MCP configuration", "environment_id", environmentID, "error", err)
 			continue
 		}
 		servers, err := executorHTTPMCPServers(response, environmentID, executorHTTPDoer{client: client})
 		if err != nil {
+			r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryMetric, map[string]string{"outcome": "error"})
 			slog.Warn("failed to parse executor-local MCP configuration", "environment_id", environmentID, "error", err)
 			continue
 		}
+		r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryMetric, map[string]string{"outcome": "success"})
+		for _, server := range servers {
+			outcome := "found"
+			if !server.config.Enabled {
+				outcome = "unavailable"
+			}
+			r.recordExecutorMCPDiscoveryMetric(executorMCPDiscoveryServerMetric, map[string]string{
+				"server_name": server.name,
+				"outcome":     outcome,
+			})
+		}
 		cache.storeExecutorMCPDiscovery(environmentID, executorMCPDiscoveryResult{key: key, servers: servers})
 	}
+}
+
+func (r *RuntimeRouter) recordExecutorMCPDiscoveryMetric(name string, tags map[string]string) {
+	if r == nil || r.services.TurnMetrics == nil {
+		return
+	}
+	r.services.TurnMetrics.Counter(name, 1, tags)
 }
 
 func mcpRuntimeEnvironmentSelections(r *RuntimeRouter, threadID string, params *turn.TurnStartParams) []map[string]any {
