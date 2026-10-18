@@ -477,6 +477,57 @@ func TestRuntimeConfigFromValuesMaterializesAuthenticatedCodexAppsLikeRust(t *te
 	}
 }
 
+func TestCodexAppsServerConfigRetainsGovChatGPTAuthLikeRust(t *testing.T) {
+	config := CodexAppsServerConfig("https://gov.chatgpt.com/backend-api/", "", &RuntimeAuth{UsesCodexBackend: true})
+	if config.URL != "https://gov.chatgpt.com/backend-api/ps/mcp" || config.EffectiveAuth() != ServerAuthChatGPT {
+		t.Fatalf("Gov Apps config = %#v", config)
+	}
+}
+
+func TestRuntimeConfigNormalizesChatGPTAuthByTrustedOriginLikeRust(t *testing.T) {
+	tests := []struct {
+		name      string
+		baseURL   string
+		serverURL string
+		wantAuth  string
+	}{
+		{name: "chatgpt", baseURL: "https://chatgpt.com", serverURL: "https://chatgpt.com/backend-api/ps/mcp", wantAuth: ServerAuthChatGPT},
+		{name: "gov", baseURL: "https://chatgpt.com", serverURL: "https://gov.chatgpt.com/backend-api/", wantAuth: ServerAuthChatGPT},
+		{name: "gov default port and case", baseURL: "https://chatgpt.com", serverURL: "https://GOV.CHATGPT.COM:443", wantAuth: ServerAuthChatGPT},
+		{name: "staging", baseURL: "https://preview.chatgpt-staging.com", serverURL: "https://preview.chatgpt-staging.com", wantAuth: ServerAuthChatGPT},
+		{name: "http", baseURL: "https://chatgpt.com", serverURL: "http://gov.chatgpt.com", wantAuth: ServerAuthOAuth},
+		{name: "nondefault port", baseURL: "https://chatgpt.com", serverURL: "https://gov.chatgpt.com:8443", wantAuth: ServerAuthOAuth},
+		{name: "lookalike", baseURL: "https://chatgpt.com", serverURL: "https://gov.chatgpt.com.evil.example", wantAuth: ServerAuthOAuth},
+		{name: "subdomain", baseURL: "https://chatgpt.com", serverURL: "https://sub.gov.chatgpt.com", wantAuth: ServerAuthOAuth},
+		{name: "trailing dot", baseURL: "https://chatgpt.com", serverURL: "https://gov.chatgpt.com.", wantAuth: ServerAuthOAuth},
+		{name: "userinfo", baseURL: "https://chatgpt.com", serverURL: "https://gov.chatgpt.com@evil.example", wantAuth: ServerAuthOAuth},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			runtime := RuntimeConfigFromValues(map[string]any{
+				"chatgpt_base_url": testCase.baseURL,
+				"mcp_servers": map[string]any{
+					"test": map[string]any{"url": testCase.serverURL, "auth": ServerAuthChatGPT},
+				},
+			}, "")
+			config := runtime.Servers["test"].Config
+			if got := config.EffectiveAuth(); got != testCase.wantAuth {
+				t.Fatalf("auth for %q = %q, want %q", testCase.serverURL, got, testCase.wantAuth)
+			}
+		})
+	}
+
+	runtime := RuntimeConfigFromValues(map[string]any{
+		"mcp_servers": map[string]any{
+			"custom": map[string]any{"url": "https://example.test/mcp", "auth": ServerAuthOAuth},
+		},
+	}, "")
+	config := runtime.Servers["custom"].Config
+	if got := config.EffectiveAuth(); got != ServerAuthOAuth {
+		t.Fatalf("custom OAuth auth = %q, want oauth", got)
+	}
+}
+
 // Mirrors Rust's `codex_apps_mcp_url_for_base_url_uses_plugin_service_paths`
 // (codex-mcp/src/mcp/mod_tests.rs:431-452) and the base shapes the helper
 // handles: plugin-service serves the Apps MCP endpoint under `/ps/mcp`.

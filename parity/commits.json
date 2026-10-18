@@ -31543,9 +31543,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 400 (implementation): runtime MCP config now retains auth=chatgpt only for normalized chatgpt.com, gov.chatgpt.com, and configured chatgpt-staging.com origins; all other streamable HTTP servers fall back to OAuth. Gov Apps uses /backend-api/ps/mcp and keeps ChatGPT auth. Tests: go test ./mcp -count=1; go test ./appserver -run 'MCP.*Auth|ChatGPT.*MCP|Apps' -count=1; go vet ./mcp"
       ]
     },
     {

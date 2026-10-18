@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -527,8 +528,71 @@ func (m *Manager) RuntimeConfig(base RuntimeConfig, overlays []ConfigOverlay) *R
 	out := base
 	out.Servers = servers
 	out.Requirements = managedconfig.CloneConfigRequirements(base.Requirements)
+	normalizeMCPServerChatGPTAuth(out.Servers, out.ChatGPTBaseURL)
 	applyManagedMCPRequirements(out.Servers, out.Requirements)
 	return &out
+}
+
+// normalizeMCPServerChatGPTAuth mirrors Rust's effective_mcp_servers auth
+// filter: hosted ChatGPT auth is retained only for the ChatGPT/Gov origins and
+// the configured staging origin. Any other streamable HTTP server falls back to
+// OAuth instead of receiving the host's ChatGPT credential.
+func normalizeMCPServerChatGPTAuth(servers map[string]ServerRegistration, chatGPTBaseURL string) {
+	for name, registration := range servers {
+		if registration.Config.EffectiveAuth() != ServerAuthChatGPT ||
+			strings.TrimSpace(registration.Config.URL) == "" ||
+			strings.TrimSpace(registration.Config.Command) != "" ||
+			trustedChatGPTMCPOrigin(registration.Config.URL, chatGPTBaseURL) {
+			continue
+		}
+		registration.Config.Auth = ServerAuthOAuth
+		servers[name] = registration
+	}
+}
+
+func trustedChatGPTMCPOrigin(serverURL string, chatGPTBaseURL string) bool {
+	server, ok := normalizedMCPServerOrigin(serverURL)
+	if !ok {
+		return false
+	}
+	for _, fixed := range []string{"https://chatgpt.com", "https://gov.chatgpt.com"} {
+		trusted, trustedOK := normalizedMCPServerOrigin(fixed)
+		if trustedOK && server == trusted {
+			return true
+		}
+	}
+	base, ok := normalizedMCPServerOrigin(chatGPTBaseURL)
+	if !ok || base.scheme != "https" ||
+		(base.host != "chatgpt-staging.com" && !strings.HasSuffix(base.host, ".chatgpt-staging.com")) {
+		return false
+	}
+	return server == base
+}
+
+type mcpURLOrigin struct {
+	scheme string
+	host   string
+	port   string
+}
+
+func normalizedMCPServerOrigin(raw string) (mcpURLOrigin, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return mcpURLOrigin{}, false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return mcpURLOrigin{}, false
+	}
+	port := parsed.Port()
+	if port == "" {
+		if parsed.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return mcpURLOrigin{scheme: parsed.Scheme, host: host, port: port}, true
 }
 
 func applyManagedMCPRequirements(servers map[string]ServerRegistration, requirements *managedconfig.ConfigRequirements) {
