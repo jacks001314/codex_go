@@ -1238,7 +1238,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Completed sub-agent activity is recorded on the parent/initiating turn with kind=completed, agent thread/path and a stable subagent-completed-<turn> ID; it is emitted through item/completed and analytics without being counted as another subagent tool call. Tests: go test ./appserver -run 'SubAgentActivity|SubagentCompleted|SubAgent' -count=1; go test ./agent -run 'SubAgentActivity' -count=1"
+        "Completed sub-agent activity is recorded on the parent/initiating turn with kind=completed, agent thread/path and a stable subagent-completed-<turn> ID; it is emitted through item/completed and analytics without being counted as another subagent tool call. Tests: go test ./appserver -run 'SubAgentActivity|SubagentCompleted|SubAgent' -count=1"
       ]
     },
     {
