@@ -69,10 +69,10 @@ func TestMCPToolParallelOptInFollowsServerConfigLikeRust(t *testing.T) {
 // TestBuiltinToolParallelFlagsLikeRust pins the per-tool parallel-safety flags
 // against Rust's `ToolHandler::supports_parallel_tool_calls` overrides (the
 // trait default is false): exec_command/write_stdin/test_sync/view_image/
-// tool_search/MCP-resource tools opt in, while the skills extension,
-// plugin-install tools, plan, request_user_input and the multi-agent tools stay
-// serial. Dynamic tools opt in themselves (#54654); see
-// dynamic_tools_parallel_test.go.
+// tool_search/MCP-resource tools, skills list/read, install-candidate listing
+// and get_context_remaining opt in (Rust #52245), while plan,
+// request_user_input and the multi-agent mutation tools stay serial. Dynamic
+// tools opt in themselves (#54654); see dynamic_tools_parallel_test.go.
 func TestBuiltinToolParallelFlagsLikeRust(t *testing.T) {
 	options := DefaultToolRegistryOptions(t.TempDir())
 	options.PluginInstallCandidates = []plugin.DiscoverableInfo{{ID: "parity", Name: "Parity"}}
@@ -97,14 +97,14 @@ func TestBuiltinToolParallelFlagsLikeRust(t *testing.T) {
 		{tool.PlainName("apply_patch"), false},
 		{tool.PlainName("update_plan"), false},
 		{tool.PlainName("request_user_input"), false},
-		{tool.PlainName("get_context_remaining"), false},
+		{tool.PlainName("get_context_remaining"), true},
 		{tool.PlainName("tool_search"), true},
 		{tool.PlainName("list_mcp_resources"), true},
 		{tool.PlainName("list_mcp_resource_templates"), true},
 		{tool.PlainName("read_mcp_resource"), true},
-		{tool.PlainName("list_available_plugins_to_install"), false},
-		{tool.NamespacedName("skills", "list"), false},
-		{tool.NamespacedName("skills", "read"), false},
+		{tool.PlainName("list_available_plugins_to_install"), true},
+		{tool.NamespacedName("skills", "list"), true},
+		{tool.NamespacedName("skills", "read"), true},
 		{tool.NamespacedName("multi_agent_v1", "spawn_agent"), false},
 		{tool.NamespacedName("multi_agent_v1", "wait_agent"), false},
 	}

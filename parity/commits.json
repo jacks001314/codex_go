@@ -694,9 +694,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 721 (implementation): Go-carried read-only tools now opt into parallel scheduling: skills list/read, get_context_remaining, list_available_plugins_to_install, and multi-agent-v2 list_agents. Goal creation/updates, request_user_input, plan, and other mutations remain serial. Rust's memory/current_time/get_goal/user_message history tools have no Go tool implementations, so their flags have no carrier. Tests: TestBuiltinToolParallelFlagsLikeRust plus turn/agent/tool parallel suites; go test ./turn -run 'Parallel|Skills' -count=1; go test ./agent -run 'MultiAgentV2|ListAgents|Parallel' -count=1; go test ./tool -run 'Parallel|PluginInstall|ContextRemaining' -count=1."
       ]
     },
     {
@@ -18645,9 +18645,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: consume_external_agent_config_import_completion, external_agent_config_detect, external_agent_config_import, external_agent_config_import_in_progress"
+        "Aligned upstream 7e6c4c20fd (#47317): /import detects and imports through the connected app server in embedded and remote TUI modes. Before a remote thread starts, detection uses the remote --cd override and stays home-only without one; once a thread exists it uses the thread cwd. The tea model records the returned import_id in pendingExternalAgentImports and ignores completions for other IDs, including early completions queued before the response. Tests: TestExternalAgentImportUsesRemoteCWDOverrideLikeRust and the existing external-agent import/remote handler coverage (go test ./tui/tea -run 'ExternalAgent|Import'; go test ./app -run 'ExternalAgent|Import')."
       ]
     },
     {

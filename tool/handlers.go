@@ -388,7 +388,7 @@ func NewGetContextRemainingHandler(status func() compact.TokenStatus) *GetContex
 }
 
 func (h *GetContextRemainingHandler) Spec() Spec {
-	return Spec{Name: PlainName("get_context_remaining"), Description: "Returns context tokens left before compaction."}
+	return Spec{Name: PlainName("get_context_remaining"), Description: "Returns context tokens left before compaction.", Parallel: true}
 }
 
 func (h *GetContextRemainingHandler) Execute(ctx context.Context, invocation *Invocation) (*Output, error) {

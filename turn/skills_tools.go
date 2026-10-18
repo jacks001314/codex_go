@@ -140,9 +140,8 @@ func newSkillsToolExecutor(options *ToolRegistryOptions, name string, descriptio
 			Name:        tool.NamespacedName(skillsToolNamespace, name),
 			Description: description,
 			InputSchema: skillsToolInputSchema(name),
-			// Rust's ext/skills tools do not override
-			// `supports_parallel_tool_calls`, so they keep the serial default.
-			Parallel:             false,
+			// Rust #52245: skills list/read are read-only and parallel-safe.
+			Parallel:             true,
 			NamespaceDescription: fmt.Sprintf("Tools in the %s namespace.", skillsToolNamespace),
 		},
 		mcpService: options.MCPService,

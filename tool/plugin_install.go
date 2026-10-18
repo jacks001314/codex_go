@@ -147,9 +147,8 @@ func (h *ListAvailablePluginsToInstallHandler) Spec() Spec {
 			"required":             []string{},
 			"additionalProperties": false,
 		},
-		// Rust ListAvailablePluginsToInstallHandler::supports_parallel_tool_calls
-		// returns false.
-		Parallel: false,
+		// Rust #52245: listing install candidates is read-only and parallel-safe.
+		Parallel: true,
 	}
 }
 

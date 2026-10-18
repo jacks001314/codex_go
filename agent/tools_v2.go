@@ -252,6 +252,8 @@ func (e *multiAgentV2ToolExecutor) Spec() tool.Spec {
 		spec.InputSchema = targetSchema("Agent id or canonical task name to interrupt (from spawn_agent).")
 		spec.OutputSchema = previousStatusSchema("The agent status observed before the interrupt request was handled.")
 	case multiAgentV2List:
+		// Rust #52245: listing agents is read-only and parallel-safe.
+		spec.Parallel = true
 		spec.Description = "List live agents in the current root thread tree. Optionally filter by task-path prefix."
 		spec.InputSchema = multiAgentObjectSchema(map[string]any{"path_prefix": map[string]any{"type": "string", "description": "Task-path prefix filter without a trailing slash. Omit to list all live agents."}}, nil)
 		spec.OutputSchema = multiAgentObjectSchema(map[string]any{"agents": map[string]any{
