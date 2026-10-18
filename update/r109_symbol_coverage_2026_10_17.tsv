@@ -981,7 +981,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5e26f7621c1c470fe62350d61c9eb4d6c772a0da	42320	Make the app-server thread unload delay configurable (#42320)	2026-09-02	appserver	0	0		0	0	not_applicable	
 5e3f0ee94b0719ab3d0d05cffaa75163e87668f6	43930	Avoid Windows sandbox setup for irrelevant proxy port changes (#43930)	2026-09-08	sandbox	0	0		0	0	not_applicable	
 5e5cadad6b90f90a999cbc49745a91c61bc0cdbf	46862	Refresh analytics on identity changes and compact usage menus (#46862)	2026-09-20	tui	1	0	0.00	0	0	implementation_pending	ensure_identity
-5e636ea760d1c821a9162af652a14225fdbd8a0f	46065	Route prepared images through the attachment store (#46065)	2026-09-17	guardian	6	3	0.50	0	0	audit_pending	into_data_url,prepare_conversation_items_for_history,resize_image
+5e636ea760d1c821a9162af652a14225fdbd8a0f	46065	Route prepared images through the attachment store (#46065)	2026-09-17	guardian	6	3	0.50	0	0	complete	into_data_url,prepare_conversation_items_for_history,resize_image
 5e96aabd68dc6194f5ad928cb7f5d0bc71b72df9	49712	Avoid full-string scans in token-budget truncation (#49712)	2026-09-30	core	0	0		0	0	not_applicable	
 5ecb3afd1bf405149e2159bfda50093b0c1b5fab	43376	Defer resume picker and directory changes to a fresh TUI stack (#43376)	2026-09-07	tui	2	0	0.00	0	0	implementation_pending	PendingWorkingDirectoryChange,finish_working_directory_change
 5ed294d49d64f79b25ae63cd1cdaf54db7a797fd	41368	Match Windows shell guidance to the executor platform (#41368)	2026-08-28	core	0	0		0	0	not_applicable	
@@ -1180,7 +1180,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 724cdfbd32d35fde9e0da1f1e141b836836f9a65	46840	Simplify agent command center hints and back navigation (#46840)	2026-09-20	tui	2	0	0.00	0	0	implementation_pending	center_footer_hints,center_task_hints
 725b3a44f8d13c8d2f019e1ecbc8ab686466b950	40692	Remove WebSocket transport from code-mode hosts (#40692)	2026-08-25	appserver	0	0		0	0	not_applicable	
 726f1492db90501746639e8c61cd3c674735a1a7	49793	Add conversation mode to Guardian v2 async classification (#49793)	2026-09-30	guardian	11	4	0.36	0	0	not_applicable	AsyncClassifierMode,ConversationBackend,ConversationRequest,classifier_mode,max_input_tokens,record_request_tokens,record_section_costs
-7275afc5c7fd2c01e0a3442ead09f44bad52422a	45957	Centralize Guardian policy resolution in config and protocol (#45957)	2026-09-16	guardian	8	1	0.12	0	0	audit_pending	GuardianPolicyLoader,GuardianUnscoredAction,allows_initial_cua_call,constrain_guardian_policy,disable_scoring,scores_tool,scoring_enabled
+7275afc5c7fd2c01e0a3442ead09f44bad52422a	45957	Centralize Guardian policy resolution in config and protocol (#45957)	2026-09-16	guardian	8	1	0.12	0	0	complete	GuardianPolicyLoader,GuardianUnscoredAction,allows_initial_cua_call,constrain_guardian_policy,disable_scoring,scores_tool,scoring_enabled
 7276d67081dd4149a15c72972e639b0d707915a4	40952	Expose resumable misalignment details through app server (#40952)	2026-08-26	tui	2	2	1.00	0	0	complete	
 727e48697d8e89a88c024cc6831bd4816ffd3b3e	45035	Run DotSlash publishing directly on Ubuntu runners (#45035)	2026-09-12	core	0	0		0	0	not_applicable	
 728cb12fe5794b0c3a8e776fb4994b1650b973a8	42458	Expose thread originators through the app-server API (#42458)	2026-09-03	tui	0	0		0	0	not_applicable	
@@ -1331,7 +1331,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 7efc49b258587fbe872c7897e90ffa6144bea2a0	51512	Align Windows sandbox temp permissions with the child environment (#51512)	2026-10-06	execserver	2	2	1.00	0	0	complete	
 7efd184c2410c02a9d0feb4896855f0f18a8f47e	52724	Add observers for initial exec-server connection attempts (#52724)	2026-10-09	execserver	3	0	0.00	0	0	complete	ConnectionAttemptOutcome,ConnectionObserver,observe_connection_attempts
 7f01a84effccef40d4726c3ca12e6c839ec98d7a	45693	Move Guardian approval routing into the reviewer extension (#45693)	2026-09-15	guardian	3	3	1.00	0	0	complete	
-7f0ab958275e5a3ec40eff993aa077b3f0636abf	46009	Centralize compaction checkpoint selection and validation (#46009)	2026-09-16	guardian	5	1	0.20	0	0	audit_pending	CompactionCheckpoint,from_item,is_compatible_with,is_usable
+7f0ab958275e5a3ec40eff993aa077b3f0636abf	46009	Centralize compaction checkpoint selection and validation (#46009)	2026-09-16	guardian	5	1	0.20	0	0	complete	CompactionCheckpoint,from_item,is_compatible_with,is_usable
 7f135e1314433a53d4e348cbf7d3df6072e5971a	41206	Make Ultra reasoning fallback model-aware (#41206)	2026-08-27	appserver	0	0		0	0	not_applicable	
 7f21b5ee9c69f0f05171e5a42f5f00c99f574efc	51184	Remove obsolete Guardian thread-context enables from tests (#51184)	2026-10-05	guardian	0	0		0	0	not_applicable	
 7f2f4fd46e0f50798fd8d3436a8e14a5386d253b	52629	Consolidate local message board storage helpers (#52629)	2026-10-09	core	3	3	1.00	0	0	complete	

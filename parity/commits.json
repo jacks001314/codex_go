@@ -1752,9 +1752,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Executor sandbox contexts are derived per selected turn environment from that environment's permission profile, cwd, workspace roots and Windows sandbox settings. Remote temporary directories and local contexts remain distinct, and a selected skill root without a matching sandbox context fails closed. Tests: go test ./appserver -run 'ExecutorSkillSandbox|SandboxContext|EnvironmentConfig' -count=1; go test ./tool -run 'FileSystemSandboxContext|SandboxContext' -count=1"
       ]
     },
     {
@@ -14393,9 +14393,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/8; needs review: GuardianPolicyLoader, GuardianUnscoredAction, allows_initial_cua_call, constrain_guardian_policy, disable_scoring"
+        "Managed guardian_policy_config and guardian_extra_policy requirements override auto_review values, templates render through the shared placeholder path, and app-server review sessions consume the resolved policy. Tests: go test ./config -run GuardianPolicy -count=1; go test ./appserver -run 'Guardian.*Policy|ReviewPolicy' -count=1"
       ]
     },
     {
@@ -14585,9 +14585,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: CompactionCheckpoint, from_item, is_compatible_with, is_usable"
+        "Rollout reconstruction centralizes compacted checkpoint selection, validates replacement/resume metadata, and replays the latest valid checkpoint with turn attribution. Tests: go test ./rollout -run 'Compaction|Checkpoint' -count=1"
       ]
     },
     {
@@ -14909,9 +14909,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: into_data_url, prepare_conversation_items_for_history, resize_image"
+        "Prepared response images run through attachmentstore with usage/origin tags and persistence intent. Durable requests upload file attachments, ephemeral requests keep inline data, and file references replace inline URLs after preparation. Tests: go test ./model -run 'PrepareResponseInputImages|EphemeralReachesUploads' -count=1"
       ]
     },
     {
