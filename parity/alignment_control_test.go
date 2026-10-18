@@ -12,7 +12,7 @@ import (
 
 const (
 	candidateRustFrom = "bd19459358f534ed1cae464ec13d56600aeb45f2"
-	candidateRustTo   = "ce0323f2f2d3b25e82806cd555237da3db4e1897"
+	candidateRustTo   = "8c076942cb70fba8e5c4732c23f1faabc4aed484"
 	candidateGoStart  = "5c25a72b1cbd16b060b594f2ccb7c3243479eb87"
 )
 
@@ -124,8 +124,8 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 	if ledger.SchemaVersion != 1 || ledger.RustFromExclusive != candidateRustFrom || ledger.RustToInclusive != candidateRustTo {
 		t.Fatalf("invalid commit ledger header: %#v", ledger)
 	}
-	if len(ledger.Commits) != 2695 {
-		t.Fatalf("candidate commit count = %d, want 2695", len(ledger.Commits))
+	if len(ledger.Commits) != 2700 {
+		t.Fatalf("candidate commit count = %d, want 2700", len(ledger.Commits))
 	}
 	shaPattern := regexp.MustCompile(`^[0-9a-f]{40}$`)
 	allowedStatus := map[string]bool{
@@ -133,6 +133,9 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 		"implementation_pending": true,
 		"regression_pending":     true,
 		"complete":               true,
+		"partial":                true,
+		"not_applicable":         true,
+		"blocked_precondition":   true,
 	}
 	allowedKind := map[string]bool{"test": true, "runtime": true, "protocol": true, "persistence": true, "security": true, "release": true}
 	seen := map[string]bool{}
@@ -141,7 +144,7 @@ func TestAlignmentCommitLedgerIsComplete(t *testing.T) {
 			t.Fatalf("invalid commit ledger entry: %#v", commit)
 		}
 		seen[commit.SHA] = true
-		if commit.Status == "complete" && len(commit.Evidence) == 0 {
+		if (commit.Status == "complete" || commit.Status == "not_applicable") && len(commit.Evidence) == 0 {
 			t.Fatalf("complete commit has no evidence: %s", commit.SHA)
 		}
 	}

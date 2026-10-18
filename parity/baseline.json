@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "frozenAt": "2026-10-17",
-  "plan": "update/plan_2026_10_17.md",
+  "frozenAt": "2026-10-18",
+  "plan": "update/plan_2026_10_18_round142.md",
   "verified": {
-    "rustCommit": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
+    "rustCommit": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
     "parityManifest": "parity.json"
   },
   "target": {
-    "rustCommit": "ce0323f2f2d3b25e82806cd555237da3db4e1897",
+    "rustCommit": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
     "rustBranch": "main",
     "goStartCommit": "5c25a72b1cbd16b060b594f2ccb7c3243479eb87"
   },
@@ -37,7 +37,7 @@
     ]
   },
   "certificationBlockers": [
-    "Per-commit certification of the 2643 upstream commits in 970b7f2ff4..ce0323f2f2 is in progress; parity/commits.json records every commit with its audit status"
+    "Per-commit certification of the 2700 upstream commits in bd19459358..8c076942 is in progress; parity/commits.json records every commit with its audit status"
   ],
   "certificationReady": false
 }

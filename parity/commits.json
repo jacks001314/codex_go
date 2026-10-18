@@ -4,66 +4,6 @@
   "rustToInclusive": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
   "commits": [
     {
-      "sha": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
-      "subject": "Allow agent messages to wake idle root sessions behind a feature flag (#54961)",
-      "kind": "runtime",
-      "domains": [
-        "codex_go"
-      ],
-      "status": "complete",
-      "evidence": [
-        "Round 395 (implementation): wake_on_agent_messages is disabled by default. Queue-only direct messages and host-mailbox child completions start an idle root turn, reuse the previous model/effort/cyber program, and stay queue-only for interrupted sessions, Plan mode, and child agents. Serialized mailbox draining, failure requeue, and turn-end rechecks cover races. Tests: go test ./appserver -run 'AgentMessageWake|QueueOnlyAgentMessage|HostMailboxCompletion|PreviousTurnSettings' -count=1; go test ./agent ./features -count=1"
-      ]
-    },
-    {
-      "sha": "ffd3429d754991183433b4d41b67551e5656ba27",
-      "subject": "Preserve model catalog caches across header credential rotation (#54946)",
-      "kind": "security",
-      "domains": [
-        "codex_go"
-      ],
-      "status": "complete",
-      "evidence": [
-        "Round 288: header auth with ChatGPT-Account-ID reuses the model catalog across opaque credential rotation; missing accounts, explicit provider keys/bearer tokens, and command auth retain credential-sensitive identities."
-      ]
-    },
-    {
-      "sha": "1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b",
-      "subject": "Share additional tool declarations across response item clones (#54945)",
-      "kind": "runtime",
-      "domains": [
-        "codex_go"
-      ],
-      "status": "not_applicable",
-      "evidence": [
-        "Round 288 (audit): N/A - this is a Rust Vec-to-Arc clone optimization. Go's additional-tools items use slices/JSON values whose assignment already shares the declaration backing array; the serialized protocol is unchanged."
-      ]
-    },
-    {
-      "sha": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
-      "subject": "Gate app-server WebSocket compression behind a feature flag (#54949)",
-      "kind": "protocol",
-      "domains": [
-        "codex_go"
-      ],
-      "status": "complete",
-      "evidence": [
-        "Round 287: app_server_websocket_compression is an opt-in under-development feature; TCP and Unix WebSocket listeners negotiate zstd only when enabled and fall back to text for absent or unsupported offers."
-      ]
-    },
-    {
-      "sha": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
-      "subject": "Add negotiated zstd compression to app-server WebSockets (#54930)",
-      "kind": "protocol",
-      "domains": [
-        "codex_go"
-      ],
-      "status": "complete",
-      "evidence": [
-        "Round 284: TCP and local-socket WebSockets negotiate zstd-stream-v1, use persistent zstd streams per direction with binary JSON messages, keep plain text fallback, enforce 1 MiB decoder windows and 64 MiB message limits, and close malformed compressed connections."
-      ]
-    },
-    {
       "sha": "27c05a52e0cdf93ef7db5a96ccaf88d6b9095472",
       "subject": "Include context window IDs in response metadata (#39847)",
       "kind": "runtime",
@@ -118,9 +58,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): previous/next permission-mode actions are registered as unbound chat keymap entries, apply only to the active session without writing config, exclude unavailable modes, require the existing full-access confirmation, reject printable bindings, and are stripped from project config. Tests: TestModelPermissionShortcutsCycleSessionOnlyLikeRust, TestModelPermissionShortcutFullAccessStillRequiresConfirmationLikeRust, TestPermissionShortcutBindingsRejectPrintableKeysLikeRust, and project ignored-settings coverage."
+        "Round 399 (audit): previous/next permission-mode actions are registered as unbound chat keymap entries, apply only to the active session without writing config, exclude unavailable modes, require the existing full-access confirmation, reject printable bindings, and are stripped from project config. Tests: TestModelPermissionShortcutsCycleSessionOnlyLikeRust, TestModelPermissionShortcutFullAccessStillRequiresConfirmationLikeRust, TestPermissionShortcutBindingsRejectPrintableKeysLikeRust, and project ignored-settings coverage."
       ]
     },
     {
@@ -250,7 +190,7 @@
       "domains": [
         "codex_go"
       ],
-      "status": "blocked_precondition",
+      "status": "implementation_pending",
       "evidence": [
         "Precondition missing: Go has shell_snapshot_v2 feature registration and the ShellSnapshotV2 capability bit, but not the executor-managed in-memory snapshot subsystem. Local unified exec launches bypass exec-server, and execserver/shell_snapshot.go only captures and replays file-backed snapshots. Completing this requires routing eligible local unified-exec launches through the executor-managed process path and adding the environment/file replay cache, policy filtering, startup-file suppression, prewarm, and telemetry semantics from the Rust implementation."
       ]
@@ -418,9 +358,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 401 (audit): keymap action menu items have one binding-aware description with no selected-description swap, and replacement actions name the affected binding. TestModelKeymapActionMenuResponsiveWidthsMatchRust renders every selection position without changing menu content."
+        "Round 401 (audit): keymap action menu items have one binding-aware description with no selected-description swap, and replacement actions name the affected binding. TestModelKeymapActionMenuResponsiveWidthsMatchRust renders every selection position without changing menu content."
       ]
     },
     {
@@ -466,9 +406,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 401 (audit): /copy extracts the whole latest response plus fenced code blocks and nested blockquotes, labels/previews targets, opens a selection modal, and copies exact source text through the clipboard path. Tests cover extraction, picker navigation/cancel, rich/plain copy, hard breaks, follow-up responses, and status-output copy."
+        "Round 401 (audit): /copy extracts the whole latest response plus fenced code blocks and nested blockquotes, labels/previews targets, opens a selection modal, and copies exact source text through the clipboard path. Tests cover extraction, picker navigation/cancel, rich/plain copy, hard breaks, follow-up responses, and status-output copy."
       ]
     },
     {
@@ -478,9 +418,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 401 (audit): the fast-mode status item is omitted when the catalogued current model is known not to support Fast, while supported and uncatalogued models still show Fast on/off; status-control tests cover all three cases."
+        "Round 401 (audit): the fast-mode status item is omitted when the catalogued current model is known not to support Fast, while supported and uncatalogued models still show Fast on/off; status-control tests cover all three cases."
       ]
     },
     {
@@ -718,9 +658,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 401 (audit): McpServerStatus carries RuntimeStatus and compact /mcp output renders connected, starting, authentication required, failed, cancelled, not started, disabled, and unknown states with tool counts; verbose output retains the detailed inventory and legacy auth fallback. history_cell tests cover the state matrix and older-server response shape."
+        "Round 401 (audit): McpServerStatus carries RuntimeStatus and compact /mcp output renders connected, starting, authentication required, failed, cancelled, not started, disabled, and unknown states with tool counts; verbose output retains the detailed inventory and legacy auth fallback. history_cell tests cover the state matrix and older-server response shape."
       ]
     },
     {
@@ -742,9 +682,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 401 (audit): Go does not own a custom ratatui-style draw/cursor cycle. Bubble Tea's renderer queues cursor position and visibility, and the model only supplies view text; there is no equivalent set_cursor_style/show/set_cursor_position sequence to reorder."
+        "Round 401 (audit): Go does not own a custom ratatui-style draw/cursor cycle. Bubble Tea's renderer queues cursor position and visibility, and the model only supplies view text; there is no equivalent set_cursor_style/show/set_cursor_position sequence to reorder."
       ]
     },
     {
@@ -888,10 +828,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Remote-compaction history trimming keeps message content and content_item_kinds aligned, retains non-text parts and passthrough metadata, and classifies legacy unannotated content as unknown."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Remote-compaction history trimming keeps message content and content_item_kinds aligned, retains non-text parts and passthrough metadata, and classifies legacy unannotated content as unknown."
+      ]
     },
     {
       "sha": "184ff338ad7d737b0bd6d5e913a070cfd5c666bd",
@@ -1356,10 +1296,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Harness-owned InitiatingAgentPath is carried through turn attribution; peer completion activity reaches the initiating agent's thread when applicable, with normal-parent fallback for missing or ghost initiators."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Harness-owned InitiatingAgentPath is carried through turn attribution; peer completion activity reaches the initiating agent's thread when applicable, with normal-parent fallback for missing or ghost initiators."
+      ]
     },
     {
       "sha": "4aa52f2cb2cdffa9c826f9e4e421a5435a05af06",
@@ -1500,10 +1440,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "The credential broker virtualizes complete provider tokens embedded in arbitrary child environment values, binds them to authorized destinations, rejects dummy/provider-token collisions, and keeps re-virtualization idempotent."
-        ]
+      "status": "complete",
+      "evidence": [
+        "The credential broker virtualizes complete provider tokens embedded in arbitrary child environment values, binds them to authorized destinations, rejects dummy/provider-token collisions, and keeps re-virtualization idempotent."
+      ]
     },
     {
       "sha": "49880081fe9d6cf89ec86e3d31c99bbe26a736c4",
@@ -1680,9 +1620,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 405 (implementation): app-server instructionSources now flow into Settings and the active TUI State; FormatInstructionSources keeps files inside or one level above cwd project-relative, collapses other home paths to `~`, deduplicates, and normalizes separators. Local and remote thread starts seed the summary immediately, resume/session switches apply it, and partial settings notifications do not clear it. Tests cover the Rust home/project-relative matrix, deduplication, tea settings application/removal, and resume/start settings mapping."
+        "Round 405 (implementation): app-server instructionSources now flow into Settings and the active TUI State; FormatInstructionSources keeps files inside or one level above cwd project-relative, collapses other home paths to `~`, deduplicates, and normalizes separators. Local and remote thread starts seed the summary immediately, resume/session switches apply it, and partial settings notifications do not clear it. Tests cover the Rust home/project-relative matrix, deduplication, tea settings application/removal, and resume/start settings mapping."
       ]
     },
     {
@@ -1884,10 +1824,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "not_applicable",
-        "evidence": [
-          "TranscriptWindow is private to the Guardian V2 asynchronous scorer transcript; Go has only the synchronous Guardian reviewer and no async transcript window lifecycle."
-        ]
+      "status": "not_applicable",
+      "evidence": [
+        "TranscriptWindow is private to the Guardian V2 asynchronous scorer transcript; Go has only the synchronous Guardian reviewer and no async transcript window lifecycle."
+      ]
     },
     {
       "sha": "70b5cfc73b25458a7af225d24b16ef4794f8f380",
@@ -1968,9 +1908,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): an active goal schedules a deduplicated status tick, refreshes the elapsed indicator, and only requests another frame when the displayed label changes. TestActiveGoalClockTicksLikeRust covers the tick and duplicate suppression."
+        "Round 399 (audit): an active goal schedules a deduplicated status tick, refreshes the elapsed indicator, and only requests another frame when the displayed label changes. TestActiveGoalClockTicksLikeRust covers the tick and duplicate suppression."
       ]
     },
     {
@@ -2497,10 +2437,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Git remote URLs are sanitized before thread metadata persistence, and response projections sanitize stored origins or omit malformed values so credentials do not reach rollout, SQLite, or API payloads."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Git remote URLs are sanitized before thread metadata persistence, and response projections sanitize stored origins or omit malformed values so credentials do not reach rollout, SQLite, or API payloads."
+      ]
     },
     {
       "sha": "346c4db7c2ee64a56ca75124bfa4cbe27e312f96",
@@ -2569,9 +2509,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 402 (implementation): composer URL detection now caches by draft value, maps source display columns through grapheme-aware rune offsets, and annotates every visible wrapped/scrolled fragment with the complete OSC-8 destination in both owned-screen and inline layouts. Selection-reverse styling is preserved, Unicode whitespace and joined emoji are handled, and destinations over 8 KiB stay unannotated. Tests: TestComposerWrappedURLKeepsCompleteDestinationLikeRust, TestInlineComposerWrappedURLKeepsDestinationLikeRust, TestComposerUnicodeWhitespaceURLKeepsDestinationLikeRust, TestComposerJoinedEmojiBeforeURLKeepsDestinationLikeRust, TestComposerOversizedURLIsNotAnnotatedLikeRust, TestComposerScrolledURLKeepsOffscreenDestinationLikeRust, TestComposerURLHyperlinkPreservesSelectionHighlightLikeRust, TestComposerHyperlinkCacheInvalidatesWithDraftLikeRust."
+        "Round 402 (implementation): composer URL detection now caches by draft value, maps source display columns through grapheme-aware rune offsets, and annotates every visible wrapped/scrolled fragment with the complete OSC-8 destination in both owned-screen and inline layouts. Selection-reverse styling is preserved, Unicode whitespace and joined emoji are handled, and destinations over 8 KiB stay unannotated. Tests: TestComposerWrappedURLKeepsCompleteDestinationLikeRust, TestInlineComposerWrappedURLKeepsDestinationLikeRust, TestComposerUnicodeWhitespaceURLKeepsDestinationLikeRust, TestComposerJoinedEmojiBeforeURLKeepsDestinationLikeRust, TestComposerOversizedURLIsNotAnnotatedLikeRust, TestComposerScrolledURLKeepsOffscreenDestinationLikeRust, TestComposerURLHyperlinkPreservesSelectionHighlightLikeRust, TestComposerHyperlinkCacheInvalidatesWithDraftLikeRust."
       ]
     },
     {
@@ -2617,10 +2557,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "SQLite log writes emit status, duration, entry-count, batch-byte, and largest-entry metrics with explicit byte boundaries, and queue drops are counted."
-        ]
+      "status": "complete",
+      "evidence": [
+        "SQLite log writes emit status, duration, entry-count, batch-byte, and largest-entry metrics with explicit byte boundaries, and queue drops are counted."
+      ]
     },
     {
       "sha": "4213b38f3c555049bf6f494065698a3dfe587c16",
@@ -2713,9 +2653,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 406 (audit + regression): the Go pager rebuilds from complete content rather than retaining a separate live-tail renderable, so SetContent preserves the reading offset and follows the bottom when already at tail. Resize preserves bottom-following or the reading offset. New tests cover repeated body-height changes and history replacement."
+        "Round 406 (audit + regression): the Go pager rebuilds from complete content rather than retaining a separate live-tail renderable, so SetContent preserves the reading offset and follows the bottom when already at tail. Resize preserves bottom-following or the reading offset. New tests cover repeated body-height changes and history replacement."
       ]
     },
     {
@@ -3085,10 +3025,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "MCP tool lifecycle start carries prepared connector/plugin provenance, including wrapper-lag preservation for evicted wrappers."
-        ]
+      "status": "complete",
+      "evidence": [
+        "MCP tool lifecycle start carries prepared connector/plugin provenance, including wrapper-lag preservation for evicted wrappers."
+      ]
     },
     {
       "sha": "a57b398351a803c9ec94e38042bc82f527bed2a4",
@@ -3506,9 +3446,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed CreateDiffPreview and the 12-row/omission behavior; TUI history now renders the complete diff."
+        "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed CreateDiffPreview and the 12-row/omission behavior; TUI history now renders the complete diff."
       ]
     },
     {
@@ -3998,11 +3938,11 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
-    "evidence": [
-      "Round 407 (implementation): Validate now walks the shared KeymapActions registry in declaration order for both contexts and actions, appending schema-only entries deterministically. This preserves the existing error text while making the first reported conflict stable across editor, Vim, pager, list, agents, and approval contexts. Tests repeat each conflict ten times and verify earlier-context priority."
-    ]
-  },
+      "status": "complete",
+      "evidence": [
+        "Round 407 (implementation): Validate now walks the shared KeymapActions registry in declaration order for both contexts and actions, appending schema-only entries deterministically. This preserves the existing error text while making the first reported conflict stable across editor, Vim, pager, list, agents, and approval contexts. Tests repeat each conflict ten times and verify earlier-context priority."
+      ]
+    },
     {
       "sha": "94311d447587411789533c47601fd8bc9d81eb48",
       "subject": "Forward history note images to the model (#41292)",
@@ -4622,9 +4562,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): Vim `/`, `?`, `n`, `N`, operator searches, live query footer, and empty-query Backspace cancellation are implemented and covered by TestVimSearchMotionsLikeRust, TestVimSearchQueryFooterLikeRust, TestVimOperatorSearchLikeVim, and TestVimSearchBackspaceCancelsEmptyQueryLikeRust."
+        "Round 399 (audit): Vim `/`, `?`, `n`, `N`, operator searches, live query footer, and empty-query Backspace cancellation are implemented and covered by TestVimSearchMotionsLikeRust, TestVimSearchQueryFooterLikeRust, TestVimOperatorSearchLikeVim, and TestVimSearchBackspaceCancelsEmptyQueryLikeRust."
       ]
     },
     {
@@ -5018,9 +4958,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 409 (audit): Go's interactive host does not implement Rust's out-of-process app-server reconnect/read-only snapshot loop. A failed remote/daemon session returns control to the launcher; daemon restart re-enters with a fresh model. There is no ReconnectState or disconnected TUI draft to preserve, matching the previously recorded reconnect-architecture gap."
+        "Round 409 (audit): Go's interactive host does not implement Rust's out-of-process app-server reconnect/read-only snapshot loop. A failed remote/daemon session returns control to the launcher; daemon restart re-enters with a fresh model. There is no ReconnectState or disconnected TUI draft to preserve, matching the previously recorded reconnect-architecture gap."
       ]
     },
     {
@@ -5042,9 +4982,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 410 (audit): the model owns a pause-aware StatusTimer independently of the optional working row. Hidden/restored rows keep elapsed time, modal approvals pause and resume the clock, new turns and Windows sandbox setup reset it, and the final Worked-for duration falls back to the timer when the server duration is absent. Tests: TestStatusTimerPausesForModalsLikeRust, TestStatusTimerFeedsWorkingRowAndCompletionFallbackLikeRust, and sandbox reset coverage."
+        "Round 410 (audit): the model owns a pause-aware StatusTimer independently of the optional working row. Hidden/restored rows keep elapsed time, modal approvals pause and resume the clock, new turns and Windows sandbox setup reset it, and the final Worked-for duration falls back to the timer when the server duration is absent. Tests: TestStatusTimerPausesForModalsLikeRust, TestStatusTimerFeedsWorkingRowAndCompletionFallbackLikeRust, and sandbox reset coverage."
       ]
     },
     {
@@ -5066,9 +5006,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 409 (audit): automatic out-of-process reconnect is not part of Go's TUI lifecycle; remote failures terminate the interactive run and managed-daemon restart is handled by relaunching the TUI. There is no reconnect loop, unavailable-thread snapshot, or task-tool capability inheritance to port."
+        "Round 409 (audit): automatic out-of-process reconnect is not part of Go's TUI lifecycle; remote failures terminate the interactive run and managed-daemon restart is handled by relaunching the TUI. There is no reconnect loop, unavailable-thread snapshot, or task-tool capability inheritance to port."
       ]
     },
     {
@@ -5090,9 +5030,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 409 (audit): this commit restores command-center selection/drafts around Rust's reconnect state. Go has no in-place reconnect transition; the command center remains active within a live model and a daemon restart re-enters the TUI rather than restoring a cached reconnect snapshot."
+        "Round 409 (audit): this commit restores command-center selection/drafts around Rust's reconnect state. Go has no in-place reconnect transition; the command center remains active within a live model and a daemon restart re-enters the TUI rather than restoring a cached reconnect snapshot."
       ]
     },
     {
@@ -5234,9 +5174,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed the 12-row/64 KiB input preview and hint; inline history, transcript, and raw output all render the complete input with one shared prefix."
+        "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed the 12-row/64 KiB input preview and hint; inline history, transcript, and raw output all render the complete input with one shared prefix."
       ]
     },
     {
@@ -5258,9 +5198,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 413 (audit): Go's pager overlay stores one rendered content string and one viewport, not Rust's per-cell renderables with cached desired heights. Moving a backtrack highlight re-renders that content but has no unrelated cell-height cache to preserve; viewport/highlight behavior is covered by existing backtrack and overlay tests."
+        "Round 413 (audit): Go's pager overlay stores one rendered content string and one viewport, not Rust's per-cell renderables with cached desired heights. Moving a backtrack highlight re-renders that content but has no unrelated cell-height cache to preserve; viewport/highlight behavior is covered by existing backtrack and overlay tests."
       ]
     },
     {
@@ -5270,9 +5210,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): bounded Vim undo snapshots restore normal edits and an entire insert session; TestVimUndoRedoNormalEditsLikeVim and TestVimUndoInsertSessionRestoresWholeSessionLikeVim pass."
+        "Round 399 (audit): bounded Vim undo snapshots restore normal edits and an entire insert session; TestVimUndoRedoNormalEditsLikeVim and TestVimUndoInsertSessionRestoresWholeSessionLikeVim pass."
       ]
     },
     {
@@ -5354,9 +5294,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 408 (implementation): DisablePasteBurst prefers tui.disable_paste_burst and falls back to the legacy top-level key. CLI top-level overrides are mirrored into the tui key after override application so layer precedence is preserved, while a CLI tui override works directly. Tests cover defaults, both locations, same-file precedence, and both CLI directions."
+        "Round 408 (implementation): DisablePasteBurst prefers tui.disable_paste_burst and falls back to the legacy top-level key. CLI top-level overrides are mirrored into the tui key after override application so layer precedence is preserved, while a CLI tui override works directly. Tests cover defaults, both locations, same-file precedence, and both CLI directions."
       ]
     },
     {
@@ -5654,9 +5594,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 411 (implementation): patch history now uses CreateDiffSummary for complete inline/full diff content, and background-terminal input renders every line with no preview hint or byte/row budget. Exec preview limits and CreateDiffPreview/RenderChangesBlockLimited were removed. Tests cover 40-line patches, 40-line terminal input, transcript/raw equality, and shared indentation."
+        "Round 411 (implementation): patch history now uses CreateDiffSummary for complete inline/full diff content, and background-terminal input renders every line with no preview hint or byte/row budget. Exec preview limits and CreateDiffPreview/RenderChangesBlockLimited were removed. Tests cover 40-line patches, 40-line terminal input, transcript/raw equality, and shared indentation."
       ]
     },
     {
@@ -5738,9 +5678,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 414 (implementation): running hooks are tracked with per-run 300ms reveal deadlines and a shared revealed-message summary. Activity folds into the working row with animation-gated shimmer when it fits, reflows to its own line when too wide, and renders independently outside a turn. Model-facing context entries and quiet successful completions are suppressed; actionable failures remain. Thread reset clears hook lifecycle/deadlines. Tests cover fold, reflow, fast hooks, idle turn, concurrent summaries, and context suppression."
+        "Round 414 (implementation): running hooks are tracked with per-run 300ms reveal deadlines and a shared revealed-message summary. Activity folds into the working row with animation-gated shimmer when it fits, reflows to its own line when too wide, and renders independently outside a turn. Model-facing context entries and quiet successful completions are suppressed; actionable failures remain. Thread reset clears hook lifecycle/deadlines. Tests cover fold, reflow, fast hooks, idle turn, concurrent summaries, and context suppression."
       ]
     },
     {
@@ -5846,9 +5786,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): redo restores undone edits, tracks the redo stack, and remains a no-op when exhausted; TestVimUndoRedoNormalEditsLikeVim covers undo/redo ordering."
+        "Round 399 (audit): redo restores undone edits, tracks the redo stack, and remains a no-op when exhausted; TestVimUndoRedoNormalEditsLikeVim covers undo/redo ordering."
       ]
     },
     {
@@ -5954,10 +5894,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "App tool requirements parse analytics_result_source, and host-only ToolResultSources are bounded, deduplicated, attached for direct and Code Mode calls, preserved across retries, and shed before call/completion metadata."
-        ]
+      "status": "complete",
+      "evidence": [
+        "App tool requirements parse analytics_result_source, and host-only ToolResultSources are bounded, deduplicated, attached for direct and Code Mode calls, preserved across retries, and shed before call/completion metadata."
+      ]
     },
     {
       "sha": "671d5d1b3531d7251d6c59709b8d29fb7927e685",
@@ -6026,9 +5966,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 399 (audit): Vim replace mode overwrites from the cursor, appends past line end, exits on Esc, records recoverable replaced characters for Backspace, absorbs prompt prefixes, and participates in dot-repeat; TestVimReplaceModeOverwritesUntilEscape, TestVimReplaceModeBackspaceRestoresCharactersLikeRust, TestVimReplaceModeAbsorbsPromptPrefixLikeRust, and TestVimReplaceModeDotRepeatLikeRust pass."
+        "Round 399 (audit): Vim replace mode overwrites from the cursor, appends past line end, exits on Esc, records recoverable replaced characters for Backspace, absorbs prompt prefixes, and participates in dot-repeat; TestVimReplaceModeOverwritesUntilEscape, TestVimReplaceModeBackspaceRestoresCharactersLikeRust, TestVimReplaceModeAbsorbsPromptPrefixLikeRust, and TestVimReplaceModeDotRepeatLikeRust pass."
       ]
     },
     {
@@ -6279,9 +6219,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 415 (audit): contextCompaction item starts track an active id and start time, render an animated compacting activity row, restore elapsed time from startedAt snapshots, survive transient retry status, clear on matching completion/turn completion/thread reset, and write the completion marker. Tests cover live elapsed time, duplicate starts, unknown ids, retry precedence, history markers, and thread reset."
+        "Round 415 (audit): contextCompaction item starts track an active id and start time, render an animated compacting activity row, restore elapsed time from startedAt snapshots, survive transient retry status, clear on matching completion/turn completion/thread reset, and write the completion marker. Tests cover live elapsed time, duplicate starts, unknown ids, retry precedence, history markers, and thread reset."
       ]
     },
     {
@@ -7037,10 +6977,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Accepted request_user_input answers are persisted in retained thread context, replayed after restart, rendered as Guardian trusted-user-answer evidence, and gated by the Guardian approval feature."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Accepted request_user_input answers are persisted in retained thread context, replayed after restart, rendered as Guardian trusted-user-answer evidence, and gated by the Guardian approval feature."
+      ]
     },
     {
       "sha": "1d6727c0b52316515bfbf5dea578374bafb4d898",
@@ -7229,10 +7169,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "ThreadManager now carries an injectable storage-neutral attachment store with an inline passthrough default, exposes it to consumers, and accepts a host-provided backend."
-        ]
+      "status": "complete",
+      "evidence": [
+        "ThreadManager now carries an injectable storage-neutral attachment store with an inline passthrough default, exposes it to consumers, and accepts a host-provided backend."
+      ]
     },
     {
       "sha": "0e0f55fc4ec9308840e54ceba1f1f1dc9547380f",
@@ -7385,10 +7325,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "The Go voice host negotiates offer/answer SDP through the helper protocol, validates and redacts bounded SDP values, and gates capture/device operations on completed negotiation."
-        ]
+      "status": "complete",
+      "evidence": [
+        "The Go voice host negotiates offer/answer SDP through the helper protocol, validates and redacts bounded SDP values, and gates capture/device operations on completed negotiation."
+      ]
     },
     {
       "sha": "f3f6922519fa38487c8250c2b8a670a39a2cf9ff",
@@ -7637,10 +7577,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Guardian decisions are request-scoped through the synchronous review action and assessment mapping, covering network/apply-patch approvals, decision duration, and absence of async approval races."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Guardian decisions are request-scoped through the synchronous review action and assessment mapping, covering network/apply-patch approvals, decision duration, and absence of async approval races."
+      ]
     },
     {
       "sha": "86b1b359cf89b65c136eda8c84e5ee544a6c2cf2",
@@ -9845,10 +9785,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Shell snapshot capture, credential preparation, export rendering, runtime environment restoration, brokered wrapping, and replay are implemented with execserver restoration tests and tool replay tests."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Shell snapshot capture, credential preparation, export rendering, runtime environment restoration, brokered wrapping, and replay are implemented with execserver restoration tests and tool replay tests."
+      ]
     },
     {
       "sha": "2e220af1f63e0dc8cd0282a283de9ec2ce5dfeb9",
@@ -13025,10 +12965,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Rollout compression failures carry failed outcomes with static stage and bounded I/O error kinds for file, materialize, run, and temp-cleanup counters."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Rollout compression failures carry failed outcomes with static stage and bounded I/O error kinds for file, materialize, run, and temp-cleanup counters."
+      ]
     },
     {
       "sha": "99b3ab2131a8672089fd7d78da62483187ba1122",
@@ -13169,10 +13109,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "ThreadManager owns managed live-thread lifetimes, closes admission atomically on shutdown, cancels tracked turns, and waits for workers without racing thread startup."
-        ]
+      "status": "complete",
+      "evidence": [
+        "ThreadManager owns managed live-thread lifetimes, closes admission atomically on shutdown, cancels tracked turns, and waits for workers without racing thread startup."
+      ]
     },
     {
       "sha": "973ec2942c33159a188ea056b1cb1b5ec3d31ed6",
@@ -14477,10 +14417,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Completed rollout compression runs report completion_reason plus file, scan, and cleanup error flags on run counters and duration observations."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Completed rollout compression runs report completion_reason plus file, scan, and cleanup error flags on run counters and duration observations."
+      ]
     },
     {
       "sha": "da18000cae9884ab45f83b2d07fbd5a220a1de39",
@@ -14597,10 +14537,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "not_applicable",
-        "evidence": [
-          "The commit is a private Rust http-client refactor around rustls and its route-aware pool; Go uses net/http with separate proxy/policy transports and has no rustls resolver path."
-        ]
+      "status": "not_applicable",
+      "evidence": [
+        "The commit is a private Rust http-client refactor around rustls and its route-aware pool; Go uses net/http with separate proxy/policy transports and has no rustls resolver path."
+      ]
     },
     {
       "sha": "43354d0f61c1bda3eff26decaf13276bb57039e7",
@@ -17469,9 +17409,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 689 (progress): the fullscreen composer gap selects a stable catalog tip seeded by session and user-turn count, uses ResolvedTooltips so {key:context.action} follows the current keymap, Markdown-renders the tip (preserving OSC 8 links), and accepts only a single rendered row that fits. A host-supplied startup announcement is preferred until the first user turn, then permanently dismissed even after /clear or history removal. Tips yield to usage notices, retained warnings, drafts, running turns, popups/modals, selections, backtrack, backend banners, and non-following transcripts. Ctrl-click resolves OSC 8 display-column ranges (with bare-URL fallback), opens through the app URL opener, and reports failures; Super-click is unavailable in Bubble Tea v1. Remaining: the app-side announcement fetch/cache that would populate the host-supplied value."
+        "Round 690 (implementation): the fullscreen composer gap selects a stable catalog tip seeded by session and user-turn count, uses ResolvedTooltips so {key:context.action} follows the current keymap, Markdown-renders the tip (preserving OSC 8 links), and accepts only a single rendered row that fits. The app prewarms announcement_tip.toml once per process with a bounded timeout, parses it for the current version/OS, and injects it asynchronously; the announcement is preferred until the first user turn and permanently dismissed afterward even when history is cleared. Tips yield to usage notices, retained warnings, drafts, running turns, popups/modals, selections, backtrack, backend banners, and non-following transcripts. Ctrl-click resolves OSC 8 display-column ranges (with bare-URL fallback), opens through the app URL opener, and reports failures; Super-click has no Bubble Tea v1 key event carrier. Tests: TestComposerTipsStableAndSingleRowLikeRust, TestComposerTipsPreferAnnouncementUntilFirstTurnLikeRust, TestStartupAnnouncementFetchInjectsBeforeFirstTurnLikeRust, TestComposerGapCtrlClickOpensOSC8LinkLikeRust, TestFetchStartupAnnouncementTipLikeRust, TestOSC8LinksInLineRanges; go test ./tui/... -count=1; go vet ./app ./tui ./tui/tea."
       ]
     },
     {
@@ -18885,10 +18825,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "RuntimeRouter interrupts only a matching active turn with no queued user or mailbox input; stale turns and pending input are preserved, and Guardian uses the conditional path."
-        ]
+      "status": "complete",
+      "evidence": [
+        "RuntimeRouter interrupts only a matching active turn with no queued user or mailbox input; stale turns and pending input are preserved, and Guardian uses the conditional path."
+      ]
     },
     {
       "sha": "d93909a939e40c3c1031f5a713bacad8c0d9afe6",
@@ -19714,10 +19654,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Project trust lookups preserve cwd-before-repository-root and canonical-before-original precedence with Windows case folding; ActiveProjectForLookup applies them to merged project settings and host config projects the same layers."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Project trust lookups preserve cwd-before-repository-root and canonical-before-original precedence with Windows case folding; ActiveProjectForLookup applies them to merged project settings and host config projects the same layers."
+      ]
     },
     {
       "sha": "8bbe8f8702471b90c75df20104bf91d20001b0d7",
@@ -20423,10 +20363,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Explicit goal set/clear mutations are persisted as host-annotated user.goal context, replayed through resume, and recognized as user authorization instead of untrusted context."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Explicit goal set/clear mutations are persisted as host-annotated user.goal context, replayed through resume, and recognized as user authorization instead of untrusted context."
+      ]
     },
     {
       "sha": "8ac495b79988995cae163d5a67ecd72b78f73629",
@@ -22452,10 +22392,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Guardian reviewer sessions retain an independent history checkpoint across parent compaction, restore it on retry rollback, and reuse or drop parent compaction checkpoints without replacing committed reviewer context."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Guardian reviewer sessions retain an independent history checkpoint across parent compaction, restore it on retry rollback, and reuse or drop parent compaction checkpoints without replacing committed reviewer context."
+      ]
     },
     {
       "sha": "ea647275560ffbcd4cf240d048eab44aa66ba9ae",
@@ -23016,10 +22956,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Plugin stores and service workflows share a bounded manifest cache keyed by manifest and overlay revisions; unchanged revisions reuse parsed data, edits invalidate, failures/oversized inputs bypass, and marketplace discovery uses the cached path."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Plugin stores and service workflows share a bounded manifest cache keyed by manifest and overlay revisions; unchanged revisions reuse parsed data, edits invalidate, failures/oversized inputs bypass, and marketplace discovery uses the cached path."
+      ]
     },
     {
       "sha": "bfdb1571780b326ce978696de12b1d81b5e978f2",
@@ -23148,10 +23088,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Available-skill rendering deduplicates cloud and executor catalogs before metadata budgeting while preserving alias numbering and unique executor descriptions."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Available-skill rendering deduplicates cloud and executor catalogs before metadata budgeting while preserving alias numbering and unique executor descriptions."
+      ]
     },
     {
       "sha": "a9118edae8b77bf23b7182fd071a7b6251898bed",
@@ -23389,10 +23329,10 @@
       "domains": [
         "codex_go"
       ],
-        "status": "complete",
-        "evidence": [
-          "Cloud config bundle revisions are tracked and bound to loaded configs; superseded/retired revisions cannot replace the active cache or authorize enterprise MCP, and runtime reloads fail closed on invalid or revoked policy."
-        ]
+      "status": "complete",
+      "evidence": [
+        "Cloud config bundle revisions are tracked and bound to loaded configs; superseded/retired revisions cannot replace the active cache or authorize enterprise MCP, and runtime reloads fail closed on invalid or revoked policy."
+      ]
     },
     {
       "sha": "677b07eca037cce69dc9b82323792b22a5101c52",
@@ -25395,9 +25335,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 396 (implementation): owned-screen composers grow with the draft, cap the whole painted section at max(8, 2/3 screen), keep the Bubbles wrapping/cursor, crop to the manual scroll window, and paint up/down arrows for hidden rows. Wheel over the prompt browses three rows per event without moving the caret or transcript selection/search/activity focus; edits and external draft changes resume caret following. Inline layout keeps its fixed three-row composer and the selected-remote-image case is not applicable because Go has no remote-image row selection. Tests: go test ./tui/tea -run 'OwnedComposer|InlineComposerKeepsFixedHeight' -count=1; go test ./tui/... -count=1"
+        "Round 396 (implementation): owned-screen composers grow with the draft, cap the whole painted section at max(8, 2/3 screen), keep the Bubbles wrapping/cursor, crop to the manual scroll window, and paint up/down arrows for hidden rows. Wheel over the prompt browses three rows per event without moving the caret or transcript selection/search/activity focus; edits and external draft changes resume caret following. Inline layout keeps its fixed three-row composer and the selected-remote-image case is not applicable because Go has no remote-image row selection. Tests: go test ./tui/tea -run 'OwnedComposer|InlineComposerKeepsFixedHeight' -count=1; go test ./tui/... -count=1"
       ]
     },
     {
@@ -26118,7 +26058,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go renders modals as a replacement bottom-pane section rather than a centered dialog over the retained composer/parent picker; there is no ViewStack/DialogOverlay/backdrop composition or shared centered dialog sizing/cursor routing. Confirmation text and input ownership exist, but the retained-backdrop presentation is still unported."
+        "Round 692 (progress): generic, review, running-task-exit, misalignment, rate-limit-switch, experimental, status-line, title, preset, config, theme, pets, memories, auto-review, goal, skills, manage-skills, hooks-browser, agent/agents, Windows-sandbox, worktree, external-import, and picker dialogs render as a rounded ANSI-aware centered overlay over the retained fullscreen base view, including the composer. Modal content is wrapped two columns narrower before boxing so borders do not truncate text; oversize dialogs fall back to the appended layout. Approval, elicitation, user-input, feedback-note, voice-channel, permissions, usage, and plugin-browser paths keep their previous layout because they need text-input/cursor ownership or truncation-sensitive descriptions. Remaining: migrate those input/width-sensitive paths and implement dialog cursor/section routing."
       ]
     },
     {
@@ -26285,9 +26225,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "not_applicable",
+      "status": "not_applicable",
       "evidence": [
-      "Round 397 (audit): Go's owned transcript leaves body selection to the terminal's native modifier-drag selection; opening a bottom modal does not disable mouse reporting or suppress that selection path. Go has no app-owned transcript selection mode to extend, while status/footer selection remains app-owned and modal-independent. The wheel-with-modal behavior is already covered by TestTranscriptWheelScrollsWhileModalOpenLikeRust."
+        "Round 397 (audit): Go's owned transcript leaves body selection to the terminal's native modifier-drag selection; opening a bottom modal does not disable mouse reporting or suppress that selection path. Go has no app-owned transcript selection mode to extend, while status/footer selection remains app-owned and modal-independent. The wheel-with-modal behavior is already covered by TestTranscriptWheelScrollsWhileModalOpenLikeRust."
       ]
     },
     {
@@ -26429,9 +26369,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (audit): vimNormalKey routes a standalone unmodified `/` on an empty draft with no popup or pending operator through vimBeginEdit and Insert mode, leaving nonempty drafts, `?`, and operators in Vim search. TestVimEmptyNormalSlashOpensCommandsLikeRust covers the transition and command popup."
+        "Round 398 (audit): vimNormalKey routes a standalone unmodified `/` on an empty draft with no popup or pending operator through vimBeginEdit and Insert mode, leaving nonempty drafts, `?`, and operators in Vim search. TestVimEmptyNormalSlashOpensCommandsLikeRust covers the transition and command popup."
       ]
     },
     {
@@ -26489,9 +26429,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (audit): interactiveLaunchReasoningOverrides forwards explicit profile/session/CLI model_reasoning_summary and features.concurrent_reasoning_summaries values, including explicit false/none, while absent implicit values stay out of thread/start so server/model defaults apply. Tests: TestInteractiveLaunchReasoningOverridesLikeRust, TestLaunchSettingForKeyMatchesRustIsLaunch, TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust."
+        "Round 398 (audit): interactiveLaunchReasoningOverrides forwards explicit profile/session/CLI model_reasoning_summary and features.concurrent_reasoning_summaries values, including explicit false/none, while absent implicit values stay out of thread/start so server/model defaults apply. Tests: TestInteractiveLaunchReasoningOverridesLikeRust, TestLaunchSettingForKeyMatchesRustIsLaunch, TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust."
       ]
     },
     {
@@ -26501,9 +26441,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (audit): connected fresh starts read the destination configuration before model bootstrap, preserve explicit model/effort overrides, clear implicit client model settings when config/read is unsupported, use the launch directory for local daemon reads and the remote directory for remote reads, and let managed new-thread defaults satisfy an empty catalog. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
+        "Round 398 (audit): connected fresh starts read the destination configuration before model bootstrap, preserve explicit model/effort overrides, clear implicit client model settings when config/read is unsupported, use the launch directory for local daemon reads and the remote directory for remote reads, and let managed new-thread defaults satisfy an empty catalog. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
       ]
     },
     {
@@ -27017,9 +26957,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (audit): modelPickerLabel appends only `(current)` and keeps IsDefault solely for preselection; the reasoning-effort picker keeps its own default marker, which is outside this change. The workspace-owner notification negative row is explicitly `No (default)`. Tests: TestModelPickerLabelHasNoDefaultMarkerLikeRust and TestModelPopupNoDefaultMarkerLikeRust."
+        "Round 398 (audit): modelPickerLabel appends only `(current)` and keeps IsDefault solely for preselection; the reasoning-effort picker keeps its own default marker, which is outside this change. The workspace-owner notification negative row is explicitly `No (default)`. Tests: TestModelPickerLabelHasNoDefaultMarkerLikeRust and TestModelPopupNoDefaultMarkerLikeRust."
       ]
     },
     {
@@ -27449,9 +27389,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (audit): async-question titles keep URLs whole, annotate them as OSC-8 terminal hyperlinks, and are covered by TestAsyncQuestionTitleLinksWrappedURLsLikeRust."
+        "Round 397 (audit): async-question titles keep URLs whole, annotate them as OSC-8 terminal hyperlinks, and are covered by TestAsyncQuestionTitleLinksWrappedURLsLikeRust."
       ]
     },
     {
@@ -27461,9 +27401,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (audit): ElicitationFormRequest::RenderLines wraps each prompt line with AdaptiveWrapLine and AnnotateCompleteWebURLsInLine, preserving explicit newlines and complete OSC-8 destinations; TestElicitationFormPromptLinksCompleteWrappedURLsLikeRust passes."
+        "Round 397 (audit): ElicitationFormRequest::RenderLines wraps each prompt line with AdaptiveWrapLine and AnnotateCompleteWebURLsInLine, preserving explicit newlines and complete OSC-8 destinations; TestElicitationFormPromptLinksCompleteWrappedURLsLikeRust passes."
       ]
     },
     {
@@ -27473,9 +27413,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (audit): WarningsView keeps URL-like body rows whole and wraps them with AnnotateCompleteWebURLsInLine, so the complete destination survives panel truncation; warnings-view tests pass."
+        "Round 397 (audit): WarningsView keeps URL-like body rows whole and wraps them with AnnotateCompleteWebURLsInLine, so the complete destination survives panel truncation; warnings-view tests pass."
       ]
     },
     {
@@ -27485,11 +27425,11 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
-    "evidence": [
-      "Round 397 (audit): the inline backend banner wraps at URL-preserving boundaries and annotates complete destinations via AnnotateCompleteWebURLsInLine; TestBackendBannerFallbackLinksCompleteURL passes."
-    ]
-  },
+      "status": "complete",
+      "evidence": [
+        "Round 397 (audit): the inline backend banner wraps at URL-preserving boundaries and annotates complete destinations via AnnotateCompleteWebURLsInLine; TestBackendBannerFallbackLinksCompleteURL passes."
+      ]
+    },
     {
       "sha": "e44b9bb3da036320853abd032e2e2f065342b964",
       "subject": "Preserve status usage hyperlinks when the URL wraps (#51457)",
@@ -27497,9 +27437,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (audit): the status card annotates the usage URL before wrapping, strips OSC-8 only for width accounting, and reapplies the complete destination; status-card tests pass."
+        "Round 397 (audit): the status card annotates the usage URL before wrapping, strips OSC-8 only for width accounting, and reapplies the complete destination; status-card tests pass."
       ]
     },
     {
@@ -27509,9 +27449,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (implementation): modalState marks openai/userVerification elicitations; renderModal now wraps and annotates the title and request details with complete OSC-8 web targets. TestUserVerificationPromptLinksCompleteURLsLikeRust covers both surfaces."
+        "Round 397 (implementation): modalState marks openai/userVerification elicitations; renderModal now wraps and annotates the title and request details with complete OSC-8 web targets. TestUserVerificationPromptLinksCompleteURLsLikeRust covers both surfaces."
       ]
     },
     {
@@ -27521,9 +27461,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 397 (audit): both Windows sandbox setup and fallback prompt headers annotate the complete 'Learn more' URL; TestWindowsSandboxPromptsLinkHelpURLsLikeRust passes."
+        "Round 397 (audit): both Windows sandbox setup and fallback prompt headers annotate the complete 'Learn more' URL; TestWindowsSandboxPromptsLinkHelpURLsLikeRust passes."
       ]
     },
     {
@@ -27761,9 +27701,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (audit): SettingsReloadOutcomeFor classifies failed reloads, ShouldStageReloadedLocalSettings rejects results accompanied by an error, and ReloadedLocalSettings keeps the live LocalSettings record while preserving launcher-owned alternate-screen state. local_settings_like_rust_test covers failed reloads, stale results, and the live-preservation path."
+        "Round 398 (audit): SettingsReloadOutcomeFor classifies failed reloads, ShouldStageReloadedLocalSettings rejects results accompanied by an error, and ReloadedLocalSettings keeps the live LocalSettings record while preserving launcher-owned alternate-screen state. local_settings_like_rust_test covers failed reloads, stale results, and the live-preservation path."
       ]
     },
     {
@@ -29852,9 +29792,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "complete",
+      "status": "complete",
       "evidence": [
-      "Round 398 (implementation): painted working and completion tip rows are registered as app-owned read-only selection regions with absolute geometry and section-local offsets. Copy-on-select copies the selected tip text, highlights stay visible, Esc clears the selection, the status row shows `Selecting text · esc cancel`, unrelated notices can shift the selected cells without invalidating them, and the working-tip selection is invalidated when the tip disappears. Tests: TestWorkingTurnTipSelectionCopiesLikeRust, TestWorkingTurnTipSelectionClearsWhenTipDisappearsLikeRust, TestCompletionTurnTipSelectionCopiesLikeRust, TestRenderedFooterSelectionCopiesPlainTextLikeRust."
+        "Round 398 (implementation): painted working and completion tip rows are registered as app-owned read-only selection regions with absolute geometry and section-local offsets. Copy-on-select copies the selected tip text, highlights stay visible, Esc clears the selection, the status row shows `Selecting text · esc cancel`, unrelated notices can shift the selected cells without invalidating them, and the working-tip selection is invalidated when the tip disappears. Tests: TestWorkingTurnTipSelectionCopiesLikeRust, TestWorkingTurnTipSelectionClearsWhenTipDisappearsLikeRust, TestCompletionTurnTipSelectionCopiesLikeRust, TestRenderedFooterSelectionCopiesPlainTextLikeRust."
       ]
     },
     {
@@ -30669,9 +30609,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "partial",
+      "status": "partial",
       "evidence": [
-      "Round 400 (implementation): owned-screen composer drag selections map wrapped visual rows back to source rune ranges, copy on release through the shared clipboard writer, retain the editable highlight, support explicit Ctrl+C with copy-on-select disabled, and clear on Esc/focus loss/external edits. Typing, paste, Enter, Backspace, and Delete replace the selected range and place the caret after the replacement. Tests: TestComposerSelectionCopiesAndTypingReplacesLikeRust, TestComposerSelectionBackspaceDeletesLikeRust, TestComposerSelectionCtrlCCopiesLikeRust, TestComposerSelectionMapsWrappedRowsLikeRust, TestComposerSelectionClearsOnExternalEdit, TestComposerSelectionClearsOnFocusLossLikeRust, plus TestOwnedComposerSelectionPTY. Remaining gap: Go's clipboard path has no X11 PRIMARY publication/ownership, so SelectionCopy's primary destination is not represented."
+        "Round 400 (implementation): owned-screen composer drag selections map wrapped visual rows back to source rune ranges, copy on release through the shared clipboard writer, retain the editable highlight, support explicit Ctrl+C with copy-on-select disabled, and clear on Esc/focus loss/external edits. Typing, paste, Enter, Backspace, and Delete replace the selected range and place the caret after the replacement. Tests: TestComposerSelectionCopiesAndTypingReplacesLikeRust, TestComposerSelectionBackspaceDeletesLikeRust, TestComposerSelectionCtrlCCopiesLikeRust, TestComposerSelectionMapsWrappedRowsLikeRust, TestComposerSelectionClearsOnExternalEdit, TestComposerSelectionClearsOnFocusLossLikeRust, plus TestOwnedComposerSelectionPTY. Remaining gap: Go's clipboard path has no X11 PRIMARY publication/ownership, so SelectionCopy's primary destination is not represented."
       ]
     },
     {
@@ -30681,9 +30621,9 @@
       "domains": [
         "codex_go"
       ],
-    "status": "partial",
+      "status": "partial",
       "evidence": [
-      "Round 398 (implementation): keymap specs accept `super` and normalize `cmd`/`command` to it; canonical ordering is ctrl-alt-shift-super; labels render ⌘ on macOS and super elsewhere; leader/chord validation treats super as a modifier rather than plain text; editor defaults add super-left, super-right, and super-backspace. Covered by TestNormalizeKeybindingSpecCommandAliasesLikeRust and TestSuperEditorDefaultsAndLabelsLikeRust. Remaining gap: Bubble Tea v1.3.10 KeyMsg has no Super modifier and its input parser drops unknown CSI-u events, so live Super chords cannot yet be captured or dispatched."
+        "Round 398 (implementation): keymap specs accept `super` and normalize `cmd`/`command` to it; canonical ordering is ctrl-alt-shift-super; labels render ⌘ on macOS and super elsewhere; leader/chord validation treats super as a modifier rather than plain text; editor defaults add super-left, super-right, and super-backspace. Covered by TestNormalizeKeybindingSpecCommandAliasesLikeRust and TestSuperEditorDefaultsAndLabelsLikeRust. Remaining gap: Bubble Tea v1.3.10 KeyMsg has no Super modifier and its input parser drops unknown CSI-u events, so live Super chords cannot yet be captured or dispatched."
       ]
     },
     {
@@ -32427,6 +32367,66 @@
         "Round 115 (lead): completed. eventmap.ContentItem carries FileID/AudioURL with Wire()/RustJSON()/ContentItemsRustJSON() in Rust's serde shape; context.ToolOutputParts preserves file ids, URLs, detail and audio and context.ToolOutputText mirrors content_items_to_code_mode_result; session.WorldStateUpdate.ContentItems carries typed world-state contributions and MergeWorldStateUpdates emits the typed parts; session/sandbox TypedWorldStateFragmentHash implement the v2 domain (single InputText keeps v1; otherwise role + serialized content with an 8-byte length) pinned by independent digests 59ed86b1/811a17a9/9a648382/208a4f0f; tool/codeModeToolResult routes typed content_items through context.ToolOutputText. RC: removing the typed merge, v2 hash or code-mode branch fails their tests. Gates: go build ./...; ./eventmap ./context ./session ./sandbox ./turn ./appserver green; ./tool only the two known login-shell baseline reds.",
         "Round 108 (lead): typed-content layer landed in context/fragments.go - BodyItems() provider, RenderedFragment.ContentItems, RenderItems() (markers wrap only InputText; every other item passes through unchanged), ToolOutputParts() preserving image URL/detail and audio; tests context/typed_fragment_content_like_rust_test.go (3 cases) + fragments_test.go expectation updated; go test ./context ok. Remaining drift: extension prompt/world-state contributions still pass strings (appserver turn_runtime world-state hashing is text-only) and code-mode output conversion is not routed through ToolOutputPa"
       ]
+    },
+    {
+      "sha": "8d9f6466ff0294785d56f55b1fe363d132fe4133",
+      "subject": "Add negotiated zstd compression to app-server WebSockets (#54930)",
+      "kind": "protocol",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 284: TCP and local-socket WebSockets negotiate zstd-stream-v1, use persistent zstd streams per direction with binary JSON messages, keep plain text fallback, enforce 1 MiB decoder windows and 64 MiB message limits, and close malformed compressed connections."
+      ]
+    },
+    {
+      "sha": "1cc7dc8f2acc63ce6c1cb72271e6b90a76136c2b",
+      "subject": "Share additional tool declarations across response item clones (#54945)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "not_applicable",
+      "evidence": [
+        "Round 288 (audit): N/A - this is a Rust Vec-to-Arc clone optimization. Go's additional-tools items use slices/JSON values whose assignment already shares the declaration backing array; the serialized protocol is unchanged."
+      ]
+    },
+    {
+      "sha": "ffd3429d754991183433b4d41b67551e5656ba27",
+      "subject": "Preserve model catalog caches across header credential rotation (#54946)",
+      "kind": "security",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 288: header auth with ChatGPT-Account-ID reuses the model catalog across opaque credential rotation; missing accounts, explicit provider keys/bearer tokens, and command auth retain credential-sensitive identities."
+      ]
+    },
+    {
+      "sha": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
+      "subject": "Gate app-server WebSocket compression behind a feature flag (#54949)",
+      "kind": "protocol",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 287: app_server_websocket_compression is an opt-in under-development feature; TCP and Unix WebSocket listeners negotiate zstd only when enabled and fall back to text for absent or unsupported offers."
+      ]
+    },
+    {
+      "sha": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
+      "subject": "Allow agent messages to wake idle root sessions behind a feature flag (#54961)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 395 (implementation): wake_on_agent_messages is disabled by default. Queue-only direct messages and host-mailbox child completions start an idle root turn, reuse the previous model/effort/cyber program, and stay queue-only for interrupted sessions, Plan mode, and child agents. Serialized mailbox draining, failure requeue, and turn-end rechecks cover races. Tests: go test ./appserver -run 'AgentMessageWake|QueueOnlyAgentMessage|HostMailboxCompletion|PreviousTurnSettings' -count=1; go test ./agent ./features -count=1"
+      ]
     }
   ]
-}
+}

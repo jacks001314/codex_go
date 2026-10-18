@@ -271,6 +271,7 @@ func goTopLevelDirectoriesSnapshot() []string {
 		"telemetry",
 		"third_party",
 		"tool",
+		"tracehook",
 		"tui",
 		"turn",
 		"utils",

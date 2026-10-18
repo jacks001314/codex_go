@@ -335,7 +335,7 @@ var Registry = []Spec{
 	{Key: "code_mode_only_strict_3p_tools", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs 5ad6891696 #51207): gate the CLI
 	// Daybreak controls and model selection behind an opt-in.
-	{Key: "cli_daybreak", Stage: StageStable, DefaultEnabled: false},
+	{Key: "cli_daybreak", Stage: StageStable, DefaultEnabled: true},
 	// Rust (codex-rs/features/src/lib.rs 7c35e1551f #49406): explicit cyber
 	// access programs with OpenAI API keys.
 	{Key: "api_key_cyber_access_programs", Stage: StageStable, DefaultEnabled: true},

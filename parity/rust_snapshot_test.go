@@ -340,7 +340,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// `include_internal_metadata` provider grant for tool metadata.
 		// Re-pinned to upstream 12de0e395d (#48508): the interrupt seam that
 		// preserves WebSocket continuations when steering a turn.
-		{Path: "core/src/client.rs", SHA256: "5c0dd767eeb5d8740ed67b4d6037c44cde80ad3cba3c7d242cdfdf21a406b2a8"},
+		// Re-pinned to upstream 8c076942 (#54945): response item clones share
+		// the additional-tool declaration backing storage; no wire change.
+		{Path: "core/src/client.rs", SHA256: "f6ac9c0a13b901056e548905c6c153b2a02064ecca7939433af78e8673939087"},
 		// Re-pinned to upstream 8ae55c863d (#47207/#47248/#47377/#47648): the
 		// gateway OAuth, MCP resource-target, realtime reasoning-status and
 		// executor bearer-token requests.
@@ -348,7 +350,9 @@ func rustCriticalFileHashSnapshot() []rustCriticalFileHash {
 		// Re-pinned to upstream 8ae55c863d (#46917/#47028/#47207/#47407): the
 		// provider-requirements, message-board, gateway-auth and network-policy
 		// suites joined the module list.
-		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "1b5bbbd4c36d53639e59f7094deaedf1bae917b403336689ce62cb021981f8c1"},
+		// Re-pinned to upstream 8c076942 (#54930/#54949/#54961): the
+		// WebSocket-compression and agent-message-wake suites joined the list.
+		{Path: "app-server/tests/suite/v2/mod.rs", SHA256: "567541d440094c2e5cdb64ee0bcf93feb6bb5c8f4b119a902a4624d024571847"},
 		// Re-pinned to upstream 8ae55c863d (#47407/#47679/#47819/#47820/#47879):
 		// the network-policy, extension-hook, guardian-authorization,
 		// agent-controller and macOS patch-permission suites joined the module

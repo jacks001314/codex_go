@@ -6349,7 +6349,7 @@ func TestLocalThreadStartStagesDaybreakDefaultLikeRust(t *testing.T) {
 	// is enabled.
 	disabled := t.TempDir()
 	t.Setenv("CODEX_HOME", disabled)
-	if err := os.WriteFile(config.ConfigPath(disabled), []byte("daybreak = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(disabled), []byte("daybreak = true\nfeatures.cli_daybreak = false\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	params = interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))

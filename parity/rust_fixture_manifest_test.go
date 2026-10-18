@@ -99,8 +99,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// system-proxy bootstrap suite.
 			// This pass adds the plugin-metadata, mcp-resource,
 			// thread-settings, project, environment and executor
-			// bearer-token fixtures (#46917-#48004).
-			Files: 167,
+			// bearer-token fixtures (#46917-#48004), plus the negotiated
+			// WebSocket compression integration fixture (#54930/#54949).
+			Files: 168,
 			Owner: "appserver",
 			Focus: "JSON-RPC v2 protocol and runtime fixtures",
 			Required: []string{
@@ -143,7 +144,9 @@ func rustGoldenFixtureRootsSnapshot() []rustFixtureRoot {
 			// #54654 then added the dynamic-tool parallel-execution suite and its
 			// CodeModeOnly/Direct MCP tool-discovery snapshots (round-91 pin
 			// advance to e16b631d08), so the suite grows by three files.
-			Files: 355,
+			// #54961 added the parent-completion-wakes-idle-root scenario
+			// snapshot.
+			Files: 356,
 			Owner: "turn, model, tool, session",
 			Focus: "core agent loop, model client, session, tools, sandbox, resume",
 			Required: []string{

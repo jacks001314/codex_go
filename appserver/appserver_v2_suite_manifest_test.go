@@ -46,6 +46,7 @@ func rustAppServerV2SuiteManifest() []rustAppServerV2SuiteCase {
 		{Module: "config_rpc", Owner: "config, appserver", Focus: "config read/write/requirements RPCs incl. auto-review requirements"},
 		{Module: "connection_handling_stdio", Owner: "appserver", Focus: "bounded stdio connection shutdown and graceful SIGTERM handling"},
 		{Module: "connection_handling_websocket", Owner: "appserver", Focus: "websocket connection lifecycle"},
+		{Module: "connection_handling_websocket_compression", Owner: "appserver", Focus: "zstd negotiation gated by app_server_websocket_compression (#54930/#54949)"},
 		{Module: "connection_handling_websocket_unix", Owner: "appserver", Focus: "unix websocket transport lifecycle"},
 		{Module: "current_time", Owner: "appserver", Focus: "currentTime/read server request"},
 		{Module: "daemon_update_recovery", Owner: "appserverdaemon, install", Focus: "managed daemon update recovery and reexec handoff"},
