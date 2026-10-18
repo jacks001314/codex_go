@@ -4020,9 +4020,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: root_service_tier, set_root_service_tier"
+        "Round 458 (audit): runtimeAgentController.rootServiceTierForSpawn resolves the root thread's persisted tier for spawned/follow-up turns, and RuntimeRouter.subagentRootServiceTier walks delegated threads to the root so reloaded children inherit it. appServiceTierForTurn drops unsupported child-model tiers. Tests: go test ./appserver -run 'RootServiceTier|SubagentRootServiceTier' -count=1"
       ]
     },
     {
