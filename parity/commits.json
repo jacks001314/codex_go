@@ -2879,9 +2879,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: cell_originating_item_id, mark_cell_ready_for_dispatch, originating_item_id"
+        "Round 408 (audit): MCP request meta uses the live thread/session/window plus the invocation's originating Responses item ID, replacing stale values while preserving non-object meta. Direct and nested Code Mode calls retain the originating item; missing origin omits itemId. Tests: go test ./mcp -run 'Originating|ItemID|Metadata' -count=1; go test ./appserver -run 'MCP.*Metadata|OriginatingItem' -count=1"
       ]
     },
     {
