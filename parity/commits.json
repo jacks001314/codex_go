@@ -19017,9 +19017,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: VoiceControl, control_voice, handle_startup_submission_key, is_dispatch_token_event, stop_realtime_conversation"
+        "Aligned upstream 72ec34ee9a (#47380) with Go's model-routed voice controls: F8 and the configured mute shortcut dispatch through the TUI voice state, /voice start/stop/settings/mute use the same handlers, and local/remote hosts route start, stop, and append-speech through thread/realtime/* app-server RPCs while preserving the composer draft. Go's keymap has no chord-prefix subsystem, so Rust's chord-specific dispatch has no carrier; the direct-key behavior is covered. Tests: TestModelVoiceToggleKeyRunsTheVoiceHandlerLikeRust, TestModelVoiceToggleKeyFollowsKeymapLikeRust, TestInteractiveLocalVoiceCallbacksUseAppServerProtocol, TestVoiceRuntimeStartsHelperAndPostsOffer, TestRemoteVoiceAudioSettingsAndWritesLikeRust."
       ]
     },
     {
