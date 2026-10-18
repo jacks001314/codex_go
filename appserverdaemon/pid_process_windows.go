@@ -19,7 +19,20 @@ import (
 // Windows process (Rust #42381/#42405). The child must be able to break away
 // from the launching job, must not run in the launching project's working
 // directory, and must not be started from an elevated parent.
-func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
+func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, *ProcessIdentity, error) {
+	pid, processStartTime, err := startDetachedPIDProcessLegacy(backend)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	identity, err := readNativePIDProcessIdentity(pid)
+	if err != nil {
+		_ = terminatePIDProcess(pid)
+		return 0, "", nil, fmt.Errorf("failed to record pid-managed app-server process %d identity: %w", pid, err)
+	}
+	return pid, processStartTime, identity, nil
+}
+
+func startDetachedPIDProcessLegacy(backend *PIDBackend) (uint32, string, error) {
 	if backend == nil {
 		return 0, "", fmt.Errorf("pid backend is nil")
 	}

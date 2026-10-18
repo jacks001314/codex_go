@@ -13,7 +13,20 @@ import (
 	"syscall"
 )
 
-func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
+func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, *ProcessIdentity, error) {
+	pid, processStartTime, err := startDetachedPIDProcessLegacy(backend)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	identity, err := readNativePIDProcessIdentity(pid)
+	if err != nil {
+		_ = terminatePIDProcess(pid)
+		return 0, "", nil, fmt.Errorf("failed to record pid-managed app-server process %d identity: %w", pid, err)
+	}
+	return pid, processStartTime, identity, nil
+}
+
+func startDetachedPIDProcessLegacy(backend *PIDBackend) (uint32, string, error) {
 	if backend == nil {
 		return 0, "", fmt.Errorf("pid backend is nil")
 	}
@@ -71,6 +84,24 @@ func startDetachedPIDProcess(backend *PIDBackend) (uint32, string, error) {
 func processMatchesPIDRecord(record *PIDRecord) (bool, error) {
 	if record == nil || record.PID == 0 {
 		return false, nil
+	}
+	if record.ProcessIdentity != nil {
+		matched, zombie, available, err := matchNativePIDProcessIdentity(record.ProcessIdentity, record.PID)
+		if err != nil {
+			if !pidProcessExists(record.PID) {
+				return false, nil
+			}
+			return false, err
+		}
+		if available {
+			if zombie {
+				if matched {
+					reapZombiePIDProcess(record.PID)
+				}
+				return false, nil
+			}
+			return matched, nil
+		}
 	}
 	state, startTime, err := readPIDProcessDetails(record.PID)
 	if err != nil {

@@ -60,6 +60,9 @@ type PIDBackend struct {
 type PIDRecord struct {
 	PID              uint32 `json:"pid"`
 	ProcessStartTime string `json:"processStartTime"`
+	// ProcessIdentity records a native process identity (Rust #45779). Linux
+	// stores the boot ID and kernel start ticks; legacy records omit it.
+	ProcessIdentity *ProcessIdentity `json:"processIdentity,omitempty"`
 	// ExecutableIdentity digests the binary that was launched at start time so
 	// an installer retargeting the selected symlink/junction cannot change which
 	// image is considered running (Rust #43552). Omitted for legacy records.
@@ -262,12 +265,17 @@ func (b *PIDBackend) Start() (*uint32, error) {
 			return nil, nil
 		}
 	}
-	pid, processStartTime, err := startDetachedPIDProcess(b)
+	pid, processStartTime, processIdentity, err := startDetachedPIDProcess(b)
 	if err != nil {
 		_ = os.Remove(b.PIDFile)
 		return nil, err
 	}
-	record := &PIDRecord{PID: pid, ProcessStartTime: processStartTime, ExecutableIdentity: launchedExecutableIdentity(b)}
+	record := &PIDRecord{
+		PID:                pid,
+		ProcessStartTime:   processStartTime,
+		ProcessIdentity:    processIdentity,
+		ExecutableIdentity: launchedExecutableIdentity(b),
+	}
 	if err := WritePIDRecord(b.PIDFile, record); err != nil {
 		_ = terminatePIDProcess(pid)
 		_ = os.Remove(b.PIDFile)

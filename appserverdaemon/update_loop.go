@@ -93,6 +93,9 @@ func RunPIDUpdateLoop(ctx context.Context, runner *LifecycleRunner, options *Upd
 	if err := WaitForUpdaterOwnership(ownershipBackend); err != nil {
 		return err
 	}
+	// Rust #45779: promote a verifiable legacy daemon record once the updater
+	// starts, so later locale/timezone changes cannot invalidate it.
+	_ = ownershipBackend.PromoteLegacyIdentity()
 	restoreRelease := strings.TrimSpace(options.RestoreRelease)
 	trigger := UpdateTrigger{Kind: UpdateTriggerManual}
 	if restoreRelease != "" {
@@ -433,7 +436,7 @@ func ReexecManagedUpdater(managedCodexBin string) error {
 		PIDFile:  pidFile,
 	})
 	previousRecord, _ := ReadPIDRecord(pidFile)
-	pid, _, err := startDetachedPIDProcess(backend)
+	pid, _, _, err := startDetachedPIDProcess(backend)
 	if err != nil {
 		return fmt.Errorf("failed to start successor updater: %w", err)
 	}

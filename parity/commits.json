@@ -13973,9 +13973,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: ProcessIdentity, matches_process, promote_legacy_identity, read_process_details"
+        "Round 701 (partial): PIDRecord now carries ProcessIdentity with bootId/startTicks (Linux) and native start-seconds/start-microseconds (macOS kinfo_proc). New launches record it; matching prefers the native identity with zombie handling; the updater promotes a verifiable legacy record at startup; Windows still propagates process-access errors instead of treating inaccessible PIDs as stale. Remaining difference: macOS uses kinfo_proc start time rather than proc_uniqidentifierinfo unique_id plus kern.bootsessionuuid, because x/sys exposes kinfo_proc but not proc_pidinfo flavor 17 without cgo. Tests: go test ./appserverdaemon -run 'PID|Process|Updater' -count=1; GOOS=linux/darwin go test -c ./appserverdaemon; GOOS=linux/darwin go build ./...; Linux parser/promotion and boot-mismatch tests added."
       ]
     },
     {
