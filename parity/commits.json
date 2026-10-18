@@ -16447,9 +16447,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/11; needs review: ExecutorPluginProvider, ExecutorPluginProviderError, PluginProviderError, PluginProviderFuture, PluginProviderResult"
+        "Go separates plugin catalog listing from package resolution: the catalog lists cloud/executor/local source locations and metadata, while the provider resolves an authority-bound package into ResolvedPluginLocation without requiring materialization during listing. Tests: go test ./plugin -count=1"
       ]
     },
     {
