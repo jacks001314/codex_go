@@ -163,6 +163,25 @@ func (c *Config) SuppressUnstableFeaturesWarning() bool {
 	return value
 }
 
+// HideGovCloudGuidance reports whether the user acknowledged the AWS GovCloud
+// startup guidance (Rust #52176's notice.hide_gov_cloud_guidance). The legacy
+// plural [notices] table is accepted as a fallback.
+func (c *Config) HideGovCloudGuidance() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	for _, key := range []string{"notice", "notices"} {
+		values, ok := c.Values[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value, ok := values["hide_gov_cloud_guidance"].(bool); ok {
+			return value
+		}
+	}
+	return false
+}
+
 // DisablePasteBurst reports whether burst-paste detection for typed input is
 // disabled, mirroring Rust disable_paste_burst (default false): when true, all
 // characters are inserted as received and no buffering or placeholder
@@ -1164,6 +1183,7 @@ func validateKnownTopLevelConfigFields(values map[string]any) error {
 	if notice, ok := values["notice"].(map[string]any); ok {
 		// Mirrors Rust Notice (config/src/types.rs, serde deny_unknown_fields).
 		known := map[string]bool{
+			"hide_gov_cloud_guidance":                 true,
 			"hide_full_access_warning":                true,
 			"hide_world_writable_warning":             true,
 			"fast_default_opt_out":                    true,
