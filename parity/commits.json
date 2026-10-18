@@ -1428,9 +1428,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 759 audit: Go has Bedrock API-key auth, AWS profile/environment discovery, SigV4 signing, and auth-mode/account plumbing, but login account params only support the managed API-key form. Missing: amazonBedrockAccessKeys login params, access-key auth-store shape, access-key-backed SigV4 provider selection, high-precedence config conflict rejection, and logout cleanup of provider/AWS model settings. Tests cover existing API-key/SigV4 paths only."
+        "Round 761: added amazonBedrockAccessKeys login params, BedrockAccessKeysAuth auth-store snapshot/mode with redacted formatting, account mapping to managed Amazon Bedrock, Bedrock provider configuration (provider + region) guarded by the existing provider/credential-export conflict checks, static AWS credential provider signing Bedrock requests with SigV4/session token, auth-mode reporting (bedrockAccessKeys), and logout cleanup of model_provider plus AWS region/profile settings while leaving external AWS/.env untouched. Tests: go test ./auth ./model ./appserver -run 'BedrockAccessKeys|Bedrock' -count=1"
       ]
     },
     {

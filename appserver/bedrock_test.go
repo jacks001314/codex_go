@@ -134,6 +134,42 @@ func TestBedrockSetupProfilePreservesExistingAWSSettingsLikeRust(t *testing.T) {
 	}
 }
 
+// TestBedrockAccessKeysLoginAndLogoutLikeRust covers Rust #40481's managed
+// access-key login, region persistence, auth snapshot, and logout cleanup.
+func TestBedrockAccessKeysLoginAndLogoutLikeRust(t *testing.T) {
+	clearBedrockEnv(t)
+	home := t.TempDir()
+	router := bedrockTestRouter(home)
+	login := router.Handle(requestWithParams(t, IntID(1), MethodLoginAccount, auth.LoginAccountParams{
+		Type:            "amazonBedrockAccessKeys",
+		AccessKeyID:     "AKIDEXAMPLE",
+		SecretAccessKey: "secret-example",
+		SessionToken:    "session-example",
+		Region:          "us-west-2",
+	}))
+	if login.Error != nil {
+		t.Fatalf("login = %+v", login.Error)
+	}
+	configText := readFileString(t, config.ConfigPath(home))
+	if !strings.Contains(configText, `model_provider = "amazon-bedrock"`) ||
+		!strings.Contains(configText, `region = "us-west-2"`) {
+		t.Fatalf("config = %q", configText)
+	}
+	snapshot := router.requireAccount().AuthSnapshot()
+	if snapshot == nil || snapshot.Mode() != "bedrock-access-keys" {
+		t.Fatalf("auth snapshot = %#v", snapshot)
+	}
+	logout := router.Handle(requestWithParams(t, IntID(2), MethodLogoutAccount, map[string]any{}))
+	if logout.Error != nil {
+		t.Fatalf("logout = %+v", logout.Error)
+	}
+	configText = readFileString(t, config.ConfigPath(home))
+	if strings.Contains(configText, `model_provider = "amazon-bedrock"`) ||
+		strings.Contains(configText, `region = "us-west-2"`) {
+		t.Fatalf("logout did not clear managed Bedrock config: %q", configText)
+	}
+}
+
 // Rust #39277,
 // app-server/tests/suite/v2/bedrock_setup.rs::setup_bedrock_rejects_invalid_or_conflicting_credentials.
 func TestBedrockSetupRejectsInvalidOrConflictingCredentialsLikeRust(t *testing.T) {

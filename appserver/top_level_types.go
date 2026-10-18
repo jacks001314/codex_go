@@ -25,6 +25,7 @@ const (
 	AuthModeAgentIdentity       AuthMode = "agentIdentity"
 	AuthModePersonalAccessToken AuthMode = "personalAccessToken"
 	AuthModeBedrockAPIKey       AuthMode = "bedrockApiKey"
+	AuthModeBedrockAccessKeys   AuthMode = "bedrockAccessKeys"
 )
 
 type AutoCompactTokenLimitScope string

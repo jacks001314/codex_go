@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -436,7 +437,7 @@ func (p *AmazonBedrockProvider) GatewayAuthManager() (*auth.GatewayAuthManager, 
 
 func (p *AmazonBedrockProvider) AccountState() (ProviderAccountState, error) {
 	source := "aws-managed"
-	if p.auth != nil && p.auth.Mode() == "bedrock-api-key" {
+	if p.auth != nil && (p.auth.Mode() == "bedrock-api-key" || p.auth.Mode() == "bedrock-access-keys") {
 		source = "codex-managed"
 	}
 	return ProviderAccountState{
@@ -497,6 +498,30 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 		}
 		return AuthHeaders{Headers: headers}, nil
 	}
+	if p.auth != nil && p.auth.Mode() == "bedrock-access-keys" {
+		keys := bedrockAccessKeysValue(p.auth.BedrockAccessKeys)
+		if keys == nil {
+			return AuthHeaders{}, errors.New("Amazon Bedrock access-key auth is incomplete")
+		}
+		awsConfig := p.awsAuthConfig()
+		if strings.TrimSpace(awsConfig.Region) == "" {
+			awsConfig.Region = strings.TrimSpace(keys.Region)
+		}
+		awsContext, err := auth.LoadAWSAuthContextWithProvider(awsConfig, staticAWSAccessKeysProvider{keys: auth.AWSAccessKeys{
+			AccessKeyID:     keys.AccessKeyID,
+			SecretAccessKey: keys.SecretAccessKey,
+			SessionToken:    keys.SessionToken,
+		}})
+		if err != nil {
+			return AuthHeaders{}, fmt.Errorf("failed to resolve Amazon Bedrock access-key auth: %w", err)
+		}
+		return AuthHeaders{
+			Headers: headers,
+			SignRequest: func(_ context.Context, request *http.Request, body []byte) (*SignedRequest, error) {
+				return signBedrockRequest(awsContext, request, body, p.endpoint())
+			},
+		}, nil
+	}
 	if token := strings.TrimSpace(os.Getenv(AmazonBedrockBearerTokenEnv)); token != "" {
 		headers.Set("Authorization", "Bearer "+token)
 		region, err := p.resolveRegion()
@@ -525,6 +550,38 @@ func (p *AmazonBedrockProvider) APIAuth() (AuthHeaders, error) {
 			return signBedrockRequest(awsContext, request, body, p.endpoint())
 		},
 	}, nil
+}
+
+type staticAWSAccessKeysProvider struct {
+	keys auth.AWSAccessKeys
+}
+
+func (p staticAWSAccessKeysProvider) Credentials(context.Context) (auth.AWSAccessKeys, error) {
+	return p.keys, nil
+}
+
+func bedrockAccessKeysValue(value any) *auth.BedrockAccessKeysAuth {
+	if value == nil {
+		return nil
+	}
+	if keys, ok := value.(*auth.BedrockAccessKeysAuth); ok {
+		return keys
+	}
+	if keys, ok := value.(auth.BedrockAccessKeysAuth); ok {
+		return &keys
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var keys auth.BedrockAccessKeysAuth
+	if err := json.Unmarshal(encoded, &keys); err != nil {
+		return nil
+	}
+	if strings.TrimSpace(keys.AccessKeyID) == "" || strings.TrimSpace(keys.SecretAccessKey) == "" {
+		return nil
+	}
+	return &keys
 }
 
 func (p *AmazonBedrockProvider) ModelsManager(configCatalog *ModelsResponse) ModelsManager {

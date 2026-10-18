@@ -310,6 +310,21 @@ func (r *RuntimeRouter) configureBedrockProvider(region *string, profile *string
 	return nil
 }
 
+// clearManagedBedrockProviderConfig removes the provider/AWS settings created
+// by a managed Bedrock login while leaving external AWS config and .env alone
+// (Rust #40481 logout cleanup).
+func (r *RuntimeRouter) clearManagedBedrockProviderConfig() error {
+	if r == nil || r.services.Config == nil {
+		return nil
+	}
+	_, err := r.services.Config.BatchWrite(&config.ConfigBatchWriteParams{Edits: []config.ConfigEdit{
+		{KeyPath: "model_provider", Value: nil, MergeStrategy: config.MergeReplace},
+		{KeyPath: "model_providers.amazon-bedrock.aws.region", Value: nil, MergeStrategy: config.MergeReplace},
+		{KeyPath: "model_providers.amazon-bedrock.aws.profile", Value: nil, MergeStrategy: config.MergeReplace},
+	}})
+	return err
+}
+
 // configEditValue renders an optional string as the Rust `serde_json::json!`
 // value does: `None` becomes a JSON null, which the config writer treats as a
 // key removal (Rust MergeStrategy::Replace semantics).

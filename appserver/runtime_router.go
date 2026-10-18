@@ -12208,6 +12208,15 @@ func (r *RuntimeRouter) handleLoginAccount(request *Request) (*auth.LoginAccount
 		r.cancelAllAccountLoginRuntimes()
 		r.requireAccount().CancelActiveLogins()
 	}
+	if params.Type == "amazonBedrockAccessKeys" {
+		if err := r.ensureUserModelProviderCanBeBedrock(); err != nil {
+			return nil, err
+		}
+		region := strings.TrimSpace(params.Region)
+		if err := r.configureBedrockProvider(&region, nil); err != nil {
+			return nil, err
+		}
+	}
 	response, err := r.requireAccount().Login(&params)
 	if err != nil {
 		return nil, err
@@ -12337,6 +12346,9 @@ func authSnapshotFromLoginParams(params *auth.LoginAccountParams) *auth.AuthDotJ
 		return &snapshot
 	case "chatgptAuthTokens":
 		snapshot := auth.FromChatGPTAuthTokens(params.AccessToken, params.ChatGPTAccountID, params.ChatGPTPlanType)
+		return &snapshot
+	case "amazonBedrockAccessKeys":
+		snapshot := auth.FromBedrockAccessKeys(params.AccessKeyID, params.SecretAccessKey, params.SessionToken, params.Region)
 		return &snapshot
 	default:
 		return nil
@@ -12562,6 +12574,11 @@ func (r *RuntimeRouter) handleLogoutAccount(request *Request) (*auth.LogoutAccou
 	}
 	r.cancelAllAccountLoginRuntimes()
 	r.requireAccount().CancelActiveLogins()
+	if snapshot := r.requireAccount().AuthSnapshot(); snapshot != nil && snapshot.Mode() == "bedrock-access-keys" {
+		if err := r.clearManagedBedrockProviderConfig(); err != nil {
+			return nil, err
+		}
+	}
 	response := r.requireAccount().Logout()
 	if codexHome := r.codexHomeForRollout(); codexHome != "" {
 		if _, err := auth.LogoutWithRevoke(context.Background(), codexHome, r.authStoreOptions()); err != nil {
@@ -15163,6 +15180,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
 		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
 		options.CodeModeToolDescriptionFirst = cfg.CodeModeToolDescriptionFirst()
+		options.DirectOnlyToolNamespaces = cfg.CodeModeDirectOnlyToolNamespaces()
 		options.CodeModeOnlyStrictThirdPartyTools = cfg.CodeModeOnlyStrictThirdPartyTools()
 		options.CodeModeToolInputSchemaMaxBytes = cfg.CodeModeToolInputSchemaMaxBytes()
 	}

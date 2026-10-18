@@ -26,11 +26,44 @@ type AuthDotJSON struct {
 	AgentIdentity       any            `json:"agent_identity,omitempty"`
 	PersonalAccessToken string         `json:"personal_access_token,omitempty"`
 	BedrockAPIKey       any            `json:"bedrock_api_key,omitempty"`
+	BedrockAccessKeys   any            `json:"bedrock_access_keys,omitempty"`
 }
 
 type BedrockAPIKeyAuth struct {
 	APIKey string `json:"api_key"`
 	Region string `json:"region"`
+}
+
+// BedrockAccessKeysAuth is the managed AWS access-key credential stored for
+// Amazon Bedrock login (Rust #40481).
+type BedrockAccessKeysAuth struct {
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	SessionToken    string `json:"session_token,omitempty"`
+	Region          string `json:"region"`
+}
+
+// Format redacts both AWS secrets from derived debug formatting.
+func (a *BedrockAccessKeysAuth) Format(f fmt.State, verb rune) {
+	if a == nil {
+		fmt.Fprint(f, "<nil>")
+		return
+	}
+	const redacted = "<redacted>"
+	switch verb {
+	case '#':
+		fmt.Fprintf(f, "auth.BedrockAccessKeysAuth{AccessKeyID:%q, SecretAccessKey:%q, SessionToken:%q, Region:%q}",
+			redacted, redacted, redacted, a.Region)
+	case 'v':
+		if f.Flag('+') {
+			fmt.Fprintf(f, "{AccessKeyID:%s SecretAccessKey:%s SessionToken:%s Region:%s}",
+				redacted, redacted, redacted, a.Region)
+		} else {
+			fmt.Fprintf(f, "{%s %s %s %s}", redacted, redacted, redacted, a.Region)
+		}
+	default:
+		fmt.Fprintf(f, "{%s %s %s %s}", redacted, redacted, redacted, a.Region)
+	}
 }
 
 // Format redacts the managed Amazon Bedrock API key from derived debug
@@ -494,6 +527,8 @@ func (a *AuthDotJSON) Mode() string {
 		return "agent-identity"
 	case a.BedrockAPIKey != nil:
 		return "bedrock-api-key"
+	case a.BedrockAccessKeys != nil:
+		return "bedrock-access-keys"
 	case a.Tokens != nil:
 		return "chatgpt"
 	default:
@@ -520,6 +555,8 @@ func normalizedAuthMode(value string) string {
 		return "personal-access-token"
 	case "bedrockapikey":
 		return "bedrock-api-key"
+	case "bedrockaccesskeys":
+		return "bedrock-access-keys"
 	case "unknown":
 		return "unknown"
 	default:
@@ -587,6 +624,18 @@ func FromBedrockAPIKey(apiKey string, region string) AuthDotJSON {
 		BedrockAPIKey: &BedrockAPIKeyAuth{
 			APIKey: strings.TrimSpace(apiKey),
 			Region: strings.TrimSpace(region),
+		},
+	}
+}
+
+func FromBedrockAccessKeys(accessKeyID string, secretAccessKey string, sessionToken string, region string) AuthDotJSON {
+	return AuthDotJSON{
+		AuthMode: "bedrock-access-keys",
+		BedrockAccessKeys: &BedrockAccessKeysAuth{
+			AccessKeyID:     strings.TrimSpace(accessKeyID),
+			SecretAccessKey: strings.TrimSpace(secretAccessKey),
+			SessionToken:    strings.TrimSpace(sessionToken),
+			Region:          strings.TrimSpace(region),
 		},
 	}
 }

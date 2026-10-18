@@ -133,6 +133,8 @@ func AccountFromAuth(snapshot *AuthDotJSON) *Account {
 		}
 	case "bedrock-api-key":
 		return &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}
+	case "bedrock-access-keys":
+		return &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}
 	case "personal-access-token":
 		return AccountFromPersonalAccessTokenMetadata(personalAccessTokenMetadataFromAuth(snapshot))
 	case "agent-identity":
@@ -365,6 +367,10 @@ type LoginAccountParams struct {
 	AccessToken           string      `json:"accessToken,omitempty"`
 	ChatGPTAccountID      string      `json:"chatgptAccountId,omitempty"`
 	ChatGPTPlanType       *string     `json:"chatgptPlanType,omitempty"`
+	AccessKeyID           string      `json:"accessKeyId,omitempty"`
+	SecretAccessKey       string      `json:"secretAccessKey,omitempty"`
+	SessionToken          string      `json:"sessionToken,omitempty"`
+	Region                string      `json:"region,omitempty"`
 }
 
 func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
@@ -404,6 +410,20 @@ func (p *LoginAccountParams) MarshalJSON() ([]byte, error) {
 			ChatGPTAccountID: p.ChatGPTAccountID,
 			ChatGPTPlanType:  cloneStringPtr(p.ChatGPTPlanType),
 		})
+	case "amazonBedrockAccessKeys":
+		return json.Marshal(struct {
+			Type            AccountType `json:"type"`
+			AccessKeyID     string      `json:"accessKeyId"`
+			SecretAccessKey string      `json:"secretAccessKey"`
+			SessionToken    string      `json:"sessionToken,omitempty"`
+			Region          string      `json:"region"`
+		}{
+			Type:            p.Type,
+			AccessKeyID:     p.AccessKeyID,
+			SecretAccessKey: p.SecretAccessKey,
+			SessionToken:    p.SessionToken,
+			Region:          p.Region,
+		})
 	default:
 		type loginAccountParamsAlias LoginAccountParams
 		return json.Marshal((*loginAccountParamsAlias)(p))
@@ -427,6 +447,13 @@ func (p *LoginAccountParams) Validate() error {
 		}
 		if strings.TrimSpace(p.ChatGPTAccountID) == "" {
 			return fmt.Errorf("%w: chatgptAccountId is required", ErrInvalidAccountRequest)
+		}
+	case "amazonBedrockAccessKeys":
+		if strings.TrimSpace(p.AccessKeyID) == "" || strings.TrimSpace(p.SecretAccessKey) == "" {
+			return fmt.Errorf("%w: accessKeyId and secretAccessKey are required", ErrInvalidAccountRequest)
+		}
+		if strings.TrimSpace(p.Region) == "" {
+			return fmt.Errorf("%w: region is required", ErrInvalidAccountRequest)
 		}
 	default:
 		return fmt.Errorf("%w: unsupported login type %q", ErrInvalidAccountRequest, p.Type)
@@ -1058,6 +1085,14 @@ func (m *AccountManager) Login(params *LoginAccountParams) (*LoginAccountRespons
 		m.requiresOpenAIAuth = true
 		m.authSnapshot = cloneAuthDotJSON(&snapshot)
 		return &LoginAccountResponse{Type: "chatgptAuthTokens"}, nil
+	case "amazonBedrockAccessKeys":
+		snapshot := FromBedrockAccessKeys(params.AccessKeyID, params.SecretAccessKey, params.SessionToken, params.Region)
+		m.account = &Account{Type: AccountAmazonBedrock, UsesCodexManagedCredentials: true}
+		mode := wireAuthModeFromMode("bedrock-access-keys")
+		m.authMode = &mode
+		m.requiresOpenAIAuth = false
+		m.authSnapshot = cloneAuthDotJSON(&snapshot)
+		return &LoginAccountResponse{Type: AccountAmazonBedrock}, nil
 	default:
 		return nil, fmt.Errorf("%w: unsupported login type %q", ErrInvalidAccountRequest, params.Type)
 	}
@@ -1545,6 +1580,8 @@ func wireAuthModeFromMode(mode string) string {
 		return "personalAccessToken"
 	case "bedrock-api-key":
 		return "bedrockApiKey"
+	case "bedrock-access-keys":
+		return "bedrockAccessKeys"
 	default:
 		return strings.TrimSpace(mode)
 	}
