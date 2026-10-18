@@ -165,6 +165,7 @@ func TestComposerRightClickCopiesAndClearsOnlyWhenConfirmedLikeRust(t *testing.T
 	model, _ = newComposerSelectionModel(t)
 	model.copyOnSelectMode = "never"
 	model.clipboardWrite = func(string) error { return errors.New("clipboard unavailable") }
+	model.clipboardForward = func(string, bool) error { return errors.New("OSC unavailable") }
 	dragComposerSelection(t, model, 0, len("hello"))
 	_, cmd = model.Update(bubbletea.MouseMsg{
 		X: x, Y: y, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonRight,

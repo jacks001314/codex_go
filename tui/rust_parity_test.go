@@ -225,7 +225,7 @@ func TestClipboardParity(t *testing.T) {
 		t.Fatal("oversized OSC52 did not fail")
 	}
 
-	if got := ClipboardCopyOrder(ClipboardEnvironment{SSHSession: true, TmuxSession: true}); !reflect.DeepEqual(got, []ClipboardBackend{ClipboardTmux, ClipboardOSC52}) {
+	if got := ClipboardCopyOrder(ClipboardEnvironment{SSHSession: true, TmuxSession: true}); !reflect.DeepEqual(got, []ClipboardBackend{ClipboardNative, ClipboardTmux, ClipboardOSC52}) {
 		t.Fatalf("remote tmux order = %#v", got)
 	}
 	// Rust #53453: on WSL the Windows clipboard is attempted before the native one.

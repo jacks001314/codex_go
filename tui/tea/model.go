@@ -1180,6 +1180,12 @@ type Options struct {
 	// OnClipboardRead, when set, supplies clipboard text for the fullscreen
 	// right-click paste fallback (#48118). Nil reads the system clipboard.
 	OnClipboardRead func() (string, error)
+	// OnClipboardForward writes a copy through OSC 52 to the attached terminal
+	// (Rust #52557). Nil uses the controlling TTY or stdout.
+	OnClipboardForward func(text string, tmux bool) error
+	// ClipboardEnvironment overrides HERDR_ENV/SSH/TMUX/WSL detection. Nil
+	// reads the process environment at copy time.
+	ClipboardEnvironment *codextui.ClipboardEnvironment
 	// ShowRawReasoning is the configured `show_raw_agent_reasoning` value
 	// (Rust config default false). It selects the raw chain-of-thought variant
 	// of a reasoning block, mirroring RawReasoningVisibility::Visible.
@@ -2074,6 +2080,8 @@ type Model struct {
 	clipboardRead           func() (string, error)
 	clipboardReadPending    bool
 	clipboardBusy           bool
+	clipboardForward        func(text string, tmux bool) error
+	clipboardEnvironment    *codextui.ClipboardEnvironment
 	nextClipboardRequestID  uint64
 	pendingClipboardRequest uint64
 	onExportTranscript      TranscriptExportFunc
@@ -2442,6 +2450,15 @@ func NewModel(state *codextui.State, options Options) *Model {
 	if clipboardRead == nil {
 		clipboardRead = defaultClipboardRead()
 	}
+	clipboardForward := options.OnClipboardForward
+	if clipboardForward == nil {
+		clipboardForward = codextui.WriteTerminalClipboard
+	}
+	var clipboardEnvironment *codextui.ClipboardEnvironment
+	if options.ClipboardEnvironment != nil {
+		value := *options.ClipboardEnvironment
+		clipboardEnvironment = &value
+	}
 
 	model := &Model{
 		State:                        state,
@@ -2577,6 +2594,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		clipboardWrite:                  clipboardWrite,
 		clipboardWriteRich:              clipboardWriteRich,
 		clipboardRead:                   clipboardRead,
+		clipboardForward:                clipboardForward,
+		clipboardEnvironment:            clipboardEnvironment,
 		rightClickPasteMode:             tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
 		copyOnSelectMode:                normalizeCopyOnSelectMode(options.CopyOnSelect),
 		copyOnSelectClear:               options.CopyOnSelectClearSelection,
@@ -9541,6 +9560,8 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 	m.pendingClipboardRequest = requestID
 	write := m.clipboardWrite
 	writeRich := m.clipboardWriteRich
+	forward := m.clipboardForward
+	environment := m.clipboardEnvironmentValue()
 	return func() bubbletea.Msg {
 		var err error
 		switch {
@@ -9551,8 +9572,41 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 		default:
 			err = write(text)
 		}
+		// Rust #52557: forward to attached terminal clients after a successful
+		// native copy in tmux, Herdr, or SSH sessions. A failed native write
+		// falls back to the terminal for any session, as Rust does.
+		if err == nil {
+			if codextui.ClipboardForwardingEnabled(environment) {
+				_ = forwardClipboardToTerminal(forward, text, environment)
+			}
+		} else if terminalErr := forwardClipboardToTerminal(forward, text, environment); terminalErr == nil {
+			err = nil
+		} else {
+			err = fmt.Errorf("%v; terminal clipboard: %v", err, terminalErr)
+		}
 		return ClipboardWriteResultMsg{RequestID: requestID, Label: label, Err: err, Warnings: warnings}
 	}
+}
+
+func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
+	if m != nil && m.clipboardEnvironment != nil {
+		return *m.clipboardEnvironment
+	}
+	keys := []string{"HERDR_ENV", "SSH_TTY", "SSH_CONNECTION", "TMUX", "TMUX_PANE"}
+	env := make(map[string]string, len(keys))
+	for _, key := range keys {
+		env[key] = os.Getenv(key)
+	}
+	return codextui.ClipboardEnvironmentFromMap(env, codextui.IsProbablyWSL())
+}
+
+func forwardClipboardToTerminal(forward func(text string, tmux bool) error, text string, environment codextui.ClipboardEnvironment) error {
+	if forward == nil {
+		forward = codextui.WriteTerminalClipboard
+	}
+	tmuxCopy := func(value string) error { return forward(value, true) }
+	osc52Copy := func(value string) error { return forward(value, false) }
+	return codextui.TerminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
 }
 
 func (m *Model) applyClipboardWriteResult(msg ClipboardWriteResultMsg) {

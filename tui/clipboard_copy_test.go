@@ -10,8 +10,9 @@ func TestClipboardEnvironmentFromMapMatchesRust(t *testing.T) {
 	env := ClipboardEnvironmentFromMap(map[string]string{
 		"SSH_CONNECTION": "127.0.0.1 1 127.0.0.1 2",
 		"TMUX_PANE":      "%1",
+		"HERDR_ENV":      "1",
 	}, true)
-	if !env.SSHSession || !env.TmuxSession || !env.WSLSession {
+	if !env.SSHSession || !env.TmuxSession || !env.WSLSession || !env.HerdrSession {
 		t.Fatalf("environment = %#v", env)
 	}
 }
@@ -30,7 +31,9 @@ func TestOSC52SequenceMatchesRustErrorsAndWriter(t *testing.T) {
 	}
 }
 
-func TestClipboardCopyWithSSHUsesTerminalAndSkipsNative(t *testing.T) {
+// Rust #52557: native copying still runs over SSH, and forwarding follows a
+// successful native write.
+func TestClipboardCopyWithSSHForwardsAfterNativeSuccessLikeRust(t *testing.T) {
 	calls := clipboardCopyCalls{}
 	lease, err := CopyToClipboardWith(
 		"hello",
@@ -40,17 +43,17 @@ func TestClipboardCopyWithSSHUsesTerminalAndSkipsNative(t *testing.T) {
 		calls.nativeOK,
 		calls.wslOK,
 	)
-	if err != nil || lease != nil {
+	if err != nil || lease == nil {
 		t.Fatalf("ssh copy = lease %#v err %v", lease, err)
 	}
-	if calls.osc != 1 || calls.tmux != 0 || calls.native != 0 || calls.wsl != 0 {
+	if calls.osc != 1 || calls.tmux != 0 || calls.native != 1 || calls.wsl != 0 {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
 
-func TestClipboardCopyWithSSHReportsOSC52Error(t *testing.T) {
+func TestClipboardCopyWithSSHKeepsNativeLeaseWhenForwardingFailsLikeRust(t *testing.T) {
 	calls := clipboardCopyCalls{}
-	_, err := CopyToClipboardWith(
+	lease, err := CopyToClipboardWith(
 		"hello",
 		ClipboardEnvironment{SSHSession: true},
 		calls.tmuxOK,
@@ -61,10 +64,10 @@ func TestClipboardCopyWithSSHReportsOSC52Error(t *testing.T) {
 		calls.nativeOK,
 		calls.wslOK,
 	)
-	if err == nil || err.Error() != "OSC 52 clipboard copy failed over SSH: blocked" {
-		t.Fatalf("ssh err = %v", err)
+	if err != nil || lease == nil {
+		t.Fatalf("ssh native lease = %#v err = %v", lease, err)
 	}
-	if calls.osc != 1 || calls.native != 0 {
+	if calls.osc != 1 || calls.native != 1 {
 		t.Fatalf("calls = %#v", calls)
 	}
 }
@@ -82,13 +85,36 @@ func TestClipboardCopyWithSSHTmuxFallbackMatchesRust(t *testing.T) {
 			calls.osc++
 			return ClipboardError("osc blocked")
 		},
+		func(string) (*ClipboardLease, error) {
+			calls.native++
+			return nil, ClipboardError("native unavailable")
+		},
+		calls.wslOK,
+	)
+	if err == nil || err.Error() != "native clipboard: native unavailable; terminal clipboard: tmux clipboard: tmux unavailable; OSC 52 fallback: osc blocked" {
+		t.Fatalf("ssh tmux err = %v", err)
+	}
+	if calls.tmux != 1 || calls.osc != 1 || calls.native != 1 {
+		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+// Rust #52557: a Herdr session forwards through OSC 52 even when native
+// copying succeeds, and keeps the native lease.
+func TestClipboardCopyWithHerdrForwardsEvenAfterNativeSuccessLikeRust(t *testing.T) {
+	calls := clipboardCopyCalls{}
+	lease, err := CopyToClipboardWith(
+		"hello",
+		ClipboardEnvironment{HerdrSession: true},
+		calls.tmuxOK,
+		calls.oscOK,
 		calls.nativeOK,
 		calls.wslOK,
 	)
-	if err == nil || err.Error() != "terminal clipboard copy failed over SSH: tmux clipboard: tmux unavailable; OSC 52 fallback: osc blocked" {
-		t.Fatalf("ssh tmux err = %v", err)
+	if err != nil || lease == nil {
+		t.Fatalf("herdr copy = lease %#v err %v", lease, err)
 	}
-	if calls.tmux != 1 || calls.osc != 1 || calls.native != 0 {
+	if calls.native != 1 || calls.osc != 1 || calls.tmux != 0 || calls.wsl != 0 {
 		t.Fatalf("calls = %#v", calls)
 	}
 }

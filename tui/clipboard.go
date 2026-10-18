@@ -26,18 +26,13 @@ const (
 )
 
 type ClipboardEnvironment struct {
-	SSHSession  bool
-	WSLSession  bool
-	TmuxSession bool
+	HerdrSession bool
+	SSHSession   bool
+	WSLSession   bool
+	TmuxSession  bool
 }
 
 func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
-	if environment.SSHSession {
-		if environment.TmuxSession {
-			return []ClipboardBackend{ClipboardTmux, ClipboardOSC52}
-		}
-		return []ClipboardBackend{ClipboardOSC52}
-	}
 	order := []ClipboardBackend{ClipboardNative}
 	if environment.WSLSession {
 		// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): prefer the Windows
@@ -46,7 +41,7 @@ func ClipboardCopyOrder(environment ClipboardEnvironment) []ClipboardBackend {
 		order = []ClipboardBackend{ClipboardWSL, ClipboardNative}
 	}
 	if environment.TmuxSession {
-		return append(order, ClipboardTmux, ClipboardOSC52)
+		order = append(order, ClipboardTmux)
 	}
 	return append(order, ClipboardOSC52)
 }
@@ -58,10 +53,19 @@ type ClipboardCopyFunc func(string) error
 
 func ClipboardEnvironmentFromMap(env map[string]string, wslSession bool) ClipboardEnvironment {
 	return ClipboardEnvironment{
-		SSHSession:  envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION"),
-		WSLSession:  wslSession,
-		TmuxSession: envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE"),
+		HerdrSession: env["HERDR_ENV"] == "1",
+		SSHSession:   envValueSet(env, "SSH_TTY") || envValueSet(env, "SSH_CONNECTION"),
+		WSLSession:   wslSession,
+		TmuxSession:  envValueSet(env, "TMUX") || envValueSet(env, "TMUX_PANE"),
 	}
+}
+
+// ClipboardForwardingEnabled reports whether a successful native copy should
+// also reach attached terminal clients. Persistent multiplexer sessions can
+// gain clients after Codex starts, so tmux and Herdr forward even without
+// inherited SSH variables (Rust #52557).
+func ClipboardForwardingEnabled(environment ClipboardEnvironment) bool {
+	return environment.TmuxSession || environment.HerdrSession || environment.SSHSession
 }
 
 func CopyToClipboardWith(
@@ -83,17 +87,6 @@ func CopyToClipboardWith(
 	}
 	if wslCopy == nil {
 		wslCopy = func(string) error { return ClipboardError("WSL clipboard fallback unavailable on this platform") }
-	}
-
-	if environment.SSHSession {
-		err := terminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
-		if err == nil {
-			return nil, nil
-		}
-		if environment.TmuxSession {
-			return nil, ClipboardError("terminal clipboard copy failed over SSH: " + err.Error())
-		}
-		return nil, ClipboardError("OSC 52 clipboard copy failed over SSH: " + err.Error())
 	}
 
 	// Rust #53453 (codex-rs/tui/src/clipboard_copy.rs:221-229): on WSL, attempt the
@@ -118,17 +111,41 @@ func CopyToClipboardWith(
 			nativeErr = ClipboardError("native clipboard: " + err.Error())
 		}
 	}
+	// Copy natively first: an X11 SelectionClear from a terminal write can otherwise
+	// race with arboard reusing its ownership window (clipboard_copy.rs:230-236).
+	// Persistent multiplexer sessions may gain remote clients after Codex starts,
+	// so still forward when native copying succeeded (Rust #52557).
 	if nativeErr == nil {
+		if ClipboardForwardingEnabled(environment) {
+			_ = terminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
+		}
 		return lease, nil
 	}
 
-	// Copy natively first: an X11 SelectionClear from a terminal write can otherwise
-	// race with arboard reusing its ownership window (clipboard_copy.rs:230-236).
 	terminalErr := terminalClipboardCopyWith(text, environment.TmuxSession, tmuxCopy, osc52Copy)
 	if terminalErr == nil {
 		return nil, nil
 	}
 	return nil, ClipboardError(fmt.Sprintf("%v; terminal clipboard: %v", nativeErr, terminalErr))
+}
+
+// WriteTerminalClipboard sends text through OSC 52 to the attached terminal.
+// Unix prefers the controlling TTY; other platforms and unavailable TTYs use
+// stdout. The tmux flag wraps the sequence for tmux passthrough.
+func WriteTerminalClipboard(text string, tmux bool) error {
+	sequence, err := OSC52Sequence(text, tmux)
+	if err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		if tty, openErr := os.OpenFile("/dev/tty", os.O_WRONLY, 0); openErr == nil {
+			defer tty.Close()
+			if writeErr := WriteOSC52ToWriter(tty, sequence); writeErr == nil {
+				return nil
+			}
+		}
+	}
+	return WriteOSC52ToWriter(os.Stdout, sequence)
 }
 
 func TerminalClipboardCopyWith(text string, tmuxSession bool, tmuxCopy ClipboardCopyFunc, osc52Copy ClipboardCopyFunc) error {

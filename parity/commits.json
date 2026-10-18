@@ -29227,9 +29227,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Go has no OSC-52 clipboard-copy forwarding path at all; app-owned copies call the native clipboard writer only. HERDR_ENV is therefore not consumed, and Herdr/tmux/SSH terminal forwarding remains unimplemented."
+        "Round 681 (implementation): HERDR_ENV=1 joins tmux and SSH as a terminal-forwarding environment. Native copying runs first and a successful write also sends OSC 52 while retaining the native lease; a failed native write falls back to tmux/OSC 52 for every session. App-owned async copies use the controlling TTY on Unix (stdout elsewhere), with injectable environment and forwarding hooks. Tests: go test ./tui/... -count=1; go vet ./tui/..."
       ]
     },
     {

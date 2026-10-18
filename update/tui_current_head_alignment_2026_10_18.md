@@ -2102,8 +2102,8 @@ green.
   app-owned transcript copy-mode state machine exists.
 - `#52330` is not applicable: Go has no wrapped LogicalLineSource remapping path
   that can index past the flattened source.
-- `#52557` remains partial: Go lacks OSC-52 terminal clipboard forwarding, so
-  Herdr/tmux/SSH forwarding is not available.
+- `#52557` is complete: Herdr, tmux, and SSH copies forward OSC 52 to the
+  attached terminal while preserving a successful native clipboard lease.
 - `#51207` is complete: `cli_daybreak` defaults off, gates live preference and
   thread/start staging, hides `/daybreak` from the slash catalog when disabled
   or account-ineligible, and keeps typed dispatch resolvable with a silent
