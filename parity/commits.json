@@ -29344,9 +29344,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: OutputDrainPolicy"
+        "Equivalent implementation already present across Go's two execution shapes. Direct local unified exec waits at most localUnifiedExecOutputDrainGrace after the foreground process exits, so an inherited stdout/stderr pipe cannot delay completion indefinitely, while preserving output already read. Exec-server-backed processes intentionally remain in pollRemote until process/closed, retaining buffered or delayed output after process/exited. Tests cover a blocked local reader being bounded after exit, a normally closed reader finishing immediately, and remote delayed output arriving after reported/recovered exit."
       ]
     },
     {
