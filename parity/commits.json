@@ -2449,9 +2449,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "turn.imagegenRequestIDHeader is captured from image generation/edit responses and retained only in-process; appserver analytics takes it by call/item id and emits imagegen_request_id while the session item/rollout wire shape stays unchanged. Tests: go test ./turn -run 'ImageGeneration' -count=1; go test ./appserver -run 'ImageGen|ImageGeneration' -count=1; go test ./telemetry -run 'ImageGeneration' -count=1"
       ]
     },
     {
@@ -2473,9 +2473,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "jsonschema subset now preserves minimum, maximum, and maxLength (including exact json.Number integers) and infers a string schema when maxLength is the only hint; tests cover bounded integer/number/string schemas. Tests: go test ./jsonschema -run 'Bounds|MaxLength|Normalize' -count=1"
       ]
     },
     {
@@ -2497,9 +2497,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The biology safety access block already points Trusted Access at https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374, matching the updated ChatGPT route. Test: go test ./tui/history_cell -count=1"
       ]
     },
     {
@@ -2533,9 +2533,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Explicit and implicit skill telemetry receive the resolved model slug from the turn's model selection and emit model_slug/reasoning_effort tags consistently. Tests: go test ./appserver -run 'SkillInjection|SkillInvocation|SkillTelemetry' -count=1"
       ]
     },
     {
@@ -2581,9 +2581,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Explicit and implicit skill telemetry receive the resolved model slug from the turn's model selection and emit model_slug/reasoning_effort tags consistently. Tests: go test ./appserver -run 'SkillInjection|SkillInvocation|SkillTelemetry' -count=1"
       ]
     },
     {
@@ -2605,9 +2605,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "MCP tool output is retained as structured content item kinds through the shared content-to-tool-output conversion instead of collapsing to plain text; context tests preserve text/image/audio/reference kinds. Tests: go test ./context -run 'ToolOutputParts|ContentItemKinds' -count=1"
       ]
     },
     {

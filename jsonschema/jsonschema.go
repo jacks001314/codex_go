@@ -11,6 +11,7 @@ package jsonschema
 
 import (
 	"encoding/json"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -34,6 +35,9 @@ var jsonSchemaSubsetKeys = map[string]bool{
 	"description":          true,
 	"encrypted":            true,
 	"enum":                 true,
+	"minimum":              true,
+	"maximum":              true,
+	"maxLength":            true,
 	"items":                true,
 	"minItems":             true,
 	"properties":           true,
@@ -107,6 +111,16 @@ func subsetSchemaField(key string, raw any) (any, bool) {
 	case "enum":
 		_, ok := raw.([]any)
 		return raw, ok
+	case "minimum", "maximum":
+		if _, ok := numericSchemaValue(raw); !ok {
+			return nil, false
+		}
+		return raw, true
+	case "maxLength":
+		if !nonNegativeIntegerSchemaValue(raw) {
+			return nil, false
+		}
+		return raw, true
 	case "items":
 		return SubsetSchema(raw)
 	case "minItems":
@@ -181,6 +195,30 @@ func numericSchemaValue(raw any) (float64, bool) {
 		return value, err == nil
 	}
 	return 0, false
+}
+
+func nonNegativeIntegerSchemaValue(raw any) bool {
+	switch typed := raw.(type) {
+	case float64:
+		return typed >= 0 && typed == math.Trunc(typed)
+	case int:
+		return typed >= 0
+	case int64:
+		return typed >= 0
+	case uint64:
+		return true
+	case json.Number:
+		if value, err := typed.Int64(); err == nil {
+			return value >= 0
+		}
+		if _, err := strconv.ParseUint(typed.String(), 10, 64); err == nil {
+			return true
+		}
+		value, err := typed.Float64()
+		return err == nil && value >= 0 && value == math.Trunc(value)
+	default:
+		return false
+	}
 }
 
 // Normalize mirrors Rust parse_tool_input_schema: sanitize, prune unreachable
@@ -272,7 +310,7 @@ func sanitizeSchemaMap(m map[string]any) {
 			schemaTypes = []string{"object"}
 		case hasAny(m, "items", "prefixItems"):
 			schemaTypes = []string{"array"}
-		case hasAny(m, "enum", "format"):
+		case hasAny(m, "enum", "format", "maxLength"):
 			schemaTypes = []string{"string"}
 		case hasAny(m, "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
 			schemaTypes = []string{"number"}
