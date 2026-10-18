@@ -20695,9 +20695,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: LogWriteWarningReporter, notify_failure, set_failure_reporter, try_send_server_notification"
+        "Round 655 (implementation): state.LogDBHandler retains the latest SQLite log-flush diagnostic, exposes failure state, and supports a reporter attached after failure. The app-server reporter emits one warning per router with feedback-aware guidance, replays pre-attachment failures, and retains later diagnostics without duplicate warnings. Tests: go test ./state -run 'LogDB|LogHandler|InstallLogDB' -count=1; go test ./appserver -run 'LogDBWrite|Warning' -count=1; go vet ./state ./appserver"
       ]
     },
     {

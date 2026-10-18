@@ -26,6 +26,12 @@ type LogSinkQueueConfig struct {
 	FlushInterval time.Duration
 }
 
+// LogWriteFailureReporter receives the first persisted diagnostic-log failure.
+// Implementations must be safe for concurrent use.
+type LogWriteFailureReporter interface {
+	ReportLogWriteFailure(diagnostic string)
+}
+
 func (c LogSinkQueueConfig) normalized() LogSinkQueueConfig {
 	if c.QueueCapacity < 1 {
 		c.QueueCapacity = defaultLogQueueCapacity
@@ -46,11 +52,14 @@ type logDBCommand struct {
 }
 
 type logDBSink struct {
-	mu       sync.Mutex
-	commands chan logDBCommand
-	done     chan struct{}
-	closed   bool
-	runtime  *StateRuntime
+	mu               sync.Mutex
+	commands         chan logDBCommand
+	done             chan struct{}
+	closed           bool
+	runtime          *StateRuntime
+	failureReporter  LogWriteFailureReporter
+	hasWriteFailure  bool
+	lastWriteFailure string
 }
 
 type LogDBHandler struct {
@@ -136,6 +145,31 @@ func (h *LogDBHandler) Close(ctx context.Context) error {
 		return nil
 	}
 	return h.sink.close(ctx)
+}
+
+// SetFailureReporter installs the client-side warning reporter. If a log write
+// already failed, the retained diagnostic is delivered immediately.
+func (h *LogDBHandler) SetFailureReporter(reporter LogWriteFailureReporter) {
+	if h == nil || h.sink == nil {
+		return
+	}
+	h.sink.setFailureReporter(reporter)
+}
+
+// HasWriteFailure reports whether any persisted log batch has been lost.
+func (h *LogDBHandler) HasWriteFailure() bool {
+	if h == nil || h.sink == nil {
+		return false
+	}
+	return h.sink.hasFailure()
+}
+
+// LastWriteFailure returns the most recent retained log-write diagnostic.
+func (h *LogDBHandler) LastWriteFailure() string {
+	if h == nil || h.sink == nil {
+		return ""
+	}
+	return h.sink.lastFailure()
 }
 
 func (h *LogDBHandler) entry(record slog.Record) *LogEntry {
@@ -343,6 +377,60 @@ func (s *logDBSink) metricsCounter(name string) {
 	s.runtime.metrics.Counter(name, 1, nil)
 }
 
+func (s *logDBSink) setFailureReporter(reporter LogWriteFailureReporter) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.failureReporter = reporter
+	diagnostic := ""
+	if s.hasWriteFailure {
+		diagnostic = s.lastWriteFailure
+	}
+	s.mu.Unlock()
+	if reporter != nil && diagnostic != "" {
+		reporter.ReportLogWriteFailure(diagnostic)
+	}
+}
+
+func (s *logDBSink) recordWriteFailure(err error, entryCount int) {
+	if s == nil || err == nil {
+		return
+	}
+	diagnostic := fmt.Sprintf(
+		"%s ERROR failed to flush logs to SQLite error=%v entries=%d",
+		time.Now().UTC().Format(time.RFC3339Nano),
+		err,
+		entryCount,
+	)
+	s.mu.Lock()
+	s.hasWriteFailure = true
+	s.lastWriteFailure = diagnostic
+	reporter := s.failureReporter
+	s.mu.Unlock()
+	if reporter != nil {
+		reporter.ReportLogWriteFailure(diagnostic)
+	}
+}
+
+func (s *logDBSink) hasFailure() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hasWriteFailure
+}
+
+func (s *logDBSink) lastFailure() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastWriteFailure
+}
+
 func (s *logDBSink) flush(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -409,7 +497,9 @@ func (s *logDBSink) run(runtime *StateRuntime, config LogSinkQueueConfig) {
 		}
 		entries := append([]LogEntry(nil), buffer...)
 		buffer = buffer[:0]
-		_ = runtime.InsertLogs(context.Background(), entries)
+		if err := runtime.InsertLogs(context.Background(), entries); err != nil {
+			s.recordWriteFailure(err, len(entries))
+		}
 	}
 	for {
 		select {

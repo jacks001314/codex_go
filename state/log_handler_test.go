@@ -9,6 +9,14 @@ import (
 	"time"
 )
 
+type recordingLogWriteFailureReporter struct {
+	diagnostics []string
+}
+
+func (r *recordingLogWriteFailureReporter) ReportLogWriteFailure(diagnostic string) {
+	r.diagnostics = append(r.diagnostics, diagnostic)
+}
+
 func TestLogDBHandlerPersistsStructuredRecordsAndPreservesNextHandler(t *testing.T) {
 	runtime := newGoalTestRuntime(t)
 	var stderr bytes.Buffer
@@ -89,6 +97,52 @@ func TestInstallLogDBHandlerRestoresPreviousLogger(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("installed logs = %#v, %v", rows, err)
 	}
+}
+
+// Rust #47887: a failed SQLite flush retains its diagnostic, reports the
+// failure, and replays it when the client reporter is attached later.
+func TestLogDBHandlerReportsAndReplaysWriteFailureLikeRust(t *testing.T) {
+	newFailingHandler := func(t *testing.T) (*LogDBHandler, *recordingLogWriteFailureReporter) {
+		t.Helper()
+		runtime := newGoalTestRuntime(t)
+		handler := NewLogDBHandlerWithConfig(runtime, nil, LogSinkQueueConfig{QueueCapacity: 8, BatchSize: 1, FlushInterval: time.Hour})
+		if err := runtime.logsDB.Close(); err != nil {
+			t.Fatalf("close logs DB: %v", err)
+		}
+		return handler, &recordingLogWriteFailureReporter{}
+	}
+
+	t.Run("reporter attached before failure", func(t *testing.T) {
+		handler, reporter := newFailingHandler(t)
+		defer func() { _ = handler.Close(context.Background()) }()
+		handler.SetFailureReporter(reporter)
+		slog.New(handler).Info("lost log", "target", "codex_test")
+		if err := handler.Flush(context.Background()); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		if len(reporter.diagnostics) != 1 || !strings.Contains(reporter.diagnostics[0], "failed to flush logs to SQLite") {
+			t.Fatalf("reported diagnostics = %#v", reporter.diagnostics)
+		}
+		if !handler.HasWriteFailure() || !strings.Contains(handler.LastWriteFailure(), "entries=1") {
+			t.Fatalf("retained failure = %q", handler.LastWriteFailure())
+		}
+	})
+
+	t.Run("reporter attached after failure", func(t *testing.T) {
+		handler, reporter := newFailingHandler(t)
+		defer func() { _ = handler.Close(context.Background()) }()
+		slog.New(handler).Info("lost before reporter", "target", "codex_test")
+		if err := handler.Flush(context.Background()); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		if len(reporter.diagnostics) != 0 {
+			t.Fatalf("unattached reporter received %#v", reporter.diagnostics)
+		}
+		handler.SetFailureReporter(reporter)
+		if len(reporter.diagnostics) != 1 || !strings.Contains(reporter.diagnostics[0], "failed to flush logs to SQLite") {
+			t.Fatalf("replayed diagnostics = %#v", reporter.diagnostics)
+		}
+	})
 }
 
 // Mirrors Rust's `post_sampling_token_estimate_is_disabled_by_always_on_sinks`

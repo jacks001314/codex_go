@@ -252,6 +252,7 @@ type RuntimeRouter struct {
 	servicesMu            sync.Mutex
 	mu                    sync.RWMutex
 	configWarningsMu      sync.Mutex
+	logDBWriteWarningOnce sync.Once
 	// agentWakeMu serializes the decision to drain queued agent mail and start
 	// its automatic root turn. Without it, concurrent deliveries could both
 	// observe an idle thread and race to consume the same queue.
@@ -829,6 +830,7 @@ func (r *RuntimeRouter) SetNotificationSink(sink NotificationSink) {
 	r.mu.Lock()
 	r.sink = sink
 	r.mu.Unlock()
+	r.installLogDBWriteWarningReporter()
 	r.requireRealtime().SetNotificationSink(func(notification realtime.Notification) {
 		r.notifyRealtime([]realtime.Notification{notification})
 	})
