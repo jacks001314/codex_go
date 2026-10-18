@@ -15027,9 +15027,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: retain_images"
+        "Equivalent implementation: file image references count toward image budgets and remote compaction retention (including the original-detail fixed cost), GuardianImageRef models inline and file sources, RetainNewGuardianImages deduplicates by source/ref including file IDs, and the admitted-image ledger preserves delivery across reviews."
       ]
     },
     {
