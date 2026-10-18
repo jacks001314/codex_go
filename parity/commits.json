@@ -19029,9 +19029,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/15); candidate gap: add_realtime_error, control_voice, deliver_background_voice_notification, detach_current_thread_for_navigation, park_voice"
+        "Aligned upstream a837a656ff (#47381) in Go's model-owned voice architecture: VoiceConversation lives outside thread-scoped state, so switching to another task neither stops the session nor changes its owner thread; returning restores the thread-scoped retained captions, and the agents overview marks the root/child voice owner. Tests: TestVoiceConversationSurvivesThreadNavigationLikeRust, TestRetainedVoiceCaptionsRemainThreadScopedLikeRust, TestAgentsOverviewMarksVoiceOwnerLikeRust, TestAgentsOverviewMarksChildVoiceOwnerLikeRust."
       ]
     },
     {
