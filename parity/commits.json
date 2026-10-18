@@ -732,9 +732,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 722 audit): Rust's preapproval branch requires per-environment active permission-grant bookkeeping and compares retained filesystem grants (including order) before routing write_stdin to review. Go's app-server does not retain an active granted-permissions set for terminals; terminalWriteReviewRequirement routes retained additional permissions to review without a grant-expiry preapproval match, and NUL/oversized input is rejected before writing. There is no grant state to compare, so the Rust preapproval optimization has no Go carrier."
       ]
     },
     {
@@ -5186,9 +5186,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ResumableThread"
+        "Audited upstream 0e03f88a30 (#41938): already implemented. tui/app/event_dispatch.go defines ResumableThread and AppExitInfo.FormatExitMessagesWithColor renders the exact indented `codex resume <thread-id>` command, adds the named-thread picker guidance when the name is non-empty, and applies the cyan command color to both options. TestFormatExitMessages covers unnamed, empty-name, named and colored output."
       ]
     },
     {
