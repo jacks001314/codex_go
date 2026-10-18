@@ -18245,9 +18245,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SEARCH_ENDPOINT"
+        "Equivalent implementation already present: standalone web search builds its HTTP client from the effective respect_system_proxy setting, so proxy-enabled searches use the host proxy while the disabled path clears the proxy transport. Dedicated appserver and network tests cover both behaviors."
       ]
     },
     {
