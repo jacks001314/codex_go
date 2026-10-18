@@ -26909,9 +26909,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's cli_daybreak feature is now disabled by default, the TUI's Daybreak behavior/update controls are gated by it, and local thread/start only stages daybreak_enabled when the feature is enabled. The slash-command catalog still lists /daybreak regardless of the feature, so Rust's hide-when-disabled presentation remains missing."
       ]
     },
     {

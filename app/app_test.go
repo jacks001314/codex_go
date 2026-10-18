@@ -6337,12 +6337,24 @@ func TestInteractiveRemoteCloseSideSkipsInterruptForOtherThread(t *testing.T) {
 func TestLocalThreadStartStagesDaybreakDefaultLikeRust(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
-	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\n"), 0o600); err != nil {
+	if err := os.WriteFile(config.ConfigPath(home), []byte("daybreak = true\nfeatures.cli_daybreak = true\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	params := interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
 	if params.DaybreakEnabled == nil || !*params.DaybreakEnabled {
 		t.Fatalf("thread/start daybreakEnabled = %v, want true", params.DaybreakEnabled)
+	}
+
+	// #51207: the configured preference is inert until the CLI Daybreak feature
+	// is enabled.
+	disabled := t.TempDir()
+	t.Setenv("CODEX_HOME", disabled)
+	if err := os.WriteFile(config.ConfigPath(disabled), []byte("daybreak = true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	params = interactiveLocalThreadStartParams(&cli.RootOptions{}, codextui.NewState(nil))
+	if params.DaybreakEnabled != nil {
+		t.Fatalf("thread/start daybreakEnabled = %v, want unset without cli_daybreak", params.DaybreakEnabled)
 	}
 
 	empty := t.TempDir()

@@ -1471,7 +1471,8 @@ func interactiveLocalThreadStartParams(root *cli.RootOptions, state *codextui.St
 	// configured Daybreak preference as its initial value
 	// (`params.daybreak_enabled = (config.daybreak_enabled && !config.ephemeral).then_some(true)`).
 	// The bootstrap thread is persistent, so the ephemeral guard is vacuous.
-	if interactiveTUISettings(root).DaybreakDefault {
+	settings := interactiveTUISettings(root)
+	if settings.DaybreakDefault && features.Enabled(settings.FeatureSettings, "cli_daybreak") {
 		enabled := true
 		threadStart.DaybreakEnabled = &enabled
 	}
