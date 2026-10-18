@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestGuardianPolicyConfigLikeRust mirrors Rust Config::guardian_policy_config:
 // the managed `guardian_policy_config` requirement wins over `[auto_review]
@@ -95,5 +99,52 @@ func TestRequirementsFileParsesGuardianExtraPolicy(t *testing.T) {
 	}
 	if configRequirementsEmpty(requirements) {
 		t.Fatal("configRequirementsEmpty() = true for a guardian_extra_policy-only requirement")
+	}
+}
+
+// TestGuardianConversationHistoryConfigLikeRust covers the two
+// [auto_review] overrides added by #49036. A blank prompt is an explicit
+// override, while a non-positive token budget keeps the bundled default.
+func TestGuardianConversationHistoryConfigLikeRust(t *testing.T) {
+	cfg := &Config{Values: map[string]any{"auto_review": map[string]any{
+		"experimental_conversation_history_prompt": "History override.",
+		"conversation_history_max_output_tokens":   int64(800),
+	}}}
+	if got, ok := cfg.GuardianConversationHistoryPrompt(); !ok || got != "History override." {
+		t.Fatalf("GuardianConversationHistoryPrompt() = %q, %v", got, ok)
+	}
+	if got := cfg.GuardianConversationHistoryMaxOutputTokens(4000); got != 800 {
+		t.Fatalf("GuardianConversationHistoryMaxOutputTokens() = %d, want 800", got)
+	}
+
+	cfg.Values = map[string]any{"auto_review": map[string]any{
+		"experimental_conversation_history_prompt": "",
+		"conversation_history_max_output_tokens":   int64(0),
+	}}
+	if got, ok := cfg.GuardianConversationHistoryPrompt(); !ok || got != "" {
+		t.Fatalf("blank prompt override = %q, %v, want explicit empty string", got, ok)
+	}
+	if got := cfg.GuardianConversationHistoryMaxOutputTokens(4000); got != 4000 {
+		t.Fatalf("invalid max output tokens = %d, want fallback 4000", got)
+	}
+}
+
+func TestLoadGuardianConversationHistoryConfigLikeRust(t *testing.T) {
+	home := t.TempDir()
+	body := "[auto_review]\n" +
+		"experimental_conversation_history_prompt = \"Loaded history override.\"\n" +
+		"conversation_history_max_output_tokens = 900\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(home)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, ok := cfg.GuardianConversationHistoryPrompt(); !ok || got != "Loaded history override." {
+		t.Fatalf("loaded prompt = %q, %v", got, ok)
+	}
+	if got := cfg.GuardianConversationHistoryMaxOutputTokens(4000); got != 900 {
+		t.Fatalf("loaded max output tokens = %d, want 900", got)
 	}
 }

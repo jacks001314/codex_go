@@ -144,6 +144,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.environment = r.guardianEnvironmentInputItems
 		modelReviewer.rootUserAuthorization = r.guardianRootUserAuthorizationForTurn
 		modelReviewer.retainedContext = r.guardianRetainedContextForTurn
+		modelReviewer.conversationHistory = r.guardianConversationHistoryForTurn
 		modelReviewer.fastDecision = r.emitGuardianV2FastDecision
 		modelReviewer.metrics = r.services.TurnMetrics
 		modelReviewer.subagentThread = r.turnThreadIsSubagent
@@ -648,6 +649,17 @@ func guardianReviewInstructions(cfg *config.Config, autoReview *model.AutoReview
 		}
 	}
 	instructions := state.RenderGuardianPolicyInstructions(policy, extraPolicy, policyTemplate, state.GuardianOutputContractPrompt())
+	if cfg != nil &&
+		features.Enabled(cfg.FeatureSettings(), "guardian_conversation_history_tools") &&
+		features.Enabled(cfg.FeatureSettings(), "apps") {
+		historyPrompt := guardianHistoryInstructions
+		if override, ok := cfg.GuardianConversationHistoryPrompt(); ok {
+			historyPrompt = override
+		}
+		if historyPrompt != "" {
+			instructions += "\n" + historyPrompt
+		}
+	}
 	format := state.GuardianTranscriptFormatLine
 	if cfg != nil {
 		format = state.ParseGuardianTranscriptFormat(cfg.GuardianV2TranscriptFormat())

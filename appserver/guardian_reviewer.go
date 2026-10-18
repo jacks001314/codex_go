@@ -118,6 +118,10 @@ type modelGuardianReviewer struct {
 	// prompt renders as the retained user-instruction section (Rust's
 	// SectionHistory::retained_context and the RetainedUserInstructionsSection).
 	retainedContext func(threadID, turnID string) *retainedctx.RetainedContext
+	// conversationHistory resolves the reviewed thread's live host-owned Apps
+	// history tools and their output budget. Nil keeps the single-request
+	// reviewer path used when the opt-in feature is disabled.
+	conversationHistory func(threadID, turnID string) *guardianConversationHistoryRuntime
 	// Rust #42807 gives extension contributors a request-scoped `decide` hook
 	// (Allow / Reviewed / AskUser) plus structured reasons for a fresh review.
 	// The Go port has no ApprovalReviewContributor extension registry; the
@@ -944,7 +948,11 @@ reviewAttempt:
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		historyCheckpoint = runner.reviewHistoryCheckpoint()
 	}
-	response, err = r.agent.Run(reviewCtx, reviewRequest)
+	if history := r.guardianConversationHistoryValue(threadID, turnID); history != nil && len(history.Tools) > 0 {
+		response, err = runGuardianReviewWithHistory(reviewCtx, r.agent, reviewRequest, history)
+	} else {
+		response, err = r.agent.Run(reviewCtx, reviewRequest)
+	}
 	if err == nil {
 		// The review request reached the session, so the retained-section
 		// omission state is delivered; a later composition may suppress it.

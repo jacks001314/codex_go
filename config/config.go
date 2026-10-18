@@ -1765,6 +1765,39 @@ func (c *Config) GuardianPolicyTemplate() (string, bool) {
 	return autoReviewConfigValue(c.Values, "experimental_policy_template")
 }
 
+// GuardianConversationHistoryPrompt returns the optional reviewer-only history
+// retrieval instructions. Unlike the policy overrides, an explicitly empty
+// string is meaningful: it suppresses the bundled instructions when the
+// feature is enabled.
+func (c *Config) GuardianConversationHistoryPrompt() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	autoReview, ok := c.Values["auto_review"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	value, ok := autoReview["experimental_conversation_history_prompt"].(string)
+	return value, ok
+}
+
+// GuardianConversationHistoryMaxOutputTokens returns the positive per-call
+// history tool budget, or fallback when the value is absent or invalid.
+func (c *Config) GuardianConversationHistoryMaxOutputTokens(fallback int) int {
+	if c == nil {
+		return fallback
+	}
+	autoReview, ok := c.Values["auto_review"].(map[string]any)
+	if !ok {
+		return fallback
+	}
+	value, ok := nonNegativeIntFromConfigValue(autoReview["conversation_history_max_output_tokens"])
+	if !ok || value == 0 {
+		return fallback
+	}
+	return value
+}
+
 // GuardianCircuitBreakAction mirrors Rust's
 // `auto_review.circuit_break_action` (#48796): "strict" attaches a structured
 // tooManyDenials error to a Guardian denial-limit interruption, while the
