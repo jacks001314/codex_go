@@ -27901,9 +27901,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: repeat_list_threads_cursor_for_testing"
+        "Equivalent behavior verified: state-DB-only listing returns -32603 with Rust's failure prefix when the database cannot serve the query, an explicitly empty cwd filter returns an empty successful page, and a nil next cursor is the exhaustion signal. Go lists local records directly without the remote multi-page refill loop that can repeat a provider cursor."
       ]
     },
     {
