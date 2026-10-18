@@ -22680,9 +22680,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: ConversationHistoryTools, GuardianConversationHistory, IsolatedSessionExtensions, conversation_history_tools"
+        "Blocked on a Guardian tool-execution loop and user_message Apps tools. Go registers guardian_conversation_history_tools and has an Apps MCP tool executor for normal turns, but the Guardian reviewer is a single-shot model session (guardianSessionRunner.Run) with no tool-call loop, no parent Apps MCP connection binding, and no search_messages/read_messages tool definitions. Implementing this needs live per-call policy checks, 4,000-token output limiting, prompt overrides, and isolated-session extension registries."
       ]
     },
     {
