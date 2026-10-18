@@ -19,10 +19,15 @@ import (
 )
 
 const (
-	maxShellSnapshotScopeBytes  = 256
-	shellSnapshotCaptureTimeout = 10 * time.Second
-	shellSnapshotRetryBackoff   = time.Second
-	maxShellSnapshotAttempts    = 3
+	maxShellSnapshotScopeBytes = 256
+	// Rust #51350: file replay admits 4 MiB of shell state and 8 MiB of raw
+	// capture output while the captured environment stays capped at 512 KiB.
+	maxFileShellSnapshotBytes        = 4 * 1024 * 1024
+	maxFileShellSnapshotCaptureBytes = 8 * 1024 * 1024
+	maxShellSnapshotEnvironmentBytes = 512 * 1024
+	shellSnapshotCaptureTimeout      = 10 * time.Second
+	shellSnapshotRetryBackoff        = time.Second
+	maxShellSnapshotAttempts         = 3
 )
 
 var shellSnapshotPlatformSupported = runtime.GOOS != "windows"
@@ -225,9 +230,16 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 	if err != nil {
 		return "", err
 	}
+	if len(output) > maxFileShellSnapshotCaptureBytes {
+		return "", fmt.Errorf("shell snapshot capture exceeds %d bytes", maxFileShellSnapshotCaptureBytes)
+	}
 	captured := shell.ParseCapturedSnapshot(shellType, output)
 	if captured == nil {
 		return "", errors.New("invalid captured shell state")
+	}
+	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
+	if err := validateShellSnapshotSizes(captured, rendered); err != nil {
+		return "", err
 	}
 	dir := filepath.Join(os.TempDir(), "codex-exec-server-shell-snapshots")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -244,7 +256,6 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 		_ = temp.Close()
 		return "", err
 	}
-	rendered := network.MaskSnapshotText(captured.RenderScript(nil), credentialPairs)
 	if _, err := temp.WriteString(rendered); err != nil {
 		_ = temp.Close()
 		return "", err
@@ -256,6 +267,25 @@ func (m *shellSnapshotManager) captureSnapshot(ctx context.Context, params *Exec
 		return "", err
 	}
 	return path, nil
+}
+
+// validateShellSnapshotSizes mirrors Rust #51350's replay limits: the captured
+// environment is capped independently from the 4 MiB file-replay state budget.
+func validateShellSnapshotSizes(captured *shell.CapturedSnapshot, renderedState string) error {
+	if captured == nil {
+		return errors.New("invalid captured shell state")
+	}
+	environmentBytes := len(captured.Environment)
+	if captured.StartupEnvironment != nil && len(captured.StartupEnvironment.Environment) > environmentBytes {
+		environmentBytes = len(captured.StartupEnvironment.Environment)
+	}
+	if environmentBytes > maxShellSnapshotEnvironmentBytes {
+		return fmt.Errorf("shell snapshot environment exceeds %d bytes", maxShellSnapshotEnvironmentBytes)
+	}
+	if len(renderedState) > maxFileShellSnapshotBytes {
+		return fmt.Errorf("shell snapshot state exceeds %d bytes", maxFileShellSnapshotBytes)
+	}
+	return nil
 }
 
 func (m *shellSnapshotManager) close() {

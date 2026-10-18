@@ -27136,9 +27136,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555: file-replay shell snapshots admit up to 4 MiB of rendered state and 8 MiB of raw capture output, while the captured environment stays capped at 512 KiB with distinct state/environment error messages. Tests: go test ./execserver -run ShellSnapshot -count=1"
       ]
     },
     {
