@@ -855,7 +855,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 523519d9747625dfd012a8336b1f52e7b4ec6c34	40431	Render Guardian review evidence with async scorer truncation (#40431)	2026-08-24	guardian	5	1	0.20	0	0	not_applicable	GuardianReviewEvidence,GuardianReviewEvidenceFragment,GuardianReviewEvidenceRecord,render_review_evidence
 527c5deb74e5cc390f8838ac361e340cb23c2234	54739	Close arg0 lock files before removing temporary directories (#54739)	2026-10-16	core	0	0		0	0	complete	
 528fd7ace5ec0a1c2a387dcb9c76a09f3fa011ee	40994	Enable retained-image budgeting by default (#40994)	2026-08-26	core	0	0		0	0	not_applicable	
-52950c592404f11cc245a83a27fb02f2c23bc0c1	52682	Validate Windows sandbox accounts before password repair (#52682)	2026-10-09	sandbox	3	0	0.00	0	0	implementation_pending	registered_packages,validate_record,validate_target
+52950c592404f11cc245a83a27fb02f2c23bc0c1	52682	Validate Windows sandbox accounts before password repair (#52682)	2026-10-09	sandbox	3	0	0.00	0	0	not_applicable	registered_packages,validate_record,validate_target
 529bcb2fdf11025b17709dc88b05d055626646a6	45549	Preserve streamed answers and plans when turns terminate (#45549)	2026-09-14	tui	1	0	0.00	0	0	implementation_pending	flush_answer_and_plan_streams
 529cd6b8602f77ce946502d2e67df6b41bc795af	51897	Use a dedicated matcher for network domain policies (#51897)	2026-10-08	core	8	3	0.38	0	0	complete	GlobalWildcard,compile_allowlist,compile_denylist,is_global_wildcard_domain_pattern,is_match
 52e12e0cb506e7bb2c9e406fc84d922e274a0e40	43298	Defer managed worktree transitions to fresh TUI loop iterations (#43298)	2026-09-06	tui	4	0	0.00	0	0	implementation_pending	ManagedWorktreeAttach,ManagedWorktreeTransition,attach_working_directory,finish_managed_worktree
@@ -916,7 +916,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 57b5e89be8efbf72bdf9f4502d1d046e369cd85d	54080	Extract TUI user-turn submission into a dedicated module (#54080)	2026-10-14	tui	1	0	0.00	0	0	not_applicable	try_submit_user_turn
 57d57df60845f6f59e1c30c71210c8af5246b32d	51396	Let late low-risk scores complete pending Guardian reviews (#51396)	2026-10-06	guardian	1	0	0.00	0	0	not_applicable	cached_approval
 57e2edc6e97474448f1fb634224471448bc09d40	41041	Encrypt sensitive history and notes tool arguments (#41041)	2026-08-27	appserver	0	0		0	0	not_applicable	
-580b18cb7488a76096238820f779b417510441d0	51256	Start the Windows sandbox service during registered Core setup (#51256)	2026-10-06	appserver	1	0	0.00	0	0	implementation_pending	start_windows_sandbox_service_for_setup
+580b18cb7488a76096238820f779b417510441d0	51256	Start the Windows sandbox service during registered Core setup (#51256)	2026-10-06	appserver	1	0	0.00	0	0	not_applicable	start_windows_sandbox_service_for_setup
 58670eeac4b0bdb9fcb86929d8631c14aee0d9f6	48213	Isolate executable fixture copies in CLI tests on Linux (#48213)	2026-09-25	core	0	0		0	0	not_applicable	
 58838dfa5ba1d4b5383898cc2d08f270323d62d0	47858	Validate loaded plugins outside the cache lock (#47858)	2026-09-24	plugins	0	0		0	0	not_applicable	
 588b781ab4924ce7352488394028e63d74cf807f	43005	Add Guardian V2 failure reasons and connection timing metrics (#43005)	2026-09-05	guardian	1	0	0.00	0	0	not_applicable	sampler_failure_reason
@@ -1525,7 +1525,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8f5387d104534d280a3c2b15ef9f5dbb3aa3a758	48198	Honor execution environment proxy requirements (#48198)	2026-09-25	config	0	0		0	0	not_applicable	
 8f6517772bc20dab715e97f9d7aac15df00bbea9	49106	Add history pagination to the agent command center (#49106)	2026-09-28	tui	6	3	0.50	0	0	audit_pending	next_batch,selectable_indices,show_more_agents_overview
 8f73cdee456b6c46b791780d40cadf9d556d22a4	46300	Centralize OAuth login and refresh handling with safer diagnostics (#46300)	2026-09-17	core	26	21	0.81	0	0	audit_pending	LIFE_SCIENCES_OAUTH_STATE_SUFFIX,from_response,from_url,generate_state,redact_error_url
-8f7a0f7a878199c6886600370e5be6bd37ca38a3	50480	Skip managed config loading for registered Windows sandbox refreshes (#50480)	2026-10-03	sandbox	1	0	0.00	0	0	implementation_pending	validate_provisioning_request
+8f7a0f7a878199c6886600370e5be6bd37ca38a3	50480	Skip managed config loading for registered Windows sandbox refreshes (#50480)	2026-10-03	sandbox	1	0	0.00	0	0	not_applicable	validate_provisioning_request
 8f82b8a31cfdf690479067a179eba2c761102643	50803	Use the managed daemon for eligible remote-control launches (#50803)	2026-10-04	tui	2	1	0.50	0	0	audit_pending	RemoteControlSubcommand
 8f8ace78cbac2901b0030a0101ae00146148c237	47408	Enforce application network policy for AWS auth and telemetry (#47408)	2026-09-23	appserver	10	3	0.30	0	0	audit_pending	PolicyExporter,RuntimeHttpClient,load_profile,load_sdk_config,profile_credentials_provider,test_request,with_http_client_factory
 8f9d0e465299e7f410bbcfe94f6096a882a4c128	45811	Bound WSL terminal detection and handle inconclusive probes safely (#45811)	2026-09-16	tui	0	0		0	0	not_applicable	

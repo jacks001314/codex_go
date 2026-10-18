@@ -26064,9 +26064,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: validate_provisioning_request"
+        "Round 308 (audit): N/A - Go has no Windows sandbox service IPC or machine-policy loader. The direct setup helper receives refresh_only in its setup payload and already skips provisioning/marker writes; there is no managed-configuration fetch in this path that a registered refresh could bypass."
       ]
     },
     {
@@ -27049,9 +27049,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: start_windows_sandbox_service_for_setup"
+        "Round 308 (audit): N/A - Go's registered Core setup invokes the local setup helper directly and has no Windows sandbox service, SCM client, or stopped-service availability state to start before provisioning. Existing missing-helper/elevation handling remains the applicable failure path."
       ]
     },
     {
@@ -29453,9 +29453,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: registered_packages, validate_record, validate_target"
+        "Round 308 (audit): N/A - Go's setup helper creates/updates local sandbox users directly with NetUserAdd/NetUserSetInfo and does not maintain Rust's registered-runtime InstallationRecord, package-family registrations, or service-owned logon-token validation/repair transaction. It also has no staged registered-package rollback path on which these checks operate."
       ]
     },
     {
