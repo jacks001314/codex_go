@@ -18497,9 +18497,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: McpResourceReadTarget"
+        "Equivalent implementation already present: resource reads accept a nullable-wire target with connectorId and required nullable linkId, require codex_apps plus a real non-synthetic link (or explicit null), suppress target metadata when originCallId scope is present, and include the target in resource cache identity. Wire-shape and validation tests pass."
       ]
     },
     {
