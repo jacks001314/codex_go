@@ -21356,9 +21356,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 11/17; needs review: GuardianRetainedInstructions, RetainedReviewContext, into_annotated_messages, into_annotated_user_inputs, prepare_annotated_conversation_items_for_history"
+        "Equivalent implementation: RetainNewRetainedInstructions removes only retained fragments whose complete source revision remains in reviewer history, preserves source-order labels, and restores missing guidance after reviewer compaction as contextual evidence. Retained-context tests cover consecutive reviews, changed/incomplete revisions, eviction labels, and compaction restore semantics."
       ]
     },
     {

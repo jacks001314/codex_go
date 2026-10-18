@@ -1420,7 +1420,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 86a54b051c08f34f373c507ae16a91915ab08700	50516	Add scenario coverage for remote `/compact` context preservation (#50516)	2026-10-03	core	0	0		0	0	not_applicable	
 86b1b359cf89b65c136eda8c84e5ee544a6c2cf2	42811	Enable staging login issuer overrides in packaged builds (#42811)	2026-09-04	appserver	0	0		0	0	not_applicable	
 86b7d127428573c8088ef7ed478e59f7bb28a9db	42144	Add Guardian V2 analytics events (#42144)	2026-09-01	guardian	6	4	0.67	0	0	audit_pending	GuardianV2EventKind,track_guardian_v2_event
-86be5320b068ef67b56348b02aa8c33706955da6	48060	Deduplicate retained instructions across Guardian reviews (#48060)	2026-09-25	guardian	17	11	0.65	0	0	audit_pending	GuardianRetainedInstructions,RetainedReviewContext,into_annotated_messages,into_annotated_user_inputs,prepare_annotated_conversation_items_for_history,prepare_prompt
+86be5320b068ef67b56348b02aa8c33706955da6	48060	Deduplicate retained instructions across Guardian reviews (#48060)	2026-09-25	guardian	17	17	1.00	0	0	complete
 86ee40c3801a8c4fbb35b1159c32da1447cf09d9	54315	Keep TUI Markdown colors readable against their backgrounds (#54315)	2026-10-15	tui	1	1	1.00	0	0	complete	
 872fc22f9c41c3ba7f9fcc5dd8630b880ee713b8	45799	Complete Windows sandbox uninstall cleanup (#45799)	2026-09-15	sandbox	4	1	0.25	0	0	audit_pending	EVENT_CLEANUP_DETAIL,contains_sid,owner_allows_cleanup
 875bf9209bd9aeb0a5f102888ccd90b2b59cc3c9	49778	Define exec-server protocol types for streamed file writes (#49778)	2026-09-30	execserver	5	5	1.00	0	0	complete	
