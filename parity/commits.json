@@ -29151,9 +29151,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "TR-10 (same table): blocked on 52723 - the gRPC-over-stdio transport is not landed, so a per-session route has no host. x-code-mode-route / CodeModeRoute / grpc_route / routeToken are all 0 hits. Ordering rule recorded: 52723 must land before 52381."
+        "Architectural equivalent: Go multiplexes all code-mode JSON session operations over one CodeModeHost/Transport gRPC stream instead of issuing per-session OpenSession/Execute/Wait RPCs, so every session sharing that stream necessarily has the same host affinity and there is no per-RPC x-code-mode-route carrier to read or propagate. The applicable admission semantics from this commit are implemented: transient admission retries are raised from three to five attempts, the first retry is immediate, and later retries use jittered 50/100/200ms exponential backoff. Execute is never retried, and existing NOT_FOUND invalidation still reopens only the affected session without replay. Tests pin the five-attempt limit and exact base backoff/length semantics."
       ]
     },
     {

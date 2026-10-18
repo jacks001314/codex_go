@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -189,13 +190,14 @@ func grpcDialOptionsForEndpoint(endpoint string, httpClient *http.Client) []grpc
 	return options
 }
 
-// Rust #51185: retry transient gRPC code-mode session admission failures.
-// Connecting and the initial session/open handshake are retried at most three
-// attempts with 100ms/200ms backoff, only for Unavailable/ResourceExhausted.
-// The retry never wraps Execute, so an established execution is never replayed.
+// Rust #51185 / #52381: retry transient gRPC code-mode session admission
+// failures. Connecting and the initial session/open handshake are retried at
+// most five attempts, only for Unavailable/ResourceExhausted. The first retry
+// is immediate, followed by jittered 50/100/200ms backoff. The retry never wraps
+// Execute, so an established execution is never replayed.
 const (
-	grpcSessionAdmissionAttempts  = 3
-	grpcSessionAdmissionBaseDelay = 100 * time.Millisecond
+	grpcSessionAdmissionAttempts  = 5
+	grpcSessionAdmissionBaseDelay = 50 * time.Millisecond
 )
 
 // sessionAdmissionRetrier marks a provider whose session admission retries
@@ -230,12 +232,18 @@ func retryableSessionAdmissionError(err error) bool {
 	}
 }
 
-// sessionAdmissionRetryDelay mirrors Rust #51185's 100ms * retries backoff.
+var sessionAdmissionJitterFactor = func() float64 {
+	return 0.9 + rand.Float64()*0.2
+}
+
+// sessionAdmissionRetryDelay mirrors Rust #52381: the first retry is immediate,
+// then the base delay doubles for attempts 2 through 4 with +/-10% jitter.
 func sessionAdmissionRetryDelay(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
+	if attempt <= 1 {
+		return 0
 	}
-	return time.Duration(attempt) * grpcSessionAdmissionBaseDelay
+	delay := grpcSessionAdmissionBaseDelay << (attempt - 2)
+	return time.Duration(float64(delay) * sessionAdmissionJitterFactor())
 }
 
 var _ tool.CodeModeRemoteProvider = (*GrpcCodeModeSessionProvider)(nil)
