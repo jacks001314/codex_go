@@ -283,6 +283,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 	if err != nil {
 		return nil, err
 	}
+	websocketProvider.ApplyManagedResidency(managedResidencyForConfig(cfg))
 	if baseURL := stringConfigValue(cfg, "experimental_realtime_ws_base_url"); baseURL != "" {
 		websocketProvider.BaseURL = baseURL
 	}
@@ -291,7 +292,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		sidebandBaseURL = baseURL
 	}
 
-	runtimeProvider := model.CreateRuntimeProviderForID(providerConfig.ProviderID, *providerInfo, snapshot)
+	runtimeProvider := model.CreateRuntimeProviderWithResidency(providerConfig.ProviderID, *providerInfo, snapshot, managedResidencyForConfig(cfg))
 	callProvider, err := runtimeProvider.APIProvider()
 	if err != nil {
 		return nil, err
@@ -301,6 +302,7 @@ func (r *RuntimeRouter) realtimeStartOptions(params *realtime.StartParams) (*rea
 		if err != nil {
 			return nil, err
 		}
+		callProvider.ApplyManagedResidency(managedResidencyForConfig(cfg))
 		callProvider.BaseURL = baseURL
 	}
 	callAuth, err := runtimeProvider.APIAuth()

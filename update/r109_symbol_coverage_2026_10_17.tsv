@@ -2029,7 +2029,7 @@ be5296d4672f59205c1b8a76f46e74eae4f10d51	53606	Prepare compaction helpers for ba
 be6ebb1f6d4cf3bcd70c5c20be2677bb38dec860	40017	Trace turn context creation and realtime state checks (#40017)	2026-08-21	realtime	0	0		0	0	not_applicable	
 be9060ff9620e170a05a6353ab293efb7c704248	52923	Stabilize the realtime steering timeline test (#52923)	2026-10-10	appserver	0	0		0	0	not_applicable	
 beae473be8564d884a8cfe9704194a5c803d2ac1	54654	Allow dynamic tool calls to execute in parallel (#54654)	2026-10-16	core	0	0		0	0	complete	
-bee042d119a4b11068b26386cf8c1e7258bbab58	46011	Enforce managed residency when constructing API providers (#46011)	2026-09-16	appserver	4	2	0.50	0	0	audit_pending	read_managed_residency_requirement,set_managed_residency_requirement
+bee042d119a4b11068b26386cf8c1e7258bbab58	46011	Enforce managed residency when constructing API providers (#46011)	2026-09-16	appserver	4	4	1.00	0	0	complete
 bee28e8a061c38c781c74299f2c1d90e3732da18	50427	Cap persisted command output in paginated history at 64 KiB (#50427)	2026-10-02	appserver	4	4	1.00	0	0	complete	
 bf3eb2ec91fb150ad62561578666532b2e1c1c8f	40460	Prevent Unix PTY I/O from blocking runtime shutdown (#40460)	2026-08-24	core	3	1	0.33	0	0	audit_pending	PtyIo,StdinCloseBehavior
 bf4ca52b61686398aafb6f4467da4202b6bdec53	53419	Restore saved thread permissions during configuration loading (#53419)	2026-10-12	guardian	1	1	1.00	0	0	complete
