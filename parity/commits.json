@@ -12929,9 +12929,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 5/9; needs review: ProvisioningListener, load_from, resolve_command_runner, save_to"
+        "N/A by architecture: the upstream commit extracts Rust helper-copy, token-user, provisioning-pipe, and service-runtime modules. Go already keeps helper materialization in sandbox/windowssandbox/helper_materialization.go, token-user queries in token_windows.go, and service/provisioning logic in dedicated files."
       ]
     },
     {
