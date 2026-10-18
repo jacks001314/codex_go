@@ -699,6 +699,20 @@ func LoadEffectiveWithOptions(codexHome string, opts *EffectiveOptions) (*Config
 	if _, ok := cfg.Values["experimental_thread_store_endpoint"]; ok {
 		return nil, errors.New("`experimental_thread_store_endpoint` is no longer supported; remove it from config.toml")
 	}
+	// Rust's experimental_thread_store schema exposes the local selector. Go
+	// always uses the local thread store, so accept that selector and reject
+	// unsupported store types explicitly instead of treating the whole section
+	// as an unknown field.
+	if raw, ok := cfg.Values["experimental_thread_store"]; ok && raw != nil {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, errors.New("experimental_thread_store must be a table")
+		}
+		storeType, _ := table["type"].(string)
+		if strings.TrimSpace(storeType) != "local" {
+			return nil, fmt.Errorf("experimental_thread_store type %q is not supported; expected \"local\"", storeType)
+		}
+	}
 	// Rust #51547: `windows.allow_mxc = false` is an opt-out of the native MXC
 	// backend. An explicit `windows.sandbox = "mxc"` must fail the load with an
 	// actionable error instead of silently selecting a disallowed backend.
@@ -874,6 +888,7 @@ var knownTopLevelConfigFields = map[string]struct{}{
 	"experimental_realtime_ws_backend_prompt":    {},
 	"experimental_realtime_ws_startup_context":   {},
 	"experimental_realtime_start_instructions":   {},
+	"experimental_thread_store":                  {},
 	"experimental_use_unified_exec_tool":         {},
 	"features":                                   {},
 	"feedback":                                   {},
