@@ -1558,7 +1558,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 923c6028b69afc77e54bba78f78745ada1e46d2d	45546	Move daemon packages out of the standalone CLI installation (#45546)	2026-09-14	appserver	8	6	0.75	0	0	audit_pending	acquire_install_lock,installer_job
 923f276f579c64251825ba767ff5bc36a28e36a0	53804	Keep the Agent command center visible during archive and delete (#53804)	2026-10-13	tui	1	0	0.00	0	0	complete	CenteredView
 929389f59696171f494e3105e56853ad2ec26c98	43953	Preserve per-image generation IDs in image generation analytics (#43953)	2026-09-09	tui	0	0		0	0	not_applicable	
-92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2	49600	Reuse unchanged history snapshots when resuming threads (#49600)	2026-09-30	guardian	3	2	0.67	0	0	audit_pending	load_from_rollout_path
+92bc601ad60542c92bf0bb1e7a2eb70b84ac49d2	49600	Reuse unchanged history snapshots when resuming threads (#49600)	2026-09-30	guardian	3	2	0.67	0	0	not_applicable	load_from_rollout_path
 92caad782887cde063572fc0a0efbf5b1317520d	53496	Preserve pending Effects toggles across save refreshes (#53496)	2026-10-12	tui	5	0	0.00	0	0	implementation_pending	SelectionToggleState,complete_selection_toggle_for_active_view,effects_with_toggle_states,refresh_config_panel_after_effective_save,selection_toggle_states_for_active_view
 92f887ec35098c479dbe7f0d48d23f7f955055a0	41344	Use refreshed MCP tool caches during binding capture (#41344)	2026-08-28	mcp	2	0	0.00	0	0	implementation_pending	cached_tools_or,current_tools_or
 93053c7f5ddc1c26e649e9e7ffc0d9e853c633cf	42408	Harden embedded composer input handling (#42408)	2026-09-03	tui	3	0	0.00	0	0	implementation_pending	footer_flash_delay,resume_text_entry,show_footer_flash

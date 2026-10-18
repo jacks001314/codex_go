@@ -24118,9 +24118,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: load_from_rollout_path"
+        "N/A - Go has no preloaded/shared history snapshot or non-serialized history revision to carry through resume. Cold resume always reloads the selected record and rollout under lifecycle ownership, so there is no unchanged snapshot to reuse or late-write revision check to perform. Compressed rollout materialization and archived-path rejection stay on that reload path."
       ]
     },
     {
