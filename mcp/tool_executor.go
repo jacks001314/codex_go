@@ -356,6 +356,19 @@ func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation)
 		return nil, tool.RespondToModel("mcp handler received unsupported payload")
 	}
 	arguments := mcpHookToolInput(invocation.Payload.Arguments)
+	releaseInvocation := e.service.RegisterToolInvocation(e.resolvedServerName(), invocation.CallID, MCPInvocationMetadata{
+		ServerName:           e.resolvedServerName(),
+		ToolName:             e.resolvedRemoteToolName(),
+		ConnectorID:          e.connectorID,
+		ConnectorName:        e.connectorName,
+		ConnectorDescription: e.connectorDescription,
+		ToolTitle:            e.toolInfo.Title,
+		ToolDescription:      e.toolInfo.Description,
+		Arguments:            cloneMCPInvocationArguments(arguments),
+		ThreadID:             e.threadID,
+		TurnID:               e.turnID,
+	})
+	defer releaseInvocation()
 	rewrittenArguments := any(nil)
 	if e.openAIFileRewriter != nil && len(e.openAIFileInputOptionalFields) > 0 {
 		rewritten, err := e.openAIFileRewriter.RewriteArgumentsWithOptionalFields(ctx, arguments, e.openAIFileInputOptionalFields, e.hostedFileUploadContext())

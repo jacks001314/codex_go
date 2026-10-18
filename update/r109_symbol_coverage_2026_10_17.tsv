@@ -2488,7 +2488,7 @@ e9633d7a0226eac91c7a791dc4f92cf8f25df2ae	45428	Avoid cloning MCP server status s
 e974aad3b1a8f144273e882c614aefe69eaef615	51930	Support model-specific function description prefixes (#51930)	2026-10-08	model	8	8	1.00	0	0	complete
 e9a446d79dc2b40549186ac69f665794ad52cdd5	41100	Add Guardian V2 decision metrics (#41100)	2026-08-27	guardian	9	9	1.00	0	0	complete	
 e9a6d731b783fa710ca0e359e88701bc0d4c28a6	41230	Apply app routing policy to unauthenticated plugin reads (#41230)	2026-08-27	appserver	0	0		0	0	not_applicable	
-e9b4c6967ee308ed1d1880ec36e3fda183c1a9ac	47647	Apply Guardian computer-use review to the Browser connector (#47647)	2026-09-23	guardian	2	0	0.00	0	0	implementation_pending	for_mcp_connector,is_node_repl_backed_connector
+e9b4c6967ee308ed1d1880ec36e3fda183c1a9ac	47647	Apply Guardian computer-use review to the Browser connector (#47647)	2026-09-23	guardian	2	1	0.50	0	0	partial	for_mcp_connector
 e9e6cf63492da108a3cabaf3cc7b23d0640ef4cf	52178	Strip symbols from source-built release package binaries (#52178)	2026-10-08	core	0	0		0	0	complete	
 ea2046f36d5ee12d39c8e168fc3e5129301afa2b	42668	Cancel remote control enrollment on stdio shutdown (#42668)	2026-09-04	appserver	0	0		0	0	not_applicable	
 ea218f5cd8a536b6e89dbd7f2338c93e87bc5bbf	46302	Validate network socket policies using the executor OS (#46302)	2026-09-17	execserver	6	3	0.50	0	0	audit_pending	NetworkProxyExecutorOs,build_config_state_for_spec,from_platform_os

@@ -15,6 +15,7 @@ import (
 
 type appserverMCPElicitationHandler struct {
 	broker              *ServerRequestBroker
+	service             *mcp.MCPService
 	reviewer            GuardianReviewer
 	authority           func(string, string, string) mcpElicitationAuthority
 	persist             func(*mcp.MCPElicitationRequest, *MCPElicitationRequestResponse) error
@@ -103,8 +104,37 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 		if reason := validateGuardianMCPElicitation(request); reason != "" {
 			return mcpElicitationAutoDecline(), nil
 		}
+		serverName := mcpElicitationServerName(request)
+		originatingCallID := mcpElicitationLiveCallID(request)
+		liveInvocation, liveOK := mcp.MCPInvocationMetadata{}, false
+		if h != nil && h.service != nil {
+			liveInvocation, liveOK = h.service.LiveToolInvocation(serverName, originatingCallID)
+		}
+		liveComputerUse := liveOK && strings.TrimSpace(liveInvocation.ServerName) == serverName &&
+			mcp.IsNodeReplBackedConnector(serverName, liveInvocation.ConnectorID)
+		strict := mcpElicitationStrictAutoReview(request)
+		action := guardianMCPAction(request)
+		reviewID := appserverMCPElicitationID(request)
+		if liveComputerUse {
+			// Rust #47647: the nested elicitation keeps its own action identity,
+			// while the assessment is attributed to the originating call.
+			reviewID = originatingCallID
+		}
+		if strict && mcp.IsCodexAppsMCPServerName(serverName) && !liveComputerUse {
+			// A hosted connector without a live Browser invocation must be
+			// reviewed through its registered outer invocation. The identity
+			// comes from host-registered tool metadata, never from the
+			// provider-supplied elicitation arguments.
+			if !liveOK || strings.TrimSpace(liveInvocation.ServerName) != serverName ||
+				mcpElicitationConnectorID(request) != strings.TrimSpace(liveInvocation.ConnectorID) ||
+				mcpElicitationToolName(request) != strings.TrimSpace(liveInvocation.ToolName) {
+				return mcpElicitationStrictAutoReviewDecline(), nil
+			}
+			reviewID = originatingCallID
+			action = guardianMCPRegisteredInvocationAction(liveInvocation)
+		}
 		if h != nil && h.reviewer != nil {
-			decision, reason, err := h.reviewer.Review(ctx, request.ThreadID, request.TurnID, appserverMCPElicitationID(request), guardianMCPAction(request))
+			decision, reason, err := h.reviewer.Review(ctx, request.ThreadID, request.TurnID, reviewID, action)
 			if err == nil {
 				// Rust #40031: strict MCP auto-review propagates canonical
 				// approved / denied / timed-out / aborted outcomes instead of
@@ -124,6 +154,10 @@ func (h *appserverMCPElicitationHandler) HandleMCPElicitation(ctx context.Contex
 				meta["timed_out"] = true
 			}
 			return &mcp.MCPElicitationResponse{Action: mcp.MCPElicitationActionDecline, Meta: meta}, nil
+		}
+		if strict {
+			// Strict auto review never falls back to prompting the user.
+			return mcpElicitationStrictAutoReviewDecline(), nil
 		}
 	}
 	return h.requestMCPElicitation(ctx, request)
@@ -297,6 +331,69 @@ func mcpElicitationApprovalKind(request *mcp.MCPElicitationRequest) string {
 		return ""
 	}
 	return strings.TrimSpace(stringFromMap(meta, "codex_approval_kind"))
+}
+
+func mcpElicitationStrictAutoReview(request *mcp.MCPElicitationRequest) bool {
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return false
+	}
+	value, _ := meta["codex_strict_auto_review"].(bool)
+	return value
+}
+
+// mcpStrictAutoReviewDeclineMessage mirrors Rust
+// codex_mcp::elicitation::STRICT_AUTO_REVIEW_DECLINE_MESSAGE: a strict review
+// that cannot verify the request fails closed without prompting the user.
+const mcpStrictAutoReviewDeclineMessage = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval."
+
+func mcpElicitationStrictAutoReviewDecline() *mcp.MCPElicitationResponse {
+	return &mcp.MCPElicitationResponse{
+		Action: mcp.MCPElicitationActionDecline,
+		Meta:   map[string]any{"message": mcpStrictAutoReviewDeclineMessage},
+	}
+}
+
+func mcpElicitationToolName(request *mcp.MCPElicitationRequest) string {
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringFromMap(meta, "tool_name"))
+}
+
+func mcpElicitationLiveCallID(request *mcp.MCPElicitationRequest) string {
+	meta, ok := requestMetaMap(request)
+	if !ok {
+		return ""
+	}
+	if mcpElicitationServerName(request) == mcp.RuntimeCodexAppsMCPServerName {
+		if apps := mapFromAny(meta[mcp.MCPToolCodexAppsMetaKey]); apps != nil {
+			return strings.TrimSpace(stringFromMap(apps, "call_id"))
+		}
+		return ""
+	}
+	return strings.TrimSpace(stringFromMap(meta, "callId"))
+}
+
+// guardianMCPRegisteredInvocationAction builds the review action for a hosted
+// connector's registered outer invocation. Rust #47647 reviews the invocation
+// recorded by the host instead of trusting connector or tool identity supplied
+// by the nested elicitation.
+func guardianMCPRegisteredInvocationAction(invocation mcp.MCPInvocationMetadata) state.Action {
+	arguments := cloneAnyMapAppserver(mapFromAny(invocation.Arguments))
+	return state.Action{
+		Type:                 "mcp_tool_call",
+		Server:               strings.TrimSpace(invocation.ServerName),
+		ToolName:             strings.TrimSpace(invocation.ToolName),
+		ConnectorID:          strings.TrimSpace(invocation.ConnectorID),
+		ConnectorName:        strings.TrimSpace(invocation.ConnectorName),
+		ToolTitle:            strings.TrimSpace(invocation.ToolTitle),
+		Arguments:            arguments,
+		ToolDescription:      strings.TrimSpace(invocation.ToolDescription),
+		ConnectorDescription: strings.TrimSpace(invocation.ConnectorDescription),
+		Extra:                map[string]any{"arguments": arguments},
+	}
 }
 
 func guardianMCPAction(request *mcp.MCPElicitationRequest) state.Action {

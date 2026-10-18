@@ -20,15 +20,24 @@ Implemented:
 - Node REPL review-evidence capture resolves the connector through
   `ToolRouter.MCPConnectorInfo`, so Browser connector results are retained.
 
-Remaining:
-
-- Go has no live MCP invocation registry keyed by server/call ID, so Browser
-  elicitations cannot yet be correlated to the originating invocation for
-  strict nested review. The action carries the request's connector ID, but a
-  missing/unknown correlation is not separately rejected as upstream requires.
+- Go now keeps a live MCP invocation registry keyed by server/call ID with the
+  host-registered connector, tool, argument, and thread/turn identity.
+  `ToolExecutor.Execute` registers the call for its lifetime.
+- Browser nested elicitations read `_codex_apps.call_id` and inherit the
+  originating call as the review target while keeping their own action
+  identity (Rust #47647).
+- Strict `codex_apps` review uses the live Browser invocation for nested
+  actions. Other hosted connectors must match their registered outer
+  invocation's connector and tool; missing, unknown, completed, or mismatched
+  correlations fail closed with Rust's strict decline message and never prompt
+  the user or reach the reviewer.
+- The outer-invocation review action comes from registered host metadata,
+  including the model-supplied arguments, instead of the elicitation payload.
 
 ## Verification
 
-- `go test ./mcp -run 'NodeRepl|ConfirmationPolicies|Browser' -count=1`
-- `go test ./appserver -run 'NodeRepl|Browser|Guardian' -count=1`
+- `go test ./mcp -count=1`
+- `go test ./mcp -run Invocation -count=1 -race`
+- `go test ./appserver -run 'Browser|MCPElicitation|GuardianMCPElicitation' -count=1`
 - `go vet ./mcp ./appserver`
+- `go build ./...`

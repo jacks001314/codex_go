@@ -751,6 +751,7 @@ type MCPService struct {
 	progress      MCPProgressHandler
 	roots         MCPRootsProvider
 	oauthComplete MCPOAuthLoginCompletionHandler
+	invocations   *MCPInvocationRegistry
 	// oauthCompleteListeners let multiple in-process consumers observe the same
 	// login completion while the app-server handler remains installed.
 	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
@@ -830,7 +831,7 @@ type cachedMCPStdioClient struct {
 }
 
 func NewMCPService(runtime *RuntimeConfig) *MCPService {
-	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU}
+	service := &MCPService{servers: map[string]MCPServerStatus{}, configs: map[string]ServerConfig{}, dynamicConfig: map[string]bool{}, required: map[string]bool{}, starting: map[string]int{}, httpClients: map[string]*cachedMCPHTTPClient{}, stdioClients: map[string]*cachedMCPStdioClient{}, oauthLogins: map[string]*OAuthLoginServer{}, resourceCache: NewMCPResourceCache(nil), generation: 1, appsMCPProductSKU: DefaultCodexAppsMCPProductSKU, invocations: NewMCPInvocationRegistry()}
 	if runtime != nil {
 		// Rust reads `config.apps_mcp_product_sku.as_deref().unwrap_or(..)`; Go's
 		// runtime config cannot distinguish an absent SKU from an empty one, so

@@ -13742,6 +13742,7 @@ func (r *RuntimeRouter) configureMCPService(service *mcp.MCPService) {
 	}
 	service.SetElicitationHandler(&appserverMCPElicitationHandler{
 		broker:    r.requireServerRequests(),
+		service:   service,
 		reviewer:  reviewer,
 		authority: r.currentMCPElicitationAuthority,
 		persist:   r.persistMCPToolApprovalAmendment,
