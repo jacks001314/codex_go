@@ -349,7 +349,8 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 			"nested-oauth": map[string]any{
 				"url": "https://nested.example.test",
 				"oauth": map[string]any{
-					"client_id": "client-nested",
+					"client_id":     "client-nested",
+					"client_secret": "nested-secret",
 				},
 			},
 		},
@@ -373,7 +374,7 @@ func TestRuntimeConfigFromValuesParsesMCPServersAndAppsFeature(t *testing.T) {
 		t.Fatalf("empty scopes config = %#v", emptyScopes)
 	}
 	nested := runtime.Servers["nested-oauth"].Config
-	if nested.URL != "https://nested.example.test" || nested.OAuthClientID != "client-nested" {
+	if nested.URL != "https://nested.example.test" || nested.OAuthClientID != "client-nested" || nested.OAuthClientSecret != "nested-secret" {
 		t.Fatalf("nested oauth config = %#v", nested)
 	}
 }

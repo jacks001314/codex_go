@@ -65,9 +65,14 @@ type ServerConfig struct {
 	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty"`
 	HTTPHeadersHelper string            `json:"http_headers_helper,omitempty"`
 	OAuthClientID     string            `json:"oauth_client_id,omitempty"`
-	OAuthCallbackPort uint16            `json:"oauth_callback_port,omitempty"`
-	OAuthCallbackURL  string            `json:"oauth_callback_url,omitempty"`
-	OAuthResource     string            `json:"oauth_resource,omitempty"`
+	// OAuthClientSecret is the configured secret for a pre-registered
+	// confidential OAuth client (Rust #47891). It is only valid with a client
+	// ID and is used for token exchange/refresh instead of persisting it in the
+	// token record.
+	OAuthClientSecret string `json:"oauth_client_secret,omitempty"`
+	OAuthCallbackPort uint16 `json:"oauth_callback_port,omitempty"`
+	OAuthCallbackURL  string `json:"oauth_callback_url,omitempty"`
+	OAuthResource     string `json:"oauth_resource,omitempty"`
 	// OAuthAuthorizationServerIssuer is the expected resource authorization
 	// server issuer for EMA token exchange (Rust #44832); it is only valid
 	// together with auth = "ema_auth".
@@ -186,6 +191,9 @@ func ValidateServerAuth(serverName string, config *ServerConfig) error {
 	if config.EffectiveAuth() == ServerAuthEMAAuth {
 		// EMA MCP connections are not enabled in this version (Rust #44832).
 		return errors.New("EMA MCP connections are not enabled in this version")
+	}
+	if strings.TrimSpace(config.OAuthClientSecret) != "" && strings.TrimSpace(config.OAuthClientID) == "" {
+		return errors.New("oauth.client_secret requires oauth.client_id")
 	}
 	if strings.TrimSpace(config.HTTPHeadersHelper) != "" {
 		if strings.TrimSpace(config.URL) == "" || strings.TrimSpace(config.Command) != "" {
@@ -580,6 +588,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.EnvHTTPHeaders = runtimeConfigStringMap(values, "env_http_headers")
 		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
+		server.OAuthClientSecret = runtimeConfigOAuthClientSecret(values)
 		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
 		server.OAuthCallbackURL = runtimeConfigStringAny(values, "oauth_callback_url", "oauthCallbackUrl")
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")
@@ -641,6 +650,17 @@ func runtimeConfigOAuthClientID(values map[string]any) string {
 		return ""
 	}
 	return runtimeConfigStringAny(oauth, "client_id", "clientId")
+}
+
+func runtimeConfigOAuthClientSecret(values map[string]any) string {
+	if value := runtimeConfigStringAny(values, "oauth_client_secret", "oauthClientSecret"); value != "" {
+		return value
+	}
+	oauth, ok := runtimeConfigMapAny(values, "oauth")
+	if !ok {
+		return ""
+	}
+	return runtimeConfigStringAny(oauth, "client_secret", "clientSecret")
 }
 
 func runtimeConfigOAuthCallbackPort(values map[string]any) uint16 {

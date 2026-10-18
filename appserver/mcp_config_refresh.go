@@ -269,6 +269,7 @@ func enterpriseServerRegistrationFingerprint(config mcp.ServerConfig) string {
 		EnvHTTPHeaders                 map[string]string `json:"env_http_headers"`
 		HTTPHeadersHelper              string            `json:"http_headers_helper"`
 		OAuthClientID                  string            `json:"oauth_client_id"`
+		OAuthClientSecret              string            `json:"oauth_client_secret"`
 		OAuthCallbackPort              uint16            `json:"oauth_callback_port"`
 		OAuthCallbackURL               string            `json:"oauth_callback_url"`
 		OAuthAuthorizationServerIssuer string            `json:"oauth_authorization_server_issuer"`
@@ -289,6 +290,7 @@ func enterpriseServerRegistrationFingerprint(config mcp.ServerConfig) string {
 		EnvHTTPHeaders:                 config.EnvHTTPHeaders,
 		HTTPHeadersHelper:              config.HTTPHeadersHelper,
 		OAuthClientID:                  config.OAuthClientID,
+		OAuthClientSecret:              config.OAuthClientSecret,
 		OAuthCallbackPort:              config.OAuthCallbackPort,
 		OAuthCallbackURL:               config.OAuthCallbackURL,
 		OAuthAuthorizationServerIssuer: config.OAuthAuthorizationServerIssuer,

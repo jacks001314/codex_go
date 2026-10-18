@@ -20707,9 +20707,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: OAuthClientCredentials, configure_for_refresh, oauth_client_secret, validate_stored_client_id"
+        "Added oauth.client_secret/oauth_client_secret parsing with client-ID validation, CLI --oauth-client-secret persistence/redaction, and propagation through app-server, plugin, dependency, and CLI login flows. Refresh prefers the configured secret and rejects a stored credential whose client ID differs before contacting the provider. Configured secrets are omitted from persisted token records; connection identity includes the secret through ServerConfig JSON."
       ]
     },
     {

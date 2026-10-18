@@ -15,30 +15,32 @@ type OAuthTokenClient struct {
 }
 
 type OAuthCodeExchangeOptions struct {
-	ServerName            string
-	ServerURL             string
-	ClientID              string
-	ClientSecret          string
-	Issuer                string
-	AuthorizationEndpoint string
-	TokenEndpoint         string
-	RedirectURL           string
-	Code                  string
-	CodeVerifier          string
-	Scopes                []string
+	ServerName                 string
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	AuthorizationEndpoint      string
+	TokenEndpoint              string
+	RedirectURL                string
+	Code                       string
+	CodeVerifier               string
+	Scopes                     []string
 }
 
 type OAuthRefreshOptions struct {
-	ServerName      string
-	ServerURL       string
-	ClientID        string
-	ClientSecret    string
-	Issuer          string
-	TokenEndpoint   string
-	AccessToken     string
-	RefreshToken    string
-	Scopes          []string
-	ExpiresAtMillis *int64
+	ServerName                 string
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	TokenEndpoint              string
+	AccessToken                string
+	RefreshToken               string
+	Scopes                     []string
+	ExpiresAtMillis            *int64
 }
 
 func NewOAuthTokenClient(client *http.Client) *OAuthTokenClient {
@@ -65,12 +67,13 @@ func (c *OAuthTokenClient) ExchangeAuthorizationCode(ctx context.Context, option
 		return nil, err
 	}
 	return oauth2TokenToSet(token, &oauthTokenSetOptions{
-		ServerName:   options.ServerName,
-		ServerURL:    options.ServerURL,
-		ClientID:     options.ClientID,
-		ClientSecret: options.ClientSecret,
-		Issuer:       options.Issuer,
-		Scopes:       options.Scopes,
+		ServerName:                 options.ServerName,
+		ServerURL:                  options.ServerURL,
+		ClientID:                   options.ClientID,
+		ClientSecret:               options.ClientSecret,
+		OmitClientSecretFromRecord: options.OmitClientSecretFromRecord,
+		Issuer:                     options.Issuer,
+		Scopes:                     options.Scopes,
 	}), nil
 }
 
@@ -95,12 +98,13 @@ func (c *OAuthTokenClient) RefreshToken(ctx context.Context, options *OAuthRefre
 		return nil, err
 	}
 	return oauth2TokenToSet(token, &oauthTokenSetOptions{
-		ServerName:   options.ServerName,
-		ServerURL:    options.ServerURL,
-		ClientID:     options.ClientID,
-		ClientSecret: options.ClientSecret,
-		Issuer:       options.Issuer,
-		Scopes:       options.Scopes,
+		ServerName:                 options.ServerName,
+		ServerURL:                  options.ServerURL,
+		ClientID:                   options.ClientID,
+		ClientSecret:               options.ClientSecret,
+		OmitClientSecretFromRecord: options.OmitClientSecretFromRecord,
+		Issuer:                     options.Issuer,
+		Scopes:                     options.Scopes,
 	}), nil
 }
 
@@ -149,12 +153,13 @@ func oauth2ConfigForRefresh(options *OAuthRefreshOptions) (*oauth2.Config, error
 }
 
 type oauthTokenSetOptions struct {
-	ServerName   string
-	ServerURL    string
-	ClientID     string
-	ClientSecret string
-	Issuer       string
-	Scopes       []string
+	ServerName                 string
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	Scopes                     []string
 }
 
 func oauth2TokenToSet(token *oauth2.Token, options *oauthTokenSetOptions) *OAuthTokenSet {
@@ -170,6 +175,9 @@ func oauth2TokenToSet(token *oauth2.Token, options *oauthTokenSetOptions) *OAuth
 		AccessToken:  strings.TrimSpace(token.AccessToken),
 		RefreshToken: strings.TrimSpace(token.RefreshToken),
 		Scopes:       scopesFromOAuth2Token(token, options.Scopes),
+	}
+	if options.OmitClientSecretFromRecord {
+		tokens.ClientSecret = ""
 	}
 	if !token.Expiry.IsZero() {
 		expiresAt := token.Expiry.UnixMilli()

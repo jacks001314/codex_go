@@ -1386,7 +1386,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 830363bd7ca7bd6d98c7a766da0ce2684730985c	42353	Add experimental Windows sandbox service provisioning (#42353)	2026-09-02	appserver	3	0	0.00	0	0	implementation_pending	UnsupportedHomeDrive,emit_windows_sandbox_setup_failure_metrics,windows_sandbox_proxy_listeners
 835cd7552d6a089bbdfeb21b001cb76c503249c7	53987	Skip service backoff for stale Guardian authorization retries (#53987)	2026-10-14	guardian	0	0		0	0	complete	
 835d3049f03ea71491299b2548c5ab8fa932f897	54737	Enable BuildBuddy for voice release builds (#54737)	2026-10-16	core	0	0		0	0	not_applicable	
-83b56bc5ad9489a47a0eb3edc3e5852f597125be	47891	Support client secrets for pre-registered MCP OAuth clients (#47891)	2026-09-24	appserver	5	1	0.20	0	0	audit_pending	OAuthClientCredentials,configure_for_refresh,oauth_client_secret,validate_stored_client_id
+83b56bc5ad9489a47a0eb3edc3e5852f597125be	47891	Support client secrets for pre-registered MCP OAuth clients (#47891)	2026-09-24	appserver	5	5	1.00	0	0	complete
 83b62a02fab5c0fc797cbc9896c332148f1fd9d0	42836	Make GPT-6-Astra user input guidance conditional (#42836)	2026-09-04	model	0	0		0	0	not_applicable	
 83cf88306e806b409f873b63544de3f1224f0fc3	49787	Remove `AGENTS.md` from Bazel core test data (#49787)	2026-09-30	core	0	0		0	0	not_applicable	
 83d1fe0e67b1323f71febc2925817732b449f1d9	40200	Remove the Plan mode composer nudge (#40200)	2026-08-23	tui	0	0		0	0	not_applicable	

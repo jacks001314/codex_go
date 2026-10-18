@@ -16,39 +16,41 @@ import (
 )
 
 type OAuthLoginSessionOptions struct {
-	ServerURL             string
-	ClientID              string
-	ClientSecret          string
-	Issuer                string
-	RegistrationEndpoint  string
-	ClientName            string
-	AuthorizationEndpoint string
-	TokenEndpoint         string
-	RedirectURL           string
-	Resource              string
-	Scopes                []string
-	State                 string
-	ClientRegistration    MCPServerOauthClientRegistration
-	CallbackID            string
-	CIMDAdvertised        *bool
-	PublicClientAuth      *bool
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	RegistrationEndpoint       string
+	ClientName                 string
+	AuthorizationEndpoint      string
+	TokenEndpoint              string
+	RedirectURL                string
+	Resource                   string
+	Scopes                     []string
+	State                      string
+	ClientRegistration         MCPServerOauthClientRegistration
+	CallbackID                 string
+	CIMDAdvertised             *bool
+	PublicClientAuth           *bool
 	// CallbackMode selects the OAuth callback mix-up defense (Rust #40691).
 	CallbackMode MCPOAuthCallbackMode
 }
 
 type OAuthLoginSession struct {
-	ServerURL        string
-	ClientID         string
-	ClientSecret     string
-	Issuer           string
-	TokenEndpoint    string
-	RedirectURL      string
-	CallbackPath     string
-	CodeVerifier     string
-	State            string
-	AuthorizationURL string
-	Scopes           []string
-	CallbackMode     MCPOAuthCallbackMode
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	TokenEndpoint              string
+	RedirectURL                string
+	CallbackPath               string
+	CodeVerifier               string
+	State                      string
+	AuthorizationURL           string
+	Scopes                     []string
+	CallbackMode               MCPOAuthCallbackMode
 }
 
 type OAuthCallbackResult struct {
@@ -123,18 +125,19 @@ func NewOAuthLoginSession(options *OAuthLoginSessionOptions) (*OAuthLoginSession
 		authOptions = append(authOptions, oauth2.SetAuthURLParam("resource", resource))
 	}
 	return &OAuthLoginSession{
-		ServerURL:        strings.TrimSpace(options.ServerURL),
-		ClientID:         strings.TrimSpace(options.ClientID),
-		ClientSecret:     strings.TrimSpace(options.ClientSecret),
-		Issuer:           strings.TrimSpace(options.Issuer),
-		TokenEndpoint:    strings.TrimSpace(options.TokenEndpoint),
-		RedirectURL:      strings.TrimSpace(options.RedirectURL),
-		CallbackPath:     callbackPath,
-		CodeVerifier:     verifier,
-		State:            state,
-		AuthorizationURL: config.AuthCodeURL(state, authOptions...),
-		Scopes:           scopes,
-		CallbackMode:     callbackMode,
+		ServerURL:                  strings.TrimSpace(options.ServerURL),
+		ClientID:                   strings.TrimSpace(options.ClientID),
+		ClientSecret:               strings.TrimSpace(options.ClientSecret),
+		OmitClientSecretFromRecord: options.OmitClientSecretFromRecord,
+		Issuer:                     strings.TrimSpace(options.Issuer),
+		TokenEndpoint:              strings.TrimSpace(options.TokenEndpoint),
+		RedirectURL:                strings.TrimSpace(options.RedirectURL),
+		CallbackPath:               callbackPath,
+		CodeVerifier:               verifier,
+		State:                      state,
+		AuthorizationURL:           config.AuthCodeURL(state, authOptions...),
+		Scopes:                     scopes,
+		CallbackMode:               callbackMode,
 	}, nil
 }
 
@@ -195,6 +198,7 @@ func NewOAuthLoginSessionWithClientRegistration(ctx context.Context, options *OA
 	cloned := *options
 	cloned.ClientID = registered.ClientID
 	cloned.ClientSecret = registered.ClientSecret
+	cloned.OmitClientSecretFromRecord = false
 	return NewOAuthLoginSession(&cloned)
 }
 
@@ -335,17 +339,18 @@ func (s *OAuthLoginSession) CompleteCallback(ctx context.Context, rawPath string
 		client = NewOAuthTokenClient(nil)
 	}
 	return client.ExchangeAuthorizationCode(ctx, &OAuthCodeExchangeOptions{
-		ServerName:            serverName,
-		ServerURL:             s.ServerURL,
-		ClientID:              s.ClientID,
-		ClientSecret:          s.ClientSecret,
-		Issuer:                s.Issuer,
-		AuthorizationEndpoint: "",
-		TokenEndpoint:         s.TokenEndpoint,
-		RedirectURL:           s.RedirectURL,
-		Code:                  callback.Code,
-		CodeVerifier:          s.CodeVerifier,
-		Scopes:                s.Scopes,
+		ServerName:                 serverName,
+		ServerURL:                  s.ServerURL,
+		ClientID:                   s.ClientID,
+		ClientSecret:               s.ClientSecret,
+		OmitClientSecretFromRecord: s.OmitClientSecretFromRecord,
+		Issuer:                     s.Issuer,
+		AuthorizationEndpoint:      "",
+		TokenEndpoint:              s.TokenEndpoint,
+		RedirectURL:                s.RedirectURL,
+		Code:                       callback.Code,
+		CodeVerifier:               s.CodeVerifier,
+		Scopes:                     s.Scopes,
 	})
 }
 

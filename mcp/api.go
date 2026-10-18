@@ -525,11 +525,11 @@ func (t *MCPResourceReadTarget) UnmarshalJSON(data []byte) error {
 
 func (p MCPResourceReadParams) MarshalJSON() ([]byte, error) {
 	type payload struct {
-		ThreadID     *string `json:"threadId,omitempty"`
-		Server       string  `json:"server"`
-		URI          string  `json:"uri"`
-		OriginCallID string  `json:"originCallId,omitempty"`
-		ConnectorID  string  `json:"connectorId,omitempty"`
+		ThreadID     *string                `json:"threadId,omitempty"`
+		Server       string                 `json:"server"`
+		URI          string                 `json:"uri"`
+		OriginCallID string                 `json:"originCallId,omitempty"`
+		ConnectorID  string                 `json:"connectorId,omitempty"`
 		Target       *MCPResourceReadTarget `json:"target,omitempty"`
 	}
 	return json.Marshal(payload{
@@ -751,8 +751,12 @@ type MCPService struct {
 	progress      MCPProgressHandler
 	roots         MCPRootsProvider
 	oauthComplete MCPOAuthLoginCompletionHandler
-	openAIForm    bool
-	generation    uint64
+	// oauthCompleteListeners let multiple in-process consumers observe the same
+	// login completion while the app-server handler remains installed.
+	oauthCompleteListeners map[uint64]MCPOAuthLoginCompletionHandlerFunc
+	nextOAuthListenerID    uint64
+	openAIForm             bool
+	generation             uint64
 	// resourceGeneration advances when resource catalogs and contents must be
 	// refreshed even if the connection set is reused (Rust #46033).
 	resourceGeneration uint64
@@ -1212,6 +1216,28 @@ func (s *MCPService) SetOAuthLoginCompletionHandler(handler MCPOAuthLoginComplet
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.oauthComplete = handler
+}
+
+// AddOAuthLoginCompletionListener registers an additional completion listener.
+// The returned function unsubscribes it. The app-server handler continues to
+// receive the same completion.
+func (s *MCPService) AddOAuthLoginCompletionListener(listener MCPOAuthLoginCompletionHandlerFunc) func() {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.oauthCompleteListeners == nil {
+		s.oauthCompleteListeners = map[uint64]MCPOAuthLoginCompletionHandlerFunc{}
+	}
+	id := s.nextOAuthListenerID
+	s.nextOAuthListenerID++
+	s.oauthCompleteListeners[id] = listener
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.oauthCompleteListeners, id)
+		s.mu.Unlock()
+	}
 }
 
 func (s *MCPService) SetOpenAIFormElicitationEnabled(enabled bool) {
@@ -2209,28 +2235,33 @@ func (s *MCPService) startOAuthLoginServer(name string, config *ServerConfig, pa
 		return "", false, nil
 	}
 	clientID := strings.TrimSpace(config.OAuthClientID)
+	if strings.TrimSpace(config.OAuthClientSecret) != "" && clientID == "" {
+		return "", false, errors.New("oauth.client_secret requires oauth.client_id")
+	}
 	if clientID == "" && strings.TrimSpace(discovery.RegistrationEndpoint) == "" {
 		return "", false, nil
 	}
 	login, err := StartOAuthLoginServer(ctx, &OAuthLoginServerOptions{
-		ServerName:            config.OAuthCredentialName(name),
-		ServerURL:             config.URL,
-		ClientID:              clientID,
-		Issuer:                strings.TrimSpace(discovery.Issuer),
-		RegistrationEndpoint:  discovery.RegistrationEndpoint,
-		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
-		TokenEndpoint:         discovery.TokenEndpoint,
-		Resource:              firstNonEmptyMCP(config.OAuthResource, discovery.Resource),
-		Scopes:                params.Scopes,
-		Store:                 store,
-		HTTPClient:            client,
-		Timeout:               callbackTimeout,
-		Port:                  config.OAuthCallbackPort,
-		RedirectURL:           config.OAuthCallbackURL,
-		ClientRegistration:    registration,
-		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
-		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
-		CallbackMode:          discovery.CallbackMode,
+		ServerName:                 config.OAuthCredentialName(name),
+		ServerURL:                  config.URL,
+		ClientID:                   clientID,
+		ClientSecret:               strings.TrimSpace(config.OAuthClientSecret),
+		OmitClientSecretFromRecord: strings.TrimSpace(config.OAuthClientSecret) != "",
+		Issuer:                     strings.TrimSpace(discovery.Issuer),
+		RegistrationEndpoint:       discovery.RegistrationEndpoint,
+		AuthorizationEndpoint:      discovery.AuthorizationEndpoint,
+		TokenEndpoint:              discovery.TokenEndpoint,
+		Resource:                   firstNonEmptyMCP(config.OAuthResource, discovery.Resource),
+		Scopes:                     params.Scopes,
+		Store:                      store,
+		HTTPClient:                 client,
+		Timeout:                    callbackTimeout,
+		Port:                       config.OAuthCallbackPort,
+		RedirectURL:                config.OAuthCallbackURL,
+		ClientRegistration:         registration,
+		CIMDAdvertised:             &discovery.ClientIDMetadataDocumentSupported,
+		PublicClientAuth:           &discovery.PublicClientTokenAuthSupported,
+		CallbackMode:               discovery.CallbackMode,
 	})
 	if err != nil {
 		return "", false, nil
@@ -2300,10 +2331,6 @@ func (s *MCPService) trackOAuthLogin(name string, threadID string, loginID strin
 }
 
 func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, loginID string, result *OAuthLoginServerResult) {
-	handler := s.oauthLoginCompletionHandler()
-	if handler == nil {
-		return
-	}
 	completion := &MCPOAuthLoginCompletion{
 		Name:     name,
 		ThreadID: threadID,
@@ -2315,7 +2342,20 @@ func (s *MCPService) notifyOAuthLoginCompleted(name string, threadID string, log
 	if result != nil && result.Error != nil {
 		completion.Error = result.Error.Error()
 	}
-	handler.HandleMCPOAuthLoginCompleted(context.Background(), normalizeMCPOAuthLoginCompletion(completion))
+	completion = normalizeMCPOAuthLoginCompletion(completion)
+	handler := s.oauthLoginCompletionHandler()
+	if handler != nil {
+		handler.HandleMCPOAuthLoginCompleted(context.Background(), completion)
+	}
+	s.mu.Lock()
+	listeners := make([]MCPOAuthLoginCompletionHandlerFunc, 0, len(s.oauthCompleteListeners))
+	for _, listener := range s.oauthCompleteListeners {
+		listeners = append(listeners, listener)
+	}
+	s.mu.Unlock()
+	for _, listener := range listeners {
+		listener(context.Background(), completion)
+	}
 }
 
 func (s *MCPService) Refresh() *MCPServerRefreshResponse {

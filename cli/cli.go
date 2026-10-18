@@ -177,6 +177,7 @@ type MCPOptions struct {
 	URL               string
 	BearerTokenEnvVar string
 	OAuthClientID     string
+	OAuthClientSecret string
 	OAuthResource     string
 	Env               map[string]string
 	Command           []string
@@ -1516,6 +1517,15 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 				i = next
 			case strings.HasPrefix(arg, "--oauth-client-id="):
 				mcp.OAuthClientID = strings.TrimPrefix(arg, "--oauth-client-id=")
+			case arg == "--oauth-client-secret":
+				value, next, err := requireValue(args, i, arg)
+				if err != nil {
+					return err
+				}
+				mcp.OAuthClientSecret = value
+				i = next
+			case strings.HasPrefix(arg, "--oauth-client-secret="):
+				mcp.OAuthClientSecret = strings.TrimPrefix(arg, "--oauth-client-secret=")
 			case arg == "--oauth-resource":
 				value, next, err := requireValue(args, i, arg)
 				if err != nil {
@@ -1554,6 +1564,12 @@ func parseMCP(args []string, mcp *MCPOptions) error {
 		}
 		if mcp.URL == "" && mcp.OAuthClientID != "" {
 			return errors.New("mcp add --oauth-client-id requires --url")
+		}
+		if mcp.URL == "" && mcp.OAuthClientSecret != "" {
+			return errors.New("mcp add --oauth-client-secret requires --url")
+		}
+		if mcp.OAuthClientSecret != "" && mcp.OAuthClientID == "" {
+			return errors.New("mcp add --oauth-client-secret requires --oauth-client-id")
 		}
 		if mcp.URL == "" && mcp.OAuthResource != "" {
 			return errors.New("mcp add --oauth-resource requires --url")

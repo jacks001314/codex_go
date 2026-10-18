@@ -15,20 +15,21 @@ import (
 )
 
 type OAuthLoginServerOptions struct {
-	ServerName            string
-	ServerURL             string
-	ClientID              string
-	ClientSecret          string
-	Issuer                string
-	RegistrationEndpoint  string
-	ClientName            string
-	AuthorizationEndpoint string
-	TokenEndpoint         string
-	Resource              string
-	Scopes                []string
-	State                 string
-	Host                  string
-	Port                  uint16
+	ServerName                 string
+	ServerURL                  string
+	ClientID                   string
+	ClientSecret               string
+	OmitClientSecretFromRecord bool
+	Issuer                     string
+	RegistrationEndpoint       string
+	ClientName                 string
+	AuthorizationEndpoint      string
+	TokenEndpoint              string
+	Resource                   string
+	Scopes                     []string
+	State                      string
+	Host                       string
+	Port                       uint16
 	// RedirectURL optionally overrides the redirect URL presented to the OAuth
 	// flow (mirrors Rust mcp_oauth_callback_url); when empty the server derives
 	// it from the listener host/port.
@@ -114,23 +115,24 @@ func StartOAuthLoginServer(ctx context.Context, options *OAuthLoginServerOptions
 		}
 	}
 	session, err := NewOAuthLoginSessionWithClientRegistration(ctx, &OAuthLoginSessionOptions{
-		ServerURL:             options.ServerURL,
-		ClientID:              options.ClientID,
-		ClientSecret:          options.ClientSecret,
-		Issuer:                options.Issuer,
-		RegistrationEndpoint:  options.RegistrationEndpoint,
-		ClientName:            options.ClientName,
-		AuthorizationEndpoint: options.AuthorizationEndpoint,
-		TokenEndpoint:         options.TokenEndpoint,
-		RedirectURL:           redirectURL,
-		Resource:              options.Resource,
-		Scopes:                options.Scopes,
-		State:                 options.State,
-		ClientRegistration:    options.ClientRegistration,
-		CallbackID:            callbackID,
-		CIMDAdvertised:        options.CIMDAdvertised,
-		PublicClientAuth:      options.PublicClientAuth,
-		CallbackMode:          callbackMode,
+		ServerURL:                  options.ServerURL,
+		ClientID:                   options.ClientID,
+		ClientSecret:               options.ClientSecret,
+		OmitClientSecretFromRecord: options.OmitClientSecretFromRecord,
+		Issuer:                     options.Issuer,
+		RegistrationEndpoint:       options.RegistrationEndpoint,
+		ClientName:                 options.ClientName,
+		AuthorizationEndpoint:      options.AuthorizationEndpoint,
+		TokenEndpoint:              options.TokenEndpoint,
+		RedirectURL:                redirectURL,
+		Resource:                   options.Resource,
+		Scopes:                     options.Scopes,
+		State:                      options.State,
+		ClientRegistration:         options.ClientRegistration,
+		CallbackID:                 callbackID,
+		CIMDAdvertised:             options.CIMDAdvertised,
+		PublicClientAuth:           options.PublicClientAuth,
+		CallbackMode:               callbackMode,
 	}, options.HTTPClient)
 	if err != nil {
 		_ = listener.Close()

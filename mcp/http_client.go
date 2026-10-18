@@ -1460,21 +1460,22 @@ func (c *httpClient) refreshOAuthTokenForRequest(tokens *OAuthTokenSet, serverNa
 	if storedIssuer != "" && discoveredIssuer != "" && !strings.EqualFold(storedIssuer, discoveredIssuer) {
 		return nil, fmt.Errorf("MCP OAuth refresh issuer changed: stored %q, discovered %q", storedIssuer, discoveredIssuer)
 	}
-	clientID := strings.TrimSpace(latest.ClientID)
-	if clientID == "" {
-		clientID = strings.TrimSpace(c.config.OAuthClientID)
+	clientID, clientSecret, omitClientSecretFromRecord, err := mcpOAuthRefreshCredentials(c.config, latest)
+	if err != nil {
+		return nil, err
 	}
 	refreshed, err := NewOAuthTokenClient(c.client).RefreshToken(ctx, &OAuthRefreshOptions{
-		ServerName:      serverName,
-		ServerURL:       c.config.URL,
-		ClientID:        clientID,
-		ClientSecret:    latest.ClientSecret,
-		Issuer:          discoveredIssuer,
-		TokenEndpoint:   discovery.TokenEndpoint,
-		AccessToken:     latest.AccessToken,
-		RefreshToken:    latest.RefreshToken,
-		Scopes:          latest.Scopes,
-		ExpiresAtMillis: latest.ExpiresAtMillis,
+		ServerName:                 serverName,
+		ServerURL:                  c.config.URL,
+		ClientID:                   clientID,
+		ClientSecret:               clientSecret,
+		OmitClientSecretFromRecord: omitClientSecretFromRecord,
+		Issuer:                     discoveredIssuer,
+		TokenEndpoint:              discovery.TokenEndpoint,
+		AccessToken:                latest.AccessToken,
+		RefreshToken:               latest.RefreshToken,
+		Scopes:                     latest.Scopes,
+		ExpiresAtMillis:            latest.ExpiresAtMillis,
 	})
 	if err != nil {
 		// Rust #43947: a browser login can finish while the provider refresh is

@@ -106,20 +106,22 @@ func (s *MCPService) performOAuthDependencyLogin(ctx context.Context, name strin
 		timeout = mcpOAuthDependencyLoginTimeout
 	}
 	login, err := StartOAuthLoginServer(contextOrBackground(ctx), &OAuthLoginServerOptions{
-		ServerName:            config.OAuthCredentialName(name),
-		ServerURL:             config.URL,
-		ClientID:              config.OAuthClientID,
-		RegistrationEndpoint:  discovery.RegistrationEndpoint,
-		AuthorizationEndpoint: discovery.AuthorizationEndpoint,
-		TokenEndpoint:         discovery.TokenEndpoint,
-		Resource:              firstNonEmptyMCP(config.OAuthResource, discovery.Resource),
-		Scopes:                scopes,
-		Store:                 store,
-		HTTPClient:            client,
-		Timeout:               timeout,
-		CIMDAdvertised:        &discovery.ClientIDMetadataDocumentSupported,
-		PublicClientAuth:      &discovery.PublicClientTokenAuthSupported,
-		CallbackMode:          discovery.CallbackMode,
+		ServerName:                 config.OAuthCredentialName(name),
+		ServerURL:                  config.URL,
+		ClientID:                   config.OAuthClientID,
+		ClientSecret:               strings.TrimSpace(config.OAuthClientSecret),
+		OmitClientSecretFromRecord: strings.TrimSpace(config.OAuthClientSecret) != "",
+		RegistrationEndpoint:       discovery.RegistrationEndpoint,
+		AuthorizationEndpoint:      discovery.AuthorizationEndpoint,
+		TokenEndpoint:              discovery.TokenEndpoint,
+		Resource:                   firstNonEmptyMCP(config.OAuthResource, discovery.Resource),
+		Scopes:                     scopes,
+		Store:                      store,
+		HTTPClient:                 client,
+		Timeout:                    timeout,
+		CIMDAdvertised:             &discovery.ClientIDMetadataDocumentSupported,
+		PublicClientAuth:           &discovery.PublicClientTokenAuthSupported,
+		CallbackMode:               discovery.CallbackMode,
 	})
 	if err != nil {
 		return err

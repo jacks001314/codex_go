@@ -527,6 +527,43 @@ func TestMCPAddUnknownOAuthPrintsLoginHint(t *testing.T) {
 	}
 }
 
+func TestMCPAddPersistsOAuthClientSecretWithoutPrintingItLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "metadata failed", http.StatusInternalServerError)
+	}))
+	defer issuer.Close()
+
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), []string{
+		"mcp", "add", "docs", "--url", issuer.URL + "/mcp",
+		"--oauth-client-id", "client-1",
+		"--oauth-client-secret", "configured-secret",
+	}, strings.NewReader(""), &stdout, &bytes.Buffer{}); err != nil {
+		t.Fatalf("mcp add returned error: %v", err)
+	}
+	if strings.Contains(stdout.String(), "configured-secret") {
+		t.Fatalf("mcp add printed the client secret:\n%s", stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(home, "config.toml"))
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	if !strings.Contains(string(data), `client_secret = "configured-secret"`) {
+		t.Fatalf("config did not persist the client secret:\n%s", data)
+	}
+
+	missingID := bytes.Buffer{}
+	err = Run(context.Background(), []string{
+		"mcp", "add", "no-id", "--url", issuer.URL + "/mcp",
+		"--oauth-client-secret", "configured-secret",
+	}, strings.NewReader(""), &missingID, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "requires --oauth-client-id") {
+		t.Fatalf("mcp add without client id error = %v", err)
+	}
+}
+
 func TestMCPListGetRustShapeAndRedaction(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
@@ -757,6 +794,36 @@ func TestMCPCLIServerOAuthCallbackURLRoundTrips(t *testing.T) {
 	oauth, ok := out["oauth"].(map[string]any)
 	if !ok || oauth["callback_url"] != "http://127.0.0.1/callback/abc123" || oauth["client_id"] != "client-1" {
 		t.Fatalf("oauth = %#v", out["oauth"])
+	}
+}
+
+func TestMCPCLIServerOAuthClientSecretRoundTripsAndStaysOutOfJSONLikeRust(t *testing.T) {
+	table := map[string]any{
+		"url": "https://mcp.example.test/mcp",
+		"oauth": map[string]any{
+			"client_id":     "client-1",
+			"client_secret": "configured-secret",
+		},
+	}
+	server := mcpServerFromConfigValue("docs", table)
+	if server == nil || server.OAuthClientSecret != "configured-secret" {
+		t.Fatalf("OAuthClientSecret = %#v", server)
+	}
+	runtimeConfig := mcpServerRuntimeConfig("docs", server, "")
+	if runtimeConfig.OAuthClientSecret != "configured-secret" {
+		t.Fatalf("runtime OAuthClientSecret = %q", runtimeConfig.OAuthClientSecret)
+	}
+	out := mcpServerToConfigValue(server)
+	oauth, ok := out["oauth"].(map[string]any)
+	if !ok || oauth["client_secret"] != "configured-secret" || oauth["client_id"] != "client-1" {
+		t.Fatalf("oauth = %#v", out["oauth"])
+	}
+	encoded, err := json.Marshal(server)
+	if err != nil {
+		t.Fatalf("Marshal(server) error = %v", err)
+	}
+	if strings.Contains(string(encoded), "configured-secret") {
+		t.Fatalf("mcp list/get JSON leaked the client secret: %s", encoded)
 	}
 }
 
