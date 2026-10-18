@@ -328,7 +328,7 @@ func (m *Model) applyGoalDraftMaterializeResult(msg GoalDraftMaterializeMsg) bub
 
 func (m *Model) openGoalReplaceConfirmation(objective string) {
 	view := tuiapp.ReplaceThreadGoalConfirmation(m.goalThreadID(), objective)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:            "replace-goal",
 		kind:          ModalKindGoal,
 		title:         view.Title,
@@ -339,7 +339,7 @@ func (m *Model) openGoalReplaceConfirmation(objective string) {
 			{ID: "replace", Label: view.ReplaceName, Description: view.ReplaceHint},
 			{ID: "cancel", Label: view.CancelName, Description: view.CancelHint},
 		},
-	}
+	})
 	m.notice = ""
 }
 
@@ -380,14 +380,14 @@ func (m *Model) openGoalEditPrompt(goal appserver.Goal) {
 	view := chatwidget.NewGoalEditPromptView(goal)
 	prompt := bottompane.NewCustomPromptView(view.Title, view.Placeholder, view.InitialText, "")
 	prompt.SetVimEnabled(m.vimMode)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:           "edit-goal",
 		kind:         ModalKindGoal,
 		customPrompt: prompt,
 		customPromptSubmit: func(objective string) bubbletea.Cmd {
 			return m.setGoal(goalActionEdit, &objective, view.TokenBudget, &view.Status, false)
 		},
-	}
+	})
 	m.notice = ""
 }
 

@@ -45,12 +45,12 @@ func (m *Model) applyExternalAgentImportCommand() bubbletea.Cmd {
 		m.refreshTranscript()
 		return nil
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		kind: ModalKindExternalImport,
 		externalAgentMigration: &externalAgentMigrationModalState{
 			busy: true,
 		},
-	}
+	})
 	m.notice = ""
 	detect := m.onDetectExternalAgent
 	cwd := ""
@@ -116,7 +116,7 @@ func (m *Model) applyExternalAgentDetectResult(message ExternalAgentDetectResult
 		return nil
 	}
 	state := &externalAgentMigrationModalState{sources: sources}
-	m.modal = &modalState{kind: ModalKindExternalImport, externalAgentMigration: state}
+	m.replaceModal(&modalState{kind: ModalKindExternalImport, externalAgentMigration: state})
 	if len(sources) == 1 {
 		state.selectSource(0)
 	}

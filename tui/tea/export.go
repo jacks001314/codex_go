@@ -58,14 +58,14 @@ func (m *Model) openTranscriptExportFilePrompt() {
 	}
 	prompt := bottompane.NewCustomPromptView("Save conversation", "Type a filename and press Enter", filename, "")
 	prompt.SetVimEnabled(m.vimMode)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:           chatwidget.TranscriptExportPickerViewID + "-file",
 		kind:         ModalKindGeneric,
 		customPrompt: prompt,
 		customPromptSubmit: func(name string) bubbletea.Cmd {
 			return m.runTranscriptExport(name)
 		},
-	}
+	})
 	m.notice = ""
 }
 

@@ -166,7 +166,7 @@ func (m *Model) openPluginBrowser(cwd string, response plugin.PluginListResponse
 		selectedByTab: map[string]int{},
 	}
 	state.selectTab(catalog.InitialTabID)
-	m.modal = &modalState{kind: ModalKindPluginsBrowser, pluginBrowser: state}
+	m.replaceModal(&modalState{kind: ModalKindPluginsBrowser, pluginBrowser: state})
 	m.notice = "Plugins"
 }
 
@@ -181,7 +181,7 @@ func (m *Model) openPluginBrowserView(cwd string, view chatwidget.SelectionView)
 		view:          &viewCopy,
 	}
 	state.viewSelected = firstEnabledPluginViewItem(viewCopy.Items)
-	m.modal = &modalState{kind: ModalKindPluginsBrowser, pluginBrowser: state}
+	m.replaceModal(&modalState{kind: ModalKindPluginsBrowser, pluginBrowser: state})
 	m.notice = "Plugins"
 }
 

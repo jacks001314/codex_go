@@ -186,7 +186,7 @@ func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelectio
 		body += "\nThis cannot be undone."
 	}
 	copied := selection
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:            "session-action-" + action,
 		kind:          ModalKindPicker,
 		title:         title,
@@ -196,7 +196,7 @@ func (m *Model) openSessionActionConfirmation(selection codextui.SessionSelectio
 			{ID: "confirm", Label: titleCaseASCII(action), Description: target, Shortcut: "y"},
 			{ID: "cancel", Label: "Cancel", Shortcut: "n"},
 		},
-	}
+	})
 	m.notice = ""
 }
 
@@ -230,7 +230,7 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 			confirmLabel = "Yes, delete and return to command center"
 		}
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:                     "current-session-action-" + string(kind),
 		kind:                   ModalKindPicker,
 		title:                  title,
@@ -241,7 +241,7 @@ func (m *Model) openCurrentSessionActionConfirmation(kind codextui.SessionSelect
 			{ID: "cancel", Label: "No, keep this session", Description: "Return to the current session"},
 			{ID: "confirm", Label: confirmLabel, Description: confirmDescription},
 		},
-	}
+	})
 	m.notice = ""
 }
 

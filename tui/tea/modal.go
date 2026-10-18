@@ -261,10 +261,29 @@ func (m *Model) replaceModal(next *modalState) {
 	if m == nil {
 		return
 	}
-	if m.modal != nil && m.modal != next {
+	if m.modal != nil && m.modal != next && m.modal.kind != next.kind &&
+		modalKindUsesParentBackdrop(next.kind) {
 		m.modalParents = append(m.modalParents, m.modal)
 	}
 	m.modal = next
+}
+
+func modalKindUsesParentBackdrop(kind ModalKind) bool {
+	switch kind {
+	case ModalKindGeneric,
+		ModalKindReview,
+		ModalKindApproval,
+		ModalKindElicitation,
+		ModalKindUserInput,
+		ModalKindFeedback,
+		ModalKindRateLimitSwitch,
+		ModalKindRunningTaskExit,
+		ModalKindMisalignment,
+		ModalKindWindowsSandbox:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) restoreParentModal() {

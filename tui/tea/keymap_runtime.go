@@ -199,7 +199,7 @@ func (m *Model) cancelKeymapModal(viewID string) bubbletea.Cmd {
 func (m *Model) openKeymapCapture(context string, action string, intent keymapCaptureIntent, oldKey string) {
 	m.keymapSelectedContext = context
 	m.keymapSelectedAction = action
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:    keymapCaptureViewID,
 		kind:  ModalKindGeneric,
 		title: "Remap Shortcut",
@@ -209,7 +209,7 @@ func (m *Model) openKeymapCapture(context string, action string, intent keymapCa
 			Intent:  intent,
 			OldKey:  oldKey,
 		},
-	}
+	})
 	m.notice = ""
 }
 

@@ -66,7 +66,7 @@ func (m *Model) openManageSkillsModal(response appserver.SkillsListResponse, cwd
 		initial[identity] = item.Enabled
 		applied[identity] = item.Enabled
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		kind: ModalKindManageSkills,
 		manageSkills: &manageSkillsModalState{
 			view:    bottompane.NewSkillsToggleView(items),
@@ -74,7 +74,7 @@ func (m *Model) openManageSkillsModal(response appserver.SkillsListResponse, cwd
 			applied: applied,
 			cwd:     cwd,
 		},
-	}
+	})
 	m.notice = ""
 }
 

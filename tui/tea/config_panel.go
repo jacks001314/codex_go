@@ -215,12 +215,12 @@ func (m *Model) openConfigPanel() {
 	if m == nil {
 		return
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:          "config",
 		kind:        ModalKindConfig,
 		title:       "Configuration",
 		configPanel: &configPanelState{},
-	}
+	})
 	m.notice = ""
 }
 

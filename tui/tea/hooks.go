@@ -59,12 +59,12 @@ func (m *Model) openHooksView(entry appserver.HookListEntry) {
 	if m == nil {
 		return
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		kind: ModalKindHooksBrowser,
 		hooksBrowser: &hooksBrowserModalState{
 			view: bottompane.NewHooksBrowserView(entry),
 		},
-	}
+	})
 	m.notice = "Hooks"
 }
 

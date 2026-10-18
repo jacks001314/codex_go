@@ -34,12 +34,12 @@ func (m *Model) openRequestUserInputModal(message RequestUserInputMsg) bubbletea
 		})
 		return nil
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:        strings.TrimSpace(message.ID),
 		kind:      ModalKindUserInput,
 		title:     "Request user input",
 		userInput: state,
-	}
+	})
 	m.refreshRequestUserInputModal()
 	return requestUserInputTimeoutCommand(m.modal.id, state.AutoResolutionMS)
 }

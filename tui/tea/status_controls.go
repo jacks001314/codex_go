@@ -418,14 +418,14 @@ func (m *Model) openStatusLineSetup() {
 		}
 		options = append(options, ModalOption{ID: item.ID, Label: item.Name, Description: description})
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:              "status-line-setup",
 		kind:            ModalKindStatusLine,
 		title:           view.Title,
 		body:            statusLineSetupBody(view.PreviewText),
 		options:         options,
 		statusLineSetup: setup,
-	}
+	})
 	m.notice = ""
 }
 
@@ -452,14 +452,14 @@ func (m *Model) openTerminalTitleSetup() bubbletea.Cmd {
 		}
 		options = append(options, ModalOption{ID: item.ID, Label: item.Name, Description: description})
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:                 "terminal-title-setup",
 		kind:               ModalKindTitle,
 		title:              view.Title,
 		body:               terminalTitleSetupBody(view.PreviewText),
 		options:            options,
 		terminalTitleSetup: setup,
-	}
+	})
 	m.notice = ""
 	result := m.statusControls.PreviewTerminalTitle(selectedTerminalTitleItems(setup))
 	return m.applyTerminalTitleResult(result)

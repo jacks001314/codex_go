@@ -244,7 +244,7 @@ func (m *Model) openReviewCustomPrompt() {
 	}
 	prompt := bottompane.NewCustomPromptView(view.Title, view.Placeholder, view.InitialText, contextLabel)
 	prompt.SetVimEnabled(m.vimMode)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:           "review-custom-prompt",
 		kind:         ModalKindReview,
 		customPrompt: prompt,
@@ -255,7 +255,7 @@ func (m *Model) openReviewCustomPrompt() {
 			}
 			return m.startReview(target)
 		},
-	}
+	})
 	m.notice = ""
 }
 
@@ -282,14 +282,14 @@ func (m *Model) openRenamePrompt() {
 	}
 	prompt := bottompane.NewCustomPromptView(title, "Type a name and press Enter", initial, "")
 	prompt.SetVimEnabled(m.vimMode)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:           "rename-thread",
 		kind:         ModalKindGeneric,
 		customPrompt: prompt,
 		customPromptSubmit: func(name string) bubbletea.Cmd {
 			return m.renameCurrentThread(name)
 		},
-	}
+	})
 	m.notice = ""
 }
 
@@ -453,13 +453,13 @@ func (m *Model) openThemePicker() {
 	options := codextui.DiscoverThemeOptions(codextui.BuiltinThemeIDs(), codextui.DiscoverCustomThemePaths(themeDir))
 	currentTheme := effectiveThemeIDTea(m.tuiTheme)
 	picker := codextui.NewThemePicker(options, currentTheme)
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:            "theme",
 		kind:          ModalKindTheme,
 		title:         "Select Syntax Theme",
 		themePicker:   picker,
 		themeSubtitle: codextui.ThemePickerSubtitle(themeDir, m.width),
-	}
+	})
 	m.notice = ""
 }
 

@@ -247,13 +247,13 @@ func (m *Model) openVoiceInputChannelsModal(device voicehost.AudioDevice) {
 	if m == nil {
 		return
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		kind: ModalKindVoiceChannels,
 		voiceChannels: chatwidget.VoiceInputChannelsPicker(
 			device, m.voiceAudio.MicrophoneChannel,
 		),
 		voiceChannelDevice: device,
-	}
+	})
 	m.notice = ""
 }
 

@@ -444,7 +444,7 @@ func (m *Model) openQuickDialEditor(slot int, initial string) bubbletea.Cmd {
 	view.SetVimEnabled(m.vimMode)
 	view.PreserveWhitespace()
 	m.quickDialMenu = false
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:           quickDialEditorID,
 		kind:         ModalKindPresets,
 		title:        title,
@@ -455,7 +455,7 @@ func (m *Model) openQuickDialEditor(slot int, initial string) bubbletea.Cmd {
 			}
 			return m.saveQuickDial(slot, input, label)
 		},
-	}
+	})
 	m.notice = ""
 	return nil
 }

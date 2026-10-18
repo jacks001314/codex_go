@@ -101,11 +101,11 @@ func (m *Model) applyWorktreeCommand(args string) bubbletea.Cmd {
 		m.addErrorHistoryMessage("Managed worktrees require a local Git repository.")
 		return nil
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:              "managed-worktrees",
 		kind:            ModalKindWorktree,
 		worktreeBrowser: newWorktreeChooser(),
-	}
+	})
 	return nil
 }
 
@@ -144,11 +144,11 @@ func (m *Model) startWorktreeBrowser() bubbletea.Cmd {
 		ThreadID: strings.TrimSpace(m.State.ThreadID),
 	}
 	m.worktreePopupRequestID = request.ID
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:              "managed-worktrees",
 		kind:            ModalKindWorktree,
 		worktreeBrowser: &worktreeBrowserState{View: worktreeViewLoading, Request: request},
-	}
+	})
 	return m.loadManagedWorktreesCmd(request)
 }
 
