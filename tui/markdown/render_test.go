@@ -46,10 +46,21 @@ func TestRenderWithThemeLongURLClickable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(rendered, "\x1b]8;;"+url+"\x07"+url+"\x1b]8;;\x07") {
+	opener := "\x1b]8;;" + url + "\x07"
+	openerIndex := strings.Index(rendered, opener)
+	closeIndex := -1
+	if openerIndex >= 0 {
+		if relative := strings.Index(rendered[openerIndex+len(opener):], "\x1b]8;;\x07"); relative >= 0 {
+			closeIndex = openerIndex + len(opener) + relative
+		}
+	}
+	if openerIndex < 0 || closeIndex < 0 || !strings.Contains(rendered[openerIndex:closeIndex], url) {
 		t.Fatalf("long URL not annotated as one full hyperlink:\n%q", rendered)
 	}
-	if strings.Contains(rendered, "CODEXURLPROT_") {
+	if !strings.Contains(rendered[openerIndex:closeIndex], "\x1b[4m") {
+		t.Fatalf("long URL lost its link underline styling:\n%q", rendered)
+	}
+	if strings.ContainsRune(rendered, '\uE000') {
 		t.Fatalf("long-URL placeholder leaked into output:\n%q", rendered)
 	}
 }

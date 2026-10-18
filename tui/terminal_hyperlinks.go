@@ -116,6 +116,133 @@ func annotateWebURLsInLine(line string, skipFragmentsAtLineEnd bool) string {
 	return sb.String()
 }
 
+// StyleWebURLsInLine applies linkSGR to every detected web URL while restoring
+// the SGR state that was active before each URL. Surrounding prose, emphasis,
+// and other attributes therefore keep their original styling (Rust
+// `style_bare_web_urls`).
+func StyleWebURLsInLine(line string, linkSGR string) string {
+	if linkSGR == "" || !strings.Contains(line, "http") {
+		return line
+	}
+	locations := webURLPattern.FindAllStringIndex(line, -1)
+	if len(locations) == 0 {
+		return line
+	}
+	var sb strings.Builder
+	var active []string
+	cursor := 0
+	for _, loc := range locations {
+		raw := line[loc[0]:loc[1]]
+		trimmed, trimStart := trimWebToken(raw)
+		if _, ok := WebDestination(trimmed); !ok {
+			continue
+		}
+		urlStart := loc[0] + trimStart
+		writeTrackedSGR(&sb, line[cursor:urlStart], &active)
+		if sgrHasUnderline(active) {
+			// Explicit Markdown links (and table cells that already carry link
+			// style) are underlined before this pass. Glamour's GFM autolink
+			// also underlines punctuation that follows a bare URL, so move that
+			// suffix outside the link style while keeping the URL styled.
+			sb.WriteString(trimmed)
+			urlEnd := urlStart + len(trimmed)
+			suffixEnd := urlEnd
+			for suffixEnd < len(line) {
+				r, size := utf8.DecodeRuneInString(line[suffixEnd:])
+				if !isWebTokenSuffixPunctuation(r) {
+					break
+				}
+				suffixEnd += size
+			}
+			if suffixEnd > urlEnd {
+				sb.WriteString("\x1b[24m")
+				sb.WriteString(line[urlEnd:suffixEnd])
+				for _, sequence := range active {
+					sb.WriteString(sequence)
+				}
+			}
+			cursor = suffixEnd
+			continue
+		}
+		sb.WriteString(linkSGR)
+		sb.WriteString(trimmed)
+		sb.WriteString("\x1b[0m")
+		for _, sequence := range active {
+			sb.WriteString(sequence)
+		}
+		cursor = urlStart + len(trimmed)
+	}
+	sb.WriteString(line[cursor:])
+	return sb.String()
+}
+
+// isWebTokenSuffixPunctuation reports whether a rune is sentence punctuation
+// that belongs to the prose around a URL rather than the URL itself.
+func isWebTokenSuffixPunctuation(r rune) bool {
+	return strings.ContainsRune(")]}>,.;!?'\"*", r)
+}
+
+// sgrHasUnderline reports whether the accumulated SGR state enables underline.
+func sgrHasUnderline(active []string) bool {
+	underlined := false
+	for _, sequence := range active {
+		for _, parameter := range strings.Split(sequence[2:len(sequence)-1], ";") {
+			switch {
+			case parameter == "4", strings.HasPrefix(parameter, "4:"):
+				underlined = true
+			case parameter == "24":
+				underlined = false
+			}
+		}
+	}
+	return underlined
+}
+
+// writeTrackedSGR copies a segment and records the SGR sequences that remain
+// active, so they can be restored after a styled URL.
+func writeTrackedSGR(sb *strings.Builder, segment string, active *[]string) {
+	for index := 0; index < len(segment); {
+		if segment[index] != 0x1b || index+1 >= len(segment) || segment[index+1] != '[' {
+			sb.WriteByte(segment[index])
+			index++
+			continue
+		}
+		end := index + 2
+		for end < len(segment) && !(segment[end] >= 0x40 && segment[end] <= 0x7e) {
+			end++
+		}
+		if end >= len(segment) {
+			sb.WriteString(segment[index:])
+			return
+		}
+		end++
+		sequence := segment[index:end]
+		sb.WriteString(sequence)
+		if sequence[len(sequence)-1] == 'm' {
+			if sgrResetsAll(sequence) {
+				*active = (*active)[:0]
+			} else {
+				*active = append(*active, sequence)
+			}
+		}
+		index = end
+	}
+}
+
+// sgrResetsAll reports whether an SGR sequence clears every attribute.
+func sgrResetsAll(sequence string) bool {
+	parameters := sequence[2 : len(sequence)-1]
+	if parameters == "" {
+		return true
+	}
+	for _, parameter := range strings.Split(parameters, ";") {
+		if strings.Trim(parameter, "0") != "" {
+			return false
+		}
+	}
+	return true
+}
+
 var webURLPattern = regexp.MustCompile(`https?://[^\s\x1b]+`)
 
 func WebDestination(destination string) (string, bool) {
@@ -186,6 +313,13 @@ func WebLinksInText(text string) []TerminalHyperlink {
 		}
 	}
 	return links
+}
+
+// TrimWebURLToken returns the web URL at the start of a whitespace-delimited
+// token, excluding surrounding and trailing punctuation, plus the byte offset
+// where the URL begins.
+func TrimWebURLToken(raw string) (string, int) {
+	return trimWebToken(raw)
 }
 
 func trimWebToken(raw string) (string, int) {

@@ -21,16 +21,17 @@ import (
 // Both affect every Markdown render, not just math.
 
 // TestMathSpansMaskLikeRust checks the source scan against Rust's snapshot
-// sources: every admitted span becomes a placeholder, the rejected prose and
-// shell dollars stay verbatim, code spans, link destinations and HTML stay
-// untouched.
+// sources: every paired span becomes a placeholder (rejected formulas restore
+// their source verbatim, like Rust's replacement text), while the rejected
+// prose and shell dollars stay verbatim. Code spans, link destinations and HTML
+// stay untouched.
 func TestMathSpansMaskLikeRust(t *testing.T) {
 	InitRendering(DefaultRendering())
 	t.Cleanup(func() { InitRendering(DefaultRendering()) })
 
 	source := "Inline $\\alpha^2 + \\beta_{10}$ on $\\mathbb{R}^n$.\nRoot $\\sqrt{x^2+y^2}$ and fraction $a/\\frac{b}{c}$.\nUnsupported: $\\unknown{x_y}$ and $\\frac{a}{b}^2$.\nAngles: <$x$>, <\\(\\alpha\\)>, and <$\\unknown{x}$>.\nCode: `$\\alpha$`; money: $5 and $10; shell: $HOME."
 	placeholders, masked := protectMathSpans(source, 80)
-	wantMasked := "Inline 8MATHPROT0END on 8MATHPROT1END.\nRoot 8MATHPROT2END and fraction 8MATHPROT3END.\nUnsupported: $\\unknown{x_y}$ and $\\frac{a}{b}^2$.\nAngles: <8MATHPROT4END>, <8MATHPROT5END>, and <$\\unknown{x}$>.\nCode: `$\\alpha$`; money: $5 and $10; shell: $HOME."
+	wantMasked := "Inline 8MATHPROT0END on 8MATHPROT1END.\nRoot 8MATHPROT2END and fraction 8MATHPROT3END.\nUnsupported: 8MATHPROT4END and 8MATHPROT5END.\nAngles: <8MATHPROT6END>, <8MATHPROT7END>, and <8MATHPROT8END>.\nCode: `$\\alpha$`; money: $5 and $10; shell: $HOME."
 	if masked != wantMasked {
 		t.Fatalf("masked = %q, want %q", masked, wantMasked)
 	}
@@ -39,8 +40,11 @@ func TestMathSpansMaskLikeRust(t *testing.T) {
 		"8MATHPROT1END": "ℝⁿ",
 		"8MATHPROT2END": "√(x²+y²)",
 		"8MATHPROT3END": "a/((b)/(c))",
-		"8MATHPROT4END": "x",
-		"8MATHPROT5END": "α",
+		"8MATHPROT4END": `$\unknown{x_y}$`,
+		"8MATHPROT5END": `$\frac{a}{b}^2$`,
+		"8MATHPROT6END": "x",
+		"8MATHPROT7END": "α",
+		"8MATHPROT8END": `$\unknown{x}$`,
 	}
 	if len(placeholders) != len(wantValues) {
 		t.Fatalf("placeholders = %#v, want %#v", placeholders, wantValues)
@@ -129,6 +133,42 @@ func TestMathRendersSnapshotContentLikeRust(t *testing.T) {
 	} {
 		if !containsCollapsedSpace(joined, want) {
 			t.Fatalf("rendered %q missing %q", joined, want)
+		}
+	}
+}
+
+// Mirrors Rust's narrow-fallback snapshot: an aligned block that cannot keep its
+// geometry at the available width is not fragmented. The TeX source survives
+// verbatim, including its delimiters and row separators.
+func TestMathNarrowDisplayFallbackKeepsSourceLikeRust(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	formula := `\[
+\begin{aligned}
+\frac{x}{z}&=\frac{1}{2} &&\text{first}\\
+y_{gpt}&=3 &&\text{second}\\
+\end{aligned}
+\]`
+	got := strings.Join(plainMarkdownLines(t, formula, 12), "\n")
+	if got != formula {
+		t.Fatalf("narrow fallback = %q, want source %q", got, formula)
+	}
+}
+
+// Unsupported display math restores its source verbatim as well, so Markdown
+// escaping cannot turn `\[` into `[` or a row separator into a single `\`.
+func TestMathUnsupportedDisplayKeepsSourceLikeRust(t *testing.T) {
+	InitRendering(DefaultRendering())
+	t.Cleanup(func() { InitRendering(DefaultRendering()) })
+
+	for _, source := range []string{
+		"\\[\n\\unknown{x}\n\\]",
+		"$$\n\\begin{matrix}a&b\\end{matrix}\n$$",
+	} {
+		got := strings.Join(plainMarkdownLines(t, source, 80), "\n")
+		if got != source {
+			t.Fatalf("fallback for %q = %q, want the source verbatim", source, got)
 		}
 	}
 }

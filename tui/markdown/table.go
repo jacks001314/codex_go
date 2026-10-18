@@ -187,7 +187,7 @@ func parseTableAlignments(delimiterLine string) []string {
 
 // restoreRenderedTables replaces each marker line in the glamour output with
 // the compact Rust-style rendered table.
-func restoreRenderedTables(rendered string, tables []sourceTable, width int) string {
+func restoreRenderedTables(rendered string, tables []sourceTable, width int, linkSGR string) string {
 	if len(tables) == 0 {
 		return rendered
 	}
@@ -203,6 +203,9 @@ func restoreRenderedTables(rendered string, tables []sourceTable, width int) str
 		if id >= 0 {
 			if table, ok := tableByID[id]; ok {
 				rendered := renderCompactTableSized(table, width)
+				for index, row := range rendered {
+					rendered[index] = codextui.StyleWebURLsInLine(row, linkSGR)
+				}
 				if table.blockquote {
 					indent, leading := splitBlockquotePrefix(line)
 					// If the marker shares a line with preceding blockquote text

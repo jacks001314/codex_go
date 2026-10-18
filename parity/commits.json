@@ -118,9 +118,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: apply_permission_shortcut, complete_permission_shortcut, handle_permission_shortcut, permission_mode_disabled_reason"
+      "Round 399 (audit): previous/next permission-mode actions are registered as unbound chat keymap entries, apply only to the active session without writing config, exclude unavailable modes, require the existing full-access confirmation, reject printable bindings, and are stripped from project config. Tests: TestModelPermissionShortcutsCycleSessionOnlyLikeRust, TestModelPermissionShortcutFullAccessStillRequiresConfirmationLikeRust, TestPermissionShortcutBindingsRejectPrintableKeysLikeRust, and project ignored-settings coverage."
       ]
     },
     {
@@ -418,9 +418,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 401 (audit): keymap action menu items have one binding-aware description with no selected-description swap, and replacement actions name the affected binding. TestModelKeymapActionMenuResponsiveWidthsMatchRust renders every selection position without changing menu content."
       ]
     },
     {
@@ -466,9 +466,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: copy_selection, copy_selection_with, extract_copy_targets, show_copy_picker, strip_line_directives"
+      "Round 401 (audit): /copy extracts the whole latest response plus fenced code blocks and nested blockquotes, labels/previews targets, opens a selection modal, and copies exact source text through the clipboard path. Tests cover extraction, picker navigation/cancel, rich/plain copy, hard breaks, follow-up responses, and status-output copy."
       ]
     },
     {
@@ -478,9 +478,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 401 (audit): the fast-mode status item is omitted when the catalogued current model is known not to support Fast, while supported and uncatalogued models still show Fast on/off; status-control tests cover all three cases."
       ]
     },
     {
@@ -718,9 +718,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 401 (audit): McpServerStatus carries RuntimeStatus and compact /mcp output renders connected, starting, authentication required, failed, cancelled, not started, disabled, and unknown states with tool counts; verbose output retains the detailed inventory and legacy auth fallback. history_cell tests cover the state matrix and older-server response shape."
       ]
     },
     {
@@ -742,9 +742,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 401 (audit): Go does not own a custom ratatui-style draw/cursor cycle. Bubble Tea's renderer queues cursor position and visibility, and the model only supplies view text; there is no equivalent set_cursor_style/show/set_cursor_position sequence to reorder."
       ]
     },
     {
@@ -766,9 +766,11 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Completed the control surface and every effect gate that has a Go animation surface. config.TuiEffectsFromValues resolves all six `tui.effects` booleans (defaults true, unknown members ignored, current `tui.whimsy` alias still maps to starfield), app/interactive passes them to EffectsSettings, and the /config Effects sub-picker exposes the same two rows as Rust (Animations + Composer stars, with stars unavailable while animations are off).",
+        "Shimmer and progress obey `animations && effects.<name>`. Added the missing terminal-title surface: the activity spinner advances under `animations && effects.progress`, the blocked action-required prefix blinks under `animations && effects.title`, and either switch off keeps the static prefix. Tests: config/tui_effects_test.go, TestWorkingHeaderShimmerHonorsTheEffectLikeRust, TestProgressEffectsGateLikeRust, TestTerminalTitleActionRequiredBlinkHonorsTitleEffectLikeRust, TestTerminalTitleSpinnerHonorsProgressEffectLikeRust, TestConfigPanelEditorsAndPreferenceCyclesLikeRust, plus go test ./tui/... -count=1.",
+        "Welcome artwork, effort ignition, and the one-time Astra composer starfield have no Go animation surface yet; those renderers are tracked by their own ledger entries (#48513/#46096/#45137), not by this control commit."
       ]
     },
     {
@@ -1594,9 +1596,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Remote TUI now drops thread/started for ephemeral feature sources `system` and `thread_title` before active-thread selection, thread-id mutation, or ThreadStarted emission, which also prevents command-center refreshes. Persisted system threads and ephemeral subagents still route. Added the generated-title response normalizer with wrapping-quote removal, whitespace collapse, trailing `.?!` removal, meaningful leading punctuation preservation, unknown-field rejection, and rune-bounded truncation. Tests: TestRemoteTUIHidesEphemeralSystemThreadStartedLikeRust, TestParseGeneratedThreadTitleLikeRust, TestParseGeneratedThreadTitleTruncatesByRuneLikeRust; focused app tests, go vet ./app, go build ./..., and go test ./tui/... -count=1 pass."
       ]
     },
     {
@@ -1678,9 +1680,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 405 (implementation): app-server instructionSources now flow into Settings and the active TUI State; FormatInstructionSources keeps files inside or one level above cwd project-relative, collapses other home paths to `~`, deduplicates, and normalizes separators. Local and remote thread starts seed the summary immediately, resume/session switches apply it, and partial settings notifications do not clear it. Tests cover the Rust home/project-relative matrix, deduplication, tea settings application/removal, and resume/start settings mapping."
       ]
     },
     {
@@ -1942,9 +1944,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Completed with the #46832 title work: terminalTitleStatusCmd recomputes the title from animation ticks and lifecycle changes, applies only the OSC sequence through applyTerminalTitleResult, and deduplicates unchanged sequences, so title animation never forces a transcript redraw. TestTerminalTitleSpinnerHonorsProgressEffectLikeRust advances frames without touching message state; TestTerminalTitleActionRequiredBlinkHonorsTitleEffectLikeRust covers the blocked blink."
       ]
     },
     {
@@ -1966,9 +1968,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: refresh_goal_status_indicator_for_time_tick"
+      "Round 399 (audit): an active goal schedules a deduplicated status tick, refreshes the elapsed indicator, and only requests another frame when the displayed label changes. TestActiveGoalClockTicksLikeRust covers the tick and duplicate suppression."
       ]
     },
     {
@@ -2567,9 +2569,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: HyperlinkCache"
+      "Round 402 (implementation): composer URL detection now caches by draft value, maps source display columns through grapheme-aware rune offsets, and annotates every visible wrapped/scrolled fragment with the complete OSC-8 destination in both owned-screen and inline layouts. Selection-reverse styling is preserved, Unicode whitespace and joined emoji are handled, and destinations over 8 KiB stay unannotated. Tests: TestComposerWrappedURLKeepsCompleteDestinationLikeRust, TestInlineComposerWrappedURLKeepsDestinationLikeRust, TestComposerUnicodeWhitespaceURLKeepsDestinationLikeRust, TestComposerJoinedEmojiBeforeURLKeepsDestinationLikeRust, TestComposerOversizedURLIsNotAnnotatedLikeRust, TestComposerScrolledURLKeepsOffscreenDestinationLikeRust, TestComposerURLHyperlinkPreservesSelectionHighlightLikeRust, TestComposerHyperlinkCacheInvalidatesWithDraftLikeRust."
       ]
     },
     {
@@ -2711,9 +2713,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 406 (audit + regression): the Go pager rebuilds from complete content rather than retaining a separate live-tail renderable, so SetContent preserves the reading offset and follows the bottom when already at tail. Resize preserves bottom-following or the reading offset. New tests cover repeated body-height changes and history replacement."
       ]
     },
     {
@@ -3492,9 +3494,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: record_trusted_skill, trusted_skill_paths"
+        "Round 489 (audit): N/A by architecture - Go has no Guardian trusted-skill evidence registry or delegated-worker GuardianRootSnapshot (the same absence recorded for #43599). Skill user inputs are expanded for the current turn, but no turn-matched trusted path set is retained or inherited by delegated workers. Go's synchronous reviewer uses its existing trusted tool descriptions and retained user/authorization context instead. Tests: go test ./state -run 'GuardianToolDescriptions|GuardianRetained|GuardianRoot' -count=1"
       ]
     },
     {
@@ -3504,9 +3506,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: rendered_prefix, visible_byte_count"
+      "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed CreateDiffPreview and the 12-row/omission behavior; TUI history now renders the complete diff."
       ]
     },
     {
@@ -3792,9 +3794,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: decoded_path_bytes"
+        "Round 495 (audit): sandbox.ResolveFileSystemEntryAccess applies executor path conventions, folds case and normalizes separators for Windows globs, and keeps POSIX byte-oriented matching. sandbox/integrity.PreparePolicy resolves ~ against the executor home, fails closed on malformed paths/invalid globs/unresolved home, and the matcher checks both alias and canonical locations. Windows deny-read ACL discovery uses the lexical case-insensitive scan. Tests: go test ./sandbox/integrity ./sandbox ./sandbox/windowssandbox -run 'DenyRead|ReadDeny|PolicyHome|Glob' -count=1"
       ]
     },
     {
@@ -3996,11 +3998,11 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
-      ]
-    },
+    "status": "complete",
+    "evidence": [
+      "Round 407 (implementation): Validate now walks the shared KeymapActions registry in declaration order for both contexts and actions, appending schema-only entries deterministically. This preserves the existing error text while making the first reported conflict stable across editor, Vim, pager, list, agents, and approval contexts. Tests repeat each conflict ten times and verify earlier-context priority."
+    ]
+  },
     {
       "sha": "94311d447587411789533c47601fd8bc9d81eb48",
       "subject": "Forward history note images to the model (#41292)",
@@ -4524,9 +4526,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 488 (audit): Go keeps app-server client name/version in connection and telemetry context rather than the session permission configuration, so updating client metadata has no filesystem projection to rerun. Thread metadata changes go through MetadataPatchToSession and update only explicit fields; ActivePermissionProfile and the stored permissions extra remain separate. The Rust cwd-bound legacy policy reprojection has no Go carrier. Tests: go test ./appserver -run 'Metadata|Permissions' -count=1"
       ]
     },
     {
@@ -4620,9 +4622,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 8/22; needs review: SearchDirection, TuiVimSearchKeymap, VimSearchKeymap, configure_vim_search, enable_vim_search"
+      "Round 399 (audit): Vim `/`, `?`, `n`, `N`, operator searches, live query footer, and empty-query Backspace cancellation are implemented and covered by TestVimSearchMotionsLikeRust, TestVimSearchQueryFooterLikeRust, TestVimOperatorSearchLikeVim, and TestVimSearchBackspaceCancelsEmptyQueryLikeRust."
       ]
     },
     {
@@ -5016,9 +5018,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/10; needs review: ReconnectPresentation, ReconnectState, begin_reconnect, clear_recap_request, handle_disconnected_key"
+      "Round 409 (audit): Go's interactive host does not implement Rust's out-of-process app-server reconnect/read-only snapshot loop. A failed remote/daemon session returns control to the launcher; daemon restart re-enters with a fresh model. There is no ReconnectState or disconnected TUI draft to preserve, matching the previously recorded reconnect-architecture gap."
       ]
     },
     {
@@ -5040,9 +5042,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/8; needs review: StatusTimer, elapsed_at, reset_status_timer, status_elapsed, with_timer"
+      "Round 410 (audit): the model owns a pause-aware StatusTimer independently of the optional working row. Hidden/restored rows keep elapsed time, modal approvals pause and resume the clock, new turns and Windows sandbox setup reset it, and the final Worked-for duration falls back to the timer when the server duration is absent. Tests: TestStatusTimerPausesForModalsLikeRust, TestStatusTimerFeedsWorkingRowAndCompletionFallbackLikeRust, and sandbox reset coverage."
       ]
     },
     {
@@ -5064,9 +5066,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 3/11; needs review: finish_reconnect, inherit_task_tool_capabilities, pause_unavailable_thread, reconnect_failed, render_thread_snapshot"
+      "Round 409 (audit): automatic out-of-process reconnect is not part of Go's TUI lifecycle; remote failures terminate the interactive run and managed-daemon restart is handled by relaunching the TUI. There is no reconnect loop, unavailable-thread snapshot, or task-tool capability inheritance to port."
       ]
     },
     {
@@ -5076,9 +5078,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: agents_navigation_available, set_agents_navigation_enabled"
+        "Already implemented and audited: the empty local-daemon composer advertises the agents-path hint, Left opens the command center only when the hint is available, transient paste input suppresses the shortcut, editor/Vim remaps are respected, and the footer hint follows availability. Tests TestAgentsNavigationOpensOverviewFromEmptyComposerLikeRust, TestAgentsNavigationRequiresLocalDaemonLikeRust, TestAgentsNavigationPreservesTransientInputLikeRust, TestAgentsNavigationRespectsEditorAndVimRemapsLikeRust, TestAgentsNavigationFooterHintFollowsAvailabilityLikeRust and production TestAgentsNavigationOpensOverviewPTY pass."
       ]
     },
     {
@@ -5088,9 +5090,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: restore_runtime_permissions"
+      "Round 409 (audit): this commit restores command-center selection/drafts around Rust's reconnect state. Go has no in-place reconnect transition; the command center remains active within a live model and a daemon restart re-enters the TUI rather than restoring a cached reconnect snapshot."
       ]
     },
     {
@@ -5232,9 +5234,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 411 (audit): implemented at the time, then superseded by #42107. Current Go intentionally removed the 12-row/64 KiB input preview and hint; inline history, transcript, and raw output all render the complete input with one shared prefix."
       ]
     },
     {
@@ -5256,9 +5258,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 413 (audit): Go's pager overlay stores one rendered content string and one viewport, not Rust's per-cell renderables with cached desired heights. Moving a backtrack highlight re-renders that content but has no unrelated cell-height cache to preserve; viewport/highlight behavior is covered by existing backtrack and overlay tests."
       ]
     },
     {
@@ -5268,9 +5270,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/8; needs review: VimPersistentState, begin_direct_vim_edit, begin_vim_edit, finish_vim_edit, handle_vim_history_key"
+      "Round 399 (audit): bounded Vim undo snapshots restore normal edits and an entire insert session; TestVimUndoRedoNormalEditsLikeVim and TestVimUndoInsertSessionRestoresWholeSessionLikeVim pass."
       ]
     },
     {
@@ -5352,9 +5354,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 408 (implementation): DisablePasteBurst prefers tui.disable_paste_burst and falls back to the legacy top-level key. CLI top-level overrides are mirrored into the tui key after override application so layer precedence is preserved, while a CLI tui override works directly. Tests cover defaults, both locations, same-file precedence, and both CLI directions."
       ]
     },
     {
@@ -5604,9 +5606,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: bundled_sites_is_hidden, ensure_sites_migration_ready, excluded_bundled_plugin_ids, update_sites_exclusion"
+        "Round 494 (audit): N/A by architecture/assets - Go's discoverable bundled catalog contains only chrome and computer-use; there is no sites@openai-bundled entry, bundled Sites skill copy, or account/backend-scoped bundled exclusion state to persist or restore. Remote plugin routing remains the only Sites path."
       ]
     },
     {
@@ -5652,9 +5654,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 411 (implementation): patch history now uses CreateDiffSummary for complete inline/full diff content, and background-terminal input renders every line with no preview hint or byte/row budget. Exec preview limits and CreateDiffPreview/RenderChangesBlockLimited were removed. Tests cover 40-line patches, 40-line terminal input, transcript/raw equality, and shared indentation."
       ]
     },
     {
@@ -5736,9 +5738,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 414 (implementation): running hooks are tracked with per-run 300ms reveal deadlines and a shared revealed-message summary. Activity folds into the working row with animation-gated shimmer when it fits, reflows to its own line when too wide, and renders independently outside a turn. Model-facing context entries and quiet successful completions are suppressed; actionable failures remain. Thread reset clears hook lifecycle/deadlines. Tests cover fold, reflow, fast hooks, idle turn, concurrent summaries, and context suppression."
       ]
     },
     {
@@ -5844,9 +5846,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 399 (audit): redo restores undone edits, tracks the redo stack, and remains a no-op when exhausted; TestVimUndoRedoNormalEditsLikeVim covers undo/redo ordering."
       ]
     },
     {
@@ -6024,9 +6026,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: apply_vim_insert_action, clear_vim_replace_recovery, is_vim_replace_mode, replace_vim_text, restore_vim_replaced_character"
+      "Round 399 (audit): Vim replace mode overwrites from the cursor, appends past line end, exits on Esc, records recoverable replaced characters for Backspace, absorbs prompt prefixes, and participates in dot-repeat; TestVimReplaceModeOverwritesUntilEscape, TestVimReplaceModeBackspaceRestoresCharactersLikeRust, TestVimReplaceModeAbsorbsPromptPrefixLikeRust, and TestVimReplaceModeDotRepeatLikeRust pass."
       ]
     },
     {
@@ -6060,9 +6062,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/8; needs review: app_server_platform_family, app_server_platform_os"
+        "The existing LocalSettings staging/reload/trust path remains separate from server thread settings and is covered by the app and tea local-settings suites. Remote initialization now retains platformFamily/platformOs exactly as reported (including unknown and missing values), and local-daemon Windows sandbox readiness requires the server-reported `windows` OS rather than the TUI host OS. The server account response's requiresOpenaiAuth now flows into local/remote State and the /status usage-link gate instead of using provider-name heuristics when known. Tests: TestRemoteInitializeRetainsPlatformMetadataLikeRust, TestRemoteWindowsSandboxReadinessUsesServerPlatformLikeRust, TestRemoteStatusAccountRetainsServerAuthRequirementLikeRust, TestStatusCardUsesServerRequiresOpenAIAuthLikeRust, plus the existing interactive/tea local-settings tests; go test ./tui/... -count=1, go vet ./tui/... ./app, and go build ./... pass."
       ]
     },
     {
@@ -6072,9 +6074,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by packaging architecture: this commit adds Rust's Python Mach-O receipt verification and GStreamer plugin relocation pipeline (`third_party/voice/runtime.py` and `macos_runtime.py`). Go's voicehost ships a Go-built helper plus an Opus codec and inspects those package artifacts at runtime (voicehost/runtime_package.go); it has no Rust native/GStreamer runtime prefix, native receipt inventory, Mach-O load-command rewriting, or ad-hoc signing stage to project."
       ]
     },
     {
@@ -6277,9 +6279,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: ActiveCompaction, COMPACTION_DETAILS, COMPACTION_HEADER, clear_context_compaction, on_context_compaction_completed"
+      "Round 415 (audit): contextCompaction item starts track an active id and start time, render an animated compacting activity row, restore elapsed time from startedAt snapshots, survive transient retry status, clear on matching completion/turn completion/thread reset, and write the completion marker. Tests cover live elapsed time, duplicate starts, unknown ids, retry precedence, history markers, and thread reset."
       ]
     },
     {
@@ -6421,9 +6423,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: cloud_config_bundle_loader_for_storage_without_cache, validate_provisioning_settings, without_cache"
+        "Round 493 (audit): N/A by architecture - Go has no windows-sandbox-service process, provisioning client, or machine-policy validator (the same absence recorded for #49067/#48829/#50480). Go uses the direct elevated setup helper instead, so there is no provisioning-client policy or cache-bypass path to validate."
       ]
     },
     {
@@ -6433,9 +6435,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: AuthorizedClientProcess, ClientIdentity, authenticate_client, authorize_client, authorize_client_process"
+        "Round 493 (audit): N/A by architecture - Go has no Windows sandbox service IPC client, service-side authenticated process identity, or AuthorizedClientProcess/ClientIdentity carrier. The direct setup helper is not a registered service client."
       ]
     },
     {
@@ -6445,9 +6447,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: EVENT_PROVISIONING_FAILED, EVENT_PROVISIONING_SUCCEEDED, EVENT_REQUEST_REJECTED, run_elevated_provisioning_setup_with_retained_handles, spawn_with_retained_handles"
+        "Round 493 (audit): N/A by architecture - authenticated provisioning belongs to the absent windows-sandbox-service IPC host. Go's RunElevatedProvisioningSetup uses the direct setup path, so there is no service request authentication or retained-handle provisioning protocol to enable."
       ]
     },
     {
@@ -6457,9 +6459,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: UnsupportedHomeDrive, emit_windows_sandbox_setup_failure_metrics, windows_sandbox_proxy_listeners"
+        "Round 493 (audit): N/A by architecture - Go has no experimental Windows sandbox service provisioning path, service-hosted proxy listeners, or UnsupportedHomeDrive service error. The direct elevated setup helper and existing sandbox proxy code retain their current behavior."
       ]
     },
     {
@@ -7047,9 +7049,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: should_recover_vim_insert_escape"
+        "Already implemented and audited: legacy terminals split Alt-prefixed input back into Escape plus the following character, replay Esc before the character, preserve configured Alt bindings, and gate recovery away from Windows. Tests TestLegacyVimEscapeRecoveryReplaysEscapeThenCharacterLikeRust, TestVimEscapeRecoveryPreservesAltBindingsAndSurfacesLikeRust and TestVimEscapeRecoveryRespectsCustomAltBindingLikeRust pass."
       ]
     },
     {
@@ -7299,9 +7301,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: for_cli"
+        "Round 491 (audit): cli parses shared --worktree/--no-worktree for new and forked exec sessions; exec builds the configured desktop worktree pool and allocates a managed checkout before thread creation, binding the checkout cwd to the thread. Unsupported remote execution, ignore-user-config, ephemeral, resume, review, and unknown subcommands are rejected before allocation. Tests: go test ./cli ./exec -run 'Worktree' -count=1"
       ]
     },
     {
@@ -8979,9 +8981,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: get_chatgpt_account_user_id, parse_chatgpt_account_user_id, server_mcp_extensions"
+        "Round 492 (implementation): MCP client capabilities advertise userVerification only for the host-owned apps registration; per-server elicitation handlers cancel verification from every other registration, including one reusing the apps name, before the client is prompted. Connection/catalog cache keys include the verification capability so ownership changes rebuild the client. auth.ChatGPTAccountUserIDFromAuth reads only the access token's opaque claim and requires its workspace to equal the explicitly selected account, with no fallback for missing/malformed/mismatched claims. Tests: go test ./mcp ./auth -count=1"
       ]
     },
     {
@@ -9435,9 +9437,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented: SplitFlapBoard accepts the discarded prefix byte count, re-renders the retained target, keeps matching prior tile arrivals, and starts fresh for a changed speaker or mismatched retained text. Tests TestSplitFlapSlidingWindowAnimatesOnlyNewTiles, TestSplitFlapReplacedSpeakerStartsFresh and TestSplitFlapAppendedTranscriptKeepsPreviousTilesSettled pass."
       ]
     },
     {
@@ -10239,9 +10241,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: builtin_credential_candidate, credential_broker_provider_sources_allowed, is_operational_path_match, recognized_credential_match, restore_brokered_text"
+        "Round 490 (audit): Go's configured credential providers scan embedded aliases in unrelated environment values, require full-token boundaries, honor the distinctive-prefix short-token exception, preserve provider/source host binding, reject dummies containing another provider's token, and mask/restore snapshot credentials before executor-local text leaves the broker. Existing snapshot wrapping preserves exported functions and restores credential-shaped values. Tests: go test ./network ./tool -run 'CredentialBroker|CredentialAlias|EmbeddedAlias|SnapshotCredential|BrokeredCredential' -count=1"
       ]
     },
     {
@@ -10587,9 +10589,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already satisfied: the starfield is applied only to `composer.View()` in `tui/tea/model.go`; voice strip rows are rendered later as independent `voiceStripLines` sections, so stars cannot recolor or replace voice indicators. Composer starfield tests confirm the decoration while the voice strip remains a separate surface."
       ]
     },
     {
@@ -10791,9 +10793,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture: Go has no suspended-turn recovery path or runtime effort pin that can append a second configuration_update on resume. The request builder appends post-prompt effort updates once per request; there is no recover-after-suspend flow to deduplicate."
       ]
     },
     {
@@ -10851,9 +10853,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture: the upstream change preserves prewarmed effort through Rust's suspended-turn replay and early rollback path. Go has no suspend/resume or early-turn rollback state machine; Prewarm is a one-shot WebSocket handshake and requests carry their effort directly."
       ]
     },
     {
@@ -12651,9 +12653,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already reflected: Go has no composer Sparkle state, renderer, or submission hook (no Sparkle/SparkleDraft/set_astra_sparkle counterpart), matching the removal. The later one-time Astra composer starfield is a separate tracked feature (#46096), not the removed multi-phase sparkle."
       ]
     },
     {
@@ -12783,9 +12785,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: update_history_search_query"
+        "The tea paste branch now gives an active Ctrl+R history search priority over ordinary composer paste and other popup handling. Nonempty sanitized text appends to the search query and restarts newest-first matching; empty or sanitized-empty pastes preserve the selected match. Existing session support provides CRLF/CR normalization, ANSI filtering, visible newline/tab footer markers, and full large-paste/image-path query handling without creating attachments or pending paste elements. Tests: TestHistorySearchPasteAppendsQueryAndAcceptsLikeRust, TestHistorySearchEmptyPastePreservesSelectedMatchLikeRust, TestHistorySearchPasteShowsSeparatorsAndConsumesLargeTextLikeRust, TestHistorySearchPasteDoesNotAttachImagePathLikeRust; go test ./tui/... -count=1, go vet ./tui/... ./app, and go build ./... pass."
       ]
     },
     {
@@ -13491,9 +13493,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: flush_answer_and_plan_streams"
+        "Streamed answer and plan source is committed into transcript messages while deltas arrive, so interruption, failure, and normal completion all retain the received source before turn-finalization paths run. The stored source remains available for narrow-width reflow and raw-output mode. Tests: TestTurnInterruptionPreservesStreamedAnswerAndPlanLikeRust and TestTurnTerminationPreservesStreamSourceAcrossModesLikeRust cover interrupted answers, interrupted plans, failed plans, completed answers, narrow rendering, and raw mode; focused go test ./tui/tea and go vet ./tui/tea pass."
       ]
     },
     {
@@ -14835,9 +14837,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: animation_default, narrator_running"
+        "Completed: app/screen_reader_animation.go runs one bounded (450ms) launch probe, skips when `tui.screen_reader_detection_done` exists (any value), preserves explicit `tui.animations`, seeds a false session default plus persisted value when detected and unconfigured, and records the marker with a comment-preserving [tui] text edit (symlink target resolved, atomic temp write, inline-table fallback declines instead of corrupting). Windows checks SPI_GETSCREENREADER plus Narrator in the current login session; macOS checks VoiceOver and Linux checks Orca/speech-dispatcher/gsettings. Wired into local and remote interactive startup. Tests TestScreenReaderMarkerSkipsDetectionLikeRust, TestScreenReaderDetectionSeedsAnimationDefaultLikeRust, TestScreenReaderDetectionPreservesExplicitAnimationsLikeRust, TestScreenReaderDetectionTimeoutLikeRust, TestScreenReaderPersistenceFailureKeepsSessionDefaultLikeRust and TestScreenReaderPersistenceRejectsInlineTuiTable pass."
       ]
     },
     {
@@ -15111,9 +15113,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/30; needs review: AstraModelPickerAction, Sparkle, SparkleDraft, SparkleEditorState, after_sparkle_key"
+        "Completed: tui/tea/composer_sparkle.go implements the one-time deterministic Astra starfield. It arms for fresh tasks and model-picker changes to an Astra slug, requires `animations && effects.starfield`, paints only blank unstyled composer cells (protecting the placeholder and cursor), preserves ANSI sequences, fades during the last second, and finishes at 15s. Ordinary draft input dismisses it; slash-command drafts hide it without consuming the opportunity. Tests TestFreshAstraTaskShowsComposerStarfieldLikeRust, TestComposerStarfieldHonorsEffectsAndModelLikeRust, TestComposerStarfieldDismissalRulesLikeRust, TestComposerStarfieldExpiresLikeRust and TestComposerStarfieldArmsWhenModelBecomesAstraLikeRust pass, plus the full go test ./tui/... -count=1 suite."
       ]
     },
     {
@@ -16144,9 +16146,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Already implemented: model catalog metadata carries `supports_reasoning_effort_updates` (default false), AgentRequest.DropReasoningEffortUpdates removes saved configuration_update items from request and post-prompt input copies without mutating history, and unsupported-model sampling clears the pinned effort baseline. TestResponsesInputItemsDropUnsupportedConfigurationUpdatesLikeRust covers filtered and supported requests."
       ]
     },
     {
@@ -16156,9 +16158,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture: Go has no ephemeral `thread_title` worker session and does not apply the managed reasoning-effort override machinery to memory-consolidation requests. Memory consolidation selects its provider-preferred model and request-level effort directly, so there is no override exemption to add."
       ]
     },
     {
@@ -16723,7 +16725,7 @@
       ],
       "status": "audit_pending",
       "evidence": [
-        "Partial symbol coverage 11/27; needs review: PickerLayoutSizes, PickerSurface, SelectionAppearance, TabAppearance, accent_color"
+        "Partial symbol coverage 11/27; needs review: PickerLayoutSizes, PickerSurface, SelectionAppearance, TabAppearance, accent_color. Footer slice landed: cancellable SelectionViews now rewrite the standard placeholder to `enter select · esc back` (Rust apply_standard_popup_hint), custom hints survive, status/title setup use lowercase `space toggle · enter save · esc cancel`, experimental uses `esc save/close`, and Ctrl+R search uses compact styled spans (dim prompt, cyan query, bold keys, red no-match). Result viewport landed for generic selection modals: terminal-height budget, ↑/↓ overflow markers, PgUp/PgDn by visible rows, Home/End edges, and responsive wrapped-row shrinking. Theme picker now has the same stable window plus preview-yields-first behavior in narrow layouts. Ctrl+T pager now reserves two compact hint rows with resolved close/find bindings. Filled tabs/overflow markers already shipped; remaining: full contrast palette and an audit of other custom browser renderers."
       ]
     },
     {
@@ -16733,9 +16735,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: picker_hint_line_for_keymap, show_copy_picker, show_review_commits"
+        "Completed: selection rows retain their column padding across wrap boundaries via wrapDescriptionColumnSelectionRow, and command-popup widths 32/33/34 match Rust's command_popup_wrap_boundary snapshot. Cancellable pickers use `enter select · esc back`; status/title setup use `space toggle · enter save · esc cancel`; Ctrl+R search and memories use compact hints. Added the generic two-stroke chord runtime (key_chord.go): an explicitly configured first stroke becomes a pending prefix, the completed chord is carried through normal action dispatch, timeout/Esc cancel it, and composer/global submit fallbacks work. The keymap action menu now offers Set key chord / Replace with key chord / Add alternate key chord, and capture stores the normalized two-stroke spec. Copy/review pickers use the shared SelectionView presentation path. Tests: TestConfiguredKeyChordSubmitsLikeRust, TestConfiguredGlobalChordSubmitFallbackLikeRust, TestModelKeymapChordCaptureWritesTwoStrokeSpecLikeRust, TestKeymapActionMenuShowsChordEntriesLikeRust, TestCommandPopupWrapBoundaryKeepsFollowingChoiceLikeRust, TestSelectionViewsUseCompactPickerHintLikeRust, full go test ./tui/... -count=1, vet/build/scripts build and the production ConPTY harness."
       ]
     },
     {
@@ -16745,9 +16747,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: measure_rows_height, render_rows_single_line"
+        "Completed the shared dedicated-picker row adapter. tui/bottom_pane/picker_rows.go mirrors Rust's picker_rows COLUMNS (AutoAllRows, HideWhenNarrow/24, full-width selection), MeasurePickerRowsHeight (+2 spacer rows), and RenderPickerRows/RenderPickerRowsSingleLine. MultiSelectPicker now uses the adapter at the full popup width, carries selection in NamePrefix, and renders Rust's compact hints: `space toggle · enter save · esc cancel`, adding `←/→ reorder` when ordering is enabled. SkillsToggleView uses the same adapter/full-width selection and the compact `space/enter toggle · esc close` hint. Tests: TestPickerRowsUseSharedColumnsAndSelection, TestMultiSelectPickerFooterHintsMatchRust, updated multi-select and skills row tests, plus go test ./tui/... -count=1, go vet ./tui/... ./app, go build ./..., scripts/build.ps1 and the production ConPTY harness."
       ]
     },
     {
@@ -16757,9 +16759,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: POPUP_HEIGHT"
+        "Completed the #46694 completion-popup refresh. Unified mention rows use the shared `›` marker and full-width selection, terminal-cell primary-column measurement across all results, a half-content-width cap that keeps parent paths visible, and truncation before padding (tui/bottom_pane/mentions_v2/render.go). The popup now has Rust's fixed 17-row frame (header, filled filter tabs, query, scroll indicators, eight results, footer) and stable short-height/empty-filter layouts; names/tags use type colors and visible fuzzy matches are bold. Command rows carry their own selection prefix at full width, remove the legacy inset, and wrap only the description column so the following choice remains at the wrap boundary (tui/bottom_pane/command_popup.go, selection_popup_common.go). File search is single-line, shortens paths through center_truncate_path while retaining filenames, recomputes fuzzy highlights on the shortened text, preserves the full insertion path, and restores the +2 picker height (tui/bottom_pane/file_search_popup.go). The standalone skill popup restores the +3 height, full-width selection, compact enter/esc hint, right-aligned category tags that survive hidden descriptions, and the tea legacy renderer also keeps [Skill] tags. Tests: TestMentionPopupFixedFrameMatchesRust, TestMentionPopupEmptyFilterClearsResultsAndKeepsFrame, TestMentionRenderBoundedPrimaryColumnKeepsFileIdentityLikeRust, TestMentionRenderStylesNamesTagsAndMatchesLikeRust, TestFileSearchPopupPreservesDistinguishingFilenamesLikeRust, TestFileSearchPopupShortensWidePathsByDisplayWidth, TestCommandPopupWrapBoundaryKeepsFollowingChoiceLikeRust, TestCommandPopupRowsUseSelectedColorBarAndScroll, bottompane.TestSkillPopupCategoryTagsSurviveHiddenDescriptionsLikeRust, tea.TestSkillPopupCategoryTagsSurviveHiddenDescriptionsLikeRust, plus go test ./tui/... -count=1, go vet ./tui/... ./app, go build ./..., scripts/build.ps1 and the production ConPTY harness."
       ]
     },
     {
@@ -16781,9 +16783,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: PickerAreas"
+        "Completed the shared picker-layout carrier. tui/bottom_pane/selection_picker_layout.go ports Rust's PickerAreas allocator (header, optional header gap, tabs, optional tab gap, search, paired overflow indicators, result rows, optional side gap/content), preserving the yield order for short terminals. The unified mention frame now consumes PickerAreas instead of duplicating the math. Tests cover the full 16-row mention frame, short and one-row layouts, header yield, side content, and non-overallocation across heights 0-40 (TestPickerAreasMatchesRustAllocation, TestPickerAreasNeverOverallocate, TestMentionPopupFixedFrameMatchesRust). Existing session-picker identity-color coverage remains green: selected and dense rows keep theme thread colors, colors suppress when theme colors are off, and the selected row retains both identity color and selection styling (tui/session_picker_color_test.go). Full go test ./tui/... -count=1, go vet ./tui/... ./app, go build ./..., scripts/build.ps1 and the production ConPTY harness pass."
       ]
     },
     {
@@ -17033,9 +17035,11 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Completed the control surface and every effect gate that has a Go animation surface. config.TuiEffectsFromValues resolves all six `tui.effects` booleans (defaults true, unknown members ignored, current `tui.whimsy` alias still maps to starfield), app/interactive passes them to EffectsSettings, and the /config Effects sub-picker exposes the same two rows as Rust (Animations + Composer stars, with stars unavailable while animations are off).",
+        "Shimmer and progress obey `animations && effects.<name>`. Added the missing terminal-title surface: the activity spinner advances under `animations && effects.progress`, the blocked action-required prefix blinks under `animations && effects.title`, and either switch off keeps the static prefix. Tests: config/tui_effects_test.go, TestWorkingHeaderShimmerHonorsTheEffectLikeRust, TestProgressEffectsGateLikeRust, TestTerminalTitleActionRequiredBlinkHonorsTitleEffectLikeRust, TestTerminalTitleSpinnerHonorsProgressEffectLikeRust, TestConfigPanelEditorsAndPreferenceCyclesLikeRust, plus go test ./tui/... -count=1.",
+        "Welcome artwork, effort ignition, and the one-time Astra composer starfield have no Go animation surface yet; those renderers are tracked by their own ledger entries (#48513/#46096/#45137), not by this control commit."
       ]
     },
     {
@@ -17117,9 +17121,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: ClockFormat"
+        "Go's ClockFormat type carries the 12/24-hour preference into FinalMessageSeparator, so live and restored completion footers both render through tui.SystemClockFormat with deterministic overrides. Detection mirrors Rust: LC_ALL/LC_TIME/LANG precedence (pickTimeLocale), C/POSIX/C.UTF-8/C.utf8 as 24-hour, an independent glibc newlocale/nl_langinfo_l lookup on linux+cgo, a documented locale fallback when cgo is unavailable, native LOCALE_SSHORTTIME parsing on Windows with quoted literals and first-alternative semantics, and a 12-hour fallback when the preference is unknown. Tests mirror Rust's locale precedence, unavailable-locale, native-pattern and strftime tables; go test ./tui/... and go vet ./tui/... pass, and linux/darwin CGO-disabled builds of ./tui succeed. glibc cgo detection could not be executed on this Windows host."
       ]
     },
     {
@@ -17189,9 +17193,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture: Go has no empty-state welcome logo/animation renderer, so there is no logo animation to limit to onboarding. The broader missing welcome screen is tracked by #48513."
       ]
     },
     {
@@ -17261,9 +17265,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: flush_activity, flush_interrupt_activity"
+        "Completed: sub-agent activity arriving while an assistant stream is active is queued and flushed only after the authoritative answer settles (or at error/interruption/turn end), so the complete answer precedes the activity row and late activity still appears after the turn stops. Tests TestSubAgentActivityWaitsForFinalAnswerLikeRust and TestSubAgentActivityFlushesAtInterruptedTurnEndLikeRust pass."
       ]
     },
     {
@@ -17321,9 +17325,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: save_fullscreen_transcript, show_tui_mode_picker"
+        "Already implemented and audited: `/tui` opens the two-option Scrollback/Fullscreen picker with the stored preference marked current, requires explicit confirmation, and only writes `tui.fullscreen_transcript` after confirmation. Success updates the stored preference while leaving the running renderer untouched and reports `Saved TUI mode: <mode>. Restart Codex to apply; launch overrides still apply.`; failures keep the previous preference, and cancel writes nothing. Tests TestTUIModePickerPersistsNextLaunchOnlyLikeRust, TestTUIModePickerFailureKeepsStoredPreferenceLikeRust, TestTUIModePickerCancelWritesNothingLikeRust and TestTUIModePickerMarksStoredPreferenceLikeRust; production ConPTY TestTUIModePickerPersistsNextLaunchPTY passes."
       ]
     },
     {
@@ -17333,9 +17337,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: style_bare_web_urls"
+        "Bare URLs now borrow the Markdown link style (theme link color plus underline) in prose, long-URL placeholders, and restored tables, while surrounding punctuation, Unicode prose, tabs, and existing emphasis keep their own SGR state; code-block URLs stay unstyled. Go's transcript and link activation are terminal-owned through OSC-8 hyperlinks, so Rust's app-owned stationary-click gesture has no separate carrier, but plain-click opening follows the terminal's OSC-8 handling. Tests in tui/markdown/bare_web_urls_like_rust_test.go and tui/terminal_hyperlinks_test.go cover prose, emphasis, punctuation, tabs, tables, and narrow long URLs; go test ./tui/markdown ./tui passes."
       ]
     },
     {
@@ -18389,9 +18393,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: display_sum"
+        "Rust's display_sum is a private helper that later became display_operator; Go has no separate public symbol and its shared parser owns sum/bigwedge limits and structured layouts directly in tui/markdown/math_render.go and math_render_structured.go. Go implements display-only aligned/boxed, stacked limits, underset/overset/substack, uppercase mathcal, widehat, grouped scripts, row/column/depth bounds and source fallback. Tests in math_render_test.go and math_integration_test.go cover aligned fraction geometry, boxed layouts, stacked limits, annotations, grouped scripts, narrow-width and unsupported-source fallback, malformed input and bounds; go test ./tui/... and go vet ./tui/markdown pass."
       ]
     },
     {
@@ -18749,9 +18753,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: date_time_format"
+        "Go's ClockFormat abstraction now drives the corresponding TUI surfaces: rate-limit/reset timestamps use FormatResetTimestampWithClock, backend-banner and reset-credit times route through SystemClockFormat, history separators and resume-picker expanded details use the shared date/time layouts, and status formatting preserves the local/UTC distinctions. Twelve- and twenty-four-hour midnight/noon/next-day layouts are covered. Rust's analytics timestamp branch has no Go carrier because Go implements no analytics view. Tests: TestClockFormatLayoutsLikeRust, TestHelpersMatchRustFormatting/TestRateLimit, TestBackendBannerCopyStripsControlsAndSubstitutesResetTime, and TestSessionPickerExpandedDetailHelpersMatchRust; focused go test and go vet pass."
       ]
     },
     {
@@ -18761,9 +18765,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: task_list_marker"
+        "Completed the lists preference: enabled rendering rewrites task-list markers to ☑/☐ while preserving ordered numbering and hanging indentation; unordered items use •. When `tui.rendering.lists=false`, task-list brackets are escaped before glamour rendering and rendered bullets are restored to `-`, preserving textual `[x]`/`[ ]` markers and ordered numbering. Literal code remains unchanged. Tests TestRenderingListsPreferenceLikeRust, TestTaskListMarkersLikeRust, ordered/empty-list marker tests and the full go test ./tui/markdown -count=1 pass."
       ]
     },
     {
@@ -19241,9 +19245,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_apple_terminal"
+        "Satisfied by Go's screen-mode architecture: Options.usesOwnedScreen keeps `auto` inline for every terminal, so Terminal.app over SSH also retains native scrollback and never enters the alternate screen. `always` opts into the owned screen, while `--no-alt-screen` and `never` override it. Tests TestOwnedScreenOptInOnlyForExplicitAlternateMode, TestInteractiveNoAltScreenResolutionLikeRust, and TestInteractiveTUIModeConfigParsingLikeRust cover the four policy branches; no Apple-specific device-attribute probe is needed."
       ]
     },
     {
@@ -19253,9 +19257,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: append_question_drafts, append_recovered_drafts, take_pending_drafts, take_question_drafts"
+        "Already implemented: unanswered async-question drafts are appended in order to the main composer at turn end, preserving the existing draft and command escaping. Tests TestTurnEndRecoversAsyncQuestionDraftsLikeRust and TestTurnEndEscapesCommandDraftBeforeRecoveryLikeRust pass."
       ]
     },
     {
@@ -19277,9 +19281,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: take_question_drafts"
+        "Already implemented and regression-audited: Model.takeQuestionDrafts clears only an AsyncQuestion pending notification, recovers all question answer drafts in order while preserving the main composer draft and text elements, and consumes pending questions exactly once. Completion, interruption, failure, live turn.completed/turn.failed events, and the error-handling path all use the shared cleanup; a higher-priority approval notification is retained. Tests: TestAsyncQuestionNotificationExpiresWhenTurnEndsLikeRust, TestTurnEndKeepsHigherPriorityNotificationLikeRust, TestTurnEndRecoversAsyncQuestionDraftsLikeRust, TestTurnEndEscapesCommandDraftBeforeRecoveryLikeRust, TestThreadTurnEndClearsAsyncQuestionNotificationLikeRust; focused go test ./tui/tea passes."
       ]
     },
     {
@@ -19818,9 +19822,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: new_transcript"
+        "Go implements `tui.copy_on_select` auto/always/never, terminal-specific auto defaults, option updates through the config panel/settings reload path, and copy-on-release for app-owned composer/status/footer/tip selections. Empty drags do not copy, selections retain highlighting when configured, and confirmed copies clear the selection only when `copy_on_select_clear_selection` is enabled. Rust's app-owned transcript/overlay `new_transcript` path has no Go equivalent because transcript text selection remains terminal-native. Tests: TestParseCopyOnSelectMode, TestCopyOnSelectForTerminalMatchesRustDefaults, TestCopyOnSelectOverridesWin, TestInteractiveCopyOnSelectConfigLikeRust, composer/rendered-selection copy-on-select tests, and config-panel persistence tests; focused go test ./tui/app ./tui/tea ./app passes."
       ]
     },
     {
@@ -20840,9 +20844,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented: config normalization rewrites `tui.whimsy` to `tui.effects.starfield`, the canonical key wins in the same layer, overlays may still override via the legacy key, canonical starfield is preserved, and the strict loader accepts the retired key. Tests TestMergeConfigMapsNormalizesNestedKeyAliasesLikeRust (legacy_whimsy_creates_nested_starfield, canonical_starfield_wins_over_legacy_whimsy, overlay_legacy_whimsy_overrides_base_starfield) and TestStrictConfigAcceptsEveryKnownTuiKeyLikeRust pass."
       ]
     },
     {
@@ -20984,9 +20988,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: apply_prompt_suggestion, clear_prompt_suggestion, generate_prompt_suggestion, has_prompt_suggestion, on_prompt_suggestion_started"
+        "N/A (verified): Go never carried follow-up prompt-suggestion state or rendering. The upstream feature was subsequently removed by #48621, and the current TUI has no prompt-suggestion event, persistence field, generation request, or composer surface. Implementing it now would recreate behavior Rust intentionally removed."
       ]
     },
     {
@@ -21140,9 +21144,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: composer_hint"
+        "Already implemented and audited: fullscreen startup tips render as transcript lines with Rust wrapping and terminal-link preservation; tooltip selection honors plan branches, announcements, override decisions and random fallback. Tests TestStartupTooltipLinesWrapLikeRust, TestStartupTooltipLinesKeepLinksLikeRust, TestSelectStartupTooltipMatchesRustPlanBranches, TestSelectStartupTooltipUsesAnnouncementBeforeRandom, TestSelectStartupTooltipFallsBackToRandomPool and TestPrepareStartupTooltipOverrideDecisionMatchRust pass."
       ]
     },
     {
@@ -21812,9 +21816,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: show_warnings"
+        "Warnings viewer already dismissed only rendered pages, preserved kept pages, exposed `dismiss & close`, filtered unchanged dismissed identities, and re-showed changed details. Added the missing transcript-reset behavior: `WarningDisplayState.ResetForTranscript` clears dismissals/count, thread reset clears retained warning cells and any open viewer, so the next transcript may show the same identity again. Go applies viewer decisions synchronously, so Rust's queued-dismissal transcript identity guard has no separate asynchronous carrier. Tests: TestWarningsViewerOpensNavigatesAndDismissesLikeRust, TestWarningsViewerKeepAndCopyLikeRust, TestWarningsFooterNoticeLikeRust, TestWarningsDismissalResetsWithTranscriptLikeRust, and chatwidget warnings changed-detail tests; go test ./tui/... -count=1, go vet ./tui/... ./app, and go build ./... pass."
       ]
     },
     {
@@ -22064,9 +22068,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/13; needs review: cancel_replay, continue_from, end_drag, first_screen_composer, fullscreen_session_lines"
+        "Completed the live fullscreen welcome screen. tui/welcome ports Rust's deterministic Braille geometry/lighting renderer; tui/tea/welcome_blossom.go centers the settled dim pose in reclaimed fullscreen space for fresh empty conversations, honors `animations && effects.welcome`, hides while typing/insufficient space/overlays, and replays one spin on a left click. Startup tooltip rows are marked StartupTip and removed from the fullscreen transcript while remaining in State.Messages, raw output and inline scrollback. Tests TestBlossomFrameProjectsCells/TestBlossomMorphChangesPattern/TestBlossomFrameClampsToRendererBounds, TestFreshFullscreenShowsSettledBlossomLikeRust, TestWelcomeBlossomEligibilityLikeRust, TestWelcomeBlossomClickReplaysLikeRust, the updated startup-tooltip test, and production TestWelcomeBlossomRendersPTY pass. Greeting preservation is obsolete after #49395, and Go has no startup-draft pump or in-TUI daemon-startup phase, so those sub-behaviors are N/A by architecture."
       ]
     },
     {
@@ -22160,9 +22164,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: codex_title"
+        "Completed: fresh, resumed, agent-switched, and /clear sessions all reinsert the shared borderless `>_ gcode (vX)` + directory header; the boxed model row stays raw-only (`gcode` is the allowed Go brand mapping for Rust's `OpenAI Codex`). sessionHeaderCell centralizes model/effort/cwd/version and the YOLO permissions indicator (approval never + unrestricted full access). /clear and resume store raw lines beside display lines, so toggling /raw after clearing still shows `model:` and `directory:`; Daybreak notices now follow the header. Tests: TestClearReinsertsBorderlessSessionHeaderLikeRust, TestClearHeaderHonorsRawOutputModeLikeRust, TestResumeAndAgentSwitchInsertBorderlessHeaderLikeRust, TestSessionHeaderYoloIndicatorLikeRust, TestClearCommandClearsTerminalAndStartsFreshSessionLikeRust, TestDaybreakNoticeOnNewThreadAndResumeLikeRust, production TestClearReinsertsHeaderPTY, full go test ./tui/..., go vet ./tui/... ./app, and go build ./..."
       ]
     },
     {
@@ -22244,9 +22248,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: set_keymap_bindings"
+        "Already satisfied by absence: Go has no follow-up prompt-suggestion state, generation callback, history cell, or keymap action to remove. Search of tui/app/chatwidget finds only unrelated tool suggestions, async-question suggestions, and tips. Current TUI behavior matches Rust after #48621."
       ]
     },
     {
@@ -22268,9 +22272,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: start_fresh_session"
+        "N/A by architecture: Go never rendered the removed previous-session token-usage/resume-hint summary. Fresh and resumed thread transitions replace/reset transcript state directly via startFreshNamedSession/resetThreadScopedState and replay messages, so there is no summary helper to remove."
       ]
     },
     {
@@ -22388,9 +22392,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ActivityDisclosure, command_disclosure"
+        "Already implemented: compact command activity renders `+N lines`/`+N line` with the configured open-transcript binding (or omits the hint when unbound/too narrow), and the disclosure control is excluded from raw/copy/search text. Tests TestOutputLinesTruncatesWithTranscriptHint, TestTranscriptDisclosureHintFollowsKeymapLikeRust, TestOpenTranscriptHintFollowsKeymapLikeRust and TestTranscriptActivityFocusDisclosureLikeRust pass."
       ]
     },
     {
@@ -22748,9 +22752,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: render_status_surface"
+        "Already implemented and audited: the status header renders the `Plan mode (shift+tab to cycle)` hint when collaboration mode is available and hides it when unavailable. Tests TestStatusHeaderShowsPlanModeCycleHintLikeRust and TestStatusHeaderHidesPlanCycleHintWhenUnavailableLikeRust pass; the production status-line PTY run also displays the hint."
       ]
     },
     {
@@ -22952,9 +22956,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: InlineDirectives, followup_labels"
+        "Already implemented and audited: tui/followup_directives.go renders `:codex-followup[label]{prompt=...}` as its Markdown label while preserving literal code, fenced blocks, HTML, links, images, escaped markers, nested neighbors and malformed directives; completed assistant Markdown normalizes through the same path, copied responses keep labels without prompt syntax, and unfinished directives are withheld from streaming previews. Tests TestFollowupLabelsRenderMarksAndHidePrompts, TestFollowupLabelsPreserveLiteralAndMalformedSources, TestFollowupLabelsDoNotConsumeNeighborsOrNestedDirectives, TestNormalizeCompletedAssistantMarkdownUsesFollowupLabels, TestHideUnfinishedFollowupDirectiveForStreamingPreview, markdown follow-up label tests, whole-response copy tests and the FollowupDirective PTY harness pass."
       ]
     },
     {
@@ -23060,9 +23064,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: MessageDelivery, has_unconfirmed_messages, reconcile_recovered_messages, restore_reconnected_input"
+        "N/A by architecture: Go's remote TUI does not implement Rust's in-process reconnect with a recovered queue. A daemon restart exits the Bubble Tea program and re-enters with a fresh model, so there is no captured input/receipt reconciliation state in which unsent messages could be resumed automatically."
       ]
     },
     {
@@ -23457,9 +23461,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: start_mcp_login"
+        "Already implemented and audited: tui/tea/mcp_login.go starts one `/mcp login <name>` attempt for the active thread, blocks overlapping starts with Rust guidance, validates missing name/session/runtime, tracks active login ids per server, ignores stale completion ids, retains results for an inactive origin thread until it becomes active, and delivers success/failure history. The remote app-server monitor filters completion notifications by the requested login id. Tests TestMCPLoginCommandStartsAndCompletesLikeRust, TestMCPLoginCompletionIgnoresStaleAttemptsLikeRust, TestMCPLoginResultWaitsForOriginThreadLikeRust, TestMCPLoginCommandErrorsAndUsageLikeRust, and TestRemoteMCPLoginMonitorWaitsForMatchingAttemptLikeRust pass."
       ]
     },
     {
@@ -23974,9 +23978,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: adopt_inherited_server_selection, adopt_server_permissions, selected_server_profile"
+        "Already implemented: the permissions picker discovers server profiles and presets, adopts the server's current selection, and falls back to legacy presets only when the server reports none. Tests TestPermissionsMenuListsServerProfiles, TestPermissionsMenuFallsBackToLegacyPresets and the permissions discovery tests pass."
       ]
     },
     {
@@ -24647,9 +24651,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: remember_launch_permissions"
+        "New remote TUI sessions merge the latest live State approval policy and sandbox over the immutable launch options, so an initial `--yolo` choice survives until a later permission-picker choice deliberately replaces it. Named/constrained profiles remain server-owned because thread/start leaves `permissions` unset unless the launch explicitly supplies one. Rust's reconnect-only reviewer restoration has no Go carrier: Go returns to the launcher and re-enters with fresh state instead of running an in-process reconnect loop. Test: TestRemoteNewThreadPreservesLaunchAndLaterPermissionsLikeRust; focused go test ./app and go vet ./app pass."
       ]
     },
     {
@@ -24791,9 +24795,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/7; needs review: as_slice"
+        "Implemented across config, TUI, persistence, and voicehost: `audio.microphone_channel` accepts one-based scalar/list forms, the input-device picker appears for devices with at least three channels and requires a nonempty selection, saving/changing the input device clears the old channel selection and surfaces configuration override conflicts, and the helper mixes only selected channels with deduplication and fail-closed unavailable/empty errors. Rust's `as_slice` enum helper has no separate Go symbol because `MicrophoneChannels.Values []uint16` already exposes the normalized selection. Tests: VoiceAudioSettingsLikeRust, VoiceInputChannelSelectionLikeRust, microphone-channel wiring/persistence tests, and voicehost InputChannel tests; focused go test ./tui/chatwidget ./tui/tea ./app ./voicehost passes."
       ]
     },
     {
@@ -24887,9 +24891,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: notice_for_model"
+        "Cyber-policy refusals now select guidance from the current model's catalog `availableAccessPrograms` for ChatGPT/OpenAI sessions: Astra plus standard-without-Daybreak gets the Astra copy, any advertised Daybreak program gets the limited copy, and missing metadata/non-OpenAI/non-ChatGPT sessions get the application copy. The prior account-scoped `/accounts/verified_access` prefetch and notice cache were removed. The catalog lookup prefers the refreshed remote model catalog over the initial picker list. Tests: TestDaybreakNoticeFromCyberProgramsLikeRust, TestModelCyberPolicyNoticeUsesOnlyCurrentModelProgramsLikeRust, TestModelCyberPolicyErrorRendersDaybreakRefusalCell, TestModelCyberPolicyErrorDefaultsToApplicationCopy; go test ./tui/... -count=1, go test ./app -run 'Daybreak|CyberPolicy' -count=1, go vet ./tui/... ./app, and go build ./... pass."
       ]
     },
     {
@@ -24911,9 +24915,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: model_preset_from_api_model, notice_for_setting"
+        "Completed: ModelPreset/ModelPickerOption carry catalog cyber programs; cyberAccessProgramForTurn selects standard/daybreak_blue with model support and the API-key gate; SubmitRequest carries it through normal turns, goal continuations, embedded ExecOptions and remote turn/start. `/daybreak` now validates feature/account/model support, persists through local or remote thread metadata, and updates status surfaces without starting a turn. Cyber refusals offer the Enable Daybreak picker for eligible live primary threads, persist the choice without retrying, and suppress the picker when Daybreak is already on or in side threads. Tests TestCyberAccessProgramForTurnLikeRust, TestCyberAccessProgramAPIKeyGateLikeRust, TestTurnSubmissionCarriesCyberAccessProgramLikeRust, TestDaybreakCommandTogglesAndPersistsLikeRust, TestCyberRefusalDaybreakPickerLikeRust, appserver Daybreak thread-start/metadata tests and remote goal continuation tests pass."
       ]
     },
     {
@@ -24923,9 +24927,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented: `daybreak` is a parsed status-line and terminal-title item with preview descriptions, and the live thread preference flows into both surfaces and the Daybreak notice. Tests TestDaybreakStatusSurfacesFollowThreadPreferenceLikeRust, TestDaybreakAccountEligibilityLikeRust and TestDaybreakNoticeOnNewThreadAndResumeLikeRust pass."
       ]
     },
     {
@@ -25201,7 +25205,7 @@
       ],
       "status": "audit_pending",
       "evidence": [
-        "Partial symbol coverage 2/6; needs review: allows_viewport_paging, is_reading, is_search_editing, match_layout"
+        "Partial symbol coverage 2/6; needs review: allows_viewport_paging, is_reading, is_search_editing, match_layout. Behavioral slice landed: first Esc with a nonempty query enters retained reading mode (query, match, expanded context, esc latest footer); second Esc returns latest; Ctrl+C cancels Find and restores the pre-search offset before global interrupt/quit; PgUp/PgDn and Ctrl+P/Ctrl+N remain available while reading. Older-history loading remains to be audited against Go's paginated transcript carrier."
       ]
     },
     {
@@ -25211,9 +25215,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: base_layout, entry_layout, install_search_match, is_search_expanded, match_anchor"
+        "Already implemented: the owned transcript find path expands only the current matching activity entry and leaves prior matches collapsed; transcript-only matches are revealed for the active search. Tests TestOwnedTranscriptFindExpandsOnlyCurrentMatchLikeRust and TestOwnedTranscriptFindRevealsTranscriptOnlyMatchLikeRust pass."
       ]
     },
     {
@@ -25391,9 +25395,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: follow_cursor, scroll_mouse"
+      "Round 396 (implementation): owned-screen composers grow with the draft, cap the whole painted section at max(8, 2/3 screen), keep the Bubbles wrapping/cursor, crop to the manual scroll window, and paint up/down arrows for hidden rows. Wheel over the prompt browses three rows per event without moving the caret or transcript selection/search/activity focus; edits and external draft changes resume caret following. Inline layout keeps its fixed three-row composer and the selected-remote-image case is not applicable because Go has no remote-image row selection. Tests: go test ./tui/tea -run 'OwnedComposer|InlineComposerKeepsFixedHeight' -count=1; go test ./tui/... -count=1"
       ]
     },
     {
@@ -25547,9 +25551,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: on_account_email_loaded, refresh_account_email"
+        "Already implemented: account-status refreshes preserve/restore the displayed email and plan, including the API-key fallback copy. TestAccountEmailRefreshOnlyAppliesCurrentRequestLikeRust and TestAccountStatusUpdateReplacesAPIKeyModeLikeRust cover the update path."
       ]
     },
     {
@@ -25655,9 +25659,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/10); candidate gap: AgentPickerRefreshState, AgentPickerThreadRefresh, AgentPickerThreadVisibility, finish_picker_refresh, handle_agent_picker_visibility_notification"
+        "Already implemented: agent-picker visibility tracks archive state for the selected thread and cascades archived visibility through parent/subagent relationships; refreshes preserve the current selection and status. TestAgentPickerVisibilityFollowsArchiveStateLikeRust plus the agents overview archive/pin lifecycle tests pass."
       ]
     },
     {
@@ -25715,9 +25719,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented: TerminalTitleEncoding selects Screen through STY (not TERM=screen), SanitizeTerminalTitleForEncoding maps the spinner frames and status dot to ASCII, replaces other non-ASCII with '?', keeps Unicode outside Screen, and still strips controls/bidi formatting. Tests TestTerminalTitleUsesAsciiUnderScreenLikeRust, TestTerminalTitleSanitizesControlCharactersLikeRust and TestTerminalTitleEncodingDetectsGnuScreenLikeRust pass."
       ]
     },
     {
@@ -25751,9 +25755,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: configured_binding_for_action"
+        "Already implemented and audited: configuredBindingTakesNavKey scans active composer/global actions, honors only explicit custom bindings, ignores unsupported transcript-navigation exceptions, and is consulted before PageUp/PageDown/Home/End transcript movement. Composer and global submit bindings therefore win over navigation when configured, while default PageUp still scrolls. Ctrl+Space normalization and configured-submit behavior are covered in TestCtrlSpaceNormalizationLikeRust / TestConfiguredCtrlSpaceSubmitLikeRust; TestConfiguredNavKeyWinsOverTranscriptScrollLikeRust covers composer/global custom page-up submission and TestDefaultNavKeyStillScrollsLikeRust covers default navigation. Full go test ./tui/... -count=1 passes."
       ]
     },
     {
@@ -25835,9 +25839,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: daybreak_account_eligible, daybreak_turn_eligible"
+        "Already implemented: daybreakAccountEligible/daybreakFeatureEnabled allow known API-key accounts when `api_key_cyber_access_programs` is enabled, keep unknown account state compatible with resumed preferences, and drive the same gate through new/resumed/continued turns. TestDaybreakAccountEligibilityLikeRust covers the flag combinations."
       ]
     },
     {
@@ -26028,9 +26032,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: literal_selection"
+        "Rust constructs CopyFormat::MarkdownSelection and literal_selection only in transcript_view::selection, where an app-owned transcript selection serializes Markdown source for HTML while copying visible text literally. Go keeps in-transcript selection terminal-owned (the terminal copies the rendered cells directly), so there is no Markdown selection payload or rich-HTML selection writer to correct; tui/tea/rendered_selection.go only selects painted status/footer/tip rows and writes plain text. Go's whole-response copy intentionally keeps Markdown source plus rich HTML, matching Rust's unchanged CopyFormat::Markdown path."
       ]
     },
     {
@@ -26281,9 +26285,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+    "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: handle_selection_mouse"
+      "Round 397 (audit): Go's owned transcript leaves body selection to the terminal's native modifier-drag selection; opening a bottom modal does not disable mouse reporting or suppress that selection path. Go has no app-owned transcript selection mode to extend, while status/footer selection remains app-owned and modal-independent. The wheel-with-modal behavior is already covered by TestTranscriptWheelScrollsWhileModalOpenLikeRust."
       ]
     },
     {
@@ -26329,9 +26333,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: CrosstermEventSource, WindowsKeySequence"
+        "Already implemented and audited: the Windows mapped Shift+Enter CSI sequence becomes a composer newline, ignores unrelated CSI/modal input, and does not impose the sequence delay on other terminals. Tests TestWindowsMappedShiftEnterInsertsNewline, TestWindowsMappedShiftEnterIgnoresOtherCSIAndModals and TestWindowsMappedShiftEnterDoesNotDelayOtherTerminals pass."
       ]
     },
     {
@@ -26341,9 +26345,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented: task details render Model and Reasoning before project/usage/attention/activity/last-message fields, use `Unknown` when unavailable, and ellipsis-truncate long values. Test TestTaskDetailsShowModelAndReasoningLikeRust covers ordering, missing values and truncation."
       ]
     },
     {
@@ -26389,9 +26393,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: owns_thread_for_routing, owns_untracked_notification"
+        "N/A by architecture: Go's MCP startup notifications are local process events without a thread id (`MCPStartupUpdateMsg`), emitted only by the interactive app's own startup flow. There is no shared app-server notification stream that could deliver another thread's MCP startup state into this TUI."
       ]
     },
     {
@@ -26425,9 +26429,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (audit): vimNormalKey routes a standalone unmodified `/` on an empty draft with no popup or pending operator through vimBeginEdit and Insert mode, leaving nonempty drafts, `?`, and operators in Vim search. TestVimEmptyNormalSlashOpensCommandsLikeRust covers the transition and command popup."
       ]
     },
     {
@@ -26485,9 +26489,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (audit): interactiveLaunchReasoningOverrides forwards explicit profile/session/CLI model_reasoning_summary and features.concurrent_reasoning_summaries values, including explicit false/none, while absent implicit values stay out of thread/start so server/model defaults apply. Tests: TestInteractiveLaunchReasoningOverridesLikeRust, TestLaunchSettingForKeyMatchesRustIsLaunch, TestRemoteConfigValuesForwardProfileReasoningChoicesLikeRust."
       ]
     },
     {
@@ -26497,9 +26501,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: bootstrap_for_new_thread"
+      "Round 398 (audit): connected fresh starts read the destination configuration before model bootstrap, preserve explicit model/effort overrides, clear implicit client model settings when config/read is unsupported, use the launch directory for local daemon reads and the remote directory for remote reads, and let managed new-thread defaults satisfy an empty catalog. Tests: TestRemoteFreshStartUsesServerModelDefaultsLikeRust, TestRemoteFreshStartClearsImplicitClientModelWithoutConfigReadLikeRust, TestRemoteStartThreadAppliesManagedNewThreadDefaultsLikeRust."
       ]
     },
     {
@@ -27013,9 +27017,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (audit): modelPickerLabel appends only `(current)` and keeps IsDefault solely for preselection; the reasoning-effort picker keeps its own default marker, which is outside this change. The workspace-owner notification negative row is explicitly `No (default)`. Tests: TestModelPickerLabelHasNoDefaultMarkerLikeRust and TestModelPopupNoDefaultMarkerLikeRust."
       ]
     },
     {
@@ -27445,9 +27449,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+    "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+      "Round 397 (audit): async-question titles keep URLs whole, annotate them as OSC-8 terminal hyperlinks, and are covered by TestAsyncQuestionTitleLinksWrappedURLsLikeRust."
       ]
     },
     {
@@ -27457,9 +27461,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 397 (audit): ElicitationFormRequest::RenderLines wraps each prompt line with AdaptiveWrapLine and AnnotateCompleteWebURLsInLine, preserving explicit newlines and complete OSC-8 destinations; TestElicitationFormPromptLinksCompleteWrappedURLsLikeRust passes."
       ]
     },
     {
@@ -27469,9 +27473,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 397 (audit): WarningsView keeps URL-like body rows whole and wraps them with AnnotateCompleteWebURLsInLine, so the complete destination survives panel truncation; warnings-view tests pass."
       ]
     },
     {
@@ -27481,11 +27485,11 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
-      "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
-      ]
-    },
+    "status": "complete",
+    "evidence": [
+      "Round 397 (audit): the inline backend banner wraps at URL-preserving boundaries and annotates complete destinations via AnnotateCompleteWebURLsInLine; TestBackendBannerFallbackLinksCompleteURL passes."
+    ]
+  },
     {
       "sha": "e44b9bb3da036320853abd032e2e2f065342b964",
       "subject": "Preserve status usage hyperlinks when the URL wraps (#51457)",
@@ -27493,9 +27497,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 397 (audit): the status card annotates the usage URL before wrapping, strips OSC-8 only for width accounting, and reapplies the complete destination; status-card tests pass."
       ]
     },
     {
@@ -27505,9 +27509,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 397 (implementation): modalState marks openai/userVerification elicitations; renderModal now wraps and annotates the title and request details with complete OSC-8 web targets. TestUserVerificationPromptLinksCompleteURLsLikeRust covers both surfaces."
       ]
     },
     {
@@ -27517,9 +27521,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 397 (audit): both Windows sandbox setup and fallback prompt headers annotate the complete 'Learn more' URL; TestWindowsSandboxPromptsLinkHelpURLsLikeRust passes."
       ]
     },
     {
@@ -27541,9 +27545,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Completed: Go carries `model` and `reasoning_effort` on sub_agent_activity items (ThreadItem fields plus SubAgentActivityItemWithSettings, used by remote_tui and exec). TestSubAgentActivityModelAndEffortRolloutRoundTripLikeRust verifies the resolved settings survive core rollout encoding and public thread-item projection, while older records without the fields stay null; TestSubAgentActivityItemSettingsJSONShapeLikeRust pins the protocol JSON shape."
       ]
     },
     {
@@ -27601,9 +27605,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: HyperlinkRows"
+        "Already implemented: PendingInputPreview renders pending steers, rejected steers, and queued follow-ups through AnnotateCompleteWebURLsInLine after wrapping, preserving the complete URL destination in OSC 8 hyperlinks and keeping the overflow/edit-hint rows unlinked. Tests TestPendingInputPreviewLinksURLsLikeRust, TestPendingInputPreviewKeepsLongURLIntact, TestPendingInputPreviewKeepsQueuedGroupWithQuestions and TestPendingInputPreviewUsesRustLineSplitting pass."
       ]
     },
     {
@@ -27613,9 +27617,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: full_hyperlink_row, wrap_row_lines, wrap_two_column_row"
+        "Already implemented: the generic selection-row renderer annotates web URLs in labels and descriptions, keeps the complete destination when rows wrap or are truncated to one line, leaves the ellipsis outside the OSC 8 link, and clips hyperlink ranges to the viewport. Tests TestGenericRowsLinkURLsLikeRust and TestGenericRowsKeepURLDestinationsWhenWrappedOrTruncatedLikeRust pass."
       ]
     },
     {
@@ -27757,9 +27761,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (audit): SettingsReloadOutcomeFor classifies failed reloads, ShouldStageReloadedLocalSettings rejects results accompanied by an error, and ReloadedLocalSettings keeps the live LocalSettings record while preserving launcher-owned alternate-screen state. local_settings_like_rust_test covers failed reloads, stale results, and the live-preservation path."
       ]
     },
     {
@@ -28743,9 +28747,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: side_thread_for_parent"
+        "Already implemented: side conversations are retained by parent thread in Model.sideConversations, thread navigation deactivates rather than deletes the active side, and /side reopens the stored snapshot with its parent/side messages and pending state. Tests TestRetainedSideConversationReopensAfterThreadNavigationLikeRust and TestSideTogglePreservesParentAndSideSnapshots pass; the production ConPTY side-navigation test covers the real TUI path."
       ]
     },
     {
@@ -28791,9 +28795,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: ItermSessionStatus, clear_iterm_session_status, desired_iterm_session_status, invalidate_iterm_session_status, refresh_iterm_session_status"
+        "Already implemented: tui/program_status.go emits OSC 21337 Idle/Working/Waiting with Rust's indicator colors and bounded detail, limits it to direct iTerm2 TTY sessions without a multiplexer/Screen, deduplicates writes, re-emits after focus/resize handoffs, and clears on exit. Tests TestITermProgramStatusLabelsLikeRust, TestProgramStatusTracksLiveResultsLikeRust, TestProgramStatusEmitsThroughTerminalLikeRust, TestProgramStatusReemitsAfterFocusAndResizeLikeRust and TestProgramStatusClearsOnExitLikeRust pass."
       ]
     },
     {
@@ -28863,9 +28867,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: set_iterm_session_status"
+        "Already implemented and now regression-audited: OSC 21337 carries the live status header only for a foreground Working state, omits the generic `Working` text, and clears the detail for idle, waiting, and background-only work. The shared terminal-title sanitizer applies control/bidi filtering and the 240-character bound, then `;` and `\\\\` are escaped for the OSC payload. The process cache includes the detail, so activity changes re-emit while duplicate status/detail pairs remain suppressed. Tests: TestITermSessionDetailUsesForegroundActivityLikeRust, TestITermSessionDetailSanitizationLikeRust, TestProgramStatusCacheSuppressesDuplicatesLikeRust; go test ./tui ./tui/tea -count=1 and go vet ./tui ./tui/tea pass."
       ]
     },
     {
@@ -28875,9 +28879,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: daybreak_account_eligible"
+        "Already implemented: daybreakFeatureEnabled requires `api_key_cyber_access_programs` for known API-key/account-display accounts while ChatGPT accounts need only `cli_daybreak`, `daybreakAccountEligible` separates account eligibility from the saved preference, and new/resumed/continued turns refresh the live gate. TestDaybreakAccountEligibilityLikeRust covers Chat and API-key flag combinations, resumed preferences, and the enabled/eligible pair; the Daybreak status-surface and notice tests also pass."
       ]
     },
     {
@@ -28971,9 +28975,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9-chain (TUI lane r90tui11 @ f6bf18a2): RenderedSelection / FooterSelection / RegionAction etc all 0 hits, and this is a DESIGN-level block, not a missing function: tui/app/copy_on_select.go:15-20 deliberately leaves mouse selection to the terminal and states the app-owned selection consumer is unported. Landing #52270 means reversing that architectural decision first. Evidence: update/r90tui_2026_10_16.md section T10"
+        "Completed for Go's explicit fullscreen mode. tui/tea/rendered_selection.go snapshots painted status/footer rows, drag-selects by terminal cell, extracts Unicode text, preserves ANSI/OSC while highlighting, copies on release for copy_on_select auto/always, keeps the selection for Ctrl+C when disabled, clears on content/geometry change, ignores stationary clicks, and leaves the composer/cursor untouched. Options.usesOwnedScreen enables alternate-screen + cell-motion mouse capture only for `tui.alternate_screen=always`; auto/never remain inline with terminal-owned selection and native scrollback (Go's documented architecture mapping). Tests TestRenderedFooterSelectionCopiesPlainTextLikeRust, TestRenderedSelectionPreservesUnicodeAndHyperlinksLikeRust, TestRenderedSelectionInvalidatesChangedRegionLikeRust, TestRenderedSelectionKeyboardCopyLikeRust, TestRenderedSelectionStationaryClickAndInlineModeLikeRust, TestOwnedScreenOptInOnlyForExplicitAlternateMode and production TestOwnedScreenFooterSelectionPTY pass (mouse reporting and reverse-video footer selection observed in the packaged binary)."
       ]
     },
     {
@@ -29597,9 +29601,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/7; needs review: refresh_terminal_program_status"
+        "Implemented through the Go model's refreshTerminalProgramStatusCmd path: OSC 7501 is emitted whenever stdout is a TTY, direct non-multiplexed iTerm2 additionally receives OSC 21337, and other terminals/multiplexers receive generic status only. Blocking maps to `blocked`, the cache deduplicates status/detail pairs and invalidates on focus/resize, exit clears both protocols, and opening an external editor now sequences a clear before the external command so the next update re-emits. Tests: TestTerminalProgramStatusProtocolsLikeRust, TestClearTerminalProgramStatusBeforeExternalProgramLikeRust, TestProgramStatusEmitsThroughTerminalLikeRust, TestProgramStatusClearsOnExitLikeRust, TestProgramStatusReemitsAfterFocusAndResizeLikeRust; go test ./tui/... -count=1 and go vet ./tui ./tui/tea pass."
       ]
     },
     {
@@ -29657,9 +29661,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9 (TUI lane r90tui10 @ 50a53dc3): prompt_header / PromptHeader / JumpToEntry / cancel_search all 0 hits. Evidence: update/r90tui_2026_10_16.md section T9"
+        "Completed: tui/tea/pinned_prompt.go pins the nearest preceding user prompt in the first visible transcript row when the prompt has scrolled away, yields while the prompt is visible or width <16, and computes targets from per-message line ranges so prepended history stays correct. An unmodified left click cancels find, clears activity focus and rendered selection, and scrolls back to the prompt. Tests TestPinnedPromptHeaderJumpsToOriginalPromptLikeRust and TestPinnedPromptHeaderVisibilityLikeRust pass, plus full go test ./tui/... -count=1."
       ]
     },
     {
@@ -29753,9 +29757,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: warm_text_reader"
+        "WSL clipboard reads now use one persistent `powershell.exe` process instead of spawning per paste. The protocol is a little-endian uint32 length frame plus UTF-8 bytes, preserving empty text, whitespace, separators, and large payloads while enforcing the 4 MiB raw limit. Reads are deadline-bounded, failed/timed-out processes are discarded and restarted on the next read, SSH bypasses the WSL reader, and eligible owned-screen WSL sessions prewarm without accessing clipboard contents. Tests: TestClipboardCommandReaderReusesProcessLikeRust, TestClipboardCommandReaderTimesOutLikeRust, TestClipboardCommandReaderRestartsAfterErrorLikeRust, TestClipboardReaderWarmupPolicyLikeRust; go test ./tui/... -count=1, GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./tui/tea, go vet ./tui/... ./app, and go build ./... pass."
       ]
     },
     {
@@ -29765,9 +29769,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: discard_startup_modal_input"
+        "N/A by architecture: Go uses Bubble Tea's foreground input decoder and has no `discard_pending_input_before_interactive_screen` startup drain step whose timeout could abort modal handling. Modals receive only already-decoded key/paste/mouse messages; incomplete terminal sequences remain inside the input parser rather than becoming stale modal answers."
       ]
     },
     {
@@ -29789,9 +29793,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9-chain (TUI lane r90tui11 @ f6bf18a2): ConfigPanel / ConfigPreference / ConfigToggle all 0 hits. Only the persistence half has a Go carrier (tui/app/config_persistence.go, tui/tea/settings_commands.go); the panel itself does not exist. The upstream change is 95 files / +4114 lines. Evidence: update/r90tui_2026_10_16.md section T10"
+        "Panel carrier landed: /config is a real CommandConfig slash command (blocked during active tasks), opening a searchable windowed panel with Appearance/Notifications/Input/Sessions/Text selection tabs (tui/tea/config_panel.go). Theme/Status line/Terminal title/Keyboard hand off to existing editors; Effects opens a sub-picker with Animations and Composer stars (dependent on Animations); notification condition, right-click paste, session-picker density, copy_on_select, and copy_on_select_clear_selection cycle through the shared writeSettings handler and apply returned live values. Additional toggles cover Tips, status-line colors, notifications enabled (custom filters unavailable), paste detection, automatic recaps, and Start in Vim mode (tui.vim_mode_default seeds new TUI composers); Test notification schedules a five-second delayed post and Deselect after copy enforces the copy-on-select dependency. Resume directory supports Ask/Current/Session with a cwd prompt when directories differ; Esc uses session, Ctrl+C quits, and Always options persist tui.resume_cwd. The decision is now made before OnResumeSession (SessionTarget.CWD + SessionSelection.ResumeCWD), so local-daemon resumes send the chosen directory and explicit remote workspaces send only --cd (Rust thread_cwd_from_config); Current without --cd returns the exact remote-workspace error and agent switching uses the target thread cwd. Failed config writes keep the panel open with the underlying error and retry guidance; the panel header renders those failures plus Saved · overridden by config or system setting and Saved · applies to new composers. Tests: TestConfigCommandOpensSearchablePanelLikeRust, TestConfigPanelEditorsAndPreferenceCyclesLikeRust, TestConfigPanelRemainingTogglesLikeRust, TestConfigPanelSaveErrorKeepsPanelAndExplainsRetryLikeRust, TestConfigPanelSaveNoticesLikeRust, TestResumeCWDModesAndPromptLikeRust, TestResumeCWDResolvedBeforeResumeLikeRust, TestResumeCWDCurrentUnavailableForRemoteLikeRust, TestResumeCWDPromptEscUsesSessionDirectoryLikeRust, TestConfigPanelResumeDirectoryCyclesLikeRust, TestConfigPanelResumeDirectoryRemoteAvailabilityLikeRust, TestInteractiveCopyOnSelectConfigLikeRust, TestRemoteTUIResumeParamsResumeDirectoryLikeRust, TestInteractiveRemoteResumeSessionForwardsResolvedCWD, TestInteractiveRemoteSwitchAgentThreadReadsTranscript, TestInteractiveRemoteSwitchAgentThreadFallsBackToReadOnlyHistory, production ConPTY /config."
       ]
     },
     {
@@ -29825,9 +29829,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: flush_pending, replace_vim_text"
+        "N/A by architecture: Go has no startup-draft pump or recovery-snapshot handoff (no StartupDraft/pending starter text path), so there is no buffered Replace key to replay during recovery. The live composer already applies Vim Replace semantics (TestVimReplaceCharAndChangeMotionsLikeVim, TestVimReplaceModeOverwritesUntilEscape, TestVimReplaceModeAbsorbsPromptPrefixLikeRust)."
       ]
     },
     {
@@ -29849,9 +29853,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (implementation): painted working and completion tip rows are registered as app-owned read-only selection regions with absolute geometry and section-local offsets. Copy-on-select copies the selected tip text, highlights stay visible, Esc clears the selection, the status row shows `Selecting text · esc cancel`, unrelated notices can shift the selected cells without invalidating them, and the working-tip selection is invalidated when the tip disappears. Tests: TestWorkingTurnTipSelectionCopiesLikeRust, TestWorkingTurnTipSelectionClearsWhenTipDisappearsLikeRust, TestCompletionTurnTipSelectionCopiesLikeRust, TestRenderedFooterSelectionCopiesPlainTextLikeRust."
       ]
     },
     {
@@ -29885,9 +29889,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: draw_with_size"
+        "N/A by architecture: the change only removes Rust's custom `Terminal::autoresize`/`try_draw` wrappers. Go renders with Bubble Tea's `tea.Model.View`/`Program` and has no custom_terminal abstraction to simplify."
       ]
     },
     {
@@ -29897,9 +29901,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: confirm_daemon_restart, show_warnings, verify_managed_daemon"
+        "Completed: `/daemon` offers `Restart background server` only when the local endpoint is verified as a managed daemon (LifecycleVersion returns a backend), with the upstream unverified disabled reason. A confirmation warns that other chats may be interrupted and that Codex reconnects automatically; confirming sets PendingDaemonRestart and exits, runInteractiveRemoteTUI runs LifecycleRestart synchronously and re-enters the remote TUI to reconnect. The first startup configuration warning for a managed local daemon appends `restart with /daemon` to the summary while leaving the diagnostic in Messages/RawLines. Centered Command Center dialogs already use the dedicated backdrop renderer from #53804. Tests TestManagedDaemonRestartConfirmationLikeRust, TestDaemonRestartDisabledWhenUnverifiedLikeRust, TestManagedDaemonStartupWarningRestartHintLikeRust and the updated chatwidget menu test pass."
       ]
     },
     {
@@ -29909,9 +29913,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9 (TUI lane r90tui10 @ 50a53dc3): RestrictedInputMode / UnavailableThread / available_when_thread_unavailable all 0 hits; agents_navigation appears once only in a comment. A dead constant corroborates the missing face: ServerNotificationThreadArchived is defined once (tui/app/app_server_event_targets.go:18) and used nowhere. Evidence: update/r90tui_2026_10_16.md section T9"
+        "Already implemented: read-only/unavailable threads route Left through agentsNavigationKeyAvailable to the command center, keep the empty-composer/editor/Vim guards, ignore repeats that are not key presses, and advertise `←/Esc command center`; a remapped Left leaves Esc as the only command-center key. Tests TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape, TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable and the production agents-navigation ConPTY test pass."
       ]
     },
     {
@@ -30197,9 +30201,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: SelectionToggleState, complete_selection_toggle_for_active_view, effects_with_toggle_states, refresh_config_panel_after_effective_save, selection_toggle_states_for_active_view"
+        "Completed: the Effects sub-picker toggles the highlighted row with Space as well as Enter, while a configured list binding keeps precedence (Space bound to cancel returns to the main panel and does not toggle). Rapid toggles preserve the newest choice because only the latest SettingsWriteResultMsg request ID is applied, so an older save refresh cannot clobber the live value. Composer stars keeps its underlying EffectsSettings value while Animations disables the row and returns when animations are re-enabled. Tests: TestEffectsSpaceTogglesSelectedRowLikeRust, TestEffectsSpaceHonorsConfiguredCancelBindingLikeRust, TestEffectsRapidTogglesIgnoreStaleSaveResultLikeRust, TestEffectsComposerStarsPendingValueSurvivesDisabledRowLikeRust, TestConfigPanelEditorsAndPreferenceCyclesLikeRust, full go test ./tui/... -count=1."
       ]
     },
     {
@@ -30666,9 +30670,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "partial",
       "evidence": [
-        "Partial symbol coverage 1/12; needs review: SelectionCopy, cancel_composer_primary, cancel_primary, clear_selection, copies_clipboard"
+      "Round 400 (implementation): owned-screen composer drag selections map wrapped visual rows back to source rune ranges, copy on release through the shared clipboard writer, retain the editable highlight, support explicit Ctrl+C with copy-on-select disabled, and clear on Esc/focus loss/external edits. Typing, paste, Enter, Backspace, and Delete replace the selected range and place the caret after the replacement. Tests: TestComposerSelectionCopiesAndTypingReplacesLikeRust, TestComposerSelectionBackspaceDeletesLikeRust, TestComposerSelectionCtrlCCopiesLikeRust, TestComposerSelectionMapsWrappedRowsLikeRust, TestComposerSelectionClearsOnExternalEdit, TestComposerSelectionClearsOnFocusLossLikeRust, plus TestOwnedComposerSelectionPTY. Remaining gap: Go's clipboard path has no X11 PRIMARY publication/ownership, so SelectionCopy's primary destination is not represented."
       ]
     },
     {
@@ -30678,9 +30682,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+    "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+      "Round 398 (implementation): keymap specs accept `super` and normalize `cmd`/`command` to it; canonical ordering is ctrl-alt-shift-super; labels render ⌘ on macOS and super elsewhere; leader/chord validation treats super as a modifier rather than plain text; editor defaults add super-left, super-right, and super-backspace. Covered by TestNormalizeKeybindingSpecCommandAliasesLikeRust and TestSuperEditorDefaultsAndLabelsLikeRust. Remaining gap: Bubble Tea v1.3.10 KeyMsg has no Super modifier and its input parser drops unknown CSI-u events, so live Super chords cannot yet be captured or dispatched."
       ]
     },
     {
@@ -30798,9 +30802,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: CenteredView"
+        "Already implemented: archive/delete progress renders as a centered dialog over the retained Command Center backdrop, keeps the selected row and list visible, redraws on resize, and clears the lifecycle state after completion. Tests TestAgentsOverviewLifecycleProgressKeepsBackdropLikeRust and the archive/delete lifecycle tests pass."
       ]
     },
     {
@@ -31195,9 +31199,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "TR-lead: blocked_precondition (verified). The commit defers a startup folder-consent step that Go never performs: Rust App::confirm_directory_trust (tui/src/app/resume_config.rs) prompts for an untrusted cwd during interactive startup, and #54048 skips it for SessionSelection::AgentsOverview then re-checks on /new. Go resolves folder trust only through the config layer stack (config.LoadEffective / ProjectTrustLevelForTarget / interactiveProjectlessThreadDefaults) and has no interactive consent step: tui/onboarding.NewTrustDirectoryPrompt exists but has no production caller (git grep: only *_t"
+        "N/A by architecture (verified): the commit defers a startup folder-consent prompt that Go never performs. Go resolves folder trust through the config layer stack (config.LoadEffective / ProjectTrustLevelForTarget / interactiveProjectlessThreadDefaults); tui/onboarding.NewTrustDirectoryPrompt has no production caller. The agents-overview/new-session paths therefore have no startup consent step to defer or re-check."
       ]
     },
     {
@@ -31363,9 +31367,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: apply_vertical_action, vertical_action_for"
+        "Completed and verified: ScrollState.ApplyVerticalAction preserves wrap/visibility/page/jump behavior, and VerticalActionFor is the shared resolver used by ExperimentalFeatures, HooksBrowser, MemoriesSettings, SkillsToggle, and MultiSelect before view-specific input/reorder handling. Fixed a real dispatch mismatch: TUI key specs use `ctrl-p`/`ctrl-n`/`ctrl-u`/`ctrl-d`/`ctrl-a`/`ctrl-e`, while the resolver only accepted the `ctrl+` spelling; both spellings now normalize to the same actions. TestMultiSelectVerticalActionBeatsReorderLikeRust covers page-down winning before reordering/search and preserving item order. TestVerticalActionForAndApplySharedLikeRust covers both key spellings and shared movement. Full go test ./tui/... -count=1, go vet ./tui/... ./app, go build ./..., scripts/build.ps1 and the production ConPTY harness pass."
       ]
     },
     {
@@ -31567,9 +31571,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "Round 97 verified preconditions absent: (1) tui/state.go Message carries only UserPromptLocalImages/RemoteImages (user attachments) - no viewed-image or generated-image artifact fields, so the data Rust previews never reaches the transcript; (2) tui/chatwidget/transcript_overlay.go is a plain string viewport (SetContent + viewport) with no item/layout model to carry ImagePlacement rows; (3) Kitty/Sixel encoders live only under tui/pets (image_protocol.go, sixel.go) and are unreachable from the pager renderer; (4) Go has no transcript_view or custom_terminal equivalent (grep hits only parity/ru"
+        "tui/transcript_image/{transcript_image,draw}.go（32MiB 编码输入/32MiB 解码分配、Kitty/Sixel 缩略图编码、viewport/物理像素裁剪）；tui/history_cell/patches.go（ImageView/ImageGeneration 的 ImagePath 与 ActivityIDs）；tui/state.go Message.ImagePath；tui/tea/transcript_images.go（按大小/mtime 校验的解码缓存、图形保留/删除、overlay 清理、内联帧底部锚定）；tui/tea/model.go（图片行预留、view_image→ImageView、Find 不泄露预览、replay 元数据）；app/remote_tui.go（imageView/imageGeneration 历史元数据）；回归见 TestTranscriptImage*、TestViewImageToolCall* 与 update/tui_current_head_alignment_2026_10_18.md"
       ]
     },
     {
@@ -31807,9 +31811,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9-chain (TUI lane r90tui11 @ f6bf18a2), integrated in 05fdcd50: QuickDial / quickDial / quick_dial all 0 hits; the whole quick-dials subsystem (chatwidget/quick_dials.rs 607 lines + app/quick_dials.rs) has no Go side. The lane also checked the slash_command.rs metadata half and found it already equivalent, so there is not even a metadata change to land. Evidence: update/r90tui_2026_10_16.md section T10"
+        "Already implemented after the ledger evidence was written: `/presets` parses and opens the quick-dial HUD, supports saved prompt/slash-command slots, leader and configurable shortcuts, live persistence through tui.presets, read-only layer guards, and unavailable-before-session guidance. Tests TestPresetsLeaderChordOpensQuickDialLikeRust, TestPresetsUnavailableBeforeSessionLikeRust, TestQuickDialNewSlotWritesConfigAndUpdatesLivePresetsLikeRust and the quick-dial config guard tests pass."
       ]
     },
     {
@@ -31867,9 +31871,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: current_status_line_quick_dial, current_terminal_title_quick_dial"
+        "Already implemented and now audited: tui/tea/quick_dials.go exposes currentTerminalTitleQuickDial/currentStatusLineQuickDial and adds both options after model/permissions in the four-row prefill picker. The generated commands preserve configured item order and duplicates, normalize terminal-title/status-line aliases, use `--clear` for an empty layout, retain `--colors`/`--no-colors`, and disable entries whose configured items cannot be parsed with Rust's unavailable-item guidance. TestQuickDialStatusSurfaceLayoutsNormalizeItemsLikeRust covers title/status inputs, empty layouts, colors, normalization, and unavailable items; TestQuickDialPrefillsUseCurrentSettingsLikeRust covers picker composition. Full go test ./tui/... -count=1 and the production ConPTY harness pass."
       ]
     },
     {

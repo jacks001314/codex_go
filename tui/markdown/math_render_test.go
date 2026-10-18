@@ -120,3 +120,152 @@ func TestMathRenderStructuredBoundsLikeRust(t *testing.T) {
 		}
 	}
 }
+
+// compactLayout trims the trailing padding a layout keeps for alignment so a
+// snapshot can be written without invisible spaces, like Rust's rendered lines.
+func compactLayout(text string) string {
+	lines := strings.Split(text, "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(line, " ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Mirrors Rust's aligned-fraction snapshots: aligned cells keep their fraction
+// geometry, rows share one baseline, and an aligned block works both as an
+// expression and nested inside another block.
+func TestMathRenderAlignedLayoutsLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "fraction geometry",
+			source: `\begin{aligned}\frac{x}{y}+\frac{1}{123456789}&=0\\\frac{123456789}{1}+\frac{y}{x}&=1\end{aligned}`,
+			want: strings.Join([]string{
+				"x      1",
+				"─+ ───────── =0",
+				"y  123456789",
+				"123456789  y",
+				"─────────+ ─ =1",
+				"    1      x",
+			}, "\n"),
+		},
+		{
+			name:   "expression wrapper",
+			source: `\begin{aligned}\frac{a}{b}\end{aligned}=c`,
+			want: strings.Join([]string{
+				"a",
+				"─=c",
+				"b",
+			}, "\n"),
+		},
+		{
+			name:   "nested aligned",
+			source: `\begin{aligned}x&=\begin{aligned}\frac{a}{b}\end{aligned}\\y&=2\end{aligned}`,
+			want: strings.Join([]string{
+				"   a",
+				"x =─",
+				"   b",
+				"y =2",
+			}, "\n"),
+		},
+		{
+			name:   "two columns and annotations",
+			source: `\begin{aligned}\frac{x}{z}&=\frac{1}{2} &&\text{first}\\y_{gpt}&=3 &&\text{second}\end{aligned}`,
+			want: strings.Join([]string{
+				"      x  1",
+				"      ─ =─   first",
+				"      z  2",
+				"y_{gpt} =3   second",
+			}, "\n"),
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := mathRender(testCase.source, true)
+			if !ok {
+				t.Fatalf("mathRender(%q, true) rejected the layout", testCase.source)
+			}
+			if compact := compactLayout(got); compact != testCase.want {
+				t.Fatalf("mathRender(%q, true) = %q, want %q", testCase.source, compact, testCase.want)
+			}
+			// aligned is a display layout; inline math keeps the source.
+			if got, ok := mathRender(testCase.source, false); ok {
+				t.Fatalf("mathRender(%q, false) = %q, want rejected", testCase.source, got)
+			}
+		})
+	}
+}
+
+// Mirrors Rust's boxed optimization layout: the border wraps the aligned block
+// and every row keeps its centered annotation.
+func TestMathRenderBoxedLayoutLikeRust(t *testing.T) {
+	got, ok := mathRender(`\boxed{\begin{aligned}x&=1\\y&=2\end{aligned}}`, true)
+	if !ok {
+		t.Fatal("boxed aligned layout was rejected")
+	}
+	want := strings.Join([]string{
+		"┌──────┐",
+		"│ x =1 │",
+		"│ y =2 │",
+		"└──────┘",
+	}, "\n")
+	if got != want {
+		t.Fatalf("boxed layout = %q, want %q", got, want)
+	}
+	if got, ok := mathRender(`\boxed{x}=c`, false); ok {
+		t.Fatalf("inline boxed layout = %q, want rejected", got)
+	}
+}
+
+// Mirrors Rust's display-limits snapshot: sum and wedge limits stack above and
+// below the operator, annotations attach to the whole expression, and a nested
+// sum limit stays compact instead of opening another block.
+func TestMathRenderStackedLimitsLikeRust(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "minimize sum limits",
+			source: `\underset{x,u,m\ge0}{\operatorname{minimize}}\quad\sum_{g,t}x_{gpt}+\lambda\sum^{N}_{i=1}y_i`,
+			want: strings.Join([]string{
+				"                        N",
+				"minimize   ∑ x_{gpt}+λ  ∑ yᵢ",
+				"x,u,m≥0   g,t          i=1",
+			}, "\n"),
+		},
+		{
+			name:   "fraction and definition",
+			source: `\sum_{i=1}^N\frac{x_i}{y_i}\overset{\text{def}}{=}\underset{j\in J}{\min} z_j`,
+			want: strings.Join([]string{
+				" N  xᵢ def",
+				" ∑  ──  =  min  zⱼ",
+				"i=1 yᵢ     j∈ J",
+			}, "\n"),
+		},
+		{
+			name:   "nested sum limit",
+			source: `\sum_{j=\sum_i^n i}^N x_j`,
+			want: strings.Join([]string{
+				"   N",
+				"   ∑    xⱼ",
+				"j=∑ᵢⁿ i",
+			}, "\n"),
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, ok := mathRender(testCase.source, true)
+			if !ok {
+				t.Fatalf("mathRender(%q, true) rejected the layout", testCase.source)
+			}
+			if compact := compactLayout(got); compact != testCase.want {
+				t.Fatalf("mathRender(%q, true) = %q, want %q", testCase.source, compact, testCase.want)
+			}
+		})
+	}
+}

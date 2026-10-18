@@ -211,6 +211,7 @@ func dimRenderedLines(rendered string) string {
 }
 
 func renderWithStyle(text string, width int, themeID string, cwd string, style ansi.StyleConfig) (string, error) {
+	text = codextui.FollowupLabels(text)
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", nil
@@ -232,9 +233,15 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	mathPlaceholders, text := protectMathSpans(text, width)
 	codeBlocks := collectSourceCodeBlocks(text)
 	tables, renderText := detectSourceTables(text)
-	renderText = rewriteTaskListMarkers(renderText)
+	renderLists := CurrentRendering().Lists
+	if renderLists {
+		renderText = rewriteTaskListMarkers(renderText)
+	} else {
+		renderText = escapeTaskListMarkers(renderText)
+	}
 	colorLevel := codextui.DetectStdoutColorLevel()
 	style = applyThemeMarkupColors(style, themeID, colorLevel)
+	linkSGR := linkStyleSGR(style.Link, colorLevel)
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
@@ -248,18 +255,68 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	if err != nil {
 		return "", err
 	}
-	out = stripRenderedTaskBullets(out)
+	if renderLists {
+		out = stripRenderedTaskBullets(out)
+	} else {
+		out = hyphenUnorderedListMarkers(out)
+	}
 	out = colorOrderedListMarkers(out, orderedListMarkerSGRForTheme(themeID))
-	out = colorUnorderedListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
-	out = colorTaskListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
+	if renderLists {
+		out = colorUnorderedListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
+		out = colorTaskListMarkers(out, unorderedListMarkerSGRForTheme(themeID))
+	}
+	out = styleBareWebURLs(out, linkSGR)
 	out = restoreSourceCodeBlocks(out, codeBlocks, themeID, width)
-	out = restoreRenderedTables(out, tables, width)
+	out = restoreRenderedTables(out, tables, width, linkSGR)
 	out = restoreMathPlaceholders(out, mathPlaceholders)
 	out = annotateRenderedLineURLs(out)
 	out = annotateWebLinkLabels(out, webLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)
-	out = restoreURLPlaceholders(out, urlPlaceholders)
+	out = restoreURLPlaceholders(out, urlPlaceholders, linkSGR)
 	return strings.TrimRight(out, "\n"), nil
+}
+
+// linkStyleSGR renders the Markdown link style (color and underline) as an SGR
+// prefix, so bare URLs can borrow the same affordance as explicit links.
+func linkStyleSGR(link ansi.StylePrimitive, level codextui.StdoutColorLevel) string {
+	var sgr strings.Builder
+	if link.Underline != nil && *link.Underline {
+		sgr.WriteString("\x1b[4m")
+	}
+	if link.Color != nil {
+		if color := codextui.TermenvProfileForLevel(level).Color(*link.Color); color != nil {
+			sgr.WriteString("\x1b[")
+			sgr.WriteString(color.Sequence(false))
+			sgr.WriteString("m")
+		}
+	}
+	return sgr.String()
+}
+
+// styleBareWebURLs gives detected URLs the link style while leaving code
+// blocks untouched; restored tables apply the same style separately.
+func styleBareWebURLs(rendered string, linkSGR string) string {
+	if linkSGR == "" || !strings.Contains(rendered, "http") {
+		return rendered
+	}
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	inCode := false
+	for index, line := range lines {
+		plain := utils.StripANSI(line)
+		if strings.Contains(plain, codeBlockStartMarker) {
+			inCode = true
+			continue
+		}
+		if strings.Contains(plain, codeBlockEndMarker) {
+			inCode = false
+			continue
+		}
+		if inCode {
+			continue
+		}
+		lines[index] = codextui.StyleWebURLsInLine(line, linkSGR)
+	}
+	return strings.Join(lines, "\n")
 }
 
 var taskListSourceRE = regexp.MustCompile(`(?m)^([ \t]*(?:>[ \t]*)*)([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\[([xX ])\]([ \t]+)`)
@@ -280,9 +337,32 @@ func rewriteTaskListMarkers(text string) string {
 	})
 }
 
+// escapeTaskListMarkers keeps task-list brackets literal when Unicode list
+// markers are disabled, so glamour preserves the original bullet/numbering.
+func escapeTaskListMarkers(text string) string {
+	return taskListSourceRE.ReplaceAllStringFunc(text, func(match string) string {
+		parts := taskListSourceRE.FindStringSubmatch(match)
+		if len(parts) != 5 {
+			return match
+		}
+		return parts[1] + parts[2] + `\[` + parts[3] + `\]` + parts[4]
+	})
+}
+
 var renderedTaskBulletRE = regexp.MustCompile(`(?m)^((?:` + blockQuoteIndentToken + `)*[ \t]*)` + unorderedListMarkerToken + `([☑☐]) `)
 var renderedTaskMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*[ \t]*)([☑☐]) `)
 var renderedOrderedMarkerRE = regexp.MustCompile(`^(?:` + blockQuoteIndentToken + `)*[ \t]*\d+\. `)
+var hyphenUnorderedListMarkerRE = regexp.MustCompile(`^((?:` + blockQuoteIndentToken + `)*)([ \t]*)` + unorderedListMarkerToken)
+
+// hyphenUnorderedListMarkers restores Rust's textual list marker when
+// `tui.rendering.lists` is disabled.
+func hyphenUnorderedListMarkers(rendered string) string {
+	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	for index, line := range lines {
+		lines[index] = hyphenUnorderedListMarkerRE.ReplaceAllString(line, "$1$2- ")
+	}
+	return strings.Join(lines, "\n")
+}
 
 // stripRenderedTaskBullets removes the bullet glamour inserts before the
 // Unicode checkbox. Ordered task items keep their numbering.
@@ -497,23 +577,39 @@ func protectLongBareURLs(text string, width int) (map[string]string, string) {
 		if m[0] >= 2 && text[m[0]-1] == '(' && text[m[0]-2] == ']' {
 			continue
 		}
-		url := text[m[0]:m[1]]
+		// Table cells wrap their own content; protecting a URL here would hide
+		// it from the cell wrapper and can split the placeholder.
+		lineStart := strings.LastIndexByte(text[:m[0]], '\n') + 1
+		line := strings.TrimSpace(text[lineStart:m[0]])
+		if strings.HasPrefix(line, "|") || strings.HasPrefix(line, "> |") {
+			continue
+		}
+		url, trimStart := codextui.TrimWebURLToken(text[m[0]:m[1]])
+		// Emphasis markers around a bare URL remain Markdown syntax; the
+		// placeholder will sit between them.
+		url = strings.TrimRight(url, "*")
+		if _, ok := codextui.WebDestination(url); !ok {
+			continue
+		}
+		urlStart := m[0] + trimStart
 		if codextui.DisplayWidth(url) <= threshold {
 			continue
 		}
 		if placeholders == nil {
 			placeholders = map[string]string{}
 		}
-		ph := "CODEXURLPROT_" + strconv.Itoa(id) + "_X_"
+		// Keep the token at least as short as the narrowest table column so a
+		// renderer that breaks long words cannot split it.
+		ph := "\uE000" + strconv.Itoa(id) + "\uE001"
 		id++
 		for strings.Contains(text, ph) {
-			ph = "CODEXURLPROT_" + strconv.Itoa(id) + "_X_"
+			ph = "\uE000" + strconv.Itoa(id) + "\uE001"
 			id++
 		}
 		placeholders[ph] = url
-		sb.WriteString(text[cursor:m[0]])
+		sb.WriteString(text[cursor:urlStart])
 		sb.WriteString(ph)
-		cursor = m[1]
+		cursor = urlStart + len(url)
 	}
 	if len(placeholders) == 0 {
 		return nil, text
@@ -522,12 +618,16 @@ func protectLongBareURLs(text string, width int) (map[string]string, string) {
 	return placeholders, sb.String()
 }
 
-func restoreURLPlaceholders(rendered string, placeholders map[string]string) string {
+func restoreURLPlaceholders(rendered string, placeholders map[string]string, linkSGR string) string {
 	if len(placeholders) == 0 {
 		return rendered
 	}
 	for ph, url := range placeholders {
-		rendered = strings.ReplaceAll(rendered, ph, codextui.OSC8Hyperlink(url, url))
+		text := url
+		if linkSGR != "" {
+			text = linkSGR + url + "\x1b[0m"
+		}
+		rendered = strings.ReplaceAll(rendered, ph, codextui.OSC8Hyperlink(url, text))
 	}
 	return rendered
 }

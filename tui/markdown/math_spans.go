@@ -16,10 +16,11 @@ import (
 
 // Rust parity: codex-rs/tui/src/markdown_render/math.rs's source scan
 // (`MathMarkdown`). Go renders Markdown with goldmark/glamour, so the scan works
-// at the source level like the long-URL protection: an admitted math span is
-// replaced with a unique placeholder before rendering and restored to its
-// rendered Unicode afterwards, while rejected expressions stay verbatim. Code,
-// links, HTML and block containers keep the ordinary Markdown renderer.
+// at the source level like the long-URL protection: every paired math span is
+// replaced with a unique placeholder before rendering and restored afterwards
+// to its rendered Unicode, or to its verbatim source when it cannot be
+// rendered. Code, links, HTML and block containers keep the ordinary Markdown
+// renderer.
 
 // mathPlaceholderPrefix/…Suffix build a placeholder that goldmark cannot
 // reinterpret: underscores (as the long-URL placeholder uses) would let an
@@ -274,6 +275,14 @@ func (s *mathScanner) scan() {
 		}
 		rendered, ok := mathRender(formula, display)
 		if !ok || !mathRenderFits(rendered, s.width, s.containers, containerIdx, start) {
+			// Rust replaces every paired span that reaches the render stage with
+			// its source text when it cannot be rendered. Mask the source here so
+			// Markdown escape processing cannot mangle TeX such as `\[`, `\]`,
+			// or a trailing `\\`, and restore it verbatim afterwards.
+			emitTo(start)
+			s.masked.WriteString(s.placeholderFor(text[start:spanEnd]))
+			cursor = spanEnd
+			offset = spanEnd
 			continue
 		}
 		emitTo(start)
