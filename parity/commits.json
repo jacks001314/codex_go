@@ -1630,9 +1630,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Equivalent implementation verified: Go builds Guardian reviews as explicit isolated model requests without the parent tool catalog, MCP bindings, extensions, or user instructions; guardian turns skip executor MCP discovery and required-skill inheritance. Added regression coverage asserting the review request carries no tools while retaining only reviewer policy and permission evidence."
       ]
     },
     {
@@ -11355,9 +11355,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SessionIsolation"
+        "Equivalent architecture: Go has no managed reviewer session whose isolation could be inferred from subagent attribution. Guardian isolation is applied when constructing the reviewer request, independently of the reviewed thread's subagent status, while ordinary review/subagent turns retain inherited tools and instructions."
       ]
     },
     {
