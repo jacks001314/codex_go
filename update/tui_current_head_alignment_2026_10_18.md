@@ -2116,8 +2116,10 @@ green.
   including approval, elicitation, user-input, feedback, voice channels,
   plugin browser, permissions, usage, and picker/config flows. Long
   descriptions are wrapped before boxing and oversized dialogs use the append
-  fallback. Remaining: nested dialog stacks that retain a parent picker
-  backdrop, and explicit overlay cursor/section ownership.
+  fallback. A parent-modal stack now renders the parent dialog as a child
+  backdrop and restores it on cancel/submit. Remaining: specialized direct
+  modal opens that bypass the shared stack helper, and explicit overlay
+  cursor/section ownership.
   instead of rendering as centered dialogs over a retained composer/picker
   backdrop.
 - `#50396` is complete: transcript PageUp/PageDown honor pager single-row,

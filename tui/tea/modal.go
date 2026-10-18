@@ -241,7 +241,7 @@ func (m *Model) openModal(message ModalRequestMsg) {
 	if len(options) == 0 {
 		options = []ModalOption{{ID: "ok", Label: "OK", Shortcut: "enter"}}
 	}
-	m.modal = &modalState{
+	m.replaceModal(&modalState{
 		id:                strings.TrimSpace(message.ID),
 		kind:              message.Kind,
 		title:             firstNonEmpty(message.Title, "Select an option"),
@@ -252,9 +252,34 @@ func (m *Model) openModal(message ModalRequestMsg) {
 		reopenOnCancel:    message.ReopenOnCancel,
 		columnWidth:       message.ColumnWidth,
 		descriptionLayout: message.DescriptionLayout,
-	}
+	})
 	m.quickDialMenu = false
 	m.notice = ""
+}
+
+func (m *Model) replaceModal(next *modalState) {
+	if m == nil {
+		return
+	}
+	if m.modal != nil && m.modal != next {
+		m.modalParents = append(m.modalParents, m.modal)
+	}
+	m.modal = next
+}
+
+func (m *Model) restoreParentModal() {
+	if m == nil || m.modal != nil || len(m.modalParents) == 0 {
+		return
+	}
+	m.modal = m.modalParents[len(m.modalParents)-1]
+	m.modalParents = m.modalParents[:len(m.modalParents)-1]
+}
+
+func (m *Model) clearModalStack() {
+	if m == nil {
+		return
+	}
+	m.modalParents = nil
 }
 
 func normalizeModalOptions(options []ModalOption) []ModalOption {

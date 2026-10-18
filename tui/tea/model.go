@@ -1820,12 +1820,15 @@ type Model struct {
 	// composerElements tracks the composer's structured text elements (byte
 	// ranges plus placeholders) so mentions reach the turn input as
 	// text_elements (Rust textarea::text_elements).
-	composerElements            []ComposerTextElement
-	misalignmentPolicyStopped   bool
-	misalignmentReview          *misalignmentReview
-	misalignmentReviewSerial    uint64
-	currentTurnID               string
-	modal                       *modalState
+	composerElements          []ComposerTextElement
+	misalignmentPolicyStopped bool
+	misalignmentReview        *misalignmentReview
+	misalignmentReviewSerial  uint64
+	currentTurnID             string
+	modal                     *modalState
+	// modalParents retains dialogs covered by a child dialog so cancel/submit
+	// restores the parent backdrop (Rust #50504 ViewStack).
+	modalParents                []*modalState
 	skillPopup                  skillPopupState
 	mentionPopup                *mentionsv2.Popup
 	mentionDismissedToken       string
@@ -3016,6 +3019,7 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if !ok || next == nil {
 		return model, cmd
 	}
+	next.restoreParentModal()
 	next.observeSparkleModel()
 	statusCmd := next.refreshTerminalProgramStatusCmd()
 	settleCmd := next.terminalSizeSettleCmd()

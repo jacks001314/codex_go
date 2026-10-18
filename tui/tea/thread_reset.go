@@ -23,6 +23,7 @@ func (m *Model) resetThreadScopedState() {
 	m.sparkle = composerSparkleState{}
 	m.misalignmentPolicyStopped = false
 	m.misalignmentReview = nil
+	m.clearModalStack()
 	if m.modal != nil && m.modal.kind == ModalKindMisalignment {
 		m.modal = nil
 	}

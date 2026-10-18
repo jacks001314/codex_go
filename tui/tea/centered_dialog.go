@@ -61,9 +61,16 @@ func (m *Model) renderCenteredModalOverlay() string {
 		return ""
 	}
 	saved := m.modal
-	m.modal = nil
+	parents := m.modalParents
+	if len(parents) > 0 {
+		m.modal = parents[len(parents)-1]
+		m.modalParents = parents[:len(parents)-1]
+	} else {
+		m.modal = nil
+	}
 	base := m.View()
 	m.modal = saved
+	m.modalParents = parents
 	return overlayCenteredDialog(base, dialog, m.width, m.height)
 }
 
