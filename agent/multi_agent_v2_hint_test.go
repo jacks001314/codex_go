@@ -45,3 +45,28 @@ func TestMultiAgentV2UsageHintCatalogRoleInstructionsLikeRust(t *testing.T) {
 		t.Fatalf("shared concurrency guidance should remain:\n%s", hint)
 	}
 }
+
+// TestMultiAgentV2UsageHintUpdatePlanFilterLikeRust mirrors Rust #41744:
+// configured role text is caller-owned and survives the filter, while bundled
+// or catalog instructions are Codex-owned.
+func TestMultiAgentV2UsageHintUpdatePlanFilterLikeRust(t *testing.T) {
+	configured := "## Plan tool\nConfigured root guidance."
+	hint := MultiAgentV2UsageHint(MultiAgentV2UsageHintOptions{
+		MaxConcurrency:             2,
+		RootUsageHintText:          &configured,
+		OmitUpdatePlanInstructions: true,
+	})
+	if !strings.Contains(hint, configured) {
+		t.Fatalf("configured hint was filtered:\n%s", hint)
+	}
+
+	catalog := "## Plan tool\nCatalog root guidance."
+	hint = MultiAgentV2UsageHint(MultiAgentV2UsageHintOptions{
+		MaxConcurrency:             2,
+		RootCatalogHintText:        &catalog,
+		OmitUpdatePlanInstructions: true,
+	})
+	if strings.Contains(hint, "## Plan tool") || strings.Contains(hint, "Catalog root guidance.") {
+		t.Fatalf("catalog plan-tool section survived:\n%s", hint)
+	}
+}

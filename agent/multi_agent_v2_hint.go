@@ -71,21 +71,26 @@ type MultiAgentV2UsageHintOptions struct {
 // concurrency fragments are appended to the defaults only.
 func MultiAgentV2UsageHint(options MultiAgentV2UsageHintOptions) string {
 	identity := MultiAgentV2RootUsageHint
+	configured := false
 	if options.IsSubagent {
 		identity = MultiAgentV2SubagentUsageHint
 		if options.SubagentUsageHintText != nil {
 			identity = strings.TrimSpace(*options.SubagentUsageHintText)
+			configured = true
 		} else if options.SubagentCatalogHintText != nil {
 			identity = strings.TrimSpace(*options.SubagentCatalogHintText)
 			identity = markMultiAgentRoleInstruction(identity)
 		}
 	} else if options.RootUsageHintText != nil {
 		identity = strings.TrimSpace(*options.RootUsageHintText)
+		configured = true
 	} else if options.RootCatalogHintText != nil {
 		identity = strings.TrimSpace(*options.RootCatalogHintText)
 		identity = markMultiAgentRoleInstruction(identity)
 	}
-	if options.OmitUpdatePlanInstructions {
+	// Rust #41744 returns configured role text before applying the bundled
+	// update_plan filter; only catalog/bundled instructions are Codex-owned.
+	if options.OmitUpdatePlanInstructions && !configured {
 		identity = prompt.WithoutUpdatePlanInstructions(identity)
 	}
 	parts := []string{identity, MultiAgentV2SharedUsageHint}

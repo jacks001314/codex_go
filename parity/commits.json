@@ -4740,9 +4740,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: continuation_steering_item, get_prompt_base_instructions, without_update_plan_instructions"
+        "Round 441 (implementation): update_plan already defaults off and registration/prompt stripping existed. Closed the remaining gaps: exec multi-agent hints now carry the omit flag from config, configured role hints are preserved while bundled/catalog text is filtered, and client-supplied builtin Plan presets are stripped only on exact preset match; custom collaboration text and custom model catalogs stay intact. Tests: go test ./prompt ./agent -run 'UpdatePlan|PlanModeInstructions' -count=1; go test ./exec -run 'TestExecMultiAgentV2UsageHint|TestExecMultiAgentToolsWiresUpdatePlan' -count=1; go test ./appserver -run 'TestCollaborationModeUpdatePlanInstructionsLikeRust' -count=1; go test ./appserver -run 'UpdatePlan|MultiAgentV2InjectsUsageHint|CollaborationMode' -count=1"
       ]
     },
     {

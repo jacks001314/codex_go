@@ -700,14 +700,21 @@ func collaborationModeInstructions(params *turn.TurnStartParams, info *model.Mod
 		if catalogValue != nil {
 			value := *catalogValue
 			// Rust #41744 omits bundled planning guidance from catalog
-			// collaboration instructions when update_plan is disabled.
-			if !updatePlanEnabled {
+			// collaboration instructions when update_plan is disabled, but a
+			// custom model catalog owns its own instructions.
+			if !updatePlanEnabled && modelUsesBundledInstructions(info) {
 				value = promptctx.WithoutUpdatePlanInstructions(value)
 			}
 			return value, true
 		}
 	}
 	if legacy := collaborationModeDeveloperInstructions(params); legacy != "" {
+		// Clients send the built-in presets through the override field too.
+		// Match the entire preset so custom text mentioning update_plan
+		// survives (Rust #41744).
+		if !updatePlanEnabled && strings.TrimSpace(legacy) == strings.TrimSpace(promptctx.BuiltinPlanModeInstructions()) {
+			legacy = promptctx.WithoutUpdatePlanInstructions(legacy)
+		}
 		return legacy, true
 	}
 	return "", false

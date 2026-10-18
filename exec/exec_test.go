@@ -3361,6 +3361,54 @@ func TestExecMultiAgentV2UsageHintOmitsWaitAgentGuidanceWhenDisabledLikeRust(t *
 	}
 }
 
+func TestExecMultiAgentV2UsageHintOmitsUpdatePlanGuidanceLikeRust(t *testing.T) {
+	configured := "## Plan tool\nConfigured root guidance."
+	options := &execMultiAgentTools{
+		version:        agent.VersionV2,
+		maxConcurrency: 4,
+		omitUpdatePlan: true,
+		rootHint:       &configured,
+	}
+	hint := execMultiAgentV2UsageHint(&Request{}, options)
+	if !strings.Contains(hint, configured) {
+		t.Fatalf("configured root hint was filtered:\n%s", hint)
+	}
+	options.rootHint = nil
+	hint = execMultiAgentV2UsageHint(&Request{}, options)
+	if strings.Contains(hint, "You have access to an `update_plan` tool") {
+		t.Fatalf("bundled update_plan guidance survived:\n%s", hint)
+	}
+}
+
+func TestExecMultiAgentToolsWiresUpdatePlanOptInLikeRust(t *testing.T) {
+	runner := NewLocalRunner(t.TempDir())
+	req := &Request{Exec: cli.ExecOptions{Prompt: "hello", Shared: cli.SharedOptions{CWD: t.TempDir()}}}
+	for _, testCase := range []struct {
+		name  string
+		value any
+		want  bool
+	}{
+		{name: "default disabled", value: nil, want: true},
+		{name: "explicit enabled", value: true, want: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			values := map[string]any{
+				"features": map[string]any{"multi_agent_v2": map[string]any{"enabled": true}},
+			}
+			if testCase.value != nil {
+				values["tools"] = map[string]any{"update_plan": map[string]any{"enabled": testCase.value}}
+			}
+			tools, err := runner.multiAgentToolsForRun(context.Background(), req, &config.Config{Values: values}, "thread-plan", "turn-plan", nil)
+			if err != nil {
+				t.Fatalf("multiAgentToolsForRun() error = %v", err)
+			}
+			if tools == nil || tools.omitUpdatePlan != testCase.want {
+				t.Fatalf("omitUpdatePlan = %#v, want %v", tools, testCase.want)
+			}
+		})
+	}
+}
+
 func TestExecAgentControllerValidatesV2SpawnModelOverrides(t *testing.T) {
 	controller := newExecAgentController(NewLocalRunner(t.TempDir()), context.Background(), &Request{}, "thread-root", 3).(*execAgentController)
 	controller.parentModel = "catalog-v2"

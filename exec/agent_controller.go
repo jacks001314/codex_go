@@ -51,6 +51,7 @@ type execMultiAgentTools struct {
 	waitMax                   time.Duration
 	hideSpawnMetadata         bool
 	exposeSpawnModelOverrides bool
+	omitUpdatePlan            bool
 	maxConcurrency            int
 	rootHint                  *string
 	subagentHint              *string
@@ -307,6 +308,7 @@ func (r *Runner) multiAgentToolsForRun(ctx context.Context, req *Request, cfg *c
 		options.waitMax = v2Config.MaxWaitTimeout
 		options.hideSpawnMetadata = v2Config.HideSpawnAgentMetadata
 		options.exposeSpawnModelOverrides = v2Config.ExposeSpawnAgentModelOverrides
+		options.omitUpdatePlan = !cfg.UpdatePlanEnabled()
 		options.rootHint = v2Config.RootAgentUsageHintText
 		options.subagentHint = v2Config.SubagentUsageHintText
 		options.usageHintText = v2Config.UsageHintText
@@ -447,6 +449,7 @@ func execMultiAgentV2UsageHint(req *Request, options *execMultiAgentTools) strin
 		MaxConcurrency:                 options.maxConcurrency,
 		WaitAgentEnabled:               !options.disableWait,
 		ExposeSpawnAgentModelOverrides: options.exposeSpawnModelOverrides,
+		OmitUpdatePlanInstructions:     options.omitUpdatePlan,
 		RootUsageHintText:              options.rootHint,
 		SubagentUsageHintText:          options.subagentHint,
 	})
