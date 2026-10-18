@@ -11775,9 +11775,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: current_turn_trigger"
+        "Round 455 (audit): appserver.agent_controller carries turnTrigger into spawned child turns and follow-up mailbox turns (params.TurnTrigger/root/parent lineage), exec carries Request.TurnTrigger into execTurnTrigger metadata, and queued dispatch tests verify pending work starts new turns with the queue trigger. Tests: go test ./appserver -run 'TurnTrigger' -count=1 (exec's TestRunAttributesTurnTriggerLikeRust currently hits the unrelated relative-CWD baseline error 'path is not absolute: .')"
       ]
     },
     {
