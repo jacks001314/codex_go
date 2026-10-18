@@ -33,7 +33,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 035295b46ee4a5962d0e01a66a888d5bf5da4de4	41196	Improve sandboxing, MCP errors, and cached approvals (#41196)	2026-08-27	guardian	7	1	0.14	0	0	audit_pending	DirectoryScanMode,ScoreAuthorization,collect_existing_glob_directory_matches,guardian_authorization_version,is_read_denied_with_canonical_path,mcp_error
 03861e69ef549717c0fc7045abad56321d4a082b	41457	Source proactive multi-agent instructions from the model catalog (#41457)	2026-08-29	model	0	0		0	0	not_applicable	
 039eb58a0ba6647fb8f29fdd35341f3f1b153728	40848	Give Guardian reviewers read-only access to parent history (#40848)	2026-08-26	appserver	1	0	0.00	0	0	not_applicable	GuardianReadOnlyHistoryTools
-03b761dca9b04f47e166494232d70b3fe7c6738a	52363	Expand realtime v3 voice support (#52363)	2026-10-09	appserver	0	0		0	0	not_applicable	
+03b761dca9b04f47e166494232d70b3fe7c6738a	52363	Expand realtime v3 voice support (#52363)	2026-10-09	realtime	0	0		0	0	complete
 03f014564deef528c25e80fe67ec51871cb6ee51	44472	Harden Code Mode tool-call completeness tracking (#44472)	2026-09-10	mcp	8	8	1.00	0	0	complete	
 0447e4a1fd2ceedfd50e3781adafc03f1cf2f46c	44352	Remove path-bearing fields from Guardian review analytics (#44352)	2026-09-10	guardian	1	1	1.00	0	0	complete	
 044da98b4a7ff2dd0079f706280e0a6934048222	51503	Expose selected environments to MCP contributors (#51503)	2026-10-06	mcp	2	2	1.00	0	0	complete	

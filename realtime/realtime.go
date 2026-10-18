@@ -76,22 +76,38 @@ const (
 	VoiceAlloy   Voice = "alloy"
 	VoiceArbor   Voice = "arbor"
 	VoiceAsh     Voice = "ash"
+	VoiceAube    Voice = "aube"
 	VoiceBallad  Voice = "ballad"
 	VoiceBreeze  Voice = "breeze"
+	VoiceBubbie  Voice = "bubbie"
 	VoiceCedar   Voice = "cedar"
 	VoiceCoral   Voice = "coral"
 	VoiceCove    Voice = "cove"
 	VoiceEcho    Voice = "echo"
 	VoiceEmber   Voice = "ember"
+	VoiceHaetsal Voice = "haetsal"
+	VoiceHanul   Voice = "hanul"
+	VoiceHimari  Voice = "himari"
 	VoiceJuniper Voice = "juniper"
+	VoiceLeher   Voice = "leher"
 	VoiceMaple   Voice = "maple"
 	VoiceMarin   Voice = "marin"
+	VoiceMiko    Voice = "miko"
+	VoiceNeer    Voice = "neer"
+	VoicePorto   Voice = "porto"
+	VoiceRindo   Voice = "rindo"
+	VoiceRio     Voice = "rio"
+	VoiceRivage  Voice = "rivage"
 	VoiceSage    Voice = "sage"
+	VoiceSelva   Voice = "selva"
 	VoiceShimmer Voice = "shimmer"
 	VoiceSol     Voice = "sol"
+	VoiceSonna   Voice = "sonna"
 	VoiceSpruce  Voice = "spruce"
+	VoiceTinta   Voice = "tinta"
 	VoiceVale    Voice = "vale"
 	VoiceVerse   Voice = "verse"
+	VoiceViola   Voice = "viola"
 )
 
 type TextRole string
@@ -804,8 +820,11 @@ type StopResponse struct{}
 type ListVoicesParams struct{}
 
 type VoicesList struct {
-	V1        []Voice `json:"v1"`
-	V2        []Voice `json:"v2"`
+	V1 []Voice `json:"v1"`
+	V2 []Voice `json:"v2"`
+	// V3 is the dedicated v3 validation list: the v1 voices plus the v3-only
+	// additions (Rust #52363). An omitted field deserializes to an empty list.
+	V3        []Voice `json:"v3"`
 	DefaultV1 Voice   `json:"defaultV1"`
 	DefaultV2 Voice   `json:"defaultV2"`
 }
@@ -835,9 +854,74 @@ func BuiltinVoices() VoicesList {
 			VoiceMarin,
 			VoiceCedar,
 		},
+		V3: []Voice{
+			VoiceJuniper,
+			VoiceMaple,
+			VoiceSpruce,
+			VoiceEmber,
+			VoiceVale,
+			VoiceBreeze,
+			VoiceArbor,
+			VoiceSol,
+			VoiceCove,
+			VoiceAube,
+			VoiceBubbie,
+			VoiceHaetsal,
+			VoiceHanul,
+			VoiceHimari,
+			VoiceLeher,
+			VoiceMiko,
+			VoiceNeer,
+			VoicePorto,
+			VoiceRindo,
+			VoiceRio,
+			VoiceRivage,
+			VoiceSelva,
+			VoiceSonna,
+			VoiceTinta,
+			VoiceViola,
+		},
 		DefaultV1: VoiceCove,
 		DefaultV2: VoiceMarin,
 	}
+}
+
+// UnmarshalJSON mirrors Rust's `#[serde(default)]` on `v3`: a list that omits
+// the field decodes to an empty list rather than nil.
+func (v *VoicesList) UnmarshalJSON(data []byte) error {
+	type voicesListAlias VoicesList
+	var decoded voicesListAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.V3 == nil {
+		decoded.V3 = []Voice{}
+	}
+	*v = VoicesList(decoded)
+	return nil
+}
+
+// MarshalJSON keeps every version list an array, matching Rust's Vec encoding.
+func (v VoicesList) MarshalJSON() ([]byte, error) {
+	v1 := append([]Voice(nil), v.V1...)
+	if v1 == nil {
+		v1 = []Voice{}
+	}
+	v2 := append([]Voice(nil), v.V2...)
+	if v2 == nil {
+		v2 = []Voice{}
+	}
+	v3 := append([]Voice(nil), v.V3...)
+	if v3 == nil {
+		v3 = []Voice{}
+	}
+	return json.Marshal(struct {
+		V1        []Voice `json:"v1"`
+		V2        []Voice `json:"v2"`
+		V3        []Voice `json:"v3"`
+		DefaultV1 Voice   `json:"defaultV1"`
+		DefaultV2 Voice   `json:"defaultV2"`
+	}{V1: v1, V2: v2, V3: v3, DefaultV1: v.DefaultV1, DefaultV2: v.DefaultV2})
 }
 
 func (v *VoicesList) DefaultForVersion(version Version) Voice {
@@ -857,8 +941,11 @@ func (v *VoicesList) Supports(version Version, voice Voice) bool {
 		return builtin.Supports(version, voice)
 	}
 	voices := v.V2
-	if version == VersionV1 || version == VersionV3 {
+	switch version {
+	case VersionV1:
 		voices = v.V1
+	case VersionV3:
+		voices = v.V3
 	}
 	for _, candidate := range voices {
 		if candidate == voice {

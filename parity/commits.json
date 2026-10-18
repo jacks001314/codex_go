@@ -29093,9 +29093,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555: realtime voices expose a dedicated v3 list (v1 voices plus Aube/Bubbie/Haetsal/Hanul/Himari/Leher/Miko/Neer/Porto/Rindo/Rio/Rivage/Selva/Sonna/Tinta/Viola), v3 validation uses it while the v3 default remains cove, and omitted v3 decodes to an empty array. Tests: go test ./realtime -run V3 -count=1; go test ./realtime -count=1; go test ./appserver -run Realtime -count=1"
       ]
     },
     {

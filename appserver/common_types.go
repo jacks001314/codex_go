@@ -259,6 +259,7 @@ type RealtimeVoice string
 type RealtimeVoicesList struct {
 	V1        []RealtimeVoice `json:"v1"`
 	V2        []RealtimeVoice `json:"v2"`
+	V3        []RealtimeVoice `json:"v3"`
 	DefaultV1 RealtimeVoice   `json:"defaultV1"`
 	DefaultV2 RealtimeVoice   `json:"defaultV2"`
 }
@@ -272,14 +273,20 @@ func (v *RealtimeVoicesList) MarshalJSON() ([]byte, error) {
 	if v2 == nil {
 		v2 = []RealtimeVoice{}
 	}
+	v3 := append([]RealtimeVoice(nil), v.V3...)
+	if v3 == nil {
+		v3 = []RealtimeVoice{}
+	}
 	return json.Marshal(struct {
 		V1        []RealtimeVoice `json:"v1"`
 		V2        []RealtimeVoice `json:"v2"`
+		V3        []RealtimeVoice `json:"v3"`
 		DefaultV1 RealtimeVoice   `json:"defaultV1"`
 		DefaultV2 RealtimeVoice   `json:"defaultV2"`
 	}{
 		V1:        v1,
 		V2:        v2,
+		V3:        v3,
 		DefaultV1: v.DefaultV1,
 		DefaultV2: v.DefaultV2,
 	})
