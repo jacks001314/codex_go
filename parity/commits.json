@@ -13791,9 +13791,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: CodexResponsesHeaders, RequestMode"
+        "Round 509 (audit): already implemented. model/responses_agent.go keeps Guardian review inference on the standard /responses route and sets x-codex-guardian: reviewer only for the preferred review model over Codex backend auth and backend-route providers. Marked reviews drop the routing hint, service tier, and Guardian credits request; overridden models, API-key auth, and plain providers remain unmarked. TestResponsesAgentRunnerGuardianRoutingLikeRust covers these cases. Tests: go test ./model -run 'GuardianRouting' -count=1"
       ]
     },
     {
