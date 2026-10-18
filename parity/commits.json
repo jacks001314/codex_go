@@ -190,7 +190,7 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "blocked_precondition",
       "evidence": [
         "Precondition missing: Go has shell_snapshot_v2 feature registration and the ShellSnapshotV2 capability bit, but not the executor-managed in-memory snapshot subsystem. Local unified exec launches bypass exec-server, and execserver/shell_snapshot.go only captures and replays file-backed snapshots. Completing this requires routing eligible local unified-exec launches through the executor-managed process path and adding the environment/file replay cache, policy filtering, startup-file suppression, prewarm, and telemetry semantics from the Rust implementation."
       ]
@@ -24939,9 +24939,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SectionTransition"
+        "N/A by architecture (Round 708 audit): Rust replaces its internal WorldStateSection::snapshot/render_diff pair with a typed SectionTransition. Go has no section-trait/object model to refactor: world-state updates are typed session.WorldStateUpdate values merged by mergeWorldStateUpdates, and snapshot/context fragments are produced independently. The Rust change has no public wire or behavioral delta to port."
       ]
     },
     {
