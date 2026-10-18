@@ -28478,9 +28478,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: WriteAclOperation, record_acl_failure"
+        "Equivalent implementation already present in the Windows setup helper: recordSetupACLFailure preserves the check/grant/deny summary before attempting to write the diagnostic log, formatSetupErrorChain unwraps and renders distinct native causes, and sandbox-bin lock failures use the same chain formatter. ACL handle-opening context names READ_CONTROL | WRITE_DAC and MAXIMUM_ALLOWED access. Windows tests cover native chain preservation, all operation summaries, and retention of the ACL summary when log writing fails."
       ]
     },
     {
