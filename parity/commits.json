@@ -12365,9 +12365,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: begin_windows_sandbox_setup, finish_windows_sandbox_setup_start, verify_windows_sandbox_mode_after_setup, windows_sandbox_blocks_thread_switch"
+        "Aligned upstream cebdb732ea (#44945): embedded and remote TUI setup both call windowsSandbox/setupStart on the app server, local readiness is queried without opening a raw setup path, setup completion is matched to the initiating mode and persists the effective selected mode, fallback/requirements/status transitions are handled by the tea model, and thread navigation is blocked while setup is active. Tests: TestInteractiveRunWindowsSandboxSetupWaitsForCompletionAndPersistsMode, TestInteractiveRemoteStartWindowsSandboxSetupCallsAppServer, TestModelWindowsSandboxSetupUsesCallbackAndCompletion, TestModelElevatedWindowsSandboxFailureOpensFallback, TestModelWindowsSandboxSetupHonorsRequirements."
       ]
     },
     {
