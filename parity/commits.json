@@ -1992,9 +1992,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "mcp.ServerConfig.Auth is marshaled into mcpConnectionCacheKeyWithFeatures, so an auth-mode change replaces the cached HTTP/stdio connection during reconciliation; TestMCPConnectionCacheKeyIncludesAuthModeLikeRust. Tests: go test ./mcp -run 'ConnectionReuse|CacheKeyIncludesAuth|StartupTimeout' -count=1"
       ]
     },
     {
@@ -2004,9 +2004,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "httpClientForServer and stdioClientForServer reuse a cached client only when it is initialized (ready) or its startup timeout still matches, so a pending startup is replaced after startup_timeout_sec changes while ready connections survive; TestMCPStdioConnectionReuseHonorsStartupTimeoutLikeRust. Tests: go test ./mcp -run 'ConnectionReuse|CacheKeyIncludesAuth|StartupTimeout' -count=1"
       ]
     },
     {
@@ -2016,9 +2016,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "CloudConfigLoader.Get invokes the loader on every configuration load and does not retain a cached-timeout error, so the next load observes recovery without a 15-minute refresh delay; the last successful bundle is preserved on other refresh failures. TestCloudConfigLoaderRetriesTimeoutOnNextLoadLikeRust pins the timeout recovery. Tests: go test ./config -run 'CloudConfigLoader' -count=1"
       ]
     },
     {
@@ -2028,9 +2028,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The effective plugins feature captured in runtimeStepCapabilitySnapshot gates selected executor-root skills in selectedCapabilitySkillEntriesForRuntimeSnapshotWithSandbox and in executorSkillProviderForThread, while the selected root identity remains persisted for filtering and resume; Go does not project MCP servers, apps, or connectors from those roots. TestManagedPluginsRequirementDisablesSelectedExecutorSkillsLikeRust covers enabled/disabled requirements and prompt exposure. Tests: go test ./appserver -run 'ManagedPluginsRequirement|SelectedExecutor|ExecutorSkill' -count=1"
       ]
     },
     {
@@ -2040,9 +2040,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "guardianTurnStart selects execserver.WindowsSandboxProxySettingsPreserve for shell/patch validation, while ordinary turns keep reconcile; TestGuardianTurnStartSelectsWindowsProxyPreserveMode covers guardian originator/metadata and the ordinary-review negative case. Tests: go test ./appserver -run 'GuardianTurnStartSelectsWindowsProxy|ManagedPluginsRequirement' -count=1"
       ]
     },
     {

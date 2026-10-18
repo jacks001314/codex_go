@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	execserverclient "codex_go/execserver"
+	"codex_go/features"
 	"codex_go/plugin"
 	"codex_go/session"
 	"codex_go/turn"
@@ -25,6 +26,9 @@ type runtimeStepCapabilitySnapshot struct {
 	sandboxContexts    map[string]*execserverclient.FileSystemSandboxContext
 	discoveryV2Cache   *runtimeCapabilityDiscoveryV2Cache
 	discoveryV2        *[]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
+	// executorPluginsEnabled is nil until the snapshot is refreshed, so callers
+	// can distinguish "not captured" from an explicit feature-off value.
+	executorPluginsEnabled *bool
 }
 
 func newRuntimeStepCapabilitySnapshot(router *RuntimeRouter, threadID string, params *turn.TurnStartParams) *runtimeStepCapabilitySnapshot {
@@ -65,6 +69,7 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 	var skillRoots []plugin.EnabledSkillRoot
 	var sandboxContexts map[string]*execserverclient.FileSystemSandboxContext
 	var discoveryV2 *[]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
+	var executorPluginsEnabled *bool
 	if router != nil && router.services.Plugins != nil {
 		capabilities = cloneRuntimePluginCapabilities(router.services.Plugins.EnabledCapabilities())
 		capabilities = filterCanonicalDisabledConnectors(capabilities, router.canonicalDisabledConnectorIDs(disabled))
@@ -74,6 +79,8 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 		cfg, _ := router.effectiveConfigForTurn(params)
 		sandboxContexts, _ = router.executorSkillSandboxContextsForTurn(cfg, turnCWD(params), params)
 		discoveryV2 = router.executorCapabilityDiscoveryV2ForStep(ctx, threadID, params, cfg, sandboxContexts, s.discoveryV2Cache)
+		enabled := cfg == nil || features.Enabled(cfg.FeatureSettings(), "plugins")
+		executorPluginsEnabled = &enabled
 	}
 
 	s.mu.Lock()
@@ -83,6 +90,7 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 	s.pluginSkillRoots = skillRoots
 	s.sandboxContexts = sandboxContexts
 	s.discoveryV2 = discoveryV2
+	s.executorPluginsEnabled = executorPluginsEnabled
 	s.mu.Unlock()
 }
 
@@ -146,6 +154,18 @@ func (s *runtimeStepCapabilitySnapshot) executorCapabilityDiscoveryV2Enabled() b
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.discoveryV2 != nil
+}
+
+func (s *runtimeStepCapabilitySnapshot) executorPluginsEnabledForStep() (bool, bool) {
+	if s == nil {
+		return false, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.executorPluginsEnabled == nil {
+		return false, false
+	}
+	return *s.executorPluginsEnabled, true
 }
 
 // readySelectedCapabilityRootsForStep resolves the roots visible to a sampling

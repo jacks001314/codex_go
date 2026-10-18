@@ -10404,6 +10404,19 @@ func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntimeSnapshotWithSand
 	if r == nil || strings.TrimSpace(threadID) == "" || r.services.ThreadRouter == nil || r.services.ThreadRouter.store == nil {
 		return nil, nil, nil
 	}
+	// Rust #40640: managed plugin disablement suppresses capabilities from
+	// selected executor plugin roots while the root identity itself remains in
+	// the thread record for filtering and resume.
+	pluginsEnabled, captured := false, false
+	if snapshot != nil {
+		pluginsEnabled, captured = snapshot.executorPluginsEnabledForStep()
+	}
+	if !captured {
+		pluginsEnabled = r.executorPluginsFeatureEnabledForThread(threadID)
+	}
+	if !pluginsEnabled {
+		return nil, nil, nil
+	}
 	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
 	if err != nil || record == nil {
 		return nil, nil, err

@@ -131,3 +131,28 @@ func TestCloudConfigLoaderReturnsErrorWhenNeverSucceeded(t *testing.T) {
 		t.Fatal("Get() error = nil, want error when no successful bundle exists")
 	}
 }
+
+// Rust #40637 retries a startup timeout through the background worker. Go's
+// loader has no cached-error window: every Get calls the loader again, so the
+// next configuration load observes recovery without waiting for a refresh
+// interval.
+func TestCloudConfigLoaderRetriesTimeoutOnNextLoadLikeRust(t *testing.T) {
+	calls := 0
+	loader := NewCloudConfigLoader(func() (*CloudConfigBundle, error) {
+		calls++
+		if calls == 1 {
+			return nil, NewCloudConfigLoadError(CloudConfigLoadTimeout, nil, "startup timed out")
+		}
+		return &CloudConfigBundle{ConfigTOML: CloudConfigTOMLBundle{EnterpriseManaged: []CloudConfigFragment{{ID: "recovered"}}}}, nil
+	})
+	if _, err := loader.Get(); err == nil {
+		t.Fatal("first Get() error = nil, want the startup timeout")
+	}
+	recovered, err := loader.Get()
+	if err != nil || recovered == nil || len(recovered.ConfigTOML.EnterpriseManaged) != 1 || recovered.ConfigTOML.EnterpriseManaged[0].ID != "recovered" {
+		t.Fatalf("second Get() = %#v, %v; want the recovered bundle", recovered, err)
+	}
+	if calls != 2 {
+		t.Fatalf("loader calls = %d, want 2", calls)
+	}
+}
