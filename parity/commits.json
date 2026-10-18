@@ -15664,9 +15664,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: prepare_cleanup, restore_disabled_accounts"
+        "N/A - Go's legacy Windows uninstall disables, waits for, and removes local sandbox accounts directly. It has no service-owned InstallationRecord, cleanup_logon_pending receipt, SID-validated owner restoration, IPC admission/readiness fence, retained-logon registry, or retirement transaction in which a pending cleanup logon could block provisioning."
       ]
     },
     {

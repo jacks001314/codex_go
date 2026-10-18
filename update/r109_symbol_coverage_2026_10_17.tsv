@@ -2679,7 +2679,7 @@ fd346b8dbaa24573a0244bc917811849d27c4cf4	45987	Centralize Guardian action prepar
 fd59b42a09df58d301839cac889c2db69c40f6cb	46575	Preserve Windows package identity for sandboxed descendants (#46575)	2026-09-19	sandbox	1	1	1.00	0	0	complete	
 fd5bf3b0590e8d24e1cd913754a87c9f72833044	45515	Filter plugin-install test analytics by event type (#45515)	2026-09-14	appserver	0	0		0	0	not_applicable	
 fd75aa116c4a6d1db0fa1e0a0f896e3368349649	50447	Remove the provider capability gate for tool namespaces (#50447)	2026-10-02	appserver	0	0		0	0	not_applicable	
-fd875b188bde23782419c62dc00c4412fa1e4f91	46333	Handle disabled Windows sandbox accounts during cleanup (#46333)	2026-09-18	sandbox	3	1	0.33	0	0	audit_pending	prepare_cleanup,restore_disabled_accounts
+fd875b188bde23782419c62dc00c4412fa1e4f91	46333	Handle disabled Windows sandbox accounts during cleanup (#46333)	2026-09-18	sandbox	3	1	0.33	0	0	not_applicable	prepare_cleanup,restore_disabled_accounts
 fdbce2080c6681c57ecd66aad001d6504251650d	48772	Fix Unix socket connections through long symlink paths (#48772)	2026-09-27	appserver	0	0		0	0	not_applicable	
 fdbe23da4556dcce488e5392a9f187734ba850da	47808	Allow hosts to provide agent controllers through ThreadManager (#47808)	2026-09-24	guardian	1	0	0.00	0	0	not_applicable	with_agent_control_factory
 fdd89e78ac33f02e65dabe60567cdfeba2e954d4	47252	Return agent snapshots from `close_agent` (#47252)	2026-09-22	core	1	1	1.00	0	0	complete	
