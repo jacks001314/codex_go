@@ -17793,9 +17793,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: highlight_selection"
+        "N/A by architecture (audit): upstream f07aaf920b (#47068) highlights a trailing cell for selected hard newlines inside Rust's owned transcript cell buffer. Go deliberately keeps transcript text selection terminal-owned (rendered_selection.go/model.go), and only paints app-owned selection for status/footer/tips rows, which contain no transcript hard-break metadata or source-row model to highlight."
       ]
     },
     {
