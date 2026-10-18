@@ -8907,9 +8907,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: scan_unarchived_threads"
+        "Round 474 (audit): rollout.FindThreadPath/RolloutReferenceIndex scans restrict archived candidates to the requested thread IDs (canonical filename ownership plus session metadata), and ArchiveThreadRollouts moves only the owned active rollouts for the requested threads. Tests: go test ./rollout -run 'ArchivedThread|ArchiveThreadRollouts' -count=1"
       ]
     },
     {
@@ -9903,9 +9903,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: queued_event_count"
+        "Round 475 (audit): N/A by architecture - queued_event_count only supports Rust's finite drain before transferring a tokio event receiver to another reader. Go's RuntimeRouter delivers notifications directly through the sink and uses explicit buffers/locks; it has no transferable event receiver whose snapshot length must be drained by the current owner."
       ]
     },
     {
