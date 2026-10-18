@@ -27241,9 +27241,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ToolStart"
+        "Round 310 (audit): N/A - Go's Guardian reviewer has no asynchronous scorer, pending-review release queue, or lag-zero approval path. It only tracks tool-call score lag to deny stale reviews and executes each review synchronously, so a later score cannot release an earlier pending action."
       ]
     },
     {

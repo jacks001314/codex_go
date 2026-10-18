@@ -1743,7 +1743,7 @@ a482e65b8643509f2217b3a34453f3c4a1968228	42835	Preserve Windows managed deny rea
 a4bfd07d51fa941d70e41cc0345b631ab5a41224	50443	Stabilize paused-time code-mode service tests (#50443)	2026-10-02	core	0	0		0	0	not_applicable	
 a4c61afff27b954e3c0831c728f11f8f9a17ae73	45178	Split Windows sandbox cleanup into preparation and completion phases (#45178)	2026-09-13	sandbox	4	2	0.50	0	0	audit_pending	PreparedWindowsSandboxCleanup,prepare_packaged_windows_sandbox_cleanup
 a4c8fc7a6b01ffc8965761d5da32fd8b33b1fb21	47065	Deduplicate deprecation notices in the TUI transcript (#47065)	2026-09-21	tui	0	0		0	0	not_applicable	
-a4ebc509f4cdff88a8e58e175541970a30a2d385	51400	Prevent later Guardian scores from releasing earlier pending reviews (#51400)	2026-10-06	guardian	1	0	0.00	0	0	implementation_pending	ToolStart
+a4ebc509f4cdff88a8e58e175541970a30a2d385	51400	Prevent later Guardian scores from releasing earlier pending reviews (#51400)	2026-10-06	guardian	1	0	0.00	0	0	not_applicable	ToolStart
 a4ee536f0132092f20996c3810c14d090e4dded1	46122	Route filesystem reads and writes by their own sandbox permissions (#46122)	2026-09-17	execserver	4	0	0.00	0	0	implementation_pending	has_full_disk_read_access_for_convention,has_full_disk_write_access_for_convention,should_read_from_sandbox,should_write_into_sandbox
 a505c71490885a44979df056284badbfdd75b3fb	45262	Route pastes into the active history search query (#45262)	2026-09-13	tui	1	0	0.00	0	0	implementation_pending	update_history_search_query
 a5130128697b10022a88e8f5eae6dca77393b4b0	51642	Fix retained context handling for typed section content (#51642)	2026-10-07	guardian	0	0		0	0	not_applicable	
