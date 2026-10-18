@@ -1977,7 +1977,7 @@ b871a1b9f6eb58aa21ec6c307b5b08b1ba5b2613	52952	Verify reset notification during 
 b876f889818e99b371e3078e3f499d75164c13bb	45457	Fix clipboard routing for tmux and SSH sessions (#45457)	2026-09-14	tui	1	1	1.00	0	0	complete	
 b8a1fe4afc973a2e9cdc9d71e696a2f7a80d32e1	48118	Add configurable right-click paste to the fullscreen TUI (#48118)	2026-09-25	tui	16	12	0.75	0	0	audit_pending	is_ssh_session,is_wsl_session,read_text,take_text_result
 b8c86376a258e55efc8e5ecfbabc21c16c07d814	41570	Fix proactive multi-agent instruction grammar (#41570)	2026-08-29	persistence	0	0		0	0	not_applicable	
-b8d365b18ec27188a46d3305dd002180921bcc2b	47604	Extend child commands with session and descriptor controls (#47604)	2026-09-23	execserver	2	0	0.00	0	0	implementation_pending	preserve_fds,terminate_on_parent_death
+b8d365b18ec27188a46d3305dd002180921bcc2b	47604	Extend child commands with session and descriptor controls (#47604)	2026-09-23	execserver	2	0	0.00	0	0	not_applicable	preserve_fds,terminate_on_parent_death
 b8d5e3f12e58fff942093457bf1350f9ceb695e9	48568	Allow exec-server to proxy permitted private IPs upstream (#48568)	2026-09-26	tui	8	4	0.50	0	0	audit_pending	local_runtime_paths,with_local_runtime_paths,with_proxy_private_ips_via_upstream,with_runtime_paths
 b8dceb0d4f29e49e73daa08f57fcf5181186f354	50788	Open slash commands from empty drafts in Vim Normal mode (#50788)	2026-10-04	tui	0	0		0	0	not_applicable	
 b948cfa88da330b338d6f49ede5d2e58fdedf62b	46564	Rename plugin MCP and app extension APIs (#46564)	2026-09-18	appserver	7	0	0.00	0	0	not_applicable	PluginAppProvider,PluginAppProviderError,PluginContributor,PluginContributorState,PluginMcpProvider,PluginMcpProviderError,install_plugins

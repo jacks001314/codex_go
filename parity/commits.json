@@ -19590,9 +19590,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: preserve_fds, terminate_on_parent_death"
+        "Round 321 (audit): N/A - Go's exec-server/PTY launch paths expose stdin/stdout/stderr only and have no shared ChildCommand ProcessMode/DescriptorPolicy abstraction, explicit inheritable-descriptor list, parent-death session option, or macOS native file-action descriptor inheritance carrier."
       ]
     },
     {
