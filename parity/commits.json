@@ -28635,9 +28635,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: CODEX_TOOL_CALL_ID_ENV_VAR, apply_exec_metadata, set_tool_call_id_env_var"
+        "Equivalent implementation present: command launches carry protected CODEX_TOOL_CALL_ID execution metadata, precedence is applied consistently across policy, overlay, and explicit exec metadata, and unified-exec preserves the originating call ID through write_stdin and remote processes. Shell snapshot capture strips/restores the protected variable rather than leaking or overriding it. Tool and exec-server tests cover precedence, missing/stale metadata, empty/NUL values, unified-exec persistence, and remote propagation."
       ]
     },
     {
