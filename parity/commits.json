@@ -502,9 +502,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 570 (audit): already implemented. Managed deny-read rules are merged into command-exec sandbox policy, and request-specific policies that would weaken or conflict with them are rejected. Tests: go test ./appserver -run 'ManagedDenyRead|DenyRead|CommandExec' -count=1"
       ]
     },
     {
@@ -658,9 +658,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 571 (audit): already implemented. Unified exec honors the granular sandbox_approval sub-policy, permitting escalation to prompt when allowed while rejecting disallowed escalation. Tests: go test ./tool -run 'Granular|SandboxApproval|Escalation' -count=1"
       ]
     },
     {
@@ -802,9 +802,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/8; needs review: into_parts"
+        "Round 572 (audit): already implemented. Context fragments are classified with harness-owned content kinds and that classification is preserved through app-server rendering. Tests: go test ./context ./appserver -run 'Contextual|ContentKind|Fragment' -count=1"
       ]
     },
     {
