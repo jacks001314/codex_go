@@ -2233,9 +2233,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "appserver schema exposes thread/turns/list, thread/items/list, thread/revert, and thread/reverted as stable methods; Thread and resume/fork responses carry historyMode and pagination cursors. Tests: go test ./appserver -run 'Paginated|ThreadItemsList|ThreadTurnsList|ThreadRevert' -count=1"
       ]
     },
     {
@@ -2245,9 +2245,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "thread/read, thread/resume, and thread/fork emit the connection-scoped Rust #40676 deprecation notice when a paginated thread is asked for full history, while metadata-only requests stay silent. TestPaginatedFullHistoryRequestsEmitDeprecationNoticesLikeRust covers applied and silent cases. Tests: go test ./appserver -run 'PaginatedFullHistoryRequestsEmitDeprecationNotices' -count=1"
       ]
     },
     {
@@ -2257,9 +2257,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "NewDefaultRuntimeRouter sets the local store's default history mode to paginated, while explicit legacy selections and ephemeral threads remain supported. TestRuntimeRouterDefaultsLocalThreadsToPaginatedHistoryLikeRust covers the default and explicit override. Tests: go test ./appserver -run 'DefaultsLocalThreadsToPaginated' -count=1"
       ]
     },
     {
@@ -2293,9 +2293,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "MarketplaceRemoveConflictSource loads the effective config layers and rejects removal when another enabled non-user layer still defines the marketplace, while allowing user-only and snapshot-only cleanup. TestMarketplaceRemoveConflictSourceDetectsOtherLayer covers the conflict and user-only cases. Tests: go test ./appserver -run 'MarketplaceRemove' -count=1"
       ]
     },
     {
@@ -2305,9 +2305,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: NewTurnContextOptions, drain_mailbox_input_items, new_turn_with_default_settings"
+        "turn/start accepts the experimental cyberAccessProgram selection; appserver resolves it only for the OpenAI provider, persists it in turn context/rollout, and carries it into compaction and child-agent turns. Auth-gated forwarding is implemented by model.AccessProgramsForAuth for ChatGPT and API-key policy. Tests: go test ./appserver -run 'CyberAccessProgram|AgentCompactRunnerCarries' -count=1; go test ./exec -run 'CyberAccessProgram' -count=1"
       ]
     },
     {
@@ -2341,9 +2341,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "App-server --code-mode-host accepts only http/https gRPC endpoints and rejects ws/wss, credentials, fragments, and paths; runtime always constructs the gRPC provider for a configured host. The internal WebSocket provider is no longer reachable from CLI or runtime. Tests: go test ./cli -run 'ParseAppServerCodeModeHostValidation' -count=1; go test ./appserver -run 'SelectsCodeModeProviderByURL|RemoteCodeMode' -count=1"
       ]
     },
     {
@@ -2353,9 +2353,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 15/17; needs review: is_terminal_focused, merge_recap_progress"
+        "tui/tea recap tracks terminal focus lost/gained, completed-turn progress across thread replacement, bounded recent-conversation prompts, manual and automatic eligibility, retry timing, and recap history rendering. The Rust symbols is_terminal_focused/merge_recap_progress map to noteRecapFocusLost/Gained and seedRecapProgress. Tests: go test ./tui/tea -run 'Recap' -count=1"
       ]
     },
     {

@@ -1476,13 +1476,9 @@ func NewDefaultRuntimeRouterWithOptions(store *session.Store, codexHome string, 
 	switch {
 	case options != nil && strings.TrimSpace(options.CodeModeHostURL) != "":
 		hostURL := strings.TrimSpace(options.CodeModeHostURL)
-		if codemode.UsesGrpcCodeModeEndpoint(hostURL) {
-			// Rust 1e557a554e/85f331772f (#38041/#38087): http/https code-mode
-			// host URLs open gRPC sessions; ws/wss continue over WebSocket.
-			services.CodeModeProvider = codemode.NewGrpcCodeModeSessionProvider(hostURL, options.CodeModeHostHTTPClient)
-		} else {
-			services.CodeModeProvider = codemode.NewWebSocketProvider(hostURL, options.CodeModeHostHTTPClient)
-		}
+		// Rust #40692: code-mode hosts accept only http/https gRPC endpoints;
+		// WebSocket session transport has been removed.
+		services.CodeModeProvider = codemode.NewGrpcCodeModeSessionProvider(hostURL, options.CodeModeHostHTTPClient)
 	case options != nil && (options.CodeModeHostEnabled || options.DisableCodeModeInProcessFallback):
 		program := strings.TrimSpace(options.CodeModeHostProgram)
 		if program == "" {
@@ -3096,6 +3092,11 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 				return nil, err
 			}
 			if response, ok := result.(*ThreadResumeResponse); ok && response.Thread != nil {
+				var resumeParams ThreadResumeParams
+				if request.DecodeParams(&resumeParams) == nil && !resumeParams.ExcludeTurns && response.Thread.HistoryMode == ThreadHistoryPaginated {
+					r.notifyPaginatedHistoryDeprecation(request,
+						"Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.")
+				}
 				// Rust #44655: a resumed session re-derives its active plugin
 				// selection from the resumed settings until the next task.
 				r.clearActiveDisabledPluginIDs(response.Thread.ID)
@@ -4255,9 +4256,25 @@ func (r *RuntimeRouter) handleThreadReadRuntime(request *Request) (*ThreadReadRe
 	r.applyLiveThreadModelSettings(response.Thread)
 	if params.IncludeTurns {
 		normalizeThreadTurnsStatus(response.Thread.Turns, loadedStatus, r.activeRuntimeTurnSnapshot(params.ThreadID) != nil)
+		if response.Thread.HistoryMode == ThreadHistoryPaginated {
+			r.notifyPaginatedHistoryDeprecation(request,
+				"Full-history hydration is deprecated for paginated threads; omit `includeTurns` or set it to `false`, then page with `thread/turns/list` and `thread/items/list`.")
+		}
 	}
 	attachThreadReadState(r.services.StateRuntime, response)
 	return response, nil
+}
+
+// notifyPaginatedHistoryDeprecation sends the connection-scoped Rust #40676
+// notice. The request remains supported; clients are directed to the paginated
+// list APIs instead of reconstructing full history in the response.
+func (r *RuntimeRouter) notifyPaginatedHistoryDeprecation(request *Request, summary string) {
+	if r == nil || request == nil {
+		return
+	}
+	r.notifyToConnection(request.normalizedConnectionID(), NotificationDeprecationNotice, &DeprecationNoticeNotification{
+		Summary: summary,
+	})
 }
 
 func (r *RuntimeRouter) handleThreadUnsubscribeRuntime(request *Request) (*ThreadUnsubscribeResponse, error) {
@@ -4793,8 +4810,14 @@ func (r *RuntimeRouter) handleThreadLifecycleRuntime(request *Request) (any, err
 		} else if response, ok := result.(*ThreadForkResponse); ok && response.Thread != nil {
 			r.startThreadSessionSpan(response.Thread.ID, threadSpawnSpan)
 			var forkParams ThreadForkParams
-			if request.DecodeParams(&forkParams) == nil && r.networkApproval != nil {
-				r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
+			if request.DecodeParams(&forkParams) == nil {
+				if !forkParams.ExcludeTurns && response.Thread.HistoryMode == ThreadHistoryPaginated {
+					r.notifyPaginatedHistoryDeprecation(request,
+						"Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.")
+				}
+				if r.networkApproval != nil {
+					r.networkApproval.syncApprovedHostsForFork(forkParams.ThreadID, response.Thread.ID)
+				}
 			}
 			r.markResponseThreadLoaded(response, request.normalizedConnectionID())
 			// Rust #44944: the fork inherits its own retained provider route.

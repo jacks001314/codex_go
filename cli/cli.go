@@ -2692,13 +2692,19 @@ func parseAppServer(args []string, appServer *AppServerOptions) error {
 func validateAppServerCodeModeHostURL(value string) error {
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil {
-		return fmt.Errorf("invalid websocket URL: %w", err)
+		return fmt.Errorf("invalid code-mode host URL: %w", err)
 	}
-	if (parsed.Scheme != "ws" && parsed.Scheme != "wss") || parsed.Hostname() == "" {
-		return errors.New("code-mode host URL must use ws:// or wss:// with a host")
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return errors.New("code-mode host URL must use http:// or https:// with a host")
 	}
 	if parsed.Fragment != "" {
 		return errors.New("code-mode host URL must not contain a fragment")
+	}
+	if parsed.User != nil {
+		return errors.New("gRPC code-mode host URL must not contain credentials")
+	}
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" {
+		return errors.New("gRPC code-mode host URL must not contain a path or query")
 	}
 	return nil
 }

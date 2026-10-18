@@ -60,9 +60,11 @@ func TestRuntimeRouterRemoteCodeModeExecutesAndClosesSharedConnection(t *testing
 
 	home := t.TempDir()
 	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(home), home, &RuntimeRouterOptions{
-		CodeModeHostURL:        "ws" + strings.TrimPrefix(server.URL, "http"),
-		CodeModeHostHTTPClient: server.Client(),
+		DisableCodeModeInProcessFallback: true,
 	})
+	// The WebSocket provider remains available for embedders, but Rust #40692
+	// removed it from the app-server URL selection path.
+	router.services.CodeModeProvider = codemode.NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
 	toolRouter, err := router.requireToolRouter(home)
 	if err != nil {
 		t.Fatalf("requireToolRouter() error = %v", err)
@@ -100,10 +102,9 @@ func TestRuntimeRouterRemoteCodeModeNoFallbackReturnsFatalError(t *testing.T) {
 
 	home := t.TempDir()
 	router := NewDefaultRuntimeRouterWithOptions(session.NewStore(home), home, &RuntimeRouterOptions{
-		CodeModeHostURL:                  "ws" + strings.TrimPrefix(server.URL, "http"),
-		CodeModeHostHTTPClient:           server.Client(),
 		DisableCodeModeInProcessFallback: true,
 	})
+	router.services.CodeModeProvider = codemode.NewWebSocketProvider("ws"+strings.TrimPrefix(server.URL, "http"), server.Client())
 	defer router.Close()
 	toolRouter, err := router.requireToolRouter(home)
 	if err != nil {

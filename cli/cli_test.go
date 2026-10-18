@@ -1615,19 +1615,27 @@ func TestParseAppServerListenValidation(t *testing.T) {
 func TestParseAppServerCodeModeHostValidation(t *testing.T) {
 	parsed, err := Parse([]string{
 		"app-server",
-		"--code-mode-host", "wss://example.test/code-mode",
+		"--code-mode-host", "https://example.test",
 		"--listen", "ws://127.0.0.1:4500",
 	})
 	if err != nil {
 		t.Fatalf("Parse code-mode host returned error: %v", err)
 	}
-	if parsed.AppServer.CodeModeHostURL != "wss://example.test/code-mode" || parsed.AppServer.Listen != "ws://127.0.0.1:4500" {
+	if parsed.AppServer.CodeModeHostURL != "https://example.test" || parsed.AppServer.Listen != "ws://127.0.0.1:4500" {
 		t.Fatalf("app-server options = %#v", parsed.AppServer)
 	}
 	for _, endpoint := range []string{
-		"http://127.0.0.1:8765",
+		"ftp://127.0.0.1:8765",
 		"ws://",
+		"ws://127.0.0.1:8765",
+		"wss://example.test/code-mode",
+		"ws://alice:secret@example.test/code-mode",
+		"wss://alice:secret@example.test/code-mode",
 		"wss://example.test/code-mode#fragment",
+		"http://",
+		"https://example.test/#fragment",
+		"https://example.test/code-mode",
+		"http://alice:secret@example.test",
 	} {
 		if _, err := Parse([]string{"app-server", "--code-mode-host", endpoint}); err == nil {
 			t.Fatalf("Parse accepted invalid code-mode host %q", endpoint)

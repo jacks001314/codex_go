@@ -15,7 +15,7 @@ func TestDefaultRuntimeRouterSelectsCodeModeProviderByURL(t *testing.T) {
 	}
 
 	ws := NewDefaultRuntimeRouterWithOptions(store, t.TempDir(), &RuntimeRouterOptions{CodeModeHostURL: "ws://127.0.0.1:8765"})
-	if _, ok := ws.services.CodeModeProvider.(*codemode.WebSocketProvider); !ok {
-		t.Fatalf("ws code-mode host provider = %T, want WebSocket provider", ws.services.CodeModeProvider)
+	if _, ok := ws.services.CodeModeProvider.(*codemode.GrpcCodeModeSessionProvider); !ok {
+		t.Fatalf("ws code-mode host provider = %T, want gRPC provider", ws.services.CodeModeProvider)
 	}
 }

@@ -87,3 +87,98 @@ func TestRuntimeRouterRejectsEphemeralThreadRevertLikeRust(t *testing.T) {
 		t.Fatalf("thread after rejected revert = %+v, want retained ephemeral thread", thread)
 	}
 }
+
+// TestPaginatedFullHistoryRequestsEmitDeprecationNoticesLikeRust covers Rust
+// #40676: reads, resumes, and forks that request full history for a paginated
+// thread emit a connection-scoped deprecation notice, while metadata-only
+// requests stay silent.
+func TestPaginatedFullHistoryRequestsEmitDeprecationNoticesLikeRust(t *testing.T) {
+	home := t.TempDir()
+	store := session.NewStore(home)
+	router := NewDefaultRuntimeRouter(store, home)
+	t.Cleanup(func() { _ = router.Close() })
+	sink := &targetedNotificationTestSink{}
+	router.SetNotificationSink(sink)
+	initializeAttestationTestConnection(t, router, "conn-a", false)
+
+	threadID := session.ThreadID("thread-paginated-notice")
+	if err := store.Create(&session.Record{
+		ID:        threadID,
+		SessionID: string(threadID),
+		Metadata:  session.Metadata{CWD: t.TempDir(), HistoryMode: string(ThreadHistoryPaginated)},
+	}); err != nil {
+		t.Fatalf("create thread error = %v", err)
+	}
+	if _, err := store.AppendItem(threadID, session.Item{
+		ID:       "item-1",
+		Type:     "user_message",
+		Text:     "hello",
+		Metadata: map[string]any{"turnId": "turn-1"},
+	}); err != nil {
+		t.Fatalf("append item error = %v", err)
+	}
+
+	readRequest := requestWithParams(t, IntID(2), MethodThreadRead, ThreadReadParams{
+		ThreadID:     string(threadID),
+		IncludeTurns: true,
+	})
+	readRequest.ConnectionID = "conn-a"
+	read := router.Handle(readRequest)
+	if read.Error != nil {
+		t.Fatalf("thread/read error = %+v", read.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 1 {
+		t.Fatalf("full read notices = %d, want 1", count)
+	}
+
+	metadataRead := requestWithParams(t, IntID(3), MethodThreadRead, ThreadReadParams{ThreadID: string(threadID)})
+	metadataRead.ConnectionID = "conn-a"
+	if response := router.Handle(metadataRead); response.Error != nil {
+		t.Fatalf("metadata read error = %+v", response.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 1 {
+		t.Fatalf("metadata read emitted a notice: count = %d", count)
+	}
+
+	resume := requestWithParams(t, IntID(4), MethodThreadResume, ThreadResumeParams{ThreadID: string(threadID)})
+	resume.ConnectionID = "conn-a"
+	if response := router.Handle(resume); response.Error != nil {
+		t.Fatalf("full resume error = %+v", response.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 2 {
+		t.Fatalf("full resume notices = %d, want 2", count)
+	}
+
+	resumeMetadata := requestWithParams(t, IntID(5), MethodThreadResume, ThreadResumeParams{
+		ThreadID:     string(threadID),
+		ExcludeTurns: true,
+	})
+	resumeMetadata.ConnectionID = "conn-a"
+	if response := router.Handle(resumeMetadata); response.Error != nil {
+		t.Fatalf("metadata resume error = %+v", response.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 2 {
+		t.Fatalf("metadata resume emitted a notice: count = %d", count)
+	}
+
+	fork := requestWithParams(t, IntID(6), MethodThreadFork, ThreadForkParams{ThreadID: string(threadID)})
+	fork.ConnectionID = "conn-a"
+	if response := router.Handle(fork); response.Error != nil {
+		t.Fatalf("full fork error = %+v", response.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 3 {
+		t.Fatalf("full fork notices = %d, want 3", count)
+	}
+
+	forkMetadata := requestWithParams(t, IntID(7), MethodThreadFork, ThreadForkParams{
+		ThreadID:     string(threadID),
+		ExcludeTurns: true,
+	})
+	forkMetadata.ConnectionID = "conn-a"
+	if response := router.Handle(forkMetadata); response.Error != nil {
+		t.Fatalf("metadata fork error = %+v", response.Error)
+	}
+	if count := countDeprecationNoticesForConnection(sink, "conn-a"); count != 3 {
+		t.Fatalf("metadata fork emitted a notice: count = %d", count)
+	}
+}
