@@ -28551,9 +28551,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ThreadEvictionOutcome, remove_unsubscribed_listener, try_evict_v2_thread"
+        "Blocked on idle-thread eviction, which Go does not implement: thread_unload_delay_secs has no caller, ThreadUnsubscribe only drops the connection subscription, and markThreadUnloaded runs only for archive/delete. There is no local v2 eviction, residency pin, or unsubscribe-driven reload boundary to preserve. Go already retains mailbox messages and environment selections across its manual unload."
       ]
     },
     {
