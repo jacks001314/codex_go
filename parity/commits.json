@@ -13755,9 +13755,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 539 (audit): already implemented. The trusted connector auth-failure classification is captured before model-facing rewrites, app/skill connector selection and use analytics are emitted, and approval outcomes carry the expected approval/null classification. Tests: go test ./mcp -run 'TestMCPToolExecutorReportsConnectorAuthFailuresLikeRust' -count=1; go test ./appserver -run 'TestExplicitAppMentionsPopulateTheSelectionLikeRust|TestCodexAppUsedEventFollowsRustDedupAndSelection|TestSkillInstructionsSelectAppsTheyMentionLikeRust' -count=1"
       ]
     },
     {
@@ -27097,9 +27097,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 540 (audit): already implemented. Only none and all fork modes remain; partial-history aliases are removed from spawn validation and the tool description. Tests: go test ./agent ./appserver ./exec -run 'ForkTurns|PartialHistory' -count=1"
       ]
     },
     {
@@ -27805,9 +27805,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 541 (audit): already implemented. Attachment upload requests carry the originating thread's persistence/ephemeral intent on every upload, and request-time image preparation marks ephemeral uploads accordingly. Tests: go test ./attachmentstore ./model -run 'Attachment|Persistence|Ephemeral' -count=1"
       ]
     },
     {
