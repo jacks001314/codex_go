@@ -17373,9 +17373,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: ListSpacing, UniformList, render_markdown_agent_with_list_spacing, render_source_with_list_spacing, with_list_spacing"
+        "Go keeps assistant and plan lists compact while streaming, matching Rust's owned-screen streaming policy, but completed markdown lists remain compact at every width: markdown.Render/glamour never inserts blank lines between sibling items when one item wraps, and the native-scrollback AfterMultiline mode is not represented. Rust's completion/interruption width-dependent regrouping (blank lines between all siblings when any item spans multiple rendered rows, recomputed on resize) remains unimplemented."
       ]
     },
     {
@@ -17385,9 +17385,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust hides its rendered 'Back to bottom' follow control when the owned transcript's current tail row is already visible. Go's transcript viewport has no rendered follow control or composer-gap affordance; navigation is entirely key-driven (End/PageDown) and following is tracked through viewport.AtBottom/activityFollow, so there is no control visibility to correct."
       ]
     },
     {
@@ -17409,9 +17409,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Opening Go's theme/model/keymap/memories/status-line pickers leaves transcript activityFollow and YOffset unchanged, so a reader stays anchored; refreshTranscript preserves YOffset unless following. Settings write results, model-selection sync results, memory-reset results, and keymap edits now set activityFollow before reporting, so confirmations/errors return to the live tail. Tests TestSettingsPickerPreservesTranscriptPositionLikeRust, TestSettingsWriteResultResumesFollowingLikeRust, and TestModelAndMemoryResultsResumeFollowingLikeRust cover picker anchoring and visible failure outcomes."
       ]
     },
     {
@@ -17457,9 +17457,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust only reworded its startup error from 'Error loading config.toml:' to 'loading config.toml:' in startup_orchestration. Go's TUI bootstrap does not emit that message: local-settings reload failures are logged and the live settings are carried forward, while thread/start failures use 'thread/start failed during TUI bootstrap' and are printed as-is by cmd/codex. There is no matching 'Error' prefix to remove."
       ]
     },
     {
@@ -17469,9 +17469,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 5/10; needs review: AnnouncementTips, ComposerTips, composer_hint, preferred_tooltip, select_catalog_tip"
+        "Go has keymap-aware startup/session tooltips and working/completion turn tips, but no stable fullscreen composer-gap catalog rotation: there is no ComposerTips selection state, single-row fit check, announcement-dismissal lifecycle, or composer-gap hyperlink hit testing. The expanded shared catalog and {key:context.action} substitution in the composer row remain unimplemented."
       ]
     },
     {

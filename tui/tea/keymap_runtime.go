@@ -52,6 +52,11 @@ func (m *Model) applyKeymapCommand(args string) {
 }
 
 func (m *Model) applyKeymapEdit(edit codextui.KeymapEdit) (*codextui.KeymapConfig, string, error) {
+	if m == nil {
+		return nil, "", fmt.Errorf("model is nil")
+	}
+	// Rust #46910: keymap edits report their outcome in the transcript.
+	m.activityFollow = true
 	next := m.keymapConfig.Clone()
 	if edit.Operation == codextui.KeymapEditUnset {
 		if err := next.Unset(edit.Context, edit.Action); err != nil {

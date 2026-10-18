@@ -139,6 +139,9 @@ func (m *Model) applyModelSelectionSync(msg ModelSelectionSyncMsg) {
 	if m == nil {
 		return
 	}
+	// Rust #46910: selecting a model/settings surface resumes following so its
+	// confirmation or failure is visible.
+	m.activityFollow = true
 	if msg.ThreadSettingsErr != nil {
 		m.addErrorHistoryMessage("Failed to update thread settings: " + strings.TrimSpace(msg.ThreadSettingsErr.Error()))
 	}

@@ -351,6 +351,9 @@ func (m *Model) applySettingsWriteResult(msg SettingsWriteResultMsg) {
 		return
 	}
 	m.pendingSettingsRequestID = 0
+	// Rust #46910: settings confirmations and errors must remain visible even
+	// when the reader had scrolled away from the live tail.
+	m.activityFollow = true
 	if msg.Err != nil {
 		// Rust #51510: a failed configuration reload preserves the live TUI
 		// settings, so msg.Result is never applied on this path; only the

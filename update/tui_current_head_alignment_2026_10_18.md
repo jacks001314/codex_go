@@ -1969,3 +1969,20 @@ green.
   write; failures retain it. Ctrl+C now also retains the selection, matching
   Rust. Transcript right-click copy has no carrier because transcript selection
   remains terminal-owned.
+- `#46899` remains partial: streaming lists are already compact, but completed
+  lists stay compact even when an item wraps; Rust's width-dependent
+  completion/interruption spacing (blank lines between all siblings when any
+  item becomes multiline) has no Go implementation yet.
+- `#46902` is not applicable: Go has no rendered "Back to bottom" follow
+  control; transcript navigation is key-driven and following is tracked by the
+  viewport's bottom state.
+- `#46929` is not applicable: Go does not emit Rust's
+  "Error loading config.toml:" startup message, so there is no prefix to
+  remove.
+- `#46931` remains partial: keymap-aware startup and turn tips exist, but the
+  fullscreen composer-gap catalog rotation, announcement lifecycle, single-row
+  fitting, and composer-gap link hit testing are not ported.
+- `#46910` is complete: settings pickers no longer disturb the reader's
+  transcript offset, while settings-write, model-selection, memory-reset, and
+  keymap outcomes resume following so confirmations and errors are visible.
+  Picker anchoring and failure visibility have regression coverage.

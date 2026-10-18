@@ -221,6 +221,11 @@ func (m *Model) resetMemories() bubbletea.Cmd {
 }
 
 func (m *Model) applyMemoryResetResult(message MemoryResetResultMsg) {
+	if m == nil {
+		return
+	}
+	// Rust #46910: memory reset output resumes transcript following.
+	m.activityFollow = true
 	if message.Err != nil {
 		m.applyHistoryCell(historycell.NewErrorEvent("Failed to reset memories: " + message.Err.Error()))
 		return
