@@ -2473,9 +2473,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "complete",
+      "status": "not_applicable",
       "evidence": [
-        "jsonschema subset now preserves minimum, maximum, and maxLength (including exact json.Number integers) and infers a string schema when maxLength is the only hint; tests cover bounded integer/number/string schemas. Tests: go test ./jsonschema -run 'Bounds|MaxLength|Normalize' -count=1"
+        "Rust-only test harness change (core/tests/common/test_codex.rs and exec-server/testing/exec_server.rs); Go's exec-server tests already drive sandboxed environments through FileSystemSandboxContext and need no carrier."
       ]
     },
     {
@@ -2499,7 +2499,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "The biology safety access block already points Trusted Access at https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374, matching the updated ChatGPT route. Test: go test ./tui/history_cell -count=1"
+        "jsonschema subset now preserves minimum, maximum, and maxLength (including exact json.Number integers) and infers a string schema when maxLength is the only hint; tests cover bounded integer/number/string schemas. Tests: go test ./jsonschema -run 'Bounds|MaxLength|Normalize' -count=1"
       ]
     },
     {
@@ -2535,7 +2535,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Explicit and implicit skill telemetry receive the resolved model slug from the turn's model selection and emit model_slug/reasoning_effort tags consistently. Tests: go test ./appserver -run 'SkillInjection|SkillInvocation|SkillTelemetry' -count=1"
+        "The biology safety access block already points Trusted Access at https://chatgpt.com/r/b749fb02595e04c3007a54375f3f4374, matching the updated ChatGPT route. Test: go test ./tui/history_cell -count=1"
       ]
     },
     {
@@ -2593,9 +2593,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only Bazel test plumbing (bazel/rules/testing/compat, exec-server BUILD.bazel, version-skew shell runners); Go has no Bazel toolchain carrier."
       ]
     },
     {
@@ -2677,9 +2677,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "appserver resolves sandbox permission profiles, workspace roots, and filesystem sandbox contexts from each selected turn environment (turnEnvironmentSelectionPermissionProfileResolution / turnEnvironmentWorkspaceRoots) instead of only the turn-wide config; tests cover environment-owned profiles in turn permission and executor skill sandbox contexts. Tests: go test ./appserver -run 'TurnPermission|Environment.*Sandbox|ExecutorSkillSandboxContextsPreserve' -count=1"
       ]
     },
     {
@@ -2689,9 +2689,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "historynotes schemas use anyOf for nullable string/integer/role arguments, omit additionalProperties and client-side maximum/maxLength limits, and ValidateArguments forwards every JSON object without local limit enforcement; non-object arguments remain rejected by the tool decoder. Tests: go test ./historynotes -count=1; go test ./appserver -run 'HistoryNotes|TokenBudget' -count=1"
       ]
     },
     {
@@ -2725,9 +2725,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "model reasoning effort accepts persistent as a local value and maps it to the Responses wire value disabled; the TUI labels it Persistent and model-backed reasoning selection passes it through. Tests: go test ./model -run 'ReasoningEffort|Persistent' -count=1; go test ./appserver -run 'ReasoningEffort' -count=1"
       ]
     },
     {
@@ -27220,9 +27220,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555 (verified): Go expands Linux deny globs with a native filesystem walker and never resolves or executes ripgrep during sandbox construction, so a writable workspace rg cannot run before confinement; masks keep applying to matching denied paths."
       ]
     },
     {
@@ -27328,9 +27328,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555 (verified): maybeDispatchNextQueuedSubmission rechecks that the wakeup still owns the active-turn reservation before starting a turn; an interrupt or replacement turn leaves the claiming turn intact and retains the queued submission. Evidence: appserver/queued_dispatch_test.go invalidated-reservation case."
       ]
     },
     {
