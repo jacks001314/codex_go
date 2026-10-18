@@ -554,7 +554,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3715bf4100cd42773cb978d8ec0f632e97883cf7	44613	Enable user verification for local Codex Desktop sessions (#44613)	2026-09-10	appserver	0	0		0	0	not_applicable	
 3724dc836155f30acd47616d9c778a0a1cc91160	46334	Share platform identity across path, network, and sandbox configuration (#46334)	2026-09-18	execserver	5	3	0.60	0	0	complete	effective_sandbox_mode,from_platform_os
 3749d1eff7df4ac9a0e2d32099813ba56500b930	49075	Preserve pending environments when spawning subagents (#49075)	2026-09-28	core	4	4	1.00	0	0	complete
-374c4b2d828321cfa3d3fc69ce66870f8b7fd01f	45459	Resolve enterprise-managed MCP registrations in the catalog (#45459)	2026-09-14	appserver	3	1	0.33	0	0	audit_pending	enable_ema,resolve_ema_registration
+374c4b2d828321cfa3d3fc69ce66870f8b7fd01f	45459	Resolve enterprise-managed MCP registrations in the catalog (#45459)	2026-09-14	appserver	3	1	0.33	0	0	complete	enable_ema,resolve_ema_registration
 379d50be35d393631f45fde69197f3b9a592aa02	41884	Add pinned native voice source preparation (#41884)	2026-08-31	realtime	0	0		0	0	not_applicable	
 37a5149822296c52414ccf8ad3ca00bfb7424260	40983	Record Windows world-writable scan telemetry (#40983)	2026-08-26	tui	1	0	0.00	0	0	implementation_pending	record_world_writable_scan_result
 37eaae6eeb71c3bd3d165f52515086db8f5e7dee	51650	Require hostname authorization before proxy DNS lookups (#51650)	2026-10-07	sandbox	1	1	1.00	0	0	complete	
@@ -662,7 +662,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 41ca88e95c6c194dbac17dd16a819808ea1a0917	40508	Persist realtime events in the thread timeline (#40508)	2026-08-25	tui	30	18	0.60	0	0	audit_pending	ListTimelineParams,ThreadRealtimeBemItemPresentation,ThreadRealtimeItemContent,ThreadRealtimeSessionOutcome,ThreadRealtimeTranscriptRole,ThreadTimelineEntry,TimelinePage,apply_realtime_event_effects,list_timeline,persist_realtime_items
 41d3dc56a0e1de47e30a9585c1b49253c082f8f7	41239	Surface model provider authentication recovery progress (#41239)	2026-08-28	tui	4	2	0.50	0	0	audit_pending	ProviderAuthRecoveryMessages,with_session_context
 41d5adfbe69ae4eb6a4b442464b40d9caa2a3272	51855	Add Bazel support to the Codex package build action (#51855)	2026-10-07	core	0	0		0	0	not_applicable	
-41ed72c32b4980cd7919e1c2a45ecb1f96c5911a	49036	Add opt-in conversation history retrieval to Guardian reviews (#49036)	2026-09-28	guardian	4	0	0.00	0	0	implementation_pending	ConversationHistoryTools,GuardianConversationHistory,IsolatedSessionExtensions,conversation_history_tools
+41ed72c32b4980cd7919e1c2a45ecb1f96c5911a	49036	Add opt-in conversation history retrieval to Guardian reviews (#49036)	2026-09-28	guardian	4	0	0.00	0	0	complete	ConversationHistoryTools,GuardianConversationHistory,IsolatedSessionExtensions,conversation_history_tools
 41f9084b30812db321a0b592def4f500d1e79cf4	48686	Remove WebSocket headers and tool payloads from info logs (#48686)	2026-09-27	core	0	0		0	0	not_applicable	
 41fd60f5618dc4e1d7d2730e956fe791006e66be	53152	Allow selecting and copying TUI turn tips (#53152)	2026-10-11	tui	0	0		0	0	not_applicable	
 421082e79d3186b0077bccbbbe2c77c0b1a26520	47852	Avoid blocking async proxy resolution on the system proxy cache (#47852)	2026-09-24	core	0	0		0	0	not_applicable	
@@ -925,7 +925,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 58ae3ba61186c39b849a6ebe60e60f4b11690373	50687	Keep third-party tools deferred in strict Code Mode Only (#50687)	2026-10-03	mcp	0	0		0	0	not_applicable	
 58ca099b03029bcffd1c56b33d31bf4913c61cc1	50562	Keep Code Mode tool discovery guidance stable across catalog changes (#50562)	2026-10-03	guardian	0	0		0	0	not_applicable	
 58d722cb5d2acfc8c5ebeb7c596d18b6562fdc85	47382	Show a voice badge in the agents overview (#47382)	2026-09-22	tui	0	0		0	0	not_applicable	
-58e2e8cf3c2a261394a96065510d8ef7cc2ba939	45812	Add workspace routing support for Responses requests (#45812)	2026-09-16	appserver	16	6	0.38	0	0	audit_pending	ResolvedResponsesProvider,ResponsesConnectionKey,WorkspaceRoutingContext,WorkspaceRoutingRequest,WorkspaceRoutingResolver,WorkspaceRoutingSession,load_latest_config_with_session_layers,rebuild_with_session_layers,set_workspace_routing_resolver,workspace_routing_context
+58e2e8cf3c2a261394a96065510d8ef7cc2ba939	45812	Add workspace routing support for Responses requests (#45812)	2026-09-16	appserver	16	6	0.38	0	0	complete	ResolvedResponsesProvider,ResponsesConnectionKey,WorkspaceRoutingContext,WorkspaceRoutingRequest,WorkspaceRoutingResolver,WorkspaceRoutingSession,load_latest_config_with_session_layers,rebuild_with_session_layers,set_workspace_routing_resolver,workspace_routing_context
 5918c743f3d3c185b436c18f9ea2ae7212f2d457	40501	Deduplicate plugin skills in unified mentions (#40501)	2026-08-25	tui	0	0		0	0	not_applicable	
 591ffb1aaef4fb83afac02a2dd97c0f1b05c6647	47618	Prefer Shift-arrow hints for queued messages and questions (#47618)	2026-09-23	tui	0	0		0	0	not_applicable	
 592964c0cb4d8f1b0c32d2a81f2bc602e7ae88cc	54420	Record local image inputs on completed image-generation items (#54420)	2026-10-15	tui	1	1	1.00	0	0	complete	
