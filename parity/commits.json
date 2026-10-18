@@ -4224,9 +4224,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: run_user_shell_command"
+        "Round 440 (implementation + regression): ShellCommandParams.timeoutMs is validated (negative rejected, zero immediate, longer deadlines allowed), defaults to one hour, and is propagated to the command context without delaying the RPC acknowledgement. Added Rust-compatible timeout results (failed status, exit code -1, output contains Timeout) and tests proving a zero timeout completes a standalone turn while an auxiliary timeout leaves the active turn running. Tests: go test ./appserver -run 'ShellCommandParamsTimeoutValidation|ThreadShellCommandZeroTimeout|ThreadShellCommandTimeoutPreservesActiveTurn|ThreadShellCommandPersistsUserShellRecord' -count=1; go test ./appserver -run 'ThreadShellCommand|ShellCommandParams|CommandExec' -count=1"
       ]
     },
     {

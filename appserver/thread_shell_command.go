@@ -434,6 +434,10 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 		return 1, CommandExecutionFailed
 	}
 	if err := cmd.Start(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			output.WriteString("Timeout")
+			return -1, CommandExecutionFailed
+		}
 		output.WriteString("failed to start shell command: " + err.Error())
 		return 1, CommandExecutionFailed
 	}
@@ -450,6 +454,16 @@ func (r *RuntimeRouter) runThreadShellCommandProcess(ctx context.Context, run *t
 	}()
 	err = cmd.Wait()
 	wg.Wait()
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		// Rust's user-shell task surfaces an expired deadline as the command's
+		// own failure (status failed, exit code -1, "Timeout" in the output)
+		// rather than command/exec's historical 124 code.
+		if strings.TrimSpace(output.String()) != "" {
+			output.WriteString("\n")
+		}
+		output.WriteString("Timeout")
+		return -1, CommandExecutionFailed
+	}
 	exitCode, waitErr := commandExecExitCode(ctx, err)
 	if waitErr != nil {
 		if strings.TrimSpace(output.String()) != "" {

@@ -10474,6 +10474,81 @@ func int64PtrTest(value int64) *int64 {
 	return &value
 }
 
+func TestRuntimeRouterThreadShellCommandZeroTimeoutReportsTimeout(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: NewThreadExtraService(), DefaultCWD: t.TempDir()})
+	router.SetNotificationSink(sink)
+	threadID := "thread-shell-zero-timeout"
+	router.requireThreadStatus().UpsertThread(threadID, false)
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID:  threadID,
+		Command:   "echo should-not-run",
+		TimeoutMs: int64PtrTest(0),
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/shellCommand response = %+v", response)
+	}
+	started := waitForCommandExecutionStartedBySource(t, sink, CommandExecutionSourceUserShell)
+	itemID, _ := started.Item["id"].(string)
+	completed := waitForItemCompleted(t, sink, itemID)
+	item := notificationItemMap(t, completed.Item)
+	if item["status"] != string(CommandExecutionFailed) {
+		t.Fatalf("timeout status = %#v", item["status"])
+	}
+	if exitCode, ok := item["exitCode"].(float64); !ok || exitCode != -1 {
+		t.Fatalf("timeout exitCode = %#v", item["exitCode"])
+	}
+	if output, _ := item["aggregatedOutput"].(string); !strings.Contains(output, "Timeout") {
+		t.Fatalf("timeout output = %q", output)
+	}
+	waitForTurnCompletedStatus(t, sink, started.TurnID, TurnStatusCompleted)
+}
+
+func TestRuntimeRouterThreadShellCommandTimeoutPreservesActiveTurn(t *testing.T) {
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadExtras: NewThreadExtraService(), DefaultCWD: t.TempDir()})
+	router.SetNotificationSink(sink)
+	threadID := "thread-shell-active-timeout"
+	turnID := "turn-shell-active-timeout"
+	router.requireThreadStatus().UpsertThread(threadID, false)
+	router.turnsMu.Lock()
+	router.active[threadID] = &activeRuntimeTurn{ThreadID: threadID, TurnID: turnID, StartedAtMS: time.Now().UTC().UnixMilli()}
+	router.turnsMu.Unlock()
+
+	response := router.Handle(requestWithParams(t, IntID(1), MethodThreadShellCommand, ShellCommandParams{
+		ThreadID:  threadID,
+		Command:   "echo auxiliary-timeout",
+		TimeoutMs: int64PtrTest(0),
+	}))
+	if response.Error != nil {
+		t.Fatalf("thread/shellCommand response = %+v", response)
+	}
+	started := waitForCommandExecutionStartedBySource(t, sink, CommandExecutionSourceUserShell)
+	if started.TurnID != turnID {
+		t.Fatalf("started turn id = %q, want %q", started.TurnID, turnID)
+	}
+	itemID, _ := started.Item["id"].(string)
+	completed := waitForItemCompleted(t, sink, itemID)
+	if got := notificationItemMap(t, completed.Item)["status"]; got != string(CommandExecutionFailed) {
+		t.Fatalf("timeout status = %#v", got)
+	}
+	router.turnsMu.Lock()
+	active := router.active[threadID]
+	router.turnsMu.Unlock()
+	if active == nil || active.TurnID != turnID {
+		t.Fatalf("active turn after auxiliary timeout = %#v", active)
+	}
+	for _, notification := range sink.List() {
+		if notification.Method != NotificationTurnCompleted {
+			continue
+		}
+		if payload, ok := notification.Params.(*TurnCompletedNotification); ok && payload != nil && payload.Turn.ID == turnID {
+			t.Fatalf("auxiliary timeout completed active turn: %+v", payload)
+		}
+	}
+}
+
 func TestRuntimeRouterThreadShellCommandEnqueuesActiveTurnContext(t *testing.T) {
 	sink := NewNotificationBuffer()
 	mailbox := turn.NewSteerMailbox()
