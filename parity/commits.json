@@ -13577,9 +13577,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: MessageDeliveryError, MessageDeliveryMode, deliver_message, into_communication"
+        "N/A by architecture: this Rust agent-control refactor moves delivery helpers out of multi-agent tool handlers. Go already routes V2 messages through appserver/agent_controller.go and the agent package, so there is no equivalent Rust handler/control split to move."
       ]
     },
     {
@@ -16242,9 +16242,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 6/24; needs review: AgentConfigUpdate, AgentExecutionGuard, AgentInfo, AgentInput, AgentMetadata"
+        "N/A by architecture: Go's agent control interface is already defined at the agent/appserver boundary and consumed directly by spawn/message/resume paths; there is no Rust-style local/remote backend abstraction requiring a new contract layer."
       ]
     },
     {
@@ -16363,9 +16363,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: mark_budget_reminder_delivered, pending_budget_reminder"
+        "N/A by architecture: Go accounts rollout/goal budgets through its state and appserver turn accounting rather than a Rust LocalAgentControl budget object. This is a module-boundary refactor with no separate Go control object to move."
       ]
     },
     {

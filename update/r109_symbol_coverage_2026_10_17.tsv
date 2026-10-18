@@ -682,7 +682,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 435d1b3f19e20b96dc3a0eb63c73bb7f213d1e27	51061	Gate Guardian continuation tests on classifier request capture (#51061)	2026-10-05	guardian	0	0		0	0	not_applicable	
 43da1368500dc935a4f3eac4844187b677fac6d9	45492	Split Guardian V2 async scoring into focused modules (#45492)	2026-09-14	guardian	5	2	0.40	0	0	not_applicable	GuardianV2Extension,record_fail_closed_score,score_tool
 440312f11396a58b312dd31798ec3393810d8ff8	54681	Keep TUI session selections bound to their backend (#54681)	2026-10-16	tui	3	3	1.00	0	0	complete	
-4415f985dc87bc20e4e4c518df4029a80de7e3a6	45670	Move V2 agent message delivery into `AgentControl` (#45670)	2026-09-15	core	5	1	0.20	0	0	audit_pending	MessageDeliveryError,MessageDeliveryMode,deliver_message,into_communication
+4415f985dc87bc20e4e4c518df4029a80de7e3a6	45670	Move V2 agent message delivery into `AgentControl` (#45670)	2026-09-15	core	5	1	0.20	0	0	not_applicable	MessageDeliveryError,MessageDeliveryMode,deliver_message,into_communication
 444da310e108da16aaeb18fd790b0ac464f08aca	49912	Respect approval policies in temporary structured threads (#49912)	2026-10-01	tui	0	0		0	0	not_applicable	
 446b771049d41617c66d7475d292b010e9165c71	45556	Add attachment upload and resolution APIs and pass stores into sessions (#45556)	2026-09-15	guardian	8	8	1.00	0	0	complete	
 447eac3b81183b32c1a09f5fba9617abfacbebe3	50720	Decode Windows Terminal's mapped Shift+Enter sequence (#50720)	2026-10-03	tui	2	0	0.00	0	0	implementation_pending	CrosstermEventSource,WindowsKeySequence
@@ -2042,7 +2042,7 @@ bfb8daa3c9520c95431f56242d056350aabcd654	46551	Add a composite action to build a
 bfca0335fabd27b5f9907acc286349988473e309	44575	Tie network approval reviews to their originating execution (#44575)	2026-09-10	guardian	0	0		0	0	not_applicable	
 bfdb1571780b326ce978696de12b1d81b5e978f2	49100	Reuse the HTTP connection pool for remote plugin requests (#49100)	2026-09-28	plugins	0	0		0	0	complete
 bfe0fb9bb9fa44f3d28125bfd9d6e2ef3b0e5f5b	52225	Fix config rebuild call in the Windows MXC preference test (#52225)	2026-10-08	config	0	0		0	0	not_applicable	
-c026e7a622ecae45f0af1939729e7baab9d1637b	46547	Expose a backend-independent agent control contract (#46547)	2026-09-18	guardian	24	6	0.25	0	0	audit_pending	AgentConfigUpdate,AgentExecutionGuard,AgentInfo,AgentInput,AgentMetadata,AgentPage,AgentQuery,AgentScope,AgentTarget,AgentTurnOutcome
+c026e7a622ecae45f0af1939729e7baab9d1637b	46547	Expose a backend-independent agent control contract (#46547)	2026-09-18	guardian	24	6	0.25	0	0	not_applicable	AgentConfigUpdate,AgentExecutionGuard,AgentInfo,AgentInput,AgentMetadata,AgentPage,AgentQuery,AgentScope,AgentTarget,AgentTurnOutcome
 c0316291ca477b8355c0c4f20784f4863ee30f5a	45779	Use native process identities for PID-managed daemons (#45779)	2026-09-15	appserver	4	0	0.00	0	0	implementation_pending	ProcessIdentity,matches_process,promote_legacy_identity,read_process_details
 c03bbff4831a23a6dfc6f178838b73a50a9f554a	53689	Constrain API-key model access programs to server support (#53689)	2026-10-13	tui	2	0	0.00	0	0	implementation_pending	constrain_api_key_models,refresh_account_scoped_models
 c079352d8380316f748a9c88522589758d858c4f	52200	Allow plugin toggles while searching and preserve filters on refresh (#52200)	2026-10-08	tui	0	0		0	0	not_applicable	
@@ -2424,7 +2424,7 @@ e39ab0c1854dbd567172fd5a79dbfff9067cb609	41944	Emit turn cost telemetry for Chat
 e3a52b87b28760413eafa340e2ab23d653f0bbe7	44893	Expose available access programs in model discovery (#44893)	2026-09-11	tui	1	1	1.00	0	0	complete	
 e3c2a8393725c0fd8b0d1084301bf15ef35b6092	50207	Release stable Markdown tables into scrollback during streaming (#50207)	2026-10-02	tui	2	1	0.50	0	0	audit_pending	needs_scrollback_reflow
 e412b93d08eb3d9d116373727349c4123baca16e	46063	Trim Guardian tests and tighten request layout assertions (#46063)	2026-09-17	guardian	0	0		0	0	not_applicable	
-e416eadf7f990d96bc1b538c02ddcdb062d5542c	46559	Encapsulate rollout budget accounting in `LocalAgentControl` (#46559)	2026-09-18	guardian	3	1	0.33	0	0	audit_pending	mark_budget_reminder_delivered,pending_budget_reminder
+e416eadf7f990d96bc1b538c02ddcdb062d5542c	46559	Encapsulate rollout budget accounting in `LocalAgentControl` (#46559)	2026-09-18	guardian	3	1	0.33	0	0	not_applicable	mark_budget_reminder_delivered,pending_budget_reminder
 e444aa99d76beeb8b5b0610b793c0cdefe58da58	44349	Distinguish forked sessions in session-start hooks (#44349)	2026-09-10	core	0	0		0	0	not_applicable	
 e4490eff65d9f4dcd986f140e81927058bfa296d	52736	Allow model catalogs to override incremental tool notices (#52736)	2026-10-10	persistence	4	4	1.00	0	0	complete
 e44b9bb3da036320853abd032e2e2f065342b964	51457	Preserve status usage hyperlinks when the URL wraps (#51457)	2026-10-06	tui	0	0		0	0	not_applicable	
