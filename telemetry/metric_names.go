@@ -116,6 +116,11 @@ const (
 	// #51355, otel/src/metrics/names.rs `MULTI_AGENT_SPAWN_FAILURE_METRIC`, whose
 	// classifications were added in otel/src/events/session_telemetry.rs).
 	MultiAgentSpawnFailureMetric = "codex.multi_agent.spawn.failure"
+	// MultiAgentSpawnPhaseDurationMetric measures successful multi-agent spawn
+	// phases, tagged by bounded fork/version/history/product dimensions (Rust
+	// #47984, otel/src/metrics/names.rs
+	// MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC).
+	MultiAgentSpawnPhaseDurationMetric = "codex.multi_agent.spawn.phase.duration_ms"
 )
 
 // ConversationTurnCountMetric mirrors config.rs's local

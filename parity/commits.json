@@ -21272,9 +21272,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/7; needs review: MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC, SpawnMeasurements, record_multi_agent_spawn_phase, record_spawn_success"
+        "Added codex.multi_agent.spawn.phase.duration_ms duration samples for successful spawns: V2 residency reservation, fork context when present, child create, durability wait, input admission, and total. Labels are bounded to phase, fork_mode, multi_agent_version, history_mode, and optional product_sku. The existing spawn-failure counter remains shared by V1/V2 and failed spawns emit no partial phase timings."
       ]
     },
     {

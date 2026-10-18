@@ -1689,7 +1689,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 9e868bd9dc007c05e84a98e0b1f4e31dc98c5e6a	44101	Handle empty voice arguments in macOS release packaging (#44101)	2026-09-09	core	0	0		0	0	not_applicable	
 9ec33e19260907aad207185a624bd8b936d5afa8	43921	Show streaming reasoning summaries in the TUI status row (#43921)	2026-09-08	tui	8	7	0.88	0	0	audit_pending	before_event
 9ed1b7469921e056b7cdbe2b98d1b3251d08e9f9	46750	Preserve startup drafts and submit them when the session is ready (#46750)	2026-09-20	tui	30	8	0.27	0	0	audit_pending	OwnedStartupLayout,StartupPresentation,StartupScreen,bind_submission,bottom_area,cancel_startup_submission,composer_recovery_snapshot,handed_off,handle_startup_draft_key,handle_startup_submission_key
-9ef08dcf2bda8ba57c569bc69dd079b4643805f2	47984	Add multi-agent spawn latency and failure metrics (#47984)	2026-09-25	telemetry	7	3	0.43	0	0	audit_pending	MULTI_AGENT_SPAWN_PHASE_DURATION_METRIC,SpawnMeasurements,record_multi_agent_spawn_phase,record_spawn_success
+9ef08dcf2bda8ba57c569bc69dd079b4643805f2	47984	Add multi-agent spawn latency and failure metrics (#47984)	2026-09-25	telemetry	7	7	1.00	0	0	complete
 9ef9cb1d9fc6013f6c1994346e0ee93ad9e6f986	49475	Complete turn abort callbacks before emitting terminal events (#49475)	2026-09-30	core	0	0		0	0	not_applicable	
 9f22ba8039948033ec53598f60cce20b988d7520	47158	Harden gateway OAuth credential persistence and error redaction (#47158)	2026-09-22	core	0	0		0	0	not_applicable	
 9f3d25588b3f0bdf452d4eda919f2c2365a89bba	53201	Keep agents navigation available after a thread is archived (#53201)	2026-10-11	tui	1	0	0.00	0	0	blocked_precondition	handle_agents_navigation

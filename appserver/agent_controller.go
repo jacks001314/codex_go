@@ -91,6 +91,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if args == nil {
 		args = &agent.SpawnAgentArgs{}
 	}
+	spawnStartedAt := time.Now()
 	// Rust's record_collab_spawn_failure labels every spawn failure with the fork
 	// mode the spawn would have used, so the label is resolved before the first
 	// failure can be reported.
@@ -116,10 +117,12 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if registry == nil {
 		registry = c.router.runtimeAgentRegistry(c.rootID)
 	}
+	residencyReservationStartedAt := time.Now()
 	reservation, err := registry.ReserveSpawnSlot(c.maxThreads)
 	if err != nil {
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextRegistryCapacity, forkMode)
 	}
+	residencyReservation := time.Since(residencyReservationStartedAt)
 	committed := false
 	defer func() {
 		if !committed {
@@ -183,6 +186,8 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	var record *session.Record
 	forkTurns := runtimeForkTurns(args.ForkTurns)
 	forkedHistory := false
+	var forkContext time.Duration
+	var childCreateStartedAt time.Time
 	if c.version == agent.VersionV2 && forkTurns != "none" {
 		// Rust #51329: partial-history forks are gone. `all` and the legacy
 		// positive-integer spellings both inherit the parent's full history, so the
@@ -193,6 +198,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 				return nil, recordRuntimeAgentSpawnFailure(c, ctx, fmt.Errorf("fork_turns must be `none` or `all`"), tool.AgentErrorContextForkHistory, forkMode)
 			}
 		}
+		forkContextStartedAt := time.Now()
 		parent, readErr := c.router.threadRecord(session.ThreadID(c.parentID), true, true)
 		if readErr != nil || parent == nil {
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, firstNonNilError(readErr, fmt.Errorf("parent thread %s is unavailable", c.parentID)), tool.AgentErrorContextForkHistory, forkMode)
@@ -209,7 +215,10 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		// conversational message, so a resume cannot recapture the parent's
 		// authorization as the child's own.
 		markInheritedUserMessages(record.Items)
+		forkContext = time.Since(forkContextStartedAt)
+		childCreateStartedAt = time.Now()
 	} else {
+		childCreateStartedAt = time.Now()
 		record = &session.Record{ID: threadID, SessionID: string(threadID), ParentThreadID: session.ThreadID(c.parentID), CreatedAt: now, UpdatedAt: now, RecencyAt: now}
 		if err := c.router.services.ThreadRouter.store.Create(record); err != nil {
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
@@ -246,11 +255,15 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		_ = c.router.services.ThreadRouter.store.Delete(threadID)
 		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 	}
+	childCreate := time.Since(childCreateStartedAt)
+	var durabilityWait time.Duration
 	if c.router.services.SpawnGraph != nil {
+		durabilityStartedAt := time.Now()
 		if err := c.router.services.SpawnGraph.UpsertThreadSpawnEdge(c.parentID, string(threadID), agent.ThreadSpawnEdgeOpen); err != nil {
 			_ = c.router.services.ThreadRouter.store.Delete(threadID)
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
+		durabilityWait = time.Since(durabilityStartedAt)
 	}
 	reservation.Commit(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
 	if c.router.agentRegistry != registry {
@@ -259,6 +272,7 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	committed = true
 	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
+	inputAdmissionStartedAt := time.Now()
 	if prompt != "" || len(args.Items) > 0 {
 		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
 		if inheritDisabledPluginIDs {
@@ -304,6 +318,25 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
 		}
 	}
+	inputAdmission := time.Since(inputAdmissionStartedAt)
+	phases := map[string]time.Duration{
+		telemetry.AgentSpawnPhaseChildCreate:    childCreate,
+		telemetry.AgentSpawnPhaseDurabilityWait: durabilityWait,
+		telemetry.AgentSpawnPhaseInputAdmission: inputAdmission,
+		telemetry.AgentSpawnPhaseTotal:          time.Since(spawnStartedAt),
+	}
+	if c.version == agent.VersionV2 {
+		phases[telemetry.AgentSpawnPhaseResidencyReservation] = residencyReservation
+	}
+	if forkContext > 0 {
+		phases[telemetry.AgentSpawnPhaseForkContext] = forkContext
+	}
+	telemetry.EmitMultiAgentSpawnPhases(c.router.services.TurnMetrics, telemetry.AgentSpawnPhaseTags{
+		ForkMode:          forkMode,
+		MultiAgentVersion: string(c.version),
+		HistoryMode:       c.router.agentSpawnHistoryMode(string(threadID)),
+		ProductSKU:        c.router.spawnFailureProductSKU(),
+	}, phases)
 	return &agent.SpawnAgentResult{
 		AgentID:         string(threadID),
 		TaskName:        agentPath,
@@ -311,6 +344,17 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		Model:           modelID,
 		ReasoningEffort: c.resolvedSpawnReasoningEffort(modelID, args, capturedEffort),
 	}, nil
+}
+
+func (r *RuntimeRouter) agentSpawnHistoryMode(threadID string) string {
+	if r == nil || r.services.ThreadRouter == nil {
+		return string(ThreadHistoryLegacy)
+	}
+	mode, found, err := r.services.ThreadRouter.threadHistoryModeWithRepair(session.ThreadID(strings.TrimSpace(threadID)))
+	if err != nil || !found || !strings.EqualFold(strings.TrimSpace(mode), string(ThreadHistoryPaginated)) {
+		return string(ThreadHistoryLegacy)
+	}
+	return string(ThreadHistoryPaginated)
 }
 
 func (c *runtimeAgentController) spawnDisabledPluginIDs(args *agent.SpawnAgentArgs) ([]string, bool) {
