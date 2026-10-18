@@ -2094,6 +2094,12 @@ green.
   backdrop.
 - `#50396` is complete: transcript PageUp/PageDown honor pager single-row,
   half-page, full-page, and unbound bindings.
+- `#51433` is complete: hook browser rows use trimmed status-message titles with
+  aligned dim indices, trust suffixes, and wide-title-safe selection styling.
+- `#50431` is complete: agents-overview previews retain OSC-8 links through
+  wrapping/truncation while ellipses stay unlinked.
+- `#50434` is not applicable: Go's transcript selection is terminal-owned; no
+  app-owned transcript copy-mode state machine exists.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

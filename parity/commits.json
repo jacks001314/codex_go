@@ -25827,9 +25827,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Agents overview styled previews preserve OSC-8 destinations through wrapping/truncation, plain rendering strips hyperlinks while keeping visible text, and truncation ellipses remain unlinked. Tests cover prompt/last-message previews and overwide raw lines."
       ]
     },
     {
@@ -25851,9 +25851,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/14; needs review: CopyInputGuard, CopyMode, SourceBlock, begin_copy_mode, copy_block_ranges"
+        "Rust adds an app-owned transcript copy mode with CopyInputGuard/source-block ranges. Go keeps in-transcript selection terminal-owned and supports app-owned composer/status/footer selection copy (Ctrl+C/Ctrl+Insert); there is no owned transcript copy-mode state machine to port."
       ]
     },
     {
@@ -27401,9 +27401,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "HookHandlerTitle trims app-server status messages and falls back to 'Unnamed hook'; handler rows use aligned dimmed indices, retain trust suffixes, and preserve full-row selection styling/wide titles. Tests cover blank/missing titles, wide characters, index dimming, and trust suffixes."
       ]
     },
     {
