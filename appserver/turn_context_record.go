@@ -48,6 +48,9 @@ func (r *RuntimeRouter) recordRuntimeTurnContext(threadID string, turnID string,
 	if strings.TrimSpace(runConfig.SandboxPolicy) != "" {
 		turnContext.SandboxPolicy = runConfig.SandboxPolicy
 	}
+	if raw := strings.TrimSpace(runConfig.PermissionProfileJSON); raw != "" && json.Valid([]byte(raw)) {
+		turnContext.PermissionProfile = json.RawMessage(raw)
+	}
 	if strings.TrimSpace(turnContext.Model) == "" {
 		return
 	}

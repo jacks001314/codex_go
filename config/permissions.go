@@ -158,6 +158,39 @@ func PermissionProfileAllowedByRequirements(allowed map[string]bool, profileID s
 	return permissionProfileAllowedByRequirements(allowed, profileID)
 }
 
+// PermissionProfileSatisfiesRequirements reports whether a saved, unnamed
+// runtime profile may be restored under the effective managed requirements
+// (Rust #53419 `permission_profile_satisfies_requirements`). A managed
+// allow-list makes the configured default authoritative, so a saved profile is
+// not eligible. When managed sandbox modes are present, the saved profile's
+// legacy mode must be one of them. Managed deny-read entries are applied
+// separately while restoring the profile.
+func (c *Config) PermissionProfileSatisfiesRequirements(profile *sandbox.PermissionProfile) bool {
+	if profile == nil {
+		return false
+	}
+	if profile.SandboxPolicy != nil && profile.SandboxPolicy.Kind == sandbox.SandboxModeExternalSandbox {
+		return false
+	}
+	if c == nil || c.Requirements == nil {
+		return true
+	}
+	requirements := c.Requirements
+	if requirements.AllowedPermissionProfiles != nil {
+		return false
+	}
+	if len(requirements.AllowedSandboxModes) == 0 {
+		return true
+	}
+	mode := sandbox.SandboxMode(profile.LegacySandboxPolicy().Kind)
+	for _, allowed := range requirements.AllowedSandboxModes {
+		if allowed == mode {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveRequirementDefaultPermissionProfile mirrors Rust's
 // resolve_default_permissions: when a managed allow-list is present, the
 // selected profile falls back to the required default - the requirement's

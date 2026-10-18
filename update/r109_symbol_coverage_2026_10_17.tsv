@@ -2032,7 +2032,7 @@ beae473be8564d884a8cfe9704194a5c803d2ac1	54654	Allow dynamic tool calls to execu
 bee042d119a4b11068b26386cf8c1e7258bbab58	46011	Enforce managed residency when constructing API providers (#46011)	2026-09-16	appserver	4	2	0.50	0	0	audit_pending	read_managed_residency_requirement,set_managed_residency_requirement
 bee28e8a061c38c781c74299f2c1d90e3732da18	50427	Cap persisted command output in paginated history at 64 KiB (#50427)	2026-10-02	appserver	4	4	1.00	0	0	complete	
 bf3eb2ec91fb150ad62561578666532b2e1c1c8f	40460	Prevent Unix PTY I/O from blocking runtime shutdown (#40460)	2026-08-24	core	3	1	0.33	0	0	audit_pending	PtyIo,StdinCloseBehavior
-bf4ca52b61686398aafb6f4467da4202b6bdec53	53419	Restore saved thread permissions during configuration loading (#53419)	2026-10-12	guardian	1	0	0.00	0	0	implementation_pending	permission_profile_satisfies_requirements
+bf4ca52b61686398aafb6f4467da4202b6bdec53	53419	Restore saved thread permissions during configuration loading (#53419)	2026-10-12	guardian	1	1	1.00	0	0	complete
 bf5ebd98c567931d82e873a4afdac7548bd85979	44424	Add a hide shortcut to the agents overview (#44424)	2026-09-10	tui	0	0		0	0	not_applicable	
 bf7c87a7b7bdb1b65cbfdca06d15713d3aa20b01	47155	Ignore stale thread-close notifications after resuming a thread (#47155)	2026-09-22	tui	0	0		0	0	not_applicable	
 bf832f4678e18ae317fb82820367d39a5ea60c25	48116	Allow reasoning shortcuts to reach Max (#48116)	2026-09-25	tui	0	0		0	0	not_applicable	

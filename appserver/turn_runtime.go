@@ -7399,6 +7399,10 @@ type appTurnRunConfig struct {
 	GuardianV2Enabled    bool
 	SandboxPolicy        string
 	SandboxNetworkAccess bool
+	// PermissionProfileJSON is the canonical unnamed runtime profile the turn
+	// ran with, persisted in the turn-context record for a cold resume
+	// (Rust #53419).
+	PermissionProfileJSON string
 	// ActivePluginIDsAtTurnStart is the turn-start plugin inventory captured for
 	// turn analytics (Rust #46323). nil means the inventory was not observed.
 	ActivePluginIDsAtTurnStart *[]string
@@ -7831,6 +7835,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		MultiAgentVersion:       r.turnAnalyticsMultiAgentVersion(threadID, cfg),
 		SandboxPolicy:           analyticsSandboxPolicy(permissionProfile, cwd),
 		SandboxNetworkAccess:    analyticsSandboxNetworkAccess(permissionProfile),
+		PermissionProfileJSON:   sandboxPermissionProfileJSON(permissionProfile),
 		// The inventory is captured when the turn is admitted so a later plugin
 		// reconciliation cannot change what the turn started with (Rust #46323).
 		ActivePluginIDsAtTurnStart:     r.turnAnalyticsPluginInventory(threadID, turnID),

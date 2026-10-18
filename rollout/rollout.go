@@ -798,9 +798,14 @@ type TurnContextRecord struct {
 	CWD            string `json:"cwd,omitempty"`
 	ApprovalPolicy string `json:"approval_policy,omitempty"`
 	SandboxPolicy  any    `json:"sandbox_policy,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	Model          string `json:"model,omitempty"`
-	CompHash       string `json:"comp_hash,omitempty"`
+	// PermissionProfile is the turn's unnamed runtime permission profile
+	// (Rust TurnContextItem::permission_profile, #53419). It lets a cold resume
+	// restore the profile the turn actually ran with instead of the current
+	// configured default.
+	PermissionProfile json.RawMessage `json:"permission_profile,omitempty"`
+	Effort            string          `json:"effort,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	CompHash          string          `json:"comp_hash,omitempty"`
 	// CyberAccessProgram is the turn's selected cyber access program (Rust
 	// TurnContextItem::cyber_access_program, core snake_case). It is persisted so
 	// resume/fork replay can rebuild the model/program pair the turn used

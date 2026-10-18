@@ -30029,9 +30029,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: permission_profile_satisfies_requirements"
+        "Config.PermissionProfileSatisfiesRequirements keeps an allow-list authoritative and enforces managed sandbox modes. Eligible unnamed profiles are recovered from the rollout turn context, restored before turn/profile resolution, keep explicit permission and sandbox_workspace_write overrides authoritative, reject external enforcement and materialized read grants, and gain the current managed deny-read entries. Turn-context records now persist the resolved unnamed profile for cold resume."
       ]
     },
     {

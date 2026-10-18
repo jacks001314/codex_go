@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"codex_go/protocol"
+	"codex_go/sandbox"
 )
 
 var (
@@ -248,10 +249,15 @@ type TurnStartParams struct {
 	ApprovalsReviewer         *string           `json:"approvalsReviewer,omitempty"`
 	SandboxPolicy             any               `json:"sandboxPolicy,omitempty"`
 	Permissions               *string           `json:"permissions,omitempty"`
-	RuntimeWorkspaceRoots     []string          `json:"runtimeWorkspaceRoots,omitempty"`
-	Environments              []map[string]any  `json:"environments,omitempty"`
-	ServiceTier               *string           `json:"serviceTier,omitempty"`
-	ServiceTierSet            bool              `json:"-"`
+	// PersistedPermissionProfile is the unnamed runtime profile recovered from
+	// the thread-owned rollout snapshot. It is a fallback only: explicit
+	// permission overrides and managed requirements take priority, and it is
+	// never serialized on the turn wire (Rust #53419).
+	PersistedPermissionProfile *sandbox.PermissionProfile `json:"-"`
+	RuntimeWorkspaceRoots      []string                   `json:"runtimeWorkspaceRoots,omitempty"`
+	Environments               []map[string]any           `json:"environments,omitempty"`
+	ServiceTier                *string                    `json:"serviceTier,omitempty"`
+	ServiceTierSet             bool                       `json:"-"`
 	// ServiceTierForTurn overrides the service tier only for the turn this
 	// request starts ("default" for standard speed); it does not change the
 	// thread's tier and is ignored when the request steers a turn (Rust

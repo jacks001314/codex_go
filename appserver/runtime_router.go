@@ -5377,6 +5377,7 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadResume(response *ThreadResume
 		PersonalitySet:        params.Personality != nil,
 		Config:                mergeTurnConfigOverrides(threadRecordConfigOverrides(record), params.Config),
 	}
+	applyPersistedPermissionProfileToTurnParams(record, turnParams)
 	providerID := firstNonEmpty(stringPtrValue(params.ModelProvider), response.ModelProvider, record.Metadata.ModelProvider)
 	if providerID != "" {
 		turnParams.Config["model_provider"] = providerID
@@ -7631,6 +7632,7 @@ func (r *RuntimeRouter) prepareTurnStartParams(params *turn.TurnStartParams) err
 		value := strings.TrimSpace(record.Metadata.ActivePermissionProfile)
 		params.Permissions = &value
 	}
+	applyPersistedPermissionProfileToTurnParams(record, params)
 	return nil
 }
 
@@ -16602,6 +16604,11 @@ func threadDefaultSandboxPermissionProfile(cfg *config.Config, cwd string, param
 	}
 	if cfg == nil {
 		return nil, nil
+	}
+	if params != nil && params.Permissions == nil {
+		if restored, ok := restoredPermissionProfileResolution(cfg, params.PersistedPermissionProfile); ok {
+			return restored, nil
+		}
 	}
 	// Rust TurnContext::permission_profile_for_environments (#46568): the thread
 	// defaults are materialized with the captured primary selection's workspace
