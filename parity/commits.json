@@ -11739,9 +11739,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: ToolPluginContext, activate_plugin_selection, allows_connector_id, disabled_connector_ids, from_plugin_sources"
+        "Round 460 (audit): disabled_plugin_ids persist on the thread record/settings snapshot, agent spawning inherits or replaces them with an explicit list while carrying them into child turn params, and the active selection is applied on the next task rather than mid-turn. Capability/runtime filtering consumes the effective selection. Tests: go test ./appserver -run 'DisabledPluginIDs|SpawnCapabilities' -count=1"
       ]
     },
     {
