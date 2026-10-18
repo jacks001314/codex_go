@@ -9905,9 +9905,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: RealtimeConversationPhase, realtime_retry_cleanup_pending, record_realtime_failure"
+        "Audited upstream fba22e9a2a (#43934): the app-server owns the realtime session and records codex.voice.session.start/ended/failure/duration with deduplicated failure and once-per-thread duration accounting; rejected starts/stops and reconnect cleanup are covered. Tests: appserver/realtime_metrics_test.go (start, ended, duration, failure, rejected start). The tea layer intentionally has no metric sink, matching the Go runtime ownership split."
       ]
     },
     {
@@ -29612,9 +29612,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 728 (audit): remoteSession captures the live binding generation for Execute/Wait and returns execRuntimeResetError when recovery replaces it, preventing code from running against the replacement runtime. Calls created before the first binding adopt that generation, while Terminate uses existingConnection only and cannot reopen a runtime. Tests: go test ./codemode -run TestRemoteSessionStaleGenerationReportsResetLikeRust -count=1; go test ./codemode -run TestRemoteSessionTerminateDoesNotOpenLikeRust -count=1"
       ]
     },
     {
@@ -29756,9 +29756,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 728 (audit): plugin list JSON/table output is buffered, propagates formatting and flush errors, and treats syscall.EPIPE and io.ErrClosedPipe as successful completion while preserving other write failures. Tests: go test ./app -run TestPluginListBrokenPipeLikeRust -count=1; go test ./app -run TestPluginListRemoteCatalogLikeRust -count=1; go test ./app -run TestPluginRemoteAddAndRemoveLikeRust -count=1"
       ]
     },
     {
@@ -29876,9 +29876,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 728 (audit): the remote unified-exec poll loop keeps collecting delayed output for the 500ms window after process/exited, performs the final non-blocking read, then releases the remote session and exit watcher; process/closed still finishes immediately. The output-open-at-final-poll regression verifies output arriving after exit is consumed and the final read completes cleanup. Tests: go test ./tool -run TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust -count=1"
       ]
     },
     {
