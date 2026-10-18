@@ -61,10 +61,10 @@ func TestEnvironmentInfoTimeoutRetiresConnectionLikeRust(t *testing.T) {
 	client := newNetworkPolicyTestClient(conn)
 	client.sessionID = "session-1"
 	recovered := make(chan clientConnection, 1)
-	client.open = func(ctx context.Context, sessionID string, _ func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
+	client.open = func(ctx context.Context, sessionID string, _ func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
 		replacement := newHangingEnvironmentInfoConnection()
 		recovered <- replacement
-		return replacement, &InitializeResponse{SessionID: sessionID}, nil
+		return replacement, &InitializeResponse{SessionID: sessionID}, clientConnectMetadata{}, nil
 	}
 
 	startedAt := time.Now()

@@ -254,6 +254,9 @@ func TestNoiseRendezvousClientRecoveryFetchesFreshBundleAndResumesSessionLikeRus
 		t.Fatalf("DialNoiseRendezvousClient() error = %v", err)
 	}
 	defer client.Close()
+	if registrationID, ok := client.CachedExecutorRegistrationID(); !ok || registrationID != remoteRelayTestRegistrationID {
+		t.Fatalf("cached registration = %q, %v, want %q", registrationID, ok, remoteRelayTestRegistrationID)
+	}
 	firstSessionID := client.SessionID()
 	if _, err := client.EnvironmentInfo(ctx); err != nil {
 		t.Fatalf("first EnvironmentInfo() error = %v", err)
@@ -277,6 +280,9 @@ func TestNoiseRendezvousClientRecoveryFetchesFreshBundleAndResumesSessionLikeRus
 	}
 	if client.SessionID() != firstSessionID {
 		t.Fatalf("recovery session id = %q, want %q", client.SessionID(), firstSessionID)
+	}
+	if registrationID, ok := client.CachedExecutorRegistrationID(); !ok || registrationID != remoteRelayTestRegistrationID {
+		t.Fatalf("cached registration after recovery = %q, %v, want %q", registrationID, ok, remoteRelayTestRegistrationID)
 	}
 	mu.Lock()
 	keys := append([]RemotePublicKey(nil), connectKeys...)

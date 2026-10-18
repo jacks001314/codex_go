@@ -143,3 +143,28 @@ func TestResetGuardianMessageText(t *testing.T) {
 		t.Fatal("missing feature description")
 	}
 }
+
+func TestGuardianParentCompactionSeedRequiresMatchingProvenanceLikeRust(t *testing.T) {
+	testCases := []struct {
+		name         string
+		reuse        bool
+		compacted    string
+		current      string
+		wantReusable bool
+	}{
+		{name: "matching", reuse: true, compacted: "hash-a", current: "hash-a", wantReusable: true},
+		{name: "trimmed match", reuse: true, compacted: " hash-a ", current: "hash-a", wantReusable: true},
+		{name: "mismatched", reuse: true, compacted: "hash-a", current: "hash-b", wantReusable: false},
+		{name: "missing producer", reuse: true, compacted: "", current: "hash-a", wantReusable: false},
+		{name: "missing current", reuse: true, compacted: "hash-a", current: "", wantReusable: false},
+		{name: "both missing", reuse: true, compacted: "", current: "", wantReusable: false},
+		{name: "reuse disabled", reuse: false, compacted: "hash-a", current: "hash-a", wantReusable: false},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := guardianParentCompactionSeedAllowed(testCase.reuse, testCase.compacted, testCase.current); got != testCase.wantReusable {
+				t.Fatalf("guardianParentCompactionSeedAllowed() = %v, want %v", got, testCase.wantReusable)
+			}
+		})
+	}
+}

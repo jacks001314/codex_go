@@ -112,6 +112,49 @@ func TestPluginReconcileSignatureDetectsInstallSuggestionChange(t *testing.T) {
 	}
 }
 
+func TestPluginReconcileChangedCapabilitiesUnionReplacedBundleLikeRust(t *testing.T) {
+	previous := plugin.PluginDetail{
+		Summary:    plugin.PluginSummary{ID: "acme/weather"},
+		MCPServers: []string{"weather"},
+		Hooks:      []plugin.PluginHookSummary{{Key: "post_tool_use"}},
+	}
+	current := plugin.PluginDetail{
+		Summary:      plugin.PluginSummary{ID: "acme/weather", HasSkills: true},
+		Apps:         []plugin.AppSummary{{ID: "weather-app"}},
+		AppTemplates: []plugin.AppTemplateSummary{{ID: "weather-template"}},
+	}
+
+	got := pluginReconcileChangedCapabilities("acme/weather", previous, true, current, true)
+	if got.ID != "acme/weather" || !got.HasMCPS || !got.HasApps || !got.HasHooks || !got.HasSkills {
+		t.Fatalf("changed capabilities = %#v, want the union of both bundles", got)
+	}
+}
+
+func TestPluginReconcileChangedCapabilitiesKeepRemovedBundleLikeRust(t *testing.T) {
+	previous := plugin.PluginDetail{
+		Summary:    plugin.PluginSummary{ID: "acme/weather", HasSkills: true},
+		MCPServers: []string{"weather"},
+		Hooks:      []plugin.PluginHookSummary{{Key: "post_tool_use"}},
+	}
+
+	got := pluginReconcileChangedCapabilities("acme/weather", previous, true, plugin.PluginDetail{}, false)
+	if !got.HasMCPS || got.HasApps || !got.HasHooks || !got.HasSkills {
+		t.Fatalf("removed plugin capabilities = %#v, want declarations from the deleted bundle", got)
+	}
+}
+
+func TestPluginReconcileChangedCapabilitiesUseNewBundleOnlyLikeRust(t *testing.T) {
+	current := plugin.PluginDetail{
+		Summary:      plugin.PluginSummary{ID: "acme/weather"},
+		AppTemplates: []plugin.AppTemplateSummary{{ID: "weather-template"}},
+	}
+
+	got := pluginReconcileChangedCapabilities("acme/weather", plugin.PluginDetail{}, false, current, true)
+	if got.HasMCPS || !got.HasApps || got.HasHooks || got.HasSkills {
+		t.Fatalf("new plugin capabilities = %#v, want only the installed bundle", got)
+	}
+}
+
 func pluginDisabledReasonPtr(value plugin.PluginDisabledReason) *plugin.PluginDisabledReason {
 	return &value
 }

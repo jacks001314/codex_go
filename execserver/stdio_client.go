@@ -292,12 +292,13 @@ func dialStdioCommandClient(ctx context.Context, clientName string, options Dial
 		// connections without ExecServerReconnectStrategy).
 		reconnectDisabled: true,
 	}
-	client.open = func(openCtx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialStdioClientConnection(openCtx, options.StdioCommand, clientName, resumeSessionID, handleNotification, options.InitializeTimeout)
+	client.open = func(openCtx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
+		conn, initialized, err := dialStdioClientConnection(openCtx, options.StdioCommand, clientName, resumeSessionID, handleNotification, options.InitializeTimeout)
+		return conn, initialized, clientConnectMetadata{}, err
 	}
 	// A stdio connect never resumes a session (Rust passes
 	// `resume_session_id: None` for stdio transports).
-	conn, initialized, err := client.open(ctx, "", client.handleNotification)
+	conn, initialized, _, err := client.open(ctx, "", client.handleNotification)
 	if err != nil {
 		return nil, err
 	}

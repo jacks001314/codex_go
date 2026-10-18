@@ -2032,14 +2032,33 @@ func (r *RuntimeRouter) resetGuardianAfterParentCompaction(threadID string, comp
 		sessionRunner.DropStaleParentCompaction()
 		return
 	}
-	if threadContext && compacted != nil && strings.TrimSpace(compacted.CompactionModelHash) != "" {
-		currentHash := r.guardianReviewModelHashForTurn(threadID, compacted.Request.TurnID)
-		if currentHash != "" && currentHash != strings.TrimSpace(compacted.CompactionModelHash) {
+	if threadContext {
+		// Rust #42588: missing or unknown provenance must fail closed just like
+		// a mismatched producer hash. Only a nonempty, matching producer hash
+		// may reuse the opaque checkpoint.
+		currentHash := ""
+		if compacted != nil {
+			currentHash = r.guardianReviewModelHashForTurn(threadID, compacted.Request.TurnID)
+		}
+		if compacted == nil || !guardianParentCompactionSeedAllowed(reuseParentCompaction, compacted.CompactionModelHash, currentHash) {
 			sessionRunner.DropStaleParentCompaction()
 			return
 		}
 	}
 	sessionRunner.ResetAfterParentCompaction(responseID)
+}
+
+// guardianParentCompactionSeedAllowed reports whether the producer hash of an
+// opaque checkpoint is safe to reuse for the currently selected Guardian model.
+// A checkpoint is reusable only when reuse is enabled and both sides declare
+// the same nonempty compatibility hash (Rust #42588).
+func guardianParentCompactionSeedAllowed(reuseParentCompaction bool, compactedHash, currentHash string) bool {
+	if !reuseParentCompaction {
+		return false
+	}
+	compactedHash = strings.TrimSpace(compactedHash)
+	currentHash = strings.TrimSpace(currentHash)
+	return compactedHash != "" && currentHash != "" && compactedHash == currentHash
 }
 
 // guardianParentCompactionResponseID returns the reusable compaction response

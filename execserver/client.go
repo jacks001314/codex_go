@@ -58,6 +58,14 @@ type Client struct {
 	// reconnectDisabled mirrors Rust's stdio transport, which registers no
 	// reconnect strategy: a dropped stdio connection cannot resume its session.
 	reconnectDisabled bool
+	// executorRegistrationID is the registration of the installed Noise
+	// session. Recovery may renew it while retaining the same executor key
+	// (Rust #46555).
+	executorRegistrationID string
+	// executorPublicKey pins session recovery to the executor that created the
+	// session. A registry lookup that returns a different executor must not
+	// resume this session against it.
+	executorPublicKey *RemotePublicKey
 }
 
 type inFlightMetadataRequest struct {
@@ -74,11 +82,18 @@ type clientConnection interface {
 	CloseNow() error
 }
 
+// clientConnectMetadata describes the executor that answered a connection
+// attempt. It is empty for transports without a Noise rendezvous.
+type clientConnectMetadata struct {
+	executorRegistrationID string
+	executorPublicKey      *RemotePublicKey
+}
+
 type clientConnectionOpener func(
 	context.Context,
 	string,
 	func(string, json.RawMessage) error,
-) (clientConnection, *InitializeResponse, error)
+) (clientConnection, *InitializeResponse, clientConnectMetadata, error)
 
 type websocketClientConnection struct {
 	conn            *websocket.Conn
@@ -451,10 +466,11 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		inboundSlots: make(chan struct{}, MaxInFlightServerRequests),
 		done:         make(chan struct{}),
 	}
-	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers, options.InitializeTimeout)
+	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
+		conn, initialized, err := dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers, options.InitializeTimeout)
+		return conn, initialized, clientConnectMetadata{}, err
 	}
-	conn, initialized, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
+	conn, initialized, _, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
 	if err != nil {
 		return nil, err
 	}
@@ -693,6 +709,23 @@ func (c *Client) SessionID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.sessionID
+}
+
+// CachedExecutorRegistrationID returns the registration of the installed Noise
+// session without connecting or refreshing it (Rust #46555). It reports false
+// before a session is installed and for transports without a Noise rendezvous.
+// Recovery may renew this registration while retaining the same executor key.
+func (c *Client) CachedExecutorRegistrationID() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	registrationID := strings.TrimSpace(c.executorRegistrationID)
+	if registrationID == "" {
+		return "", false
+	}
+	return registrationID, true
 }
 
 func (c *Client) HTTPRequest(ctx context.Context, params *HTTPRequestParams) (*HTTPRequestResponse, *HTTPBodyStream, error) {
@@ -2088,6 +2121,7 @@ func (c *Client) recoverConnection(ctx context.Context) error {
 	}
 	sessionID := c.sessionID
 	opener := c.open
+	pinnedExecutorKey := c.executorPublicKey
 	c.mu.Unlock()
 	if opener == nil {
 		return errors.New("exec-server client has no reconnect strategy")
@@ -2101,10 +2135,20 @@ func (c *Client) recoverConnection(ctx context.Context) error {
 	}
 	var lastErr error
 	for {
-		conn, initialized, err := opener(recoveryCtx, sessionID, c.handleNotification)
+		conn, initialized, metadata, err := opener(recoveryCtx, sessionID, c.handleNotification)
 		if err == nil && initialized.SessionID != sessionID {
 			_ = conn.CloseNow()
 			err = fmt.Errorf("exec-server initialized an unexpected session %s", initialized.SessionID)
+		}
+		if err == nil && pinnedExecutorKey != nil {
+			// Registration renewal is allowed, but the session belongs to the
+			// executor's original Noise identity (Rust #46555). A stale
+			// registry lookup must not move running processes to another
+			// executor.
+			if metadata.executorPublicKey == nil || *metadata.executorPublicKey != *pinnedExecutorKey {
+				_ = conn.CloseNow()
+				return errors.New("exec-server session recovery failed: executor key changed during session recovery")
+			}
 		}
 		if err == nil {
 			c.mu.Lock()
@@ -2119,6 +2163,7 @@ func (c *Client) recoverConnection(ctx context.Context) error {
 				return nil
 			}
 			c.conn = conn
+			c.executorRegistrationID = strings.TrimSpace(metadata.executorRegistrationID)
 			c.mu.Unlock()
 			go c.readLoop(conn)
 			return nil

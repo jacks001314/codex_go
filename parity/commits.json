@@ -3660,9 +3660,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: RemotePluginCapabilities, RemotePluginRemoval, include_active_bundle, plugin_skill_roots"
+        "Round 656 (implementation): plugin/reconcile reports the union of the previous and current bundle declarations for MCP servers, Apps, Hooks, and Skills; removed plugins keep the deleted bundle's hints and new plugins use only the installed bundle. Go derives hints from PluginDetail at the app-server boundary because it has no separate RemotePluginCapabilities sync-outcome type. Tests: go test ./appserver -run 'PluginReconcile' -count=1; go test ./plugin -count=1; go vet ./appserver"
       ]
     },
     {
@@ -7059,9 +7059,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: conversation_history_snapshot, supports_parent_compaction, uses_thread_owned_context"
+        "Round 658 (partial): Guardian parent-compaction reuse fails closed unless reuse is enabled and the checkpoint producer hash and current scoring-model hash are both nonempty and equal; missing or unknown provenance drops the stale seeded checkpoint. Local-fallback compaction stamps the producing model's comp_hash and the runtime persists compaction_model_hash in thread metadata. Remaining: Go has no separate async Guardian sampler/extension path, so the Rust sampler rejection and synchronous-review escalation are represented by dropping the seed; per-item checkpoint provenance stays record-level. Tests: go test ./appserver -run 'Guardian.*Compaction|GuardianParentCompaction|CompactionModelHash|ContextCompaction' -count=1; go test ./compact -count=1"
       ]
     },
     {
@@ -16372,9 +16372,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: active_turn_environment_selections, cached_executor_registration_id"
+        "Round 657 (partial): execserver.Client records the installed Noise registration ID and exposes CachedExecutorRegistrationID without connecting; recovery publishes a renewed registration only when the connection is installed, pins recovery to the original executor Noise key, and rejects a changed key without publishing the new registration. Active-turn environment selections were already snapshotted by the app server. Remaining: Go has no LazyRemoteExecServerClient refresh/lookup path or environment cached-registration surface, so refresh registration+key matching and stale-lookup retirement cannot land. Tests: go test ./execserver -run 'NoiseRendezvous|ExecutorRegistration|ChangedExecutorNoiseKey' -count=1; go vet ./execserver"
       ]
     },
     {

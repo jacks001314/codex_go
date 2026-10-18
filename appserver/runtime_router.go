@@ -10894,17 +10894,7 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 			if hadBefore == hasAfter && pluginReconcileSignature(previous) == pluginReconcileSignature(current) {
 				continue
 			}
-			detail := current
-			if !hasAfter {
-				detail = previous
-			}
-			changed = append(changed, plugin.PluginReconcileChangedPlugin{
-				ID:        strings.TrimSpace(id),
-				HasMCPS:   len(detail.MCPServers) > 0,
-				HasApps:   len(detail.Apps) > 0 || len(detail.AppTemplates) > 0,
-				HasHooks:  len(detail.Hooks) > 0,
-				HasSkills: detail.Summary.HasSkills,
-			})
+			changed = append(changed, pluginReconcileChangedCapabilities(id, previous, hadBefore, current, hasAfter))
 		}
 		sort.SliceStable(changed, func(i, j int) bool { return changed[i].ID < changed[j].ID })
 	}
@@ -10926,6 +10916,33 @@ func (r *RuntimeRouter) handlePluginReconcile(request *Request) (*plugin.PluginR
 		FailedRemotePluginIDs:                failedRemotePluginIDs,
 		FailedMaterializationRemotePluginIDs: failedMaterializationRemotePluginIDs,
 	}, nil
+}
+
+// pluginReconcileChangedCapabilities reports every runtime category that either
+// the old or the new bundle declared (Rust #41193). A removed plugin keeps the
+// declarations of the bundle that was deleted; an update must not hide a
+// capability that only existed in the replaced bundle.
+func pluginReconcileChangedCapabilities(
+	id string,
+	previous plugin.PluginDetail,
+	hadBefore bool,
+	current plugin.PluginDetail,
+	hasAfter bool,
+) plugin.PluginReconcileChangedPlugin {
+	changed := plugin.PluginReconcileChangedPlugin{ID: strings.TrimSpace(id)}
+	include := func(detail plugin.PluginDetail) {
+		changed.HasMCPS = changed.HasMCPS || len(detail.MCPServers) > 0
+		changed.HasApps = changed.HasApps || len(detail.Apps) > 0 || len(detail.AppTemplates) > 0
+		changed.HasHooks = changed.HasHooks || len(detail.Hooks) > 0
+		changed.HasSkills = changed.HasSkills || detail.Summary.HasSkills
+	}
+	if hadBefore {
+		include(previous)
+	}
+	if hasAfter {
+		include(current)
+	}
+	return changed
 }
 
 // refreshPluginHookRuntimes rebuilds the dynamically discovered plugin hook

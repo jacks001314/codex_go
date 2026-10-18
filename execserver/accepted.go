@@ -39,13 +39,14 @@ func ConnectAcceptedClient(conn *websocket.Conn, clientName string) (*Client, er
 		done:         make(chan struct{}),
 		accepted:     true,
 	}
-	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
+	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
 		if strings.TrimSpace(resumeSessionID) != "" {
-			return nil, nil, errors.New("accepted exec-server initial connection cannot resume a session")
+			return nil, nil, clientConnectMetadata{}, errors.New("accepted exec-server initial connection cannot resume a session")
 		}
-		return initializeAcceptedClientConnection(ctx, conn, clientName, "", handleNotification)
+		wire, initialized, err := initializeAcceptedClientConnection(ctx, conn, clientName, "", handleNotification)
+		return wire, initialized, clientConnectMetadata{}, err
 	}
-	wire, initialized, err := client.open(context.Background(), "", client.handleNotification)
+	wire, initialized, _, err := client.open(context.Background(), "", client.handleNotification)
 	if err != nil {
 		return nil, err
 	}

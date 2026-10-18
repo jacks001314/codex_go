@@ -275,7 +275,7 @@ func DialNoiseRendezvousClient(
 	// deadline, so only the initial connect to a provisioned environment gets the
 	// longer environment_offline window (Rust #48575).
 	openWithProvisioningDeadline := func(provisioningDeadline time.Time) clientConnectionOpener {
-		return func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
+		return func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
 			// connectBundle issues one registry request. bound, when non-zero,
 			// caps the request by the current retry deadline so a stalled request
 			// cannot outlive it; Rust wraps the sleep and the request in
@@ -298,7 +298,7 @@ func DialNoiseRendezvousClient(
 				}
 				return bundle, err
 			}
-			openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, error) {
+			openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, clientConnectMetadata, error) {
 				var wire clientConnection
 				var initialized *InitializeResponse
 				err := withInitializeTimeout(ctx, options.InitializeTimeout, func(initializeCtx context.Context) error {
@@ -314,9 +314,13 @@ func DialNoiseRendezvousClient(
 					if wire != nil {
 						_ = wire.CloseNow()
 					}
-					return nil, nil, err
+					return nil, nil, clientConnectMetadata{}, err
 				}
-				return wire, initialized, nil
+				executorPublicKey := bundle.ExecutorPublicKey
+				return wire, initialized, clientConnectMetadata{
+					executorRegistrationID: strings.TrimSpace(bundle.ExecutorRegistrationID),
+					executorPublicKey:      &executorPublicKey,
+				}, nil
 			}
 			// Rust #39777: retry transient registry failures (timeouts,
 			// interrupted bodies, retryable HTTP statuses, temporarily offline
@@ -342,10 +346,10 @@ func DialNoiseRendezvousClient(
 					case isRetryableRegistryError(err) && retries < initialRegistryMaxRetries:
 						retryDeadline = deadline
 					default:
-						return nil, nil, err
+						return nil, nil, clientConnectMetadata{}, err
 					}
 					if !time.Now().Before(retryDeadline) {
-						return nil, nil, err
+						return nil, nil, clientConnectMetadata{}, err
 					}
 					// Rust computes the delay from the pre-increment attempt so
 					// the first retry sleeps the base interval, and bounds the
@@ -360,15 +364,15 @@ func DialNoiseRendezvousClient(
 					}
 					select {
 					case <-ctx.Done():
-						return nil, nil, err
+						return nil, nil, clientConnectMetadata{}, err
 					case <-time.After(delay):
 					}
 					if !time.Now().Before(retryDeadline) {
-						return nil, nil, err
+						return nil, nil, clientConnectMetadata{}, err
 					}
 					continue
 				}
-				conn, initialized, err := openWithBundle(bundle)
+				conn, initialized, metadata, err := openWithBundle(bundle)
 				if isUnauthorizedNoiseWebSocketError(err) && !refreshedUnauthorizedBundle {
 					refreshedUnauthorizedBundle = true
 					deadline = time.Now().Add(initialRegistryOperationTimeout)
@@ -376,7 +380,7 @@ func DialNoiseRendezvousClient(
 					requestBound = time.Time{}
 					continue
 				}
-				return conn, initialized, err
+				return conn, initialized, metadata, err
 			}
 		}
 	}
@@ -387,9 +391,9 @@ func DialNoiseRendezvousClient(
 	if options.Provisioned {
 		initialDeadline = time.Now().Add(provisionedEnvironmentConnectTimeout)
 	}
-	conn, initialized, err := openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
+	conn, initialized, metadata, err := openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
 	if isUnauthorizedNoiseWebSocketError(err) {
-		conn, initialized, err = openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
+		conn, initialized, metadata, err = openWithProvisioningDeadline(initialDeadline)(ctx, options.ResumeSessionID, client.handleNotification)
 	}
 	if err != nil {
 		identity.Destroy()
@@ -397,6 +401,8 @@ func DialNoiseRendezvousClient(
 	}
 	client.conn = conn
 	client.sessionID = initialized.SessionID
+	client.executorRegistrationID = strings.TrimSpace(metadata.executorRegistrationID)
+	client.executorPublicKey = metadata.executorPublicKey
 	client.rememberEnvironmentInfo(initialized.EnvironmentInfo)
 	go client.readLoop(conn)
 	return client, nil

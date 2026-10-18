@@ -6254,6 +6254,12 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if compacted == nil {
 		return nil, nil, nil
 	}
+	// Record the model that produced the checkpoint, including the local
+	// fallback path. Guardian may reuse an opaque checkpoint only when this
+	// producer hash matches the scoring model (Rust #42588).
+	if strings.TrimSpace(compacted.CompactionModelHash) == "" {
+		compacted.CompactionModelHash = r.modelCompHash(firstNonEmpty(strings.TrimSpace(params.Model), strings.TrimSpace(record.Metadata.Model)))
+	}
 	if err := r.runPostCompactHooks(ctx, hookCtx); err != nil {
 		r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, err, startedAt, time.Now().UTC(), params.ActiveContextTokensBefore)
 		return nil, nil, err
@@ -6334,6 +6340,9 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	}
 	if strings.TrimSpace(compacted.Model) != "" {
 		extra["compaction_model"] = strings.TrimSpace(compacted.Model)
+	}
+	if strings.TrimSpace(compacted.CompactionModelHash) != "" {
+		extra["compaction_model_hash"] = strings.TrimSpace(compacted.CompactionModelHash)
 	}
 	if strings.TrimSpace(compacted.ProviderID) != "" {
 		extra["compaction_provider_id"] = strings.TrimSpace(compacted.ProviderID)
