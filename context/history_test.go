@@ -2,6 +2,7 @@ package context
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"codex_go/eventmap"
@@ -242,6 +243,36 @@ func TestForPromptTagsOmittedImageUnsupported(t *testing.T) {
 	}
 	if prompt[0].Content[0].Kind != eventmap.ContentInputText || prompt[0].Content[0].Text != ImageOmittedPlaceholder {
 		t.Fatalf("omitted image content = %#v", prompt[0].Content)
+	}
+}
+
+// Rust #40277: stripping unsupported media rewrites the placeholder kinds in
+// place, leaving surrounding text annotations aligned.
+func TestForPromptTagsOmittedImageAndAudioWithoutShiftingKindsLikeRust(t *testing.T) {
+	manager := NewHistoryManager()
+	manager.RecordItems(HistoryItem{
+		Kind: eventmap.ResponseMessage,
+		Role: "user",
+		ID:   "mixed-media",
+		Content: []eventmap.ContentItem{
+			{Kind: eventmap.ContentInputText, Text: "before"},
+			{Kind: eventmap.ContentInputImage, ImageURL: "data:image/png;base64,AAA"},
+			{Kind: eventmap.ContentInputAudio, AudioURL: "data:audio/wav;base64,AAA"},
+			{Kind: eventmap.ContentInputText, Text: "after"},
+		},
+		ContentItemKinds: []string{"user.text", "user.image", "user.audio", "user.text"},
+	})
+
+	prompt := manager.ForPrompt(false, false)
+	if len(prompt) != 1 {
+		t.Fatalf("prompt = %#v", prompt)
+	}
+	wantKinds := []string{"user.text", UnsupportedImageKind, UnsupportedAudioKind, "user.text"}
+	if strings.Join(prompt[0].ContentItemKinds, ",") != strings.Join(wantKinds, ",") {
+		t.Fatalf("content kinds = %#v, want %#v", prompt[0].ContentItemKinds, wantKinds)
+	}
+	if prompt[0].Content[1].Text != ImageOmittedPlaceholder || prompt[0].Content[2].Text != AudioOmittedPlaceholder {
+		t.Fatalf("placeholders = %#v", prompt[0].Content)
 	}
 }
 

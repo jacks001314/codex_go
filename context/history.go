@@ -8,7 +8,10 @@ import (
 	"codex_go/eventmap"
 )
 
-const ImageOmittedPlaceholder = "image content omitted because you do not support image input"
+const (
+	ImageOmittedPlaceholder = "image content omitted because you do not support image input"
+	AudioOmittedPlaceholder = "audio content omitted because you do not support audio input"
+)
 
 type HistoryItem = eventmap.ResponseItem
 
@@ -233,7 +236,7 @@ func (m *HistoryManager) ReplaceLastTurnImages(placeholder string) bool {
 	return false
 }
 
-func (m *HistoryManager) ForPrompt(supportsImages bool) []HistoryItem {
+func (m *HistoryManager) ForPrompt(supportsImages bool, supportsAudio ...bool) []HistoryItem {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	items := cloneItems(m.items)
@@ -241,6 +244,9 @@ func (m *HistoryManager) ForPrompt(supportsImages bool) []HistoryItem {
 	RemoveOrphanOutputs(&items)
 	if !supportsImages {
 		StripImages(&items, ImageOmittedPlaceholder)
+	}
+	if len(supportsAudio) == 0 || !supportsAudio[0] {
+		StripAudio(&items, AudioOmittedPlaceholder)
 	}
 	return items
 }
@@ -365,6 +371,20 @@ func StripImages(items *[]HistoryItem, placeholder string) {
 	}
 }
 
+// StripAudio replaces unsupported audio with a text placeholder and keeps the
+// positional content kinds aligned (Rust #40277).
+func StripAudio(items *[]HistoryItem, placeholder string) {
+	if items == nil {
+		return
+	}
+	if placeholder == "" {
+		placeholder = AudioOmittedPlaceholder
+	}
+	for index := range *items {
+		replaceAudioInContent((*items)[index].Content, (*items)[index].ContentItemKinds, placeholder)
+	}
+}
+
 func MergeContextualMessages(items []HistoryItem) []HistoryItem {
 	out := make([]HistoryItem, 0, len(items))
 	for _, item := range items {
@@ -471,6 +491,20 @@ func replaceImagesInContent(content []eventmap.ContentItem, kinds []string, plac
 			content[i] = eventmap.ContentItem{Kind: eventmap.ContentInputText, Text: placeholder}
 			if i < len(kinds) {
 				kinds[i] = UnsupportedImageKind
+			}
+			replaced = true
+		}
+	}
+	return replaced
+}
+
+func replaceAudioInContent(content []eventmap.ContentItem, kinds []string, placeholder string) bool {
+	replaced := false
+	for i := range content {
+		if content[i].Kind == eventmap.ContentInputAudio {
+			content[i] = eventmap.ContentItem{Kind: eventmap.ContentInputText, Text: placeholder}
+			if i < len(kinds) {
+				kinds[i] = UnsupportedAudioKind
 			}
 			replaced = true
 		}
