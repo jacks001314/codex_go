@@ -47,8 +47,8 @@ var jsonSchemaSubsetKeys = map[string]bool{
 }
 
 const (
-	maxCompactToolSchemaBytes = 5_000
-	maxCompactToolSchemaDepth = 3
+	DefaultCompactToolSchemaBytes = 5_000
+	maxCompactToolSchemaDepth     = 3
 )
 
 // SubsetSchema validates a caller-supplied JSON Schema document against the
@@ -187,11 +187,21 @@ func numericSchemaValue(raw any) (float64, bool) {
 // definitions, compact oversized schemas, then drop non-subset fields. The
 // input is not mutated.
 func Normalize(input map[string]any) map[string]any {
+	return NormalizeWithBudget(input, DefaultCompactToolSchemaBytes)
+}
+
+// NormalizeWithBudget mirrors Normalize with an explicit best-effort
+// compaction threshold (Rust #47936
+// `tool_input_schema_max_bytes`). A non-positive budget keeps the default.
+func NormalizeWithBudget(input map[string]any, maxBytes int) map[string]any {
+	if maxBytes <= 0 {
+		maxBytes = DefaultCompactToolSchemaBytes
+	}
 	value := cloneJSON(input)
 	if obj, ok := value.(map[string]any); ok {
 		sanitizeJSONSchema(obj)
 		pruneUnreachableDefinitions(obj)
-		compactLargeToolSchema(obj)
+		compactLargeToolSchema(obj, maxBytes)
 		return subsetFilter(obj).(map[string]any)
 	}
 	return subsetFilter(value).(map[string]any)
@@ -582,8 +592,8 @@ func subsetFilter(value any) any {
 
 // compactLargeToolSchema mirrors Rust compact_large_tool_schema: apply
 // increasingly lossy passes while the normalized schema exceeds the budget.
-func compactLargeToolSchema(value map[string]any) {
-	if compactSchemaFitsBudget(value) {
+func compactLargeToolSchema(value map[string]any, maxBytes int) {
+	if compactSchemaFitsBudget(value, maxBytes) {
 		return
 	}
 	passes := []func(map[string]any){
@@ -593,15 +603,15 @@ func compactLargeToolSchema(value map[string]any) {
 		pruneSchemaCompositions,
 	}
 	for _, pass := range passes {
-		if compactSchemaFitsBudget(value) {
+		if compactSchemaFitsBudget(value, maxBytes) {
 			break
 		}
 		pass(value)
 	}
 }
 
-func compactSchemaFitsBudget(value map[string]any) bool {
-	return compactNormalizedSchemaLen(value) <= maxCompactToolSchemaBytes
+func compactSchemaFitsBudget(value map[string]any, maxBytes int) bool {
+	return compactNormalizedSchemaLen(value) <= maxBytes
 }
 
 // compactNormalizedSchemaLen mirrors Rust compact_normalized_schema_len: the

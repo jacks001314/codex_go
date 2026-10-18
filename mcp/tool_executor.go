@@ -92,6 +92,12 @@ type ToolExecutorOptions struct {
 	// TurnRootTurnID supplies the issuing turn's root turn id for host-owned
 	// Apps calls (Rust #51421). Nil or empty omits the field.
 	TurnRootTurnID func() string
+	// ToolInputSchemaMaxBytes bounds best-effort compaction of this server's
+	// model-visible input schema (Rust #47936).
+	ToolInputSchemaMaxBytes int
+	// CodeModeInputSchemaMaxBytes is the rendering budget for the generated
+	// Code Mode input type. Zero uses the 16,000-byte default.
+	CodeModeInputSchemaMaxBytes int
 	// HostOwnedApps marks the captured host-owned codex_apps registration
 	// (Rust #51421). Only it receives the turn's root turn id; user-configured
 	// and extension-owned Apps servers omit it.
@@ -189,6 +195,8 @@ type ToolExecutor struct {
 	captureResultMetadata         bool
 	connectorAuthFailureObserver  func(callID string)
 	mcpSourceObserver             func(source McpCallSource)
+	toolInputSchemaMaxBytes       int
+	codeModeInputSchemaMaxBytes   int
 }
 
 func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
@@ -218,6 +226,8 @@ func NewToolExecutor(options *ToolExecutorOptions) *ToolExecutor {
 	executor.requestMeta = cloneAnyMap(options.RequestMeta)
 	executor.turnMetadata = options.TurnMetadata
 	executor.turnRootTurnID = options.TurnRootTurnID
+	executor.toolInputSchemaMaxBytes = options.ToolInputSchemaMaxBytes
+	executor.codeModeInputSchemaMaxBytes = options.CodeModeInputSchemaMaxBytes
 	executor.hostOwnedApps = options.HostOwnedApps
 	executor.binding = options.Binding
 	executor.connectorID = strings.TrimSpace(options.ConnectorID)
@@ -299,7 +309,7 @@ func (e *ToolExecutor) MCPServerName() string {
 
 func (e *ToolExecutor) Spec() tool.Spec {
 	name := e.resolvedToolName()
-	parameters := jsonschema.Normalize(cloneAnyMap(e.toolInfo.InputSchema))
+	parameters := jsonschema.NormalizeWithBudget(cloneAnyMap(e.toolInfo.InputSchema), e.toolInputSchemaMaxBytes)
 	// Mirrors Rust agent_plugin_mcp_tool_to_responses_api_tool: Agent Plugins
 	// v1 tools that still exceed the serialized-size cap after normalization
 	// degrade to an accept-anything object schema instead of reaching the
@@ -314,11 +324,19 @@ func (e *ToolExecutor) Spec() tool.Spec {
 		// parameters go through the JsonSchema subset policy (sanitize, prune
 		// unreachable $defs, drop non-subset fields, compact oversized
 		// schemas); the raw schema stays on the executor for calls.
-		InputSchema:  parameters,
-		Search:       e.searchInfo(),
-		Parallel:     e.parallel,
-		ReadOnlyHint: cloneBoolPtrMCP(e.readOnlyHint),
+		InputSchema:         parameters,
+		InputSchemaMaxBytes: maxIntMCP(tool.DefaultCodeModeInputSchemaMaxBytes, e.codeModeInputSchemaMaxBytes),
+		Search:              e.searchInfo(),
+		Parallel:            e.parallel,
+		ReadOnlyHint:        cloneBoolPtrMCP(e.readOnlyHint),
 	}
+}
+
+func maxIntMCP(left, right int) int {
+	if right > left {
+		return right
+	}
+	return left
 }
 
 func (e *ToolExecutor) Execute(ctx context.Context, invocation *tool.Invocation) (*tool.Output, error) {

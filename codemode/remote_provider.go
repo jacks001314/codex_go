@@ -252,12 +252,13 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 			namespace = &value
 		}
 		definitions = append(definitions, ProtocolToolDefinition{
-			Name:         definition.Name,
-			ToolName:     ToolName{Name: definition.ToolName.Name, Namespace: namespace},
-			Description:  definition.Description,
-			Kind:         kind,
-			InputSchema:  append(json.RawMessage(nil), definition.InputSchema...),
-			OutputSchema: append(json.RawMessage(nil), definition.OutputSchema...),
+			Name:                definition.Name,
+			ToolName:            ToolName{Name: definition.ToolName.Name, Namespace: namespace},
+			Description:         definition.Description,
+			Kind:                kind,
+			InputSchema:         append(json.RawMessage(nil), definition.InputSchema...),
+			InputSchemaMaxBytes: definition.InputSchemaMaxBytes,
+			OutputSchema:        append(json.RawMessage(nil), definition.OutputSchema...),
 		})
 	}
 	delegate := s.delegateForGeneration(s.generation)

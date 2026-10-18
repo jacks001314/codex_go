@@ -12,6 +12,7 @@ import (
 	"codex_go/compact"
 	"codex_go/execserver"
 	featureflags "codex_go/features"
+	"codex_go/jsonschema"
 	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/plugin"
@@ -147,7 +148,10 @@ type ToolRegistryOptions struct {
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
 	CodeModeShowCellOverhead bool
-	DisableCodeModeFallback  bool
+	// CodeModeToolInputSchemaMaxBytes enlarges the rendered Code Mode input
+	// type budget when set (Rust #47936).
+	CodeModeToolInputSchemaMaxBytes int
+	DisableCodeModeFallback         bool
 	// ToolMode is the turn's resolved tool mode (Rust `effective_tool_mode`).
 	// CodeModeOnly keeps the MCP resource helpers registered even without
 	// configured servers (Rust #50546).
@@ -470,6 +474,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		options = DefaultToolRegistryOptions("")
 	}
 	registry := tool.NewRegistry()
+	registry.SetDefaultInputSchemaMaxBytes(maxIntTurn(tool.DefaultCodeModeInputSchemaMaxBytes, options.CodeModeToolInputSchemaMaxBytes))
 	// Rust #50741/#50962: the environment-backed tools are advertised by the
 	// same readiness decision, so it is resolved once per registry.
 	environmentPlan := resolveTurnEnvironmentPlan(options)
@@ -868,6 +873,24 @@ func mcpOmitToolsFromForTool(service *mcp.MCPService, appsConfigValues map[strin
 	return omitted
 }
 
+func mcpServerToolInputSchemaMaxBytes(service *mcp.MCPService, serverName string) int {
+	if service == nil {
+		return jsonschema.DefaultCompactToolSchemaBytes
+	}
+	config, ok := service.ServerConfigForServer(serverName)
+	if !ok {
+		return jsonschema.DefaultCompactToolSchemaBytes
+	}
+	return config.ToolInputSchemaCompactionBytes()
+}
+
+func maxIntTurn(left int, right int) int {
+	if right > left {
+		return right
+	}
+	return left
+}
+
 // mcpConnectorOmitToolsFrom returns the connector-level omissions configured for
 // a Codex Apps tool (`apps.<connector_id>.omit_tools_from`). Non-apps tools and
 // tools without a connector id have no connector-level omissions.
@@ -972,6 +995,8 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			},
 			Parallel:                          parallelByServer[strings.TrimSpace(info.ServerName)],
 			ToolName:                          tool.NamespacedName(info.CallableNamespace, info.CallableName),
+			ToolInputSchemaMaxBytes:           mcpServerToolInputSchemaMaxBytes(options.MCPService, info.ServerName),
+			CodeModeInputSchemaMaxBytes:       maxIntTurn(maxIntTurn(tool.DefaultCodeModeInputSchemaMaxBytes, options.CodeModeToolInputSchemaMaxBytes), mcpServerToolInputSchemaMaxBytes(options.MCPService, info.ServerName)),
 			ThreadID:                          options.ThreadID,
 			TurnID:                            options.TurnID,
 			RequestMeta:                       mcpRuntimeToolRequestMeta(&info),

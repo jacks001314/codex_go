@@ -513,7 +513,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 334b6e7321d55697a2415a42e1725c814d3c0df4	48621	Remove follow-up prompt suggestions from the TUI (#48621)	2026-09-27	tui	1	0	0.00	0	0	implementation_pending	set_keymap_bindings
 335c7f8ecab29c4462a553bbf174276d2c67a766	50962	Gate stable environment tool exposure behind a feature flag (#50962)	2026-10-04	sandbox	0	0		0	0	not_applicable	
 339751715c64496cb86246bfb3935f40e309dd3d	40368	Use snapshot session sources for MCP projection (#40368)	2026-08-24	mcp	0	0		0	0	not_applicable	
-339e981ba71b131eae3e2086a22b143f455a8cb8	47936	Make MCP and Code Mode input schema budgets configurable (#47936)	2026-09-24	mcp	8	1	0.12	0	0	audit_pending	DEFAULT_COMPACT_TOOL_SCHEMA_BYTES,DEFAULT_INPUT_SCHEMA_MAX_BYTES,augment_tool_spec_for_code_mode,new_with_schema_max_bytes,parse_mcp_tool_with_schema_max_bytes,parse_tool_input_schema_with_max_bytes,render_json_schema_to_typescript_with_budget
+339e981ba71b131eae3e2086a22b143f455a8cb8	47936	Make MCP and Code Mode input schema budgets configurable (#47936)	2026-09-24	mcp	8	8	1.00	0	0	complete
 33a0f766a647208b471cfbcad889c67fd324ee04	49069	Reclaim unused SQLite log database pages in the background (#49069)	2026-09-28	persistence	5	5	1.00	0	0	complete	
 33aea33b39a5e35c78de75c332106479b16c6994	49801	Update the Rust toolchain action for argument-comment linting (#49801)	2026-09-30	core	0	0		0	0	not_applicable	
 33bdf976ccd1130823d4fe041e4d5075ab511d67	44879	Fade Astra composer stars and stabilize cursor redraws (#44879)	2026-09-11	tui	4	0	0.00	0	0	implementation_pending	interact_with_astra_sparkle,invalidate_cursor_state,render_sparkle,set_sparkle_terminal_focus

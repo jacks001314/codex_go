@@ -827,6 +827,25 @@ func TestMCPCLIServerOAuthClientSecretRoundTripsAndStaysOutOfJSONLikeRust(t *tes
 	}
 }
 
+func TestMCPCLIServerToolInputSchemaMaxBytesRoundTripsLikeRust(t *testing.T) {
+	table := map[string]any{
+		"url":                         "https://mcp.example.test/mcp",
+		"tool_input_schema_max_bytes": int64(12_000),
+	}
+	server := mcpServerFromConfigValue("docs", table)
+	if server == nil || server.ToolInputSchemaMaxBytes == nil || *server.ToolInputSchemaMaxBytes != 12_000 {
+		t.Fatalf("ToolInputSchemaMaxBytes = %#v", server)
+	}
+	runtimeConfig := mcpServerRuntimeConfig("docs", server, "")
+	if runtimeConfig.ToolInputSchemaMaxBytes == nil || *runtimeConfig.ToolInputSchemaMaxBytes != 12_000 {
+		t.Fatalf("runtime ToolInputSchemaMaxBytes = %#v", runtimeConfig.ToolInputSchemaMaxBytes)
+	}
+	out := mcpServerToConfigValue(server)
+	if value, ok := out["tool_input_schema_max_bytes"].(int); !ok || value != 12_000 {
+		t.Fatalf("round-tripped budget = %#v", out["tool_input_schema_max_bytes"])
+	}
+}
+
 func TestMCPLoginUsesConfiguredScopes(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)

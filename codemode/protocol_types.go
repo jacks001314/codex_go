@@ -56,12 +56,13 @@ const (
 )
 
 type ProtocolToolDefinition struct {
-	Name         string           `json:"name"`
-	ToolName     ToolName         `json:"tool_name"`
-	Description  string           `json:"description"`
-	Kind         ProtocolToolKind `json:"kind"`
-	InputSchema  json.RawMessage  `json:"input_schema"`
-	OutputSchema json.RawMessage  `json:"output_schema"`
+	Name                string           `json:"name"`
+	ToolName            ToolName         `json:"tool_name"`
+	Description         string           `json:"description"`
+	Kind                ProtocolToolKind `json:"kind"`
+	InputSchema         json.RawMessage  `json:"input_schema"`
+	InputSchemaMaxBytes int              `json:"input_schema_max_bytes,omitempty"`
+	OutputSchema        json.RawMessage  `json:"output_schema"`
 }
 
 type ImageDetail string

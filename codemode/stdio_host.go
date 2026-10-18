@@ -487,7 +487,7 @@ func (e *stdioHostNestedExecutor) Execute(ctx context.Context, invocation *tool.
 }
 
 func hostToolSpec(name tool.ToolName, definition ProtocolToolDefinition) (tool.Spec, error) {
-	spec := tool.Spec{Name: name, Description: definition.Description}
+	spec := tool.Spec{Name: name, Description: definition.Description, InputSchemaMaxBytes: definition.InputSchemaMaxBytes}
 	if definition.Kind == ProtocolToolKindFreeform {
 		var grammar struct {
 			Syntax     string `json:"syntax"`

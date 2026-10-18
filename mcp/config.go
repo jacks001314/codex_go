@@ -13,6 +13,7 @@ import (
 
 	"codex_go/apps"
 	managedconfig "codex_go/config"
+	"codex_go/jsonschema"
 	"codex_go/sandbox"
 )
 
@@ -70,9 +71,12 @@ type ServerConfig struct {
 	// ID and is used for token exchange/refresh instead of persisting it in the
 	// token record.
 	OAuthClientSecret string `json:"oauth_client_secret,omitempty"`
-	OAuthCallbackPort uint16 `json:"oauth_callback_port,omitempty"`
-	OAuthCallbackURL  string `json:"oauth_callback_url,omitempty"`
-	OAuthResource     string `json:"oauth_resource,omitempty"`
+	// ToolInputSchemaMaxBytes is the best-effort compaction threshold for this
+	// server's tool input schemas (Rust #47936). Nil uses 5,000 bytes.
+	ToolInputSchemaMaxBytes *int   `json:"tool_input_schema_max_bytes,omitempty"`
+	OAuthCallbackPort       uint16 `json:"oauth_callback_port,omitempty"`
+	OAuthCallbackURL        string `json:"oauth_callback_url,omitempty"`
+	OAuthResource           string `json:"oauth_resource,omitempty"`
 	// OAuthAuthorizationServerIssuer is the expected resource authorization
 	// server issuer for EMA token exchange (Rust #44832); it is only valid
 	// together with auth = "ema_auth".
@@ -139,6 +143,15 @@ func (c *ServerConfig) EffectiveEnvironmentID() string {
 
 func (c *ServerConfig) IsLocalEnvironment() bool {
 	return c != nil && c.EffectiveEnvironmentID() == DefaultMCPServerEnvironmentID
+}
+
+// ToolInputSchemaCompactionBytes returns the server's configured best-effort
+// input-schema compaction threshold, or Rust's 5,000-byte default.
+func (c *ServerConfig) ToolInputSchemaCompactionBytes() int {
+	if c != nil && c.ToolInputSchemaMaxBytes != nil && *c.ToolInputSchemaMaxBytes > 0 {
+		return *c.ToolInputSchemaMaxBytes
+	}
+	return jsonschema.DefaultCompactToolSchemaBytes
 }
 
 func (c *ServerConfig) EffectiveAuth() string {
@@ -589,6 +602,7 @@ func runtimeServerConfigFromValues(values map[string]any) *ServerConfig {
 		server.HTTPHeadersHelper = runtimeConfigString(values, "http_headers_helper")
 		server.OAuthClientID = runtimeConfigOAuthClientID(values)
 		server.OAuthClientSecret = runtimeConfigOAuthClientSecret(values)
+		server.ToolInputSchemaMaxBytes = runtimeConfigPositiveIntAny(values, "tool_input_schema_max_bytes", "toolInputSchemaMaxBytes")
 		server.OAuthCallbackPort = runtimeConfigOAuthCallbackPort(values)
 		server.OAuthCallbackURL = runtimeConfigStringAny(values, "oauth_callback_url", "oauthCallbackUrl")
 		server.OAuthResource = runtimeConfigStringAny(values, "oauth_resource", "oauthResource")

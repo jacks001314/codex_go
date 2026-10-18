@@ -194,12 +194,13 @@ type CodeModeRemoteNestedCall struct {
 }
 
 type CodeModeRemoteToolDefinition struct {
-	Name         string
-	ToolName     ToolName
-	Description  string
-	Kind         PayloadKind
-	InputSchema  json.RawMessage
-	OutputSchema json.RawMessage
+	Name                string
+	ToolName            ToolName
+	Description         string
+	Kind                PayloadKind
+	InputSchema         json.RawMessage
+	InputSchemaMaxBytes int
+	OutputSchema        json.RawMessage
 }
 
 type CodeModeToolNameMetadata struct {
@@ -772,7 +773,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 			inputSchema, _ = json.Marshal(spec.InputSchema)
 		}
 		outputSchema, _ := json.Marshal(spec.OutputSchema)
-		definitions = append(definitions, CodeModeRemoteToolDefinition{Name: nested.globalName, ToolName: name, Description: spec.Description, Kind: kind, InputSchema: inputSchema, OutputSchema: outputSchema})
+		definitions = append(definitions, CodeModeRemoteToolDefinition{Name: nested.globalName, ToolName: name, Description: spec.Description, Kind: kind, InputSchema: inputSchema, InputSchemaMaxBytes: spec.InputSchemaMaxBytes, OutputSchema: outputSchema})
 	}
 	yieldTimeMS := e.defaultExecYieldTimeMS()
 	if options.YieldTimeMS != nil {

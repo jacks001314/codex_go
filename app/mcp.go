@@ -62,6 +62,7 @@ type mcpCLIServer struct {
 	DisabledReason                 string                    `json:"disabled_reason,omitempty"`
 	Required                       bool                      `json:"required,omitempty"`
 	SupportsParallelToolCalls      bool                      `json:"supports_parallel_tool_calls,omitempty"`
+	ToolInputSchemaMaxBytes        *int                      `json:"tool_input_schema_max_bytes,omitempty"`
 	StartupTimeoutSec              *float64                  `json:"startup_timeout_sec,omitempty"`
 	ToolTimeoutSec                 *float64                  `json:"tool_timeout_sec,omitempty"`
 	EnabledTools                   []string                  `json:"enabled_tools,omitempty"`
@@ -638,6 +639,7 @@ func mcpServerRuntimeConfig(name string, server *mcpCLIServer, codexHome string)
 		OAuthResource:                  server.OAuthResource,
 		OAuthAuthorizationServerIssuer: server.OAuthAuthorizationServerIssuer,
 		OAuthServerName:                name,
+		ToolInputSchemaMaxBytes:        server.ToolInputSchemaMaxBytes,
 		CodexHome:                      codexHome,
 		Enabled:                        server.Enabled,
 		Required:                       server.Required,
@@ -1017,6 +1019,7 @@ func mcpServerFromConfigValue(name string, table map[string]any) *mcpCLIServer {
 	server.DisabledReason = stringFromAny(table["disabled_reason"])
 	server.Required = boolFromAny(table["required"])
 	server.SupportsParallelToolCalls = boolFromAny(table["supports_parallel_tool_calls"])
+	server.ToolInputSchemaMaxBytes = positiveIntPtrFromAny(table["tool_input_schema_max_bytes"])
 	server.Auth = stringFromAny(table["auth"])
 	server.EnvironmentID = stringFromAny(table["environment_id"])
 	server.StartupTimeoutSec = floatPtrFromAny(table["startup_timeout_sec"])
@@ -1141,6 +1144,9 @@ func mcpServerAddSharedConfigValue(value map[string]any, server *mcpCLIServer) {
 	}
 	if len(server.Scopes) > 0 {
 		value["scopes"] = stringSliceToAnySlice(server.Scopes)
+	}
+	if server.ToolInputSchemaMaxBytes != nil && *server.ToolInputSchemaMaxBytes > 0 {
+		value["tool_input_schema_max_bytes"] = *server.ToolInputSchemaMaxBytes
 	}
 	if len(server.Tools) > 0 {
 		value["tools"] = nestedAnyMapToAnyMap(server.Tools)
@@ -1286,6 +1292,26 @@ func floatPtrFromAny(value any) *float64 {
 	default:
 		return nil
 	}
+}
+
+func positiveIntPtrFromAny(value any) *int {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return &typed
+		}
+	case int64:
+		if typed > 0 {
+			value := int(typed)
+			return &value
+		}
+	case float64:
+		if typed > 0 && typed == float64(int(typed)) {
+			value := int(typed)
+			return &value
+		}
+	}
+	return nil
 }
 
 func stringSliceFromAny(value any) []string {

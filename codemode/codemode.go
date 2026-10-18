@@ -155,12 +155,13 @@ const (
 )
 
 type ToolDefinition struct {
-	Name         string         `json:"name"`
-	ToolName     tool.ToolName  `json:"tool_name"`
-	Description  string         `json:"description"`
-	Kind         ToolKind       `json:"kind"`
-	InputSchema  map[string]any `json:"input_schema,omitempty"`
-	OutputSchema map[string]any `json:"output_schema,omitempty"`
+	Name                string         `json:"name"`
+	ToolName            tool.ToolName  `json:"tool_name"`
+	Description         string         `json:"description"`
+	Kind                ToolKind       `json:"kind"`
+	InputSchema         map[string]any `json:"input_schema,omitempty"`
+	InputSchemaMaxBytes int            `json:"-"`
+	OutputSchema        map[string]any `json:"output_schema,omitempty"`
 }
 
 type NamespaceDescription struct {
@@ -342,7 +343,7 @@ func RenderSample(definition ToolDefinition) string {
 		return ""
 	}
 	inputName := "args"
-	inputType := RenderJSONSchemaToTypeScript(definition.InputSchema)
+	inputType := RenderJSONSchemaToTypeScriptWithBudget(definition.InputSchema, definition.InputSchemaMaxBytes)
 	if definition.Kind == ToolKindFreeform {
 		inputName = "input"
 		inputType = "string"
@@ -375,12 +376,13 @@ func AugmentToolSpec(spec tool.Spec) tool.Spec {
 		return spec
 	}
 	definition := ToolDefinition{
-		Name:         NameForToolName(spec.Name),
-		ToolName:     spec.Name,
-		Description:  spec.Description,
-		Kind:         ToolKindFunction,
-		InputSchema:  spec.InputSchema,
-		OutputSchema: spec.OutputSchema,
+		Name:                NameForToolName(spec.Name),
+		ToolName:            spec.Name,
+		Description:         spec.Description,
+		Kind:                ToolKindFunction,
+		InputSchema:         spec.InputSchema,
+		InputSchemaMaxBytes: spec.InputSchemaMaxBytes,
+		OutputSchema:        spec.OutputSchema,
 	}
 	if spec.Freeform != nil {
 		definition.Kind = ToolKindFreeform
@@ -402,8 +404,17 @@ func AugmentToolSpecs(specs []tool.Spec) []tool.Spec {
 }
 
 func RenderJSONSchemaToTypeScript(schema any) string {
-	rendered := newJSONSchemaTypeRenderer(schema).render(schema)
-	if len(rendered) > maxRenderedSchemaBytes {
+	return RenderJSONSchemaToTypeScriptWithBudget(schema, 0)
+}
+
+// RenderJSONSchemaToTypeScriptWithBudget renders an input type with an explicit
+// UTF-8 byte budget (Rust #47936). A non-positive budget uses 16,000 bytes.
+func RenderJSONSchemaToTypeScriptWithBudget(schema any, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = maxRenderedSchemaBytes
+	}
+	rendered := newJSONSchemaTypeRendererWithBudget(schema, maxBytes).render(schema)
+	if len(rendered) > maxBytes {
 		return "unknown"
 	}
 	return rendered
@@ -433,11 +444,18 @@ type jsonSchemaTypeRenderer struct {
 }
 
 func newJSONSchemaTypeRenderer(root any) *jsonSchemaTypeRenderer {
+	return newJSONSchemaTypeRendererWithBudget(root, maxRenderedSchemaBytes)
+}
+
+func newJSONSchemaTypeRendererWithBudget(root any, maxBytes int) *jsonSchemaTypeRenderer {
+	if maxBytes <= 0 {
+		maxBytes = maxRenderedSchemaBytes
+	}
 	return &jsonSchemaTypeRenderer{
 		root:                        root,
 		activeLocalRefExpansions:    map[string]int{},
 		remainingLocalRefExpansions: maxTotalLocalRefExpansions,
-		remainingRenderWorkBytes:    maxRenderWorkBytes,
+		remainingRenderWorkBytes:    maxBytes * 4,
 	}
 }
 

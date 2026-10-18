@@ -1249,6 +1249,7 @@ func validateKnownFeatureFieldsAt(value any, prefix string) error {
 		// Rust #46288 added experimental_show_cell_overhead to CodeModeConfigToml.
 		known := map[string]bool{
 			"enabled": true, "default_exec_yield_time_ms": true,
+			"tool_input_schema_max_bytes":     true,
 			"experimental_show_cell_overhead": true,
 			"excluded_tool_namespaces":        true, "direct_only_tool_namespaces": true,
 		}
@@ -1955,6 +1956,28 @@ func (c *Config) CodeModeExperimentalShowCellOverhead() bool {
 	}
 	value, ok := codeMode["experimental_show_cell_overhead"].(bool)
 	return ok && value
+}
+
+// CodeModeToolInputSchemaMaxBytes returns
+// features.code_mode.tool_input_schema_max_bytes (Rust #47936). Zero means the
+// 16,000-byte Code Mode default.
+func (c *Config) CodeModeToolInputSchemaMaxBytes() int {
+	if c == nil || c.Values == nil {
+		return 0
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	codeMode, ok := features["code_mode"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	value, ok := nonNegativeIntFromConfigValue(codeMode["tool_input_schema_max_bytes"])
+	if !ok {
+		return 0
+	}
+	return int(value)
 }
 
 // DefaultMCPOptionalStartupGrace mirrors Rust

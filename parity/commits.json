@@ -21020,9 +21020,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/8; needs review: DEFAULT_COMPACT_TOOL_SCHEMA_BYTES, DEFAULT_INPUT_SCHEMA_MAX_BYTES, augment_tool_spec_for_code_mode, new_with_schema_max_bytes, parse_mcp_tool_with_schema_max_bytes"
+        "Added mcp_servers.<name>.tool_input_schema_max_bytes (5,000-byte default) and features.code_mode.tool_input_schema_max_bytes. JSON-schema normalization compacts with the configured threshold; MCP executors expose the effective rendering budget; Code Mode renders input types with an explicit budget through local/remote definitions. Registry defaults and runtime specs apply max(16,000, feature, server), and changed descriptions invalidate declaration fingerprints."
       ]
     },
     {

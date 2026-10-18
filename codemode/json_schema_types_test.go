@@ -182,3 +182,19 @@ func TestRenderJSONSchemaHasHardSizeCap(t *testing.T) {
 		t.Fatalf("oversized render = %q, want unknown", got)
 	}
 }
+
+func TestRenderJSONSchemaHonorsConfiguredBudgetLikeRust(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value": map[string]any{"type": "string", "description": strings.Repeat("x", maxRenderedSchemaBytes)},
+		},
+	}
+	if got := RenderJSONSchemaToTypeScript(schema); got != "unknown" {
+		t.Fatalf("default render = %q, want unknown", got)
+	}
+	got := RenderJSONSchemaToTypeScriptWithBudget(schema, 2*maxRenderedSchemaBytes)
+	if got == "unknown" || !strings.Contains(got, "value?: string") {
+		t.Fatalf("large-budget render = %q", got)
+	}
+}

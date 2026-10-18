@@ -88,9 +88,12 @@ func (n *ToolName) Key() string {
 }
 
 type Spec struct {
-	Name                 ToolName       `json:"name"`
-	Description          string         `json:"description,omitempty"`
-	InputSchema          map[string]any `json:"inputSchema,omitempty"`
+	Name        ToolName       `json:"name"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	// InputSchemaMaxBytes is the internal Code Mode type-rendering budget for
+	// this tool (Rust #47936). Zero uses the registry default.
+	InputSchemaMaxBytes  int            `json:"-"`
 	OutputSchema         map[string]any `json:"outputSchema,omitempty"`
 	Freeform             *FreeformSpec  `json:"freeform,omitempty"`
 	Search               *SearchInfo    `json:"search,omitempty"`
@@ -254,14 +257,35 @@ func (e *ExecutorFunc) Execute(ctx context.Context, invocation *Invocation) (*Ou
 }
 
 type Registry struct {
-	mu        sync.RWMutex
-	executors map[string]Executor
-	specs     map[string]Spec
-	order     []string
+	mu                         sync.RWMutex
+	executors                  map[string]Executor
+	specs                      map[string]Spec
+	order                      []string
+	defaultInputSchemaMaxBytes int
 }
 
+// DefaultCodeModeInputSchemaMaxBytes is Rust's
+// DEFAULT_INPUT_SCHEMA_MAX_BYTES for rendered Code Mode input types.
+const DefaultCodeModeInputSchemaMaxBytes = 16_000
+
 func NewRegistry() *Registry {
-	return &Registry{executors: map[string]Executor{}, specs: map[string]Spec{}, order: []string{}}
+	return &Registry{
+		executors:                  map[string]Executor{},
+		specs:                      map[string]Spec{},
+		order:                      []string{},
+		defaultInputSchemaMaxBytes: DefaultCodeModeInputSchemaMaxBytes,
+	}
+}
+
+// SetDefaultInputSchemaMaxBytes sets the Code Mode rendering budget applied to
+// tools that do not carry a larger explicit budget.
+func (r *Registry) SetDefaultInputSchemaMaxBytes(maxBytes int) {
+	if r == nil || maxBytes <= 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.defaultInputSchemaMaxBytes = maxBytes
 }
 
 func (r *Registry) Register(executor Executor) error {
@@ -299,6 +323,9 @@ func (r *Registry) register(executor Executor, skipDuplicate bool, prepend bool)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if spec.InputSchemaMaxBytes < r.defaultInputSchemaMaxBytes {
+		spec.InputSchemaMaxBytes = r.defaultInputSchemaMaxBytes
+	}
 	if _, exists := r.executors[key]; exists {
 		if skipDuplicate {
 			return false, nil
