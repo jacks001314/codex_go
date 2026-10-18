@@ -1798,12 +1798,11 @@ green.
   confirmation, reject printable bindings, and are stripped from project config.
 - `#40622` is complete: an active goal owns a deduplicated status tick that
   updates elapsed time and only requests another frame when the label changes.
-- `#53753` is partial: composer drag selections map wrapped rows to source
-  rune ranges, copy through the shared clipboard path, retain their editable
-  highlight, support Ctrl+C, and are replaced by typing/paste/Enter/Delete.
-  Esc, focus loss, and external edits clear them. Go has no X11 PRIMARY
-  publication/ownership path, which is the remaining part of the upstream
-  `SelectionCopy` behavior.
+- `#53753` is partial: composer/footer drag selections map wrapped rows to source
+  ranges, retain editable highlights, and copy-on-select now also publishes
+  plain text to X11/Wayland PRIMARY while explicit copies remain CLIPBOARD-only.
+  Middle-click reads PRIMARY into the composer. Remaining: release/clear PRIMARY
+  ownership on focus loss/resume and helper ownership tests.
 - `#39997` is complete: `/copy` offers the whole latest response plus fenced
   code blocks and nested blockquotes with labels/previews, and copies exact
   source text through the async clipboard path.
@@ -2067,7 +2066,10 @@ green.
 - `#47896` and `#49153` are not applicable: Go's in-transcript selection is
   terminal-owned, so there is no semantic Markdown selection serializer or
   blockquote-marker stripping path.
-- `#49112` remains partial: X11 PRIMARY publication/ownership and middle-click
+- `#49112` remains partial: Linux X11/Wayland PRIMARY publication and
+  middle-click paste are now implemented through wl-clipboard/xclip/xsel;
+  remaining ownership release on focus loss/resume and helper availability
+  tests.
   paste are still absent, consistent with the existing transcript-selection
   terminal-ownership gap.
 - `#47975` is complete: pending voice speech carries its input generation and

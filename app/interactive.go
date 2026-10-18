@@ -1359,6 +1359,8 @@ func runInteractiveTUI(ctx context.Context, root *cli.RootOptions, stdin io.Read
 		OnUpgradeMarketplace:       interactiveMarketplaceUpgrader(pluginService),
 		OnOpenPluginURL:            auth.OpenBrowser,
 		OnOpenURL:                  auth.OpenBrowser,
+		OnPrimarySelectionWrite:    codextui.WritePrimarySelection,
+		OnPrimarySelectionRead:     codextui.ReadPrimarySelection,
 		OnFetchStartupAnnouncement: fetchStartupAnnouncementTip,
 		PluginUserMarketplaces:     settings.PluginUserMarketplaces,
 		PluginGitMarketplaces:      settings.PluginGitMarketplaces,

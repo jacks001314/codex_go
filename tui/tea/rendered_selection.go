@@ -266,7 +266,7 @@ func (m *Model) handleRenderedSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 			return true, nil
 		}
 		if m.copyOnSelectEnabled() {
-			cmd := m.copyRenderedSelection()
+			cmd := m.copyRenderedSelection(true)
 			if m.copyOnSelectClear {
 				state.clear()
 			}
@@ -285,12 +285,16 @@ func (m *Model) copyOnSelectEnabled() bool {
 	return normalizeCopyOnSelectMode(m.copyOnSelectMode) != "never"
 }
 
-func (m *Model) copyRenderedSelection() bubbletea.Cmd {
+func (m *Model) copyRenderedSelection(primary bool) bubbletea.Cmd {
 	text := m.renderedSelectionText()
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	return m.clipboardWriteCmd("footer selection", text, false, false)
+	clipboardCmd := m.clipboardWriteCmd("footer selection", text, false, false)
+	if !primary {
+		return clipboardCmd
+	}
+	return bubbletea.Batch(clipboardCmd, m.publishPrimarySelectionCmd(text))
 }
 
 func (m *Model) renderedSelectionText() string {

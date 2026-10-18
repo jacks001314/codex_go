@@ -120,7 +120,7 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 						m.notice = "Copy already in progress; try again after it finishes"
 						return true, nil
 					}
-					cmd := m.copyComposerSelection()
+					cmd := m.copyComposerSelection(false)
 					m.composerRightClickCopy = true
 					return true, cmd
 				}
@@ -171,7 +171,7 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 			return true, nil
 		}
 		if m.copyOnSelectEnabled() {
-			return true, m.copyComposerSelection()
+			return true, m.copyComposerSelection(true)
 		}
 		return true, nil
 	default:
@@ -216,13 +216,17 @@ func (m *Model) composerSelectedText() string {
 	return value[startByte:endByte]
 }
 
-func (m *Model) copyComposerSelection() bubbletea.Cmd {
+func (m *Model) copyComposerSelection(primary bool) bubbletea.Cmd {
 	text := m.composerSelectedText()
 	if text == "" {
 		return nil
 	}
 	m.composerRightClickCopy = false
-	return m.clipboardWriteCmd("composer selection", text, false, false)
+	clipboardCmd := m.clipboardWriteCmd("composer selection", text, false, false)
+	if !primary {
+		return clipboardCmd
+	}
+	return bubbletea.Batch(clipboardCmd, m.publishPrimarySelectionCmd(text))
 }
 
 // applyComposerSelectionKey makes the next edit replace the editable selection.

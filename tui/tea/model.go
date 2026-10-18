@@ -1368,6 +1368,11 @@ type Options struct {
 	// OnOpenURL opens a rendered terminal hyperlink from an app-owned row,
 	// used by Ctrl-click composer-gap tips (Rust #46931).
 	OnOpenURL func(string) error
+	// OnPrimarySelectionWrite publishes copy-on-select text to X11 PRIMARY
+	// (Rust #49112/#53753).
+	OnPrimarySelectionWrite func(string) error
+	// OnPrimarySelectionRead supplies middle-click paste text from PRIMARY.
+	OnPrimarySelectionRead func() (string, error)
 	// StartupAnnouncement is the host-supplied announcement tip preferred in
 	// the fullscreen composer gap until the first user turn (Rust #46931).
 	StartupAnnouncement *string
@@ -2201,6 +2206,8 @@ type Model struct {
 	onUpgradeMarketplace              MarketplaceUpgradeFunc
 	onOpenPluginURL                   PluginOpenURLFunc
 	onOpenURL                         func(string) error
+	onPrimarySelectionWrite           func(string) error
+	onPrimarySelectionRead            func() (string, error)
 	onFetchStartupAnnouncement        func() (string, bool)
 	pluginUserMarketplaces            map[string]bool
 	pluginGitMarketplaces             map[string]bool
@@ -2687,6 +2694,8 @@ func NewModel(state *codextui.State, options Options) *Model {
 		onUpgradeMarketplace:            options.OnUpgradeMarketplace,
 		onOpenPluginURL:                 options.OnOpenPluginURL,
 		onOpenURL:                       options.OnOpenURL,
+		onPrimarySelectionWrite:         options.OnPrimarySelectionWrite,
+		onPrimarySelectionRead:          options.OnPrimarySelectionRead,
 		onFetchStartupAnnouncement:      options.OnFetchStartupAnnouncement,
 		pluginUserMarketplaces:          cloneBoolMapTea(options.PluginUserMarketplaces),
 		pluginGitMarketplaces:           cloneBoolMapTea(options.PluginGitMarketplaces),
@@ -3014,12 +3023,12 @@ func (m *Model) handleCtrlInsertCopy(message bubbletea.Msg) (bool, bubbletea.Cmd
 		return false, nil
 	}
 	if m.composerSelection.active {
-		cmd := m.copyComposerSelection()
+		cmd := m.copyComposerSelection(false)
 		m.composerRightClickCopy = true
 		return true, cmd
 	}
 	if m.renderedSelection.active {
-		cmd := m.copyRenderedSelection()
+		cmd := m.copyRenderedSelection(false)
 		m.renderedSelection.clear()
 		m.refreshTranscript()
 		return true, cmd
@@ -3372,6 +3381,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case OpenURLResultMsg:
 		m.applyOpenURLResult(msg)
 		return m, nil
+	case PrimarySelectionReadResultMsg:
+		m.applyPrimarySelectionRead(msg)
+		return m, nil
 	case StartupAnnouncementMsg:
 		m.applyStartupAnnouncement(msg)
 		return m, nil
@@ -3573,7 +3585,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.renderedSelection.active {
 			if msg.Type == bubbletea.KeyCtrlC {
-				cmd := m.copyRenderedSelection()
+				cmd := m.copyRenderedSelection(false)
 				m.renderedSelection.clear()
 				m.refreshTranscript()
 				return m, cmd
@@ -3582,7 +3594,7 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.composerSelection.active {
 			if msg.Type == bubbletea.KeyCtrlC {
-				cmd := m.copyComposerSelection()
+				cmd := m.copyComposerSelection(false)
 				return m, cmd
 			}
 			if msg.Type == bubbletea.KeyEsc {
@@ -3864,6 +3876,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		}
 		if m.handlePinnedPromptClick(msg) {
 			return m, nil
+		}
+		if handled, cmd := m.startPrimarySelectionPaste(msg); handled {
+			return m, cmd
 		}
 		if handled, cmd := m.handleComposerGapLinkClick(msg); handled {
 			return m, cmd

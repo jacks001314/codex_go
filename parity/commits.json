@@ -23030,7 +23030,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go has app-owned selection for composer/status/footer rows and right-click clipboard paste, but no X11 PRIMARY selection publication/ownership, primary-copy destination or cancellation state, and no middle-click paste source. Transcript selection remains terminal-owned. The X11 primary lane is still absent."
+        "Round 695 (progress): Linux copy-on-select now publishes to Wayland/X11 PRIMARY through wl-copy, xclip, or xsel, and an unmodified middle-click reads PRIMARY through wl-paste/xclip/xsel and inserts it into the composer. Explicit Ctrl+C/Ctrl+Insert copies remain CLIPBOARD-only. Helper processes retain selection ownership while alive. Remaining: explicit ownership release on focus loss/resume and platform helper availability/ownership tests; transcript selection remains terminal-owned."
       ]
     },
     {
@@ -30611,7 +30611,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 400 (implementation): owned-screen composer drag selections map wrapped visual rows back to source rune ranges, copy on release through the shared clipboard writer, retain the editable highlight, support explicit Ctrl+C with copy-on-select disabled, and clear on Esc/focus loss/external edits. Typing, paste, Enter, Backspace, and Delete replace the selected range and place the caret after the replacement. Tests: TestComposerSelectionCopiesAndTypingReplacesLikeRust, TestComposerSelectionBackspaceDeletesLikeRust, TestComposerSelectionCtrlCCopiesLikeRust, TestComposerSelectionMapsWrappedRowsLikeRust, TestComposerSelectionClearsOnExternalEdit, TestComposerSelectionClearsOnFocusLossLikeRust, plus TestOwnedComposerSelectionPTY. Remaining gap: Go's clipboard path has no X11 PRIMARY publication/ownership, so SelectionCopy's primary destination is not represented."
+        "Round 695 (implementation): owned-screen composer and footer drag selections map to source ranges, copy on release through the shared clipboard writer, retain editable highlights, and support explicit Ctrl+C/Ctrl+Insert. Copy-on-select now also publishes plain text to Wayland/X11 PRIMARY while explicit copies stay CLIPBOARD-only; middle-click reads PRIMARY into the composer. Typing, paste, Enter, Backspace, and Delete replace selected text. Remaining: release/clear PRIMARY ownership on focus loss or resume and add platform-helper ownership tests."
       ]
     },
     {
