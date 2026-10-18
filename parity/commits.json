@@ -30738,9 +30738,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Equivalent implementation present: migration apply acquires the process-scoped rollout maintenance flock before scanning/mutating and holds it until the migration call returns; cancellation has no ownership-aware early unlock. Compression and migration share the same lock, a competing maintenance job reports skipped_busy instead of racing a rename, and lock tests verify exclusion and explicit release."
       ]
     },
     {
