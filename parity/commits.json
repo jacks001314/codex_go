@@ -1176,9 +1176,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Guardian reviewer policy is emitted as a separate unmarked developer message with content kind guardian.policy; top-level request instructions stay empty so the policy is independently auditable and retained. Tests: go test ./appserver -run 'GuardianReviewRequestCarriesThePolicyInstructionsLikeRust|GuardianReviewInstructionsPrecedence|Guardian' -count=1; go test ./context -count=1"
       ]
     },
     {

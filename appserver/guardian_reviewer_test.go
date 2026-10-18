@@ -587,8 +587,11 @@ func TestGuardianReviewRequestCarriesThePolicyInstructionsLikeRust(t *testing.T)
 				t.Fatalf("Guardian review error = %v", err)
 			}
 			want := state.RenderGuardianPolicyInstructions(testCase.wantPolicy, "", testCase.wantTemplate, state.GuardianOutputContractPrompt())
-			if captured == nil || captured.Instructions != want {
-				t.Fatalf("Guardian instructions = %q, want %q", instructionsOrEmpty(captured), want)
+			if captured == nil || captured.Instructions != "" {
+				t.Fatalf("Guardian top-level instructions = %q, want empty", instructionsOrEmpty(captured))
+			}
+			if got := guardianPolicyInputText(captured.InputItems); got != want {
+				t.Fatalf("Guardian policy fragment = %q, want %q", got, want)
 			}
 		})
 	}

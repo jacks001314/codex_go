@@ -906,10 +906,18 @@ reviewAttempt:
 			}
 		}
 	}
+	// Rust #40420 keeps the reviewer policy in a separate developer item with
+	// the guardian.policy content kind, making it auditable and preserving it
+	// independently from ordinary prompt instructions.
+	if fragment := codexctx.NewGuardianPolicy(plan.Instructions); fragment != nil {
+		if item := buildRenderedMessage(codexctx.Render(fragment)); item != nil {
+			inputItems = append(inputItems, item)
+		}
+	}
 	r.emitGuardianContextMetrics(promptCosts, prompt, plan.Instructions, inputItems)
 	reviewRequest := &model.AgentRequest{
 		Prompt:          prompt,
-		Instructions:    plan.Instructions,
+		Instructions:    "",
 		InputItems:      inputItems,
 		Model:           plan.Selection.Model,
 		Endpoint:        r.reviewEndpointValue(threadID, turnID),
