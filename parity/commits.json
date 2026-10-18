@@ -1476,9 +1476,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Settled turn cost exports codex.turn.cost_microusd with turn.id, conversation.id, turn.interrupted and optional speed/reasoning_effort tags. Only visible estimates whose responses have all settled are emitted, each completed response is tracked once, and turn/response tracking caps match Rust. Tests: go test ./appserver -run 'TurnCost' -count=1"
       ]
     },
     {
