@@ -5778,7 +5778,9 @@ func (m *Model) applyTurnInterrupted(message TurnInterruptedMsg) {
 	// "tell the model what to do differently" wording and the
 	// `interrupted_turn_message` helper. Mirrors the Rust assertion in
 	// chatwidget/tests/review_mode.rs::interrupted_turn_error_message_snapshot.
-	m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{chatwidget.ConversationInterruptedNotice}))
+	m.applyHistoryCell(historycell.NewPlainHistoryCell([]string{
+		"\x1b[2m" + chatwidget.ConversationInterruptedNotice + "\x1b[0m",
+	}))
 	m.flushDeferredSubAgentActivity()
 	m.refreshTranscript()
 	m.appendQuestionDrafts(questionDrafts)

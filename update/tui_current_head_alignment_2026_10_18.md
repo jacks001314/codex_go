@@ -2071,6 +2071,8 @@ green.
 - `#49144` and `#49145` are complete: launch-scoped reasoning summary/verbosity
   overrides preserve server defaults, and `/status` hides the summary setting
   when a server/daemon owns the session.
+- `#48830` is complete: interrupted turns show the short neutral feedback notice
+  with secondary styling; budget-limited turns keep the error notice.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

@@ -22620,9 +22620,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Interrupted turns use the short neutral text '■ Conversation interrupted - use /feedback if something went wrong' and no longer suggest telling the model what to do differently. The notice is emitted with secondary/dim styling; budget-limited turns retain the error notice. Tests assert the shortened wording and secondary SGR."
       ]
     },
     {

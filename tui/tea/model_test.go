@@ -954,6 +954,9 @@ func TestModelTurnInterruptedNoticeLikeRust(t *testing.T) {
 	if !strings.Contains(view, "\u25a0 Conversation interrupted - use /feedback if something went wrong") {
 		t.Fatalf("interrupted notice missing from the transcript:\n%s", view)
 	}
+	if !strings.Contains(view, "\x1b[2m\u25a0 Conversation interrupted") {
+		t.Fatalf("interrupted notice lost secondary styling:\n%s", view)
+	}
 	if strings.Contains(view, "tell the model what to do differently") {
 		t.Fatalf("interrupted notice must not tell the user what to do differently:\n%s", view)
 	}
