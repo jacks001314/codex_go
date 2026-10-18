@@ -4955,6 +4955,8 @@ func remoteGuardianAssessmentAction(action appserver.GuardianApprovalReviewActio
 		kind = chatwidget.GuardianActionMcpToolCall
 	case "requestPermissions":
 		kind = chatwidget.GuardianActionRequestPermissions
+	case "writeStdin":
+		kind = chatwidget.GuardianActionWriteStdin
 	}
 	target := firstNonEmptyLocal(strings.TrimSpace(action.Target), strings.TrimSpace(action.Host))
 	return chatwidget.GuardianAssessmentAction{
@@ -4968,6 +4970,9 @@ func remoteGuardianAssessmentAction(action appserver.GuardianApprovalReviewActio
 		ToolName:      strings.TrimSpace(action.ToolName),
 		ConnectorName: strings.TrimSpace(stringPtrValue(action.ConnectorName)),
 		Reason:        strings.TrimSpace(stringPtrValue(action.Reason)),
+		ProcessID:     strings.TrimSpace(action.ProcessID),
+		Stdin:         action.Stdin,
+		CWD:           strings.TrimSpace(action.CWD),
 	}
 }
 

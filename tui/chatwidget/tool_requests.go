@@ -2,8 +2,10 @@ package chatwidget
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
+	codextui "codex_go/tui"
 	historycell "codex_go/tui/history_cell"
 )
 
@@ -47,6 +49,7 @@ const (
 	GuardianActionNetworkAccess      GuardianAssessmentActionKind = "network_access"
 	GuardianActionMcpToolCall        GuardianAssessmentActionKind = "mcp_tool_call"
 	GuardianActionRequestPermissions GuardianAssessmentActionKind = "request_permissions"
+	GuardianActionWriteStdin         GuardianAssessmentActionKind = "write_stdin"
 )
 
 type GuardianAssessmentAction struct {
@@ -60,6 +63,9 @@ type GuardianAssessmentAction struct {
 	ToolName      string
 	ConnectorName string
 	Reason        string
+	ProcessID     string
+	Stdin         string
+	CWD           string
 }
 
 type GuardianAssessmentEvent struct {
@@ -186,6 +192,9 @@ func GuardianActionSummary(action GuardianAssessmentAction) string {
 		return "MCP " + strings.TrimSpace(action.ToolName) + " on " + label
 	case GuardianActionRequestPermissions:
 		return permissionRequestSummary("permission request", action.Reason)
+	case GuardianActionWriteStdin:
+		return "send input to terminal " + strings.TrimSpace(action.ProcessID) + ": " +
+			codextui.TruncateText(strconv.Quote(action.Stdin), 80)
 	default:
 		return ""
 	}
@@ -262,6 +271,8 @@ func guardianDeniedSummary(action GuardianAssessmentAction) string {
 		return "codex to access " + strings.TrimSpace(action.Target)
 	case GuardianActionRequestPermissions:
 		return permissionRequestSummary("codex to request permissions", action.Reason)
+	case GuardianActionWriteStdin:
+		return "codex to " + GuardianActionSummary(action)
 	default:
 		return GuardianActionSummary(action)
 	}
@@ -275,6 +286,8 @@ func guardianTimedOutSummary(action GuardianAssessmentAction) string {
 		return "codex could access " + strings.TrimSpace(action.Target)
 	case GuardianActionRequestPermissions:
 		return permissionRequestSummary("codex could request permissions", action.Reason)
+	case GuardianActionWriteStdin:
+		return "codex could " + GuardianActionSummary(action)
 	default:
 		return GuardianActionSummary(action)
 	}

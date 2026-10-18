@@ -37,7 +37,7 @@ func TestAutoReviewDenialsPopupOutcomesRowsAndSelectionMatchRust(t *testing.T) {
 	if !view.Searchable || view.SearchPlaceholder != "Type to search denials" || view.InitialSelectedIndex != 1 {
 		t.Fatalf("search/selection = %#v", view)
 	}
-	if len(view.Items) != 3 || !view.Items[0].Disabled || view.Items[0].Name != "Command" || view.Items[0].Description != "Rationale" {
+	if len(view.Items) != 3 || !view.Items[0].Disabled || view.Items[0].Name != "Action" || view.Items[0].Description != "Rationale" {
 		t.Fatalf("header item = %#v", view.Items)
 	}
 	if view.Items[1].Action != PermissionActionApproveRecentAutoReviewDenial || !view.Items[1].DismissOnSelect {

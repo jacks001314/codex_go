@@ -106,6 +106,7 @@ func TestGuardianActionSummaryAndRequestUserInputTitleMatchRust(t *testing.T) {
 		{GuardianAssessmentAction{Kind: GuardianActionApplyPatch, Files: []string{"a.go"}}, "apply_patch touching a.go"},
 		{GuardianAssessmentAction{Kind: GuardianActionMcpToolCall, Server: "figma", ConnectorName: "Figma", ToolName: "open"}, "MCP open on Figma"},
 		{GuardianAssessmentAction{Kind: GuardianActionRequestPermissions, Reason: "need network"}, "permission request: need network"},
+		{GuardianAssessmentAction{Kind: GuardianActionWriteStdin, ProcessID: "42", Stdin: "confirm\n"}, `send input to terminal 42: "confirm\n"`},
 	}
 	for _, tc := range cases {
 		if got := GuardianActionSummary(tc.action); got != tc.want {
@@ -121,5 +122,25 @@ func TestGuardianActionSummaryAndRequestUserInputTitleMatchRust(t *testing.T) {
 	}
 	if got := RequestUserInputNotificationTitle([]ToolRequestQuestion{{}, {}}); got != "2 questions requested" {
 		t.Fatalf("multi title = %q", got)
+	}
+}
+
+// TestGuardianWriteStdinHistoryMatchesRust covers Rust #40528's terminal-input
+// denial and timeout messages.
+func TestGuardianWriteStdinHistoryMatchesRust(t *testing.T) {
+	action := GuardianAssessmentAction{Kind: GuardianActionWriteStdin, ProcessID: "42", Stdin: "confirm\n"}
+	denied := GuardianAssessmentHistoryMessage(GuardianAssessmentEvent{
+		Status: GuardianAssessmentDenied,
+		Action: action,
+	})
+	if denied != `Request denied for codex to send input to terminal 42: "confirm\n"` {
+		t.Fatalf("denied history = %q", denied)
+	}
+	timedOut := GuardianAssessmentHistoryMessage(GuardianAssessmentEvent{
+		Status: GuardianAssessmentTimedOut,
+		Action: action,
+	})
+	if timedOut != `Review timed out before codex could send input to terminal 42: "confirm\n"` {
+		t.Fatalf("timed out history = %q", timedOut)
 	}
 }

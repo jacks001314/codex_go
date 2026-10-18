@@ -88,7 +88,7 @@ func BuildAutoReviewDenialsPopup(threadID string, denials []AutoReviewDenialEntr
 
 	items := []SelectionItem{
 		{
-			Name:        "Command",
+			Name:        "Action",
 			Description: "Rationale",
 			SearchValue: "",
 			Disabled:    true,

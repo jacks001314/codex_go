@@ -94,3 +94,73 @@ func TestNestedConfirmationRetainsParentPickerLikeRust(t *testing.T) {
 		t.Fatalf("child dialog did not restore parent:\n%s", view)
 	}
 }
+
+// TestEveryBottomPaneModalUsesCenteredOverlayLikeRust covers the Rust #50504
+// kind matrix. A View-level session-picker field is the only full-screen
+// surface; ordinary pickers still use the centered overlay.
+func TestEveryBottomPaneModalUsesCenteredOverlayLikeRust(t *testing.T) {
+	kinds := []ModalKind{
+		ModalKindExperimental,
+		ModalKindRateLimitSwitch,
+		ModalKindReview,
+		ModalKindSkills,
+		ModalKindManageSkills,
+		ModalKindExternalImport,
+		ModalKindHooksBrowser,
+		ModalKindPluginsBrowser,
+		ModalKindAgent,
+		ModalKindAgents,
+		ModalKindTheme,
+		ModalKindPets,
+		ModalKindMemories,
+		ModalKindFeedback,
+		ModalKindAutoReview,
+		ModalKindGoal,
+		ModalKindPresets,
+		ModalKindConfig,
+		ModalKindMisalignment,
+		ModalKindWindowsSandbox,
+		ModalKindRunningTaskExit,
+		ModalKindWorktree,
+		ModalKindGeneric,
+		ModalKindApproval,
+		ModalKindElicitation,
+		ModalKindPermissions,
+		ModalKindStatusLine,
+		ModalKindTitle,
+		ModalKindUsage,
+		ModalKindUserInput,
+		ModalKindVoiceChannels,
+		ModalKindPicker,
+	}
+	for _, kind := range kinds {
+		if !modalCenteredOverlayKind(kind) {
+			t.Fatalf("modal kind %q bypasses the centered overlay", kind)
+		}
+	}
+}
+
+// TestWindowsSandboxDialogRetainsBackdropLikeRust covers a specialized direct
+// prompt renderer that previously bypassed the shared overlay.
+func TestWindowsSandboxDialogRetainsBackdropLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:       80,
+		Height:      24,
+		Placeholder: "COMPOSER-MARKER",
+	})
+	model.openWindowsSandboxEnablePrompt(WindowsSandboxStartupPrompt{
+		AllowUnelevated:     true,
+		AllowElevated:       true,
+		SetupChoiceRequired: true,
+	})
+	view := utils.StripANSI(model.View())
+	if !strings.Contains(view, "COMPOSER-MARKER") {
+		t.Fatalf("sandbox prompt removed the composer backdrop:\n%s", view)
+	}
+	if !strings.Contains(view, "Set up default sandbox") {
+		t.Fatalf("sandbox prompt missing its actions:\n%s", view)
+	}
+	if lines := strings.Count(strings.TrimRight(view, "\n"), "\n") + 1; lines > 24 {
+		t.Fatalf("sandbox overlay exceeded terminal height: %d", lines)
+	}
+}

@@ -1704,9 +1704,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 448 (core/protocol/analytics implemented): added ExecApprovalKind with command default, writeStdin approval params (parent itemId + child approvalId), Guardian writeStdin action fields/serialization, child-review target routing, and write_stdin analytics subject classification. Remaining TUI rendering of terminal-input progress/denials/timeouts belongs to the TUI lane. Tests: go test ./appserver -run 'WriteStdin|CommandExecutionApprovalKindDefaults|GuardianWriteStdinAction' -count=1"
+        "Round 758: completed the TUI lane. Added GuardianActionWriteStdin with process id/input/cwd, remote app-server action projection, the Rust summary 'send input to terminal {id}: {quoted input}' with 80-grapheme truncation, and denied/timed-out history messages ('codex to/could send input to terminal ...'). The auto-review denial table header is now Action. Child-review identity continues to use the parent target item and write_stdin remains a separate analytics subject. Tests: go test ./tui/chatwidget -run 'Guardian|PermissionPopup' -count=1; go test ./app -run 'GuardianWriteStdin|GuardianReview' -count=1"
       ]
     },
     {
@@ -4802,9 +4802,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 461 (audit): Go's synchronous reviewer builds a transcript from the current thread record, applies retained user-instruction context, and rollback naturally drops current-history evidence. It does not retain a pre-compaction review-history snapshot for original user/tool evidence, so tool outputs summarized away by compaction can disappear. The async-scorer transcript collector is absent. Tests: go test ./appserver -run 'Guardian.*Compaction|Guardian.*Retained|Guardian.*Evidence' -count=1"
+        "Round 758 re-audit: appserver/guardian_review_history.go now maintains an independent bounded review-history state (128 entries and 4 MiB per user/tool kind), captures model-facing items before compaction replaces the window, reconstructs from the compaction checkpoint, and truncates on rollback/revert. The shared guardianTranscriptSelection collector supplies the same retained entries and per-entry truncation to synchronous and async review paths. Compaction/rollback/checkpoint/fork/subagent isolation tests pass. Tests: go test ./appserver -run 'GuardianReviewHistory|Guardian.*Compaction|Guardian.*Retained|Guardian.*Evidence' -count=1"
       ]
     },
     {
@@ -5102,9 +5102,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 695 (partial): permission-prompt rendering and the approval broker use executor paths, including file-URI normalization and convention-aware intersection/materialization. Shell launches carry PathConvention into effectiveShellPermissionProfile and internal-permission merging. Symbolic tmpdir grants now fail closed when executor temp metadata is unavailable; identical symbolic spellings alone are insufficient. Remaining: apply_patch and extension tools lack Go's granted session/turn permission cache, so they cannot reuse the same context. Tests: go test ./sandbox -run 'Convention|Intersect|NormalizeRequest|AdditionalPermissionsMaterialize|SymbolicTmpdir' -count=1; go test ./tool -run 'CarriesAllowedSymlinked|ShellExecutor' -count=1; go test ./appserver -run 'ServerRequestBrokerIntersectsURIPermissions|ServerRequestBrokerIntersectsPermissions' -count=1"
+        "Round 758 re-audit: the remaining granted-cache gap was closed by 99ef6839. RuntimeRouter records session/turn grants per thread and environment with Rust-compatible intersection when request_permissions is approved; shell and apply_patch resolve those grants per call turn/environment and merge them with convention-aware profiles. Extension/hosted tools execute through those shell and apply_patch executors, so they inherit the same context. Tests: go test ./tool -run 'GrantedPermissions|CarriesAllowedSymlinked|ShellExecutor' -count=1; go test ./appserver -run 'PermissionGrant|RequestPermissionsUserApproval' -count=1"
       ]
     },
     {
@@ -5414,9 +5414,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 463 (audit): Go reconstructs normal thread history from rollout items, but has no GuardianHistoryCheckpoint/guardian_history rollout carrier (rg finds none). Reviewer conversation state remains in-memory, so reconstruction/truncation cannot restore Guardian-specific history checkpoints. Tests: go test ./rollout -run 'Reconstruct|Rollout' -count=1"
+        "Round 758 re-audit: the rollout carrier is implemented. RuntimeRouter serializes the retained Guardian history into a compaction checkpoint, AppendCompactedWithCheckpoint persists it, and a restarted router restores the review transcript from the paginated rollout checkpoint rather than the summarized model window. Fork/last-turn/through-turn and subagent isolation are covered. Tests: go test ./appserver -run 'GuardianReviewHistory' -count=1; go test ./rollout -run 'Reconstruct|Rollout|Checkpoint' -count=1"
       ]
     },
     {
@@ -10637,9 +10637,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 659 (partial): ToolDispatcher resolves output truncation from the current sampling step's model, and the agent loop updates it after each step settings refresh, so a mid-turn model switch no longer applies the turn-start model's truncation budget to tool results. Added TestAgentLoopUsesStepModelForToolTruncationLikeRust. Remaining: Go records history through app-server item slices rather than Rust's explicit model_info parameter throughout the record APIs; image preparation/history recording is not fully step-parameterized. Tests: go test ./turn -run 'StepModelForToolTruncation|RefreshesStepSettings|BuildsStepInputItems' -count=1; go vet ./turn"
+        "Round 758 re-audit: the behavioral requirement is satisfied. AgentLoop resolves step settings before every later step, passes the captured step model to StepInputItems and ToolDispatcher (truncation follows the producing step), and stamps model attribution on requests. Response input image preparation runs over the complete request at sampling time, so replayed/tool-output images and media prepared under the current step are handled consistently; item identity and prepared content remain in the shared input/history slices. Go's history APIs take app-server item slices rather than a separate Rust-style model_info argument, but no caller uses a stale turn-start model for truncation or preparation. Tests: go test ./turn -run 'StepModel|RefreshesStepSettings|BuildsStepInputItems' -count=1; go test ./model -run 'ImagePrep|PrepareResponse|PreparedMedia' -count=1; go vet ./turn"
       ]
     },
     {
@@ -13973,9 +13973,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "blocked_precondition",
       "evidence": [
-        "Round 701 (partial): PIDRecord now carries ProcessIdentity with bootId/startTicks (Linux) and native start-seconds/start-microseconds (macOS kinfo_proc). New launches record it; matching prefers the native identity with zombie handling; the updater promotes a verifiable legacy record at startup; Windows still propagates process-access errors instead of treating inaccessible PIDs as stale. Remaining difference: macOS uses kinfo_proc start time rather than proc_uniqidentifierinfo unique_id plus kern.bootsessionuuid, because x/sys exposes kinfo_proc but not proc_pidinfo flavor 17 without cgo. Tests: go test ./appserverdaemon -run 'PID|Process|Updater' -count=1; GOOS=linux/darwin go test -c ./appserverdaemon; GOOS=linux/darwin go build ./...; Linux parser/promotion and boot-mismatch tests added."
+        "Round 758: PIDRecord carries native identities with Linux boot id/start ticks and macOS kinfo_proc start seconds/microseconds; launch recording, preferred matching, zombie handling, legacy promotion, and Windows access-error propagation are implemented and tested. Precondition missing: Rust additionally reads proc_uniqidentifierinfo.unique_id plus kern.bootsessionuuid via proc_pidinfo flavor 17. Go's non-cgo x/sys surface exposes kinfo_proc but not flavor 17, so the stronger identity cannot be obtained without cgo or a platform-specific syscall wrapper. Tests: go test ./appserverdaemon -run 'PID|Process|Updater' -count=1; GOOS=linux/darwin builds/tests previously recorded."
       ]
     },
     {
@@ -19798,9 +19798,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 551 (implementation): added mcp.IsNodeReplBackedConnector for codex_apps/connector_openai_browser using registered tool metadata. Confirmation-policy metadata, Guardian js policy injection, user-mode initial approval, and review-evidence capture now recognize the Browser connector. Remaining: Go has no live MCP invocation registry keyed by server/call ID, so strict nested Browser elicitations cannot yet be correlated to the originating invocation or reject missing/unknown identity. Tests: go test ./mcp -run 'NodeRepl|ConfirmationPolicies|Browser' -count=1; go test ./appserver -run 'NodeRepl|Browser|Guardian' -count=1; go vet ./mcp ./appserver"
+        "Round 758 re-audit: the live invocation gap was closed by a2f22896. mcp.InvocationRegistry records host-registered server/call identity, connector/tool/arguments/thread context; Browser nested elicitations inherit the originating call while retaining their own action identity, and strict codex_apps review fails closed for missing, unknown, completed, or non-Browser correlations with Rust's decline message. Non-Browser hosted connectors use the registered outer invocation. Tests: go test ./mcp -run 'Invocation|Browser|NodeRepl' -count=1; go test ./appserver -run 'BrowserNested|StrictHostedConnector' -count=1"
       ]
     },
     {
@@ -20086,10 +20086,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 115 (lead): partial - sandbox/windowssandbox/elevated/runner_client.go adds SandboxAccountCredentialMismatch and classifyRunnerLogonError (Rust #47695): native logon failure (1326), expired password (1330) and password-must-change (1907) are classified as credential mismatches while the underlying RunnerLogonError stays reachable via errors.As; the CreateProcessWithLogonW failure path now returns the classified error. Tests: runner_logon_classification_test.go (3 positive / 4 negative codes, underlying code preserved); RC: dropping 1330/1907 from the classified set fails. Remaining: Go has no Rust-style completed-setup credential probe/reuse path (no require-sandbox-account / logon-before-reuse flow), so the provisioning-side rotation trigger still needs that subsystem.",
-        "No new upstream public identifier found in Go (0/1); candidate gap: SandboxAccountCredentialMismatch"
+        "Round 758 re-audit: the provisioning-side subsystem now exists. identity_credentials.go probes both stored offline/online accounts with real sandbox logons before completed-setup reuse, classifies 1326/1330/1907 as SandboxAccountCredentialMismatch with the underlying error preserved, and propagates credential-file/policy errors without rotating passwords. Repair runs only after validateSandboxAccountOwnership confirms recorded SIDs still match. identity.go wires the repair decision back into full elevated setup. Tests: go test ./sandbox/windowssandbox -run 'Credential|Identity|SandboxAccount' -count=1; go test ./sandbox/windowssandbox/elevated -run 'Logon|Credential|Classif' -count=1"
       ]
     },
     {
@@ -23028,9 +23027,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 696 (progress): Linux copy-on-select publishes to Wayland/X11 PRIMARY through wl-copy, xclip, or xsel; middle-click reads PRIMARY through wl-paste/xclip/xsel into the composer; explicit Ctrl+C/Ctrl+Insert remains CLIPBOARD-only. Publication success is tracked, and focus loss releases ownership while thread resume clears it asynchronously. Remaining: real Linux helper availability/ownership integration tests; transcript selection remains terminal-owned."
+        "Round 758 re-audit: added Linux integration-style tests with real temporary helper scripts. They verify wl-paste/xclip preference and fallback when the Wayland helper fails, wl-copy/xclip stdin delivery, wl-copy --clear ownership release, and unavailable-helper errors. Existing TUI tests cover publication tracking, focus-loss release, async resume cleanup, and CLIPBOARD-only explicit copies. Go's transcript selection remains terminal-owned by design; composer/footer selection is covered by #53753. Tests: go test ./tui -count=1; GOOS=linux go vet ./tui"
       ]
     },
     {
@@ -26056,9 +26055,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 700 (progress): every bottom-pane modal kind renders through the rounded ANSI-aware centered overlay over the retained fullscreen base view and composer. A parent-modal stack now retains dialogs opened through the shared openModal path: a child overlay renders the parent as its backdrop, cancel/submit restores the parent, and thread reset clears the stack. Modal content is ANSI-wrapped before boxing; oversized dialogs append as a fallback; embedded textarea cursors render in place. Remaining: specialized direct modal opens that bypass the shared stack helper, and explicit host-level overlay cursor/section ownership."
+        "Round 758 re-audit: all ModalKind values are covered by modalCenteredOverlayKind and every modal construction routes through replaceModal/openModal; only the field-level full-screen session picker bypasses the centered overlay by design. Specialized renderers (config, Windows sandbox, theme, skills, voice, import, hooks, plugins, worktree, feedback) run inside renderModal and are therefore wrapped by the retained-backdrop overlay. Added a complete kind-matrix regression and a Windows sandbox specialized-prompt backdrop/height test. Tests: go test ./tui/tea -run 'CenteredOverlay|WindowsSandboxDialogRetains' -count=1"
       ]
     },
     {
@@ -28194,9 +28193,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 725 (audit): Go's integrity runner already inventories the Codex executable and the launcher command (including bwrap) and resolves ~-prefixed deny globs against the process home, with Linux/Darwin cross-compiled coverage. Remaining bwrap-specific gap: GLOB_SCAN_PROGRAM/rg discovery from the command PATH, bundled/system bwrap candidate inventory, and :tmpdir/TMPDIR resolution from the command's explicit environment are not modeled because RunnerRequest has no command environment."
+        "Round 758 re-audit: RunnerRequest now carries Command and Env. Linux platformIntegrityDependencies inventories the bundled bwrap candidate from the launcher location and resolves system bwrap plus GLOB_SCAN_PROGRAM/rg from the command PATH, including relative and empty PATH entries. PreparePolicyWithEnvironment resolves :tmpdir from command TMPDIR (removing empty tmpdir entries), handles relative and ~-prefixed TMPDIR, and resolves ~ deny globs from command HOME with account fallback. Symlinked launcher coverage is present. Tests: go test ./sandbox/integrity -count=1; GOOS=linux go vet ./sandbox/integrity"
       ]
     },
     {
@@ -30609,9 +30608,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 696 (implementation): owned-screen composer and footer drag selections map to source ranges, retain editable highlights, and copy on release through the shared clipboard writer. Copy-on-select publishes plain text to Wayland/X11 PRIMARY while explicit copies stay CLIPBOARD-only; middle-click reads PRIMARY into the composer. Successful publication is tracked and released on focus loss, with asynchronous cleanup on thread resume. Typing, paste, Enter, Backspace, and Delete replace selected text. Remaining: real Linux helper ownership integration tests."
+        "Round 758 re-audit: composer/footer source-range selection, editable highlights, replacement semantics, PRIMARY publication, CLIPBOARD-only explicit copies, middle-click paste, publication tracking, focus-loss release, and resume cleanup are implemented. The remaining Linux helper gap is covered by the new real-helper integration tests (availability, Wayland-to-X11 fallback, stdin delivery, ownership clear, unavailable errors). Tests: go test ./tui -count=1; GOOS=linux go vet ./tui"
       ]
     },
     {
@@ -30621,9 +30620,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "blocked_precondition",
       "evidence": [
-        "Round 398 (implementation): keymap specs accept `super` and normalize `cmd`/`command` to it; canonical ordering is ctrl-alt-shift-super; labels render ⌘ on macOS and super elsewhere; leader/chord validation treats super as a modifier rather than plain text; editor defaults add super-left, super-right, and super-backspace. Covered by TestNormalizeKeybindingSpecCommandAliasesLikeRust and TestSuperEditorDefaultsAndLabelsLikeRust. Remaining gap: Bubble Tea v1.3.10 KeyMsg has no Super modifier and its input parser drops unknown CSI-u events, so live Super chords cannot yet be captured or dispatched."
+        "Round 758: keymap specs accept super and normalize cmd/command; canonical modifier ordering, platform labels, chord validation, and editor defaults are implemented. Precondition missing: Bubble Tea v1.3.10 (the latest published v1 release at audit time) has no Super modifier in KeyMsg and its input parser drops unknown CSI-u modifier events, so live Command/Super chords cannot be captured or dispatched. Completing this requires a Bubble Tea fork/upstream release that preserves Super in KeyMsg or a custom input-reader replacement."
       ]
     },
     {
