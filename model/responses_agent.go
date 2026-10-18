@@ -123,11 +123,14 @@ type ResponsesAgentOptions struct {
 	ProviderUsesOwnCredentials bool
 	Stream                     bool
 	StreamHandler              ResponsesStreamHandler
-	CodexHome                  string
-	AuthSnapshot               *auth.AuthDotJSON
-	AuthIssuer                 string
-	StoreOptions               *auth.StoreOptions
-	ExternalAuthRefresh        ExternalAuthRefreshFunc
+	// AuthRecoveryHandler receives the turn-scoped progress of a
+	// provider-owned authentication recovery (Rust #41239).
+	AuthRecoveryHandler ProviderAuthRecoveryHandler
+	CodexHome           string
+	AuthSnapshot        *auth.AuthDotJSON
+	AuthIssuer          string
+	StoreOptions        *auth.StoreOptions
+	ExternalAuthRefresh ExternalAuthRefreshFunc
 	// WorkloadIdentityRefresh refreshes process-scoped workload identity
 	// after a downstream 401 (Rust WorkloadIdentityExternalAuth::refresh,
 	// #38188). When nil, the runner lazily builds one from StoreOptions.
@@ -184,6 +187,9 @@ type ResponsesAgentRunner struct {
 	ProviderUsesOwnCredentials bool
 	Stream                     bool
 	StreamHandler              ResponsesStreamHandler
+	// AuthRecoveryHandler receives the turn-scoped progress of a
+	// provider-owned authentication recovery (Rust #41239).
+	AuthRecoveryHandler        ProviderAuthRecoveryHandler
 	CodexHome                  string
 	AuthSnapshot               *auth.AuthDotJSON
 	AuthIssuer                 string
@@ -215,7 +221,7 @@ type ResponsesAgentRunner struct {
 	agentIdentityBypass   bool
 	// AWSRefreshMu and AWSRefreshInFlight share Bedrock AWS credential
 	// refresh state across concurrent failures (Rust shared_state, #39410).
-	AWSRefreshMu       sync.Mutex
+	AWSRefreshMu       *sync.Mutex
 	AWSRefreshInFlight chan struct{}
 	// bedrockAuthRecoveryAttempted bounds provider-owned Bedrock auth recovery
 	// to one attempt per request (Rust #39274).
@@ -313,7 +319,7 @@ const MaxResponseMessageBytes = 15 * 1024 * 1024
 // the soft cap is bounded by the overage, and only its optional
 // executed-tool-call metadata changes. Model-visible input, ordinary content and
 // the WebSocket continuation history stay intact.
-func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *AgentRequest) []any {
+func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *AgentRequest, metrics MetricsSink) []any {
 	if apiRequest == nil {
 		return nil
 	}
@@ -334,8 +340,15 @@ func boundedInputForResponseMessage(apiRequest *responsesAgentRequest, request *
 		budget = 0
 	}
 	bounded := BoundExecutedToolCallsForMessage(input, budget)
-	if ExecutedToolCallMetadataTotalBytes(bounded) == before {
+	after := ExecutedToolCallMetadataTotalBytes(bounded)
+	if after == before {
 		return input
+	}
+	if sink, ok := metrics.(ToolMetadataMetricSink); ok {
+		RecordToolMetadataShedding(sink, "message", before, after)
+	}
+	if request.OnWireInputBounded != nil {
+		request.OnWireInputBounded(input, bounded)
 	}
 	return bounded
 }
@@ -675,6 +688,7 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		ProviderUsesOwnCredentials: options.ProviderUsesOwnCredentials || provider.Auth != nil,
 		Stream:                     options.Stream,
 		StreamHandler:              options.StreamHandler,
+		AuthRecoveryHandler:        options.AuthRecoveryHandler,
 		CodexHome:                  strings.TrimSpace(options.CodexHome),
 		AuthSnapshot:               cloneAuthSnapshot(options.AuthSnapshot),
 		AuthIssuer:                 strings.TrimSpace(options.AuthIssuer),
@@ -697,11 +711,19 @@ func NewResponsesAgentRunner(options *ResponsesAgentOptions) *ResponsesAgentRunn
 		Metrics:                    options.Metrics,
 		ApiKeyCyberAccessPrograms:  options.ApiKeyCyberAccessPrograms,
 		ImageStore:                 attachmentstore.StoreOrDefault(options.ImageStore),
+		AWSRefreshMu:               &sync.Mutex{},
 		providerAuthFetchedAt:      providerAuthFetchedAt,
 		turnState:                  &responsesTurnStateCache{},
 		websocketSessions:          &responsesWebsocketSessionCache{sessions: map[string]*responsesWebsocketSession{}},
 		inferenceTools:             &responsesInferenceToolCache{},
 	}
+}
+
+func (r *ResponsesAgentRunner) awsRefreshMutex() *sync.Mutex {
+	if r.AWSRefreshMu == nil {
+		r.AWSRefreshMu = &sync.Mutex{}
+	}
+	return r.AWSRefreshMu
 }
 
 func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *responsesWebsocketSession {
@@ -866,7 +888,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 	apiRequest.Input, _ = prependResponsesBaseInstructions(apiRequest.Input, responsesInstructions(request), request.ThreadID)
 	apiRequest.Reasoning = responsesReasoningParam(request, &ModelInfo{Slug: modelID, SupportsReasoningSummaries: true})
 	apiRequest.StreamOptions = responsesStreamOptionsForRequest(request, apiRequest.Reasoning, r.providerName())
-	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -1127,7 +1149,7 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	if apiRequest.Reasoning != nil || r.outputTokenReplayForProvider() {
 		apiRequest.Include = r.responsesInclude()
 	}
-	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
 	httpRequest, err := r.newResponsesHTTPRequest(ctx, request, apiRequest, "")
 	if err != nil {
 		return nil, err
@@ -1617,6 +1639,7 @@ func (r *ResponsesAgentRunner) WithStreamHandler(handler ResponsesStreamHandler)
 	clone := *r
 	clone.Stream = true
 	clone.StreamHandler = handler
+	clone.AWSRefreshMu = &sync.Mutex{}
 	clone.Auth = cloneAuthHeaders(r.Auth)
 	clone.AuthSnapshot = cloneAuthSnapshot(r.AuthSnapshot)
 	clone.StoreOptions = cloneStoreOptions(r.StoreOptions)
@@ -1716,7 +1739,7 @@ func (r *ResponsesAgentRunner) Run(ctx context.Context, request *AgentRequest) (
 	if apiRequest.Reasoning != nil || r.outputTokenReplayForProvider() {
 		apiRequest.Include = r.responsesInclude()
 	}
-	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request)
+	apiRequest.Input = boundedInputForResponseMessage(apiRequest, request, r.Metrics)
 	if apiRequest.Stream {
 		return r.runStreaming(ctx, request, apiRequest)
 	}
@@ -3985,10 +4008,10 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	}
 	// Share refresh state across matching provider configurations so
 	// concurrent failures invoke the command only once (Rust shared_state).
-	r.AWSRefreshMu.Lock()
+	r.awsRefreshMutex().Lock()
 	if r.AWSRefreshInFlight != nil {
 		ch := r.AWSRefreshInFlight
-		r.AWSRefreshMu.Unlock()
+		r.awsRefreshMutex().Unlock()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -3998,17 +4021,17 @@ func (r *ResponsesAgentRunner) refreshBedrockAWSCredentials(ctx context.Context)
 	}
 	ch := make(chan struct{})
 	r.AWSRefreshInFlight = ch
-	r.AWSRefreshMu.Unlock()
+	r.awsRefreshMutex().Unlock()
 
 	var runErr error
 	if refresh != nil {
 		runErr = r.runBedrockAWSRefreshCommand(ctx, refresh)
 	}
 
-	r.AWSRefreshMu.Lock()
+	r.awsRefreshMutex().Lock()
 	r.AWSRefreshInFlight = nil
 	close(ch)
-	r.AWSRefreshMu.Unlock()
+	r.awsRefreshMutex().Unlock()
 	if runErr != nil {
 		return runErr
 	}

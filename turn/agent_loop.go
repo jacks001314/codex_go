@@ -499,6 +499,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
 			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, l.now)),
+			OnWireInputBounded: func(original, bounded []any) {
+				if l.executedToolCalls != nil {
+					l.executedToolCalls.InvalidateWireInventoryLoss(original, bounded)
+				}
+			},
 			// Rust #48141: new user input preempts the unfinished sampling
 			// request so the queued input reaches the model without waiting.
 			Preempt: stepPreempt.Done(),

@@ -37,6 +37,9 @@ type ExecutedToolCallRecorder struct {
 	// retainedDirectMetadataBytes counts the direct metadata kept in history for
 	// the retention budget above.
 	retainedDirectMetadataBytes int
+	// toolMetadataMetrics records bytes shed by the direct-retention budget
+	// (Rust metadata_metrics `codex.tool_metadata.shed_bytes`).
+	toolMetadataMetrics model.ToolMetadataMetricSink
 	// seenIDs tracks observed call and runtime cell IDs so reused or historical
 	// IDs cannot be presented as fresh evidence (Rust #44472).
 	seenIDs *seenIDs
@@ -349,6 +352,18 @@ func NewExecutedToolCallRecorder() *ExecutedToolCallRecorder {
 	}
 }
 
+// SetToolMetadataMetrics installs the histogram sink used by metadata budgets.
+// Recorders created before the app-server metrics service is available can be
+// wired after construction.
+func (r *ExecutedToolCallRecorder) SetToolMetadataMetrics(sink model.ToolMetadataMetricSink) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.toolMetadataMetrics = sink
+	r.mu.Unlock()
+}
+
 // RecordMcpSource records one completed MCP tools/call attribution source
 // (Rust `ExecutedToolCalls::record_mcp_source`).
 func (r *ExecutedToolCallRecorder) RecordMcpSource(source retainedctx.McpAttributionSource) {
@@ -501,13 +516,13 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 		r.directCalls[itemID] = *call
 	}
 	available := maxRetainedDirectMetadataBytes - r.retainedDirectMetadataBytes
-	bytes := executedToolCallMetadataBytesForItem(item)
-	if bytes > available {
-		clearToolResultMetadataForItem(item)
-		bytes = executedToolCallMetadataBytesForItem(item)
+	carrier, ok := item.(model.ExecutedToolCallCarrier)
+	if !ok {
+		return
 	}
+	originalBytes, bytes := model.BoundRetainedDirectMetadata(carrier, available)
+	model.RecordToolMetadataShedding(r.toolMetadataMetrics, "direct_retained", originalBytes, bytes)
 	if bytes > available {
-		clearExecutedToolCallsForItem(item)
 		return
 	}
 	r.retainedDirectMetadataBytes += bytes
@@ -529,6 +544,41 @@ func (r *ExecutedToolCallRecorder) ObserveNonDispatchedCall(item any) {
 	r.ensureState()
 	if !r.seenIDs.observeCallID(callID) {
 		r.invalidateCall(callID)
+	}
+}
+
+// InvalidateWireInventoryLoss mirrors Rust's invalidate_wire_inventory_loss:
+// after the outgoing message budget trims a wire copy, a cell whose calls or
+// arguments changed can no longer prove a complete inventory to later waits.
+func (r *ExecutedToolCallRecorder) InvalidateWireInventoryLoss(original, bounded []any) {
+	if r == nil || len(original) == 0 || len(bounded) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureState()
+	limit := len(original)
+	if len(bounded) < limit {
+		limit = len(bounded)
+	}
+	for index := 0; index < limit; index++ {
+		originalCarrier, ok := original[index].(model.ExecutedToolCallCarrier)
+		if !ok {
+			continue
+		}
+		cellCarrier, ok := original[index].(executedToolCallCellCarrier)
+		if !ok {
+			continue
+		}
+		cellID := strings.TrimSpace(cellCarrier.ExecutedToolCallCellID())
+		calls := originalCarrier.ExecutedToolCalls()
+		if cellID == "" || len(calls) == 0 {
+			continue
+		}
+		boundedCarrier, ok := bounded[index].(model.ExecutedToolCallCarrier)
+		if !ok || !model.SameExecutedToolCalls(calls, boundedCarrier.ExecutedToolCalls()) {
+			r.invalidateGroup("cell:" + cellID)
+		}
 	}
 }
 

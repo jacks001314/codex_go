@@ -128,7 +128,14 @@ func (r *ResponsesAgentRunner) authRecoveryUnavailableReason() string {
 // recoverProviderAuth runs the provider-owned credential recovery (at most once
 // per request, guarded by the caller) and reports whether it recovered.
 func (r *ResponsesAgentRunner) recoverProviderAuth(ctx context.Context) bool {
+	messages := r.providerAuthRecoveryMessages()
+	if messages != nil {
+		r.emitProviderAuthRecovery(ProviderAuthRecoveryPhaseStarted, messages.Started)
+	}
 	if err := r.refreshBedrockAWSCredentials(ctx); err == nil && r.bedrockAuthRecoveryAttempted {
+		if messages != nil {
+			r.emitProviderAuthRecovery(ProviderAuthRecoveryPhaseCompleted, messages.Succeeded)
+		}
 		return true
 	}
 	if err := r.refreshWorkloadIdentityAuth(ctx); err == nil {

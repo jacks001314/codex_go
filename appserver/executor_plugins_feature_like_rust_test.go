@@ -52,6 +52,7 @@ func TestManagedPluginsRequirementDisablesSelectedExecutorSkillsLikeRust(t *test
 				Agent:        agent,
 				ThreadStatus: NewThreadStatusManager(),
 			})
+			defer router.Close()
 			threadStart := router.Handle(requestWithParams(t, IntID(1), MethodThreadStart, ThreadStartParams{
 				CWD: t.TempDir(),
 				SelectedCapabilityRoots: []SelectedCapabilityRoot{{

@@ -14837,6 +14837,7 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		Agent:                        agent,
 		Router:                       router,
 		ToolRegistrationMetrics:      r.services.TurnMetrics,
+		ToolMetadataMetrics:          r.services.TurnMetrics,
 		Hooks:                        hooks,
 		SteerMailbox:                 r.requireSteerMailbox(),
 		ExecutedToolCalls:            r.executedToolCallRecorder(params.ThreadID),
@@ -14949,6 +14950,7 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 	recorder := r.executedToolCalls[threadID]
 	r.executedToolCallsMu.Unlock()
 	if recorder != nil {
+		recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
 		return recorder
 	}
 	// Seed from the thread's persisted history outside the map lock so a resume
@@ -14956,6 +14958,7 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 	// recorded (Rust `ExecutedToolCalls::new(features, history)`).
 	fresh, checkpoints := r.mcpAttributionHistory(threadID)
 	recorder = turn.NewExecutedToolCallRecorder()
+	recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
 	recorder.SeedMcpAttribution(fresh, checkpoints)
 	r.executedToolCallsMu.Lock()
 	if existing := r.executedToolCalls[threadID]; existing != nil {
@@ -14964,6 +14967,7 @@ func (r *RuntimeRouter) executedToolCallRecorder(threadID string) *turn.Executed
 		r.executedToolCalls[threadID] = recorder
 	}
 	r.executedToolCallsMu.Unlock()
+	recorder.SetToolMetadataMetrics(r.services.TurnMetrics)
 	return recorder
 }
 

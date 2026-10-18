@@ -2,12 +2,26 @@ package turn
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"codex_go/model"
 	"codex_go/tool"
 )
+
+type directSheddingMetricRecorder struct {
+	values []int
+	stages []string
+}
+
+func (r *directSheddingMetricRecorder) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	if name != model.ToolMetadataShedBytesMetric {
+		return
+	}
+	r.values = append(r.values, value)
+	r.stages = append(r.stages, tags["stage"])
+}
 
 func directMetadataTestInvocation(callID string, arguments string) *tool.Invocation {
 	return &tool.Invocation{
@@ -133,6 +147,71 @@ func TestExecutedToolCallRecorderBoundsRetainedDirectMetadataLikeRust(t *testing
 	recorder.mu.Unlock()
 	if retained > maxRetainedDirectMetadataBytes {
 		t.Fatalf("retained direct metadata = %d, want <= %d", retained, maxRetainedDirectMetadataBytes)
+	}
+}
+
+// Mirrors Rust's direct-retention budget: resource evidence is cheaper than the
+// full snapshot, so it survives while the shed bytes are reported.
+func TestExecutedToolCallRecorderRetainsDirectResourceEvidenceAndRecordsSheddingLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	metrics := &directSheddingMetricRecorder{}
+	recorder.SetToolMetadataMetrics(metrics)
+	invocation := directMetadataTestInvocation("call-resource", `{"text":"hi"}`)
+	call, permit := recorder.PrepareDirectCall(invocation, "")
+	if call == nil || permit == nil {
+		t.Fatal("PrepareDirectCall() = nil, want a reserved record")
+	}
+	call.SetToolResultMetadata(model.NewToolResultMetadata(map[string]any{
+		"openai/resource_access": map[string]any{"id": "resource-1"},
+		"bulk":                   strings.Repeat("x", maxRetainedDirectMetadataBytes+1024),
+	}))
+	output := &ToolResponseItem{Type: "function_call_output", CallID: "call-resource", Output: NewFunctionCallOutputPayload("ok", nil)}
+	recorder.AttachDirectCallToOutput(output, call, permit)
+	permit.Release()
+
+	calls := output.ExecutedToolCalls()
+	if len(calls) != 1 || !calls[0].HasToolResultMetadata() {
+		t.Fatalf("direct calls = %#v, want the record with resource evidence retained", calls)
+	}
+	encoded, err := json.Marshal(calls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"openai/resource_access":{"id":"resource-1"}`) {
+		t.Fatalf("resource evidence was not retained: %s", encoded)
+	}
+	if len(metrics.values) != 1 || metrics.stages[0] != "direct_retained" || metrics.values[0] <= 0 {
+		t.Fatalf("shedding metrics = %#v/%#v, want one positive direct_retained sample", metrics.values, metrics.stages)
+	}
+}
+
+// Mirrors #47957: a wire copy that loses calls or arguments revokes the
+// originating Code Mode cell's completeness, while an unchanged copy does not.
+func TestExecutedToolCallRecorderInvalidatesWireInventoryLossLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	newCellItem := func(arguments map[string]any) *ToolResponseItem {
+		item := &ToolResponseItem{Type: "custom_tool_call_output", CallID: "cell-output", Output: NewFunctionCallOutputPayload("ok", nil)}
+		item.SetExecutedToolCallCell("cell-1")
+		item.ReplaceExecutedToolCalls([]model.ExecutedToolCall{model.NewExecutedToolCall("echo", arguments)})
+		return item
+	}
+	original := newCellItem(map[string]any{"text": "hi"})
+	unchanged := newCellItem(map[string]any{"text": "hi"})
+	recorder.InvalidateWireInventoryLoss([]any{original}, []any{unchanged})
+	recorder.mu.Lock()
+	_, invalidAfterUnchanged := recorder.invalidCells["cell-1"]
+	recorder.mu.Unlock()
+	if invalidAfterUnchanged {
+		t.Fatal("an unchanged wire copy must not invalidate the cell")
+	}
+
+	changed := newCellItem(map[string]any{"text": "truncated"})
+	recorder.InvalidateWireInventoryLoss([]any{original}, []any{changed})
+	recorder.mu.Lock()
+	_, invalidAfterLoss := recorder.invalidCells["cell-1"]
+	recorder.mu.Unlock()
+	if !invalidAfterLoss {
+		t.Fatal("a wire copy with changed arguments must invalidate the cell")
 	}
 }
 

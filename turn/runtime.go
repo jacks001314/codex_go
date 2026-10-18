@@ -21,6 +21,9 @@ type RuntimeOptions struct {
 	// before each sampling request (Rust #51868). Transport retries inside the
 	// model client do not produce another sample.
 	ToolRegistrationMetrics ToolRegistrationMetricSink
+	// ToolMetadataMetrics receives the `codex.tool_metadata.shed_bytes`
+	// histogram from retention and outgoing-message budgets (Rust #47758).
+	ToolMetadataMetrics model.ToolMetadataMetricSink
 	// TurnMetadataIncludesToolInfo mirrors the
 	// features.tool_registry.turn_metadata_includes_tool_info gate: when set,
 	// a Responses Lite request's turn metadata carries the model-visible tool
@@ -85,6 +88,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 	if executedToolCalls == nil {
 		executedToolCalls = NewExecutedToolCallRecorder()
 	}
+	executedToolCalls.SetToolMetadataMetrics(options.ToolMetadataMetrics)
 	return &Runtime{
 		agent:                        options.Agent,
 		router:                       options.Router,
@@ -237,6 +241,11 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			OutputSchema:                 request.OutputSchema,
 			DisableHostedImageGeneration: request.DisableHostedImageGeneration,
 			StreamHandler:                combineResponsesStreamHandlers(request.StreamHandler, timingStreamHandler(timing, r.now)),
+			OnWireInputBounded: func(original, bounded []any) {
+				if executedToolCalls != nil {
+					executedToolCalls.InvalidateWireInventoryLoss(original, bounded)
+				}
+			},
 		})
 		sampling.CloseAt(r.now())
 		if err != nil {

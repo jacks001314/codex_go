@@ -30,6 +30,7 @@ func (r *RuntimeRouter) agentForAppTurn(params *turn.TurnStartParams, turnID str
 		return agent
 	}
 	streaming = streaming.WithStreamHandler(r.responsesStreamHandler(params.ThreadID, turnID, params))
+	streaming.AuthRecoveryHandler = r.authRecoveryEventHandler(params.ThreadID, turnID)
 	streaming.ExternalAuthRefresh = r.externalAuthRefresh
 	streaming.StoreOptions = r.authStoreOptions()
 	if cfg, err := r.effectiveConfigForTurn(params); err == nil {

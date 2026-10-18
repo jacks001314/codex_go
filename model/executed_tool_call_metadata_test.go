@@ -4,7 +4,32 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
+
+type toolMetadataHistogramSample struct {
+	name       string
+	value      int
+	boundaries []float64
+	tags       map[string]string
+}
+
+type toolMetadataMetricRecorder struct {
+	histograms []toolMetadataHistogramSample
+}
+
+func (r *toolMetadataMetricRecorder) Counter(string, int, map[string]string) {}
+
+func (r *toolMetadataMetricRecorder) RecordDuration(string, time.Duration, map[string]string) {}
+
+func (r *toolMetadataMetricRecorder) HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string) {
+	r.histograms = append(r.histograms, toolMetadataHistogramSample{
+		name:       name,
+		value:      value,
+		boundaries: append([]float64(nil), boundaries...),
+		tags:       cloneStringMap(tags),
+	})
+}
 
 // Mirrors Rust #44336: tool-result metadata is bounded, redacted, and serialized
 // as the raw snapshot or the omission marker.
@@ -34,15 +59,19 @@ func TestToolResultMetadataBoundsAndRedacts(t *testing.T) {
 		t.Fatalf("Marshal() = %s", encoded)
 	}
 
-	// The per-result capture budget omits metadata that cannot fit, while
-	// keeping resource-access evidence when that alone fits.
-	oversized := NewToolResultMetadata(strings.Repeat("x", MaxToolResultMetadataBytes+1))
-	if !oversized.IsSome() || !oversized.isOmittedDueToSizeLimit() {
-		t.Fatal("capture must omit an oversized generic snapshot")
+	// Capture retains the complete snapshot. The outgoing message budget, not a
+	// per-result cap, decides what must be shed (Rust #47758).
+	largeValue := strings.Repeat("x", MaxExecutedToolCallMetadataBytes+1)
+	oversized := NewToolResultMetadata(largeValue)
+	if !oversized.IsSome() || oversized.isOmittedDueToSizeLimit() {
+		t.Fatal("capture must retain an oversized snapshot")
+	}
+	if value, ok := oversized.value.(string); !ok || value != largeValue {
+		t.Fatal("capture did not preserve the complete snapshot")
 	}
 	resourceAccess := map[string]any{
 		resourceAccessMetadataKey: map[string]any{"id": "resource-1"},
-		"large":                   strings.Repeat("x", MaxToolResultMetadataBytes+1),
+		"large":                   strings.Repeat("x", MaxExecutedToolCallMetadataBytes+1),
 	}
 	oversized = NewToolResultMetadata(resourceAccess)
 	call.SetToolResultMetadata(oversized)
@@ -50,8 +79,9 @@ func TestToolResultMetadataBoundsAndRedacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(oversized) error = %v", err)
 	}
-	if !strings.Contains(string(encoded), `"tool_result_metadata":{"openai/resource_access":{"id":"resource-1"}}`) {
-		t.Fatalf("capture did not retain resource access: %s", encoded)
+	if !strings.Contains(string(encoded), `"tool_result_metadata":{"large":"`) ||
+		!strings.Contains(string(encoded), `"openai/resource_access":{"id":"resource-1"}}`) {
+		t.Fatalf("capture did not retain the complete snapshot: %s", encoded)
 	}
 }
 
@@ -313,7 +343,7 @@ func TestBoundedInputForResponseMessageLikeRust(t *testing.T) {
 		return item
 	}
 	small := &responsesAgentRequest{Model: "m", Input: []any{carrier(map[string]any{"provider": "small"})}}
-	if got := boundedInputForResponseMessage(small, &AgentRequest{}); len(got) != 1 || got[0] != small.Input[0] {
+	if got := boundedInputForResponseMessage(small, &AgentRequest{}, nil); len(got) != 1 || got[0] != small.Input[0] {
 		t.Fatalf("a message under the soft cap was bounded: %#v", got)
 	}
 
@@ -332,7 +362,14 @@ func TestBoundedInputForResponseMessageLikeRust(t *testing.T) {
 		t.Fatalf("message bytes = %d, want over the soft cap", len(encoded))
 	}
 	before := ExecutedToolCallMetadataTotalBytes(big.Input)
-	got := boundedInputForResponseMessage(big, &AgentRequest{})
+	metrics := &toolMetadataMetricRecorder{}
+	var callbackOriginal, callbackBounded []any
+	got := boundedInputForResponseMessage(big, &AgentRequest{
+		OnWireInputBounded: func(original, bounded []any) {
+			callbackOriginal = original
+			callbackBounded = bounded
+		},
+	}, metrics)
 	if len(got) != len(big.Input) {
 		t.Fatalf("bounded input length = %d, want %d", len(got), len(big.Input))
 	}
@@ -342,12 +379,28 @@ func TestBoundedInputForResponseMessageLikeRust(t *testing.T) {
 	if output, ok := got[1].(*AgentItem); !ok || len(output.Text) != MaxResponseMessageBytes {
 		t.Fatal("ordinary content must survive the soft-cap bound")
 	}
+	if len(metrics.histograms) != 1 {
+		t.Fatalf("shedding histograms = %d, want 1", len(metrics.histograms))
+	}
+	sample := metrics.histograms[0]
+	if sample.name != ToolMetadataShedBytesMetric || sample.tags["stage"] != "message" {
+		t.Fatalf("shedding sample = %#v, want message-stage tool metadata bytes", sample)
+	}
+	if sample.value != before-ExecutedToolCallMetadataTotalBytes(got) {
+		t.Fatalf("shed bytes = %d, want %d", sample.value, before-ExecutedToolCallMetadataTotalBytes(got))
+	}
+	if len(sample.boundaries) != len(ToolMetadataShedBytesBoundaries) {
+		t.Fatalf("boundaries = %v, want Rust BYTE_BUCKETS", sample.boundaries)
+	}
+	if len(callbackOriginal) != len(big.Input) || len(callbackBounded) != len(big.Input) {
+		t.Fatalf("wire callback lengths = %d/%d, want %d", len(callbackOriginal), len(callbackBounded), len(big.Input))
+	}
 
 	// A message over the cap without optional metadata is untouched.
 	plain := &responsesAgentRequest{Model: "m", Input: []any{
 		&AgentItem{Type: "function_call_output", Name: "tool", CallID: "call-3", Text: strings.Repeat("x", MaxResponseMessageBytes)},
 	}}
-	if got := boundedInputForResponseMessage(plain, &AgentRequest{}); got[0] != plain.Input[0] {
+	if got := boundedInputForResponseMessage(plain, &AgentRequest{}, nil); got[0] != plain.Input[0] {
 		t.Fatal("a message without tool metadata must not be re-bounded")
 	}
 }

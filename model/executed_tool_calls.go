@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,15 +11,16 @@ import (
 )
 
 const (
-	// MaxExecutedToolCallMetadataBytes is Rust's protocol
-	// `MAX_EXECUTED_TOOL_CALL_METADATA_BYTES`: the aggregate budget for one
-	// serialized request.
-	MaxExecutedToolCallMetadataBytes = 128 * 1024
-	// MaxToolResultMetadataBytes bounds the raw metadata captured from one
-	// tool result before it enters request history.
-	MaxToolResultMetadataBytes    = 32 * 1024
-	MaxToolResultSources          = 32
-	MaxToolResultSourceFieldBytes = 128
+	// MaxExecutedToolCallMetadataBytes is the aggregate prompt budget introduced
+	// by Rust #47758. Production request input no longer applies this cap
+	// (Rust #49401); the actual outgoing message budget is authoritative.
+	MaxExecutedToolCallMetadataBytes = 2 * 1024 * 1024
+	MaxToolResultSources             = 32
+	MaxToolResultSourceFieldBytes    = 128
+
+	// ToolMetadataShedBytesMetric mirrors Rust's metadata_metrics
+	// `codex.tool_metadata.shed_bytes` histogram.
+	ToolMetadataShedBytesMetric = "codex.tool_metadata.shed_bytes"
 
 	internalChatMessageMetadataPassthroughField = "internal_chat_message_metadata_passthrough"
 	executedToolCallsField                      = "executed_tool_calls"
@@ -31,6 +33,33 @@ const (
 	// field kept when a snapshot must shrink but its evidence is still useful.
 	resourceAccessMetadataKey = "openai/resource_access"
 )
+
+// ToolMetadataShedBytesBoundaries mirrors Rust's metadata_metrics BYTE_BUCKETS.
+var ToolMetadataShedBytesBoundaries = []float64{
+	1024, 4096, 16384, 32768, 65536, 131072, 262144, 524288, 1048576,
+	2097152, 4194304, 8388608, 16777216,
+}
+
+// ToolMetadataMetricSink receives the metadata-shedding histogram. The model
+// and turn packages use this narrow interface so they do not depend on the
+// app-server or telemetry implementations.
+type ToolMetadataMetricSink interface {
+	HistogramWithBounds(name string, value int, boundaries []float64, tags map[string]string)
+}
+
+// RecordToolMetadataShedding mirrors Rust's metadata_metrics::record_shedding:
+// it records only an actual reduction, tagged with the budget stage.
+func RecordToolMetadataShedding(sink ToolMetadataMetricSink, stage string, before, after int) {
+	if sink == nil || after >= before {
+		return
+	}
+	sink.HistogramWithBounds(
+		ToolMetadataShedBytesMetric,
+		before-after,
+		ToolMetadataShedBytesBoundaries,
+		map[string]string{"stage": stage},
+	)
+}
 
 type ExecutedToolCall struct {
 	Name string `json:"name"`
@@ -79,6 +108,21 @@ func NewTruncatedExecutedToolCall(name string, originalBytes int, maxBytes int) 
 	return call
 }
 
+// SameExecutedToolCalls mirrors Rust's
+// InternalChatMessageMetadataPassthrough::has_same_tool_calls: compare call
+// order, names and arguments while ignoring optional result metadata.
+func SameExecutedToolCalls(left, right []ExecutedToolCall) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Name != right[index].Name || !reflect.DeepEqual(left[index].arguments, right[index].arguments) {
+			return false
+		}
+	}
+	return true
+}
+
 // ToolResultSource is a trusted source identity observed by the host in an
 // accepted tool result (Rust #42164).
 type ToolResultSource struct {
@@ -125,26 +169,14 @@ type ToolResultMetadata struct {
 	value any
 }
 
-// NewToolResultMetadata captures the MCP `_meta` snapshot within the per-result
-// budget. If the full snapshot is too large, resource-access evidence is kept
-// when it fits; otherwise the omission marker is used.
+// NewToolResultMetadata captures the complete MCP `_meta` snapshot. Retention
+// and size limiting happen later against the actual outgoing message budget
+// (Rust #47758), so capture must not discard metadata that still fits on the wire.
 func NewToolResultMetadata(metadata any) ToolResultMetadata {
 	if metadata == nil {
 		return ToolResultMetadata{}
 	}
-	data, err := json.Marshal(metadata)
-	if err == nil && len(data) <= MaxToolResultMetadataBytes {
-		return ToolResultMetadata{value: metadata}
-	}
-	if object, ok := metadata.(map[string]any); ok {
-		if resourceAccess, present := object[resourceAccessMetadataKey]; present {
-			reduced := map[string]any{resourceAccessMetadataKey: resourceAccess}
-			if data, err := json.Marshal(reduced); err == nil && len(data) <= MaxToolResultMetadataBytes {
-				return ToolResultMetadata{value: reduced}
-			}
-		}
-	}
-	return OmittedToolResultMetadata()
+	return ToolResultMetadata{value: metadata}
 }
 
 // OmittedToolResultMetadata is the harness status marker used when raw metadata
@@ -495,6 +527,68 @@ func BoundExecutedToolCallsForMessage(items []any, maxMetadataBytes int) []any {
 	}
 	boundExecutedToolCallItemsWithBudget(carriers, maxMetadataBytes, true, false)
 	return items
+}
+
+// BoundRetainedDirectMetadata mirrors Rust's direct-retention budget: resource
+// evidence is kept first, then generic metadata is replaced by omission
+// markers, then metadata is cleared, and only as a last resort the call record
+// is dropped. It returns the metadata bytes before and after the bound so the
+// caller can record the shed histogram.
+func BoundRetainedDirectMetadata(item ExecutedToolCallCarrier, availableBytes int) (int, int) {
+	if item == nil {
+		return 0, 0
+	}
+	before := ExecutedToolCallMetadataBytes(item)
+	if before <= availableBytes {
+		return before, before
+	}
+	overage := before - availableBytes
+	for _, keepResource := range []bool{true, false} {
+		calls := item.ExecutedToolCalls()
+		changed := false
+		for index := range calls {
+			if !calls[index].HasToolResultMetadata() {
+				continue
+			}
+			metadata := &calls[index].toolResultMetadata
+			if keepResource && metadata.retainResourceAccess() {
+				changed = true
+				continue
+			}
+			original := jsonSize(*metadata)
+			retained := metadata.omitIfSmaller(original, overage)
+			if retained != original {
+				changed = true
+			}
+		}
+		if changed {
+			item.ReplaceExecutedToolCalls(calls)
+		}
+		after := ExecutedToolCallMetadataBytes(item)
+		if after <= availableBytes {
+			return before, after
+		}
+		overage = after - availableBytes
+	}
+	clearToolResultMetadata(item)
+	after := ExecutedToolCallMetadataBytes(item)
+	if after <= availableBytes {
+		return before, after
+	}
+	item.ReplaceExecutedToolCalls(nil)
+	return before, 0
+}
+
+func clearToolResultMetadata(item ExecutedToolCallCarrier) {
+	if clearer, ok := item.(interface{ ClearToolResultMetadata() }); ok {
+		clearer.ClearToolResultMetadata()
+		return
+	}
+	calls := item.ExecutedToolCalls()
+	for index := range calls {
+		calls[index].ClearToolResultMetadata()
+	}
+	item.ReplaceExecutedToolCalls(calls)
 }
 
 // NormalizeExecutedToolCallCompleteness clears completion across a cell when

@@ -85,6 +85,11 @@ type AgentRequest struct {
 	// loop owns the request body, so the item is appended to the attempt input
 	// here and handed to the caller for recording.
 	OnConversationItem func(item any)
+	// OnWireInputBounded, when non-nil, receives the original and bounded wire
+	// copies when the outgoing-message soft cap changed executed-tool-call
+	// metadata. Rust uses the same hook to invalidate a Code Mode cell's
+	// completeness after the wire copy loses calls or arguments (#47957).
+	OnWireInputBounded func(original, bounded []any)
 	// Preempt, when non-nil, carries the sampling request's preemption signal
 	// (Rust #48141's `StepContext::preempt`): closing it interrupts request
 	// setup, the response stream and the retry backoff so the queued user input
