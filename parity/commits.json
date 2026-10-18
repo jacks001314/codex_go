@@ -29127,9 +29127,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "blocked-precondition (lane A batch A-b7 reconnaissance, no code changed): the response fields (ThreadReadResponse.readState, ThreadListResponse.readStates) plus schema/json + schema/typescript exports have to change appserver/protocol.go and schema/**, which this pin round reserves for the schema lane, and the durable half lands in state/** (lane B); the type and method surface already exists from #52384/#52395 so this is not N-A. Evidence update/r90a_2026_10_16.md section 13."
+        "Implementation present: ThreadListResponse.readStates and ThreadReadResponse.readState are populated only for eligible durable local user threads; thread/readState/update validates revisions and returns structured readStateConflict data; thread/readState/changed notifications publish committed changes. The methods and schema exports are registered as experimental, and state-runtime persistence backs reads, updates, attention publication, and revert revision retirement. App-server read-state and schema regression suites pass."
       ]
     },
     {
