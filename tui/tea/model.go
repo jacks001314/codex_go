@@ -1707,6 +1707,8 @@ type Model struct {
 	presetSetReadOnly    map[string]bool
 	presetClearReadOnly  map[string]bool
 	quickDialMenu        bool
+	quickDialGuardSpec   string
+	quickDialGuardUntil  time.Time
 	quickDialWriteSlot   int
 	quickDialWriteDelete bool
 	quickDialPending     *config.TUIPreset
@@ -3583,6 +3585,18 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		// no key is forwarded to the draft.
 		if m.warningsView != nil {
 			return m, m.updateWarningsViewKey(msg)
+		}
+		// Rust #54381: a key held across a preset-menu action must not reach the
+		// child view. Bubble Tea reports auto-repeat as repeated presses, so the
+		// guard uses a bounded window like Rust's legacy repeat handling.
+		if !(msg.Type == bubbletea.KeyRunes && msg.Paste) &&
+			m.consumeQuickDialKeyGuard(keySpecFromKeyMsg(msg)) {
+			return m, nil
+		}
+		// Rust #54381: pasting dismisses the passive preset HUD and is then
+		// handled as normal composer input.
+		if msg.Type == bubbletea.KeyRunes && msg.Paste {
+			m.quickDialMenu = false
 		}
 		if m.quickDialMenu {
 			if cmd, handled := m.updateQuickDialMenuKey(msg); handled {

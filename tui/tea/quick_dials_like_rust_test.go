@@ -3,6 +3,7 @@ package tea
 import (
 	"strings"
 	"testing"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
@@ -98,6 +99,119 @@ func TestQuickDialRecallKeepsComposerDraftLikeRust(t *testing.T) {
 	}
 	if model.quickDialMenu {
 		t.Fatal("recalling a preset left the HUD open")
+	}
+}
+
+// TestQuickDialMenuEnterKeepsHudOpenLikeRust covers Rust #54381: Enter is
+// consumed by the passive HUD and does not dismiss it or submit the draft.
+func TestQuickDialMenuEnterKeepsHudOpenLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := NewModel(quickDialTestState(), Options{
+		Width:  100,
+		Height: 30,
+		QuickDials: map[string]config.TUIPreset{
+			"1": {Input: "hello"},
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	typeText(t, model, "keep this draft")
+	model.openQuickDialMenu()
+	model.Update(key(bubbletea.KeyEnter))
+	if !model.quickDialMenu {
+		t.Fatal("Enter dismissed the preset HUD")
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("submitted requests = %#v, want none", submitted)
+	}
+	if got := model.composerText(); got != "keep this draft" {
+		t.Fatalf("composer draft = %q", got)
+	}
+}
+
+// TestQuickDialHeldActionConsumesRepeatsLikeRust covers Rust #54381's
+// ActivationKeyGuard: an action key held across the menu transition must not
+// type into the composer or re-trigger the menu.
+func TestQuickDialHeldActionConsumesRepeatsLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := NewModel(quickDialTestState(), Options{
+		Width:  100,
+		Height: 30,
+		QuickDials: map[string]config.TUIPreset{
+			"1": {Input: "hello"},
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	now := time.Unix(100, 0)
+	model.now = func() time.Time { return now }
+	model.openQuickDialMenu()
+	_, cmd := model.Update(runes("1"))
+	runTeaCmd(t, model, cmd)
+	if len(submitted) != 1 {
+		t.Fatalf("submitted requests = %#v, want one recall", submitted)
+	}
+
+	// The held repeat is consumed instead of reaching the composer.
+	model.Update(runes("1"))
+	if got := model.composerText(); got != "" {
+		t.Fatalf("held repeat reached the composer: %q", got)
+	}
+	if model.quickDialMenu {
+		t.Fatal("held repeat reopened the preset HUD")
+	}
+
+	// After the repeat window a fresh press is normal input.
+	now = now.Add(2 * quickDialKeyGuardWindow)
+	model.Update(runes("1"))
+	if got := model.composerText(); got != "1" {
+		t.Fatalf("fresh press after the guard window = %q, want 1", got)
+	}
+}
+
+// TestQuickDialPasteDismissesHudLikeRust covers Rust #54381: a paste, including
+// a single character, cancels the HUD and reaches the composer.
+func TestQuickDialPasteDismissesHudLikeRust(t *testing.T) {
+	var submitted []SubmitRequest
+	model := NewModel(quickDialTestState(), Options{
+		Width:  100,
+		Height: 30,
+		QuickDials: map[string]config.TUIPreset{
+			"1": {Input: "hello"},
+		},
+		OnSubmitRequest: func(request SubmitRequest) bubbletea.Cmd {
+			submitted = append(submitted, request)
+			return nil
+		},
+	})
+	model.openQuickDialMenu()
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune{'1'}, Paste: true})
+	if model.quickDialMenu {
+		t.Fatal("paste left the preset HUD open")
+	}
+	if len(submitted) != 0 {
+		t.Fatalf("paste recalled a preset: %#v", submitted)
+	}
+	if got := model.composerText(); got != "1" {
+		t.Fatalf("composer text = %q, want the pasted character", got)
+	}
+}
+
+// TestQuickDialMenuYieldsToActivePopupLikeRust covers Rust #54381 popup
+// ownership: an active slash popup keeps the preset HUD closed.
+func TestQuickDialMenuYieldsToActivePopupLikeRust(t *testing.T) {
+	model := NewModel(quickDialTestState(), Options{Width: 100, Height: 30})
+	model.slashPopup = slashCommandPopup{Active: true}
+	model.openQuickDialMenu()
+	if model.quickDialMenu {
+		t.Fatal("preset HUD opened over an active slash popup")
+	}
+	if !model.slashPopup.Active {
+		t.Fatal("opening presets dismissed the popup it must yield to")
 	}
 }
 

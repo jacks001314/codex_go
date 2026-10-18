@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
@@ -28,6 +29,10 @@ const (
 )
 
 var quickDialSlotOrder = []byte{'1', '2', '3', '4', '5', '6', '7', '8', '9', '0'}
+
+// quickDialKeyGuardWindow mirrors Rust's ActivationKeyGuard legacy repeat
+// window: terminals without release events report a held key as fresh presses.
+const quickDialKeyGuardWindow = time.Second
 
 func cloneTUIPresets(values map[string]config.TUIPreset) map[string]config.TUIPreset {
 	if values == nil {
@@ -79,14 +84,45 @@ func (m *Model) openQuickDialMenu() bubbletea.Cmd {
 	if m == nil || !m.quickDialsAvailable() {
 		return nil
 	}
-	if m.modal != nil || m.overlay != nil || m.agentsOverview != nil || m.windowsSandboxSetupActive {
+	// Rust #54381: the HUD yields while another modal or popup owns input.
+	if m.modal != nil || m.overlay != nil || m.agentsOverview != nil || m.windowsSandboxSetupActive ||
+		m.slashPopup.Active || m.skillPopup.Active {
 		return nil
 	}
 	m.quickDialMenu = true
-	m.slashPopup = slashCommandPopup{}
-	m.skillPopup = skillPopupState{}
 	m.notice = ""
 	return nil
+}
+
+// consumeQuickDialKeyGuard reports whether keySpec is a held repeat of the key
+// that just triggered a preset-menu action (Rust #54381
+// quick_dial_menu_key_guard).
+func (m *Model) consumeQuickDialKeyGuard(keySpec string) bool {
+	if m == nil || m.quickDialGuardSpec == "" || strings.TrimSpace(keySpec) == "" {
+		return false
+	}
+	if keySpec != m.quickDialGuardSpec {
+		m.quickDialGuardSpec = ""
+		m.quickDialGuardUntil = time.Time{}
+		return false
+	}
+	now := m.currentTime()
+	if !now.Before(m.quickDialGuardUntil) {
+		m.quickDialGuardSpec = ""
+		m.quickDialGuardUntil = time.Time{}
+		return false
+	}
+	m.quickDialGuardUntil = now.Add(quickDialKeyGuardWindow)
+	return true
+}
+
+// armQuickDialKeyGuard suppresses auto-repeats of a consumed menu action.
+func (m *Model) armQuickDialKeyGuard(keySpec string) {
+	if m == nil || strings.TrimSpace(keySpec) == "" {
+		return
+	}
+	m.quickDialGuardSpec = keySpec
+	m.quickDialGuardUntil = m.currentTime().Add(quickDialKeyGuardWindow)
 }
 
 func (m *Model) renderQuickDialHUD() string {
@@ -162,8 +198,12 @@ func (m *Model) updateQuickDialMenuKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 		return nil, false
 	}
 	switch message.Type {
-	case bubbletea.KeyEsc, bubbletea.KeyEnter:
+	case bubbletea.KeyEsc:
 		m.quickDialMenu = false
+		m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
+		return nil, true
+	case bubbletea.KeyEnter:
+		// Rust #54381 consumes Enter without dismissing the passive HUD.
 		return nil, true
 	case bubbletea.KeyRunes:
 		if message.Alt {
@@ -177,22 +217,27 @@ func (m *Model) updateQuickDialMenuKey(message bubbletea.KeyMsg) (bubbletea.Cmd,
 		switch ch := runes[0]; ch {
 		case 'n':
 			m.quickDialMenu = false
+			m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 			return m.openQuickDialEditor(-1, m.quickDialComposerText()), true
 		case 's':
 			m.quickDialMenu = false
+			m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 			return m.openQuickDialPrefills(), true
 		case 'e':
 			m.quickDialMenu = false
+			m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 			m.openQuickDialsPicker(quickDialEditPickerID, "Edit a preset")
 			return nil, true
 		case 'd':
 			m.quickDialMenu = false
+			m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 			m.openQuickDialsPicker(quickDialDeletePickerID, "Delete a preset")
 			return nil, true
 		default:
 			if ch >= '0' && ch <= '9' {
 				slot := byte(ch)
 				m.quickDialMenu = false
+				m.armQuickDialKeyGuard(keySpecFromKeyMsg(message))
 				if _, ok := m.quickDials[string(slot)]; ok {
 					return m.recallQuickDial(slot), true
 				}

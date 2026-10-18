@@ -31762,9 +31762,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "T9-chain (TUI lane r90tui11 @ f6bf18a2): ShortcutHud / shortcutHud / shortcut_hud all 0 hits (main face blocked on #54380); the chord half is N-A because Go has no chord matcher at all. Registered as backlog BL-1 (chord runtime is a new subsystem). Evidence: update/r90tui_2026_10_16.md section T10"
+        "Round 753: the passive preset HUD above the composer, numbered 0-9 recall/create, n/s/e/d actions, responsive single/two-column layout, and draft preservation are implemented. Closed the remaining interaction gaps: Enter and Esc are consumed by the HUD (Enter keeps it open), paste dismisses the HUD before normal composer input even for a single character, an active slash/skill popup keeps the HUD closed, and a one-second legacy ActivationKeyGuard equivalent consumes held-key repeats after menu actions. chat.open_presets is registered in /keymap, the tooltip references it, and leader p yields to earlier key-chord bindings. Tests: go test ./tui/tea -run 'QuickDial|PresetsLeader' -count=1; go test ./tui/tea -count=1; go vet ./tui/tea"
       ]
     },
     {
