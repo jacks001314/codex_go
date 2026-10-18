@@ -2785,9 +2785,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Guardian context defaults to retaining admitted computer-use images for review; guardianAdmittedImages and node-repl transcript image admission preserve/deduplicate eligible images while rejected or failed reviews keep the ledger semantics. Tests: go test ./appserver ./context -run 'Guardian.*Image|AdmittedImage' -count=1"
       ]
     },
     {
@@ -3146,9 +3146,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Bundled browser cleanup hooks are marked Builtin and admitted through the bundled-hook allowlist while user/executor plugin hooks remain on their existing trust path; tests cover allowed, malformed, and untrusted input cases. Tests: go test ./appserver -run 'BundledHook|Bundled.*Cleanup|ExecutorPluginHook' -count=1"
       ]
     },
     {
