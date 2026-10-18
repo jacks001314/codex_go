@@ -130,9 +130,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ExistingCallAttachment, connect_existing_call_sideband, realtime_sideband_headers"
+        "Round 573 (audit): already implemented. Go attaches to existing realtime calls with the negotiated voice, skips startup context/session updates for an existing call, and retries sideband attachment within a bounded budget with 410 handling. Tests: go test ./realtime -run 'ExistingCall|Attachment|Sideband' -count=1"
       ]
     },
     {
@@ -202,9 +202,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 574 (audit): already implemented. The local code-mode host uses the longer upstream startup timeout, so a slow local host is not cut off prematurely. Tests: go test ./codemode -run 'LocalHost|Startup|Timeout' -count=1"
       ]
     },
     {
@@ -970,9 +970,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 575 (audit): already implemented. Image preparation preserves content kinds and marks preparation errors with images.preparation_error. Tests: go test ./model -run 'ImagePreparation|ContentItemKinds|PreparationError' -count=1"
       ]
     },
     {
