@@ -3422,9 +3422,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: with_host_root"
+        "ServerRegistration.PluginHostRoot is frozen from the host-discovered plugin registration, carried into PluginAttribution and the MCP connection cache key, and test TestRuntimeConfigFreezesPluginHostRootLikeRust covers retention. The Rust with_host_root builder maps to this retained field. Tests: go test ./mcp -run 'FreezesPluginHostRoot|PluginAttribution' -count=1"
       ]
     },
     {
