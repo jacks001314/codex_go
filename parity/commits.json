@@ -14573,9 +14573,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: reject_pending_permission_root_switch"
+        "Round 752: connected TUI threads route built-in presets (:read-only/:workspace/:danger-full-access) through thread/settings/update with permissions, approvalPolicy, and approvalsReviewer; named profiles keep their existing routing. Built-in selections are allowed during a running turn, matching selections short-circuit without waiting for a notification, and the confirmed settings refresh the active profile, approval policy, and reviewer. Pending selections block /new, /clear, resume/fork switches, and command-center task creation/selection with Rust's root-switch message. The embedded local TUI has no app-server thread session, so local presets remain authoritative there; Windows-sandbox deferred selections have no Go carrier and stay tracked under #45821. Tests: go test ./tui/tea -run 'BuiltinPermission|PendingPermission' -count=1; go test ./app -run TestInteractiveRemoteUpdateThreadPermissionsSendsSelectionLikeRust -count=1; go vet ./tui/tea ./app"
       ]
     },
     {

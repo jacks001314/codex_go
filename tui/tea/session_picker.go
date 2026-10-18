@@ -292,6 +292,13 @@ func (m *Model) applyForkCurrentSession(name string) bubbletea.Cmd {
 func (m *Model) applySessionSelection(selection codextui.SessionSelection) (*PickerDecision, string, bool) {
 	threadID := strings.TrimSpace(selection.Target.ThreadID)
 	decision := &PickerDecision{Kind: string(selection.Kind), Value: threadID}
+	currentThreadID := ""
+	if m != nil && m.State != nil {
+		currentThreadID = strings.TrimSpace(m.State.ThreadID)
+	}
+	if threadID != "" && threadID != currentThreadID && m.rejectPendingPermissionRootSwitch("") {
+		return nil, "", true
+	}
 	switch selection.Kind {
 	case codextui.SessionSelectionResume:
 		if threadID == "" {

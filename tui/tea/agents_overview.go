@@ -791,6 +791,10 @@ func (m *Model) newAgentsOverviewSessionCmd() bubbletea.Cmd {
 	if m == nil || m.agentsOverview == nil || m.onAgentsOverviewNewSession == nil || m.agentsOverviewBusy {
 		return nil
 	}
+	if strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.agentsOverviewNotice = "Wait for permissions to update before switching tasks."
+		return nil
+	}
 	// Rust #45255 returns early while offline or when the list is showing a
 	// connection notice: a new session needs the app server.
 	if m.agentsOverviewNotice != "" {
@@ -1079,6 +1083,11 @@ func (m *Model) openAgentsOverviewThread(threadID string) bubbletea.Cmd {
 	current := ""
 	if m.State != nil {
 		current = strings.TrimSpace(m.State.ThreadID)
+	}
+	if threadID != "" && threadID != current && strings.TrimSpace(m.pendingServerProfile) != "" {
+		m.addErrorHistoryMessage("Wait for permissions to update before switching tasks.")
+		m.refreshTranscript()
+		return nil
 	}
 	// Rust #44424: explicitly resuming a task clears its local hide.
 	if m.agentsOverview != nil {

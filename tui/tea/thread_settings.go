@@ -8,6 +8,7 @@ import (
 
 	"codex_go/appserver"
 	codextui "codex_go/tui"
+	chatwidget "codex_go/tui/chatwidget"
 )
 
 // ThreadSettingsUpdatedMsg carries the app server's authoritative settings for
@@ -82,6 +83,11 @@ func (m *Model) applyThreadSettingsValues(settings appserver.Settings) {
 	m.State.ServiceTier = serviceTier
 	if policy := strings.TrimSpace(settings.ApprovalPolicy); policy != "" {
 		m.State.ApprovalPolicy = policy
+	}
+	// Rust #46008: the server-confirmed selection also refreshes the approvals
+	// reviewer so a built-in preset adopts the authoritative setting.
+	if reviewer := strings.TrimSpace(settings.ApprovalsReviewer); reviewer != "" {
+		m.approvalsReviewer = chatwidget.ApprovalsReviewer(reviewer)
 	}
 	if settings.ActivePermissionProfile != nil {
 		if profile := strings.TrimSpace(*settings.ActivePermissionProfile); profile != "" {

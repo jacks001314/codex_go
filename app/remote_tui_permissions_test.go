@@ -5,11 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"codex_go/appserver"
+	"codex_go/appserverdaemon"
 	codextui "codex_go/tui"
 	codextea "codex_go/tui/tea"
 )
@@ -134,6 +141,78 @@ func TestRemoteTUIPermissionRequestUnsupportedMapping(t *testing.T) {
 	}
 	if remoteTUIPermissionUpdateUnsupported(errors.New("boom")) {
 		t.Fatal("plain errors must propagate")
+	}
+}
+
+// TestInteractiveRemoteUpdateThreadPermissionsSendsSelectionLikeRust covers
+// Rust #46008: built-in selections carry their permission profile, approval
+// policy, and approvals reviewer in thread/settings/update.
+func TestInteractiveRemoteUpdateThreadPermissionsSendsSelectionLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	paramsCh := make(chan appserver.SettingsUpdateParams, 1)
+	serverErrs := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			remoteTUITestSendErr(serverErrs, err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				return
+			}
+			switch req.Method {
+			case "":
+				continue
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodThreadSettingsUpdate):
+				var params appserver.SettingsUpdateParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					remoteTUITestSendErr(serverErrs, err)
+					return
+				}
+				paramsCh <- params
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": appserver.SettingsUpdateResponse{}})
+			default:
+				remoteTUITestSendErr(serverErrs, fmt.Errorf("unexpected method %s", req.Method))
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	hook := interactiveRemoteUpdateThreadPermissions(ctx, endpoint)
+	if err := hook("thread-1", codextea.PermissionSelection{
+		ProfileID:         ":workspace",
+		ApprovalPolicy:    "on-request",
+		ApprovalsReviewer: "auto_review",
+		DisplayLabel:      "Approve for me",
+	}); err != nil {
+		t.Fatalf("update thread permissions: %v", err)
+	}
+	select {
+	case params := <-paramsCh:
+		if params.ThreadID != "thread-1" {
+			t.Fatalf("thread id = %q", params.ThreadID)
+		}
+		if params.Permissions == nil || *params.Permissions != ":workspace" {
+			t.Fatalf("permissions = %v", params.Permissions)
+		}
+		if params.ApprovalPolicy == nil || *params.ApprovalPolicy != "on-request" {
+			t.Fatalf("approval policy = %v", params.ApprovalPolicy)
+		}
+		if params.ApprovalsReviewer == nil || *params.ApprovalsReviewer != "auto_review" {
+			t.Fatalf("approvals reviewer = %v", params.ApprovalsReviewer)
+		}
+	case err := <-serverErrs:
+		t.Fatalf("server error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for thread/settings/update")
 	}
 }
 

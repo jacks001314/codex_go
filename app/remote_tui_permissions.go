@@ -215,12 +215,14 @@ func interactiveRemoteListPermissionProfiles(ctx context.Context, endpoint *apps
 	}
 }
 
-// interactiveRemoteUpdateThreadPermissions asks the server to adopt a named
-// permission profile through thread/settings/update (Rust #43340).
-func interactiveRemoteUpdateThreadPermissions(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(threadID string, profileID string) error {
-	return func(threadID string, profileID string) error {
+// interactiveRemoteUpdateThreadPermissions asks the server to adopt a
+// permission selection through thread/settings/update (Rust #43340/#46008).
+// Built-in presets carry their approval policy and reviewer so the confirmed
+// settings remain authoritative for the connected thread.
+func interactiveRemoteUpdateThreadPermissions(ctx context.Context, endpoint *appserverdaemon.RemoteAppServerEndpoint) func(threadID string, selection codextea.PermissionSelection) error {
+	return func(threadID string, selection codextea.PermissionSelection) error {
 		threadID = strings.TrimSpace(threadID)
-		profileID = strings.TrimSpace(profileID)
+		profileID := strings.TrimSpace(selection.ProfileID)
 		if threadID == "" || profileID == "" {
 			return errors.New("a thread id and permission profile are required")
 		}
@@ -229,11 +231,18 @@ func interactiveRemoteUpdateThreadPermissions(ctx context.Context, endpoint *app
 			return err
 		}
 		defer client.close()
-		var updated appserver.SettingsUpdateResponse
-		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadSettingsUpdate, appserver.SettingsUpdateParams{
+		params := appserver.SettingsUpdateParams{
 			ThreadID:    threadID,
 			Permissions: &profileID,
-		}, &updated); err != nil {
+		}
+		if policy := strings.TrimSpace(selection.ApprovalPolicy); policy != "" {
+			params.ApprovalPolicy = &policy
+		}
+		if reviewer := strings.TrimSpace(selection.ApprovalsReviewer); reviewer != "" {
+			params.ApprovalsReviewer = &reviewer
+		}
+		var updated appserver.SettingsUpdateResponse
+		if err := remoteSessionRequest(ctx, client, appserver.MethodThreadSettingsUpdate, params, &updated); err != nil {
 			if remoteTUIPermissionUpdateUnsupported(err) {
 				return codextea.ErrNamedPermissionProfilesUnsupported
 			}

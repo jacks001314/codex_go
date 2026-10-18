@@ -112,7 +112,7 @@ func TestApplyThreadSettingsPreservesNamedPermissionProfileLikeRust(t *testing.T
 	model := NewModel(codextui.NewState(nil), Options{
 		Width:  120,
 		Height: 40,
-		OnUpdateThreadPermissions: func(string, string) error {
+		OnUpdateThreadPermissions: func(string, PermissionSelection) error {
 			return nil
 		},
 	})

@@ -34,8 +34,8 @@ func (r *permissionProfileRecorder) model(taskRunning bool) *Model {
 			}
 			return recorder.profiles, explicit, recorder.listErr
 		},
-		OnUpdateThreadPermissions: func(threadID string, profileID string) error {
-			recorder.updates = append(recorder.updates, threadID+"|"+profileID)
+		OnUpdateThreadPermissions: func(threadID string, selection PermissionSelection) error {
+			recorder.updates = append(recorder.updates, threadID+"|"+selection.ProfileID)
 			return recorder.updErr
 		},
 	})
@@ -146,7 +146,7 @@ func TestPermissionsMenuSelectionGuards(t *testing.T) {
 	}).model(false)
 	openPermissionsWithProfiles(unsupported)
 	unsupported.applyPermissionsModalOption("trusted")
-	if !strings.Contains(unsupported.notice, "Named profiles require a newer app server.") {
+	if !strings.Contains(unsupported.notice, "Permission selection requires a newer app server.") {
 		t.Fatalf("unsupported notice = %q", unsupported.notice)
 	}
 	if unsupported.pendingServerProfile != "" {

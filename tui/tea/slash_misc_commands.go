@@ -107,6 +107,9 @@ func (m *Model) startFreshNamedSession(args string, defaultNotice string) {
 	if m == nil || m.State == nil {
 		return
 	}
+	if m.rejectPendingPermissionRootSwitch("") {
+		return
+	}
 	m.clearMisalignmentState()
 	name := strings.TrimSpace(args)
 	// Daybreak is session-scoped for a fresh thread: retain the current

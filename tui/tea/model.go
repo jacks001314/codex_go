@@ -181,6 +181,16 @@ type StartManagedWorktreeFunc func(mode string, name string, cwd string, threadI
 
 type ThreadRenameFunc func(threadID string, name string) error
 
+// PermissionSelection carries one picker decision to the connected app server
+// (Rust #46008 PermissionProfileSelection). Empty approval and reviewer fields
+// preserve the server's active values, matching an omitted update parameter.
+type PermissionSelection struct {
+	ProfileID         string
+	ApprovalPolicy    string
+	ApprovalsReviewer string
+	DisplayLabel      string
+}
+
 // DaybreakUpdateFunc persists a thread's Daybreak preference.
 type DaybreakUpdateFunc func(threadID string, enabled bool) error
 
@@ -1324,9 +1334,11 @@ type Options struct {
 	// configured permission profiles, so the picker falls back to its local
 	// built-in presets. Nil keeps the picker on local presets only.
 	OnListPermissionProfiles func() ([]chatwidget.CustomPermissionProfile, bool, error)
-	// OnUpdateThreadPermissions asks the connected app server to adopt a named
-	// permission profile for the thread (Rust #43340; thread/settings/update).
-	OnUpdateThreadPermissions func(threadID string, profileID string) error
+	// OnUpdateThreadPermissions asks the connected app server to adopt a
+	// permission selection for the thread (Rust #43340/#46008;
+	// thread/settings/update). Built-in presets are routed through the server
+	// too so the confirmed settings stay authoritative.
+	OnUpdateThreadPermissions func(threadID string, selection PermissionSelection) error
 	// TerminalSize overrides the terminal-size probe used by the tmux resize
 	// monitor (Rust #43603); nil uses the process terminal.
 	TerminalSize      func() (int, int, error)
@@ -2046,7 +2058,7 @@ type Model struct {
 	worktreePopupRequestID   string
 	// Named permission profile discovery and pending selection (Rust #43340).
 	onListPermissionProfiles  func() ([]chatwidget.CustomPermissionProfile, bool, error)
-	onUpdateThreadPermissions func(threadID string, profileID string) error
+	onUpdateThreadPermissions func(threadID string, selection PermissionSelection) error
 	permissionProfiles        []chatwidget.CustomPermissionProfile
 	permissionProfilesLoading bool
 	// permissionProfilesExplicit records the server's explicit-profile mode from

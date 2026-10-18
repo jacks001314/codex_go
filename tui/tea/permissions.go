@@ -28,8 +28,10 @@ type permissionProfilesLoadedMsg struct {
 	err                 error
 }
 
-// selectServerPermissionProfile asks the server to adopt a named profile and
-// tracks the selection until the server confirms it (Rust #43340).
+// selectServerPermissionProfile asks the server to adopt a permission profile
+// and tracks the selection until the server confirms it (Rust #43340/#46008).
+// Built-in presets use the same path so the server's confirmed settings remain
+// authoritative, and they may be selected while a turn is running.
 func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem) bubbletea.Cmd {
 	if m == nil || m.State == nil {
 		return nil
@@ -45,15 +47,27 @@ func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem
 		m.refreshTranscript()
 		return nil
 	}
-	if m.isTaskRunning() {
+	profileID := strings.TrimSpace(item.ProfileID)
+	if profileID == "" {
+		return nil
+	}
+	builtin := strings.HasPrefix(profileID, ":")
+	if !builtin && m.isTaskRunning() {
 		m.notice = "Wait for the current turn to finish before changing permissions."
 		m.refreshTranscript()
 		return nil
 	}
-	profileID := strings.TrimSpace(item.ProfileID)
-	if err := m.onUpdateThreadPermissions(threadID, profileID); err != nil {
+	selection := permissionSelectionFromItem(item)
+	if builtin && m.permissionSelectionMatches(selection) {
+		// Rust #46008: an unchanged selection may not emit a settings
+		// notification, so adopt it locally instead of waiting for one.
+		m.notice = ""
+		m.refreshTranscript()
+		return nil
+	}
+	if err := m.onUpdateThreadPermissions(threadID, selection); err != nil {
 		if errors.Is(err, ErrNamedPermissionProfilesUnsupported) {
-			m.notice = "Named profiles require a newer app server."
+			m.notice = "Permission selection requires a newer app server."
 		} else {
 			m.notice = "Failed to select permissions: " + strings.TrimSpace(err.Error())
 		}
@@ -61,9 +75,80 @@ func (m *Model) selectServerPermissionProfile(item chatwidget.PermissionMenuItem
 		return nil
 	}
 	m.pendingServerProfile = profileID
-	m.notice = "Permission selection requested: " + profileID
+	label := strings.TrimSpace(selection.DisplayLabel)
+	if label == "" {
+		label = profileID
+	}
+	m.notice = "Permission selection requested: " + label
 	m.refreshTranscript()
 	return nil
+}
+
+// permissionSelectionFromItem converts a picker row into the app-server
+// selection payload.
+func permissionSelectionFromItem(item chatwidget.PermissionMenuItem) PermissionSelection {
+	selection := PermissionSelection{
+		ProfileID:    strings.TrimSpace(item.ProfileID),
+		DisplayLabel: strings.TrimSpace(item.Name),
+	}
+	if item.ApprovalPolicy != nil {
+		selection.ApprovalPolicy = string(*item.ApprovalPolicy)
+	}
+	if item.Reviewer != nil {
+		selection.ApprovalsReviewer = string(*item.Reviewer)
+	}
+	return selection
+}
+
+// permissionSelectionMatches reports whether a built-in selection already
+// matches the active settings (Rust #46008 already_selected).
+func (m *Model) permissionSelectionMatches(selection PermissionSelection) bool {
+	if m == nil || m.State == nil {
+		return false
+	}
+	if normalizePermissionProfileID(strings.TrimSpace(m.State.Sandbox)) !=
+		normalizePermissionProfileID(strings.TrimSpace(selection.ProfileID)) {
+		return false
+	}
+	if policy := strings.TrimSpace(selection.ApprovalPolicy); policy != "" &&
+		policy != strings.TrimSpace(m.State.ApprovalPolicy) {
+		return false
+	}
+	if reviewer := strings.TrimSpace(selection.ApprovalsReviewer); reviewer != "" &&
+		reviewer != string(currentApprovalsReviewer(m)) {
+		return false
+	}
+	return true
+}
+
+// rejectPendingPermissionRootSwitch blocks starting or switching tasks while a
+// permission selection awaits the server's confirmation (Rust #46008
+// reject_pending_permission_root_switch).
+func (m *Model) rejectPendingPermissionRootSwitch(message string) bool {
+	if m == nil || strings.TrimSpace(m.pendingServerProfile) == "" {
+		return false
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Wait for permissions to update before switching tasks."
+	}
+	m.addErrorHistoryMessage(message)
+	m.refreshTranscript()
+	return true
+}
+
+// normalizePermissionProfileID maps legacy sandbox-policy spellings onto the
+// built-in profile ids used by the permission picker.
+func normalizePermissionProfileID(value string) string {
+	switch value {
+	case "read-only", ":read-only":
+		return chatwidget.ReadOnlyProfile
+	case "workspace", "workspace-write", ":workspace", ":workspace-write":
+		return chatwidget.WorkspaceProfile
+	case "danger-full-access", ":danger-full-access":
+		return chatwidget.DangerFullAccessProfile
+	default:
+		return value
+	}
 }
 
 // remoteNamedPermissionProfileActive reports whether a non-built-in profile
@@ -430,9 +515,10 @@ func (m *Model) applyPermissionSelectionWithPersistence(item chatwidget.Permissi
 		return nil
 	}
 	profileID := strings.TrimSpace(item.ProfileID)
-	// Rust #43340: a named (non-built-in) profile is owned by the connected app
-	// server and must be selected through thread/settings/update.
-	if profileID != "" && !strings.HasPrefix(profileID, ":") && m.onUpdateThreadPermissions != nil {
+	// Rust #43340/#46008: a connected thread's profile selection, including a
+	// built-in preset, goes through thread/settings/update so the server's
+	// confirmed settings stay authoritative.
+	if profileID != "" && m.onUpdateThreadPermissions != nil {
 		return m.selectServerPermissionProfile(item)
 	}
 	if item.ApprovalPolicy != nil {
