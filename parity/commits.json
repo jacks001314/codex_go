@@ -11847,9 +11847,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: SessionInstructions, inherited_instructions, with_user_instructions"
+        "Round 545 (audit): already implemented. Go keeps the applied global-instructions snapshot, re-discovers repository instructions when the working directory changes, inherits the parent snapshot for subagents, and refreshes between long-turn model requests with one warning per episode. Tests: go test ./appserver ./config -run 'GlobalInstructions' -count=1"
       ]
     },
     {
@@ -14607,9 +14607,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 546 (audit): already implemented. The controller socket policy remains optional, so an omitted controller value defers to the attachment policy; capturing a policy for an attachment resolves the effective value distinctly from an explicit false. Tests: go test ./network ./execserver -run 'UnixSocket|NetworkPolicy|Socket' -count=1"
       ]
     },
     {
@@ -21716,9 +21716,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 547 (audit): already implemented. Usage-limit windows are preserved on turn and compaction analytics events and on API errors, including the error display/recovery lane. Tests: go test ./telemetry ./model -run 'UsageLimitWindow|UsageLimit' -count=1"
       ]
     },
     {
