@@ -10323,9 +10323,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: GUARDIAN_MAX_ACTION_BYTES"
+        "Equivalent implementation already present: Guardian action formatting truncates per-string content and rejects aggregate JSON above 200000 bytes, with the exact Rust error; unified exec keeps its separate 8000-byte stdin approval cap and records size-check metrics before review."
       ]
     },
     {
