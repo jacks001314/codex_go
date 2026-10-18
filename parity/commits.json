@@ -430,9 +430,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 6/6 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "configRequirements/read exposes browser-use origin/default policies, access and persistent-approval requirements, computer-use default app access, macOS bundle IDs and Windows AUMID/EXE rules. Config parsing, JSON marshaling and app-server requirements tests cover the wire shape. Tests: go test ./config -run 'BrowserUse|ComputerUse|Requirements' -count=1; go test ./appserver -run 'ConfigRequirementsRead' -count=1"
       ]
     },
     {
