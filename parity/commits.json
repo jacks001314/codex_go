@@ -922,9 +922,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 596 (audit): rebuilding retained user input updates content_item_kinds together with the replacement parts, so a text-only message carries user.text and discarded media cannot leave a stale positional classification. The later multipart retention work extends this normalization to each retained text slice while preserving the remaining message and harness metadata. Tests: go test ./compact -run 'LocalCompaction|Retained|Annotation|ContentItemKinds' -count=1; go vet ./compact"
       ]
     },
     {
