@@ -13889,9 +13889,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 663 (partial): remote installed plugins retain canonical_app_id scoped to the current authentication identity. Disabling a canonical owner removes its canonical connector from remaining enabled capabilities, including AppConnectors, Apps, and AppTemplate canonical/materialized IDs, even when another enabled plugin contributes the connector; step snapshots and the immediate thread capability path both apply the filter. Remaining: Go has no persistent remote-installed metadata cache, so canonical ownership is available after app-server plugin sync populates the shared PluginService state; backend-disabled entries are skipped. Tests: go test ./plugin -run 'CanonicalApp' -count=1; go test ./appserver -run 'CanonicalDisabled|DisabledPluginCapabilities|RemoteInstalledPluginDisplayRefresh' -count=1; go vet ./plugin ./appserver"
+        "Round 682 (audit): remote installed-plugin entries retain canonical_app_id with the current authentication identity in the shared PluginService cache, matching Rust's in-memory PluginsManager cache. CanonicalAppIDsForDisabledPlugins matches owners by plugin id/name+marketplace, ignores stale-auth metadata, and needs no local owner bundle. Both step snapshots and immediate thread capabilities filter AppConnectors, Apps, and canonical/materialized template IDs even when another enabled plugin contributes the connector. Tests: go test ./plugin -run 'CanonicalApp' -count=1; go test ./appserver -run 'CanonicalDisabled|DisabledPluginCapabilities|RemoteInstalledPluginDisplayRefresh' -count=1; go vet ./plugin ./appserver"
       ]
     },
     {
