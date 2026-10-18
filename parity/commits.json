@@ -12209,9 +12209,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: set_render_rate"
+        "N/A by architecture (audit): upstream 7ef70f95d5 (#44924) refreshes the speaker format only on Rust's in-session output restart path. Go's voicehost opens capture before playback for a session (openHostDevices) and has no speaker restart API that would retain a pre-microphone SupportedStreamConfig. Each new session therefore queries/reopens the output against the current device state rather than restoring a stale rate."
       ]
     },
     {
@@ -16855,9 +16855,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: cancel_beginning, cancel_pending_jump"
+        "N/A by architecture (audit): upstream 392f56a611 (#46722) cancels a Rust pager's asynchronous LoadingBeginning history request when later navigation supersedes Home. Go's TranscriptOverlay renders the already-loaded in-memory transcript synchronously and has no incremental older-history request or pending-jump state to cancel; Home is a direct viewport jump. Existing pager navigation and backtrack coverage remains applicable."
       ]
     },
     {
@@ -18765,9 +18765,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: permission_preset_description"
+        "Aligned upstream 00d92ad3ee (#47329): built-in permission presets use the concise, period-free Rust menu descriptions in both the permissions popup and named-profile picker, while disabled reasons and custom fallbacks stay consistent with the menu contract. Tests: TestPermissionPresetDescriptionsMatchRustMenuWording and TestInlinePermissionPresetDescriptionsShareMenuCopy."
       ]
     },
     {
