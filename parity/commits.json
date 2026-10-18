@@ -2170,9 +2170,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 11/13; needs review: resolve_model_info, selected_collaboration_mode"
+        "Round 601 (parity backfill): AgentStepSettings snapshots model, effort, reasoning summary, service tier, and request metadata; the agent loop applies captured values only to following steps. App-server resolution preserves config/model defaults and refilters service tiers after model changes. Tests: go test ./turn ./appserver -run 'StepSettings|ServiceTierForUpdatedModel|RefreshesStepSettings' -count=1"
       ]
     },
     {
@@ -2519,9 +2519,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: git_path_from_bytes"
+        "Round 602 (parity backfill): worktree ownership validates the four-hex bucket layout, repository identity, and linked-worktree common git directory before reading or writing codex-thread.json. Binding is atomic no-clobber and preserves the versioned camelCase schema. Tests: go test ./worktree -count=1"
       ]
     },
     {
@@ -3155,9 +3155,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/5; needs review: with_forked_from_ordinal_exclusive"
+        "Round 603 (parity backfill): Responses turn/client metadata carries forked_from_ordinal_exclusive only when the logical history base names the direct fork parent; ambiguous revert or ancestor boundaries omit the cutoff. Window identity remains in turn and prewarm metadata. Tests: go test ./turn ./codexapi ./appserver -run 'ForkOrdinal|ResponsesMetadata|Fork.*Metadata' -count=1"
       ]
     },
     {
@@ -3588,9 +3588,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: resolve_token_budget"
+        "Round 604 (parity backfill): appTurnRunConfig captures turn-start token-budget preferences and effective configuration; step input resolution evaluates them against each sampling step's active model, rebuilds model/context-window world state, and emits guidance changes once. Tests: go test ./config ./turn ./appserver -run 'TurnStepInputItems|ResolveTokenBudget|TokenBudget' -count=1"
       ]
     },
     {
@@ -26917,9 +26917,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: DeferredToolDiscovery, TOOL_SEARCH_GUIDANCE, apply_code_mode_description, create_code_mode_tool, prepare_code_mode_tool_definitions"
+        "Round 605 (parity backfill): tool.ToolSearchHandler indexes deferred specs, ranks deterministic token coverage/frequency matches, honors the caller limit, and returns metadata for the next model call. The code_mode_tool_search feature and direct-tool fallback are wired. Tests: go test ./turn ./codemode ./tool ./features -run 'ToolSearch|Deferred' -count=1"
       ]
     },
     {
