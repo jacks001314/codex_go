@@ -4079,14 +4079,24 @@ func (m *Model) footerHelpLine() (string, bool) {
 		// second-Esc prompt once backtrack mode is primed.
 		footerLine = bottompane.EscHintLine(true)
 	} else {
-		if m.agentsNavigationAvailable() {
-			footerLine = PlainKey(bubbletea.KeyLeft).Label() + " for agents \u00b7 " + footerLine
+		usageNotice := ""
+		if m.usageNoticeApplies() {
+			usageNotice, _ = m.usageNoticeLine(max(m.width-2, 1))
 		}
-		// Rust #48205/#48206: the passive hint row right-aligns the retained
-		// warning count (with its open-warnings shortcut) when it fits.
-		m.warningDisplay.SyncWarnings(m.retainedWarningCells())
-		if m.passiveWarningNoticeApplies() {
-			footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
+		if usageNotice != "" {
+			// Rust #47096: the quota notice owns the composer gap row and
+			// prefers half its width over the passive key hints.
+			footerLine = usageNotice
+		} else {
+			if m.agentsNavigationAvailable() {
+				footerLine = PlainKey(bubbletea.KeyLeft).Label() + " for agents \u00b7 " + footerLine
+			}
+			// Rust #48205/#48206: the passive hint row right-aligns the retained
+			// warning count (with its open-warnings shortcut) when it fits.
+			m.warningDisplay.SyncWarnings(m.retainedWarningCells())
+			if m.passiveWarningNoticeApplies() {
+				footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
+			}
 		}
 	}
 	return footerLine, footerAlreadyStyled
@@ -8320,6 +8330,7 @@ func rateLimitWindowFromProtocol(window *protocol.RateLimitWindow) *chatwidget.R
 	return &chatwidget.RateLimitWindow{
 		UsedPercent:        window.UsedPercent,
 		WindowDurationMins: cloneInt64PtrTea(window.WindowDurationMins),
+		ResetsAt:           cloneInt64PtrTea(window.ResetsAt),
 	}
 }
 

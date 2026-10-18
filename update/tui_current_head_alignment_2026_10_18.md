@@ -2000,12 +2000,17 @@ green.
 - `#46946` is complete: dynamic-tool lifecycle metadata immediately registers
   missing root rows and folds children into loaded roots, while archived/deleted
   tombstones block delayed responses and clear on thread start/unarchive.
-- `#47096` is partially complete: owned/fullscreen layouts place the hint and
+- `#47096` is complete: owned/fullscreen layouts place the hint and
   reading-control row immediately above the composer, reserve preview/HUD rows
   when sizing the transcript, and clip the hint → HUD → activity → preview in
   that order when the terminal is still too short while keeping composer/status
-  visible. Rust's shared usage-notice detail-width policy remains unimplemented
-  because Go has no usage-notice state for that row.
+  visible. The composer gap now also renders the quota usage notice with Rust's
+  half-row/compact width policy, thresholds, credits suppression, and reset
+  details.
+- `#46912` is partially complete: the quota notice is visible in the composer
+  gap and honors backend-banner/modal/following gates. Remaining: the dedicated
+  rolling-update merge and stale-read rejection state, plus native-history quota
+  warning cells.
 - `#41467` is complete: the model picker refreshes from the app server with
   stale-request rejection, catalog constraints, in-place picker/reasoning
   refresh, and fallback when the current model disappears.

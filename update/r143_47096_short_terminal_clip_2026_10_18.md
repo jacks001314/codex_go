@@ -8,11 +8,14 @@
 - 裁剪后重新映射 footer/working/composer section index，避免选中区域与
   welcome-blossom 插入点错位。
 - inline 布局保持原有“hint 在 composer 下方”的顺序。
+- composer gap 现在优先显示 quota usage notice：详情目标半行宽，窄终端允许
+  最短完整警告占满行；Plus/Team 5h 阈值为 50%，其余 75%；有 workspace
+  credits 时抑制；reset 详情仅在放得下时显示。
+- `RateLimitWindow` 补齐 `ResetsAt`，从 protocol snapshot 映射，用于
+  `resets at ...` 文案。
 
-剩余差异：
-
-- Rust 的 usage notice 详情宽度策略（半行宽、最短完整警告可占满行）仍无法
-  落地，因为 Go 没有对应的 usage-notice 状态/行。
+结论：`#47096` 的短终端裁剪与 usage notice 宽度策略均已落地。`#46912`
+仍保留 partial，剩余 rolling/stale-read 状态与 native-history 配额告警。
 
 验证：
 

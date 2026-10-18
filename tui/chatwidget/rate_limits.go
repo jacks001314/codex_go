@@ -38,6 +38,7 @@ const (
 type RateLimitWindow struct {
 	UsedPercent        float64
 	WindowDurationMins *int64
+	ResetsAt           *int64
 }
 
 type RateLimitCredits struct {
