@@ -12437,9 +12437,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: get_model_instructions, personality_opt_out_only"
+        "Round 662 (audit): already implemented. ModelInfo.SupportsPersonality is always false and ModelInstructions returns the literal template while ignoring legacy personality variables; explicit none still strips the baked Personality section. App-server no longer emits personality_spec, ignores retired friendly/pragmatic overrides, and preserves none through thread start/turn/resume/fork paths; TUI and app request construction keep only the none opt-out. Tests: go test ./model -run 'Personality|ModelInstructions' -count=1; go test ./appserver -run 'Personality' -count=1; go test ./app -run 'PersonalityOptOut' -count=1; go test ./tui/chatwidget -run 'Personality' -count=1"
       ]
     },
     {
