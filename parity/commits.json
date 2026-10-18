@@ -20239,9 +20239,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: retain_tool_resource_access"
+        "Round 303 (implementation): aligned the aggregate executed-tool-call metadata budget to 128KiB and added a 32KiB per-result capture bound. Oversized generic metadata is omitted, while openai/resource_access is retained when it alone fits. Existing largest-first eviction, resource-evidence-before-inventory shedding, whole-message and retained-history scopes now operate under the updated limits. Tests: go test ./model -run 'ExecutedToolCall|ToolResult' -count=1; go test ./model -run 'Prompt|Tool|Metadata|Truncat|Compact|Executed' -count=1"
       ]
     },
     {

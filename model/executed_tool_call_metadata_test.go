@@ -34,19 +34,24 @@ func TestToolResultMetadataBoundsAndRedacts(t *testing.T) {
 		t.Fatalf("Marshal() = %s", encoded)
 	}
 
-	// Rust's `ToolResultMetadata::new` captures the complete snapshot; the
-	// outgoing-request budget sheds it later, so capture must not omit it.
-	oversized := NewToolResultMetadata(strings.Repeat("x", MaxExecutedToolCallMetadataBytes+1))
-	if !oversized.IsSome() || oversized.isOmittedDueToSizeLimit() {
-		t.Fatal("capture must retain the raw oversized snapshot")
+	// The per-result capture budget omits metadata that cannot fit, while
+	// keeping resource-access evidence when that alone fits.
+	oversized := NewToolResultMetadata(strings.Repeat("x", MaxToolResultMetadataBytes+1))
+	if !oversized.IsSome() || !oversized.isOmittedDueToSizeLimit() {
+		t.Fatal("capture must omit an oversized generic snapshot")
 	}
+	resourceAccess := map[string]any{
+		resourceAccessMetadataKey: map[string]any{"id": "resource-1"},
+		"large":                   strings.Repeat("x", MaxToolResultMetadataBytes+1),
+	}
+	oversized = NewToolResultMetadata(resourceAccess)
 	call.SetToolResultMetadata(oversized)
 	encoded, err = json.Marshal(call)
 	if err != nil {
 		t.Fatalf("Marshal(oversized) error = %v", err)
 	}
-	if strings.Contains(string(encoded), "omitted_due_to_size_limit") {
-		t.Fatal("capture shed the oversized snapshot before the request budget")
+	if !strings.Contains(string(encoded), `"tool_result_metadata":{"openai/resource_access":{"id":"resource-1"}}`) {
+		t.Fatalf("capture did not retain resource access: %s", encoded)
 	}
 }
 
@@ -89,8 +94,9 @@ func TestBoundExecutedToolCallsShedsMetadataBeforeSourcesAndCalls(t *testing.T) 
 	RecordExecutedToolCall(item)
 	calls := item.ExecutedToolCalls()
 	calls[0].SetToolResultSources(NewToolResultSources([]ToolResultSource{{Type: "document", ID: "R0"}}))
-	// Keep the individual snapshot under the limit, but let the call total cross it.
-	calls[0].SetToolResultMetadata(NewToolResultMetadata(strings.Repeat("m", MaxExecutedToolCallMetadataBytes-64)))
+	// Simulate a snapshot retained under an older capture path so this test
+	// exercises outgoing-request shedding rather than capture rejection.
+	calls[0].SetToolResultMetadata(ToolResultMetadata{value: strings.Repeat("m", MaxExecutedToolCallMetadataBytes-64)})
 	if !calls[0].HasToolResultMetadata() {
 		t.Fatal("raw snapshot must be retained before bounding")
 	}

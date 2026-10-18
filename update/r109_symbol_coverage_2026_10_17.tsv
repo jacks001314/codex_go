@@ -2454,7 +2454,7 @@ e6a944ad758b41b0bdfd80079a52e3133beac910	42397	Extract focused TUI logic into su
 e6da6fd7c7fd557a7b23ddea2916a075ca47bf82	47649	Add opt-in OTLP logging for final agent responses (#47649)	2026-09-23	telemetry	4	1	0.25	0	0	audit_pending	AgentResponseContext,AgentResponseLogger,agent_response_logging_enabled
 e6f4af1d92bbfadcc49217006c930f2a760f1cc8	48829	Wait briefly for the Windows sandbox provisioning service to start (#48829)	2026-09-28	sandbox	0	0		0	0	not_applicable	
 e6ff7495064372deab97e7b793f5b613d1a76309	42325	Render completed assistant messages directly during replay (#42325)	2026-09-02	tui	2	0	0.00	0	0	implementation_pending	omit_completed_agent_deltas,prepare_assistant_message
-e7165c2dbb14c912d682cef254d7430a5137885a	47714	Preserve tool result metadata more selectively under size limits (#47714)	2026-09-24	model	1	0	0.00	0	0	implementation_pending	retain_tool_resource_access
+e7165c2dbb14c912d682cef254d7430a5137885a	47714	Preserve tool result metadata more selectively under size limits (#47714)	2026-09-24	model	1	0	0.00	0	0	complete	retain_tool_resource_access
 e722303e38ad8e4ffb69c098e86108b895a99a68	44331	Expose voice conversations in experimental features (#44331)	2026-09-09	tui	0	0		0	0	not_applicable	
 e72da2b53805894878023d01949a25a082e0a5cb	48353	Stabilize skill catalogs across executor availability changes (#48353)	2026-09-26	appserver	3	1	0.33	0	0	audit_pending	CatalogBudgetAllocation,metadata_cost
 e75b36efdec6416f82306d307bc001461efe295a	48101	Show multiline command previews in `/ps` (#48101)	2026-09-25	tui	0	0		0	0	not_applicable	

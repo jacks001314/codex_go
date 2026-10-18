@@ -11,11 +11,14 @@ import (
 
 const (
 	// MaxExecutedToolCallMetadataBytes is Rust's protocol
-	// `MAX_EXECUTED_TOOL_CALL_METADATA_BYTES`: the budget for one serialized
-	// prompt.
-	MaxExecutedToolCallMetadataBytes = 2 * 1024 * 1024
-	MaxToolResultSources             = 32
-	MaxToolResultSourceFieldBytes    = 128
+	// `MAX_EXECUTED_TOOL_CALL_METADATA_BYTES`: the aggregate budget for one
+	// serialized request.
+	MaxExecutedToolCallMetadataBytes = 128 * 1024
+	// MaxToolResultMetadataBytes bounds the raw metadata captured from one
+	// tool result before it enters request history.
+	MaxToolResultMetadataBytes    = 32 * 1024
+	MaxToolResultSources          = 32
+	MaxToolResultSourceFieldBytes = 128
 
 	internalChatMessageMetadataPassthroughField = "internal_chat_message_metadata_passthrough"
 	executedToolCallsField                      = "executed_tool_calls"
@@ -122,14 +125,26 @@ type ToolResultMetadata struct {
 	value any
 }
 
-// NewToolResultMetadata captures the complete MCP `_meta` snapshot. No keys are
-// filtered: retention and outgoing-request budgets apply later (Rust
-// `ToolResultMetadata::new`). The prompt bound sheds an oversized snapshot.
+// NewToolResultMetadata captures the MCP `_meta` snapshot within the per-result
+// budget. If the full snapshot is too large, resource-access evidence is kept
+// when it fits; otherwise the omission marker is used.
 func NewToolResultMetadata(metadata any) ToolResultMetadata {
 	if metadata == nil {
 		return ToolResultMetadata{}
 	}
-	return ToolResultMetadata{value: metadata}
+	data, err := json.Marshal(metadata)
+	if err == nil && len(data) <= MaxToolResultMetadataBytes {
+		return ToolResultMetadata{value: metadata}
+	}
+	if object, ok := metadata.(map[string]any); ok {
+		if resourceAccess, present := object[resourceAccessMetadataKey]; present {
+			reduced := map[string]any{resourceAccessMetadataKey: resourceAccess}
+			if data, err := json.Marshal(reduced); err == nil && len(data) <= MaxToolResultMetadataBytes {
+				return ToolResultMetadata{value: reduced}
+			}
+		}
+	}
+	return OmittedToolResultMetadata()
 }
 
 // OmittedToolResultMetadata is the harness status marker used when raw metadata
