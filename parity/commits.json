@@ -18609,9 +18609,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: forget_v2_residency"
+        "N/A by architecture: Rust splits LocalAgentControl runtime state from controller handles. Go's runtime agent controller and agent registry already keep handle/state separation in the agent/appserver packages; there is no Rust control/runtime module split to reproduce."
       ]
     },
     {
@@ -18621,9 +18621,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/5; needs review: GUARDIAN_THREAD_PREVIEW, GUARDIAN_THREAD_TITLE, has_guardian_default_title, metadata_is_guardian_review"
+        "N/A by architecture: Rust persists Guardian review threads and derives compact list/display metadata in the thread store. Go's synchronous Guardian reviewer runs model review sessions without creating persisted review threads, so there is no review-thread metadata row to compact."
       ]
     },
     {

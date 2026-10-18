@@ -817,7 +817,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 4f39251a010a8bd7d692d25fb33832ff06f1635a	40038	Add unfinished root turn suspension (#40038)	2026-08-22	core	5	0	0.00	0	0	not_applicable	GRACEFULL_INTERRUPTION_TIMEOUT_MS,SuspendTurnOutcome,emit_thread_stop_lifecycle,shutdown_session_runtime,suspend_turn_and_shutdown
 4f63088cce14065f57c152a0689d9cdf6cd88dea	49043	Update Pro plan display names in the TUI (#49043)	2026-09-28	tui	0	0		0	0	not_applicable	
 4f699cd64227f42ff1094b0d3704ff8c3d05c96d	49708	Move session index I/O off async runtime threads (#49708)	2026-09-30	persistence	0	0		0	0	not_applicable	
-4f6c106cddb64297898554911ce5f45b871e2e7b	47302	Use compact display metadata for Guardian review threads (#47302)	2026-09-22	guardian	5	1	0.20	0	0	audit_pending	GUARDIAN_THREAD_PREVIEW,GUARDIAN_THREAD_TITLE,has_guardian_default_title,metadata_is_guardian_review
+4f6c106cddb64297898554911ce5f45b871e2e7b	47302	Use compact display metadata for Guardian review threads (#47302)	2026-09-22	guardian	5	1	0.20	0	0	not_applicable	GUARDIAN_THREAD_PREVIEW,GUARDIAN_THREAD_TITLE,has_guardian_default_title,metadata_is_guardian_review
 4f6d43c267363d4c73c3c8f0ab2ce1ba97478807	40481	Support managed AWS access keys for Amazon Bedrock (#40481)	2026-08-24	tui	7	2	0.29	0	0	audit_pending	BedrockAccessKeysAuth,BedrockProviderConfig,bedrock_provider_config_paths_to_clear,load_with_access_keys,login_with_bedrock_access_keys
 4f99920b8cbb9dc694140719a0ea0f175c250a5b	50128	Expose the model selected for a running turn's next step (#50128)	2026-10-01	core	1	1	1.00	0	0	complete	
 4fa6ad173055f6438e8baf81cd55cb59f46179d7	40585	Track remaining multi-agent v2 tools in analytics (#40585)	2026-08-25	tui	4	1	0.25	0	0	audit_pending	ToolCallAnalytics,handle_message_string_tool,set_receiver
@@ -962,7 +962,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5bf132cd527311eb61bbec46562e3890eb49df80	45825	Add opt-in nonfatal handling for clock read failures (#45825)	2026-09-16	appserver	3	3	1.00	0	0	complete	
 5bfb04b247672223743ff7a1900f55b98d4a3a31	47653	Attach inherited rollout history to diagnostic reports (#47653)	2026-09-23	appserver	1	0	0.00	0	0	complete	history_base_attachments
 5c013177d85b72d61dc35e0634511c6d55af5cc5	44620	Support temporary and minimal filesystem grants in MXC (#44620)	2026-09-10	sandbox	0	0		0	0	not_applicable	
-5c07856e25b565c86c6266ff51edff58299fd4e6	47301	Separate local agent runtime state from controller handles (#47301)	2026-09-22	guardian	3	2	0.67	0	0	audit_pending	forget_v2_residency
+5c07856e25b565c86c6266ff51edff58299fd4e6	47301	Separate local agent runtime state from controller handles (#47301)	2026-09-22	guardian	3	2	0.67	0	0	not_applicable	forget_v2_residency
 5c5308fc9a9ee789049d646ef11e5400384b9c6f	46752	Add an animated Codex logo to fresh conversations and onboarding (#46752)	2026-09-20	tui	39	15	0.38	0	0	audit_pending	AnimationEnd,COMPLETION_FADE,ComposerState,EXTENT,EmptyStateAnimation,FRAME_INTERVAL,LOOP_SECONDS,Lighting,MAX_COLUMNS,SPIN_DURATION
 5c8fc15cc99241d3a1a415a629841540cdff4b28	47908	Alias `tui.whimsy` to `tui.effects.starfield` (#47908)	2026-09-24	tui	0	0		0	0	not_applicable	
 5c94936b56efc1392fc5f4660001a022b72dae77	44654	Preserve missing environment variable diagnostics in Codex Doctor (#44654)	2026-09-10	core	0	0		0	0	not_applicable	
