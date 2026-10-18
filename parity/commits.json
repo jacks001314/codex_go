@@ -20467,9 +20467,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ApprovalEvidence, run_with_retry"
+        "Round 513 (audit): already implemented. A changed-context allow rolls back the reviewer checkpoint and retries within the shared attempt budget, using Gosched rather than the service backoff. Denies are reported without a stale retry, and an exhausted stale-allow budget returns a failed-closed denial. Tests: go test ./appserver -run 'TestGuardianReviewRefreshesChangedContextLikeRust|TestGuardianReviewStaleRetrySkipsServiceBackoffLikeRust|TestGuardianReviewDenySkipsStaleRetryLikeRust' -count=1"
       ]
     },
     {
