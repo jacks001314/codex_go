@@ -1651,6 +1651,10 @@ type Model struct {
 	// readOnlyThread marks a conversation opened read-only because another app
 	// owns it (Rust #43253).
 	readOnlyThread bool
+	// threadUnavailable marks a replay-only conversation whose server is still
+	// connected (Rust #46566). Drafts stay editable and recovery/local commands
+	// remain available, but ordinary submissions are rejected.
+	threadUnavailable bool
 	// workingDirectoryChangePending tracks a deferred /cd request so another
 	// one is rejected until it finishes (Rust #43376).
 	workingDirectoryChangePending bool
@@ -3909,6 +3913,12 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 				return m, m.insertComposerNewline()
 			}
 		}
+		if m.threadUnavailable && m.keyMatches("composer", "submit", keySpec) {
+			// Rust #46566: restricted input keeps drafts editable while only
+			// recovery and local commands may be submitted.
+			m.clearComposerPasteWindow()
+			return m, m.submitComposer()
+		}
 		if m.keyMatches("composer", "submit", keySpec) {
 			m.clearComposerPasteWindow()
 			if m.asyncQuestions.Expanded() && m.asyncQuestions.UnansweredCount() > 0 {
@@ -5050,6 +5060,11 @@ func (m *Model) submitComposer() bubbletea.Cmd {
 		return nil
 	}
 	input := strings.TrimSpace(m.composerText())
+	if m.threadUnavailable && !unavailableThreadCommand(input) {
+		m.notice = "This conversation is unavailable. Use /new, /resume, /clear, /status, or /copy."
+		m.refreshTranscript()
+		return nil
+	}
 	textElements := m.composerTextElementsForPromptValue(m.composer.Value(), input)
 	m.resetComposer()
 	m.composerElements = nil

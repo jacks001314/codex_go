@@ -502,6 +502,7 @@ func (m *Model) applyResumeResponseWithCWD(threadID string, response SessionResu
 		m.applyThreadSettingsValues(*response.ThreadSettings)
 	}
 	m.setReadOnlyThread(response.ReadOnly)
+	m.setThreadUnavailable(false)
 	m.State.Messages = append([]codextui.Message(nil), response.Messages...)
 	m.State.BumpMessagesRevision()
 	m.insertSessionHeader()

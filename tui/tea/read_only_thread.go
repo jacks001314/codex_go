@@ -20,6 +20,9 @@ func (m *Model) setReadOnlyThread(readOnly bool) {
 		return
 	}
 	m.readOnlyThread = readOnly
+	if readOnly {
+		m.threadUnavailable = false
+	}
 	if !readOnly {
 		return
 	}

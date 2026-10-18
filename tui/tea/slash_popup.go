@@ -35,6 +35,10 @@ func (m *Model) refreshSlashPopup() {
 	if m == nil {
 		return
 	}
+	if m.threadUnavailable {
+		m.slashPopup = slashCommandPopup{}
+		return
+	}
 	query, ok := slashPopupQuery(m.composerText())
 	if !ok {
 		m.slashPopup = slashCommandPopup{}

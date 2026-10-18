@@ -369,6 +369,7 @@ func (m *Model) applyAgentSwitchResult(message AgentSwitchResultMsg) {
 		m.applyThreadSettingsValues(*message.Response.ThreadSettings)
 	}
 	m.setReadOnlyThread(message.Response.ReadOnly)
+	m.setThreadUnavailable(message.Response.Entry.IsClosed)
 	m.restorePendingAgentsOverviewDraft()
 	m.refreshTranscript()
 }

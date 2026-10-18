@@ -16435,9 +16435,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: RestrictedInputMode, available_when_thread_unavailable, handle_restricted_key"
+        "Round 756: added threadUnavailable restricted-input mode for replay-only conversations while the server remains connected. A closed agent-thread switch enters the mode, clears stale review/MCP-startup activity, and forces idle status without clearing drafts or attachments. Configured composer submit keys dispatch only single-line recovery/local commands (/new, /clear, /resume, /agents, /subagents, /exit|/quit, /status, /debug-config, /pwd, /rollout, /copy, /raw); ordinary prompts and other commands keep the draft and are not submitted. Slash/skill/mention popups are suppressed in this mode, /new and /clear restore a writable session, and read-only threads owned by another app still take precedence. Structural note: Go has no connected-channel replay-only runtime outside the closed agent-thread carrier and no postponed-turn input queue, so those Rust internals map to the retained composer/queue state. Tests: go test ./tui/tea -run 'UnavailableThread|ClosedAgentSwitch|ReadOnlyThreadOutranks' -count=1; go test ./tui/tea -count=1"
       ]
     },
     {

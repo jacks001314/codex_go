@@ -39,6 +39,11 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 	if m == nil {
 		return nil
 	}
+	if m.threadUnavailable {
+		m.skillPopup = skillPopupState{}
+		m.mentionPopup = nil
+		return nil
+	}
 	query, ok := skillPopupQuery(m.composer.Value())
 	if !ok && features.Enabled(m.featureSettings, "mentions_v2") {
 		m.skillPopup = skillPopupState{}
@@ -94,6 +99,10 @@ func (m *Model) refreshSkillPopup() bubbletea.Cmd {
 
 func (m *Model) refreshMentionPopup() bubbletea.Cmd {
 	if m == nil {
+		return nil
+	}
+	if m.threadUnavailable {
+		m.mentionPopup = nil
 		return nil
 	}
 	start, end, query, ok := m.currentMentionPopupTokenRange()
