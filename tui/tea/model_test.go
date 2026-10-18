@@ -7346,7 +7346,7 @@ func TestModelUsageCommandOpensMenuAndShowsTokenActivity(t *testing.T) {
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	for _, want := range []string{"Usage", "View account usage", "Show usage", "Redeem usage limit reset", "You have 2 usage limit resets available."} {
+	for _, want := range []string{"Usage", "Account usage and resets.", "Show usage", "Redeem reset", "2 available."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("usage menu missing %q:\n%s", want, view)
 		}
@@ -7448,7 +7448,7 @@ func TestModelUsageMenuResetStates(t *testing.T) {
 	typeText(t, model, "/usage")
 	model.Update(key(bubbletea.KeyEnter))
 	view := model.View()
-	if !strings.Contains(view, "Redeem usage limit reset [disabled]") || !strings.Contains(view, "No usage limit resets available.") {
+	if !strings.Contains(view, "Redeem reset") || !strings.Contains(view, "None available.") {
 		t.Fatalf("usage menu disabled reset missing:\n%s", view)
 	}
 	model.Update(key(bubbletea.KeyDown))

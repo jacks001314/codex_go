@@ -120,14 +120,15 @@ type UsageRuntimeState struct {
 func NewUsageMenuView(state UsageMenuState) SelectionView {
 	resetEligible := state.HasChatGPTAccount
 	resetActionEnabled := false
-	resetDescription := "No usage limit resets available."
+	resetDescription := "None available."
 	switch {
 	case resetEligible && state.AvailableRateLimitResetCredits != nil && *state.AvailableRateLimitResetCredits > 0:
 		resetActionEnabled = true
-		resetDescription = "You have " + formatInt64(*state.AvailableRateLimitResetCredits) + " " + ResetLabel(*state.AvailableRateLimitResetCredits) + " available."
+		resetDescription = formatInt64(*state.AvailableRateLimitResetCredits) + " available."
 	case resetEligible && state.AvailableRateLimitResetCredits == nil:
 		resetActionEnabled = true
-		resetDescription = "Check reset availability."
+		// Rust #46862 keeps the usage menu readable on narrow terminals.
+		resetDescription = "Check availability."
 	}
 	shouldRefresh := resetEligible &&
 		state.RefreshWhenKnownResetCreditsZero &&
@@ -135,10 +136,14 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 		*state.AvailableRateLimitResetCredits == 0
 
 	return SelectionView{
-		ViewID:                   UsageMenuViewID,
-		Title:                    "Usage",
-		Subtitle:                 "View account usage or redeem an earned reset.",
+		ViewID:   UsageMenuViewID,
+		Title:    "Usage",
+		Subtitle: "Account usage and resets.",
+		// Rust #46862 uses the shared picker row layout so descriptions are
+		// hidden when the terminal is narrow.
 		FooterHint:               standardPopupHintLine,
+		ColumnWidth:              bottompane.DefaultPickerRowColumns(),
+		DescriptionLayout:        bottompane.NewHideWhenNarrowDescriptionLayout(24),
 		RefreshResetAvailability: shouldRefresh,
 		RefreshResetAvailabilityID: func() uint64 {
 			if shouldRefresh {
@@ -150,12 +155,12 @@ func NewUsageMenuView(state UsageMenuState) SelectionView {
 		Items: []SelectionItem{
 			{
 				Name:            "Show usage",
-				Description:     "View recent account token usage.",
+				Description:     "Usage history.",
 				Action:          UsageMenuActionShowTokenActivity,
 				DismissOnSelect: true,
 			},
 			{
-				Name:            "Redeem usage limit reset",
+				Name:            "Redeem reset",
 				Description:     resetDescription,
 				Disabled:        !resetActionEnabled,
 				Action:          UsageMenuActionOpenRateLimitReset,

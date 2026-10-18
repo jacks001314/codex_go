@@ -8,6 +8,8 @@ import (
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 
+	codextui "codex_go/tui"
+	bottompane "codex_go/tui/bottom_pane"
 	chatwidget "codex_go/tui/chatwidget"
 )
 
@@ -37,6 +39,7 @@ func (m *Model) applyUsageCommand(args string) bubbletea.Cmd {
 		AvailableRateLimitResetCredits:   cloneInt64PtrTea(m.availableRateLimitResetCredits),
 		RefreshWhenKnownResetCreditsZero: true,
 	})
+	view.FooterHint = m.usageHintLine("open")
 	if m.availableRateLimitResetCredits != nil && *m.availableRateLimitResetCredits == 0 {
 		view.RefreshResetAvailability = true
 	}
@@ -69,7 +72,9 @@ func (m *Model) openRateLimitResetView() bubbletea.Cmd {
 		return nil
 	}
 	if m.availableRateLimitResetCredits != nil && *m.availableRateLimitResetCredits > 0 {
-		m.openUsageSelectionView(m.rateLimitResetConfirmationView(*m.availableRateLimitResetCredits))
+		confirmation := m.rateLimitResetConfirmationView(*m.availableRateLimitResetCredits)
+		confirmation.FooterHint = m.usageHintLine("confirm")
+		m.openUsageSelectionView(confirmation)
 		return nil
 	}
 	if m.availableRateLimitResetCredits != nil {
@@ -92,6 +97,13 @@ func (m *Model) openUsageSelectionView(view chatwidget.SelectionView) {
 	if m == nil {
 		return
 	}
+	// Rust #46862: every usage surface uses the shared picker row layout, so
+	// descriptions collapse on narrow terminals.
+	view.ColumnWidth = bottompane.DefaultPickerRowColumns()
+	view.DescriptionLayout = bottompane.NewHideWhenNarrowDescriptionLayout(24)
+	if strings.TrimSpace(view.FooterHint) == "" && view.AllowCancel {
+		view.FooterHint = chatwidget.PickerPopupHintLine
+	}
 	options := make([]ModalOption, 0, len(view.Items))
 	for _, item := range view.Items {
 		id := string(item.Action)
@@ -106,11 +118,15 @@ func (m *Model) openUsageSelectionView(view chatwidget.SelectionView) {
 		})
 	}
 	m.openModal(ModalRequestMsg{
-		ID:      view.ViewID,
-		Kind:    ModalKindUsage,
-		Title:   view.Title,
-		Body:    view.Subtitle,
-		Options: options,
+		ID:                view.ViewID,
+		Kind:              ModalKindUsage,
+		Title:             view.Title,
+		Body:              view.Subtitle,
+		Options:           options,
+		FooterHint:        view.FooterHint,
+		FooterNote:        view.FooterNote,
+		ColumnWidth:       view.ColumnWidth,
+		DescriptionLayout: view.DescriptionLayout,
 	})
 	if m.modal != nil && view.InitialSelectedIndex >= 0 && view.InitialSelectedIndex < len(m.modal.options) {
 		m.modal.selected = view.InitialSelectedIndex
@@ -118,6 +134,30 @@ func (m *Model) openUsageSelectionView(view chatwidget.SelectionView) {
 			m.moveModalSelection(1)
 		}
 	}
+}
+
+// usageHintLine mirrors Rust #46862 usage_hint_line: action-specific labels
+// rendered with the active list keymap.
+func (m *Model) usageHintLine(acceptLabel string) string {
+	parts := make([]string, 0, 2)
+	for _, hint := range []struct {
+		action string
+		label  string
+	}{
+		{action: "accept", label: acceptLabel},
+		{action: "cancel", label: "back"},
+	} {
+		bindings, _, _ := codextui.ResolvedKeymapBindings(m.keymapConfig, "list", hint.action)
+		if len(bindings) == 0 {
+			continue
+		}
+		key := strings.ReplaceAll(strings.TrimSpace(bindings[0]), "-", "+")
+		if key == "" {
+			continue
+		}
+		parts = append(parts, key+" "+hint.label)
+	}
+	return strings.Join(parts, " \u00b7 ")
 }
 
 func (m *Model) openTokenActivity(view chatwidget.TokenActivityView) bubbletea.Cmd {

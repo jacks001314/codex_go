@@ -17,7 +17,7 @@ func TestUsageMenuViewResetAvailability(t *testing.T) {
 	if view.Items[1].Disabled || view.Items[1].Action != UsageMenuActionOpenRateLimitReset {
 		t.Fatalf("reset item = %#v", view.Items[1])
 	}
-	if !strings.Contains(view.Items[1].Description, "You have 2 usage limit resets available.") {
+	if view.Items[1].Description != "2 available." {
 		t.Fatalf("reset description = %q", view.Items[1].Description)
 	}
 	if view.RefreshResetAvailability {
@@ -31,7 +31,7 @@ func TestUsageMenuViewResetAvailability(t *testing.T) {
 		RefreshWhenKnownResetCreditsZero: true,
 		NextRefreshResetAvailabilityID:   7,
 	})
-	if !view.Items[1].Disabled || view.Items[1].Description != "No usage limit resets available." {
+	if !view.Items[1].Disabled || view.Items[1].Description != "None available." {
 		t.Fatalf("known zero reset item = %#v", view.Items[1])
 	}
 	if !view.RefreshResetAvailability || view.RefreshResetAvailabilityID != 7 {
@@ -39,12 +39,12 @@ func TestUsageMenuViewResetAvailability(t *testing.T) {
 	}
 
 	view = NewUsageMenuView(UsageMenuState{HasChatGPTAccount: true})
-	if view.Items[1].Disabled || view.Items[1].Description != "Check reset availability." {
+	if view.Items[1].Disabled || view.Items[1].Description != "Check availability." {
 		t.Fatalf("unknown reset item = %#v", view.Items[1])
 	}
 
 	view = NewUsageMenuView(UsageMenuState{})
-	if !view.Items[1].Disabled || view.Items[1].Description != "No usage limit resets available." {
+	if !view.Items[1].Disabled || view.Items[1].Description != "None available." {
 		t.Fatalf("signed out reset item = %#v", view.Items[1])
 	}
 }
@@ -127,14 +127,14 @@ func TestUsageRuntimeKnownZeroRefreshMatchesRust(t *testing.T) {
 	if !opened.RefreshResetAvailability || opened.RefreshResetAvailabilityID == 0 {
 		t.Fatalf("open usage result = %#v", opened)
 	}
-	if !opened.View.Items[1].Disabled || opened.View.Items[1].Description != "No usage limit resets available." {
+	if !opened.View.Items[1].Disabled || opened.View.Items[1].Description != "None available." {
 		t.Fatalf("known zero reset item = %#v", opened.View.Items[1])
 	}
 	failedView, ok := state.FinishUsageMenuRateLimitRefresh(opened.RefreshResetAvailabilityID, RateLimitResetCreditsRefresh{Failed: true})
 	if !ok {
 		t.Fatal("failed refresh was not accepted")
 	}
-	if !failedView.Items[1].Disabled || failedView.Items[1].Description != "No usage limit resets available." {
+	if !failedView.Items[1].Disabled || failedView.Items[1].Description != "None available." {
 		t.Fatalf("failed refresh should preserve cached zero = %#v", failedView.Items[1])
 	}
 
@@ -143,7 +143,7 @@ func TestUsageRuntimeKnownZeroRefreshMatchesRust(t *testing.T) {
 	if !ok {
 		t.Fatal("successful refresh was not accepted")
 	}
-	if updatedView.Items[1].Disabled || updatedView.Items[1].Description != "You have 1 usage limit reset available." {
+	if updatedView.Items[1].Disabled || updatedView.Items[1].Description != "1 available." {
 		t.Fatalf("successful refresh did not enable reset = %#v", updatedView.Items[1])
 	}
 }

@@ -17157,9 +17157,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: ensure_identity"
+        "Round 754: implemented the compact usage surfaces. /usage now uses the shortened Rust labels (Account usage and resets., Show usage/Usage history., Redeem reset/2 available./Check availability./None available.), shared picker row columns, narrow-terminal description hiding, and action-specific hints sourced from the active list keymap (enter open, enter confirm, esc back). The menu/reset modal now forwards footer hints and picker layout. Structural note: Go has chatgptapi analytics report types but no TUI analytics dashboard/chats/tasks report loader, so Rust's identity_invalidated polling/refresh logic has no Go carrier; there is no cached analytics report to discard. Tests: go test ./tui/tea -run 'Usage|RateLimit' -count=1; go test ./tui/chatwidget -run 'Usage|RateLimit' -count=1; go test ./tui/tea ./tui/chatwidget -count=1; go vet ./tui/tea ./tui/chatwidget"
       ]
     },
     {
