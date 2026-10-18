@@ -1,13 +1,16 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"syscall"
 
 	"codex_go/appserver"
 	"codex_go/auth"
@@ -363,6 +366,7 @@ func runPluginList(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Wri
 			entries = appendRemotePluginMarketplace(entries, plugin.RemoteGlobalMarketplaceName, remote, installedRemote)
 		}
 	}
+	writer := bufio.NewWriter(stdout)
 	if opts.JSON {
 		output := pluginListJSONOutput{}
 		for _, marketplace := range entries {
@@ -378,28 +382,63 @@ func runPluginList(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Wri
 				}
 			}
 		}
-		encoder := json.NewEncoder(stdout)
+		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(&output)
+		if err := encoder.Encode(&output); err != nil {
+			return pluginListOutputError(err)
+		}
+		return pluginListOutputError(writer.Flush())
+	}
+	var writeErr error
+	writef := func(format string, args ...any) {
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintf(writer, format, args...)
 	}
 	if pluginMarketplaceEntriesPluginCount(entries) == 0 {
 		if opts.MarketplaceName != "" {
-			fmt.Fprintf(stdout, "No plugins found in marketplace `%s`.\n", opts.MarketplaceName)
-			return nil
+			writef("No plugins found in marketplace `%s`.\n", opts.MarketplaceName)
+		} else {
+			writef("No marketplace plugins found.\n")
 		}
-		fmt.Fprintln(stdout, "No marketplace plugins found.")
-		return nil
+		return pluginListOutputError(firstNonNilError(writeErr, writer.Flush()))
 	}
 	for index, marketplace := range entries {
 		if len(marketplace.Plugins) == 0 {
 			continue
 		}
 		if index > 0 {
-			fmt.Fprintln(stdout)
+			writef("\n")
 		}
-		fmt.Fprintf(stdout, "Marketplace `%s`\n", marketplace.Name)
-		fmt.Fprintf(stdout, "%s\n\n", stringValueOrEmptyLocal(marketplace.Path))
-		printPluginRows(stdout, marketplace.Plugins)
+		writef("Marketplace `%s`\n", marketplace.Name)
+		if marketplace.Path == nil {
+			writef("Remote catalog\n\n")
+		} else {
+			writef("%s\n\n", stringValueOrEmptyLocal(marketplace.Path))
+		}
+		if err := printPluginRows(writer, marketplace.Plugins); err != nil {
+			return pluginListOutputError(err)
+		}
+	}
+	return pluginListOutputError(firstNonNilError(writeErr, writer.Flush()))
+}
+
+func pluginListOutputError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe) {
+		return nil
+	}
+	return err
+}
+
+func firstNonNilError(values ...error) error {
+	for _, err := range values {
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -712,7 +751,7 @@ func validatePluginSegment(segment string, kind string) error {
 	return nil
 }
 
-func printPluginRows(stdout io.Writer, rows []plugin.PluginSummary) {
+func printPluginRows(stdout io.Writer, rows []plugin.PluginSummary) error {
 	headers := []string{"PLUGIN", "STATUS", "VERSION", "PATH"}
 	widths := []int{len(headers[0]), len(headers[1]), len(headers[2]), len(headers[3])}
 	converted := make([][4]string, 0, len(rows))
@@ -736,22 +775,30 @@ func printPluginRows(stdout io.Writer, rows []plugin.PluginSummary) {
 		}
 		converted = append(converted, row)
 	}
+	var writeErr error
+	writef := func(format string, args ...any) {
+		if writeErr != nil {
+			return
+		}
+		_, writeErr = fmt.Fprintf(stdout, format, args...)
+	}
 	for i, header := range headers {
 		if i > 0 {
-			fmt.Fprint(stdout, "  ")
+			writef("  ")
 		}
-		fmt.Fprintf(stdout, "%-*s", widths[i], header)
+		writef("%-*s", widths[i], header)
 	}
-	fmt.Fprintln(stdout)
+	writef("\n")
 	for _, row := range converted {
 		for i, cell := range row {
 			if i > 0 {
-				fmt.Fprint(stdout, "  ")
+				writef("  ")
 			}
-			fmt.Fprintf(stdout, "%-*s", widths[i], cell)
+			writef("%-*s", widths[i], cell)
 		}
-		fmt.Fprintln(stdout)
+		writef("\n")
 	}
+	return writeErr
 }
 
 func firstNonEmptyLocal(values ...string) string {

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	"codex_go/cli"
@@ -132,6 +133,34 @@ func TestPluginRemoteAddAndRemoveLikeRust(t *testing.T) {
 	}
 	if !uninstalled {
 		t.Fatal("remote uninstall mutation was not called")
+	}
+}
+
+type pluginListFailingWriter struct {
+	err error
+}
+
+func (w pluginListFailingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+// Mirrors Rust #53109: a consumer closing stdout early must not turn a
+// successful plugin listing into a CLI error, while other write failures
+// still propagate.
+func TestPluginListBrokenPipeLikeRust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	root := writePluginCLITestMarketplace(t, t.TempDir(), "debug", "sample")
+	if err := Run(context.Background(), []string{"plugin", "marketplace", "add", root}, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("marketplace add error = %v", err)
+	}
+	ctx := newPluginCLIContext(home)
+	options := &cli.PluginOptions{Action: "list", MarketplaceName: "debug", JSON: true}
+	if err := runPluginList(ctx, options, pluginListFailingWriter{err: syscall.EPIPE}); err != nil {
+		t.Fatalf("broken pipe error = %v", err)
+	}
+	if err := runPluginList(ctx, options, pluginListFailingWriter{err: fmt.Errorf("boom")}); err == nil {
+		t.Fatal("non-pipe write error was swallowed")
 	}
 }
 

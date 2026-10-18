@@ -34,9 +34,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 710 (implementation): plugin list now renders through a buffered writer, propagates write/flush errors, and treats EPIPE/io.ErrClosedPipe as success for both JSON and table output. Other output errors still fail. Test: TestPluginListBrokenPipeLikeRust (broken pipe success + non-pipe propagation); go test ./app -run 'PluginListBrokenPipeLikeRust|PluginListRemoteCatalogLikeRust|PluginRemoteAddAndRemoveLikeRust' -count=1."
       ]
     },
     {
