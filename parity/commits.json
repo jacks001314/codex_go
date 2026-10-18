@@ -8991,9 +8991,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: WrapperLag, discount"
+        "Round 611 (parity backfill): Guardian score freshness records bounded tool-start provenance per thread. Direct custom exec calls carry their origin item as wrapper identity, nested code-mode calls inherit it, and a review discounts only its own newer unscored wrapper. Tests: go test ./appserver -run 'GuardianWrapperLag|RuntimeToolStartFeedsGuardianWrapperLag|GuardianReviewUsesOwnWrapperDiscount' -count=1"
       ]
     },
     {
@@ -15567,9 +15567,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 14/16; needs review: CallbackListener, StoredToken"
+        "Round 612 (parity backfill): the auth package has encrypted provider-gateway OAuth storage with a cross-process lock, token rotation and refresh-skew handling, reuse/rejection paths, and a single-shot loopback callback listener with state validation. Tests: go test ./auth -run Gateway -count=1"
       ]
     },
     {
@@ -16685,9 +16685,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 11/13; needs review: ChildKind, NativeChild"
+        "Round 613 (parity backfill): the local MCP launcher owns explicit environment/argv, pipe setup, Unix process groups, and Windows suspended/Job-Object containment. Rust ChildKind/NativeChild are backend wrappers rather than separate Go behavior. Tests: go test ./mcp -run 'StdioProcess|StdioCommand|TerminationReaches|Containment|ProcessGroup' -count=1"
       ]
     },
     {
@@ -19493,9 +19493,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: PendingAssistantMessageOrders"
+        "Round 614 (parity backfill): RetainedContext reserves an assistant message's order when stream output starts and consumes it when the completed message is recorded, so a user reply accepted mid-stream keeps a later order. Tests: go test ./retainedctx ./appserver -run 'Retained|Guardian' -count=1"
       ]
     },
     {
@@ -19830,9 +19830,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 7/8; needs review: from_delay"
+        "Round 615 (parity backfill): codexapi captures Retry-After as a monotonic deadline at header receipt; it survives wrapping and retry state, while RetryDelay returns the remaining duration. Updated TestResponsesHTTPErrorPreservesRetryAfterMetadata for the captured deadline and (0, 17s] remainder. Tests: go test ./codexapi ./model -run 'RetryAfter|RetryDelay|ResponsesHTTPError' -count=1"
       ]
     },
     {

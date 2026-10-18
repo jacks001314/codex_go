@@ -14,16 +14,24 @@ import (
 )
 
 func TestResponsesHTTPErrorPreservesRetryAfterMetadata(t *testing.T) {
+	receivedAt := time.Now()
 	err := responsesHTTPError("openai", http.StatusServiceUnavailable, http.Header{
 		"Retry-After": []string{"17"},
-	}, []byte(`{"error":{"message":"busy"}}`))
+	}, []byte(`{"error":{"message":"busy"}}`), receivedAt)
 
 	var apiErr *ResponsesAPIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("responsesHTTPError() = %T, want *ResponsesAPIError", err)
 	}
-	if got := codexapi.RetryDelay(err); got != 17*time.Second {
-		t.Fatalf("RetryDelay() = %v", got)
+	retryAfter, ok := codexapi.RetryAfterInfo(err)
+	if !ok {
+		t.Fatal("RetryAfterInfo() = absent, want the captured deadline")
+	}
+	if deadline, want := retryAfter.Deadline(), receivedAt.Add(17*time.Second); deadline.Before(want) || deadline.After(want.Add(10*time.Millisecond)) {
+		t.Fatalf("retry deadline = %v, want about %v", deadline, want)
+	}
+	if got := codexapi.RetryDelay(err); got <= 0 || got > 17*time.Second {
+		t.Fatalf("RetryDelay() = %v, want remaining duration in (0, 17s]", got)
 	}
 }
 
