@@ -27,6 +27,7 @@ import (
 	"codex_go/session"
 	"codex_go/state"
 	"codex_go/telemetry"
+	"codex_go/utils"
 
 	"github.com/google/uuid"
 )
@@ -605,6 +606,13 @@ func rolloutSessionMetaFromRecord(record *session.Record) *rollout.SessionMeta {
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
+	extra := cloneAnyMapForRouter(record.Metadata.Extra)
+	var runtimeWorkspaceRoots *[]string
+	if roots := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"]); len(roots) > 0 {
+		copied := append([]string{}, roots...)
+		runtimeWorkspaceRoots = &copied
+		delete(extra, "runtime_workspace_roots")
+	}
 	return &rollout.SessionMeta{
 		ID:                         string(record.ID),
 		SessionID:                  record.SessionID,
@@ -632,7 +640,8 @@ func rolloutSessionMetaFromRecord(record *session.Record) *rollout.SessionMeta {
 		ContextWindow:              append(json.RawMessage(nil), record.Metadata.ContextWindow...),
 		CLIVersion:                 record.Metadata.CLIVersion,
 		Git:                        cloneStringMap(record.Metadata.Git),
-		Extra:                      cloneAnyMapForRouter(record.Metadata.Extra),
+		RuntimeWorkspaceRoots:      runtimeWorkspaceRoots,
+		Extra:                      extra,
 	}
 }
 
@@ -662,7 +671,11 @@ func (r *Router) appendThreadSettingsAppliedWithOwner(threadID session.ThreadID,
 }
 
 func (r *Router) appendThreadSettingsAppliedWithSnapshot(threadID session.ThreadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, now time.Time) error {
-	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "" && len(collaborationMode) == 0) {
+	return r.appendThreadSettingsAppliedWithWorkspaceRoots(threadID, approvalPolicy, cwd, collaborationMode, nil, now)
+}
+
+func (r *Router) appendThreadSettingsAppliedWithWorkspaceRoots(threadID session.ThreadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, runtimeWorkspaceRoots *[]string, now time.Time) error {
+	if r == nil || r.store == nil || (strings.TrimSpace(approvalPolicy) == "" && strings.TrimSpace(cwd) == "" && len(collaborationMode) == 0 && runtimeWorkspaceRoots == nil) {
 		return nil
 	}
 	path, err := r.findThreadRolloutPath(threadID, false)
@@ -675,7 +688,7 @@ func (r *Router) appendThreadSettingsAppliedWithSnapshot(threadID session.Thread
 	}
 	r.configureThreadHistoryRecorder(recorder, threadID)
 	defer recorder.Close()
-	return recorder.AppendThreadSettingsAppliedWithSnapshot(string(threadID), approvalPolicy, cwd, collaborationMode, now)
+	return recorder.AppendThreadSettingsAppliedWithWorkspaceRoots(string(threadID), approvalPolicy, cwd, collaborationMode, runtimeWorkspaceRoots, now)
 }
 
 func (r *Router) latestPersistedApprovalPolicy(record *session.Record) (string, bool) {
@@ -718,6 +731,28 @@ func (r *Router) latestPersistedOwnedThreadCWD(threadID string, record *session.
 		return ""
 	}
 	return rollout.LastPersistedOwnedThreadCWD(threadID, lines)
+}
+
+// latestPersistedOwnedThreadSettings returns the newest settings snapshot
+// explicitly owned by the resumed thread (Rust #43848). Unlike the cwd helper
+// it also restores the runtime workspace root selection recorded on that
+// snapshot.
+func (r *Router) latestPersistedOwnedThreadSettings(threadID string, record *session.Record) (rollout.ThreadSettingsSnapshot, bool) {
+	if r == nil || record == nil {
+		return rollout.ThreadSettingsSnapshot{}, false
+	}
+	path := r.threadRolloutPath(record)
+	if strings.TrimSpace(path) == "" {
+		return rollout.ThreadSettingsSnapshot{}, false
+	}
+	if _, ok := rollout.ExistingRolloutPath(path); !ok {
+		return rollout.ThreadSettingsSnapshot{}, false
+	}
+	lines, _, err := rollout.Load(path)
+	if err != nil {
+		return rollout.ThreadSettingsSnapshot{}, false
+	}
+	return rollout.LatestPersistedOwnedThreadSettings(threadID, lines)
 }
 
 // latestPersistedCollaborationMode returns the collaboration mode to report on
@@ -1499,7 +1534,10 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 	// owned settings snapshot cwd (not a fork-copied one from another thread).
 	ownedCWD := r.latestPersistedOwnedThreadCWD(string(record.ID), record)
 	cwd := firstNonEmpty(stringPtrValue(params.CWD), ownedCWD, record.Metadata.CWD)
-	runtimeWorkspaceRoots := threadRecordRuntimeWorkspaceRoots(record, cwd, params.RuntimeWorkspaceRoots)
+	runtimeWorkspaceRoots, err := r.resumedThreadRuntimeWorkspaceRoots(record, cwd, params.RuntimeWorkspaceRoots)
+	if err != nil {
+		return nil, err
+	}
 	thread := BuildThread(record, path, includeTurns && !paginatedResume)
 	if thread != nil {
 		thread.Status = IdleStatus()
@@ -1600,6 +1638,11 @@ func (r *Router) handleThreadResume(request *Request) (*ThreadResumeResponse, er
 		}
 		response.InitialTurnsPage = page
 	}
+	// Rust #43848 checkpoints the effective settings during resume so an
+	// override survives another resume even before a turn runs. Go retains the
+	// thread while handling the request, so this must not depend on whether the
+	// source was already live.
+	r.checkpointThreadResumeSettings(record.ID, response, runtimeWorkspaceRoots)
 	return response, nil
 }
 
@@ -1866,6 +1909,40 @@ func threadRecordRuntimeWorkspaceRoots(record *session.Record, cwd string, roots
 	return threadRuntimeWorkspaceRoots(cwd, nil)
 }
 
+// resumedThreadRuntimeWorkspaceRoots mirrors Rust #43848's resume selection:
+// an explicit request value wins; otherwise the newest owned settings snapshot
+// is authoritative (even when it records no roots); startup metadata is only
+// consulted when the thread has no owned snapshot at all. Restored roots are
+// retargeted from the saved cwd and validated for the current host.
+func (r *Router) resumedThreadRuntimeWorkspaceRoots(record *session.Record, cwd string, requested []string) ([]string, error) {
+	if requested != nil {
+		return threadRuntimeWorkspaceRoots(cwd, requested), nil
+	}
+	if record == nil {
+		return threadRuntimeWorkspaceRoots(cwd, nil), nil
+	}
+	if snapshot, ok := r.latestPersistedOwnedThreadSettings(string(record.ID), record); ok {
+		if snapshot.RuntimeWorkspaceRoots == nil {
+			// The snapshot is authoritative. Missing roots do not resurrect a
+			// stale selection from startup metadata.
+			return threadRuntimeWorkspaceRoots(cwd, nil), nil
+		}
+		roots := retargetRuntimeWorkspaceRoots(*snapshot.RuntimeWorkspaceRoots, snapshot.CWD, cwd)
+		if err := validateRestoredRuntimeWorkspaceRoots(roots); err != nil {
+			return nil, err
+		}
+		return roots, nil
+	}
+	if stored := stringSliceFromAny(record.Metadata.Extra["runtime_workspace_roots"]); len(stored) > 0 {
+		roots := retargetRuntimeWorkspaceRoots(stored, record.Metadata.CWD, cwd)
+		if err := validateRestoredRuntimeWorkspaceRoots(roots); err != nil {
+			return nil, err
+		}
+		return roots, nil
+	}
+	return threadRuntimeWorkspaceRoots(cwd, nil), nil
+}
+
 // retargetRuntimeWorkspaceRoots mirrors Rust #43848's
 // replace_path_and_deduplicate: a cwd-only update replaces the saved cwd root
 // while preserving additional roots, and the result is deduplicated.
@@ -1901,6 +1978,74 @@ func retargetRuntimeWorkspaceRoots(stored []string, oldCWD string, newCWD string
 		return threadRuntimeWorkspaceRoots(target, nil)
 	}
 	return out
+}
+
+// validateRestoredRuntimeWorkspaceRoots mirrors Rust #43848's current-host
+// validation: saved executor paths from another OS must not be reused
+// silently. Callers can provide runtimeWorkspaceRoots explicitly to override.
+func validateRestoredRuntimeWorkspaceRoots(roots []string) error {
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		if _, err := utils.FromHostNativePath(root); err != nil {
+			return &restoredRuntimeWorkspaceRootsError{message: fmt.Sprintf(
+				"cannot restore workspace root `%s` on this host: %v. Pass `runtimeWorkspaceRoots` with valid local paths or an empty list.",
+				root, err,
+			)}
+		}
+	}
+	return nil
+}
+
+// restoredRuntimeWorkspaceRootsError mirrors Rust's invalid_params response
+// for a saved workspace root that cannot be parsed on the current host.
+type restoredRuntimeWorkspaceRootsError struct {
+	message string
+}
+
+func (e *restoredRuntimeWorkspaceRootsError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+func (e *restoredRuntimeWorkspaceRootsError) Unwrap() error {
+	return ErrInvalidParams
+}
+
+func (e *restoredRuntimeWorkspaceRootsError) Is(target error) bool {
+	return target == ErrInvalidParams
+}
+
+// checkpointThreadResumeSettings writes the settings a cold resume made
+// effective, including any explicit runtimeWorkspaceRoots override, so the
+// next resume restores the same selection when no turn has run (Rust #43848).
+func (r *Router) checkpointThreadResumeSettings(threadID session.ThreadID, response *ThreadResumeResponse, roots []string) {
+	if r == nil || response == nil || strings.TrimSpace(string(threadID)) == "" {
+		return
+	}
+	approvalPolicy := ""
+	if value, ok := response.ApprovalPolicy.(string); ok {
+		approvalPolicy = strings.TrimSpace(value)
+	}
+	var collaborationMode json.RawMessage
+	if response.CollaborationMode != nil {
+		if encoded, err := json.Marshal(response.CollaborationMode); err == nil {
+			collaborationMode = encoded
+		}
+	}
+	snapshotRoots := append([]string{}, roots...)
+	_ = r.appendThreadSettingsAppliedWithWorkspaceRoots(
+		threadID,
+		approvalPolicy,
+		response.CWD,
+		collaborationMode,
+		&snapshotRoots,
+		r.now(),
+	)
 }
 
 func setThreadRecordRuntimeWorkspaceRoots(record *session.Record, roots []string) {

@@ -3303,12 +3303,13 @@ func TestRuntimeRouterThreadResumeAndReadInterruptIncompleteRolloutTurnWhenIdleL
 	})
 	now := fixedTime()
 	threadID := "thread-incomplete-rollout"
+	cwd := t.TempDir()
 	recorder, err := rollout.NewRecorder(&rollout.CreateParams{
 		CodexHome:     store.Root(),
 		SessionID:     threadID,
 		ThreadID:      threadID,
 		Source:        string(SessionSourceCli),
-		CWD:           "/repo",
+		CWD:           cwd,
 		ModelProvider: "openai",
 		HistoryMode:   string(ThreadHistoryLegacy),
 		Now:           now,

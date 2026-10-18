@@ -3810,6 +3810,10 @@ func (r *RuntimeRouter) handleThreadRevertRuntime(request *Request) (*ThreadReve
 			r.notifyThreadReadStateChanged(params.ThreadID, apiThreadReadState(outcome.State))
 		}
 	}
+	// Rust #43848 replaces the reverted suffix's settings checkpoint with the
+	// settings restored after the reload, so the next resume still sees the
+	// effective selection.
+	r.checkpointThreadSettings(params.ThreadID)
 	return response, nil
 }
 
@@ -7257,14 +7261,22 @@ func (r *RuntimeRouter) persistTurnStartRuntimeWorkspaceRoots(params *turn.TurnS
 		return nil
 	}
 	if params.RuntimeWorkspaceRoots != nil {
-		return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, threadRuntimeWorkspaceRoots(params.CWD, params.RuntimeWorkspaceRoots))
+		if err := r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, threadRuntimeWorkspaceRoots(params.CWD, params.RuntimeWorkspaceRoots)); err != nil {
+			return err
+		}
+		r.checkpointThreadSettings(params.ThreadID)
+		return nil
 	}
 	record, err := r.threadRecord(session.ThreadID(params.ThreadID), true, false)
 	if err != nil {
 		return err
 	}
 	roots := threadRecordRuntimeWorkspaceRoots(record, firstNonEmpty(strings.TrimSpace(params.CWD), record.Metadata.CWD), nil)
-	return r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, roots)
+	if err := r.persistThreadRecordRuntimeWorkspaceRoots(params.ThreadID, roots); err != nil {
+		return err
+	}
+	r.checkpointThreadSettings(params.ThreadID)
+	return nil
 }
 
 func (r *RuntimeRouter) applyThreadResumeRuntimeWorkspaceRoots(result any, request *Request) {
@@ -7760,7 +7772,11 @@ func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParam
 	// Rust #44905: a turn-start override is a saved thread setting. Rust #40645
 	// routes both standalone and turn-start writes through the same committed
 	// snapshot path.
-	_, _ = r.commitThreadSettingsUpdate(params, params.DisabledPluginIDs != nil)
+	if _, err := r.commitThreadSettingsUpdate(params, params.DisabledPluginIDs != nil); err == nil {
+		// Rust applies the turn-start settings snapshot to the rollout as well,
+		// which carries the runtime workspace roots from #43848.
+		r.checkpointThreadSettings(params.ThreadID)
+	}
 }
 
 // commitThreadSettingsUpdate commits one settings write and publishes the
@@ -8753,7 +8769,7 @@ func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
 }
 
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.Effort == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.Effort == nil && params.CWD == nil && params.RuntimeWorkspaceRoots == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -8802,6 +8818,17 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	if committed != nil {
 		settingsCWD = strings.TrimSpace(committed.CWD)
 	}
+	settingsCWD = firstNonEmpty(settingsCWD, record.Metadata.CWD)
+	// Rust #43848 keeps the runtime workspace roots on the thread settings
+	// snapshot. A cwd-only update retargets the saved cwd root; an explicit
+	// roots value (including an empty list) replaces the selection.
+	switch {
+	case params.RuntimeWorkspaceRoots != nil:
+		setThreadRecordRuntimeWorkspaceRoots(record, threadRuntimeWorkspaceRoots(settingsCWD, params.RuntimeWorkspaceRoots))
+	case params.CWD != nil:
+		stored := threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil)
+		setThreadRecordRuntimeWorkspaceRoots(record, retargetRuntimeWorkspaceRoots(stored, record.Metadata.CWD, settingsCWD))
+	}
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return err
 	}
@@ -8809,11 +8836,55 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	if committed != nil && strings.TrimSpace(committed.ApprovalPolicy) != "" {
 		appliedPolicy = strings.TrimSpace(committed.ApprovalPolicy)
 	}
-	return r.services.ThreadRouter.appendThreadSettingsAppliedWithSnapshot(
+	snapshotRoots := threadRecordRuntimeWorkspaceRoots(record, settingsCWD, nil)
+	return r.services.ThreadRouter.appendThreadSettingsAppliedWithWorkspaceRoots(
 		threadID,
 		appliedPolicy,
 		settingsCWD,
 		collaborationModeSnapshotFromSettings(committed),
+		&snapshotRoots,
+		runtimeRouterNow(r).UTC(),
+	)
+}
+
+// checkpointThreadSettings writes the live effective thread settings to the
+// rollout without changing them (Rust #43848 checkpoint_thread_settings). It is
+// best-effort on turn start and post-revert, matching Go's other rollout
+// bookkeeping paths.
+func (r *RuntimeRouter) checkpointThreadSettings(threadID string) {
+	if r == nil || r.services.ThreadRouter == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil {
+		return
+	}
+	settings := r.threadSettingsForTurn(threadID)
+	cwd := record.Metadata.CWD
+	roots := threadRecordRuntimeWorkspaceRoots(record, cwd, nil)
+	policy := strings.TrimSpace(record.Metadata.ApprovalPolicy)
+	if settings != nil {
+		if value := strings.TrimSpace(settings.CWD); value != "" {
+			cwd = value
+		}
+		if settings.RuntimeWorkspaceRoots != nil {
+			roots = threadRuntimeWorkspaceRoots(cwd, settings.RuntimeWorkspaceRoots)
+		}
+		if value := strings.TrimSpace(settings.ApprovalPolicy); value != "" {
+			policy = value
+		}
+	}
+	snapshotRoots := append([]string{}, roots...)
+	_ = r.services.ThreadRouter.appendThreadSettingsAppliedWithWorkspaceRoots(
+		session.ThreadID(threadID),
+		policy,
+		cwd,
+		collaborationModeSnapshotFromSettings(settings),
+		&snapshotRoots,
 		runtimeRouterNow(r).UTC(),
 	)
 }

@@ -481,6 +481,14 @@ func RecordFromPath(path string, archived bool) (*session.Record, error) {
 		Items:       items,
 		FromRollout: true,
 	}
+	// Rust writes runtime roots as a top-level SessionMeta field (#43848);
+	// older Go rollouts kept the same value in the nested extra object.
+	if meta.RuntimeWorkspaceRoots != nil {
+		record.Metadata.Extra = ensureExtraMap(record.Metadata.Extra)
+		if _, exists := record.Metadata.Extra["runtime_workspace_roots"]; !exists {
+			record.Metadata.Extra["runtime_workspace_roots"] = append([]string{}, (*meta.RuntimeWorkspaceRoots)...)
+		}
+	}
 	if meta.HistoryBase != nil {
 		record.HistoryBase = &session.HistoryPosition{
 			ThreadID:            session.ThreadID(meta.HistoryBase.ThreadID),
@@ -597,6 +605,70 @@ func LastPersistedOwnedThreadCWD(threadID string, lines []Line) string {
 		}
 	}
 	return ""
+}
+
+// ThreadSettingsSnapshot is a thread-owned settings snapshot restored on
+// resume. RuntimeWorkspaceRoots is nil when the snapshot predates #43848 or
+// intentionally omitted the field, and non-nil (possibly empty) when the
+// snapshot recorded a selection.
+type ThreadSettingsSnapshot struct {
+	CWD                   string
+	RuntimeWorkspaceRoots *[]string
+}
+
+// LatestPersistedOwnedThreadSettings returns the newest settings snapshot
+// explicitly owned by the resumed thread (Rust #43848). Snapshots copied from
+// a forking thread or written without an owner are ignored so they cannot
+// override the resumed thread's own cwd or workspace roots.
+func LatestPersistedOwnedThreadSettings(threadID string, lines []Line) (ThreadSettingsSnapshot, bool) {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ThreadSettingsSnapshot{}, false
+	}
+	for index := len(lines) - 1; index >= 0; index-- {
+		snapshot, ok := threadSettingsSnapshotFromEvent(lines[index].Payload)
+		if !ok || snapshot.ThreadID != threadID {
+			continue
+		}
+		return ThreadSettingsSnapshot{
+			CWD:                   snapshot.CWD,
+			RuntimeWorkspaceRoots: snapshot.RuntimeWorkspaceRoots,
+		}, true
+	}
+	return ThreadSettingsSnapshot{}, false
+}
+
+type persistedThreadSettingsEvent struct {
+	ThreadID              string
+	CWD                   string
+	RuntimeWorkspaceRoots *[]string
+}
+
+func threadSettingsSnapshotFromEvent(raw json.RawMessage) (persistedThreadSettingsEvent, bool) {
+	var event struct {
+		Type           string `json:"type"`
+		ThreadID       string `json:"thread_id"`
+		ThreadSettings struct {
+			CWD                   string    `json:"cwd"`
+			RuntimeWorkspaceRoots *[]string `json:"runtime_workspace_roots"`
+		} `json:"thread_settings"`
+	}
+	if len(raw) == 0 {
+		return persistedThreadSettingsEvent{}, false
+	}
+	if err := json.Unmarshal(raw, &event); err != nil || strings.TrimSpace(event.Type) != "thread_settings_applied" {
+		return persistedThreadSettingsEvent{}, false
+	}
+	var roots *[]string
+	if event.ThreadSettings.RuntimeWorkspaceRoots != nil {
+		copied := append([]string{}, (*event.ThreadSettings.RuntimeWorkspaceRoots)...)
+		roots = &copied
+	}
+	return persistedThreadSettingsEvent{
+		ThreadID:              strings.TrimSpace(event.ThreadID),
+		CWD:                   strings.TrimSpace(event.ThreadSettings.CWD),
+		RuntimeWorkspaceRoots: roots,
+	}, true
 }
 
 func threadSettingsOwnerAndCWD(raw json.RawMessage) (string, string, bool) {

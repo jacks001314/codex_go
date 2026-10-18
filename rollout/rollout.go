@@ -126,7 +126,10 @@ type SessionMeta struct {
 	ContextWindow               json.RawMessage                     `json:"context_window,omitempty"`
 	CLIVersion                  string                              `json:"cli_version"`
 	Git                         map[string]string                   `json:"git,omitempty"`
-	Extra                       map[string]any                      `json:"extra,omitempty"`
+	// RuntimeWorkspaceRoots mirrors Rust's SessionMeta field (#43848). A nil
+	// value means unknown; an empty list is an explicit empty selection.
+	RuntimeWorkspaceRoots *[]string      `json:"runtime_workspace_roots,omitempty"`
+	Extra                 map[string]any `json:"extra,omitempty"`
 }
 
 // UnmarshalJSON accepts both the legacy Go string representation and the
@@ -410,6 +413,13 @@ func NewRecorder(params *CreateParams) (*Recorder, error) {
 		Git:                         cloneStringMap(params.Git),
 		Extra:                       cloneAnyMap(params.Extra),
 	}
+	// Go historically kept this selection inside the nested extra object. Write
+	// the Rust-compatible top-level field while still accepting the legacy
+	// spelling when reading.
+	if roots := runtimeWorkspaceRootsFromAny(meta.Extra["runtime_workspace_roots"]); roots != nil {
+		meta.RuntimeWorkspaceRoots = roots
+		delete(meta.Extra, "runtime_workspace_roots")
+	}
 	if err := recorder.AppendLine(Line{Type: "session_meta", Timestamp: now.UTC().Format(time.RFC3339Nano), Meta: meta}); err != nil {
 		file.Close()
 		return nil, err
@@ -654,11 +664,25 @@ func (r *Recorder) AppendThreadSettingsAppliedWithOwner(threadID, approvalPolicy
 // resumed thread restores the saved Plan mode from the latest matching
 // ThreadSettingsApplied event).
 func (r *Recorder) AppendThreadSettingsAppliedWithSnapshot(threadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, now time.Time) error {
+	return r.AppendThreadSettingsAppliedWithWorkspaceRoots(threadID, approvalPolicy, cwd, collaborationMode, nil, now)
+}
+
+// AppendThreadSettingsAppliedWithWorkspaceRoots persists the thread-owned
+// settings snapshot together with the runtime workspace root selection
+// (Rust #43848). A non-nil roots pointer preserves an explicit empty list,
+// which is distinct from an unknown/omitted selection.
+func (r *Recorder) AppendThreadSettingsAppliedWithWorkspaceRoots(threadID, approvalPolicy, cwd string, collaborationMode json.RawMessage, runtimeWorkspaceRoots *[]string, now time.Time) error {
 	approvalPolicy = strings.TrimSpace(approvalPolicy)
 	threadID = strings.TrimSpace(threadID)
 	cwd = strings.TrimSpace(cwd)
 	collaborationMode = append(json.RawMessage(nil), collaborationMode...)
-	if approvalPolicy == "" && cwd == "" && len(collaborationMode) == 0 {
+	var roots *[]string
+	if runtimeWorkspaceRoots != nil {
+		copied := make([]string, len(*runtimeWorkspaceRoots))
+		copy(copied, *runtimeWorkspaceRoots)
+		roots = &copied
+	}
+	if approvalPolicy == "" && cwd == "" && len(collaborationMode) == 0 && roots == nil {
 		return errors.New("thread settings require an approval policy or cwd")
 	}
 	if now.IsZero() {
@@ -668,18 +692,20 @@ func (r *Recorder) AppendThreadSettingsAppliedWithSnapshot(threadID, approvalPol
 		Type           string `json:"type"`
 		ThreadID       string `json:"thread_id,omitempty"`
 		ThreadSettings struct {
-			ApprovalPolicy    string          `json:"approval_policy"`
-			CWD               string          `json:"cwd,omitempty"`
-			CollaborationMode json.RawMessage `json:"collaboration_mode,omitempty"`
+			ApprovalPolicy        string          `json:"approval_policy"`
+			CWD                   string          `json:"cwd,omitempty"`
+			CollaborationMode     json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots *[]string       `json:"runtime_workspace_roots,omitempty"`
 		} `json:"thread_settings"`
 	}{
 		Type:     "thread_settings_applied",
 		ThreadID: threadID,
 		ThreadSettings: struct {
-			ApprovalPolicy    string          `json:"approval_policy"`
-			CWD               string          `json:"cwd,omitempty"`
-			CollaborationMode json.RawMessage `json:"collaboration_mode,omitempty"`
-		}{ApprovalPolicy: approvalPolicy, CWD: cwd, CollaborationMode: collaborationMode},
+			ApprovalPolicy        string          `json:"approval_policy"`
+			CWD                   string          `json:"cwd,omitempty"`
+			CollaborationMode     json.RawMessage `json:"collaboration_mode,omitempty"`
+			RuntimeWorkspaceRoots *[]string       `json:"runtime_workspace_roots,omitempty"`
+		}{ApprovalPolicy: approvalPolicy, CWD: cwd, CollaborationMode: collaborationMode, RuntimeWorkspaceRoots: roots},
 	})
 	if err != nil {
 		return err
@@ -3123,6 +3149,36 @@ func cloneAnyMap(values map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func ensureExtraMap(values map[string]any) map[string]any {
+	if values == nil {
+		return map[string]any{}
+	}
+	return values
+}
+
+// runtimeWorkspaceRootsFromAny normalizes the runtime workspace root selection
+// from record metadata, which may hold either a []string or the []any produced
+// by a JSON round trip. A nil result means the field was absent.
+func runtimeWorkspaceRootsFromAny(value any) *[]string {
+	switch typed := value.(type) {
+	case []string:
+		roots := append([]string{}, typed...)
+		return &roots
+	case []any:
+		roots := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, ok := item.(string)
+			if !ok {
+				continue
+			}
+			roots = append(roots, text)
+		}
+		return &roots
+	default:
+		return nil
+	}
 }
 
 func cloneStringMap(values map[string]string) map[string]string {
