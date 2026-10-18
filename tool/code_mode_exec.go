@@ -156,10 +156,11 @@ type CodeModeCallObservation struct {
 	ParentCallID string
 	CallID       string
 	// The Completed fact's fields.
-	ToolName      string
-	StartedAtMS   uint64
-	CompletedAtMS uint64
-	Status        CodeModeCallStatus
+	ToolName               string
+	StartedAtMS            uint64
+	CompletedAtMS          uint64
+	CodeModeHostDurationNS uint64
+	Status                 CodeModeCallStatus
 }
 
 // codeModeCallOrigin is one cell's retained origin (Rust ToolCallOrigin).
@@ -380,7 +381,7 @@ func (e *codeModeExecExecutor) observeCall(observation CodeModeCallObservation) 
 // observeCodeModeCallCompletion publishes Rust's `Completed` fact for one
 // finished exec/wait call: the call id, the cell it ran in (once known), the tool
 // name, the observed window and the terminal status.
-func (e *codeModeExecExecutor) observeCodeModeCallCompletion(callID string, toolName string, cellID *string, startedAt time.Time, status CodeModeCallStatus) {
+func (e *codeModeExecExecutor) observeCodeModeCallCompletion(callID string, toolName string, cellID *string, startedAt time.Time, hostDurationNS uint64, status CodeModeCallStatus) {
 	if e == nil {
 		return
 	}
@@ -389,12 +390,13 @@ func (e *codeModeExecExecutor) observeCodeModeCallCompletion(callID string, tool
 		return
 	}
 	observation := CodeModeCallObservation{
-		Kind:          CodeModeCallCompleted,
-		CallID:        callID,
-		ToolName:      strings.TrimSpace(toolName),
-		StartedAtMS:   uint64(startedAt.UTC().UnixMilli()),
-		CompletedAtMS: uint64(time.Now().UTC().UnixMilli()),
-		Status:        status,
+		Kind:                   CodeModeCallCompleted,
+		CallID:                 callID,
+		ToolName:               strings.TrimSpace(toolName),
+		StartedAtMS:            uint64(startedAt.UTC().UnixMilli()),
+		CompletedAtMS:          uint64(time.Now().UTC().UnixMilli()),
+		CodeModeHostDurationNS: hostDurationNS,
+		Status:                 status,
 	}
 	if cellID != nil {
 		observation.CellID = strings.TrimSpace(*cellID)
@@ -690,7 +692,7 @@ func (e *codeModeExecExecutor) Execute(ctx context.Context, invocation *Invocati
 	output, err := e.execute(ctx, invocation, &callCellID)
 	// Rust's CodeModeToolCallGuard publishes the call's Completed fact when the
 	// handler returns, with the cell it ran in and its terminal status.
-	e.observeCodeModeCallCompletion(invocation.CallID, CodeModeExecToolName, &callCellID, startedAt, codeModeCallStatusFor(ctx, output, err))
+	e.observeCodeModeCallCompletion(invocation.CallID, CodeModeExecToolName, &callCellID, startedAt, codeModeHostDurationFromOutput(output), codeModeCallStatusFor(ctx, output, err))
 	return output, err
 }
 
@@ -1245,6 +1247,12 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		value := time.Duration(response.HostDurationNS)
 		hostDuration = &value
 	}
+	modelWallTime := wallTime
+	if hostDuration != nil && !showOverhead {
+		// Rust #41452: model-visible wall time is the host operation itself, not
+		// the client's response-read delay.
+		modelWallTime = *hostDuration
+	}
 	texts := make([]string, 0)
 	for _, item := range response.ContentItems {
 		if item["type"] == "input_text" {
@@ -1255,11 +1263,17 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		// Rust's failed response: partial content, then the `Script error:`
 		// block, with the header reporting "Script failed".
 		output := codeModeScriptFailureOutput(callID, response.ErrorText, response.ContentItems, nil, nil, nil)
+		if hostDuration != nil {
+			output.Data["code_mode_host_duration_ns"] = response.HostDurationNS
+		}
 		output = truncateCodeModeOutput(output, maxTokens)
-		return applyCodeModeHeader(output, "Script failed", wallTime, hostDuration, showOverhead), nil
+		return applyCodeModeHeader(output, "Script failed", modelWallTime, hostDuration, showOverhead), nil
 	}
 	body := strings.Join(texts, "\n")
 	output := &Output{CallID: callID, ToolName: PlainName(CodeModeExecToolName), Success: true, Body: body, Data: map[string]any{"content_items": response.ContentItems}}
+	if hostDuration != nil {
+		output.Data["code_mode_host_duration_ns"] = response.HostDurationNS
+	}
 	if strings.TrimSpace(response.CellID) != "" {
 		output.Data["cell_id"] = response.CellID
 	}
@@ -1270,7 +1284,26 @@ func remoteResponseOutput(callID string, response CodeModeRemoteResponse, maxTok
 		output.Data["running"] = true
 	}
 	output = truncateCodeModeOutput(output, maxTokens)
-	return applyCodeModeHeader(output, status, wallTime, hostDuration, showOverhead), nil
+	return applyCodeModeHeader(output, status, modelWallTime, hostDuration, showOverhead), nil
+}
+
+func codeModeHostDurationFromOutput(output *Output) uint64 {
+	if output == nil || output.Data == nil {
+		return 0
+	}
+	switch value := output.Data["code_mode_host_duration_ns"].(type) {
+	case uint64:
+		return value
+	case int:
+		if value > 0 {
+			return uint64(value)
+		}
+	case float64:
+		if value > 0 {
+			return uint64(value)
+		}
+	}
+	return 0
 }
 
 func (e *codeModeExecExecutor) executeScript(ctx context.Context, invocation *Invocation, yield chan<- struct{}, cell *codeModeCell) (*Output, error) {
@@ -1786,7 +1819,7 @@ func (e *codeModeWaitExecutor) Execute(ctx context.Context, invocation *Invocati
 			}
 		}
 	}
-	e.exec.observeCodeModeCallCompletion(invocation.CallID, CodeModeWaitToolName, cellID, startedAt, codeModeCallStatusFor(ctx, output, err))
+	e.exec.observeCodeModeCallCompletion(invocation.CallID, CodeModeWaitToolName, cellID, startedAt, codeModeHostDurationFromOutput(output), codeModeCallStatusFor(ctx, output, err))
 	return output, err
 }
 

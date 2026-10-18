@@ -380,6 +380,7 @@ func (r *RuntimeRouter) observeCodeModeCall(threadID string, observation tool.Co
 	case tool.CodeModeCallCellClosed:
 		r.closeCodeModeCell(threadID, turnID, observation.CellID)
 	case tool.CodeModeCallCompleted:
+		r.emitCodeModeHostTiming(threadID, turnID, observation)
 		r.emitCodeModeToolCallEvent(threadID, turnID, observation)
 	}
 }
