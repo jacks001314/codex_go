@@ -23541,9 +23541,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: format_guardian_interruption_message"
+        "Equivalent implementation already present: strict Guardian circuit-break interruptions format a bounded parent notification with the fixed do-not-resume guidance and enqueue it through the parent's active-turn mailbox or idle wake path. Default circuit-break mode and non-V2 threads stay silent; tests cover strict/default delivery and message truncation."
       ]
     },
     {
