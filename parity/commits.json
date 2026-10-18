@@ -334,9 +334,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 715 (audit): already implemented. toolRouterForTurn does not require the collaboration post tool when disable_direct_message is set; unavailable post/send_message/followup_task tools are omitted, dispatch returns the model-visible tool-not-found/unsupported-call error, and no agent board database is created. Test: TestDisableDirectMessageAllowsUnavailableBoardLikeRust; covered in go test ./appserver -count=1."
       ]
     },
     {
