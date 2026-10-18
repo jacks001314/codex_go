@@ -30584,9 +30584,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555: routePluginDetails and runtime eligibility now let a cached openai-curated-remote sites/visualize install supersede the bundled openai-bundled entry; a disabled remote entry still suppresses the fallback and a missing remote bundle preserves it. Other bundled plugins and curated mirrors keep their existing rules. Tests: go test ./plugin -run RemoteSupersedesBundled -count=1; go test ./plugin -count=1"
       ]
     },
     {

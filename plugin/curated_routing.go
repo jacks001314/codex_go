@@ -11,6 +11,7 @@ const (
 	OpenAICuratedMarketplaceName       = "openai-curated"
 	OpenAIAPICuratedMarketplaceName    = "openai-api-curated"
 	OpenAIRemoteCuratedMarketplaceName = "openai-curated-remote"
+	OpenAIBundledMarketplaceName       = "openai-bundled"
 	AmazonBedrockModelProviderID       = "amazon-bedrock"
 )
 
@@ -18,7 +19,7 @@ var openAIReservedMarketplaceNames = map[string]bool{
 	OpenAICuratedMarketplaceName:       true,
 	OpenAIAPICuratedMarketplaceName:    true,
 	OpenAIRemoteCuratedMarketplaceName: true,
-	"openai-bundled":                   true,
+	OpenAIBundledMarketplaceName:       true,
 	"openai-bundled-alpha":             true,
 	"openai-primary-runtime":           true,
 }
@@ -107,7 +108,15 @@ func (s *PluginService) pluginEligibleForRuntimeLocked(detail PluginDetail) bool
 	if !pluginEligibleForCuratedTarget(detail.Summary.ID, detail.Summary.MarketplaceName, s.targetCuratedMarketplace) {
 		return false
 	}
-	if s.targetCuratedMarketplace != TargetCuratedOpenAIWithRemote || detail.Summary.MarketplaceName != OpenAICuratedMarketplaceName {
+	if s.targetCuratedMarketplace != TargetCuratedOpenAIWithRemote {
+		return true
+	}
+	// Rust #53747: a cached remote install supersedes both the curated mirror
+	// and the bundled sites/visualize plugins. A disabled remote entry still
+	// suppresses the fallback; a missing one keeps it.
+	supersedable := detail.Summary.MarketplaceName == OpenAICuratedMarketplaceName ||
+		(detail.Summary.MarketplaceName == OpenAIBundledMarketplaceName && remoteSupersedesBundledPlugin(detail.Summary.Name))
+	if !supersedable {
 		return true
 	}
 	for _, candidate := range s.plugins {
@@ -132,12 +141,28 @@ func routePluginDetails(details []PluginDetail, target TargetCuratedMarketplace)
 		if !pluginEligibleForCuratedTarget(detail.Summary.ID, detail.Summary.MarketplaceName, target) {
 			continue
 		}
-		if target == TargetCuratedOpenAIWithRemote && detail.Summary.MarketplaceName == OpenAICuratedMarketplaceName && remoteNames[detail.Summary.Name] {
-			continue
+		if target == TargetCuratedOpenAIWithRemote && remoteNames[detail.Summary.Name] {
+			if detail.Summary.MarketplaceName == OpenAICuratedMarketplaceName {
+				continue
+			}
+			if detail.Summary.MarketplaceName == OpenAIBundledMarketplaceName && remoteSupersedesBundledPlugin(detail.Summary.Name) {
+				continue
+			}
 		}
 		out = append(out, detail)
 	}
 	return out
+}
+
+// remoteSupersedesBundledPlugin mirrors Rust #53747's bundled fallback set:
+// sites and visualize are replaced by their openai-curated-remote installs.
+func remoteSupersedesBundledPlugin(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "sites", "visualize":
+		return true
+	default:
+		return false
+	}
 }
 
 func routePluginSummaries(plugins []PluginSummary, target TargetCuratedMarketplace) []PluginSummary {
