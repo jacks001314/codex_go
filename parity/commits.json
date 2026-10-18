@@ -3816,9 +3816,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: GUARDIAN_TRANSCRIPT_START, context_window_token_status_for_model"
+        "Round 501 (audit): partial. Go's guardianSessionRunner retains previous/seeded review history, prior-review state, evidence cursors, and parent-compaction reseeding, with Guardian tests green. It does not check reviewer context_window_token_status before a follow-up or submit Op::Compact; after a rollover it has no full-transcript detection to reset transcript/Node REPL evidence cursors, and no post-compaction reminder/policy re-injection equivalent. Remaining: add this reviewer-session rollover path."
       ]
     },
     {
