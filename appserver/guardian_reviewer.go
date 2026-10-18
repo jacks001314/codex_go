@@ -90,8 +90,15 @@ type modelGuardianReviewer struct {
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
 	fullAccess                 func(threadID, turnID string) bool
 	approvalsReviewer          func(threadID, turnID string) string
-	environment                func(context.Context, string, string) ([]any, error)
-	permissionProfile          func(threadID, turnID string) *sandbox.PermissionProfile
+	// requiredReview reports whether the reviewed model is listed in
+	// auto_review.required_on_models. Rust #41309 defers such models from the
+	// cached-score fast path before they can reuse an approval, so Go's
+	// remaining user-mode fast path must defer them to a full review as well.
+	// Full Access stays outside this guard because Rust's routing approves it
+	// before contributors run.
+	requiredReview    func(threadID, turnID string) bool
+	environment       func(context.Context, string, string) ([]any, error)
+	permissionProfile func(threadID, turnID string) *sandbox.PermissionProfile
 	// turnPermissionProfile resolves the reviewed turn's own profile and cwd for
 	// the permission evidence, which is distinct from the read-only profile the
 	// reviewer's session uses, plus the reviewed environment's selection id when
@@ -622,7 +629,8 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		}
 		return state.DecisionApproved, "full access", nil
 	}
-	if r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
+	requiredReview := r.requiredReview != nil && r.requiredReview(threadID, turnID)
+	if !requiredReview && r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
 		action.Type == "mcp_tool_call" &&
 		mcp.IsNodeReplBackedConnector(strings.TrimSpace(action.Server), action.ConnectorID) &&
 		strings.EqualFold(strings.TrimSpace(action.ToolName), "js") {

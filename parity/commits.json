@@ -3974,9 +3974,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Required models cannot use a fast approval. Go has no cached-score approval path; the remaining user-mode node_repl fast path now checks auto_review.required_on_models and defers protected models to the full reviewer. Full Access keeps Rust's earlier routing short-circuit. Tests: go test ./appserver -run 'RequiresFullReviewForProtectedModel|ProtectedModelForcesAutoReviewerForTurn' -count=1"
       ]
     },
     {

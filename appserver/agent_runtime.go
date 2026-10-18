@@ -133,6 +133,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
+		modelReviewer.requiredReview = r.guardianReviewRequiredForTurn
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
@@ -250,6 +251,25 @@ func (r *RuntimeRouter) guardianFullAccessForTurn(threadID, turnID string) bool 
 		return false
 	}
 	return turnIsFullAccess(cfg, firstNonEmpty(active.Params.CWD, r.services.DefaultCWD), active.Params)
+}
+
+// guardianReviewRequiredForTurn reports whether the reviewed turn's model is
+// listed in auto_review.required_on_models. Required models must reach a full
+// review instead of reusing a fast approval (#41309).
+func (r *RuntimeRouter) guardianReviewRequiredForTurn(threadID, turnID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	modelID := turnParamModel(active.Params)
+	if active.RunConfig != nil {
+		modelID = firstNonEmpty(active.RunConfig.Model, modelID)
+	}
+	return autoReviewRequiredForModel(cfg, modelID)
 }
 
 func (r *RuntimeRouter) guardianApprovalsReviewerForTurn(threadID, turnID string) string {
