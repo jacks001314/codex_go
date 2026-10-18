@@ -1367,7 +1367,10 @@ type Options struct {
 	OnOpenPluginURL             PluginOpenURLFunc
 	// OnOpenURL opens a rendered terminal hyperlink from an app-owned row,
 	// used by Ctrl-click composer-gap tips (Rust #46931).
-	OnOpenURL              func(string) error
+	OnOpenURL func(string) error
+	// StartupAnnouncement is the host-supplied announcement tip preferred in
+	// the fullscreen composer gap until the first user turn (Rust #46931).
+	StartupAnnouncement    *string
 	PluginUserMarketplaces map[string]bool
 	PluginGitMarketplaces  map[string]bool
 	OnReadSkills           SkillsListReaderFunc
@@ -2802,7 +2805,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 	// The initial refresh above ran before the terminal environment was
 	// installed. Re-render now so resumed image entries can reserve preview rows.
 	model.refreshTranscript()
-	model.composerTips = newComposerTipState(uint64(time.Now().UnixNano()))
+	model.composerTips = newComposerTipState(uint64(time.Now().UnixNano()), options.StartupAnnouncement)
 	return model
 }
 

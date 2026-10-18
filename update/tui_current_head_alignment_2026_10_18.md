@@ -1996,8 +1996,9 @@ green.
   Markdown-renders it with OSC 8 links, requires a single fitting row, and
   yields to usage notices, warnings, drafts, running turns, and interactions.
   Ctrl-click now resolves OSC 8 ranges and opens them through the app URL
-  opener; Super-click is unavailable in Bubble Tea v1. Remaining:
-  startup-announcement preference/dismissal.
+  opener; Super-click is unavailable in Bubble Tea v1. A host-supplied startup
+  announcement is preferred until the first user turn and then permanently
+  dismissed. Remaining: the app-side announcement fetch/cache.
   fullscreen composer-gap catalog rotation, announcement lifecycle, single-row
   fitting, and composer-gap link hit testing are not ported.
 - `#46910` is complete: settings pickers no longer disturb the reader's

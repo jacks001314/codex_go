@@ -21,7 +21,7 @@ func composerTipTestModel(t *testing.T, width int) *Model {
 		FullscreenTranscript: &fullscreen,
 		ShowTooltips:         &show,
 	})
-	model.composerTips = newComposerTipState(42)
+	model.composerTips = newComposerTipState(42, nil)
 	model.View()
 	model.activityFollow = true
 	return model
@@ -112,5 +112,29 @@ func TestComposerGapCtrlClickOpensOSC8LinkLikeRust(t *testing.T) {
 		X: 7, Y: 10, Action: bubbletea.MouseActionPress, Button: bubbletea.MouseButtonLeft,
 	}); handled {
 		t.Fatal("plain click consumed a link hit test")
+	}
+}
+
+// Rust #46931: a startup announcement is preferred until the first user turn,
+// then stays dismissed even if history is cleared.
+func TestComposerTipsPreferAnnouncementUntilFirstTurnLikeRust(t *testing.T) {
+	model := composerTipTestModel(t, 100)
+	announcement := "Welcome **back** to Codex"
+	model.composerTips = newComposerTipState(42, &announcement)
+	line, ok := model.composerTipLine()
+	if !ok || !strings.Contains(utils.StripANSI(line), "Welcome back to Codex") {
+		t.Fatalf("announcement tip = %q ok=%v", line, ok)
+	}
+
+	model.State.AddMessage(codextui.RoleUser, "first turn")
+	line, ok = model.composerTipLine()
+	if !ok || strings.Contains(utils.StripANSI(line), "Welcome back") {
+		t.Fatalf("announcement survived the first turn: %q ok=%v", line, ok)
+	}
+
+	model.State.Messages = nil
+	line, ok = model.composerTipLine()
+	if !ok || strings.Contains(utils.StripANSI(line), "Welcome back") {
+		t.Fatalf("cleared history restored the announcement: %q ok=%v", line, ok)
 	}
 }

@@ -17471,7 +17471,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 688 (progress): the fullscreen composer gap selects a stable catalog tip seeded by session and user-turn count, uses ResolvedTooltips so {key:context.action} follows the current keymap, Markdown-renders the tip (preserving OSC 8 links), and accepts only a single rendered row that fits. Tips yield to usage notices, retained warnings, drafts, running turns, popups/modals, selections, backtrack, backend banners, and non-following transcripts. Ctrl-click on the composer-gap footer row now resolves OSC 8 display-column ranges (with bare-URL fallback), opens the destination through the app URL opener, and reports open failures; Super-click is unavailable in Bubble Tea v1. Remaining: startup-announcement preference/dismissal lifecycle."
+        "Round 689 (progress): the fullscreen composer gap selects a stable catalog tip seeded by session and user-turn count, uses ResolvedTooltips so {key:context.action} follows the current keymap, Markdown-renders the tip (preserving OSC 8 links), and accepts only a single rendered row that fits. A host-supplied startup announcement is preferred until the first user turn, then permanently dismissed even after /clear or history removal. Tips yield to usage notices, retained warnings, drafts, running turns, popups/modals, selections, backtrack, backend banners, and non-following transcripts. Ctrl-click resolves OSC 8 display-column ranges (with bare-URL fallback), opens through the app URL opener, and reports failures; Super-click is unavailable in Bubble Tea v1. Remaining: the app-side announcement fetch/cache that would populate the host-supplied value."
       ]
     },
     {

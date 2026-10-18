@@ -14,14 +14,25 @@ import (
 // composerTipState keeps fullscreen composer-gap tip selection stable across
 // redraws while varying it by session seed and user-turn count (Rust #46931).
 type composerTipState struct {
-	seed     uint64
-	cacheKey string
-	line     string
-	found    bool
+	seed                  uint64
+	announcement          string
+	announcementDismissed bool
+	bootTurnCount         int
+	bootTurnSet           bool
+	cacheKey              string
+	line                  string
+	found                 bool
+	announcementCacheKey  string
+	announcementLine      string
+	announcementFound     bool
 }
 
-func newComposerTipState(seed uint64) composerTipState {
-	return composerTipState{seed: seed}
+func newComposerTipState(seed uint64, announcement *string) composerTipState {
+	state := composerTipState{seed: seed}
+	if announcement != nil {
+		state.announcement = strings.TrimSpace(*announcement)
+	}
+	return state
 }
 
 func (c *composerTipState) selectTip(turnCount int, width int, keymap *codextui.KeymapConfig, themeID string, cwd string) (string, bool) {
@@ -48,23 +59,42 @@ func (c *composerTipState) selectTip(turnCount int, width int, keymap *codextui.
 	rng := rand.New(rand.NewSource(int64(c.seed + uint64(turnCount))))
 	rng.Shuffle(len(tips), func(i, j int) { tips[i], tips[j] = tips[j], tips[i] })
 	for _, tip := range tips {
-		rendered, err := markdown.RenderWithThemeCwd(tip, width, themeID, cwd)
-		if err != nil {
-			continue
+		if line, ok := renderComposerTip(tip, width, themeID, cwd); ok {
+			c.line = line
+			c.found = true
+			return c.line, true
 		}
-		lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
-		if len(lines) != 1 {
-			continue
-		}
-		line := strings.TrimRight(lines[0], " ")
-		if codextui.DisplayWidth(line) > width {
-			continue
-		}
-		c.line = line
-		c.found = true
-		return c.line, true
 	}
 	return "", false
+}
+
+func (c *composerTipState) selectAnnouncement(width int, themeID string, cwd string) (string, bool) {
+	if c == nil || c.announcement == "" || c.announcementDismissed || width <= 0 {
+		return "", false
+	}
+	key := strings.Join([]string{strconv.Itoa(width), themeID, cwd, c.announcement}, "\x00")
+	if key == c.announcementCacheKey {
+		return c.announcementLine, c.announcementFound
+	}
+	c.announcementCacheKey = key
+	c.announcementLine, c.announcementFound = renderComposerTip(c.announcement, width, themeID, cwd)
+	return c.announcementLine, c.announcementFound
+}
+
+func renderComposerTip(tip string, width int, themeID string, cwd string) (string, bool) {
+	rendered, err := markdown.RenderWithThemeCwd(tip, width, themeID, cwd)
+	if err != nil {
+		return "", false
+	}
+	lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
+	if len(lines) != 1 {
+		return "", false
+	}
+	line := strings.TrimRight(lines[0], " ")
+	if codextui.DisplayWidth(line) > width {
+		return "", false
+	}
+	return line, true
 }
 
 // composerTipLine mirrors Rust's fullscreen composer_hint fallback: a
@@ -94,7 +124,20 @@ func (m *Model) composerTipLine() (string, bool) {
 			turnCount++
 		}
 	}
-	return m.composerTips.selectTip(turnCount, max(m.width-2, 1), m.keymapConfig, m.activeTUITheme(), m.sessionCWD)
+	if !m.composerTips.bootTurnSet {
+		m.composerTips.bootTurnCount = turnCount
+		m.composerTips.bootTurnSet = true
+	}
+	if turnCount != m.composerTips.bootTurnCount || m.isUserTurnPendingOrRunning() {
+		// Rust #46931: leaving startup permanently dismisses the announcement,
+		// even if /clear or backtrack later removes the user turn.
+		m.composerTips.announcementDismissed = true
+	}
+	width := max(m.width-2, 1)
+	if line, ok := m.composerTips.selectAnnouncement(width, m.activeTUITheme(), m.sessionCWD); ok {
+		return line, true
+	}
+	return m.composerTips.selectTip(turnCount, width, m.keymapConfig, m.activeTUITheme(), m.sessionCWD)
 }
 
 // OpenURLResultMsg reports an app-owned hyperlink open initiated by Ctrl-click.
