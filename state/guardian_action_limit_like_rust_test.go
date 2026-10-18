@@ -1,6 +1,7 @@
 package state
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -73,6 +74,33 @@ func TestGuardianActionReviewLimitTruncatesOversizedStringsLikeRust(t *testing.T
 	}
 	if !strings.Contains(text, "prefix ") || !strings.Contains(text, "suffix") {
 		t.Fatal("truncated action lost its prefix or suffix evidence")
+	}
+}
+
+// Mirrors Rust #45987: only host-provided MCP descriptions are removed from the
+// reviewed action; identically named fields inside arguments remain exact.
+func TestGuardianMCPActionReviewPreservesDescriptionArgumentsLikeRust(t *testing.T) {
+	arguments := map[string]any{
+		"description":      "required argument",
+		"tool_description": "also an argument",
+		"nested":           map[string]any{"connector_description": "required nested argument"},
+	}
+	value := guardianActionJSONValue(Action{
+		Type:                 "mcp_tool_call",
+		Server:               "example",
+		ToolName:             "publish",
+		ToolDescription:      "optional host metadata",
+		ConnectorDescription: "optional connector metadata",
+		Arguments:            arguments,
+	})
+	if _, ok := value["tool_description"]; ok {
+		t.Fatalf("host tool_description leaked into reviewed action: %#v", value)
+	}
+	if _, ok := value["connector_description"]; ok {
+		t.Fatalf("host connector_description leaked into reviewed action: %#v", value)
+	}
+	if got := value["arguments"]; !reflect.DeepEqual(got, arguments) {
+		t.Fatalf("arguments = %#v, want unchanged %#v", got, arguments)
 	}
 }
 

@@ -14583,9 +14583,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: action_for_review"
+        "Equivalent implementation: Guardian's typed action projection omits only host-provided MCP tool/connector descriptions from the reviewed action and renders those descriptions separately as untrusted evidence; the arguments object remains exact. Added regression coverage for nested description-like argument fields."
       ]
     },
     {
