@@ -5481,7 +5481,10 @@ func (r *RuntimeRouter) effectiveMCPConfigForThreadStartRequest(request *Request
 	if err := request.DecodeParams(&params); err != nil {
 		return nil, err
 	}
-	if host := r.hostMCPPathContextForTurn("", &turn.TurnStartParams{CWD: params.CWD, Environments: params.Environments}); host.CWD != "" {
+	// The request CWD owns project discovery and trust. Host MCP fallbacks only
+	// fill a missing working directory; using the process CWD here would mark an
+	// unrelated checkout as trusted (Rust #46328).
+	if host := r.hostMCPPathContextForTurn("", &turn.TurnStartParams{CWD: params.CWD, Environments: params.Environments}); host.CWD != "" && strings.TrimSpace(params.CWD) == "" {
 		params.CWD = host.CWD
 	}
 	cfg, err := r.effectiveConfigForThreadStart(&params)

@@ -634,9 +634,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: GRACEFULL_INTERRUPTION_TIMEOUT_MS, SuspendTurnOutcome, emit_thread_stop_lifecycle, shutdown_session_runtime, suspend_turn_and_shutdown"
+        "N/A by architecture (Round 702 audit): Rust adds a CodexThread session-loop primitive for handoff between workers, but it has no production caller at upstream head (only core tests). Go has no equivalent per-thread submission loop with terminal-event suppression: TurnService is an in-memory active-turn registry, and daemon recovery already reloads unfinished rollouts and marks them interrupted when idle. There is therefore no Go carrier for suspend_turn_and_shutdown, SuspendTurnOutcome, or the session runtime shutdown split."
       ]
     },
     {
@@ -972,9 +972,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Round 703 (implementation): projectless thread/start no longer persists trust. The MCP host-path fallback previously replaced an explicit request CWD with the process CWD, so config discovery and trust were evaluated for an unrelated checkout. The fallback now applies only when the request omits CWD, and the projectless trust-target helper is pinned by TestThreadStartTrustTargetProjectlessUsesCWDLikeRust. Tests: go test ./appserver -run 'ThreadStartProjectlessDoesNotPersistProjectTrust|ThreadStartProjectTrustWriteGuards|ThreadStartTrustTargetProjectless' -count=1"
       ]
     },
     {
