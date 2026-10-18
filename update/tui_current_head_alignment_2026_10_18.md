@@ -2100,6 +2100,10 @@ green.
   wrapping/truncation while ellipses stay unlinked.
 - `#50434` is not applicable: Go's transcript selection is terminal-owned; no
   app-owned transcript copy-mode state machine exists.
+- `#52330` is not applicable: Go has no wrapped LogicalLineSource remapping path
+  that can index past the flattened source.
+- `#52557` remains partial: Go lacks OSC-52 terminal clipboard forwarding, so
+  Herdr/tmux/SSH forwarding is not available.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

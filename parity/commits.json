@@ -29119,9 +29119,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's terminal hyperlink path wraps/annotates rendered lines directly and has no LogicalLineSource/remap_source_wrapped_line range projection that could retain a one-past-end cursor sentinel. The Rust panic path has no Go carrier."
       ]
     },
     {
@@ -29227,9 +29227,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go has no OSC-52 clipboard-copy forwarding path at all; app-owned copies call the native clipboard writer only. HERDR_ENV is therefore not consumed, and Herdr/tmux/SSH terminal forwarding remains unimplemented."
       ]
     },
     {
