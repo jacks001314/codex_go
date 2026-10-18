@@ -4058,9 +4058,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Memory phase-one user messages carry a prefixed msg_ ID with ItemIDsEnabled, so internal HTTP/WebSocket retries reuse the same item identity. Guardian async-classifier input construction has no Go carrier because Go has no guardian-v2 scorer. Tests: go test ./appserver -run 'MemoryStageOneUsesDetachedResponsesRequestLikeRust|Memory.*StageOne|MemoryStartup' -count=1"
       ]
     },
     {

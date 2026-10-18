@@ -63,6 +63,7 @@ type OtelConfig struct {
 	ToolResult             protocol.ToolResultLogConfig
 	LogUserPrompt          bool
 	LogGuardianAssessments bool
+	LogAgentResponses      bool
 	Environment            string
 	Exporter               OtelExporterKind
 	TraceExporter          OtelExporterKind
@@ -103,6 +104,9 @@ func ResolveOtelConfig(values map[string]any) (OtelConfig, []string) {
 	}
 	if logGuardian, ok := otel["log_guardian_assessments"].(bool); ok {
 		resolved.LogGuardianAssessments = logGuardian
+	}
+	if logResponses, ok := otel["log_agent_responses"].(bool); ok {
+		resolved.LogAgentResponses = logResponses
 	}
 	if environment, ok := otel["environment"].(string); ok && environment != "" {
 		resolved.Environment = environment
@@ -147,6 +151,11 @@ func ValidateOtelConfigValues(values map[string]any) error {
 	if value, ok := otel["log_guardian_assessments"]; ok && value != nil {
 		if _, isBool := value.(bool); !isBool {
 			return errors.New("otel.log_guardian_assessments must be a boolean")
+		}
+	}
+	if value, ok := otel["log_agent_responses"]; ok && value != nil {
+		if _, isBool := value.(bool); !isBool {
+			return errors.New("otel.log_agent_responses must be a boolean")
 		}
 	}
 	if value, ok := otel["environment"]; ok && value != nil {
@@ -209,6 +218,14 @@ func ValidateOtelConfigValues(values map[string]any) error {
 // payloads may go to an explicit OTLP log exporter.
 func (c OtelConfig) GuardianAssessmentLoggingEnabled() bool {
 	return c.LogGuardianAssessments &&
+		(c.Exporter.Kind == OtelExporterKindOtlpHTTP || c.Exporter.Kind == OtelExporterKindOtlpGRPC)
+}
+
+// AgentResponseLoggingEnabled reports whether final main-agent and
+// thread-spawn subagent responses may go to an explicit OTLP log exporter.
+// Response text requires both the opt-in and a log destination (Rust #47649).
+func (c OtelConfig) AgentResponseLoggingEnabled() bool {
+	return c.LogAgentResponses &&
 		(c.Exporter.Kind == OtelExporterKindOtlpHTTP || c.Exporter.Kind == OtelExporterKindOtlpGRPC)
 }
 

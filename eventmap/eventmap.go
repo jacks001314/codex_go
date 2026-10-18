@@ -679,6 +679,12 @@ func stripCitations(text string) string {
 	}
 }
 
+// StripCitations removes memory and web citation controls from exported text
+// while leaving the stored answer unchanged.
+func StripCitations(text string) string {
+	return stripCitations(text)
+}
+
 func stripInlineHiddenTag(text string, open string, close string) string {
 	for {
 		start := strings.Index(text, open)

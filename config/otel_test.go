@@ -322,3 +322,31 @@ func TestGuardianAssessmentLoggingRequiresOptInAndOtlpLogExporter(t *testing.T) 
 		t.Fatal("non-boolean guardian assessment logging was accepted")
 	}
 }
+
+func TestAgentResponseLoggingRequiresOptInAndOtlpLogExporter(t *testing.T) {
+	otlp := map[string]any{"otlp-http": map[string]any{
+		"endpoint": "https://logs.example/v1/logs",
+		"protocol": "json",
+	}}
+	resolved, warnings := ResolveOtelConfig(map[string]any{"otel": map[string]any{
+		"log_agent_responses": true,
+		"exporter":            otlp,
+	}})
+	if len(warnings) != 0 || !resolved.AgentResponseLoggingEnabled() {
+		t.Fatalf("enabled logging = %#v warnings=%v", resolved, warnings)
+	}
+	resolved, _ = ResolveOtelConfig(map[string]any{"otel": map[string]any{"exporter": otlp}})
+	if resolved.AgentResponseLoggingEnabled() {
+		t.Fatal("agent response logging enabled without opt-in")
+	}
+	resolved, _ = ResolveOtelConfig(map[string]any{"otel": map[string]any{
+		"log_agent_responses": true,
+		"exporter":            "none",
+	}})
+	if resolved.AgentResponseLoggingEnabled() {
+		t.Fatal("agent response logging enabled without an OTLP log exporter")
+	}
+	if err := ValidateOtelConfigValues(map[string]any{"otel": map[string]any{"log_agent_responses": "yes"}}); err == nil {
+		t.Fatal("non-boolean agent response logging was accepted")
+	}
+}

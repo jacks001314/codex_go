@@ -1747,6 +1747,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 		OnTokenUsage: func(usage model.AgentUsage) {
 			r.recordGoalTokenUsageWithDescendants(threadID, turnID, usage)
 		},
+		OnCompletedResponseItem: r.agentResponseRecorder(ctx, threadID, turnID, runConfig),
 		// Rust #53670: the usage a terminal incomplete response reported is
 		// charged to the cumulative total and to the shared rollout budget
 		// instead of being dropped with the error, while the context baseline
@@ -7561,6 +7562,7 @@ type appTurnRunConfig struct {
 	ParentThreadID       string
 	ParentTurnID         string
 	RootTurnID           string
+	InitiatingAgentPath  string
 	Ephemeral            bool
 	WorkspaceKind        string
 	NumInputImages       int
@@ -7620,6 +7622,7 @@ type appTurnRunConfig struct {
 	AttestationProvider             codexapi.AttestationProvider
 	UnifiedExecEnabled              bool
 	ExecutedToolCallMetadataEnabled bool
+	LogAgentResponses               bool
 	ImageResizeNoticeEnabled        bool
 	// MultiAgentVersion is the turn's resolved multi-agent version for turn
 	// analytics (Rust #51333, `turn_context.multi_agent_version`).
@@ -7996,6 +7999,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		ParentThreadID:          lineage.ParentThreadID,
 		ParentTurnID:            strings.TrimSpace(params.ParentTurnID),
 		RootTurnID:              effectiveRootTurnID(params.RootTurnID, turnID, params.ParentTurnID, lineage.SubagentHeader),
+		InitiatingAgentPath:     strings.TrimSpace(params.InitiatingAgentPath),
 		Ephemeral:               threadSnapshot.Ephemeral,
 		WorkspaceKind:           strings.TrimSpace(extraMetadata["workspace_kind"]),
 		NumInputImages:          countTurnStartInputImages(params),
@@ -8039,6 +8043,7 @@ func (r *RuntimeRouter) appTurnConfig(ctx context.Context, threadID string, turn
 		AttestationProvider:             r.appServerAttestationProvider(),
 		UnifiedExecEnabled:              unifiedExecEnabled,
 		ExecutedToolCallMetadataEnabled: features.Enabled(cfg.FeatureSettings(), "executed_tool_call_metadata"),
+		LogAgentResponses:               cfg.Otel().AgentResponseLoggingEnabled(),
 		ImageResizeNoticeEnabled:        features.Enabled(cfg.FeatureSettings(), "image_resize_notice"),
 		Config:                          cfg,
 		ConfiguredTokenBudget:           configuredTokenBudget,

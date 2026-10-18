@@ -101,6 +101,31 @@ func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
 	}
 }
 
+type completedItemLoopAgent struct{}
+
+func (completedItemLoopAgent) Run(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+	return &model.AgentResponse{Items: []model.AgentItem{
+		{ID: "final-item", Type: "agent_message", Text: "done", Data: map[string]any{"phase": "final_answer"}},
+		{ID: "reasoning-item", Type: "reasoning", Text: "thinking"},
+	}}, nil
+}
+
+func TestAgentLoopReportsCompletedResponseItemsLikeRust(t *testing.T) {
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: completedItemLoopAgent{}, MaxTurns: 1})
+	var completed []string
+	if _, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Model: "gpt-test",
+		OnCompletedResponseItem: func(item model.AgentItem) {
+			completed = append(completed, item.ID)
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(completed, ","); got != "final-item,reasoning-item" {
+		t.Fatalf("completed items = %q", got)
+	}
+}
+
 func TestAgentLoopMidTurnCompactionRollsOverLikeRust(t *testing.T) {
 	agent := &rollOverLoopAgent{}
 	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, MaxTurns: 3})

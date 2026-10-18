@@ -187,20 +187,24 @@ type AgentLoopRequest struct {
 	StepSettings func() *AgentStepSettings
 	// StepInputItems, when set, rebuilds request-scoped context for the model
 	// selected for this step (Rust context/world_state built from StepContext).
-	StepInputItems                  StepInputItemsProvider
-	AttestationProvider             codexapi.AttestationProvider
-	OutputSchema                    any
-	DisableHostedImageGeneration    bool
-	PostToolInputItems              ToolPostExecutionInputItems
-	OnToolStarted                   ToolStartedCallback
-	OnToolCompleted                 ToolCompletedCallback
-	EmitCodeModeNestedLifecycle     bool
-	OnCodeModeNotify                CodeModeNotifyCallback
-	OnWarning                       WarningCallback
-	Timing                          *TimingState
-	SamplingFollowUp                SamplingFollowUp
-	SamplingCompaction              SamplingCompaction
-	OnAssistantMessage              AssistantMessageCallback
+	StepInputItems               StepInputItemsProvider
+	AttestationProvider          codexapi.AttestationProvider
+	OutputSchema                 any
+	DisableHostedImageGeneration bool
+	PostToolInputItems           ToolPostExecutionInputItems
+	OnToolStarted                ToolStartedCallback
+	OnToolCompleted              ToolCompletedCallback
+	EmitCodeModeNestedLifecycle  bool
+	OnCodeModeNotify             CodeModeNotifyCallback
+	OnWarning                    WarningCallback
+	Timing                       *TimingState
+	SamplingFollowUp             SamplingFollowUp
+	SamplingCompaction           SamplingCompaction
+	OnAssistantMessage           AssistantMessageCallback
+	// OnCompletedResponseItem receives every completed model response item.
+	// Hosts use it for opt-in telemetry that must observe a final answer before
+	// it is folded into the turn result (Rust #47649).
+	OnCompletedResponseItem         func(model.AgentItem)
 	OnTokenUsage                    TokenUsageCallback
 	StreamHandler                   model.ResponsesStreamHandler
 	ExecutedToolCallMetadataEnabled bool
@@ -551,6 +555,11 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 		recordResponseTiming(timing, response, l.now())
 		result.Response = response
 		result.Responses = append(result.Responses, response)
+		if request.OnCompletedResponseItem != nil {
+			for i := range response.Items {
+				request.OnCompletedResponseItem(response.Items[i])
+			}
+		}
 		result.Usage = addAgentUsage(result.Usage, response.Usage)
 		if request.OnTokenUsage != nil {
 			request.OnTokenUsage(result.Usage)
