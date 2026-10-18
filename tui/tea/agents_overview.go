@@ -803,6 +803,7 @@ func (m *Model) newAgentsOverviewSessionCmd() bubbletea.Cmd {
 		}
 	}
 	m.agentsOverviewBusy = true
+	m.agentsOverviewAttachments = cloneComposerAttachments(m.attachments)
 	return func() bubbletea.Msg {
 		response, err := m.onAgentsOverviewNewSession(cwd)
 		return agentsOverviewNewSessionMsg{response: response, err: err}
@@ -840,6 +841,10 @@ func (m *Model) applyAgentsOverviewNewSession(message agentsOverviewNewSessionMs
 	// settings instead of re-deriving them from a configuration reload that may
 	// have failed, so live preferences survive into the new session.
 	m.applyLocalSettings(m.localSettings)
+	if len(m.agentsOverviewAttachments) > 0 {
+		m.attachments = cloneComposerAttachments(m.agentsOverviewAttachments)
+		m.agentsOverviewAttachments = nil
+	}
 	// Rust attaches a new session with a fresh chat widget, so the composer
 	// starts empty.
 	empty := ""

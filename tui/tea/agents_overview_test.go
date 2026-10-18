@@ -13,6 +13,7 @@ import (
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	agentsoverview "codex_go/tui/agents_overview"
+	bottompane "codex_go/tui/bottom_pane"
 	"codex_go/utils"
 )
 
@@ -238,6 +239,50 @@ func TestModelAgentsDashboardNewSessionOpensBlankSession(t *testing.T) {
 	model.Update(ThreadEventMsg{Event: protocol.ThreadEvent{Type: "turn.started", ThreadID: "new-1"}})
 	if _, ok := model.agentsOverviewBlankSessions["new-1"]; ok {
 		t.Fatal("the retained session must be cleared once its first turn starts")
+	}
+}
+
+func TestAgentsDashboardNewSessionPreservesImageAttachmentsLikeRust(t *testing.T) {
+	fail := true
+	model := NewModel(nil, Options{
+		Width:  120,
+		Height: 24,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+		OnAgentsOverviewNewSession: func(string) (AgentThreadSwitchResponse, error) {
+			if fail {
+				return AgentThreadSwitchResponse{}, errors.New("start failed")
+			}
+			return AgentThreadSwitchResponse{
+				Entry:  codextui.AgentThreadEntry{ThreadID: "new-image-task"},
+				Status: "idle",
+			}, nil
+		},
+	})
+	openAgentsDashboard(t, model)
+	model.attachments = []bottompane.ComposerAttachment{{
+		Kind: bottompane.AttachmentImage,
+		Path: "/tmp/context.png",
+	}}
+
+	updated, command := model.Update(agentsKeyEvent('n'))
+	model = updated.(*Model)
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	if len(model.attachments) != 1 || model.attachments[0].Path != "/tmp/context.png" {
+		t.Fatalf("attachments after failed start = %#v", model.attachments)
+	}
+
+	fail = false
+	model.agentsOverviewNotice = ""
+	updated, command = model.Update(agentsKeyEvent('n'))
+	model = updated.(*Model)
+	updated, _ = model.Update(command())
+	model = updated.(*Model)
+	if model.State.ThreadID != "new-image-task" ||
+		len(model.attachments) != 1 || model.attachments[0].Path != "/tmp/context.png" {
+		t.Fatalf("attachments after start = thread:%q attachments:%#v", model.State.ThreadID, model.attachments)
 	}
 }
 

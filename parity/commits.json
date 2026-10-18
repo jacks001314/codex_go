@@ -10145,9 +10145,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: restore_agents_overview_prompt"
+        "Aligned upstream 2ce38ae6d8 (#44027) in Go's command-center architecture: agentsOverviewAttachments captures the main composer's image attachments before starting a new task, preserves them on failure for retry, and restores them after the blank session attaches so image input continues through the normal composer/turn path. Tests: TestAgentsDashboardNewSessionPreservesImageAttachmentsLikeRust plus existing attachment submission coverage."
       ]
     },
     {
