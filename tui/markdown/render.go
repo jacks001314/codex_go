@@ -46,7 +46,15 @@ func RenderWithTheme(text string, width int, themeID string) (string, error) {
 // label (Rust parity: markdown_render local file-link display). Passing an
 // empty cwd renders absolute paths unchanged.
 func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	return renderWithStyle(text, width, themeID, cwd, codexMarkdownStyle())
+	return renderWithStyleSpacing(text, width, themeID, cwd, codexMarkdownStyle(), false)
+}
+
+// RenderUniformListsWithThemeCwd renders completed transcript markdown with
+// Rust #46899's list policy: if any sibling item wraps or spans multiple rows,
+// every sibling in that list is separated by one blank line. Streaming callers
+// use RenderWithThemeCwd so the live tail stays compact until completion.
+func RenderUniformListsWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
+	return renderWithStyleSpacing(text, width, themeID, cwd, codexMarkdownStyle(), true)
 }
 
 // RenderReasoningWithThemeCwd renders a completed reasoning block the way Rust's
@@ -55,7 +63,7 @@ func RenderWithThemeCwd(text string, width int, themeID string, cwd string) (str
 // glamour renders the italic through the style variant but never emits faint, so
 // the dim is re-asserted around the rendered spans.
 func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	rendered, err := renderWithStyle(text, width, themeID, cwd, codexReasoningMarkdownStyle())
+	rendered, err := renderWithStyleSpacing(text, width, themeID, cwd, codexReasoningMarkdownStyle(), true)
 	if err != nil || strings.TrimSpace(rendered) == "" {
 		return rendered, err
 	}
@@ -68,7 +76,7 @@ func RenderReasoningWithThemeCwd(text string, width int, themeID string, cwd str
 // completed plans; Go renders ANSI directly, so the same pass paints each line's
 // background and re-resolves its foreground colours against it.
 func RenderProposedPlanWithThemeCwd(text string, width int, themeID string, cwd string) (string, error) {
-	rendered, err := RenderWithThemeCwd(text, width, themeID, cwd)
+	rendered, err := RenderUniformListsWithThemeCwd(text, width, themeID, cwd)
 	if err != nil || strings.TrimSpace(rendered) == "" {
 		return rendered, err
 	}
@@ -211,6 +219,10 @@ func dimRenderedLines(rendered string) string {
 }
 
 func renderWithStyle(text string, width int, themeID string, cwd string, style ansi.StyleConfig) (string, error) {
+	return renderWithStyleSpacing(text, width, themeID, cwd, style, false)
+}
+
+func renderWithStyleSpacing(text string, width int, themeID string, cwd string, style ansi.StyleConfig, uniformLists bool) (string, error) {
 	text = codextui.FollowupLabels(text)
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -273,6 +285,9 @@ func renderWithStyle(text string, width int, themeID string, cwd string, style a
 	out = annotateWebLinkLabels(out, webLinks)
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	out = restoreURLPlaceholders(out, urlPlaceholders, linkSGR)
+	if uniformLists {
+		out = applyUniformListSpacing(out)
+	}
 	return strings.TrimRight(out, "\n"), nil
 }
 

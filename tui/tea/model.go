@@ -10320,7 +10320,9 @@ func richMessageDisplayLines(message codextui.Message, width int, themeID string
 			contentWidth = 1
 		}
 		renderText, _ := codextui.RewriteInlineVisualizations(text, nil)
-		rendered, err := markdown.RenderWithThemeCwd(renderText, contentWidth, themeID, cwd)
+		// Rust #46899: completed transcript lists use uniform sibling spacing;
+		// the streaming controller keeps its live tail compact.
+		rendered, err := markdown.RenderUniformListsWithThemeCwd(renderText, contentWidth, themeID, cwd)
 		if err == nil && strings.TrimSpace(rendered) != "" {
 			lines := trimBlankDisplayEdges(rawLinesTrimmed(rendered))
 			return prefixPrewrappedAgentLines(lines, true)

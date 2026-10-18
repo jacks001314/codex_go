@@ -17375,7 +17375,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go keeps assistant and plan lists compact while streaming, matching Rust's owned-screen streaming policy, but completed markdown lists remain compact at every width: markdown.Render/glamour never inserts blank lines between sibling items when one item wraps, and the native-scrollback AfterMultiline mode is not represented. Rust's completion/interruption width-dependent regrouping (blank lines between all siblings when any item spans multiple rendered rows, recomputed on resize) remains unimplemented."
+        "Round 681 (implementation): streaming assistant and plan markdown stays compact, while completed assistant, reasoning, and proposed-plan markdown renders through a per-list uniform policy: if any sibling item spans multiple rendered rows, every sibling is separated, with nested single-line lists, quoted lists, and code-block items handled as their own groups. The policy is applied after rendering, so resizing re-wraps and recomputes separators, and OSC 8 links survive insertion. Remaining: glamour concatenates multiple paragraphs inside one list item, so Rust's paragraph-preserving consolidation still differs, and the native-scrollback AfterMultiline policy has no Go carrier. Tests: go test ./tui/... -count=1; go vet ./tui/..."
       ]
     },
     {

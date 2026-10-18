@@ -1974,10 +1974,12 @@ green.
   write; failures retain it. Ctrl+C now also retains the selection, matching
   Rust. Transcript right-click copy has no carrier because transcript selection
   remains terminal-owned.
-- `#46899` remains partial: streaming lists are already compact, but completed
-  lists stay compact even when an item wraps; Rust's width-dependent
-  completion/interruption spacing (blank lines between all siblings when any
-  item becomes multiline) has no Go implementation yet.
+- `#46899` remains partial but now implements the core spacing policy:
+  streaming lists stay compact, completed assistant/reasoning/plan lists
+  separate every sibling when any item wraps, nested/quoted/code-item groups
+  are handled independently, and resizing recomputes separators. Remaining:
+  glamour concatenates multiple paragraphs inside a list item, and native
+  scrollback still has no AfterMultiline carrier.
 - `#46902` is not applicable: Go has no rendered "Back to bottom" follow
   control; transcript navigation is key-driven and following is tracked by the
   viewport's bottom state.
