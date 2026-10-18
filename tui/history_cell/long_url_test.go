@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	codextui "codex_go/tui"
 	"codex_go/utils"
 )
 
@@ -32,6 +33,29 @@ func TestUserPromptLongURLWrapsPreservingGutterAndBackground(t *testing.T) {
 	for _, line := range lines {
 		if !strings.Contains(line, ansiUserMessageBackground) {
 			t.Fatalf("user row lost background: %q", line)
+		}
+	}
+}
+
+// Mirrors Rust #47360: URL destinations survive adaptive wrapping and forced
+// splitting of oversized URLs at every terminal width.
+func TestUserPromptURLsKeepDestinationsAcrossWidthsLikeRust(t *testing.T) {
+	url := "https://example.test/terminal-link-wrapping/solid-octants"
+	message := "from this site, write out the ascii for solid octants 18 columns " + url +
+		"\n[Image #1] See (https://example.test/a)."
+	cell := NewUserPrompt(message, nil, nil, nil)
+	for _, width := range []int{120, 60, 24} {
+		lines := cell.DisplayLines(width)
+		joined := strings.Join(lines, "\n")
+		for _, destination := range []string{url, "https://example.test/a"} {
+			if !strings.Contains(joined, "\x1b]8;;"+destination+"\x07") {
+				t.Fatalf("width %d lost URL destination %q:\n%q", width, destination, joined)
+			}
+		}
+		for _, line := range lines {
+			if got := codextui.DisplayWidth(utils.StripANSI(line)); got > width {
+				t.Fatalf("width %d line = %d columns: %q", width, got, line)
+			}
 		}
 	}
 }

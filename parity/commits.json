@@ -18993,9 +18993,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Go's UserHistoryCell wraps user text with the prompt gutter/background and preserves oversized tokens, but it does not annotate web URLs before wrapping and its display has no hyperlink line output; TestUserPromptLongURLWrapsPreservingGutterAndBackground checks only layout. Full OSC-8 destinations across adaptive and forced URL splitting are still missing."
+        "UserHistoryCell now anchors each URL in source order, wraps the prompt, then reattaches OSC-8 destinations to complete URL tokens and to fragments carried across forced-split rows. TestUserPromptURLsKeepDestinationsAcrossWidthsLikeRust checks both the long and parenthesized URL at widths 120/60/24, confirms the full destinations remain in the output, and enforces line-width limits while preserving the existing gutter/background test."
       ]
     },
     {

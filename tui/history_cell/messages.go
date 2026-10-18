@@ -113,6 +113,7 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 				BreakWords: true,
 			})...)
 		}
+		wrappedMessage = annotateUserMessageURLs(wrappedMessage, message)
 		wrappedMessage = trimTrailingBlankLines(wrappedMessage)
 	}
 	if len(wrappedRemoteImages) == 0 && len(wrappedMessage) == 0 {
@@ -134,6 +135,113 @@ func (c UserHistoryCell) DisplayLines(width int) []string {
 	}
 	lines = append(lines, styleUserMessageLine("", width))
 	return lines
+}
+
+var userPromptURLRE = regexp.MustCompile(`https?://[^\s"'<>]+`)
+
+// annotateUserMessageURLs links URL fragments to their complete destination
+// after wrapping. A forced split leaves the continuation at the start of the
+// next wrapped row, so the remaining URL is carried across rows (Rust #47360).
+func annotateUserMessageURLs(lines []string, source string) []string {
+	if len(lines) == 0 || !strings.Contains(source, "http") {
+		return lines
+	}
+	urls := []string{}
+	for _, raw := range userPromptURLRE.FindAllString(source, -1) {
+		url, _ := tui.TrimWebURLToken(raw)
+		if _, ok := tui.WebDestination(url); ok {
+			urls = append(urls, url)
+		}
+	}
+	if len(urls) == 0 {
+		return lines
+	}
+	nextURLIndex := 0
+	activeURLIndex := -1
+	activeDestination := ""
+	activeRemaining := ""
+	out := make([]string, len(lines))
+	for lineIndex, line := range lines {
+		var builder strings.Builder
+		cursor := 0
+		if activeRemaining != "" {
+			leading := 0
+			for leading < len(line) && line[leading] == ' ' {
+				leading++
+			}
+			matched := commonPrefixLen(line[leading:], activeRemaining)
+			if matched > 0 {
+				builder.WriteString(line[:leading])
+				builder.WriteString(tui.OSC8Hyperlink(activeDestination, line[leading:leading+matched]))
+				cursor = leading + matched
+				activeRemaining = activeRemaining[matched:]
+				if activeRemaining == "" {
+					nextURLIndex = activeURLIndex + 1
+					activeURLIndex = -1
+					activeDestination = ""
+				}
+			} else {
+				activeDestination = ""
+				activeRemaining = ""
+				activeURLIndex = -1
+			}
+		}
+		rest := line[cursor:]
+		for _, location := range userPromptURLRE.FindAllStringIndex(rest, -1) {
+			raw := rest[location[0]:location[1]]
+			token, trimStart := tui.TrimWebURLToken(raw)
+			if token == "" {
+				continue
+			}
+			start := cursor + location[0] + trimStart
+			destination := ""
+			destinationIndex := -1
+			for index := nextURLIndex; index < len(urls); index++ {
+				candidate := urls[index]
+				if token == candidate || strings.HasPrefix(candidate, token) {
+					destination = candidate
+					destinationIndex = index
+					break
+				}
+			}
+			if destination == "" {
+				for index, candidate := range urls {
+					if token == candidate || strings.HasPrefix(candidate, token) {
+						destination = candidate
+						destinationIndex = index
+						break
+					}
+				}
+			}
+			builder.WriteString(line[cursor:start])
+			if destination == "" {
+				builder.WriteString(token)
+				cursor = start + len(token)
+				continue
+			}
+			builder.WriteString(tui.OSC8Hyperlink(destination, token))
+			cursor = start + len(token)
+			if token != destination {
+				activeDestination = destination
+				activeRemaining = strings.TrimPrefix(destination, token)
+				activeURLIndex = destinationIndex
+			} else {
+				nextURLIndex = destinationIndex + 1
+			}
+		}
+		builder.WriteString(line[cursor:])
+		out[lineIndex] = builder.String()
+	}
+	return out
+}
+
+func commonPrefixLen(left string, right string) int {
+	limit := min(len(left), len(right))
+	index := 0
+	for index < limit && left[index] == right[index] {
+		index++
+	}
+	return index
 }
 
 // styleUserMessageMentions wraps mention-like tokens ($name / @name) with cyan
