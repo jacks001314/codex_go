@@ -206,10 +206,14 @@ func (r *ResponsesAgentRunner) recordAPIRequestRecord(ctx context.Context, reque
 	if r == nil || r.Telemetry == nil || apiRequest == nil {
 		return
 	}
+	endpoint := ResponsesEndpointResponses
+	if request != nil {
+		endpoint = request.Endpoint
+	}
 	record := APIRequestRecord{
 		Attempt:                attempt,
 		Duration:               duration,
-		Endpoint:               ResponsesEndpointResponses.Path(),
+		Endpoint:               endpoint.Path(),
 		RetryAfterUnauthorized: retryAfterUnauthorized,
 		RecoveryMode:           recoveryMode,
 		RecoveryPhase:          recoveryPhase,

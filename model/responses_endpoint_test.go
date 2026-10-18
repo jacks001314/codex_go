@@ -39,6 +39,7 @@ func TestResponsesAgentRunnerUsesSelectedGuardianEndpoint(t *testing.T) {
 	defer server.Close()
 
 	authHeaders := BearerAuthHeaders("sk-test", "", false)
+	telemetry := &recordingTelemetrySink{}
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
 		Provider: &APIProvider{Name: OpenAIProviderName, BaseURL: server.URL + "/v1"},
 		Auth:     &authHeaders,
@@ -47,6 +48,7 @@ func TestResponsesAgentRunnerUsesSelectedGuardianEndpoint(t *testing.T) {
 		}}}),
 		ProviderID: OpenAIProviderID,
 	})
+	runner.Telemetry = telemetry
 	_, err := runner.Run(context.Background(), &AgentRequest{
 		Prompt:      "review",
 		Model:       "gpt-test",
@@ -64,5 +66,8 @@ func TestResponsesAgentRunnerUsesSelectedGuardianEndpoint(t *testing.T) {
 	}
 	if routingHint != "" {
 		t.Fatalf("dedicated Guardian request carried routing hint %q", routingHint)
+	}
+	if len(telemetry.apiRequests) != 1 || telemetry.apiRequests[0].Endpoint != "/guardian" {
+		t.Fatalf("api request telemetry = %#v, want /guardian", telemetry.apiRequests)
 	}
 }

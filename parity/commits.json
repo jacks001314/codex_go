@@ -2869,9 +2869,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "model APIRequestRecord.Endpoint now comes from AgentRequest.Endpoint instead of hardcoded /responses, so HTTP attempt telemetry reports /guardian or /guardian-classifier when selected. WebSocket session keys already separate endpoint-specific connections. Test TestResponsesAgentRunnerUsesSelectedGuardianEndpoint asserts the /guardian telemetry endpoint. Tests: go test ./model -run 'SelectedGuardianEndpoint|ResponsesEndpoint' -count=1"
       ]
     },
     {
