@@ -14655,9 +14655,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: has_same_tool_result_metadata"
+        "Equivalent implementation already present: MCP tool execution captures raw result _meta only when analytics capture is enabled, binds it to the originating call/window, and app-server exposes host-owned app result metadata under the same analytics gate. Tests cover capture, binding, and analytics-disabled suppression."
       ]
     },
     {
