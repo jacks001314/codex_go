@@ -58,6 +58,11 @@ func (p *ProcessProvider) NewSession(delegate tool.CodeModeRemoteDelegate) tool.
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
 }
 
+func (p *ProcessProvider) Prewarm(ctx context.Context) error {
+	_, err := p.connect(ctx)
+	return err
+}
+
 func (p *ProcessProvider) connect(ctx context.Context) (*remoteConnection, error) {
 	if p == nil {
 		return nil, errors.New("code-mode process provider is nil")

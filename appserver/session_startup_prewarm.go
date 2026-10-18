@@ -2,10 +2,13 @@ package appserver
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
+	"codex_go/features"
 	"codex_go/model"
+	"codex_go/turn"
 )
 
 // Session-startup prewarm mirrors Rust core/src/session_startup_prewarm.rs:
@@ -36,15 +39,19 @@ type startupPrewarmState struct {
 // prewarm interface are skipped (Rust's websocket-disabled path falls back to
 // auth prewarm, which Go's auth store resolves lazily on demand).
 func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
-	if r == nil || response == nil || response.Thread == nil || r.services.Agent == nil {
-		return
-	}
-	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
-	if !ok {
+	if r == nil || response == nil || response.Thread == nil {
 		return
 	}
 	threadID := strings.TrimSpace(response.Thread.ID)
 	if threadID == "" {
+		return
+	}
+	r.scheduleCodeModeHostPrewarm(threadID, response.Thread.CWD)
+	if r.services.Agent == nil {
+		return
+	}
+	prewarmer, ok := r.services.Agent.(guardianPrewarmer)
+	if !ok {
 		return
 	}
 	r.startupPrewarmMu.Lock()
@@ -83,6 +90,26 @@ func (r *RuntimeRouter) scheduleStartupPrewarm(response *ThreadStartResponse) {
 		// Rust's prewarm task records these when it completes.
 		r.recordStartupPhase("startup_prewarm_total", finishedAt.Sub(startedAt), status)
 		r.recordStartupPrewarmDuration(status, finishedAt.Sub(startedAt))
+	}()
+}
+
+func (r *RuntimeRouter) scheduleCodeModeHostPrewarm(threadID, cwd string) {
+	if r == nil || r.services.CodeModeProvider == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	cfg, err := r.effectiveConfigForTurn(&turn.TurnStartParams{
+		ThreadID: threadID,
+		CWD:      firstNonEmpty(strings.TrimSpace(cwd), r.services.DefaultCWD),
+	})
+	if err != nil || cfg == nil || !features.Enabled(cfg.FeatureSettings(), "code_mode_prewarm") {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), startupPrewarmTimeout)
+		defer cancel()
+		if err := r.codeModeRuntimeForThread(threadID).Prewarm(ctx); err != nil && ctx.Err() == nil {
+			slog.Debug("code-mode host startup prewarm failed", "thread_id", threadID, "error", err)
+		}
 	}()
 }
 

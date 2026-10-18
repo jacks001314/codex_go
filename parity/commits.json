@@ -2269,9 +2269,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "With features.code_mode_prewarm enabled, thread startup schedules a best-effort background connection prewarm for the shared Code Mode host. Process, stdio gRPC and WebSocket providers expose prewarm through the runtime; failures are non-fatal and do not delay the first turn. Tests: go test ./appserver -run 'ThreadStartPrewarmsCodeModeHost|SessionStartupPrewarm|CodeModeHost' -count=1; go test ./tool -run 'CodeModeRuntimePrewarms' -count=1; go test ./codemode -run 'Prewarm|Provider' -count=1"
       ]
     },
     {

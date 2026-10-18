@@ -78,6 +78,11 @@ func (p *WebSocketProvider) NewSession(delegate tool.CodeModeRemoteDelegate) too
 	return &remoteSession{provider: p, delegate: delegate, id: SessionID(fmt.Sprintf("session-%d", value))}
 }
 
+func (p *WebSocketProvider) Prewarm(ctx context.Context) error {
+	_, err := p.connect(ctx)
+	return err
+}
+
 func (p *WebSocketProvider) Close() error {
 	if p == nil {
 		return nil

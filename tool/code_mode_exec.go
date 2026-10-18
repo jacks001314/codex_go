@@ -177,6 +177,12 @@ type CodeModeRemoteProvider interface {
 	NewSession(delegate CodeModeRemoteDelegate) CodeModeRemoteSession
 }
 
+// CodeModeRemotePrewarmer establishes the shared host connection without
+// creating a cell. Rust #40678 uses this to warm the host at session startup.
+type CodeModeRemotePrewarmer interface {
+	Prewarm(context.Context) error
+}
+
 type CodeModeRemoteAvailabilityProvider interface {
 	Availability() error
 }
@@ -307,6 +313,7 @@ func NewCodeModeExecutorsWithProvider(registry *Registry, provider CodeModeRemot
 type CodeModeRuntime struct {
 	exec      *codeModeExecExecutor
 	wait      *codeModeWaitExecutor
+	provider  CodeModeRemoteProvider
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -321,7 +328,7 @@ func NewCodeModeRuntime(provider CodeModeRemoteProvider, disableFallback bool) *
 	if provider != nil {
 		exec.remote = provider.NewSession(&codeModeRemoteDelegate{exec: exec})
 	}
-	return &CodeModeRuntime{exec: exec, wait: &codeModeWaitExecutor{exec: exec}}
+	return &CodeModeRuntime{exec: exec, wait: &codeModeWaitExecutor{exec: exec}, provider: provider}
 }
 
 func (r *CodeModeRuntime) SetDefaultExecYieldTime(value time.Duration) {
@@ -331,6 +338,17 @@ func (r *CodeModeRuntime) SetDefaultExecYieldTime(value time.Duration) {
 	r.exec.bindingMu.Lock()
 	r.exec.defaultYieldMS = int(value / time.Millisecond)
 	r.exec.bindingMu.Unlock()
+}
+
+func (r *CodeModeRuntime) Prewarm(ctx context.Context) error {
+	if r == nil || r.provider == nil {
+		return nil
+	}
+	prewarmer, ok := r.provider.(CodeModeRemotePrewarmer)
+	if !ok {
+		return nil
+	}
+	return prewarmer.Prewarm(ctx)
 }
 
 // SetTurnWindowID binds the current turn's conversation window identity, which
