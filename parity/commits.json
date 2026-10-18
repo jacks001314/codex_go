@@ -30954,9 +30954,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Equivalent implementation present: pre-turn and during-turn compaction collect output locally and replace history only after successful completion; failed attempts record compaction failure without committing partial compaction items. The accepted user prompt remains exactly once in conversation history. The pre-turn compaction failure regression passes."
       ]
     },
     {
