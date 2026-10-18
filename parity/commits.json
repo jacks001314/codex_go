@@ -4272,9 +4272,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: RemotePluginChange, include_active_bundle"
+        "Round 496 (audit): Go has no persistent remote-plugin runtime cache to invalidate. plugin/reconcile compares capability signatures (hooks, skills, MCP/apps, versions, enablement, auth, install policy), and RuntimeRouter.refreshPluginCachesAndMCPRuntimes rebuilds MCP bindings, skill caches, hook discovery, and plugin contributions; install/config-mutation and remote reconciliation paths call the same refresh. Hook discovery is re-derived per turn. Tests: go test ./appserver -run 'PluginReconcile|PluginInstallRefresh|RemoteReconciliation|PluginRefresh' -count=1"
       ]
     },
     {
