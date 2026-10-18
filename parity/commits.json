@@ -21632,9 +21632,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: from_config_with_policy, from_executor_config, from_host_config"
+        "Equivalent implementation: CredentialPolicy is retained on ServerRegistration, RuntimeConfig, and ServerConfig and included in connection/catalog cache identities. Executor-only declarations reject host bearer-token fallback and transports needing host env headers/helpers; selected HTTP plugins derive policy from their source environment. Host-configured credential resolution remains unchanged."
       ]
     },
     {
