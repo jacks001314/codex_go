@@ -532,7 +532,7 @@ func (p *StartParams) Normalized(defaultModel string, defaultVersion Version, de
 	model := defaultModel
 	if model == "" {
 		if version == VersionV3 {
-			model = "gpt-live-1-boulder-alpha"
+			model = "gpt-live-1-codex"
 		} else {
 			model = "gpt-realtime-1.5"
 		}

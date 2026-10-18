@@ -816,7 +816,7 @@ func TestManagerRealWebsocketV3IsBidirectionalAndOrdered(t *testing.T) {
 	}()
 
 	handshakeInfo := <-handshakes
-	if handshakeInfo.path != "/v1/live" || !strings.Contains(handshakeInfo.query, "model=gpt-live-1-boulder-alpha") {
+	if handshakeInfo.path != "/v1/live" || !strings.Contains(handshakeInfo.query, "model=gpt-live-1-codex") {
 		t.Fatalf("realtime URL = %s?%s", handshakeInfo.path, handshakeInfo.query)
 	}
 	if handshakeInfo.header.Get("Authorization") != "Bearer test" || handshakeInfo.header.Get("Openai-Alpha") != "quicksilver=v2" || handshakeInfo.header.Get("X-Session-Id") != "thread-v3" {
@@ -1047,6 +1047,29 @@ func TestV3BatchesCodexOutputRoutesBEMAndFlushesTranscriptTail(t *testing.T) {
 	case err := <-serverErrors:
 		t.Fatalf("V3 test server: %v", err)
 	default:
+	}
+}
+
+// Rust #40321: frameless V3 sessions default to gpt-live-1-codex while an
+// explicit per-session model still wins.
+func TestStartParamsNormalizedFramelessRealtimeModelLikeRust(t *testing.T) {
+	version := VersionV3
+	params := &StartParams{ThreadID: "thread-v3-model", OutputModality: OutputAudio, Version: &version}
+	config, err := params.Normalized("", "", "")
+	if err != nil {
+		t.Fatalf("Normalized() error = %v", err)
+	}
+	if config.Model != "gpt-live-1-codex" {
+		t.Fatalf("default frameless model = %q, want gpt-live-1-codex", config.Model)
+	}
+	override := "session-override-model"
+	params.Model = &override
+	config, err = params.Normalized("", "", "")
+	if err != nil {
+		t.Fatalf("Normalized(override) error = %v", err)
+	}
+	if config.Model != override {
+		t.Fatalf("explicit frameless model = %q, want %q", config.Model, override)
 	}
 }
 
