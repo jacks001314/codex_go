@@ -23625,9 +23625,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ensure_native_sandbox, with_filesystem_escalation"
+        "Round 316 (audit): already implemented. SandboxPermissionsPreservingDeniedReads downgrades approved RequireEscalated launches to a sandboxed default/additional-permission path when deny-read entries exist, while plain profiles may fully escalate. Shell/unified-exec tests cover approved escalation with denied reads, denied reads without escalation, and preserving the sandbox. Tests: go test ./sandbox ./tool -run 'DeniedRead|Escalat' -count=1"
       ]
     },
     {

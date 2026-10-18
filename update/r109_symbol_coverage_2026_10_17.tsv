@@ -1345,7 +1345,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8003609cc703dbf014159055e63a684901855edc	46507	Run Windows sandbox tests exclusively when local (#46507)	2026-09-18	sandbox	0	0		0	0	not_applicable	
 800d183e2d0a3275c1b440992f4b11abbf425711	46075	Use captured step settings when spawning subagents (#46075)	2026-09-17	config	1	1	1.00	0	0	complete	
 801ca0d0d1206a5886048a01262584c79bf33d60	42606	Support trusted headers for remote exec WebSockets (#42606)	2026-09-03	execserver	4	2	0.50	0	0	audit_pending	connect_loopback_direct,upsert_environment_with_options
-804d6306e84f570393cdd1eec94c41464f503b1a	49353	Allow approved filesystem escalation while preserving denied reads (#49353)	2026-09-29	sandbox	2	0	0.00	0	0	implementation_pending	ensure_native_sandbox,with_filesystem_escalation
+804d6306e84f570393cdd1eec94c41464f503b1a	49353	Allow approved filesystem escalation while preserving denied reads (#49353)	2026-09-29	sandbox	2	0	0.00	0	0	complete	ensure_native_sandbox,with_filesystem_escalation
 806d2d1cc194548170a606946aa6c68e99927e58	52329	Remove per-content source attribution metadata (#52329)	2026-10-08	guardian	3	1	0.33	0	0	not_applicable	into_parts,latest_read_resource
 806d9732c974bc8a51b8317c1bd8985544fe627c	52825	Report exec runtime resets before accepting further requests (#52825)	2026-10-10	core	0	0		0	0	not_applicable	
 808b3411fdd0dd05d7a9f1c221a5bc87934943ac	43954	Cache protected shell snapshots and harden capture cleanup (#43954)	2026-09-09	sandbox	5	2	0.40	0	0	audit_pending	ShellSnapshotCache,config_revision,credential_broker_config_revision
