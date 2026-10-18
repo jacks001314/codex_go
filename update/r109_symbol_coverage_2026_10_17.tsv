@@ -2070,7 +2070,7 @@ c223ff3170ad95d875d49cf8fb95da35489be16e	46570	Tag remote model fetch duration b
 c22a06c18070c3e33bd2648c7210a00a2a9f6f80	53859	Record bucketed terminal sizes in TUI telemetry (#53859)	2026-10-14	tui	8	7	0.88	0	0	complete	LaunchTags
 c248f6d48b97eb4a2aa56147a0b11b7d763278b9	49171	Fix model provider lookup for TUI history (#49171)	2026-09-29	tui	0	0		0	0	not_applicable	
 c2617273706f142ea1cc7196a2d423893b0767e4	52685	Preserve code mode cancellation during output serialization (#52685)	2026-10-09	core	0	0		0	0	not_applicable	
-c2837d8ecefacc1c1ad59039809ea42a3a976341	49305	Batch metadata reads when resolving thread names (#49305)	2026-09-29	persistence	1	0	0.00	0	0	implementation_pending	get_threads
+c2837d8ecefacc1c1ad59039809ea42a3a976341	49305	Batch metadata reads when resolving thread names (#49305)	2026-09-29	persistence	1	0	0.00	0	0	not_applicable	get_threads
 c2904b9c5afbf7c32b2219d92a0b03c60d80b014	40465	Record Guardian classifier input truncation metrics (#40465)	2026-08-24	guardian	10	2	0.20	0	0	not_applicable	CLASSIFICATION_TRUNCATION_BYTES_METRIC,CLASSIFICATION_TRUNCATION_METRIC,ClassificationTruncations,RenderedImages,RenderedReviewEvidence,RenderedTranscript,TruncationObservation,render_review_evidence
 c29bc99949f90687171611bb845c4c289fa85dde	41192	Preserve restored permission profiles in TUI sessions (#41192)	2026-08-27	tui	1	0	0.00	0	0	implementation_pending	permission_profile_is_safely_represented_by_sandbox_mode
 c2a924fc4a3970198679d24c9fa5df5643af5041	46560	Fix stale environment config in the network approval test (#46560)	2026-09-18	core	0	0		0	0	not_applicable	

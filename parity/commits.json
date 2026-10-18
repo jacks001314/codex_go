@@ -23505,9 +23505,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: get_threads"
+        "Round 311 (audit): N/A - Go resolves thread names from one backward scan of the append-only session index (FindThreadNamesByIDs), not from one SQLite metadata lookup per thread. There is no N+1 state-runtime read or 999-ID bind-limit batching path to optimize."
       ]
     },
     {
