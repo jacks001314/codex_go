@@ -388,13 +388,15 @@ func (v *View) renderRows(height, listWidth int, styled bool) []string {
 func (v *View) renderRowSpans(index int, projectGrouping bool) []span {
 	row := &v.Rows[index]
 	marker := span{text: " ", style: spanPlain}
+	statusStyle := groupDotStyle(row.Group)
 	if v.Selected == index {
 		marker = span{text: "›", style: spanCyanBold}
+		statusStyle = spanCyanBold
 	}
 	spans := []span{
 		marker,
 		{text: " ", style: spanPlain},
-		{text: row.Group.Dot(), style: groupDotStyle(row.Group)},
+		{text: row.Group.Dot(), style: statusStyle},
 		{text: " ", style: spanPlain},
 		v.titleSpan(row.ThreadID, row.Title(), spanPlain),
 	}

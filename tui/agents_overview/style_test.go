@@ -74,6 +74,23 @@ func TestRenderStyledFooterStopHintDependsOnSelection(t *testing.T) {
 	}
 }
 
+// Rust #47319: the selected row's status symbol uses the row selection style,
+// while unselected status symbols keep their group color.
+func TestSelectedAgentStatusSymbolUsesSelectionStyleLikeRust(t *testing.T) {
+	view := New([]Row{
+		{ThreadID: "selected", Name: "Selected", Group: GroupReady},
+		{ThreadID: "other", Name: "Other", Group: GroupReady},
+	}, "selected", false)
+	view.Selected = 0
+	styled := strings.Join(view.RenderStyled(100, 12), "\n")
+	if !strings.Contains(styled, "\x1b[36;1m○\x1b[0m") {
+		t.Fatalf("selected status symbol did not use the row selection style:\n%s", styled)
+	}
+	if !strings.Contains(styled, "\x1b[36m○\x1b[0m") {
+		t.Fatalf("unselected status symbol lost its group color:\n%s", styled)
+	}
+}
+
 func TestRenderStyledFooterUsesResolvedShortcutHints(t *testing.T) {
 	view := New(sampleRows(), "", false)
 	view.SetShortcutHint(ShortcutHintSearch, "ctrl-l")

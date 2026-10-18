@@ -2007,3 +2007,21 @@ green.
   without sources, and renders non-web link destinations as visible text.
 - `#47082` is not applicable: Go's live tea TUI has no shortcut-overlay mode;
   the footer overlay helper is test-only.
+- `#48776` and `#48800` are complete: task rows omit the stale `current`
+  badge, and ordered Markdown markers use the terminal LightBlue palette with
+  the marker/text split covered by regression tests.
+- `#48805` is complete: a modal keeps keyboard ownership while wheel input over
+  the transcript still scrolls it; completion popups retain every gesture.
+- `#48352` is complete: working and completion turn tips use the shared
+  cadence, leading spacer, dismissal, and selection behavior.
+- `#47319` is complete: the selected agents-overview row applies its cyan/bold
+  selection style to the status symbol, while unselected symbols keep group
+  colors.
+- `#47382` remains partial: the agents overview has no voice-activity badge.
+- `#47441` is not applicable: the live tea footer has no appended shortcut-hint
+  suffix to style.
+- `#48623` is complete: empty ordered/nested/blockquoted list markers are
+  preserved, and a trailing bare marker remains mutable in the streaming tail.
+- `#47847` remains partial: clipboard writes are asynchronous, but Go lacks the
+  session worker's busy rejection, setup expiry, bounded shutdown, and
+  request-id matching against stale completions.

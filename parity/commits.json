@@ -5702,9 +5702,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/7); candidate gap: RemotePluginInstallOutcome, RemotePluginInstallRequest, RemotePluginOperationError, RemotePluginOperationErrorKind, RemotePluginUninstallOutcome"
+        "Round 668 (partial): Go already performs remote install/uninstall orchestration in PluginService.Install/Uninstall; app-server only acquires the remote-installed cache mutation gate, calls the service, refreshes derived caches/MCP runtimes, and emits analytics. Remaining: the mutation gate and typed RemotePluginInstall/UninstallOutcome + OperationError APIs remain app-server-owned rather than living in the shared service. Tests: go test ./plugin -run 'Install|Uninstall' -count=1; go test ./appserver -run 'PluginInstall|PluginUninstall|PluginInstallRuntime' -count=1"
       ]
     },
     {
@@ -18729,9 +18729,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The selected agents-overview row now styles its status symbol with the same cyan/bold selection style as the '›' marker, while unselected symbols keep groupDotStyle colors. TestSelectedAgentStatusSymbolUsesSelectionStyleLikeRust asserts the selected ready symbol is cyan-bold and an unselected ready symbol remains cyan."
       ]
     },
     {
@@ -19101,9 +19101,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's agents overview rows carry title, group/status, model, reasoning, project, usage, branch, last message and prompt, but no voice-conversation activity badge; tui/agents_overview has no voice field or rendered badge. Rust's voice indicator on task rows remains unimplemented."
       ]
     },
     {
@@ -19329,9 +19329,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust styles the '· shortcuts' suffix appended to the transcript footer hint. Go's live tea TUI uses a fixed footerHelpText with no appended transcript-hint suffix or secondary-style split, and the bottom_pane footer overlay helper is test-only, so this styling surface has no carrier."
       ]
     },
     {
@@ -20543,9 +20543,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 5/19; needs review: ClipboardWorker, CopyResult, KeyEventAction, PendingCopy, defer_copy"
+        "Go already returns clipboard writes as Bubble Tea commands, so native writes run off the update loop and results arrive as ClipboardWriteResultMsg; image paste has a separate async reader. It lacks Rust's single session clipboard worker with retained ownership, five-second setup expiry, busy rejection with a retry message, bounded shutdown, and request-id matching so stale completions cannot clear newer selections. Those ordering/cancellation guarantees remain unimplemented."
       ]
     },
     {
@@ -21972,9 +21972,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 10/12; needs review: render_with_turn_tip_space, with_leading_spacer"
+        "Go implements turn-tip cadence and rendering in tui/tea/turn_tips.go: a working tip appears after the delay under the working indicator, completion tips respect the start/interval/limit rules, transcript interaction can dismiss them, and tip rows participate in rendered selection. Tests cover working/completion selection, tip disappearance, image-row spacing, and completion cadence. Rust's render_with_turn_tip_space/with_leading_spacer are layout helpers; Go composes the same '  └ ' leading spacer in the working/completion render paths."
       ]
     },
     {
@@ -22260,9 +22260,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's markdown renderer preserves empty ordered and nested list markers, including blockquoted lists, and TestEmptyListItemsKeepTheirMarkersLikeRust pins the marker output. The streaming controller already keeps a trailing bare list marker in its mutable tail so later chunks and resizing re-render the item; the streaming renderer shares the same markdown path."
       ]
     },
     {
@@ -22440,9 +22440,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "TestCurrentTaskRowOmitsCurrentBadgeLikeRust pins that the current task row no longer renders a 'current' badge, that its title column matches an ordinary row, and that selection still identifies the current task. The badge-removal behavior is implemented and regression-covered."
       ]
     },
     {
@@ -22500,9 +22500,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go paints ordered list markers with the xterm LightBlue palette SGR (index 12), leaving item text in the default foreground; a themed markup.list.numbered foreground wins when configured, matching later theme behavior. TestOrderedListMarkersUseTerminalPaletteLikeRust covers ordered/custom-start/nested/blockquote lists and marker/text separation; streaming paths share the same markdown renderer."
       ]
     },
     {
@@ -22512,9 +22512,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's tea mouse dispatch keeps keyboard input with a modal but routes wheel events over the transcript through transcriptWheelRows, except while slash/skill/mention completion popups are active. TestTranscriptWheelScrollsWhileModalOpenLikeRust and the completion-popup test cover both sides of the ownership rule."
       ]
     },
     {
