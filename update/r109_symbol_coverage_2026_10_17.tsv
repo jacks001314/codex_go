@@ -2660,7 +2660,7 @@ fb9311db5ce1910ee71d0f29c074f3af0f72417d	40487	Extract agent role loading into a
 fba22e9a2aca9798e86982fd1f7b8ccb08e34807	43934	Track voice session lifecycle metrics in the TUI (#43934)	2026-09-08	tui	3	0	0.00	0	0	implementation_pending	RealtimeConversationPhase,realtime_retry_cleanup_pending,record_realtime_failure
 fbad00774bba7434ac2779b55413c9ca16a0af67	45737	Separate Windows sandbox implementations from legacy setup modes (#45737)	2026-09-15	appserver	1	1	1.00	0	0	complete	
 fbc169827e9789f9e7ba2ed97c15e2021c3312bb	49164	Suppress Windows console windows for background subprocesses (#49164)	2026-09-29	appserver	2	2	1.00	0	0	complete	
-fbd0c0d96ca0fbc13360b6fd844e45053af7d1ee	47937	Add direct replies for thread settings updates (#47937)	2026-09-24	appserver	1	0	0.00	0	0	implementation_pending	update_thread_settings
+fbd0c0d96ca0fbc13360b6fd844e45053af7d1ee	47937	Add direct replies for thread settings updates (#47937)	2026-09-24	appserver	1	0	0.00	0	0	complete	update_thread_settings
 fbe97c79290821e75a817adb7059adfca4404fef	51868	Record tool registration metrics for each sampling request (#51868)	2026-10-07	telemetry	3	0	0.00	0	0	complete	TOOL_REGISTRATIONS_METRIC,TOOL_REGISTRATIONS_METRIC_BUCKETS,record_registration_metrics
 fc269b66adc37f3c855df222ad80b02733355c46	45580	Add explicit daemon package replacement from the CLI (#45580)	2026-09-15	appserver	4	3	0.75	0	0	complete	confirm_install
 fc2ea82e7eff22c618a56db29c68a6b1967cba7d	46015	Allow callers to disable executor skills per environment (#46015)	2026-09-16	core	1	1	1.00	0	0	complete	

@@ -21694,6 +21694,49 @@ func TestRuntimeRouterDeferredGoalNotificationMode(t *testing.T) {
 	}
 }
 
+func TestRuntimeRouterDeferredThreadSettingsNotificationLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	routerStore := NewRouter(store)
+	routerStore.SetClock(func() time.Time { return fixedTime() })
+	createRecord(t, store, "thread-settings-deferred", fixedTime())
+	sink := NewNotificationBuffer()
+	router := NewRuntimeRouter(RuntimeServices{ThreadRouter: routerStore})
+	router.SetNotificationSink(sink)
+	model := "gpt-5"
+
+	if _, err := router.commitThreadSettingsUpdate(&SettingsUpdateParams{
+		ThreadID: "thread-settings-deferred",
+		Model:    &model,
+	}, false); err != nil {
+		t.Fatalf("settings update error: %v", err)
+	}
+	if !sinkHasMethod(sink, NotificationThreadSettingsUpdated) {
+		t.Fatalf("default mode should notify immediately: %#v", sink.List())
+	}
+
+	sink = NewNotificationBuffer()
+	router.SetNotificationSink(sink)
+	router.SetDeferredGoalNotifications(true)
+	defer router.SetDeferredGoalNotifications(false)
+	model = "gpt-5.1"
+	if _, err := router.commitThreadSettingsUpdateWithConnection(&SettingsUpdateParams{
+		ThreadID: "thread-settings-deferred",
+		Model:    &model,
+	}, false, "", true); err != nil {
+		t.Fatalf("deferred settings update error: %v", err)
+	}
+	if sinkHasMethod(sink, NotificationThreadSettingsUpdated) {
+		t.Fatalf("deferred mode notified before the response flush: %#v", sink.List())
+	}
+	pending := router.FlushDeferredGoalNotifications("")
+	if len(pending) != 1 || pending[0].Method != NotificationThreadSettingsUpdated {
+		t.Fatalf("flushed settings notifications = %#v", pending)
+	}
+	if sinkHasMethod(sink, NotificationThreadSettingsUpdated) {
+		t.Fatalf("flushed settings notification was also broadcast: %#v", sink.List())
+	}
+}
+
 func TestRuntimeRouterThreadGoalSetAndClearEmitGoalAnalyticsLikeRust(t *testing.T) {
 	store := session.NewStore(t.TempDir())
 	now := fixedTime()

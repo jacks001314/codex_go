@@ -7535,6 +7535,12 @@ func (r *RuntimeRouter) applyTurnStartSettingsUpdate(params *SettingsUpdateParam
 // snapshot that this write committed, rather than reading a state a concurrent
 // update may already have replaced (Rust #40645 SessionSettingsCommit).
 func (r *RuntimeRouter) commitThreadSettingsUpdate(params *SettingsUpdateParams, persist bool) (*SettingsUpdateResponse, error) {
+	return r.commitThreadSettingsUpdateWithConnection(params, persist, "", false)
+}
+
+// commitThreadSettingsUpdateWithConnection optionally defers the applied
+// notification until the transport has written the request response.
+func (r *RuntimeRouter) commitThreadSettingsUpdateWithConnection(params *SettingsUpdateParams, persist bool, connectionID string, deferNotification bool) (*SettingsUpdateResponse, error) {
 	if r == nil || params == nil {
 		return nil, nil
 	}
@@ -7553,10 +7559,15 @@ func (r *RuntimeRouter) commitThreadSettingsUpdate(params *SettingsUpdateParams,
 	}
 	r.prewarmMCPThread(params.ThreadID)
 	if committed != nil {
-		r.notify(NotificationThreadSettingsUpdated, &SettingsUpdatedNotification{
+		notification := &SettingsUpdatedNotification{
 			ThreadID:       strings.TrimSpace(params.ThreadID),
 			ThreadSettings: *committed,
-		})
+		}
+		if deferNotification {
+			r.emitDeferredNotification(connectionID, NotificationThreadSettingsUpdated, notification)
+		} else {
+			r.notify(NotificationThreadSettingsUpdated, notification)
+		}
 	}
 	return response, nil
 }
@@ -8425,7 +8436,7 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 				return nil, err
 			}
 		}
-		response, err := r.commitThreadSettingsUpdate(&params, true)
+		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, request.normalizedConnectionID(), true)
 		if err != nil {
 			return nil, err
 		}
@@ -8949,11 +8960,11 @@ func (r *RuntimeRouter) goalsFeatureEnabled() bool {
 }
 
 // SetDeferredGoalNotifications switches the router into the stream-transport
-// ordering mode used by the stdio/socket JSON-line servers: thread/goal/*
-// notifications emitted by the set/clear handlers are buffered per connection
-// and flushed by the transport immediately after the response, mirroring
-// Rust's send_response-before-emit ordering. Direct Handle consumers (in-process
-// TUI, unit tests) keep immediate broadcast delivery.
+// ordering mode used by the stdio/socket JSON-line servers: request-scoped
+// thread/goal/* and thread/settings/updated notifications are buffered per
+// connection and flushed by the transport immediately after the response,
+// mirroring Rust's send_response-before-emit ordering. Direct Handle consumers
+// (in-process TUI, unit tests) keep immediate broadcast delivery.
 func (r *RuntimeRouter) SetDeferredGoalNotifications(enabled bool) {
 	if r == nil {
 		return
@@ -8961,11 +8972,11 @@ func (r *RuntimeRouter) SetDeferredGoalNotifications(enabled bool) {
 	r.deferredGoalMode.Store(enabled)
 }
 
-// emitGoalNotification delivers a goal notification immediately (default mode)
-// or buffers it for the stream transport to flush after the response
-// (deferred mode). It preserves the same memory/analytics/opt-out checks as
-// notify.
-func (r *RuntimeRouter) emitGoalNotification(connectionID string, method NotificationMethod, params any) {
+// emitDeferredNotification delivers a request-scoped notification immediately
+// (default mode) or buffers it for the stream transport to flush after the
+// response (deferred mode). It preserves the same memory/analytics/opt-out
+// checks as notify.
+func (r *RuntimeRouter) emitDeferredNotification(connectionID string, method NotificationMethod, params any) {
 	if r == nil {
 		return
 	}
@@ -8991,6 +9002,10 @@ func (r *RuntimeRouter) emitGoalNotification(connectionID string, method Notific
 		r.pendingGoalByConn = map[string][]*Notification{}
 	}
 	r.pendingGoalByConn[key] = append(r.pendingGoalByConn[key], notification)
+}
+
+func (r *RuntimeRouter) emitGoalNotification(connectionID string, method NotificationMethod, params any) {
+	r.emitDeferredNotification(connectionID, method, params)
 }
 
 // FlushDeferredGoalNotifications returns and clears the buffered goal

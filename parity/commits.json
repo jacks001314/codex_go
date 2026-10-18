@@ -21032,9 +21032,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: update_thread_settings"
+        "Round 305 (implementation): thread/settings/update validation failures are returned directly as RPC errors, and successful thread/settings/updated notifications now use the existing post-response transport buffer. The stdio/stream path writes the settings response before flushing the notification, while direct in-process Handle consumers retain immediate delivery. TestRuntimeRouterDeferredThreadSettingsNotificationLikeRust covers default versus deferred delivery and flush semantics; focused settings tests and go vet ./appserver pass."
       ]
     },
     {
