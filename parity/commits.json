@@ -10671,9 +10671,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: remapping_edits, validate_remapping"
+        "Round 582 (audit): already implemented. Config writes validate credential-provider edits, report source overrides, prune displaced origins, and apply credential-broker state at the project sanitizer. Tests: go test ./config -run 'CredentialProvider' -count=1"
       ]
     },
     {
@@ -12219,9 +12219,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 583 (audit): already implemented. Thread settings and resume/fork responses expose and restore disabledPluginIds; a supplied list replaces it, an empty list clears it, and null/omission preserves it. Tests: go test ./appserver -run 'DisabledPlugin' -count=1"
       ]
     },
     {
@@ -27649,9 +27649,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: skill_discovery_path_for_path, skill_root_for_path, with_disabled_paths"
+        "Round 584 (audit + fix): PathUri identity covers structured skill mentions, implicit doc/scripts maps, and onboarding lookup. Fixed Windows shlex path handling by normalizing host absolute-path separators before tokenization; the home-expansion fixture now sets USERPROFILE. Tests: go test ./prompt -run 'PathIdentity|PathUri|ExplicitSkill|ImplicitSkill' -count=1; go test ./plugin -run 'Onboarding|PathIdentity|PathUri' -count=1"
       ]
     },
     {

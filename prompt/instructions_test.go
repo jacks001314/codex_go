@@ -477,6 +477,7 @@ func TestCollectExplicitSkillMentionsResolvesStructuredPathsLikeRust(t *testing.
 	directory := t.TempDir()
 	t.Chdir(directory)
 	t.Setenv("HOME", directory)
+	t.Setenv("USERPROFILE", directory)
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
