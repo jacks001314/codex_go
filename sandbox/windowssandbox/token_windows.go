@@ -238,18 +238,86 @@ func getUserSIDBytes(token windows.Token) ([]byte, error) {
 	return copySIDBytes(user.User.Sid), nil
 }
 
+// tokenGroup is an owned token group SID with its attributes.
+type tokenGroup struct {
+	sid        []byte
+	attributes uint32
+}
+
+// tokenGroupsForToken queries token groups into an owned, validated slice.
+// Callers may bound the accepted TOKEN_GROUPS buffer before any SID pointer is
+// dereferenced (Rust #45182).
+func tokenGroupsForToken(token windows.Token, maxBytes uint32) ([]tokenGroup, error) {
+	var needed uint32
+	_ = windows.GetTokenInformation(token, windows.TokenGroups, nil, 0, &needed)
+	if needed == 0 || needed > maxBytes {
+		return nil, fmt.Errorf("invalid token group size %d", needed)
+	}
+	buffer := make([]byte, needed)
+	if err := windows.GetTokenInformation(token, windows.TokenGroups, &buffer[0], needed, &needed); err != nil {
+		return nil, fmt.Errorf("GetTokenInformation(TokenGroups) failed: %w", err)
+	}
+	if int(needed) > len(buffer) {
+		return nil, fmt.Errorf("invalid token group result size %d", needed)
+	}
+	return decodeTokenGroups(buffer[:needed])
+}
+
+func decodeTokenGroups(buffer []byte) ([]tokenGroup, error) {
+	headerSize := int(unsafe.Offsetof(windows.Tokengroups{}.Groups))
+	stride := int(unsafe.Sizeof(windows.SIDAndAttributes{}))
+	if len(buffer) < headerSize || stride <= 0 {
+		return nil, fmt.Errorf("truncated token group header")
+	}
+	count := int(*(*uint32)(unsafe.Pointer(&buffer[0])))
+	if count < 0 || count > (len(buffer)-headerSize)/stride {
+		return nil, fmt.Errorf("truncated token groups")
+	}
+	groups := make([]tokenGroup, 0, count)
+	base := uintptr(unsafe.Pointer(&buffer[0]))
+	for index := 0; index < count; index++ {
+		offset := headerSize + index*stride
+		entry := *(*windows.SIDAndAttributes)(unsafe.Pointer(&buffer[offset]))
+		if entry.Sid == nil {
+			return nil, fmt.Errorf("invalid token group SID pointer")
+		}
+		sidPointer := uintptr(unsafe.Pointer(entry.Sid))
+		if sidPointer < base {
+			return nil, fmt.Errorf("invalid token group SID pointer")
+		}
+		sidOffset := sidPointer - base
+		if sidOffset > uintptr(len(buffer)) || uintptr(len(buffer))-sidOffset < 8 {
+			return nil, fmt.Errorf("invalid token group SID pointer")
+		}
+		if buffer[sidOffset] != 1 {
+			return nil, fmt.Errorf("invalid token group SID revision")
+		}
+		sidLength := 8 + int(buffer[sidOffset+1])*4
+		if sidLength > 68 || uintptr(sidLength) > uintptr(len(buffer))-sidOffset {
+			return nil, fmt.Errorf("invalid token group SID size")
+		}
+		if !entry.Sid.IsValid() {
+			return nil, fmt.Errorf("invalid token group SID")
+		}
+		groups = append(groups, tokenGroup{
+			sid:        append([]byte(nil), buffer[sidOffset:sidOffset+uintptr(sidLength)]...),
+			attributes: entry.Attributes,
+		})
+	}
+	return groups, nil
+}
+
 func scanTokenGroupsForLogonSID(token windows.Token) ([]byte, bool) {
-	groups, err := token.GetTokenGroups()
+	groups, err := tokenGroupsForToken(token, ^uint32(0))
 	if err != nil {
 		return nil, false
 	}
-	for _, group := range groups.AllGroups() {
-		if (group.Attributes & windows.SE_GROUP_LOGON_ID) != windows.SE_GROUP_LOGON_ID {
+	for _, group := range groups {
+		if (group.attributes & windows.SE_GROUP_LOGON_ID) != windows.SE_GROUP_LOGON_ID {
 			continue
 		}
-		bytes := copySIDBytes(group.Sid)
-		if len(bytes) != 0 {
-			return bytes, true
+		if len(group.sid) != 0 {
+			return group.sid, true
 		}
 	}
 	return nil, false

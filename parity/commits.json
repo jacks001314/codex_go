@@ -12725,9 +12725,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: TokenGroup, token_groups"
+        "Round 670 (implementation): tokenGroupsForToken reads TOKEN_GROUPS into an owned caller-bounded buffer; decodeTokenGroups validates header/count/stride, SID pointer bounds, revision, subauthority length <=68, and IsValidSid before copying owned SID bytes with attributes. Logon SID lookup preserves order/duplicates and falls back to the linked token. Tests cover owned SIDs, attributes/order, truncated/malformed/out-of-buffer SIDs, size limits, and current-token logon SID. Tests: go test ./sandbox/windowssandbox -count=1"
       ]
     },
     {
