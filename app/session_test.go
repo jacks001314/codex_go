@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"codex_go/appserver"
+	"codex_go/cli"
 	"codex_go/config"
 	"codex_go/rollout"
 	"codex_go/session"
@@ -476,6 +477,34 @@ func TestSessionResumeAmbiguousNameRejectedLikeRust(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'Design'") ||
 		!strings.Contains(err.Error(), "older") || !strings.Contains(err.Error(), "newer") {
 		t.Fatalf("resume ambiguous name error = %v", err)
+	}
+}
+
+func TestSessionResumeChecksLabelsBeyondPickerPageLikeRust(t *testing.T) {
+	store := session.NewStore(t.TempDir())
+	now := fixedAppSessionTime()
+	for index := 0; index < 1001; index++ {
+		id := fmt.Sprintf("thread-%04d", index)
+		title := "Unique"
+		if index == 0 || index == 1000 {
+			title = "Target"
+		}
+		record := &session.Record{
+			ID:        session.ThreadID(id),
+			Title:     title,
+			Preview:   strings.ToLower(title),
+			CreatedAt: now.Add(time.Duration(index) * time.Second),
+			UpdatedAt: now.Add(time.Duration(index) * time.Second),
+			RecencyAt: now.Add(time.Duration(index) * time.Second),
+			Metadata:  session.Metadata{Source: "cli", HistoryMode: "legacy"},
+		}
+		if err := store.Save(record); err != nil {
+			t.Fatalf("Save(%s) error = %v", id, err)
+		}
+	}
+	_, err := sessionIDByName(store, &cli.SessionOptions{}, "Target")
+	if err == nil || !strings.Contains(err.Error(), "Multiple sessions match 'Target'") {
+		t.Fatalf("duplicate label beyond picker page error = %v", err)
 	}
 }
 

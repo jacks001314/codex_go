@@ -171,6 +171,7 @@ type modalState struct {
 	modelReasoning          *codextui.ModelReasoningPicker
 	planReasoningScope      *codextui.PlanReasoningScopePicker
 	sessionPicker           *codextui.SessionPickerState
+	sessionPickerNotice     string
 	sessionAction           *codextui.SessionSelection
 	exitAfterSessionAction  bool
 	// unarchivePrompt hosts the archived-conversation confirmation and
@@ -2035,6 +2036,10 @@ func (m *Model) renderSessionPickerModal() string {
 	builder.WriteString("\n\n")
 	builder.WriteString(picker.SearchLine(contentWidth))
 	builder.WriteString("\n\n")
+	if notice := strings.TrimSpace(m.modal.sessionPickerNotice); notice != "" {
+		builder.WriteString(notice)
+		builder.WriteString("\n\n")
+	}
 	rows := picker.RenderRows(contentWidth, m.currentTime())
 	maxRows := sessionPickerListHeight(m.height)
 	if maxRows > 0 && len(rows) > maxRows {

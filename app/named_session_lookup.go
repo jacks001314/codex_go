@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"codex_go/appserver"
 	"codex_go/cli"
@@ -73,12 +75,12 @@ func lookupRemoteSessionByName(ctx context.Context, client *remoteAppServerTUICl
 		return nil, nil
 	}
 	var matched *appserver.Thread
-	paginated := false
+	unverifiedPagination := false
 	for _, collection := range collections {
 		archived := collection == sessionCollectionArchived
 		var cursor *string
 		for {
-			params := remoteThreadListParams(opts, archived, 100)
+			params := namedSessionLookupThreadListParams(opts, archived, 100)
 			params.Cursor = cursor
 			// Labels are matched locally (name or preview), not by the server's
 			// search index, so duplicates cannot be hidden by a search term.
@@ -87,8 +89,11 @@ func lookupRemoteSessionByName(ctx context.Context, client *remoteAppServerTUICl
 			if err := remoteSessionRequest(ctx, client, appserver.MethodThreadList, params, &response); err != nil {
 				return nil, fmt.Errorf("failed to list sessions while resolving session label: %w", err)
 			}
-			if response.NextCursor != nil && strings.TrimSpace(*response.NextCursor) != "" {
-				paginated = true
+			if response.NextCursor != nil {
+				next := strings.TrimSpace(*response.NextCursor)
+				if next != "" && !verifiedNamedSessionLookupCursor(next) {
+					unverifiedPagination = true
+				}
 			}
 			for index := range response.Data {
 				thread := &response.Data[index]
@@ -113,12 +118,36 @@ func lookupRemoteSessionByName(ctx context.Context, client *remoteAppServerTUICl
 			cursor = response.NextCursor
 		}
 	}
-	if matched != nil && paginated {
+	if matched != nil && unverifiedPagination {
 		// Older server cursors can skip equal timestamps at a page boundary, so
 		// uniqueness cannot be proven.
 		return nil, paginatedSessionNameError(matched.ID)
 	}
 	return matched, nil
+}
+
+func namedSessionLookupThreadListParams(opts *cli.SessionOptions, archived bool, limit int) appserver.ThreadListParams {
+	params := remoteThreadListParams(opts, archived, limit)
+	params.SortKey = appserver.SortCreatedAt
+	params.SortDirection = appserver.SortDesc
+	params.UseStateDBOnly = true
+	return params
+}
+
+// verifiedNamedSessionLookupCursor reports whether a continuation cursor
+// carries the timestamp-and-thread-id tie breaker introduced by Rust #51230.
+// Timestamp-only or malformed cursors cannot prove that equal-created-at
+// sessions were not skipped at a page boundary.
+func verifiedNamedSessionLookupCursor(cursor string) bool {
+	anchor, threadID, ok := strings.Cut(strings.TrimSpace(cursor), "|")
+	if !ok || strings.TrimSpace(threadID) == "" || strings.TrimSpace(anchor) == "" {
+		return false
+	}
+	if _, err := strconv.ParseInt(anchor, 10, 64); err == nil {
+		return true
+	}
+	_, err := time.Parse(time.RFC3339Nano, anchor)
+	return err == nil
 }
 
 // revalidateRemoteSessionLabel re-reads a candidate so a stale list entry or a

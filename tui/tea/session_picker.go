@@ -165,6 +165,7 @@ func (m *Model) openSessionPicker(action codextui.SessionPickerAction) bubbletea
 	})
 	if m.modal != nil {
 		m.modal.sessionPicker = picker
+		m.modal.sessionPickerNotice = strings.TrimSpace(m.sessionPickerLoadNotice)
 		m.modal.selected = picker.Selected
 	}
 	if m.noAltScreen {

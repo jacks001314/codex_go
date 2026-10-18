@@ -18,10 +18,12 @@ import (
 
 // namedLookupServer serves scripted thread/list pages and thread/read results.
 type namedLookupServer struct {
-	listPages map[string][]any // cursor ("": first) -> thread list data
-	nextBy    map[string]any   // cursor -> nextCursor (nil for the last page)
-	reads     map[string]any   // thread id -> thread/read result (thread map)
-	readErrs  map[string]string
+	listPages  map[string][]any // cursor ("": first) -> thread list data
+	nextBy     map[string]any   // cursor -> nextCursor (nil for the last page)
+	listErrs   map[string]string
+	listParams *[]appserver.ThreadListParams
+	reads      map[string]any // thread id -> thread/read result (thread map)
+	readErrs   map[string]string
 }
 
 func newNamedLookupEndpoint(t *testing.T, srv namedLookupServer) (*appserverdaemon.RemoteAppServerEndpoint, func()) {
@@ -50,6 +52,17 @@ func newNamedLookupEndpoint(t *testing.T, srv namedLookupServer) (*appserverdaem
 				cursor := ""
 				if params.Cursor != nil {
 					cursor = *params.Cursor
+				}
+				if srv.listParams != nil {
+					*srv.listParams = append(*srv.listParams, params)
+				}
+				if message, ok := srv.listErrs[cursor]; ok {
+					remoteTUITestWrite(ctx, conn, map[string]any{
+						"jsonrpc": "2.0",
+						"id":      req.ID,
+						"error":   map[string]any{"code": -32603, "message": message},
+					})
+					continue
 				}
 				remoteTUITestWrite(ctx, conn, map[string]any{
 					"jsonrpc": "2.0",
@@ -158,6 +171,67 @@ func TestLookupRemoteSessionByNameRequiresUUIDWhenPaginated(t *testing.T) {
 	want := "Cannot verify a unique session label across server pages; matching session UUID: thread-a. Use it only if this is the session you want."
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestLookupRemoteSessionByNameAcceptsVerifiedCursorPagesLikeRust(t *testing.T) {
+	var listParams []appserver.ThreadListParams
+	srv := namedLookupServer{
+		listPages: map[string][]any{
+			"": {
+				map[string]any{"id": "thread-a", "name": "Solo", "createdAt": 20},
+			},
+			"2025-01-01T00:00:00.000Z|thread-a": {},
+		},
+		nextBy: map[string]any{
+			"":                                  "2025-01-01T00:00:00.000Z|thread-a",
+			"2025-01-01T00:00:00.000Z|thread-a": nil,
+		},
+		listParams: &listParams,
+		reads: map[string]any{
+			"thread-a": map[string]any{"id": "thread-a", "name": "Solo"},
+		},
+	}
+	threadID, err := lookupNamedSession(t, srv, "Solo", []sessionCollection{sessionCollectionActive})
+	if err != nil || threadID != "thread-a" {
+		t.Fatalf("lookup = %q err=%v", threadID, err)
+	}
+	if len(listParams) != 2 {
+		t.Fatalf("thread/list calls = %d, want 2", len(listParams))
+	}
+	for _, params := range listParams {
+		if params.SortKey != appserver.SortCreatedAt || !params.UseStateDBOnly {
+			t.Fatalf("thread/list params = %#v, want CreatedAt and state-db-only", params)
+		}
+	}
+}
+
+func TestLookupRemoteSessionByNamePropagatesListingFailureLikeRust(t *testing.T) {
+	srv := namedLookupServer{
+		listErrs: map[string]string{"": "failed to list threads from state database"},
+	}
+	_, err := lookupNamedSession(t, srv, "Any", []sessionCollection{sessionCollectionActive})
+	if err == nil || !strings.Contains(err.Error(), "failed to list sessions while resolving session label") ||
+		!strings.Contains(err.Error(), "failed to list threads from state database") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestVerifiedNamedSessionLookupCursor(t *testing.T) {
+	for _, testCase := range []struct {
+		cursor string
+		want   bool
+	}{
+		{cursor: "c1", want: false},
+		{cursor: "2025-01-01T00:00:00Z", want: false},
+		{cursor: "2025-01-01T00:00:00Z|thread-a", want: true},
+		{cursor: "42|thread-a", want: true},
+		{cursor: "not-a-time|thread-a", want: false},
+		{cursor: "2025-01-01T00:00:00Z|", want: false},
+	} {
+		if got := verifiedNamedSessionLookupCursor(testCase.cursor); got != testCase.want {
+			t.Errorf("verifiedNamedSessionLookupCursor(%q) = %v, want %v", testCase.cursor, got, testCase.want)
+		}
 	}
 }
 

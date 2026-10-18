@@ -432,6 +432,7 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 	// are built (the standalone `codex agents` dashboard drives the core
 	// directly instead of the tea model).
 	agentsOverviewPinRequest := interactiveRemoteAgentsOverviewPinRequest(ctx, endpoint)
+	sessionPickerItems, sessionPickerNotice := interactiveRemoteSessionPickerItems(ctx, root, endpoint)
 	options := codextea.Options{
 		NoAltScreen:                  interactiveNoAltScreen(root, settings),
 		AlternateScreenMode:          settings.AlternateScreenMode,
@@ -465,7 +466,8 @@ func runInteractiveRemoteTUI(ctx context.Context, root *cli.RootOptions, endpoin
 		// Rust #43340: the connected server owns named permission profiles.
 		OnListPermissionProfiles:    interactiveRemoteListPermissionProfiles(ctx, endpoint),
 		OnUpdateThreadPermissions:   interactiveRemoteUpdateThreadPermissions(ctx, endpoint),
-		SessionPickerItems:          interactiveRemoteSessionPickerItems(ctx, root, endpoint),
+		SessionPickerItems:          sessionPickerItems,
+		SessionPickerNotice:         sessionPickerNotice,
 		SessionPickerCWD:            interactiveSessionPickerCWD(root),
 		SessionPickerView:           settings.SessionPickerView,
 		AgentsOverviewGrouping:      settings.AgentsOverviewGrouping,
@@ -1521,10 +1523,10 @@ func runInteractiveRemotePrompt(ctx context.Context, root *cli.RootOptions, endp
 	return turnErr
 }
 
-func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint) []codextui.SessionSummary {
+func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOptions, endpoint *appserverdaemon.RemoteAppServerEndpoint) ([]codextui.SessionSummary, string) {
 	client, err := openRemoteSessionClient(ctx, endpoint)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
 	defer client.close()
 	provider := remoteTUIHistoryModelProvider(ctx, client, root)
@@ -1534,14 +1536,31 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		if provider != "" {
 			params.ModelProviders = []string{provider}
 		}
-		response, err := remoteThreadListWithCwdFallback(ctx, client, params)
-		if err != nil {
-			return nil
-		}
-		for i := range response.Data {
-			if summary := remoteTUISessionSummaryFromThread(&response.Data[i], archived); summary != nil {
-				items = append(items, *summary)
+		var cursor *string
+		seenCursors := map[string]bool{}
+		for {
+			params.Cursor = cursor
+			response, err := remoteThreadListWithCwdFallback(ctx, client, params)
+			if err != nil {
+				if len(items) > 0 {
+					return items, "Could not load more sessions"
+				}
+				return nil, ""
 			}
+			for i := range response.Data {
+				if summary := remoteTUISessionSummaryFromThread(&response.Data[i], archived); summary != nil {
+					items = append(items, *summary)
+				}
+			}
+			if response.NextCursor == nil {
+				break
+			}
+			next := strings.TrimSpace(*response.NextCursor)
+			if next == "" || seenCursors[next] {
+				break
+			}
+			seenCursors[next] = true
+			cursor = response.NextCursor
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -1550,7 +1569,7 @@ func interactiveRemoteSessionPickerItems(ctx context.Context, root *cli.RootOpti
 		}
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
-	return items
+	return items, ""
 }
 
 // remoteTUIHistoryModelProvider mirrors Rust #49161: an explicit CLI/profile

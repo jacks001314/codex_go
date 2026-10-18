@@ -7651,6 +7651,23 @@ func TestModelResumeCommandOpensSessionPickerAndSetsThread(t *testing.T) {
 	}
 }
 
+func TestModelSessionPickerShowsLaterPageFailureNoticeLikeRust(t *testing.T) {
+	now := fixedTeaTime()
+	model := NewModel(codextui.NewState(nil), Options{
+		SessionPickerCWD: "/repo",
+		SessionPickerItems: []codextui.SessionSummary{
+			{ThreadID: "thread-loaded", Title: "Loaded session", Preview: "Loaded session", CWD: "/repo", UpdatedAt: now},
+		},
+		SessionPickerNotice: "Could not load more sessions",
+	})
+	typeText(t, model, "/resume")
+	model.Update(key(bubbletea.KeyEnter))
+	view := model.View()
+	if !strings.Contains(view, "Loaded session") || !strings.Contains(view, "Could not load more sessions") {
+		t.Fatalf("session picker did not preserve loaded rows with the page error:\n%s", view)
+	}
+}
+
 func TestModelResumePickerCancelRestoresInlineScreen(t *testing.T) {
 	model := NewModel(codextui.NewState(nil), Options{
 		SessionPickerItems: []codextui.SessionSummary{{ThreadID: "thread-resume", Preview: "Resume Me"}},

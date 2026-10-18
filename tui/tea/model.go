@@ -1097,6 +1097,9 @@ type Options struct {
 	SessionPickerItems      []codextui.SessionSummary
 	SessionPickerCWD        string
 	SessionPickerView       string
+	// SessionPickerNotice preserves already-loaded sessions when a later remote
+	// history page fails (Rust #51230's inline "Could not load more sessions").
+	SessionPickerNotice string
 	// AgentsOverviewGrouping seeds the Command Center grouping from the
 	// configured `tui.agents_overview_grouping` value (Rust #50786).
 	AgentsOverviewGrouping string
@@ -1890,6 +1893,7 @@ type Model struct {
 	serviceTierRequirements *config.ConfigRequirementsReadResponse
 	sessionItems            []codextui.SessionSummary
 	sessionCWD              string
+	sessionPickerLoadNotice string
 	// sessionWorkspaceRoots mirrors the active thread's server-authoritative
 	// runtime workspace roots (Rust #46494). Client config paths belong to the
 	// client host, so a Session-sourced fork must forward the roots the server
@@ -2597,6 +2601,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		serviceTierRequirements:         options.ServiceTierRequirements,
 		sessionItems:                    append([]codextui.SessionSummary(nil), options.SessionPickerItems...),
 		sessionCWD:                      strings.TrimSpace(options.SessionPickerCWD),
+		sessionPickerLoadNotice:         strings.TrimSpace(options.SessionPickerNotice),
 		sessionPickerDensity:            normalizeSessionPickerDensityTea(options.SessionPickerView),
 		agentsOverviewGrouping:          agentsoverview.ParseGroupingConfig(options.AgentsOverviewGrouping),
 		backgroundProcesses:             cloneUnifiedExecProcessDetails(options.BackgroundProcesses),

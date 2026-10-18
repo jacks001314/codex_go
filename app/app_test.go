@@ -4737,7 +4737,10 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 	defer server.Close()
 
 	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	items := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{Shared: cli.SharedOptions{CWD: `D:\repo`}}, endpoint)
+	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{Shared: cli.SharedOptions{CWD: `D:\repo`}}, endpoint)
+	if notice != "" {
+		t.Fatalf("session picker notice = %q, want empty", notice)
+	}
 	if len(items) != 2 || items[0].ThreadID != "thread-active" || items[1].ThreadID != "thread-archived" || !items[1].Archived {
 		t.Fatalf("remote session items = %#v", items)
 	}
@@ -4755,6 +4758,68 @@ func TestInteractiveRemoteSessionPickerItemsLoadFromAppServer(t *testing.T) {
 	case err := <-serverErrs:
 		t.Fatalf("server error: %v", err)
 	default:
+	}
+}
+
+func TestInteractiveRemoteSessionPickerPreservesItemsOnLaterPageFailureLikeRust(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			req, err := remoteTUITestReadRequest(ctx, conn)
+			if err != nil {
+				return
+			}
+			switch req.Method {
+			case string(appserver.MethodInitialize):
+				remoteTUITestWrite(ctx, conn, map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{}})
+			case string(appserver.MethodConfigRead):
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result": map[string]any{"config": map[string]any{
+						"model_provider": "server-provider",
+					}},
+				})
+			case string(appserver.MethodThreadList):
+				var params appserver.ThreadListParams
+				if err := json.Unmarshal(req.Params, &params); err != nil {
+					return
+				}
+				if params.Cursor != nil && *params.Cursor == "page-2" {
+					remoteTUITestWrite(ctx, conn, map[string]any{
+						"jsonrpc": "2.0",
+						"id":      req.ID,
+						"error":   map[string]any{"code": -32603, "message": "failed to list threads from state database"},
+					})
+					continue
+				}
+				active := remoteSessionTestThread("thread-active", "Remote Active", false, 0)
+				next := "page-2"
+				remoteTUITestWrite(ctx, conn, map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"result":  map[string]any{"data": []any{active}, "nextCursor": next},
+				})
+			default:
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	endpoint := appserverdaemon.NewWebSocketEndpoint("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	items, notice := interactiveRemoteSessionPickerItems(ctx, &cli.RootOptions{}, endpoint)
+	if len(items) != 1 || items[0].ThreadID != "thread-active" {
+		t.Fatalf("loaded session items = %#v, want the first page", items)
+	}
+	if notice != "Could not load more sessions" {
+		t.Fatalf("session picker notice = %q", notice)
 	}
 }
 

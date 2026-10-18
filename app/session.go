@@ -919,7 +919,7 @@ func sessionIDByName(store *session.Store, opts *cli.SessionOptions, name string
 			}
 		}
 	}
-	records, err := listSessionPickerRecords(store, opts, sessionPickerPageSize*10)
+	records, err := sessionPickerRecords(store, opts)
 	if err != nil {
 		return "", err
 	}
@@ -1181,11 +1181,25 @@ func writeSessionPicker(stdout io.Writer, store *session.Store, action string, o
 }
 
 func listSessionPickerRecords(store *session.Store, opts *cli.SessionOptions, limit int) ([]session.Record, error) {
-	if store == nil {
-		return nil, errors.New("session store is nil")
+	records, err := sessionPickerRecords(store, opts)
+	if err != nil {
+		return nil, err
 	}
 	if limit <= 0 {
 		limit = sessionPickerPageSize
+	}
+	if len(records) > limit {
+		records = records[:limit]
+	}
+	return records, nil
+}
+
+// sessionPickerRecords returns every filtered session so label resolution can
+// inspect all matches before deciding uniqueness. The picker-facing helper
+// applies its display limit only after this complete set is built.
+func sessionPickerRecords(store *session.Store, opts *cli.SessionOptions) ([]session.Record, error) {
+	if store == nil {
+		return nil, errors.New("session store is nil")
 	}
 	records, err := listSessionsByArchived(store, false)
 	if err != nil {
@@ -1200,9 +1214,6 @@ func listSessionPickerRecords(store *session.Store, opts *cli.SessionOptions, li
 	}
 	records = filterSessionPickerRecords(records, opts)
 	sortSessionRecordsByRecency(records)
-	if len(records) > limit {
-		records = records[:limit]
-	}
 	return records, nil
 }
 
