@@ -2013,7 +2013,7 @@ bcd6d9ab6b9f26f85d76d0c680b3f88b367bffa0	49489	Add regression coverage for accou
 bce96bcb43c1aeea69fa0aa230809fa9e4eba80e	41159	Reject oversized reviewed terminal input (#41159)	2026-08-27	guardian	1	0	0.00	0	0	complete	into_guardian_request
 bd0d4a23e3d276d6c4addcf12da40042b9c0b4df	40271	Preserve content annotations when rolling back model switches (#40271)	2026-08-23	model	0	0		0	0	not_applicable	
 bd274564e1b1b3febb3886d274e6d97c2a3d275e	52302	Add opt-in credential masking for proxied sandboxed sessions (#52302)	2026-10-08	config	1	0	0.00	0	0	complete	credential_masking_warning
-bd3d4d1436bb41b94fd38ba9bdd34d74524e7a9f	48115	Preserve user text parts during local compaction (#48115)	2026-09-25	core	2	0	0.00	0	0	implementation_pending	CompactedUserMessage,collect_user_messages
+bd3d4d1436bb41b94fd38ba9bdd34d74524e7a9f	48115	Preserve user text parts during local compaction (#48115)	2026-09-25	core	2	0	0.00	0	0	complete	CompactedUserMessage,collect_user_messages
 bd4204efc24a888c6671681f5cd41fbf9377c163	49379	Compile hook matchers during discovery (#49379)	2026-09-29	core	4	2	0.50	0	0	audit_pending	HookMatcher,matches_matcher
 bd5185820df893016f51e34a7e7e19ebc8e7240b	49408	Compare tool call metadata in the recorder refresh test (#49408)	2026-09-30	core	0	0		0	0	not_applicable	
 bd5564fec447bd42b4e60d051967670d2eaa2aa8	51768	Expand OpenAI Docs migration guidance to the GPT-6 model family (#51768)	2026-10-07	model	0	0		0	0	not_applicable	

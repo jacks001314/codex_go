@@ -21500,9 +21500,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: CompactedUserMessage, collect_user_messages"
+        "Round 315 (audit): already implemented. compact preserves the original text-only user content parts, empty boundaries, and passthrough annotations when under budget; only truncated messages or messages carrying media are rebuilt as text fallbacks without media. Tests: go test ./compact -run 'UserMessage|Retention' -count=1"
       ]
     },
     {
