@@ -226,6 +226,10 @@ func (m *EnvironmentManager) ApplyProviderSnapshot(snapshot execserverclient.Env
 				record.ConnectTimeoutMS = &milliseconds
 			}
 		}
+		if environment.Transport.InitializeTimeout > 0 {
+			milliseconds := uint64(environment.Transport.InitializeTimeout / time.Millisecond)
+			record.InitializeTimeoutMS = &milliseconds
+		}
 		m.cancelConnectionAttempts(id)
 		m.records[id] = record
 	}
@@ -297,6 +301,7 @@ func execServerClientOptions(record *EnvironmentRecord, clientName string) execs
 		return options
 	}
 	options.HTTPClient = record.HTTPClient
+	options.InitializeTimeout = environmentInitializeTimeout(record)
 	if record.StdioCommand != nil {
 		options.StdioCommand = record.StdioCommand
 		return options
@@ -383,6 +388,10 @@ type EnvironmentRecord struct {
 	ExecServerURL    string
 	NoiseProvider    execserverclient.NoiseRendezvousConnectProvider
 	ConnectTimeoutMS *uint64
+	// InitializeTimeoutMS is the environments.toml `initialize_timeout_sec`
+	// value for this executor. It bounds the Noise handshake and initialize
+	// RPC as one budget (Rust #42623).
+	InitializeTimeoutMS *uint64
 	// ExecServerHeaders are sent on the executor's WebSocket upgrade and on
 	// reconnects; the app-server fills them from the registration's bearer token.
 	ExecServerHeaders http.Header
@@ -1643,10 +1652,21 @@ func provisionedNoiseDialOptions(record *EnvironmentRecord, clientName string) e
 		return options
 	}
 	options.HTTPClient = record.HTTPClient
+	options.InitializeTimeout = environmentInitializeTimeout(record)
 	if record.provisionedReady() {
 		options.Provisioned = true
 	}
 	return options
+}
+
+// environmentInitializeTimeout carries an environments.toml
+// `initialize_timeout_sec` value into the exec-server dial options. Zero keeps
+// the exec-server client's default.
+func environmentInitializeTimeout(record *EnvironmentRecord) time.Duration {
+	if record == nil || record.InitializeTimeoutMS == nil {
+		return 0
+	}
+	return time.Duration(*record.InitializeTimeoutMS) * time.Millisecond
 }
 
 func writeExecServerJSON(ctx context.Context, conn *websocket.Conn, value any) error {

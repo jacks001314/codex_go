@@ -7191,9 +7191,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/5); candidate gap: NoiseHarnessConnection, NoiseInitializeContext, call_untraced, connect_with_recovery_and_noise_context, noise_harness_connection_from_websocket_with_readiness"
+        "Round 480 (implementation): DialClientOptions.InitializeTimeout bounds direct and stdio initialize RPCs and shares one deadline across the Noise handshake and initialize RPC; typed InitializeTimedOutError preserves the configured duration in diagnostics and participates in both retry classifiers. environments.toml initialize_timeout_sec now flows through app-server and unified-exec. Tests: go test ./execserver -run 'InitializeTimeout|NoiseHandshakeUsesInitializeTimeout|NoiseInitializeRPC|DirectInitializeRPC' -count=1; go test ./appserver ./tool -run 'InitializeTimeout|EnvironmentProvider|ExecServerClientOptions|UnifiedExecEnvironments' -count=1"
       ]
     },
     {

@@ -144,6 +144,9 @@ type ShellRequest struct {
 	UnifiedExecTurnID               string
 	UnifiedExecRemoteURL            string
 	UnifiedExecNoiseProvider        execserver.NoiseRendezvousConnectProvider
+	// UnifiedExecInitializeTimeout bounds the Noise handshake and initialize
+	// RPC for this environment (Rust #42623). Zero keeps the client default.
+	UnifiedExecInitializeTimeout time.Duration
 	// UnifiedExecProvisioned marks the selected environment as provisioned so
 	// the initial remote dial waits out a resuming executor (Rust #48575).
 	UnifiedExecProvisioned bool
@@ -187,6 +190,9 @@ type UnifiedExecEnvironment struct {
 	// configured with a program instead of a URL (environments.toml entries).
 	ExecServerStdioCommand *execserver.StdioExecServerCommand
 	NoiseProvider          execserver.NoiseRendezvousConnectProvider
+	// ExecServerInitializeTimeout is the environments.toml
+	// `initialize_timeout_sec` value for this transport.
+	ExecServerInitializeTimeout time.Duration
 	// Provisioned marks an environment registered through the app-server's
 	// deferred (provisioned) executor flow: provisioning has completed, but the
 	// executor may still be resuming, so an initial Noise connection waits out

@@ -42,7 +42,10 @@ func UnifiedExecEnvironmentsForProviderIDs(snapshot execserver.EnvironmentProvid
 		if !ok {
 			continue
 		}
-		environment := UnifiedExecEnvironment{ID: id}
+		environment := UnifiedExecEnvironment{
+			ID:                          id,
+			ExecServerInitializeTimeout: transport.InitializeTimeout,
+		}
 		switch transport.Kind {
 		case execserver.EnvironmentTransportStdio:
 			if transport.Command == nil {

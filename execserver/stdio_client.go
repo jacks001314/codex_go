@@ -254,12 +254,18 @@ func dialStdioClientConnection(
 	clientName string,
 	resumeSessionID string,
 	handleNotification func(string, json.RawMessage) error,
+	initializeTimeout time.Duration,
 ) (clientConnection, *InitializeResponse, error) {
 	connection, err := spawnStdioClientConnection(command)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to spawn exec-server stdio command: %w", err)
 	}
-	initialized, err := initializeClientConnection(ctx, connection, clientName, resumeSessionID, handleNotification)
+	var initialized *InitializeResponse
+	err = withInitializeTimeout(ctx, initializeTimeout, func(initializeCtx context.Context) error {
+		var initializeErr error
+		initialized, initializeErr = initializeClientConnection(initializeCtx, connection, clientName, resumeSessionID, handleNotification)
+		return initializeErr
+	})
 	if err != nil {
 		_ = connection.CloseNow()
 		return nil, nil, err
@@ -287,7 +293,7 @@ func dialStdioCommandClient(ctx context.Context, clientName string, options Dial
 		reconnectDisabled: true,
 	}
 	client.open = func(openCtx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialStdioClientConnection(openCtx, options.StdioCommand, clientName, resumeSessionID, handleNotification)
+		return dialStdioClientConnection(openCtx, options.StdioCommand, clientName, resumeSessionID, handleNotification, options.InitializeTimeout)
 	}
 	// A stdio connect never resumes a session (Rust passes
 	// `resume_session_id: None` for stdio transports).

@@ -744,6 +744,7 @@ func (e *ShellExecutor) Execute(ctx context.Context, invocation *Invocation) (*O
 		req.UnifiedExecEnvironmentID = environment.ID
 		req.UnifiedExecRemoteURL = environment.ExecServerURL
 		req.UnifiedExecNoiseProvider = environment.NoiseProvider
+		req.UnifiedExecInitializeTimeout = environment.ExecServerInitializeTimeout
 		req.UnifiedExecProvisioned = environment.Provisioned
 		req.UnifiedExecRemoteHTTPHeaders = environment.ExecServerHTTPHeaders
 		req.UnifiedExecRemoteStdioCommand = environment.ExecServerStdioCommand

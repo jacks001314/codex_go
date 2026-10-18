@@ -299,12 +299,21 @@ func DialNoiseRendezvousClient(
 				return bundle, err
 			}
 			openWithBundle := func(bundle *NoiseRendezvousConnectBundle) (clientConnection, *InitializeResponse, error) {
-				wire, err := dialNoiseHarnessConnection(ctx, bundle, identity, options.HTTPClient)
+				var wire clientConnection
+				var initialized *InitializeResponse
+				err := withInitializeTimeout(ctx, options.InitializeTimeout, func(initializeCtx context.Context) error {
+					var dialErr error
+					wire, dialErr = dialNoiseHarnessConnection(initializeCtx, bundle, identity, options.HTTPClient)
+					if dialErr != nil {
+						return dialErr
+					}
+					initialized, dialErr = initializeClientConnection(initializeCtx, wire, clientName, resumeSessionID, handleNotification)
+					return dialErr
+				})
 				if err != nil {
-					return nil, nil, err
-				}
-				initialized, err := initializeClientConnection(ctx, wire, clientName, resumeSessionID, handleNotification)
-				if err != nil {
+					if wire != nil {
+						_ = wire.CloseNow()
+					}
 					return nil, nil, err
 				}
 				return wire, initialized, nil

@@ -153,6 +153,12 @@ type DialClientOptions struct {
 	ClientName      string
 	ResumeSessionID string
 	HTTPClient      *http.Client
+	// InitializeTimeout bounds the authenticated Noise handshake and the
+	// subsequent initialize request as one budget (Rust #42623
+	// ExecServerClientConnectOptions::initialize_timeout). Zero uses
+	// DefaultRemoteExecServerInitializeTimeout. Timeout diagnostics report this
+	// configured duration even when the handshake consumed part of it.
+	InitializeTimeout time.Duration
 	// HTTPHeaders are sent on the direct WebSocket upgrade request and on every
 	// reconnect (Rust RemoteEnvironmentOptions::http_headers, #47648). They are
 	// validated: connection-controlled headers are rejected, and a non-empty set
@@ -278,6 +284,20 @@ type RPCTimedOutError struct {
 	Timeout time.Duration
 }
 
+// InitializeTimedOutError reports that the Noise handshake or initialize RPC
+// exceeded the configured initialization budget (Rust #42623
+// ExecServerError::InitializeTimedOut).
+type InitializeTimedOutError struct {
+	Timeout time.Duration
+}
+
+func (e *InitializeTimedOutError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("timed out waiting for exec-server initialize handshake after %s", e.Timeout)
+}
+
 func (e *RPCTimedOutError) Error() string {
 	if e == nil {
 		return "exec-server RPC timed out"
@@ -293,7 +313,8 @@ func IsRetryableRecoveryError(err error) bool {
 	}
 	var transportErr *clientTransportError
 	var timeoutErr *RPCTimedOutError
-	return errors.As(err, &transportErr) || errors.As(err, &timeoutErr)
+	var initializeTimeoutErr *InitializeTimedOutError
+	return errors.As(err, &transportErr) || errors.As(err, &timeoutErr) || errors.As(err, &initializeTimeoutErr)
 }
 
 // IsRetryablePreparationError classifies transient registry, connection,
@@ -305,6 +326,10 @@ func IsRetryablePreparationError(err error) bool {
 		return false
 	}
 	if IsRetryableRecoveryError(err) {
+		return true
+	}
+	var initializeTimeoutErr *InitializeTimedOutError
+	if errors.As(err, &initializeTimeoutErr) {
 		return true
 	}
 	var statusErr *remoteRegistryHTTPError
@@ -333,6 +358,36 @@ func preparationReadError(err error) error {
 		return err
 	}
 	return errors.Join(err, io.ErrClosedPipe)
+}
+
+// effectiveInitializeTimeout mirrors Rust's defaulting of
+// ExecServerClientConnectOptions::initialize_timeout.
+func effectiveInitializeTimeout(timeout time.Duration) time.Duration {
+	if timeout > 0 {
+		return timeout
+	}
+	return DefaultRemoteExecServerInitializeTimeout
+}
+
+// withInitializeTimeout runs one connection-preparation operation within the
+// configured initialization budget. The typed timeout preserves the configured
+// duration in diagnostics after an earlier phase consumed part of it.
+func withInitializeTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+	run func(context.Context) error,
+) error {
+	timeout = effectiveInitializeTimeout(timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	initializeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := run(initializeCtx)
+	if err != nil && errors.Is(initializeCtx.Err(), context.DeadlineExceeded) {
+		return &InitializeTimedOutError{Timeout: timeout}
+	}
+	return err
 }
 
 func (e *clientTransportError) Error() string {
@@ -397,7 +452,7 @@ func DialClientWithOptions(ctx context.Context, url string, options DialClientOp
 		done:         make(chan struct{}),
 	}
 	client.open = func(ctx context.Context, resumeSessionID string, handleNotification func(string, json.RawMessage) error) (clientConnection, *InitializeResponse, error) {
-		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers)
+		return dialInitializedClientConnection(ctx, url, clientName, resumeSessionID, handleNotification, options.HTTPClient, headers, options.InitializeTimeout)
 	}
 	conn, initialized, err := client.open(ctx, options.ResumeSessionID, client.handleNotification)
 	if err != nil {
@@ -418,6 +473,7 @@ func dialInitializedClientConnection(
 	handleNotification func(string, json.RawMessage) error,
 	httpClient *http.Client,
 	headers http.Header,
+	initializeTimeout time.Duration,
 ) (clientConnection, *InitializeResponse, error) {
 	dialOptions := &websocket.DialOptions{HTTPClient: httpClient}
 	if len(headers) > 0 {
@@ -438,7 +494,12 @@ func dialInitializedClientConnection(
 	} else {
 		wire = newWebSocketClientConnection(conn)
 	}
-	initialized, err := initializeClientConnection(ctx, wire, clientName, resumeSessionID, handleNotification)
+	var initialized *InitializeResponse
+	err = withInitializeTimeout(ctx, initializeTimeout, func(initializeCtx context.Context) error {
+		var initializeErr error
+		initialized, initializeErr = initializeClientConnection(initializeCtx, wire, clientName, resumeSessionID, handleNotification)
+		return initializeErr
+	})
 	if err != nil {
 		_ = wire.CloseNow()
 		return nil, nil, err

@@ -405,10 +405,11 @@ func dialEnvironmentFileSystemClient(ctx context.Context, environment UnifiedExe
 	connectCtx, cancel := context.WithTimeout(ctx, environment.ConnectBudget(environmentFileSystemConnectTimeout))
 	defer cancel()
 	options := execserver.DialClientOptions{
-		ClientName:   "codex-go-environment-fs",
-		HTTPHeaders:  environment.ExecServerHTTPHeaders.Clone(),
-		StdioCommand: environment.ExecServerStdioCommand,
-		Provisioned:  environment.Provisioned,
+		ClientName:        "codex-go-environment-fs",
+		InitializeTimeout: environment.ExecServerInitializeTimeout,
+		HTTPHeaders:       environment.ExecServerHTTPHeaders.Clone(),
+		StdioCommand:      environment.ExecServerStdioCommand,
+		Provisioned:       environment.Provisioned,
 	}
 	if environment.NoiseProvider != nil {
 		return execserver.DialNoiseRendezvousClient(connectCtx, environment.NoiseProvider, options)

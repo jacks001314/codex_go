@@ -301,34 +301,35 @@ func unifiedExecOutputSchema() map[string]any {
 type unifiedExecProcess struct {
 	id int
 	unifiedExecLaunchFacts
-	callID               string
-	hookCommand          string
-	tty                  bool
-	cmd                  *osexec.Cmd
-	stdin                io.WriteCloser
-	remote               *execserver.Client
-	remoteURL            string
-	remoteProvider       execserver.NoiseRendezvousConnectProvider
-	remoteHeaders        http.Header
-	remoteStdioCommand   *execserver.StdioExecServerCommand
-	remoteSessionID      string
-	remoteID             string
-	remoteWrite          uint64
-	remoteEvents         *execserver.ProcessEventSubscription
-	networkPolicyDecider network.ProxyPolicyDecider
-	networkPolicyTimeout time.Duration
-	sandbox              unifiedExecSandboxProcess
-	sandboxType          *sandbox.SandboxType
-	escalated            bool
-	done                 chan struct{}
-	eventDone            chan struct{}
-	eventSink            UnifiedExecEventSink
-	command              []string
-	cwd                  string
-	startedAt            time.Time
-	lastUsed             time.Time
-	threadID             string
-	turnID               string
+	callID                  string
+	hookCommand             string
+	tty                     bool
+	cmd                     *osexec.Cmd
+	stdin                   io.WriteCloser
+	remote                  *execserver.Client
+	remoteURL               string
+	remoteProvider          execserver.NoiseRendezvousConnectProvider
+	remoteInitializeTimeout time.Duration
+	remoteHeaders           http.Header
+	remoteStdioCommand      *execserver.StdioExecServerCommand
+	remoteSessionID         string
+	remoteID                string
+	remoteWrite             uint64
+	remoteEvents            *execserver.ProcessEventSubscription
+	networkPolicyDecider    network.ProxyPolicyDecider
+	networkPolicyTimeout    time.Duration
+	sandbox                 unifiedExecSandboxProcess
+	sandboxType             *sandbox.SandboxType
+	escalated               bool
+	done                    chan struct{}
+	eventDone               chan struct{}
+	eventSink               UnifiedExecEventSink
+	command                 []string
+	cwd                     string
+	startedAt               time.Time
+	lastUsed                time.Time
+	threadID                string
+	turnID                  string
 
 	mu            sync.Mutex
 	interactionMu sync.Mutex
@@ -664,15 +665,17 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 	var err error
 	if req.UnifiedExecNoiseProvider != nil {
 		client, err = execserver.DialNoiseRendezvousClient(connectCtx, req.UnifiedExecNoiseProvider, execserver.DialClientOptions{
-			ClientName:  "codex-go-unified-exec",
-			Provisioned: req.UnifiedExecProvisioned,
+			ClientName:        "codex-go-unified-exec",
+			InitializeTimeout: req.UnifiedExecInitializeTimeout,
+			Provisioned:       req.UnifiedExecProvisioned,
 		})
 	} else {
 		client, err = execserver.DialClientWithOptions(connectCtx, req.UnifiedExecRemoteURL, execserver.DialClientOptions{
-			ClientName:   "codex-go-unified-exec",
-			Provisioned:  req.UnifiedExecProvisioned,
-			HTTPHeaders:  req.UnifiedExecRemoteHTTPHeaders.Clone(),
-			StdioCommand: req.UnifiedExecRemoteStdioCommand,
+			ClientName:        "codex-go-unified-exec",
+			InitializeTimeout: req.UnifiedExecInitializeTimeout,
+			Provisioned:       req.UnifiedExecProvisioned,
+			HTTPHeaders:       req.UnifiedExecRemoteHTTPHeaders.Clone(),
+			StdioCommand:      req.UnifiedExecRemoteStdioCommand,
 		})
 	}
 	if err != nil {
@@ -801,33 +804,34 @@ func (m *UnifiedExecManager) execRemote(ctx context.Context, req *ShellRequest, 
 		return nil, err
 	}
 	process := &unifiedExecProcess{
-		id:                     processID,
-		callID:                 callID,
-		hookCommand:            req.HookCommand,
-		tty:                    req.TTY,
-		remote:                 client,
-		remoteURL:              req.UnifiedExecRemoteURL,
-		remoteProvider:         req.UnifiedExecNoiseProvider,
-		remoteHeaders:          req.UnifiedExecRemoteHTTPHeaders.Clone(),
-		remoteStdioCommand:     req.UnifiedExecRemoteStdioCommand,
-		remoteSessionID:        client.SessionID(),
-		remoteID:               remoteID,
-		remoteEvents:           events,
-		networkPolicyDecider:   req.NetworkPolicyDecider,
-		networkPolicyTimeout:   req.NetworkPolicyDecisionTimeout,
-		done:                   make(chan struct{}),
-		eventDone:              make(chan struct{}),
-		output:                 newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		transcript:             newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
-		eventSink:              req.UnifiedExecEventSink,
-		command:                append([]string(nil), req.Command...),
-		cwd:                    req.CWD,
-		startedAt:              time.Now(),
-		threadID:               req.UnifiedExecThreadID,
-		turnID:                 req.UnifiedExecTurnID,
-		unifiedExecLaunchFacts: unifiedExecLaunchFactsFromRequest(req),
-		sandboxType:            execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
-		escalated:              shellRequestEscalated(req),
+		id:                      processID,
+		callID:                  callID,
+		hookCommand:             req.HookCommand,
+		tty:                     req.TTY,
+		remote:                  client,
+		remoteURL:               req.UnifiedExecRemoteURL,
+		remoteProvider:          req.UnifiedExecNoiseProvider,
+		remoteInitializeTimeout: req.UnifiedExecInitializeTimeout,
+		remoteHeaders:           req.UnifiedExecRemoteHTTPHeaders.Clone(),
+		remoteStdioCommand:      req.UnifiedExecRemoteStdioCommand,
+		remoteSessionID:         client.SessionID(),
+		remoteID:                remoteID,
+		remoteEvents:            events,
+		networkPolicyDecider:    req.NetworkPolicyDecider,
+		networkPolicyTimeout:    req.NetworkPolicyDecisionTimeout,
+		done:                    make(chan struct{}),
+		eventDone:               make(chan struct{}),
+		output:                  newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		transcript:              newUnifiedExecHeadTailBuffer(unifiedExecOutputMaxBytes),
+		eventSink:               req.UnifiedExecEventSink,
+		command:                 append([]string(nil), req.Command...),
+		cwd:                     req.CWD,
+		startedAt:               time.Now(),
+		threadID:                req.UnifiedExecThreadID,
+		turnID:                  req.UnifiedExecTurnID,
+		unifiedExecLaunchFacts:  unifiedExecLaunchFactsFromRequest(req),
+		sandboxType:             execserver.SandboxTypeFromProtocol(startResponse.SandboxType),
+		escalated:               shellRequestEscalated(req),
 	}
 	process.lastUsed = process.startedAt
 	m.mu.Lock()
@@ -1780,6 +1784,7 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	p.mu.Lock()
 	remoteURL := p.remoteURL
 	remoteProvider := p.remoteProvider
+	remoteInitializeTimeout := p.remoteInitializeTimeout
 	remoteHeaders := p.remoteHeaders.Clone()
 	remoteStdioCommand := p.remoteStdioCommand
 	sessionID := p.remoteSessionID
@@ -1794,10 +1799,11 @@ func (p *unifiedExecProcess) recoverRemote(lastSeq *uint64, exitCode **int, disc
 	for time.Now().Before(deadline) {
 		attemptCtx, cancel := context.WithDeadline(context.Background(), deadline)
 		options := execserver.DialClientOptions{
-			ClientName:      "codex-go-unified-exec",
-			ResumeSessionID: sessionID,
-			HTTPHeaders:     remoteHeaders.Clone(),
-			StdioCommand:    remoteStdioCommand,
+			ClientName:        "codex-go-unified-exec",
+			ResumeSessionID:   sessionID,
+			InitializeTimeout: remoteInitializeTimeout,
+			HTTPHeaders:       remoteHeaders.Clone(),
+			StdioCommand:      remoteStdioCommand,
 		}
 		var client *execserver.Client
 		var err error
