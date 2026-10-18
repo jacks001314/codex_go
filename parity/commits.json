@@ -11115,9 +11115,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 15/32; needs review: RemoteControlAuth, RemoteControlHandle, RemoteControlPersistence, RemoteControlRecovery, RemoteControlWebsocket"
+        "Round 531 (audit): already implemented. A live relay connection retires when its authentication owner changes, replacement sessions get fresh client/replay/enrollment state, and a preference write admitted by retirement keeps its write permit. Tests: go test ./remotecontrol ./appserver -run 'AuthOwner|Retire|RemoteControlWatch' -count=1"
       ]
     },
     {
@@ -12735,9 +12735,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: strong_count"
+        "Round 532 (audit): already implemented. Direct invocation metadata is bound to its own output, nested Code Mode captures are tracked separately, reused IDs cannot be presented as fresh evidence, and prepared direct calls use the pending reservation. Tests: go test ./turn -run 'ExecutedToolCalls|ToolCallMetadata|Direct' -count=1"
       ]
     },
     {
@@ -19181,9 +19181,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/10; needs review: PolicyExporter, RuntimeHttpClient, load_profile, load_sdk_config, profile_credentials_provider"
+        "Round 530 (audit): already implemented. Signing checks the request destination before loading credentials, caller-supplied exporters require unrestricted application policy, AWS SDK credential and region requests use the policy-aware transport, and revoked fetches cancel. Tests: go test ./auth -run 'AWS|Aws|Credential|Network' -count=1"
       ]
     },
     {
