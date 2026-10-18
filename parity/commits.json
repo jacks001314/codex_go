@@ -3444,9 +3444,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SENSITIVE_ACTION_KEY"
+        "Round 450 (audit): N/A by architecture - codex_sensitive_action only escalates Guardian V2 extension fast approval to the synchronous reviewer. Go has no extension fast-approval path: appserver.mcp_elicitation always calls GuardianReviewer.Review synchronously for guardian MCP elicitations, so absent/true metadata produce the same existing route. Tests: go test ./appserver -run 'GuardianMCP|MCPElicitation' -count=1"
       ]
     },
     {
