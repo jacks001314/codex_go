@@ -194,6 +194,34 @@ func ChatGPTUserIDFromAuth(snapshot *AuthDotJSON) string {
 	return ""
 }
 
+// ChatGPTAccountUserIDFromAuth returns the access token's opaque
+// chatgpt_account_user_id claim only when the token's workspace matches the
+// selected account (Rust #43524). Missing, malformed, or cross-workspace claims
+// return no identity and never fall back to another user ID.
+func ChatGPTAccountUserIDFromAuth(snapshot *AuthDotJSON) string {
+	if snapshot == nil {
+		return ""
+	}
+	selectedAccountID := firstNonEmptyAccount(
+		stringFromAny(snapshot.Tokens, "account_id"),
+		stringFromAny(snapshot.Tokens, "chatgpt_account_id"),
+		stringFromAny(snapshot.Tokens, "accountId"),
+		stringFromAny(snapshot.Tokens, "chatgptAccountId"),
+	)
+	if selectedAccountID == "" || selectedAccountID != strings.TrimSpace(selectedAccountID) {
+		return ""
+	}
+	accessToken := stringFromAny(snapshot.Tokens, "access_token")
+	if strings.TrimSpace(accessToken) == "" {
+		return ""
+	}
+	claims := ChatGPTClaimsFromJWT(accessToken)
+	if claims.AccountID != selectedAccountID || claims.AccountUserID == "" || claims.AccountUserID != strings.TrimSpace(claims.AccountUserID) {
+		return ""
+	}
+	return claims.AccountUserID
+}
+
 func accountIDFromAgentIdentity(value any) string {
 	record := agentIdentityRecordFromAny(value)
 	if record != nil {

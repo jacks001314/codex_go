@@ -163,6 +163,7 @@ type httpClient struct {
 	elicitation                        MCPElicitationHandler
 	progress                           MCPProgressHandler
 	openAIForm                         bool
+	userVerification                   bool
 	protocolMode                       MCPProtocolMode
 	negotiatedProtocolVersion          string
 	retrySleep                         func(time.Duration)
@@ -365,6 +366,10 @@ func newMCPHTTPClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *http
 }
 
 func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HTTPDoer) *httpClient {
+	return newMCPHTTPClientWithFeatures(config, openAIForm, false, shared)
+}
+
+func newMCPHTTPClientWithFeatures(config *ServerConfig, openAIForm bool, userVerification bool, shared HTTPDoer) *httpClient {
 	client := mcpHTTPClientFromShared(shared, mcpClientTimeout(config))
 	if config != nil {
 		if policy := mcpRedirectPolicy(config.URL); policy != nil {
@@ -384,11 +389,12 @@ func newMCPHTTPClientWithShared(config *ServerConfig, openAIForm bool, shared HT
 		protocolMode = config.ProtocolMode
 	}
 	return &httpClient{
-		config:       config,
-		client:       mcpHTTPClientWithDefaultHeaders(client, config),
-		openAIForm:   openAIForm,
-		protocolMode: protocolMode,
-		retrySleep:   time.Sleep,
+		config:           config,
+		client:           mcpHTTPClientWithDefaultHeaders(client, config),
+		openAIForm:       openAIForm,
+		userVerification: userVerification,
+		protocolMode:     protocolMode,
+		retrySleep:       time.Sleep,
 	}
 }
 
@@ -690,7 +696,7 @@ func (c *httpClient) initialize(ctx context.Context) (string, error) {
 	c.capabilitiesMu.Lock()
 	c.serverCapabilities = nil
 	c.capabilitiesMu.Unlock()
-	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParams(c.openAIForm), "", true)
+	response, requestID, err := c.doRPC(ctx, "initialize", mcpClientInitializeParamsWithFeatures(c.openAIForm, false, c.userVerification), "", true)
 	if err != nil {
 		recordProtocolDiscoveryMetrics(mcpProtocolDiscoveryModeLabel(c.protocolMode), "failure", time.Since(started))
 		return "", err
@@ -942,7 +948,7 @@ func (c *httpClient) doRPC(ctx context.Context, method string, params any, sessi
 	if endpoint == "" {
 		return nil, 0, errors.New("HTTP MCP URL is required")
 	}
-	params = mcpParamsWithProtocolMetadata(params, c.protocolMode, c.openAIForm)
+	params = mcpParamsWithProtocolMetadataAndFeatures(params, c.protocolMode, c.openAIForm, false, c.userVerification)
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,

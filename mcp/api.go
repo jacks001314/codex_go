@@ -968,7 +968,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 			sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
 		}
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, sharedHTTPClientKey) {
+			cached.key == mcpHTTPConnectionCacheKey(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm), sharedHTTPClientKey) {
 			nextHTTPClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -980,7 +980,7 @@ func (s *MCPService) ApplyRuntimeConfig(runtime *RuntimeConfig) {
 	for name, cached := range s.stdioClients {
 		config, ok := refreshed.configs[name]
 		if ok && cached != nil && cached.client != nil && !cached.client.isClosed() &&
-			cached.key == mcpConnectionCacheKey(&config, s.openAIForm) {
+			cached.key == mcpConnectionCacheKeyWithFeatures(&config, s.openAIForm, mcpServerAllowsUserVerification(refreshed.servers, name, s.openAIForm)) {
 			nextStdioClients[name] = cached
 			preserveMCPServerInventory(refreshed.servers, s.servers, name)
 			continue
@@ -1804,7 +1804,7 @@ func (s *MCPService) populateStatusInventories(params *MCPListServerStatusParams
 			config := configs[name]
 			agentPlugin := servers[index].PluginID != nil
 			oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
-			if key, eligible := mcpToolCatalogGraceKey(name, &config, s.openAIForm, agentPlugin, oauthResolved); eligible {
+			if key, eligible := mcpToolCatalogGraceKeyWithFeatures(name, &config, s.openAIForm, s.openAIForm && servers[index].hostOwnedApps, agentPlugin, oauthResolved); eligible {
 				optionalDeadlines[index] = sharedOptionalStartupDeadlineForKey(key, defaultDeadline)
 			} else {
 				// OAuth / dynamically-resolved-credential HTTP configs stay out of
@@ -1987,7 +1987,7 @@ func (s *MCPService) recordInventoryStatus(name string, status MCPServerStatus, 
 	s.mu.Unlock()
 	if status.State == MCPServerReady {
 		oauthResolved := s.authStatusForConfig(name, &config) == MCPAuthOAuth
-		if key, eligible := mcpToolCatalogGraceKey(name, &config, s.openAIForm, status.PluginID != nil, oauthResolved); eligible {
+		if key, eligible := mcpToolCatalogGraceKeyWithFeatures(name, &config, s.openAIForm, s.openAIForm && status.hostOwnedApps, status.PluginID != nil, oauthResolved); eligible {
 			clearSharedOptionalStartupDeadlineForKey(key)
 		}
 	}
@@ -2086,8 +2086,12 @@ func mcpToolCatalogCacheEligible(config *ServerConfig, oauthCredentialsResolved 
 // bearer-token / env-header values and agent-plugin status, so catalogs are
 // reused only across equivalent connections (Rust 0ca439900e).
 func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, agentPlugin bool, oauthCredentialsResolved bool) (string, bool) {
+	return mcpToolCatalogGraceKeyWithFeatures(name, config, openAIForm, false, agentPlugin, oauthCredentialsResolved)
+}
+
+func mcpToolCatalogGraceKeyWithFeatures(name string, config *ServerConfig, openAIForm bool, userVerification bool, agentPlugin bool, oauthCredentialsResolved bool) (string, bool) {
 	if config == nil {
-		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
+		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification), true
 	}
 	// Rust #46042: a read-only server must not read or populate an unrestricted
 	// shared catalog.
@@ -2095,7 +2099,7 @@ func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, 
 		return "", false
 	}
 	if strings.TrimSpace(config.Command) != "" {
-		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKey(config, openAIForm), true
+		return strings.TrimSpace(name) + "\x00" + mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification), true
 	}
 	if strings.TrimSpace(config.URL) == "" {
 		return "", false
@@ -2103,7 +2107,7 @@ func mcpToolCatalogGraceKey(name string, config *ServerConfig, openAIForm bool, 
 	if !mcpToolCatalogCacheEligible(config, oauthCredentialsResolved) {
 		return "", false
 	}
-	key := mcpConnectionCacheKey(config, openAIForm)
+	key := mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification)
 	if agentPlugin {
 		key += "|agentPlugin=1"
 	}
@@ -2440,7 +2444,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			if err := ValidateServerAuth(server, &config); err != nil {
 				return nil, err
 			}
-			response, err = readMCPHTTPResourceWithClient(s.httpClientForServer(server, &config), server, roots, s.elicitationHandler(), s.progressHandler(), &request)
+			response, err = readMCPHTTPResourceWithClient(s.httpClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
@@ -2449,7 +2453,7 @@ func (s *MCPService) ReadResource(params *MCPResourceReadParams) (*MCPResourceRe
 			return response, nil
 		}
 		if strings.TrimSpace(config.Command) != "" {
-			response, err = readMCPStdioResourceWithClient(s.stdioClientForServer(server, &config), server, roots, s.elicitationHandler(), s.progressHandler(), &request)
+			response, err = readMCPStdioResourceWithClient(s.stdioClientForServer(server, &config), server, roots, s.elicitationHandlerForServer(server), s.progressHandler(), &request)
 			if err != nil {
 				return nil, err
 			}
@@ -2566,10 +2570,10 @@ func (s *MCPService) CallTool(params *MCPToolCallParams) (*MCPToolCallResponse, 
 	effective, meta := s.prepareToolCallSandboxState(server, serverEnvironmentID, stdioTarget != nil, params, httpTarget.sandboxStateMetaNegotiated(), stdioTarget.sandboxStateMetaNegotiated())
 	roots := s.rootsForThread(effective.ThreadID)
 	if httpTarget != nil {
-		return callMCPHTTPToolWithClient(httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, effective.Arguments, meta)
+		return callMCPHTTPToolWithClient(httpTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
 	}
 	if stdioTarget != nil {
-		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandler(), s.progressHandler(), tool, effective.Arguments, meta)
+		return callMCPStdioToolWithClient(stdioTarget, server, effective.ThreadID, effective.TurnID, effective.ItemID, roots, s.elicitationHandlerForServer(server), s.progressHandler(), tool, effective.Arguments, meta)
 	}
 	encoded, err := json.Marshal(params.Arguments)
 	if err != nil {
@@ -2860,13 +2864,14 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 		s.httpClients = map[string]*cachedMCPHTTPClient{}
 	}
 	openAIForm := s.openAIForm
+	userVerification := openAIForm && s.serverAllowsUserVerificationLocked(name)
 	sharedHTTPClient := s.sharedHTTPClient
 	sharedHTTPClientKey := s.sharedHTTPClientKey
 	if config.HTTPClient != nil {
 		sharedHTTPClient = config.HTTPClient
 		sharedHTTPClientKey = mcpHTTPDoerIdentity(config.HTTPClient)
 	}
-	key := mcpHTTPConnectionCacheKey(config, openAIForm, sharedHTTPClientKey)
+	key := mcpHTTPConnectionCacheKey(config, openAIForm, userVerification, sharedHTTPClientKey)
 	if cached := s.httpClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
@@ -2874,15 +2879,15 @@ func (s *MCPService) httpClientForServer(name string, config *ServerConfig) *htt
 	}
 	old := s.deleteHTTPClientLocked(name)
 	cloned := cloneServerConfig(config)
-	client := newMCPHTTPClientWithShared(&cloned, openAIForm, sharedHTTPClient)
+	client := newMCPHTTPClientWithFeatures(&cloned, openAIForm, userVerification, sharedHTTPClient)
 	s.httpClients[name] = &cachedMCPHTTPClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
 	closeHTTPClients([]*httpClient{old})
 	return client
 }
 
-func mcpHTTPConnectionCacheKey(config *ServerConfig, openAIForm bool, sharedHTTPClientKey string) string {
-	return mcpConnectionCacheKey(config, openAIForm) + "|httpClient=" + sharedHTTPClientKey
+func mcpHTTPConnectionCacheKey(config *ServerConfig, openAIForm bool, userVerification bool, sharedHTTPClientKey string) string {
+	return mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification) + "|httpClient=" + sharedHTTPClientKey
 }
 
 func mcpHTTPDoerIdentity(client HTTPDoer) string {
@@ -2902,8 +2907,12 @@ func mcpHTTPDoerIdentity(client HTTPDoer) string {
 }
 
 func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
+	return mcpConnectionCacheKeyWithFeatures(config, openAIForm, false)
+}
+
+func mcpConnectionCacheKeyWithFeatures(config *ServerConfig, openAIForm bool, userVerification bool) string {
 	if config == nil {
-		return fmt.Sprintf("openaiForm=%t", openAIForm)
+		return fmt.Sprintf("openaiForm=%t|userVerification=%t", openAIForm, userVerification)
 	}
 	cloned := cloneServerConfig(config)
 	cloned.Enabled = false
@@ -2925,9 +2934,9 @@ func mcpConnectionCacheKey(config *ServerConfig, openAIForm bool) string {
 	credentialPolicy := EffectiveCredentialPolicy(config.CredentialPolicy)
 	data, err := json.Marshal(cloned)
 	if err != nil {
-		return fmt.Sprintf("%#v|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", cloned, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
+		return fmt.Sprintf("%#v|openaiForm=%t|userVerification=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", cloned, openAIForm, userVerification, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	}
-	key := fmt.Sprintf("%s|openaiForm=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
+	key := fmt.Sprintf("%s|openaiForm=%t|userVerification=%t|requestAuth=%t|protocolMode=%d|readOnlyTools=%t|credentialPolicy=%s", data, openAIForm, userVerification, applyHTTPRequest, config.ProtocolMode, config.RequiresReadOnlyTools, credentialPolicy)
 	for _, reference := range mcpReferencedEnvironmentVariables(config) {
 		key += "\x1f" + reference
 	}
@@ -2994,15 +3003,16 @@ func (s *MCPService) stdioClientForServer(name string, config *ServerConfig) *st
 		s.stdioClients = map[string]*cachedMCPStdioClient{}
 	}
 	openAIForm := s.openAIForm
+	userVerification := openAIForm && s.serverAllowsUserVerificationLocked(name)
 	authChanges := s.authChangeSource
-	key := mcpConnectionCacheKey(config, openAIForm)
+	key := mcpConnectionCacheKeyWithFeatures(config, openAIForm, userVerification)
 	if cached := s.stdioClients[name]; cached != nil && cached.key == key && cached.client != nil && !cached.client.isClosed() &&
 		(cached.client.isInitialized() || cached.startupTimeout == config.StartupTimeout) {
 		s.mu.Unlock()
 		return cached.client
 	}
 	old := s.deleteStdioClientLocked(name)
-	client := newMCPStdioClientWithOpenAIForm(config, openAIForm)
+	client := newMCPStdioClientWithFeatures(config, openAIForm, userVerification)
 	client.authChanges = authChanges
 	s.stdioClients[name] = &cachedMCPStdioClient{key: key, client: client, startupTimeout: config.StartupTimeout}
 	s.mu.Unlock()
@@ -3044,6 +3054,43 @@ func (s *MCPService) elicitationHandler() MCPElicitationHandler {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.elicitation
+}
+
+// elicitationHandlerForServer restricts user verification to the host-owned
+// apps MCP server (Rust #43524). Other registrations cancel verification
+// before the client is prompted, even when they reuse the apps server name.
+func (s *MCPService) elicitationHandlerForServer(serverName string) MCPElicitationHandler {
+	handler := s.elicitationHandler()
+	if handler == nil || s.serverAllowsUserVerification(serverName) {
+		return handler
+	}
+	return MCPElicitationHandlerFunc(func(ctx context.Context, request *MCPElicitationRequest) (*MCPElicitationResponse, error) {
+		if IsUserVerificationElicitation(request) {
+			return &MCPElicitationResponse{Action: MCPElicitationActionCancel}, nil
+		}
+		return handler.HandleMCPElicitation(ctx, request)
+	})
+}
+
+func (s *MCPService) serverAllowsUserVerification(serverName string) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.serverAllowsUserVerificationLocked(serverName)
+}
+
+func (s *MCPService) serverAllowsUserVerificationLocked(serverName string) bool {
+	return mcpServerAllowsUserVerification(s.servers, serverName, s.openAIForm)
+}
+
+func mcpServerAllowsUserVerification(servers map[string]MCPServerStatus, serverName string, openAIForm bool) bool {
+	if !openAIForm {
+		return false
+	}
+	status, ok := servers[strings.TrimSpace(serverName)]
+	return ok && status.hostOwnedApps
 }
 
 // ElicitationHandler returns the currently installed MCP elicitation handler.

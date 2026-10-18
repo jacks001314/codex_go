@@ -56,6 +56,7 @@ type stdioClient struct {
 	pending                            map[int64]*stdioPendingCall
 	pendingOrder                       []int64
 	openAIForm                         bool
+	userVerification                   bool
 	protocolMode                       MCPProtocolMode
 	supportsSandboxStateMetaCapability bool
 	// elicitationCancellations remembers server cancellations for this
@@ -258,8 +259,18 @@ func newMCPStdioClient(config *ServerConfig) *stdioClient {
 }
 
 func newMCPStdioClientWithOpenAIForm(config *ServerConfig, openAIForm bool) *stdioClient {
+	return newMCPStdioClientWithFeatures(config, openAIForm, false)
+}
+
+func newMCPStdioClientWithFeatures(config *ServerConfig, openAIForm bool, userVerification bool) *stdioClient {
 	cloned := cloneServerConfig(config)
-	return &stdioClient{config: &cloned, nextID: 1, openAIForm: openAIForm, protocolMode: cloned.ProtocolMode}
+	return &stdioClient{
+		config:           &cloned,
+		nextID:           1,
+		openAIForm:       openAIForm,
+		userVerification: userVerification,
+		protocolMode:     cloned.ProtocolMode,
+	}
 }
 
 func (c *stdioClient) Call(method string, params any, out any) error {
@@ -320,7 +331,7 @@ func (c *stdioClient) CallWithOptionsContext(ctx context.Context, options *stdio
 }
 
 func (c *stdioClient) doRequest(ctx context.Context, options *stdioCallOptions, method string, params any) (*stdioRPCResponse, error) {
-	params = mcpParamsWithProtocolMetadataAndAuthChange(params, c.protocolModeSnapshot(), c.openAIForm, c.authChanges != nil)
+	params = mcpParamsWithProtocolMetadataAndFeatures(params, c.protocolModeSnapshot(), c.openAIForm, c.authChanges != nil, c.userVerification)
 	cmd := c.currentCommand()
 	id := c.nextRequestID()
 	pending := &stdioPendingCall{
@@ -505,7 +516,7 @@ func (c *stdioClient) startAndInitialize(ctx context.Context, options *stdioCall
 		c.mu.Unlock()
 	}
 
-	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParamsWithAuthChange(c.openAIForm, c.authChanges != nil))
+	response, err := c.doRequest(ctx, options, "initialize", mcpClientInitializeParamsWithFeatures(c.openAIForm, c.authChanges != nil, c.userVerification))
 	if err != nil {
 		_ = c.Close()
 		return decorateMCPStdioError(err, stderr)
@@ -1027,9 +1038,13 @@ func mcpClientInitializeParams(openAIForm bool) map[string]any {
 }
 
 func mcpClientInitializeParamsWithAuthChange(openAIForm bool, advertiseAuthChange bool) map[string]any {
+	return mcpClientInitializeParamsWithFeatures(openAIForm, advertiseAuthChange, false)
+}
+
+func mcpClientInitializeParamsWithFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool) map[string]any {
 	return map[string]any{
 		"protocolVersion": defaultMCPProtocol,
-		"capabilities":    mcpClientCapabilitiesWithAuthChange(openAIForm, advertiseAuthChange),
+		"capabilities":    mcpClientCapabilitiesWithFeatures(openAIForm, advertiseAuthChange, userVerification),
 		"clientInfo": map[string]string{
 			"name":    "codex-go",
 			"version": "go-port",

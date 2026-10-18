@@ -699,11 +699,12 @@ func EnsureWorkspaceAccountAllowed(expected []string, accountID string) error {
 }
 
 type ChatGPTJWTClaims struct {
-	AccountID string
-	Email     string
-	PlanType  string
-	UserID    string
-	FedRAMP   bool
+	AccountID     string
+	AccountUserID string
+	Email         string
+	PlanType      string
+	UserID        string
+	FedRAMP       bool
 }
 
 func ChatGPTClaimsFromJWT(jwt string) *ChatGPTJWTClaims {
@@ -742,6 +743,9 @@ func ChatGPTClaimsFromJWT(jwt string) *ChatGPTJWTClaims {
 			claims.UserID = value
 			break
 		}
+	}
+	if value := firstStringClaim(claimMaps, "chatgpt_account_user_id"); value != "" {
+		claims.AccountUserID = value
 	}
 	for _, key := range []string{"is_fedramp_account", "chatgpt_account_is_fedramp"} {
 		if value, ok := firstBoolClaim(claimMaps, key); ok {

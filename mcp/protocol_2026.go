@@ -113,15 +113,25 @@ func mcpClientCapabilities(openAIForm bool) map[string]any {
 // offers the experimental auth-change capability when a source is attached
 // (Rust #43428).
 func mcpClientCapabilitiesWithAuthChange(openAIForm bool, advertiseAuthChange bool) map[string]any {
+	return mcpClientCapabilitiesWithFeatures(openAIForm, advertiseAuthChange, false)
+}
+
+// mcpClientCapabilitiesWithFeatures mirrors Rust #43524: user verification is
+// advertised only to the host-owned apps MCP server.
+func mcpClientCapabilitiesWithFeatures(openAIForm bool, advertiseAuthChange bool, userVerification bool) map[string]any {
 	capabilities := map[string]any{
 		"roots": map[string]any{"listChanged": false},
 	}
 	if openAIForm {
+		elicitation := map[string]any{"form": map[string]any{}}
+		if userVerification {
+			elicitation["userVerification"] = map[string]any{}
+		}
 		capabilities["extensions"] = map[string]any{
 			// Rust #41447 advertises the umbrella elicitation form capability
 			// alongside the legacy openai/form extension.
 			"openai/form":        map[string]any{},
-			"openai/elicitation": map[string]any{"form": map[string]any{}},
+			"openai/elicitation": elicitation,
 		}
 	}
 	if advertiseAuthChange {
@@ -135,6 +145,10 @@ func mcpParamsWithProtocolMetadata(params any, mode MCPProtocolMode, openAIForm 
 }
 
 func mcpParamsWithProtocolMetadataAndAuthChange(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool) any {
+	return mcpParamsWithProtocolMetadataAndFeatures(params, mode, openAIForm, advertiseAuthChange, false)
+}
+
+func mcpParamsWithProtocolMetadataAndFeatures(params any, mode MCPProtocolMode, openAIForm bool, advertiseAuthChange bool, userVerification bool) any {
 	if mode != MCPProtocol20260728 {
 		return params
 	}
@@ -152,7 +166,7 @@ func mcpParamsWithProtocolMetadataAndAuthChange(params any, mode MCPProtocolMode
 	}
 	meta[mcpProtocolVersionMetadataKey] = modernMCPProtocol
 	meta[mcpClientInfoMetadataKey] = map[string]string{"name": "codex-go", "version": "go-port"}
-	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithAuthChange(openAIForm, advertiseAuthChange)
+	meta[mcpClientCapabilitiesMetadataKey] = mcpClientCapabilitiesWithFeatures(openAIForm, advertiseAuthChange, userVerification)
 	out["_meta"] = meta
 	return out
 }
