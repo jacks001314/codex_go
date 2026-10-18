@@ -7851,9 +7851,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: set_thread_daybreak_enabled"
+        "Round 483 (audit + regression): Session.Metadata.DaybreakEnabled is serialized in the thread record, surfaced by BuildThread/thread responses, and patched by thread/metadata/update without touching turn access-program fields. Store.ForkRecord clones the metadata (independent copy), and cold reload/new-router resume preserve the value. Added tests for update -> cold reload -> fork -> source update isolation -> resume, plus metadata-only persistence on a thread without a first turn. Tests: go test ./appserver ./session -run 'Daybreak' -count=1"
       ]
     },
     {
