@@ -26116,9 +26116,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 1/8; needs review: CenteredView, DialogOverlay, ViewPresentation, ViewStack, backdrop_with_options"
+        "Go renders modals as a replacement bottom-pane section rather than a centered dialog over the retained composer/parent picker; there is no ViewStack/DialogOverlay/backdrop composition or shared centered dialog sizing/cursor routing. Confirmation text and input ownership exist, but the retained-backdrop presentation is still unported."
       ]
     },
     {

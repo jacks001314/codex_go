@@ -2089,6 +2089,9 @@ green.
   with prefixes, indentation, combining characters, and trailing blanks intact.
 - `#50503` is complete: Enter accepts Find results, Ctrl+P/Ctrl+N navigate, and
   Escape cancels editing or returns to latest after acceptance.
+- `#50504` remains partial: confirmations still replace the bottom-pane section
+  instead of rendering as centered dialogs over a retained composer/picker
+  backdrop.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
