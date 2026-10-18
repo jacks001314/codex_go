@@ -13035,9 +13035,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ManagedProxyRouting, managed_proxy_routing"
+        "Round 507 (audit): N/A by architecture. Go's managed proxy always reserves dedicated loopback HTTP and SOCKS listeners and exposes their addresses to the sandbox; there is no shared SID-attributed ingress mode, so the Rust SharedIngress/DedicatedListeners selector has no Go counterpart. Tests: go test ./network -run 'TestProxyManagedNetwork|TestStandaloneProxyWait' -count=1"
       ]
     },
     {
