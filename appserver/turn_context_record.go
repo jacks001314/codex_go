@@ -136,3 +136,17 @@ func (r *RuntimeRouter) runtimePreviousTurnContext(threadID string, record *sess
 	}
 	return turnContext, true
 }
+
+// threadRecordReasoningEffort returns the effort recorded by the thread's most
+// recent turn context. Rust #51884 reports the forked thread's effective
+// reasoning effort from the inherited configuration snapshot.
+func threadRecordReasoningEffort(record *session.Record) string {
+	if record == nil || len(record.Metadata.TurnContext) == 0 {
+		return ""
+	}
+	var turnContext rollout.TurnContextRecord
+	if err := json.Unmarshal(record.Metadata.TurnContext, &turnContext); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(turnContext.Effort)
+}

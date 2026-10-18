@@ -5049,6 +5049,9 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	if sourceRecord != nil && sourceRecord.Archived {
 		return nil, true, threadResumeArchivedError(sourceRecord.ID)
 	}
+	if params.ExperimentalPredictionMode && (r.threads == nil || !r.threads.HasLiveThread(session.ThreadID(sourceID))) {
+		return nil, true, jsonRPCInvalidRequest("`experimentalPredictionMode` requires a loaded parent")
+	}
 	if unmaterializedThread(sourceRecord) && !threadUsesPaginatedHistory(sourceRecord) {
 		return nil, true, jsonRPCInvalidRequest(fmt.Sprintf("no rollout found for thread id %s", sourceRecord.ID))
 	}
@@ -5072,6 +5075,9 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 	record, err := r.services.ThreadRouter.store.ForkRecord(sourceRecord, forkOptions)
 	if err != nil {
 		return nil, true, threadForkRecordError(err)
+	}
+	if params.ExperimentalPredictionMode {
+		enableThreadConfigFeatureOverride(record, "reasoning_effort_override")
 	}
 	r.forkGuardianReviewHistory(sourceRecord, string(record.ID), params.BeforeTurnID, params.LastTurnID, params.LastN)
 	if !params.Ephemeral {
@@ -5111,10 +5117,45 @@ func (r *RuntimeRouter) handleEphemeralThreadForkRuntime(request *Request) (*Thr
 		ModelProvider:           record.Metadata.ModelProvider,
 		Sandbox:                 params.Sandbox,
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
+		ReasoningEffort:         stringPtrIfNotEmpty(threadRecordReasoningEffort(record)),
 		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 	}, true, nil
+}
+
+// enableThreadConfigFeatureOverride records one enabled feature in a thread's
+// effective configuration overrides without disturbing the inherited ones.
+func enableThreadConfigFeatureOverride(record *session.Record, feature string) {
+	feature = strings.TrimSpace(feature)
+	if record == nil || feature == "" {
+		return
+	}
+	record.Metadata.Extra = ensureRecordExtra(record.Metadata.Extra)
+	// Store overrides in their dotted form so the order in which
+	// applyRuntimeConfigOverrides walks the map cannot drop inherited features.
+	overrides := map[string]any{}
+	flattenThreadConfigOverrides("", threadRecordConfigOverrides(record), overrides)
+	overrides["features."+feature] = true
+	record.Metadata.Extra["config"] = overrides
+}
+
+func flattenThreadConfigOverrides(prefix string, values map[string]any, out map[string]any) {
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		path := key
+		if prefix != "" {
+			path = prefix + "." + key
+		}
+		if nested, ok := value.(map[string]any); ok {
+			flattenThreadConfigOverrides(path, nested, out)
+			continue
+		}
+		out[path] = value
+	}
 }
 
 func (r *RuntimeRouter) rejectEphemeralThreadDelete(request *Request) error {
@@ -6675,6 +6716,7 @@ func (r *RuntimeRouter) handleActiveThreadForkRuntime(request *Request) (any, bo
 		ModelProvider:           record.Metadata.ModelProvider,
 		Sandbox:                 params.Sandbox,
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
+		ReasoningEffort:         stringPtrIfNotEmpty(threadRecordReasoningEffort(record)),
 		RuntimeWorkspaceRoots:   threadRecordRuntimeWorkspaceRoots(record, record.Metadata.CWD, nil),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),

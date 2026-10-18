@@ -2003,6 +2003,10 @@ type ThreadForkParams struct {
 	Ephemeral             bool             `json:"ephemeral,omitempty"`
 	ExcludeTurns          bool             `json:"excludeTurns,omitempty"`
 	DeferGoalContinuation bool             `json:"deferGoalContinuation,omitempty"`
+	// ExperimentalPredictionMode forks an ephemeral thread that inherits the
+	// loaded parent's effective context and request settings (Rust #51884).
+	// Configuration overrides and history cutoffs are rejected in this mode.
+	ExperimentalPredictionMode bool `json:"experimentalPredictionMode,omitempty"`
 }
 
 func (p *ThreadForkParams) UnmarshalJSON(data []byte) error {
@@ -2036,10 +2040,42 @@ func (p *ThreadForkParams) Validate() error {
 	if strings.TrimSpace(p.LastTurnID) != "" && strings.TrimSpace(p.BeforeTurnID) != "" {
 		return jsonRPCInvalidRequest("`beforeTurnId` cannot be combined with `lastTurnId`")
 	}
+	if p.ExperimentalPredictionMode {
+		if p.predictionModeHasConfigOverrides() {
+			return jsonRPCInvalidRequest("`experimentalPredictionMode` cannot be combined with configuration overrides")
+		}
+		if !p.Ephemeral {
+			return jsonRPCInvalidRequest("`experimentalPredictionMode` requires `ephemeral: true`")
+		}
+		if p.Path != nil || strings.TrimSpace(p.LastTurnID) != "" || strings.TrimSpace(p.BeforeTurnID) != "" {
+			return jsonRPCInvalidRequest("`experimentalPredictionMode` requires a thread id without a path or turn cutoff")
+		}
+	}
 	if err := validateThreadRuntimeWorkspaceRoots(p.RuntimeWorkspaceRoots); err != nil {
 		return err
 	}
 	return nil
+}
+
+// predictionModeHasConfigOverrides mirrors Rust #51884's override check: a
+// prediction fork inherits the parent's effective configuration, so every
+// per-request configuration override is rejected.
+func (p *ThreadForkParams) predictionModeHasConfigOverrides() bool {
+	if p == nil {
+		return false
+	}
+	return p.Model != nil ||
+		p.ModelProvider != nil ||
+		p.ServiceTier != nil || p.ServiceTierSet ||
+		p.CWD != nil ||
+		p.RuntimeWorkspaceRoots != nil ||
+		p.ApprovalPolicy != nil ||
+		p.ApprovalsReviewer != nil ||
+		p.Sandbox != nil ||
+		p.Permissions != nil ||
+		p.BaseInstructions != nil ||
+		p.DeveloperInstructions != nil ||
+		len(p.Config) > 0
 }
 
 type ThreadForkResponse struct {

@@ -2516,7 +2516,7 @@ ebe18fc982c854f4385d0a7ac3bda4872afb8ab6	40502	Collapse home paths in AGENTS.md 
 ec0cfa5da8e9fac464b94cb36396904546eee4e8	49800	Allow cleanup of replay-only side conversations with missing threads (#49800)	2026-09-30	tui	0	0		0	0	not_applicable	
 ec4d27ae8088e67785fb6d913462c8433f99dd47	47539	Test interrupted one-shot command launch failure persistence (#47539)	2026-09-23	core	0	0		0	0	not_applicable	
 ec512d23470c6afe30c975d570d181f34813b9a2	44040	Harden credential handling in shell snapshots and replay (#44040)	2026-09-09	sandbox	11	2	0.18	0	0	audit_pending	CapturedArray,ExportValue,brokered_credential_marker_env_keys,brokered_credential_value_env_keys,literal_word_bytes,literal_words,protected_startup_env,restore_fail_open_aliases,startup_credential_keys
-ec8251c545a1aeca985b6a0db5517cd8e1b34b35	51884	Add experimental prediction forks that inherit parent context (#51884)	2026-10-07	tui	2	1	0.50	0	0	audit_pending	fork_options_from_parent
+ec8251c545a1aeca985b6a0db5517cd8e1b34b35	51884	Add experimental prediction forks that inherit parent context (#51884)	2026-10-07	appserver	2	2	1.00	0	0	complete
 ec84e692611d50d9c79c4bdad0a5785013975a72	42590	Harden the macOS sandbox against terminal input injection (#42590)	2026-09-03	sandbox	0	0		0	0	not_applicable	
 ec9620c231396895194329c410f3ec360b4cadef	41243	Add configurable gating for the sleep tool (#41243)	2026-08-28	config	2	2	1.00	0	0	complete	
 eca63f0803aa334cd45908743b4696dec893b6ed	44536	Move Guardian reviewer settings and execution into the reviewer crate (#44536)	2026-09-10	guardian	8	0	0.00	0	0	implementation_pending	GuardianReviewSession,ReviewerConfigOverrides,ReviewerRuntime,ReviewerTurn,into_request,reviewer_config_overrides,start_review_turn,wait_for_guardian_review

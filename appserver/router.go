@@ -2383,6 +2383,7 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 		ModelProvider:           record.Metadata.ModelProvider,
 		Sandbox:                 params.Sandbox,
 		ServiceTier:             stringPtrIfNotEmpty(record.Metadata.ServiceTier),
+		ReasoningEffort:         stringPtrIfNotEmpty(threadRecordReasoningEffort(record)),
 		RuntimeWorkspaceRoots:   runtimeWorkspaceRoots,
 		DisabledPluginIDs:       disabledPluginIDsFromRecord(record),
 		ActivePermissionProfile: activePermissionProfileFromID(params.Permissions),
@@ -2390,6 +2391,11 @@ func (r *Router) handleThreadFork(request *Request) (*ThreadForkResponse, error)
 }
 
 func validatePaginatedForkParams(source *session.Record, params *ThreadForkParams) error {
+	// Rust #51884 prediction forks inherit the parent's persisted history even
+	// though the fork itself is ephemeral.
+	if params != nil && params.ExperimentalPredictionMode {
+		return nil
+	}
 	if threadUsesPaginatedHistory(source) && params != nil && params.Ephemeral && !params.ExcludeTurns {
 		return jsonRPCInvalidRequest("ephemeral paginated thread/fork requires `excludeTurns: true`")
 	}
