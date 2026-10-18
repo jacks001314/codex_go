@@ -37,6 +37,10 @@ type ToolDispatcherOptions struct {
 	// response-content budget; Code Mode calls ignore it because they receive
 	// typed results.
 	Truncation *utils.TruncationPolicy
+	// TruncationForModel resolves the output-truncation policy for the model
+	// that produced the current sampling step (Rust #44243). SetStepModel
+	// replaces Truncation between steps.
+	TruncationForModel func(model string) *utils.TruncationPolicy
 	// OnToolOutputExternalContext runs after a tool returns an output that
 	// declares external context (Rust `handle_any_tool` marking the thread's
 	// memory mode polluted when `memories.disable_on_external_context`).
@@ -112,6 +116,7 @@ type ToolDispatcher struct {
 	toolMode                    string
 	instantInterrupt            bool
 	truncation                  *utils.TruncationPolicy
+	truncationForModel          func(model string) *utils.TruncationPolicy
 	onToolOutputExternalContext func(ctx context.Context, invocation *tool.Invocation, output *tool.Output)
 	clockMu                     sync.Mutex
 	// preparedDirectCalls/permittedDirectCalls carry the direct-call records
@@ -347,8 +352,20 @@ func NewToolDispatcher(options *ToolDispatcherOptions) *ToolDispatcher {
 		toolMode:                    strings.TrimSpace(options.ToolMode),
 		instantInterrupt:            options.InstantInterrupt,
 		truncation:                  options.Truncation,
+		truncationForModel:          options.TruncationForModel,
 		onToolOutputExternalContext: options.OnToolOutputExternalContext,
 	}
+}
+
+// SetStepModel applies the producing model's output-truncation policy to the
+// tools of the current sampling step (Rust #44243). The agent loop drains each
+// step's tools before asking for the next step's settings, so the policy is
+// step-scoped even when a turn switches models.
+func (d *ToolDispatcher) SetStepModel(modelID string) {
+	if d == nil || d.truncationForModel == nil {
+		return
+	}
+	d.truncation = d.truncationForModel(strings.TrimSpace(modelID))
 }
 
 // BeginStepPreempt mirrors Rust #48135's `run_sampling_request`: when the

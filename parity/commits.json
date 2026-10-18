@@ -10695,9 +10695,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: capture_current_model_info"
+        "Round 659 (partial): ToolDispatcher resolves output truncation from the current sampling step's model, and the agent loop updates it after each step settings refresh, so a mid-turn model switch no longer applies the turn-start model's truncation budget to tool results. Added TestAgentLoopUsesStepModelForToolTruncationLikeRust. Remaining: Go records history through app-server item slices rather than Rust's explicit model_info parameter throughout the record APIs; image preparation/history recording is not fully step-parameterized. Tests: go test ./turn -run 'StepModelForToolTruncation|RefreshesStepSettings|BuildsStepInputItems' -count=1; go vet ./turn"
       ]
     },
     {

@@ -301,6 +301,7 @@ func (r *Runtime) Run(ctx context.Context, request *AgentLoopRequest) (*AgentLoo
 			ToolMode:                    loopRequest.ToolMode,
 			InstantInterrupt:            r.instantInterrupt,
 			Truncation:                  r.truncationPolicy(loopRequest.Model),
+			TruncationForModel:          r.truncationPolicy,
 			OnToolOutputExternalContext: r.toolOutputExternalContextHandler(loopRequest.ThreadID),
 		}),
 		MaxTurns:               r.maxTurns,

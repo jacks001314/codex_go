@@ -362,6 +362,7 @@ func (l *AgentLoop) Run(ctx context.Context, request *AgentLoopRequest) (*AgentL
 				clientMetadata = transformClientMetadata(steer.ClientMetadata, request.ClientMetadataTransform)
 			}
 		}
+		l.dispatcher.SetStepModel(stepModel)
 		if request.StepInputItems != nil {
 			items, err := request.StepInputItems(ctx, iteration, stepModel, stepReasoningEffort)
 			if err != nil {

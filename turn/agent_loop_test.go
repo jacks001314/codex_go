@@ -11,6 +11,7 @@ import (
 
 	"codex_go/model"
 	"codex_go/tool"
+	"codex_go/utils"
 )
 
 func TestAgentLoopRunsToolsAndContinuesSampling(t *testing.T) {
@@ -622,6 +623,26 @@ func (a *failAfterToolLoopAgent) Run(_ context.Context, request *model.AgentRequ
 	return &model.AgentResponse{ResponseID: "resp-done", Message: "done", Items: []model.AgentItem{{Type: "agent_message", Text: "done"}}}, nil
 }
 
+type toolPerStepLoopAgent struct {
+	requests []model.AgentRequest
+}
+
+func (a *toolPerStepLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
+	a.requests = append(a.requests, *request)
+	if len(a.requests) <= 2 {
+		callID := fmt.Sprintf("call-%d", len(a.requests))
+		return &model.AgentResponse{
+			ResponseID: "resp-" + callID,
+			Items:      []model.AgentItem{{Type: "function_call", CallID: callID, Name: "echo", Arguments: `{}`}},
+		}, nil
+	}
+	return &model.AgentResponse{
+		ResponseID: "resp-final",
+		Message:    "done",
+		Items:      []model.AgentItem{{Type: "agent_message", Text: "done"}},
+	}, nil
+}
+
 func (a *followUpLoopAgent) Run(_ context.Context, request *model.AgentRequest) (*model.AgentResponse, error) {
 	a.requests = append(a.requests, *request)
 	usage := model.AgentUsage{TotalTokens: 100}
@@ -936,6 +957,51 @@ func TestAgentLoopRefreshesStepSettingsLikeRust(t *testing.T) {
 	}
 	if stepCalls != 1 {
 		t.Fatalf("step settings callbacks = %d, want 1 (only after the first step)", stepCalls)
+	}
+}
+
+// Rust #44243: a mid-turn model switch must use the producing step's
+// output-truncation policy when recording tool results.
+func TestAgentLoopUsesStepModelForToolTruncationLikeRust(t *testing.T) {
+	agent := &toolPerStepLoopAgent{}
+	registry := tool.NewRegistry()
+	var limits []int
+	if err := registry.Register(tool.NewExecutorFunc(tool.Spec{Name: tool.PlainName("echo")}, func(_ context.Context, invocation *tool.Invocation) (*tool.Output, error) {
+		if invocation.Truncation == nil {
+			return nil, errors.New("missing step truncation policy")
+		}
+		limits = append(limits, invocation.Truncation.Limit)
+		return &tool.Output{Success: true, Body: "tool result"}, nil
+	})); err != nil {
+		t.Fatalf("register echo: %v", err)
+	}
+	dispatcher := NewToolDispatcher(&ToolDispatcherOptions{
+		Router: tool.NewRouter(registry),
+		TruncationForModel: func(modelID string) *utils.TruncationPolicy {
+			switch strings.TrimSpace(modelID) {
+			case "gpt-initial":
+				return &utils.TruncationPolicy{Limit: 11}
+			case "gpt-updated":
+				return &utils.TruncationPolicy{Limit: 22}
+			default:
+				return nil
+			}
+		},
+	})
+	loop := NewAgentLoop(&AgentLoopOptions{Agent: agent, Dispatcher: dispatcher, MaxTurns: 4})
+
+	_, err := loop.Run(context.Background(), &AgentLoopRequest{
+		Prompt: "run echo twice",
+		Model:  "gpt-initial",
+		StepSettings: func() *AgentStepSettings {
+			return &AgentStepSettings{Model: "gpt-updated"}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(limits) != 2 || limits[0] != 11 || limits[1] != 22 {
+		t.Fatalf("tool truncation limits = %#v, want [11 22]", limits)
 	}
 }
 
