@@ -4177,6 +4177,10 @@ func (r *RuntimeRouter) clearRuntimeSeedRolloutMarker(record *session.Record) {
 }
 
 func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, turnID string, message string, replacement []session.Item, now time.Time) error {
+	return r.appendRuntimeCompactedWithResponse(threadID, turnID, message, replacement, "", now)
+}
+
+func (r *RuntimeRouter) appendRuntimeCompactedWithResponse(threadID string, turnID string, message string, replacement []session.Item, compactionResponseID string, now time.Time) error {
 	items := make([]rollout.Item, 0, len(replacement))
 	for i := range replacement {
 		item := rollout.ItemFromSessionItem(&replacement[i])
@@ -4195,7 +4199,11 @@ func (r *RuntimeRouter) appendRuntimeCompacted(threadID string, turnID string, m
 	windowNumber := uint64PtrAppserver(r.windowNumberForThread(threadID))
 	return r.withRuntimeRollout(threadID, func(recorder *rollout.Recorder) error {
 		resume := checkpointResumeMetadata(recorder.Path(), turnID)
-		return recorder.AppendCompactedWithResumeMetadata(message, items, retained, resume, windowNumber, now)
+		var latest *rollout.TokenUsageRecord
+		if lines, _, loadErr := rollout.Load(recorder.Path()); loadErr == nil {
+			latest = rollout.LatestTokenUsageRecord(lines)
+		}
+		return recorder.AppendCompactedWithCheckpoint(message, items, retained, resume, windowNumber, compactionResponseID, latest, now)
 	})
 }
 
@@ -6459,7 +6467,7 @@ func (r *RuntimeRouter) compactThreadWithHistory(ctx context.Context, params *ru
 	if err := r.runtimeSaveThreadRecord(record); err != nil {
 		return nil, nil, err
 	}
-	_ = r.appendRuntimeCompacted(request.ThreadID, request.TurnID, compacted.Summary, record.Items, now)
+	_ = r.appendRuntimeCompactedWithResponse(request.ThreadID, request.TurnID, compacted.Summary, record.Items, compacted.ResponseID, now)
 	r.notifyContextCompactionItemCompleted(request.ThreadID, request.TurnID, compactionItem)
 	r.emitCompactionAnalyticsEvent(ctx, params.ConnectionID, record, request, compacted, nil, startedAt, now, params.ActiveContextTokensBefore)
 	// Rust c2bcb9a26b: restart Guardian review sessions after parent history

@@ -5030,9 +5030,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 691 (partial): Go now writes durable token_usage_record rollout lines for every completed response with thread/turn/session/root-turn/response attribution, per-response usage, running turn usage, and running thread usage derived from the turn baseline. Rollout readers expose ordered records and the latest record. Remaining: embedding the latest record plus compaction response ID directly in compaction checkpoint payloads rather than relying on turn metadata. Tests: go test ./appserver -run 'TokenUsageRecordLikeRust|TestRuntimeRouterThreadForkRestoredTokenUsagePrecedesStarted' -count=1; go test ./rollout -count=1"
+        "Round 691 (implementation): durable token_usage_record lines carry thread/turn/session/root-turn/response attribution plus per-response, running turn, and running thread usage. Compaction checkpoints now embed compaction_response_id and latest_token_usage_record with Rust-compatible fields (including explicit nulls); resume restores accumulated totals from the existing token_usage_info metadata while fork tests retain child isolation and restored-display ordering. Tests: go test ./appserver -run 'TokenUsageRecordLikeRust|TestRuntimeRouterThreadForkRestoredTokenUsagePrecedesStarted' -count=1; go test ./rollout -run 'CompactionCheckpointCarries|TokenUsage' -count=1; go test ./rollout -count=1"
       ]
     },
     {

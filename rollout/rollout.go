@@ -265,6 +265,11 @@ type CompactedEvent struct {
 	// so a resumed thread can still show its original instructions to the
 	// Guardian reviewer.
 	RetainedContext *retainedctx.RetainedContext `json:"retained_context,omitempty"`
+	// CompactionResponseID and LatestTokenUsageRecord mirror Rust #41912's
+	// checkpoint fields. They serialize as null when absent, matching the Rust
+	// wire shape.
+	CompactionResponseID   *string           `json:"compaction_response_id"`
+	LatestTokenUsageRecord *TokenUsageRecord `json:"latest_token_usage_record"`
 }
 
 // TokenUsageRecord mirrors Rust RolloutItem::TokenUsageRecord (#41912): one
@@ -1090,6 +1095,12 @@ func (r *Recorder) AppendCompactedWithContext(message string, replacement []Item
 // (`selectAttributionCheckpoint`), so the window number is part of the contract,
 // not decoration.
 func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, now time.Time) error {
+	return r.AppendCompactedWithCheckpoint(message, replacement, retained, resume, windowNumber, "", nil, now)
+}
+
+// AppendCompactedWithCheckpoint also persists the compaction response identity
+// and latest response usage record (Rust #41912).
+func (r *Recorder) AppendCompactedWithCheckpoint(message string, replacement []Item, retained *retainedctx.RetainedContext, resume *CompactionResumeMetadata, windowNumber *uint64, compactionResponseID string, latestTokenUsage *TokenUsageRecord, now time.Time) error {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -1120,6 +1131,10 @@ func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement
 			historyMetadata = append(historyMetadata, json.RawMessage(`{}`))
 		}
 	}
+	var compactionID *string
+	if value := strings.TrimSpace(compactionResponseID); value != "" {
+		compactionID = &value
+	}
 	payloadValues := struct {
 		Message                    string                       `json:"message"`
 		ReplacementHistory         []json.RawMessage            `json:"replacement_history,omitempty"`
@@ -1127,6 +1142,8 @@ func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement
 		RetainedContext            *retainedctx.RetainedContext `json:"retained_context,omitempty"`
 		WindowNumber               *uint64                      `json:"window_number,omitempty"`
 		ResumeMetadata             *CompactionResumeMetadata    `json:"resume_metadata,omitempty"`
+		CompactionResponseID       *string                      `json:"compaction_response_id"`
+		LatestTokenUsageRecord     *TokenUsageRecord            `json:"latest_token_usage_record"`
 	}{
 		Message:                    strings.TrimSpace(message),
 		ReplacementHistory:         history,
@@ -1134,6 +1151,8 @@ func (r *Recorder) AppendCompactedWithResumeMetadata(message string, replacement
 		RetainedContext:            retained,
 		WindowNumber:               windowNumber,
 		ResumeMetadata:             resume,
+		CompactionResponseID:       compactionID,
+		LatestTokenUsageRecord:     latestTokenUsage,
 	}
 	payload, err := json.Marshal(payloadValues)
 	if err != nil {
