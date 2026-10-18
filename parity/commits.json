@@ -5990,9 +5990,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: handle_backtrack_preview_event, handle_legacy_transcript_event, handle_shared_app_keymap_action"
+        "N/A by architecture (audit): upstream 0b509e930e (#42199) is a Rust input-routing refactor that centralizes app keymap actions and moves read-only transcript handling. Go already has the equivalent split in tui/tea/message_router.go and read_only_thread.go, and existing tests cover read-only drafts, backtrack selection, global chords, and unavailable-thread keys. The commit introduces no new observable contract beyond the behavior already covered."
       ]
     },
     {
