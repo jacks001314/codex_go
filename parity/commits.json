@@ -2064,9 +2064,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: log_commit_tick"
+        "Audited upstream a95391160a (#40644): already equivalent. Go animation frames are produced by Bubble Tea Tick commands processed in the model's foreground Update loop, so there is no background animation thread that can accumulate stale CommitTick events; Advance/EnsureRunning also guarantee one tick loop and Pause stops scheduling on blur. The Rust-only log_commit_tick session-log helper has no Go carrier, but the pacing, missed-tick avoidance, and stop/replace behavior are provided by the foreground tick model."
       ]
     },
     {
