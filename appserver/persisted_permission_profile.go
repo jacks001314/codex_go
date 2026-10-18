@@ -91,6 +91,19 @@ func hasExplicitPermissionConfigOverride(values map[string]any) bool {
 	return false
 }
 
+func hasPermissionProfileConfigOverride(values map[string]any) bool {
+	for key, value := range values {
+		if value == nil {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if strings.EqualFold(key, "permission_profile") || strings.EqualFold(key, "default_permissions") {
+			return true
+		}
+	}
+	return false
+}
+
 // persistedPermissionProfileIsPortable rejects snapshots that describe an
 // executor's enforcement boundary or materialized filesystem grants. Those
 // grants may outlive the workspace they came from and are not thread defaults
