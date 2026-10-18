@@ -46,6 +46,8 @@ const (
 	ServerNotificationModelVerification                   = "model_verification"
 	ServerNotificationModelSafetyBufferingUpdated         = "model_safety_buffering_updated"
 	ServerNotificationTurnModerationMetadata              = "turn_moderation_metadata"
+	ServerNotificationAuthRecoveryStarted                 = "auth_recovery_started"
+	ServerNotificationAuthRecoveryCompleted               = "auth_recovery_completed"
 	ServerNotificationThreadRealtimeStarted               = "thread_realtime_started"
 	ServerNotificationThreadRealtimeItemAdded             = "thread_realtime_item_added"
 	ServerNotificationThreadRealtimeItemStarted           = "thread_realtime_item_started"

@@ -516,6 +516,13 @@ type StatusMsg struct {
 	Status string
 }
 
+// AuthRecoveryMsg mirrors Rust's authentication recovery history entries:
+// started recovery is an info line, completion is a check-marked line.
+type AuthRecoveryMsg struct {
+	Completed bool
+	Message   string
+}
+
 // ModelRetryStatusMsg is a transient model transport status. Unlike warnings,
 // it is an Activity row and must not be persisted in conversation history.
 type ModelRetryStatusMsg struct {
@@ -3177,6 +3184,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		m.setStatus(msg.Status)
 		m.refreshTranscript()
 		return m, m.refreshStatusControlsCmd()
+	case AuthRecoveryMsg:
+		m.applyAuthRecoveryMessage(msg)
+		return m, nil
 	case ModelRetryStatusMsg:
 		if msg.Active {
 			m.retryActivityMessage = strings.TrimSpace(msg.Message)
@@ -5875,6 +5885,17 @@ func (m *Model) addInfoHistoryMessage(message string) {
 		return
 	}
 	m.Transcript.addInfoHistoryMessage(m.State, message, m.width)
+}
+
+func (m *Model) applyAuthRecoveryMessage(msg AuthRecoveryMsg) {
+	if m == nil || m.State == nil || strings.TrimSpace(msg.Message) == "" {
+		return
+	}
+	if msg.Completed {
+		m.addHistoryCell(historycell.NewPlainHistoryCell([]string{"✓ " + strings.TrimSpace(msg.Message)}))
+		return
+	}
+	m.addInfoHistoryMessage(msg.Message)
 }
 
 func (m *Model) addHistoryCell(cell historycell.HistoryCell) {

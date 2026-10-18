@@ -1031,6 +1031,13 @@ func (c *execStreamEventCollector) Warning(message string) {
 	c.emit(protocol.ItemCompleted(protocol.ErrorItem(fmt.Sprintf("warning-%d", c.warningCount), message)))
 }
 
+func (c *execStreamEventCollector) AuthRecovery(event model.ProviderAuthRecoveryEvent) {
+	if c == nil || c.sink == nil {
+		return
+	}
+	c.sink.emitAuthRecovery(event)
+}
+
 func (c *execStreamEventCollector) AssistantMessage(response *model.AgentResponse, _ int, hasToolCalls bool) {
 	if c == nil || response == nil || !hasToolCalls {
 		return
@@ -1204,6 +1211,17 @@ func (s *execEventSink) EmitTurnDiff(diff string) {
 	}
 }
 
+func (s *execEventSink) emitAuthRecovery(event model.ProviderAuthRecoveryEvent) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.human != nil {
+		s.human.HandleAuthRecovery(event)
+	}
+}
+
 // emitTurnDiffForExecution feeds one tool execution to the turn diff tracker and
 // renders the accumulated diff when the producer reports an update, mirroring
 // Rust's core ToolEmitter::ApplyPatch -> EventMsg::TurnDiff -> TurnDiffUpdated
@@ -1278,7 +1296,9 @@ func (r *Runner) runAgentTurn(ctx context.Context, req *Request, agent model.Age
 	run.ToolRouter = router
 	if run.StreamEvents != nil {
 		if responsesAgent, ok := agent.(*model.ResponsesAgentRunner); ok && responsesAgent != nil {
-			agent = responsesAgent.WithStreamHandler(run.StreamEvents.Handle)
+			responsesAgent = responsesAgent.WithStreamHandler(run.StreamEvents.Handle)
+			responsesAgent.AuthRecoveryHandler = run.StreamEvents.AuthRecovery
+			agent = responsesAgent
 		}
 	}
 	return turn.NewRuntime(&turn.RuntimeOptions{

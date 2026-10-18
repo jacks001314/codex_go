@@ -4874,6 +4874,18 @@ func (c *remoteAppServerTUIClient) handleNotification(message remoteAppServerMes
 			ShowBufferingUI: payload.ShowBufferingUI,
 			FasterModel:     payload.FasterModel,
 		})
+	case appserver.NotificationAuthRecoveryStarted, appserver.NotificationAuthRecoveryCompleted:
+		var payload appserver.AuthRecoveryNotification
+		if err := json.Unmarshal(message.Params, &payload); err != nil {
+			return err
+		}
+		if !c.notificationThreadIsActive(payload.ThreadID) {
+			return nil
+		}
+		c.send(codextea.AuthRecoveryMsg{
+			Completed: method == appserver.NotificationAuthRecoveryCompleted,
+			Message:   payload.Message,
+		})
 	case appserver.NotificationWindowsSandboxSetupCompleted:
 		var payload sandbox.WindowsSetupCompletedNotification
 		if err := json.Unmarshal(message.Params, &payload); err != nil {

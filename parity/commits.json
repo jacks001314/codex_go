@@ -3890,9 +3890,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: ProviderAuthRecoveryMessages, with_session_context"
+        "Bedrock provider-owned recovery emits turn-scoped started/completed progress with Rust's AWS lifecycle messages. app-server sends modelProvider/authRecoveryStarted and authRecoveryCompleted with thread/turn/provider/message; exec and TUI render the progress. Tests: go test ./model -run 'ProviderAuthRecovery' -count=1; go test ./appserver -run 'AuthRecoveryNotificationsAreTurnScoped' -count=1; go test ./exec -run 'AuthRecovery' -count=1; go test ./tui/tea -run 'AuthRecovery' -count=1"
       ]
     },
     {

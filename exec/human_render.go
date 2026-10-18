@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"codex_go/cli"
+	"codex_go/model"
 	"codex_go/protocol"
 )
 
@@ -126,6 +127,19 @@ func (h *execHumanRenderer) HandleTurnDiff(diff string) {
 		fmt.Fprintln(h.stderr, diff)
 	}
 	h.lastTurnDiff = diff
+}
+
+// HandleAuthRecovery mirrors Rust's EventProcessorWithHumanOutput arms for
+// modelProvider/authRecoveryStarted and authRecoveryCompleted (#41239).
+func (h *execHumanRenderer) HandleAuthRecovery(event model.ProviderAuthRecoveryEvent) {
+	if h == nil || h.stderr == nil || strings.TrimSpace(event.Message) == "" {
+		return
+	}
+	message := event.Message
+	if event.Phase == model.ProviderAuthRecoveryPhaseCompleted {
+		message = h.style(ansiGreen, message)
+	}
+	fmt.Fprintln(h.stderr, message)
 }
 
 func (h *execHumanRenderer) renderItemStarted(item protocol.ThreadItem) {
