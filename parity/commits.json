@@ -1260,9 +1260,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Windows sandbox policy keeps symbolic-root read access while exact and glob deny-read rules narrow it, preserves public/bundled-cache reads, applies deny-read ACLs, and continues sandboxing reads under full-disk-write profiles. Tests: go test ./sandbox -run 'Windows|DenyRead|Root' -count=1; go test ./sandbox/windowssandbox -run 'DenyRead|Root|ACL' -count=1"
       ]
     },
     {
@@ -3374,9 +3374,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Streamed Responses usage_metadata.amount is preserved through SSE and WebSocket completion/incomplete events and exposed as usageMetadata on rawResponse/completed, including null and empty-object distinctions. Tests: go test ./model -run 'UsageMetadataFromStreamEventData' -count=1; go test ./appserver -run 'RawResponseCompletedNotificationIncludesUsageMetadata|CacheWriteTokens' -count=1"
       ]
     },
     {
