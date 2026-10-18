@@ -30282,9 +30282,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Equivalent implementation present: exec-server processes retain buffered/delayed output after exit until the final collection poll observes the open stream and terminal state; only then is the background session removed. The replay/final-poll regression covers delayed output after exit, correct exit code, event consumption, and no surviving background session."
       ]
     },
     {
