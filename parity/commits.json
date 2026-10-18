@@ -30246,9 +30246,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/10; needs review: CompactedHistoryInstallation, CompactionPrefix, ResponsesHttpExecutor, auth_owner_generation, compaction_responses_metadata_for_window"
+        "Round 651 (parity backfill): the compaction prefix installer preserves later history and places initial context at the real user/agent or summary boundary; real-user/agent classification, context-window trimming, history fingerprints, and captured-window metadata are covered. Tests: go test ./compact ./appserver -run 'InstallCompactedHistoryPrefix|RealUserOrAgentMessage|TrimHistoryToContextWindow|CompactResponsesClientMetadata' -count=1"
       ]
     },
     {
@@ -30258,9 +30258,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/10; needs review: AsyncCompactionState, BackgroundCompactionCandidate, BackgroundCompactionInput, RemoteCompactV2AttemptInput, capture_background_input"
+        "Round 652 (parity backfill): session-scoped async compaction captures history, turn routing, window identity, model/compaction hash, instructions, and auth-owner generation; attempts are deduplicated by fingerprint/model/hash/owner, only the newest candidate remains, and close cancels/drains work. Tests: go test -race ./appserver -run AsyncCompaction -count=1"
       ]
     },
     {
@@ -30378,9 +30378,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ThreadSpawnError, ThreadSpawnRequest, ThreadSpawnResult"
+        "Round 653 (parity backfill): the runtime controller owns model/effort resolution, capacity and task-path reservation, inherited settings/environment/plugins, full-history fork preparation, child metadata, spawn-graph publication, admission, and bounded failure origins. Tests: go test ./appserver -run 'SpawnFailureContext|AgentSpawn|AgentDepth|AgentForkTurns' -count=1"
       ]
     },
     {
@@ -30618,9 +30618,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/9; needs review: ExecutorCapabilityDiscoveryV2Cache, ExecutorCapabilityDiscoveryV2Snapshot, executor_capability_discovery_for_step_v2, executor_session_id, seed_capability_locations"
+        "Round 654 (parity backfill): the snapshot/cache is keyed by environment instance, session, cwd, and sandbox, with coalescing, FIFO eviction, retryable/permanent failure caching, and recovery reporting; the disabled-by-default feature shares inert inventories through the step snapshot and refreshes on turn/recovery boundaries. Tests: go test ./execserver ./appserver -run 'ExecutorCapabilityDiscoveryV2|CapabilityDiscoveryV2|ExecutorCapabilityInventory' -count=1"
       ]
     },
     {
