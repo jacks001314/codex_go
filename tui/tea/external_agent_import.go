@@ -54,11 +54,18 @@ func (m *Model) applyExternalAgentImportCommand() bubbletea.Cmd {
 	m.notice = ""
 	detect := m.onDetectExternalAgent
 	cwd := ""
-	if m.State != nil {
-		cwd = strings.TrimSpace(m.State.CWD)
-	}
-	if cwd == "" {
-		cwd = strings.TrimSpace(m.sessionCWD)
+	hasThread := m.State != nil && strings.TrimSpace(m.State.ThreadID) != ""
+	if hasThread || !m.remoteAppServer {
+		if m.State != nil {
+			cwd = strings.TrimSpace(m.State.CWD)
+		}
+		if cwd == "" {
+			cwd = strings.TrimSpace(m.sessionCWD)
+		}
+	} else {
+		// Rust #47317: before a remote thread starts, detection uses the
+		// remote --cd override; without one it is home-only.
+		cwd = strings.TrimSpace(m.remoteCWDOverride)
 	}
 	return func() bubbletea.Msg {
 		results := make([]ExternalAgentSourceDetectResult, 0, len(externalAgentMigrationSources))
