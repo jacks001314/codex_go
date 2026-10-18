@@ -14849,9 +14849,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: WEBSOCKET_CONTINUATION_COUNT_METRIC, with_restored_history"
+        "Round 705 (implementation): codex.websocket.continuation counts every response.create with mode/reason/phase tags. Prewarm records full/prewarm/warmup; generation records incremental/previous_response when the caller supplies previous_response_id, otherwise full/connection_reused or full/initial from the websocket connection state. Go resolves continuation history in the turn runtime rather than a per-socket reset-reason state machine, so restored-history/forked/account-switch reasons have no separate websocket-session carrier; the observable send classification is covered. Tests: TestWebsocketContinuationTagsLikeRust, TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse (asserts warmup metric), TestResponsesAgentRunnerWebSocketRecordsContinuationMetricLikeRust; go test ./model -run 'ContinuationMetric|PrewarmUsesWebSocket|WebsocketContinuationTags' -count=1."
       ]
     },
     {

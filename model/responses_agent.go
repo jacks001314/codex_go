@@ -929,6 +929,7 @@ func (r *ResponsesAgentRunner) Prewarm(ctx context.Context, request *AgentReques
 		payload["access_programs"] = apiRequest.AccessPrograms
 	}
 	requestStartedAt := time.Now()
+	r.recordWebsocketContinuation("full", "prewarm", "warmup")
 	writeErr := conn.Write(connectCtx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	// The prewarm dials a fresh connection (it returns early when one exists).
@@ -1167,6 +1168,8 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 	}
 	payload := websocketResponseCreatePayload(apiRequest, request.PreviousResponseID, nil, request.Trace)
 	requestStartedAt := time.Now()
+	continuationMode, continuationReason := websocketContinuationTags(request.PreviousResponseID, connectionReused)
+	r.recordWebsocketContinuation(continuationMode, continuationReason, "generation")
 	writeErr := conn.Write(ctx, websocket.MessageText, marshalResponsesMessage(payload))
 	r.recordWebsocketRequest(writeErr, time.Since(requestStartedAt))
 	r.recordWebsocketRequestRecord(ctx, writeErr, time.Since(requestStartedAt), connectionReused)

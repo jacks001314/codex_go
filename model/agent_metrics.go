@@ -147,6 +147,7 @@ const (
 	websocketEventCountMetric                   = "codex.websocket.event"
 	websocketEventDurationMetric                = "codex.websocket.event.duration_ms"
 	websocketRequestCountMetric                 = "codex.websocket.request"
+	websocketContinuationCountMetric            = "codex.websocket.continuation"
 	websocketRequestDurationMetric              = "codex.websocket.request.duration_ms"
 	responsesAPIOverheadDurationMetric          = "codex.responses_api_overhead.duration_ms"
 	responsesAPIInferenceTimeDurationMetric     = "codex.responses_api_inference_time.duration_ms"
@@ -392,6 +393,32 @@ func (r *ResponsesAgentRunner) recordWebsocketRequest(err error, duration time.D
 	tags := map[string]string{"success": strconv.FormatBool(err == nil)}
 	r.Metrics.Counter(websocketRequestCountMetric, 1, tags)
 	r.Metrics.RecordDuration(websocketRequestDurationMetric, duration, tags)
+}
+
+// recordWebsocketContinuation mirrors Rust #46051's
+// `codex.websocket.continuation` counter for every response.create attempt.
+func (r *ResponsesAgentRunner) recordWebsocketContinuation(mode, reason, phase string) {
+	if r == nil || r.Metrics == nil {
+		return
+	}
+	r.Metrics.Counter(websocketContinuationCountMetric, 1, map[string]string{
+		"mode":   mode,
+		"reason": reason,
+		"phase":  phase,
+	})
+}
+
+// websocketContinuationTags classifies a generation request from the
+// caller-provided continuation state. Go's previous_response_id is resolved by
+// the turn runtime, so an incremental send is exactly a non-empty id.
+func websocketContinuationTags(previousResponseID string, connectionReused bool) (mode string, reason string) {
+	if strings.TrimSpace(previousResponseID) != "" {
+		return "incremental", "previous_response"
+	}
+	if connectionReused {
+		return "full", "connection_reused"
+	}
+	return "full", "initial"
 }
 
 // recordWebsocketConnectRecord mirrors the record half of

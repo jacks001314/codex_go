@@ -42,6 +42,28 @@ func cloneStringTags(tags map[string]string) map[string]string {
 	return cloned
 }
 
+// Mirrors Rust #46051: generation sends distinguish incremental reuse, a
+// reused connection needing full input, and a fresh initial request.
+func TestWebsocketContinuationTagsLikeRust(t *testing.T) {
+	cases := []struct {
+		previous   string
+		reused     bool
+		wantMode   string
+		wantReason string
+	}{
+		{"resp-1", true, "incremental", "previous_response"},
+		{"resp-1", false, "incremental", "previous_response"},
+		{"", true, "full", "connection_reused"},
+		{"", false, "full", "initial"},
+	}
+	for _, tc := range cases {
+		mode, reason := websocketContinuationTags(tc.previous, tc.reused)
+		if mode != tc.wantMode || reason != tc.wantReason {
+			t.Fatalf("websocketContinuationTags(%q, %v) = %q/%q, want %q/%q", tc.previous, tc.reused, mode, reason, tc.wantMode, tc.wantReason)
+		}
+	}
+}
+
 // Mirrors SessionTelemetry::record_api_request's metric half: the counter and
 // duration sample per attempt with the status ("none" for a transport failure)
 // and success tags.
@@ -272,11 +294,19 @@ func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
 
 	events := map[string]string{}
 	requests := 0
+	continuations := 0
 	for _, counter := range sink.counters {
 		if counter.name == websocketRequestCountMetric {
 			requests++
 			if counter.tags["success"] != "true" {
 				t.Fatalf("websocket request counter = %#v", counter)
+			}
+			continue
+		}
+		if counter.name == websocketContinuationCountMetric {
+			continuations++
+			if counter.tags["mode"] != "full" || counter.tags["reason"] != "initial" || counter.tags["phase"] != "generation" {
+				t.Fatalf("websocket continuation counter = %#v", counter)
 			}
 			continue
 		}
@@ -287,6 +317,9 @@ func TestRunWebSocketRecordsEventsAndTimingMetricsLikeRust(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("websocket request counters = %d (all %#v)", requests, sink.counters)
+	}
+	if continuations != 1 {
+		t.Fatalf("websocket continuation counters = %d (all %#v)", continuations, sink.counters)
 	}
 	for _, kind := range []string{"responsesapi.websocket_timing", "response.completed"} {
 		if success, ok := events[kind]; !ok || success != "true" {

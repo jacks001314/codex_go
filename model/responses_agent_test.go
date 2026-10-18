@@ -417,10 +417,12 @@ func TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse(t *testing.T) {
 		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"warm-1"}}`))
 	}))
 	defer server.Close()
+	sink := &recordingMetricsSink{}
 	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
 		Provider: &APIProvider{BaseURL: server.URL, Headers: http.Header{"x-provider-test": []string{"present"}}},
 		Auth:     &AuthHeaders{Headers: http.Header{"Authorization": []string{"Bearer secret"}}}, SupportsWebsockets: true, WebsocketConnectTimeout: time.Second,
 	})
+	runner.Metrics = sink
 	response, err := runner.Prewarm(context.Background(), &AgentRequest{Model: "gpt-test", ThreadID: "guardian-thread", ClientMetadata: map[string]string{"x-openai-subagent": "guardian"}})
 	if err != nil {
 		t.Fatalf("Prewarm() error = %v", err)
@@ -437,6 +439,63 @@ func TestResponsesAgentRunnerPrewarmUsesWebSocketGenerateFalse(t *testing.T) {
 	}
 	if authorization != "Bearer secret" {
 		t.Fatalf("authorization = %q", authorization)
+	}
+	var continuation *recordedMetricSample
+	for index := range sink.counters {
+		if sink.counters[index].name == websocketContinuationCountMetric {
+			continuation = &sink.counters[index]
+		}
+	}
+	if continuation == nil || continuation.tags["mode"] != "full" || continuation.tags["reason"] != "prewarm" || continuation.tags["phase"] != "warmup" {
+		t.Fatalf("continuation metric = %#v", continuation)
+	}
+}
+
+// Mirrors Rust #46051: every generation response.create records the
+// continuation mode/reason/phase, including a fresh connection.
+func TestResponsesAgentRunnerWebSocketRecordsContinuationMetricLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, err := websocket.Accept(w, request, nil)
+		if err != nil {
+			t.Errorf("Accept() error = %v", err)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		if _, _, err := conn.Read(request.Context()); err != nil {
+			t.Errorf("Read() error = %v", err)
+			return
+		}
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.created","response":{"id":"resp-metric"}}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_text.delta","item_id":"msg-metric","delta":"done"}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.output_item.done","item":{"id":"msg-metric","type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}`))
+		_ = conn.Write(request.Context(), websocket.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp-metric"}}`))
+	}))
+	defer server.Close()
+	sink := &recordingMetricsSink{}
+	runner := NewResponsesAgentRunner(&ResponsesAgentOptions{
+		Provider:                &APIProvider{BaseURL: server.URL},
+		Auth:                    &AuthHeaders{Headers: http.Header{"Authorization": []string{"Bearer secret"}}},
+		SupportsWebsockets:      true,
+		WebsocketConnectTimeout: time.Second,
+	})
+	runner.Metrics = sink
+	if _, err := runner.RunWebSocket(context.Background(), &AgentRequest{
+		Prompt:   "hello",
+		Model:    "gpt-test",
+		ThreadID: "thread-metric",
+		TurnID:   "turn-metric",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var continuation *recordedMetricSample
+	for index := range sink.counters {
+		if sink.counters[index].name == websocketContinuationCountMetric {
+			continuation = &sink.counters[index]
+		}
+	}
+	if continuation == nil || continuation.tags["mode"] != "full" ||
+		continuation.tags["reason"] != "initial" || continuation.tags["phase"] != "generation" {
+		t.Fatalf("continuation metric = %#v", continuation)
 	}
 }
 
