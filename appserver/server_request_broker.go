@@ -54,6 +54,7 @@ type pendingServerRequest struct {
 	ch           chan *serverRequestResult
 	request      *ServerRequest
 	connectionID string
+	claimed      atomic.Bool
 }
 
 func NewServerRequestBroker() *ServerRequestBroker {
@@ -127,7 +128,7 @@ func (b *ServerRequestBroker) RequestToConnection(ctx context.Context, connectio
 	}
 	select {
 	case <-ctx.Done():
-		if entry := b.unregister(id); entry != nil {
+		if entry := b.claimPending(id); entry != nil {
 			b.notifyResolved(entry.request)
 		}
 		return ctx.Err()
@@ -166,6 +167,9 @@ func (b *ServerRequestBroker) RejectPending(connectionID string, err error) int 
 			continue
 		}
 		if entry.connectionID != connectionID && entry.connectionID != "" {
+			continue
+		}
+		if !entry.claim() {
 			continue
 		}
 		rejected = append(rejected, entry)
@@ -251,7 +255,7 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 		return false, nil
 	}
 	id := response.ID.String()
-	entry := b.pendingEntry(id)
+	entry := b.claimPending(id)
 	if entry == nil || entry.ch == nil {
 		return false, nil
 	}
@@ -309,10 +313,19 @@ func (b *ServerRequestBroker) unregister(id string) *pendingServerRequest {
 	return entry
 }
 
-func (b *ServerRequestBroker) pendingEntry(id string) *pendingServerRequest {
+func (b *ServerRequestBroker) claimPending(id string) *pendingServerRequest {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.pending[id]
+	entry := b.pending[id]
+	if entry == nil || !entry.claim() {
+		return nil
+	}
+	delete(b.pending, id)
+	return entry
+}
+
+func (entry *pendingServerRequest) claim() bool {
+	return entry != nil && entry.claimed.CompareAndSwap(false, true)
 }
 
 func (b *ServerRequestBroker) pendingRequestsForThread(threadID string) ([]*ServerRequest, ServerRequestSink) {

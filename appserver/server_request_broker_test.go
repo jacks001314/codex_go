@@ -198,6 +198,124 @@ func TestServerRequestBrokerTargetsConnectionWhenSinkSupportsIt(t *testing.T) {
 	}
 }
 
+func TestServerRequestBrokerRejectsOnlyOriginatingConnectionLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	sink := &targetedServerRequestTestSink{
+		requests:      make(chan *ServerRequest, 2),
+		connectionIDs: make(chan string, 2),
+	}
+	broker.SetSink(sink)
+
+	errorsByConnection := map[string]chan error{
+		"conn-a": make(chan error, 1),
+		"conn-b": make(chan error, 1),
+	}
+	for connectionID := range errorsByConnection {
+		connectionID := connectionID
+		go func() {
+			var response authRefreshTestResponse
+			errorsByConnection[connectionID] <- broker.RequestToConnection(
+				context.Background(),
+				connectionID,
+				ServerRequestChatGPTAuthTokensRefresh,
+				nil,
+				&response,
+			)
+		}()
+	}
+
+	requests := make(map[string]*ServerRequest, len(errorsByConnection))
+	for range errorsByConnection {
+		request := <-sink.requests
+		connectionID := <-sink.connectionIDs
+		requests[connectionID] = request
+	}
+	if requests["conn-a"] == nil || requests["conn-b"] == nil {
+		t.Fatalf("requests = %#v, want one request for each connection", requests)
+	}
+	if requests["conn-a"].ID == requests["conn-b"].ID {
+		t.Fatalf("request IDs both = %s, want globally unique IDs", requests["conn-a"].ID)
+	}
+
+	if rejected := broker.RejectPending("conn-a", ErrServerRequestConnectionClosed); rejected != 1 {
+		t.Fatalf("RejectPending(conn-a) rejected %d requests, want 1", rejected)
+	}
+	select {
+	case err := <-errorsByConnection["conn-a"]:
+		if !errors.Is(err, ErrServerRequestConnectionClosed) {
+			t.Fatalf("conn-a error = %v, want connection closed", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("conn-a request was not rejected")
+	}
+	select {
+	case err := <-errorsByConnection["conn-b"]:
+		t.Fatalf("conn-b request ended after conn-a close: %v", err)
+	default:
+	}
+	if resolved, err := broker.Resolve(OK(requests["conn-b"].ID, authRefreshTestResponse{AccessToken: "conn-b"})); err != nil || !resolved {
+		t.Fatalf("Resolve(conn-b) resolved=%v error=%v", resolved, err)
+	}
+	select {
+	case err := <-errorsByConnection["conn-b"]:
+		if err != nil {
+			t.Fatalf("conn-b error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("conn-b request did not resolve")
+	}
+}
+
+func TestServerRequestBrokerResolvesOnlyOnceLikeRust(t *testing.T) {
+	broker := NewServerRequestBroker()
+	requestSent := make(chan *ServerRequest, 1)
+	releaseSink := make(chan struct{})
+	broker.SetSink(ServerRequestSinkFunc(func(request *ServerRequest) {
+		requestSent <- request
+		<-releaseSink
+	}))
+	done := make(chan error, 1)
+	go func() {
+		var response authRefreshTestResponse
+		done <- broker.Request(context.Background(), ServerRequestChatGPTAuthTokensRefresh, nil, &response)
+	}()
+	request := <-requestSent
+
+	if resolved, err := broker.Resolve(OK(request.ID, authRefreshTestResponse{AccessToken: "first"})); err != nil || !resolved {
+		t.Fatalf("first Resolve() resolved=%v error=%v", resolved, err)
+	}
+	second := make(chan struct {
+		resolved bool
+		err      error
+	}, 1)
+	go func() {
+		resolved, err := broker.Resolve(OK(request.ID, authRefreshTestResponse{AccessToken: "second"}))
+		second <- struct {
+			resolved bool
+			err      error
+		}{resolved: resolved, err: err}
+	}()
+	select {
+	case result := <-second:
+		if result.resolved || result.err != nil {
+			close(releaseSink)
+			t.Fatalf("second Resolve() resolved=%v error=%v, want false, nil", result.resolved, result.err)
+		}
+	case <-time.After(time.Second):
+		close(releaseSink)
+		t.Fatal("second Resolve() blocked instead of observing a consumed reply")
+	}
+	close(releaseSink)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Request() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for broker response")
+	}
+}
+
 func TestConnectionServerRequestSinkHonorsTargetConnection(t *testing.T) {
 	sent := make(chan *ServerRequest, 1)
 	sink := connectionServerRequestSink{

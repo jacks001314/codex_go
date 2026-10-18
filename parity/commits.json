@@ -29789,9 +29789,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/8; needs review: AppServerReplyHandle, reject_server_request, resolve_server_request, server_request_reply_handle"
+        "Round 394 (equivalent implementation): ServerRequestBroker assigns globally unique IDs, binds each pending entry to its originating connection, routes targeted replies through that completion channel, and scopes connection-close rejection. Added an atomic single-use claim so duplicate/cancellation/close races have one winner. Tests: go test ./appserver -run 'TestServerRequestBroker|TestConnectionServerRequestSink|TestRuntimeRouter.*Connection' -count=1"
       ]
     },
     {
