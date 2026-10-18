@@ -2945,6 +2945,9 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if handled, cmd := m.handleWindowsMappedShiftEnter(message); handled {
 		return m, cmd
 	}
+	if handled, cmd := m.handleCtrlInsertCopy(message); handled {
+		return m, cmd
+	}
 	model, cmd := m.updateMessage(message)
 	next, ok := model.(*Model)
 	if !ok || next == nil {
@@ -2958,6 +2961,31 @@ func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 		return model, cmd
 	}
 	return model, bubbletea.Batch(cmd, statusCmd, settleCmd, titleCmd)
+}
+
+// handleCtrlInsertCopy maps Bubble Tea v1's undecoded Ctrl+Insert CSI
+// sequence to the shared selection copy path (#50215). Confirmed composer
+// copies clear the selection like mouse copy; failures retain it.
+func (m *Model) handleCtrlInsertCopy(message bubbletea.Msg) (bool, bubbletea.Cmd) {
+	if m == nil {
+		return false, nil
+	}
+	text, ok := message.(interface{ String() string })
+	if !ok || text.String() != "?CSI[50 59 53 126]?" {
+		return false, nil
+	}
+	if m.composerSelection.active {
+		cmd := m.copyComposerSelection()
+		m.composerRightClickCopy = true
+		return true, cmd
+	}
+	if m.renderedSelection.active {
+		cmd := m.copyRenderedSelection()
+		m.renderedSelection.clear()
+		m.refreshTranscript()
+		return true, cmd
+	}
+	return false, nil
 }
 
 func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {

@@ -28,6 +28,29 @@ func newComposerSelectionModel(t *testing.T) (*Model, *string) {
 	return model, &copied
 }
 
+type ctrlInsertCopyMsg struct{}
+
+func (ctrlInsertCopyMsg) String() string { return "?CSI[50 59 53 126]?" }
+
+// Rust #50215: Windows Terminal forwards Ctrl+Insert when it has no native
+// selection; a confirmed app-owned copy clears the composer selection.
+func TestComposerCtrlInsertCopiesLikeRust(t *testing.T) {
+	model, copied := newComposerSelectionModel(t)
+	model.copyOnSelectMode = "never"
+	dragComposerSelection(t, model, 0, len("hello"))
+	_, cmd := model.Update(ctrlInsertCopyMsg{})
+	runTeaCmd(t, model, cmd)
+	if *copied != "hello" {
+		t.Fatalf("Ctrl+Insert copied %q, want hello", *copied)
+	}
+	if model.composerSelection.active {
+		t.Fatalf("confirmed Ctrl+Insert copy kept the selection: %#v", model.composerSelection)
+	}
+	if got := model.composer.Value(); got != "hello world" {
+		t.Fatalf("Ctrl+Insert changed the draft: %q", got)
+	}
+}
+
 func dragComposerSelection(t *testing.T, model *Model, startColumn, endColumn int) bubbletea.Cmd {
 	t.Helper()
 	if model.composerTextTopRow < 0 {

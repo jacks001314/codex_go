@@ -25599,9 +25599,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Bubble Tea v1 reports Ctrl+Insert as an unknown CSI sequence (2;5~). Go maps that sequence to app-owned composer/rendered selection copy before ordinary input; a confirmed Ctrl+Insert composer copy clears the selection like mouse copy while failures retain it. TestComposerCtrlInsertCopiesLikeRust covers the Windows Terminal path."
       ]
     },
     {

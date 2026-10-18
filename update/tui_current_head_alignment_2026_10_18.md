@@ -2083,6 +2083,8 @@ green.
   paste buffer to flush before Enter; expired windows submit directly.
 - `#49816` is complete by behavior: URL openers add errors but no browser-open
   success history entry.
+- `#50215` is complete: Bubble Tea's undecoded Ctrl+Insert sequence is mapped to
+  app-owned selection copy, with confirmed composer copies clearing selection.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
