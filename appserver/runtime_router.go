@@ -3087,6 +3087,12 @@ func (r *RuntimeRouter) dispatch(request *Request) (any, error) {
 			}
 			r.applyThreadResumeRuntimeWorkspaceRoots(result, request)
 			r.applyThreadResumeSettingsUpdate(result, request)
+			if response, ok := result.(*ThreadResumeResponse); ok && response != nil && response.Thread != nil {
+				r.applyLiveThreadModelSettings(response.Thread)
+				// A cold resume may not be marked loaded until later in dispatch;
+				// its request-scoped settings update still owns the reported values.
+				applyThreadModelSettings(response.Thread, r.threadSettingsForTurn(response.Thread.ID))
+			}
 			r.applyThreadResumePersistedPermissions(result, request)
 			r.applyThreadResumeCollaborationMode(result, resumeConfig)
 			if err := r.applyRunningThreadResumeSnapshot(result, request); err != nil {
@@ -4201,6 +4207,7 @@ func (r *RuntimeRouter) handleThreadReadRuntime(request *Request) (*ThreadReadRe
 	}
 	loadedStatus := r.requireThreadStatus().LoadedStatusForThread(params.ThreadID)
 	response.Thread.Status = loadedStatus
+	r.applyLiveThreadModelSettings(response.Thread)
 	if params.IncludeTurns {
 		normalizeThreadTurnsStatus(response.Thread.Turns, loadedStatus, r.activeRuntimeTurnSnapshot(params.ThreadID) != nil)
 	}
@@ -4423,6 +4430,7 @@ func (r *RuntimeRouter) applyRuntimeThreadStatus(thread *Thread) {
 		return
 	}
 	thread.Status = status
+	r.applyLiveThreadModelSettings(thread)
 	record, err := r.threadRecord(session.ThreadID(thread.ID), true, false)
 	if err != nil || record == nil || !runtimeRecordIsThreadSpawn(record) {
 		return
@@ -8690,8 +8698,31 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 	}
 }
 
+// applyThreadModelSettings overlays model settings from a live settings
+// snapshot. Unloaded threads keep the persisted values from BuildThread.
+func applyThreadModelSettings(thread *Thread, settings *Settings) {
+	if thread == nil || settings == nil {
+		return
+	}
+	if model := strings.TrimSpace(settings.Model); model != "" {
+		thread.Model = stringPtrIfNotEmpty(model)
+	}
+	if settings.Effort != nil {
+		thread.ReasoningEffort = reasoningEffortPtr(*settings.Effort)
+	}
+}
+
+// applyLiveThreadModelSettings reports a loaded thread's current model and
+// reasoning effort (Rust #42151).
+func (r *RuntimeRouter) applyLiveThreadModelSettings(thread *Thread) {
+	if r == nil || thread == nil || strings.TrimSpace(thread.ID) == "" || !r.threadIsLoaded(thread.ID) {
+		return
+	}
+	applyThreadModelSettings(thread, r.threadSettingsForTurn(thread.ID))
+}
+
 func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams, committed *Settings) error {
-	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil) {
+	if r == nil || params == nil || (params.ApprovalPolicy == nil && params.Permissions == nil && params.DisabledPluginIDs == nil && params.CollaborationMode == nil && params.Model == nil && params.Effort == nil) {
 		return nil
 	}
 	threadID := session.ThreadID(strings.TrimSpace(params.ThreadID))
@@ -8714,6 +8745,19 @@ func (r *RuntimeRouter) persistThreadSettingsUpdate(params *SettingsUpdateParams
 	if params.Permissions != nil && strings.TrimSpace(*params.Permissions) != "" {
 		profile := strings.TrimSpace(*params.Permissions)
 		record.Metadata.ActivePermissionProfile = profile
+	}
+	// Rust #42151: unloaded threads report the latest persisted model settings.
+	if params.Model != nil {
+		if model := strings.TrimSpace(*params.Model); model != "" {
+			record.Metadata.Model = model
+		}
+	}
+	if params.Effort != nil {
+		if effort := strings.TrimSpace(*params.Effort); effort != "" {
+			configOverrides["model_reasoning_effort"] = effort
+		} else {
+			delete(configOverrides, "model_reasoning_effort")
+		}
 	}
 	record.Metadata.Extra["config"] = configOverrides
 	if params.DisabledPluginIDs != nil {

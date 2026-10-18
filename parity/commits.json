@@ -5928,9 +5928,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: apply_live_model_settings"
+        "Round 444 (implementation): Thread already carried nullable model/reasoningEffort and BuildThread populated persisted values. Added live-setting overlay for thread/read, list/search status enrichment, and resume; thread/settings/update now persists model and reasoning effort so unloaded threads report the latest snapshot after restart. Tests: go test ./appserver -run 'ThreadReadReportsLiveModelSettings|ThreadListReportsLiveAndPersistedModelSettings|ThreadSettingsUpdatePersistsModelSettings' -count=1; go test ./appserver -run 'ThreadRead|ThreadList|ThreadSettingsUpdate|ThreadResume|ModelSettings' -count=1"
       ]
     },
     {
