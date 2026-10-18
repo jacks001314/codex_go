@@ -260,20 +260,22 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 	if c.router.services.SpawnGraph != nil {
 		durabilityStartedAt := time.Now()
 		if err := c.router.services.SpawnGraph.UpsertThreadSpawnEdge(c.parentID, string(threadID), agent.ThreadSpawnEdgeOpen); err != nil {
-			_ = c.router.services.ThreadRouter.store.Delete(threadID)
+			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 		}
 		durabilityWait = time.Since(durabilityStartedAt)
 	}
-	reservation.Commit(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
-	if c.router.agentRegistry != registry {
-		c.router.agentRegistry.RegisterSpawnedThread(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
+	if err := ctx.Err(); err != nil {
+		c.cleanupProvisionalSpawn(string(threadID))
+		return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextChildStartup, forkMode)
 	}
-	committed = true
-	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	prompt := agentStringValue(args.Message)
 	inputAdmissionStartedAt := time.Now()
 	if prompt != "" || len(args.Items) > 0 {
+		if err := ctx.Err(); err != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
+		}
 		params := &turn.TurnStartParams{ThreadID: string(threadID), CWD: c.cwd, Model: modelID, Environments: cloneMapSlice(inheritedEnvironments), ParentTurnID: c.parentTurnID, RootTurnID: c.rootTurnID, TurnTrigger: c.turnTrigger, CoreCyberAccessProgram: c.cyberAccessProgram}
 		if inheritDisabledPluginIDs {
 			values := append([]string{}, disabledPluginIDs...)
@@ -313,12 +315,21 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 			params.ServiceTierSet = true
 		}
 		if _, err := c.router.handleTurnStart(requestWithInternalParams(MethodTurnStart, params)); err != nil {
-			registry.ReleaseSpawnedThread(string(threadID))
-			_ = c.router.services.ThreadRouter.store.Delete(threadID)
+			c.cleanupProvisionalSpawn(string(threadID))
+			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
+		}
+		if err := ctx.Err(); err != nil {
+			c.cleanupProvisionalSpawn(string(threadID))
 			return nil, recordRuntimeAgentSpawnFailure(c, ctx, err, tool.AgentErrorContextInputAdmission, forkMode)
 		}
 	}
 	inputAdmission := time.Since(inputAdmissionStartedAt)
+	reservation.Commit(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
+	if c.router.agentRegistry != registry {
+		c.router.agentRegistry.RegisterSpawnedThread(agent.Metadata{ThreadID: string(threadID), Path: agent.AgentPath(agentPath), Nickname: nickname, Role: args.ResolvedRole})
+	}
+	committed = true
+	c.router.notify(NotificationThreadStarted, &ThreadStartedNotification{Thread: threadStartedNotificationThread(BuildThread(record, "", true))})
 	phases := map[string]time.Duration{
 		telemetry.AgentSpawnPhaseChildCreate:    childCreate,
 		telemetry.AgentSpawnPhaseDurabilityWait: durabilityWait,
@@ -344,6 +355,30 @@ func (c *runtimeAgentController) SpawnAgent(ctx context.Context, args *agent.Spa
 		Model:           modelID,
 		ReasoningEffort: c.resolvedSpawnReasoningEffort(modelID, args, capturedEffort),
 	}, nil
+}
+
+// cleanupProvisionalSpawn removes a child that never completed initial turn
+// admission. The spawn edge closes before the record disappears, and any turn
+// started by the admission race is cancelled before deletion.
+func (c *runtimeAgentController) cleanupProvisionalSpawn(threadID string) {
+	if c == nil || c.router == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	if active := c.router.activeRuntimeTurnSnapshot(threadID); active != nil {
+		c.router.cancelActiveRuntimeTurn(threadID, active.ID)
+	}
+	if c.router.services.SpawnGraph != nil {
+		_ = c.router.services.SpawnGraph.SetThreadSpawnEdgeStatus(threadID, agent.ThreadSpawnEdgeClosed)
+	}
+	if c.registry != nil {
+		c.registry.ReleaseSpawnedThread(threadID)
+	}
+	if c.router.agentRegistry != nil && c.router.agentRegistry != c.registry {
+		c.router.agentRegistry.ReleaseSpawnedThread(threadID)
+	}
+	if c.router.services.ThreadRouter != nil && c.router.services.ThreadRouter.store != nil {
+		_ = c.router.services.ThreadRouter.store.Delete(session.ThreadID(threadID))
+	}
 }
 
 func (r *RuntimeRouter) agentSpawnHistoryMode(threadID string) string {

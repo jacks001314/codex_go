@@ -18917,9 +18917,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: PendingSpawn, disarm, set_edge_write, wait_for_edge"
+        "Round 405 (implementation): child creation is provisional until initial turn admission succeeds. Commit/registry registration/thread-started now occur after admission; failure or cancellation cancels any raced turn, closes the spawn edge, releases registry state, and deletes the record. Go store writes are synchronous, so no separate background durability checkpoint is needed. Tests: go test ./appserver -run 'ProvisionalSpawn|Spawn|AgentController|Delegate|Cancelled' -count=1; go vet ./appserver"
       ]
     },
     {
