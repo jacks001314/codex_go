@@ -4622,9 +4622,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: set_cursor_style_with_repair"
+        "N/A by architecture (audit): upstream da23e131e6 (#41673) repairs a glyph corrupted by DECSCUSR on older JediTerm because Rust owns the terminal cell buffer and draws the cursor-style command over one of its cells. Go uses Bubble Tea's renderer, which owns frame diffing, cursor positioning, and style restoration; it has no custom cell/render-anchor cache to repair. Existing tea cursor-style tests cover the only explicit DECSCUSR sequence emitted for the agents-overview rename editor."
       ]
     },
     {
