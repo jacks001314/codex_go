@@ -3954,9 +3954,12 @@ func (m *Model) View() string {
 	sections := []string{status, transcript}
 	composerIndex := -1
 	footerIndex := -1
+	previewIndex := -1
 	workingIndex := -1
+	hudIndex := -1
 	footerBeforeComposer := false
 	if bottom := m.renderBottomPane(); bottom != "" {
+		previewIndex = len(sections)
 		sections = append(sections, m.bottomStyle.Render(bottom))
 	}
 	if modal := m.renderModal(); modal != "" {
@@ -3987,6 +3990,7 @@ func (m *Model) View() string {
 			sections = append(sections, m.bottomStyle.Render(working))
 		}
 		if hud := m.renderQuickDialHUD(); hud != "" {
+			hudIndex = len(sections)
 			sections = append(sections, m.bottomStyle.Render(hud))
 		}
 		footerLine, footerAlreadyStyled := m.footerHelpLine()
@@ -4046,6 +4050,9 @@ func (m *Model) View() string {
 		footerLine, footerAlreadyStyled := m.footerHelpLine()
 		footerIndex = len(sections)
 		sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
+	}
+	if footerBeforeComposer {
+		sections = clipOwnedSectionsToHeight(sections, m.height, &footerIndex, &previewIndex, &hudIndex, &workingIndex, &composerIndex)
 	}
 	m.captureRenderedSelectionRegions(sections, footerIndex)
 	m.captureTurnTipSelectionRegions(sections, workingIndex)
@@ -9078,6 +9085,12 @@ func (m *Model) bottomReservedRows() int {
 		return len(strings.Split(strings.TrimRight(modal, "\n"), "\n"))
 	}
 	rows := m.composerTargetRows()
+	if bottom := m.renderBottomPane(); bottom != "" {
+		rows += sectionHeight(bottom)
+	}
+	if hud := m.renderQuickDialHUD(); hud != "" {
+		rows += sectionHeight(hud)
+	}
 	if working := m.renderWorkingIndicator(); working != "" {
 		rows += len(strings.Split(strings.TrimRight(working, "\n"), "\n"))
 	}

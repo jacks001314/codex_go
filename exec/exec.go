@@ -1432,6 +1432,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 	if options.Shell != nil {
 		options.Shell.Approval = r.ShellApproval
 		options.Shell.DecisionSink = r.sessionTelemetryForRun()
+		options.Shell.Validation.PathConvention = tool.PathConventionForPath(requestCWD(req))
 		r.applyUnifiedExecEnvironments(options)
 		if run != nil {
 			options.Shell.MaxOutputTokens = run.ToolOutputTokenLimit

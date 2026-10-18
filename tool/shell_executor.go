@@ -1178,7 +1178,7 @@ func applyInternalPermissionsToLaunch(req *ShellRequest, internal *sandbox.Addit
 	if req == nil || internal.IsEmpty() || req.PermissionProfile == nil || req.PermissionProfile.Disabled {
 		return nil
 	}
-	merged, err := sandbox.PermissionProfileWithAdditionalPermissions(req.PermissionProfile, internal)
+	merged, err := sandbox.PermissionProfileWithAdditionalPermissionsForConvention(req.PermissionProfile, internal, req.PathConvention)
 	if err != nil {
 		return err
 	}

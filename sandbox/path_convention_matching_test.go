@@ -81,3 +81,21 @@ func TestNormalizeRequestPermissionProfileURIsLikeRust(t *testing.T) {
 		t.Fatal("foreign URI convention must fail closed")
 	}
 }
+
+func TestAdditionalPermissionsMaterializeByConventionLikeRust(t *testing.T) {
+	profile := WorkspaceWritePermissionProfile()
+	additional := &AdditionalPermissionProfile{FileSystem: []string{`c:/WORKSPACE/EXTRA`}}
+	effective, err := PermissionProfileWithAdditionalPermissionsForConvention(&profile, additional, utils.ConventionWindows)
+	if err != nil {
+		t.Fatalf("PermissionProfileWithAdditionalPermissionsForConvention() error = %v", err)
+	}
+	found := false
+	for _, root := range effective.LegacySandboxPolicy().WritableRoots {
+		if root == `c:\WORKSPACE\EXTRA` {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("writable roots = %#v, want Windows-normalized additional root", effective.LegacySandboxPolicy().WritableRoots)
+	}
+}

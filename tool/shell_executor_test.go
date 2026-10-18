@@ -15,6 +15,7 @@ import (
 	"codex_go/execserver"
 	"codex_go/network"
 	"codex_go/sandbox"
+	"codex_go/utils"
 )
 
 func TestShellExecutorRunsCommandAndFormatsOutput(t *testing.T) {
@@ -80,6 +81,7 @@ func TestShellExecutorCarriesAllowedSymlinkedCodexHomeLikeRust(t *testing.T) {
 		Validation: ShellValidationOptions{
 			CWD:                       t.TempDir(),
 			AllowedSymlinkedCodexHome: allowed,
+			PathConvention:            utils.ConventionPosix,
 		},
 	})
 	if _, err := executor.Execute(context.Background(), &Invocation{
@@ -90,6 +92,9 @@ func TestShellExecutorCarriesAllowedSymlinkedCodexHomeLikeRust(t *testing.T) {
 	}
 	if runner.request == nil || runner.request.AllowedSymlinkedCodexHome != allowed {
 		t.Fatalf("request allowed home = %#v, want %q", runner.request, allowed)
+	}
+	if runner.request.PathConvention != utils.ConventionPosix {
+		t.Fatalf("request path convention = %q, want posix", runner.request.PathConvention)
 	}
 }
 

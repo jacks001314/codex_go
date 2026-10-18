@@ -7,11 +7,15 @@
 - `IntersectPermissionProfilesWithConvention` 的路径解析、glob
   materialization、containment、equal/overlap/dedup 使用 executor
   convention：POSIX 大小写敏感，Windows 折叠大小写并统一分隔符。
-- 剩余 partial：tool-side `PermissionProfileWithAdditionalPermissions`
-  尚未接收同一 context，symbolic tmp/project grant 的 fail-closed 仍在
-  broker 之外。
+- `ShellRequest` 携带 `PathConvention`，app-server/exec turn 从 CWD 推导；
+  `effectiveShellPermissionProfile` 与 internal-permission merge 使用
+  `PermissionProfileWithAdditionalPermissionsForConvention`。
+- 剩余 partial：apply_patch/extensions 尚未接收同一 context，symbolic
+  tmp/project grant 的显式 fail-closed gate 仍在 broker 之外。
 
 验证：
 
 - `go test ./sandbox -run 'Convention|Intersect|NormalizeRequest' -count=1`
+- `go test ./sandbox -run 'Convention|Intersect|NormalizeRequest|AdditionalPermissionsMaterialize' -count=1`
+- `go test ./tool -run 'CarriesAllowedSymlinked|ShellExecutor' -count=1`
 - `go test ./appserver -run 'ServerRequestBrokerIntersectsURIPermissions|ServerRequestBrokerIntersectsPermissions' -count=1`

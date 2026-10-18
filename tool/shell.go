@@ -130,6 +130,9 @@ type ShellRequest struct {
 	PermissionProfileID   string
 	PermissionProfile     *sandbox.PermissionProfile
 	PermissionProfileJSON string
+	// PathConvention is the selected executor's path grammar for permission
+	// grant materialization (Rust #41928). Empty keeps the native convention.
+	PathConvention utils.PathConvention
 	// AllowedSymlinkedCodexHome is the host-resolved macOS Seatbelt opt-out
 	// (Rust #42716). Empty keeps symlinked writable roots rejected.
 	AllowedSymlinkedCodexHome       string
@@ -315,6 +318,7 @@ type ShellValidationOptions struct {
 	DefaultTimeoutMS                uint64
 	PermissionProfileID             string
 	PermissionProfile               *sandbox.PermissionProfile
+	PathConvention                  utils.PathConvention
 	AllowedSymlinkedCodexHome       string
 	WindowsSandboxLevel             sandbox.WindowsSandboxLevel
 	WindowsSandboxPrivateDesktop    bool
@@ -357,6 +361,23 @@ func NewDefaultShell() *Shell {
 		return &Shell{Type: DetectShellType(shell), Path: shell}
 	}
 	return &Shell{Type: ShellBash, Path: "/bin/bash"}
+}
+
+// PathConventionForPath infers a native path or file URI's path convention.
+// An unknown convention stays empty so permission materialization fails closed.
+func PathConventionForPath(value string) utils.PathConvention {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if path, err := utils.Parse(value); err == nil {
+		if convention, ok := path.InferConvention(); ok {
+			return convention
+		}
+	}
+	legacy := utils.NewLegacyAppPathString(value)
+	convention, _ := legacy.InferAbsolutePathConvention()
+	return convention
 }
 
 func DetectShellType(path string) ShellType {
@@ -635,6 +656,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		sandboxPermissions,
 		additionalPermissions,
 		opts.PermissionsPreapproved,
+		opts.PathConvention,
 	)
 	if err != nil {
 		return nil, err
@@ -681,6 +703,7 @@ func BuildShellRequest(args *ExecCommandArgs, sessionShell *Shell, opts ShellVal
 		SandboxProfile:                  sandboxProfile,
 		PermissionProfileID:             permissionProfileID,
 		PermissionProfile:               permissionProfile,
+		PathConvention:                  opts.PathConvention,
 		AllowedSymlinkedCodexHome:       opts.AllowedSymlinkedCodexHome,
 		WindowsSandboxLevel:             opts.WindowsSandboxLevel,
 		WindowsSandboxPrivateDesktop:    opts.WindowsSandboxPrivateDesktop,
@@ -732,7 +755,7 @@ func cloneManagedNetworkSandboxContext(value *network.ProxyManagedNetworkSandbox
 	}
 }
 
-func effectiveShellPermissionProfile(profileID string, profile *sandbox.PermissionProfile, permissions sandbox.SandboxPermissions, additional *sandbox.AdditionalPermissionProfile, preapproved bool) (string, *sandbox.PermissionProfile, error) {
+func effectiveShellPermissionProfile(profileID string, profile *sandbox.PermissionProfile, permissions sandbox.SandboxPermissions, additional *sandbox.AdditionalPermissionProfile, preapproved bool, convention utils.PathConvention) (string, *sandbox.PermissionProfile, error) {
 	if permissions == sandbox.SandboxPermissionsRequireEscalated && preapproved {
 		fullAccess := sandbox.FullAccessPermissionProfile()
 		return sandbox.BuiltInPermissionProfileDangerFullAccess, &fullAccess, nil
@@ -740,7 +763,7 @@ func effectiveShellPermissionProfile(profileID string, profile *sandbox.Permissi
 	if profile == nil && additional == nil {
 		return "", nil, nil
 	}
-	effective, err := sandbox.PermissionProfileWithAdditionalPermissions(profile, additional)
+	effective, err := sandbox.PermissionProfileWithAdditionalPermissionsForConvention(profile, additional, convention)
 	if err != nil {
 		return "", nil, err
 	}

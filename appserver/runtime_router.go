@@ -15187,6 +15187,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 		// environments the shell family dials back that filesystem for them.
 		options.EnvironmentFileSystems = tool.NewUnifiedExecEnvironmentFileSystems(options.Shell.UnifiedExecEnvironments, cwd)
 		options.Shell.Validation.ApprovalPolicy = approvalPolicy
+		options.Shell.Validation.PathConvention = tool.PathConventionForPath(cwd)
 		// Rust #49467: executor-reported PATH directories are restored inside
 		// POSIX login shells only when the `login_shell_package_path` feature is
 		// enabled for this turn.

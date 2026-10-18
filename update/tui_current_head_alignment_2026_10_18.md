@@ -2000,10 +2000,12 @@ green.
 - `#46946` is complete: dynamic-tool lifecycle metadata immediately registers
   missing root rows and folds children into loaded roots, while archived/deleted
   tombstones block delayed responses and clear on thread start/unarchive.
-- `#47096` is partially complete: owned/fullscreen layouts now place the hint and
-  reading-control row immediately above the composer, with blossom/snapshot
-  coverage. Short-terminal clipping order and the shared usage-notice width
-  policy for that row remain unimplemented.
+- `#47096` is partially complete: owned/fullscreen layouts place the hint and
+  reading-control row immediately above the composer, reserve preview/HUD rows
+  when sizing the transcript, and clip the hint → HUD → activity → preview in
+  that order when the terminal is still too short while keeping composer/status
+  visible. Rust's shared usage-notice detail-width policy remains unimplemented
+  because Go has no usage-notice state for that row.
 - `#41467` is complete: the model picker refreshes from the app server with
   stale-request rejection, catalog constraints, in-place picker/reasoning
   refresh, and fallback when the current model disappears.

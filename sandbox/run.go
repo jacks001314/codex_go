@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"codex_go/sandbox/linuxsandbox"
+	"codex_go/utils"
 
 	json "github.com/goccy/go-json"
 )
@@ -614,6 +615,12 @@ func canonicalPermissionProfileFromJSON(raw []byte) (PermissionProfile, error) {
 // PermissionProfileWithAdditionalPermissions applies per-command grants to
 // the canonical runtime profile without dropping read/deny entries.
 func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, additional *AdditionalPermissionProfile) (*PermissionProfile, error) {
+	return PermissionProfileWithAdditionalPermissionsForConvention(profile, additional, utils.NativePathConvention())
+}
+
+// PermissionProfileWithAdditionalPermissionsForConvention applies grants using
+// the executor's path convention (Rust #41928).
+func PermissionProfileWithAdditionalPermissionsForConvention(profile *PermissionProfile, additional *AdditionalPermissionProfile, convention utils.PathConvention) (*PermissionProfile, error) {
 	if profile == nil {
 		base := WorkspaceWritePermissionProfile()
 		profile = &base
@@ -642,8 +649,8 @@ func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, addi
 				wire.FileSys.Type = "restricted"
 			}
 			for _, path := range additional.FileSystem {
-				cleaned := cleanRunPath(path)
-				if cleaned == "" || runtimeProfileHasPathAccess(wire.FileSys.Entries, cleaned, string(FileSystemAccessWrite)) {
+				cleaned := resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: path}, "", convention)
+				if cleaned == "" || runtimeProfileHasPathAccessForConvention(wire.FileSys.Entries, cleaned, string(FileSystemAccessWrite), convention) {
 					continue
 				}
 				wire.FileSys.Entries = append(wire.FileSys.Entries, rustPermissionFilesystemEntry{
@@ -666,8 +673,8 @@ func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, addi
 		// instead of narrowing it to a restricted profile.
 		if wire.FileSys.Type != "unrestricted" {
 			for _, path := range additional.ReadFileSystem {
-				cleaned := cleanRunPath(path)
-				if cleaned == "" || runtimeProfileHasPathAccess(wire.FileSys.Entries, cleaned, string(FileSystemAccessRead)) {
+				cleaned := resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: path}, "", convention)
+				if cleaned == "" || runtimeProfileHasPathAccessForConvention(wire.FileSys.Entries, cleaned, string(FileSystemAccessRead), convention) {
 					continue
 				}
 				wire.FileSys.Entries = append(wire.FileSys.Entries, rustPermissionFilesystemEntry{
@@ -688,12 +695,32 @@ func PermissionProfileWithAdditionalPermissions(profile *PermissionProfile, addi
 }
 
 func runtimeProfileHasPathAccess(entries []rustPermissionFilesystemEntry, path string, access string) bool {
+	return runtimeProfileHasPathAccessForConvention(entries, path, access, utils.NativePathConvention())
+}
+
+func runtimeProfileHasPathAccessForConvention(entries []rustPermissionFilesystemEntry, path string, access string, convention utils.PathConvention) bool {
 	for _, entry := range entries {
-		if entry.Access == access && entry.Path.Type == "path" && cleanRunPath(entry.Path.Path) == path {
+		if entry.Access != access || entry.Path.Type != "path" {
+			continue
+		}
+		candidate := resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: entry.Path.Path}, "", convention)
+		if permissionPathStringsEqualForConvention(candidate, path, convention) {
 			return true
 		}
 	}
 	return false
+}
+
+func permissionPathStringsEqualForConvention(left, right string, convention utils.PathConvention) bool {
+	if convention == "" {
+		return cleanRunPath(left) == cleanRunPath(right)
+	}
+	left = utils.LexicalClean(strings.TrimSpace(left), convention)
+	right = utils.LexicalClean(strings.TrimSpace(right), convention)
+	if convention == utils.ConventionWindows {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func rustPermissionProfileJSON(profile PermissionProfile) (string, error) {

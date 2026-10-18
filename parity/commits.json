@@ -18047,7 +18047,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Owned/fullscreen layouts now paint the computed hint/reading-control row immediately above the composer (after activity/working/HUD), while inline layouts retain their previous below-composer order; welcome-blossom insertion and terminal snapshots were adjusted for the new section index. Go still lacks Rust's short-terminal clipping order and the shared usage-notice width policy for that row."
+        "Round 683 (implementation): owned/fullscreen layouts paint the hint/reading-control row immediately above the composer, and inline layouts retain their below-composer order. The transcript height now reserves queued/attachment previews and the quick-dial HUD, so normal terminals shrink the transcript instead of dropping those rows. When the terminal is still too short, owned layouts clip the hint row first, then the HUD, activity, and finally previews; the composer and status row keep their rows, and transcript rows shrink last from the top. Tests: TestShortFullscreenClipsHintsBeforeActivityLikeRust, TestFooterHintsSitAboveComposerInFullscreenLikeRust, plus full go test ./tui/... -count=1. Remaining: Rust's shared usage-notice detail-width policy still has no Go usage-notice state to target."
       ]
     },
     {
