@@ -2627,9 +2627,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 5/6; needs review: current_environments_match"
+        "Round 555 (audit): already implemented. Go publishes per-server permission authority for each enabled MCP runtime; a server with no published authority has its calls and elicitations rejected rather than inheriting another owner's profile. Tests: go test ./mcp -run 'PermissionAuthority|Attachment|Permissions' -count=1"
       ]
     },
     {
@@ -16445,9 +16445,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: without_request_logging"
+        "Round 556 (audit): already implemented. An explicit provider catalog URL keeps its own query/path, gains provider identity, and a custom inference base URL alone does not opt into API-key discovery. Tests: go test ./model -run 'ModelCatalogURL|DiscoveryGate|APIKey' -count=1"
       ]
     },
     {
@@ -23024,9 +23024,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 557 (audit): already implemented. Remote plugin service configuration can reuse the owner's HTTP pool while retaining the current endpoint, product SKU, and authentication; a service without a doer or pool keeps fallback behavior. Tests: go test ./plugin -run 'RemoteHTTP|Pool|Reused' -count=1"
       ]
     },
     {
