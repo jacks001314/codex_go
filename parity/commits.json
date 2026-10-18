@@ -9353,9 +9353,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: refresh_realtime_audio_meters"
+        "Audited upstream 9a3af22d01 (#43695): Go's voice meters are sampled by a 100ms Tick command rather than by redraws, so footer/transcript redraws cannot consume peaks early; quiet microphone/speaker channels clear their own meter history immediately. Tests: TestModelVoiceMeterTickSamplesWhileRunning and TestModelVoiceAnswerResultStartsMeterTick."
       ]
     },
     {
@@ -9389,9 +9389,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: UserVerificationDecision, UserVerificationRequest, UserVerificationView, prompt_header"
+        "Audited upstream 54e04f25db (#43702): the tea elicitation modal renders the explicit user-verification decision with title/description, complete hyperlinks, and accept/decline handling. Tests: TestUserVerificationElicitationShowsExplicitDecisionLikeRust and TestUserVerificationPromptLinksCompleteURLsLikeRust."
       ]
     },
     {
@@ -9425,9 +9425,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: cancel_thread, cancel_thread_verification, finish_user_verification, push_user_verification_request, resolve_user_verification"
+        "Audited upstream c7f81afc19 (#43712): app-server exposes the experimental userVerification status/enroll/delete/verify/cancel methods with bounded challenge/title/description validation, cancellation and failure reason mapping, MCP host-owned elicitation restrictions, TUI routing, and reconnect/rejected-operation cleanup. Tests across tui/tea user verification, appserver user_verification, and mcp user_verification pass."
       ]
     },
     {
@@ -12221,9 +12221,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: suppress_active_realtime_speaker"
+        "Audited upstream 1b5e27c7f0 (#44925): the voice generation tracker accepts assistant response audio that arrives before captions on a quiet turn without suppressing it, while still superseding stale prior-turn audio. Test: TestVoiceQuietTurnAudioBeforeCaptionsLikeRust (voice_quiet_turn_like_rust_test.go)."
       ]
     },
     {
