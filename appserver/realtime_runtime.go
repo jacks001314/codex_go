@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/auth"
 	"codex_go/codexapi"
@@ -31,6 +32,7 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 			_, notifications, startErr := r.requireRealtime().StartWithOptions(&params, options)
 			err = startErr
 			if err == nil {
+				r.clearVoiceSessionFailure(params.ThreadID)
 				r.recordVoiceMetric(voiceSessionStartMetric, 1)
 				r.notifyRealtime(notifications)
 				return
@@ -39,7 +41,7 @@ func (r *RuntimeRouter) startRealtimeConversationAsync(params realtime.StartPara
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			return
 		}
-		r.recordVoiceMetric(voiceSessionFailureMetric, 1)
+		r.recordVoiceSessionFailure(params.ThreadID, "backend", "starting")
 		r.notifyRealtime([]realtime.Notification{{
 			Method: realtime.NotificationError,
 			Params: realtime.ErrorNotification{ThreadID: strings.TrimSpace(params.ThreadID), Message: err.Error()},
@@ -67,6 +69,69 @@ func (r *RuntimeRouter) recordVoiceMetric(name string, inc int) {
 	r.services.VoiceMetrics.Counter(name, inc, nil)
 }
 
+// voiceFailureCauses mirrors Rust's bounded RealtimeFailureCause wire values.
+var voiceFailureCauses = map[string]struct{}{
+	"app_server_disconnect": {}, "app_server_request": {}, "audio_controls": {},
+	"audio_devices": {}, "audio_session": {}, "backend": {},
+	"connection_unknown": {}, "helper_startup": {}, "negotiation_timed_out": {},
+	"local_request": {}, "runtime_initialization": {}, "shutdown": {},
+	"speech_delivery": {}, "transport": {}, "transport_closed": {}, "unknown_close": {},
+}
+
+// recordVoiceSessionFailure emits Rust #52756's failure counter with bounded
+// cause and lifecycle phase values, at most once per session.
+func (r *RuntimeRouter) recordVoiceSessionFailure(threadID, cause, phase string) {
+	if r == nil || r.services.VoiceMetrics == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	cause = strings.TrimSpace(cause)
+	if _, ok := voiceFailureCauses[cause]; !ok {
+		cause = "connection_unknown"
+	}
+	switch strings.TrimSpace(phase) {
+	case "starting", "active", "stopping":
+	default:
+		// Inactive sessions are not failures (Rust returns before recording).
+		return
+	}
+	r.realtimeEventMu.Lock()
+	if r.voiceFailureThreads == nil {
+		r.voiceFailureThreads = map[string]bool{}
+	}
+	if r.voiceFailureThreads[threadID] {
+		r.realtimeEventMu.Unlock()
+		return
+	}
+	r.voiceFailureThreads[threadID] = true
+	r.realtimeEventMu.Unlock()
+	r.services.VoiceMetrics.Counter(voiceSessionFailureMetric, 1, map[string]string{
+		"cause": cause,
+		"phase": strings.TrimSpace(phase),
+	})
+}
+
+func (r *RuntimeRouter) voiceSessionFailed(threadID string) bool {
+	if r == nil {
+		return false
+	}
+	r.realtimeEventMu.Lock()
+	defer r.realtimeEventMu.Unlock()
+	return r.voiceFailureThreads[strings.TrimSpace(threadID)]
+}
+
+func (r *RuntimeRouter) clearVoiceSessionFailure(threadID string) {
+	if r == nil {
+		return
+	}
+	r.realtimeEventMu.Lock()
+	delete(r.voiceFailureThreads, strings.TrimSpace(threadID))
+	r.realtimeEventMu.Unlock()
+}
+
 // recordVoiceSessionDuration reports how long a voice session lasted. The
 // duration is available once the session is closed, so it is recorded when the
 // closed notification is forwarded and only once per thread.
@@ -91,24 +156,35 @@ func (r *RuntimeRouter) recordVoiceSessionDuration(notification *realtime.Notifi
 		return
 	}
 	duration := state.ClosedAt.Sub(state.StartedAt)
-	if duration < 0 || !r.claimVoiceDuration(threadID) {
+	if duration < 0 || !r.claimVoiceDuration(threadID, state.StartedAt) {
 		return
 	}
-	r.services.VoiceMetrics.RecordDuration(voiceSessionDurationMetric, duration, nil)
+	r.services.VoiceMetrics.RecordDuration(voiceSessionDurationMetric, duration, r.voiceDurationTags(threadID))
+	r.clearVoiceSessionFailure(threadID)
+}
+
+// voiceDurationTags reports the terminal outcome for the duration metric:
+// failure when this session already recorded a bounded failure, success
+// otherwise (Rust #52756).
+func (r *RuntimeRouter) voiceDurationTags(threadID string) map[string]string {
+	if r != nil && r.voiceSessionFailed(threadID) {
+		return map[string]string{"outcome": "failure"}
+	}
+	return map[string]string{"outcome": "success"}
 }
 
 // claimVoiceDuration reports whether this thread's duration has still to be
 // recorded.
-func (r *RuntimeRouter) claimVoiceDuration(threadID string) bool {
+func (r *RuntimeRouter) claimVoiceDuration(threadID string, startedAt time.Time) bool {
 	r.realtimeEventMu.Lock()
 	defer r.realtimeEventMu.Unlock()
 	if r.voiceDurationRecorded == nil {
-		r.voiceDurationRecorded = map[string]bool{}
+		r.voiceDurationRecorded = map[string]time.Time{}
 	}
-	if r.voiceDurationRecorded[threadID] {
+	if previous, ok := r.voiceDurationRecorded[threadID]; ok && previous.Equal(startedAt) {
 		return false
 	}
-	r.voiceDurationRecorded[threadID] = true
+	r.voiceDurationRecorded[threadID] = startedAt
 	return true
 }
 
@@ -228,6 +304,7 @@ func (r *RuntimeRouter) stopRealtimeConversationAsync(params realtime.StopParams
 			err = nil
 		}
 		if err != nil {
+			r.recordVoiceSessionFailure(params.ThreadID, "app_server_request", "stopping")
 			r.notifyRealtimeOperationError(params.ThreadID, err)
 			return
 		}

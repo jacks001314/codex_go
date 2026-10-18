@@ -507,9 +507,13 @@ type RuntimeRouter struct {
 	realtimeOpsQueues     map[string]chan func(context.Context)
 	realtimeEventMu       sync.Mutex
 	realtimeEventLocks    map[string]*sync.Mutex
-	// voiceDurationRecorded deduplicates the voice session duration metric,
-	// which is recorded once per completed session.
-	voiceDurationRecorded map[string]bool
+	// voiceDurationRecorded deduplicates the voice session duration metric by
+	// session start time, which is recorded once per completed session.
+	voiceDurationRecorded map[string]time.Time
+	// voiceFailureThreads marks sessions that already recorded their bounded
+	// failure metric (Rust #52756), so the terminal duration outcome can carry
+	// `failure` and repeated errors do not double-count.
+	voiceFailureThreads map[string]bool
 	// voiceSessionWindows retains the active and recent closed realtime sessions
 	// per thread so delayed compaction analytics can resolve their start time.
 	voiceSessionWindows   map[string][]voiceSessionWindow

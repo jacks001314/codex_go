@@ -29587,9 +29587,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 1/6; needs review: RealtimeFailureCause, RealtimeWebrtcStartupFailure, on_realtime_error, record_realtime_disconnect_failure, record_realtime_failure"
+        "Round 555 (app-server metric half): codex.voice.session.failure carries bounded cause/phase tags and records at most once per session; the duration metric carries a success/failure outcome and deduplicates per session start. Start failures classify as backend/starting and stop failures as app_server_request/stopping. Remaining: TUI-side typed WebRTC error preservation and disconnect-failure recording for background sessions have no Go carrier. Tests: go test ./appserver -run 'Voice|Realtime' -count=1"
       ]
     },
     {
