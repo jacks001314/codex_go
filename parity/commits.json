@@ -4574,9 +4574,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: type_chars_humanlike"
+        "N/A by architecture (audit): upstream dde85b435b (#41613) only relocates Vim history-navigation tests and exports a test-only typing helper. Go already keeps the equivalent behavior tests in tui/tea/edit_queued_message_test.go and vim_mode_test.go, and has no chat_composer/history_search module boundary to move them across. No observable behavior changed."
       ]
     },
     {
@@ -6689,9 +6689,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: handle_paste_enter"
+        "N/A by architecture (audit): upstream e6a944ad75 (#42397) only moves agents-overview rendering and paste-burst Enter handling into Rust submodules without behavior changes. Go already has separate tui/agents_overview/render.go and reconnect/input files, and its paste-burst handling is covered by existing tea tests; there is no equivalent file move to perform."
       ]
     },
     {
