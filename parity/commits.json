@@ -2891,9 +2891,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 437): the persistence branch lives in the Guardian V2 async scorer, which Go does not have (its Guardian path is the synchronous reviewer). Go's rollout.SecurityRiskScore API is a persistence/parse carrier only, with no production writer; loaded security_risk_score lines never enter sessionItemsFromRolloutLines, so resumed/forked threads cannot restore a persisted score. Rust-only extension tests and session.rs restore removal have no Go carrier."
       ]
     },
     {
