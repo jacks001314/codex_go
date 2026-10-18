@@ -2146,9 +2146,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/8; needs review: ModelInfoOverrides, StepSettingsConstraints, StepSettingsUpdate, step_settings_constraints"
+        "Implemented step-settings candidate validation against the permission profile proposed by the same write. Protected models require the auto_review reviewer plus a restricted profile with Guardian enabled; full-disk access or an explicit user reviewer is rejected without changing settings. Standalone settings, turn start, and active-turn settings all use the shared validator, and turn-start permission selections now enter the committed settings snapshot."
       ]
     },
     {

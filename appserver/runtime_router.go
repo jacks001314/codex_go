@@ -7036,6 +7036,14 @@ func (r *RuntimeRouter) handleTurnStart(request *Request) (*turn.TurnStartRespon
 	if err := r.prepareTurnStartParams(params); err != nil {
 		return nil, err
 	}
+	reviewerExplicit := params.ApprovalsReviewer != nil && strings.TrimSpace(*params.ApprovalsReviewer) != ""
+	if err := r.validateTurnStepSettings(params, reviewerExplicit); err != nil {
+		return nil, err
+	}
+	if hasSettingsUpdate {
+		// Validation may select AutoReview for the proposed protected model.
+		settingsUpdate.ApprovalsReviewer = cloneString(params.ApprovalsReviewer)
+	}
 	if err := params.Validate(); err != nil {
 		return nil, err
 	}
@@ -7569,6 +7577,10 @@ func turnStartSettingsUpdateParams(params *turn.TurnStartParams) (*SettingsUpdat
 	}
 	update := &SettingsUpdateParams{ThreadID: strings.TrimSpace(params.ThreadID)}
 	hasUpdate := false
+	if params.Permissions != nil {
+		update.Permissions = cloneString(params.Permissions)
+		hasUpdate = true
+	}
 	// Rust #44905: a supplied disabled-plugin list replaces the saved selection;
 	// an empty list clears it.
 	if params.DisabledPluginIDs != nil {
@@ -8168,6 +8180,9 @@ func (r *RuntimeRouter) handleTurnSettingsUpdate(request *Request) (*turn.TurnSe
 			return nil, jsonRPCInvalidRequest("turn settings updates require the step_model_switching feature")
 		}
 	}
+	if err := r.validateActiveTurnStepSettings(&params); err != nil {
+		return nil, err
+	}
 	if params.ApprovalsReviewer != nil {
 		r.updateActiveTurnApprovalsReviewer(&turn.TurnSteerParams{
 			ThreadID:          params.ThreadID,
@@ -8566,6 +8581,9 @@ func (r *RuntimeRouter) dispatchThreadExtra(request *Request) (any, error) {
 			if err := rejectDisallowedPermissionProfileOverride(cfg, "invalid thread settings override", params.Permissions); err != nil {
 				return nil, err
 			}
+		}
+		if err := r.validateThreadSettingsStepSettings(&params); err != nil {
+			return nil, err
 		}
 		response, err := r.commitThreadSettingsUpdateWithConnection(&params, true, request.normalizedConnectionID(), true)
 		if err != nil {
