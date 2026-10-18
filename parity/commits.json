@@ -23349,9 +23349,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 526 (audit): already implemented. The turn loop emits codex.turn.phase sampling/tool-blocking spans, automatic compaction has its own span, mailbox preemption records are trace-safe, and accepted input is correlated with the assigned turn ID. Tests: go test ./turn ./telemetry -run 'TurnPhase|Sampling|Compaction|MailboxPreemption|TelemetrySpan' -count=1"
       ]
     },
     {
@@ -24106,9 +24106,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: lock_goal_resume"
+        "Round 525 (audit): already implemented. thread/goal/set and thread/goal/clear tag host-originated goal mutations, context/user_goal renders the persisted model-history fragment, and exec/goal_retention preserves host-annotated goals across compaction and history replacement. Tests: go test ./context ./exec ./app -run 'Goal|UserGoal' -count=1"
       ]
     },
     {
@@ -26725,9 +26725,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/7; needs review: with_cloud_catalog"
+        "Round 524 (audit): already implemented. environment/add stores per-environment required skills, turn setup snapshots them, and inference is gated until every required skill is enabled; missing/disabled requirements fail before the model request and the Guardian source exemption is covered. Tests: go test ./appserver ./turn -run 'RequiredSkills|EnvironmentAddStoresRequiredSkills' -count=1"
       ]
     },
     {
