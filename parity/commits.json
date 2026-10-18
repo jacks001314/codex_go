@@ -27053,9 +27053,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 733 (audit): codex.guardian.decision.duration_ms wraps the complete approval decision, including fast decisions, preparation, model review, and cancellation, rather than measuring only the model call. Test: go test ./appserver -run GuardianDecision -count=1"
       ]
     },
     {
@@ -27065,9 +27065,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 733 (audit): codex.multi_agent.result_delivery records queued and failed outcomes when the parent accepts or rejects a child result, including mailbox delivery. Test: go test ./appserver -run ResultDelivery -count=1"
       ]
     },
     {
@@ -27077,9 +27077,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 733 (audit): completed wait_agent calls record codex.multi_agent.wait.duration_ms with the bounded outcome tag observed by the wait; dropped waits do not add records. Test: go test ./appserver -run MultiAgentWait -count=1"
       ]
     },
     {
@@ -27089,9 +27089,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 733 (audit): turn analytics carry the resolved multi_agent_version as disabled, v1, or v2; both the telemetry event payload and app-server turn event expose the same value. Tests: go test ./telemetry -run MultiAgentVersion -count=1; go test ./appserver -run MultiAgentVersion -count=1"
       ]
     },
     {
@@ -27101,9 +27101,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 733 (audit): codex.guardian.denial_limit_reached increments once when a turn reaches its denial limit and interrupts review, increments again for a later turn's limit, and does not count approvals or denials below the limit. Test: go test ./appserver -run GuardianDenialLimit -count=1"
       ]
     },
     {
