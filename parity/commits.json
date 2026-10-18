@@ -5160,9 +5160,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: file_system_sandbox_policy_context_for_cwd"
+        "Round 498 (audit): partial. permissionPromptExecutorContextForTurn and the sandbox permission-prompt helpers render writable roots/deny entries in the selected executor's convention (TestPermissionsInstructionsUseRemoteExecutorPathsLikeRust). However the actual grant/preapproval path still calls sandbox.IntersectPermissionProfiles and PermissionProfileWithAdditionalPermissions with a host-native cwd; cleanRunPath/materializePermissionGlob do not carry executor URI convention, temporary directories, or project roots. Remaining: thread the selected environment policy context into grant intersection/materialization for exec_command, apply_patch, and extension tools, and fail closed on unresolved symbolic temp/project grants."
       ]
     },
     {
