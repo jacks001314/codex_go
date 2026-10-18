@@ -1356,7 +1356,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 80b88a700e4300022fe1893ecca9b8376d0c85d9	54076	Avoid false URL-launch detections in literal PowerShell commands (#54076)	2026-10-14	core	3	0	0.00	0	0	not_applicable	dangerous_powershell_literal_words_match,is_dangerous_powershell_literal_words,powershell_commands_are_independent
 80cce09d059780528e59353ab3d87e4c97d1e944	40398	Stabilize the mismatched executor Stop hook test (#40398)	2026-08-24	core	0	0		0	0	not_applicable	
 80d7ca34bce7497fa72a13af74695c759a48a8d4	42762	Retain user instructions in guardian thread context (#42762)	2026-09-04	guardian	13	10	0.77	0	0	audit_pending	CompactedMessageIdentity,enable_user_message_retention,restore_retained_context
-80e0b51c9e44853471fae105032fa000c77d3e4a	51230	Make session lookup pagination stable and report listing failures (#51230)	2026-10-06	tui	0	0		0	0	not_applicable	
+80e0b51c9e44853471fae105032fa000c77d3e4a	51230	Make session lookup pagination stable and report listing failures (#51230)	2026-10-06	persistence	0	0		0	0	partial
 80e871309aec1ee2cc2fe58e4da61ccffc7ee3fd	40504	Route cyber Trusted Access links by plan type (#40504)	2026-08-25	tui	1	1	1.00	0	0	complete	
 811fe5fa4311d33a4d4626509025b6c61100245e	47422	Recover unsent question drafts when TUI turns end (#47422)	2026-09-23	tui	4	0	0.00	0	0	implementation_pending	append_question_drafts,append_recovered_drafts,take_pending_drafts,take_question_drafts
 814de47b69dd63a2660fd14f9af66690888d183e	48611	Centralize persistent mode enablement checks (#48611)	2026-09-27	persistence	1	1	1.00	0	0	complete	

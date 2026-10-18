@@ -479,7 +479,7 @@ func TestStoreListTimeCursors(t *testing.T) {
 	if got := ids(page.Records); !reflect.DeepEqual(got, []ThreadID{"watermark"}) {
 		t.Fatalf("List(desc) = %v, want [watermark]", got)
 	}
-	if page.NextCursor != listTimeCursor(base.Add(2*time.Hour)) {
+	if want := listTimeCursor(base.Add(2*time.Hour)) + "|watermark"; page.NextCursor != want {
 		t.Fatalf("NextCursor = %q", page.NextCursor)
 	}
 	if page.BackwardsCursor != listBackwardsCursor(base.Add(2*time.Hour), SortDesc) {

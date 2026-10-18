@@ -2304,8 +2304,13 @@ func listStartIndex(records []Record, options ListOptions) (int, bool, error) {
 	if start, ok := parseLegacyOffsetCursor(cursor); ok {
 		return start, true, nil
 	}
-	anchor, err := time.Parse(time.RFC3339Nano, cursor)
+	anchorText, anchorID, hasAnchorID := strings.Cut(cursor, "|")
+	anchor, err := time.Parse(time.RFC3339Nano, anchorText)
 	if err != nil {
+		return 0, false, fmt.Errorf("%w: invalid cursor %q", ErrInvalidThreadID, cursor)
+	}
+	anchorID = strings.TrimSpace(anchorID)
+	if hasAnchorID && anchorID == "" {
 		return 0, false, fmt.Errorf("%w: invalid cursor %q", ErrInvalidThreadID, cursor)
 	}
 	direction := options.SortDirection
@@ -2319,12 +2324,12 @@ func listStartIndex(records []Record, options ListOptions) (int, bool, error) {
 	for i := range records {
 		value := sortTime(&records[i], options.SortKey)
 		if direction == SortAsc {
-			if value.After(anchor) {
+			if value.After(anchor) || (hasAnchorID && value.Equal(anchor) && string(records[i].ID) > anchorID) {
 				return i, false, nil
 			}
 			continue
 		}
-		if value.Before(anchor) {
+		if value.Before(anchor) || (hasAnchorID && value.Equal(anchor) && string(records[i].ID) < anchorID) {
 			return i, false, nil
 		}
 	}
@@ -2359,7 +2364,16 @@ func listCursor(record *Record, key SortKey) string {
 		}
 		return fmt.Sprintf("%d|%s", *record.SectionPosition, record.ID)
 	}
-	return listTimeCursor(sortTime(record, key))
+	if record == nil {
+		return ""
+	}
+	timeCursor := listTimeCursor(sortTime(record, key))
+	if timeCursor == "" {
+		return ""
+	}
+	// Rust #51230: include the thread id so equal timestamps cannot skip or
+	// duplicate records across pages.
+	return timeCursor + "|" + string(record.ID)
 }
 
 func parseSectionPositionCursor(cursor string) (int64, ThreadID, error) {

@@ -26944,9 +26944,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 555 (cursor half): session and thread-list time cursors now carry the timestamp plus the thread id tie-breaker, so equal CreatedAt records are neither skipped nor duplicated across pages; legacy timestamp-only cursors keep their historical skip behavior and app-server validation accepts both forms. Remaining: database-only label lookup uniqueness across pages and resume/fork picker pagination-failure display. Tests: go test ./session -run ListTimeCursor -count=1; go test ./session -count=1"
       ]
     },
     {

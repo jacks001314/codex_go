@@ -3809,8 +3809,13 @@ func validThreadListCursor(cursor string) bool {
 	if allDigits {
 		return true
 	}
-	if position, threadID, ok := strings.Cut(cursor, "|"); ok && strings.TrimSpace(threadID) != "" {
-		_, err := strconv.ParseInt(position, 10, 64)
+	if anchor, threadID, ok := strings.Cut(cursor, "|"); ok && strings.TrimSpace(threadID) != "" {
+		if _, err := strconv.ParseInt(anchor, 10, 64); err == nil {
+			return true
+		}
+		// Rust #51230: time-sorted cursors carry a timestamp plus the thread id
+		// tie-breaker.
+		_, err := time.Parse(time.RFC3339Nano, anchor)
 		return err == nil
 	}
 	_, err := time.Parse(time.RFC3339Nano, cursor)

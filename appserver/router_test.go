@@ -572,7 +572,7 @@ func TestRouterThreadListUsesTimeCursors(t *testing.T) {
 	if len(firstPage.Data) != 1 || firstPage.Data[0].ID != "thread-watermark" {
 		t.Fatalf("first page = %+v", firstPage)
 	}
-	wantNext := base.Add(2 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	wantNext := base.Add(2*time.Hour).UTC().Format("2006-01-02T15:04:05.000Z") + "|thread-watermark"
 	wantBackwards := base.Add(2*time.Hour - time.Millisecond).UTC().Format("2006-01-02T15:04:05.000Z")
 	if firstPage.NextCursor == nil || *firstPage.NextCursor != wantNext {
 		t.Fatalf("nextCursor = %+v, want %q", firstPage.NextCursor, wantNext)
