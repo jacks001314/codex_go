@@ -9687,9 +9687,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: checkpoint_thread_settings, replace_path_and_deduplicate, with_runtime_workspace_roots"
+        "Round 456 (audit): Go persists runtime_workspace_roots in record metadata, restores them on resume, applies explicit fork roots, and deduplicates/cleans paths (TestRouterResumeAndForkRuntimeWorkspaceRootsUseEffectiveRoots). Missing full parity: the protocol cannot distinguish an omitted override from an explicit empty list, so empty selections fall back to cwd/stored roots; cwd changes do not retarget the old cwd entry; and restored-host path validation/checkpointing semantics are not fully covered. Tests: go test ./appserver -run 'RuntimeWorkspaceRoots' -count=1"
       ]
     },
     {
