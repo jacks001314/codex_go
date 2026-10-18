@@ -22520,9 +22520,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: PrewarmInput, persistent_execution_enabled, prewarm_with_history"
+        "Blocked on an idle-thread session/reconnect lifecycle that Go does not have. Go's startup prewarm is scheduled only for newly created threads with an empty-input AgentRequest; there is no idle unload/reload boundary, history-mode PrewarmInput, or websocket reconnect path that can prepare generate=false history for a later turn. The existing persistent-mode behavior is present under a different helper name."
       ]
     },
     {

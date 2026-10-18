@@ -625,7 +625,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 3ee99cde7074a09f57b8cd1c4b42a3dbc06ca023	54046	Track approval cancellation sources and Guardian context changes (#54046)	2026-10-14	guardian	4	2	0.50	0	0	complete	ApprovalResult,ReviewInvalidation
 3ef3cecd2002c7841519df37417426d66fd5cc3d	44344	Open tasks with Right from the agents overview (#44344)	2026-09-09	tui	1	0	0.00	0	0	implementation_pending	can_leave_empty_prompt_with_right
 3f1ccb7ceb814e54314826f68d61c892e2f5a48e	51140	Isolate Guardian checkpoint recovery flags per review attempt (#51140)	2026-10-05	guardian	0	0		0	0	not_applicable	
-3f4668da20a56907f0a8c546c8cffa16e5e03f28	48812	Add history-aware prewarming for idle threads (#48812)	2026-09-27	core	4	1	0.25	0	0	audit_pending	PrewarmInput,persistent_execution_enabled,prewarm_with_history
+3f4668da20a56907f0a8c546c8cffa16e5e03f28	48812	Add history-aware prewarming for idle threads (#48812)	2026-09-27	core	4	1	0.25	0	0	blocked_precondition	PrewarmInput,persistent_execution_enabled,prewarm_with_history
 3f59eb965a8bed447065dfcc1b5047f987a647bc	44921	Enable TUI voice conversations by default (#44921)	2026-09-11	tui	0	0		0	0	not_applicable	
 3f76e88a480f15258eab3512e7eafca77bbe80ee	43797	Add configurable memory versions with isolated storage (#43797)	2026-09-08	appserver	8	8	1.00	0	0	complete	
 3f97f2b3bd890744240374a832137b4b7d0fe1f4	50199	Restore the account email in `/status` after account updates (#50199)	2026-10-02	tui	2	0	0.00	0	0	implementation_pending	on_account_email_loaded,refresh_account_email
