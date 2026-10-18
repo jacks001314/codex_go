@@ -38,9 +38,9 @@ const (
 type CollabAgentToolCallStatus string
 
 const (
-	CollabAgentToolCallInProgress CollabAgentToolCallStatus = "inProgress"
-	CollabAgentToolCallCompleted  CollabAgentToolCallStatus = "completed"
-	CollabAgentToolCallFailed     CollabAgentToolCallStatus = "failed"
+	CollabAgentToolCallInProgress  CollabAgentToolCallStatus = "inProgress"
+	CollabAgentToolCallCompleted   CollabAgentToolCallStatus = "completed"
+	CollabAgentToolCallFailed      CollabAgentToolCallStatus = "failed"
 	CollabAgentToolCallInterrupted CollabAgentToolCallStatus = "interrupted"
 )
 

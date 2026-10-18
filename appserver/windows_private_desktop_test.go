@@ -1,4 +1,4 @@
-﻿package appserver
+package appserver
 
 import (
 	"strings"

@@ -52,10 +52,10 @@ func TestRuntimeRouterTurnStartEmitsMemoryToolDeveloperInstructionsLikeRust(t *t
 // cases).
 func TestRuntimeRouterTurnStartOmitsMemoryToolDeveloperInstructionsWhenGated(t *testing.T) {
 	cases := []struct {
-		name          string
-		configTOML    string
-		writeSummary  bool
-		summary       string
+		name         string
+		configTOML   string
+		writeSummary bool
+		summary      string
 	}{
 		{name: "feature-disabled", configTOML: "", writeSummary: true, summary: "v1\nconventions: tabs\n"},
 		{name: "use-memories-false", configTOML: "[features]\nmemories = true\n[memories]\nuse_memories = false\n", writeSummary: true, summary: "v1\nconventions: tabs\n"},

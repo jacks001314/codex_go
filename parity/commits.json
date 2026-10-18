@@ -25058,9 +25058,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/14; needs review: EmaAuthenticatedHttpClient, EmaCredentialLease, EmaCredentialSnapshot, EmaRequestAuthority, EmaTokenSource"
+        "Enterprise OAuth credentials carry refresh tokens, and the HTTP MCP client refreshes them under the credential lock, adopts concurrent refreshes, retires rejected refresh tokens, and persists the new snapshot. Enterprise generation files invalidate stale login/commit attempts after logout or replacement. Tests: go test ./mcp -run 'Enterprise|Refresh|EMA|OAuth' -count=1; go test ./mcp -count=1"
       ]
     },
     {
