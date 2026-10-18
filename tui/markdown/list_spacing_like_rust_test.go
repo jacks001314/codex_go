@@ -137,3 +137,9 @@ func TestUniformListSpacingPreservesRenderedLinks(t *testing.T) {
 		t.Fatalf("second link occurrences = %d, want 1", got)
 	}
 }
+
+func TestUniformListSpacingIgnoresTableRowsStartingWithBullet(t *testing.T) {
+	if info := parseRenderedListLine("│ • item │"); info.kind != renderedListNone {
+		t.Fatalf("table row parsed as list item: %#v", info)
+	}
+}

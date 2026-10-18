@@ -105,6 +105,9 @@ func applyUniformListSpacing(rendered string) string {
 
 func parseRenderedListLine(line string) renderedListLine {
 	text := utils.StripANSI(line)
+	if renderedTableLine(text) {
+		return renderedListLine{}
+	}
 	quoteDepth, text := splitRenderedQuotePrefix(text)
 	indent := len(text) - len(strings.TrimLeft(text, " "))
 	body := text[indent:]
@@ -123,6 +126,13 @@ func parseRenderedListLine(line string) renderedListLine {
 		return renderedListLine{quoteDepth: quoteDepth, indent: indent, kind: renderedListOrdered}
 	}
 	return renderedListLine{quoteDepth: quoteDepth, indent: indent}
+}
+
+// renderedTableLine keeps table cells that begin with a bullet glyph from being
+// mistaken for a blockquote/list row after the box-drawing quote prefix.
+func renderedTableLine(text string) bool {
+	trimmed := strings.TrimRight(text, " ")
+	return strings.HasPrefix(trimmed, "│") && strings.HasSuffix(trimmed, "│") && strings.Count(trimmed, "│") >= 2
 }
 
 func renderedListItemEnd(lines []string, infos []renderedListLine, start int) (int, bool) {
