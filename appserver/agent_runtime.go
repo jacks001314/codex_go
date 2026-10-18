@@ -135,6 +135,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.fullAccess = r.guardianFullAccessForTurn
 		modelReviewer.approvalsReviewer = r.guardianApprovalsReviewerForTurn
 		modelReviewer.requiredReview = r.guardianReviewRequiredForTurn
+		modelReviewer.rolloverForTokenBudget = r.guardianReviewTokenBudgetReached
 		modelReviewer.permissionProfile = r.guardianReviewPermissionProfileForTurn
 		modelReviewer.turnPermissionProfile = r.guardianTurnPermissionProfileForTurn
 		modelReviewer.latestResponseID = r.guardianLatestResponseIDForTurn
@@ -271,6 +272,40 @@ func (r *RuntimeRouter) guardianReviewRequiredForTurn(threadID, turnID string) b
 		modelID = firstNonEmpty(active.RunConfig.Model, modelID)
 	}
 	return autoReviewRequiredForModel(cfg, modelID)
+}
+
+// guardianReviewTokenBudgetReached mirrors Rust #41221: the review rollover
+// decision resolves the parent turn's captured token-budget preferences against
+// the review model's defaults instead of applying the review model defaults
+// unconditionally.
+func (r *RuntimeRouter) guardianReviewTokenBudgetReached(threadID, turnID string) bool {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil || active.RunConfig == nil || !active.RunConfig.TokenBudgetFeatureEnabled {
+		return false
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil {
+		return false
+	}
+	reviewModel := strings.TrimSpace(r.guardianReviewModelForTurn(threadID, turnID))
+	if reviewModel == "" {
+		return false
+	}
+	budget := config.ResolveTokenBudgetConfig(
+		active.RunConfig.ConfiguredTokenBudget,
+		active.RunConfig.UseModelTokenBudgetDefaults,
+		modelTokenBudgetDefaults(r.modelInfoForRuntimeWithConfig(reviewModel, cfg)),
+		active.RunConfig.TokenBudgetFeatureEnabled,
+	)
+	buffer := 0
+	if budget != nil && budget.AutoCompactFallbackBufferTokens != nil {
+		buffer = *budget.AutoCompactFallbackBufferTokens
+	}
+	status := r.compactTokenStatusForTurnWithPolicy(threadID, reviewModel, active.Params, func(policy compact.Policy) compact.Policy {
+		policy.FallbackBufferTokens = buffer
+		return policy
+	})
+	return status.ShouldCompact
 }
 
 func (r *RuntimeRouter) guardianApprovalsReviewerForTurn(threadID, turnID string) string {

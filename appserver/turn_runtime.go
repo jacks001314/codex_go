@@ -6035,6 +6035,10 @@ func (r *RuntimeRouter) compactTokenStatusForThread(threadID string) compact.Tok
 }
 
 func (r *RuntimeRouter) compactTokenStatusForTurn(threadID string, modelID string, params *turn.TurnStartParams) compact.TokenStatus {
+	return r.compactTokenStatusForTurnWithPolicy(threadID, modelID, params, nil)
+}
+
+func (r *RuntimeRouter) compactTokenStatusForTurnWithPolicy(threadID string, modelID string, params *turn.TurnStartParams, adjust func(compact.Policy) compact.Policy) compact.TokenStatus {
 	record, err := r.threadRecord(session.ThreadID(threadID), true, true)
 	if err != nil || record == nil {
 		return compact.TokenStatus{}
@@ -6059,6 +6063,9 @@ func (r *RuntimeRouter) compactTokenStatusForTurn(threadID string, modelID strin
 		active = compact.EstimateActiveContextTokens(compactItemsFromSessionItems(record.Items), active)
 	}
 	policy := r.compactPolicyForTurn(modelID, params, extra)
+	if adjust != nil {
+		policy = adjust(policy)
+	}
 	if policy.Scope == compact.ScopeBodyAfterPrefix && policy.PrefillTokens <= 0 {
 		// Rust estimates the carried prefix from the resumed history when no
 		// server-observed baseline exists yet for the current window.

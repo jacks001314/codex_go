@@ -96,9 +96,13 @@ type modelGuardianReviewer struct {
 	// remaining user-mode fast path must defer them to a full review as well.
 	// Full Access stays outside this guard because Rust's routing approves it
 	// before contributors run.
-	requiredReview    func(threadID, turnID string) bool
-	environment       func(context.Context, string, string) ([]any, error)
-	permissionProfile func(threadID, turnID string) *sandbox.PermissionProfile
+	requiredReview func(threadID, turnID string) bool
+	// rolloverForTokenBudget reports whether the Guardian follow-up review must
+	// start a fresh response chain because the reviewed turn's token budget is
+	// exhausted under the review model's defaults (Rust #41221).
+	rolloverForTokenBudget func(threadID, turnID string) bool
+	environment            func(context.Context, string, string) ([]any, error)
+	permissionProfile      func(threadID, turnID string) *sandbox.PermissionProfile
 	// turnPermissionProfile resolves the reviewed turn's own profile and cwd for
 	// the permission evidence, which is distinct from the read-only profile the
 	// reviewer's session uses, plus the reviewed environment's selection id when
@@ -693,6 +697,10 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 	plan := r.planForTurn(threadID, turnID)
 	if runner, ok := r.agent.(*guardianSessionRunner); ok {
 		runner.EnsureReviewPolicy(plan.NodeReplPolicy)
+		if r.rolloverForTokenBudget != nil && r.rolloverForTokenBudget(threadID, turnID) {
+			runner.RolloverForContext()
+			contextChanged = true
+		}
 	}
 	feedbackCapture.model = plan.Selection.Model
 	feedbackCapture.instructions = plan.Instructions

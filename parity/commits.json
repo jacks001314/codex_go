@@ -3794,9 +3794,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Guardian review rollover resolves the parent turn's captured token-budget preferences and model-default flag against the review model, applies the resolved auto-compact fallback buffer, and starts a fresh reviewer response chain when the review-model token limit is reached. Tests: go test ./appserver -run 'GuardianTokenBudgetRollover|TokenBudget' -count=1"
       ]
     },
     {
