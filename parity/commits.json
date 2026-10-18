@@ -18185,9 +18185,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: render_classifier_instructions"
+        "Equivalent implementation already present: managed guardian_extra_policy overrides [auto_review].extra_policy, blank layers fall through, every {{ extra_policy }} slot is substituted after tenant-policy substitution, and the resulting policy reaches the Guardian reviewer instructions."
       ]
     },
     {
