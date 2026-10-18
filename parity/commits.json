@@ -8391,9 +8391,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: TokenBudgetStartupConfig, prepare_token_budget_for_startup"
+        "Round 478 (audit): model.ModelInfo.SupportsExperimentalContext is parsed from the catalog, and both experimentalContextManagementEligible and token_budget_history_notes require it before activating token-budget/history-notes/new_context. Omitted capability stays false. Tests: go test ./appserver -run 'PromptCacheKey|ExperimentalContext|TokenBudget|HistoryNotes' -count=1"
       ]
     },
     {
@@ -12087,9 +12087,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: tools_available"
+        "Round 479 (audit): RuntimeRouter.responsesPromptCacheKey inherits the parent session for an ephemeral fork with parent lineage while non-ephemeral forks and subagent threads keep their own identity. Tests cover ephemeral fork, non-ephemeral fork, parent, and subagent affinity: go test ./appserver -run 'PromptCacheKey|ExperimentalContext|TokenBudget|HistoryNotes' -count=1"
       ]
     },
     {
