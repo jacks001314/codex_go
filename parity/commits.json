@@ -7421,9 +7421,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ToolOrchestrator, allowed_symlinked_codex_home, with_allowed_symlinked_codex_home"
+        "Round 678 (implementation): config resolves allow_symlinked_codex_home only from the top-level user layer, rejects project/CLI/profile activation, preserves a CODEX_HOME alias only when it resolves to the loaded home, and carries the value through shell, apply_patch, interactive/app-server, codex sandbox, exec-server process/fs-helper, and remote executor paths. Seatbelt rejects nested writable-root symlinks by default, resolves opted-in roots, and references the opt-out in the error. Tests: go test ./config -run 'AllowedSymlinked' -count=1; go test ./sandbox ./tool ./execserver -run 'AllowedSymlinked|Seatbelt|WritableRoot|PrepareExecProcess|SessionServerCarries' -count=1"
       ]
     },
     {
@@ -23761,9 +23761,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's SessionHeaderHistoryCell has no greeting field or WithGreeting method, and startup/session headers omit randomized phrases; raw headers consistently include model and directory fields. Regression tests assert the greeting state/method are absent and no startup phrase leaks into display or raw headers."
       ]
     },
     {
@@ -24074,9 +24074,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust marks rendered local file-target spans as literal in its app-owned Markdown selection copy metadata. Go's transcript selection is terminal-owned and copies displayed cells directly, so no Markdown escape can be added to a selected path; there is no CopyLine literal-range serializer to extend."
       ]
     },
     {
@@ -24663,9 +24663,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust must flush held character/burst buffers before classifying Enter. Go's tea composer inserts text-producing runes immediately and only tracks an Enter-suppression window plus last-character time; an expired window lets Enter submit directly, with no hidden buffer to flush. Tests cover submission after burst expiry and newline insertion during the window."
       ]
     },
     {
@@ -24723,9 +24723,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's app/plugin URL openers do not add a success history entry; only failures add an error message (for example the plugin install URL failure path). The browser-open success-notice behavior is already absent."
       ]
     },
     {

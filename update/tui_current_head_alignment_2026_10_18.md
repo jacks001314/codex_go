@@ -2075,6 +2075,14 @@ green.
   with secondary styling; budget-limited turns keep the error notice.
 - `#49043` is not applicable at current Rust head: the Pro Extra/Standard/Max
   labels were superseded and Rust again uses Pro 200/100/500, matching Go.
+- `#49395` is complete: session headers no longer bind randomized greeting state
+  and consistently expose model/directory fields.
+- `#49564` is not applicable: terminal-owned transcript selection copies literal
+  displayed path text without a Markdown-selection serializer.
+- `#49810` is not applicable: Go inserts burst runes immediately and has no held
+  paste buffer to flush before Enter; expired windows submit directly.
+- `#49816` is complete by behavior: URL openers add errors but no browser-open
+  success history entry.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
