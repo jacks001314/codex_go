@@ -1820,7 +1820,7 @@ a9e447a69dee4f2789dd8d8c776e314772c1f049	40643	Migrate Claude commands without f
 a9e7920da1019ad19e794aaa301af5a3070e8462	40393	Classify Guardian V2 risk with a single token (#40393)	2026-08-24	guardian	1	0	0.00	0	0	not_applicable	CLASSIFICATION_OUTPUT_INSTRUCTIONS
 a9ed4f154a4fad64acf538d6418d3ed012aeab86	40844	Refine Guardian predictive risk classification (#40844)	2026-08-26	guardian	0	0		0	0	not_applicable	
 aa12ab45df0af59423fe21d4b9064539a5bc2244	43472	Recover missing Guardian root instructions in acceptance order (#43472)	2026-09-07	guardian	4	4	1.00	0	0	complete	
-aa380897f67b91e1a47d530d7286d497b6726d3f	47989	Add startup-only PID namespace inheritance to exec-server (#47989)	2026-09-25	execserver	2	0	0.00	0	0	implementation_pending	LinuxSandboxPidNamespace,with_linux_sandbox_pid_namespace
+aa380897f67b91e1a47d530d7286d497b6726d3f	47989	Add startup-only PID namespace inheritance to exec-server (#47989)	2026-09-25	execserver	2	0	0.00	0	0	not_applicable	LinuxSandboxPidNamespace,with_linux_sandbox_pid_namespace
 aa4a870e0663edf9efc8a33035236c657f66f06d	43125	Add explicit Windows tool selection for native voice builds (#43125)	2026-09-05	realtime	0	0		0	0	not_applicable	
 aa6635ece5acecb7dac021b55132d37708f9a9f3	51185	Retry transient gRPC code-mode session admission failures (#51185)	2026-10-05	core	1	1	1.00	0	0	complete	
 aa88a0333c751711901ce078f4b272a6a970f9b9	44248	Preserve tool output truncation budgets across resume and fork (#44248)	2026-09-09	appserver	1	1	1.00	0	0	complete	

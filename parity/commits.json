@@ -21296,9 +21296,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: LinuxSandboxPidNamespace, with_linux_sandbox_pid_namespace"
+        "Round 322 (audit): N/A - Go's Linux sandbox launcher always emits --unshare-pid and has no LinuxSandboxPidNamespace startup choice, helper namespace argument, or inherit mode. There is no exec-server startup/config carrier for preserving the caller PID namespace."
       ]
     },
     {
