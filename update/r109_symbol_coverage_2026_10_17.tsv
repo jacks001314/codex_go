@@ -932,7 +932,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 5937592c07e7321f6b0469ef34dd58a03c39a84c	49330	Keep remote control reconnect backoff capped during sustained failures (#49330)	2026-09-29	appserver	0	0		0	0	not_applicable	
 594283af5c0a4c99cdede91b0d7951524b2535fb	51391	Make URLs in asynchronous question titles clickable (#51391)	2026-10-06	tui	1	1	1.00	0	0	complete	
 595534314f7636b52da3a066aded5be87bbd9888	50018	Use descriptor-safe helpers for executable test fixtures (#50018)	2026-10-01	tui	0	0		0	0	not_applicable	
-595cc91e8cbb1c2ca822d0311dcf12709410c582	46661	Avoid fork when spawning macOS filesystem helpers (#46661)	2026-09-19	execserver	9	4	0.44	0	0	audit_pending	ChildStdin,DescriptorPolicy,SpawnFallback,descriptor_policy,wait_with_output
+595cc91e8cbb1c2ca822d0311dcf12709410c582	46661	Avoid fork when spawning macOS filesystem helpers (#46661)	2026-09-19	execserver	9	4	0.44	0	0	not_applicable	ChildStdin,DescriptorPolicy,SpawnFallback,descriptor_policy,wait_with_output
 596ae94fb00f8325d6bf835a9ebdc90baab4ad33	49710	Classify SQLite corruption using typed error codes (#49710)	2026-09-30	tui	1	1	1.00	0	0	complete	
 596f8c5c3c855b78eae3222c5ee0aad3a91f4b43	48775	Match pinned transcript headers to the original prompt style (#48775)	2026-09-27	tui	0	0		0	0	not_applicable	
 5971d42847aae04db0e3c70146e0b189fc9a6803	42293	Preserve verified answers across history compaction (#42293)	2026-09-02	tui	13	11	0.85	0	0	audit_pending	remove_turns,restore_retained_context

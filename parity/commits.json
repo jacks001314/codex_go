@@ -16639,9 +16639,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 4/9; needs review: ChildStdin, DescriptorPolicy, SpawnFallback, descriptor_policy, wait_with_output"
+        "N/A by architecture: the upstream change replaces Rust PTY child fork/exec with a macOS spawn helper path. Go's exec-server filesystem helper starts through os/exec directly and has no fork-in-parent PTY Child wrapper, so there is no equivalent fork path to remove."
       ]
     },
     {
