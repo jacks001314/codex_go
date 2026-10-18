@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	bubbletea "github.com/charmbracelet/bubbletea"
+
 	"codex_go/protocol"
 	codextui "codex_go/tui"
 	"codex_go/utils"
@@ -152,5 +154,54 @@ func TestComposerStarfieldSurvivesBootstrapThreadStart(t *testing.T) {
 	}
 	if dots := countSparkleDots(model.View()); dots == 0 {
 		t.Fatal("bootstrap Astra thread omitted the starfield")
+	}
+}
+
+// Rust #44879: losing focus stops animation frames, but the idle deadline
+// keeps running on wall-clock time; regaining focus after it clears the field.
+func TestComposerStarfieldPausesFramesWhileUnfocusedAndExpires(t *testing.T) {
+	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
+	_ = model.View()
+	if model.sparkle.phase != sparkleVisible {
+		t.Fatalf("phase before blur = %v, want visible", model.sparkle.phase)
+	}
+	updated, _ := model.Update(bubbletea.BlurMsg{})
+	model = updated.(*Model)
+	if !model.animEngine.Paused() {
+		t.Fatal("BlurMsg did not pause animation frames")
+	}
+	*now = (*now).Add(16 * time.Second)
+	updated, cmd := model.Update(bubbletea.FocusMsg{})
+	model = updated.(*Model)
+	if model.animEngine.Paused() {
+		t.Fatal("FocusMsg did not resume animation frames")
+	}
+	if cmd == nil {
+		t.Fatal("FocusMsg did not restart the tick loop")
+	}
+	if dots := countSparkleDots(model.View()); dots != 0 {
+		t.Fatalf("expired starfield rendered %d dots after focus", dots)
+	}
+	if model.sparkle.phase != sparkleFinished {
+		t.Fatalf("phase after expired focus = %v, want finished", model.sparkle.phase)
+	}
+}
+
+// Rust #44879: a focus round-trip before the deadline preserves the original
+// visible deadline instead of restarting the 15-second opportunity.
+func TestComposerStarfieldFocusGainPreservesVisibleDeadline(t *testing.T) {
+	model, now := sparkleTestModel(t, "gpt-6-astra", true, DefaultEffectsSettings())
+	_ = model.View()
+	visibleSince := model.sparkle.visibleSince
+	updated, _ := model.Update(bubbletea.BlurMsg{})
+	model = updated.(*Model)
+	*now = (*now).Add(2 * time.Second)
+	updated, _ = model.Update(bubbletea.FocusMsg{})
+	model = updated.(*Model)
+	if model.sparkle.phase != sparkleVisible || !model.sparkle.visibleSince.Equal(visibleSince) {
+		t.Fatalf("focus restarted sparkle: phase=%v since=%v want=%v", model.sparkle.phase, model.sparkle.visibleSince, visibleSince)
+	}
+	if dots := countSparkleDots(model.View()); dots == 0 {
+		t.Fatal("starfield disappeared during an early focus round-trip")
 	}
 }

@@ -3116,12 +3116,20 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 		codextui.InvalidateTerminalProgramStatus()
 		m.terminalFocused = true
 		m.noteRecapFocusGained()
-		return m, nil
+		if m.animEngine == nil {
+			return m, nil
+		}
+		// Rust #44879: frame scheduling resumes on focus, but the sparkle
+		// deadline keeps running on wall-clock time while unfocused.
+		return m, m.animEngine.EnsureRunning()
 	case bubbletea.BlurMsg:
 		m.clearLeaderChord()
 		m.terminalFocused = false
 		m.composerSelection.clear()
 		m.renderedSelection.clear()
+		if m.animEngine != nil {
+			m.animEngine.Pause()
+		}
 		return m, bubbletea.Batch(m.noteRecapFocusLost(), m.releasePrimarySelectionCmd())
 	case StatusMsg:
 		if warning, ok := warningMessageFromStatus(msg.Status); ok {

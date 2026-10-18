@@ -18,6 +18,9 @@ type Engine struct {
 	tick   int
 	fps    int
 	paused bool
+	// pending records that a TickMsg-producing command is already in flight.
+	// EnsureRunning uses it to resume without starting a second tick loop.
+	pending bool
 }
 
 // NewEngine creates an animation Engine with the given FPS (defaults to 20 if fps <= 0).
@@ -30,6 +33,7 @@ func NewEngine(fps int) *Engine {
 
 // TickCmd returns a Bubble Tea command that fires a TickMsg after one frame interval.
 func (e *Engine) TickCmd() bubbletea.Cmd {
+	e.pending = true
 	return bubbletea.Tick(time.Second/time.Duration(e.fps), func(t time.Time) bubbletea.Msg {
 		return TickMsg{Tick: e.tick}
 	})
@@ -38,6 +42,7 @@ func (e *Engine) TickCmd() bubbletea.Cmd {
 // Advance increments the internal tick counter and returns a TickCmd for the next frame.
 // Call this when you receive a TickMsg to schedule the next one.
 func (e *Engine) Advance() bubbletea.Cmd {
+	e.pending = false
 	if e.paused {
 		return nil
 	}
@@ -56,3 +61,16 @@ func (e *Engine) Pause() { e.paused = true }
 
 // Resume restarts the engine.
 func (e *Engine) Resume() { e.paused = false }
+
+// Paused reports whether frame scheduling is suspended.
+func (e *Engine) Paused() bool { return e.paused }
+
+// EnsureRunning resumes a paused engine and guarantees one tick loop is in
+// flight. It returns nil when a tick was already scheduled.
+func (e *Engine) EnsureRunning() bubbletea.Cmd {
+	e.paused = false
+	if e.pending {
+		return nil
+	}
+	return e.TickCmd()
+}

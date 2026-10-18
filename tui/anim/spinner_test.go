@@ -71,6 +71,26 @@ func TestEnginePauseResume(t *testing.T) {
 	}
 }
 
+func TestEngineEnsureRunningKeepsOneTickLoop(t *testing.T) {
+	engine := NewEngine(20)
+	if cmd := engine.EnsureRunning(); cmd == nil {
+		t.Fatal("EnsureRunning() did not start the first tick loop")
+	}
+	if cmd := engine.EnsureRunning(); cmd != nil {
+		t.Fatal("EnsureRunning() started a duplicate tick loop")
+	}
+	engine.Pause()
+	if !engine.Paused() {
+		t.Fatal("Pause() did not suspend the engine")
+	}
+	if cmd := engine.EnsureRunning(); cmd != nil {
+		t.Fatal("EnsureRunning() duplicated an in-flight tick after resume")
+	}
+	if engine.Paused() {
+		t.Fatal("EnsureRunning() did not resume the engine")
+	}
+}
+
 func TestSpinnerDots(t *testing.T) {
 	e := NewEngine(20)
 	s := NewSpinner(SpinnerConfig{

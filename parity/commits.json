@@ -12113,9 +12113,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: interact_with_astra_sparkle, invalidate_cursor_state, render_sparkle, set_sparkle_terminal_focus"
+        "Aligned upstream 33bdf976cc (#44879): animation frames now pause on terminal blur and resume on focus through anim.Engine.EnsureRunning, which guarantees one in-flight tick without duplicate loops. Sparkle keeps its wall-clock 15-second deadline while unfocused, so focus returning after the deadline clears the field without restarting it; an early focus round-trip preserves visibleSince. Stars still fade over one second and dismiss on input/drafts/popups. Tests: TestComposerStarfieldPausesFramesWhileUnfocusedAndExpires, TestComposerStarfieldFocusGainPreservesVisibleDeadline, TestEngineEnsureRunningKeepsOneTickLoop. Rust's invalidate_cursor_state is tied to its owned-cell custom terminal; Bubble Tea owns cursor rendering and has no equivalent cached anchor state to invalidate."
       ]
     },
     {
