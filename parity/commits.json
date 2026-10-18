@@ -2499,7 +2499,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "jsonschema subset now preserves minimum, maximum, and maxLength (including exact json.Number integers) and infers a string schema when maxLength is the only hint; tests cover bounded integer/number/string schemas. Tests: go test ./jsonschema -run 'Bounds|MaxLength|Normalize' -count=1"
+        "Round 768 initially preserved minimum/maximum/maxLength, matching #40719; upstream #40966 later reverted that behavior. Current Go subset drops those bounds again and keeps only the supported schema subset, matching the latest upstream."
       ]
     },
     {
@@ -3001,9 +3001,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "jsonschema subset no longer accepts minimum, maximum, or maxLength, so reserved history/notes tool declarations drop those bounds as in the latest Rust tools schema representation; maxLength alone no longer infers a string. Tests: go test ./jsonschema -count=1"
       ]
     },
     {

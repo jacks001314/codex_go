@@ -38,46 +38,6 @@ func TestNormalizeCoercesUnrecognizedObjectSchemaToEmptySchemaLikeRust(t *testin
 	}
 }
 
-func TestNormalizePreservesToolSchemaBoundsLikeRust(t *testing.T) {
-	input := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"count": map[string]any{
-				"type":    "integer",
-				"minimum": json.Number("0"),
-				"maximum": json.Number("9007199254740993"),
-			},
-			"score": map[string]any{
-				"type":    "number",
-				"minimum": -1.5,
-				"maximum": 3.25,
-			},
-			"query": map[string]any{
-				"type":      "string",
-				"maxLength": json.Number("1000"),
-			},
-		},
-		"additionalProperties": false,
-	}
-	got := Normalize(cloneJSON(input).(map[string]any))
-	encoded, err := json.Marshal(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `{"additionalProperties":false,"properties":{"count":{"maximum":9007199254740993,"minimum":0,"type":"integer"},"query":{"maxLength":1000,"type":"string"},"score":{"maximum":3.25,"minimum":-1.5,"type":"number"}},"type":"object"}`
-	if string(encoded) != want {
-		t.Fatalf("Normalize() = %s\nwant %s", encoded, want)
-	}
-}
-
-func TestNormalizeInfersStringFromMaxLengthLikeRust(t *testing.T) {
-	got := Normalize(map[string]any{"maxLength": json.Number("1000")})
-	want := map[string]any{"type": "string", "maxLength": json.Number("1000")}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Normalize() = %#v, want %#v", got, want)
-	}
-}
-
 func TestNormalizePreservesIntegerAndDefaultsArrayItemsLikeRust(t *testing.T) {
 	got := Normalize(map[string]any{
 		"type":        "array",
