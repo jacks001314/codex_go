@@ -552,7 +552,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 36f0dbe796d9bb1a18a0fc0640ed08b3e1d54564	45224	Register Windows desktop uninstall ownership before sandbox setup (#45224)	2026-09-13	appserver	8	1	0.12	0	0	audit_pending	ProvisioningRequest,ServiceRequest,ServiceUnavailable,pin_directory,register_authenticated_user,register_desktop_installation,validate_request
 370cd7cba87aeef8cf39bb194e51829b210c26a6	47435	Allow environment selection updates during an active turn (#47435)	2026-09-23	guardian	5	5	1.00	0	0	complete
 3715bf4100cd42773cb978d8ec0f632e97883cf7	44613	Enable user verification for local Codex Desktop sessions (#44613)	2026-09-10	appserver	0	0		0	0	not_applicable	
-3724dc836155f30acd47616d9c778a0a1cc91160	46334	Share platform identity across path, network, and sandbox configuration (#46334)	2026-09-18	execserver	5	3	0.60	0	0	audit_pending	effective_sandbox_mode,from_platform_os
+3724dc836155f30acd47616d9c778a0a1cc91160	46334	Share platform identity across path, network, and sandbox configuration (#46334)	2026-09-18	execserver	5	3	0.60	0	0	complete	effective_sandbox_mode,from_platform_os
 3749d1eff7df4ac9a0e2d32099813ba56500b930	49075	Preserve pending environments when spawning subagents (#49075)	2026-09-28	core	4	4	1.00	0	0	complete
 374c4b2d828321cfa3d3fc69ce66870f8b7fd01f	45459	Resolve enterprise-managed MCP registrations in the catalog (#45459)	2026-09-14	appserver	3	1	0.33	0	0	audit_pending	enable_ema,resolve_ema_registration
 379d50be35d393631f45fde69197f3b9a592aa02	41884	Add pinned native voice source preparation (#41884)	2026-08-31	realtime	0	0		0	0	not_applicable	
@@ -2511,7 +2511,7 @@ eb49f491c6ed2e203d07919ffd9d45eebee851e7	40710	Add explicit remote executor conn
 eb5a00b0683f3555ce6a2ce55d0257dc95151437	42652	Add managed worktrees to `codex exec` (#42652)	2026-09-04	tui	1	0	0.00	0	0	complete	for_cli
 eb680c055860c41897af44ac8fcf1af56ce8ffd9	44318	Give hosted Codex Apps an independent MCP protocol opt-in (#44318)	2026-09-09	appserver	0	0		0	0	not_applicable	
 eb7bd64ef935cedb6a2c90c77c78d6677f1efb45	44250	Remove retired model entries while preserving migration prompts (#44250)	2026-09-09	tui	1	1	1.00	0	0	complete	
-ebc05da3bdb76f25861e7cb418bd06d28cadc609	46999	Decouple tool restrictions from session identity with `ToolPolicy` (#46999)	2026-09-21	guardian	4	1	0.25	0	0	audit_pending	ToolPolicy,reviewer_tool_policy,with_tool_policy
+ebc05da3bdb76f25861e7cb418bd06d28cadc609	46999	Decouple tool restrictions from session identity with `ToolPolicy` (#46999)	2026-09-21	guardian	4	1	0.25	0	0	not_applicable	ToolPolicy,reviewer_tool_policy,with_tool_policy
 ebe18fc982c854f4385d0a7ac3bda4872afb8ab6	40502	Collapse home paths in AGENTS.md status summaries (#40502)	2026-08-25	tui	0	0		0	0	not_applicable	
 ec0cfa5da8e9fac464b94cb36396904546eee4e8	49800	Allow cleanup of replay-only side conversations with missing threads (#49800)	2026-09-30	tui	0	0		0	0	not_applicable	
 ec4d27ae8088e67785fb6d913462c8433f99dd47	47539	Test interrupted one-shot command launch failure persistence (#47539)	2026-09-23	core	0	0		0	0	not_applicable	

@@ -15630,9 +15630,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: effective_sandbox_mode, from_platform_os"
+        "Executor PlatformOS flows from environment info into permissions world state, network socket-path validation, sandbox permission prompts, and turn environment metadata. Tests: go test ./network -run 'ExecutorOS|SocketPath|SocketAllowlist' -count=1; go test ./sandbox -run 'PlatformOS|PermissionPrompt|Seatbelt' -count=1; go test ./appserver -run 'PlatformOS|PermissionsExecutorContext|EnvironmentInfoReportsLocalPlatformOS' -count=1"
       ]
     },
     {
@@ -17577,9 +17577,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ToolPolicy, reviewer_tool_policy, with_tool_policy"
+        "N/A by architecture: Go has no extension runtime or extension tool-policy API. App-server applies app/tool policy and Guardian tool scopes directly, so there is no extension session-identity restriction boundary to decouple."
       ]
     },
     {
