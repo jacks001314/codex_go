@@ -337,7 +337,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 2126f9361751017f61a0eca0d7ab868f4920b552	40449	Route peer agent completion activity to the initiating turn (#40449)	2026-08-24	core	2	1	0.50	0	0	complete	set_initiating_agent_path
 2151d3a5b78ca93128496b26333bc30187385a5f	39852	Reset registry retries when refreshing Noise bundles (#39852)	2026-08-21	execserver	0	0		0	0	not_applicable	
 2161ec272a7d6b775c9c721e6206f4fe63e383f2	40257	Support `cua_repl` as a Node REPL-backed MCP server (#40257)	2026-08-23	tui	2	1	0.50	0	0	audit_pending	is_node_repl_backed_tool
-2181224dad147a9ed37e698b66487aba54acdb65	41456	Support app targets in executor plugin hooks (#41456)	2026-08-29	mcp	1	0	0.00	0	0	implementation_pending	executor_plugin_hook_sources
+2181224dad147a9ed37e698b66487aba54acdb65	41456	Support app targets in executor plugin hooks (#41456)	2026-08-29	mcp	1	0	0.00	0	0	complete	executor_plugin_hook_sources
 218a3e50ae9f499edcf3d14e6535b97559976ab5	41070	Clarify when to send asynchronous user messages (#41070)	2026-08-27	core	0	0		0	0	not_applicable	
 218e8df92683fee5d052fdde3d8e502f951227d7	42891	Integrate asynchronous questions into the TUI (#42891)	2026-09-05	tui	5	1	0.20	0	0	audit_pending	add_async_questions,handle_question_key,push_async_questions,question_summary
 219c2034173becb616d74775c625bd1cc454e057	40480	Add a computer-use-only Guardian v2 review scope (#40480)	2026-08-24	guardian	1	0	0.00	0	0	not_applicable	GuardianV2ReviewScope
@@ -1470,7 +1470,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 8afccec87aa15f73ee7fc35a3a4e7834afc5ef62	44084	Expose Python SDK history selection and per-turn options (#44084)	2026-09-09	core	0	0		0	0	not_applicable	
 8b507a8e4566288b4b35e81905673900198c479b	53780	Remove redundant Codex manual cache directory check (#53780)	2026-10-13	core	0	0		0	0	complete	
 8b5beea5c04456468b236efb5eb9ea7207e491af	40011	Synchronize concurrent Git enrichment test explicitly (#40011)	2026-08-21	core	0	0		0	0	not_applicable	
-8b61c50ebe21a433b763847ade6ec7a103028089	40009	Run allowlisted executor plugin stop hooks (#40009)	2026-08-21	mcp	7	1	0.14	0	0	audit_pending	ExecutorPluginHookSource,HandlerSourcePath,executor_plugin_hook_sources,schedule_async_task,set_executor_hooks,with_executor_hooks
+8b61c50ebe21a433b763847ade6ec7a103028089	40009	Run allowlisted executor plugin stop hooks (#40009)	2026-08-21	mcp	7	1	0.14	0	0	complete	ExecutorPluginHookSource,HandlerSourcePath,executor_plugin_hook_sources,schedule_async_task,set_executor_hooks,with_executor_hooks
 8b6bb1c77de0be7395c5c0431ad695a70be829bf	51241	Add a partial answer message phase (#51241)	2026-10-06	tui	0	0		0	0	not_applicable	
 8b78600dc85cc265d7e7e827f6aa903875405287	46271	Enable MXC selection through Windows sandbox configuration (#46271)	2026-09-17	tui	8	2	0.25	0	0	audit_pending	WindowsSandboxImplementationToml,as_metric_tag,configured_windows_sandbox_selection,effective_windows_sandbox_type,windows_sandbox_level_for_legacy_checks,windows_sandbox_selection_for_turn_metadata
 8b78f4796605bda8e31329537f5fef036e405e66	48157	Allow Windows daemon launches with residual job membership (#48157)	2026-09-25	appserver	0	0		0	0	not_applicable	
@@ -2074,7 +2074,7 @@ c2837d8ecefacc1c1ad59039809ea42a3a976341	49305	Batch metadata reads when resolvi
 c2904b9c5afbf7c32b2219d92a0b03c60d80b014	40465	Record Guardian classifier input truncation metrics (#40465)	2026-08-24	guardian	10	2	0.20	0	0	not_applicable	CLASSIFICATION_TRUNCATION_BYTES_METRIC,CLASSIFICATION_TRUNCATION_METRIC,ClassificationTruncations,RenderedImages,RenderedReviewEvidence,RenderedTranscript,TruncationObservation,render_review_evidence
 c29bc99949f90687171611bb845c4c289fa85dde	41192	Preserve restored permission profiles in TUI sessions (#41192)	2026-08-27	tui	1	0	0.00	0	0	implementation_pending	permission_profile_is_safely_represented_by_sandbox_mode
 c2a924fc4a3970198679d24c9fa5df5643af5041	46560	Fix stale environment config in the network approval test (#46560)	2026-09-18	core	0	0		0	0	not_applicable	
-c2abf869d539a6326a6e5a125dfdb8a5dc488ab4	41432	Run executor hooks for interrupted turns (#41432)	2026-08-28	plugins	3	0	0.00	0	0	implementation_pending	into_matcher_groups,matcher_groups_mut,run_turn_interrupt_hooks
+c2abf869d539a6326a6e5a125dfdb8a5dc488ab4	41432	Run executor hooks for interrupted turns (#41432)	2026-08-28	plugins	3	0	0.00	0	0	complete	into_matcher_groups,matcher_groups_mut,run_turn_interrupt_hooks
 c2ae67d76931fcfac287d0bacf94f2b055b57da3	51332	Record multi-agent wait duration by outcome (#51332)	2026-10-06	core	0	0		0	0	not_applicable	
 c2d2f422e63e5d4db83e0da93858b5a3e2ad12e1	49102	Preserve SQLite vacuum modes and surface pool initialization errors (#49102)	2026-09-28	persistence	0	0		0	0	not_applicable	
 c2e5692e2c923ed222c77487b3141829881757cd	41946	Expand extension permission regression coverage (#41946)	2026-09-01	sandbox	0	0		0	0	not_applicable	
@@ -2121,7 +2121,7 @@ c6327eba6a5a31304c289f2121cc74f56f9a441b	53997	Filter rollout filenames before c
 c63929af50518ca638ccad12f2805298cb7f25a1	52610	Align Linux sandbox names and docs with bubblewrap and seccomp (#52610)	2026-10-09	sandbox	1	1	1.00	0	0	complete	
 c6a59ef923c19935003ad55ef8e141a4fe5b9e04	44346	Support native verification in MCP tool continuations (#44346)	2026-09-10	mcp	2	2	1.00	0	0	complete	
 c6ad6f33eb1fba74f8aab266465b91249fe4ef3f	47361	Restrict Windows sandbox default object access to the logon session (#47361)	2026-09-22	sandbox	0	0		0	0	not_applicable	
-c6bf330b42ed6fcbdcc902dc06ef38306b2e02f3	41435	Allow bundled browser cleanup hooks on subagent stop (#41435)	2026-08-28	plugins	0	0		0	0	not_applicable	
+c6bf330b42ed6fcbdcc902dc06ef38306b2e02f3	41435	Allow bundled browser cleanup hooks on subagent stop (#41435)	2026-08-28	plugins	0	0		0	0	complete
 c6c09fe29fb0b926ced5146e6ed47b6ff756c1a4	47292	Consolidate agent operations in the `AgentControl` implementation (#47292)	2026-09-22	core	0	0		0	0	not_applicable	
 c6c7c8d2706981bfc2368bc896e4d07876300c3b	49153	Omit blockquote markers when copying quoted selections in the TUI (#49153)	2026-09-29	tui	0	0		0	0	not_applicable	
 c6f5d9e9b5d9ab8085ad5d3a7e28717d3a6a19dc	46553	Return `LiveAgent` records from agent listing (#46553)	2026-09-18	core	0	0		0	0	not_applicable	

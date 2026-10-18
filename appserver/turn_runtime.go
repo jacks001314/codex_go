@@ -1748,6 +1748,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	// which drops its guard directly after the final items are recorded).
 	finishTurn := r.beginRuntimeTurnFinish(threadID, turnID)
 	defer finishTurn()
+	executorStepCapabilities := r.activeStepCapabilitySnapshot(threadID)
 	if err != nil {
 		steerCount := r.activeRuntimeTurnSteerCount(threadID, turnID)
 		if ctx.Err() != nil {
@@ -1957,6 +1958,18 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	if summary := finalAgentMessageSummary(threadItems); len(summary) > 0 {
 		completedTurn.Items = summary
 		completedTurn.ItemsView = TurnItemsSummary
+	}
+	executorEvent := r.executorCleanupEventForThread(threadID)
+	if executorInput, inputErr := executorStopCleanupInput(
+		executorEvent,
+		threadID,
+		turnID,
+		params.CWD,
+		runConfig.Model,
+		"",
+		"",
+	); inputErr == nil {
+		r.scheduleExecutorCleanupHooks(threadID, executorStepCapabilities, executorEvent, executorInput)
 	}
 	r.notifyTurnCompletedOnce(&TurnCompletedNotification{ThreadID: threadID, Turn: completedTurn})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))

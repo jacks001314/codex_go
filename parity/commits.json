@@ -538,9 +538,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/7; needs review: ExecutorPluginHookSource, HandlerSourcePath, executor_plugin_hook_sources, schedule_async_task, set_executor_hooks"
+        "Round 299 (implementation): executor V2 plugin inventories now contribute allowlisted, matcher-free MCP cleanup sources; Stop cleanup is scheduled asynchronously after successful turn completion, keeps executor-scoped provenance, and is hidden from public hook summaries. Go has no regular Stop hook control path, so cleanup is best-effort at completion. Tests: go test ./appserver -run 'Hook|Executor' -count=1; go build ./...; go vet ./appserver"
       ]
     },
     {
@@ -4380,9 +4380,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: into_matcher_groups, matcher_groups_mut, run_turn_interrupt_hooks"
+        "Round 299 (implementation): interrupt handling captures the active step's executor V2 inventory before the turn is consumed and schedules Interrupt cleanup targets asynchronously, independent of whether host Interrupt hooks exist. Multi-environment sources are admitted and cleanup targets dedupe by event + MCP environment + server + tool. Tests: go test ./appserver -run 'ExecutorPluginHook|ExecutorCleanup' -count=1"
       ]
     },
     {
@@ -4392,9 +4392,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 299 (implementation): SubagentStop executor cleanup is selected from the thread source and runs through the same admitted cleanup-target pipeline; the bundled browser/chrome/computer-use allowlist already covers SubagentStop and app targets are connector-validated. Tests: go test ./appserver -run 'ExecutorPluginHook|ExecutorCleanup' -count=1"
       ]
     },
     {
@@ -4476,9 +4476,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: executor_plugin_hook_sources"
+        "Round 299 (implementation): app cleanup targets are admitted only when the listed codex_apps browser.turn_ended tool is enabled by app policy and belongs to connector_openai_browser; manifest-provided arguments are rejected. Admitted sources carry the trusted _codex_apps routing metadata, use the default MCP environment rather than the executor that supplied the manifest, and dedupe shared cleanup calls across executor environments. Tests: go test ./appserver -run 'ExecutorPluginHook|ExecutorCleanup' -count=1"
       ]
     },
     {

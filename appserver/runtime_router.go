@@ -3558,19 +3558,27 @@ func (r *RuntimeRouter) runInterruptHook(active *activeRuntimeTurn) {
 	}
 	model, permissionMode = r.hookTurnAttribution(params)
 	hooks := r.interruptHooksForCWD(cwd, active.ThreadID)
-	if len(hooks) == 0 {
-		return
+	if len(hooks) > 0 {
+		_, err := r.requireHookRunner().RunInterrupt(context.Background(), &HookInterruptRequest{
+			ThreadID:       active.ThreadID,
+			TurnID:         active.TurnID,
+			CWD:            cwd,
+			Model:          model,
+			PermissionMode: permissionMode,
+			Hooks:          hooks,
+		})
+		if err != nil {
+			slog.Warn("interrupt hook failed", "thread_id", active.ThreadID, "turn_id", active.TurnID, "error", err)
+		}
 	}
-	_, err := r.requireHookRunner().RunInterrupt(context.Background(), &HookInterruptRequest{
+	if input, inputErr := executorCleanupInput(&HookInterruptRequest{
 		ThreadID:       active.ThreadID,
 		TurnID:         active.TurnID,
 		CWD:            cwd,
 		Model:          model,
 		PermissionMode: permissionMode,
-		Hooks:          hooks,
-	})
-	if err != nil {
-		slog.Warn("interrupt hook failed", "thread_id", active.ThreadID, "turn_id", active.TurnID, "error", err)
+	}); inputErr == nil {
+		r.scheduleExecutorCleanupHooks(active.ThreadID, active.StepCapabilities, HookEventInterrupt, input)
 	}
 }
 
@@ -16730,23 +16738,8 @@ func filterCodexAppsRuntimeTools(tools []mcp.RuntimeToolInfo, cfg *config.Config
 		if connectorID == "" {
 			continue
 		}
-		if evaluator != nil {
-			annotations := tool.Tool.Annotations
-			var destructiveHint, openWorldHint *bool
-			if annotations != nil {
-				destructiveHint = annotations.DestructiveHint
-				openWorldHint = annotations.OpenWorldHint
-			}
-			policy := evaluator.Policy(apps.AppToolPolicyInput{
-				ConnectorID:     connectorID,
-				ToolName:        tool.Tool.Name,
-				ToolTitle:       tool.Tool.Title,
-				DestructiveHint: destructiveHint,
-				OpenWorldHint:   openWorldHint,
-			})
-			if !policy.Enabled {
-				continue
-			}
+		if !codexAppsToolPolicyAllows(&tool, evaluator) {
+			continue
 		}
 		filtered = append(filtered, tool)
 	}
