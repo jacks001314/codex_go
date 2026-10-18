@@ -24539,9 +24539,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: GuardianRetainedOmissions, omission_state"
+        "Equivalent implementation already present: the reviewer records delivered retained-instruction and assistant-context omission state per thread, suppresses repeated notices, emits the availability-changed notice on recovery, and only treats exact host-generated parts in the retained section as delivery proof. Coalesced REPL/tool text cannot forge omission delivery."
       ]
     },
     {
