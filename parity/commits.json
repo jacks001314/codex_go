@@ -30270,9 +30270,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: CompactionFallback, run_compaction, take_ready, wait_for_pending"
+        "Equivalent implementation present: remote compaction first checks the thread's async compaction state with TakeReady and waits for one pending result when needed. The candidate is validated against the current history prefix, model compaction hash, and auth-owner revision before its rebuilt history is installed; otherwise the normal remote compaction path runs. Regression tests cover captured-attempt validation, shared pending results, and launch from the turn checkpoint."
       ]
     },
     {
