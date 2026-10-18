@@ -12411,9 +12411,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/5; needs review: into_layers, load_requirements_from_sources"
+        "Round 548 (audit): already implemented. Existing threads retain the model-provider route they were admitted with, and later requirements changes that no longer match reject retained-thread entry points while unrelated changes keep the thread usable. Tests: go test ./appserver -run 'TestRuntimeRouterRetainsManagedModelProviderRoute|TestManagedModelProviderSelectionChangeRejectsRetainedThread|TestManagedModelProviderDefinitionChangeRejectsRetainedThread|TestModelListValidatesStartupProviderRequirementsLikeRust|TestManagedModelProviderUnrelatedChangeKeepsRetainedThread|TestManagedModelProviderInvalidRequirementsRejectRetainedThread|TestRequiredModelProviderDefinitionMergesBedrockOverrides|TestManagedModelProviderChangeRejectsAllRetainedThreadEntryPoints' -count=1"
       ]
     },
     {
@@ -22208,9 +22208,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 549 (audit): already implemented. Provisioned executors use a separate fixed readiness window and a longer environment_offline retry deadline, while already-ready executors skip the extra wait. Tests: go test ./execserver -run 'Provisioned' -count=1"
       ]
     },
     {
@@ -26353,9 +26353,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 550 (audit): already implemented. Environment-backed tools stay advertised as readiness changes, while execution selects the waiting or legacy failure message from current readiness. Tests: go test ./tool -run 'EnvironmentReadiness|ResolveUnifiedExecEnvironmentMessages|WriteStdinEnvironment' -count=1"
       ]
     },
     {
