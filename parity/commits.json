@@ -5964,9 +5964,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: NetworkHeaderInjectionToml"
+        "Round 447 (audit): config requirements parse experimental_network.header_injections (host, methods, path prefixes, header map) into NetworkHeaderInjection, carry it through NetworkConstraints and cloning, and network.ApplyProxyHeaderInjections applies matching rules. The TUI debug summary is owned by the TUI lane. Tests: go test ./config ./network -run 'NetworkHeaderInjections|ApplyProxyHeaderInjections' -count=1"
       ]
     },
     {
