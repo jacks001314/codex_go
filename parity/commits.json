@@ -22760,9 +22760,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: TRANSCRIPT_OMISSION_NOTICE, TranscriptContent"
+        "Equivalent implementation already present: Guardian transcript construction detects encrypted agent-message items, excludes them from text rendering/truncation, and emits each complete native response item in conversation order between surrounding text runs. Tests cover exact ciphertext preservation, ordering, and absence from flattened transcript text."
       ]
     },
     {
