@@ -29561,9 +29561,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: ProcessOwnedGrpcCodeModeSessionProvider, with_host_program"
+        "Equivalent implementation already present: code_mode_host_grpc selects codemode.GrpcProcessProvider, which spawns the host with stdio pipes and drives the CodeModeHost/Transport gRPC stream. The host side serves the same transport over stdin/stdout and exits cleanly when the connection closes. Tests cover opt-in provider selection, nested tool execution and notifications over gRPC stdio, isolated sessions, host-death recovery, and clean host shutdown."
       ]
     },
     {
