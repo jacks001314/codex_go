@@ -2075,6 +2075,20 @@ func (c *Config) CodeModeToolDescriptionFirst() bool {
 	return enabled
 }
 
+// CodeModeOnlyStrictThirdPartyTools reports whether eligible MCP/app and
+// client-supplied dynamic tools stay deferred in Code Mode Only (Rust #50687).
+func (c *Config) CodeModeOnlyStrictThirdPartyTools() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := features["code_mode_only_strict_3p_tools"].(bool)
+	return enabled
+}
+
 // CodeModeToolInputSchemaMaxBytes returns
 // features.code_mode.tool_input_schema_max_bytes (Rust #47936). Zero means the
 // 16,000-byte Code Mode default.

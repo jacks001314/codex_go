@@ -953,6 +953,112 @@ func TestBuildToolRegistryOrdersCodeModeToolDescriptionsLikeRust(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryStrictThirdPartyToolsLikeRust(t *testing.T) {
+	output := func(context.Context, *tool.Invocation) (*tool.Output, error) {
+		return &tool.Output{Success: true}, nil
+	}
+	for _, test := range []struct {
+		name     string
+		mode     string
+		enabled  bool
+		deferred bool
+	}{
+		{name: "strict code mode only", mode: model.ToolModeCodeModeOnly, enabled: true, deferred: true},
+		{name: "strict disabled", mode: model.ToolModeCodeModeOnly, deferred: false},
+		{name: "strict direct mode", mode: model.ToolModeDirect, enabled: true, deferred: false},
+		{name: "strict code mode", mode: model.ToolModeCodeMode, enabled: true, deferred: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := DefaultToolRegistryOptions(t.TempDir())
+			options.EnableMCP = true
+			options.EnableAgents = false
+			options.ToolMode = test.mode
+			options.CodeModeOnlyStrictThirdPartyTools = test.enabled
+			options.MCPTools = []mcp.RuntimeToolInfo{{
+				ServerName: "calendar",
+				Tool: mcp.RuntimeTool{
+					Name:        "lookup",
+					Description: "Look up calendar entries.",
+					InputSchema: map[string]any{"type": "object"},
+				},
+			}}
+			options.MCPExposure = tool.ExposureDirectModelOnly
+			options.DynamicToolCaller = &fakeDynamicToolCaller{result: &DynamicToolCallResponse{Success: true}}
+			options.DynamicTools = []DynamicToolSpec{{
+				Type: "function",
+				Function: &DynamicToolFunctionSpec{
+					Name:        "client_lookup",
+					Description: "Client lookup.",
+					InputSchema: map[string]any{"type": "object"},
+				},
+			}}
+			options.ExtraTools = []tool.Executor{
+				tool.NewExecutorFunc(tool.Spec{
+					Name:        tool.NamespacedName("client", "direct"),
+					Description: "Direct client tool.",
+					Exposure:    tool.ExposureDirectModelOnly,
+					ThirdParty:  true,
+				}, output),
+				tool.NewExecutorFunc(tool.Spec{
+					Name:        tool.PlainName("hidden_client"),
+					Description: "Hidden client tool.",
+					Exposure:    tool.ExposureHidden,
+					ThirdParty:  true,
+				}, output),
+				tool.NewExecutorFunc(tool.Spec{
+					Name:        tool.PlainName("builtin_like"),
+					Description: "Built-in tool.",
+					Exposure:    tool.ExposureModelVisible,
+				}, output),
+			}
+			registry, err := BuildToolRegistry(options)
+			if err != nil {
+				t.Fatalf("BuildToolRegistry() error = %v", err)
+			}
+
+			for _, name := range []tool.ToolName{
+				tool.PlainName("client_lookup"),
+				tool.NamespacedName("client", "direct"),
+				tool.NamespacedName("mcp__calendar", "lookup"),
+			} {
+				spec, ok := registry.Spec(name)
+				if !ok {
+					t.Fatalf("%s missing", name.Key())
+				}
+				want := tool.ExposureModelVisible
+				if name.Namespace != "" {
+					want = tool.ExposureDirectModelOnly
+				}
+				if test.deferred {
+					want = tool.ExposureDiscoverable
+				}
+				if spec.Exposure != want {
+					t.Fatalf("%s exposure = %q, want %q", name.Key(), spec.Exposure, want)
+				}
+				if test.deferred {
+					found := false
+					for _, metadata := range tool.NewRouter(registry).CodeModeToolNames() {
+						if metadata.Name == name.Name &&
+							(name.Namespace == "" || metadata.Namespace != nil && *metadata.Namespace == name.Namespace) {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Fatalf("%s missing from Code Mode tools: %#v", name.Key(), tool.NewRouter(registry).CodeModeToolNames())
+					}
+				}
+			}
+			if spec, _ := registry.Spec(tool.PlainName("hidden_client")); spec.Exposure != tool.ExposureHidden {
+				t.Fatalf("hidden_client exposure = %q, want hidden", spec.Exposure)
+			}
+			if spec, _ := registry.Spec(tool.PlainName("builtin_like")); spec.Exposure != tool.ExposureModelVisible {
+				t.Fatalf("builtin_like exposure = %q, want model_visible", spec.Exposure)
+			}
+		})
+	}
+}
+
 func TestSkillReadPageHonorsEscapedAndMultibyteBudgetsLikeRust(t *testing.T) {
 	contents := strings.Repeat("quote \" slash \\ newline\n emoji 😀 ", 40)
 	for _, budget := range []int{180, 300, 1024} {

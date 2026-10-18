@@ -25948,9 +25948,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 731 (audit): incremental_tools is registered as an under-development, default-off feature, accepted by strict config, and consumed by the Responses Lite declaration lifecycle. Test: go test ./features -run Incremental -count=1"
       ]
     },
     {
@@ -26140,9 +26140,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 731 (audit): Code Mode Only always includes the shared MCP TypeScript preamble, independent of the available tools' output schemas, so generated declarations keep their shared types resolvable. Test: go test ./codemode -run TestSharedMCPTypesPreambleStableInCodeModeOnly -count=1"
       ]
     },
     {
@@ -26164,9 +26164,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 731 (audit): list_mcp_resources, list_mcp_resource_templates, and read_mcp_resource are registered whenever MCP servers exist or the effective tool mode is Code Mode Only, keeping the helper surface stable as the first server appears or the last disappears. Test: go test ./turn -run TestBuildToolRegistryRegistersMCPResourceHelpersInCodeModeOnlyLikeRust -count=1"
       ]
     },
     {
@@ -26213,9 +26213,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 731 (audit): deferred-tool discovery guidance is emitted unconditionally by both the Code Mode prompt builder and inline exec description builder, so the eager description stays byte-stable as deferred catalogs gain or lose tools. Test: go test ./codemode -run TestDeferredNestedToolsGuidanceStableAcrossCatalogChanges -count=1"
       ]
     },
     {
@@ -26237,9 +26237,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 731 (implementation): MCP/app and client-supplied dynamic specs carry an internal ThirdParty marker. With code_mode_only_strict_3p_tools enabled and effective Code Mode Only, every non-Hidden third-party tool is forced to discoverable/deferred, overriding direct, code-mode-only, tool-search, and omission exposure settings while keeping the tool callable through exec. Hidden or ineligible tools and built-in tools remain unchanged. Tests: go test ./turn -run TestBuildToolRegistryStrictThirdPartyToolsLikeRust -count=1; go test ./tool -run TestRegistryEnforceStrictThirdPartyToolsLikeRust -count=1; go test ./config -run TestCodeModeOnlyStrictThirdPartyToolsLikeRust -count=1"
       ]
     },
     {

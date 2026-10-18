@@ -115,6 +115,7 @@ func registerDynamicToolHandler(registry *tool.Registry, options *DynamicToolReg
 		Description: function.Description,
 		InputSchema: inputSchema,
 		Exposure:    exposure,
+		ThirdParty:  true,
 		// Rust DynamicToolHandler overrides `supports_parallel_tool_calls` with
 		// true (#54654): dynamic tool calls stay independent while waiting for
 		// client responses, so one pending call does not block another from

@@ -741,6 +741,29 @@ func TestCodeModeToolDescriptionFirstLikeRust(t *testing.T) {
 	}
 }
 
+func TestCodeModeOnlyStrictThirdPartyToolsLikeRust(t *testing.T) {
+	enabled := &Config{Values: map[string]any{
+		"features": map[string]any{"code_mode_only_strict_3p_tools": true},
+	}}
+	if !enabled.CodeModeOnlyStrictThirdPartyTools() {
+		t.Fatal("CodeModeOnlyStrictThirdPartyTools() = false, want true")
+	}
+	for _, test := range []struct {
+		name string
+		cfg  *Config
+	}{
+		{name: "disabled", cfg: &Config{Values: map[string]any{
+			"features": map[string]any{"code_mode_only_strict_3p_tools": false},
+		}}},
+		{name: "absent", cfg: &Config{Values: map[string]any{"features": map[string]any{}}}},
+		{name: "nil", cfg: nil},
+	} {
+		if test.cfg.CodeModeOnlyStrictThirdPartyTools() {
+			t.Errorf("%s config enabled strict third-party tools", test.name)
+		}
+	}
+}
+
 func TestAllowLoginShellDefaultsTrueLikeRust(t *testing.T) {
 	cfg := &Config{Values: map[string]any{}}
 	if !cfg.AllowLoginShell() {

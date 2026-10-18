@@ -106,6 +106,9 @@ type Spec struct {
 	// publishes its own terminal item, so dispatch must let it finish instead of
 	// aborting it (and reports an aborted lifecycle outcome).
 	FinishesOnCancellation bool `json:"-"`
+	// ThirdParty marks MCP/app and client-supplied dynamic tools. Built-ins stay
+	// false even when a third-party tool attempts to use the same name.
+	ThirdParty bool `json:"-"`
 }
 
 type FreeformSpec struct {
@@ -286,6 +289,25 @@ func (r *Registry) SetDefaultInputSchemaMaxBytes(maxBytes int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.defaultInputSchemaMaxBytes = maxBytes
+}
+
+// EnforceStrictThirdPartyTools keeps every eligible third-party tool deferred
+// while preserving Hidden tools that failed eligibility or budget checks
+// (Rust #50687).
+func (r *Registry) EnforceStrictThirdPartyTools() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, key := range r.order {
+		spec := r.specs[key]
+		if !spec.ThirdParty || spec.Exposure == ExposureHidden {
+			continue
+		}
+		spec.Exposure = ExposureDiscoverable
+		r.specs[key] = spec
+	}
 }
 
 func (r *Registry) Register(executor Executor) error {

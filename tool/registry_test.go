@@ -87,6 +87,42 @@ func TestRegistryDirectModelOnlySpecsAreVisibleButNotDiscoverable(t *testing.T) 
 	}
 }
 
+func TestRegistryEnforceStrictThirdPartyToolsLikeRust(t *testing.T) {
+	registry := NewRegistry()
+	for _, spec := range []Spec{
+		{Name: PlainName("builtin"), Exposure: ExposureModelVisible},
+		{Name: NamespacedName("mcp__calendar", "direct"), Exposure: ExposureDirectModelOnly, ThirdParty: true},
+		{Name: PlainName("dynamic"), Exposure: ExposureModelVisible, ThirdParty: true},
+		{Name: PlainName("code_only"), Exposure: ExposureCodeModeOnly, ThirdParty: true},
+		{Name: PlainName("hidden"), Exposure: ExposureHidden, ThirdParty: true},
+		{Name: PlainName("deferred"), Exposure: ExposureDiscoverable, ThirdParty: true},
+	} {
+		if err := registry.Register(NewExecutorFunc(spec, noopExecutor)); err != nil {
+			t.Fatalf("register %s: %v", spec.Name.Key(), err)
+		}
+	}
+
+	registry.EnforceStrictThirdPartyTools()
+
+	for _, name := range []ToolName{
+		NamespacedName("mcp__calendar", "direct"),
+		PlainName("dynamic"),
+		PlainName("code_only"),
+		PlainName("deferred"),
+	} {
+		spec, ok := registry.Spec(name)
+		if !ok || spec.Exposure != ExposureDiscoverable {
+			t.Fatalf("%s exposure = %q, want discoverable", name.Key(), spec.Exposure)
+		}
+	}
+	if spec, _ := registry.Spec(PlainName("builtin")); spec.Exposure != ExposureModelVisible {
+		t.Fatalf("builtin exposure = %q, want model_visible", spec.Exposure)
+	}
+	if spec, _ := registry.Spec(PlainName("hidden")); spec.Exposure != ExposureHidden {
+		t.Fatalf("hidden exposure = %q, want hidden", spec.Exposure)
+	}
+}
+
 func TestRegistryPerSurfaceExposureValues(t *testing.T) {
 	registry := NewRegistry()
 	register := func(name string, exposure Exposure) {

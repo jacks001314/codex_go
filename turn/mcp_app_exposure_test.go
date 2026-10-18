@@ -32,13 +32,13 @@ func TestMCPConnectorOmitToolsFromCombinesWithServerRestrictions(t *testing.T) {
 	if !reflect.DeepEqual(omit, []string{"deferred"}) {
 		t.Fatalf("calendar omit = %#v", omit)
 	}
-	if exposure := mcpToolExposureForSurfaces(omit, true); exposure != tool.ExposureModelVisible {
+	if exposure := mcpToolExposureForSurfaces(omit, true, false); exposure != tool.ExposureModelVisible {
 		t.Fatalf("calendar exposure = %q, want %q", exposure, tool.ExposureModelVisible)
 	}
 
 	// A connector that omits Code Mode keeps deferred discovery.
 	mailOmit := mcpOmitToolsFromForTool(nil, appsValues, appTool("mail"))
-	if exposure := mcpToolExposureForSurfaces(mailOmit, true); exposure != tool.ExposureDeferredModelOnly {
+	if exposure := mcpToolExposureForSurfaces(mailOmit, true, false); exposure != tool.ExposureDeferredModelOnly {
 		t.Fatalf("mail exposure = %q, want %q", exposure, tool.ExposureDeferredModelOnly)
 	}
 
@@ -80,7 +80,7 @@ func TestMCPConnectorOmitToolsFromPreservesServerRestrictions(t *testing.T) {
 	// With tool search enabled the server default keeps the direct surface
 	// hidden (deferred discovery plus Code Mode remain), and an empty connector
 	// list cannot re-enable it.
-	if exposure := mcpToolExposureForSurfaces(omit, true); exposure != tool.ExposureDiscoverable {
+	if exposure := mcpToolExposureForSurfaces(omit, true, false); exposure != tool.ExposureDiscoverable {
 		t.Fatalf("exposure = %q, want %q", exposure, tool.ExposureDiscoverable)
 	}
 
@@ -88,7 +88,11 @@ func TestMCPConnectorOmitToolsFromPreservesServerRestrictions(t *testing.T) {
 	// already omits deferred discovery leaves the direct surface alone (Rust's
 	// `DirectModelOnly`) - the server's omission is preserved and the connector's
 	// adds to it.
-	union := mcpToolExposureForSurfaces([]string{"deferred", "code_mode"}, true)
+	union := mcpToolExposureForSurfaces([]string{"deferred", "code_mode"}, true, false)
+	strict := mcpToolExposureForSurfaces([]string{"direct", "deferred", "code_mode"}, true, true)
+	if strict != tool.ExposureDiscoverable {
+		t.Fatalf("strict exposure = %q, want omissions ignored and tool search deferral retained", strict)
+	}
 	if union != tool.ExposureDirectModelOnly {
 		t.Fatalf("union exposure = %q, want %q", union, tool.ExposureDirectModelOnly)
 	}

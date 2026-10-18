@@ -155,6 +155,9 @@ type ToolRegistryOptions struct {
 	// features.code_mode_tool_description_first (#51690/#51704): nested tool
 	// definitions put the tool description before the namespace description.
 	CodeModeToolDescriptionFirst bool
+	// CodeModeOnlyStrictThirdPartyTools defers eligible MCP/app and dynamic
+	// tools in Code Mode Only (Rust #50687).
+	CodeModeOnlyStrictThirdPartyTools bool
 	// CodeModeToolInputSchemaMaxBytes enlarges the rendered Code Mode input
 	// type budget when set (Rust #47936).
 	CodeModeToolInputSchemaMaxBytes int
@@ -740,6 +743,9 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		}
 		indirectPrefixes = resolved
 	}
+	if options.CodeModeOnlyStrictThirdPartyTools && options.ToolMode == model.ToolModeCodeModeOnly {
+		registry.EnforceStrictThirdPartyTools()
+	}
 	if options.EnableToolSearch {
 		// Rust only adds tool_search when at least one deferred executor is
 		// searchable. Advertising an empty search tool causes models to emit a
@@ -840,7 +846,8 @@ func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) err
 		// Rust #46035: a Codex Apps connector's own omissions are combined with
 		// the server's so app settings never drop a server restriction.
 		omit := mcpOmitToolsFromForTool(options.MCPService, options.AppsConfigValues, info)
-		exposure := mcpToolExposureForSurfaces(omit, options.EnableToolSearch)
+		strictThirdParty := options.CodeModeOnlyStrictThirdPartyTools && options.ToolMode == model.ToolModeCodeModeOnly
+		exposure := mcpToolExposureForSurfaces(omit, options.EnableToolSearch, strictThirdParty)
 		if err := registerMCPToolSet(registry, options, []mcp.RuntimeToolInfo{info}, exposure); err != nil {
 			return err
 		}
@@ -852,7 +859,12 @@ func registerMCPTools(registry *tool.Registry, options *ToolRegistryOptions) err
 // final tool exposure using Rust's apply_mcp_tool_exposure_policy table:
 // (direct, deferred, code_mode) -> ToolExposure. Go has no
 // direct_only_tool_namespaces configuration, so that restriction is skipped.
-func mcpToolExposureForSurfaces(omit []string, searchToolEnabled bool) tool.Exposure {
+func mcpToolExposureForSurfaces(omit []string, searchToolEnabled bool, strictThirdParty bool) tool.Exposure {
+	if strictThirdParty {
+		// Rust #50687 ignores MCP/app omit_tools_from for eligible third-party
+		// tools. Hidden tools filtered before this point remain absent.
+		omit = nil
+	}
 	allowed := map[string]bool{"direct": true, "deferred": true, "code_mode": true}
 	for _, surface := range omit {
 		switch strings.ToLower(strings.TrimSpace(surface)) {
@@ -1045,6 +1057,7 @@ func registerMCPToolSet(registry *tool.Registry, options *ToolRegistryOptions, t
 			MCPSourceObserver:                 options.MCPSourceObserver,
 		})
 		spec := executor.Spec()
+		spec.ThirdParty = true
 		spec.NamespaceDescription = mcp.BoundedMCPNamespaceDescription(info.NamespaceDescription)
 		if spec.Search != nil && spec.Search.Source != nil {
 			spec.Search.Source.Description = spec.NamespaceDescription

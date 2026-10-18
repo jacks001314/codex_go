@@ -509,73 +509,74 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 	// session metrics when the task ends.
 	turnStartedAt := time.Now().UTC()
 	runConfig := &agentRunConfig{
-		Config:                         cfg,
-		Prompt:                         runPrompt,
-		InputItems:                     inputItems,
-		PostPromptInputItems:           postPromptInputItems,
-		Model:                          modelID,
-		ToolMode:                       model.ResolveToolMode(modelInfo.ToolMode, cfg.FeatureSettings()),
-		CodeModeHostEnabled:            features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
-		DisableCodeModeFallback:        cfg.DisableCodeModeInProcessFallback(),
-		CodeModeDefaultExecYieldTime:   cfg.CodeModeDefaultExecYieldTime(),
-		CodeModeShowCellOverhead:       cfg.CodeModeExperimentalShowCellOverhead(),
-		CodeModeToolDescriptionFirst:   cfg.CodeModeToolDescriptionFirst(),
-		ProviderID:                     providerID,
-		CyberAccessProgram:             cyberAccessProgram,
-		TaskKind:                       taskKind,
-		ThreadID:                       threadID,
-		TurnID:                         turnID,
-		Originator:                     originator,
-		PreviousResponseID:             resumePreviousResponseID(resumeContext),
-		ParallelToolCalls:              parallelToolCalls,
-		ReasoningEffort:                requestReasoningEffort,
-		ReasoningSummary:               effectiveReasoningSummary(cfg),
-		DropReasoningEffortUpdates:     !reasoningEffortOverride,
-		ConcurrentReasoningSummaries:   concurrentReasoningSummaries,
-		ModelVerbosity:                 modelVerbosity,
-		IncludeTimingMetrics:           includeTimingMetrics,
-		BetaFeaturesHeader:             betaFeaturesHeader,
-		ItemIDsEnabled:                 itemIDsEnabled,
-		PromptCacheKey:                 threadID,
-		ServiceTier:                    serviceTier,
-		Instructions:                   instructions,
-		ClientMetadata:                 clientMetadata,
-		OutputSchema:                   outputSchema,
-		ApprovalPolicy:                 approvalPolicy,
-		StreamEvents:                   streamCollector,
-		PermissionProfileID:            sandboxPermissionProfileID(permissionProfile),
-		PermissionProfile:              sandboxPermissionProfile(permissionProfile),
-		MCPService:                     mcpService,
-		MCPTools:                       mcpTools,
-		MCPConnectors:                  mcpConnectors,
-		AppsConfigValues:               cfg.Values,
-		WebSearch:                      webSearchOptions,
-		ImageGeneration:                imageGenerationOptions,
-		ViewImage:                      execViewImageOptions(requestCWD(req), &modelInfo),
-		HostedTools:                    hostedTools,
-		DisableHostedImageGeneration:   req.Exec.Subcommand == "review",
-		ToolOutputTokenLimit:           cfg.ToolOutputTokenLimit(),
-		UnifiedExecEnabled:             features.Enabled(cfg.FeatureSettings(), "unified_exec"),
-		ExecPermissionApprovals:        features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
-		AgentController:                execAgentControllerFromTools(multiAgentTools),
-		AgentExposure:                  execAgentExposureFromTools(multiAgentTools),
-		AgentVersion:                   execAgentVersionFromTools(multiAgentTools),
-		AgentNamespace:                 execAgentNamespaceFromTools(multiAgentTools),
-		AgentUsageHintText:             execAgentUsageHintFromTools(multiAgentTools),
-		AgentWaitDefault:               agentWaitDefault,
-		AgentWaitMin:                   agentWaitMin,
-		AgentWaitMax:                   agentWaitMax,
-		AgentWaitConfigured:            multiAgentTools != nil,
-		AgentHideSpawnMetadata:         agentHideSpawnMetadata,
-		AgentExposeSpawnModelOverrides: agentExposeSpawnOverrides,
-		AgentToolOverrides:             execAgentToolOverridesFromTools(multiAgentTools),
-		AgentRoles:                     execAgentRolesFromTools(multiAgentTools),
-		AgentDefaults:                  execAgentDefaultsFromTools(multiAgentTools),
-		DisableWaitAgent:               execAgentWaitDisabledFromTools(multiAgentTools),
-		SteerMailbox:                   firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
-		OnSteerCommitted:               req.OnSteerCommitted,
-		SamplingFollowUp:               r.execAutoCompactFallbackFollowUp(cfg, modelID),
-		SamplingCompaction:             r.execMidTurnSamplingCompaction(cfg, modelID, providerID, cyberAccessProgram, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
+		Config:                            cfg,
+		Prompt:                            runPrompt,
+		InputItems:                        inputItems,
+		PostPromptInputItems:              postPromptInputItems,
+		Model:                             modelID,
+		ToolMode:                          model.ResolveToolMode(modelInfo.ToolMode, cfg.FeatureSettings()),
+		CodeModeHostEnabled:               features.Enabled(cfg.FeatureSettings(), "code_mode_host"),
+		DisableCodeModeFallback:           cfg.DisableCodeModeInProcessFallback(),
+		CodeModeDefaultExecYieldTime:      cfg.CodeModeDefaultExecYieldTime(),
+		CodeModeShowCellOverhead:          cfg.CodeModeExperimentalShowCellOverhead(),
+		CodeModeToolDescriptionFirst:      cfg.CodeModeToolDescriptionFirst(),
+		CodeModeOnlyStrictThirdPartyTools: cfg.CodeModeOnlyStrictThirdPartyTools(),
+		ProviderID:                        providerID,
+		CyberAccessProgram:                cyberAccessProgram,
+		TaskKind:                          taskKind,
+		ThreadID:                          threadID,
+		TurnID:                            turnID,
+		Originator:                        originator,
+		PreviousResponseID:                resumePreviousResponseID(resumeContext),
+		ParallelToolCalls:                 parallelToolCalls,
+		ReasoningEffort:                   requestReasoningEffort,
+		ReasoningSummary:                  effectiveReasoningSummary(cfg),
+		DropReasoningEffortUpdates:        !reasoningEffortOverride,
+		ConcurrentReasoningSummaries:      concurrentReasoningSummaries,
+		ModelVerbosity:                    modelVerbosity,
+		IncludeTimingMetrics:              includeTimingMetrics,
+		BetaFeaturesHeader:                betaFeaturesHeader,
+		ItemIDsEnabled:                    itemIDsEnabled,
+		PromptCacheKey:                    threadID,
+		ServiceTier:                       serviceTier,
+		Instructions:                      instructions,
+		ClientMetadata:                    clientMetadata,
+		OutputSchema:                      outputSchema,
+		ApprovalPolicy:                    approvalPolicy,
+		StreamEvents:                      streamCollector,
+		PermissionProfileID:               sandboxPermissionProfileID(permissionProfile),
+		PermissionProfile:                 sandboxPermissionProfile(permissionProfile),
+		MCPService:                        mcpService,
+		MCPTools:                          mcpTools,
+		MCPConnectors:                     mcpConnectors,
+		AppsConfigValues:                  cfg.Values,
+		WebSearch:                         webSearchOptions,
+		ImageGeneration:                   imageGenerationOptions,
+		ViewImage:                         execViewImageOptions(requestCWD(req), &modelInfo),
+		HostedTools:                       hostedTools,
+		DisableHostedImageGeneration:      req.Exec.Subcommand == "review",
+		ToolOutputTokenLimit:              cfg.ToolOutputTokenLimit(),
+		UnifiedExecEnabled:                features.Enabled(cfg.FeatureSettings(), "unified_exec"),
+		ExecPermissionApprovals:           features.Enabled(cfg.FeatureSettings(), "exec_permission_approvals"),
+		AgentController:                   execAgentControllerFromTools(multiAgentTools),
+		AgentExposure:                     execAgentExposureFromTools(multiAgentTools),
+		AgentVersion:                      execAgentVersionFromTools(multiAgentTools),
+		AgentNamespace:                    execAgentNamespaceFromTools(multiAgentTools),
+		AgentUsageHintText:                execAgentUsageHintFromTools(multiAgentTools),
+		AgentWaitDefault:                  agentWaitDefault,
+		AgentWaitMin:                      agentWaitMin,
+		AgentWaitMax:                      agentWaitMax,
+		AgentWaitConfigured:               multiAgentTools != nil,
+		AgentHideSpawnMetadata:            agentHideSpawnMetadata,
+		AgentExposeSpawnModelOverrides:    agentExposeSpawnOverrides,
+		AgentToolOverrides:                execAgentToolOverridesFromTools(multiAgentTools),
+		AgentRoles:                        execAgentRolesFromTools(multiAgentTools),
+		AgentDefaults:                     execAgentDefaultsFromTools(multiAgentTools),
+		DisableWaitAgent:                  execAgentWaitDisabledFromTools(multiAgentTools),
+		SteerMailbox:                      firstSteerMailbox(req.SteerMailbox, execAgentSteerMailboxFromTools(req, multiAgentTools)),
+		OnSteerCommitted:                  req.OnSteerCommitted,
+		SamplingFollowUp:                  r.execAutoCompactFallbackFollowUp(cfg, modelID),
+		SamplingCompaction:                r.execMidTurnSamplingCompaction(cfg, modelID, providerID, cyberAccessProgram, agent, req, threadID, turnID, prompt, requestInputs, resumeContext, eventSink, execStartupItems, req.AdditionalInputItems),
 	}
 	turnResult, err := r.runAgentTurn(ctx, req, agent, runConfig)
 	if err != nil {
@@ -741,62 +742,63 @@ type agentRunConfig struct {
 	PostPromptInputItems []any
 	// DropReasoningEffortUpdates removes saved configuration_update items from
 	// the request copy when overrides are unsupported (Rust #46530).
-	DropReasoningEffortUpdates     bool
-	Model                          string
-	ToolMode                       string
-	CodeModeHostEnabled            bool
-	DisableCodeModeFallback        bool
-	CodeModeDefaultExecYieldTime   time.Duration
-	CodeModeShowCellOverhead       bool
-	CodeModeToolDescriptionFirst   bool
-	CodeModeProvider               tool.CodeModeRemoteProvider
-	CodeModeRuntime                *tool.CodeModeRuntime
-	ProviderID                     string
-	CyberAccessProgram             string
-	TaskKind                       model.AgentTaskKind
-	ThreadID                       string
-	TurnID                         string
-	Originator                     string
-	PreviousResponseID             string
-	ParallelToolCalls              bool
-	ReasoningEffort                string
-	ReasoningSummary               string
-	ConcurrentReasoningSummaries   bool
-	ModelVerbosity                 string
-	IncludeTimingMetrics           bool
-	BetaFeaturesHeader             string
-	ItemIDsEnabled                 bool
-	PromptCacheKey                 string
-	ServiceTier                    string
-	ClientMetadata                 map[string]string
-	OutputSchema                   any
-	ApprovalPolicy                 sandbox.AskForApproval
-	StreamEvents                   *execStreamEventCollector
-	PermissionProfileID            string
-	PermissionProfile              *sandbox.PermissionProfile
-	MCPService                     *mcp.MCPService
-	MCPTools                       []mcp.RuntimeToolInfo
-	MCPConnectors                  []mcp.RuntimeConnector
-	AppsConfigValues               map[string]any
-	WebSearch                      *turn.WebSearchOptions
-	ImageGeneration                *turn.ImageGenerationOptions
-	ViewImage                      *tool.ViewImageOptions
-	HostedTools                    []any
-	DisableHostedImageGeneration   bool
-	ToolOutputTokenLimit           *int
-	UnifiedExecEnabled             bool
-	ExecPermissionApprovals        bool
-	AgentController                multiagent.ToolController
-	AgentExposure                  tool.Exposure
-	AgentVersion                   multiagent.MultiAgentVersion
-	AgentNamespace                 string
-	AgentUsageHintText             *string
-	AgentWaitDefault               time.Duration
-	AgentWaitMin                   time.Duration
-	AgentWaitMax                   time.Duration
-	AgentWaitConfigured            bool
-	AgentHideSpawnMetadata         bool
-	AgentExposeSpawnModelOverrides bool
+	DropReasoningEffortUpdates        bool
+	Model                             string
+	ToolMode                          string
+	CodeModeHostEnabled               bool
+	DisableCodeModeFallback           bool
+	CodeModeDefaultExecYieldTime      time.Duration
+	CodeModeShowCellOverhead          bool
+	CodeModeToolDescriptionFirst      bool
+	CodeModeOnlyStrictThirdPartyTools bool
+	CodeModeProvider                  tool.CodeModeRemoteProvider
+	CodeModeRuntime                   *tool.CodeModeRuntime
+	ProviderID                        string
+	CyberAccessProgram                string
+	TaskKind                          model.AgentTaskKind
+	ThreadID                          string
+	TurnID                            string
+	Originator                        string
+	PreviousResponseID                string
+	ParallelToolCalls                 bool
+	ReasoningEffort                   string
+	ReasoningSummary                  string
+	ConcurrentReasoningSummaries      bool
+	ModelVerbosity                    string
+	IncludeTimingMetrics              bool
+	BetaFeaturesHeader                string
+	ItemIDsEnabled                    bool
+	PromptCacheKey                    string
+	ServiceTier                       string
+	ClientMetadata                    map[string]string
+	OutputSchema                      any
+	ApprovalPolicy                    sandbox.AskForApproval
+	StreamEvents                      *execStreamEventCollector
+	PermissionProfileID               string
+	PermissionProfile                 *sandbox.PermissionProfile
+	MCPService                        *mcp.MCPService
+	MCPTools                          []mcp.RuntimeToolInfo
+	MCPConnectors                     []mcp.RuntimeConnector
+	AppsConfigValues                  map[string]any
+	WebSearch                         *turn.WebSearchOptions
+	ImageGeneration                   *turn.ImageGenerationOptions
+	ViewImage                         *tool.ViewImageOptions
+	HostedTools                       []any
+	DisableHostedImageGeneration      bool
+	ToolOutputTokenLimit              *int
+	UnifiedExecEnabled                bool
+	ExecPermissionApprovals           bool
+	AgentController                   multiagent.ToolController
+	AgentExposure                     tool.Exposure
+	AgentVersion                      multiagent.MultiAgentVersion
+	AgentNamespace                    string
+	AgentUsageHintText                *string
+	AgentWaitDefault                  time.Duration
+	AgentWaitMin                      time.Duration
+	AgentWaitMax                      time.Duration
+	AgentWaitConfigured               bool
+	AgentHideSpawnMetadata            bool
+	AgentExposeSpawnModelOverrides    bool
 	// AgentToolOverrides carries the model catalog's per-tool Multi-Agent V2
 	// overrides (Rust #46505).
 	AgentToolOverrides map[string]multiagent.MultiAgentToolOverride
@@ -1429,6 +1431,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.CodeModeShowCellOverhead = run.CodeModeShowCellOverhead
 		options.CodeModeToolDescriptionFirst = run.CodeModeToolDescriptionFirst
+		options.CodeModeOnlyStrictThirdPartyTools = run.CodeModeOnlyStrictThirdPartyTools
 		options.DisableCodeModeFallback = run.DisableCodeModeFallback
 		options.ToolMode = run.ToolMode
 	}
