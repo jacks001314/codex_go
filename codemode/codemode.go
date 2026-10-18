@@ -298,12 +298,13 @@ func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferred
 
 	definitions = SortDefinitions(definitions)
 	currentNamespace := ""
+	namespaceInitialized := false
 	for _, definition := range definitions {
 		if !IsNestedTool(definition.Name) {
 			continue
 		}
 		namespace := definition.ToolName.Namespace
-		if namespace != currentNamespace {
+		if !namespaceInitialized || namespace != currentNamespace {
 			if namespaceDescription, ok := namespaces[namespace]; ok {
 				description := strings.TrimSpace(namespaceDescription.Description)
 				if description != "" {
@@ -315,6 +316,7 @@ func BuildExecToolDescriptionWithDeferred(definitions []ToolDefinition, deferred
 				}
 			}
 			currentNamespace = namespace
+			namespaceInitialized = true
 		}
 		globalName := NormalizeIdentifier(definition.Name)
 		heading := "### `" + globalName + "`"

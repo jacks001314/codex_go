@@ -50,6 +50,9 @@ type RuntimeOptions struct {
 	// calls even though inter-agent mail is queued at a commentary or
 	// partial-answer boundary (#49262, #51249).
 	DeferMailboxPreemption bool
+	// IndirectDescriptionPrefixes carries the active model's indirect namespace
+	// guidance for Code Mode rendering (Rust #47642).
+	IndirectDescriptionPrefixes *tool.IndirectNamespacePrefixes
 }
 
 type Runtime struct {
@@ -67,6 +70,7 @@ type Runtime struct {
 	onToolOutputExternalContext  func(ctx context.Context, threadID string, invocation *tool.Invocation)
 	instantInterrupt             bool
 	deferMailboxPreemption       bool
+	indirectDescriptionPrefixes  *tool.IndirectNamespacePrefixes
 }
 
 func NewRuntime(options *RuntimeOptions) *Runtime {
@@ -96,6 +100,7 @@ func NewRuntime(options *RuntimeOptions) *Runtime {
 		onToolOutputExternalContext:  options.OnToolOutputExternalContext,
 		instantInterrupt:             options.InstantInterrupt,
 		deferMailboxPreemption:       options.DeferMailboxPreemption,
+		indirectDescriptionPrefixes:  options.IndirectDescriptionPrefixes,
 	}
 }
 
@@ -331,7 +336,7 @@ func (r *Runtime) modelVisibleSpecsForRequest(effectiveToolMode string) []tool.S
 		visibleSpecs = directModeVisibleSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
 	} else if effectiveToolMode == model.ToolModeCodeModeOnly && codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = codeModeOnlyVisibleSpecs(visibleSpecs)
-		visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
+		visibleSpecs = codeModeOnlyExecPromptSpecs(visibleSpecs, r.router.CodeModeToolSpecs(), r.indirectDescriptionPrefixes)
 	}
 	if codemode.HasExecTool(visibleSpecs) {
 		visibleSpecs = augmentCodeModeWinnerSpecs(visibleSpecs, r.router.CodeModeToolSpecs())
@@ -442,7 +447,7 @@ func codeModeOnlyVisibleSpecs(specs []tool.Spec) []tool.Spec {
 	return out
 }
 
-func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec) []tool.Spec {
+func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Spec, indirectPrefixes *tool.IndirectNamespacePrefixes) []tool.Spec {
 	enabledSpecs := make([]tool.Spec, 0, len(nestedSpecs))
 	deferredSpecs := make([]tool.Spec, 0)
 	namespaces := map[string]codemode.NamespaceDescription{}
@@ -460,6 +465,11 @@ func codeModeOnlyExecPromptSpecs(visibleSpecs []tool.Spec, nestedSpecs []tool.Sp
 		existing, ok := namespaces[namespace]
 		if !ok || (strings.TrimSpace(existing.Description) == "" && description != "") {
 			namespaces[namespace] = codemode.NamespaceDescription{Name: namespace, Description: description}
+		}
+	}
+	if indirectPrefixes != nil {
+		if prefix := indirectPrefixes.PrefixForNamespace("functions"); prefix != "" {
+			namespaces[""] = codemode.NamespaceDescription{Name: "functions", Description: prefix}
 		}
 	}
 	description := codemode.BuildExecToolDescriptionWithDeferred(

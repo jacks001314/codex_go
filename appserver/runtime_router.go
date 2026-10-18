@@ -14578,6 +14578,10 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 			includeToolInfo = cfg.ToolRegistryTurnMetadataIncludesToolInfo()
 		}
 	}
+	indirectPrefixes, err := resolvedIndirectDescriptionPrefixesForTurn(r, router, params, turnConfig)
+	if err != nil {
+		return nil, err
+	}
 	return turn.NewRuntime(&turn.RuntimeOptions{
 		Agent:                        agent,
 		Router:                       router,
@@ -14610,8 +14614,46 @@ func (r *RuntimeRouter) buildTurnRuntimeContext(ctx context.Context, params *tur
 		// Rust #49262/#51249: the defer-mailbox-preemption feature is what keeps a
 		// sampling response's remaining tool calls when inter-agent mail is queued
 		// at a commentary or partial-answer boundary.
-		DeferMailboxPreemption: turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "defer_mailbox_preemption"),
+		DeferMailboxPreemption:      turnConfig != nil && features.Enabled(turnConfig.FeatureSettings(), "defer_mailbox_preemption"),
+		IndirectDescriptionPrefixes: indirectPrefixes,
 	}), nil
+}
+
+func indirectDescriptionPrefixesFromModel(in *model.IndirectDescriptionPrefixes) *tool.IndirectDescriptionPrefixes {
+	if in == nil {
+		return nil
+	}
+	return &tool.IndirectDescriptionPrefixes{
+		Namespaces: cloneStringMap(in.Namespaces),
+		MCPServers: cloneStringMap(in.MCPServers),
+	}
+}
+
+func resolvedIndirectDescriptionPrefixesForTurn(
+	r *RuntimeRouter,
+	router *tool.Router,
+	params *turn.TurnStartParams,
+	cfg *config.Config,
+) (*tool.IndirectNamespacePrefixes, error) {
+	if r == nil || router == nil || router.Registry() == nil {
+		return nil, nil
+	}
+	modelID := ""
+	if params != nil {
+		modelID = strings.TrimSpace(params.Model)
+	}
+	if modelID == "" {
+		modelID = stringConfigValue(cfg, "model")
+	}
+	info := r.modelInfoForRuntimeWithConfig(modelID, cfg)
+	if info == nil || info.ModelMessages == nil || info.ModelMessages.Tools == nil {
+		return nil, nil
+	}
+	prefixes := indirectDescriptionPrefixesFromModel(info.ModelMessages.Tools.IndirectDescriptionPrefixes)
+	if prefixes == nil {
+		return nil, nil
+	}
+	return tool.NewIndirectNamespacePrefixes(prefixes, router.Registry().MCPServerNamespaces())
 }
 
 // markThreadMemoryPollutedOnToolOutput mirrors Rust's `handle_any_tool`
@@ -14970,6 +15012,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 					options.SendUserMessageAsyncDescription = tools.SendUserMessageAsync.Description
 				}
 				options.FunctionDescriptionPrefixes = tools.FunctionsNamespaceFunctionsDescriptionPrefixes
+				options.IndirectDescriptionPrefixes = indirectDescriptionPrefixesFromModel(tools.IndirectDescriptionPrefixes)
 			}
 			// Rust #47773: request_user_input_async uses the same catalog
 			// entry's description and parameters override.

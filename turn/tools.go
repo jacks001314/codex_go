@@ -99,6 +99,9 @@ type ToolRegistryOptions struct {
 	// FunctionDescriptionPrefixes carries the active model's
 	// functions-namespace per-tool guidance (Rust #51930).
 	FunctionDescriptionPrefixes map[string]string
+	// IndirectDescriptionPrefixes carries the active model's guidance for
+	// Code Mode, ALL_TOOLS, and tool search renderings (Rust #47642).
+	IndirectDescriptionPrefixes *tool.IndirectDescriptionPrefixes
 	// SuppressActorConfirmationPolicies omits the confirmation-policies request
 	// metadata (Guardian review sessions).
 	SuppressActorConfirmationPolicies bool
@@ -725,6 +728,14 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 	}); err != nil {
 		return nil, err
 	}
+	var indirectPrefixes *tool.IndirectNamespacePrefixes
+	if options.IndirectDescriptionPrefixes != nil {
+		resolved, resolveErr := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces())
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		indirectPrefixes = resolved
+	}
 	if options.EnableToolSearch {
 		// Rust only adds tool_search when at least one deferred executor is
 		// searchable. Advertising an empty search tool causes models to emit a
@@ -732,7 +743,11 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		// resumed Responses history.
 		if registryHasSearchableDeferredTool(registry) {
 			registry.Remove(tool.PlainName(tool.ToolSearchName))
-			if err := tool.RegisterToolSearchFromRegistryWithOptions(registry, options.OmitToolSearchSources); err != nil {
+			specs := registry.DiscoverableSpecs()
+			if indirectPrefixes != nil {
+				specs = indirectPrefixes.ApplyToSpecs(specs)
+			}
+			if err := tool.RegisterToolSearchHandlerWithOptions(registry, specs, options.OmitToolSearchSources); err != nil {
 				return nil, err
 			}
 		}
@@ -744,6 +759,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if options.CodeModeRuntime != nil {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
+			options.CodeModeRuntime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			// Rust #45409: a Code Mode cell retains the window it started in, so
 			// the nested MCP calls it issues keep reporting that window.
 			options.CodeModeRuntime.SetTurnWindowID(options.WindowID)
@@ -752,6 +768,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
+			runtime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)
 		}
 		if err := registry.Prepend(waitExecutor); err != nil {

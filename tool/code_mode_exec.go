@@ -112,6 +112,9 @@ type codeModeExecExecutor struct {
 	// CodeModeToolCallFact). The app-server correlates tool events with it; nil
 	// leaves the observation off.
 	callObserver func(observation CodeModeCallObservation)
+	// indirectPrefixes decorates nested tool and namespace descriptions for
+	// model rendering without changing registry specifications (Rust #47642).
+	indirectPrefixes *IndirectNamespacePrefixes
 }
 
 // CodeModeCallObservationKind mirrors Rust's CodeModeToolCallFact variants.
@@ -341,6 +344,17 @@ func (r *CodeModeRuntime) SetCallObserver(observer func(observation CodeModeCall
 	}
 	r.exec.bindingMu.Lock()
 	r.exec.callObserver = observer
+	r.exec.bindingMu.Unlock()
+}
+
+// SetIndirectDescriptionPrefixes applies model-owned namespace guidance to the
+// Code Mode prompt, ALL_TOOLS, and nested tool descriptions (Rust #47642).
+func (r *CodeModeRuntime) SetIndirectDescriptionPrefixes(prefixes *IndirectNamespacePrefixes) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.indirectPrefixes = prefixes
 	r.exec.bindingMu.Unlock()
 }
 
@@ -877,6 +891,9 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 	if registry == nil {
 		return nil
 	}
+	e.bindingMu.RLock()
+	indirectPrefixes := e.indirectPrefixes
+	e.bindingMu.RUnlock()
 	names := registry.Names()
 	out := make([]codeModeNestedTool, 0, len(names))
 	seenIdentifiers := make(map[string]struct{}, len(names))
@@ -893,6 +910,9 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 			continue
 		}
 		seenIdentifiers[globalName] = struct{}{}
+		if indirectPrefixes != nil {
+			spec = indirectPrefixes.ApplyToSpec(spec)
+		}
 		out = append(out, codeModeNestedTool{globalName: globalName, name: name, spec: spec})
 	}
 	return out

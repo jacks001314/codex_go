@@ -222,6 +222,10 @@ type ConfirmationPolicies struct {
 // model-owned descriptions for built-in tools.
 type ToolMessages struct {
 	SendUserMessageAsync *ToolMessage `json:"send_user_message_async,omitempty"`
+	// IndirectDescriptionPrefixes adds model-owned guidance to namespace
+	// documentation in Code Mode prompts, ALL_TOOLS, and tool search results
+	// without altering direct tool specifications (Rust #47642).
+	IndirectDescriptionPrefixes *IndirectDescriptionPrefixes `json:"indirect_description_prefixes,omitempty"`
 	// IncrementalTools overrides harness-owned incremental catalog notices.
 	IncrementalTools *IncrementalToolMessages `json:"incremental_tools,omitempty"`
 	// FunctionsNamespaceFunctionsDescriptionPrefixes prepends model-owned
@@ -233,6 +237,15 @@ type ToolMessages struct {
 	// McpResources carries the built-in MCP resource helpers' overrides
 	// (Rust #47677).
 	McpResources *McpResourceToolMessages `json:"mcp_resources,omitempty"`
+}
+
+// IndirectDescriptionPrefixes mirrors Rust's model-owned indirect tool guidance.
+// Namespace keys are exact rendered namespaces (including `functions` for plain
+// tools); MCP server keys are configured server names before namespace
+// normalization. Values are trimmed and empty values add no prefix.
+type IndirectDescriptionPrefixes struct {
+	Namespaces map[string]string `json:"namespaces,omitempty"`
+	MCPServers map[string]string `json:"mcp_servers,omitempty"`
 }
 
 // IncrementalToolMessages mirrors Rust's model-catalog overrides for
@@ -832,6 +845,10 @@ type ModelPreset struct {
 	SupportedReasoningLevels []string
 	MultiAgentVersion        string
 	ServiceTiers             []string
+	// AvailableAccessPrograms is the model's catalog-advertised cyber program
+	// list (Rust ModelInfo.available_access_programs), used by the TUI to choose
+	// standard vs Daybreak per turn.
+	AvailableAccessPrograms *ModelAccessPrograms
 }
 
 type ModelsManagerConfig struct {
@@ -1413,6 +1430,7 @@ func BuildAvailableModels(remoteModels []ModelInfo) []ModelPreset {
 			SupportedReasoningLevels: cloneStrings(model.SupportedReasoningLevels),
 			MultiAgentVersion:        model.MultiAgentVersion,
 			ServiceTiers:             cloneStrings(model.ServiceTiers),
+			AvailableAccessPrograms:  cloneModelAccessPrograms(model.AvailableAccessPrograms),
 		})
 	}
 	if len(presets) > 0 {
@@ -1906,6 +1924,7 @@ func cloneModelInfo(in ModelInfo) ModelInfo {
 		if messages.Tools != nil {
 			tools := *messages.Tools
 			tools.SendUserMessageAsync = cloneToolMessage(tools.SendUserMessageAsync)
+			tools.IndirectDescriptionPrefixes = cloneIndirectDescriptionPrefixes(tools.IndirectDescriptionPrefixes)
 			if tools.IncrementalTools != nil {
 				incremental := *tools.IncrementalTools
 				incremental.ToolUpdateHint = cloneStringPointer(incremental.ToolUpdateHint)
@@ -1934,6 +1953,16 @@ func cloneToolMessage(in *ToolMessage) *ToolMessage {
 	out.Description = cloneStringPointer(in.Description)
 	out.Parameters = cloneStringPointer(in.Parameters)
 	return &out
+}
+
+func cloneIndirectDescriptionPrefixes(in *IndirectDescriptionPrefixes) *IndirectDescriptionPrefixes {
+	if in == nil {
+		return nil
+	}
+	return &IndirectDescriptionPrefixes{
+		Namespaces: cloneStringMap(in.Namespaces),
+		MCPServers: cloneStringMap(in.MCPServers),
+	}
 }
 
 func cloneMultiAgentToolMessages(in *MultiAgentToolMessages) *MultiAgentToolMessages {

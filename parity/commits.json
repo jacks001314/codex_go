@@ -19846,9 +19846,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/8); candidate gap: IndirectDescriptionPrefixes, IndirectNamespacePrefixConflict, IndirectNamespacePrefixes, apply_code_mode, apply_exec_prompt"
+        "Round 661 (implementation): ToolMessages.IndirectDescriptionPrefixes parses model namespaces/mcp_servers with trimmed empty handling and cloned maps. IndirectNamespacePrefixes resolves registered MCP server namespaces, rejects conflicting selectors before the request, and applies guidance to cloned Code Mode/ALL_TOOLS/tool-search specs only; direct registry specs remain unchanged. Code Mode-only renders the default functions namespace prefix. Tests: go test ./tool -run 'Indirect|MCPServerNamespaces' -count=1; go test ./turn -run 'IndirectDescriptionPrefixes' -count=1; go test ./codemode -count=1; go test ./model -run 'IndirectDescriptionPrefixes' -count=1; go test ./appserver -run 'CodeMode|ToolSearch|ToolRegistry' -count=1; go vet ./tool ./turn ./codemode ./appserver"
       ]
     },
     {

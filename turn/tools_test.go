@@ -793,6 +793,114 @@ func TestBuildToolRegistryAppliesModelFunctionDescriptionPrefixesLikeRust(t *tes
 	}
 }
 
+type indirectPrefixMCPServerExecutor struct {
+	spec       tool.Spec
+	serverName string
+}
+
+func (e indirectPrefixMCPServerExecutor) Spec() tool.Spec { return e.spec }
+
+func (e indirectPrefixMCPServerExecutor) Execute(context.Context, *tool.Invocation) (*tool.Output, error) {
+	return &tool.Output{Success: true, Body: "ok"}, nil
+}
+
+func (e indirectPrefixMCPServerExecutor) MCPServerName() string { return e.serverName }
+
+func TestBuildToolRegistryAppliesIndirectDescriptionPrefixesLikeRust(t *testing.T) {
+	runtime := tool.NewCodeModeRuntime(nil, false)
+	options := &ToolRegistryOptions{
+		EnableCodeMode:        true,
+		EnableToolSearch:      true,
+		CodeModeRuntime:       runtime,
+		OmitToolSearchSources: true,
+		IndirectDescriptionPrefixes: &tool.IndirectDescriptionPrefixes{
+			Namespaces: map[string]string{"functions": "Function guidance."},
+			MCPServers: map[string]string{"drive": "Drive guidance."},
+		},
+		ExtraTools: []tool.Executor{
+			indirectPrefixMCPServerExecutor{
+				serverName: "drive",
+				spec: tool.Spec{
+					Name:                 tool.NamespacedName("mcp__drive", "search"),
+					Description:          "Search Drive.",
+					NamespaceDescription: "Drive tools.",
+					Exposure:             tool.ExposureCodeModeOnly,
+				},
+			},
+			tool.NewExecutorFunc(tool.Spec{
+				Name:        tool.PlainName("lookup"),
+				Description: "Lookup.",
+				Exposure:    tool.ExposureModelVisible,
+			}, func(context.Context, *tool.Invocation) (*tool.Output, error) {
+				return &tool.Output{Success: true, Body: "ok"}, nil
+			}),
+			indirectPrefixMCPServerExecutor{
+				serverName: "drive",
+				spec: tool.Spec{
+					Name:                 tool.NamespacedName("mcp__drive", "find"),
+					Description:          "Find Drive.",
+					NamespaceDescription: "Drive tools.",
+					Exposure:             tool.ExposureDiscoverable,
+					Search:               &tool.SearchInfo{Text: "Find Drive."},
+				},
+			},
+		},
+	}
+	registry, err := BuildToolRegistry(options)
+	if err != nil {
+		t.Fatalf("BuildToolRegistry() error = %v", err)
+	}
+	direct, ok := registry.Spec(tool.NamespacedName("mcp__drive", "search"))
+	if !ok || direct.Description != "Search Drive." || direct.NamespaceDescription != "Drive tools." {
+		t.Fatalf("direct MCP spec was changed = %#v", direct)
+	}
+	resolved, err := tool.NewIndirectNamespacePrefixes(options.IndirectDescriptionPrefixes, registry.MCPServerNamespaces())
+	if err != nil {
+		t.Fatalf("NewIndirectNamespacePrefixes() error = %v", err)
+	}
+	var codeModeMCP tool.Spec
+	for _, spec := range tool.NewRouter(registry).CodeModeToolSpecs() {
+		if spec.Name.Key() == "mcp__drive.search" {
+			codeModeMCP = spec
+			break
+		}
+	}
+	if codeModeMCP.Description != "Drive guidance.\n\nSearch Drive." || codeModeMCP.NamespaceDescription != "Drive guidance.\n\nDrive tools." {
+		t.Fatalf("code-mode MCP spec = %#v", codeModeMCP)
+	}
+	execSpec, ok := registry.Spec(tool.PlainName(tool.CodeModeExecToolName))
+	if !ok {
+		t.Fatal("code-mode exec spec is missing")
+	}
+	promptSpecs := codeModeOnlyExecPromptSpecs([]tool.Spec{execSpec}, tool.NewRouter(registry).CodeModeToolSpecs(), resolved)
+	if len(promptSpecs) == 0 || !strings.Contains(promptSpecs[0].Description, "## functions\nFunction guidance.") ||
+		!strings.Contains(promptSpecs[0].Description, "## mcp__drive\nDrive guidance.") {
+		t.Fatalf("code-mode-only exec description = %#v", promptSpecs)
+	}
+	executor, ok := registry.Lookup(tool.PlainName(tool.ToolSearchName))
+	if !ok {
+		t.Fatal("tool_search executor is missing")
+	}
+	handler, ok := executor.(*tool.ToolSearchHandler)
+	if !ok {
+		t.Fatalf("tool_search executor = %T", executor)
+	}
+	output, err := handler.Execute(context.Background(), &tool.Invocation{Payload: tool.Payload{
+		Kind:   tool.PayloadToolSearch,
+		Search: map[string]any{"query": "drive"},
+	}})
+	if err != nil || output == nil {
+		t.Fatalf("tool search = %#v, %v", output, err)
+	}
+	var result tool.ToolSearchResult
+	if err := json.Unmarshal([]byte(output.Body), &result); err != nil {
+		t.Fatalf("decode tool search: %v", err)
+	}
+	if len(result.Tools) != 1 || result.Tools[0].Description != "Drive guidance.\n\nFind Drive." {
+		t.Fatalf("tool search results = %#v", result.Tools)
+	}
+}
+
 func TestSkillReadPageHonorsEscapedAndMultibyteBudgetsLikeRust(t *testing.T) {
 	contents := strings.Repeat("quote \" slash \\ newline\n emoji 😀 ", 40)
 	for _, budget := range []int{180, 300, 1024} {

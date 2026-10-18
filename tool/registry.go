@@ -441,6 +441,42 @@ func (r *Registry) DiscoverableSpecs() []Spec {
 	return out
 }
 
+// MCPServerNamespaces maps each configured MCP server name to the callable
+// namespaces it exposes. Indirect description prefixes use this mapping so a
+// server selector applies to every tool namespace of that server (Rust #47642).
+func (r *Registry) MCPServerNamespaces() map[string][]string {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := map[string][]string{}
+	seen := map[string]struct{}{}
+	for _, key := range r.order {
+		spec := r.specs[key]
+		namespace := strings.TrimSpace(spec.Name.Namespace)
+		if namespace == "" {
+			continue
+		}
+		executor := r.executors[key]
+		namer, ok := executor.(interface{ MCPServerName() string })
+		if !ok {
+			continue
+		}
+		server := strings.TrimSpace(namer.MCPServerName())
+		if server == "" {
+			continue
+		}
+		seenKey := server + "\x00" + namespace
+		if _, exists := seen[seenKey]; exists {
+			continue
+		}
+		seen[seenKey] = struct{}{}
+		out[server] = append(out[server], namespace)
+	}
+	return out
+}
+
 // ApplyFunctionsNamespaceFunctionDescriptionPrefixes prepends model-owned
 // guidance to available default-namespace tools. Values are trimmed; empty
 // values and unavailable names add nothing. The combined prefix text for
