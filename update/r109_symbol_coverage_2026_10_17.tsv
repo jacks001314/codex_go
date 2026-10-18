@@ -553,7 +553,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 370cd7cba87aeef8cf39bb194e51829b210c26a6	47435	Allow environment selection updates during an active turn (#47435)	2026-09-23	guardian	5	1	0.20	0	0	audit_pending	ensure_configs_stay_owner_provided,snapshot_now,validate_environment_configs,validate_environment_ids_and_cwds
 3715bf4100cd42773cb978d8ec0f632e97883cf7	44613	Enable user verification for local Codex Desktop sessions (#44613)	2026-09-10	appserver	0	0		0	0	not_applicable	
 3724dc836155f30acd47616d9c778a0a1cc91160	46334	Share platform identity across path, network, and sandbox configuration (#46334)	2026-09-18	execserver	5	3	0.60	0	0	audit_pending	effective_sandbox_mode,from_platform_os
-3749d1eff7df4ac9a0e2d32099813ba56500b930	49075	Preserve pending environments when spawning subagents (#49075)	2026-09-28	core	4	2	0.50	0	0	audit_pending	PendingConfiguration,owner_configuration
+3749d1eff7df4ac9a0e2d32099813ba56500b930	49075	Preserve pending environments when spawning subagents (#49075)	2026-09-28	core	4	4	1.00	0	0	complete
 374c4b2d828321cfa3d3fc69ce66870f8b7fd01f	45459	Resolve enterprise-managed MCP registrations in the catalog (#45459)	2026-09-14	appserver	3	1	0.33	0	0	audit_pending	enable_ema,resolve_ema_registration
 379d50be35d393631f45fde69197f3b9a592aa02	41884	Add pinned native voice source preparation (#41884)	2026-08-31	realtime	0	0		0	0	not_applicable	
 37a5149822296c52414ccf8ad3ca00bfb7424260	40983	Record Windows world-writable scan telemetry (#40983)	2026-08-26	tui	1	0	0.00	0	0	implementation_pending	record_world_writable_scan_result

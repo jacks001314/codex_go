@@ -22880,9 +22880,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: PendingConfiguration, owner_configuration"
+        "Already implemented in f15258cf. inheritableEnvironmentSelections keeps ready and starting attachments while dropping failed ones; spawned children and grandchildren persist that exact selection. The runtime propagates the owner's first ready/failure result to descendants through turn/start, while a child that configured its own attachment keeps its own configuration."
       ]
     },
     {
