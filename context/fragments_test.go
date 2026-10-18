@@ -194,6 +194,9 @@ func TestPermissionsInstructions(t *testing.T) {
 	if !strings.Contains(body, "Network: restricted") {
 		t.Fatalf("network missing in:\n%s", body)
 	}
+	if fragment.ContentKind() != "permissions.instructions" {
+		t.Fatalf("permissions content kind = %q, want permissions.instructions", fragment.ContentKind())
+	}
 }
 
 func TestCurrentTimeReminder(t *testing.T) {

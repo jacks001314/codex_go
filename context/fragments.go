@@ -911,7 +911,7 @@ func (p *RecommendedPluginsInstructions) ContentKind() string {
 }
 
 func (p *PermissionsInstructions) ContentKind() string {
-	return "generic.permissions_instructions"
+	return "permissions.instructions"
 }
 
 func (c *CurrentTimeReminder) ContentKind() string {

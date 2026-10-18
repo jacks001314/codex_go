@@ -934,9 +934,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: GuardianApprovedAction, inject_fragment_without_turn"
+        "Round 576 (audit): already implemented. compaction.summary, guardian.approved_action, and multi_agent.subagent_notification kinds are applied through the typed fragment path. Tests: go test ./compact ./appserver -run 'CompactionSummary|GuardianApproved|SubagentNotification' -count=1"
       ]
     },
     {
@@ -994,9 +994,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 577 (audit): already implemented. Go's daemon-recovery internal model context is classified as daemon_recovery.internal_context, matching the source-derived kind. Tests: go test ./appserver -run 'DaemonRecovery|InternalContext' -count=1"
       ]
     },
     {
@@ -1006,9 +1006,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 578 (fix): changed PermissionsInstructions content kind from generic.permissions_instructions to permissions.instructions and added a regression assertion. Tests: go test ./context -run 'PermissionsInstructions|ContentKind' -count=1"
       ]
     },
     {
