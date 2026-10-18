@@ -2139,9 +2139,9 @@ green.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
-- `#47847` remains partial but now has a dedicated session clipboard worker:
-  one blocking operation at a time, a five-second setup budget that abandons
-  the UI request while keeping the worker busy, rejection of concurrent copies,
-  buffered late completions, bounded close on quit, and latest-PRIMARY
-  publication coalescing through the same queue. Remaining: an explicit native
-  clipboard lease/ownership handoff model.
+- `#47847` is complete: a session clipboard worker serializes operations,
+  enforces a five-second setup budget while staying busy until the OS call
+  returns, rejects concurrent copies, buffers/discards late completions,
+  coalesces the latest PRIMARY publication, invalidates stale middle-click
+  reads on new input, and closes within one second on quit. Platform helpers
+  provide the session-lifetime native lease.

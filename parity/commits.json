@@ -20483,9 +20483,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 698 (implementation): a session-lived clipboard worker owns one blocking operation at a time. A five-second setup budget returns a timeout result while the worker remains busy until the OS call returns, concurrent copies are rejected, late completions are buffered/discarded, and quit paths close the worker with a bounded one-second wait. The worker retains only the latest PRIMARY publication while busy, flushes it before releasing busy, and supersedes older waiters; copy tasks and primary publications share the same serialized queue. Tests cover setup timeout, continued busy state, bounded close, and latest-primary supersession. Remaining: an explicit native clipboard lease/ownership handoff model; platform helpers retain CLIPBOARD/PRIMARY ownership implicitly."
+        "Round 699 (implementation): a session-lived clipboard worker owns one blocking operation at a time. A five-second setup budget abandons the UI request while the worker remains busy until the OS call returns; concurrent copies are rejected with no backlog, late completions are buffered/discarded, and quit paths close the worker within one second. PRIMARY publications coalesce to the latest and flush before busy is released, while middle-click reads use request IDs and are invalidated by new key input so stale reads cannot paste. Native CLIPBOARD/PRIMARY ownership is held by session-lifetime platform helpers (arboard/xclip/xsel/wl-clipboard), which is the Go carrier for Rust's retained lease. Tests cover setup timeout, continued busy state, bounded close, latest-primary supersession, and stale primary-read rejection."
       ]
     },
     {

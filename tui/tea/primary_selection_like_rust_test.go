@@ -95,3 +95,26 @@ func TestResumeReleasesPrimaryOwnershipLikeRust(t *testing.T) {
 		t.Fatal("primary ownership remained marked after resume")
 	}
 }
+
+func TestLatePrimaryPasteIsDiscardedAfterInputLikeRust(t *testing.T) {
+	model := NewModel(codextui.NewState(nil), Options{
+		Width:  100,
+		Height: 24,
+		OnPrimarySelectionRead: func() (string, error) {
+			return "stale primary", nil
+		},
+	})
+	model.View()
+	handled, cmd := model.startPrimarySelectionPaste(bubbletea.MouseMsg{
+		Button: bubbletea.MouseButtonMiddle,
+		Action: bubbletea.MouseActionPress,
+	})
+	if !handled || cmd == nil {
+		t.Fatal("middle-click did not start")
+	}
+	model.Update(bubbletea.KeyMsg{Type: bubbletea.KeyRunes, Runes: []rune("x")})
+	model.Update(cmd())
+	if got := model.composer.Value(); got != "x" {
+		t.Fatalf("late primary paste changed composer to %q", got)
+	}
+}

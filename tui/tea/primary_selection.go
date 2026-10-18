@@ -9,8 +9,9 @@ import (
 
 // PrimarySelectionReadResultMsg carries an asynchronous middle-click paste.
 type PrimarySelectionReadResultMsg struct {
-	Text string
-	Err  error
+	RequestID uint64
+	Text      string
+	Err       error
 }
 
 // PrimarySelectionWriteResultMsg records whether a copy-on-select publication
@@ -91,14 +92,24 @@ func (m *Model) startPrimarySelectionPaste(msg bubbletea.MouseMsg) (bool, bubble
 		return false, nil
 	}
 	reader := m.onPrimarySelectionRead
+	m.nextPrimarySelectionReadID++
+	if m.nextPrimarySelectionReadID == 0 {
+		m.nextPrimarySelectionReadID = 1
+	}
+	requestID := m.nextPrimarySelectionReadID
+	m.pendingPrimarySelectionRead = requestID
 	return true, func() bubbletea.Msg {
 		text, err := reader()
-		return PrimarySelectionReadResultMsg{Text: text, Err: err}
+		return PrimarySelectionReadResultMsg{RequestID: requestID, Text: text, Err: err}
 	}
 }
 
 func (m *Model) applyPrimarySelectionRead(msg PrimarySelectionReadResultMsg) {
-	if m == nil || msg.Err != nil || strings.TrimSpace(msg.Text) == "" {
+	if m == nil || msg.RequestID == 0 || msg.RequestID != m.pendingPrimarySelectionRead {
+		return
+	}
+	m.pendingPrimarySelectionRead = 0
+	if msg.Err != nil || strings.TrimSpace(msg.Text) == "" {
 		return
 	}
 	if m.modal != nil || m.slashPopup.Active || m.skillPopup.Active || m.mentionPopup != nil || m.readOnlyThread {

@@ -2214,6 +2214,8 @@ type Model struct {
 	onPrimarySelectionRead            func() (string, error)
 	onPrimarySelectionRelease         func() error
 	primarySelectionPublished         bool
+	nextPrimarySelectionReadID        uint64
+	pendingPrimarySelectionRead       uint64
 	onFetchStartupAnnouncement        func() (string, bool)
 	pluginUserMarketplaces            map[string]bool
 	pluginGitMarketplaces             map[string]bool
@@ -2996,6 +2998,11 @@ func (m *Model) Init() bubbletea.Cmd {
 func (m *Model) Update(message bubbletea.Msg) (bubbletea.Model, bubbletea.Cmd) {
 	if m == nil {
 		return m, nil
+	}
+	if _, key := message.(bubbletea.KeyMsg); key {
+		// Rust #47847: a text read is bound to its UI owner; new input makes a
+		// late PRIMARY result stale.
+		m.pendingPrimarySelectionRead = 0
 	}
 	m.acknowledgeProgramStatusOnInput(message)
 	if handled, cmd := m.handleWindowsMappedShiftEnter(message); handled {
