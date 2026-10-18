@@ -18857,9 +18857,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: LUNA_MODEL"
+        "Equivalent implementation already present: the bundled OpenAI catalog contains GPT-6 Sol and Luna with current display names, descriptions, priorities, context metadata, and migration targets; model-list and catalog-message tests cover their visibility and defaults."
       ]
     },
     {
@@ -18905,9 +18905,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Equivalent implementation and regression coverage are present: Mantle and Runtime Bedrock catalogs include GPT-6 Sol/Luna with the upstream provider slugs, display names, regional aliases, and priorities; tests cover both catalog projections."
       ]
     },
     {
