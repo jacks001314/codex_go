@@ -18047,7 +18047,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Go has no dedicated owned-transcript hint row above the composer: status/activity and the working indicator are laid out above the composer, but the footer help/reading-control row is appended below it. There is no ComposerGap rendering/short-terminal clipping order, and usage notices that would share that row are not implemented. The specific 'hints immediately above the composer' ordering remains unported."
+        "Owned/fullscreen layouts now paint the computed hint/reading-control row immediately above the composer (after activity/working/HUD), while inline layouts retain their previous below-composer order; welcome-blossom insertion and terminal snapshots were adjusted for the new section index. Go still lacks Rust's short-terminal clipping order and the shared usage-notice width policy for that row."
       ]
     },
     {

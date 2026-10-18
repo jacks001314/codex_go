@@ -70,10 +70,10 @@ Thread: thread-snap | Status: idle | Model: gpt-5 | Approval: on-request | Sandb
 
 
 
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
 > Ask gcode
 >
->
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
+>`)
 	})
 
 	t.Run("approval modal", func(t *testing.T) {

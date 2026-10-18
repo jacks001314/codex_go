@@ -50,10 +50,10 @@ Thread: thread-vt100 | Status: idle | Model: gpt-5 | Approval: on-request | Sand
 
 
 
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
 > Ask gcode
 >
->
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
+>`)
 }
 
 func TestModelVT100TerminalSnapshotApprovalModal(t *testing.T) {

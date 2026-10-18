@@ -104,7 +104,7 @@ func blendBlossomOpacity(from, to, progress float64) float64 {
 // insertWelcomeBlossom adds a centered stage immediately above the composer.
 // The section consumes the unused vertical space so the composer stays at the
 // bottom; if the stage cannot fit, nothing is inserted.
-func (m *Model) insertWelcomeBlossom(sections []string, composerIndex int) []string {
+func (m *Model) insertWelcomeBlossom(sections []string, composerIndex int, transcriptIndex int) []string {
 	if m == nil || composerIndex < 0 || !m.welcomeBlossomEligible() {
 		m.welcomeBlossom.rect = welcomeBlossomRect{}
 		return sections
@@ -118,7 +118,6 @@ func (m *Model) insertWelcomeBlossom(sections []string, composerIndex int) []str
 	// The transcript viewport pads itself to the available height. Reclaim its
 	// trailing blank rows for the centered stage instead of adding height that
 	// would push the composer below the screen.
-	transcriptIndex := composerIndex - 1
 	if transcriptIndex < 0 {
 		m.welcomeBlossom.rect = welcomeBlossomRect{}
 		return sections

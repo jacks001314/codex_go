@@ -3905,6 +3905,7 @@ func (m *Model) View() string {
 	composerIndex := -1
 	footerIndex := -1
 	workingIndex := -1
+	footerBeforeComposer := false
 	if bottom := m.renderBottomPane(); bottom != "" {
 		sections = append(sections, m.bottomStyle.Render(bottom))
 	}
@@ -3937,6 +3938,12 @@ func (m *Model) View() string {
 		}
 		if hud := m.renderQuickDialHUD(); hud != "" {
 			sections = append(sections, m.bottomStyle.Render(hud))
+		}
+		footerLine, footerAlreadyStyled := m.footerHelpLine()
+		footerBeforeComposer = m.fullscreenTranscript && !m.rawOutput
+		if footerBeforeComposer {
+			footerIndex = len(sections)
+			sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
 		}
 		composer := m.renderComposerWindow()
 		composer = m.applyComposerSparkle(composer, m.currentTime())
@@ -3985,6 +3992,22 @@ func (m *Model) View() string {
 	if m.ideContext.Enabled {
 		sections = append(sections, m.footerStyle.Render("IDE context"))
 	}
+	if !footerBeforeComposer {
+		footerLine, footerAlreadyStyled := m.footerHelpLine()
+		footerIndex = len(sections)
+		sections = append(sections, m.renderFooterHelpSection(footerLine, footerAlreadyStyled))
+	}
+	m.captureRenderedSelectionRegions(sections, footerIndex)
+	m.captureTurnTipSelectionRegions(sections, workingIndex)
+	sections = m.applyRenderedSelection(sections)
+	sections = m.insertWelcomeBlossom(sections, composerIndex, 1)
+	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	m.transcriptImageFrameRows = strings.Count(rendered, "\n") + 1
+	m.publishTranscriptImages()
+	return rendered
+}
+
+func (m *Model) footerHelpLine() (string, bool) {
 	footerLine := footerHelpText
 	footerAlreadyStyled := false
 	if searchLine, ok := m.historySearchFooterLine(); ok {
@@ -4009,21 +4032,15 @@ func (m *Model) View() string {
 			footerLine = bottompane.WarningNoticeLine(m.width, footerLine, m.warningDisplay.WarningCount(), m.warningsShortcutLabel())
 		}
 	}
-	if footerAlreadyStyled {
-		footerIndex = len(sections)
-		sections = append(sections, fitTerminalLine(footerLine, m.width))
-	} else {
-		footerIndex = len(sections)
-		sections = append(sections, m.footerStyle.Render(fitTerminalLine(footerLine, m.width)))
+	return footerLine, footerAlreadyStyled
+}
+
+func (m *Model) renderFooterHelpSection(footerLine string, alreadyStyled bool) string {
+	line := fitTerminalLine(footerLine, m.width)
+	if alreadyStyled {
+		return line
 	}
-	m.captureRenderedSelectionRegions(sections, footerIndex)
-	m.captureTurnTipSelectionRegions(sections, workingIndex)
-	sections = m.applyRenderedSelection(sections)
-	sections = m.insertWelcomeBlossom(sections, composerIndex)
-	rendered := lipgloss.JoinVertical(lipgloss.Left, sections...)
-	m.transcriptImageFrameRows = strings.Count(rendered, "\n") + 1
-	m.publishTranscriptImages()
-	return rendered
+	return m.footerStyle.Render(line)
 }
 
 // passiveWarningNoticeApplies mirrors `show_warning_notice`'s reachable gates:

@@ -1998,10 +1998,10 @@ green.
 - `#46946` is complete: dynamic-tool lifecycle metadata immediately registers
   missing root rows and folds children into loaded roots, while archived/deleted
   tombstones block delayed responses and clear on thread start/unarchive.
-- `#47096` remains partial: Go paints status/activity and the working indicator
-  above the composer but leaves the footer help/reading-control row below it;
-  there is no shared hint row or short-terminal clipping order above the
-  composer yet.
+- `#47096` is partially complete: owned/fullscreen layouts now place the hint and
+  reading-control row immediately above the composer, with blossom/snapshot
+  coverage. Short-terminal clipping order and the shared usage-notice width
+  policy for that row remain unimplemented.
 - `#41467` is complete: the model picker refreshes from the app server with
   stale-request rejection, catalog constraints, in-place picker/reasoning
   refresh, and fallback when the current model disappears.
