@@ -61,3 +61,42 @@ func TestClipboardWorkerBoundedCloseLikeRust(t *testing.T) {
 		t.Fatal("worker did not stop within the bounded close window")
 	}
 }
+
+func TestClipboardWorkerRetainsLatestPrimaryPublicationLikeRust(t *testing.T) {
+	worker := newClipboardWorker()
+	block := make(chan struct{})
+	copyResult, err := worker.submit(func() error {
+		<-block
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	writes := []string{}
+	writer := func(text string) error {
+		writes = append(writes, text)
+		return nil
+	}
+	first, err := worker.queuePrimary("first", writer)
+	if err != nil {
+		t.Fatalf("queue first primary: %v", err)
+	}
+	second, err := worker.queuePrimary("second", writer)
+	if err != nil {
+		t.Fatalf("queue second primary: %v", err)
+	}
+	close(block)
+	if err := <-copyResult; err != nil {
+		t.Fatalf("copy result: %v", err)
+	}
+	if err := <-first; err == nil {
+		t.Fatal("superseded primary publication unexpectedly succeeded")
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("latest primary publication: %v", err)
+	}
+	if len(writes) != 1 || writes[0] != "second" {
+		t.Fatalf("primary writes = %#v, want only latest", writes)
+	}
+	worker.close(time.Second)
+}

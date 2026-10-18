@@ -2142,5 +2142,6 @@ green.
 - `#47847` remains partial but now has a dedicated session clipboard worker:
   one blocking operation at a time, a five-second setup budget that abandons
   the UI request while keeping the worker busy, rejection of concurrent copies,
-  buffered late completions, and bounded close on quit. Remaining: retained
-  native lease/ownership handoff and latest-PRIMARY-publication queue.
+  buffered late completions, bounded close on quit, and latest-PRIMARY
+  publication coalescing through the same queue. Remaining: an explicit native
+  clipboard lease/ownership handoff model.

@@ -11,12 +11,15 @@ import (
 // session. Abandoning a setup on timeout does not interrupt the OS call; the
 // worker remains busy until it returns (Rust #47847).
 type clipboardWorker struct {
-	tasks     chan func() error
-	closed    chan struct{}
-	done      chan struct{}
-	busy      atomic.Bool
-	closeOnce sync.Once
-	mu        sync.Mutex
+	tasks         chan func() error
+	closed        chan struct{}
+	done          chan struct{}
+	busy          atomic.Bool
+	closeOnce     sync.Once
+	mu            sync.Mutex
+	primaryText   string
+	primaryWriter func(string) error
+	primaryResult chan error
 }
 
 func newClipboardWorker() *clipboardWorker {
@@ -38,9 +41,75 @@ func (w *clipboardWorker) run() {
 				return
 			}
 			task()
+			w.drainPrimaryAndRelease()
 		case <-w.closed:
 			return
 		}
+	}
+}
+
+func (w *clipboardWorker) queuePrimary(text string, writer func(string) error) (<-chan error, error) {
+	if w == nil || writer == nil {
+		return nil, errors.New("primary selection unavailable")
+	}
+	w.mu.Lock()
+	select {
+	case <-w.closed:
+		w.mu.Unlock()
+		return nil, errors.New("clipboard worker stopped")
+	default:
+	}
+	if w.primaryResult != nil {
+		// Only the latest selection publication survives a busy worker.
+		w.primaryResult <- errors.New("primary publication superseded")
+		close(w.primaryResult)
+	}
+	result := make(chan error, 1)
+	w.primaryText = text
+	w.primaryWriter = writer
+	w.primaryResult = result
+	needTask := w.busy.CompareAndSwap(false, true)
+	w.mu.Unlock()
+	if needTask {
+		select {
+		case w.tasks <- func() error { return nil }:
+		case <-w.closed:
+			w.busy.Store(false)
+			return nil, errors.New("clipboard worker stopped")
+		}
+	}
+	return result, nil
+}
+
+func (w *clipboardWorker) flushPendingPrimary() {
+	w.mu.Lock()
+	text := w.primaryText
+	writer := w.primaryWriter
+	result := w.primaryResult
+	w.primaryText = ""
+	w.primaryWriter = nil
+	w.primaryResult = nil
+	w.mu.Unlock()
+	if writer == nil {
+		return
+	}
+	err := writer(text)
+	if result != nil {
+		result <- err
+		close(result)
+	}
+}
+
+func (w *clipboardWorker) drainPrimaryAndRelease() {
+	for {
+		w.flushPendingPrimary()
+		w.mu.Lock()
+		if w.primaryWriter == nil {
+			w.busy.Store(false)
+			w.mu.Unlock()
+			return
+		}
+		w.mu.Unlock()
 	}
 }
 
@@ -49,23 +118,30 @@ func (w *clipboardWorker) submit(task func() error) (<-chan error, error) {
 		return nil, errors.New("clipboard worker stopped")
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	select {
 	case <-w.closed:
+		w.mu.Unlock()
 		return nil, errors.New("clipboard worker stopped")
 	default:
 	}
 	if !w.busy.CompareAndSwap(false, true) {
+		w.mu.Unlock()
 		return nil, errors.New("clipboard busy")
 	}
 	result := make(chan error, 1)
-	w.tasks <- func() error {
+	taskFn := func() error {
 		err := task()
 		result <- err
-		w.busy.Store(false)
 		return nil
 	}
-	return result, nil
+	w.mu.Unlock()
+	select {
+	case w.tasks <- taskFn:
+		return result, nil
+	case <-w.closed:
+		w.busy.Store(false)
+		return nil, errors.New("clipboard worker stopped")
+	}
 }
 
 func (w *clipboardWorker) isBusy() bool {

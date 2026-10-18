@@ -20485,7 +20485,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 697 (implementation): a session-lived clipboard worker owns one blocking operation at a time. A five-second setup budget returns a timeout result while the worker remains busy until the OS call returns, concurrent copies are rejected, late completions are buffered/discarded, and quit paths close the worker with a bounded one-second wait. Tests cover setup timeout, continued busy state, and bounded close. Remaining: retained native clipboard lease/ownership handoff and the latest-PRIMARY-publication queue."
+        "Round 698 (implementation): a session-lived clipboard worker owns one blocking operation at a time. A five-second setup budget returns a timeout result while the worker remains busy until the OS call returns, concurrent copies are rejected, late completions are buffered/discarded, and quit paths close the worker with a bounded one-second wait. The worker retains only the latest PRIMARY publication while busy, flushes it before releasing busy, and supersedes older waiters; copy tasks and primary publications share the same serialized queue. Tests cover setup timeout, continued busy state, bounded close, and latest-primary supersession. Remaining: an explicit native clipboard lease/ownership handoff model; platform helpers retain CLIPBOARD/PRIMARY ownership implicitly."
       ]
     },
     {

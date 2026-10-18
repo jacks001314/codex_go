@@ -2,6 +2,7 @@ package tea
 
 import (
 	"strings"
+	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
 )
@@ -23,8 +24,26 @@ func (m *Model) publishPrimarySelectionCmd(text string) bubbletea.Cmd {
 		return nil
 	}
 	writer := m.onPrimarySelectionWrite
+	if m.clipboardWorker == nil {
+		m.clipboardWorker = newClipboardWorker()
+	}
+	result, err := m.clipboardWorker.queuePrimary(text, writer)
+	if err != nil {
+		return func() bubbletea.Msg { return PrimarySelectionWriteResultMsg{} }
+	}
+	timeout := m.clipboardSetupTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	return func() bubbletea.Msg {
-		return PrimarySelectionWriteResultMsg{Published: writer(text) == nil}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case err := <-result:
+			return PrimarySelectionWriteResultMsg{Published: err == nil}
+		case <-timer.C:
+			return PrimarySelectionWriteResultMsg{}
+		}
 	}
 }
 
