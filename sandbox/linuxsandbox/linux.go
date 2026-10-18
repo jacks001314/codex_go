@@ -24,7 +24,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const proxySocketDirPrefix = "codex-linux-sandbox-proxy-"
+const (
+	proxySocketDirPrefix = "codex-linux-sandbox-proxy-"
+)
 
 var proxyEnvKeys = map[string]bool{
 	"HTTP_PROXY":             true,
@@ -780,12 +782,22 @@ func pathComponentDepth(path string) int {
 }
 
 func ensureLegacyLandlockSupportsPolicy(cmd *linuxSandboxCommand) error {
+	return ensureLegacyLandlockSupportsPolicyWithInterop(cmd, wslInteropDir)
+}
+
+func ensureLegacyLandlockSupportsPolicyWithInterop(cmd *linuxSandboxCommand, interopDir string) error {
 	if !cmd.UseLegacyLandlock || cmd.PermissionProfile == nil || cmd.PermissionProfile.Filesystem == nil {
 		return nil
 	}
 	fs := cmd.PermissionProfile.Filesystem
 	if !fs.hasFullDiskReadAccess() && !fs.hasFullDiskWriteAccess() {
 		return errors.New("permission profiles requiring direct runtime enforcement are incompatible with --use-legacy-landlock")
+	}
+	if cmd.PermissionProfile.NetworkEnabled &&
+		!cmd.managedNetworkEnabled() &&
+		!fs.hasFullDiskWriteAccess() &&
+		pathIsDirectory(interopDir) {
+		return errors.New("legacy Landlock cannot isolate WSL Windows interop with network access enabled; use bubblewrap or restrict network access")
 	}
 	return nil
 }
@@ -1066,6 +1078,7 @@ func execBubblewrap(cmd *linuxSandboxCommand, inner []string) error {
 			}
 		}
 	}
+	args = appendWSLInteropMaskArgs(args, cmd.NoProc, !fs.hasFullDiskWriteAccess(), wslInteropDir)
 	args = append(args, "--chdir", cmd.CommandCWD, "--")
 	args = append(args, inner...)
 	// Bubblewrap semantics: unsharing the pid namespace makes the sandboxed

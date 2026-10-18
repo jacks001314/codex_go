@@ -10865,9 +10865,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: WSL_INTEROP_DIR"
+        "Round 672 (partial): bwrap masks /run/WSL after filesystem binds for restricted write policies and masks inherited /proc when --no-proc; legacy Landlock rejects restricted filesystem + full network when /run/WSL exists; AF_VSOCK/io_uring seccomp was already implemented. Cross-platform mask-argv test passes and the Linux test binary compiles. Remaining: run legacy/WSL integration tests on a capable Linux/WSL host; this machine has no WSL runtime."
       ]
     },
     {
