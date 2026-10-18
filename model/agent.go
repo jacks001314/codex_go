@@ -32,8 +32,11 @@ type AgentRequest struct {
 	Tools                []any
 	Model                string
 	ProviderID           string
-	TaskKind             AgentTaskKind
-	ThreadID             string
+	// Endpoint selects the Responses-compatible backend route. The zero value
+	// is the standard /responses route; Guardian callers may opt into /guardian.
+	Endpoint ResponsesEndpoint
+	TaskKind AgentTaskKind
+	ThreadID string
 	// SessionID is the session (rollout) identity that Rust passes to
 	// ResponsesOptions::session_id. Go keeps one rollout per thread, so an
 	// empty value falls back to ThreadID (see addSessionIdentityHeaders).

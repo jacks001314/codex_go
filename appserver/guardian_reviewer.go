@@ -85,6 +85,7 @@ type modelGuardianReviewer struct {
 	// reviewer's policy instructions (Rust's resolve_review_model /
 	// select_review_model plus build_guardian_review_session_config).
 	reviewPlan                 func(threadID, turnID string) guardianReviewPlan
+	reviewEndpoint             func(threadID, turnID string) model.ResponsesEndpoint
 	specialty                  func(threadID, turnID string) string
 	nodeReplAutoReviewRequired func(threadID, turnID string) bool
 	fullAccess                 func(threadID, turnID string) bool
@@ -895,6 +896,7 @@ reviewAttempt:
 		Instructions:    plan.Instructions,
 		InputItems:      inputItems,
 		Model:           plan.Selection.Model,
+		Endpoint:        r.reviewEndpointValue(threadID, turnID),
 		ReasoningEffort: plan.Selection.ReasoningEffort,
 		// Rust #52689 forwards the parent turn's Cyber program to the reviewer
 		// (turn_start_options.cyber_access_program), normalized to Blue for
@@ -1229,6 +1231,13 @@ func (r *modelGuardianReviewer) emit(threadID string, event *state.Event) {
 	if r != nil && r.notify != nil && event != nil {
 		r.notify(threadID, event)
 	}
+}
+
+func (r *modelGuardianReviewer) reviewEndpointValue(threadID, turnID string) model.ResponsesEndpoint {
+	if r == nil || r.reviewEndpoint == nil {
+		return model.ResponsesEndpointResponses
+	}
+	return r.reviewEndpoint(threadID, turnID)
 }
 
 // emitWarning surfaces a guardian warning notification (Rust's

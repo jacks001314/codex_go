@@ -127,6 +127,7 @@ func (r *RuntimeRouter) ensureGuardianReviewerWithPrewarm(agent model.AgentRunne
 		modelReviewer.feedbackCaptureEnabled = r.guardianFeedbackCaptureEnabled
 		modelReviewer.persistFeedback = r.persistGuardianReviewFeedback
 		modelReviewer.reviewPlan = r.guardianReviewPlanForTurn
+		modelReviewer.reviewEndpoint = r.guardianReviewEndpointForTurn
 		modelReviewer.specialty = r.guardianReviewModelSpecialtyForTurn
 		modelReviewer.maxToolCallLagFor = r.guardianMaxToolCallLagForTurn
 		modelReviewer.nodeReplAutoReviewRequired = r.guardianReviewNodeReplAutoReviewRequiredForTurn
@@ -187,6 +188,40 @@ func (r *RuntimeRouter) guardianMaxToolCallLagForTurn(threadID, turnID string) i
 	}
 	info := r.modelInfoForRuntimeWithConfig(strings.TrimSpace(active.Params.Model), cfg)
 	return guardianMaxToolCallLag(cfg, info)
+}
+
+// guardianReviewEndpointForTurn mirrors Rust #40892's opt-in dedicated
+// Guardian route selection: only ChatGPT-backed Codex-backend requests with the
+// free_guardian setting use /guardian. API-key, custom-provider, and disabled
+// configurations keep the standard /responses route.
+func (r *RuntimeRouter) guardianReviewEndpointForTurn(threadID, turnID string) model.ResponsesEndpoint {
+	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), strings.TrimSpace(turnID))
+	if active == nil || active.Params == nil {
+		return model.ResponsesEndpointResponses
+	}
+	cfg, err := r.effectiveConfigForTurn(active.Params)
+	if err != nil || cfg == nil || !cfg.GuardianV2FreeGuardian() {
+		return model.ResponsesEndpointResponses
+	}
+	providerID := ""
+	if active.RunConfig != nil {
+		providerID = active.RunConfig.ProviderID
+	}
+	providerID = firstNonEmpty(providerID, stringConfigValue(cfg, "model_provider"), model.OpenAIProviderID)
+	provider, err := model.ProviderForConfigID(configValues(cfg), providerID, stringConfigValue(cfg, "openai_base_url"))
+	if err != nil || provider == nil || !provider.SupportsCodexBackendRoutes() {
+		return model.ResponsesEndpointResponses
+	}
+	snapshot := r.requireAccount().AuthSnapshot()
+	if snapshot == nil {
+		return model.ResponsesEndpointResponses
+	}
+	switch snapshot.Mode() {
+	case "chatgpt", "chatgptAuthTokens", "personal-access-token", "agent-identity":
+		return model.ResponsesEndpointGuardian
+	default:
+		return model.ResponsesEndpointResponses
+	}
 }
 
 // guardianMaxToolCallLag resolves the bound from a config plus model info

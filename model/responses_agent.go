@@ -45,18 +45,30 @@ const ResidencyHeaderName = "x-openai-internal-codex-residency"
 const responsesIncludeTimingMetricsHeader = codexapi.ClientResponsesAPIIncludeTimingMetricsHeader
 
 // ResponsesEndpoint selects the Responses-compatible backend route used for an
-// inference request. Rust #45736 removed the dedicated Guardian endpoints, so
-// every request - including a Guardian review - uses the standard route and
-// identifies itself with the `x-codex-guardian` header instead.
+// inference request. Rust #40892 re-added opt-in Guardian routes; requests keep
+// using the standard route unless the caller selects a dedicated endpoint.
 type ResponsesEndpoint int
 
 const (
 	// ResponsesEndpointResponses is the standard user-owned model inference route.
 	ResponsesEndpointResponses ResponsesEndpoint = iota
+	// ResponsesEndpointGuardian is the full Guardian approval-review inference route.
+	ResponsesEndpointGuardian
+	// ResponsesEndpointGuardianClassifier is the lightweight Guardian risk-classifier route.
+	ResponsesEndpointGuardianClassifier
 )
 
 // Path returns the provider-relative path for this inference surface.
-func (e ResponsesEndpoint) Path() string { return "/responses" }
+func (e ResponsesEndpoint) Path() string {
+	switch e {
+	case ResponsesEndpointGuardian:
+		return "/guardian"
+	case ResponsesEndpointGuardianClassifier:
+		return "/guardian-classifier"
+	default:
+		return "/responses"
+	}
+}
 
 type HTTPDoer interface {
 	Do(request *http.Request) (*http.Response, error)
@@ -708,6 +720,11 @@ func (r *ResponsesAgentRunner) websocketSession(request *AgentRequest) *response
 // including the reviewer-specific suffix.
 func (r *ResponsesAgentRunner) websocketSessionKey(request *AgentRequest) string {
 	key := responsesWebsocketSessionKey(request)
+	if request != nil && request.Endpoint != ResponsesEndpointResponses {
+		// Rust #40892 keeps endpoint-specific websocket connections separate so a
+		// Guardian route never reuses the ordinary /responses socket.
+		key += fmt.Sprintf(":endpoint=%s", request.Endpoint.Path())
+	}
 	// Rust #45736 reconnects the cached socket when the applicable responses
 	// headers change (they are scoped to the reviewer model), so a Guardian
 	// review never reuses the reviewed thread's ordinary connection or the
@@ -1244,6 +1261,9 @@ func (r *ResponsesAgentRunner) runWebSocket(ctx context.Context, request *AgentR
 				locked = false
 				return r.runWebSocket(ctx, &clone, recoveryMode, recoveryPhase, true, recovery)
 			}
+			if apiErr := websocketErrorEventAPIError(event); apiErr != nil {
+				return nil, apiErr
+			}
 			return nil, fmt.Errorf("responses websocket request failed: %s", websocketEventError(event))
 		}
 		// Rust's `safety_buffering_for_event` refreshes the treatment from the
@@ -1368,6 +1388,55 @@ func websocketEventHTTPHeaders(event map[string]any) http.Header {
 		return nil
 	}
 	return jsonHeadersToHTTPHeaders(headers)
+}
+
+// websocketErrorEventAdviceHeaders mirrors Rust #51440: nested `error.headers`
+// wins when they carry valid retry advice, otherwise the top-level headers are
+// the fallback.
+func websocketErrorEventAdviceHeaders(event map[string]any) http.Header {
+	if value, ok := event["error"].(map[string]any); ok {
+		if headers, ok := value["headers"].(map[string]any); ok {
+			httpHeaders := jsonHeadersToHTTPHeaders(headers)
+			if _, valid := responsesRequestedRetryDelay(httpHeaders, time.Now()); valid {
+				return httpHeaders
+			}
+		}
+	}
+	return websocketEventHTTPHeaders(event)
+}
+
+// websocketErrorEventAPIError maps rate-limit and overload `error` events that
+// carry Retry-After advice to the shared retryable API error, preserving the
+// server deadline (Rust #51440). Headerless rate limits and all other codes stay
+// on the terminal generic-error path.
+func websocketErrorEventAPIError(event map[string]any) *codexapi.APIError {
+	var kind codexapi.APIErrorKind
+	switch strings.ToLower(strings.TrimSpace(websocketEventErrorCode(event))) {
+	case "rate_limit_exceeded", "rate_limited", "rate_limit":
+		kind = codexapi.ErrorRateLimitExceeded
+	case "server_is_overloaded", "overloaded":
+		kind = codexapi.ErrorServerOverloaded
+	default:
+		return nil
+	}
+	delay, ok := responsesRequestedRetryDelay(websocketErrorEventAdviceHeaders(event), time.Now())
+	if !ok {
+		return nil
+	}
+	status, _ := uint64FromAny(event["status"])
+	if status == 0 {
+		if value, ok := event["error"].(map[string]any); ok {
+			status, _ = uint64FromAny(value["status"])
+		}
+	}
+	if status > 65535 {
+		status = 0
+	}
+	return (&codexapi.APIError{
+		Kind:    kind,
+		Status:  int(status),
+		Message: websocketEventError(event),
+	}).WithRetryDelay(delay)
 }
 
 // websocketUsageLimitError mirrors Rust's wrapped-WebSocket usage-limit
@@ -1920,11 +1989,16 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	if err := r.ensureFreshProviderCommandAuth(ctx); err != nil {
 		return nil, err
 	}
+	endpoint := ResponsesEndpointResponses
+	if request != nil {
+		endpoint = request.Endpoint
+	}
+	dedicatedGuardianEndpoint := endpoint == ResponsesEndpointGuardian || endpoint == ResponsesEndpointGuardianClassifier
 	// Rust #45736: a Guardian reviewer request carries `x-codex-guardian:
 	// reviewer` and drops its service tier (the backend controls Guardian
 	// billing), so both are decided before the body is serialized.
 	guardianReviewer := r.isGuardianReviewerInference(apiRequest.Model, request)
-	if guardianReviewer {
+	if guardianReviewer || dedicatedGuardianEndpoint {
 		apiRequest.ServiceTier = ""
 	} else if r.usesCodexBackend() && r.supportsCodexBackendRoutes() {
 		// Rust #45736: ordinary Codex-backend traffic asks the backend to bill
@@ -1944,7 +2018,6 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 		}
 		contentEncoding = "zstd"
 	}
-	endpoint := ResponsesEndpointResponses
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, r.responsesURL(endpoint), bytes.NewReader(requestBody))
 	if err != nil {
 		return nil, err
@@ -1964,7 +2037,7 @@ func (r *ResponsesAgentRunner) newResponsesHTTPRequest(ctx context.Context, requ
 	}
 	// A Guardian reviewer request never carries a routing hint (Rust's
 	// `!guardian_reviewer` guard around build_routing_hint_header).
-	if !guardianReviewer {
+	if !guardianReviewer && !dedicatedGuardianEndpoint {
 		if routingHint := r.responsesRoutingHint(apiRequest.Model, apiRequest.ServiceTier); routingHint != "" {
 			httpRequest.Header.Set(codexapi.ClientCodexRoutingHintHeader, routingHint)
 		}

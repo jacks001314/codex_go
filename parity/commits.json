@@ -2845,9 +2845,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/5; needs review: free_guardian_enabled, with_endpoint, with_free_guardian_enabled"
+        "config.GuardianV2FreeGuardian reads [features.guardianv2].free_guardian; guardianReviewEndpointForTurn selects /guardian only for ChatGPT-backed Codex-backend providers and otherwise keeps /responses. model.ResponsesEndpoint now exposes /guardian and /guardian-classifier, HTTP and WebSocket requests use AgentRequest.Endpoint, dedicated requests omit service_tier and routing hints, and websocket session keys include the endpoint. Tests: go test ./model -run 'ResponsesEndpoint|SelectedGuardianEndpoint' -count=1; go test ./appserver -run 'GuardianReviewEndpoint' -count=1; go test ./config -run 'GuardianV2FreeGuardian' -count=1"
       ]
     },
     {

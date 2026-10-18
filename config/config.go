@@ -1863,6 +1863,25 @@ func (c *Config) GuardianV2PersistScores() bool {
 	}
 }
 
+// GuardianV2FreeGuardian reports whether eligible Guardian reviews and
+// classifiers should use the dedicated Codex backend routes
+// (`[features.guardianv2].free_guardian`, Rust #40892). The option is opt-in.
+func (c *Config) GuardianV2FreeGuardian() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	featuresTable, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	guardianV2, ok := featuresTable["guardianv2"].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, _ := guardianV2["free_guardian"].(bool)
+	return value
+}
+
 func (c *Config) SkillShadowSelectionEnabled() bool {
 	if featureflags.Enabled(c.FeatureSettings(), "skill_search") {
 		return true

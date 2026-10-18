@@ -2726,6 +2726,24 @@ func TestGuardianV2PersistScoresParsesAndDefaultsLikeRust(t *testing.T) {
 	}
 }
 
+func TestGuardianV2FreeGuardianParsesAndDefaultsLikeRust(t *testing.T) {
+	if (&Config{}).GuardianV2FreeGuardian() {
+		t.Fatal("free_guardian should default to false")
+	}
+	enabled := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"free_guardian": true}},
+	}}
+	if !enabled.GuardianV2FreeGuardian() {
+		t.Fatal("free_guardian=true should opt into dedicated endpoints")
+	}
+	disabled := &Config{Values: map[string]any{
+		"features": map[string]any{"guardianv2": map[string]any{"free_guardian": false}},
+	}}
+	if disabled.GuardianV2FreeGuardian() {
+		t.Fatal("free_guardian=false should keep /responses")
+	}
+}
+
 func TestDaybreakConfigKeyLikeRust(t *testing.T) {
 	// Mirrors Rust #49856 (c41a72cd3f): ConfigToml::daybreak is an optional
 	// default Daybreak preference, surfaced as
