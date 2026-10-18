@@ -557,9 +557,16 @@ type TurnInterruptedMsg struct {
 
 // ClipboardWriteResultMsg delivers an asynchronous clipboard write result.
 type ClipboardWriteResultMsg struct {
-	Label    string
-	Err      error
-	Warnings bool
+	RequestID uint64
+	Label     string
+	Err       error
+	Warnings  bool
+}
+
+// ClipboardBusyMsg reports a copy rejected because another clipboard write is
+// still in flight (Rust #47847 rejects rather than queuing).
+type ClipboardBusyMsg struct {
+	Label string
 }
 
 // AccountStatusUpdatedMsg replaces the status account display after an
@@ -2060,6 +2067,9 @@ type Model struct {
 	rightClickPasteResult   *rightClickPasteResult
 	clipboardRead           func() (string, error)
 	clipboardReadPending    bool
+	clipboardBusy           bool
+	nextClipboardRequestID  uint64
+	pendingClipboardRequest uint64
 	onExportTranscript      TranscriptExportFunc
 	onGenerateRecap         RecapGenerateFunc
 	recapInFlight           bool
@@ -3056,6 +3066,9 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 	case ClipboardWriteResultMsg:
 		m.applyClipboardWriteResult(msg)
 		return m, nil
+	case ClipboardBusyMsg:
+		m.notice = "Copy already in progress; try again after it finishes"
+		return m, nil
 	case SteerResultMsg:
 		m.applySteerResult(msg)
 		return m, nil
@@ -3533,6 +3546,10 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			// terminals. Read the native clipboard explicitly and insert it into
 			// the focused composer.
 			if m.modal == nil && m.overlay == nil {
+				if m.clipboardBusy {
+					m.notice = "Copy already in progress; try image paste after it finishes"
+					return m, nil
+				}
 				// Rust #51411: legacy terminals deliver key auto-repeat as new
 				// presses, so a repeated image-paste press inside the sliding
 				// window is ignored (and the window refreshed) to avoid a burst
@@ -9451,6 +9468,18 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 	if m == nil {
 		return nil
 	}
+	if m.clipboardBusy {
+		return func() bubbletea.Msg {
+			return ClipboardBusyMsg{Label: label}
+		}
+	}
+	m.nextClipboardRequestID++
+	if m.nextClipboardRequestID == 0 {
+		m.nextClipboardRequestID = 1
+	}
+	requestID := m.nextClipboardRequestID
+	m.clipboardBusy = true
+	m.pendingClipboardRequest = requestID
 	write := m.clipboardWrite
 	writeRich := m.clipboardWriteRich
 	return func() bubbletea.Msg {
@@ -9463,7 +9492,7 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 		default:
 			err = write(text)
 		}
-		return ClipboardWriteResultMsg{Label: label, Err: err, Warnings: warnings}
+		return ClipboardWriteResultMsg{RequestID: requestID, Label: label, Err: err, Warnings: warnings}
 	}
 }
 
@@ -9471,6 +9500,11 @@ func (m *Model) applyClipboardWriteResult(msg ClipboardWriteResultMsg) {
 	if m == nil {
 		return
 	}
+	if msg.RequestID != 0 && msg.RequestID != m.pendingClipboardRequest {
+		return
+	}
+	m.clipboardBusy = false
+	m.pendingClipboardRequest = 0
 	if msg.Warnings {
 		if msg.Err != nil {
 			m.warningsFlash = "Copy failed"

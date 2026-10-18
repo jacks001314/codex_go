@@ -116,6 +116,10 @@ func (m *Model) handleComposerSelectionMouse(msg bubbletea.MouseMsg) (bool, bubb
 		if msg.Button == bubbletea.MouseButtonRight {
 			if m.composerSelection.active {
 				if _, inside := m.composerPositionAt(msg.X, msg.Y); inside {
+					if m.clipboardBusy {
+						m.notice = "Copy already in progress; try again after it finishes"
+						return true, nil
+					}
 					cmd := m.copyComposerSelection()
 					m.composerRightClickCopy = true
 					return true, cmd

@@ -737,6 +737,9 @@ a slow clipboard backend could block input and rendering.
   return a `bubbletea.Cmd` that performs the write outside the update loop.
 - `ClipboardWriteResultMsg` applies the success/failure notice and refreshes the
   transcript; warnings copies update the viewer flash independently.
+- Each write carries a monotonically increasing request id. Concurrent copies
+  are rejected with a busy notice, stale completions are ignored, and image or
+  text paste reports a retry message while a copy is in flight.
 - The copy picker still validates backend availability before opening.
 - Existing copy tests drive the returned command and result message so the
   asynchronous path, rich clipboard writer, hard-break preservation, status
@@ -746,6 +749,8 @@ Regression coverage:
 
 - `TestClipboardCopyRunsOffUpdateLoopLikeRust`
 - `TestClipboardCopyFailureReturnsNoticeLikeRust`
+- `TestClipboardCopyRejectsConcurrentWritesLikeRust`
+- `TestClipboardBusyNoticeLikeRust`
 - Existing `/copy`, status-copy, hard-break, rich-copy, and warnings-view tests
   updated to execute the deferred command.
 
@@ -2024,9 +2029,9 @@ green.
   suffix to style.
 - `#48623` is complete: empty ordered/nested/blockquoted list markers are
   preserved, and a trailing bare marker remains mutable in the streaming tail.
-- `#47847` remains partial: clipboard writes are asynchronous, but Go lacks the
-  session worker's busy rejection, setup expiry, bounded shutdown, and
-  request-id matching against stale completions.
+- `#47847` remains partial: clipboard writes now reject concurrent copies,
+  match request ids, and block busy pastes, but Go still lacks Rust's dedicated
+  session worker with setup expiry and bounded shutdown/ownership handoff.
 - `#47360` is complete: user prompt URLs retain full OSC-8 destinations across
   adaptive wrapping and forced splits, including parenthesized URLs, with
   width-bound regression coverage.
