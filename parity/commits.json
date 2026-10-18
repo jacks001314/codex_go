@@ -24827,9 +24827,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: render_step_world_state"
+        "Equivalent implementation verified: Go world-state renderers return their rendered context together with the corresponding persisted section snapshot, and the incremental tool catalog saves updated top-level-tools/base-instruction snapshots in the same thread-record write as the generated context items. Resume and history-diff paths consume the stored snapshot and retain empty-but-known states."
       ]
     },
     {
