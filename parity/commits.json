@@ -1932,9 +1932,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "worktree.FromDesktopConfig resolves the existing [desktop] keys with Rust defaults: root defaults to <codexHome>/worktrees, auto cleanup defaults on, keep count defaults to 15, configured roots must be absolute, and keep count must be a positive integer. Tests: go test ./worktree -run 'FromDesktopConfig' -count=1"
       ]
     },
     {
