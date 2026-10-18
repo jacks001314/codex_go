@@ -346,9 +346,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: drain_active_thread_events_until"
+        "N/A by architecture (audit): upstream f6519a355a (#39991) bounds draining between Rust's separate app-event and active-thread notification channels. Go's Bubble Tea Update consumes one ordered message queue, so replay/app events and thread events cannot race ahead of one another; non-active thread notifications are retained in backgroundThreadEvents and replayed in order on attach. There is no active-thread drain deadline or startup-protected ordinary notification queue to preserve."
       ]
     },
     {
