@@ -13203,9 +13203,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 528 (audit): already implemented. tool/unified_exec opens lifecycle spans for session start, output collection, and write_stdin; exec_command records its mode and termination reason; remote process-start observations and trace-ID budgeting are covered. Tests: go test ./tool -run 'TestUnifiedExecLifecycleSpansMatchRust|TestUnifiedExecWriteStdinSpanMatchesRust|TestExecCommandSpanMatchesRustModes|TestUnifiedExecTraceIDMatchesRustBudget|TestUnifiedExecRemoteProcessStartEventMatchesRust' -count=1"
       ]
     },
     {
@@ -14619,9 +14619,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 527 (audit + fix): Go already supports nonfatal clock read errors, per-thread clock-failure tracking, current-time-unavailable context, and pre-inference failure for a stalled external clock. Fixed server_request_broker to propagate a bounded client error detail for ordinary requests (including currentTime/read) while credential and attestation methods continue to suppress client-supplied text. Tests: go test ./appserver -run 'ServerRequest|Clock|Nonfatal' -count=1; go vet ./appserver"
       ]
     },
     {
@@ -15928,9 +15928,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 529 (audit): already implemented. The models endpoint and lazy models manager record catalog identity and perform a best-effort refresh when the in-memory catalog belongs to a previous auth identity, before a turn samples. Tests: go test ./model -run 'RefreshAfterAuthChange|CatalogIdentity|ModelsEndpoint' -count=1"
       ]
     },
     {

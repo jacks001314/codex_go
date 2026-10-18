@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"codex_go/sandbox"
 )
@@ -262,9 +263,13 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 	b.notifyResolved(entry.request)
 	b.notifyResolvedResponse(entry.request, response)
 	if response.Error != nil {
-		// Error messages are client-supplied and can echo credentials. Keep only
-		// the structural code in the propagated error.
-		entry.ch <- &serverRequestResult{err: fmt.Errorf("server request failed: code=%d", response.Error.Code)}
+		// Client-supplied messages are useful for ordinary requests such as
+		// currentTime/read, but credential responses must not echo their payload.
+		entry.ch <- &serverRequestResult{err: fmt.Errorf(
+			"server request failed: code=%d%s",
+			response.Error.Code,
+			serverRequestErrorDetail(entry.request.Method, response.Error.Message),
+		)}
 		return true, nil
 	}
 	data, err := json.Marshal(response.Result)
@@ -274,6 +279,29 @@ func (b *ServerRequestBroker) Resolve(response *Response) (bool, error) {
 	}
 	entry.ch <- &serverRequestResult{data: data}
 	return true, nil
+}
+
+func serverRequestErrorDetail(method ServerRequestMethod, message string) string {
+	switch method {
+	case ServerRequestChatGPTAuthTokensRefresh, ServerRequestAttestationGenerate:
+		return ""
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	return ": " + truncateServerRequestErrorDetail(message, 512)
+}
+
+func truncateServerRequestErrorDetail(message string, limit int) string {
+	if limit <= 0 || len(message) <= limit {
+		return message
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(message[cut]) {
+		cut--
+	}
+	return message[:cut]
 }
 
 func (b *ServerRequestBroker) ReplayThread(threadID string) int {
