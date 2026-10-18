@@ -28274,9 +28274,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: build_exec_request, env_for, env_for_exec_server, from_sandbox_exec_request"
+        "Round 313 (audit): blocked on #51842. Go has the policy/content-checking library under sandbox/integrity, but no IntegrityMetrics runner, DependencyTarget inventory, preparation/check recording, or observational run helper to invoke before command and filesystem preparation. Wiring #51843 without that runner would add calls with no findings/metrics source."
       ]
     },
     {
