@@ -72,6 +72,9 @@ type modelGuardianReviewer struct {
 	// by log-enabled feedback uploads (#41936): ephemeral threads and disabled
 	// feedback collection retain nothing.
 	feedbackCaptureEnabled func(threadID string) bool
+	// persistFeedback stores failed-review evidence in the state runtime so it
+	// survives reviewer/process cleanup (Rust #51651).
+	persistFeedback func(threadID string, record []byte)
 	// retainedOmissions is the host-scoped record of the retained-section
 	// omission notices the reviewer conversation already received (#49796).
 	retainedOmissionsMu sync.Mutex
@@ -617,7 +620,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		if r.feedbackCaptureEnabled != nil && !r.feedbackCaptureEnabled(threadID) {
 			return
 		}
-		feedbackCapture.record(threadID, turnID, attribution, action)
+		if record := feedbackCapture.record(threadID, turnID, attribution, action); len(record) > 0 && r.persistFeedback != nil {
+			r.persistFeedback(threadID, record)
+		}
 	}()
 	contextChanged := false
 	emitReviewMetrics := func() {

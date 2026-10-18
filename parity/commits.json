@@ -27950,9 +27950,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/8); candidate gap: GuardianReviewRecord, MAX_GUARDIAN_REVIEW_BYTES, MAX_GUARDIAN_REVIEW_RECORDS, MAX_GUARDIAN_REVIEW_RECORDS_PER_THREAD, guardian_review_failures"
+        "Round 312 (implementation): failed Guardian evidence is persisted in the existing guardian_review_feedback SQLite table with UUIDv7 ordering, 64-record/8-per-thread/8MiB budgets, 250ms bounded writes, and cascade deletion with the reviewed thread. Feedback export merges persisted and in-memory records, deduplicates exact evidence, and scopes to the reported task tree; logs remain opt-in. Tests: state guardian persistence/reopen/budget/cascade; appserver persisted-evidence merge; focused Guardian/Feedback and state suites; go vet ./state ./appserver"
       ]
     },
     {

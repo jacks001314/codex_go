@@ -1,9 +1,12 @@
 package appserver
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"codex_go/state"
 )
@@ -153,6 +156,102 @@ func guardianReviewFailuresSnapshot(threadIDs []string) guardianReviewFailures {
 	return globalGuardianFeedbackRecords.snapshot(threadIDs)
 }
 
+// persistGuardianReviewFeedback stores failed-review evidence before the
+// reviewer object is released. Storage failure leaves the in-memory fallback
+// intact.
+func (r *RuntimeRouter) persistGuardianReviewFeedback(threadID string, record []byte) {
+	if r == nil || r.services.StateRuntime == nil || len(record) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	persisted := state.NewGuardianReviewRecord(threadID, record)
+	if err := r.services.StateRuntime.RecordGuardianReviewFailure(ctx, &persisted); err != nil {
+		slog.Warn("failed to persist guardian review feedback", "thread_id", threadID, "error", err)
+	}
+}
+
+// guardianReviewFailuresForThreads merges persisted evidence with the
+// process-local fallback, deduplicating exact records and retaining only the
+// reported task tree.
+func (r *RuntimeRouter) guardianReviewFailuresForThreads(threadIDs []string) guardianReviewFailures {
+	memory := guardianReviewFailuresSnapshot(threadIDs)
+	if r == nil || r.services.StateRuntime == nil || len(threadIDs) == 0 {
+		return memory
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	persisted, err := r.services.StateRuntime.ListGuardianReviewRecords(ctx)
+	if err != nil {
+		return memory
+	}
+	wanted := make(map[string]struct{}, len(threadIDs))
+	for _, threadID := range threadIDs {
+		if threadID = strings.TrimSpace(threadID); threadID != "" {
+			wanted[threadID] = struct{}{}
+		}
+	}
+	seen := map[string]struct{}{}
+	buffer := make([]byte, 0)
+	appendRecord := func(threadID string, data []byte) {
+		if _, ok := wanted[threadID]; !ok || len(data) == 0 {
+			return
+		}
+		if _, duplicate := seen[string(data)]; duplicate {
+			return
+		}
+		seen[string(data)] = struct{}{}
+		buffer = append(buffer, data...)
+		buffer = append(buffer, '\n')
+	}
+	for _, record := range persisted {
+		appendRecord(record.ThreadID, record.Record)
+	}
+	if memory.Attachment != nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(memory.Attachment.Buffer)), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var record guardianReviewFeedbackRecord
+			if json.Unmarshal([]byte(line), &record) == nil {
+				appendRecord(record.ReviewedThreadID, []byte(line))
+			}
+		}
+	}
+	if len(buffer) == 0 {
+		return guardianReviewFailures{ProcessDiscardedRecords: memory.ProcessDiscardedRecords}
+	}
+	orderedThreads := make([]string, 0, len(wanted))
+	seenThreads := map[string]struct{}{}
+	for _, record := range persisted {
+		if _, ok := wanted[record.ThreadID]; !ok {
+			continue
+		}
+		if _, ok := seenThreads[record.ThreadID]; ok {
+			continue
+		}
+		seenThreads[record.ThreadID] = struct{}{}
+		orderedThreads = append(orderedThreads, record.ThreadID)
+	}
+	for _, threadID := range memory.ThreadIDs {
+		if _, ok := seenThreads[threadID]; ok {
+			continue
+		}
+		seenThreads[threadID] = struct{}{}
+		orderedThreads = append(orderedThreads, threadID)
+	}
+	return guardianReviewFailures{
+		Attachment: &FeedbackAttachment{
+			Filename:    guardianFeedbackFilename,
+			ContentType: guardianFeedbackContentType,
+			Buffer:      buffer,
+		},
+		ThreadIDs:               orderedThreads,
+		ProcessDiscardedRecords: memory.ProcessDiscardedRecords,
+	}
+}
+
 func resetGuardianFeedbackRecordsForTest() {
 	globalGuardianFeedbackRecords.mu.Lock()
 	defer globalGuardianFeedbackRecords.mu.Unlock()
@@ -190,14 +289,14 @@ type guardianReviewFeedbackCapture struct {
 	decisionText string
 }
 
-func (c *guardianReviewFeedbackCapture) record(threadID, turnID string, attribution guardianReviewMetricAttribution, action state.Action) {
+func (c *guardianReviewFeedbackCapture) record(threadID, turnID string, attribution guardianReviewMetricAttribution, action state.Action) []byte {
 	status, decision := guardianFeedbackStatus(attribution, c.decisionText)
 	if status == "" {
-		return
+		return nil
 	}
 	formatted, truncated, err := state.FormatGuardianActionPretty(action)
 	if err != nil {
-		return
+		return nil
 	}
 	record := guardianReviewFeedbackRecord{
 		ReviewedThreadID: threadID,
@@ -217,7 +316,7 @@ func (c *guardianReviewFeedbackCapture) record(threadID, turnID string, attribut
 	data, err := json.Marshal(record)
 	if err == nil && len(data) <= guardianFeedbackMaxRecordBytes {
 		recordGuardianReviewFailure(threadID, data)
-		return
+		return data
 	}
 	// Preserve the action and decision even when the optional reviewer context
 	// is too large.
@@ -226,9 +325,10 @@ func (c *guardianReviewFeedbackCapture) record(threadID, turnID string, attribut
 	record.ContextOmitted = true
 	data, err = json.Marshal(record)
 	if err != nil || len(data) > guardianFeedbackMaxRecordBytes {
-		return
+		return nil
 	}
 	recordGuardianReviewFailure(threadID, data)
+	return data
 }
 
 func guardianFeedbackStatus(attribution guardianReviewMetricAttribution, decisionText string) (string, *string) {

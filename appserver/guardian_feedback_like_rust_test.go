@@ -103,6 +103,38 @@ func TestGuardianReviewFeedbackOversizeOmitsContextLikeRust(t *testing.T) {
 	}
 }
 
+func TestGuardianReviewFailuresMergePersistedEvidenceLikeRust(t *testing.T) {
+	resetGuardianFeedbackRecordsForTest()
+	t.Cleanup(resetGuardianFeedbackRecordsForTest)
+	ctx := context.Background()
+	sqliteConfig, err := state.NewSqliteConfig(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := state.InitStateRuntime(ctx, sqliteConfig, "openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	threadID := "thread-persisted-guardian"
+	if _, err := runtime.StateDB().ExecContext(ctx, `INSERT INTO threads
+		(id, rollout_path, created_at, updated_at, created_at_ms, updated_at_ms, recency_at_ms, source, model_provider, cwd, title, sandbox_policy, approval_mode)
+		VALUES (?, '/tmp/rollout', 1, 1, 1, 1, 1, 'cli', 'openai', '/repo', 'thread', '', '')`, threadID); err != nil {
+		t.Fatal(err)
+	}
+	capture := &guardianReviewFeedbackCapture{decisionText: guardianDenyAssessment}
+	record := capture.record(threadID, "turn-persisted", guardianReviewMetricAttribution{TerminalStatus: "denied"}, state.Action{Type: "command", Command: "ls", CWD: "/repo"})
+	resetGuardianFeedbackRecordsForTest()
+	router := &RuntimeRouter{services: RuntimeServices{StateRuntime: runtime}}
+	router.persistGuardianReviewFeedback(threadID, record)
+	router.persistGuardianReviewFeedback(threadID, record)
+	failures := router.guardianReviewFailuresForThreads([]string{threadID})
+	records := parseGuardianFeedbackAttachment(t, failures.Attachment)
+	if len(records) != 1 || records[0].ReviewedThreadID != threadID || records[0].ReviewedTurnID != "turn-persisted" {
+		t.Fatalf("merged persisted records = %#v", records)
+	}
+}
+
 // Mirrors Rust's bounded store: at most eight records per thread and 64
 // process-wide.
 func TestGuardianFeedbackStoreLimitsLikeRust(t *testing.T) {

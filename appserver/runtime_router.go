@@ -11601,7 +11601,7 @@ func (r *RuntimeRouter) handleFeedbackUpload(request *Request) (*FeedbackUploadR
 			if len(failureThreadIDs) == 0 {
 				failureThreadIDs = []string{threadID}
 			}
-			guardianFailures = guardianReviewFailuresSnapshot(failureThreadIDs)
+			guardianFailures = r.guardianReviewFailuresForThreads(failureThreadIDs)
 			rolloutThreadIDs, threadIndex = selectFeedbackTreeThreads(threadID, feedbackThreadIDs, guardianFailures)
 			includeThreadIndex = true
 		}
