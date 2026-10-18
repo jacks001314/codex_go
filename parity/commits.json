@@ -16374,9 +16374,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 657 (partial): execserver.Client records the installed Noise registration ID and exposes CachedExecutorRegistrationID without connecting; recovery publishes a renewed registration only when the connection is installed, pins recovery to the original executor Noise key, and rejects a changed key without publishing the new registration. Active-turn environment selections were already snapshotted by the app server. Remaining: Go has no LazyRemoteExecServerClient refresh/lookup path or environment cached-registration surface, so refresh registration+key matching and stale-lookup retirement cannot land. Tests: go test ./execserver -run 'NoiseRendezvous|ExecutorRegistration|ChangedExecutorNoiseKey' -count=1; go vet ./execserver"
+        "Round 684 (audit): execserver.Client records the installed Noise registration ID and exposes CachedExecutorRegistrationID without connecting; recovery publishes a renewed registration only after the recovered transport is installed, pins recovery to the original executor Noise key, rejects a changed key without publishing, and refuses to install after close/retirement. Active-turn environment selections are snapshotted by the app server. Go has no separate LazyRemoteExecServerClient refresh lookup, so the registry-refresh registration/key matching path has no carrier; the equivalent invariant is enforced at connection installation. Tests: go test ./execserver -run 'NoiseRendezvous|ExecutorRegistration|ChangedExecutorNoiseKey' -count=1; go vet ./execserver"
       ]
     },
     {
