@@ -22,6 +22,9 @@ var OSKeyringAvailable = keyring.Available()
 // required but no durable keyring backend exists in this build.
 const KeyringUnavailableError = "OS keyring storage is unavailable; set cli_auth_credentials_store = \"file\" or \"auto\""
 
+// ErrKeyringUnavailable is the typed form of KeyringUnavailableError.
+var ErrKeyringUnavailable = errors.New(KeyringUnavailableError)
+
 type KeyringBackendKind string
 
 const (

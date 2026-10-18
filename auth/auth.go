@@ -190,8 +190,26 @@ func (s *Store) Path() string {
 	return filepath.Join(s.CodexHome, "auth.json")
 }
 
-func (s *Store) Load() (*AuthDotJSON, error) {
-	return s.backend().Load()
+func (s *Store) Load() (auth *AuthDotJSON, err error) {
+	backend := s.backend()
+	actualStore := authStorageBackendName(backend.Source())
+	attempt := newStorageAttempt(s.options.Mode, "load")
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		if secureOutcome == "not_attempted" && (actualStore == "direct_keyring" || s.options.Mode == AuthCredentialsStoreAuto) {
+			secureOutcome = authStorageLoadOutcome(auth, err)
+			if err != nil {
+				secureError = classifyAuthStorageError(err)
+			}
+		}
+		attempt.finish(actualStore, authStorageLoadOutcome(auth, err), secureOutcome, secureError)
+	}()
+	auth, err = backend.Load()
+	if err != nil {
+		secureError = classifyAuthStorageError(err)
+	}
+	return auth, err
 }
 
 func (s *Store) Resolve() (*ResolvedAuth, error) {
@@ -255,16 +273,47 @@ func (s *Store) resolveWorkloadIdentity() (*ResolvedAuth, error) {
 	return &ResolvedAuth{Auth: *auth, Source: WorkloadIdentitySource}, nil
 }
 
-func (s *Store) Save(auth AuthDotJSON) error {
-	if err := s.backend().Save(auth); err != nil {
+func (s *Store) Save(auth AuthDotJSON) (err error) {
+	backend := s.backend()
+	actualStore := authStorageBackendName(backend.Source())
+	attempt := newStorageAttempt(s.options.Mode, "save")
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		if actualStore == "direct_keyring" || s.options.Mode == AuthCredentialsStoreAuto {
+			secureOutcome = authStorageSaveOutcome(err)
+			if err != nil {
+				secureError = classifyAuthStorageError(err)
+			}
+		}
+		attempt.finish(actualStore, authStorageSaveOutcome(err), secureOutcome, secureError)
+	}()
+	if err = backend.Save(auth); err != nil {
 		return err
 	}
 	ClearPermanentRefreshFailure(s.CodexHome)
 	return nil
 }
 
-func (s *Store) Delete() (bool, error) {
-	removed, err := s.backend().Delete()
+func (s *Store) Delete() (removed bool, err error) {
+	backend := s.backend()
+	actualStore := authStorageBackendName(backend.Source())
+	if actualStore == "direct_keyring" {
+		actualStore = "multiple"
+	}
+	attempt := newStorageAttempt(s.options.Mode, "delete")
+	secureOutcome := "not_attempted"
+	secureError := "none"
+	defer func() {
+		if actualStore == "multiple" || s.options.Mode == AuthCredentialsStoreAuto {
+			secureOutcome = authStorageDeleteOutcome(removed, err)
+			if err != nil {
+				secureError = classifyAuthStorageError(err)
+			}
+		}
+		attempt.finish(actualStore, authStorageDeleteOutcome(removed, err), secureOutcome, secureError)
+	}()
+	removed, err = backend.Delete()
 	if err != nil {
 		return false, err
 	}
@@ -364,7 +413,7 @@ func (s *keyringAuthStorage) keyringUnavailable() error {
 	if s == nil || s.available {
 		return nil
 	}
-	return errors.New(KeyringUnavailableError)
+	return ErrKeyringUnavailable
 }
 
 func (s *keyringAuthStorage) Load() (*AuthDotJSON, error) {

@@ -355,7 +355,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 22d1d9336f75d4b6191327d6d32ad2ac2021aba5	49074	Propagate Cargo package versions to Bazel Rust targets (#49074)	2026-09-28	core	0	0		0	0	not_applicable	
 22dea110204c8a07abcbd6495d7eeae65faa0d9f	46535	Allow unrelated namespace mounts in Linux sandbox socket checks (#46535)	2026-09-18	sandbox	0	0		0	0	not_applicable	
 22ebb0fb178fe369190123c256ba200585765725	52330	Clamp wrapped source ranges before remapping terminal hyperlinks (#52330)	2026-10-08	tui	0	0		0	0	not_applicable	
-2347a61d0d0ee627f3d2f196443b181c487b55f6	47901	Add bounded credential-storage telemetry helpers (#47901)	2026-09-24	telemetry	18	9	0.50	0	0	audit_pending	CredentialKind,StoragePhase,StorageTelemetry,from_client_name,record_delete_attempt,record_load_attempt,record_save_attempt,record_secure_error,sync_scope
+2347a61d0d0ee627f3d2f196443b181c487b55f6	47901	Add bounded credential-storage telemetry helpers (#47901)	2026-09-24	telemetry	18	9	0.50	0	0	complete	CredentialKind,StoragePhase,StorageTelemetry,from_client_name,record_delete_attempt,record_load_attempt,record_save_attempt,record_secure_error,sync_scope
 2350823caa2bd3c4a6c7ef46deb390425ca7d5e1	42076	Unify Guardian context section collection (#42076)	2026-09-01	guardian	8	4	0.50	0	0	not_applicable	ContextSection,RenderedContext,build_context,collect_guardian_sections
 2351d9e1b608e6f9d9a3699b71d7eb39ee41cfa4	52418	Avoid an extra blank quote line when pasting text with a trailing newline (#52418)	2026-10-09	tui	0	0		0	0	complete	
 236be1ad9f6169269bbad436a0eca41d21948680	49852	Improve diagnostics for report attachment failures (#49852)	2026-10-01	core	0	0		0	0	not_applicable	

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/mcp"
 )
 
@@ -38,13 +39,18 @@ func TestOAuthStorageTelemetryEmitsBoundedMetricsLikeRust(t *testing.T) {
 	router := &RuntimeRouter{services: RuntimeServices{TurnMetrics: metrics}}
 	router.configureOAuthStorageTelemetry()
 	defer mcp.SetOAuthStorageTelemetryObserver(nil)
+	defer auth.SetStorageTelemetryObserver(nil)
 	store := mcp.NewOAuthStoreWithMode(t.TempDir(), mcp.OAuthCredentialsStoreFile)
 	if err := store.Save(&mcp.OAuthTokenSet{
 		ServerName: "docs", ServerURL: "https://example.test/mcp", ClientID: "client", AccessToken: "secret",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if len(metrics.counters) != 1 || len(metrics.durations) != 1 {
+	authStore := auth.NewStoreWithOptions(t.TempDir(), &auth.StoreOptions{Mode: auth.AuthCredentialsStoreFile})
+	if err := authStore.Save(auth.FromAPIKey("sk-test")); err != nil {
+		t.Fatal(err)
+	}
+	if len(metrics.counters) != 2 || len(metrics.durations) != 2 {
 		t.Fatalf("metrics = %#v/%#v", metrics.counters, metrics.durations)
 	}
 	tags := metrics.counters[0]
@@ -58,5 +64,10 @@ func TestOAuthStorageTelemetryEmitsBoundedMetricsLikeRust(t *testing.T) {
 				t.Fatalf("sensitive value %q leaked into telemetry tags: %#v", sensitive, tags)
 			}
 		}
+	}
+	authTags := metrics.counters[1]
+	if authTags["credential_kind"] != "codex" || authTags["operation"] != "save" || authTags["outcome"] != "success" ||
+		authTags["actual_store"] != "file" || authTags["originator"] != "cli" {
+		t.Fatalf("CLI auth telemetry tags = %#v", authTags)
 	}
 }

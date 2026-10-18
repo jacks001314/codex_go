@@ -3830,9 +3830,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 2/2 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Elevated Windows sandbox commands detect Store PowerShell launchers case-insensitively and substitute the compatible Windows PowerShell path; remote environments retain their original executable; -NoProfile is inserted once when absent. Tests: go test ./execserver -run 'WindowsPowerShell|PowerShellFallback|SandboxProgram' -count=1"
       ]
     },
     {
@@ -20734,9 +20734,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 9/18; needs review: CredentialKind, StoragePhase, StorageTelemetry, from_client_name, record_delete_attempt"
+        "CLI auth and MCP OAuth stores emit the bounded storage vocabulary: credential kind, store mode/selected/actual store, operation, secure/overall outcome, duration, phase, secure error class, fallback reason, and originator. Keyring unavailability uses a typed sentinel; app-server records codex.auth_storage.operation and duration without payload/path/service/account/error leakage. Tests: go test ./auth -count=1; go test ./appserver -run OAuthStorageTelemetry -count=1"
       ]
     },
     {

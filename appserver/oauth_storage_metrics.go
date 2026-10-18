@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"codex_go/auth"
 	"codex_go/mcp"
 )
 
@@ -46,5 +47,22 @@ func (r *RuntimeRouter) configureOAuthStorageTelemetry() {
 				"originator", event.Originator,
 			)
 		}
+	})
+	auth.SetStorageTelemetryObserver(func(event auth.StorageTelemetry) {
+		tags := map[string]string{
+			"credential_kind": event.CredentialKind,
+			"store_mode":      event.StoreMode,
+			"selected_store":  event.SelectedStore,
+			"actual_store":    event.ActualStore,
+			"operation":       event.Operation,
+			"secure_outcome":  event.SecureOutcome,
+			"outcome":         event.Outcome,
+			"fallback_reason": event.FallbackReason,
+			"secure_error":    event.SecureError,
+			"storage_phase":   event.StoragePhase,
+			"originator":      event.Originator,
+		}
+		sink.Counter("codex.auth_storage.operation", 1, tags)
+		sink.RecordDuration("codex.auth_storage.duration", time.Duration(event.DurationMS)*time.Millisecond, tags)
 	})
 }
