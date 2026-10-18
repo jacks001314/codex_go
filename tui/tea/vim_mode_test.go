@@ -598,6 +598,191 @@ func TestVimFindTillMotionsLikeVim(t *testing.T) {
 	if got := m.composer.Value(); got != " world" {
 		t.Fatalf("d f o value = %q, want ' world' (deleted hello)", got)
 	}
+
+	m = vimTestModel("hello world")
+	m = vimKeyPress(m, 'f')
+	if !m.shouldHandleVimInsertEscape() {
+		t.Fatal("a pending find must own Esc before backtrack handling")
+	}
+	m = vimEscape(m)
+	if m.vimPendingFind {
+		t.Fatal("Esc did not cancel the pending find")
+	}
+}
+
+// TestVimFindTillUsesExtendedGraphemesLikeRust pins #40785's grapheme
+// boundary rule: f/F/t/T target the first rune of an extended grapheme and
+// never split a joined emoji or Indic cluster. The normal-mode r replacement
+// consumes the whole target grapheme as well.
+func TestVimFindTillUsesExtendedGraphemesLikeRust(t *testing.T) {
+	m := vimTestModel("a👩‍💻z")
+	m = vimKeyPress(m, 'f')
+	m = vimKeyPress(m, '💻')
+	if got := m.vimValueByteOffset(); got != 0 {
+		t.Fatalf("f💻 cursor = %d, want 0 (💻 is not a grapheme start)", got)
+	}
+	m = vimKeyPress(m, 'f')
+	m = vimKeyPress(m, '👩')
+	m = vimKeyPress(m, 'r')
+	m = vimKeyPress(m, 'X')
+	if got := m.composer.Value(); got != "aXz" {
+		t.Fatalf("f👩rX value = %q, want aXz", got)
+	}
+
+	m = vimTestModel("a👩‍💻r")
+	m = vimKeyPress(m, 't')
+	m = vimKeyPress(m, 'r')
+	if got := m.vimValueByteOffset(); got != 1 {
+		t.Fatalf("tr cursor = %d, want 1 (before the emoji grapheme)", got)
+	}
+
+	m = vimTestModel("aहिr")
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'f')
+	m = vimKeyPress(m, 'ह')
+	if got := m.composer.Value(); got != "r" {
+		t.Fatalf("dfह value = %q, want r", got)
+	}
+	if got := m.vimValueByteOffset(); got != 0 {
+		t.Fatalf("dfह cursor = %d, want 0", got)
+	}
+}
+
+// TestVimFindOperatorYankCursorAndAdjacentTargetsLikeRust mirrors the
+// operator range/cursor assertions from Rust's
+// character_find_is_line_local_and_works_as_operator_motion and
+// find_and_till_handle_missing_cancelled_and_adjacent_targets.
+func TestVimFindOperatorYankCursorAndAdjacentTargetsLikeRust(t *testing.T) {
+	m := vimTestModel("abcrdef")
+	m.composer.SetCursor(3)
+	m = vimKeyPress(m, 'y')
+	m = vimKeyPress(m, 'F')
+	m = vimKeyPress(m, 'b')
+	if got := m.vimValueByteOffset(); got != 1 {
+		t.Fatalf("yFb cursor = %d, want 1 (range start)", got)
+	}
+	if got := m.vimYank; got != "bc" {
+		t.Fatalf("yFb yank = %q, want bc", got)
+	}
+
+	for _, command := range [][]rune{
+		{'c', 't', 'b'},
+		{'c', 'T', 'b'},
+	} {
+		m = vimTestModel("abc")
+		if command[1] == 'T' {
+			m.composer.SetCursor(2)
+		}
+		for _, key := range command {
+			m = vimKeyPress(m, key)
+		}
+		want := "bc"
+		if command[1] == 'T' {
+			want = "abc"
+		}
+		if got := m.composer.Value(); got != want || !m.vimInsert {
+			t.Fatalf("%q value=%q insert=%v, want %q + insert", string(command), got, m.vimInsert, want)
+		}
+	}
+
+	for _, motion := range []rune{'f', 'F', 't', 'T'} {
+		for _, operator := range []rune{'c', 'd', 'y'} {
+			m = vimTestModel("abc\nz")
+			m.vimSetCursorAtByteOffset(1)
+			m = vimKeyPress(m, operator)
+			m = vimKeyPress(m, motion)
+			m = vimKeyPress(m, 'z')
+			if got := m.composer.Value(); got != "abc\nz" {
+				t.Fatalf("%c%cz value = %q, want unchanged", operator, motion, got)
+			}
+			if got := m.vimValueByteOffset(); got != 1 || m.vimInsert {
+				t.Fatalf("%c%cz cursor=%d insert=%v, want 1/normal", operator, motion, got, m.vimInsert)
+			}
+		}
+	}
+}
+
+// TestVimFindChangeDotRepeatLikeRust pins #40785's semantic `.` replay for
+// character find/till deletes and changes, including the inserted change text.
+func TestVimFindChangeDotRepeatLikeRust(t *testing.T) {
+	m := vimTestModel("one:two:three")
+	for _, key := range []rune{'d', 'f', ':', '.'} {
+		m = vimKeyPress(m, key)
+	}
+	if got := m.composer.Value(); got != "three" {
+		t.Fatalf("df: dot-repeat value = %q, want three", got)
+	}
+
+	cases := []struct {
+		cursor  int
+		command string
+		repeat  string
+		want    string
+	}{
+		{0, "cfrX", "w.", "X X"},
+		{0, "ctrX", "w.", "Xr Xr"},
+		{3, "cFbX", "wlll.", "aXr aXr"},
+		{3, "cTbX", "wlll.", "abXr abXr"},
+	}
+	for _, testCase := range cases {
+		m = vimTestModel("abcr abcr")
+		m.composer.SetCursor(testCase.cursor)
+		for _, key := range []rune(testCase.command) {
+			m = vimKeyPress(m, key)
+		}
+		m = vimEscape(m)
+		for _, key := range []rune(testCase.repeat) {
+			m = vimKeyPress(m, key)
+		}
+		if got := m.composer.Value(); got != testCase.want || m.vimInsert {
+			t.Fatalf("%s then %s value=%q insert=%v, want %q/normal", testCase.command, testCase.repeat, got, m.vimInsert, testCase.want)
+		}
+	}
+}
+
+// TestVimFindOperatorUsesConfiguredBindingsLikeRust verifies that both the
+// normal and operator-motion slots honor remapped keybindings.
+func TestVimFindOperatorUsesConfiguredBindingsLikeRust(t *testing.T) {
+	keymap := codextui.NewKeymapConfig()
+	if err := keymap.Set("vim_normal", "find_char_forward", []string{"z"}); err != nil {
+		t.Fatalf("set vim_normal find_char_forward: %v", err)
+	}
+	if err := keymap.Set("vim_normal", "till_char_forward", []string{"q"}); err != nil {
+		t.Fatalf("set vim_normal till_char_forward: %v", err)
+	}
+	if err := keymap.Set("vim_operator", "motion_find_forward", []string{"z"}); err != nil {
+		t.Fatalf("set vim_operator motion_find_forward: %v", err)
+	}
+	if err := keymap.Set("vim_operator", "motion_till_forward", []string{"q"}); err != nil {
+		t.Fatalf("set vim_operator motion_till_forward: %v", err)
+	}
+	for _, testCase := range []struct {
+		motion string
+		cursor int
+		want   string
+	}{
+		{"zb", 6, "eta gamma"},
+		{"qb", 5, "beta gamma"},
+	} {
+		m := NewModel(codextui.NewState(nil), Options{Width: 200, Height: 36, KeymapConfig: keymap})
+		m.vimMode = true
+		m.composer.SetValue("alpha beta gamma")
+		m.composer.SetCursor(0)
+		for _, key := range []rune(testCase.motion) {
+			m = vimKeyPress(m, key)
+		}
+		if got := m.vimValueByteOffset(); got != testCase.cursor {
+			t.Fatalf("%s cursor = %d, want %d", testCase.motion, got, testCase.cursor)
+		}
+		m.composer.SetCursor(0)
+		m = vimKeyPress(m, 'd')
+		for _, key := range []rune(testCase.motion) {
+			m = vimKeyPress(m, key)
+		}
+		if got := m.composer.Value(); got != testCase.want {
+			t.Fatalf("d%s value = %q, want %q", testCase.motion, got, testCase.want)
+		}
+	}
 }
 
 // TestVimEditsDeleteAndChangeLikeVim pins x / D / s / C.

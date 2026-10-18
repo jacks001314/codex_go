@@ -2701,9 +2701,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: VimFindMotion, handle_vim_operator_command"
+        "Aligned upstream 98ee29c7cd (#40785): the Vim composer implements line-local f/F/t/T find and till motions in the tea model, including operator ranges for d/c/y (yank lands on the range start), missing/adjacent-target cancellation, and Esc ownership while a target is pending. Target matching uses extended grapheme boundaries through rivo/uniseg and matches the first rune of a grapheme, so joined emoji and Indic clusters are neither split nor partially replaced; normal-mode r now replaces the whole grapheme. Normal and operator slots honor remapped bindings, with shift-f/F and shift-t/T aliases, and semantic . replay records find deletes/changes plus inserted change text. Rust's embedded-composer-element skip has no Go carrier because the Go composer is plain text. Tests: TestVimFindTillMotionsLikeVim, TestVimFindTillUsesExtendedGraphemesLikeRust, TestVimFindOperatorYankCursorAndAdjacentTargetsLikeRust, TestVimFindChangeDotRepeatLikeRust, TestVimFindOperatorUsesConfiguredBindingsLikeRust."
       ]
     },
     {

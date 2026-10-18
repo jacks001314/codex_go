@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+	"github.com/rivo/uniseg"
 )
 
 // vimDraftSnapshot captures the composer draft before a Vim edit so undo/redo
@@ -33,7 +34,8 @@ func (m *Model) shouldHandleVimInsertEscape() bool {
 	if m == nil || !m.vimMode {
 		return false
 	}
-	return m.vimInsert || m.isVimReplaceMode() || m.vimPendingOp != "" || m.vimPendingObject != ""
+	return m.vimInsert || m.isVimReplaceMode() || m.vimPendingReplace || m.vimPendingFind ||
+		m.vimPendingOp != "" || m.vimPendingObject != ""
 }
 
 // vimSearchRange is a byte-offset match range in the composer draft.
@@ -142,6 +144,7 @@ func (m *Model) enterVimInsertAfterSubmission() {
 	m.vimPendingObject = ""
 	m.vimPendingFind = false
 	m.vimPendingReplace = false
+	m.clearVimFindChange()
 }
 
 // applyVimModeKey dispatches Vim normal/insert mode keys when /vim is enabled
@@ -249,7 +252,16 @@ func (m *Model) applyVimModeKey(msg bubbletea.KeyMsg, keySpec string) bool {
 			m.vimInsert = false
 			m.vimPendingOp = ""
 			m.vimPendingObject = ""
+			m.vimFindChangeRecording = false
 			return true
+		}
+		if m.vimFindChangeRecording {
+			switch {
+			case msg.Type == bubbletea.KeyRunes:
+				m.vimLastFindInsertText = append(m.vimLastFindInsertText, msg.Runes...)
+			case msg.Type == bubbletea.KeyBackspace && len(m.vimLastFindInsertText) > 0:
+				m.vimLastFindInsertText = m.vimLastFindInsertText[:len(m.vimLastFindInsertText)-1]
+			}
 		}
 		// Insert mode types normally.
 		return false
@@ -459,8 +471,7 @@ func (m *Model) vimEmptyNormalSlashOpensCommands(msg bubbletea.KeyMsg) bool {
 
 // vimCursorColumn returns the cursor column within the current logical line.
 // The textarea's LineInfo exposes the wrapped-row start and the column offset
-// within that row; their sum is the logical line column (byte-based, matching
-// SetCursor's clamping).
+// within that row; their sum is the rune index of the logical line column.
 func (m *Model) vimCursorColumn() int {
 	info := m.composer.LineInfo()
 	return info.StartColumn + info.ColumnOffset
@@ -484,7 +495,7 @@ func (m *Model) vimCursorLeft() {
 
 func (m *Model) vimCursorRight() {
 	col := m.vimCursorColumn()
-	if col < len(m.vimCurrentLine()) {
+	if col < len([]rune(m.vimCurrentLine())) {
 		m.composer.SetCursor(col + 1)
 	}
 }
@@ -492,12 +503,11 @@ func (m *Model) vimCursorRight() {
 func (m *Model) vimCursorLineStartNonBlank() {
 	line := m.vimCurrentLine()
 	col := 0
-	for col < len(line) {
-		r, size := utf8.DecodeRuneInString(line[col:])
+	for index, r := range []rune(line) {
 		if !unicode.IsSpace(r) {
+			col = index
 			break
 		}
-		col += size
 	}
 	m.composer.SetCursor(col)
 }
@@ -510,7 +520,11 @@ func (m *Model) vimValueByteOffset() int {
 	for i := 0; i < m.composer.Line() && i < len(lines); i++ {
 		offset += len(lines[i]) + 1
 	}
-	return offset + m.vimCursorColumn()
+	row := m.composer.Line()
+	if row < 0 || row >= len(lines) {
+		return offset
+	}
+	return offset + byteOffsetForRuneIndex(lines[row], m.vimCursorColumn())
 }
 
 // deleteVimCharAtCursor removes the rune under the cursor (x / s).
@@ -521,9 +535,9 @@ func (m *Model) deleteVimCharAtCursor() {
 		return
 	}
 	startedEdit := m.vimBeginEdit()
-	_, size := utf8.DecodeRuneInString(value[offset:])
-	m.recordVimDelete(value[offset : offset+size])
-	m.composer.SetValue(value[:offset] + value[offset+size:])
+	end := vimNextGraphemeBoundary(value, offset)
+	m.recordVimDelete(value[offset:end])
+	m.composer.SetValue(value[:offset] + value[end:])
 	m.vimSetCursorAtByteOffset(offset)
 	m.vimFinishEdit(startedEdit)
 }
@@ -532,6 +546,9 @@ func (m *Model) deleteVimCharAtCursor() {
 // mirroring Rust VimCommandState::last_change (#40521). A deletion spanning
 // multiple runes or containing whitespace is treated as a word delete.
 func (m *Model) recordVimDelete(deleted string) {
+	if !m.vimApplyingFindEdit {
+		m.clearVimFindChange()
+	}
 	m.vimHasLastDelete = true
 	m.vimLastDeleteWord = utf8.RuneCountInString(deleted) > 1 || strings.ContainsAny(deleted, " \t")
 	m.vimHasLastReplace = false
@@ -544,6 +561,26 @@ func (m *Model) recordVimDelete(deleted string) {
 func (m *Model) applyVimDotRepeat() bool {
 	if m == nil {
 		return false
+	}
+	if m.vimHasLastFindChange {
+		startedEdit := m.vimBeginEdit()
+		kind := m.vimLastFindKind
+		forward := m.vimLastFindForward
+		target := m.vimLastFindTarget
+		operator := m.vimLastFindOperator
+		insertText := append([]rune(nil), m.vimLastFindInsertText...)
+		if !m.applyVimFindMotion(kind, forward, target, operator, false) {
+			m.vimFinishEdit(startedEdit)
+			return true
+		}
+		if operator == "c" {
+			for _, ch := range insertText {
+				m.composer.InsertString(string(ch))
+			}
+			m.vimInsert = false
+		}
+		m.vimFinishEdit(startedEdit)
+		return true
 	}
 	if m.vimHasLastReplace && len(m.vimLastReplaceText) > 0 {
 		startedEdit := m.vimBeginEdit()
@@ -585,6 +622,7 @@ func (m *Model) recordVimReplaceChange() {
 	m.vimLastDeleteWord = false
 	m.vimHasLastReplace = true
 	m.vimLastReplaceText = text
+	m.clearVimFindChange()
 }
 
 // deleteVimWordAtCursor deletes the word under/after the cursor (the `dw` word
@@ -619,9 +657,9 @@ func (m *Model) replaceVimCharAtCursor(ch rune) {
 		return
 	}
 	startedEdit := m.vimBeginEdit()
-	_, size := utf8.DecodeRuneInString(value[offset:])
+	end := vimNextGraphemeBoundary(value, offset)
 	replacement := string(ch)
-	next := value[:offset] + replacement + value[offset+size:]
+	next := value[:offset] + replacement + value[end:]
 	m.composer.SetValue(next)
 	if ch == '\n' {
 		m.vimSetCursorAtByteOffset(offset + len(replacement))
@@ -1142,67 +1180,144 @@ func (m *Model) resolveVimFind(target rune) {
 	forward := m.vimFindForward
 	operator := m.vimFindOperator
 	m.clearVimFind()
+	m.applyVimFindMotion(kind, forward, target, operator, true)
+}
 
+// applyVimFindMotion performs one line-local find/till motion. A non-empty
+// operator applies that operator over the Rust-compatible character range;
+// otherwise the cursor moves to the destination. record stores a delete or
+// change for semantic `.` replay.
+func (m *Model) applyVimFindMotion(kind int, forward bool, target rune, operator string, record bool) bool {
 	line := m.vimCurrentLine()
-	col := m.vimCursorColumn()
-	from := runeIndexForByte(line, col)
-	idx, ok := vimFindCharIndex(line, from, target, kind, forward)
+	col := byteOffsetForRuneIndex(line, m.vimCursorColumn())
+	foundStart, foundEnd, ok := vimFindGraphemeRange(line, col, target, kind, forward)
 	if !ok {
 		if operator != "" {
 			m.cancelVimOperator()
 		}
-		return
+		return false
 	}
 	if operator == "" {
-		m.composer.SetCursor(byteOffsetForRuneIndex(line, idx))
-		return
+		destination := foundStart
+		if kind == 1 && forward {
+			destination = vimPreviousGraphemeStart(line, foundStart, col)
+		} else if kind == 1 {
+			destination = foundEnd
+		}
+		m.composer.SetCursor(runeIndexForByte(line, destination))
+		return true
 	}
-	bytePos := byteOffsetForRuneIndex(line, idx)
-	targetLen := len(string([]rune(line)[idx]))
 	var start, end int
 	switch {
 	case forward && kind == 0: // f: cursor..target end
-		start, end = col, bytePos+targetLen
+		start, end = col, foundEnd
 	case !forward && kind == 0: // F: target start..cursor
-		start, end = bytePos, col
+		start, end = foundStart, col
 	case forward && kind == 1: // t: cursor..target start
-		start, end = col, bytePos
+		start, end = col, foundStart
 	default: // T: target end..cursor
-		start, end = bytePos+targetLen, col
+		start, end = foundEnd, col
 	}
+	if operator == "y" {
+		m.vimSetCursorAtByteOffset(m.vimLineStartByteOffset() + start)
+	}
+	m.vimPendingOp = operator
+	m.vimApplyingFindEdit = true
 	m.applyVimOperatorRange(start, end)
+	m.vimApplyingFindEdit = false
+	if record && (operator == "d" || operator == "c") {
+		m.recordVimFindChange(operator, kind, forward, target)
+	}
+	return true
 }
 
-// vimFindCharIndex returns the rune index of the destination for a find/till
-// motion on the current line. kind 0 = find (land on target), 1 = till (stop
-// just before/after the target). The search is line-local.
-func vimFindCharIndex(line string, from int, target rune, kind int, forward bool) (int, bool) {
-	runes := []rune(line)
+// recordVimFindChange stores a completed find delete/change for `.` replay.
+func (m *Model) recordVimFindChange(operator string, kind int, forward bool, target rune) {
+	m.vimHasLastFindChange = true
+	m.vimLastFindKind = kind
+	m.vimLastFindForward = forward
+	m.vimLastFindTarget = target
+	m.vimLastFindOperator = operator
+	m.vimLastFindInsertText = nil
+	m.vimFindChangeRecording = operator == "c"
+	m.vimHasLastDelete = false
+	m.vimLastDeleteWord = false
+	m.vimHasLastReplace = false
+	m.vimLastReplaceText = nil
+}
+
+func (m *Model) clearVimFindChange() {
+	if m == nil {
+		return
+	}
+	m.vimHasLastFindChange = false
+	m.vimLastFindKind = 0
+	m.vimLastFindForward = false
+	m.vimLastFindTarget = 0
+	m.vimLastFindOperator = ""
+	m.vimLastFindInsertText = nil
+	m.vimFindChangeRecording = false
+}
+
+type vimGraphemeRange struct {
+	start int
+	end   int
+	text  string
+}
+
+func vimLineGraphemes(line string) []vimGraphemeRange {
+	graphemes := uniseg.NewGraphemes(line)
+	ranges := make([]vimGraphemeRange, 0, len(line))
+	for graphemes.Next() {
+		start, end := graphemes.Positions()
+		ranges = append(ranges, vimGraphemeRange{start: start, end: end, text: graphemes.Str()})
+	}
+	return ranges
+}
+
+func vimNextGraphemeBoundary(text string, offset int) int {
+	if offset >= len(text) {
+		return len(text)
+	}
+	graphemes := uniseg.NewGraphemes(text[offset:])
+	if graphemes.Next() {
+		_, end := graphemes.Positions()
+		return offset + end
+	}
+	return len(text)
+}
+
+func vimPreviousGraphemeStart(line string, before, fallback int) int {
+	graphemes := vimLineGraphemes(line)
+	for i := len(graphemes) - 1; i >= 0; i-- {
+		if graphemes[i].start < before {
+			return graphemes[i].start
+		}
+	}
+	return fallback
+}
+
+// vimFindGraphemeRange returns the byte range of the matching extended
+// grapheme for a line-local f/F/t/T motion. A target matches when it is the
+// first rune of the grapheme, mirroring Rust's grapheme.starts_with(target).
+func vimFindGraphemeRange(line string, from int, target rune, kind int, forward bool) (int, int, bool) {
+	graphemes := vimLineGraphemes(line)
+	targetText := string(target)
 	if forward {
-		for i := from + 1; i < len(runes); i++ {
-			if runes[i] != target {
-				continue
+		for _, grapheme := range graphemes {
+			if grapheme.start > from && strings.HasPrefix(grapheme.text, targetText) {
+				return grapheme.start, grapheme.end, true
 			}
-			if kind == 0 {
-				return i, true
-			}
-			if i-1 >= from {
-				return i - 1, true
-			}
-			return from, true
 		}
-		return 0, false
+		return 0, 0, false
 	}
-	for i := from - 1; i >= 0; i-- {
-		if runes[i] != target {
-			continue
+	for i := len(graphemes) - 1; i >= 0; i-- {
+		grapheme := graphemes[i]
+		if grapheme.end <= from && strings.HasPrefix(grapheme.text, targetText) {
+			return grapheme.start, grapheme.end, true
 		}
-		if kind == 0 {
-			return i, true
-		}
-		return i + 1, true
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 func runeIndexForByte(s string, byteCol int) int {
@@ -1281,13 +1396,23 @@ func (m *Model) vimSetCursorAtByteOffset(offset int) {
 	}
 	prefix := value[:offset]
 	row := strings.Count(prefix, "\n")
-	lastRow := m.composer.LineCount() - 1
-	for i := 0; i < lastRow-row; i++ {
+	currentRow := m.composer.Line()
+	for currentRow > row {
 		m.composer.CursorUp()
+		currentRow--
 	}
-	col := offset
+	for currentRow < row {
+		m.composer.CursorDown()
+		currentRow++
+	}
+	colByte := offset
 	if nl := strings.LastIndex(prefix, "\n"); nl >= 0 {
-		col = offset - nl - 1
+		colByte = offset - nl - 1
+	}
+	lines := strings.Split(value, "\n")
+	col := colByte
+	if row >= 0 && row < len(lines) {
+		col = runeIndexForByte(lines[row], colByte)
 	}
 	m.composer.SetCursor(col)
 }
@@ -1315,17 +1440,18 @@ func (m *Model) applyVimLineOperatorRepeat() {
 func (m *Model) vimOperatorMotion(keySpec string) bool {
 	// Character find/till operator motions (d f / y t etc.): f/F/t/T capture a
 	// pending find with the current operator, mirroring Rust VimPending::Find.
-	if keySpec == "f" || keySpec == "shift-f" || keySpec == "F" || keySpec == "t" || keySpec == "shift-t" || keySpec == "T" {
-		kind, forward := 0, true
-		switch {
-		case keySpec == "shift-f" || keySpec == "F":
-			kind, forward = 0, false
-		case keySpec == "t":
-			kind, forward = 1, true
-		case keySpec == "shift-t" || keySpec == "T":
-			kind, forward = 1, false
-		}
-		m.startVimFind(kind, forward, m.vimPendingOp)
+	switch {
+	case m.keyMatches("vim_operator", "motion_find_forward", keySpec):
+		m.startVimFind(0, true, m.vimPendingOp)
+		return true
+	case m.keyMatches("vim_operator", "motion_find_backward", keySpec):
+		m.startVimFind(0, false, m.vimPendingOp)
+		return true
+	case m.keyMatches("vim_operator", "motion_till_forward", keySpec):
+		m.startVimFind(1, true, m.vimPendingOp)
+		return true
+	case m.keyMatches("vim_operator", "motion_till_backward", keySpec):
+		m.startVimFind(1, false, m.vimPendingOp)
 		return true
 	}
 	if keySpec == "k" || keySpec == "up" || keySpec == "j" || keySpec == "down" {
@@ -1478,6 +1604,9 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 	op := m.vimPendingOp
 	m.vimPendingOp = ""
 	m.vimPendingObject = ""
+	if !m.vimApplyingFindEdit {
+		m.clearVimFindChange()
+	}
 	value := m.composer.Value()
 	if start < 0 {
 		start = 0

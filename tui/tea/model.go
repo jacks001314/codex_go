@@ -1951,6 +1951,16 @@ type Model struct {
 	vimFindKind     int
 	vimFindForward  bool
 	vimFindOperator string
+	// vimHasLastFindChange records the last f/F/t/T delete or change so `.`
+	// can replay it with the same grapheme target (Rust #40785).
+	vimHasLastFindChange   bool
+	vimLastFindKind        int
+	vimLastFindForward     bool
+	vimLastFindTarget      rune
+	vimLastFindOperator    string
+	vimLastFindInsertText  []rune
+	vimFindChangeRecording bool
+	vimApplyingFindEdit    bool
 	// vimPendingG tracks the first key of the `gg` buffer-top jump chord
 	// (mirrors Rust vim_commands.rs jump_top). Once pending, the next `g`
 	// completes the chord and jumps to the top buffer line; any other key
