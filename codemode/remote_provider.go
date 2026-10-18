@@ -235,11 +235,59 @@ type remoteSession struct {
 	closed   bool
 }
 
+const execRuntimeResetError = "The exec runtime was replaced. Stored values and running cells were lost. Prior external tool operations may have completed; inspect their results before retrying. You may continue with a fresh exec call."
+
+func (s *remoteSession) bindingGeneration() (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openedOn == nil || !s.openedOn.Alive() {
+		// A fresh call after connection loss must be allowed to open the
+		// replacement runtime; only calls created against a live old binding
+		// are rejected when recovery replaces it.
+		return 0, false
+	}
+	return s.generation, true
+}
+
+// ensureGeneration rejects a call created against an older runtime binding.
+// Calls created before the first binding (hadBinding=false) join the first
+// opened generation, matching Rust's binding_for_request(None).
+func (s *remoteSession) ensureGeneration(generation uint64, hadBinding bool) error {
+	if s == nil || !hadBinding {
+		return nil
+	}
+	current, _ := s.bindingGeneration()
+	if current != generation {
+		return errors.New(execRuntimeResetError)
+	}
+	return nil
+}
+
+func (s *remoteSession) existingConnection() (*remoteConnection, error) {
+	if s == nil {
+		return nil, errors.New("code mode session is shutting down")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.openedOn == nil {
+		return nil, errors.New("code mode session is shutting down")
+	}
+	return s.openedOn, nil
+}
+
 func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemoteExecuteRequest, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+	generation, hadBinding := s.bindingGeneration()
 	connection, err := s.connection(ctx)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
+	if err := s.ensureGeneration(generation, hadBinding); err != nil {
+		return tool.CodeModeRemoteResponse{}, err
+	}
+	actualGeneration, _ := s.bindingGeneration()
 	definitions := make([]ProtocolToolDefinition, 0, len(request.EnabledTools))
 	for _, definition := range request.EnabledTools {
 		kind := ProtocolToolKindFunction
@@ -261,25 +309,30 @@ func (s *remoteSession) Execute(ctx context.Context, request tool.CodeModeRemote
 			OutputSchema:        append(json.RawMessage(nil), definition.OutputSchema...),
 		})
 	}
-	delegate := s.delegateForGeneration(s.generation)
+	delegate := s.delegateForGeneration(actualGeneration)
 	response, err := connection.Execute(ctx, s.id, delegate, ExecuteRequest{
 		ToolCallID: request.ToolCallID, EnabledTools: definitions, Source: request.Source,
 		YieldTimeMS: request.YieldTimeMS, MaxOutputTokens: request.MaxOutputTokens,
 		TraceContext: codeModeTraceContextFromContext(ctx),
 	}, preempt)
 	s.invalidateSessionOnNotFound(connection, err)
-	return publicRemoteResponseForGeneration(response, s.generation), err
+	return publicRemoteResponseForGeneration(response, actualGeneration), err
 }
 
 func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uint64, preempt *tool.YieldSignal) (tool.CodeModeRemoteResponse, error) {
+	generation, hadBinding := s.bindingGeneration()
 	connection, err := s.connection(ctx)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
+	if err := s.ensureGeneration(generation, hadBinding); err != nil {
+		return tool.CodeModeRemoteResponse{}, err
+	}
+	actualGeneration, _ := s.bindingGeneration()
 	// Account for the runtime's one-second yield grace separately from transport
 	// (mirrors Rust wait()).
 	runtimeTimeout := time.Duration(yieldTimeMS)*time.Millisecond + time.Second
-	remoteCellID, err := remoteCellIDForGeneration(s.generation, cellID)
+	remoteCellID, err := remoteCellIDForGeneration(actualGeneration, cellID)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
@@ -296,15 +349,16 @@ func (s *remoteSession) Wait(ctx context.Context, cellID string, yieldTimeMS uin
 	if outcome.Outcome == nil {
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid wait response")
 	}
-	return publicRemoteResponseForGeneration(outcome.Outcome.Response, s.generation), nil
+	return publicRemoteResponseForGeneration(outcome.Outcome.Response, actualGeneration), nil
 }
 
 func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.CodeModeRemoteResponse, error) {
-	connection, err := s.connection(ctx)
+	connection, err := s.existingConnection()
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
-	remoteCellID, err := remoteCellIDForGeneration(s.generation, cellID)
+	generation, _ := s.bindingGeneration()
+	remoteCellID, err := remoteCellIDForGeneration(generation, cellID)
 	if err != nil {
 		return tool.CodeModeRemoteResponse{}, err
 	}
@@ -321,7 +375,7 @@ func (s *remoteSession) Terminate(ctx context.Context, cellID string) (tool.Code
 	if outcome.Outcome == nil {
 		return tool.CodeModeRemoteResponse{}, fmt.Errorf("code-mode host returned an invalid terminate response")
 	}
-	return publicRemoteResponseForGeneration(outcome.Outcome.Response, s.generation), nil
+	return publicRemoteResponseForGeneration(outcome.Outcome.Response, generation), nil
 }
 
 // invalidateSessionOnNotFound mirrors Rust #52235: Execute, Wait and Terminate

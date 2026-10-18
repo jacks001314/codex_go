@@ -286,9 +286,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 712 (implementation): Execute and Wait capture the live binding generation before opening the runtime; if recovery replaces it during the call, they return the explicit exec-runtime-reset message instead of executing against new state. Calls created after connection loss see no live binding and may open the replacement generation. Terminate now uses only the existing binding and never reopens a runtime. Tests: TestRemoteSessionStaleGenerationReportsResetLikeRust, TestRemoteSessionTerminateDoesNotOpenLikeRust, TestRemoteSessionReopensAfterConnectionLoss; go test ./codemode -count=1."
       ]
     },
     {
