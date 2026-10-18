@@ -151,6 +151,48 @@ func TestModelAgentsDashboardRightOpensSelectedTask(t *testing.T) {
 	if editing.agentsOverview == nil {
 		t.Fatal("right while renaming must keep the editor, not open the task")
 	}
+
+	// An explicit editor remap keeps Right for cursor movement.
+	keymap := codextui.NewKeymapConfig()
+	if err := keymap.Set("editor", "move_right", []string{"f2"}); err != nil {
+		t.Fatalf("set editor move_right remap: %v", err)
+	}
+	remapped := NewModel(nil, Options{
+		Width:        120,
+		Height:       24,
+		KeymapConfig: keymap,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, remapped)
+	updated, _ = remapped.Update(key(bubbletea.KeyRight))
+	remapped = updated.(*Model)
+	if remapped.agentsOverview == nil {
+		t.Fatal("an editor move_right remap must keep Right for the editor")
+	}
+
+	// The Vim-normal binding has the same precedence.
+	vimKeymap := codextui.NewKeymapConfig()
+	if err := vimKeymap.Set("vim_normal", "move_right", []string{"f2"}); err != nil {
+		t.Fatalf("set vim_normal move_right remap: %v", err)
+	}
+	vimRemapped := NewModel(nil, Options{
+		Width:        120,
+		Height:       24,
+		KeymapConfig: vimKeymap,
+		OnAgentsOverviewRefresh: func(string) ([]agentsoverview.Row, error) {
+			return agentsOverviewTestRows(), nil
+		},
+	})
+	openAgentsDashboard(t, vimRemapped)
+	vimRemapped.vimMode = true
+	vimRemapped.vimInsert = false
+	updated, _ = vimRemapped.Update(key(bubbletea.KeyRight))
+	vimRemapped = updated.(*Model)
+	if vimRemapped.agentsOverview == nil {
+		t.Fatal("a Vim move_right remap must keep Right for the editor")
+	}
 }
 
 // Rust #45255: `n` opens a blank session in the selected checkout without

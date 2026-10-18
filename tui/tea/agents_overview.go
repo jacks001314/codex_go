@@ -440,7 +440,7 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 	case "right":
 		// Rust #44344/#45255: Right opens the selected task unless metadata
 		// editing owns the editor; a connection notice keeps the list.
-		if m.agentsOverviewNotice == "" && m.agentsOverview.CanOpenWithRight() {
+		if m.agentsOverviewCanOpenWithRight(keySpec) {
 			return m.openAgentsOverviewThread(m.agentsOverview.SelectedThreadID())
 		}
 	case "enter":
@@ -541,6 +541,21 @@ func (m *Model) updateAgentsOverviewKey(msg bubbletea.KeyMsg) bubbletea.Cmd {
 		return m.refreshAgentsOverviewUsageCmd()
 	}
 	return nil
+}
+
+// agentsOverviewCanOpenWithRight mirrors the composer-side guards around the
+// dashboard's Right shortcut: the list owns focus, there is no notice or
+// pending queued input, and Right still resolves to the active move_right
+// binding. An explicit editor or Vim remap therefore keeps Right for editing.
+func (m *Model) agentsOverviewCanOpenWithRight(keySpec string) bool {
+	if m == nil || m.agentsOverview == nil || m.agentsOverviewNotice != "" ||
+		!m.agentsOverview.CanOpenWithRight() || len(m.queued) > 0 {
+		return false
+	}
+	if m.vimMode && !m.vimInsert {
+		return m.keyMatches("vim_normal", "move_right", keySpec)
+	}
+	return m.keyMatches("editor", "move_right", keySpec)
 }
 
 func (m *Model) composerIsVimEnabled() bool {
