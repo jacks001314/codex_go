@@ -22,19 +22,27 @@ func ApplyWorldWritableScanAndDenies(req *WorldWritableAuditRequest) (*WorldWrit
 	}
 	flagged, err := AuditEveryoneWritable(req.CWD, req.Env, req.LogsBaseDir)
 	if err != nil {
-		return worldWritableAuditResult(flagged, true), err
+		result := worldWritableAuditResult(flagged, true)
+		recordWorldWritableScanResult(result, err)
+		return result, err
 	}
 	if len(flagged) == 0 {
-		return worldWritableAuditResult(nil, false), nil
+		result := worldWritableAuditResult(nil, false)
+		recordWorldWritableScanResult(result, nil)
+		return result, nil
 	}
 	if err := applyCapabilityDeniesForWorldWritable(req, flagged); err != nil {
 		_ = logAuditNote(req.LogsBaseDir, fmt.Sprintf("AUDIT: failed to apply capability deny ACEs: %v", err))
 		// Rust #39279: preflight must fail when applying a deny ACE failed so
 		// a detected world-writable path is never left without its capability
 		// restriction while reporting success.
-		return worldWritableAuditResult(flagged, false), err
+		result := worldWritableAuditResult(flagged, false)
+		recordWorldWritableScanResult(result, err)
+		return result, err
 	}
-	return worldWritableAuditResult(flagged, false), nil
+	result := worldWritableAuditResult(flagged, false)
+	recordWorldWritableScanResult(result, nil)
+	return result, nil
 }
 
 func AuditEveryoneWritable(cwd string, env map[string]string, logsBaseDir string) ([]string, error) {

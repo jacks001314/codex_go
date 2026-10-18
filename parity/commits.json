@@ -2713,9 +2713,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: supports_paginated_history"
+        "Audited upstream 37f4bb94c9 (#40787): remoteAgentsDashboardSource.Stop reads the thread without turns, uses thread/turns/list for paginated threads, and only falls back to includeTurns for legacy threads or servers that reject the page RPC. It interrupts the first in-progress turn from the selected history and makes no interrupt call for an idle thread. Test: TestRemoteAgentsStopRespectsPaginatedHistoryLikeRust."
       ]
     },
     {
@@ -3073,9 +3073,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: record_world_writable_scan_result"
+        "Aligned upstream 37a5149822 (#40983): ApplyWorldWritableScanAndDenies now records codex.windows_sandbox.world_writable_scan_flagged_directories for every scan it performs. Successful scans use WorldWritableAuditResult.FlaggedCount, failed scan or deny-application paths report zero with result=error, and no recorder is a no-op. Test: TestWorldWritableScanTelemetryLikeRust."
       ]
     },
     {
