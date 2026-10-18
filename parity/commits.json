@@ -14535,9 +14535,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SystemDnsResolver"
+        "Round 512 (audit): already implemented. network/proxy_lookup_darwin.go resolves proxy hosts through net.Resolver{PreferGo:false} so supplemental resolvers and VPN split DNS are honored, while the existing non-public-address checks still apply to resolved destinations. The Darwin test binary cross-compiles; its runtime test cannot execute on this Windows host. Tests: GOOS=darwin GOARCH=amd64 go test -c ./network; go test ./network -run 'TestProxyManagedNetwork|TestStandaloneProxyWait' -count=1"
       ]
     },
     {
