@@ -3963,6 +3963,9 @@ func (m *Model) View() string {
 		m.hideTranscriptImages()
 		return m.renderSessionPickerModal()
 	}
+	if m.modal != nil && modalCenteredOverlayKind(m.modal.kind) {
+		return m.renderCenteredModalOverlay()
+	}
 	m.refreshTranscript()
 	m.composerPromptWidth = codextui.DisplayWidth(m.composer.Prompt)
 

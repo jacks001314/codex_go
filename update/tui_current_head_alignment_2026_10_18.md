@@ -2112,7 +2112,10 @@ green.
   with prefixes, indentation, combining characters, and trailing blanks intact.
 - `#50503` is complete: Enter accepts Find results, Ctrl+P/Ctrl+N navigate, and
   Escape cancels editing or returns to latest after acceptance.
-- `#50504` remains partial: confirmations still replace the bottom-pane section
+- `#50504` remains partial but generic confirmation/selection dialogs now render
+  as an ANSI-aware rounded overlay centered over the retained composer/backdrop,
+  with an append fallback when the dialog cannot fit. Remaining: migrate the
+  other modal kinds and route cursor/section ownership through the overlay.
   instead of rendering as centered dialogs over a retained composer/picker
   backdrop.
 - `#50396` is complete: transcript PageUp/PageDown honor pager single-row,
