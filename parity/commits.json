@@ -31751,9 +31751,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "TR-10 (same table): two preconditions, both external - (1) no Go carrier for the MXC network-root inspection (networkRoots / uninspectable / ImplicitRead are all 0 hits even though the mxc backend exists via config/windows_sandbox_mode.go, sandbox/windows.go, execserver/windows_mxc_test.go), and (2) validating probe/policy semantics needs a Windows+MXC node. Do not fabricate the predicate; the narrow 'just add a filter predicate' slice was offered by the lane and I declined it."
+        "Round 674 (audit): N/A by architecture. Go has no native MXC launcher or PathUri volume-root policy materializer; UseMXC fails closed as unavailable and there is no implicit :root read expansion path to filter. Evidence: rg volume_roots/implicit_read_roots/materialize_volume_roots/uninspectable; go test ./execserver -run MXC."
       ]
     },
     {
