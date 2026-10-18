@@ -27817,9 +27817,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: windows_mxc_allowed_by_config"
+        "Equivalent implementation already present: the exec-server host config reader carries only the startup CLI features.prefer_mxc value into environmentConfig/read as a session-flags layer, ordered above project config and below legacy managed policy. Other startup overrides and private model values are not retained."
       ]
     },
     {
