@@ -28887,9 +28887,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: session_request"
+        "Equivalent implementation already present: gRPC/unified remote session Execute, Wait, and Terminate calls invalidate only the affected session binding on gRPC NotFound; the next operation reopens without replaying the failed execution. CompleteToolCall NotFound remains scoped to the missing invocation because it may still identify a live session. Other sessions and unrelated status codes retain their state. A regression test pins the missing-session retirement rule and non-NotFound exclusions."
       ]
     },
     {
