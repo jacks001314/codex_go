@@ -2112,15 +2112,13 @@ green.
   with prefixes, indentation, combining characters, and trailing blanks intact.
 - `#50503` is complete: Enter accepts Find results, Ctrl+P/Ctrl+N navigate, and
   Escape cancels editing or returns to latest after acceptance.
-- `#50504` remains partial but most selection/settings dialogs (generic,
-  review/exit/misalignment/rate-limit, experimental, status/title, presets,
-  config, theme, pets, memories, goals, skills, hooks, agents, permissions,
-  usage, sandbox, worktree, import, picker) now render as an ANSI-aware rounded
-  overlay centered over the retained composer/backdrop, with ANSI wrapping for
-  long descriptions and an append fallback when oversized. Remaining:
-  input/cursor-owned modals (approval, elicitation, user-input, feedback note,
-  voice channels), plugin browser's background-history path, and dialog
-  cursor/section routing.
+- `#50504` remains partial but every bottom-pane modal kind now renders as an
+  ANSI-aware rounded overlay centered over the retained composer/backdrop,
+  including approval, elicitation, user-input, feedback, voice channels,
+  plugin browser, permissions, usage, and picker/config flows. Long
+  descriptions are wrapped before boxing and oversized dialogs use the append
+  fallback. Remaining: nested dialog stacks that retain a parent picker
+  backdrop, and explicit overlay cursor/section ownership.
   instead of rendering as centered dialogs over a retained composer/picker
   backdrop.
 - `#50396` is complete: transcript PageUp/PageDown honor pager single-row,

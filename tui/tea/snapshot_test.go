@@ -90,19 +90,19 @@ Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
-
-
-
-
-Run command?
-  Reason: needs tests
-  Working directory: D:\repo
-  go test ./...
-› 1. Allow for this turn (y)
-  2. Allow for this session (a)
-  3. Deny (d)
-Esc cancel | Enter choose
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
+                     ╭───────────────────────────────╮
+                     │Run command?                   │
+                     │  Reason: needs tests          │
+                     │  Working directory: D:\repo   │
+                     │  go test ./...                │
+                     │› 1. Allow for this turn (y)   │
+                     │  2. Allow for this session (a)│
+                     │  3. Deny (d)                  │
+                     │Esc cancel | Enter choose      │
+enter send · ctrl+j n╰───────────────────────────────╯uit · /help commands
+> Ask gcode
+>
+>`)
 	})
 
 	t.Run("session picker", func(t *testing.T) {
@@ -172,19 +172,19 @@ Thread: new | Status: idle | Model: default | Approval: default | Sandbox: de…
 No messages yet.
 
 
-
-
-
-
-
-Request user input
-  Scope
-  Question 1/1 (1 unanswered) · auto-resolves in 1m 00s
-  Where should this apply?
-› 1. Plan (1) - Only update the plan.
-  2. All (2) - Apply everywhere.
-Esc cancel | Enter choose
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
+          ╭───────────────────────────────────────────────────────╮
+          │Request user input                                     │
+          │  Scope                                                │
+          │  Question 1/1 (1 unanswered) · auto-resolves in 1m 00s│
+          │  Where should this apply?                             │
+          │› 1. Plan (1) - Only update the plan.                  │
+          │  2. All (2) - Apply everywhere.                       │
+          │Esc cancel | Enter choose                              │
+          ╰───────────────────────────────────────────────────────╯
+enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands
+> Ask gcode
+>
+>`)
 	})
 }
 

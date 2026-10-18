@@ -70,19 +70,19 @@ Thread: new | Status: idle | Model: gpt-5 | Approval: default | Sandbox: de…
 No messages yet.
 
 
-
-
-
-
-Run command?
-  Reason: needs tests
-  Working directory: D:\repo
-  go test ./...
-› 1. Allow for this turn (y)
-  2. Allow for this session (a)
-  3. Deny (d)
-Esc cancel | Enter choose
-enter send · ctrl+j newline · ctrl+g editor · ctrl+c quit · /help commands`)
+                     ╭───────────────────────────────╮
+                     │Run command?                   │
+                     │  Reason: needs tests          │
+                     │  Working directory: D:\repo   │
+                     │  go test ./...                │
+                     │› 1. Allow for this turn (y)   │
+                     │  2. Allow for this session (a)│
+                     │  3. Deny (d)                  │
+                     │Esc cancel | Enter choose      │
+enter send · ctrl+j n╰───────────────────────────────╯uit · /help commands
+> Ask gcode
+>
+>`)
 }
 
 func assertVT100Snapshot(t *testing.T, view string, width int, height int, want string) {

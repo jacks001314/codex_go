@@ -308,8 +308,8 @@ func TestPluginBrowserMarketplaceActionsAndAuthFlow(t *testing.T) {
 	selectPluginViewAction(t, model, chatwidget.PluginMenuActionAuthFlowAdvance)
 	refreshCmd = model.applyPluginSelectionAction()
 	runTeaCmd(t, model, refreshCmd)
-	if !strings.Contains(model.View(), "Completed app setup flow for Docs plugin.") {
-		t.Fatalf("auth completion history missing:\n%s", model.View())
+	if !strings.Contains(modelRawMessageText(model), "Completed app setup flow for Docs plugin.") {
+		t.Fatalf("auth completion history missing:\n%s", modelRawMessageText(model))
 	}
 }
 

@@ -12,6 +12,8 @@ import (
 func modalCenteredOverlayKind(kind ModalKind) bool {
 	switch kind {
 	case ModalKindGeneric,
+		ModalKindApproval,
+		ModalKindElicitation,
 		ModalKindReview,
 		ModalKindRunningTaskExit,
 		ModalKindMisalignment,
@@ -30,12 +32,16 @@ func modalCenteredOverlayKind(kind ModalKind) bool {
 		ModalKindSkills,
 		ModalKindManageSkills,
 		ModalKindHooksBrowser,
+		ModalKindPluginsBrowser,
 		ModalKindAgent,
 		ModalKindAgents,
 		ModalKindUsage,
 		ModalKindWindowsSandbox,
 		ModalKindWorktree,
 		ModalKindExternalImport,
+		ModalKindUserInput,
+		ModalKindFeedback,
+		ModalKindVoiceChannels,
 		ModalKindPicker:
 		return true
 	default:

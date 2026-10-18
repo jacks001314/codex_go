@@ -26058,7 +26058,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 693 (progress): generic, review, running-task-exit, misalignment, rate-limit-switch, permissions, experimental, status-line, title, preset, config, theme, pets, memories, auto-review, goal, skills, manage-skills, hooks-browser, agent/agents, usage, Windows-sandbox, worktree, external-import, and picker dialogs render as a rounded ANSI-aware centered overlay over the retained fullscreen base view, including the composer. Modal content is ANSI-wrapped before boxing so long option descriptions and disabled reasons stay complete; oversize dialogs fall back to the appended layout. Approval, elicitation, user-input, feedback-note, voice-channel, and plugin-browser paths keep their previous layout because they need text-input/cursor ownership or rely on background history visibility. Remaining: migrate those input/background-sensitive paths and implement dialog cursor/section routing."
+        "Round 694 (progress): every bottom-pane modal kind, including approval, elicitation, user-input, feedback, voice channels, plugin browser, permissions, usage, and config/picker flows, now renders through the rounded ANSI-aware centered overlay over the retained fullscreen base view and composer. Modal content is ANSI-wrapped before boxing so long option descriptions and disabled reasons stay complete; oversized dialogs fall back to the appended layout; embedded textarea cursors render in-place, and plugin-browser tests now verify covered history through retained state. Remaining: nested dialog stacks that must retain a parent picker backdrop, and explicit overlay cursor/section ownership for host-level cursor placement."
       ]
     },
     {
