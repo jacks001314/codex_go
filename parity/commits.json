@@ -29573,9 +29573,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: ConnectionAttemptOutcome, ConnectionObserver, observe_connection_attempts"
+        "Equivalent implementation already present: EnvironmentManager.ObserveConnectionAttempts registers a one-shot observer for an environment's initial exec-server connection attempts, reporting elapsed time plus success, failure, or cancellation. The first observer wins, failed startup attempts keep it armed for retry, past attempts and later reconnections are ignored, and replacing/removing an environment cancels and forgets in-flight attempts exactly once. Tests cover failure-then-success, first-observer precedence, cancellation on replacement, and past-attempt filtering."
       ]
     },
     {
