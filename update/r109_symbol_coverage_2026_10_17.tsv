@@ -847,7 +847,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 51c30ad800a16502dc18ac0019af253670cb9c64	46043	Repair expired Windows sandbox account passwords during setup (#46043)	2026-09-16	sandbox	0	0		0	0	not_applicable	
 51c97f3a67621aab788fb83d6ef90cf795f12177	43074	Show a retryable error when the apps popup fails to load (#43074)	2026-09-05	tui	0	0		0	0	not_applicable	
 51d221a9b77ad4810608f148e90231f0e48b5c82	47064	Stop redundant message-board reads when limits reach one (#47064)	2026-09-21	core	0	0		0	0	not_applicable	
-51d45620702cd3c825d3520ddc7d7e8052a16b87	47797	Support close-on-exec attachments without changing PTY semantics (#47797)	2026-09-24	appserver	4	0	0.00	0	0	implementation_pending	ChildFds,as_slice,inherit_fds,make_fds_inheritable
+51d45620702cd3c825d3520ddc7d7e8052a16b87	47797	Support close-on-exec attachments without changing PTY semantics (#47797)	2026-09-24	appserver	4	0	0.00	0	0	not_applicable	ChildFds,as_slice,inherit_fds,make_fds_inheritable
 51d66fdd3b75e1d34fdb82616e7e9c4089684b56	47956	Support file references in image edit requests (#47956)	2026-09-24	core	0	0		0	0	not_applicable	
 51d8d12236f7ab91a885839c8755db2ea42a2b42	40006	Synchronize Git enrichment tests explicitly (#40006)	2026-08-21	core	1	0	0.00	0	0	not_applicable	wait_for_git_enrichment
 51ebf5b1842d44a8e2c955e8b5cd2a589d41e71e	39985	Truncate Guardian instructions after rendering the policy (#39985)	2026-08-21	guardian	0	0		0	0	not_applicable	

@@ -20371,9 +20371,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: ChildFds, as_slice, inherit_fds, make_fds_inheritable"
+        "Round 314 (audit): N/A - Go command and PTY launches expose stdin/stdout/stderr only and have no ChildFds Attached/Inherited distinction, ExtraFiles launch-attachment API, or child-side close-on-exec flag update path. The legacy inherited-descriptor PTY semantics this change separates also have no Go carrier."
       ]
     },
     {
