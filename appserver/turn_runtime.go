@@ -1980,6 +1980,7 @@ func (r *RuntimeRouter) runTurnRuntime(ctx context.Context, params *turn.TurnSta
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnCompleted(threadID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusCompleted, Message: lastAgentMessageFromThreadItems(threadItems)})
+	r.maybeWakeRootForPendingAgentMessages(threadID)
 	r.emitCodexTurnAnalyticsEvent(ctx, connectionID, params, record, runConfig, result, TurnStatusCompleted, startedAt, completedAt, durationMS, steerCount, nil, nil, nil, nil, nil)
 	r.emitAcceptedLineFingerprintsAnalyticsEvent(ctx, threadID, turnID, runConfig, completedAt)
 	r.clearActiveDiffTracker(threadID, turnID)
@@ -4319,6 +4320,7 @@ func (r *RuntimeRouter) finishTurnWithErrorAnalytics(threadID string, turnID str
 	r.notifyThreadStatus(r.requireThreadStatus().NoteSystemError(threadID))
 	r.maybeDispatchNextQueuedSubmission(threadID)
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusErrored, Message: err.Error()})
+	r.maybeWakeRootForPendingAgentMessages(threadID)
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusFailed, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }
@@ -4370,6 +4372,7 @@ func (r *RuntimeRouter) finishTurnInterruptedAnalytics(threadID string, turnID s
 	})
 	r.notifyThreadStatus(r.requireThreadStatus().NoteTurnInterrupted(threadID))
 	r.deliverRuntimeAgentCompletion(threadID, agent.AgentMessageStatus{Kind: agent.AgentMessageStatusInterrupted})
+	r.maybeWakeRootForPendingAgentMessages(threadID)
 	r.emitTurnCompletionAnalytics(context.Background(), analytics, turnID, TurnStatusInterrupted, startedAtMS, now, durationMS)
 	r.clearActiveDiffTracker(threadID, turnID)
 }

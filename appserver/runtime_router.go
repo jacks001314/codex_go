@@ -252,6 +252,10 @@ type RuntimeRouter struct {
 	servicesMu            sync.Mutex
 	mu                    sync.RWMutex
 	configWarningsMu      sync.Mutex
+	// agentWakeMu serializes the decision to drain queued agent mail and start
+	// its automatic root turn. Without it, concurrent deliveries could both
+	// observe an idle thread and race to consume the same queue.
+	agentWakeMu           sync.Mutex
 	emittedConfigWarnings map[string]bool
 	sink                  NotificationSink
 	requests              ServerRequestSink

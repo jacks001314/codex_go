@@ -922,6 +922,7 @@ func (r *RuntimeRouter) enqueueRuntimeAgentMessage(threadID string, item any) {
 	r.agentMessagesMu.Lock()
 	r.agentMessages[threadID] = append(r.agentMessages[threadID], item)
 	r.agentMessagesMu.Unlock()
+	r.maybeWakeRootForPendingAgentMessages(threadID)
 }
 
 func (r *RuntimeRouter) drainRuntimeAgentMessages(threadID string) []any {
@@ -933,6 +934,107 @@ func (r *RuntimeRouter) drainRuntimeAgentMessages(threadID string) []any {
 	items := append([]any(nil), r.agentMessages[threadID]...)
 	delete(r.agentMessages, threadID)
 	return items
+}
+
+// maybeWakeRootForPendingAgentMessages mirrors Rust #54961's
+// `reserve_pending_work_turn`: queue-only mail starts a new turn only for an
+// idle root session whose feature is enabled. The previous turn's settings are
+// recovered by the normal turn-start preparation path, while the queued mail is
+// delivered as internal additional input.
+func (r *RuntimeRouter) maybeWakeRootForPendingAgentMessages(threadID string) {
+	if r == nil {
+		return
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return
+	}
+	r.agentWakeMu.Lock()
+	defer r.agentWakeMu.Unlock()
+	if r.activeRuntimeTurnSnapshot(threadID) != nil {
+		return
+	}
+	record, err := r.threadRecord(session.ThreadID(threadID), true, false)
+	if err != nil || record == nil || !r.runtimeAgentMessageWakeEligible(threadID, record) {
+		return
+	}
+
+	r.agentMessagesMu.Lock()
+	items := append([]any(nil), r.agentMessages[threadID]...)
+	delete(r.agentMessages, threadID)
+	r.agentMessagesMu.Unlock()
+	if len(items) == 0 {
+		return
+	}
+
+	params := &turn.TurnStartParams{
+		ThreadID:             threadID,
+		AdditionalInputItems: items,
+	}
+	if previous, ok := r.runtimePreviousTurnContext(threadID, record); ok {
+		params.Model = strings.TrimSpace(previous.Model)
+		if effort := strings.TrimSpace(previous.Effort); effort != "" {
+			params.Effort = &effort
+		}
+		params.CoreCyberAccessProgram = strings.TrimSpace(previous.CyberAccessProgram)
+	}
+	if _, err := r.handleTurnStart(requestWithInternalParams(MethodTurnStart, params)); err != nil {
+		r.requeueRuntimeAgentMessages(threadID, items)
+	}
+}
+
+func (r *RuntimeRouter) runtimeAgentMessageWakeEligible(threadID string, record *session.Record) bool {
+	if r == nil || record == nil {
+		return false
+	}
+	// Rust's SessionSource::is_non_root_agent keeps child agents queue-only.
+	if strings.TrimSpace(string(record.ParentThreadID)) != "" || runtimeRecordIsSubagent(record) {
+		return false
+	}
+	if runtimeAgentMessagesInterrupted(record) {
+		return false
+	}
+	settings := r.threadSettingsForTurn(threadID)
+	if runtimeCollaborationModeIsPlan(settings) {
+		return false
+	}
+
+	params := &turn.TurnStartParams{ThreadID: threadID}
+	if settings != nil {
+		params.CWD = threadSettingsCWD(settings)
+	}
+	params.Config = threadRecordConfigOverrides(record)
+	cfg, err := r.effectiveConfigForTurn(params)
+	return err == nil && cfg != nil && features.Enabled(cfg.FeatureSettings(), "wake_on_agent_messages")
+}
+
+func runtimeAgentMessagesInterrupted(record *session.Record) bool {
+	if record == nil || len(record.Metadata.RolloutTurns) == 0 {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(record.Metadata.RolloutTurns[len(record.Metadata.RolloutTurns)-1].Status))
+	return status == "interrupted" || status == "aborted"
+}
+
+func runtimeCollaborationModeIsPlan(settings *Settings) bool {
+	if settings == nil {
+		return false
+	}
+	mode := collaborationModeFromAnyMap(settings.CollaborationMode)
+	return mode != nil && mode.Mode == ModeKindPlan
+}
+
+func (r *RuntimeRouter) requeueRuntimeAgentMessages(threadID string, items []any) {
+	if r == nil || strings.TrimSpace(threadID) == "" || len(items) == 0 {
+		return
+	}
+	r.agentMessagesMu.Lock()
+	existing := r.agentMessages[threadID]
+	queued := make([]any, 0, len(items)+len(existing))
+	queued = append(queued, items...)
+	queued = append(queued, existing...)
+	r.agentMessages[threadID] = queued
+	r.agentMessagesMu.Unlock()
 }
 
 func (r *RuntimeRouter) discardRuntimeAgentMessages(threadID string) {

@@ -140,6 +140,10 @@ var Registry = []Spec{
 	// reasoning and commentary boundaries when agent mail arrives; pending mail
 	// is delivered at the next normal input boundary instead.
 	{Key: "defer_mailbox_preemption", Stage: StageUnderDevelopment, DefaultEnabled: false},
+	// Rust #54961: queue-only agent messages may start a new turn for a
+	// completed root session. Interrupted sessions, Plan mode, and child agents
+	// remain queue-only.
+	{Key: "wake_on_agent_messages", Stage: StageUnderDevelopment, DefaultEnabled: false},
 	// Rust (codex-rs/features/src/lib.rs #48135): yield foreground code-mode
 	// observations when new user input arrives, so a queued message is delivered
 	// while the cell keeps running.

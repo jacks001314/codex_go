@@ -102,9 +102,20 @@ func (r *RuntimeRouter) setRuntimeTurnContext(threadID string, payload json.RawM
 // its rollout was recorded with. ok is false when no turn context is known,
 // which matches Rust returning `None` for a brand-new thread.
 func (r *RuntimeRouter) runtimePreviousTurnSettings(threadID string, record *session.Record) (string, string, string, bool) {
+	turnContext, ok := r.runtimePreviousTurnContext(threadID, record)
+	if !ok {
+		return "", "", "", false
+	}
+	return strings.TrimSpace(turnContext.Model), strings.TrimSpace(turnContext.CompHash), strings.TrimSpace(turnContext.CyberAccessProgram), true
+}
+
+// runtimePreviousTurnContext returns the decoded context of the thread's last
+// turn, seeding it from the persisted record when this process has not started
+// a turn yet.
+func (r *RuntimeRouter) runtimePreviousTurnContext(threadID string, record *session.Record) (rollout.TurnContextRecord, bool) {
 	threadID = strings.TrimSpace(threadID)
 	if r == nil || threadID == "" {
-		return "", "", "", false
+		return rollout.TurnContextRecord{}, false
 	}
 	r.turnContextMu.Lock()
 	raw := r.turnContexts[threadID]
@@ -116,5 +127,12 @@ func (r *RuntimeRouter) runtimePreviousTurnSettings(threadID string, record *ses
 		r.turnContexts[threadID] = raw
 	}
 	r.turnContextMu.Unlock()
-	return rollout.TurnContextSettings(raw)
+	if len(raw) == 0 {
+		return rollout.TurnContextRecord{}, false
+	}
+	var turnContext rollout.TurnContextRecord
+	if err := json.Unmarshal(raw, &turnContext); err != nil || strings.TrimSpace(turnContext.Model) == "" {
+		return rollout.TurnContextRecord{}, false
+	}
+	return turnContext, true
 }

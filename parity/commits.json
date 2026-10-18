@@ -1,8 +1,20 @@
 {
   "schemaVersion": 1,
   "rustFromExclusive": "bd19459358f534ed1cae464ec13d56600aeb45f2",
-  "rustToInclusive": "7b44ac1661433ae3a6f375fde873fa7123c935fe",
+  "rustToInclusive": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
   "commits": [
+    {
+      "sha": "8c076942cb70fba8e5c4732c23f1faabc4aed484",
+      "subject": "Allow agent messages to wake idle root sessions behind a feature flag (#54961)",
+      "kind": "runtime",
+      "domains": [
+        "codex_go"
+      ],
+      "status": "complete",
+      "evidence": [
+        "Round 395 (implementation): wake_on_agent_messages is disabled by default. Queue-only direct messages and host-mailbox child completions start an idle root turn, reuse the previous model/effort/cyber program, and stay queue-only for interrupted sessions, Plan mode, and child agents. Serialized mailbox draining, failure requeue, and turn-end rechecks cover races. Tests: go test ./appserver -run 'AgentMessageWake|QueueOnlyAgentMessage|HostMailboxCompletion|PreviousTurnSettings' -count=1; go test ./agent ./features -count=1"
+      ]
+    },
     {
       "sha": "ffd3429d754991183433b4d41b67551e5656ba27",
       "subject": "Preserve model catalog caches across header credential rotation (#54946)",
