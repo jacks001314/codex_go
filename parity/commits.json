@@ -30894,9 +30894,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: ModelInstructionsSnapshot, for_incremental_tools, text_from_item"
+        "Equivalent implementation present: incremental-tool windows record model instructions with the catalog, append an instruction update only when text changes, replay them unchanged on identical turns, and handle model switches and explicit empty instructions like Rust. Compaction window replacement installs the latest model instructions with the rebuilt declaration prefix. Tests cover refresh/replay, model switching, empty instructions, and compaction replacement."
       ]
     },
     {
