@@ -2375,9 +2375,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: SqliteIntegrityCheck, open_read_only_pool"
+        "Round 446 (audit): doctor.Options.Feedback applies a one-second deadline per database integrity scan; sqliteIntegrityDetailForDoctor classifies an expired clean scan as a warning, preserves corruption rows returned before interruption as a failure, and direct doctor checks stay unbounded. Tests: go test ./doctor -run 'DiagnosticIntegrityCheckDeadline|IntegrityResultKeepsCorruptionRows|State' -count=1"
       ]
     },
     {
