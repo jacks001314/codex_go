@@ -18,6 +18,7 @@ import (
 	"codex_go/envutil"
 	"codex_go/sandbox"
 	"codex_go/sandbox/windowssandbox"
+	"codex_go/utils"
 )
 
 const FSHelperArg1 = "--codex-run-as-fs-helper"
@@ -306,9 +307,6 @@ func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation strin
 	if profile.Disabled {
 		return false, profile, profileJSON, "", nil, nil
 	}
-	if operation != "" && !fsOperationRequiresSandbox(operation, profile) {
-		return false, profile, profileJSON, "", nil, nil
-	}
 	if operation == "" && profile.LegacySandboxPolicy().HasFullDiskWriteAccess() {
 		return false, profile, profileJSON, "", nil, nil
 	}
@@ -330,6 +328,10 @@ func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation strin
 	if !filepath.IsAbs(cwd) {
 		return true, nil, "", "", nil, requestError(-32602, fmt.Sprintf("current directory is not absolute: %s", cwd))
 	}
+	convention := fsSandboxPathConvention(cwd)
+	if operation != "" && !fsOperationRequiresSandbox(operation, profile, convention) {
+		return false, profile, profileJSON, "", nil, nil
+	}
 	workspaceRoots := make([]string, 0, len(ctx.WorkspaceRoots))
 	for _, root := range ctx.WorkspaceRoots {
 		native, pathErr := nativeExecServerPath(root, "workspace root")
@@ -348,13 +350,13 @@ func prepareFSSandboxForOperation(ctx *FileSystemSandboxContext, operation strin
 // writes (Rust #46122). A full-disk-write policy may still carry deny-read
 // entries, so read operations cannot skip enforcement merely because writes are
 // unrestricted. Copy is a write operation in Rust's routing.
-func fsOperationRequiresSandbox(operation string, profile *sandbox.PermissionProfile) bool {
+func fsOperationRequiresSandbox(operation string, profile *sandbox.PermissionProfile, convention utils.PathConvention) bool {
 	if profile == nil || profile.Disabled {
 		return false
 	}
 	policy := profile.LegacySandboxPolicy()
 	writeRestricted := !policy.HasFullDiskWriteAccess()
-	readRestricted := profile.HasDenyReadEntries() || !policy.HasFullDiskReadAccess()
+	readRestricted := profile.HasDenyReadEntriesForConvention(convention) || !policy.HasFullDiskReadAccess()
 	switch strings.TrimSpace(operation) {
 	case MethodFSReadFile, MethodFSGetMetadata, MethodFSCanonicalize, MethodFSReadDirectory, MethodFSWalk:
 		return readRestricted
@@ -363,6 +365,17 @@ func fsOperationRequiresSandbox(operation string, profile *sandbox.PermissionPro
 	default:
 		return writeRestricted
 	}
+}
+
+// fsSandboxPathConvention infers the executor convention from its cwd. An
+// unknown convention is passed through as the zero value so symbolic
+// `:slash_tmp` denials still force sandboxing (Rust #46122).
+func fsSandboxPathConvention(cwd string) utils.PathConvention {
+	legacy := utils.NewLegacyAppPathString(strings.TrimSpace(cwd))
+	if convention, ok := legacy.InferAbsolutePathConvention(); ok {
+		return convention
+	}
+	return ""
 }
 
 func fsPermissionsDependOnCWD(raw json.RawMessage) bool {

@@ -15197,9 +15197,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 677 (partial): filesystem helper selects sandbox per operation; read operations honor deny-read entries even under full-disk writes, permitted full-disk reads run directly when only writes are restricted, and fs/open uses the read/replace operation. Remaining: capability discovery/skill reads and executor path-convention/:slash_tmp-aware full-disk access checks are not yet routed. Tests: go test ./execserver -run 'FSOperationSandboxSelection|SandboxOverride' -count=1; go test ./execserver -run 'FS|SandboxOverride|Filesystem' -count=1; go vet ./execserver"
+        "Round 680 (implementation): filesystem operations select the sandbox independently for reads and writes, reads honor deny-read entries under full-disk writes, and fs/open uses read/replace routing. Read routing now evaluates executor path convention: symbolic :slash_tmp denials apply on POSIX and unknown conventions but not on Windows, so capability discovery and skill resource reads can use direct full-disk reads when the executor has no sandboxed-read support. Tests: go test ./execserver -run 'FSOperationSandboxSelection' -count=1; go test ./sandbox -run 'Permission|SlashTmp' -count=1; go vet ./execserver"
       ]
     },
     {

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"codex_go/utils"
+
 	"github.com/bmatcuk/doublestar/v4"
 )
 
@@ -214,11 +216,19 @@ func (p *PermissionProfile) AllowsNetwork() bool {
 }
 
 func (p *PermissionProfile) HasDenyReadEntries() bool {
+	return p.HasDenyReadEntriesForConvention(utils.NativePathConvention())
+}
+
+// HasDenyReadEntriesForConvention reports whether the profile carries a
+// read denial that applies on an executor using the given path convention.
+// `:slash_tmp` is symbolic only on POSIX executors; an unknown convention keeps
+// it as a restriction (Rust #46122 fails closed).
+func (p *PermissionProfile) HasDenyReadEntriesForConvention(convention utils.PathConvention) bool {
 	if p == nil {
 		return false
 	}
 	for _, entry := range p.DeniedReadEntries {
-		if !supportsSymbolicSlashTmp() && isSymbolicSlashTmpPath(entry.Path) {
+		if convention == utils.ConventionWindows && isSymbolicSlashTmpPath(entry.Path) {
 			continue
 		}
 		return true
