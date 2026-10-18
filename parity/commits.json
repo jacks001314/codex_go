@@ -3914,9 +3914,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "realtimeThreadHeaders adds the saved thread source to x-codex-turn-metadata; the common headers feed WebSocket, ExistingCall and WebRTC transports. Values above 256 bytes or empty sources are omitted, and asciiJSONHeaderString escapes non-ASCII/control bytes for header safety. Tests: go test ./appserver -run 'RealtimeThreadHeadersIncludeThreadSource|ASCIICJSONHeaderStringEscapesNonASCII' -count=1"
       ]
     },
     {
