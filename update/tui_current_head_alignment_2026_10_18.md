@@ -2092,6 +2092,8 @@ green.
 - `#50504` remains partial: confirmations still replace the bottom-pane section
   instead of rendering as centered dialogs over a retained composer/picker
   backdrop.
+- `#50396` is complete: transcript PageUp/PageDown honor pager single-row,
+  half-page, full-page, and unbound bindings.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

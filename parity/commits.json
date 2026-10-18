@@ -25767,9 +25767,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Main transcript PageUp/PageDown now resolve through the pager scroll bindings in Rust's order (scroll, page, half-page), using configured rows and allowing unbound page keys to do nothing. TestTranscriptPageKeysFollowPagerBindingsLikeRust covers default full page, half page, single row, and unbound configurations plus PageDown reversal."
       ]
     },
     {

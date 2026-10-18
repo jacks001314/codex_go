@@ -9786,11 +9786,11 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	if m.configuredBindingTakesNavKey(keySpecFromKeyMsg(msg)) {
 		return false
 	}
+	if msg.Type == bubbletea.KeyPgUp || msg.Type == bubbletea.KeyPgDown {
+		m.applyTranscriptPagerPageKey(msg)
+		return true
+	}
 	switch msg.Type {
-	case bubbletea.KeyPgUp:
-		m.transcript.PageUp()
-	case bubbletea.KeyPgDown:
-		m.transcript.PageDown()
 	case bubbletea.KeyHome, bubbletea.KeyCtrlHome:
 		m.transcript.GotoTop()
 	case bubbletea.KeyEnd, bubbletea.KeyCtrlEnd:
@@ -9798,6 +9798,42 @@ func (m *Model) applyTranscriptNavigationKey(msg bubbletea.KeyMsg) bool {
 	}
 	m.activityFollow = m.transcript.AtBottom()
 	return true
+}
+
+// applyTranscriptPagerPageKey resolves unmodified PageUp/PageDown through the
+// pager's scroll bindings, preserving configured single-row/half-page/full-page
+// movement and allowing the key to remain unbound (Rust #50396).
+func (m *Model) applyTranscriptPagerPageKey(msg bubbletea.KeyMsg) {
+	if m == nil {
+		return
+	}
+	keySpec := keySpecFromKeyMsg(msg)
+	height := max(m.transcript.Height, 1)
+	page := max(height-1, 1)
+	half := (height + 1) / 2
+	actions := []struct {
+		name  string
+		delta int
+	}{
+		{"scroll_up", -1},
+		{"scroll_down", 1},
+		{"page_up", -page},
+		{"page_down", page},
+		{"half_page_up", -half},
+		{"half_page_down", half},
+	}
+	for _, action := range actions {
+		if !m.keyMatches("pager", action.name, keySpec) {
+			continue
+		}
+		if action.delta < 0 {
+			m.transcript.ScrollUp(-action.delta)
+		} else {
+			m.transcript.ScrollDown(action.delta)
+		}
+		m.activityFollow = m.transcript.AtBottom()
+		return
+	}
 }
 
 func (m *Model) applyInputHistoryKey(msg bubbletea.KeyMsg) bool {
