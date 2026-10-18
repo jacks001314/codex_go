@@ -10,9 +10,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 3/3 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Turn, Code Mode and compaction Responses metadata include context_window_id together with window_id. The ID is stable within a context window, advances on reset/compaction, survives resume from persisted metadata, and client-supplied reserved values are ignored. Tests: go test ./turn -run 'ResponsesClientMetadata|ContextWindow' -count=1; go test ./appserver -run 'ContextWindowID|ContextWindowRollOver|CompactResponsesClientMetadata' -count=1"
       ]
     },
     {
@@ -18957,9 +18957,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: ClientJsonRpcMessageDecoder, MAX_CLIENT_INBOUND_NOTIFICATION_LEN, MAX_CLIENT_INBOUND_REQUEST_LEN, client_from_stdio, client_inbound_message_exceeded_limit"
+        "Go bounds in-flight inbound server requests with MaxInFlightServerRequests=256, de-duplicates request ids, rejects oversized Noise/JSON-RPC frames at 64 MiB, and covers direct websocket, relay, and server-request paths. Tests: go test ./execserver -run 'Inbound|ServerRequest|RemoteRelay|Noise' -count=1"
       ]
     },
     {
