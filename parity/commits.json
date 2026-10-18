@@ -11657,9 +11657,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: add_agents_overview_error"
+        "Audited upstream db2e09106c (#44651): command-center errors remain in agentsOverviewNotice while the dashboard stays open, refresh failures and grouping-save failures are surfaced, and per-thread drafts are preserved across switches. Tests: TestModelAgentsDashboardRefreshErrorShowsNotice, TestModelAgentsDashboardPreservesDraftAcrossSwitch, TestModelAgentsDashboardAttachClearsComposerWithoutSavedDraft, and TestModelAgentsDashboardSwitchFailureDiscardsPendingDraft."
       ]
     },
     {
@@ -11861,9 +11861,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: SessionStartOutcome"
+        "Audited upstream 08e49689b8 (#44711): deleting the current session on a shared/remote server returns to an open command center instead of exiting, with the refresh command requested; read-only views also return with Left/Esc when a command center is available. Tests: TestDeleteCurrentSessionReturnsToCommandCenterOnSharedServerLikeRust, TestReadOnlyViewReturnsToCommandCenterWithLeftOrEscape, and TestReadOnlyViewKeepsEscapeWhenLeftIsUnavailable."
       ]
     },
     {
@@ -28074,9 +28074,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): Bedrock Mantle and Runtime GPT-6.1 Sol catalogs advertise the ultrafast service tier while leaving the default tier unset. Astra behavior and non-Sol Bedrock models remain unchanged. Test: go test ./model -run Ultrafast -count=1"
       ]
     },
     {
@@ -28830,9 +28830,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): environment/add forwards websocketRequestId as X-Request-ID only for wss or loopback executors and rejects plain remote ws; the registration retains the header across reconnects, and exec-server echoes it on the WebSocket upgrade response. Tests: go test ./appserver -run TestEnvironmentAddWebsocketRequestIDLikeRust -count=1; go test ./execserver -run TestExecServerEchoesWebSocketRequestIDLikeRust -count=1"
       ]
     },
     {
@@ -28866,9 +28866,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): Go marks skills list/read, get_context_remaining, plugin catalog listing, and multi-agent list_agents parallel while keeping goal, request_user_input, plan, and mutation tools serial. Rust memory/current_time/get_goal/history tools have no Go carrier. Tests: go test ./turn -run Parallel -count=1; go test ./tool -run Parallel -count=1; go test ./agent -count=1"
       ]
     },
     {
@@ -28962,9 +28962,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): otelinit gates only the built-in statsig metrics route on analytics consent. Explicit OTLP HTTP/gRPC exporters continue when analytics is disabled, metrics_exporter=none disables metrics, and absent analytics uses the caller default only for statsig selection. Test: go test ./otelinit -count=1"
       ]
     },
     {
@@ -29912,9 +29912,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): toolRouterForTurn does not reject a turn when the direct-message board is missing, omits post/send_message/followup_task from advertised tools, returns model-visible unsupported/tool-not-found errors on calls, and does not create the board database. Test: go test ./appserver -run TestDisableDirectMessageAllowsUnavailableBoardLikeRust -count=1"
       ]
     },
     {
@@ -30285,9 +30285,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): N/A by architecture. Go has no asynchronous Guardian Decisions scorer, cached Decisions API-key path, or decisions credentials_unavailable metric; Guardian review is a synchronous model call. Evidence: update/r159_53633_guardian_decisions_audit_2026_10_18.md; go test ./parity -count=1"
       ]
     },
     {
@@ -30309,9 +30309,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): N/A. The upstream change is a Rust Arc/copy-on-write allocation refactor with no wire or behavioral change. Go hook clones already copy slices without sharing mutable backing storage; TestCloneEntryPreservesRequiredLoadErrors remains green. Evidence: update/r161_53426_53657_audits_2026_10_18.md; go test ./parity -count=1"
       ]
     },
     {
@@ -30465,9 +30465,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): rewriteExternalTermsPreservingLinks protects URLs, email addresses, Markdown destinations/titles, bare www links, and relative AGENTS.md references while migrating external-agent terms. Coverage includes http(s), mailto, file, and custom schemes. Test: go test ./config -run ExternalRewrite -count=1"
       ]
     },
     {
@@ -31426,9 +31426,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 729 (audit): N/A by architecture. Go write_stdin reviews retained additional permissions through hooks/Guardian/user review and bounds NUL/size, but app-server has no per-environment active granted-permissions set or filesystem grant-order comparison, so Rust's additional_permissions_preapproved expiry path has no carrier. Tests: go test ./appserver -run WriteStdin -count=1; evidence update/r165_54119_stdin_active_grants_audit_2026_10_18.md"
       ]
     },
     {
