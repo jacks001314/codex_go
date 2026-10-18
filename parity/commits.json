@@ -2134,9 +2134,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: SessionSettingsCommit, emit_applied"
+        "Round 407 (audit): UpdateSettingsWithCommit deep-clones the snapshot in the write critical section; standalone notifications and turn-start settings use that returned snapshot rather than re-reading live settings, so later writes cannot alter earlier post-commit work. Tests: go test ./appserver -run 'UpdateSettingsWithCommit|SettingsCommit|ThreadSettings' -count=1; go vet ./appserver"
       ]
     },
     {
