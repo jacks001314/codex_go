@@ -478,9 +478,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 6/9; needs review: configure_bedrock_for_managed_auth, load_profile, profile_credentials_provider"
+        "Round 759: appserver/bedrock.go implements account/bedrock/discover (profiles plus AWS environment/bearer credential types), account/bedrock/setup for validated profile/environment sources with region persistence, credential precedence, conflict rejection, and stale profile cleanup. Tests: go test ./appserver -run Bedrock -count=1"
       ]
     },
     {
@@ -1008,9 +1008,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 13/16; needs review: ThreadHistorySupport, failure_response, thread_start_params_from_config"
+        "Round 759: the codex_tui dynamic-tool namespace implements task list/read/wait/create/fork/message/rename/archive/restore operations with bounded inputs/responses, task capability tracking across forks, and app-server dynamic-tool dispatch. Local-daemon sessions host the namespace as a task-tools MCP server with read-only annotations and configured/managed MCP policy. Tests: go test ./app -run DynamicTool -count=1"
       ]
     },
     {
@@ -1320,9 +1320,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "blocked_precondition",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: PtyIo, StdinCloseBehavior"
+        "Round 759: Go appserver/tool PTY paths use blocking creack/pty file reads and writes with a context monitor that kills the child. They do not have Rust's AsyncFd readiness-driven PtyIo/StdinCloseBehavior implementation, so cancellation during shutdown/output backpressure cannot be modeled without adding a nonblocking PTY I/O subsystem. Precondition: cancellable nonblocking Unix PTY reader/writer."
       ]
     },
     {
@@ -1356,9 +1356,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: credential_broker_provider_context_env_keys"
+        "Round 759: config parses features.network_proxy.credential_broker into ProxySettings, preserves structured feature settings on toggle, protects broker/provider-context variables from project config (including Windows case-insensitive shell env keys), and propagates trusted provider env keys. App-server shell snapshots detect managed broker state. Tests: go test ./config -run CredentialBroker -count=1; go test ./network -run CredentialBroker -count=1"
       ]
     },
     {
@@ -1392,9 +1392,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 759: Windows ACL update/open handles request READ_CONTROL | WRITE_DAC before SetSecurityInfo (acl_windows.go, allow_windows.go), with ACL tests covering the handle-based path. Tests: go test ./sandbox/windowssandbox -run 'ACL|Acl|WindowsPermission' -count=1"
       ]
     },
     {
@@ -1428,9 +1428,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: BedrockAccessKeysAuth, BedrockProviderConfig, bedrock_provider_config_paths_to_clear, load_with_access_keys, login_with_bedrock_access_keys"
+        "Round 759 audit: Go has Bedrock API-key auth, AWS profile/environment discovery, SigV4 signing, and auth-mode/account plumbing, but login account params only support the managed API-key form. Missing: amazonBedrockAccessKeys login params, access-key auth-store shape, access-key-backed SigV4 provider selection, high-precedence config conflict rejection, and logout cleanup of provider/AWS model settings. Tests cover existing API-key/SigV4 paths only."
       ]
     },
     {
