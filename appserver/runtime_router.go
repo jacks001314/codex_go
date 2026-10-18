@@ -13448,6 +13448,9 @@ func (r *RuntimeRouter) configureHookDiscovery() *HookDiscoveryService {
 
 // configureHookDiscoveryForThread filters plugin hook sources by the thread's
 // disabled plugins. An empty thread ID keeps every source (Rust #44655).
+// EnabledHookSources is re-derived on every call and the discovery service
+// rereads each hooks.json, so plugin updates from another process are visible
+// on the next turn without a notification (Rust #42990).
 func (r *RuntimeRouter) configureHookDiscoveryForThread(threadID string) *HookDiscoveryService {
 	disabled := r.threadDisabledPluginIDs(threadID)
 	r.servicesMu.Lock()

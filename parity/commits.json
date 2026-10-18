@@ -8019,9 +8019,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: iter_effective_plugin_hook_sources, iter_effective_plugin_hook_warnings, matches_plugin_hooks"
+        "Round 482 (audit + regression): Go has no persistent loaded-hook runtime to invalidate. Every turn calls hooksForCWD -> configureHookDiscoveryForThread, which re-derives EnabledHookSources and rereads each plugin hooks.json, so an external upgrade or rollback is visible on the next turn without notification. TestLoadedSessionRefreshesExternallyUpdatedPluginHooksLikeRust covers version 1.0.0 -> 2.0.0 -> 0.9.0 through successive turn adapters. Tests: go test ./appserver -run 'LoadedSessionRefreshesExternallyUpdatedPluginHooksLikeRust|HookDiscovery|HooksList|PluginHook' -count=1"
       ]
     },
     {
