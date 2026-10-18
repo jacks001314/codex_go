@@ -21920,9 +21920,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: spawn_without_inheriting_stdio"
+        "Go does not need to clear launcher inherit flags: syscall.StartProcess passes an explicit PROC_THREAD_ATTRIBUTE_HANDLE_LIST containing only the child's configured stdio, so detached daemons never inherit launcher output pipes; Windows regression test covers EOF and child liveness"
       ]
     },
     {
