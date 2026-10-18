@@ -19854,9 +19854,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "partial",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: for_mcp_connector, is_node_repl_backed_connector"
+        "Round 551 (implementation): added mcp.IsNodeReplBackedConnector for codex_apps/connector_openai_browser using registered tool metadata. Confirmation-policy metadata, Guardian js policy injection, user-mode initial approval, and review-evidence capture now recognize the Browser connector. Remaining: Go has no live MCP invocation registry keyed by server/call ID, so strict nested Browser elicitations cannot yet be correlated to the originating invocation or reject missing/unknown identity. Tests: go test ./mcp -run 'NodeRepl|ConfirmationPolicies|Browser' -count=1; go test ./appserver -run 'NodeRepl|Browser|Guardian' -count=1; go vet ./mcp ./appserver"
       ]
     },
     {

@@ -22,6 +22,9 @@ const (
 	// CONFIRMATION_POLICIES_META_KEY; host-supplied confirmation-policy
 	// documents forwarded to Node REPL-backed actor calls (#41072).
 	ConfirmationPoliciesMetaKey = "openai/confirmation_policies"
+	// BrowserConnectorID identifies the host-owned Browser connector whose
+	// tools run through the computer-use policy path (Rust #47647).
+	BrowserConnectorID = "connector_openai_browser"
 	// maxSerializedMCPToolBytes mirrors Rust MAX_SERIALIZED_MCP_TOOL_BYTES:
 	// the cap above which Agent Plugin v1 tools degrade to an accept-anything
 	// object schema (responses_api.rs).
@@ -42,6 +45,15 @@ type ActorConfirmationPolicies struct {
 // whether a raw MCP server name identifies a Node REPL-backed actor server.
 func IsNodeReplBackedServer(server string) bool {
 	return server == "node_repl" || server == "cua_repl"
+}
+
+// IsNodeReplBackedConnector reports whether a server or host-registered
+// connector is backed by the Node REPL computer-use policy path. Connector IDs
+// must come from registered tool metadata, not tool arguments.
+func IsNodeReplBackedConnector(server string, connectorID string) bool {
+	server = strings.TrimSpace(server)
+	return IsNodeReplBackedServer(server) ||
+		(IsCodexAppsMCPServerName(server) && strings.TrimSpace(connectorID) == BrowserConnectorID)
 }
 
 // McpCallSource is the identity of one completed MCP tools/call, reported to the
@@ -677,7 +689,7 @@ func (e *ToolExecutor) requestMetaForCall(callID ...string) any {
 		}
 		requestMeta["_codex_apps"] = appsMeta
 	}
-	if IsNodeReplBackedServer(e.resolvedServerName()) && !e.suppressActorPolicies {
+	if IsNodeReplBackedConnector(e.resolvedServerName(), e.connectorID) && !e.suppressActorPolicies {
 		requestMeta[ConfirmationPoliciesMetaKey] = e.actorConfirmationPoliciesMeta()
 	}
 	if len(requestMeta) == 0 {

@@ -303,17 +303,22 @@ func TestModelGuardianReviewerShortCircuitsInFullAccess(t *testing.T) {
 }
 
 func TestModelGuardianReviewerAutoAcceptsUserModeNodeReplJS(t *testing.T) {
-	reviewer := newModelGuardianReviewer(guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
-		t.Fatal("reviewer should not sample in user approval mode")
-		return nil, nil
-	})).(*modelGuardianReviewer)
-	reviewer.approvalsReviewer = func(threadID, turnID string) string { return string(config.ApprovalsReviewerUser) }
-	decision, _, err := reviewer.Review(context.Background(), "thread-user", "turn-user", "", state.Action{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"})
-	if err != nil {
-		t.Fatalf("Review error = %v", err)
-	}
-	if decision != state.DecisionApproved {
-		t.Fatalf("decision = %v, want approved", decision)
+	for _, action := range []state.Action{
+		{Type: "mcp_tool_call", Server: "node_repl", ToolName: "js"},
+		{Type: "mcp_tool_call", Server: "codex_apps", ConnectorID: "connector_openai_browser", ToolName: "js"},
+	} {
+		reviewer := newModelGuardianReviewer(guardianAgentFunc(func(context.Context, *model.AgentRequest) (*model.AgentResponse, error) {
+			t.Fatal("reviewer should not sample in user approval mode")
+			return nil, nil
+		})).(*modelGuardianReviewer)
+		reviewer.approvalsReviewer = func(threadID, turnID string) string { return string(config.ApprovalsReviewerUser) }
+		decision, _, err := reviewer.Review(context.Background(), "thread-user", "turn-user", "", action)
+		if err != nil {
+			t.Fatalf("Review(%#v) error = %v", action, err)
+		}
+		if decision != state.DecisionApproved {
+			t.Fatalf("Review(%#v) decision = %v, want approved", action, decision)
+		}
 	}
 }
 
@@ -676,6 +681,17 @@ func TestGuardianReviewInjectsNodeReplPolicyLikeRust(t *testing.T) {
 			action:              state.Action{Type: "mcp_tool_call", Server: "cua_repl", ToolName: "js"},
 			autoReviewRequired:  true,
 			wantPolicyInRequest: true,
+		},
+		{
+			name:                "browser connector js with computer-use review",
+			action:              state.Action{Type: "mcp_tool_call", Server: "codex_apps", ConnectorID: "connector_openai_browser", ToolName: "js"},
+			autoReviewRequired:  true,
+			wantPolicyInRequest: true,
+		},
+		{
+			name:               "other apps connector js",
+			action:             state.Action{Type: "mcp_tool_call", Server: "codex_apps", ConnectorID: "connector_calendar", ToolName: "js"},
+			autoReviewRequired: true,
 		},
 		{
 			name:               "node_repl js without computer-use review",

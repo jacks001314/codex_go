@@ -6,6 +6,7 @@ import (
 
 	codexctx "codex_go/context"
 	"codex_go/features"
+	"codex_go/mcp"
 	"codex_go/model"
 	"codex_go/tool"
 	"codex_go/turn"
@@ -103,8 +104,7 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 	if execution.Invocation.Source != "code_mode" || !execution.Output.Success {
 		return
 	}
-	namespace := strings.TrimRight(strings.TrimSpace(execution.Invocation.ToolName.Namespace), "_")
-	if !isNodeReplBackedNamespace(namespace) {
+	if !r.nodeReplBackedInvocation(execution.Invocation) {
 		return
 	}
 	active := r.activeRuntimeTurnStateSnapshot(strings.TrimSpace(threadID), "")
@@ -131,6 +131,22 @@ func (r *RuntimeRouter) recordNodeReplReviewEvidence(threadID string, execution 
 	callID := strings.TrimSpace(execution.Invocation.CallID)
 	evidence := r.nodeReplEvidenceForThread(strings.TrimSpace(threadID))
 	evidence.RecordMultimodal(execution.Invocation.ToolName.Name, cellID, callID, blocks, imageURLs)
+}
+
+func (r *RuntimeRouter) nodeReplBackedInvocation(invocation *tool.Invocation) bool {
+	if invocation == nil {
+		return false
+	}
+	namespace := strings.TrimRight(strings.TrimSpace(invocation.ToolName.Namespace), "_")
+	if isNodeReplBackedNamespace(namespace) {
+		return true
+	}
+	connectorID := ""
+	if r != nil && r.services.ToolRouter != nil {
+		connectorID, _ = r.services.ToolRouter.MCPConnectorInfo(invocation)
+	}
+	server := strings.TrimPrefix(namespace, "mcp__")
+	return mcp.IsNodeReplBackedConnector(server, connectorID)
 }
 
 // isNodeReplBackedNamespace reports whether the tool namespace routes through a

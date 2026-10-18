@@ -604,7 +604,9 @@ func (r *modelGuardianReviewer) Review(ctx context.Context, threadID, turnID, ta
 		return state.DecisionApproved, "full access", nil
 	}
 	if r.approvalsReviewer != nil && strings.EqualFold(r.approvalsReviewer(threadID, turnID), string(config.ApprovalsReviewerUser)) &&
-		action.Type == "mcp_tool_call" && strings.EqualFold(strings.TrimSpace(action.Server), "node_repl") && strings.EqualFold(strings.TrimSpace(action.ToolName), "js") {
+		action.Type == "mcp_tool_call" &&
+		mcp.IsNodeReplBackedConnector(strings.TrimSpace(action.Server), action.ConnectorID) &&
+		strings.EqualFold(strings.TrimSpace(action.ToolName), "js") {
 		if r.fastDecision != nil {
 			r.fastDecision(ctx, threadID, turnID, targetItemID)
 		}
@@ -1148,7 +1150,7 @@ func guardianTimeoutMessage(messages *model.AutoReviewMessages) string {
 // tool call on a node-repl-backed server (node_repl or cua_repl).
 func isNodeReplJSApprovalAction(action state.Action) bool {
 	return action.Type == "mcp_tool_call" &&
-		mcp.IsNodeReplBackedServer(strings.TrimSpace(action.Server)) &&
+		mcp.IsNodeReplBackedConnector(strings.TrimSpace(action.Server), action.ConnectorID) &&
 		strings.TrimSpace(action.ToolName) == "js"
 }
 

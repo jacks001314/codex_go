@@ -225,6 +225,33 @@ func TestMCPToolExecutorAttachesConfirmationPoliciesForNodeREPL(t *testing.T) {
 	}
 }
 
+func TestMCPToolExecutorAttachesConfirmationPoliciesForBrowserConnector(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:           "codex_apps",
+		ConnectorID:          BrowserConnectorID,
+		ConfirmationPolicies: &ActorConfirmationPolicies{ComputerUse: "browser policy"},
+	})
+	meta := executor.requestMetaForCall().(map[string]any)
+	policies, ok := meta[ConfirmationPoliciesMetaKey].(map[string]any)
+	if !ok || policies["computer_use"] != "browser policy" {
+		t.Fatalf("confirmation policies meta = %#v", meta[ConfirmationPoliciesMetaKey])
+	}
+}
+
+func TestMCPToolExecutorOmitsConfirmationPoliciesForOtherAppsConnectors(t *testing.T) {
+	executor := NewToolExecutor(&ToolExecutorOptions{
+		ServerName:           "codex_apps",
+		ConnectorID:          "connector_calendar",
+		ConfirmationPolicies: &ActorConfirmationPolicies{ComputerUse: "calendar policy"},
+	})
+	meta, _ := executor.requestMetaForCall().(map[string]any)
+	if meta != nil {
+		if _, ok := meta[ConfirmationPoliciesMetaKey]; ok {
+			t.Fatalf("confirmation policies meta present for non-Browser connector: %#v", meta)
+		}
+	}
+}
+
 func TestMCPToolExecutorConfirmationPoliciesEmptyForNilPolicies(t *testing.T) {
 	executor := NewToolExecutor(&ToolExecutorOptions{ServerName: "cua_repl"})
 	meta := executor.requestMetaForCall().(map[string]any)
@@ -270,6 +297,25 @@ func TestIsNodeReplBackedServer(t *testing.T) {
 	for _, name := range []string{"filesystem", "calendar", "mcp__node_repl", "", "node_repl "} {
 		if IsNodeReplBackedServer(name) {
 			t.Fatalf("IsNodeReplBackedServer(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestIsNodeReplBackedConnector(t *testing.T) {
+	for _, testCase := range []struct {
+		server      string
+		connectorID string
+		want        bool
+	}{
+		{server: "node_repl", want: true},
+		{server: "cua_repl", want: true},
+		{server: "codex_apps", connectorID: BrowserConnectorID, want: true},
+		{server: "codex_apps", connectorID: "connector_calendar"},
+		{server: "filesystem", connectorID: BrowserConnectorID},
+		{server: " codex_apps ", connectorID: " " + BrowserConnectorID + " ", want: true},
+	} {
+		if got := IsNodeReplBackedConnector(testCase.server, testCase.connectorID); got != testCase.want {
+			t.Fatalf("IsNodeReplBackedConnector(%q, %q) = %t, want %t", testCase.server, testCase.connectorID, got, testCase.want)
 		}
 	}
 }
