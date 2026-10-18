@@ -685,16 +685,21 @@ func (m *Model) setAgentPickerThreadVisibility(threadID string, archived bool) b
 	if m.agentThreadArchiveCause == nil {
 		m.agentThreadArchiveCause = map[string]string{}
 	}
+	if m.agentsOverviewRemoved == nil {
+		m.agentsOverviewRemoved = map[string]bool{}
+	}
 	closure := m.agentThreadVisibilityClosure(threadID)
 	for _, visibleID := range closure {
 		if archived {
 			m.archivedAgentThreads[visibleID] = true
+			m.agentsOverviewRemoved[visibleID] = true
 			if visibleID == threadID {
 				m.agentThreadArchiveCause[visibleID] = "self"
 			} else if m.agentThreadArchiveCause[visibleID] == "" {
 				m.agentThreadArchiveCause[visibleID] = "parent:" + threadID
 			}
 		} else {
+			delete(m.agentsOverviewRemoved, visibleID)
 			cause := m.agentThreadArchiveCause[visibleID]
 			if visibleID == threadID || cause == "parent:"+threadID || !m.archivedAgentThreads[visibleID] {
 				delete(m.agentThreadArchiveCause, visibleID)

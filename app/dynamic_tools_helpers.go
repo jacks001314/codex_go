@@ -510,11 +510,24 @@ func (e *dynamicToolExecutor) startTurn(threadID string, tool string, prompt str
 	return e.request(appserver.MethodTurnStart, params, &response)
 }
 
-func (e *dynamicToolExecutor) registerBackgroundThread(threadID string, taskToolsAvailable bool) error {
+func (e *dynamicToolExecutor) registerBackgroundThread(thread *appserver.Thread, taskToolsAvailable bool) error {
+	if thread == nil {
+		return errors.New("background task metadata is missing")
+	}
+	threadID := strings.TrimSpace(thread.ID)
+	if threadID == "" {
+		return errors.New("background task requires a thread id")
+	}
+	if e.options.RegisterBackgroundThreadMetadata != nil {
+		if err := e.options.RegisterBackgroundThreadMetadata(thread, taskToolsAvailable); err != nil {
+			return fmt.Errorf("Failed to register background task: %v", err)
+		}
+		return nil
+	}
 	if e.options.RegisterBackgroundThread == nil {
 		return nil
 	}
-	if err := e.options.RegisterBackgroundThread(strings.TrimSpace(threadID), taskToolsAvailable); err != nil {
+	if err := e.options.RegisterBackgroundThread(threadID, taskToolsAvailable); err != nil {
 		return fmt.Errorf("Failed to register background task: %v", err)
 	}
 	return nil

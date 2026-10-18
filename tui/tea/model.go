@@ -1574,10 +1574,13 @@ type Model struct {
 	mouseScroll codextui.MouseScrollAccumulator
 	// mouseScrollSpeed seeds transcript overlays created later; it always holds
 	// the resolved (default-or-configured) multiplier.
-	mouseScrollSpeed       float64
-	overlay                *chatwidget.TranscriptOverlay
-	slashPopup             slashCommandPopup
-	agentsOverview         *agentsoverview.View
+	mouseScrollSpeed float64
+	overlay          *chatwidget.TranscriptOverlay
+	slashPopup       slashCommandPopup
+	agentsOverview   *agentsoverview.View
+	// agentsOverviewRemoved tombstones archived/deleted tasks so a delayed
+	// dynamic-tool registration cannot restore their rows (Rust #46946).
+	agentsOverviewRemoved  map[string]bool
 	agentsOverviewNotice   string
 	agentsOverviewBusy     bool
 	agentsOverviewRefresh  int
@@ -5584,6 +5587,7 @@ func (m *Model) markThreadStarted(threadID string) {
 	if m == nil {
 		return
 	}
+	delete(m.agentsOverviewRemoved, strings.TrimSpace(threadID))
 	m.Transcript.markThreadStarted(threadID)
 }
 

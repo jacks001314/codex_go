@@ -6,6 +6,9 @@ import (
 	"time"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+
+	"codex_go/appserver"
+	agentsoverview "codex_go/tui/agents_overview"
 )
 
 // taskMentionSearchDebounce mirrors Rust task_mentions::SEARCH_DEBOUNCE.
@@ -30,6 +33,9 @@ func (m *Model) nextTaskSearchGeneration() (uint64, *atomic.Uint64) {
 // task.
 type DynamicToolThreadStartedMsg struct {
 	ThreadID string
+	// Thread carries the lifecycle response's metadata when available, so the
+	// dashboard can register a task before its next list refresh (Rust #46946).
+	Thread *appserver.Thread
 	// TaskToolsAvailable records whether the child also hosts the task-tool
 	// namespace (Rust app_server.remember_task_tool_thread).
 	TaskToolsAvailable bool
@@ -122,9 +128,81 @@ func (m *Model) applyDynamicToolThreadStarted(msg DynamicToolThreadStartedMsg) b
 	if m.agentsOverview == nil {
 		return nil
 	}
+	if msg.Thread != nil && !msg.Thread.Ephemeral {
+		m.registerAgentsOverviewThreadMetadata(msg.Thread)
+	}
 	// Refresh the open dashboard so the dispatched task appears; Rust also marks
 	// it as dispatched before the next list refresh.
 	return m.refreshAgentsOverviewCmd()
+}
+
+// registerAgentsOverviewThreadMetadata registers a root task immediately and
+// folds child metadata into the matching root row. Existing rows keep their
+// current metadata, and removed-thread tombstones win over delayed responses.
+func (m *Model) registerAgentsOverviewThreadMetadata(thread *appserver.Thread) {
+	if m == nil || m.agentsOverview == nil || thread == nil {
+		return
+	}
+	threadID := strings.TrimSpace(thread.ID)
+	if threadID == "" || m.agentsOverviewRemoved[threadID] {
+		return
+	}
+	parentID := ""
+	if thread.ParentThreadID != nil {
+		parentID = strings.TrimSpace(*thread.ParentThreadID)
+	}
+	for index := range m.agentsOverview.Rows {
+		row := &m.agentsOverview.Rows[index]
+		if row.ThreadID == threadID {
+			return
+		}
+		if parentID != "" && row.ThreadID == parentID {
+			row.ChildThreadIDs = append(row.ChildThreadIDs, threadID)
+			m.markAgentsOverviewVoiceOwners(m.agentsOverview.Rows)
+			return
+		}
+	}
+	if parentID != "" {
+		// The root row is not loaded yet; the next refresh will fold the child.
+		return
+	}
+	rows := append([]agentsoverview.Row(nil), m.agentsOverview.Rows...)
+	rows = append(rows, agentsOverviewRowFromThread(thread))
+	m.agentsOverview.ApplyRefresh(rows, m.agentsOverview.SelectedThreadID())
+	m.markAgentsOverviewVoiceOwners(m.agentsOverview.Rows)
+}
+
+func agentsOverviewRowFromThread(thread *appserver.Thread) agentsoverview.Row {
+	row := agentsoverview.Row{
+		ThreadID: strings.TrimSpace(thread.ID),
+		Preview:  strings.TrimSpace(thread.Preview),
+		CWD:      strings.TrimSpace(thread.CWD),
+	}
+	waitingApproval := false
+	waitingUserInput := false
+	for _, flag := range thread.Status.ActiveFlags {
+		switch flag {
+		case appserver.ThreadActiveFlagWaitingOnApproval:
+			waitingApproval = true
+		case appserver.ThreadActiveFlagWaitingOnUserInput:
+			waitingUserInput = true
+		}
+	}
+	row.Group = agentsoverview.GroupForStatus(thread.Status.Type, waitingApproval, waitingUserInput)
+	row.StatusActive = strings.EqualFold(strings.TrimSpace(thread.Status.Type), "active")
+	if thread.Name != nil {
+		row.Name = strings.TrimSpace(*thread.Name)
+	}
+	if thread.Model != nil {
+		row.Model = strings.TrimSpace(*thread.Model)
+	}
+	if thread.ReasoningEffort != nil {
+		row.ReasoningEffort = strings.TrimSpace(string(*thread.ReasoningEffort))
+	}
+	if thread.GitInfo != nil && thread.GitInfo.Branch != nil {
+		row.GitBranch = strings.TrimSpace(*thread.GitInfo.Branch)
+	}
+	return row
 }
 
 // IsDynamicToolThread reports whether a task was started through the TUI's

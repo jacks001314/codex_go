@@ -335,6 +335,15 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	if len(m.agentsOverviewRemoved) > 0 {
+		rows := make([]agentsoverview.Row, 0, len(message.rows))
+		for _, row := range message.rows {
+			if !m.agentsOverviewRemoved[strings.TrimSpace(row.ThreadID)] {
+				rows = append(rows, row)
+			}
+		}
+		message.rows = rows
+	}
 	switch {
 	case message.pinErr != nil:
 		// Rust #51500: a failed pin listing keeps the pins the dashboard already
@@ -352,13 +361,7 @@ func (m *Model) applyAgentsOverviewList(message agentsOverviewListMsg) bubbletea
 		// advertises the pin shortcut.
 		m.agentsOverview.ClearPinnedThreads()
 	}
-	voiceOwner := strings.TrimSpace(m.VoiceConversation.ThreadID)
-	voiceRunning := voiceOwner != "" && m.VoiceConversation.Running()
-	for index := range message.rows {
-		row := &message.rows[index]
-		row.HasVoice = voiceRunning && (strings.TrimSpace(row.ThreadID) == voiceOwner ||
-			agentsOverviewThreadContains(row.ChildThreadIDs, voiceOwner))
-	}
+	m.markAgentsOverviewVoiceOwners(message.rows)
 	m.agentsOverview.ApplyRefresh(message.rows, m.agentsOverview.SelectedThreadID())
 	m.syncAgentsOverviewUsageLines()
 	usageCmd := m.refreshAgentsOverviewUsageCmd()
@@ -380,6 +383,19 @@ func agentsOverviewThreadContains(threadIDs []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (m *Model) markAgentsOverviewVoiceOwners(rows []agentsoverview.Row) {
+	if m == nil {
+		return
+	}
+	voiceOwner := strings.TrimSpace(m.VoiceConversation.ThreadID)
+	voiceRunning := voiceOwner != "" && m.VoiceConversation.Running()
+	for index := range rows {
+		row := &rows[index]
+		row.HasVoice = voiceRunning && (strings.TrimSpace(row.ThreadID) == voiceOwner ||
+			agentsOverviewThreadContains(row.ChildThreadIDs, voiceOwner))
+	}
 }
 
 // updateAgentsOverviewKey routes keys to the dashboard while it is active.
@@ -994,6 +1010,10 @@ func (m *Model) applyAgentsOverviewLifecycleResult(msg agentsOverviewLifecycleMs
 		return nil
 	}
 	m.agentsOverviewNotice = ""
+	if m.agentsOverviewRemoved == nil {
+		m.agentsOverviewRemoved = map[string]bool{}
+	}
+	m.agentsOverviewRemoved[strings.TrimSpace(msg.threadID)] = true
 	// Rust #50505: choose the adjacent surviving task before the refresh can
 	// rebuild the list without the removed task, so archiving or deleting the
 	// selected task cannot jump the selection to the top of the list.

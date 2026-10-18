@@ -26,6 +26,10 @@ type DynamicToolOptions struct {
 	// or resumed so the dashboard can track it (Rust
 	// AppEvent::DynamicToolThreadStarted).
 	RegisterBackgroundThread func(threadID string, taskToolsAvailable bool) error
+	// RegisterBackgroundThreadMetadata carries the thread object returned by the
+	// lifecycle response, allowing the dashboard to show it before a metadata
+	// refresh completes (Rust #46946).
+	RegisterBackgroundThreadMetadata func(thread *appserver.Thread, taskToolsAvailable bool) error
 	// Now/Sleep allow tests to control the wait loop.
 	Now   func() time.Time
 	Sleep func(time.Duration)
@@ -457,7 +461,7 @@ func (e *dynamicToolExecutor) createThreadTool(params appserver.DynamicToolCallP
 		return nil, errors.New("thread/start returned no thread")
 	}
 	threadID := strings.TrimSpace(started.Thread.ID)
-	if err := e.registerBackgroundThread(threadID, true); err != nil {
+	if err := e.registerBackgroundThread(started.Thread, true); err != nil {
 		return nil, err
 	}
 	if arguments.Title != nil {
@@ -496,7 +500,7 @@ func (e *dynamicToolExecutor) sendMessageTool(params appserver.DynamicToolCallPa
 	if _, err := e.resumeThread(arguments.ThreadID, thread.HistoryMode == appserver.ThreadHistoryPaginated, e.mcpConfigOverrides()); err != nil {
 		return nil, err
 	}
-	if err := e.registerBackgroundThread(arguments.ThreadID, false); err != nil {
+	if err := e.registerBackgroundThread(thread, false); err != nil {
 		return nil, err
 	}
 	var model *string

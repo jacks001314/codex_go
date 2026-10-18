@@ -1995,9 +1995,9 @@ green.
   rendering preferences, default to enabled, reload from live settings, and
   preserve their Markdown source when disabled; coverage includes fence/table
   source preservation and math gating.
-- `#46946` remains partial: Go tracks dynamic tool thread ids and refreshes an
-  open overview, but does not register fallback thread metadata from the tool
-  response or maintain removed-thread tombstones against delayed registrations.
+- `#46946` is complete: dynamic-tool lifecycle metadata immediately registers
+  missing root rows and folds children into loaded roots, while archived/deleted
+  tombstones block delayed responses and clear on thread start/unarchive.
 - `#47096` remains partial: Go paints status/activity and the working indicator
   above the composer but leaves the footer help/reading-control row below it;
   there is no shared hint row or short-terminal clipping order above the

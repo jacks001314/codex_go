@@ -17493,9 +17493,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Go's DynamicToolThreadStartedMsg records only a thread id plus task-tool capability and asks an open agents overview to refresh; it does not carry the created/forked/resumed thread metadata as a fallback when thread/started is missing. The overview also has hidden/row-removal state but no removed-thread tombstone set to block delayed tool registrations from restoring archived/deleted rows. Rust's fallback metadata registration and lifecycle removal precedence remain unimplemented."
+        "Dynamic-tool lifecycle responses now carry their full thread metadata into the TUI. An open agents overview immediately registers a missing root row, folds child metadata into the loaded root, skips ephemeral threads, preserves existing row metadata, and refreshes afterward. Archived/deleted thread ids are tombstoned; list refreshes and delayed tool registrations cannot restore them, and thread-start/unarchive clears the tombstone. Tests cover fallback root registration, child folding, ephemeral exclusion, delayed-response suppression, and tombstone clearing."
       ]
     },
     {

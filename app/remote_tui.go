@@ -3549,8 +3549,9 @@ func (c *remoteAppServerTUIClient) remoteServerRequestResult(ctx context.Context
 			return nil, -32000, err
 		}
 		result := ExecuteDynamicTool(ctx, c, payload, DynamicToolOptions{
-			ThreadStartParams:        template,
-			RegisterBackgroundThread: c.registerDynamicToolThread,
+			ThreadStartParams:                template,
+			RegisterBackgroundThread:         c.registerDynamicToolThread,
+			RegisterBackgroundThreadMetadata: c.registerDynamicToolThreadMetadata,
 		})
 		return result, 0, nil
 	case appserver.ServerRequestChatGPTAuthTokensRefresh:
@@ -3598,6 +3599,20 @@ func (c *remoteAppServerTUIClient) registerDynamicToolThread(threadID string, ta
 		return errors.New("background task requires a thread id")
 	}
 	c.send(codextea.DynamicToolThreadStartedMsg{ThreadID: threadID, TaskToolsAvailable: taskToolsAvailable})
+	return nil
+}
+
+// registerDynamicToolThreadMetadata carries the lifecycle response's thread
+// object so the dashboard can register it before a refresh completes.
+func (c *remoteAppServerTUIClient) registerDynamicToolThreadMetadata(thread *appserver.Thread, taskToolsAvailable bool) error {
+	if thread == nil || strings.TrimSpace(thread.ID) == "" {
+		return errors.New("background task requires thread metadata")
+	}
+	c.send(codextea.DynamicToolThreadStartedMsg{
+		ThreadID:           strings.TrimSpace(thread.ID),
+		Thread:             thread,
+		TaskToolsAvailable: taskToolsAvailable,
+	})
 	return nil
 }
 
