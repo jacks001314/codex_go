@@ -14,6 +14,12 @@ import (
 	"codex_go/tool"
 )
 
+func TestLocalCodeModeHostStartupTimeoutLikeRust(t *testing.T) {
+	if localHostStartupTimeout != 30*time.Second {
+		t.Fatalf("localHostStartupTimeout = %s, want 30s", localHostStartupTimeout)
+	}
+}
+
 const processHostHelperEnv = "CODEX_GO_PROCESS_HOST_TEST_HELPER"
 
 func init() {

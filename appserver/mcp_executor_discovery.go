@@ -32,8 +32,8 @@ type executorMCPServer struct {
 }
 
 // discoverExecutorHTTPMCPServers reads executor-owned MCP configuration from
-// each selected remote environment. Discovery is best effort and never makes an
-// executor-local server required at startup (Rust #39941).
+// each selected remote environment. Discovery itself is best effort, while an
+// executor-declared required server retains that startup requirement.
 func (r *RuntimeRouter) discoverExecutorHTTPMCPServers(ctx context.Context, threadID string, params *turn.TurnStartParams, cache *runtimeCapabilityDiscoveryV2Cache) {
 	if r == nil || r.services.Environment == nil || cache == nil || strings.TrimSpace(threadID) == "" {
 		return
@@ -202,7 +202,6 @@ func (s *runtimeCapabilityDiscoveryV2Cache) applyExecutorMCPServers(router *Runt
 			}
 			serverConfig := discovered.config
 			serverConfig.EnvironmentID = environmentID
-			serverConfig.Required = false
 			serverConfig.CredentialPolicy = mcp.CredentialPolicyExecutorOnly
 			applyExecutorMCPRequirements(name, &serverConfig, requirements)
 			runtimeConfig.Servers[name] = mcp.ServerRegistration{
@@ -257,7 +256,6 @@ func executorHTTPMCPServers(response *execserverclient.EnvironmentConfigReadResp
 			continue
 		}
 		serverConfig.EnvironmentID = environmentID
-		serverConfig.Required = false
 		serverConfig.CredentialPolicy = mcp.CredentialPolicyExecutorOnly
 		httpClient.bearerTokenEnvVar = serverConfig.BearerTokenEnvVar
 		serverConfig.HTTPClient = httpClient

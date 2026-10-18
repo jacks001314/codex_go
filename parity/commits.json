@@ -94,9 +94,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Already implemented in codemode/process_provider.go: locally spawned Code Mode hosts use a 30-second start/handshake timeout, while WebSocket owners retain the shorter connection handshake timeout in the remote provider. TestLocalCodeModeHostStartupTimeoutLikeRust locks the local value; process-provider and remote-provider suites pass."
       ]
     },
     {
@@ -130,9 +130,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Executor-discovered HTTP MCP servers now preserve required=true through both discovery and thread-runtime projection instead of being forced optional. Coverage verifies the required setting survives provider projection, and an executor-owned bearer-authenticated server that delays its first startup response still exposes tools to the first non-blocking capture despite a 10ms optional grace. Discovery failures remain best effort for optional servers."
       ]
     },
     {
@@ -202,9 +202,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: discover_http_mcp_servers, project_selected_environment_mcp_servers"
+        "Already implemented in appserver/mcp_executor_discovery.go and runtime_router wiring: selected remote executors read mcp_servers config and requirements, executor-local stdio and unsupported env-header/helper HTTP declarations are excluded, discovered HTTP servers are bound to the selected environment snapshot, requirements vetoes disable them, and discovery is best effort. Tests cover projection ownership, requirements enforcement, activation without host MCP config, authenticated executor HTTP invocation, and exclusion of stdio servers."
       ]
     },
     {

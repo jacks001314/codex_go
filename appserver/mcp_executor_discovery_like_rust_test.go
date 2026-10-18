@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ http_headers_helper = "helper"
 [mcp_servers.bearer_env]
 url = "http://executor-only.invalid/bearer"
 bearer_token_env_var = "TOKEN"
+required = true
 
 [mcp_servers.foreign]
 url = "http://executor-only.invalid/foreign"
@@ -80,7 +82,7 @@ url = "http://executor-only.invalid/mcp"
 	}
 	bearer := byName["bearer_env"]
 	if bearer.BearerTokenEnvVar != "TOKEN" || bearer.CredentialPolicy != mcp.CredentialPolicyExecutorOnly ||
-		bearer.HTTPClient == nil {
+		!bearer.Required || bearer.HTTPClient == nil {
 		t.Fatalf("bearer_env = %#v", bearer)
 	}
 	unlisted := byName["policy_unlisted"]
@@ -161,7 +163,9 @@ func TestExecutorHTTPDoerResolvesBearerTokenInExecutorEnvironmentLikeRust(t *tes
 
 func TestExecutorHTTPMCPDiscoversToolsWithExecutorBearerTokenLikeRust(t *testing.T) {
 	t.Setenv("EXECUTOR_MCP_TOKEN", "executor-only-mcp-token")
+	var firstRequest sync.Once
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		firstRequest.Do(func() { time.Sleep(100 * time.Millisecond) })
 		if got := request.Header.Get("Authorization"); got != "Bearer executor-only-mcp-token" {
 			http.Error(writer, "unexpected authorization: "+got, http.StatusUnauthorized)
 			return
@@ -202,7 +206,7 @@ func TestExecutorHTTPMCPDiscoversToolsWithExecutorBearerTokenLikeRust(t *testing
 
 	servers, err := executorHTTPMCPServers(&execserverclient.EnvironmentConfigReadResponse{
 		Config: execserverclient.EnvironmentConfigLayerStack{Layers: []execserverclient.EnvironmentConfigLayer{{
-			TOML: "[mcp_servers.executor_auth]\nurl = \"" + upstream.URL + "\"\nbearer_token_env_var = \"EXECUTOR_MCP_TOKEN\"\n",
+			TOML: "[mcp_servers.executor_auth]\nurl = \"" + upstream.URL + "\"\nbearer_token_env_var = \"EXECUTOR_MCP_TOKEN\"\nrequired = true\n",
 		}}},
 	}, "executor-1", executorHTTPDoer{client: client})
 	if err != nil || len(servers) != 1 {
@@ -213,7 +217,9 @@ func TestExecutorHTTPMCPDiscoversToolsWithExecutorBearerTokenLikeRust(t *testing
 	}})
 	defer service.Close()
 	response, err := service.ListStatusChecked(&mcp.MCPListServerStatusParams{
-		Detail: &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		Detail:               &mcp.MCPServerStatusDetail{Mode: mcp.MCPServerStatusDetailToolsAndAuthOnly},
+		NonBlockingOptional:  true,
+		OptionalStartupGrace: 10 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("ListStatusChecked() error = %v", err)
@@ -260,7 +266,7 @@ func TestExecutorMCPProjectionPreservesExistingOwnershipLikeRust(t *testing.T) {
 	cache.storeExecutorMCPDiscovery("executor-1", executorMCPDiscoveryResult{
 		key: key,
 		servers: []executorMCPServer{
-			{name: "plugin", config: mcp.ServerConfig{URL: "http://executor/plugin", Enabled: true}},
+			{name: "plugin", config: mcp.ServerConfig{URL: "http://executor/plugin", Enabled: true, Required: true}},
 			{name: "configured", config: mcp.ServerConfig{URL: "http://executor/configured", Enabled: true}},
 			{name: "foreign", config: mcp.ServerConfig{URL: "http://executor/foreign", Enabled: true}},
 			{name: "disabled_plugin", config: mcp.ServerConfig{URL: "http://executor/disabled", Enabled: false}},
@@ -283,7 +289,8 @@ func TestExecutorMCPProjectionPreservesExistingOwnershipLikeRust(t *testing.T) {
 	router := &RuntimeRouter{services: RuntimeServices{Environment: manager}}
 	cache.applyExecutorMCPServers(router, runtimeConfig, []map[string]any{selection}, nil)
 
-	if got := runtimeConfig.Servers["plugin"]; got.Config.URL != "http://executor/plugin" || mcp.SourceFromRegistration(&got) != mcp.CatalogSourceConfig {
+	if got := runtimeConfig.Servers["plugin"]; got.Config.URL != "http://executor/plugin" ||
+		!got.Config.Required || mcp.SourceFromRegistration(&got) != mcp.CatalogSourceConfig {
 		t.Fatalf("same-environment plugin was not supplemented: %#v", got)
 	}
 	if got := runtimeConfig.Servers["configured"]; got.Config.URL != "http://host/configured" {
