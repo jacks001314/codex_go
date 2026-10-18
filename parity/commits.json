@@ -18401,9 +18401,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: checkpoint_preparation"
+        "Equivalent architecture: Go's thread/inject_items synchronously appends preparation items to the thread record and rollout before any first turn, so there is no speculative-persistence checkpoint to defer and prepared context survives reload/restart. Existing tests cover record persistence, rollout repair, and client-authored metadata."
       ]
     },
     {
