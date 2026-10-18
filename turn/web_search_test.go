@@ -3,10 +3,14 @@ package turn
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"codex_go/codemode"
@@ -245,6 +249,139 @@ func TestWebSearchHandlerPostsAlphaSearchAndReturnsRustOutputShape(t *testing.T)
 }
 
 func uint64PtrWebSearch(value uint64) *uint64 { return &value }
+
+type webSearchProxyHop struct {
+	method string
+	target string
+	host   string
+	header http.Header
+	body   string
+}
+
+// TestWebSearchRedirectResolvesProxyRoutePerHopLikeRust mirrors Rust #47204:
+// standalone web search must resolve the proxy route for the redirect
+// destination, not only for the initial endpoint, while replaying the POST body
+// and Codex default headers. Go's http.Transport calls Proxy for every request,
+// including redirect hops, which is the route-aware pool's core behavior.
+func TestWebSearchRedirectResolvesProxyRoutePerHopLikeRust(t *testing.T) {
+	var mu sync.Mutex
+	var initialHops, redirectHops []webSearchProxyHop
+	recordHop := func(destination *[]webSearchProxyHop, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read proxied request body: %v", err)
+		}
+		mu.Lock()
+		*destination = append(*destination, webSearchProxyHop{
+			method: request.Method,
+			target: request.URL.String(),
+			host:   request.Host,
+			header: request.Header.Clone(),
+			body:   string(body),
+		})
+		mu.Unlock()
+	}
+
+	redirectProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		recordHop(&redirectHops, request)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"output":"redirected search"}`)
+	}))
+	defer redirectProxy.Close()
+	initialProxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		recordHop(&initialHops, request)
+		w.Header().Set("Location", "http://web-search-redirect.invalid/v1/alpha/search")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	defer initialProxy.Close()
+
+	initialProxyURL, err := url.Parse(initialProxy.URL)
+	if err != nil {
+		t.Fatalf("parse the initial proxy URL: %v", err)
+	}
+	redirectProxyURL, err := url.Parse(redirectProxy.URL)
+	if err != nil {
+		t.Fatalf("parse the redirect proxy URL: %v", err)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = func(request *http.Request) (*url.URL, error) {
+		switch request.URL.Host {
+		case "web-search-proxy.invalid":
+			return initialProxyURL, nil
+		case "web-search-redirect.invalid":
+			return redirectProxyURL, nil
+		default:
+			return nil, fmt.Errorf("unexpected proxy route for %q", request.URL.Host)
+		}
+	}
+
+	handler := NewWebSearchHandler(&WebSearchOptions{
+		SessionID:    "thread-redirect",
+		Model:        "mock-model",
+		Originator:   "codex_vscode",
+		TurnMetadata: `{"thread_id":"thread-redirect"}`,
+		Provider: model.APIProvider{
+			BaseURL: "http://web-search-proxy.invalid/v1",
+			Headers: http.Header{"X-Provider-Test": []string{"provider"}},
+		},
+		Auth:       model.BearerAuthHeaders("test-token", "", false),
+		HTTPClient: &http.Client{Transport: transport},
+		InputItems: []any{model.UserMessageInputItem("Search through two proxies")},
+	})
+	output, err := handler.Execute(context.Background(), &tool.Invocation{
+		CallID:   "call-web-search-redirect",
+		ToolName: tool.NamespacedName(WebSearchNamespace, WebSearchRunTool),
+		Payload: tool.Payload{
+			Kind:      tool.PayloadFunction,
+			Arguments: `{"search_query":[{"q":"redirected search"}]}`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if output == nil || output.Body != "redirected search" {
+		t.Fatalf("output = %#v", output)
+	}
+
+	mu.Lock()
+	initial := append([]webSearchProxyHop(nil), initialHops...)
+	redirected := append([]webSearchProxyHop(nil), redirectHops...)
+	mu.Unlock()
+	if len(initial) != 1 || len(redirected) != 1 {
+		t.Fatalf("proxy hops = initial %d, redirect %d; want one each", len(initial), len(redirected))
+	}
+	if initial[0].target != "http://web-search-proxy.invalid/v1/alpha/search" {
+		t.Fatalf("initial proxy target = %q", initial[0].target)
+	}
+	if redirected[0].target != "http://web-search-redirect.invalid/v1/alpha/search" {
+		t.Fatalf("redirect proxy target = %q", redirected[0].target)
+	}
+	if initial[0].body == "" || initial[0].body != redirected[0].body {
+		t.Fatalf("redirected POST body = %q, initial = %q", redirected[0].body, initial[0].body)
+	}
+	for _, hop := range []webSearchProxyHop{initial[0], redirected[0]} {
+		if hop.method != http.MethodPost {
+			t.Fatalf("%s proxy method = %q, want POST", hop.host, hop.method)
+		}
+		if got := hop.header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("%s proxy Content-Type = %q", hop.host, got)
+		}
+		if got := hop.header.Get("originator"); got != "codex_vscode" {
+			t.Fatalf("%s proxy originator = %q", hop.host, got)
+		}
+		if got := hop.header.Get(codexapi.ClientCodexTurnMetadataHeader); got != `{"thread_id":"thread-redirect"}` {
+			t.Fatalf("%s proxy turn metadata = %q", hop.host, got)
+		}
+		if got := hop.header.Get("X-Provider-Test"); got != "provider" {
+			t.Fatalf("%s proxy provider header = %q", hop.host, got)
+		}
+	}
+	// Go and reqwest both strip URL credentials/authorization on cross-origin
+	// redirects, so the redirected hop authenticates only when it is same-origin.
+	if got := redirected[0].header.Get("Authorization"); got != "" {
+		t.Fatalf("cross-origin redirect forwarded Authorization %q", got)
+	}
+}
 
 func TestWebSearchRecentInputKeepsPreviousVisibleTurnLikeRust(t *testing.T) {
 	items := []any{

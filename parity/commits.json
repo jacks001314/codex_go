@@ -18413,9 +18413,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/10; needs review: HeaderUpdate, RequestDraft, create_transport_for_routes_async, extend_headers, from_http_client"
+        "Round 438 (audit + regression): Go's http.Transport resolves the proxy per request, so standalone web search redirect hops already select their own route. Added a two-proxy regression test proving a 307 hop reaches the redirect-destination proxy with the same POST body, originator, turn metadata, provider header, and Content-Type, and without cross-origin Authorization. Tests: go test ./turn -run 'TestWebSearchRedirectResolvesProxyRoutePerHopLikeRust' -count=1; go test ./turn -count=1; go test ./appserver -run 'StandaloneWebSearchHonorsSystemProxySettingLikeRust|WebSearchRuntime|AppStandaloneWebSearchEnabled' -count=1"
       ]
     },
     {
