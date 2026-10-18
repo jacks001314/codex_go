@@ -20485,7 +20485,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Clipboard writes run as Bubble Tea commands off the update loop, now carry monotonically increasing request ids, reject concurrent copies with a busy notice, ignore stale completions, and block image/text paste with a retry message while busy; tests cover rejection and stale-result handling. Go still lacks Rust's dedicated session worker with retained native ownership, five-second setup expiry, and bounded shutdown/handoff guarantees."
+        "Round 697 (implementation): a session-lived clipboard worker owns one blocking operation at a time. A five-second setup budget returns a timeout result while the worker remains busy until the OS call returns, concurrent copies are rejected, late completions are buffered/discarded, and quit paths close the worker with a bounded one-second wait. Tests cover setup timeout, continued busy state, and bounded close. Remaining: retained native clipboard lease/ownership handoff and the latest-PRIMARY-publication queue."
       ]
     },
     {

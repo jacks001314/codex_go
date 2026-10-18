@@ -2051,9 +2051,6 @@ green.
   suffix to style.
 - `#48623` is complete: empty ordered/nested/blockquoted list markers are
   preserved, and a trailing bare marker remains mutable in the streaming tail.
-- `#47847` remains partial: clipboard writes now reject concurrent copies,
-  match request ids, and block busy pastes, but Go still lacks Rust's dedicated
-  session worker with setup expiry and bounded shutdown/ownership handoff.
 - `#47360` is complete: user prompt URLs retain full OSC-8 destinations across
   adaptive wrapping and forced splits, including parenthesized URLs, with
   width-bound regression coverage.
@@ -2142,3 +2139,8 @@ green.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.
+- `#47847` remains partial but now has a dedicated session clipboard worker:
+  one blocking operation at a time, a five-second setup budget that abandons
+  the UI request while keeping the worker busy, rejection of concurrent copies,
+  buffered late completions, and bounded close on quit. Remaining: retained
+  native lease/ownership handoff and latest-PRIMARY-publication queue.

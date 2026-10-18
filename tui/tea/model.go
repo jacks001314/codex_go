@@ -2101,6 +2101,8 @@ type Model struct {
 	clipboardBusy           bool
 	clipboardForward        func(text string, tmux bool) error
 	clipboardEnvironment    *codextui.ClipboardEnvironment
+	clipboardWorker         *clipboardWorker
+	clipboardSetupTimeout   time.Duration
 	nextClipboardRequestID  uint64
 	pendingClipboardRequest uint64
 	onExportTranscript      TranscriptExportFunc
@@ -2621,6 +2623,7 @@ func NewModel(state *codextui.State, options Options) *Model {
 		clipboardRead:                   clipboardRead,
 		clipboardForward:                clipboardForward,
 		clipboardEnvironment:            clipboardEnvironment,
+		clipboardSetupTimeout:           5 * time.Second,
 		rightClickPasteMode:             tuiapp.ParseRightClickPasteMode(options.RightClickPaste),
 		copyOnSelectMode:                normalizeCopyOnSelectMode(options.CopyOnSelect),
 		copyOnSelectClear:               options.CopyOnSelectClearSelection,
@@ -3634,11 +3637,13 @@ func (m *Model) updateMessage(message bubbletea.Msg) (bubbletea.Model, bubbletea
 			if m.inSideConversation() {
 				return m, m.returnFromSideConversation()
 			}
+			m.closeClipboardWorker()
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlD:
 			if m.modal != nil && (m.modal.externalAgentMigration != nil || m.modal.hooksBrowser != nil || m.modal.pluginBrowser != nil) {
 				return m, m.updateModal(msg)
 			}
+			m.closeClipboardWorker()
 			return m, bubbletea.Quit
 		case bubbletea.KeyCtrlV:
 			// Bubble Tea does not provide a portable text-paste message on all
@@ -8490,6 +8495,7 @@ func (m *Model) applyCommand(invocation *codextui.CommandInvocation) bubbletea.C
 	}
 	switch invocation.Command {
 	case codextui.CommandExit:
+		m.closeClipboardWorker()
 		return bubbletea.Quit
 	case codextui.CommandHelp:
 		m.State.AddMessage(codextui.RoleSystem, strings.TrimSpace(m.State.RenderHelp()))
@@ -9642,7 +9648,7 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 	if m == nil {
 		return nil
 	}
-	if m.clipboardBusy {
+	if m.clipboardBusy || (m.clipboardWorker != nil && m.clipboardWorker.isBusy()) {
 		return func() bubbletea.Msg {
 			return ClipboardBusyMsg{Label: label}
 		}
@@ -9658,7 +9664,15 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 	writeRich := m.clipboardWriteRich
 	forward := m.clipboardForward
 	environment := m.clipboardEnvironmentValue()
-	return func() bubbletea.Msg {
+	if m.clipboardWorker == nil {
+		m.clipboardWorker = newClipboardWorker()
+	}
+	worker := m.clipboardWorker
+	timeout := m.clipboardSetupTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	task := func() error {
 		var err error
 		switch {
 		case rich && writeRich != nil:
@@ -9680,8 +9694,39 @@ func (m *Model) clipboardWriteCmd(label string, text string, rich bool, warnings
 		} else {
 			err = fmt.Errorf("%v; terminal clipboard: %v", err, terminalErr)
 		}
-		return ClipboardWriteResultMsg{RequestID: requestID, Label: label, Err: err, Warnings: warnings}
+		return err
 	}
+	result, submitErr := worker.submit(task)
+	if submitErr != nil {
+		m.clipboardBusy = false
+		m.pendingClipboardRequest = 0
+		return func() bubbletea.Msg {
+			return ClipboardBusyMsg{Label: label}
+		}
+	}
+	return func() bubbletea.Msg {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case err := <-result:
+			return ClipboardWriteResultMsg{RequestID: requestID, Label: label, Err: err, Warnings: warnings}
+		case <-timer.C:
+			return ClipboardWriteResultMsg{
+				RequestID: requestID,
+				Label:     label,
+				Err:       fmt.Errorf("clipboard setup timed out; copy abandoned"),
+				Warnings:  warnings,
+			}
+		}
+	}
+}
+
+func (m *Model) closeClipboardWorker() {
+	if m == nil || m.clipboardWorker == nil {
+		return
+	}
+	_ = m.clipboardWorker.close(time.Second)
+	m.clipboardWorker = nil
 }
 
 func (m *Model) clipboardEnvironmentValue() codextui.ClipboardEnvironment {
