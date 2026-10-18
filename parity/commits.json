@@ -23773,9 +23773,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "partial",
+      "status": "complete",
       "evidence": [
-        "Round 665 (partial): Responses input construction no longer applies the aggregate 128KB prompt metadata cap; SanitizeExecutedToolCallsForPrompt still strips forged metadata, and the actual outgoing message budget plus per-call argument limits remain. Added TestResponsesInputItemsRetainLargeMetadataUntilMessageBoundLikeRust. Remaining: Go recorder lacks a separate live direct-call map keyed by response item ID and restore/prune across sampling/compaction retries; ToolResponseItem has no response item ID field. Tests: go test ./model -run 'ExecutedToolCall|ResponsesInputItemsRetainLarge' -count=1; go test ./turn -run 'ExecutedToolCall' -count=1"
+        "Round 666 (implementation): ExecutedToolCallRecorder retains live direct-call observations by response item ID; ToolResponseItem gains an id (fco_* when missing) that is stripped with response item IDs disabled. Sampling restores observations shed from bounded persisted history and prunes only items outside the live window; compaction retries restore without pruning. Responses input construction no longer applies the aggregate 128KB prompt cap while retaining forged-metadata sanitization, per-call argument limits, and the outgoing message budget. Tests: go test ./turn -run 'ExecutedToolCall|DirectObservation' -count=1; go test ./model -run 'ResponseInputItemID|ExecutedToolCall|PreparesInputItemIDs|ResponsesInputItemsRetainLarge' -count=1; go vet ./turn"
       ]
     },
     {

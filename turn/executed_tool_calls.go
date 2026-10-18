@@ -2,6 +2,7 @@ package turn
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,6 +48,14 @@ type ExecutedToolCallRecorder struct {
 	// re-emit them and a late result can still update the original output
 	// (Rust RetainedToolCalls, #46044 and #48222).
 	retained map[string]*retainedToolCallBinding
+	// directCalls retains live direct-call observations by the response item ID
+	// assigned to their output. Persisted history may shed the bounded copy;
+	// sampling restores from here and prunes only when the item leaves the live
+	// window (Rust #49401).
+	directCalls map[string]model.ExecutedToolCall
+	// nextDirectItemID mints a stable fco_* ID for output items that do not have
+	// one yet. The prefix is stripped when response item IDs are disabled.
+	nextDirectItemID uint64
 	// historySeeded records that the first prompt's supplied history was
 	// indexed. Rust indexes the session's initial history at construction; Go
 	// records are created before the thread's first sampling request, so the
@@ -225,6 +234,68 @@ func attachDirectCallToItem(item any, call model.ExecutedToolCall, complete bool
 		}
 	}
 	return true
+}
+
+func (r *ExecutedToolCallRecorder) restoreDirectCallObservations(items []any) {
+	if r == nil || len(r.directCalls) == 0 {
+		return
+	}
+	for _, item := range items {
+		itemID := executedToolCallResponseItemID(item)
+		if itemID == "" {
+			continue
+		}
+		call, ok := r.directCalls[itemID]
+		if !ok {
+			continue
+		}
+		clearExecutedToolCallsForItem(item)
+		attachDirectCallToItem(item, call, call.HasCompleteInventory())
+	}
+}
+
+func executedToolCallResponseItemID(item any) string {
+	switch value := item.(type) {
+	case *ToolResponseItem:
+		if value == nil {
+			return ""
+		}
+		return strings.TrimSpace(value.ID)
+	case *model.AgentItem:
+		if value == nil {
+			return ""
+		}
+		return strings.TrimSpace(value.ID)
+	case model.AgentItem:
+		return strings.TrimSpace(value.ID)
+	case map[string]any:
+		id, _ := value["id"].(string)
+		return strings.TrimSpace(id)
+	default:
+		return ""
+	}
+}
+
+func assignExecutedToolCallResponseItemID(item any, id string) bool {
+	switch value := item.(type) {
+	case *ToolResponseItem:
+		if value == nil {
+			return false
+		}
+		value.ID = id
+		return true
+	case *model.AgentItem:
+		if value == nil {
+			return false
+		}
+		value.ID = id
+		return true
+	case map[string]any:
+		value["id"] = id
+		return true
+	default:
+		return false
+	}
 }
 
 func clearToolResultMetadataForItem(item any) {
@@ -416,6 +487,19 @@ func (r *ExecutedToolCallRecorder) AttachDirectCallToOutput(item any, call *mode
 	if !attachDirectCallToItem(item, *call, complete) {
 		return
 	}
+	itemID := executedToolCallResponseItemID(item)
+	if itemID == "" {
+		r.nextDirectItemID++
+		if assignExecutedToolCallResponseItemID(item, "fco_"+strconv.FormatUint(r.nextDirectItemID, 10)) {
+			itemID = executedToolCallResponseItemID(item)
+		}
+	}
+	if itemID != "" {
+		if r.directCalls == nil {
+			r.directCalls = map[string]model.ExecutedToolCall{}
+		}
+		r.directCalls[itemID] = *call
+	}
 	available := maxRetainedDirectMetadataBytes - r.retainedDirectMetadataBytes
 	bytes := executedToolCallMetadataBytesForItem(item)
 	if bytes > available {
@@ -482,7 +566,7 @@ func (r *ExecutedToolCallRecorder) AttachToCompactionPrompt(items []any, enabled
 	if r == nil {
 		return items
 	}
-	attached, _ := r.AttachPendingToPrompt(items)
+	attached, _ := r.attachPendingToPrompt(items, false)
 	return attached
 }
 
@@ -859,6 +943,10 @@ func (r *ExecutedToolCallRecorder) evictFinishedGroup(protectedGroupID string) b
 // AttachPendingToPrompt returns request-local clones with metadata attached.
 // CommitAttachment must be called only after the sampling request succeeds.
 func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *ExecutedToolCallAttachment) {
+	return r.attachPendingToPrompt(items, true)
+}
+
+func (r *ExecutedToolCallRecorder) attachPendingToPrompt(items []any, pruneDirect bool) ([]any, *ExecutedToolCallAttachment) {
 	out := append([]any(nil), items...)
 	if r == nil || len(out) == 0 {
 		return out, nil
@@ -867,6 +955,20 @@ func (r *ExecutedToolCallRecorder) AttachPendingToPrompt(items []any) ([]any, *E
 	defer r.mu.Unlock()
 	r.ensureState()
 	r.seedHistoryOnce(out)
+	r.restoreDirectCallObservations(out)
+	if pruneDirect && len(r.directCalls) > 0 {
+		present := make(map[string]struct{}, len(out))
+		for _, item := range out {
+			if itemID := executedToolCallResponseItemID(item); itemID != "" {
+				present[itemID] = struct{}{}
+			}
+		}
+		for itemID := range r.directCalls {
+			if _, ok := present[itemID]; !ok {
+				delete(r.directCalls, itemID)
+			}
+		}
+	}
 	if len(r.outputs) == 0 && len(r.retained) == 0 {
 		model.NormalizeExecutedToolCallCompleteness(out)
 		return out, nil
@@ -1217,6 +1319,9 @@ func (r *ExecutedToolCallRecorder) ensureState() {
 	}
 	if r.retained == nil {
 		r.retained = map[string]*retainedToolCallBinding{}
+	}
+	if r.directCalls == nil {
+		r.directCalls = map[string]model.ExecutedToolCall{}
 	}
 	if r.pendingWrapperOrigins == nil {
 		r.pendingWrapperOrigins = map[string]struct{}{}

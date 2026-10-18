@@ -2753,6 +2753,15 @@ func stripResponseInputItemID(item any) any {
 			delete(clone, "id")
 		}
 		return clone
+	case interface {
+		ResponseItemID() string
+		WithResponseItemID(string) any
+	}:
+		id := typed.ResponseItemID()
+		if !isPrefixedResponseItemID(id) {
+			id = ""
+		}
+		return typed.WithResponseItemID(id)
 	default:
 		return item
 	}

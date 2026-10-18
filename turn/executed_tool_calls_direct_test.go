@@ -74,6 +74,37 @@ func TestExecutedToolCallRecorderBindsDirectRecordToOutputLikeRust(t *testing.T)
 	}
 }
 
+// Rust #49401 keeps live direct observations by response item ID across
+// sampling/compaction windows and prunes them only after ordinary sampling
+// confirms the output left the live history.
+func TestExecutedToolCallRecorderRestoresLiveDirectObservationLikeRust(t *testing.T) {
+	recorder := NewExecutedToolCallRecorder()
+	call, permit := recorder.PrepareDirectCall(directMetadataTestInvocation("call-live", `{"text":"hi"}`), "")
+	output := &ToolResponseItem{Type: "function_call_output", CallID: "call-live", Output: NewFunctionCallOutputPayload("ok", nil)}
+	recorder.AttachDirectCallToOutput(output, call, permit)
+	permit.Release()
+	if !strings.HasPrefix(output.ID, "fco_") {
+		t.Fatalf("assigned response item ID = %q, want fco_*", output.ID)
+	}
+	clearExecutedToolCallsForItem(output)
+
+	other := &ToolResponseItem{ID: "fco_other", Type: "function_call_output", CallID: "other"}
+	recorder.AttachToCompactionPrompt([]any{other}, true)
+	clearExecutedToolCallsForItem(output)
+	restored, _ := recorder.AttachPendingToPrompt([]any{output})
+	if calls := restored[0].(*ToolResponseItem).ExecutedToolCalls(); len(calls) != 1 || calls[0].Name != "echo" {
+		t.Fatalf("restored live direct calls = %#v", calls)
+	}
+
+	clearExecutedToolCallsForItem(output)
+	recorder.AttachPendingToPrompt([]any{other})
+	clearExecutedToolCallsForItem(output)
+	notRestored, _ := recorder.AttachPendingToPrompt([]any{output})
+	if calls := notRestored[0].(*ToolResponseItem).ExecutedToolCalls(); len(calls) != 0 {
+		t.Fatalf("pruned live direct calls = %#v, want none", calls)
+	}
+}
+
 // Mirrors Rust's retained-metadata budget: once the recorder lifetime has
 // retained the budget, further direct records are dropped instead of exceeding it.
 func TestExecutedToolCallRecorderBoundsRetainedDirectMetadataLikeRust(t *testing.T) {

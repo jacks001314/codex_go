@@ -158,6 +158,7 @@ type ToolCompletedCallback func(ctx context.Context, result *ToolExecutionResult
 type CodeModeNotifyCallback func(ctx context.Context, callID string, text string)
 
 type ToolResponseItem struct {
+	ID        string                     `json:"id,omitempty"`
 	Type      string                     `json:"type"`
 	CallID    string                     `json:"call_id,omitempty"`
 	Name      string                     `json:"name,omitempty"`
@@ -176,6 +177,25 @@ func (i *ToolResponseItem) ExecutedToolCalls() []model.ExecutedToolCall {
 		return nil
 	}
 	return append([]model.ExecutedToolCall(nil), i.executedToolCalls...)
+}
+
+// ResponseItemID exposes the response item identity for model request
+// sanitization without importing the turn package from model.
+func (i *ToolResponseItem) ResponseItemID() string {
+	if i == nil {
+		return ""
+	}
+	return i.ID
+}
+
+// WithResponseItemID returns a copy carrying the requested response item ID.
+func (i *ToolResponseItem) WithResponseItemID(id string) any {
+	if i == nil {
+		return (*ToolResponseItem)(nil)
+	}
+	clone := *i
+	clone.ID = id
+	return &clone
 }
 
 func (i *ToolResponseItem) ReplaceExecutedToolCalls(calls []model.ExecutedToolCall) {
