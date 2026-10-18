@@ -49,6 +49,9 @@ func TestWindowsSandboxPowerShellFallbackLikeRust(t *testing.T) {
 // path stays untouched when no unpackaged PowerShell can be found.
 func TestWindowsSandboxPowerShellFallbackWithoutCompatibleShellLikeRust(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
+	previousFallbacks := windowsSandboxPowerShellFallbackPaths
+	windowsSandboxPowerShellFallbackPaths = []string{filepath.Join(t.TempDir(), "missing-powershell.exe")}
+	t.Cleanup(func() { windowsSandboxPowerShellFallbackPaths = previousFallbacks })
 	storePwsh := `C:\Users\codex\AppData\Local\Microsoft\WindowsApps\pwsh.exe`
 	for _, level := range []string{windowsSandboxLevelElevated, windowsSandboxLevelMxc} {
 		if got := windowsSandboxPowerShellProgram(storePwsh, level); got != storePwsh {
