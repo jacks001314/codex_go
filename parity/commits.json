@@ -1714,9 +1714,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: ThreadArtifact, ThreadArtifactAttachmentOutcome, ThreadArtifactPage, ThreadArtifactRemovalOutcome"
+        "Round 443 (implementation): state/migrations/state/0051_thread_artifacts.sql already defines the cascade, unique identity, and ordered per-thread index. Added the exported Go models ThreadArtifact, ThreadArtifactAttachmentOutcome, ThreadArtifactRemovalOutcome, and ThreadArtifactPage with the Rust field/outcome semantics. Tests: go test ./state -run 'ThreadArtifact' -count=1; go test ./state -run 'Migration|RuntimeMigrations|ThreadArtifact' -count=1"
       ]
     },
     {
