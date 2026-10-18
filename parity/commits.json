@@ -13815,9 +13815,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/28); candidate gap: ActiveUsersSummary, AnalyticsReport, AnalyticsResponse, ClientActiveUsersCount, ClientWorkspaceUsageCount"
+        "Round 502 (implementation): chatgptapi.GetAccountAnalytics covers all eight Rust reports with both api/codex and wham path styles and matching report-specific query parameters. All 28 analytics model/report symbols are present, required response shapes are validated before typed decoding, mismatched report payloads return a generic decode error without the body, and signed credit values, nullable amounts/IDs, attribution, and open string values are preserved. Tests: go test ./chatgptapi -run 'Analytics' -count=1; go test ./chatgptapi -count=1; go vet ./chatgptapi"
       ]
     },
     {

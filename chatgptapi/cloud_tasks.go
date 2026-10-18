@@ -598,9 +598,23 @@ func (c *CloudClient) doJSON(ctx context.Context, method string, path string, qu
 		return nil
 	}
 	if err := json.Unmarshal(responseBody, out); err != nil {
-		return fmt.Errorf("decode %s response: %w; body=%s", target.String(), err, string(responseBody))
+		return &cloudResponseDecodeError{url: target.String(), err: err, body: string(responseBody)}
 	}
 	return nil
+}
+
+type cloudResponseDecodeError struct {
+	url  string
+	err  error
+	body string
+}
+
+func (e *cloudResponseDecodeError) Error() string {
+	return fmt.Sprintf("decode %s response: %v; body=%s", e.url, e.err, e.body)
+}
+
+func (e *cloudResponseDecodeError) Unwrap() error {
+	return e.err
 }
 
 func (c *CloudClient) apiPath(parts ...string) string {
