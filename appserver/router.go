@@ -2567,6 +2567,14 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 	}
 	defer closeTemporaryWriters(lifecycleLocks)
 	deleteOrder := session.DeleteOrderForSubtree(threadIDs)
+	// Rust's local thread store runs its `thread_data_cleanup` callback as soon
+	// as the reference and writer checks pass, before rollout removal. Keeping
+	// that order makes a cleanup failure retryable (Rust #47029).
+	if r.messageBoardCleanup != nil {
+		if err := r.messageBoardCleanup(threadIDs); err != nil {
+			return nil, err
+		}
+	}
 	for _, threadID := range deleteOrder {
 		if err := r.store.Delete(threadID); err != nil && !errors.Is(err, session.ErrThreadNotFound) {
 			return nil, err
@@ -2593,14 +2601,6 @@ func (r *Router) handleThreadDelete(request *Request) (*ThreadDeleteResponse, er
 		}
 	}
 	r.releaseLiveThreads(threadIDs)
-	// Rust's local thread store runs its `thread_data_cleanup` callback as part
-	// of the same delete: the permanently removed thread roots also drop their
-	// shared discussion boards.
-	if r.messageBoardCleanup != nil {
-		if err := r.messageBoardCleanup(threadIDs); err != nil {
-			return nil, err
-		}
-	}
 	return &ThreadDeleteResponse{}, nil
 }
 
