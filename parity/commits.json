@@ -4022,9 +4022,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "clock.curr_time and clock.sleep are classified as built-in control tools and excluded from model invocation analytics; TestClockToolsAreBuiltinControlToolsLikeRust covers the classification. Tests: go test ./appserver -run 'ClockToolsAreBuiltinControlTools' -count=1"
       ]
     },
     {
@@ -4070,9 +4070,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Terminal input containing a NUL byte is rejected before approval review with the Rust message 'terminal input contains a NUL byte and cannot be reviewed safely'. Tests: go test ./appserver -run 'Stdin.*NUL|StdinReview' -count=1"
       ]
     },
     {
@@ -4130,9 +4130,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "ShellExecutor.modelVisiblePlatformOS uses the selected executor's PlatformOS for shell guidance, falling back to host OS only when the executor does not report one. Tests: go test ./tool -run 'ModelVisiblePlatformOS|PlatformOS' -count=1"
       ]
     },
     {
@@ -4154,9 +4154,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "proactiveMultiAgentModeText matches the upstream guidance: override only earlier developer explicit-request instructions, preserve user priority, and encourage root/subagent delegation when it improves speed or quality. Tests: go test ./appserver -run 'ProactiveMultiAgent|MultiAgentMode' -count=1"
       ]
     },
     {
@@ -4202,9 +4202,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: exec_command_inner, exec_command_to_completion, mark_timed_out"
+        "ShellExecutor OneShot removes session-only args, keeps timeout semantics, and reports exit code 124 on timeout; tests cover the one-shot spec and timeout path. Tests: go test ./tool -run 'OneShotExec' -count=1"
       ]
     },
     {
@@ -4250,9 +4250,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only performance refactor of thread history/chat-composer indexes; Go's history store and TUI use different lookup data structures, and there is no observable contract change to carry."
       ]
     },
     {
@@ -4394,9 +4394,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust-only profile file rename (restricted_read_only_platform_defaults.sbpl -> seatbelt_read_only_platform_defaults.sbpl); Go constructs the Seatbelt policy in code and has no filename carrier."
       ]
     },
     {
@@ -4550,9 +4550,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "proactiveMultiAgentModeText already contains the corrected 'If at any point you can parallelize work...' grammar from upstream. Tests: go test ./appserver -run 'ProactiveMultiAgent|MultiAgentMode' -count=1"
       ]
     },
     {
