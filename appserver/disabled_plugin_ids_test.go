@@ -113,6 +113,35 @@ func TestDisabledPluginCapabilitiesFilteredLikeRust(t *testing.T) {
 	}
 }
 
+func TestCanonicalDisabledConnectorsOverrideSharedContributorsLikeRust(t *testing.T) {
+	canonical := "calendar"
+	capabilities := []plugin.CapabilitySummary{{
+		Name:          "B",
+		ConfigName:    "b@m",
+		AppConnectors: []string{"calendar", "b-only"},
+		Apps:          []plugin.AppSummary{{ID: "calendar", DisplayName: "Calendar"}, {ID: "b-only", DisplayName: "B"}},
+		AppTemplates: []plugin.AppTemplateSummary{{
+			ID:                   "calendar-template",
+			CanonicalConnectorID: &canonical,
+			MaterializedAppIDs:   []string{"calendar", "b-only"},
+		}},
+	}}
+	filtered := filterCanonicalDisabledConnectors(capabilities, map[string]struct{}{"calendar": {}})
+	if len(filtered) != 1 || !reflect.DeepEqual(filtered[0].AppConnectors, []string{"b-only"}) {
+		t.Fatalf("filtered connectors = %#v", filtered)
+	}
+	if len(filtered[0].Apps) != 1 || filtered[0].Apps[0].ID != "b-only" {
+		t.Fatalf("filtered apps = %#v", filtered[0].Apps)
+	}
+	if len(filtered[0].AppTemplates) != 1 || filtered[0].AppTemplates[0].CanonicalConnectorID != nil ||
+		!reflect.DeepEqual(filtered[0].AppTemplates[0].MaterializedAppIDs, []string{"b-only"}) {
+		t.Fatalf("filtered templates = %#v", filtered[0].AppTemplates)
+	}
+	if !reflect.DeepEqual(capabilities[0].AppConnectors, []string{"calendar", "b-only"}) || capabilities[0].AppTemplates[0].CanonicalConnectorID == nil {
+		t.Fatal("canonical filtering mutated its input")
+	}
+}
+
 // TestDisabledPluginHookSourcesFilteredLikeRust covers the plugin-hook half of
 // #44655: a disabled plugin's hook sources are excluded from thread-scoped
 // hook discovery.

@@ -535,6 +535,14 @@ type PluginDetail struct {
 	MCPServers      []string             `json:"mcpServers"`
 	ManifestPath    string               `json:"manifestPath,omitempty"`
 	MarketplaceRoot string               `json:"marketplaceRoot,omitempty"`
+	// CanonicalAppID is the connector this remote plugin canonically owns. It
+	// remains host-internal and is used to exclude shared connectors when the
+	// canonical owner is disabled (Rust #45755).
+	CanonicalAppID *string `json:"-"`
+	// CanonicalAppAuthIdentity binds canonical ownership to the account whose
+	// installed-plugin cache produced it. A different authentication identity
+	// must ignore the metadata.
+	CanonicalAppAuthIdentity string `json:"-"`
 	// onboardingSkillPath is the resolved declaration from the plugin manifest;
 	// it is internal and never serialized.
 	onboardingSkillPath string
@@ -2108,6 +2116,55 @@ func (s *PluginService) InstalledDetails() []PluginDetail {
 	return details
 }
 
+// CanonicalAppIDsForDisabledPlugins returns connector IDs owned canonically by
+// disabled plugins from the current authentication's installed-plugin cache
+// (Rust #45755). An owner matches by plugin name and marketplace; metadata from
+// another authentication identity is ignored. The owner's bundle need not be
+// materialized on this host.
+func (s *PluginService) CanonicalAppIDsForDisabledPlugins(disabledPluginIDs []string, authIdentity string) map[string]struct{} {
+	if s == nil || len(disabledPluginIDs) == 0 {
+		return nil
+	}
+	disabled := make(map[string]struct{}, len(disabledPluginIDs))
+	for _, id := range disabledPluginIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			disabled[id] = struct{}{}
+		}
+	}
+	if len(disabled) == 0 {
+		return nil
+	}
+	authIdentity = strings.TrimSpace(authIdentity)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]struct{}{}
+	for _, detail := range s.plugins {
+		if detail.CanonicalAppID == nil || strings.TrimSpace(*detail.CanonicalAppID) == "" {
+			continue
+		}
+		if strings.TrimSpace(detail.CanonicalAppAuthIdentity) != authIdentity {
+			continue
+		}
+		pluginID := strings.TrimSpace(detail.Summary.ID)
+		if pluginID == "" {
+			name := strings.TrimSpace(detail.Summary.Name)
+			marketplace := strings.TrimSpace(detail.Summary.MarketplaceName)
+			if name == "" || marketplace == "" {
+				continue
+			}
+			pluginID = name + "@" + marketplace
+		}
+		if _, blocked := disabled[pluginID]; !blocked {
+			continue
+		}
+		out[strings.TrimSpace(*detail.CanonicalAppID)] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (s *PluginService) EnabledCapabilities() []CapabilitySummary {
 	if s == nil {
 		return nil
@@ -3504,6 +3561,10 @@ func cloneDetail(detail PluginDetail) PluginDetail {
 	if detail.Description != nil {
 		value := *detail.Description
 		detail.Description = &value
+	}
+	if detail.CanonicalAppID != nil {
+		value := *detail.CanonicalAppID
+		detail.CanonicalAppID = &value
 	}
 	return detail
 }

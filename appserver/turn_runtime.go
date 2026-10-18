@@ -10194,7 +10194,9 @@ func (r *RuntimeRouter) pluginCapabilitiesForThread(threadID string) []plugin.Ca
 	if snapshot := r.activeStepCapabilitySnapshot(threadID); snapshot != nil {
 		return snapshot.capabilities()
 	}
-	return filterDisabledPluginCapabilities(r.threadDisabledPluginIDs(threadID), r.services.Plugins.EnabledCapabilities())
+	disabled := r.threadDisabledPluginIDs(threadID)
+	capabilities := filterDisabledPluginCapabilities(disabled, r.services.Plugins.EnabledCapabilities())
+	return filterCanonicalDisabledConnectors(capabilities, r.canonicalDisabledConnectorIDs(disabled))
 }
 
 // filterDisabledPluginCapabilities keeps only capabilities whose plugin is not
@@ -10224,6 +10226,73 @@ func filterDisabledPluginCapabilities(disabled []string, capabilities []plugin.C
 		filtered = append(filtered, capability)
 	}
 	return filtered
+}
+
+// canonicalDisabledConnectorIDs resolves connector ownership from the installed
+// remote-plugin cache for the current account. A stale cache from another
+// authentication identity contributes no exclusions (Rust #45755).
+func (r *RuntimeRouter) canonicalDisabledConnectorIDs(disabled []string) map[string]struct{} {
+	if r == nil || r.services.Plugins == nil || len(disabled) == 0 {
+		return nil
+	}
+	authIdentity := ""
+	if r.services.Config != nil {
+		codexHome := strings.TrimSpace(r.services.Config.CodexHome())
+		authIdentity = remoteInstalledPluginsAuthIdentityKey(remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome)))
+	}
+	return r.services.Plugins.CanonicalAppIDsForDisabledPlugins(disabled, authIdentity)
+}
+
+// filterCanonicalDisabledConnectors removes connectors owned by a disabled
+// canonical plugin even when another enabled plugin contributes the same
+// connector (Rust #45755). The disabled owner's bundle need not be materialized.
+func filterCanonicalDisabledConnectors(capabilities []plugin.CapabilitySummary, blocked map[string]struct{}) []plugin.CapabilitySummary {
+	if len(blocked) == 0 || len(capabilities) == 0 {
+		return capabilities
+	}
+	out := make([]plugin.CapabilitySummary, len(capabilities))
+	for index := range capabilities {
+		capability := capabilities[index]
+		if len(capability.AppConnectors) > 0 {
+			connectors := make([]string, 0, len(capability.AppConnectors))
+			for _, connectorID := range capability.AppConnectors {
+				if _, excluded := blocked[strings.TrimSpace(connectorID)]; !excluded {
+					connectors = append(connectors, connectorID)
+				}
+			}
+			capability.AppConnectors = connectors
+		}
+		if len(capability.Apps) > 0 {
+			apps := make([]plugin.AppSummary, 0, len(capability.Apps))
+			for _, app := range capability.Apps {
+				if _, excluded := blocked[strings.TrimSpace(app.ID)]; !excluded {
+					apps = append(apps, app)
+				}
+			}
+			capability.Apps = apps
+		}
+		if len(capability.AppTemplates) > 0 {
+			templates := make([]plugin.AppTemplateSummary, len(capability.AppTemplates))
+			for templateIndex, template := range capability.AppTemplates {
+				if template.CanonicalConnectorID != nil {
+					if _, excluded := blocked[strings.TrimSpace(*template.CanonicalConnectorID)]; excluded {
+						template.CanonicalConnectorID = nil
+					}
+				}
+				materialized := make([]string, 0, len(template.MaterializedAppIDs))
+				for _, appID := range template.MaterializedAppIDs {
+					if _, excluded := blocked[strings.TrimSpace(appID)]; !excluded {
+						materialized = append(materialized, appID)
+					}
+				}
+				template.MaterializedAppIDs = materialized
+				templates[templateIndex] = template
+			}
+			capability.AppTemplates = templates
+		}
+		out[index] = capability
+	}
+	return out
 }
 
 func (r *RuntimeRouter) selectedCapabilitySkillEntriesForRuntime(threadID string) ([]SkillsListEntry, []string, error) {

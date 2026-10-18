@@ -42,6 +42,7 @@ type remoteInstalledPluginPage struct {
 type remoteInstalledPlugin struct {
 	ID                 string                       `json:"id"`
 	Name               string                       `json:"name"`
+	CanonicalAppID     *string                      `json:"canonical_app_id"`
 	Scope              string                       `json:"scope"`
 	Discoverability    string                       `json:"discoverability"`
 	InstalledAt        *time.Time                   `json:"installed_at"`
@@ -116,6 +117,12 @@ func (r *RuntimeRouter) reconcileInstalledRemotePlugins(ctx context.Context) (bo
 	if !remoteInstalledPluginGenerationCurrent(codexHome, generation) ||
 		remoteInstalledPluginsAuthIdentityFromSnapshot(r.accountAuthSnapshot(codexHome)) != authIdentity {
 		return false, nil
+	}
+	for marketplaceName, details := range detailsByMarketplace {
+		for index := range details {
+			details[index].CanonicalAppAuthIdentity = remoteInstalledPluginsAuthIdentityKey(authIdentity)
+		}
+		detailsByMarketplace[marketplaceName] = details
 	}
 	changed := false
 	for _, marketplaceName := range []string{
@@ -257,6 +264,7 @@ func fetchInstalledRemotePluginDetails(ctx context.Context, client interface {
 				Enabled:           true,
 				Extensions:        plugin.ParsePluginExtensions(candidate.Extensions),
 			},
+			CanonicalAppID: cloneStringPtrAppserver(candidate.CanonicalAppID),
 		})
 	}
 	if err := removeStaleRemoteInstalledPluginCaches(codexHome, installedNamesByMarketplace); err != nil {

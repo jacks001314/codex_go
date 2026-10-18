@@ -35,7 +35,7 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 			return
 		}
 		mu.Lock()
-		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","scope":"GLOBAL","enabled":true,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"},"extensions":{"entrypoints":[{"type":"global","app_id":"demo-app","tool_name":"demo.open","title":"Demo","resource_uri":"ui://demo","icons":[],"quick_action":{"title":"Open demo","icons":[],"target":{"type":"tool","name":"demo.open","arguments":{}}}}],"settings":[{"app_id":"demo-app","read_tool_name":"demo.read","update_tool_name":"demo.update"}]}}],"pagination":{"next_page_token":null}}`, status, displayName)
+		body := fmt.Sprintf(`{"plugins":[{"id":"plugins~Plugin_demo","name":"demo-plugin","canonical_app_id":"demo-app","scope":"GLOBAL","enabled":true,"status":%q,"release":{"display_name":%q,"description":"Demo plugin"},"extensions":{"entrypoints":[{"type":"global","app_id":"demo-app","tool_name":"demo.open","title":"Demo","resource_uri":"ui://demo","icons":[],"quick_action":{"title":"Open demo","icons":[],"target":{"type":"tool","name":"demo.open","arguments":{}}}}],"settings":[{"app_id":"demo-app","read_tool_name":"demo.read","update_tool_name":"demo.update"}]}}],"pagination":{"next_page_token":null}}`, status, displayName)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(body))
@@ -81,6 +81,10 @@ func TestRemoteInstalledPluginDisplayRefreshPreservesDerivedCachesLikeRust(t *te
 	}
 	if len(extensions.Settings) != 1 || extensions.Settings[0].ReadToolName != "demo.read" {
 		t.Fatalf("settings extensions = %#v", extensions.Settings)
+	}
+	authIdentity := remoteInstalledPluginsAuthIdentityKey(remoteInstalledPluginsAuthIdentityFromSnapshot(router.accountAuthSnapshot(home)))
+	if canonical := plugins.CanonicalAppIDsForDisabledPlugins([]string{"demo-plugin@openai-curated-remote"}, authIdentity); len(canonical) != 1 {
+		t.Fatalf("canonical app exclusions = %#v", canonical)
 	}
 
 	seed := func() {

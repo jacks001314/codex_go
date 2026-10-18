@@ -67,6 +67,7 @@ func (s *runtimeStepCapabilitySnapshot) refreshContext(ctx context.Context, rout
 	var discoveryV2 *[]execserverclient.ExecutorCapabilityDiscoveryV2Snapshot
 	if router != nil && router.services.Plugins != nil {
 		capabilities = cloneRuntimePluginCapabilities(router.services.Plugins.EnabledCapabilities())
+		capabilities = filterCanonicalDisabledConnectors(capabilities, router.canonicalDisabledConnectorIDs(disabled))
 		skillRoots = cloneRuntimeEnabledSkillRoots(router.services.Plugins.EnabledSkillRoots())
 	}
 	if router != nil {

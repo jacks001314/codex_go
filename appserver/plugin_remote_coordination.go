@@ -33,6 +33,20 @@ func remoteInstalledPluginsAuthIdentityFromSnapshot(snapshot *auth.AuthDotJSON) 
 	}
 }
 
+func remoteInstalledPluginsAuthIdentityKey(identity remoteInstalledPluginsAuthIdentity) string {
+	workspace := "0"
+	if identity.WorkspaceAccount {
+		workspace = "1"
+	}
+	return strings.Join([]string{
+		identity.AuthMode,
+		identity.AccountID,
+		identity.ChatGPTUserID,
+		identity.ChatGPTPlanType,
+		workspace,
+	}, "\x00")
+}
+
 type remoteInstalledPluginCoordinationState struct {
 	// gate serializes installed-plugin bundle reconciliation with direct remote
 	// plugin installs and uninstalls.
