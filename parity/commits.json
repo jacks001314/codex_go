@@ -16288,9 +16288,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: new_inject_items_context"
+        "Equivalent implementation: thread/inject_items appends the supplied items directly to the existing thread record/rollout (or active-turn mailbox) and does not construct a turn context, so initialized-thread injection performs no skill discovery. The next real turn still uses the normal full turn-context path and discovers skills."
       ]
     },
     {
