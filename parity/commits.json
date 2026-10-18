@@ -21276,9 +21276,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: validate_external_url"
+        "Audited upstream d0a64e91ae (#48015): already implemented. AppLinkParamsFromToolSuggestion validates install URLs with the shared external-URL policy (credential-free HTTPS with a host), declines malformed/non-HTTPS suggestions without a popup, and renders valid suggestions through the app-link flow. Tests: TestAppLinkToolSuggestionInvalidInstallURLDeclinesLikeRust, TestAppLinkParamsFromToolSuggestionValidatesURLsLikeRust, TestModelDeclinesInvalidToolSuggestionInstallURLsWithoutPopup, TestModelShowsValidToolSuggestionAppLinkPopupLikeRust."
       ]
     },
     {
@@ -25551,9 +25551,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/6); candidate gap: composer_is_vim_enabled, filter_line_breaks, new_single_line, rename_key, set_rename_input"
+        "Audited upstream 37f53199a6 (#50216): already implemented. The agents-overview rename field is a single-line editor honoring Vim mode, filters line breaks, restores the cursor, and uses the steady-bar cursor style in Vim insert mode. Tests: TestAgentsOverviewRenameUsesVimSingleLineEditorLikeRust and TestAgentsOverviewRenameCursorStyleLikeRust."
       ]
     },
     {
@@ -28326,9 +28326,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: test_plugin_summary"
+        "Audited upstream 746103b592 (#51865): already implemented. PluginMentionName uses bounded display names for generated app IDs and falls back for invalid/env-var-like names, while mention bindings preserve the plugin config name and do not suppress same-name skills. Tests: TestGeneratedAppPluginMentionNameMatchesRust and the plugin/skill mention submission coverage."
       ]
     },
     {
@@ -29672,9 +29672,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: box_future, make_test_app"
+        "N/A by architecture (audit): upstream 47bcb3a3f9 (#52959) only boxes Tokio futures and shrinks async TUI test helper stacks. Go tests are synchronous/table-driven or use goroutines without Tokio future layouts, so there is no equivalent stack-usage change or observable contract."
       ]
     },
     {
