@@ -88,6 +88,31 @@ func TestModelsCatalogURLRejectsOversizedResponseLikeRust(t *testing.T) {
 	}
 }
 
+// Mirrors Rust #45822's opt-in contract: the body limit belongs to the explicit
+// catalog request and must not make ordinary models-endpoint calls bounded.
+func TestModelsCatalogBodyLimitOnlyAppliesToExplicitCatalogLikeRust(t *testing.T) {
+	body := `{"models":[{"slug":"remote","display_name":"Remote","visibility":"list","supported_in_api":true}],"padding":"` +
+		strings.Repeat("x", modelsCatalogMaxBytes) + `"}`
+	server, _ := modelCatalogTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	})
+
+	ordinary := &HTTPModelsEndpoint{Provider: &APIProvider{BaseURL: server.URL}}
+	response, err := ordinary.ListModels(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ordinary models request became bounded: %v", err)
+	}
+	if len(response.Models) != 1 || response.Models[0].Slug != "remote" {
+		t.Fatalf("ordinary models response = %#v", response.Models)
+	}
+
+	explicit := &HTTPModelsEndpoint{CatalogURL: server.URL + "/codex/models"}
+	if _, err := explicit.ListModels(context.Background(), ""); err == nil ||
+		!strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("explicit catalog limit error = %v", err)
+	}
+}
+
 // Mirrors Rust #49135: an explicit provider catalog is authoritative even when
 // API-key discovery is gated off, so bundled models are not advertised as a
 // fallback.

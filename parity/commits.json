@@ -14247,9 +14247,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: list_models_raw"
+        "Equivalent implementation present at the explicit-catalog carrier: HTTP models reads use a max+1 LimitReader and reject oversized success or error bodies, while ordinary models requests remain unbounded. The catalog limit is re-applied on every attempt because it is derived from the endpoint's CatalogURL. Added regression coverage proving only explicit catalog calls are bounded."
       ]
     },
     {
