@@ -29429,9 +29429,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: read_environment_config_with_timeout"
+        "Equivalent implementation already present: Client.ReadEnvironmentConfig remains unbounded, while ReadEnvironmentConfigWithTimeout uses callWithTimeoutRecovery to bound sending and receiving after connection establishment. Timeouts return the typed RPCTimedOutError and are retryable. Reconnectable transports retire the probed connection; stdio transports with reconnect disabled remain open, so an in-flight config read can finish and a late timed-out response does not break subsequent reads on the same connection. Environment-info requests already share the same timeout/recovery helper. Regression tests cover timeout typing, in-flight preservation, late responses, and a fresh read on the same stdio connection."
       ]
     },
     {
