@@ -24202,9 +24202,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: install_notifications"
+        "Equivalent implementation already present: turn start installs a turn-owned remote board receiver, waits for the first connection attempt, retries every second, filters stale/wrong-turn notices, and cancels the receiver on completion, abort, error, or shutdown. Delivery stays best effort through the board host so skipped previews do not tear down the stream."
       ]
     },
     {
