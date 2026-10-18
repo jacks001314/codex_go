@@ -2066,6 +2066,11 @@ green.
 - `#48560` is complete: an already-painted working tip survives transcript
   interaction/scrolling, while initial and completion tips still require an
   idle following viewport.
+- `#49136` is complete: Option glyphs attach directly to the key (`⌥t`,
+  `shift+⌥t`) while text modifiers retain `+`.
+- `#49144` and `#49145` are complete: launch-scoped reasoning summary/verbosity
+  overrides preserve server defaults, and `/status` hides the summary setting
+  when a server/daemon owns the session.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

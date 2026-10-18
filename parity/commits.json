@@ -23184,9 +23184,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's key-label formatter treats the macOS Option glyph as a prefix: it emits compact labels such as ⌥t, ⌥, and shift+⌥t, while text modifiers (ctrl/shift/alt) keep the '+' separator. The same formatter feeds shortcut help, navigation hints, footer labels, and tooltips."
       ]
     },
     {
@@ -23208,9 +23208,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Go's launch-scoped reasoning resolver forwards model_reasoning_summary/model_verbosity only when their winning layer is a session flag, CLI override, or explicitly selected user profile; plain user/project values are left to the destination server. Embedded launch overrides and remote config values share the same resolution, with profile/project/CLI precedence and nested feature-flag tests."
       ]
     },
     {
@@ -23220,9 +23220,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "NewModel marks State.RemoteConnection for local background daemons and remote app servers, and the status card omits the reasoning-summaries row in that mode while keeping it for in-process sessions. TestNewModelCarriesServerConnectionToStatusCardLikeRust covers all three connection kinds."
       ]
     },
     {
