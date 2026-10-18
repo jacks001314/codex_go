@@ -21504,9 +21504,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: clear_for_thread_switch, defer_thread_switch_clear, has_deferred_thread_switch_clear"
+        "N/A by architecture (audit): upstream 66c4e5a20d (#48121) defers a terminal clear while Rust's separate StartupDraftPump keeps its initial composer visible between loading frames and session handoff. Go has no StartupDraftPump/loading-frame split: newAgentsOverviewSessionCmd starts the session as a Bubble Tea command and applies the result on a later Update, while thread drafts are preserved explicitly through agentsOverviewDrafts/agentsOverviewPendingDraft. There is no deferred-terminal-clear or startup draft surface to preserve."
       ]
     },
     {
