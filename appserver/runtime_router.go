@@ -15095,6 +15095,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if cfg != nil {
 		options.CodeModeDefaultExecYieldTime = cfg.CodeModeDefaultExecYieldTime()
 		options.CodeModeShowCellOverhead = cfg.CodeModeExperimentalShowCellOverhead()
+		options.CodeModeToolDescriptionFirst = cfg.CodeModeToolDescriptionFirst()
 		options.CodeModeToolInputSchemaMaxBytes = cfg.CodeModeToolInputSchemaMaxBytes()
 	}
 	options.DisableCodeModeFallback = r.services.DisableCodeModeFallback

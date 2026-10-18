@@ -151,6 +151,10 @@ type ToolRegistryOptions struct {
 	// CodeModeShowCellOverhead mirrors features.code_mode.experimental_show_cell_overhead
 	// (#46288): code-mode cell responses report the host duration and overhead.
 	CodeModeShowCellOverhead bool
+	// CodeModeToolDescriptionFirst mirrors
+	// features.code_mode_tool_description_first (#51690/#51704): nested tool
+	// definitions put the tool description before the namespace description.
+	CodeModeToolDescriptionFirst bool
 	// CodeModeToolInputSchemaMaxBytes enlarges the rendered Code Mode input
 	// type budget when set (Rust #47936).
 	CodeModeToolInputSchemaMaxBytes int
@@ -744,6 +748,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if registryHasSearchableDeferredTool(registry) {
 			registry.Remove(tool.PlainName(tool.ToolSearchName))
 			specs := registry.DiscoverableSpecs()
+			specs = tool.OrderCodeModeToolDescriptions(specs, options.CodeModeToolDescriptionFirst)
 			if indirectPrefixes != nil {
 				specs = indirectPrefixes.ApplyToSpecs(specs)
 			}
@@ -759,6 +764,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 		if options.CodeModeRuntime != nil {
 			options.CodeModeRuntime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			options.CodeModeRuntime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
+			options.CodeModeRuntime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			options.CodeModeRuntime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			// Rust #45409: a Code Mode cell retains the window it started in, so
 			// the nested MCP calls it issues keep reporting that window.
@@ -768,6 +774,7 @@ func BuildToolRegistry(options *ToolRegistryOptions) (*tool.Registry, error) {
 			runtime := tool.NewCodeModeRuntime(options.CodeModeProvider, options.DisableCodeModeFallback)
 			runtime.SetDefaultExecYieldTime(options.CodeModeDefaultExecYieldTime)
 			runtime.SetShowCellOverhead(options.CodeModeShowCellOverhead)
+			runtime.SetToolDescriptionFirst(options.CodeModeToolDescriptionFirst)
 			runtime.SetIndirectDescriptionPrefixes(indirectPrefixes)
 			execExecutor, waitExecutor = runtime.Executors(registry, codeModeCommandTool)
 		}

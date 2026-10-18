@@ -105,6 +105,9 @@ type codeModeExecExecutor struct {
 	// (#46288): report the code-mode host duration and harness overhead in the
 	// cell response header.
 	showCellOverhead bool
+	// toolDescriptionFirst mirrors features.code_mode_tool_description_first
+	// (#51690/#51704): order nested namespace descriptions after tool guidance.
+	toolDescriptionFirst bool
 	// windowID is the turn's conversation window identity (`{thread}:{n}`); it
 	// stamps a cell's retained origin when the cell starts.
 	windowID string
@@ -418,6 +421,17 @@ func (r *CodeModeRuntime) SetShowCellOverhead(enabled bool) {
 	}
 	r.exec.bindingMu.Lock()
 	r.exec.showCellOverhead = enabled
+	r.exec.bindingMu.Unlock()
+}
+
+// SetToolDescriptionFirst orders nested Code Mode descriptions as tool text
+// followed by namespace text when enabled (Rust #51704).
+func (r *CodeModeRuntime) SetToolDescriptionFirst(enabled bool) {
+	if r == nil || r.exec == nil {
+		return
+	}
+	r.exec.bindingMu.Lock()
+	r.exec.toolDescriptionFirst = enabled
 	r.exec.bindingMu.Unlock()
 }
 
@@ -780,7 +794,7 @@ func (e *codeModeExecExecutor) executeRemote(ctx context.Context, invocation *In
 		}
 	}()
 	definitions := make([]CodeModeRemoteToolDefinition, 0)
-	for _, nested := range e.nestedTools() {
+	for _, nested := range e.nestedToolsWithOrderedDescriptions() {
 		name := nested.name
 		spec := nested.spec
 		kind := PayloadFunction
@@ -887,12 +901,21 @@ func (e *codeModeExecExecutor) TakeCodeModeUnavailableWarning(effectiveToolMode 
 }
 
 func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
+	return e.nestedToolsOrdered(false)
+}
+
+func (e *codeModeExecExecutor) nestedToolsWithOrderedDescriptions() []codeModeNestedTool {
+	return e.nestedToolsOrdered(true)
+}
+
+func (e *codeModeExecExecutor) nestedToolsOrdered(orderDescriptions bool) []codeModeNestedTool {
 	registry, nestedCommandTool := e.binding()
 	if registry == nil {
 		return nil
 	}
 	e.bindingMu.RLock()
 	indirectPrefixes := e.indirectPrefixes
+	toolDescriptionFirst := e.toolDescriptionFirst
 	e.bindingMu.RUnlock()
 	names := registry.Names()
 	out := make([]codeModeNestedTool, 0, len(names))
@@ -910,6 +933,9 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 			continue
 		}
 		seenIdentifiers[globalName] = struct{}{}
+		if orderDescriptions {
+			spec.Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription, toolDescriptionFirst)
+		}
 		if indirectPrefixes != nil {
 			spec = indirectPrefixes.ApplyToSpec(spec)
 		}
@@ -918,8 +944,44 @@ func (e *codeModeExecExecutor) nestedTools() []codeModeNestedTool {
 	return out
 }
 
+// OrderCodeModeToolDescriptions merges namespace guidance into each Code Mode
+// tool description. The declaration suffix remains last so tool-search results,
+// remote EnabledTools, and ALL_TOOLS expose the same ordering (Rust #51704).
+func OrderCodeModeToolDescriptions(specs []Spec, toolDescriptionFirst bool) []Spec {
+	out := make([]Spec, len(specs))
+	for index, spec := range specs {
+		out[index] = cloneSpec(spec)
+		out[index].Description = orderCodeModeToolDescription(spec.Description, spec.NamespaceDescription, toolDescriptionFirst)
+	}
+	return out
+}
+
+const codeModeToolDeclarationSeparator = "\n\nexec tool declaration:\n"
+
+func orderCodeModeToolDescription(toolDescription string, namespaceDescription string, toolDescriptionFirst bool) string {
+	namespaceDescription = strings.TrimSpace(namespaceDescription)
+	if namespaceDescription == "" {
+		return toolDescription
+	}
+	toolText, declaration, hasDeclaration := strings.Cut(toolDescription, codeModeToolDeclarationSeparator)
+	toolText = strings.TrimSpace(toolText)
+	var description string
+	switch {
+	case toolText == "":
+		description = namespaceDescription
+	case toolDescriptionFirst:
+		description = toolText + "\n\n" + namespaceDescription
+	default:
+		description = namespaceDescription + "\n\n" + toolText
+	}
+	if hasDeclaration {
+		description += codeModeToolDeclarationSeparator + declaration
+	}
+	return description
+}
+
 func (e *codeModeExecExecutor) nestedToolsForInvocation(invocation *Invocation) []codeModeNestedTool {
-	nested := e.nestedTools()
+	nested := e.nestedToolsWithOrderedDescriptions()
 	if invocation == nil || invocation.Context == nil {
 		return nested
 	}

@@ -718,6 +718,29 @@ func TestCodeModeExperimentalShowCellOverheadLikeRust(t *testing.T) {
 	}
 }
 
+func TestCodeModeToolDescriptionFirstLikeRust(t *testing.T) {
+	enabled := &Config{Values: map[string]any{
+		"features": map[string]any{"code_mode_tool_description_first": true},
+	}}
+	if !enabled.CodeModeToolDescriptionFirst() {
+		t.Fatal("CodeModeToolDescriptionFirst() = false, want true")
+	}
+	for _, test := range []struct {
+		name string
+		cfg  *Config
+	}{
+		{name: "disabled", cfg: &Config{Values: map[string]any{
+			"features": map[string]any{"code_mode_tool_description_first": false},
+		}}},
+		{name: "absent", cfg: &Config{Values: map[string]any{"features": map[string]any{}}}},
+		{name: "nil", cfg: nil},
+	} {
+		if test.cfg.CodeModeToolDescriptionFirst() {
+			t.Errorf("%s config enabled tool-description-first", test.name)
+		}
+	}
+}
+
 func TestAllowLoginShellDefaultsTrueLikeRust(t *testing.T) {
 	cfg := &Config{Values: map[string]any{}}
 	if !cfg.AllowLoginShell() {

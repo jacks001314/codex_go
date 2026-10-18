@@ -519,6 +519,7 @@ func (r *Runner) RunContext(ctx context.Context, req *Request, stdin io.Reader, 
 		DisableCodeModeFallback:        cfg.DisableCodeModeInProcessFallback(),
 		CodeModeDefaultExecYieldTime:   cfg.CodeModeDefaultExecYieldTime(),
 		CodeModeShowCellOverhead:       cfg.CodeModeExperimentalShowCellOverhead(),
+		CodeModeToolDescriptionFirst:   cfg.CodeModeToolDescriptionFirst(),
 		ProviderID:                     providerID,
 		CyberAccessProgram:             cyberAccessProgram,
 		TaskKind:                       taskKind,
@@ -747,6 +748,7 @@ type agentRunConfig struct {
 	DisableCodeModeFallback        bool
 	CodeModeDefaultExecYieldTime   time.Duration
 	CodeModeShowCellOverhead       bool
+	CodeModeToolDescriptionFirst   bool
 	CodeModeProvider               tool.CodeModeRemoteProvider
 	CodeModeRuntime                *tool.CodeModeRuntime
 	ProviderID                     string
@@ -1426,6 +1428,7 @@ func (r *Runner) toolRouterForRequest(req *Request, run *agentRunConfig) (*tool.
 		options.CodeModeRuntime = run.CodeModeRuntime
 		options.CodeModeDefaultExecYieldTime = run.CodeModeDefaultExecYieldTime
 		options.CodeModeShowCellOverhead = run.CodeModeShowCellOverhead
+		options.CodeModeToolDescriptionFirst = run.CodeModeToolDescriptionFirst
 		options.DisableCodeModeFallback = run.DisableCodeModeFallback
 		options.ToolMode = run.ToolMode
 	}

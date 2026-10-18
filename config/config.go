@@ -2060,6 +2060,21 @@ func (c *Config) CodeModeExperimentalShowCellOverhead() bool {
 	return ok && value
 }
 
+// CodeModeToolDescriptionFirst reports whether nested Code Mode tool
+// definitions put the tool description before its namespace description
+// (Rust #51690/#51704). The feature is disabled by default.
+func (c *Config) CodeModeToolDescriptionFirst() bool {
+	if c == nil || c.Values == nil {
+		return false
+	}
+	features, ok := c.Values["features"].(map[string]any)
+	if !ok {
+		return false
+	}
+	enabled, _ := features["code_mode_tool_description_first"].(bool)
+	return enabled
+}
+
 // CodeModeToolInputSchemaMaxBytes returns
 // features.code_mode.tool_input_schema_max_bytes (Rust #47936). Zero means the
 // 16,000-byte Code Mode default.

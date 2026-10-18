@@ -26597,9 +26597,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 730 (audit): the Sobek runtime installs as_settled and stream_settled with positional or Map-keyed indices, settlement-order queuing, thenable/plain-value support, awaited callbacks, callback error propagation, and early-close behavior. Tests: go test ./codemode -run Settled -count=1"
       ]
     },
     {
@@ -27966,9 +27966,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 730 (implementation): code_mode_tool_description_first is registered as an under-development, default-off feature, accepted by strict config, and exposed through Config.CodeModeToolDescriptionFirst. Test: go test ./config -run TestCodeModeToolDescriptionFirstLikeRust -count=1"
       ]
     },
     {
@@ -27978,9 +27978,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 730 (implementation): the feature setting flows through app-server/exec into CodeModeRuntime and orders namespace guidance for remote EnabledTools, local ALL_TOOLS, and tool-search results. Tool text precedes namespace text when enabled, namespace-first remains the default, and the exec declaration suffix stays last. Tests: go test ./tool -run TestCodeModeToolDescriptionOrderLikeRust -count=1; go test ./turn -run TestBuildToolRegistryOrdersCodeModeToolDescriptionsLikeRust -count=1"
       ]
     },
     {
