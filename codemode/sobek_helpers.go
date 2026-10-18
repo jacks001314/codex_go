@@ -7,34 +7,54 @@ import (
 	"github.com/grafana/sobek"
 )
 
-func installSobekHelpers(runtime *sobek.Runtime, items *[]ContentItem) error {
+func installSobekHelpers(runtime *sobek.Runtime, items *[]ContentItem, state *sobekExecutionState) error {
 	if err := runtime.Set("text", func(call sobek.FunctionCall) sobek.Value {
+		if !state.active() {
+			return sobek.Undefined()
+		}
 		value := sobek.Undefined()
 		if len(call.Arguments) > 0 {
 			value = call.Argument(0)
 		}
-		*items = append(*items, InputText(renderSobekText(value)))
+		text, ok := renderSobekText(value, state)
+		if !ok {
+			return sobek.Undefined()
+		}
+		state.appendOutput(items, InputText(text))
 		return sobek.Undefined()
 	}); err != nil {
 		return fmt.Errorf("install text helper: %w", err)
 	}
 	if err := runtime.Set("audio", func(call sobek.FunctionCall) sobek.Value {
+		if !state.active() {
+			return sobek.Undefined()
+		}
 		value := sobek.Undefined()
 		if len(call.Arguments) > 0 {
 			value = call.Argument(0)
 		}
 		item, message := normalizeSobekAudio(value)
+		if !state.active() {
+			return sobek.Undefined()
+		}
 		if message != "" {
 			// Sobek host functions report JavaScript errors by panicking with
 			// an Error object; the runtime converts it into a script exception.
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if !state.active() {
+				return sobek.Undefined()
+			}
 			panic(runtime.NewTypeError(message))
 		}
-		*items = append(*items, item)
+		state.appendOutput(items, item)
 		return sobek.Undefined()
 	}); err != nil {
 		return fmt.Errorf("install audio helper: %w", err)
 	}
 	if err := runtime.Set("exit", func() {
+		state.exitRequested.Store(true)
+		state.requestTermination(errEngineExit)
 		runtime.Interrupt(errEngineExit)
 	}); err != nil {
 		return fmt.Errorf("install exit helper: %w", err)
@@ -135,19 +155,26 @@ const sobekSettledHelpers = `
 })();
 `
 
-func renderSobekText(value sobek.Value) string {
+func renderSobekText(value sobek.Value, state *sobekExecutionState) (string, bool) {
+	if !state.active() {
+		return "", false
+	}
 	if sobek.IsUndefined(value) {
-		return "undefined"
+		return "undefined", true
 	}
 	if sobek.IsNull(value) {
-		return "null"
+		return "null", true
 	}
 	if _, ok := value.Export().(string); ok {
-		return value.String()
+		return value.String(), state.active()
 	}
-	encoded, err := json.Marshal(value.Export())
+	exported := value.Export()
+	if !state.active() {
+		return "", false
+	}
+	encoded, err := json.Marshal(exported)
 	if err == nil {
-		return string(encoded)
+		return string(encoded), state.active()
 	}
-	return value.String()
+	return value.String(), state.active()
 }

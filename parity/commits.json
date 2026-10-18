@@ -29420,9 +29420,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 727 (implementation): Sobek execution state records external interruption before any text/audio serialization can re-enter JavaScript. Output admission is locked against the termination boundary, and a getter that keeps running during serialization returns the original context cancellation instead of settling as a catchable JavaScript error. Tests: go test ./codemode -run TestSobekEngineContextInterruptsOutputSerialization -count=1; go test -race ./codemode -run TestSobekEngine -count=1"
       ]
     },
     {
@@ -29576,9 +29576,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 727 (implementation): exit() now marks the whole Sobek cell terminal and interrupts execution before the runtime can inspect or await a pending/rejected module promise. Text/audio callbacks reject post-exit effects, including effects requested from getters during conversion, and exception formatting preserves the successful exit outcome. Regression coverage includes catch/finally, queued and parallel promises, infinite loops, text/audio getters, and exception formatting. Tests: go test ./codemode -count=1; go test -race ./codemode -run TestSobekEngine -count=1"
       ]
     },
     {
