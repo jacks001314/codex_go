@@ -121,7 +121,11 @@ func (m *HistoryManager) DropLastUserTurns(count uint32) {
 		cut = positions[len(positions)-n]
 	}
 	cut = m.trimPreTurnContextUpdates(firstInstructionTurn, cut)
-	m.items = cloneItems(m.items[:cut])
+	if cut == firstInstructionTurn {
+		m.items = filterFirstTurnModelSwitchInstructions(m.items[:cut])
+	} else {
+		m.items = cloneItems(m.items[:cut])
+	}
 	m.historyVersion++
 }
 
@@ -159,6 +163,52 @@ func (m *HistoryManager) trimPreTurnContextUpdates(firstInstructionTurn, cut int
 		}
 	}
 	return cut
+}
+
+// filterFirstTurnModelSwitchInstructions mirrors Rust #40271: when every user
+// turn is rolled back, first-turn developer messages retained in the prefix
+// lose model-switch fragments while their other content kinds stay aligned.
+func filterFirstTurnModelSwitchInstructions(items []HistoryItem) []HistoryItem {
+	retained := make([]HistoryItem, 0, len(items))
+	for _, source := range items {
+		item := cloneItem(source)
+		if item.Kind == eventmap.ResponseMessage && item.Role == "developer" && !filterModelSwitchInstructions(&item) {
+			continue
+		}
+		retained = append(retained, item)
+	}
+	return retained
+}
+
+// filterModelSwitchInstructions removes a rolled-back model-switch fragment
+// from a developer message that also carries persistent instructions. Rust
+// #40271 filters annotated content so the surviving fragments keep their
+// positional content kinds instead of inheriting the removed fragment's kind.
+func filterModelSwitchInstructions(item *HistoryItem) bool {
+	if item == nil || item.Role != "developer" {
+		return true
+	}
+	retained := item.Content[:0]
+	hasKinds := len(item.ContentItemKinds) > 0
+	retainedKinds := make([]string, 0, len(item.Content))
+	for index, part := range item.Content {
+		if part.Kind == eventmap.ContentInputText && strings.HasPrefix(strings.TrimSpace(part.Text), "<model_switch>") {
+			continue
+		}
+		retained = append(retained, part)
+		if hasKinds {
+			kind := "unknown"
+			if index < len(item.ContentItemKinds) && strings.TrimSpace(item.ContentItemKinds[index]) != "" {
+				kind = item.ContentItemKinds[index]
+			}
+			retainedKinds = append(retainedKinds, kind)
+		}
+	}
+	item.Content = retained
+	if hasKinds {
+		item.ContentItemKinds = retainedKinds
+	}
+	return len(retained) > 0
 }
 
 func (m *HistoryManager) ReplaceLastTurnImages(placeholder string) bool {

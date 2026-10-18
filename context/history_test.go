@@ -138,6 +138,44 @@ func TestDropLastUserTurnsClearsReferenceContextForMixedDeveloperContextBundles(
 	}
 }
 
+// Rust #40271: rolling back a first-turn model switch removes only that
+// fragment from a mixed developer message and keeps the surviving content and
+// its positional annotation aligned.
+func TestDropLastUserTurnsFiltersModelSwitchAndPreservesAnnotationsLikeRust(t *testing.T) {
+	manager := NewHistoryManager()
+	manager.RecordItems(
+		HistoryItem{
+			Kind: eventmap.ResponseMessage,
+			Role: "developer",
+			ID:   "mixed-model-switch",
+			Content: []eventmap.ContentItem{
+				{Kind: eventmap.ContentInputText, Text: "<model_switch>stale model instructions</model_switch>"},
+				{Kind: eventmap.ContentInputText, Text: "persistent developer instructions"},
+			},
+			ContentItemKinds: []string{"model_switch.instructions", "developer.instructions"},
+		},
+		textMessage("user", "u1", "turn 1 user"),
+	)
+	manager.SetReferenceContextItem([]byte(`{"turn_id":"reference-turn"}`))
+
+	manager.DropLastUserTurns(1)
+
+	items := manager.RawItems()
+	if len(items) != 1 || items[0].ID != "mixed-model-switch" {
+		t.Fatalf("items = %#v, want the mixed developer message retained", items)
+	}
+	item := items[0]
+	if len(item.Content) != 1 || item.Content[0].Text != "persistent developer instructions" {
+		t.Fatalf("developer content = %#v, want only the persistent instructions", item.Content)
+	}
+	if len(item.ContentItemKinds) != 1 || item.ContentItemKinds[0] != "developer.instructions" {
+		t.Fatalf("content kinds = %#v, want [developer.instructions]", item.ContentItemKinds)
+	}
+	if got := manager.ReferenceContextItem(); string(got) != `{"turn_id":"reference-turn"}` {
+		t.Fatalf("reference context item = %s, want the prefix baseline retained", got)
+	}
+}
+
 func TestStripImagesAndBuildTextMessage(t *testing.T) {
 	items := []HistoryItem{{
 		Kind: eventmap.ResponseMessage,

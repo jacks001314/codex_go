@@ -910,9 +910,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 598 (fix): full rollback now filters model-switch fragments from retained first-turn developer messages and rebuilds ContentItemKinds from the surviving parts, so persistent instructions keep their own positional classification. TestDropLastUserTurnsFiltersModelSwitchAndPreservesAnnotationsLikeRust covers the retained prefix path. Tests: go test ./context -count=1; go vet ./context"
       ]
     },
     {
