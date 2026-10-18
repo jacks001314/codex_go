@@ -28418,9 +28418,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: without_project_context"
+        "Round 641 (parity backfill): ConfigService.Read without a CWD loads only user, managed, and runtime layers; project layers require an explicit CWD. Global feature/marketplace/MCP reads use the no-CWD path while thread-scoped reads pass the thread CWD. Tests: go test ./config -run 'Projectless|IgnoreProject' -count=1; go test ./appserver -run 'ExperimentalFeatureList|MarketplaceRemoveConflictSource|ConfigRequirementsRead' -count=1"
       ]
     },
     {
@@ -28526,9 +28526,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/8; needs review: FunctionsNamespaceFunctionPrefixes, apply_functions_namespace_function_prefixes, cached_runtime, functions_namespace_functions_description_prefixes, registered_tool"
+        "Round 642 (parity backfill): ToolMessages parses function namespace description prefixes; registry construction applies trimmed prefixes to available default-namespace direct, freeform, and dynamic specs under the combined 256-byte boundary while leaving namespaced/unavailable tools and search ranking text unchanged. Tests: go test ./model ./tool ./turn -run 'FunctionsNamespaceDescriptionPrefixes|FunctionDescriptionPrefixes|ModelMessagesToolMessagesRoundTrip' -count=1"
       ]
     },
     {
@@ -28731,9 +28731,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: ChannelDescription"
+        "Round 643 (parity backfill): channel summaries carry an optional description; configuration validates the 512-byte UTF-8 limit, persists template descriptions, and migrates older local channel tables by adding the nullable column before seeded inserts. Tests: go test ./agentboard -run 'ChannelDescription|LocalBoard' -count=1"
       ]
     },
     {
@@ -29043,9 +29043,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/2; needs review: IncrementalToolsHint"
+        "Round 644 (parity backfill): the bundled hint uses the tools.incremental_update content kind and is emitted once per changed/new namespace batch; forked history retains it while rebuilt compaction prefixes stop before later batches. Tests: go test ./session ./appserver -run 'IncrementalToolUpdateNotice|TopLevelToolsNewNamespaces|LegacyCompactionDiscardsIncremental' -count=1"
       ]
     },
     {
@@ -29091,9 +29091,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: HISTORY_INITIALIZATION_KEY, HistoryInitialization"
+        "Round 645 (parity backfill): persisted/runtime provenance covers new, cleared, cold/warm/cold-fork, and supplied-history cases; start/resume/fork paths preserve live values and turn metadata serializes the classification while reserving the client key. Tests: go test ./codexapi ./turn ./session ./appserver -run 'HistoryInitialization' -count=1"
       ]
     },
     {
