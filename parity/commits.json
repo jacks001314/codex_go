@@ -3506,9 +3506,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "defaultGuardianMaxToolCallLag is 2, matching Rust's lowered default; configured/catalog bounds still override it. Tests: go test ./appserver -run 'Guardian.*Lag|Guardian.*Review' -count=1"
       ]
     },
     {
@@ -3542,9 +3542,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The V2 spawn_agent guidance now states: do not set `model` unless the user explicitly asks for a different model; V1 retains its upstream wording. Tests: go test ./agent -run 'Spawn' -count=1"
       ]
     },
     {

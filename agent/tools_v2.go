@@ -26,7 +26,7 @@ const (
 // whenever the model overrides are exposed and the spawn metadata is not
 // hidden (Rust #26114, re-gated by #49786 for the model-catalog-in-context
 // variant, which has no Go carrier because that feature is unwired here).
-const multiAgentV2SpawnInheritedModelGuidance = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
+const multiAgentV2SpawnInheritedModelGuidance = "Spawned agents inherit your current model by default. Do not set the `model` field unless the user explicitly asks for a different model."
 
 var multiAgentV2TaskNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
