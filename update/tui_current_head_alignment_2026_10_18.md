@@ -1977,9 +1977,10 @@ green.
 - `#46899` remains partial but now implements the core spacing policy:
   streaming lists stay compact, completed assistant/reasoning/plan lists
   separate every sibling when any item wraps, nested/quoted/code-item groups
-  are handled independently, and resizing recomputes separators. Remaining:
-  glamour concatenates multiple paragraphs inside a list item, and native
-  scrollback still has no AfterMultiline carrier.
+  are handled independently, list-item paragraphs keep their blank separator,
+  and resizing recomputes separators. Remaining: reader-position preservation
+  during streamed-cell consolidation is unverified, and native scrollback still
+  has no AfterMultiline carrier.
 - `#46902` is not applicable: Go has no rendered "Back to bottom" follow
   control; transcript navigation is key-driven and following is tracked by the
   viewport's bottom state.

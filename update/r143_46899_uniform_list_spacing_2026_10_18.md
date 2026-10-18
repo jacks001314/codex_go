@@ -9,10 +9,12 @@
   多行判定。间距在渲染后按当前宽度计算，resize 会重新分组。
 - 分隔行插入不触碰 rendered 行内容，OSC 8 链接元数据保留。
 
+- 同一列表项内的多个段落通过内部标题标记保留空行：渲染前在段落边界插入
+  私用区字符标题，渲染后替换为分隔行，再由 uniform 间距统一处理。
+
 剩余差异：
 
-- glamour 会把同一列表项内的多个段落拼接到一行，Rust 的段落保留/合并
-  语义仍需专门渲染修复。
+- streamed cell consolidation 时的 reader position 保持尚未验证。
 - native scrollback 的 `AfterMultiline` 策略尚未有 Go carrier。
 
 验证：

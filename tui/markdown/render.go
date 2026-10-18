@@ -251,6 +251,9 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	} else {
 		renderText = escapeTaskListMarkers(renderText)
 	}
+	if uniformLists {
+		renderText = insertListParagraphBreaks(renderText)
+	}
 	colorLevel := codextui.DetectStdoutColorLevel()
 	style = applyThemeMarkupColors(style, themeID, colorLevel)
 	linkSGR := linkStyleSGR(style.Link, colorLevel)
@@ -267,6 +270,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	if err != nil {
 		return "", err
 	}
+	out = replaceListParagraphBreakMarkers(out)
 	if renderLists {
 		out = stripRenderedTaskBullets(out)
 	} else {
@@ -286,7 +290,7 @@ func renderWithStyleSpacing(text string, width int, themeID string, cwd string, 
 	out = annotateLocalFileLinks(out, localLinks, cwd)
 	out = restoreURLPlaceholders(out, urlPlaceholders, linkSGR)
 	if uniformLists {
-		out = applyUniformListSpacing(out)
+		out = strings.ReplaceAll(applyUniformListSpacing(out), codexListParagraphBreakSentinel, "")
 	}
 	return strings.TrimRight(out, "\n"), nil
 }

@@ -139,9 +139,13 @@ func renderedListItemEnd(lines []string, infos []renderedListLine, start int) (i
 	key := infos[start]
 	multiline := false
 	sawBlank := false
+	sawParagraphBreak := false
 	for index := start + 1; index < len(infos); index++ {
 		info := infos[index]
 		if renderedLineBlank(lines[index]) {
+			if strings.Contains(utils.StripANSI(lines[index]), codexListParagraphBreakSentinel) {
+				sawParagraphBreak = true
+			}
 			sawBlank = true
 			continue
 		}
@@ -158,6 +162,12 @@ func renderedListItemEnd(lines []string, infos []renderedListLine, start int) (i
 			}
 			multiline = true
 			sawBlank = false
+			continue
+		}
+		if sawParagraphBreak && info.quoteDepth == key.quoteDepth {
+			multiline = true
+			sawBlank = false
+			sawParagraphBreak = false
 			continue
 		}
 		if sawBlank && info.quoteDepth == key.quoteDepth && info.indent <= key.indent {
@@ -193,6 +203,9 @@ func splitRenderedQuotePrefix(text string) (int, string) {
 
 func renderedLineBlank(line string) bool {
 	text := strings.TrimSpace(utils.StripANSI(line))
+	if strings.Contains(text, codexListParagraphBreakSentinel) {
+		return true
+	}
 	if text == "" {
 		return true
 	}

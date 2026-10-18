@@ -17375,7 +17375,7 @@
       ],
       "status": "partial",
       "evidence": [
-        "Round 681 (implementation): streaming assistant and plan markdown stays compact, while completed assistant, reasoning, and proposed-plan markdown renders through a per-list uniform policy: if any sibling item spans multiple rendered rows, every sibling is separated, with nested single-line lists, quoted lists, and code-block items handled as their own groups. The policy is applied after rendering, so resizing re-wraps and recomputes separators, and OSC 8 links survive insertion. Remaining: glamour concatenates multiple paragraphs inside one list item, so Rust's paragraph-preserving consolidation still differs, and the native-scrollback AfterMultiline policy has no Go carrier. Tests: go test ./tui/... -count=1; go vet ./tui/..."
+        "Round 681 (implementation): streaming assistant and plan markdown stays compact, while completed assistant, reasoning, and proposed-plan markdown renders through a per-list uniform policy: if any sibling item spans multiple rendered rows, every sibling is separated, with nested single-line lists, quoted lists, and code-block items handled as their own groups. Multiple paragraphs inside one list item retain a blank separator via an internal heading marker that is replaced after rendering. The policy is applied after rendering, so resizing re-wraps and recomputes separators, and OSC 8 links survive insertion. Remaining: reader-position preservation when a streamed cell consolidates is not verified, and the native-scrollback AfterMultiline policy has no Go carrier. Tests: go test ./tui/... -count=1; go vet ./tui/..."
       ]
     },
     {

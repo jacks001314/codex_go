@@ -77,6 +77,19 @@ func TestUniformListSpacingMatchesRust(t *testing.T) {
 				"after paragraph",
 			},
 		},
+		{
+			name:   "item paragraphs",
+			source: "- First paragraph\n\n  Second paragraph\n\n- Next\n\n- Last",
+			want: []string{
+				"• First paragraph",
+				"",
+				"Second paragraph",
+				"",
+				"• Next",
+				"",
+				"• Last",
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
