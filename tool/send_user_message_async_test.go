@@ -61,10 +61,17 @@ func TestSendUserMessageAsyncHandlerDescriptionOverride(t *testing.T) {
 	}
 }
 
-func TestSendUserMessageAsyncHandlerRestrictsToQuestionsLikeRust(t *testing.T) {
+func TestSendUserMessageAsyncHandlerExplainsAttentionBoundaryLikeRust(t *testing.T) {
 	spec := (&SendUserMessageAsyncHandler{}).Spec()
-	if !strings.Contains(spec.Description, "Only use this tool to ask for missing information, preferences, constraints, clarification, or approval.") {
-		t.Fatalf("description missing question restriction: %q", spec.Description)
+	for _, want := range []string{
+		"ask for missing information, preferences, constraints, clarification, or approval",
+		"report a critical blocker or a finding that may change the task's direction",
+		"use commentary for routine progress and intermediate context",
+		"bolding questions",
+	} {
+		if !strings.Contains(spec.Description, want) {
+			t.Fatalf("description missing %q: %q", want, spec.Description)
+		}
 	}
 	props, ok := spec.InputSchema["properties"].(map[string]any)
 	if !ok {

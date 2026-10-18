@@ -2893,9 +2893,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "threadEnvironmentConfigForTurn records the selected environment's resolved workspace roots, and sandbox/MCP/turn setup consume those roots instead of only top-level runtime roots; tests cover default cwd and per-turn runtime roots. Tests: go test ./appserver -run 'ThreadEnvironmentConfig|WorkspaceRoots' -count=1"
       ]
     },
     {
@@ -3290,9 +3290,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "historynotes marks only sensitive query/note text fields with encrypted:true and sends x-openai-encrypted-tool-arguments only on routes carrying those fields; tests enumerate encrypted/unencrypted fields and backend headers. Tests: go test ./historynotes -count=1"
       ]
     },
     {
@@ -3338,9 +3338,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "historynotes Backend.ToolTruncationPolicy serializes the policy into x-openai-tool-output-truncation-policy, and the tool executor forwards the configured policy; tests cover the tokens/limit header and omission when nil. Tests: go test ./historynotes -count=1"
       ]
     },
     {
@@ -3350,9 +3350,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "The legacy send_user_message_async description now covers missing information, blockers/findings, in-progress replies, commentary for routine updates, immediate-attention guidance, and formatting questions; the test asserts the new attention boundary. Tests: go test ./tool -run 'SendUserMessageAsync|SendMessageToUserAsync' -count=1"
       ]
     },
     {
