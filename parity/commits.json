@@ -20014,9 +20014,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/4; needs review: guardian_history_items, has_legacy_user_messages, legacy_user_messages"
+        "features.guardianv2.thread_context is StageRemoved and ignored, so thread-owned context is the only path. Legacy retained ordering, incomplete-instruction notices, source matching, and checkpoint reconciliation live in state/guardian_retained_context.go and retainedctx. Tests: go test ./state -run 'Guardian|Retained|Legacy' -count=1; go test ./appserver -run 'Guardian|Retained' -count=1"
       ]
     },
     {
