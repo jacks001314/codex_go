@@ -298,9 +298,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 713 (implementation): the remote unified-exec poll loop records the exit notification time, keeps collecting delayed output for a bounded 500ms post-exit close window, performs one final process/read drain, and then finishes the process even if the remote output stream never sends process/closed. ProcessEventClosed still completes immediately, and exits/termination close the remote connection through finishWithExit. Test: TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust/output-open-at-final-poll; go test ./tool -run 'TestUnifiedExecConsumesPushedRemoteEventsAndRecoversReplayLikeRust' -count=1."
       ]
     },
     {

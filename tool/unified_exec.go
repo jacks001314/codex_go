@@ -37,6 +37,7 @@ const (
 	unifiedExecDefaultMaxProcesses          = 64
 	unifiedExecInterrupt                    = "\x03"
 	unifiedExecTrailingOutputGrace          = 100 * time.Millisecond
+	unifiedExecPostExitCloseWait            = 500 * time.Millisecond
 	unifiedExecEarlyExitGrace               = 150 * time.Millisecond
 	unifiedExecOutputDeltaMaxBytes          = 8192
 	unifiedExecMaxOutputDeltas              = 10_000
@@ -1655,7 +1656,19 @@ func (p *unifiedExecProcess) pollRemote() {
 	}
 	lastSeq := uint64(0)
 	var exitCode *int
+	var exitObservedAt time.Time
 	for {
+		if !exitObservedAt.IsZero() && time.Since(exitObservedAt) >= unifiedExecPostExitCloseWait {
+			// The process exited but its output stream may remain open. Drain
+			// what is already available, then release the exit watcher
+			// (Rust #53331).
+			if _, err := p.reconcileRemote(&lastSeq, &exitCode); err != nil {
+				p.finishWithExit(err, exitCode)
+				return
+			}
+			p.finishWithExit(nil, exitCode)
+			return
+		}
 		p.mu.Lock()
 		events := p.remoteEvents
 		p.mu.Unlock()
@@ -1663,7 +1676,13 @@ func (p *unifiedExecProcess) pollRemote() {
 			p.finishWithExit(errors.New("exec-server process event stream is unavailable"), exitCode)
 			return
 		}
-		eventCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		waitTimeout := time.Second
+		if !exitObservedAt.IsZero() {
+			if remaining := time.Until(exitObservedAt.Add(unifiedExecPostExitCloseWait)); remaining < waitTimeout {
+				waitTimeout = remaining
+			}
+		}
+		eventCtx, cancel := context.WithTimeout(context.Background(), waitTimeout)
 		event, err := events.Next(eventCtx)
 		cancel()
 		if err != nil {
@@ -1722,6 +1741,7 @@ func (p *unifiedExecProcess) pollRemote() {
 			lastSeq = event.Seq
 			code := event.ExitCode
 			exitCode = &code
+			exitObservedAt = time.Now()
 			if event.SandboxDenied != nil && *event.SandboxDenied {
 				p.markSandboxDenied()
 				p.finishWithExit(nil, exitCode)
