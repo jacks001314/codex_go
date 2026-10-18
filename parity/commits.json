@@ -19209,9 +19209,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: draft_snapshot, edit_stored_draft, history_search_active"
+        "Audited upstream 3032b387fa (#47423): already implemented. Background recovery edits HistorySearchSession's saved draft through editHistorySearchSavedDraft without changing the query or visible preview; Esc/Ctrl+C restores the updated draft, accepting a match discards it, and an explicit fresh replacement ends search. Composer elements and pending structured draft state are preserved. Test: TestHistorySearchBackgroundRecoveryPreservesSearchLikeRust."
       ]
     },
     {
