@@ -1900,7 +1900,7 @@ b0af519c39766c173191fc39b341808619b51c74	45649	Add elicitation classification su
 b0d95427c2443e90998f48065902309187564085	45526	Stage Python runtime wheels directly from package directories (#45526)	2026-09-14	core	0	0		0	0	not_applicable	
 b1205c12d584c36613ab24a49aaf351e7b3fdb9e	43519	Set `recursion_limit` to 256 for app-server, exec, and TUI (#43519)	2026-09-07	tui	0	0		0	0	not_applicable	
 b12ac84be9b5835259581c68dfc7cbe63d49e5f2	52040	Add regression coverage for cancelled agent reloads (#52040)	2026-10-08	core	0	0		0	0	not_applicable	
-b13164d86f9a70adc48d22f4a5a07ed0c001a1d0	45669	Centralize child agent configuration in the agent module (#45669)	2026-09-15	config	9	3	0.33	0	0	audit_pending	PreparedSpawnConfig,SpawnConfigOptions,SpawnConfigVersion,apply_spawn_agent_service_tier,build_agent_resume_config,build_agent_spawn_config
+b13164d86f9a70adc48d22f4a5a07ed0c001a1d0	45669	Centralize child agent configuration in the agent module (#45669)	2026-09-15	config	9	3	0.33	0	0	not_applicable	PreparedSpawnConfig,SpawnConfigOptions,SpawnConfigVersion,apply_spawn_agent_service_tier,build_agent_resume_config,build_agent_spawn_config
 b15718acfc5e79dff8cc8999eada7c80df9c85cb	47828	Wait for login completion in recommended plugin tests (#47828)	2026-09-24	appserver	0	0		0	0	not_applicable	
 b172810921f89847cd310ecc496f9c901760e933	50700	Let the transport create the Windows remote-control socket directory (#50700)	2026-10-03	core	0	0		0	0	not_applicable	
 b17c74cfd5ebb39fe70ffaff78de198120278636	51652	Record telemetry for AGENTS.md changes made by apply_patch (#51652)	2026-10-07	core	0	0		0	0	complete
