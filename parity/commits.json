@@ -27245,9 +27245,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: cached_approval"
+        "Round 667 (audit): N/A by architecture. Go has no async Guardian score-update subscription or cached-approval race; scoreProgress only tracks tool-call lag and modelGuardianReviewer.Review is synchronous. fastDecision covers full-access/user-approval shortcuts, not late low-risk score approval, so there is no pending review to cancel/drain or revalidate."
       ]
     },
     {
