@@ -1027,8 +1027,8 @@ func TestVimLineYankPasteAndOperators(t *testing.T) {
 	m := vimTestModel("alpha beta")
 	m = vimKeyPress(m, 'Y')
 	m = vimKeyPress(m, 'p')
-	if got := m.composer.Value(); got != "alpha betaalpha beta" {
-		t.Fatalf("Y+p value = %q", got)
+	if got := m.composer.Value(); got != "alpha beta\nalpha beta" {
+		t.Fatalf("Y+p value = %q, want a linewise paste", got)
 	}
 
 	m = vimTestModel("line one\nline two\nline three")

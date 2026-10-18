@@ -811,6 +811,8 @@ func (m *Model) deleteVimLine() {
 	if row < 0 || row >= len(lines) {
 		return
 	}
+	m.vimYank = lines[row]
+	m.vimYankLinewise = true
 	startedEdit := m.vimBeginEdit()
 	offset := 0
 	for i := 0; i < row; i++ {
@@ -829,16 +831,33 @@ func (m *Model) deleteVimLine() {
 // yankVimLine stores the current line in the Vim yank buffer (Y / yy).
 func (m *Model) yankVimLine() {
 	m.vimYank = m.vimCurrentLine()
+	m.vimYankLinewise = true
 }
 
-// pasteVimAfterCursor inserts the yank buffer after the cursor (p).
+// pasteVimAfterCursor inserts the yank buffer after the cursor (p). Linewise
+// yanks paste on the following line, matching Vim and Rust #44742.
 func (m *Model) pasteVimAfterCursor() {
 	if m.vimYank == "" {
 		return
 	}
 	startedEdit := m.vimBeginEdit()
-	offset := m.vimValueByteOffset()
 	value := m.composer.Value()
+	if m.vimYankLinewise {
+		lineEnd := m.vimLineStartByteOffset() + len(m.vimCurrentLine())
+		insertAt := lineEnd
+		inserted := m.vimYank
+		if insertAt < len(value) && value[insertAt] == '\n' {
+			insertAt++
+			inserted += "\n"
+		} else {
+			inserted = "\n" + inserted
+		}
+		m.composer.SetValue(value[:insertAt] + inserted + value[insertAt:])
+		m.vimSetCursorAtByteOffset(insertAt + len(inserted))
+		m.vimFinishEdit(startedEdit)
+		return
+	}
+	offset := m.vimValueByteOffset()
 	m.composer.SetValue(value[:offset] + m.vimYank + value[offset:])
 	m.vimSetCursorAtByteOffset(offset + len(m.vimYank))
 	m.vimFinishEdit(startedEdit)
@@ -1579,7 +1598,12 @@ func (m *Model) vimOperatorLineMotion(direction int) {
 	} else if direction < 0 && row > 0 {
 		start = m.vimLineStartOffset(row-1, lines)
 	}
+	op := m.vimPendingOp
 	m.applyVimOperatorValueRange(start, end)
+	if op == "d" || op == "y" {
+		m.vimYank = strings.TrimSuffix(value[start:end], "\n")
+		m.vimYankLinewise = true
+	}
 }
 
 // applyVimOperatorRange applies the pending operator (d delete, y yank,
@@ -1627,6 +1651,7 @@ func (m *Model) applyVimOperatorValueRange(start, end int) {
 		m.vimFinishEdit(startedEdit)
 	case "y":
 		m.vimYank = value[start:end]
+		m.vimYankLinewise = false
 	case "c":
 		next := value[:start] + value[end:]
 		m.composer.SetValue(next)

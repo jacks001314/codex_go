@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	bubbletea "github.com/charmbracelet/bubbletea"
+
+	codextui "codex_go/tui"
 )
 
 // These tests verify the composer editor kill/yank actions (ctrl-k / ctrl-u /
@@ -39,6 +41,45 @@ func TestEditorKillBufferSurvivesNewSessionLikeRust(t *testing.T) {
 	m = updated.(*Model)
 	if got := m.composer.Value(); got != "new linesaved line" {
 		t.Fatalf("value after yank = %q, want new linesaved line", got)
+	}
+}
+
+// TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust pins #44742's Vim
+// path: dd populates the linewise yank, and both /new and a root thread switch
+// keep it available for p in the replacement composer.
+func TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust(t *testing.T) {
+	m := vimTestModel("saved line")
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'd')
+	if got := m.composer.Value(); got != "" {
+		t.Fatalf("dd value = %q, want empty composer", got)
+	}
+	if got := m.vimYank; got != "saved line" || !m.vimYankLinewise {
+		t.Fatalf("dd yank = %q linewise=%v, want saved line / true", got, m.vimYankLinewise)
+	}
+	m.startFreshNamedSession("", "Started a new local thread.")
+	m.composer.SetValue("new line")
+	m.composer.SetCursor(len("new line"))
+	m = vimKeyPress(m, 'p')
+	if got := m.composer.Value(); got != "new line\nsaved line" {
+		t.Fatalf("/new p value = %q, want new line\\nsaved line", got)
+	}
+
+	m = vimTestModel("saved line")
+	m = vimKeyPress(m, 'd')
+	m = vimKeyPress(m, 'd')
+	m.applyAgentSwitchResult(AgentSwitchResultMsg{
+		ThreadID: "target-thread",
+		Response: AgentThreadSwitchResponse{
+			Entry:  codextui.AgentThreadEntry{ThreadID: "target-thread"},
+			Status: "idle",
+		},
+	})
+	m.composer.SetValue("new line")
+	m.composer.SetCursor(len("new line"))
+	m = vimKeyPress(m, 'p')
+	if got := m.composer.Value(); got != "new line\nsaved line" {
+		t.Fatalf("thread-switch p value = %q, want new line\\nsaved line", got)
 	}
 }
 
