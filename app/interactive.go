@@ -1752,10 +1752,13 @@ func interactiveOnListModels(root *cli.RootOptions, hasChatGPTAccount bool) func
 	}
 	return func(includeHidden bool) ([]codextui.ModelPickerOption, error) {
 		presets := manager.ListModels(modelpkg.RefreshOnlineIfUncached)
+		var options []codextui.ModelPickerOption
 		if includeHidden {
-			return codextui.ModelPickerOptionsFromPresetsIncludingHidden(presets), nil
+			options = codextui.ModelPickerOptionsFromPresetsIncludingHidden(presets)
+		} else {
+			options = codextui.ModelPickerOptionsFromPresets(presets)
 		}
-		return codextui.ModelPickerOptionsFromPresets(presets), nil
+		return constrainAPIModelAccessPrograms(options, modelpkg.AuthUsesAPIKey(&resolved.Auth), loaded.Values), nil
 	}
 }
 
@@ -4809,12 +4812,38 @@ func interactiveUIState(root *cli.RootOptions) *codextui.State {
 
 func interactiveModelPickerOptions(root *cli.RootOptions) []codextui.ModelPickerOption {
 	loaded, err := config.LoadEffectiveWithOptions(auth.DefaultCodexHome(), interactiveKeymapLoadOptions(root))
-	if err == nil && loaded != nil {
-		if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
-			return codextui.ModelPickerOptionsFromCatalog(*catalog)
-		}
+	if err != nil || loaded == nil {
+		return codextui.BundledModelPickerOptions()
 	}
-	return codextui.BundledModelPickerOptions()
+	var options []codextui.ModelPickerOption
+	if catalog := modelpkg.ModelsCatalogFromConfigValues(loaded.Values); catalog != nil {
+		options = codextui.ModelPickerOptionsFromCatalog(*catalog)
+	} else {
+		options = codextui.BundledModelPickerOptions()
+	}
+	storeOptions := auth.StoreOptionsFromConfig(loaded.CLIAuthCredentialsStoreMode(), loaded.SecretAuthStorageEnabled())
+	resolved, err := auth.NewStoreWithOptions(auth.DefaultCodexHome(), storeOptions).Resolve()
+	if err != nil || resolved == nil {
+		return options
+	}
+	return constrainAPIModelAccessPrograms(options, modelpkg.AuthUsesAPIKey(&resolved.Auth), loaded.Values)
+}
+
+// constrainAPIModelAccessPrograms mirrors Rust #53689's API-key compatibility
+// filter: unless the server-side API-key cyber-program feature is enabled,
+// models in an API-key session must not advertise selectable access programs.
+func constrainAPIModelAccessPrograms(options []codextui.ModelPickerOption, apiKey bool, values map[string]any) []codextui.ModelPickerOption {
+	if !apiKey {
+		return options
+	}
+	settings := (&config.Config{Values: values}).FeatureSettings()
+	if features.Enabled(settings, "api_key_cyber_access_programs") {
+		return options
+	}
+	for index := range options {
+		options[index].AvailableCyberPrograms = nil
+	}
+	return options
 }
 
 func interactiveStringFromConfig(values map[string]any, key string) string {

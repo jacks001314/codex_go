@@ -30393,9 +30393,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: constrain_api_key_models, refresh_account_scoped_models"
+        "Aligned upstream c03bbff483 (#53689): API-key sessions now remove model access programs from both the initial picker catalog and online refreshes unless the server-side api_key_cyber_access_programs feature is enabled. ChatGPT/other credentials retain the catalog metadata, and the existing model.AccessProgramsForAuth policy still controls request forwarding. Tests: TestConstrainAPIModelAccessProgramsLikeRust; existing TestApiKeyCyberAccessProgramsFromConfigLikeRust and API-key request-wire tests."
       ]
     },
     {

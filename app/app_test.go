@@ -6451,6 +6451,25 @@ func TestLocalThreadStartForwardsOnlyExplicitModelProviderLikeRust(t *testing.T)
 	}
 }
 
+func TestConstrainAPIModelAccessProgramsLikeRust(t *testing.T) {
+	options := func() []codextui.ModelPickerOption {
+		return []codextui.ModelPickerOption{{
+			ID:                     "gpt-5",
+			AvailableCyberPrograms: []string{"standard", "daybreak_blue"},
+		}}
+	}
+	disabled := map[string]any{"features": map[string]any{"api_key_cyber_access_programs": false}}
+	if got := constrainAPIModelAccessPrograms(options(), true, disabled); len(got[0].AvailableCyberPrograms) != 0 {
+		t.Fatalf("API-key programs with disabled server feature = %#v, want none", got[0].AvailableCyberPrograms)
+	}
+	if got := constrainAPIModelAccessPrograms(options(), true, map[string]any{}); len(got[0].AvailableCyberPrograms) != 2 {
+		t.Fatalf("default-enabled API-key programs = %#v, want retained", got[0].AvailableCyberPrograms)
+	}
+	if got := constrainAPIModelAccessPrograms(options(), false, disabled); len(got[0].AvailableCyberPrograms) != 2 {
+		t.Fatalf("ChatGPT-account programs = %#v, want retained", got[0].AvailableCyberPrograms)
+	}
+}
+
 // TestSettingsCarryDaybreakDefaultLikeRust checks the settings record the TUI
 // bootstrap reads before the first thread exists.
 func TestSettingsCarryDaybreakDefaultLikeRust(t *testing.T) {
