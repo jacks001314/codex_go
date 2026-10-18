@@ -3636,9 +3636,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: INITIAL_WEBSOCKET_CONNECTIONS"
+        "Round 520 (audit): N/A by architecture. The upstream commit changes only Rust test synchronization (waiting for the idle pool, a test-only connection count, and notification registration order). Go Guardian tests use buffered notification/event channels and their own wait helpers; no production behavior is missing. Tests: go test ./appserver -run 'Guardian' -count=1"
       ]
     },
     {
