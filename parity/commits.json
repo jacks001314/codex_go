@@ -322,9 +322,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 714 audit): this changes the Rust guardian-v2 async_scorer Decisions credential lookup and failure tag. Go has no async Guardian Decisions scorer or cached Decisions API-key path; Guardian approval decisions are synchronous model reviews, so the OPENAI_API_KEY fallback and credentials_unavailable metric have no carrier."
       ]
     },
     {
@@ -11897,9 +11897,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: KillBufferSnapshot, restore_kill_buffer_snapshot, take_kill_buffer_snapshot"
+        "Aligned upstream eabb7c91d1 (#44742): the tea Model owns the editor kill buffer and Vim yank across /new and thread switches, so replacing the visible composer cannot drop them. Vim dd now populates a linewise yank, Y/yy and dj/yk preserve linewise kind, and p pastes linewise text on the following line while characterwise find/text-object yanks keep the existing cursor paste. Regression tests cover the editor kill buffer and Vim dd -> p through both startFreshNamedSession and applyAgentSwitchResult. Tests: TestEditorKillBufferSurvivesNewSessionLikeRust, TestVimLineYankSurvivesNewSessionAndThreadSwitchLikeRust, TestVimLineYankPasteAndOperators."
       ]
     },
     {
