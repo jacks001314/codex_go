@@ -16216,9 +16216,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/3; needs review: handle_response_stream_error"
+        "Equivalent mechanism: the shared Responses stream retry loop combines retryability with delay selection, preferring RetryDelayInfo server advice (including zero-duration advice) and otherwise using responsesRetryDelay exponential backoff. Terminal errors return before sleeping or consuming a retry; exhausted budgets preserve server-only timing. Tests cover attempt-dependent backoff and terminal errors with server advice."
       ]
     },
     {

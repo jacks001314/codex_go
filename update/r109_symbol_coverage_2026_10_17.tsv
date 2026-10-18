@@ -2264,7 +2264,7 @@ d570b3632b100e36f931797cdbdb8906d0fcafa8	52223	Enforce application network polic
 d583e73c4d1204f1e9f654ef87065e9f0dd07ac7	47055	Fetch local message board thread summaries in one query (#47055)	2026-09-21	core	0	0		0	0	not_applicable	
 d58d0e5841e0de08e251673db2d5af8cf3a1ad51	41803	Allow models to enable token budgeting by default (#41803)	2026-08-31	model	1	1	1.00	0	0	complete	
 d5afb62bb3d8f900530b49a1268cb110380bedfd	46574	Notify users when asynchronous questions arrive in the TUI (#46574)	2026-09-19	tui	0	0		0	0	not_applicable	
-d5b29951aca5205bc8415120b56dd4bc295f5c83	46540	Centralize retry decisions and delays in `CodexErr` (#46540)	2026-09-18	model	3	2	0.67	0	0	audit_pending	handle_response_stream_error
+d5b29951aca5205bc8415120b56dd4bc295f5c83	46540	Centralize retry decisions and delays in `CodexErr` (#46540)	2026-09-18	model	3	3	1.00	0	0	complete
 d5caceccb1ee5bf94c081b995575ce4860e0912b	41058	Track Code Mode tool call metadata completeness (#41058)	2026-08-27	model	4	3	0.75	0	0	complete	set_tool_call_cell_id
 d5cbfe1455a325684b71b6eaf4078b685ea6bdce	48109	Deduplicate retained instructions against Guardian transcripts (#48109)	2026-09-25	guardian	5	3	0.60	0	0	audit_pending	MAX_INSTRUCTION_TOKENS,RetainedTranscriptSource
 d5e6526362f6efa322ca091b61eda495f16ffb30	49297	Scan the session index backwards for batch thread name lookups (#49297)	2026-09-29	persistence	0	0		0	0	not_applicable	
