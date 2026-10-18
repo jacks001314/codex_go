@@ -217,7 +217,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 1544ffc79d60d29d492ca432fc0a5b2f3745ddce	54379	Add configuration support for TUI input presets (#54379)	2026-10-15	tui	2	2	1.00	0	0	complete	
 15922a50aa5fae5fb8998ce6079a8d0099b539d0	47613	Expand Linux spawn-helper lifecycle test coverage (#47613)	2026-09-23	core	0	0		0	0	not_applicable	
 15c08beee2d917f8d4f10bae1917bbcee21308df	49073	Surface realtime voice catalog failures in the TUI (#49073)	2026-09-28	tui	0	0		0	0	not_applicable	
-15fd656ddb55bd82a208fb9f00681880523f5260	49478	Discover and validate MCP authorization servers before ID-JAG exchange (#49478)	2026-09-30	mcp	12	3	0.25	0	0	audit_pending	ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION_ID,EmaAuthTokenExchangeRequest,EmaDiscoveryClient,EmaDiscoveryRequest,EmaResource,discover_ema_resource,exchange_ema_auth_token,legacy_discovery_fallback_response,validate_ema_metadata_issuer
+15fd656ddb55bd82a208fb9f00681880523f5260	49478	Discover and validate MCP authorization servers before ID-JAG exchange (#49478)	2026-09-30	mcp	12	3	0.25	0	0	complete	ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION_ID,EmaAuthTokenExchangeRequest,EmaDiscoveryClient,EmaDiscoveryRequest,EmaResource,discover_ema_resource,exchange_ema_auth_token,legacy_discovery_fallback_response,validate_ema_metadata_issuer
 160b2b1ef62114eeb41e41e5e3be0000d944b713	54170	Preserve ChatGPT authentication for Gov MCP servers (#54170)	2026-10-15	mcp	0	0		0	0	complete
 162fcb3976e292fb7492924f7d493fdfce328551	51257	Fix installer checksum verification under Windows PowerShell (#51257)	2026-10-06	core	0	0		0	0	not_applicable	
 16491f7f708d0869fc2356f12172f0b5e3922d19	44928	Preserve voice meter history through quiet samples (#44928)	2026-09-11	tui	0	0		0	0	not_applicable	
@@ -746,7 +746,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 49862b62be3a90aa6538e000848497b46c0a442f	47819	Retry Guardian reviews when authorization changes (#47819)	2026-09-24	guardian	2	2	1.00	0	0	complete	
 49880081fe9d6cf89ec86e3d31c99bbe26a736c4	40486	Add root turn IDs to turn and tool analytics (#40486)	2026-08-24	appserver	1	0	0.00	0	0	complete	TurnAnalyticsMetadata
 498d40b29f6028dec9ef80af672ba1258980b54a	42432	Box the TUI resume picker future (#42432)	2026-09-03	tui	0	0		0	0	not_applicable	
-4994306e9f80448bde85e770a0b0c93d3fee5665	49276	Enable enterprise MCP sign-in and account-scoped grant cleanup (#49276)	2026-09-29	appserver	11	4	0.36	0	0	audit_pending	EnterpriseLogin,EnterpriseLoginCompletion,EnterpriseLoginState,EnterpriseLoginTarget,McpEmaAuthScope,callback_closed,ema_auth_scope
+4994306e9f80448bde85e770a0b0c93d3fee5665	49276	Enable enterprise MCP sign-in and account-scoped grant cleanup (#49276)	2026-09-29	appserver	11	4	0.36	0	0	complete	EnterpriseLogin,EnterpriseLoginCompletion,EnterpriseLoginState,EnterpriseLoginTarget,McpEmaAuthScope,callback_closed,ema_auth_scope
 49a9d789997ab40d1d75b117644f796988d32e18	43698	Make older app-server notices configurable in the TUI (#43698)	2026-09-08	tui	3	0	0.00	0	0	implementation_pending	initialize_server_version_notice,refresh_server_version_overview_notice,server_version_notice_for_tui
 49be2c7ab029434dc9545cf85a7a41fd5d3beb1a	49686	Deliver remote message board notifications to active turns (#49686)	2026-09-30	core	1	0	0.00	0	0	complete	install_notifications
 49e248d4c3ad76fc29519bd0aa9e532f448fa90f	46541	Add opt-in compaction after final responses (#46541)	2026-09-18	guardian	0	0		0	0	complete

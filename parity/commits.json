@@ -3782,9 +3782,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Remote executor registration retries only HTTP 503 with code registration_conflict, using the registry recovery jittered backoff. Other 503 bodies, ambiguous timeouts, auth errors and unrelated failures fail immediately. Tests: go test ./execserver -run 'RegistrationConflict|Remote.*Retry|ConfirmedConflict' -count=1"
       ]
     },
     {
@@ -23352,9 +23352,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/11; needs review: EnterpriseLogin, EnterpriseLoginCompletion, EnterpriseLoginState, EnterpriseLoginTarget, McpEmaAuthScope"
+        "Go implements enterprise MCP OAuth login/flow and account-scoped grant invalidation, including login completion notifications, issuer/account checks, pending-login invalidation, and cleanup of grants owned by the prior account. Tests: go test ./mcp -run 'Enterprise|EMA|IDJAG|IDJag' -count=1; go test ./appserver -run 'OauthLogin|OAuthLogin|Enterprise|Grant' -count=1"
       ]
     },
     {
@@ -23953,9 +23953,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/12; needs review: ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION_ID, EmaAuthTokenExchangeRequest, EmaDiscoveryClient, EmaDiscoveryRequest, EmaResource"
+        "Authorization-server metadata is discovered and validated before ID-JAG exchange; issuer, resource, scope, client, subject, and JWT-id constraints are enforced, and invalid bearer/refresh responses remain terminal with bounded errors. Tests: go test ./mcp -run 'Enterprise|EMA|IDJAG|IDJag|Discovery' -count=1"
       ]
     },
     {
