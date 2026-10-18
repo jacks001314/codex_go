@@ -19113,9 +19113,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust replaces composer hints with an 'esc latest' footer when selection pauses following but the tail is still visible. Go has no rendered return-to-latest follow control or 'esc latest' footer row; its fixed composer footer is not gated by transcript selection/tail visibility, so selection clearing cannot leave a stale latest hint behind."
       ]
     },
     {
@@ -20747,9 +20747,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 4/12; needs review: CopyLine, LINK_PLACEHOLDER_PREFIX, MAX_COPY_DEPTH, SelectedLine, copy_lines"
+        "Rust reconstructs semantic Markdown for an app-owned transcript selection before writing the clipboard. Go keeps in-transcript selection terminal-owned, so the terminal copies rendered cells directly and Go has no SelectedLine/CopyLine/copy_lines Markdown-selection pipeline to preserve. Whole-response copy still provides Markdown plus HTML."
       ]
     },
     {
@@ -23088,9 +23088,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "partial",
       "evidence": [
-        "Partial symbol coverage 5/13; needs review: CopyDestination, PasteSource, cancel_primary, copy_selected_text, finish_clipboard"
+        "Go has app-owned selection for composer/status/footer rows and right-click clipboard paste, but no X11 PRIMARY selection publication/ownership, primary-copy destination or cancellation state, and no middle-click paste source. Transcript selection remains terminal-owned. The X11 primary lane is still absent."
       ]
     },
     {
@@ -23244,9 +23244,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Rust strips blockquote markers from copied quoted selections in its app-owned Markdown copy path. Go's transcript selection is terminal-owned and copies rendered cells directly; it has no blockquote-aware selection serializer to adjust. Composer selection copies only editable draft text, which contains no rendered blockquote gutter."
       ]
     },
     {

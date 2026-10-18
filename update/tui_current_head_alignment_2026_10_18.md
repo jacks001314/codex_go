@@ -2034,3 +2034,11 @@ green.
   tmux retains control of its mouse policy.
 - `#47717` is not applicable: Go's model picker resolves through modal state
   rather than Rust's recursive AppEvent dispatch.
+- `#47384` is not applicable: Go has no rendered `esc latest` footer to leave
+  stale after a transcript selection clears.
+- `#47896` and `#49153` are not applicable: Go's in-transcript selection is
+  terminal-owned, so there is no semantic Markdown selection serializer or
+  blockquote-marker stripping path.
+- `#49112` remains partial: X11 PRIMARY publication/ownership and middle-click
+  paste are still absent, consistent with the existing transcript-selection
+  terminal-ownership gap.
