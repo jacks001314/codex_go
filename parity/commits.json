@@ -4310,9 +4310,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "withoutNotificationMedia recursively filters item/started, item/completed and rawResponseItem/completed payloads. FunctionCallOutput content items drop input_image/input_audio while preserving input_text and encrypted_content; text-only output is unchanged. Tests: go test ./appserver -run 'WithoutNotificationMediaOmitItemMediaLikeRust' -count=1"
       ]
     },
     {
