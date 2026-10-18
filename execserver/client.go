@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -291,6 +294,45 @@ func IsRetryableRecoveryError(err error) bool {
 	var transportErr *clientTransportError
 	var timeoutErr *RPCTimedOutError
 	return errors.As(err, &transportErr) || errors.As(err, &timeoutErr)
+}
+
+// IsRetryablePreparationError classifies transient registry, connection,
+// handshake, timeout, and session-attachment failures using their typed
+// carriers. Authentication, TLS, and malformed protocol errors remain terminal;
+// error text alone never makes an error retryable.
+func IsRetryablePreparationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsRetryableRecoveryError(err) {
+		return true
+	}
+	var statusErr *remoteRegistryHTTPError
+	if errors.As(err, &statusErr) {
+		switch statusErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests:
+			return true
+		case http.StatusConflict:
+			return isEnvironmentOfflineError(err)
+		default:
+			return statusErr.StatusCode >= 500
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrClosedPipe)
+}
+
+func preparationReadError(err error) error {
+	if err == nil || !IsRetryablePreparationError(err) {
+		return err
+	}
+	return errors.Join(err, io.ErrClosedPipe)
 }
 
 func (e *clientTransportError) Error() string {
@@ -1226,7 +1268,7 @@ func (c *Client) FSReadFile(ctx context.Context, params *FSReadFileParams) (*FSR
 	}
 	var response FSReadFileResponse
 	if err := c.call(ctx, MethodFSReadFile, normalized, &response); err != nil {
-		return nil, err
+		return nil, preparationReadError(err)
 	}
 	return &response, nil
 }
@@ -1255,7 +1297,7 @@ func (c *Client) FSOpen(ctx context.Context, params *FSOpenParams) (*FSOpenRespo
 	}
 	var response FSOpenResponse
 	if err := c.call(ctx, MethodFSOpen, &normalized, &response); err != nil {
-		return nil, err
+		return nil, preparationReadError(err)
 	}
 	return &response, nil
 }

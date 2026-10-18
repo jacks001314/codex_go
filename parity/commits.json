@@ -19794,9 +19794,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: is_retryable_preparation_error"
+        "Round 320 (implementation): added typed IsRetryablePreparationError covering recovery transport/timeout failures, retryable registry HTTP statuses, environment-offline conflicts, context/deadline timeouts, typed net timeouts, and EOF/closed-pipe attachment failures. Authentication, TLS, and malformed protocol errors remain terminal; message text alone is ignored. FSReadFile/FSOpen map retryable failures with errors.Join to io.ErrClosedPipe while retaining the original typed error. Tests: go test ./execserver -run 'Retryable|FSReadFile|FSOpen' -count=1; go vet ./execserver; go build ./execserver"
       ]
     },
     {
