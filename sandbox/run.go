@@ -457,6 +457,29 @@ func RuntimePermissionProfileJSON(profile PermissionProfile) (string, error) {
 	return rustPermissionProfileJSON(profile)
 }
 
+// RuntimeFileSystemEntries returns the canonical file-system entries from the
+// profile's runtime representation. Legacy profiles are serialized first so the
+// sandbox integrity runner observes the same policy the launcher enforces.
+func (p PermissionProfile) RuntimeFileSystemEntries() []FileSystemSandboxEntry {
+	raw := strings.TrimSpace(p.runtimeJSON)
+	if raw == "" {
+		encoded, err := RuntimePermissionProfileJSON(p)
+		if err != nil {
+			return nil
+		}
+		raw = encoded
+	}
+	var wire rustPermissionProfileWire
+	if err := json.Unmarshal([]byte(raw), &wire); err != nil || wire.FileSys == nil {
+		return nil
+	}
+	entries := make([]FileSystemSandboxEntry, 0, len(wire.FileSys.Entries))
+	for _, entry := range wire.FileSys.Entries {
+		entries = append(entries, entry.toFileSystemSandboxEntry())
+	}
+	return entries
+}
+
 // CanonicalPermissionProfile folds the legacy parallel JSON input into the
 // profile once. A profile that already owns canonical runtime data always wins.
 func CanonicalPermissionProfile(profile *PermissionProfile, legacyJSON string) (*PermissionProfile, error) {

@@ -36,6 +36,7 @@ import (
 	codexnetwork "codex_go/network"
 	"codex_go/rollout"
 	"codex_go/sandbox"
+	"codex_go/sandbox/integrity"
 	"codex_go/sandbox/windowssandbox"
 	"codex_go/state"
 	"codex_go/tcptunnel"
@@ -327,6 +328,18 @@ func runSandbox(ctx context.Context, opts *cli.SandboxOptions, dispatchPaths *cl
 	}
 	if err := plan.UnsupportedError(); err != nil {
 		return err
+	}
+	if plan.PermissionProfile != nil && !plan.PermissionProfile.Disabled {
+		integrityCWD := plan.CWD
+		if integrityCWD == "" {
+			integrityCWD = opts.CWD
+		}
+		integrity.RunIntegrityChecks(ctx, &integrity.RunnerRequest{
+			SandboxType: plan.SandboxType,
+			Entries:     plan.PermissionProfile.RuntimeFileSystemEntries(),
+			CWD:         integrityCWD,
+			Command:     plan.Command,
+		})
 	}
 	env := codexexec.CreateEnv(runConfig.EnvPolicy, nil, environmentMapFromEnviron(os.Environ()))
 	if plan.PermissionProfileID != "" {

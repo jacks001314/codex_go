@@ -438,6 +438,7 @@ func fsSandboxCommand(ctx *FileSystemSandboxContext, profile *sandbox.Permission
 	if err := plan.UnsupportedError(); err != nil {
 		return nil, nil, requestError(-32602, fmt.Sprintf("failed to prepare fs sandbox: %v", err))
 	}
+	runSandboxIntegrityChecks(plan, string(ctx.SandboxOverride), cwd, plan.Command)
 	if runtime.GOOS != "windows" {
 		return plan.Command, env, nil
 	}

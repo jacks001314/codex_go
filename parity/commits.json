@@ -28230,9 +28230,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "blocked_precondition",
+      "status": "complete",
       "evidence": [
-        "Round 313 (audit): blocked on #51842. Go has the policy/content-checking library under sandbox/integrity, but no IntegrityMetrics runner, DependencyTarget inventory, preparation/check recording, or observational run helper to invoke before command and filesystem preparation. Wiring #51843 without that runner would add calls with no findings/metrics source."
+        "Round 699 (implementation): exec-server process preparation, sandboxed filesystem-helper preparation, and the codex sandbox command invoke the observational integrity runner before launch. PermissionProfile.RuntimeFileSystemEntries exposes canonical read/write/deny/glob entries so the runner observes the enforced policy; disabled and full-disk-write profiles skip. Checker failures and timeouts only record telemetry and cannot change the prepared plan or command. Tests: go test ./sandbox -run 'RuntimeFileSystemEntries' -count=1; go test ./execserver -run 'RunSandboxIntegrityChecks' -count=1; go test ./sandbox/integrity -count=1; go build ./..."
       ]
     },
     {

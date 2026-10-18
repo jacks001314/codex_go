@@ -2465,6 +2465,7 @@ func prepareExecProcess(params *ExecParams, allowedSymlinkedCodexHome string) ([
 	if profile.Disabled {
 		return nil, "", sandbox.SandboxTypeNone, requestError(-32602, "sandbox intent cannot be enforced on this executor")
 	}
+	runSandboxIntegrityChecks(plan, string(sandboxContext.SandboxOverride), cwd, plan.Command)
 	plan.CWD = cwd
 	_ = sandboxCWD
 	if runtime.GOOS == "linux" && sandboxCWD != cwd {
