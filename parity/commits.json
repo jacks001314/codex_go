@@ -16204,9 +16204,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/3); candidate gap: CommandStartInput, notify_command_start, should_use_deterministic_process_ids"
+        "Round 324 (audit): N/A - Go has no ToolLifecycleContributor or extension contributor registry, so no contributor command-start callback, filesystem-preparation hand-off, or corresponding deterministic process-ID reservation phase exists in the direct/code-mode exec paths."
       ]
     },
     {

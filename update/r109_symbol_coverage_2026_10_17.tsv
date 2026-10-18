@@ -1910,7 +1910,7 @@ b1e72963c3b71a9265a551e54beff078384efed9	49318	Add GPT-6.1 Sol as the default ca
 b1f3c2f77e7cb802af0d8ef1c325cb6e9d39d8d9	45772	Expose experimental analytics plan history and improve navigation (#45772)	2026-09-15	tui	0	0		0	0	not_applicable	
 b21f2e30815a66d96c711f4739b18e7a56e522db	42174	Add a cacheable Bazel app-server schema bundle (#42174)	2026-09-02	appserver	0	0		0	0	not_applicable	
 b23324986d03ae02d041c00d8e15bee6c1437b46	47159	Expose HTTP origins in MCP server status (#47159)	2026-09-22	tui	0	0		0	0	not_applicable	
-b244e9bafeca0872218d8e93001d85f15c4c230e	46539	Add a command-start callback for tool lifecycle extensions (#46539)	2026-09-18	core	3	0	0.00	0	0	implementation_pending	CommandStartInput,notify_command_start,should_use_deterministic_process_ids
+b244e9bafeca0872218d8e93001d85f15c4c230e	46539	Add a command-start callback for tool lifecycle extensions (#46539)	2026-09-18	core	3	0	0.00	0	0	not_applicable	CommandStartInput,notify_command_start,should_use_deterministic_process_ids
 b2592701e107804a70ab91326a2e2218237279f2	51466	Keep Guardian transcript records structured through budget recovery (#51466)	2026-10-06	guardian	15	15	1.00	0	0	complete	
 b26b0a7a777bd9c153da2e1e86f00ee1600476bd	54653	Prefer resource-specific scopes during MCP OAuth discovery (#54653)	2026-10-16	mcp	0	0		0	0	complete	
 b27a6321fa1a1dbb48e019d1d1296d2a13dc4261	42417	Expose managed application network requirements (#42417)	2026-09-03	tui	4	2	0.50	0	0	audit_pending	ApplicationNetworkRequirementsToml,ApplicationRequirementsToml
