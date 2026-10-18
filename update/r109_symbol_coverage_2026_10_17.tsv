@@ -1135,7 +1135,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 6c7d409a6d31ce745c95dda9a09a1050deb82649	53440	Preserve status line accents on 16-color terminals (#53440)	2026-10-12	tui	0	0		0	0	complete	
 6cc7d9cc5c702c0ca133f7ea48432166e0b880be	53717	Enable Cyber access programs for API-key sessions by default (#53717)	2026-10-13	tui	0	0		0	0	not_applicable	
 6ce16aadce5a0df847096826b159daf1d9a25c1b	45504	Allow ConPTY output to close after the last console client exits (#45504)	2026-09-14	core	1	1	1.00	0	0	complete	
-6cf2ff11b391fdd83d688b1740623ce55acf1a85	46528	Bind executor plugin measurements to the trusted plugin version (#46528)	2026-09-18	plugins	6	3	0.50	0	0	audit_pending	PluginMeasurementTarget,resolve_executor_attribution,resolve_metrics_operation_in_filesystem
+6cf2ff11b391fdd83d688b1740623ce55acf1a85	46528	Bind executor plugin measurements to the trusted plugin version (#46528)	2026-09-18	plugins	6	3	0.50	0	0	complete	PluginMeasurementTarget,resolve_executor_attribution,resolve_metrics_operation_in_filesystem
 6cfe29984965abfb5f7a5f86048f655d45d028a7	47327	Preserve image generation request IDs on failure (#47327)	2026-09-22	appserver	3	0	0.00	0	0	complete	ImageRequestError,imagegen_request_id,into_parts
 6d083e3bc4caabf547e0f492f0faa628f3210697	48100	Add an HTTP client for remote agent message boards (#48100)	2026-09-25	core	17	12	0.71	0	0	complete	BoardNotifications,MAX_BODY,MAX_RESPONSE,RemoteAgentMessageBoard,with_clock
 6d29cc6bac4c3099d604cdc0d0dd96215d197974	46494	Keep remote workspace roots under server control (#46494)	2026-09-18	tui	0	0		0	0	not_applicable	

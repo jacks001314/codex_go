@@ -16062,9 +16062,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/6; needs review: PluginMeasurementTarget, resolve_executor_attribution, resolve_metrics_operation_in_filesystem"
+        "Executor plugin metrics operations and measurement declarations resolve from the trusted plugin root/version captured for the thread; declarations from a different version are rejected, and sidecar rows are validated before app-server attribution analytics. Tests: go test ./plugin -run 'PluginMetrics|Measurement|Trusted|Attribution' -count=1"
       ]
     },
     {
