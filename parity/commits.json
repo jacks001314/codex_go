@@ -10467,9 +10467,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/4); candidate gap: forward_http_request, mitm_stream, remove_hop_by_hop_request_headers, requires_http_interception"
+        "Round 499 (audit): Go's broker marks configured loopback/plaintext destinations as requiring HTTP interception, accepts only same-host/port HTTP/1.1 requests inside CONNECT (plus h2c/upgrade classification), and forwards them with the real credential substituted for the dummy. End-to-end tests cover HTTP CONNECT and SOCKS5 plaintext tunnels and verify the upstream sees the real bearer token. Tests: go test ./network -run 'PlaintextTunnel|PlaintextHTTP|CredentialDestinationHost' -count=1"
       ]
     },
     {
