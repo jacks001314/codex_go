@@ -12401,9 +12401,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: live_transcript_cells, take_realtime_transcript_history"
+        "Audited upstream 944d6fd1ba (#44952): Go writes each accepted voice caption immediately as a spoken history cell and deduplicates by (role,text,complete) record, so there is no deferred-history window in which completed captions could disappear; interleaved speakers remain in Accepted arrival order and settled captions are not re-animated or duplicated. Test: TestModelVoiceSessionRendersEachCaptionOnce. The Rust live-transcript-cell handoff is an implementation detail not present in Go."
       ]
     },
     {
