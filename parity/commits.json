@@ -1848,9 +1848,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Rust-only allocation optimization replacing serde_json::to_string with a counting writer. Go uses encoding/json plus byte-length accounting in the same budget paths; the observable limits and omission metadata are already covered, and there is no public or wire contract to freeze."
       ]
     },
     {
