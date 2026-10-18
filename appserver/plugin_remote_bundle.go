@@ -397,6 +397,45 @@ func installRemotePluginBundle(codexHome string, marketplaceName string, pluginN
 	return targetRoot, nil
 }
 
+// RemotePluginBundleInstallParams describes one catalog-driven remote bundle
+// install for CLI callers (Rust #42150).
+type RemotePluginBundleInstallParams struct {
+	CodexHome         string
+	MarketplaceName   string
+	PluginName        string
+	Version           string
+	RemotePluginID    string
+	BundleDownloadURL string
+	AppManifest       json.RawMessage
+}
+
+// InstallRemotePluginBundle downloads and materializes one remote plugin
+// bundle. The caller owns catalog/auth state and local plugin registration.
+func InstallRemotePluginBundle(ctx context.Context, client interface {
+	Do(*http.Request) (*http.Response, error)
+}, params *RemotePluginBundleInstallParams) (string, error) {
+	if params == nil {
+		return "", fmt.Errorf("remote plugin bundle install params are required")
+	}
+	bundleURL := strings.TrimSpace(params.BundleDownloadURL)
+	if bundleURL == "" {
+		return "", fmt.Errorf("remote plugin bundle download URL is required")
+	}
+	bundle, err := downloadRemotePluginBundle(ctx, client, bundleURL)
+	if err != nil {
+		return "", err
+	}
+	return installRemotePluginBundle(
+		strings.TrimSpace(params.CodexHome),
+		strings.TrimSpace(params.MarketplaceName),
+		strings.TrimSpace(params.PluginName),
+		strings.TrimSpace(params.Version),
+		strings.TrimSpace(params.RemotePluginID),
+		params.AppManifest,
+		bundle,
+	)
+}
+
 func extractRemotePluginBundle(bundle []byte, destination string) error {
 	gzipReader, err := gzip.NewReader(bytes.NewReader(bundle))
 	if err != nil {

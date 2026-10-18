@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -92,13 +94,190 @@ func runPlugin(opts *cli.PluginOptions, stdout io.Writer) error {
 func newPluginCLIContext(codexHome string) *pluginCLIContext {
 	service := plugin.NewPluginService()
 	service.SetCodexHome(codexHome)
+	if snapshot, err := auth.NewStore(codexHome).Load(); err == nil && snapshot != nil {
+		service.SetRuntimeRoute(snapshot.AuthMode, "openai")
+	}
 	return &pluginCLIContext{codexHome: codexHome, service: service}
+}
+
+func (ctx *pluginCLIContext) remoteOptionsForScope(scope string) (*plugin.RemoteCatalogOptions, error) {
+	snapshot, err := auth.NewStore(ctx.codexHome).Load()
+	if err != nil || snapshot == nil {
+		return nil, fmt.Errorf("ChatGPT auth is required to load remote plugins")
+	}
+	token := ""
+	if value, ok := snapshot.Tokens["access_token"].(string); ok {
+		token = strings.TrimSpace(value)
+	}
+	if token == "" {
+		return nil, fmt.Errorf("ChatGPT auth is required to load remote plugins")
+	}
+	cfg, err := config.Load(ctx.codexHome)
+	if err != nil {
+		return nil, err
+	}
+	baseURL := ""
+	if cfg != nil {
+		baseURL = cfg.ChatGPTBaseURL()
+	}
+	return &plugin.RemoteCatalogOptions{
+		BaseURL:     baseURL,
+		AccessToken: token,
+		AccountID:   auth.AccountIDFromAuthForRestrictions(snapshot),
+		Scope:       scope,
+		CodexHome:   ctx.codexHome,
+		HTTPClient:  http.DefaultClient,
+	}, nil
+}
+
+func (ctx *pluginCLIContext) remoteCatalogPlugins(scope string, force bool) ([]plugin.RemoteCatalogPlugin, error) {
+	options, err := ctx.remoteOptionsForScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	options.ForceRefresh = force
+	return plugin.FetchRemoteCatalogPlugins(context.Background(), options)
+}
+
+func (ctx *pluginCLIContext) remotePluginForSelection(selection *pluginSelection) (*plugin.RemoteCatalogPlugin, *plugin.RemoteCatalogOptions, error) {
+	if selection == nil {
+		return nil, nil, nil
+	}
+	scope, ok := plugin.RemoteCatalogScopeForMarketplace(selection.MarketplaceName)
+	if !ok {
+		return nil, nil, nil
+	}
+	options, err := ctx.remoteOptionsForScope(scope)
+	if err != nil {
+		return nil, nil, err
+	}
+	plugins, err := plugin.FetchRemoteCatalogPlugins(context.Background(), options)
+	if err != nil {
+		return nil, nil, err
+	}
+	for index := range plugins {
+		candidate := &plugins[index]
+		if strings.EqualFold(strings.TrimSpace(candidate.Name), selection.PluginName) || strings.TrimSpace(candidate.ID) == strings.TrimSpace(selection.PluginID) {
+			return candidate, options, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("plugin %q is not available in remote marketplace %q", selection.PluginName, selection.MarketplaceName)
+}
+
+func appendRemotePluginMarketplace(entries []plugin.PluginMarketplaceEntry, marketplace string, remote []plugin.RemoteCatalogPlugin, installed map[string]bool) []plugin.PluginMarketplaceEntry {
+	if len(remote) == 0 {
+		return entries
+	}
+	summaries := make([]plugin.PluginSummary, 0, len(remote))
+	for _, item := range remote {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		summaries = append(summaries, plugin.PluginSummary{
+			ID:                name + "@" + marketplace,
+			Name:              name,
+			DisplayName:       firstNonEmptyLocal(strings.TrimSpace(item.Release.DisplayName), name),
+			Description:       strings.TrimSpace(item.Release.Description),
+			MarketplaceName:   marketplace,
+			RemotePluginID:    strings.TrimSpace(item.ID),
+			Version:           item.Release.Version,
+			LocalVersion:      item.Release.Version,
+			Availability:      item.Availability,
+			DisabledReason:    item.DisabledReason,
+			EligiblePlanTypes: item.EligiblePlanTypes,
+			InstallPolicy:     item.InstallationPolicy,
+			AuthPolicy:        item.AuthenticationPolicy,
+			Source:            plugin.PluginSource{Type: "remote"},
+			Installed:         installed[item.ID],
+			Enabled:           installed[item.ID],
+			Keywords:          append([]string(nil), item.Release.Keywords...),
+		})
+	}
+	if len(summaries) == 0 {
+		return entries
+	}
+	return append(entries, plugin.PluginMarketplaceEntry{Name: marketplace, Plugins: summaries})
 }
 
 func runPluginAdd(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Writer) error {
 	selection, err := parsePluginSelection(opts.Plugin, opts.MarketplaceName)
 	if err != nil {
 		return err
+	}
+	if remote, options, err := ctx.remotePluginForSelection(selection); err != nil {
+		return err
+	} else if remote != nil {
+		appsNeedingAuth, err := plugin.InstallRemotePluginMutation(context.Background(), options, remote.ID)
+		if err != nil {
+			return err
+		}
+		detail, err := plugin.FetchRemotePluginDetail(context.Background(), options, remote.ID)
+		if err != nil {
+			return err
+		}
+		if detail.Release.BundleDownloadURL == nil || strings.TrimSpace(*detail.Release.BundleDownloadURL) == "" {
+			return fmt.Errorf("remote plugin %q did not provide a bundle download URL", remote.Name)
+		}
+		version := stringValueOrEmptyLocal(detail.Release.Version)
+		root, err := appserver.InstallRemotePluginBundle(context.Background(), http.DefaultClient, &appserver.RemotePluginBundleInstallParams{
+			CodexHome:         ctx.codexHome,
+			MarketplaceName:   selection.MarketplaceName,
+			PluginName:        remote.Name,
+			Version:           version,
+			RemotePluginID:    remote.ID,
+			BundleDownloadURL: *detail.Release.BundleDownloadURL,
+			AppManifest:       detail.Release.AppManifest,
+		})
+		if err != nil {
+			return err
+		}
+		summary := plugin.PluginSummary{
+			ID:              remote.Name + "@" + selection.MarketplaceName,
+			Name:            remote.Name,
+			DisplayName:     firstNonEmptyLocal(detail.Release.DisplayName, remote.Release.DisplayName, remote.Name),
+			Description:     firstNonEmptyLocal(detail.Release.Description, remote.Release.Description),
+			MarketplaceName: selection.MarketplaceName,
+			RemotePluginID:  remote.ID,
+			Version:         detail.Release.Version,
+			LocalVersion:    detail.Release.Version,
+			Availability:    remote.Availability,
+			InstallPolicy:   remote.InstallationPolicy,
+			AuthPolicy:      remote.AuthenticationPolicy,
+			Source:          plugin.PluginSource{Type: "local", Path: root},
+			Keywords:        append([]string(nil), detail.Release.Keywords...),
+		}
+		ctx.service.ReplaceInstalledRemotePlugins(selection.MarketplaceName, []plugin.PluginDetail{{
+			MarketplaceName: selection.MarketplaceName,
+			MarketplaceRoot: root,
+			Summary:         summary,
+		}})
+		installed, err := ctx.service.Install(&plugin.PluginInstallParams{PluginID: summary.ID})
+		if err != nil {
+			return err
+		}
+		if opts.JSON {
+			output := pluginAddJSONOutput{
+				PluginID:        firstNonEmptyLocal(installed.PluginID, summary.ID),
+				Name:            summary.Name,
+				MarketplaceName: selection.MarketplaceName,
+				Version:         version,
+				InstalledPath:   root,
+				AuthPolicy:      summary.AuthPolicy,
+			}
+			encoder := json.NewEncoder(stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(&output); err != nil {
+				return err
+			}
+		} else {
+			fmt.Fprintf(stdout, "Added plugin `%s` from marketplace `%s`.\n", summary.Name, selection.MarketplaceName)
+			fmt.Fprintf(stdout, "Installed plugin root: %s\n", root)
+		}
+		if len(appsNeedingAuth) > 0 && !opts.JSON {
+			fmt.Fprintf(stdout, "Apps needing authentication: %s\n", strings.Join(appsNeedingAuth, ", "))
+		}
+		return nil
 	}
 	installed, err := ctx.service.Install(&plugin.PluginInstallParams{
 		PluginName:      selection.PluginName,
@@ -162,6 +341,28 @@ func runPluginList(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.Wri
 		return err
 	}
 	entries := filterPluginMarketplaceEntries(list.Marketplaces, opts.MarketplaceName)
+	installedRemote := map[string]bool{}
+	for _, marketplace := range list.Marketplaces {
+		for _, summary := range marketplace.Plugins {
+			if summary.Installed && strings.TrimSpace(summary.RemotePluginID) != "" {
+				installedRemote[summary.RemotePluginID] = true
+			}
+		}
+	}
+	if scope, ok := plugin.RemoteCatalogScopeForMarketplace(opts.MarketplaceName); ok {
+		remote, err := ctx.remoteCatalogPlugins(scope, false)
+		if err != nil {
+			return err
+		}
+		entries = appendRemotePluginMarketplace(entries, opts.MarketplaceName, remote, installedRemote)
+	} else if opts.MarketplaceName == "" {
+		// An unfiltered listing keeps the local curated catalog when the remote
+		// directory is unavailable; an explicitly selected remote marketplace
+		// surfaces the error above.
+		if remote, err := ctx.remoteCatalogPlugins(plugin.RemoteCatalogScopeGlobal, false); err == nil {
+			entries = appendRemotePluginMarketplace(entries, plugin.RemoteGlobalMarketplaceName, remote, installedRemote)
+		}
+	}
 	if opts.JSON {
 		output := pluginListJSONOutput{}
 		for _, marketplace := range entries {
@@ -207,6 +408,13 @@ func runPluginRemove(ctx *pluginCLIContext, opts *cli.PluginOptions, stdout io.W
 	selection, err := parsePluginSelection(opts.Plugin, opts.MarketplaceName)
 	if err != nil {
 		return err
+	}
+	if remote, options, err := ctx.remotePluginForSelection(selection); err != nil {
+		return err
+	} else if remote != nil {
+		if err := plugin.UninstallRemotePluginMutation(context.Background(), options, remote.ID); err != nil {
+			return err
+		}
 	}
 	if _, err := ctx.service.Uninstall(&plugin.PluginUninstallParams{PluginID: selection.PluginID}); err != nil {
 		return err

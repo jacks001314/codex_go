@@ -1,14 +1,171 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+
+	"codex_go/cli"
+	"codex_go/plugin"
 )
+
+// Mirrors Rust #42150: an explicitly selected remote marketplace lists catalog
+// entries with source, version, install policy, and auth policy.
+func TestPluginListRemoteCatalogLikeRust(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/ps/plugins/list" || request.URL.Query().Get("scope") != plugin.RemoteCatalogScopeGlobal {
+			http.NotFound(w, request)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"plugins": []any{map[string]any{
+				"id": "remote-sample", "name": "remote-sample", "scope": "GLOBAL",
+				"installation_policy": "AVAILABLE", "authentication_policy": "ON_INSTALL", "status": "AVAILABLE",
+				"release": map[string]any{"version": "1.4.0", "display_name": "Remote Sample", "description": "remote plugin"},
+			}},
+			"pagination": map[string]any{},
+		})
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"token","account_id":"account"}}`), 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	ctx := newPluginCLIContext(home)
+	var stdout bytes.Buffer
+	if err := runPluginList(ctx, &cli.PluginOptions{
+		Action:          "list",
+		MarketplaceName: plugin.RemoteGlobalMarketplaceName,
+		JSON:            true,
+		Available:       true,
+	}, &stdout); err != nil {
+		t.Fatalf("runPluginList() error = %v", err)
+	}
+	var output pluginListJSONOutput
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("Unmarshal() error = %v\n%s", err, stdout.String())
+	}
+	if len(output.Available) != 1 {
+		t.Fatalf("available = %#v", output.Available)
+	}
+	entry := output.Available[0]
+	if entry.PluginID != "remote-sample@openai-curated-remote" || entry.Version == nil || *entry.Version != "1.4.0" ||
+		entry.InstallPolicy != plugin.InstallAllowed || entry.AuthPolicy != plugin.AuthOnInstall || entry.Source.Type != "remote" {
+		t.Fatalf("remote entry = %#v", entry)
+	}
+}
+
+func TestPluginRemoteAddAndRemoveLikeRust(t *testing.T) {
+	t.Setenv("CODEX_TEST_ALLOW_HTTP_REMOTE_PLUGIN_BUNDLE_DOWNLOADS", "1")
+	bundle := pluginCLIRemoteBundleForTest(t, "remote-sample")
+	var installed, uninstalled bool
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.URL.Path == "/ps/plugins/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"plugins": []any{map[string]any{
+					"id": "remote-1", "name": "remote-sample", "scope": "GLOBAL",
+					"installation_policy": "AVAILABLE", "authentication_policy": "ON_USE", "status": "AVAILABLE",
+					"release": map[string]any{"version": "1.0.0", "display_name": "Remote Sample", "description": "remote"},
+				}},
+				"pagination": map[string]any{},
+			})
+		case request.URL.Path == "/ps/plugins/remote-1/install":
+			installed = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "remote-1", "enabled": true, "app_ids_needing_auth": []string{}})
+		case request.URL.Path == "/ps/plugins/remote-1" && request.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "remote-1", "name": "remote-sample", "scope": "GLOBAL",
+				"installation_policy": "AVAILABLE", "authentication_policy": "ON_USE", "status": "AVAILABLE",
+				"release": map[string]any{
+					"version": "1.0.0", "display_name": "Remote Sample", "description": "remote",
+					"bundle_download_url": server.URL + "/bundle.tar.gz", "app_manifest": map[string]any{},
+				},
+			})
+		case request.URL.Path == "/bundle.tar.gz":
+			w.Header().Set("Content-Type", "application/gzip")
+			_, _ = w.Write(bundle)
+		case request.URL.Path == "/ps/plugins/remote-1/uninstall":
+			uninstalled = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "remote-1", "enabled": false})
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	defer server.Close()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("chatgpt_base_url = \""+server.URL+"\"\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "auth.json"), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"token","account_id":"account"}}`), 0o600); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	ctx := newPluginCLIContext(home)
+	var stdout bytes.Buffer
+	if err := runPluginAdd(ctx, &cli.PluginOptions{
+		Action: "add", Plugin: "remote-sample@openai-curated-remote",
+	}, &stdout); err != nil {
+		t.Fatalf("runPluginAdd() error = %v", err)
+	}
+	if !installed || !strings.Contains(stdout.String(), "Added plugin `remote-sample`") {
+		t.Fatalf("installed=%v stdout=%q", installed, stdout.String())
+	}
+	stdout.Reset()
+	if err := runPluginRemove(ctx, &cli.PluginOptions{
+		Action: "remove", Plugin: "remote-sample@openai-curated-remote",
+	}, &stdout); err != nil {
+		t.Fatalf("runPluginRemove() error = %v", err)
+	}
+	if !uninstalled {
+		t.Fatal("remote uninstall mutation was not called")
+	}
+}
+
+func pluginCLIRemoteBundleForTest(t *testing.T, pluginName string) []byte {
+	t.Helper()
+	var output bytes.Buffer
+	gzipWriter := gzip.NewWriter(&output)
+	archive := tar.NewWriter(gzipWriter)
+	files := map[string]string{
+		".codex-plugin/plugin.json": fmt.Sprintf(`{"name":%q}`, pluginName),
+		"skills/remote/SKILL.md":    "---\nname: remote\ndescription: Remote skill\n---\n\n# Body\n",
+	}
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		contents := []byte(files[path])
+		if err := archive.WriteHeader(&tar.Header{Name: path, Mode: 0o600, Size: int64(len(contents)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatalf("WriteHeader(%s) error = %v", path, err)
+		}
+		if _, err := archive.Write(contents); err != nil {
+			t.Fatalf("Write(%s) error = %v", path, err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("Close(tar) error = %v", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatalf("Close(gzip) error = %v", err)
+	}
+	return output.Bytes()
+}
 
 func TestPluginMarketplaceLifecycle(t *testing.T) {
 	home := t.TempDir()

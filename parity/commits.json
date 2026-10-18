@@ -5858,9 +5858,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: RemoteMarketplaceFetchOutcome"
+        "Round 707 (implementation): the plugin CLI now fetches /ps/plugins/list with pagination, scope/collection separation, a 10-minute disk cache keyed by base URL/account/scope/collection, and ChatGPT auth/account/product headers. plugin list merges remote catalog entries into JSON/text output (source/version/install policy/auth policy), surfaces errors for explicitly selected remote marketplaces, and keeps the local curated catalog for unfiltered failures. plugin add performs the remote install mutation, fetches the bundle detail, downloads/materializes the bundle through appserver.InstallRemotePluginBundle, registers the installed remote detail, and writes local plugin config. plugin remove performs the remote uninstall mutation before removing the local cache/config. Tests: TestRemoteCatalogScopeMarketplaceMappingLikeRust, TestFetchRemoteCatalogPluginsPagesAndCachesLikeRust, TestRemotePluginMutationsLikeRust, TestPluginListRemoteCatalogLikeRust, TestPluginRemoteAddAndRemoveLikeRust; go test ./plugin -count=1; go test ./app -run 'PluginListRemoteCatalogLikeRust|PluginRemoteAddAndRemoveLikeRust' -count=1."
       ]
     },
     {
