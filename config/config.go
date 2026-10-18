@@ -1944,9 +1944,9 @@ func (c *Config) AllowSymlinkedCodexHome() bool {
 
 // ThreadUnloadDelaySecs returns how long the app server keeps an unloaded
 // thread resident before evicting it, mirroring Rust thread_unload_delay_secs
-// (default 60 seconds).
+// (default 1800 seconds, Rust #52081).
 func (c *Config) ThreadUnloadDelaySecs() time.Duration {
-	const defaultThreadUnloadDelay = 60 * time.Second
+	const defaultThreadUnloadDelay = 1800 * time.Second
 	if c == nil || c.Values == nil {
 		return defaultThreadUnloadDelay
 	}
@@ -1956,6 +1956,12 @@ func (c *Config) ThreadUnloadDelaySecs() time.Duration {
 	}
 	seconds, ok := configInt64(raw)
 	if !ok || seconds < 0 {
+		return defaultThreadUnloadDelay
+	}
+	// Rust rejects values that overflow a Duration ("thread_unload_delay_secs
+	// is too large"); this accessor cannot surface an error, so it stays on the
+	// documented default instead of wrapping around.
+	if seconds > int64((time.Duration(1<<63-1))/time.Second) {
 		return defaultThreadUnloadDelay
 	}
 	return time.Duration(seconds) * time.Second
