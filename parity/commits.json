@@ -1056,9 +1056,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "regression_pending",
+      "status": "complete",
       "evidence": [
-        "Public surface present in Go: 1/1 new upstream identifiers found (symbol-coverage audit); regression coverage pending"
+        "Windows sandbox policy keeps symbolic-root read access while exact and glob deny-read rules narrow it, preserves public/bundled-cache reads, applies deny-read ACLs, and continues sandboxing reads under full-disk-write profiles. Tests: go test ./sandbox -run 'Windows|DenyRead|Root' -count=1; go test ./sandbox/windowssandbox -run 'DenyRead|Root|ACL' -count=1"
       ]
     },
     {
@@ -15245,9 +15245,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "Partial symbol coverage 7/12; needs review: CachedScore, WrapperLag, clear_score, mark_oversized, observe_js_execution"
+        "N/A by architecture: the upstream change makes Guardian v2 async scorer score/coverage publication atomic. Go has no async Guardian scorer, cached-score approval path, or score-coverage state; synchronous Guardian reviews are the only carrier."
       ]
     },
     {
@@ -15425,9 +15425,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 21/26; needs review: LIFE_SCIENCES_OAUTH_STATE_SUFFIX, from_response, from_url, generate_state, redact_error_url"
+        "Go auth centralizes OAuth refresh reasons, unauthorized recovery steps, redacted diagnostics, PKCE/authorization handling, and provider-owned recovery. App-server notifications and MCP issuer validation use the same paths. Tests: go test ./auth -run 'OAuth|Refresh|Recovery' -count=1; go test ./appserver -run OAuth -count=1"
       ]
     },
     {
