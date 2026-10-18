@@ -13215,9 +13215,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: allows_background_persistence"
+        "Round 508 (audit): N/A by architecture. Go's thread store persists synchronously at append time and has no pluggable PersistContext or background checkpoint queue. The Rust change explicitly allows stores to retain synchronous persistence for all contexts, so steered input and tool outputs already have the required durability. Tests: go test ./appserver -run 'Steer|PendingInput' -count=1"
       ]
     },
     {
