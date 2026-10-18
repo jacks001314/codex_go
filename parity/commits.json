@@ -26833,9 +26833,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/4; needs review: BrowserUseExtensionRequirementsToml, RequestHeaderToml"
+        "Round 631 (parity backfill): config requirements expose BrowserUseExtensionRequirements/RequestHeader with strict name/value parsing, unknown-field rejection, explicit-empty list preservation, camelCase API cloning, and higher-priority whole-table replacement. Tests: go test ./config -run 'BrowserUseExtensionRequestHeaders' -count=1"
       ]
     },
     {
@@ -26977,9 +26977,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 2/7; needs review: TurnEnvironmentRequest, default_environment_requests, default_thread_environment_requests, into_request, validate_environment_ids_and_cwds"
+        "Round 632 (parity backfill): caller environment requests remain separate from the runtime step capability snapshot; raw request maps are validated before use, while selection, capability-root restriction, MCP authority, and step snapshots are derived at the receiving boundary. Tests: go test ./appserver -run 'EnvironmentCapabilityRoots|RestrictCapabilityRoots|StepCapabilitySnapshot' -count=1"
       ]
     },
     {
@@ -27181,9 +27181,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 3/4; needs review: shell_snapshot_command"
+        "Round 633 (parity backfill): eligible Direct unified-exec commands record codex.shell_snapshot.command and codex.shell_snapshot.wait_ms with version/state/outcome tags; non-Direct launches stay outside the command denominator while captures remain measured. Tests: go test ./appserver -run 'ShellSnapshotCommandMetrics' -count=1"
       ]
     },
     {
@@ -27349,9 +27349,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 1/3; needs review: TurnEnvironmentRequests, into_requests"
+        "Round 634 (parity backfill): TurnSettingsUpdateParams accepts environment request maps, distinguishes omitted from explicitly empty selections, validates cwd bounds, and applies the change only to the active turn while future turns keep saved defaults. Tests: go test ./turn -run 'TurnSettingsUpdateParamsValidation' -count=1; go test ./appserver -run 'TurnStepSettingsProviderReflectsMidTurnUpdatesLikeRust' -count=1"
       ]
     },
     {
@@ -27565,9 +27565,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/15; needs review: PreparedTranscript, RenderedTranscriptRecord, SectionContent, TRANSCRIPT_JSON_INSTRUCTIONS, TranscriptRecord"
+        "Round 635 (parity backfill): GuardianTranscriptEntry retains host author/label/index/text metadata through line or JSON rendering; the prompt pipeline keeps host omission notices, preserves native/encrypted messages, and bounds oversized content. Tests: go test ./state ./appserver -run 'GuardianTranscript|Guardian.*Omission|GuardianRetained' -count=1"
       ]
     },
     {
