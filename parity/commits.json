@@ -3796,7 +3796,7 @@
       ],
       "status": "complete",
       "evidence": [
-        "Round 495 (audit): sandbox.ResolveFileSystemEntryAccess applies executor path conventions, folds case and normalizes separators for Windows globs, and keeps POSIX byte-oriented matching. sandbox/integrity.PreparePolicy resolves ~ against the executor home, fails closed on malformed paths/invalid globs/unresolved home, and the matcher checks both alias and canonical locations. Windows deny-read ACL discovery uses the lexical case-insensitive scan. Tests: go test ./sandbox/integrity ./sandbox ./sandbox/windowssandbox -run 'DenyRead|ReadDeny|PolicyHome|Glob' -count=1"
+        "Round 688 (implementation): PathUri decoded-byte identity, Windows case folding, home-relative deny globs, and alias-plus-canonical checks are retained. Permission path/glob materialization and containment now follow the executor convention rather than runtime.GOOS: POSIX stays case-sensitive and slash-based, Windows folds case/separators, and ReadDenyMatcher fails closed for unknown or incompatible conventions. Tests: go test ./sandbox ./sandbox/integrity -run 'Convention|DenyMatcher|Permission' -count=1; go test ./sandbox ./sandbox/integrity -count=1; go build ./..."
       ]
     },
     {

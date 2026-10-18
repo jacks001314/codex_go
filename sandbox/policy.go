@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"codex_go/sandbox/sandboxpath"
+	"codex_go/utils"
 )
 
 type AskForApproval string
@@ -365,6 +366,37 @@ func sameOrWithin(path, root string) bool {
 		return false
 	}
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// pathWithinForConvention reports whether path is root or below it using the
+// executor's path convention rather than the Go host's convention. Windows
+// matching folds case and accepts either separator; POSIX matching remains
+// case-sensitive and slash-delimited (Rust #41209).
+func pathWithinForConvention(path, root string, convention utils.PathConvention) bool {
+	if convention == "" {
+		return sameOrWithin(path, root)
+	}
+	if convention == utils.ConventionWindows {
+		path = strings.ToLower(utils.LexicalClean(path, convention))
+		root = strings.ToLower(utils.LexicalClean(root, convention))
+		if path == root {
+			return true
+		}
+		root = strings.TrimRight(root, `\/`)
+		if root == "" {
+			return strings.HasPrefix(path, `\`)
+		}
+		return strings.HasPrefix(path, root+`\`)
+	}
+	path = utils.LexicalClean(path, convention)
+	root = utils.LexicalClean(root, convention)
+	if path == root {
+		return true
+	}
+	if root == "/" {
+		return strings.HasPrefix(path, "/")
+	}
+	return strings.HasPrefix(path, strings.TrimRight(root, "/")+"/")
 }
 
 func slashTmpPath() string {

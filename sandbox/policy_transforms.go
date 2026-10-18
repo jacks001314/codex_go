@@ -2,8 +2,8 @@ package sandbox
 
 import (
 	"os"
+	pathpkg "path"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"codex_go/utils"
@@ -85,17 +85,21 @@ func grantedPermissionEntryWithinRequest(requested []FileSystemSandboxEntry, gra
 }
 
 func resolveRequestedPermissionAccess(entries []FileSystemSandboxEntry, target, cwd string) FileSystemAccessMode {
+	return resolveRequestedPermissionAccessForConvention(entries, target, cwd, utils.NativePathConvention())
+}
+
+func resolveRequestedPermissionAccessForConvention(entries []FileSystemSandboxEntry, target, cwd string, convention utils.PathConvention) FileSystemAccessMode {
 	bestSpecificity := -1
 	bestPrecedence := -1
 	var best FileSystemAccessMode
 	for _, entry := range entries {
-		entryPath := resolvePermissionPath(entry.Path, cwd)
-		matches := entryPath != "" && sameOrWithin(target, entryPath)
+		entryPath := resolvePermissionPathForConvention(entry.Path, cwd, convention)
+		matches := entryPath != "" && pathWithinForConvention(target, entryPath, convention)
 		if entry.Path.Type == "glob_pattern" {
-			pattern := materializePermissionGlob(entry.Path.Pattern, cwd)
-			patternSlash := filepath.ToSlash(pattern)
-			targetSlash := filepath.ToSlash(filepath.Clean(target))
-			if runtime.GOOS == "windows" {
+			pattern := materializePermissionGlobForConvention(entry.Path.Pattern, cwd, convention)
+			patternSlash := slashPathForConvention(pattern, convention)
+			targetSlash := slashPathForConvention(target, convention)
+			if convention == utils.ConventionWindows {
 				// Rust #41209: Windows glob matching folds case and uses
 				// normalized separators; POSIX matching stays byte-oriented.
 				patternSlash = strings.ToLower(patternSlash)
@@ -147,6 +151,115 @@ func resolvePermissionPath(path FileSystemPath, cwd string) string {
 			if err == nil && info.IsDir() {
 				return cleanRunPath("/tmp")
 			}
+		}
+	}
+	return ""
+}
+
+// resolvePermissionPathForConvention resolves an entry path using the
+// executor's convention, so a POSIX policy evaluated on Windows is not rewritten
+// with backslashes (Rust #41209).
+func resolvePermissionPathForConvention(path FileSystemPath, cwd string, convention utils.PathConvention) string {
+	if convention == "" {
+		return resolvePermissionPath(path, cwd)
+	}
+	switch path.Type {
+	case "path", "":
+		raw := strings.TrimSpace(path.Path)
+		if raw == "" {
+			return ""
+		}
+		if convention == utils.ConventionWindows {
+			raw = strings.ReplaceAll(raw, `\`, "/")
+			if !windowsPathAbsoluteForConvention(raw) && strings.TrimSpace(cwd) != "" {
+				raw = pathpkg.Join(strings.ReplaceAll(cwd, `\`, "/"), raw)
+			}
+			return strings.ReplaceAll(pathpkg.Clean(raw), "/", `\`)
+		}
+		if !pathpkg.IsAbs(raw) && pathpkg.IsAbs(cwd) {
+			raw = pathpkg.Join(cwd, raw)
+		}
+		return pathpkg.Clean(raw)
+	case "special":
+		if path.Value == nil {
+			return ""
+		}
+		switch strings.ToLower(path.Value.Kind) {
+		case "root":
+			if convention == utils.ConventionWindows {
+				if volume := windowsVolumeForConvention(cwd); volume != "" {
+					return volume + `\`
+				}
+				return ""
+			}
+			return "/"
+		case "project_roots", "current_working_directory":
+			if path.Value.Subpath != nil && *path.Value.Subpath != "" {
+				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: *path.Value.Subpath}, cwd, convention)
+			}
+			return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: cwd}, cwd, convention)
+		case "tmpdir":
+			if convention == utils.ConventionPosix {
+				return resolvePermissionPathForConvention(FileSystemPath{Type: "path", Path: os.Getenv("TMPDIR")}, cwd, convention)
+			}
+			return resolvePermissionPath(path, cwd)
+		case "slash_tmp":
+			if convention == utils.ConventionPosix {
+				return "/tmp"
+			}
+			return ""
+		}
+	}
+	return resolvePermissionPath(path, cwd)
+}
+
+func materializePermissionGlobForConvention(pattern string, cwd string, convention utils.PathConvention) string {
+	trimmed := strings.TrimSpace(pattern)
+	if trimmed == "" {
+		return ""
+	}
+	if convention == "" {
+		return materializePermissionGlob(trimmed, cwd)
+	}
+	if convention == utils.ConventionWindows {
+		trimmed = strings.ReplaceAll(trimmed, `\`, "/")
+		if !windowsPathAbsoluteForConvention(trimmed) && strings.TrimSpace(cwd) != "" {
+			trimmed = pathpkg.Join(strings.ReplaceAll(cwd, `\`, "/"), trimmed)
+		}
+		return strings.ReplaceAll(pathpkg.Clean(trimmed), "/", `\`)
+	}
+	if !pathpkg.IsAbs(trimmed) && pathpkg.IsAbs(cwd) {
+		trimmed = pathpkg.Join(cwd, trimmed)
+	}
+	return pathpkg.Clean(trimmed)
+}
+
+func slashPathForConvention(value string, convention utils.PathConvention) string {
+	if convention == utils.ConventionWindows {
+		return pathpkg.Clean(strings.ReplaceAll(value, `\`, "/"))
+	}
+	return pathpkg.Clean(value)
+}
+
+func windowsPathAbsoluteForConvention(value string) bool {
+	legacy := utils.NewLegacyAppPathString(value)
+	convention, ok := legacy.InferAbsolutePathConvention()
+	return ok && convention == utils.ConventionWindows
+}
+
+func windowsVolumeForConvention(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = strings.ReplaceAll(value, `\`, "/")
+	if len(value) >= 2 && value[1] == ':' {
+		return value[:2]
+	}
+	if strings.HasPrefix(value, "//") {
+		parts := strings.SplitN(strings.TrimPrefix(value, "//"), "/", 3)
+		if len(parts) >= 2 {
+			return `\\` + parts[0] + `\` + parts[1]
 		}
 	}
 	return ""
@@ -384,5 +497,12 @@ func ResolveFileSystemEntryPath(path FileSystemPath, cwd string) string {
 // It is exported for package sandbox/integrity, which mirrors the policy
 // resolution upstream's writable-root collection and deny-read matcher both use.
 func ResolveFileSystemEntryAccess(entries []FileSystemSandboxEntry, target, cwd string) FileSystemAccessMode {
-	return resolveRequestedPermissionAccess(entries, target, cwd)
+	return resolveRequestedPermissionAccessForConvention(entries, target, cwd, utils.NativePathConvention())
+}
+
+// ResolveFileSystemEntryAccessForConvention resolves access using the executor's
+// path convention. Callers comparing a candidate from another host must use
+// this entry point so Windows case folding does not leak into POSIX policies.
+func ResolveFileSystemEntryAccessForConvention(entries []FileSystemSandboxEntry, target, cwd string, convention utils.PathConvention) FileSystemAccessMode {
+	return resolveRequestedPermissionAccessForConvention(entries, target, cwd, convention)
 }

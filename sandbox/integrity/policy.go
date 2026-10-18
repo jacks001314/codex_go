@@ -64,13 +64,15 @@ func (m *ReadDenyMatcher) IsLocalPathReadDenied(path string) bool {
 	if m == nil || len(m.entries) == 0 {
 		return false
 	}
-	if m.convention != "" {
-		legacy := utils.NewLegacyAppPathString(path)
-		if candidate, ok := legacy.InferAbsolutePathConvention(); ok && candidate != m.convention {
-			return true
-		}
+	if m.convention == "" {
+		return true
 	}
-	return sandbox.ResolveFileSystemEntryAccess(m.entries, path, m.cwd) == sandbox.FileSystemAccessDeny
+	legacy := utils.NewLegacyAppPathString(path)
+	candidate, ok := legacy.InferAbsolutePathConvention()
+	if !ok || candidate != m.convention {
+		return true
+	}
+	return sandbox.ResolveFileSystemEntryAccessForConvention(m.entries, path, m.cwd, m.convention) == sandbox.FileSystemAccessDeny
 }
 
 // IsLocalPathReadDeniedWithCanonical mirrors Rust's

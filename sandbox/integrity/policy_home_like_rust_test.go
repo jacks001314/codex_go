@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"codex_go/sandbox"
+	"codex_go/utils"
 )
 
 // Mirrors Rust #41209: `~` deny-read globs resolve against the executor home
@@ -87,5 +88,24 @@ func TestReadDenyMatcherFailsClosedOnIncompatiblePathConventionLikeRust(t *testi
 	}
 	if !posixPolicy.GlobDenials.IsLocalPathReadDenied(`C:\secret.key`) {
 		t.Fatal("Windows candidate under a POSIX policy did not fail closed")
+	}
+}
+
+// Rust #41209 also fails closed when neither the policy cwd nor the candidate
+// has an inferable convention.
+func TestReadDenyMatcherFailsClosedOnUnknownConventionLikeRust(t *testing.T) {
+	matcher := &ReadDenyMatcher{
+		entries: []sandbox.FileSystemSandboxEntry{{
+			Path:   sandbox.FileSystemPath{Type: "glob_pattern", Pattern: "/workspace/*.env"},
+			Access: sandbox.FileSystemAccessDeny,
+		}},
+		cwd: "/workspace",
+	}
+	if !matcher.IsLocalPathReadDenied("/workspace/secret.env") {
+		t.Fatal("unknown policy convention must fail closed")
+	}
+	matcher.convention = utils.ConventionPosix
+	if !matcher.IsLocalPathReadDenied("relative/secret.env") {
+		t.Fatal("unknown candidate convention must fail closed")
 	}
 }
