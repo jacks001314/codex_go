@@ -550,9 +550,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "N/A by architecture (Round 718 audit): the Rust loader suppresses visualize@openai-bundled when a cached visualize@openai-curated-remote install exists. Go's bundled discoverable catalog only contains chrome and computer-use; there is no bundled visualize or sites fallback to shadow, and remote installed plugins are already routed through the shared PluginService without a bundled duplicate path."
       ]
     },
     {
@@ -586,9 +586,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Round 719 (audit): already implemented. rewriteExternalTermsPreservingLinks protects URLs, email addresses, Markdown link destinations, and link titles while rewriting surrounding terms and relative AGENTS.md references; config/external_link_rewrite_test.go covers http(s), mailto, file, custom schemes, bare www links, Markdown labels/destinations, and relative CLAUDE.md links with suffixes. Covered by go test ./config -count=1."
       ]
     },
     {
@@ -11069,9 +11069,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/1); candidate gap: can_leave_empty_prompt_with_right"
+        "Aligned upstream 3ef3cecd20 (#44344): Right opens the selected task only when the dashboard list owns focus and metadata editing/search do not; the tea layer guards a connection notice, queued input, and the active move_right binding. Explicit editor or Vim-normal move_right remaps keep Right for cursor movement. The later #45255 footer contract advertises Enter (Right remains a silent shortcut). Tests: TestModelAgentsDashboardRightOpensSelectedTask, TestCanOpenWithRightRequiresListFocusLikeRust."
       ]
     },
     {
