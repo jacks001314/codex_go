@@ -2073,6 +2073,8 @@ green.
   when a server/daemon owns the session.
 - `#48830` is complete: interrupted turns show the short neutral feedback notice
   with secondary styling; budget-limited turns keep the error notice.
+- `#49043` is not applicable at current Rust head: the Pro Extra/Standard/Max
+  labels were superseded and Rust again uses Pro 200/100/500, matching Go.
 - `#48775` is not applicable to Go's spoken-caption architecture: pinned headers
   already add `› ` and truncate by display width, while spoken user input is a
   separate SpokenHistoryCell rather than a spoken RoleUser prompt.

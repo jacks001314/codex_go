@@ -22788,9 +22788,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "not_applicable",
       "evidence": [
-        "No new upstream public API symbols (private/behavioural change); behaviour not re-verified"
+        "Current Rust head supersedes this change: subscription.rs and status/helpers.rs again use Pro 200 / Pro 100 / Pro 500, which is exactly what Go's SubscriptionLabel emits. There is no current Pro Extra/Pro Standard/Pro Max label to port."
       ]
     },
     {
