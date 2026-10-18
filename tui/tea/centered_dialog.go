@@ -10,14 +10,45 @@ import (
 // modalCenteredOverlayKind limits the retained-backdrop presentation to the
 // generic confirmation/selection dialogs migrated so far (Rust #50504).
 func modalCenteredOverlayKind(kind ModalKind) bool {
-	return kind == ModalKindGeneric
+	switch kind {
+	case ModalKindGeneric,
+		ModalKindReview,
+		ModalKindRunningTaskExit,
+		ModalKindMisalignment,
+		ModalKindRateLimitSwitch,
+		ModalKindExperimental,
+		ModalKindStatusLine,
+		ModalKindTitle,
+		ModalKindPresets,
+		ModalKindConfig,
+		ModalKindTheme,
+		ModalKindPets,
+		ModalKindMemories,
+		ModalKindAutoReview,
+		ModalKindGoal,
+		ModalKindSkills,
+		ModalKindManageSkills,
+		ModalKindHooksBrowser,
+		ModalKindAgent,
+		ModalKindAgents,
+		ModalKindWindowsSandbox,
+		ModalKindWorktree,
+		ModalKindExternalImport,
+		ModalKindPicker:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Model) renderCenteredModalOverlay() string {
 	if m == nil || m.modal == nil {
 		return ""
 	}
+	savedWidth := m.width
+	m.width = max(m.width-2, 1)
 	dialog := m.renderModal()
+	m.width = savedWidth
 	if strings.TrimSpace(dialog) == "" {
 		return ""
 	}
@@ -36,7 +67,6 @@ func overlayCenteredDialog(base, dialog string, width, height int) string {
 	boxed := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1).
 		MaxWidth(maxDialogWidth).
 		Render(dialog)
 	dialogLines := strings.Split(boxed, "\n")
