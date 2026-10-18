@@ -111,11 +111,14 @@ type ProxySettings struct {
 	// DangerouslyAllowAllUnixSockets mirrors Rust's Option<bool> (#46004):
 	// nil means omitted, which defers socket permissions to an attachment
 	// policy, while a non-nil false is an explicit denial.
-	DangerouslyAllowAllUnixSockets               *bool
-	Mode                                         ProxyMode
-	Domains                                      *ProxyDomainPermissions
-	UnixSockets                                  *ProxyUnixSocketPermissions
-	AllowLocalBinding                            bool
+	DangerouslyAllowAllUnixSockets *bool
+	Mode                           ProxyMode
+	Domains                        *ProxyDomainPermissions
+	UnixSockets                    *ProxyUnixSocketPermissions
+	AllowLocalBinding              bool
+	// AllowLocalBindingSet distinguishes an explicit false from an omitted
+	// setting so executor-specific defaults can be applied later (Rust #46523).
+	AllowLocalBindingSet                         bool
 	MITM                                         bool
 	MITMHooks                                    []ProxyMITMHookConfig
 	CredentialBroker                             bool

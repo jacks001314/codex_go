@@ -9,8 +9,11 @@ import (
 	"strings"
 
 	"codex_go/config"
+	"codex_go/features"
 	"codex_go/network"
 	"codex_go/sandbox"
+	"codex_go/turn"
+	"codex_go/utils"
 )
 
 func (r *RuntimeRouter) buildManagedNetworkProxyConfig(values map[string]any) (*network.ProxyConfig, bool, error) {
@@ -18,6 +21,10 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfig(values map[string]any) (*
 }
 
 func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]any, cwd string) (*network.ProxyConfig, bool, error) {
+	return r.buildManagedNetworkProxyConfigForCWDWithPlatform(values, cwd, utils.NativePlatform())
+}
+
+func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWDWithPlatform(values map[string]any, cwd string, platform utils.Platform) (*network.ProxyConfig, bool, error) {
 	proxyConfig, err := network.ProxyConfigFromConfigValues(values)
 	if err != nil {
 		return nil, false, err
@@ -45,7 +52,13 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]a
 		proxyConfig.Network.CredentialBrokerOpenAIHost = host
 	}
 
-	spec, err := network.NewProxySpec(*proxyConfig, proxyRequirementsFromConfig(r.services.ManagedNetworkRequirements), managedProfile)
+	spec, err := network.NewProxySpecForPlatformWithLocalBinding(
+		*proxyConfig,
+		proxyRequirementsFromConfig(r.services.ManagedNetworkRequirements),
+		managedProfile,
+		platform,
+		managedNetworkLocalBindingPolicyForPlatform(values, platform),
+	)
 	if err != nil {
 		return nil, false, err
 	}
@@ -72,19 +85,57 @@ func (r *RuntimeRouter) buildManagedNetworkProxyConfigForCWD(values map[string]a
 	return &result, true, nil
 }
 
+func managedNetworkLocalBindingPolicy(values map[string]any) network.LocalBindingPolicy {
+	return managedNetworkLocalBindingPolicyForPlatform(values, utils.NativePlatform())
+}
+
+func managedNetworkLocalBindingPolicyForPlatform(values map[string]any, platform utils.Platform) network.LocalBindingPolicy {
+	if platform != utils.PlatformWindows {
+		return network.LocalBindingDefaultFalse
+	}
+	if mode, ok := config.WindowsSandboxModeFromValues(values); ok && mode == config.WindowsSandboxModeMxc {
+		return network.LocalBindingRequireTrue
+	}
+	if features.Enabled((&config.Config{Values: values}).FeatureSettings(), "prefer_mxc") {
+		return network.LocalBindingRequireTrue
+	}
+	return network.LocalBindingDefaultFalse
+}
+
+func (r *RuntimeRouter) managedNetworkPlatformForTurn(params *turn.TurnStartParams) utils.Platform {
+	if r == nil || r.services.Environment == nil || params == nil {
+		return utils.NativePlatform()
+	}
+	for _, selection := range params.Environments {
+		environmentID := selectionEnvironmentID(selection)
+		if environmentID == "" {
+			continue
+		}
+		info, err := r.services.Environment.InfoContext(context.Background(), &EnvironmentInfoParams{EnvironmentID: environmentID})
+		if err == nil && info != nil && strings.TrimSpace(info.PlatformOS) != "" {
+			return utils.PlatformFromOS(info.PlatformOS)
+		}
+	}
+	return utils.NativePlatform()
+}
+
 type managedNetworkReloadInput struct {
 	CWD       string
 	Overrides map[string]any
 }
 
 func (r *RuntimeRouter) managedNetworkForTurn(threadID string, cwd string, cfg *config.Config, overrides ...map[string]any) (*network.PreparedProxyManagedNetwork, error) {
+	return r.managedNetworkForTurnWithPlatform(threadID, cwd, cfg, utils.NativePlatform(), overrides...)
+}
+
+func (r *RuntimeRouter) managedNetworkForTurnWithPlatform(threadID string, cwd string, cfg *config.Config, platform utils.Platform, overrides ...map[string]any) (*network.PreparedProxyManagedNetwork, error) {
 	if r == nil || cfg == nil || r.services.Config == nil || strings.TrimSpace(threadID) == "" {
 		return nil, nil
 	}
 	if err := validateManagedNetworkRequirements(r.services.ManagedNetworkRequirements); err != nil {
 		return nil, err
 	}
-	proxyConfig, shouldStart, err := r.buildManagedNetworkProxyConfigForCWD(cfg.Values, cwd)
+	proxyConfig, shouldStart, err := r.buildManagedNetworkProxyConfigForCWDWithPlatform(cfg.Values, cwd, platform)
 	if err != nil {
 		return nil, err
 	}

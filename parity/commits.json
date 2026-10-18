@@ -16026,9 +16026,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "audit_pending",
+      "status": "complete",
       "evidence": [
-        "Partial symbol coverage 4/8; needs review: local_binding_policy_for_sandbox, remote_launch_config, remote_policy_decider, resolved_config"
+        "ProxySettings distinguishes omitted allow_local_binding from explicit false. Managed-network resolution applies executor-specific policy after owner/requirement restrictions: Windows MXC defaults omitted to true and rejects explicit false when networking is enabled; non-MXC/remote defaults remain false. Turn setup derives the platform from selected environment info. Tests: go test ./network -run 'LocalBinding|ExecutorOS|Socket' -count=1; go test ./appserver -run 'ManagedNetworkLocalBinding|ManagedNetwork' -count=1"
       ]
     },
     {

@@ -117,15 +117,38 @@ func NewProxySpec(config ProxyConfig, requirements *ProxyRequirements, managedSa
 	return NewProxySpecForPlatform(config, requirements, managedSandboxActive, utils.NativePlatform())
 }
 
+// LocalBindingPolicy selects the executor-side default for an omitted
+// allow_local_binding setting (Rust #46523).
+type LocalBindingPolicy int
+
+const (
+	LocalBindingDefaultFalse LocalBindingPolicy = iota
+	LocalBindingRequireTrue
+)
+
 // NewProxySpecForPlatform mirrors Rust `build_config_state(config, constraints,
 // executor_os)` (#46302/#46334): the composed config's socket allowlist is
 // validated against the executor's platform, not the controller's.
 func NewProxySpecForPlatform(config ProxyConfig, requirements *ProxyRequirements, managedSandboxActive bool, platform utils.Platform) (*ProxySpec, error) {
+	return NewProxySpecForPlatformWithLocalBinding(config, requirements, managedSandboxActive, platform, LocalBindingDefaultFalse)
+}
+
+// NewProxySpecForPlatformWithLocalBinding applies the executor-specific
+// local-binding default after owner/requirement restrictions. Windows MXC uses
+// RequireTrue; explicit false is rejected when managed networking is enabled.
+func NewProxySpecForPlatformWithLocalBinding(config ProxyConfig, requirements *ProxyRequirements, managedSandboxActive bool, platform utils.Platform, localBinding LocalBindingPolicy) (*ProxySpec, error) {
 	config = cloneProxyConfig(config)
 	constraints := ProxyConstraints{}
 	hardDeny := requirements != nil && requirements.ManagedAllowedDomainsOnly
 	if requirements != nil {
 		config, constraints = applyProxyRequirements(config, requirements, managedSandboxActive, hardDeny)
+	}
+	if !config.Network.AllowLocalBindingSet {
+		resolved := localBinding == LocalBindingRequireTrue
+		config.Network.AllowLocalBinding = resolved
+		config.Network.AllowLocalBindingSet = true
+	} else if localBinding == LocalBindingRequireTrue && config.Network.Enabled && !config.Network.AllowLocalBinding {
+		return nil, fmt.Errorf("network.allow_local_binding must be true for MXC managed networking")
 	}
 	if err := ValidateProxyUnixSocketAllowlistPathsForPlatform(config, platform); err != nil {
 		return nil, err
@@ -226,6 +249,7 @@ func applyProxyRequirements(config ProxyConfig, requirements *ProxyRequirements,
 	}
 	if requirements.AllowLocalBinding != nil {
 		settings.AllowLocalBinding = *requirements.AllowLocalBinding
+		settings.AllowLocalBindingSet = true
 		constraints.AllowLocalBinding = cloneBool(requirements.AllowLocalBinding)
 	}
 	constraints.HeaderInjections = cloneProxyHeaderInjections(requirements.HeaderInjections)

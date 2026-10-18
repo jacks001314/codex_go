@@ -84,6 +84,7 @@ func applyProxySettingsTable(settings *ProxySettings, table map[string]any, path
 	}
 	if value, ok := boolConfigValue(table, "allow_local_binding"); ok {
 		settings.AllowLocalBinding = value
+		settings.AllowLocalBindingSet = true
 	}
 	if value, ok := boolConfigValue(table, "mitm"); ok {
 		settings.MITM = value

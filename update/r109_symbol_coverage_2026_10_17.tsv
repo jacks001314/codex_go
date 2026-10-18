@@ -1208,7 +1208,7 @@ sha	pr	subject	date	area	pub_symbols	matched	coverage	keys_matched	keys_total	ve
 74772623dbe1141763858dd6a5e444279d3ae85f	40864	Stop overriding Rust debuginfo in Bazel CI (#40864)	2026-08-26	core	0	0		0	0	not_applicable	
 748d8ac834157bb1f29aa0966efe86b8ad824d41	39937	Bound unified exec output delta frames (#39937)	2026-08-21	core	0	0		0	0	not_applicable	
 7498521d288b9b3b96ffba4eedf089d8d6e06a84	46335	Keep MCP policy evaluation consistent with turn environments (#46335)	2026-09-18	mcp	3	2	0.67	0	0	complete	ready_environment_handles
-74af2496c9c260ed7c3a4b3454d4373ffc57d8e2	46523	Default local binding to true for MXC managed networking (#46523)	2026-09-18	appserver	8	4	0.50	0	0	audit_pending	local_binding_policy_for_sandbox,remote_launch_config,remote_policy_decider,resolved_config
+74af2496c9c260ed7c3a4b3454d4373ffc57d8e2	46523	Default local binding to true for MXC managed networking (#46523)	2026-09-18	appserver	8	4	0.50	0	0	complete	local_binding_policy_for_sandbox,remote_launch_config,remote_policy_decider,resolved_config
 74d3a5bf1046f004ee33a200ee497dc7593a5687	43800	Add summary-only extraction for memory v2 (#43800)	2026-09-08	core	4	2	0.50	0	0	complete	StageOneOutput,build_stage_one_input_v2
 751e7edd0b2012ca831c7fdcdd3400631e4cfe14	52635	Skip background workspace routing reads without ChatGPT auth (#52635)	2026-10-09	appserver	1	1	1.00	0	0	complete	
 75388bf321bffeda40e41dca2061c1cd72c2f4d4	41449	Rename the read-only Seatbelt platform defaults policy (#41449)	2026-08-28	sandbox	0	0		0	0	not_applicable	

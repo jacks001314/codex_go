@@ -15164,7 +15164,7 @@ func (r *RuntimeRouter) toolRouterForTurnContext(ctx context.Context, cwd string
 	if err != nil {
 		return nil, err
 	}
-	managedNetwork, err := r.managedNetworkForTurn(threadID, cwd, cfg, turnConfigOverrides(params))
+	managedNetwork, err := r.managedNetworkForTurnWithPlatform(threadID, cwd, cfg, r.managedNetworkPlatformForTurn(params), turnConfigOverrides(params))
 	if err != nil {
 		return nil, err
 	}
