@@ -4296,9 +4296,9 @@
       "domains": [
         "codex_go"
       ],
-      "status": "implementation_pending",
+      "status": "complete",
       "evidence": [
-        "No new upstream public identifier found in Go (0/2); candidate gap: new_without_redirects, validate_chatgpt_base_url"
+        "Round 486 (audit): chatgptapi.ValidateChatGPTBaseURL requires a trusted HTTPS origin on port 443 with no user info/query/fragment before saved ChatGPT credentials load; NewCloudClientWithoutRedirects disables redirect following so credentials cannot forward to a new origin. app/cloud.go validates the configured endpoint and uses the no-redirect client. Tests cover accepted/rejected origins and a redirect target receiving zero requests. Tests: go test ./chatgptapi ./app -run 'CredentialOrigin|ValidateChatGPTBaseURL|CloudTask' -count=1"
       ]
     },
     {
